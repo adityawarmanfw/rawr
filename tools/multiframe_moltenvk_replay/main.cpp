@@ -3,6 +3,7 @@
 #include <rawr/zsl_codec/ZslDecoder.h>
 #include <rawr/zsl_container/ZslContainer.h>
 #include <raw_sharpness/raw_sharpness_types.hpp>
+#include <tinydng.h>
 
 #include "color/ColorCalibration.h"
 #include "color/ColorMath.h"
@@ -302,6 +303,119 @@ void imageBarrier(VkCommandBuffer command, VkImage image, VkImageLayout oldLayou
     vkCmdPipelineBarrier(command, srcStage, dstStage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 }
 
+// Write one decoded RAW16 frame as a minimal standalone DNG (no opcodes /
+// lens shading) so external burst tools (e.g. hdr-plus-swift) can consume
+// RZSL bursts. Tags come from the frame's own RZSL metadata.
+void writeFrameDng(const std::filesystem::path& file, std::uint32_t cfa, std::uint32_t width, std::uint32_t height,
+                   const std::string& rawMetadata, const rawrcam::metadata::FrameMetadataSnapshot& metadata,
+                   const std::uint16_t* raw16) {
+    static const std::array<std::array<std::uint8_t, 4>, 4> kCfaBytes{{
+        {0, 1, 1, 2}, {1, 0, 2, 1}, {1, 2, 0, 1}, {2, 1, 1, 0}}};  // RGGB GRBG GBRG BGGR
+    tinydng_cfa cfaInfo{};
+    cfaInfo.present = 1;
+    cfaInfo.pattern_dim[0] = cfaInfo.pattern_dim[1] = 2;
+    for (int i = 0; i < 4; ++i) cfaInfo.pattern[i] = kCfaBytes[std::min(cfa, 3u)][std::size_t(i)];
+    cfaInfo.pattern_size = 4;
+    cfaInfo.plane_color[0] = 0;
+    cfaInfo.plane_color[1] = 1;
+    cfaInfo.plane_color[2] = 2;
+    cfaInfo.plane_color_count = 3;
+    cfaInfo.layout = 1;
+
+    tinydng_raw_info raw{};
+    raw.has_dng_version = 1;
+    raw.dng_version[0] = 1;
+    raw.dng_version[1] = 4;
+    std::string model = "Rawr RZSL camera " + tsv(rawMetadata, "cameraId");
+    raw.unique_camera_model = model.data();
+    // BlackLevel is in CFA-pattern order; RZSL stores physical R,Gr,Gb,B.
+    const auto& black = metadata.blackLevelPhysicalRggb;
+    const auto& pattern = kCfaBytes[std::min(cfa, 3u)];
+    int greenSeen = 0;
+    for (int i = 0; i < 4; ++i) {
+        const int colour = pattern[std::size_t(i)];
+        const float value = colour == 0 ? black[0] : colour == 2 ? black[3] : black[std::size_t(1 + greenSeen++)];
+        raw.black_level_exact[i] = value;
+        raw.black_level[i] = static_cast<std::int32_t>(std::lround(value));
+    }
+    raw.has_black_level_exact = 1;
+    raw.black_level_present = 1;
+    raw.has_black_level_repeat = 1;
+    raw.black_level_repeat[0] = raw.black_level_repeat[1] = 2;
+    raw.white_level_present = 1;
+    raw.white_level[0] = std::max(1, int(std::lround(metadata.effectiveWhiteLevel)));
+
+    const auto& color = metadata.cameraContext->color;
+    const auto copy9 = [](double* dst, const rawrcam::metadata::Matrix3x3& m) {
+        for (int i = 0; i < 9; ++i) dst[i] = m.rowMajor[std::size_t(i)];
+    };
+    if (color.colorTransform1.valid) {
+        raw.color_matrix_present = 1;
+        copy9(raw.color_matrix1, color.colorTransform1);
+        raw.calibration_illuminant1 = std::uint16_t(std::max(0, color.referenceIlluminant1));
+        if (color.forwardMatrix1.valid) { copy9(raw.forward_matrix1, color.forwardMatrix1); raw.has_forward_matrix1 = 1; }
+        if (color.calibrationTransform1.valid) {
+            copy9(raw.camera_calibration1, color.calibrationTransform1);
+            raw.camera_calibration_present = 1;
+        }
+        if (color.colorTransform2.valid && color.referenceIlluminant2 > 0) {
+            raw.has_color_matrix2 = 1;
+            copy9(raw.color_matrix2, color.colorTransform2);
+            raw.calibration_illuminant2 = std::uint16_t(color.referenceIlluminant2);
+            if (color.forwardMatrix2.valid) { copy9(raw.forward_matrix2, color.forwardMatrix2); raw.has_forward_matrix2 = 1; }
+            if (color.calibrationTransform2.valid) {
+                copy9(raw.camera_calibration2, color.calibrationTransform2);
+                raw.has_camera_calibration2 = 1;
+            }
+        }
+    }
+    if (metadata.hasNeutralColorPoint) {
+        for (int i = 0; i < 3; ++i) raw.as_shot_neutral[i] = metadata.neutralColorPoint[std::size_t(i)];
+        raw.has_as_shot_neutral = 1;
+    }
+
+    tinydng_exif exif{};
+    const auto exposureNs = tsv(rawMetadata, "exposureTimeNs");
+    if (!exposureNs.empty()) {
+        // 1/1e6 s units keep sub-ms ZSL exposures exact enough for EV ratios.
+        exif.exposure_time[0] = static_cast<std::int32_t>(std::llround(std::stod(exposureNs) / 1000.0));
+        exif.exposure_time[1] = 1000000;
+        exif.has_exposure_time = 1;
+    }
+    const auto iso = tsv(rawMetadata, "sensitivity");
+    if (!iso.empty()) {
+        exif.iso = static_cast<std::uint32_t>(std::stoul(iso));
+        exif.has_iso = 1;
+    }
+    std::string make = "Rawr";
+    exif.make = make.data();
+    exif.model = model.data();
+    exif.orientation = 1;
+
+    tinydng_write_image image{};
+    image.width = width;
+    image.height = height;
+    image.samples_per_pixel = 1;
+    image.bits_per_sample = 16;
+    image.data = reinterpret_cast<const std::uint8_t*>(raw16);
+    image.data_size = std::size_t(width) * height * 2u;
+    image.cfa = &cfaInfo;
+    image.raw = &raw;
+    image.exif = &exif;
+    tinydng_write_options options{};
+    options.as_dng = 1;
+    options.compression = 1;
+
+    tinydng_error err{};
+    tinydng_config config{};
+    tinydng_context* ctx = tinydng_context_create(&config, &err);
+    if (!ctx) throw std::runtime_error("tinydng context: " + std::string(err.message));
+    const tinydng_status status = tinydng_write_file(ctx, file.string().c_str(), &image, &options, &err);
+    tinydng_context_destroy(ctx);
+    if (status != TINYDNG_OK)
+        throw std::runtime_error("cannot write " + file.string() + ": " + std::string(err.message));
+}
+
 struct TuneOpts {
     std::string noiseSource = "burst";  // matches the app (always burst-fitted)
     float scale = 1.f;
@@ -331,6 +445,8 @@ struct TuneOpts {
     // Also write each decoded frame's unclipped RAW16 mosaic (dark-frame /
     // fixed-pattern analysis; the tagged dumps clip at black).
     bool dumpRaw16 = false;
+    // Write every decoded frame as frame_NN.dng (+ ref.txt) into this dir.
+    std::string exportDng;
     bool duplicateMiddle = false;  // diagnostic: every frame = the middle frame (perfect alignment)
     float affineDeadzone = -1.f;
     float affineSoftness = -1.f;
@@ -1007,6 +1123,15 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
             std::string tag = ":single" + std::to_string(fi);
             writeBaseOfflineInput(outputDir, path, bundle.cfa, width, height, metadata[fi],
                                   static_cast<const std::uint16_t*>(rawMapped), stemBuf, tag);
+            if (!tune.exportDng.empty()) {
+                std::filesystem::path dir = tune.exportDng;
+                std::filesystem::create_directories(dir);
+                char name[32];
+                std::snprintf(name, sizeof(name), "frame_%02zu.dng", fi);
+                writeFrameDng(dir / name, bundle.cfa, width, height, bundle.frames[fi].metadata, metadata[fi],
+                              static_cast<const std::uint16_t*>(rawMapped));
+                if (fi == 0) std::ofstream(dir / "ref.txt") << metaRef << '\n';
+            }
             if (tune.dumpRaw16) {
                 const auto rawPath = outputDir / (std::filesystem::path(path).stem().string() + "." + stemBuf + ".raw16");
                 std::ofstream rawOut(rawPath, std::ios::binary | std::ios::trunc);
@@ -1063,7 +1188,7 @@ int main(int argc, char** argv) {
         " [--flat-sigma F] [--detail-floor F] [--scale-bandwidth-gain F]"
         " [--coverage-neff-lo F] [--coverage-neff-hi F] [--coverage-mass-lo F] [--coverage-mass-hi F]"
         " [--robustness-t F] [--robustness-s1 F] [--robustness-s2 F]"
-         " [--max-frames I] [--suffix STR] [--dump-base] [--dump-all-singles] [--dump-raw16] [--affine-deadzone F] [--affine-softness F] [--affine-isotropic] [--fallback-chroma GAIN] [--fallback-luma GAIN] [--fallback-max-sigma PX] [--no-hot-pixels] [--hot-pixel-list FILE]"
+         " [--max-frames I] [--suffix STR] [--dump-base] [--dump-all-singles] [--dump-raw16] [--export-dng DIR] [--affine-deadzone F] [--affine-softness F] [--affine-isotropic] [--fallback-chroma GAIN] [--fallback-luma GAIN] [--fallback-max-sigma PX] [--no-hot-pixels] [--hot-pixel-list FILE]"
          " [--reference recorded|middle|sharpest] INPUT [INPUT2 ...]\n"
          "  INPUT: FILE.rzsl | DNG_DIR or dng:DNG_DIR (every *.dng, name-sorted, is one burst)"
          " | rawburst:DIR | synthetic:...";
@@ -1122,6 +1247,7 @@ int main(int argc, char** argv) {
             else if (a == "--affine-softness") tune.affineSoftness = std::stof(need(a.c_str()));
             else if (a == "--duplicate-middle") tune.duplicateMiddle = true;
             else if (a == "--dump-raw16") tune.dumpAllSingles = tune.dumpRaw16 = true;
+            else if (a == "--export-dng") { tune.exportDng = need(a.c_str()); tune.dumpAllSingles = true; }
             else if (a == "--reference") tune.reference = need(a.c_str());
             else if (a.rfind("--", 0) == 0) throw std::invalid_argument("unknown flag " + a);
             else if (a.rfind("dng:", 0) != 0 && a.find(':') == std::string::npos && std::filesystem::is_directory(a))
