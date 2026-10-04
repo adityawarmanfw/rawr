@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/rawr-logo.png" alt="Rawr logo" width="200">
+</p>
+
 # Rawr
 
 An Android RAW camera with GPU image processing, film simulation, JPEG/DNG
