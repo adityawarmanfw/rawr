@@ -202,6 +202,14 @@ session implementations.
   `RealtimeResources` exposes borrowed pointers; frame submission cannot
   replace the owners' `unique_ptr` fields. `PreviewLookController` owns tone
   and film builds; `MonitorRecorder` owns only command-recording behavior.
+- RAW ingress (`FrameSubmitCoordinator::ingestRaw`): RAW16 imports the camera
+  AHB as an image (plus a storage buffer for buffer-direct reads). RAW10 imports
+  the AHB as a storage buffer only, and `RawCpuUploadPool::gpuUnpack` hands out
+  the pool's owned R16 slot image, which `acquireRawInputImage` fills with the
+  `native/raw_ingress` unpacker. The camera fence then gates compute. If the
+  import or the unpacker fails, the coordinator logs `RAW_INGRESS_FALLBACK` and
+  latches to the CPU lock/unpack/upload (`RawCpuUploadPool::upload`).
+  `debug.rawr.force_cpu_ingress 1` and the diagnostic modes keep the CPU route.
 - `CaptureCoordinator` owns admission and the single/multiframe coordinators.
   Per-capture state is held in top-level jobs. The frozen RAW and burst
   contracts are separate from those coordinators. ZSL recording reserves an

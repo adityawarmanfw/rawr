@@ -34,6 +34,7 @@
 #include "encoding/jpeg/JpegCaptureWriter.h"
 #include "encoding/jpeg/JpegTimingsFormat.h"
 #include "encoding/rzsl/RzslBundleSink.h"
+#include "geometry/CfaPattern.h"
 #include "geometry/OrientationTransform.h"
 #include "geometry/RawGeometry.h"
 #include "imaging/RawSnapshot.h"
@@ -340,7 +341,9 @@ void MfsrCaptureJob::run() {
         if (mergedRequested && outputAdapterReady) {
             try {
                 rawr::raw_multiframe_output::CfaProjectionParameters projection{};
-                projection.blackByPhase = job->referenceMetadata.blackLevelPhysicalRggb;
+                // project_cfa_u16 indexes black by physical position (colour order in metadata).
+                projection.blackByPhase =
+                    rawrcam::geometry::reorderRggbByCode(job->referenceMetadata.blackLevelPhysicalRggb, ctx.cfa);
                 projection.whiteLevel = job->referenceMetadata.effectiveWhiteLevel;
                 projection.cfa = ctx.cfa;
                 const auto projectBegin = std::chrono::steady_clock::now();

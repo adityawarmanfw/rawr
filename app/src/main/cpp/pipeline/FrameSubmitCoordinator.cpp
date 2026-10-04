@@ -70,13 +70,14 @@ void FrameSubmitCoordinator::configure(const FrameSubmitConfiguration& config) {
     config_.diagnosticMode = diagnosticMode_;
     config_.experimentalZeroCopy = experimentalZeroCopy_;
     configured_ = true;
-    cpuUpload_.initialize(vulkanContext_.physicalDevice(), vulkanContext_.device());
+    cpuUpload_.initialize(vulkanContext_.physicalDevice(), vulkanContext_.device(), vulkanContext_.queueFamily());
     // `adb shell setprop debug.rawr.force_cpu_ingress 1` exercises the CPU
     // upload path on devices whose GPU import works.
     {
         char value[PROP_VALUE_MAX]{};
         const bool forced = __system_property_get("debug.rawr.force_cpu_ingress", value) > 0 && value[0] == '1';
         if (forced) forceCpuIngress_.store(true, std::memory_order_relaxed);
+        raw10ParityEnabled_ = __system_property_get("debug.rawr.raw10_parity", value) > 0 && value[0] == '1';
     }
     cpuUpload_.configure(config_.rawWidth, config_.rawHeight);
     cpuIngressActive_.store(false, std::memory_order_relaxed);
@@ -341,6 +342,42 @@ rawrcam::vulkan::ImportedRaw& FrameSubmitCoordinator::ingestRaw(const SubmitPara
             lifecyclePort_.postDiagnostic(line);
         }
     }
+    // RAW10: unpack the imported camera buffer on the GPU into the pool's
+    // owned R16 image. Diagnostic modes keep the CPU route they were built on.
+    if (raw10 && !cpuIngressRequired() && !raw10GpuUnpackLatched_.load(std::memory_order_relaxed) &&
+        config_.diagnosticMode == 0u) {
+        try {
+            int32_t rowStride = 0;
+            if (!params.imageLease || AImage_getPlaneRowStride(params.imageLease, 0, &rowStride) != AMEDIA_OK ||
+                rowStride <= 0)
+                throw std::runtime_error("RAW10 row stride unavailable");
+            const auto& camera = resources_.importer()->importRaw10Buffer(
+                params.ahb, config_.rawWidth, config_.rawHeight, static_cast<uint32_t>(rowStride));
+            if (raw10ParityEnabled_) {
+                const std::string report = cpuUpload_.takeRaw10ParityReport(slotIndex);
+                if (!report.empty()) {
+                    LOGI("%s", report.c_str());
+                    lifecyclePort_.postDiagnostic(report);
+                }
+                if (cpuUpload_.raw10ParityIdle() && (++raw10ParityFrame_ % 30u) == 0u)
+                    cpuUpload_.armRaw10Parity(slotIndex, params.imageLease, params.ahb, params.acquireFenceFd);
+            }
+            rawrcam::vulkan::ImportedRaw& raw = cpuUpload_.gpuUnpack(slotIndex, camera);
+            if (!raw10GpuUnpackLogged_) {
+                raw10GpuUnpackLogged_ = true;
+                const std::string line =
+                    "RAW_INGRESS_GPU_UNPACK format=RAW10 rowStrideBytes=" + std::to_string(rowStride);
+                LOGI("%s", line.c_str());
+                lifecyclePort_.postDiagnostic(line);
+            }
+            return raw;
+        } catch (const std::exception& e) {
+            raw10GpuUnpackLatched_.store(true, std::memory_order_relaxed);
+            const std::string line = std::string("RAW_INGRESS_FALLBACK from=gpu_unpack to=cpu_upload reason=") + e.what();
+            LOGE("%s", line.c_str());
+            lifecyclePort_.postDiagnostic(line);
+        }
+    }
     cpuIngressActive_.store(true, std::memory_order_relaxed);
     if (!cpuIngressLogged_) {
         cpuIngressLogged_ = true;
@@ -360,8 +397,11 @@ void FrameSubmitCoordinator::submitSplitVideoAndMonitor(const SubmitParams& para
     const auto& metadata = *params.metadata;
     const bool directBuffer = acquired.raw->importBufferAvailable;
     const bool bridgeCopy = !directBuffer && slot->rawCopy.image != VK_NULL_HANDLE;
+    // A GPU-unpacked frame reads the camera buffer in a compute dispatch
+    // ahead of any bridge copy, so the camera fence must gate compute too.
     const VkPipelineStageFlags rawWaitStage =
-        bridgeCopy ? VK_PIPELINE_STAGE_TRANSFER_BIT : VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+        (bridgeCopy ? VK_PIPELINE_STAGE_TRANSFER_BIT : VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT) |
+        (acquired.raw->gpuUnpack ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : 0u);
     vkCheck(vkResetFences(vulkanContext_.device(), 1, &slot->fence), "video reset fence");
     vkCheck(vkResetCommandBuffer(slot->videoCommand, 0), "video reset command");
     VkCommandBufferBeginInfo begin{};
@@ -674,7 +714,10 @@ FrameSubmitCoordinator::RecordedSubmit FrameSubmitCoordinator::recordSubmitComma
     trace.record(rawrcam::diagnostics::RuntimeTraceStage::RecordEnd, params.timestampNs, metadata.frameOrdinal,
                  static_cast<int32_t>(slotIndex), metadata.exposureTimeNs, metadata.sensitivity);
     vkCheck(vkEndCommandBuffer(slot->command), "vkEndCommandBuffer");
-    return RecordedSubmit{recordResult.rawWaitStage};
+    // The GPU RAW10 unpack reads the camera buffer in compute before the
+    // recorder's own first RAW access (possibly a transfer).
+    return RecordedSubmit{recordResult.rawWaitStage |
+                          (acquired.raw->gpuUnpack ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : 0u)};
 }
 
 void FrameSubmitCoordinator::submitAndPresent(const SubmitParams& params, const AcquiredSubmit& acquired,

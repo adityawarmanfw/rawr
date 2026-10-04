@@ -971,6 +971,31 @@ void RawAhbImporter::ensureBufferImport(AHardwareBuffer* ahb) noexcept {
     }
 }
 
+ImportedRaw& RawAhbImporter::importRaw10Buffer(AHardwareBuffer* ahb, uint32_t expectedWidth, uint32_t expectedHeight,
+                                               uint32_t rowStrideBytes) {
+    if (ahb == nullptr) throw std::runtime_error("RAW10 buffer import: missing AHB");
+    const uintptr_t key = reinterpret_cast<uintptr_t>(ahb);
+    auto it = imported_.find(key);
+    if (it == imported_.end()) {
+        if (imported_.size() >= 16u)
+            throw std::runtime_error(
+                "AHardwareBuffer identity count exceeded bounded cache (16); refusing unbounded import growth");
+        ImportedRaw r{};
+        r.ahb = ahb;
+        AHardwareBuffer_describe(ahb, &r.desc);
+        if (r.desc.width != expectedWidth || r.desc.height != expectedHeight)
+            throw std::runtime_error("AHB dimensions do not match configured RAW geometry");
+        AHardwareBuffer_acquire(ahb);
+        it = imported_.emplace(key, r).first;
+    }
+    ImportedRaw& r = it->second;
+    r.gpuUnpack = true;
+    r.rowStrideBytes = rowStrideBytes;
+    ensureBufferImport(ahb);
+    if (!r.importBufferAvailable) throw std::runtime_error("RAW10 buffer import unavailable");
+    return r;
+}
+
 void RawAhbImporter::clear() noexcept {
     for (auto& kv : imported_) {
         auto& r = kv.second;

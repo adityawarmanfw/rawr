@@ -106,7 +106,14 @@ ANativeWindow* SessionEngine::createRawInputWindow(uint64_t generation, uint32_t
                 << " latched=" << (realtime_.coordinator().cpuIngressRequired() ? "true" : "false");
             SESSION_LOGI("%s", out.str().c_str());
             appendDiagnostic(out.str());
-            return rawFrameIngress_.create(generation, width, height, format, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN);
+            // RAW10 normally goes through the GPU unpack, which reads the AHB
+            // as a storage buffer: ask for GPU buffer access too, or the
+            // allocation is CPU-only and the GPU sees incoherent data. CPU
+            // read stays for the fallback upload.
+            uint64_t usage = AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN;
+            if (format == rawrcam::geometry::RawPixelFormat::Raw10 && !realtime_.coordinator().cpuIngressRequired())
+                usage |= AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER;
+            return rawFrameIngress_.create(generation, width, height, format, usage);
         }
 
         const uint32_t diagnosticMode = realtime_.coordinator().diagnosticMode();

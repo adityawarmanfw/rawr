@@ -1,5 +1,5 @@
 #version 450
-// Multiframe accumulate: RGGB path (MultiframeRecorder rejects non-RGGB).
+// Multiframe accumulate: any 2x2 Bayer arrangement (CfaPattern codes 0..3).
 #ifdef RAWR_PARITY_TRACE
 layout(std430, set = 0, binding = 31) buffer RawrTraceBuffer {
     uint writeCount;
@@ -165,8 +165,10 @@ float rawrExpF32(float x) {
     return (y * uintBitsToFloat(uint(n + 151) << 23u)) * 5.9604644775390625e-8;
 }
 int ch(ivec2 q) {
-    // Recorder guarantees CfaPattern::RGGB for the frozen path.
-    int px = q.x & 1, py = q.y & 1;
+    // Shifting to RGGB-relative parity keeps one table for all four patterns:
+    // GRBG flips x, GBRG flips y, BGGR flips both.
+    int px = (q.x ^ (p.cfa == 1 || p.cfa == 3 ? 1 : 0)) & 1;
+    int py = (q.y ^ (p.cfa == 2 || p.cfa == 3 ? 1 : 0)) & 1;
     return (py == 0 && px == 0) ? 0 : (py == 1 && px == 1) ? 2 : 1;
 }
 bool smoothFlow(vec2 q, out vec2 f) {

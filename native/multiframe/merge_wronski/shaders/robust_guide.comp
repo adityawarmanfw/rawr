@@ -42,6 +42,7 @@ layout(push_constant) uniform P {
     vec3 wb;
     int w;
     int h;
+    int cfa;
 }
 p;
 void main() {
@@ -49,9 +50,12 @@ void main() {
     rawrTrace4(1u, q, 0u, vec4(gl_GlobalInvocationID.xy, 0, 0));
     if (q.x >= p.w || q.y >= p.h) return;
     ivec2 r = q * 2;
-    float R = imageLoad(rawI, r).x / p.wb.x,
-          G = .5 * (imageLoad(rawI, r + ivec2(1, 0)).x + imageLoad(rawI, r + ivec2(0, 1)).x) / p.wb.y,
-          B = imageLoad(rawI, r + ivec2(1)).x / p.wb.z;
+    // Red's offset inside the quad; blue sits diagonally opposite.
+    ivec2 ro = ivec2(p.cfa == 1 || p.cfa == 3 ? 1 : 0, p.cfa == 2 || p.cfa == 3 ? 1 : 0);
+    ivec2 bo = ivec2(1) - ro;
+    float R = imageLoad(rawI, r + ro).x / p.wb.x,
+          G = .5 * (imageLoad(rawI, r + ivec2(bo.x, ro.y)).x + imageLoad(rawI, r + ivec2(ro.x, bo.y)).x) / p.wb.y,
+          B = imageLoad(rawI, r + bo).x / p.wb.z;
     vec3 value = vec3(R, G, B);
     value = sqrt(max(value, vec3(0)));
     imageStore(guide, q, vec4(value, 0));

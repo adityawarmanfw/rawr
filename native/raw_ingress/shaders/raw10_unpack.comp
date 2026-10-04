@@ -1,0 +1,27 @@
+#version 450
+// RAW10 -> R16 unpack. MIPI groups are 5 bytes: four MSB bytes, then one
+// byte holding the four 2-bit LSBs (pixel k at bits 2k..2k+1).
+// The source is the camera buffer itself, addressed by row stride in bytes
+// so padded strides need no special casing.
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, set = 0, binding = 0) readonly buffer Packed { uint words[]; } src;
+layout(set = 0, binding = 1, r16ui) writeonly uniform uimage2D dst;
+layout(push_constant) uniform P {
+    uint width;
+    uint height;
+    uint rowStrideBytes;
+}
+p;
+
+uint byteAt(uint offset) { return (src.words[offset >> 2u] >> ((offset & 3u) * 8u)) & 0xffu; }
+
+void main() {
+    // One texel per invocation: a per-group loop writing four texels
+    // miscompiled on the V2562 (Adreno) driver, corrupting pixels 1..3.
+    uint x = gl_GlobalInvocationID.x, y = gl_GlobalInvocationID.y;
+    if (x >= p.width || y >= p.height) return;
+    uint base = y * p.rowStrideBytes + (x >> 2u) * 5u;
+    uint k = x & 3u;
+    uint v = (byteAt(base + k) << 2u) | ((byteAt(base + 4u) >> (2u * k)) & 3u);
+    imageStore(dst, ivec2(int(x), int(y)), uvec4(v, 0u, 0u, 0u));
+}

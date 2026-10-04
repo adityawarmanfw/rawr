@@ -30,6 +30,7 @@ std::size_t multiframeRingFrames(uint32_t width, uint32_t height) {
                                    kMultiframeRingFrames);
 }
 
+#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, kTag, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, kTag, __VA_ARGS__)
 }  // namespace
 MultiframeCaptureCoordinator::MultiframeCaptureCoordinator(vulkan::VulkanContext& context, std::mutex& queueMutex,
@@ -108,15 +109,20 @@ uint32_t MultiframeCaptureCoordinator::prepareExperimentalMultiframeOnShutter(ui
         trace.record(rawrcam::diagnostics::RuntimeTraceStage::MultiframeTrigger, 0, 0, -1, 0, 0, 1u, 0);
         return 0u;
     }
+    // The merge handles every 2x2 Bayer arrangement (codes 0..3); anything else
+    // (e.g. MONO) has no CFA phases to merge, so say why instead of going quiet.
+    if (config_.cfa > 3u) {
+        trace.record(rawrcam::diagnostics::RuntimeTraceStage::MultiframeFail, 0, 0, -1, 0, 0, 5u, config_.cfa);
+        LOGW("MULTIFRAME_UNAVAILABLE reason=cfa code=%u", config_.cfa);
+        return 0u;
+    }
     try {
         auto frozen = multiframeFrameRing_->freeze(maxFrames);
         trace.record(rawrcam::diagnostics::RuntimeTraceStage::MultiframeSnapshot, 0, 0, -1, 0, 0,
                      static_cast<uint32_t>(frozen ? frozen->refs.size() : 0),
                      static_cast<int64_t>(multiframeFrameRing_->usedBytes()));
-        if (!frozen || config_.cfa != 0u) {
-            if (!frozen) {
-                trace.record(rawrcam::diagnostics::RuntimeTraceStage::MultiframeFail, 0, 0, -1, 0, 0, 4u, 0);
-            }
+        if (!frozen) {
+            trace.record(rawrcam::diagnostics::RuntimeTraceStage::MultiframeFail, 0, 0, -1, 0, 0, 4u, 0);
             return 0u;
         }
         auto pending = std::make_unique<rawrcam::capture::multiframe::PendingMultiframeCapture>();

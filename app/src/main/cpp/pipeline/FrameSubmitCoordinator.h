@@ -260,6 +260,11 @@ class FrameSubmitCoordinator final {
     std::atomic<bool> forceCpuIngress_{false};
     std::atomic<bool> cpuIngressActive_{false};
     bool cpuIngressLogged_ = false;
+    // Set when the RAW10 GPU unpack failed once; RAW10 then stays on the CPU upload.
+    std::atomic<bool> raw10GpuUnpackLatched_{false};
+    bool raw10GpuUnpackLogged_ = false;
+    bool raw10ParityEnabled_ = false;  // debug.rawr.raw10_parity
+    uint32_t raw10ParityFrame_ = 0;
     rawrcam::vulkan::ImportedRaw& ingestRaw(const SubmitParams& params, uint32_t slotIndex);
     VideoDropReasons videoDropReasons_{};
     std::string lastVideoSubmitFailure_;

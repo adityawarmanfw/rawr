@@ -9,6 +9,9 @@
 #include <unordered_map>
 
 #include "vulkan/RawImportOptions.h"
+namespace rawr::raw_ingress {
+class Raw10Unpacker;
+}
 namespace rawrcam::vulkan {
 struct ImportedRaw {
     AHardwareBuffer* ahb = nullptr;
@@ -71,6 +74,18 @@ struct ImportedRaw {
     // App-owned CPU upload (pipeline/RawCpuUploadPool): image/view and
     // importBuffer are not camera memory and must not use foreign barriers.
     bool cpuUploaded = false;
+    // GPU RAW10 ingress. On a camera entry (importRaw10Buffer) importBuffer
+    // holds the packed RAW10 rows, rowStrideBytes apart. On the pool's slot
+    // entry, image/view are the owned R16 target that acquireRawInputImage
+    // fills by unpacking unpackSource with unpacker (descriptor slot unpackSlot).
+    bool gpuUnpack = false;
+    uint32_t rowStrideBytes = 0;
+    VkBuffer unpackSource = VK_NULL_HANDLE;
+    rawr::raw_ingress::Raw10Unpacker* unpacker = nullptr;
+    uint32_t unpackSlot = 0;
+    // Debug parity probe (debug.rawr.raw10_parity): recorded once after the
+    // unpack while the camera buffer and unpacked image are readable.
+    std::function<void(VkCommandBuffer)> afterUnpack;
     AHardwareBuffer_Desc desc{};
 };
 class RawAhbImporter {
@@ -87,6 +102,11 @@ class RawAhbImporter {
     // only; never throws. Failures mark the entry unavailable with a
     // diagnostic line so the bridge fallback continues undisturbed.
     void ensureBufferImport(AHardwareBuffer* ahb) noexcept;
+    // Buffer-only import of a RAW10 camera AHB for the GPU unpack: no image
+    // import is attempted. Throws when the buffer import is unavailable so
+    // the caller can fall back to the CPU upload.
+    ImportedRaw& importRaw10Buffer(AHardwareBuffer* ahb, uint32_t expectedWidth, uint32_t expectedHeight,
+                                   uint32_t rowStrideBytes);
     void clear() noexcept;
     size_t size() const noexcept { return imported_.size(); }
 

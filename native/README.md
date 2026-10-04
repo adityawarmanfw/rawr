@@ -16,7 +16,8 @@ still a native library, not app code.
 
 | Stage | Preview | Still (single) | Still (multiframe) | Video | Renderer (DNG) |
 |---|---|---|---|---|---|
-| Clip classification + CFA pack | `raw_preview` (cfa_state) | `raw_demosaic/common` (sensor_clip_pack) | `multiframe/output` (prepare_rgb) | `video_pipeline` | CPU normalize (`RendererEngine`) |
+| Clip classification + CFA pack | `raw_preview` (cfa_state) | `raw_demosaic/common` (sensor_clip_pack) | `multiframe/output` (prepare_rgb) | `raw_ingress` | GPU camera ingress: RAW10 (MIPI packed) to R16 unpack from the imported camera buffer. |
+| `video_pipeline` | CPU normalize (`RendererEngine`) |
 | Pre-demosaic denoise | — | `galosh` (RAW) | — | — | — |
 | Demosaic | `raw_preview` (2×2 cell) | `raw_demosaic` (RCD / VNG4 / Dual) | `multiframe/merge_wronski` (merge outputs RGB) | `video_pipeline` (MHC 5×5) | `raw_demosaic` (+ quadfix) |
 | Post-demosaic denoise | — | `raw_denoise` | — | `raw_denoise` | `raw_denoise` |

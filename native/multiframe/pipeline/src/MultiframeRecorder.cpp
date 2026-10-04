@@ -55,7 +55,7 @@ struct KernelPc {
 };
 struct GuidePc {
     float wb[3];
-    std::int32_t w, h;
+    std::int32_t w, h, cfa;
 };
 struct FlowScalePc {
     float s1, s2, threshold;
@@ -100,8 +100,6 @@ MultiframeRecorder::MultiframeRecorder(ResourceArena& a, VulkanExecutor& e, rawr
     if (!rawr::raw_merge_wronski_gpu::valid(merge_))
         throw std::invalid_argument("multiframe recorder: invalid merge config");
     if (!stripeHeight_) throw std::invalid_argument("multiframe recorder: zero stripe height");
-    if (merge_.cfa != rawr::raw_merge_wronski_gpu::CfaPattern::RGGB)
-        throw std::invalid_argument("multiframe recorder: multiframe robustness oracle supports RGGB only");
     const auto& out = arena_.image("linear_output");
     if (stripeHeight_ < out.extent.height)
         throw std::invalid_argument(
@@ -289,7 +287,8 @@ void MultiframeRecorder::recordKernelAndStats(VkCommandBuffer c, bool ref, const
         computeWriteBarrier(c);
     }
     const auto& guide = arena_.image(ref ? "reference_guide" : "companion_guide");
-    GuidePc gp{{1.0f, 1.0f, 1.0f}, std::int32_t(guide.extent.width), std::int32_t(guide.extent.height)};
+    GuidePc gp{{1.0f, 1.0f, 1.0f}, std::int32_t(guide.extent.width), std::int32_t(guide.extent.height),
+                std::int32_t(merge_.cfa)};
     (void)f.whiteBalance;
     executor_.record(c, ShaderId::RobustGuide, {{ib(0, raw), ib(1, guide)}, {}}, &gp, sizeof(gp),
                      divUp(guide.extent.width, 16), divUp(guide.extent.height, 16), 1, tr);

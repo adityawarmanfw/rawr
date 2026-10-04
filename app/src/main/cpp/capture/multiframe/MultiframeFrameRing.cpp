@@ -4,6 +4,7 @@
 #include <iterator>
 
 #include "color/WhiteBalance.h"
+#include "geometry/CfaPattern.h"
 
 namespace rawrcam::capture::multiframe {
 
@@ -85,7 +86,11 @@ std::optional<FrozenBurst> MultiframeFrameRing::freeze(std::size_t maxFrames) {
         if (meta == metadata_.end() || col == color_.end() || !gpu) return std::nullopt;
         rawr::raw_gpu_pipeline::BurstFrame frame{};
         frame.raw = *gpu;
-        frame.parameters.normalization.blackByPhase = meta->second.blackLevelPhysicalRggb;
+        // raw_normalize indexes black by physical 2x2 position; metadata keeps
+        // it in R,G1,G2,B colour order.
+        const std::uint32_t cfa = meta->second.cameraContext ? meta->second.cameraContext->rawPreviewCfa : 0u;
+        frame.parameters.normalization.blackByPhase =
+            rawrcam::geometry::reorderRggbByCode(meta->second.blackLevelPhysicalRggb, cfa);
         frame.parameters.normalization.whiteLevel = meta->second.effectiveWhiteLevel;
         frame.parameters.whiteBalance = rawrcam::color::collapseRggbToRgb(col->second.baselineWbRggb);
         out.frames.push_back(frame);
