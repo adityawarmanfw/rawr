@@ -65,6 +65,7 @@ RAWR_internal_trace_*.txt
 *.jks
 *.keystore
 /signing.properties
+/signing/
 .env
 .env.*
 !.env.example

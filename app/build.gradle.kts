@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -69,15 +71,20 @@ android {
         getByName("testRelease").java.srcDir("src/fixtures/kotlin")
     }
 
+    // Lowest precedence: the git-ignored signing/release.properties (keystore path relative to the repo root).
+    val localSigning = Properties().apply {
+        rootProject.file("signing/release.properties").takeIf { it.isFile }?.reader()?.use { load(it) }
+    }
     val releaseSigning = listOf("STORE_FILE", "STORE_PASSWORD", "KEY_ALIAS", "KEY_PASSWORD").associateWith { key ->
         providers.gradleProperty("rawr.signing.$key").orElse(providers.environmentVariable("RAWR_SIGNING_$key")).orNull
+            ?: localSigning.getProperty("rawr.signing.$key")
     }
     require(releaseSigning.values.all { it == null } || releaseSigning.values.all { !it.isNullOrBlank() }) {
         "Provide all four RAWR_SIGNING_* values, or none for an unsigned release."
     }
     if (releaseSigning.values.all { it != null }) {
         signingConfigs.create("release") {
-            storeFile = file(requireNotNull(releaseSigning["STORE_FILE"]))
+            storeFile = rootProject.file(requireNotNull(releaseSigning["STORE_FILE"]))
             storePassword = releaseSigning["STORE_PASSWORD"]
             keyAlias = releaseSigning["KEY_ALIAS"]
             keyPassword = releaseSigning["KEY_PASSWORD"]
