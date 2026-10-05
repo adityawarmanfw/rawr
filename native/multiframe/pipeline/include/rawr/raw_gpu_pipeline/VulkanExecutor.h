@@ -30,6 +30,22 @@ enum class ShaderId : std::uint32_t {
     NoiseEstimate,
     FallbackChroma,
     HotPixelConceal,
+    // HDR+ spatial merge (merge_hdrplus/).
+    HdrpPrepare,
+    HdrpHotPixel,
+    HdrpAvgPool,
+    HdrpBlur,
+    HdrpUpsampleAlign,
+    HdrpCorrectUpsampling,
+    HdrpTileDiff,
+    HdrpBestTile,
+    HdrpWarp,
+    HdrpColorDiff,
+    HdrpColumnSum,
+    HdrpMean,
+    HdrpMergeWeight,
+    HdrpAccumulate,
+    HdrpFinalize,
     Count
 };
 struct ImageBinding {

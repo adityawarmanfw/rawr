@@ -1,0 +1,42 @@
+#version 450
+// Fused port of hdr-plus-swift upsample(.Bilinear) + add_texture_weighted +
+// add_texture: accum (+)= lerp(ref, aligned, w) / N, with w bilinearly
+// upsampled from the half-resolution weight. mode 0 initializes the
+// accumulator with ref / N (the reference's own contribution).
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0, r32f) readonly uniform image2D refPadded;
+layout(set = 0, binding = 1, r32f) readonly uniform image2D aligned;
+layout(set = 0, binding = 2, r32f) readonly uniform image2D weight;
+layout(set = 0, binding = 3, r32f) uniform image2D accum;
+layout(push_constant) uniform P {
+    ivec2 size;
+    ivec2 pad;
+    ivec2 cells;
+    float invCount;
+    int mode;  // 0 = reference init, 1 = companion add
+} p;
+
+float w(ivec2 c) { return imageLoad(weight, clamp(c, ivec2(0), p.cells - 1)).x; }
+
+// upsample_bilinear_float at scale 2: even pixels hit a cell exactly.
+float upsampledWeight(ivec2 q) {
+    vec2 x = vec2(q) * 0.5;
+    ivec2 f = ivec2(floor(x)), c = ivec2(ceil(x));
+    vec2 t = x - floor(x);
+    float i1 = t.x == 0.0 ? w(ivec2(f.x, f.y)) : (1.0 - t.x) * w(ivec2(f.x, f.y)) + t.x * w(ivec2(c.x, f.y));
+    float i2 = t.x == 0.0 ? w(ivec2(f.x, c.y)) : (1.0 - t.x) * w(ivec2(f.x, c.y)) + t.x * w(ivec2(c.x, c.y));
+    return t.y == 0.0 ? i1 : (1.0 - t.y) * i1 + t.y * i2;
+}
+
+void main() {
+    ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(q, p.size))) return;
+    float r = imageLoad(refPadded, p.pad + q).x;
+    if (p.mode == 0) {
+        imageStore(accum, q, vec4(r * p.invCount));
+        return;
+    }
+    float k = upsampledWeight(q);
+    float merged = k * imageLoad(aligned, q).x + (1.0 - k) * r;
+    imageStore(accum, q, vec4(imageLoad(accum, q).x + merged * p.invCount));
+}

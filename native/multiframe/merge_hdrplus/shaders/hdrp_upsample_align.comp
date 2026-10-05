@@ -1,0 +1,18 @@
+#version 450
+// Port of hdr-plus-swift upsample_nearest_int for the per-tile alignment
+// vectors (stored as ivec2 in SSBOs instead of rg16Sint textures).
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, set = 0, binding = 0) readonly buffer Src { ivec2 v[]; } src;
+layout(std430, set = 0, binding = 1) writeonly buffer Dst { ivec2 v[]; } dst;
+layout(push_constant) uniform P {
+    ivec2 srcTiles;
+    ivec2 dstTiles;
+    vec2 scale;  // dst / src, as float like upstream
+} p;
+
+void main() {
+    ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(q, p.dstTiles))) return;
+    ivec2 s = clamp(ivec2(round(vec2(q) / p.scale)), ivec2(0), p.srcTiles - 1);
+    dst.v[q.y * p.dstTiles.x + q.x] = src.v[s.y * p.srcTiles.x + s.x];
+}

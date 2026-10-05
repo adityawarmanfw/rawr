@@ -17,6 +17,7 @@ of this file. The GNU GPL v3 text is the repository `LICENSE`.
 | librtprocess (RCD, VNG4 demosaic) | `native/raw_demosaic/rcd`, `native/raw_demosaic/vng4` | https://github.com/CarVac/librtprocess | GPL-3.0-or-later |
 | spektrafilm / spektrafilm-ofx | `native/spektrafilm`, `app/src/main/assets/spektrafilm` | https://github.com/chaert-s/spektrafilm-ofx , https://github.com/andreavolpato/spektrafilm | GPL-3.0-only |
 | Handheld Multi-Frame Super-Resolution (Wronski et al.) | `native/multiframe` | https://github.com/Jamy-L/Handheld-Multi-Frame-Super-Resolution | MIT |
+| hdr-plus-swift / Burst Photo (HDR+ spatial merge) | `native/multiframe/merge_hdrplus` | https://github.com/martin-marek/hdr-plus-swift | GPL-3.0 |
 | GALOSH | `native/galosh` | https://github.com/luxgrain/GALOSH | Apache-2.0 |
 | libultrahdr (Ultra HDR / JPEG_R mux) | `native/gainmap` | https://github.com/google/libultrahdr | Apache-2.0 |
 | Oklab gamut clipping (Björn Ottosson) | `native/tonemap_engine` | https://bottosson.github.io/posts/gamutclipping/ | MIT |

@@ -1,0 +1,16 @@
+#version 450
+// texture_mean stage 1 (sum_rect_columns_float): per-column sums.
+layout(local_size_x = 64) in;
+layout(set = 0, binding = 0, r32f) readonly uniform image2D src;
+layout(std430, set = 0, binding = 1) writeonly buffer Columns { float v[]; } columns;
+layout(push_constant) uniform P {
+    ivec2 size;
+} p;
+
+void main() {
+    int x = int(gl_GlobalInvocationID.x);
+    if (x >= p.size.x) return;
+    float total = 0.0;
+    for (int y = 0; y < p.size.y; ++y) total += imageLoad(src, ivec2(x, y)).x;
+    columns.v[x] = total;
+}

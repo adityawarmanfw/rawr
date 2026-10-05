@@ -47,7 +47,22 @@ set(RAWR_MF_SHADER_SOURCES
   ${RAWR_MF_DIR}/merge_wronski/shaders/a11_finalize.comp
   ${CMAKE_CURRENT_LIST_DIR}/shaders/noise_estimate.comp
   ${RAWR_MF_DIR}/merge_wronski/shaders/fallback_chroma.comp
-  ${CMAKE_CURRENT_LIST_DIR}/shaders/hot_pixel_conceal.comp)
+  ${CMAKE_CURRENT_LIST_DIR}/shaders/hot_pixel_conceal.comp
+  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrp_prepare.comp
+  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrp_hot_pixel.comp
+  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrp_avg_pool.comp
+  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrp_blur.comp
+  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrp_upsample_align.comp
+  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrp_correct_upsampling.comp
+  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrp_tile_diff.comp
+  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrp_best_tile.comp
+  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrp_warp.comp
+  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrp_color_diff.comp
+  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrp_column_sum.comp
+  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrp_mean.comp
+  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrp_merge_weight.comp
+  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrp_accumulate.comp
+  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrp_finalize.comp)
 set(RAWR_MF_SPV_OUTPUTS)
 foreach(RAWR_MF_SRC IN LISTS RAWR_MF_SHADER_SOURCES)
   get_filename_component(RAWR_MF_NAME ${RAWR_MF_SRC} NAME_WE)
@@ -80,6 +95,7 @@ add_library(raw_gpu_pipeline STATIC
   src/VulkanExecutor.cpp
   src/ResourceArena.cpp
   src/MultiframeRecorder.cpp
+  src/HdrPlusRecorder.cpp
   src/AndroidBurstCoordinator.cpp
   src/BurstNoiseEstimate.cpp)
 add_dependencies(raw_gpu_pipeline raw_multiframe_gpu_shaders)
@@ -87,6 +103,7 @@ target_include_directories(raw_gpu_pipeline
   PUBLIC include
          ${RAWR_MF_DIR}/alignment/include
          ${RAWR_MF_DIR}/merge_wronski/include
+         ${RAWR_MF_DIR}/merge_hdrplus/include
          ${RAWR_NATIVE_DIR}/zsl_codec/include
          ${RAWR_NATIVE_DIR}/zsl_ring/include
   PRIVATE ${RAWR_MF_SPV_DIR})
@@ -102,7 +119,7 @@ endif()
 
 if(RAW_GPU_PIPELINE_BUILD_TESTS)
   enable_testing()
-  foreach(TEST_NAME merge_math_test reconstruction_tiling_test resource_geometry_test scratch_layout_test)
+  foreach(TEST_NAME merge_math_test hdrplus_geometry_test reconstruction_tiling_test resource_geometry_test scratch_layout_test)
     add_executable(${TEST_NAME} tests/${TEST_NAME}.cpp)
     target_link_libraries(${TEST_NAME} PRIVATE raw_gpu_pipeline)
     # The tests are assert-based; keep asserts active in every build type.

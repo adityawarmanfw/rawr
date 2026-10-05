@@ -1,10 +1,13 @@
 #include <rawr/raw_gpu_pipeline/AndroidBurstCoordinator.h>
 #include <rawr/raw_gpu_pipeline/BurstNoiseEstimate.h>
+#include <rawr/raw_gpu_pipeline/HdrPlusRecorder.h>
 #include <rawr/raw_gpu_pipeline/MergeMath.h>
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -86,6 +89,7 @@ void AndroidBurstCoordinator::warmAll(VkPhysicalDevice physical, VkDevice device
     if (arenaReady_ && width_ == w && height_ == h && std::abs(outputScale_ - lastScale_) <= 1.0e-6f) return;
     const auto geom = makeMultiframeGeometry(w, h, lastScale_);
     arena_.initialize(physical, device, makeMultiframeScratchLayout(geom));
+    arenaAlgorithm_ = MergeAlgorithm::Wronski;
     arenaReady_ = true;
     layoutsInitialized_ = false;
     width_ = w;
@@ -152,12 +156,34 @@ void AndroidBurstCoordinator::ensureExecutionInfra(VkPhysicalDevice physical, Vk
     executionReady_ = true;
 }
 
+bool AndroidBurstCoordinator::arenaMatchesSelection() const noexcept {
+    if (arenaAlgorithm_ != algorithm_) return false;
+    return algorithm_ != MergeAlgorithm::HdrPlusSpatial || (arenaHdrPlus_.tileSize == hdrplus_.tileSize &&
+                                                            arenaHdrPlus_.searchDistance == hdrplus_.searchDistance);
+}
+void AndroidBurstCoordinator::initializeArenaLocked(VkPhysicalDevice physical, VkDevice device) {
+    if (algorithm_ == MergeAlgorithm::HdrPlusSpatial) {
+        arena_.initialize(physical, device,
+                          makeHdrPlusScratchLayout(rawr::raw_merge_hdrplus_gpu::makeGeometry(width_, height_, hdrplus_)));
+        arenaHdrPlus_ = hdrplus_;
+    } else {
+        arena_.initialize(physical, device, makeMultiframeScratchLayout(makeMultiframeGeometry(width_, height_, outputScale_)));
+    }
+    arenaAlgorithm_ = algorithm_;
+}
 void AndroidBurstCoordinator::initialize(VkPhysicalDevice physical, VkDevice device, std::uint32_t qf, Submit submit,
                                          std::uint32_t w, std::uint32_t h, float scale, StageSink stageSink,
                                          rawr::raw_alignment_gpu::Config alignment,
-                                         rawr::raw_merge_wronski_gpu::Config merge) {
+                                         rawr::raw_merge_wronski_gpu::Config merge, MergeAlgorithm algorithm,
+                                         rawr::raw_merge_hdrplus_gpu::Config hdrplus) {
     if (!physical || !device || !submit || !w || !h)
         throw std::invalid_argument("multiframe burst: invalid initialize");
+    // HDR+ merges on the RAW grid only.
+    if (algorithm == MergeAlgorithm::HdrPlusSpatial) {
+        scale = 1.0f;
+        if (!rawr::raw_merge_hdrplus_gpu::valid(hdrplus))
+            throw std::invalid_argument("multiframe burst: invalid HDR+ tuning");
+    }
     merge.outputScale = scale;
     if (!rawr::raw_alignment_gpu::valid(alignment) ||
         !(std::isfinite(alignment.hessianEpsilon) && alignment.hessianEpsilon > 0.0f) ||
@@ -169,15 +195,21 @@ void AndroidBurstCoordinator::initialize(VkPhysicalDevice physical, VkDevice dev
         std::abs(outputScale_ - scale) <= 1.0e-6f) {
         alignment_ = alignment;
         merge_ = merge;
+        algorithm_ = algorithm;
+        hdrplus_ = hdrplus;
         submit_ = std::move(submit);
         stageSink_ = std::move(stageSink);
         pipelineCacheReused_ = executionReady_;
+        if (arenaReady_ && !arenaMatchesSelection()) {
+            arena_.reset();
+            arenaReady_ = false;
+            layoutsInitialized_ = false;
+        }
         resourcesReused_ = arenaReady_;
         if (!arenaReady_) {
             const auto initializeBegin = std::chrono::steady_clock::now();
             if (stageSink_) stageSink_(Stage::ArenaInitializeBegin, 0, 0);
-            const auto geom = makeMultiframeGeometry(w, h, scale);
-            arena_.initialize(physical, device, makeMultiframeScratchLayout(geom));
+            initializeArenaLocked(physical, device);
             arenaReady_ = true;
             layoutsInitialized_ = false;
             if (stageSink_)
@@ -212,6 +244,8 @@ void AndroidBurstCoordinator::initialize(VkPhysicalDevice physical, VkDevice dev
     const auto initializeBegin = std::chrono::steady_clock::now();
     alignment_ = alignment;
     merge_ = merge;
+    algorithm_ = algorithm;
+    hdrplus_ = hdrplus;
     submit_ = std::move(submit);
     stageSink_ = std::move(stageSink);
     width_ = w;
@@ -219,14 +253,87 @@ void AndroidBurstCoordinator::initialize(VkPhysicalDevice physical, VkDevice dev
     outputScale_ = scale;
     if (stageSink_) stageSink_(Stage::ArenaInitializeBegin, 0, 0);
     ensureExecutionInfra(physical, device, qf);
-    const auto geom = makeMultiframeGeometry(w, h, scale);
-    arena_.initialize(physical, device, makeMultiframeScratchLayout(geom));
+    initializeArenaLocked(physical, device);
     arenaReady_ = true;
     if (stageSink_) stageSink_(Stage::ArenaInitializeEnd, arena_.physicalImageBytes(), arena_.physicalBufferBytes());
     resourcesReused_ = false;
     pipelineCacheReused_ = warmedInfra;
     pendingInitializeMs_ =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - initializeBegin).count();
+}
+AndroidBurstCoordinator::ChunkTiming AndroidBurstCoordinator::executeChunk(std::uint32_t chunkCode,
+                                                                          std::uint32_t frameIndex,
+                                                                          std::uint32_t queryCount,
+                                                                          const std::function<void()>& record) {
+    using Clock = std::chrono::steady_clock;
+    const auto begin = Clock::now();
+    if (stageSink_) stageSink_(Stage::ChunkBegin, chunkCode, frameIndex);
+    try {
+        if (submissionInFlight_) {
+            const VkResult prior = vkWaitForFences(device_, 1, &fence_, VK_TRUE, UINT64_MAX);
+            submissionInFlight_ = false;
+            check(prior, "multiframe prior fence");
+        }
+        check(vkResetCommandBuffer(command_, 0), "multiframe reset command buffer");
+        executor_.beginBatch();
+        if (stageSink_) stageSink_(Stage::RecordBegin, arena_.physicalImageBytes(), arena_.physicalBufferBytes());
+        VkCommandBufferBeginInfo bi{};
+        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        check(vkBeginCommandBuffer(command_, &bi), "multiframe begin");
+        if (timestampsSupported_) vkCmdResetQueryPool(command_, timestampPool_, 0u, queryCount);
+        record();
+        check(vkEndCommandBuffer(command_), "multiframe end");
+        if (stageSink_) stageSink_(Stage::RecordEnd, arena_.physicalImageBytes(), arena_.physicalBufferBytes());
+        VkSubmitInfo si{};
+        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &command_;
+        // One-shot cross-queue edge (e.g. prior-queue writes to borrowed
+        // inputs before a multiframe queue takes over). Consumed once.
+        // NB: stage/semaphore must be locals: pWaitSemaphores must stay
+        // valid through submit_, so they cannot alias the cleared member.
+        VkSemaphore initialWait = initialWait_;
+        VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+        initialWait_ = VK_NULL_HANDLE;
+        if (initialWait != VK_NULL_HANDLE) {
+            si.waitSemaphoreCount = 1;
+            si.pWaitSemaphores = &initialWait;
+            si.pWaitDstStageMask = &waitStage;
+        }
+        check(vkResetFences(device_, 1, &fence_), "multiframe reset fence");
+        if (stageSink_) stageSink_(Stage::SubmitBegin, arena_.physicalImageBytes(), arena_.physicalBufferBytes());
+        submit_(si, fence_);
+        submissionInFlight_ = true;
+        if (stageSink_) stageSink_(Stage::SubmitEnd, arena_.physicalImageBytes(), arena_.physicalBufferBytes());
+        if (stageSink_)
+            stageSink_(Stage::FenceWaitBegin, arena_.physicalImageBytes(), arena_.physicalBufferBytes());
+        const VkResult executed = vkWaitForFences(device_, 1, &fence_, VK_TRUE, UINT64_MAX);
+        submissionInFlight_ = false;
+        if (stageSink_) stageSink_(Stage::FenceWaitEnd, arena_.physicalImageBytes(), arena_.physicalBufferBytes());
+        check(executed, "multiframe execute");
+    } catch (const std::exception& e) {
+        throw std::runtime_error("multiframe chunk=" + std::to_string(chunkCode) +
+                                 " frame=" + std::to_string(frameIndex) + ": " + e.what());
+    }
+    if (stageSink_) stageSink_(Stage::ChunkEnd, chunkCode, frameIndex);
+    std::vector<double> gpuIntervals;
+    if (timestampsSupported_ && queryCount > 1u) {
+        std::array<std::uint64_t, 8> values{};
+        check(vkGetQueryPoolResults(device_, timestampPool_, 0u, queryCount, queryCount * sizeof(values[0]),
+                                    values.data(), sizeof(values[0]), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT),
+              "multiframe timestamp results");
+        gpuIntervals.reserve(queryCount - 1u);
+        for (std::uint32_t i = 1u; i < queryCount; ++i) {
+            gpuIntervals.push_back(double(values[i] - values[i - 1u]) * double(timestampPeriodNs_) / 1.0e6);
+        }
+    }
+    const double wall = std::chrono::duration<double, std::milli>(Clock::now() - begin).count();
+    return std::pair<double, std::vector<double>>(wall, std::move(gpuIntervals));
+}
+void AndroidBurstCoordinator::recordTimestamp(std::uint32_t query) {
+    if (timestampsSupported_)
+        vkCmdWriteTimestamp(command_, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, timestampPool_, query);
 }
 BurstRunResult AndroidBurstCoordinator::run(const std::vector<BurstFrame>& frames, std::uint32_t ref,
                                             FrameConsumed frameConsumed) {
@@ -246,77 +353,8 @@ BurstRunResult AndroidBurstCoordinator::run(const std::vector<BurstFrame>& frame
     const auto runBegin = Clock::now();
     BurstStageTimings timings{};
     timings.initializeMs = pendingInitializeMs_;
-    const auto executeChunk = [&](std::uint32_t chunkCode, std::uint32_t frameIndex, std::uint32_t queryCount,
-                                  auto&& record) {
-        const auto begin = Clock::now();
-        if (stageSink_) stageSink_(Stage::ChunkBegin, chunkCode, frameIndex);
-        try {
-            if (submissionInFlight_) {
-                const VkResult prior = vkWaitForFences(device_, 1, &fence_, VK_TRUE, UINT64_MAX);
-                submissionInFlight_ = false;
-                check(prior, "multiframe prior fence");
-            }
-            check(vkResetCommandBuffer(command_, 0), "multiframe reset command buffer");
-            executor_.beginBatch();
-            if (stageSink_) stageSink_(Stage::RecordBegin, arena_.physicalImageBytes(), arena_.physicalBufferBytes());
-            VkCommandBufferBeginInfo bi{};
-            bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-            bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-            check(vkBeginCommandBuffer(command_, &bi), "multiframe begin");
-            if (timestampsSupported_) vkCmdResetQueryPool(command_, timestampPool_, 0u, queryCount);
-            record();
-            check(vkEndCommandBuffer(command_), "multiframe end");
-            if (stageSink_) stageSink_(Stage::RecordEnd, arena_.physicalImageBytes(), arena_.physicalBufferBytes());
-            VkSubmitInfo si{};
-            si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-            si.commandBufferCount = 1;
-            si.pCommandBuffers = &command_;
-            // One-shot cross-queue edge (e.g. prior-queue writes to borrowed
-            // inputs before a multiframe queue takes over). Consumed once.
-            // NB: stage/semaphore must be locals: pWaitSemaphores must stay
-            // valid through submit_, so they cannot alias the cleared member.
-            VkSemaphore initialWait = initialWait_;
-            VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
-            initialWait_ = VK_NULL_HANDLE;
-            if (initialWait != VK_NULL_HANDLE) {
-                si.waitSemaphoreCount = 1;
-                si.pWaitSemaphores = &initialWait;
-                si.pWaitDstStageMask = &waitStage;
-            }
-            check(vkResetFences(device_, 1, &fence_), "multiframe reset fence");
-            if (stageSink_) stageSink_(Stage::SubmitBegin, arena_.physicalImageBytes(), arena_.physicalBufferBytes());
-            submit_(si, fence_);
-            submissionInFlight_ = true;
-            if (stageSink_) stageSink_(Stage::SubmitEnd, arena_.physicalImageBytes(), arena_.physicalBufferBytes());
-            if (stageSink_)
-                stageSink_(Stage::FenceWaitBegin, arena_.physicalImageBytes(), arena_.physicalBufferBytes());
-            const VkResult executed = vkWaitForFences(device_, 1, &fence_, VK_TRUE, UINT64_MAX);
-            submissionInFlight_ = false;
-            if (stageSink_) stageSink_(Stage::FenceWaitEnd, arena_.physicalImageBytes(), arena_.physicalBufferBytes());
-            check(executed, "multiframe execute");
-        } catch (const std::exception& e) {
-            throw std::runtime_error("multiframe chunk=" + std::to_string(chunkCode) +
-                                     " frame=" + std::to_string(frameIndex) + ": " + e.what());
-        }
-        if (stageSink_) stageSink_(Stage::ChunkEnd, chunkCode, frameIndex);
-        std::vector<double> gpuIntervals;
-        if (timestampsSupported_ && queryCount > 1u) {
-            std::array<std::uint64_t, 8> values{};
-            check(vkGetQueryPoolResults(device_, timestampPool_, 0u, queryCount, queryCount * sizeof(values[0]),
-                                        values.data(), sizeof(values[0]), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT),
-                  "multiframe timestamp results");
-            gpuIntervals.reserve(queryCount - 1u);
-            for (std::uint32_t i = 1u; i < queryCount; ++i) {
-                gpuIntervals.push_back(double(values[i] - values[i - 1u]) * double(timestampPeriodNs_) / 1.0e6);
-            }
-        }
-        const double wall = std::chrono::duration<double, std::milli>(Clock::now() - begin).count();
-        return std::pair<double, std::vector<double>>(wall, std::move(gpuIntervals));
-    };
-    const auto timestamp = [&](std::uint32_t query) {
-        if (timestampsSupported_)
-            vkCmdWriteTimestamp(command_, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, timestampPool_, query);
-    };
+    const auto timestamp = [&](std::uint32_t query) { recordTimestamp(query); };
+    if (algorithm_ == MergeAlgorithm::HdrPlusSpatial) return runHdrPlus(frames, ref, frameConsumed);
     // Burst noise estimation: the profile it fits drives everything below
     // (robustness LUT, kernel GAT, aperture gate), so it runs first. The
     // configured profile is restored after the run (also on failure).
@@ -512,6 +550,89 @@ BurstRunResult AndroidBurstCoordinator::run(const std::vector<BurstFrame>& frame
     result.noiseEstimated = noiseEstimated;
     if (noiseEstimated) result.estimatedNoise = *merge_.sensorNoiseProfile;
     return result;
+}
+BurstRunResult AndroidBurstCoordinator::runHdrPlus(const std::vector<BurstFrame>& frames, std::uint32_t ref,
+                                                   const FrameConsumed& frameConsumed) {
+    // Chunks reuse the Wronski trace codes: 1=reference, 11=prepare and
+    // alignment (two submissions), 14=merge/accumulate, 20=finalize. Splitting
+    // each companion lets preview work interleave on a shared queue.
+    using Clock = std::chrono::steady_clock;
+    const auto runBegin = Clock::now();
+    BurstStageTimings timings{};
+    timings.initializeMs = pendingInitializeMs_;
+    const auto gpuOrWall = [](const ChunkTiming& t) { return t.second.empty() ? t.first : t.second.front(); };
+    const auto geometry = rawr::raw_merge_hdrplus_gpu::makeGeometry(width_, height_, hdrplus_);
+    HdrPlusRecorder recorder(arena_, executor_, hdrplus_, geometry);
+    const std::size_t pairs = std::min<std::size_t>(merge_.hotPixels.size() / 2u, 1u << 20);
+    if (pairs > 0u) {
+        ensureHostBuffer(hotPixels_, VkDeviceSize(pairs) * 2u * sizeof(std::int32_t));
+        std::memcpy(hotPixels_.mapped, merge_.hotPixels.data(), pairs * 2u * sizeof(std::int32_t));
+        recorder.setHotPixels(hotPixels_.buffer, std::uint32_t(pairs));
+    }
+    const auto frameCount = std::uint32_t(frames.size());
+    const bool initializeLayouts = !layoutsInitialized_;
+    timings.referencePrepareMs = gpuOrWall(executeChunk(1u, ref, 2u, [&] {
+        recordTimestamp(0u);
+        if (initializeLayouts) arena_.recordInitializeLayouts(command_);
+        recorder.recordReference(command_, frames[ref].raw.view, frames[ref].parameters.normalization, frameCount);
+        recordTimestamp(1u);
+    }));
+    if (initializeLayouts) layoutsInitialized_ = true;
+    std::uint32_t companions = 0;
+    for (std::uint32_t i = 0; i < frameCount; ++i) {
+        if (i == ref) continue;
+        if (frames[i].raw.ref.width != width_ || frames[i].raw.ref.height != height_)
+            throw std::invalid_argument("multiframe burst: RAW geometry mismatch");
+        timings.companionPrepareMs += gpuOrWall(executeChunk(11u, i, 2u, [&] {
+            recordTimestamp(0u);
+            recorder.recordCompanionPrepare(command_, frames[i].raw.view, frames[i].parameters.normalization);
+            recordTimestamp(1u);
+        }));
+        for (std::uint32_t level = recorder.levelCount(); level-- > 0;) {
+            const double ms = gpuOrWall(executeChunk(11u, i, 2u, [&] {
+                recordTimestamp(0u);
+                recorder.recordCompanionAlignLevel(command_, level);
+                recordTimestamp(1u);
+            }));
+            timings.alignmentMs += ms;
+            if (std::getenv("RAWR_HDRP_PROFILE")) std::fprintf(stderr, "hdrp_profile frame=%u level=%u ms=%.3f\n", i, level, ms);
+        }
+        const auto mergeTiming = executeChunk(14u, i, 5u, [&] {
+            recordTimestamp(0u);
+            recorder.recordCompanionMerge(command_, frameCount, [&](std::uint32_t k) { recordTimestamp(k); });
+            recordTimestamp(4u);
+        });
+        double mergeMs = mergeTiming.first;
+        if (!mergeTiming.second.empty()) {
+            mergeMs = 0.0;
+            for (const double ms : mergeTiming.second) mergeMs += ms;
+            if (std::getenv("RAWR_HDRP_PROFILE") && mergeTiming.second.size() == 4u)
+                std::fprintf(stderr, "hdrp_profile frame=%u warp=%.3f blur=%.3f weight=%.3f accumulate=%.3f\n", i,
+                             mergeTiming.second[0], mergeTiming.second[1], mergeTiming.second[2], mergeTiming.second[3]);
+        }
+        timings.accumulationMs += mergeMs;
+        ++companions;
+        if (frameConsumed) frameConsumed(i);
+    }
+    timings.finalizeMs = gpuOrWall(executeChunk(20u, ref, 2u, [&] {
+        recordTimestamp(0u);
+        recorder.recordFinalize(command_);
+        recordTimestamp(1u);
+    }));
+    timings.totalMs = std::chrono::duration<double, std::milli>(Clock::now() - runBegin).count();
+    const auto& out = arena_.image("hdrp_output");
+    return BurstRunResult{ref,
+                          frameCount,
+                          out.image,
+                          out.view,
+                          out.format,
+                          out.extent,
+                          arena_.physicalImageBytes(),
+                          arena_.physicalBufferBytes(),
+                          2u + companions * (2u + recorder.levelCount()),
+                          resourcesReused_,
+                          pipelineCacheReused_,
+                          timings};
 }
 void AndroidBurstCoordinator::releaseScratch() noexcept {
     if (device_ && fence_ && submissionInFlight_) {

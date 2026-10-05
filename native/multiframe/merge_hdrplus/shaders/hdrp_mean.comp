@@ -1,0 +1,16 @@
+#version 450
+// texture_mean stage 2: one invocation sums the column sums and divides by
+// the pixel count. Stays on the GPU (upstream also keeps it in a buffer).
+layout(local_size_x = 1) in;
+layout(std430, set = 0, binding = 0) readonly buffer Columns { float v[]; } columns;
+layout(std430, set = 0, binding = 1) writeonly buffer Mean { float v[]; } mean;
+layout(push_constant) uniform P {
+    int count;
+    float pixels;
+} p;
+
+void main() {
+    float total = 0.0;
+    for (int i = 0; i < p.count; ++i) total += columns.v[i];
+    mean.v[0] = total / p.pixels;
+}

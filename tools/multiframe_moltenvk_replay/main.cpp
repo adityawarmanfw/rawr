@@ -457,6 +457,8 @@ struct TuneOpts {
     bool hotPixels = true;
     std::string hotPixelList;  // test/diagnostic override: "x y" per line
     std::string reference = "recorded";  // recorded|middle|sharpest
+    std::string mergeAlgorithm = "wronski";  // wronski|hdrplus
+    rawr::raw_merge_hdrplus_gpu::Config hdrplus{};
 };
 
 std::uint64_t fnv1a(const void* data, std::size_t bytes) {
@@ -1011,7 +1013,10 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
                            [&](const VkSubmitInfo& info, VkFence fence) {
                                vktest::ck(vkQueueSubmit(context.q, 1, &info, fence), "burst queue submit");
                            },
-                           width, height, tune.scale, {}, alignment, merge);
+                           width, height, tune.scale, {}, alignment, merge,
+                           tune.mergeAlgorithm == "hdrplus" ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusSpatial
+                                                            : rawr::raw_gpu_pipeline::MergeAlgorithm::Wronski,
+                           tune.hdrplus);
     const auto result = coordinator.run(runFrames, runRef);
     if (merge.estimateNoiseFromBurst) {
         const auto& n = result.estimatedNoise;
@@ -1145,7 +1150,7 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
 
     const auto& t = result.timings;
     std::cout << std::fixed << std::setprecision(3)
-              << "RESULT input=" << path << " suffix=" << tune.suffix
+              << "RESULT input=" << path << " suffix=" << tune.suffix << " merge=" << tune.mergeAlgorithm
               << " frames=" << result.frameCount << " requested=" << useFrames
               << " scale=" << tune.scale << " lkIterations=" << tune.lkIterations
               << " kDetail=" << merge.kDetail << " kDenoise=" << merge.kDenoise
@@ -1188,7 +1193,7 @@ int main(int argc, char** argv) {
         " [--flat-sigma F] [--detail-floor F] [--scale-bandwidth-gain F]"
         " [--coverage-neff-lo F] [--coverage-neff-hi F] [--coverage-mass-lo F] [--coverage-mass-hi F]"
         " [--robustness-t F] [--robustness-s1 F] [--robustness-s2 F]"
-         " [--max-frames I] [--suffix STR] [--dump-base] [--dump-all-singles] [--dump-raw16] [--export-dng DIR] [--affine-deadzone F] [--affine-softness F] [--affine-isotropic] [--fallback-chroma GAIN] [--fallback-luma GAIN] [--fallback-max-sigma PX] [--no-hot-pixels] [--hot-pixel-list FILE]"
+         " [--max-frames I] [--suffix STR] [--dump-base] [--dump-all-singles] [--dump-raw16] [--export-dng DIR] [--merge wronski|hdrplus] [--hdrplus-strength F] [--hdrplus-tile 16|32] [--hdrplus-search 32|64|128] [--affine-deadzone F] [--affine-softness F] [--affine-isotropic] [--fallback-chroma GAIN] [--fallback-luma GAIN] [--fallback-max-sigma PX] [--no-hot-pixels] [--hot-pixel-list FILE]"
          " [--reference recorded|middle|sharpest] INPUT [INPUT2 ...]\n"
          "  INPUT: FILE.rzsl | DNG_DIR or dng:DNG_DIR (every *.dng, name-sorted, is one burst)"
          " | rawburst:DIR | synthetic:...";
@@ -1249,6 +1254,10 @@ int main(int argc, char** argv) {
             else if (a == "--dump-raw16") tune.dumpAllSingles = tune.dumpRaw16 = true;
             else if (a == "--export-dng") { tune.exportDng = need(a.c_str()); tune.dumpAllSingles = true; }
             else if (a == "--reference") tune.reference = need(a.c_str());
+            else if (a == "--merge") tune.mergeAlgorithm = need(a.c_str());
+            else if (a == "--hdrplus-strength") tune.hdrplus.strength = std::stof(need(a.c_str()));
+            else if (a == "--hdrplus-tile") tune.hdrplus.tileSize = std::uint32_t(std::stoul(need(a.c_str())));
+            else if (a == "--hdrplus-search") tune.hdrplus.searchDistance = std::uint32_t(std::stoul(need(a.c_str())));
             else if (a.rfind("--", 0) == 0) throw std::invalid_argument("unknown flag " + a);
             else if (a.rfind("dng:", 0) != 0 && a.find(':') == std::string::npos && std::filesystem::is_directory(a))
                 inputs.push_back("dng:" + std::filesystem::path(a).lexically_normal().string());
