@@ -34,6 +34,7 @@ struct MultiframeTuning {
     // merge, 1 = HDR+ spatial merge (1x only; uses only hdrplusStrength).
     std::uint32_t mergeAlgorithm = 0;
     float hdrplusStrength = 13.0f;
+    std::uint32_t hdrplusTileSize = 32;  // 16 tracks small motion better, 32 steadier in heavy noise
 };
 
 }  // namespace rawrcam::capture::multiframe

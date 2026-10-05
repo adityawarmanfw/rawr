@@ -499,6 +499,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
                     mergeAlgorithm =
                         enumOrDefault(p[Keys.multiframeMergeAlgorithm], d.multiframeTuning.mergeAlgorithm),
                     hdrPlusStrength = p[Keys.multiframeHdrPlusStrength] ?: d.multiframeTuning.hdrPlusStrength,
+                    hdrPlusTileSize = p[Keys.multiframeHdrPlusTileSize] ?: d.multiframeTuning.hdrPlusTileSize,
                     maxFrames = p[Keys.multiframeMaxFrames] ?: d.multiframeTuning.maxFrames,
                     lkIterations = p[Keys.multiframeLkIterations] ?: d.multiframeTuning.lkIterations,
                     hessianEpsilonExponent =
@@ -721,6 +722,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.multiframeOutputResolution] = v.multiframeTuning.outputResolution.name
         p[Keys.multiframeMergeAlgorithm] = v.multiframeTuning.mergeAlgorithm.name
         p[Keys.multiframeHdrPlusStrength] = v.multiframeTuning.hdrPlusStrength
+        p[Keys.multiframeHdrPlusTileSize] = v.multiframeTuning.hdrPlusTileSize
         p[Keys.multiframeMaxFrames] = v.multiframeTuning.maxFrames
         p[Keys.multiframeLkIterations] = v.multiframeTuning.lkIterations
         p[Keys.multiframeHessianExponent] = v.multiframeTuning.hessianEpsilonExponent
@@ -957,6 +959,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val multiframeOutputResolution = stringPreferencesKey("multiframe_output_resolution")
         val multiframeMergeAlgorithm = stringPreferencesKey("multiframe_merge_algorithm")
         val multiframeHdrPlusStrength = floatPreferencesKey("multiframe_hdrplus_strength")
+        val multiframeHdrPlusTileSize = intPreferencesKey("multiframe_hdrplus_tile_size")
         val multiframeMaxFrames = intPreferencesKey("multiframe_max_frames")
         val multiframeLkIterations = intPreferencesKey("multiframe_lk_iterations")
         val multiframeHessianExponent = intPreferencesKey("multiframe_hessian_exponent")

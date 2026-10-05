@@ -234,6 +234,7 @@ internal object CaptureRecipe {
             val value = v.multiframeTuning.sanitized()
             put("mergeAlgorithm", value.mergeAlgorithm.name)
             put("hdrPlusStrength", value.hdrPlusStrength)
+            put("hdrPlusTileSize", value.hdrPlusTileSize)
             put("maxFrames", value.maxFrames)
             put("lkIterations", value.lkIterations)
             put("hessianEpsilonExponent", value.hessianEpsilonExponent)

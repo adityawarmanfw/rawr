@@ -69,6 +69,8 @@ internal fun MultiframeSettings(state: SettingsUiState, dispatch: SettingsDispat
         ) {
             if (hdrPlus) {
                 MultiframeSlider(spec(MultiframeNumericParameter.HdrPlusStrength), tuning, enabled, dispatch)
+                SettingDivider()
+                MultiframeSlider(spec(MultiframeNumericParameter.HdrPlusTileSize), tuning, enabled, dispatch)
             } else {
                 StandaloneNumericSliderRow(
                     identity = "mf_output_resolution",

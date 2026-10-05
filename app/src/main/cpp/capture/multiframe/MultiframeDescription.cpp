@@ -57,7 +57,8 @@ std::string buildParametersBlock(const MultiframeTuningView& tuning, const Multi
     }
     if (tuning.mergeAlgorithm == 1u) {
         out << "- Merge: HDR+ spatial (tile alignment + robust average)\n"
-            << "- HDR+ strength: " << f3(tuning.hdrplusStrength) << '\n';
+            << "- HDR+ strength: " << f3(tuning.hdrplusStrength) << '\n'
+            << "- HDR+ tile size: " << tuning.hdrplusTileSize << '\n';
     } else {
         out << "- Merge: Wronski kernel regression\n"
             << "- LK iterations: " << tuning.lkIterations << '\n'

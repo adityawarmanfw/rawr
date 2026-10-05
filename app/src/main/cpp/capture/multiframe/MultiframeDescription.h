@@ -36,6 +36,7 @@ struct MultiframeTuningView {
     float fallbackLumaGain = 0.0f;
     std::uint32_t mergeAlgorithm = 0;  // 0 = Wronski, 1 = HDR+ spatial
     float hdrplusStrength = 13.0f;
+    std::uint32_t hdrplusTileSize = 32;
     MultiframeBaseFrameMode baseFrameMode = MultiframeBaseFrameMode::Middle;
 };
 

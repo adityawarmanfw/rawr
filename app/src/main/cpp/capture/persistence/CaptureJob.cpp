@@ -196,15 +196,20 @@ struct Reader {
             throw std::runtime_error("capture_job_tonemap_schema_mismatch");
         }
     }
-    // Merge algorithm + HDR+ strength were appended to MultiframeTuning without
-    // a journal bump; older jobs carry the 88-byte prefix (Wronski defaults).
+    // Merge algorithm, HDR+ strength and tile size were appended to
+    // MultiframeTuning without a journal bump; older jobs carry a shorter
+    // prefix (88 bytes: Wronski only, 96: before the tile size).
     void one(multiframe::MultiframeTuning& v) {
         constexpr uint32_t kPrefixBytes = 2u * sizeof(uint32_t) + 20u * sizeof(float);
         static_assert(offsetof(multiframe::MultiframeTuning, mergeAlgorithm) == kPrefixBytes,
                       "MultiframeTuning journal prefix layout");
         uint32_t n = 0;
         bytes(&n, sizeof(n));
-        if (n != sizeof(v) && n != kPrefixBytes) throw std::runtime_error("capture_job_tuning_schema_mismatch");
+        constexpr uint32_t kBeforeTileBytes = kPrefixBytes + 2u * sizeof(uint32_t);
+        static_assert(offsetof(multiframe::MultiframeTuning, hdrplusTileSize) == kBeforeTileBytes,
+                      "MultiframeTuning journal tile-size layout");
+        if (n != sizeof(v) && n != kPrefixBytes && n != kBeforeTileBytes)
+            throw std::runtime_error("capture_job_tuning_schema_mismatch");
         v = {};
         bytes(&v, n);
     }

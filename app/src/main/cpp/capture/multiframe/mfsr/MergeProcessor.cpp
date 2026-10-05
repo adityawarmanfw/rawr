@@ -43,6 +43,7 @@ rawr::raw_gpu_pipeline::BurstRunResult MergeProcessor::run(
                                                        : rawr::raw_gpu_pipeline::MergeAlgorithm::Wronski;
     rawr::raw_merge_hdrplus_gpu::Config hdrplusConfig{};
     hdrplusConfig.strength = tuning.hdrplusStrength;
+    hdrplusConfig.tileSize = tuning.hdrplusTileSize;
     coordinator.initialize(context.physicalDevice(), context.device(), context.queueFamily(), mergeSubmit, width,
                            height, tuning.outputScale, stageSink, alignmentConfig, mergeConfig, algorithm,
                            hdrplusConfig);

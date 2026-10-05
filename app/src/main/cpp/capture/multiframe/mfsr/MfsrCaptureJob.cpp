@@ -115,6 +115,7 @@ void MfsrCaptureJob::run() {
     tuningView.fallbackLumaGain = tuning.fallbackLumaGain;
     tuningView.mergeAlgorithm = tuning.mergeAlgorithm;
     tuningView.hdrplusStrength = tuning.hdrplusStrength;
+    tuningView.hdrplusTileSize = tuning.hdrplusTileSize;
     tuningView.baseFrameMode = baseFrameMode;
     MultiframeOutputInfo outputInfo{};
     outputInfo.noiseProfile = "Burst (fitted per capture)";
