@@ -1,7 +1,16 @@
 #version 450
+// Projects the normalized merge back to integer CFA codes for the merged DNG.
+// codeScale (an integer) widens the sensor's code range toward 16 bits so
+// the merge's sub-code precision survives quantization; the DNG writer scales
+// the BlackLevel/WhiteLevel tags by the same factor. RAWR_SOURCE_R32F reads a
+// full-precision normalized CFA plane instead of the RGBA16F merge output.
 
 layout(local_size_x = 16, local_size_y = 16) in;
+#ifdef RAWR_SOURCE_R32F
+layout(set = 0, binding = 0, r32f) readonly uniform image2D mergedCfa;
+#else
 layout(set = 0, binding = 0, rgba16f) readonly uniform image2D mergedRgb;
+#endif
 layout(set = 0, binding = 1, r16ui) writeonly uniform uimage2D projectedCfa;
 
 layout(push_constant) uniform Parameters {
@@ -10,6 +19,7 @@ layout(push_constant) uniform Parameters {
     uint width;
     uint height;
     uint cfa;
+    float codeScale;
 }
 p;
 
@@ -27,10 +37,14 @@ void main() {
     ivec2 q = ivec2(gl_GlobalInvocationID.xy);
     if (q.x >= int(p.width) || q.y >= int(p.height)) return;
     uint phase = uint((q.y & 1) * 2 + (q.x & 1));
+#ifdef RAWR_SOURCE_R32F
+    float normalized = max(0.0, imageLoad(mergedCfa, q).r);
+#else
     vec3 rgb = imageLoad(mergedRgb, q).rgb;
     float normalized = max(0.0, rgb[channelForSite(q)]);
+#endif
     float range = max(1.0, p.whiteLevel - p.blackByPhase[phase]);
-    precise float code = fma(normalized, range, p.blackByPhase[phase]);
+    precise float code = fma(normalized, range, p.blackByPhase[phase]) * p.codeScale;
     uint packed = uint(roundEven(clamp(code, 0.0, 65535.0)));
     imageStore(projectedCfa, q, uvec4(packed, 0u, 0u, 0u));
 }

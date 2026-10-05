@@ -19,3 +19,7 @@ opcodes), DNGPrivateData, IFD0 descriptive tags, Orientation, and a staged
 EXIF sub-IFD. `tinydng_exif`/`tinydng_raw_info`/`tinydng_write_image` carry
 additive Rawr extension fields (writer-emitted; reader-accepted where parsed).
 Opcode-list allocation includes all four 32-bit header fields per opcode.
+
+Local fix: RATIONAL/SRATIONAL writers pick a per-value power-of-ten denominator
+(<= 1e6) instead of a fixed 1e6, so values above ~4295 (e.g. 16-bit black
+levels) are written exactly instead of saturating at UINT32_MAX/1e6.

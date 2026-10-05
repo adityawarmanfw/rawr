@@ -177,6 +177,36 @@ int main() {
         std::cout << "DNG_CAPTURE_SEMANTIC_TEST_PASS pass=" << pass << " bytes=" << outSize << "\n";
     }
 
+    {
+        // 16-bit merged DNG levels (black 1024 x7): BlackLevel is written as
+        // RATIONAL and must stay exact above the old fixed-1e6 denominator limit.
+        auto wide = makeFrame(true);
+        wide.metadata.blackLevelPhysicalRggb = {7168, 7168, 7175, 7168};
+        wide.metadata.effectiveWhiteLevel = 60984;
+        capture.compression = rawrcam::encoding::dng::DngCompression::Uncompressed;
+        auto params = rawrcam::encoding::dng::makeTinyDngWriteParams(wide, capture, &error);
+        if (!params) return 8;
+        params->rebind();
+        tinydng_config cfg{};
+        tinydng_error err{};
+        tinydng_context* tctx = tinydng_context_create(&cfg, &err);
+        uint8_t* out = nullptr;
+        size_t outSize = 0;
+        tinydng_document* doc = nullptr;
+        tinydng_open_options oopts{};
+        bool ok = tctx && tinydng_write_memory(tctx, &params->image, &params->options, &out, &outSize, &err) ==
+                              TINYDNG_OK &&
+                  tinydng_open_memory(tctx, out, outSize, &oopts, &doc, &err) == TINYDNG_OK;
+        const tinydng_image_info* img = ok ? tinydng_image_get(doc, 0) : nullptr;
+        ok = ok && img && img->raw.white_level[0] == 60984 && std::abs(img->raw.black_level_exact[0] - 7168.0) < 1e-6 &&
+             std::abs(img->raw.black_level_exact[2] - 7175.0) < 1e-6;
+        if (doc) tinydng_document_destroy(tctx, doc);
+        if (out) tinydng_buffer_free(tctx, out);
+        if (tctx) tinydng_context_destroy(tctx);
+        if (!ok) return 8;
+        std::cout << "DNG_CAPTURE_16BIT_LEVELS_PASS\n";
+    }
+
     auto bad = makeFrame(false);
     error.clear();
     if (rawrcam::encoding::dng::makeTinyDngWriteParams(bad, capture, &error) ||

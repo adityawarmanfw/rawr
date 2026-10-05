@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "multiframe_cfa_project.h"
+#include "multiframe_cfa_project_f32.h"
 #include "multiframe_packed_cfa.h"
 #include "multiframe_rgb_prepare.h"
 
@@ -27,8 +28,9 @@ struct ProjectionPush {
     std::uint32_t width;
     std::uint32_t height;
     std::uint32_t cfa;
+    float codeScale;
 };
-static_assert(sizeof(ProjectionPush) == 32);
+static_assert(sizeof(ProjectionPush) == 36);
 
 // 1A RGB-prepare push block. Field order mirrors prepare_rgb.comp P{}:
 // 8 uints, black vec4, invRange vec4, threshold float. Keep under the
@@ -159,25 +161,28 @@ void MultiframeOutputAdapter::initialize(VkPhysicalDevice physical, VkDevice dev
     pipelineLayoutInfo.pPushConstantRanges = &pushRange;
     check(vkCreatePipelineLayout(device_, &pipelineLayoutInfo, nullptr, &pipelineLayout_),
           "multiframe output pipeline layout");
-    VkShaderModuleCreateInfo moduleInfo{};
-    moduleInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    moduleInfo.codeSize = multiframe_cfa_project_spv_size;
-    moduleInfo.pCode = reinterpret_cast<const std::uint32_t*>(multiframe_cfa_project_spv);
-    VkShaderModule module = VK_NULL_HANDLE;
-    check(vkCreateShaderModule(device_, &moduleInfo, nullptr, &module), "multiframe output shader module");
-    VkPipelineShaderStageCreateInfo stage{};
-    stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-    stage.module = module;
-    stage.pName = "main";
-    VkComputePipelineCreateInfo pipelineInfo{};
-    pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    pipelineInfo.stage = stage;
-    pipelineInfo.layout = pipelineLayout_;
-    const VkResult pipelineResult =
-        vkCreateComputePipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline_);
-    vkDestroyShaderModule(device_, module, nullptr);
-    check(pipelineResult, "multiframe output compute pipeline");
+    const auto makeProjectionPipeline = [&](const unsigned char* spv, std::size_t spvSize, VkPipeline* out) {
+        VkShaderModuleCreateInfo moduleInfo{};
+        moduleInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        moduleInfo.codeSize = spvSize;
+        moduleInfo.pCode = reinterpret_cast<const std::uint32_t*>(spv);
+        VkShaderModule module = VK_NULL_HANDLE;
+        check(vkCreateShaderModule(device_, &moduleInfo, nullptr, &module), "multiframe output shader module");
+        VkPipelineShaderStageCreateInfo stage{};
+        stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        stage.module = module;
+        stage.pName = "main";
+        VkComputePipelineCreateInfo pipelineInfo{};
+        pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        pipelineInfo.stage = stage;
+        pipelineInfo.layout = pipelineLayout_;
+        const VkResult pipelineResult = vkCreateComputePipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, out);
+        vkDestroyShaderModule(device_, module, nullptr);
+        check(pipelineResult, "multiframe output compute pipeline");
+    };
+    makeProjectionPipeline(multiframe_cfa_project_spv, multiframe_cfa_project_spv_size, &pipeline_);
+    makeProjectionPipeline(multiframe_cfa_project_f32_spv, multiframe_cfa_project_f32_spv_size, &pipelineF32_);
 
     VkDescriptorPoolSize poolSizes[] = {{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 4}, {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1}};
     VkDescriptorPoolCreateInfo poolInfo{};
@@ -280,9 +285,10 @@ PackedRaw16 MultiframeOutputAdapter::readBase(VkImage rawR16Uint) {
     return copyMapped();
 }
 
-PackedRaw16 MultiframeOutputAdapter::projectMerged(VkImage mergedRgba16f, VkImageView mergedView,
+PackedRaw16 MultiframeOutputAdapter::projectMerged(VkImage mergedImage, VkImageView mergedView,
                                                    const CfaProjectionParameters& parameters) {
-    if (!device_ || !mergedRgba16f || !mergedView || parameters.cfa > 3u) {
+    if (!device_ || !mergedImage || !mergedView || parameters.cfa > 3u ||
+        !(std::isfinite(parameters.codeScale) && parameters.codeScale >= 1.0f)) {
         throw std::invalid_argument("multiframe output: invalid merged image");
     }
     check(vkWaitForFences(device_, 1, &fence_, VK_TRUE, UINT64_MAX), "multiframe output prior fence");
@@ -332,7 +338,8 @@ PackedRaw16 MultiframeOutputAdapter::projectMerged(VkImage mergedRgba16f, VkImag
     push.width = width_;
     push.height = height_;
     push.cfa = parameters.cfa;
-    vkCmdBindPipeline(command_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
+    push.codeScale = parameters.codeScale;
+    vkCmdBindPipeline(command_, VK_PIPELINE_BIND_POINT_COMPUTE, parameters.sourceIsCfaR32f ? pipelineF32_ : pipeline_);
     vkCmdBindDescriptorSets(command_, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout_, 0, 1, &descriptorSet_, 0,
                             nullptr);
     vkCmdPushConstants(command_, pipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
@@ -541,6 +548,7 @@ void MultiframeOutputAdapter::reset() noexcept {
     if (device_ && commandPool_) vkDestroyCommandPool(device_, commandPool_, nullptr);
     if (device_ && descriptorPool_) vkDestroyDescriptorPool(device_, descriptorPool_, nullptr);
     if (device_ && pipeline_) vkDestroyPipeline(device_, pipeline_, nullptr);
+    if (device_ && pipelineF32_) vkDestroyPipeline(device_, pipelineF32_, nullptr);
     if (device_ && pipelineLayout_) vkDestroyPipelineLayout(device_, pipelineLayout_, nullptr);
     if (device_ && descriptorLayout_) vkDestroyDescriptorSetLayout(device_, descriptorLayout_, nullptr);
     if (device_ && readback_) vkDestroyBuffer(device_, readback_, nullptr);
@@ -565,6 +573,7 @@ void MultiframeOutputAdapter::reset() noexcept {
     descriptorLayout_ = VK_NULL_HANDLE;
     pipelineLayout_ = VK_NULL_HANDLE;
     pipeline_ = VK_NULL_HANDLE;
+    pipelineF32_ = VK_NULL_HANDLE;
     descriptorPool_ = VK_NULL_HANDLE;
     descriptorSet_ = VK_NULL_HANDLE;
     commandPool_ = VK_NULL_HANDLE;

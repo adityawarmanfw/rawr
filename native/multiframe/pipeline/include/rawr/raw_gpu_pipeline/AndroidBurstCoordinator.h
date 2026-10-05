@@ -52,6 +52,10 @@ struct BurstRunResult {
     bool resourcesReused = false;
     bool pipelineCacheReused = false;
     BurstStageTimings timings{};
+    // HDR+ only: normalized full-precision R32F CFA plane (same extent as
+    // output) for the 16-bit merged DNG projection. Null for Wronski.
+    VkImage cfaImage = VK_NULL_HANDLE;
+    VkImageView cfaView = VK_NULL_HANDLE;
     // Set when estimateNoiseFromBurst produced the profile this run merged with.
     bool noiseEstimated = false;
     rawr::raw_merge_wronski_gpu::CfaNoiseProfile estimatedNoise{};

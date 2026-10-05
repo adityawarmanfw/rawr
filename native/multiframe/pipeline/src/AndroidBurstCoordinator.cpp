@@ -626,7 +626,8 @@ BurstRunResult AndroidBurstCoordinator::runHdrPlus(const std::vector<BurstFrame>
     }));
     timings.totalMs = std::chrono::duration<double, std::milli>(Clock::now() - runBegin).count();
     const auto& out = arena_.image("hdrp_output");
-    return BurstRunResult{ref,
+    const auto& cfa = arena_.image("hdrp_cfa");
+    BurstRunResult result{ref,
                           frameCount,
                           out.image,
                           out.view,
@@ -638,6 +639,9 @@ BurstRunResult AndroidBurstCoordinator::runHdrPlus(const std::vector<BurstFrame>
                           resourcesReused_,
                           pipelineCacheReused_,
                           timings};
+    result.cfaImage = cfa.image;
+    result.cfaView = cfa.view;
+    return result;
 }
 void AndroidBurstCoordinator::releaseScratch() noexcept {
     if (device_ && fence_ && submissionInFlight_) {

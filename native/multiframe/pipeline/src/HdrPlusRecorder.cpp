@@ -83,6 +83,7 @@ ScratchLayout makeHdrPlusScratchLayout(const hp::Geometry& g) {
     add("hdrp_weight", cells, PixelStorage::R32Float, Lifetime::Companion);
     add("hdrp_accum", raw, PixelStorage::R32Float, Lifetime::Output);
     add("hdrp_output", raw, PixelStorage::RGBA16Float, Lifetime::Output);
+    add("hdrp_cfa", raw, PixelStorage::R32Float, Lifetime::Output);
     const Extent2D level0{g.levels.front().width, g.levels.front().height};
     add("hdrp_pyr_tmp_a", level0, PixelStorage::R32Float, Lifetime::PyramidTemp);
     add("hdrp_pyr_tmp_b", level0, PixelStorage::R32Float, Lifetime::PyramidTemp);
@@ -294,7 +295,10 @@ void HdrPlusRecorder::recordFinalize(VkCommandBuffer c) {
     fp.width = std::int32_t(geometry_.width);
     fp.height = std::int32_t(geometry_.height);
     executor_.record(c, ShaderId::HdrpFinalize,
-                     {{ib(0, arena_.image("hdrp_accum")), ib(1, arena_.image("hdrp_output"))}, {}}, &fp, sizeof(fp),
+                     {{ib(0, arena_.image("hdrp_accum")), ib(1, arena_.image("hdrp_output")),
+                       ib(2, arena_.image("hdrp_cfa"))},
+                      {}},
+                     &fp, sizeof(fp),
                      divUp(geometry_.width, 16), divUp(geometry_.height, 16));
     computeWriteBarrier(c);
 }

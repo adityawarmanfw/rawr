@@ -21,6 +21,8 @@ file(MAKE_DIRECTORY ${MF_OUTPUT_GEN})
 set(SHADER_COMMON_DIR ${CMAKE_CURRENT_LIST_DIR}/../../shader_common/shaders)
 embed_spirv(multiframe_cfa_project ${CMAKE_CURRENT_LIST_DIR}/shaders/project_cfa_u16.comp multiframe_cfa_project_spv
   OUTPUT_DIR ${MF_OUTPUT_GEN})
+embed_spirv(multiframe_cfa_project_f32 ${CMAKE_CURRENT_LIST_DIR}/shaders/project_cfa_u16.comp
+  multiframe_cfa_project_f32_spv OUTPUT_DIR ${MF_OUTPUT_GEN} FLAGS -DRAWR_SOURCE_R32F)
 embed_spirv(multiframe_rgb_prepare ${CMAKE_CURRENT_LIST_DIR}/shaders/prepare_rgb.comp multiframe_rgb_prepare_spv
   OUTPUT_DIR ${MF_OUTPUT_GEN} FLAGS -I${SHADER_COMMON_DIR} DEPENDS ${SHADER_COMMON_DIR}/cfa_common.glsl)
 
@@ -30,7 +32,7 @@ embed_spirv(multiframe_packed_cfa ${CMAKE_CURRENT_LIST_DIR}/shaders/prepare_pack
 
 add_library(raw_multiframe_output STATIC
   src/MultiframeOutputAdapter.cpp
-  ${multiframe_cfa_project_HDR} ${multiframe_rgb_prepare_HDR} ${multiframe_packed_cfa_HDR})
+  ${multiframe_cfa_project_HDR} ${multiframe_cfa_project_f32_HDR} ${multiframe_rgb_prepare_HDR} ${multiframe_packed_cfa_HDR})
 target_include_directories(raw_multiframe_output PUBLIC include PRIVATE ${MF_OUTPUT_GEN})
 target_link_libraries(raw_multiframe_output PUBLIC ${VULKAN_LIB})
 target_compile_features(raw_multiframe_output PUBLIC cxx_std_17)

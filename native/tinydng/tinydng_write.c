@@ -242,20 +242,24 @@ static void td_add_bytes(td_writer *w, uint16_t tag, const uint8_t *v,
   td_add(w, tag, TD_TYPE_BYTE, n, v, n);
 }
 
-/* Doubles -> SRATIONAL (num/den) with fixed denominator. The double->int32
+/* Doubles -> SRATIONAL (num/den). The denominator is the largest power of ten
+ * <= 1e6 that keeps the numerator in range, so large values (e.g. 16-bit
+ * black levels) stay exact instead of saturating. The double->int32
  * conversion is saturated: a NaN/Inf or out-of-range caller value would be
  * undefined behavior (C11 6.3.1.4) as a plain cast. */
 static void td_add_srationals(td_writer *w, uint16_t tag, const double *v,
                               uint32_t n) {
   uint8_t tmp[128];
   uint32_t i;
-  const int32_t den = 1000000;
   if ((size_t)n * 8u > sizeof(tmp)) {
     w->failed = 1;
     return;
   }
   for (i = 0; i < n; i++) {
     int32_t num;
+    int32_t den = 1000000;
+    while (den > 1 && v[i] == v[i] && (v[i] * (double)den >= 2147483647.0 || v[i] * (double)den <= -2147483648.0))
+      den /= 10;
     double d = v[i] * (double)den;
     if (!(d == d)) { /* NaN */
       num = 0;
@@ -273,18 +277,20 @@ static void td_add_srationals(td_writer *w, uint16_t tag, const double *v,
 }
 
 /* Doubles -> RATIONAL; negative / NaN values clamp to 0 (RATIONAL is
- * unsigned), huge values saturate at UINT32_MAX. */
+ * unsigned). The denominator adapts like td_add_srationals; only values
+ * beyond UINT32_MAX itself saturate. */
 static void td_add_rationals(td_writer *w, uint16_t tag, const double *v,
                              uint32_t n) {
   uint8_t tmp[128];
   uint32_t i;
-  const uint32_t den = 1000000u;
   if ((size_t)n * 8u > sizeof(tmp)) {
     w->failed = 1;
     return;
   }
   for (i = 0; i < n; i++) {
     uint32_t num;
+    uint32_t den = 1000000u;
+    while (den > 1u && v[i] == v[i] && v[i] * (double)den >= 4294967295.0) den /= 10u;
     double d = v[i] * (double)den;
     if (!(d == d) || d <= 0.0) { /* NaN or negative */
       num = 0;
