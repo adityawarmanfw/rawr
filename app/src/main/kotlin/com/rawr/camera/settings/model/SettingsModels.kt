@@ -321,6 +321,11 @@ enum class MultiframeOutputResolution(val label: String, val outputScale: Float)
     Mp24("≈24 MP", 1.385641f)
 }
 
+enum class MultiframeMergeAlgorithm(val nativeId: Int, val label: String) {
+    Wronski(0, "Super-resolution"),
+    HdrPlus(1, "HDR+")
+}
+
 enum class MultiframeBaseFrameMode(val nativeId: Int, val label: String) {
     Middle(0, "Middle"),
     Sharpest(1, "Sharpest")
@@ -348,7 +353,8 @@ enum class MultiframeNumericParameter {
     CoverageMassLo,
     CoverageMassHi,
     FallbackChroma,
-    FallbackLuma
+    FallbackLuma,
+    HdrPlusStrength
 }
 
 data class MultiframeNumericSpec(
@@ -612,6 +618,18 @@ object MultiframeSpecs {
             2
         )
 
+    val hdrPlusStrength =
+        MultiframeNumericSpec(
+            MultiframeNumericParameter.HdrPlusStrength,
+            "HDR+ Strength",
+            "Lower: keeps more single-frame grain and rejects motion sooner. Higher: cleaner, but moving areas risk ghosting.",
+            1f,
+            22f,
+            13f,
+            1f,
+            0
+        )
+
     val all =
         listOf(
             maxFrames,
@@ -635,7 +653,8 @@ object MultiframeSpecs {
             coverageMassLo,
             coverageMassHi,
             fallbackChroma,
-            fallbackLuma
+            fallbackLuma,
+            hdrPlusStrength
         )
 
     fun forParameter(parameter: MultiframeNumericParameter): MultiframeNumericSpec =
@@ -644,6 +663,8 @@ object MultiframeSpecs {
 
 data class MultiframeTuning(
     val outputResolution: MultiframeOutputResolution = MultiframeOutputResolution.Native,
+    val mergeAlgorithm: MultiframeMergeAlgorithm = MultiframeMergeAlgorithm.Wronski,
+    val hdrPlusStrength: Float = 13f,
     val maxFrames: Int = 16,
     val lkIterations: Int = 5,
     val hessianEpsilonExponent: Int = -10,
@@ -690,6 +711,7 @@ data class MultiframeTuning(
         MultiframeNumericParameter.CoverageMassHi -> coverageMassHi
         MultiframeNumericParameter.FallbackChroma -> fallbackChroma
         MultiframeNumericParameter.FallbackLuma -> fallbackLuma
+        MultiframeNumericParameter.HdrPlusStrength -> hdrPlusStrength
     }
 
     fun withValue(parameter: MultiframeNumericParameter, value: Float): MultiframeTuning = when (parameter) {
@@ -715,6 +737,7 @@ data class MultiframeTuning(
         MultiframeNumericParameter.CoverageMassHi -> copy(coverageMassHi = value)
         MultiframeNumericParameter.FallbackChroma -> copy(fallbackChroma = value)
         MultiframeNumericParameter.FallbackLuma -> copy(fallbackLuma = value)
+        MultiframeNumericParameter.HdrPlusStrength -> copy(hdrPlusStrength = value.roundToInt().toFloat())
     }
 
     fun sanitized(defaults: MultiframeTuning = MultiframeTuning()): MultiframeTuning {
@@ -757,6 +780,9 @@ data class MultiframeTuning(
         fallbackChroma,
         fallbackLuma
     )
+
+    // Appended after the multiframe chroma-denoise flag (native indices 23-24).
+    fun nativeMergeValues(): FloatArray = floatArrayOf(mergeAlgorithm.nativeId.toFloat(), hdrPlusStrength)
 }
 
 data class SettingsValues(

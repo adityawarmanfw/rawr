@@ -55,26 +55,32 @@ std::string buildParametersBlock(const MultiframeTuningView& tuning, const Multi
         mp << std::fixed << std::setprecision(1) << megapixels;
         out << "- Output: " << outWidth << 'x' << outHeight << " (" << scale.str() << "x, ~" << mp.str() << " MP)\n";
     }
-    out << "- LK iterations: " << tuning.lkIterations << '\n'
-        << "- Hessian epsilon: " << sci0(tuning.hessianEpsilon) << '\n'
-        << "- kDetail: " << f3(tuning.kDetail) << '\n'
-        << "- kDenoise: " << f3(tuning.kDenoise) << '\n'
-        << "- dThreshold: " << f3(tuning.dThreshold) << '\n'
-        << "- dTransition: " << f3(tuning.dTransition) << '\n'
-        << "- kStretch: " << f3(tuning.kStretch) << '\n'
-        << "- kShrink: " << f3(tuning.kShrink) << '\n'
-        << "- Flat sigma: " << f3(tuning.flatSigma) << (tuning.flatSigma < 0.0f ? " (coupled)" : " (decoupled)") << '\n'
-        << "- Detail floor sigma: " << f3(tuning.detailFloorSigma) << (tuning.detailFloorSigma <= 0.0f ? " (off)" : "")
-        << '\n'
-        << "- Scale bandwidth gain: " << f3(tuning.scaleBandwidthGain)
-        << (tuning.scaleBandwidthGain <= 0.0f ? " (off)" : "") << '\n'
-        << "- Coverage Neff: " << f3(tuning.coverageNeffLo) << " .. " << f3(tuning.coverageNeffHi) << '\n'
-        << "- Coverage mass: " << f3(tuning.coverageMassLo) << " .. " << f3(tuning.coverageMassHi) << '\n';
-    out << "- Robustness T/S1/S2: " << f3(tuning.robustnessT) << " / " << f3(tuning.robustnessS1) << " / "
-        << f3(tuning.robustnessS2) << '\n'
-        << "- Motion threshold: " << f3(tuning.motionThreshold) << '\n'
-        << "- Fallback cleanup chroma/luma: " << f3(tuning.fallbackChromaGain) << " / " << f3(tuning.fallbackLumaGain)
-        << '\n';
+    if (tuning.mergeAlgorithm == 1u) {
+        out << "- Merge: HDR+ spatial (tile alignment + robust average)\n"
+            << "- HDR+ strength: " << f3(tuning.hdrplusStrength) << '\n';
+    } else {
+        out << "- Merge: Wronski kernel regression\n"
+            << "- LK iterations: " << tuning.lkIterations << '\n'
+            << "- Hessian epsilon: " << sci0(tuning.hessianEpsilon) << '\n'
+            << "- kDetail: " << f3(tuning.kDetail) << '\n'
+            << "- kDenoise: " << f3(tuning.kDenoise) << '\n'
+            << "- dThreshold: " << f3(tuning.dThreshold) << '\n'
+            << "- dTransition: " << f3(tuning.dTransition) << '\n'
+            << "- kStretch: " << f3(tuning.kStretch) << '\n'
+            << "- kShrink: " << f3(tuning.kShrink) << '\n'
+            << "- Flat sigma: " << f3(tuning.flatSigma) << (tuning.flatSigma < 0.0f ? " (coupled)" : " (decoupled)") << '\n'
+            << "- Detail floor sigma: " << f3(tuning.detailFloorSigma) << (tuning.detailFloorSigma <= 0.0f ? " (off)" : "")
+            << '\n'
+            << "- Scale bandwidth gain: " << f3(tuning.scaleBandwidthGain)
+            << (tuning.scaleBandwidthGain <= 0.0f ? " (off)" : "") << '\n'
+            << "- Coverage Neff: " << f3(tuning.coverageNeffLo) << " .. " << f3(tuning.coverageNeffHi) << '\n'
+            << "- Coverage mass: " << f3(tuning.coverageMassLo) << " .. " << f3(tuning.coverageMassHi) << '\n';
+        out << "- Robustness T/S1/S2: " << f3(tuning.robustnessT) << " / " << f3(tuning.robustnessS1) << " / "
+            << f3(tuning.robustnessS2) << '\n'
+            << "- Motion threshold: " << f3(tuning.motionThreshold) << '\n'
+            << "- Fallback cleanup chroma/luma: " << f3(tuning.fallbackChromaGain) << " / " << f3(tuning.fallbackLumaGain)
+            << '\n';
+    }
     out << "\nMultiframe Reconstruction inputs:\n"
         << "- Noise profile: " << output.noiseProfile << '\n'
         << "- JPEG input: merged CFA\n"

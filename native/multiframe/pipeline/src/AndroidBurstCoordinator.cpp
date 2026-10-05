@@ -86,15 +86,18 @@ void AndroidBurstCoordinator::warmAll(VkPhysicalDevice physical, VkDevice device
         resetLocked();
     }
     ensureExecutionInfra(physical, device, qf);
-    if (arenaReady_ && width_ == w && height_ == h && std::abs(outputScale_ - lastScale_) <= 1.0e-6f) return;
-    const auto geom = makeMultiframeGeometry(w, h, lastScale_);
-    arena_.initialize(physical, device, makeMultiframeScratchLayout(geom));
-    arenaAlgorithm_ = MergeAlgorithm::Wronski;
-    arenaReady_ = true;
-    layoutsInitialized_ = false;
+    algorithm_ = lastAlgorithm_;
+    hdrplus_ = lastHdrPlus_;
+    const float scale = algorithm_ == MergeAlgorithm::HdrPlusSpatial ? 1.0f : lastScale_;
+    if (arenaReady_ && width_ == w && height_ == h && std::abs(outputScale_ - scale) <= 1.0e-6f &&
+        arenaMatchesSelection())
+        return;
     width_ = w;
     height_ = h;
-    outputScale_ = lastScale_;
+    outputScale_ = scale;
+    initializeArenaLocked(physical, device);
+    arenaReady_ = true;
+    layoutsInitialized_ = false;
 }
 
 void AndroidBurstCoordinator::resetInfraLocked() noexcept {
@@ -190,7 +193,9 @@ void AndroidBurstCoordinator::initialize(VkPhysicalDevice physical, VkDevice dev
         !rawr::raw_merge_wronski_gpu::valid(merge))
         throw std::invalid_argument("multiframe burst: invalid tuning");
     std::lock_guard<std::mutex> lock(initMutex_);
-    lastScale_ = scale;
+    if (algorithm == MergeAlgorithm::Wronski) lastScale_ = scale;
+    lastAlgorithm_ = algorithm;
+    lastHdrPlus_ = hdrplus;
     if (device_ == device && physical_ == physical && queueFamily_ == qf && width_ == w && height_ == h &&
         std::abs(outputScale_ - scale) <= 1.0e-6f) {
         alignment_ = alignment;

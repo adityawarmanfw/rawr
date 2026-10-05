@@ -285,6 +285,8 @@ data class SetMultiframeNumericValue(val parameter: MultiframeNumericParameter, 
 
 data class SetMultiframeOutputResolution(val value: MultiframeOutputResolution) : SettingsApplicationAction
 
+data class SetMultiframeMergeAlgorithm(val value: MultiframeMergeAlgorithm) : SettingsApplicationAction
+
 data class SetCustomGpuDriverEnabled(val enabled: Boolean) : SettingsApplicationAction
 
 data class SetCustomGpuDriverInstalled(val displayName: String) : SettingsApplicationAction

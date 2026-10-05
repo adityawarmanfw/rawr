@@ -89,8 +89,8 @@ class AndroidBurstCoordinator final {
     // (~1.3GB) stay lazy. Safe to call before initialize(); initialize()
     // reuses the warmed infrastructure. Never throws-fatal: callers log.
     void warmPipelines(VkPhysicalDevice physical, VkDevice device, std::uint32_t queueFamily);
-    // warmPipelines plus arena creation at the last-used output scale
-    // (default 1x). Makes even the first burst fully warm when geometry
+    // warmPipelines plus arena creation for the last-used merge algorithm and
+    // output scale (default Wronski 1x; HDR+ holds ~0.5GB instead). Makes even the first burst fully warm when geometry
     // matches. Holds ~1.3GB while the camera is open; reset()/resetConfiguration
     // release it. Same reuse rules as initialize().
     void warmAll(VkPhysicalDevice physical, VkDevice device, std::uint32_t queueFamily, std::uint32_t width,
@@ -118,8 +118,11 @@ class AndroidBurstCoordinator final {
     VkCommandBuffer command_ = VK_NULL_HANDLE;
     VkFence fence_ = VK_NULL_HANDLE;
     VkSemaphore initialWait_ = VK_NULL_HANDLE;
-    // Last output scale seen (survives reset: self-tuning warmup heuristic).
+    // Last output scale / merge selection seen (survive reset: self-tuning
+    // warmup heuristic, so warmAll builds the arena the next burst will use).
     float lastScale_ = 1.0f;
+    MergeAlgorithm lastAlgorithm_ = MergeAlgorithm::Wronski;
+    rawr::raw_merge_hdrplus_gpu::Config lastHdrPlus_{};
     // Guards initialize/warmPipelines/reset (pipelines + pools + handles).
     // run() is called after initialize() returns on the same worker.
     std::mutex initMutex_;

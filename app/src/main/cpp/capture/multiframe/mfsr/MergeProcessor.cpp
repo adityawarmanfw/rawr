@@ -39,8 +39,13 @@ rawr::raw_gpu_pipeline::BurstRunResult MergeProcessor::run(
     mergeConfig.fallbackLumaGain = tuning.fallbackLumaGain;
     mergeConfig.fallbackChromaMaxSigma = 16.0f;
     auto stageSink = rawrcam::capture::multiframe::makeTraceStageSink();
+    const auto algorithm = tuning.mergeAlgorithm == 1u ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusSpatial
+                                                       : rawr::raw_gpu_pipeline::MergeAlgorithm::Wronski;
+    rawr::raw_merge_hdrplus_gpu::Config hdrplusConfig{};
+    hdrplusConfig.strength = tuning.hdrplusStrength;
     coordinator.initialize(context.physicalDevice(), context.device(), context.queueFamily(), mergeSubmit, width,
-                           height, tuning.outputScale, stageSink, alignmentConfig, mergeConfig);
+                           height, tuning.outputScale, stageSink, alignmentConfig, mergeConfig, algorithm,
+                           hdrplusConfig);
     ScopedSemaphore mfStartSem(context.device(), useMfQueue);
     if (useMfQueue) {
         // Empty signal ordered after all prior queue-0 work (decodes, base

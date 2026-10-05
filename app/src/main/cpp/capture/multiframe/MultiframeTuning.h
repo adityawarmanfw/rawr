@@ -30,6 +30,10 @@ struct MultiframeTuning {
     // Support-aware cleanup of fallback (motion/rejected) areas at finalize.
     float fallbackChromaGain = 0.0f;
     float fallbackLumaGain = 0.0f;
+    // Appended (journal prefix-compatible): 0 = Wronski super-resolution
+    // merge, 1 = HDR+ spatial merge (1x only; uses only hdrplusStrength).
+    std::uint32_t mergeAlgorithm = 0;
+    float hdrplusStrength = 13.0f;
 };
 
 }  // namespace rawrcam::capture::multiframe

@@ -496,6 +496,9 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
                             p[Keys.multiframeOutputResolution],
                             d.multiframeTuning.outputResolution
                         ),
+                    mergeAlgorithm =
+                        enumOrDefault(p[Keys.multiframeMergeAlgorithm], d.multiframeTuning.mergeAlgorithm),
+                    hdrPlusStrength = p[Keys.multiframeHdrPlusStrength] ?: d.multiframeTuning.hdrPlusStrength,
                     maxFrames = p[Keys.multiframeMaxFrames] ?: d.multiframeTuning.maxFrames,
                     lkIterations = p[Keys.multiframeLkIterations] ?: d.multiframeTuning.lkIterations,
                     hessianEpsilonExponent =
@@ -716,6 +719,8 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p.remove(Keys.multiframeNoiseProfile)
         p.remove(Keys.camera2NoiseModelEnabled)
         p[Keys.multiframeOutputResolution] = v.multiframeTuning.outputResolution.name
+        p[Keys.multiframeMergeAlgorithm] = v.multiframeTuning.mergeAlgorithm.name
+        p[Keys.multiframeHdrPlusStrength] = v.multiframeTuning.hdrPlusStrength
         p[Keys.multiframeMaxFrames] = v.multiframeTuning.maxFrames
         p[Keys.multiframeLkIterations] = v.multiframeTuning.lkIterations
         p[Keys.multiframeHessianExponent] = v.multiframeTuning.hessianEpsilonExponent
@@ -950,6 +955,8 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val camera2NoiseModelEnabled = booleanPreferencesKey("camera2_noise_model_enabled")
         val multiframeNoiseProfile = stringPreferencesKey("multiframe_noise_profile")
         val multiframeOutputResolution = stringPreferencesKey("multiframe_output_resolution")
+        val multiframeMergeAlgorithm = stringPreferencesKey("multiframe_merge_algorithm")
+        val multiframeHdrPlusStrength = floatPreferencesKey("multiframe_hdrplus_strength")
         val multiframeMaxFrames = intPreferencesKey("multiframe_max_frames")
         val multiframeLkIterations = intPreferencesKey("multiframe_lk_iterations")
         val multiframeHessianExponent = intPreferencesKey("multiframe_hessian_exponent")

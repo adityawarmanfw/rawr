@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -194,6 +195,18 @@ struct Reader {
         } else {
             throw std::runtime_error("capture_job_tonemap_schema_mismatch");
         }
+    }
+    // Merge algorithm + HDR+ strength were appended to MultiframeTuning without
+    // a journal bump; older jobs carry the 88-byte prefix (Wronski defaults).
+    void one(multiframe::MultiframeTuning& v) {
+        constexpr uint32_t kPrefixBytes = 2u * sizeof(uint32_t) + 20u * sizeof(float);
+        static_assert(offsetof(multiframe::MultiframeTuning, mergeAlgorithm) == kPrefixBytes,
+                      "MultiframeTuning journal prefix layout");
+        uint32_t n = 0;
+        bytes(&n, sizeof(n));
+        if (n != sizeof(v) && n != kPrefixBytes) throw std::runtime_error("capture_job_tuning_schema_mismatch");
+        v = {};
+        bytes(&v, n);
     }
     void one(std::string& v) {
         uint64_t n = 0;

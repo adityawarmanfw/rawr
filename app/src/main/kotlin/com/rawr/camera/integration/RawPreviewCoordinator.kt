@@ -573,7 +573,9 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
             jpegDisplayName,
             dumpRzslRequested,
             // Tuning contract + trailing chroma-denoise flag (JNI reads index 22).
-            multiframeTuning.sanitized().nativeValues() + (if (multiframeChromaDenoise) 1f else 0f),
+            multiframeTuning.sanitized().let { tuning ->
+                tuning.nativeValues() + (if (multiframeChromaDenoise) 1f else 0f) + tuning.nativeMergeValues()
+            },
             multiframeBaseFrameMode.nativeId,
             distortionCorrectionEnabled,
             filmDescription,

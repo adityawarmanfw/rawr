@@ -32,5 +32,10 @@ internal fun reduceMultiframeSettings(
             values.copy(multiframeTuning = values.multiframeTuning.copy(outputResolution = action.value))
         )
     }
+
+    is SetMultiframeMergeAlgorithm -> {
+        val values = state.values
+        state.withValues(values.copy(multiframeTuning = values.multiframeTuning.copy(mergeAlgorithm = action.value)))
+    }
     else -> error("Unsupported multiframe settings action: $action")
 }

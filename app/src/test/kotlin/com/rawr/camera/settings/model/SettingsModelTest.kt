@@ -525,6 +525,25 @@ class SettingsModelTest {
         assertTrue(MultiframeOutputResolution.entries.all { it.label.contains("MP") })
     }
 
+    @Test fun multiframeMergeAlgorithmIsPersistableAndAppendedToNativeContract() {
+        var persisted: SettingsValues? = null
+        val controller = PersistentSettingsController(onValuesChanged = { persisted = it })
+        assertEquals(MultiframeMergeAlgorithm.Wronski, controller.state.value.values.multiframeTuning.mergeAlgorithm)
+
+        controller.dispatch(SetMultiframeMergeAlgorithm(MultiframeMergeAlgorithm.HdrPlus))
+        controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.HdrPlusStrength, 18f))
+        controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.HdrPlusStrength, 40f))
+
+        val tuning = controller.state.value.values.multiframeTuning
+        assertEquals(MultiframeMergeAlgorithm.HdrPlus, persisted?.multiframeTuning?.mergeAlgorithm)
+        assertEquals(18f, tuning.hdrPlusStrength)
+        // Native layout: 22 tuning values, chroma flag, then algorithm id + strength.
+        assertEquals(22, tuning.nativeValues().size)
+        assertEquals(listOf(1f, 18f), tuning.nativeMergeValues().toList())
+        assertEquals(0, MultiframeMergeAlgorithm.Wronski.nativeId)
+        assertEquals(13f, MultiframeTuning().copy(hdrPlusStrength = 0f).sanitized().hdrPlusStrength)
+    }
+
     @Test fun multiframeDefaultsFollowResearchedOperatingPoint() {
         val defaults = MultiframeTuning()
         assertEquals(.15f, defaults.kDetail)

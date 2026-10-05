@@ -73,9 +73,9 @@ void MfsrCaptureService::configure(const Geometry& geometry, bool warmEnabled) {
             }
             try {
                 const auto begin = std::chrono::steady_clock::now();
-                // Pipelines + arena (last scale): first burst fully warm when
-                // geometry matches. ~1.3GB held while the camera is open;
-                // reset() releases it.
+                // Pipelines + arena (last merge algorithm/scale): first burst
+                // fully warm when geometry matches. ~1.3GB (Wronski) or
+                // ~0.5GB (HDR+) held while the camera is open; reset() releases it.
                 burstCoordinator_.warmAll(vulkan_.physicalDevice(), vulkan_.device(), vulkan_.queueFamily(), rawW,
                                           rawH);
                 const double ms =

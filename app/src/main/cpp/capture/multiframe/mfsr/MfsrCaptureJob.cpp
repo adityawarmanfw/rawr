@@ -78,6 +78,8 @@ void MfsrCaptureJob::run() {
         const float largestSide = static_cast<float>(std::max(ctx.rawWidth, ctx.rawHeight));
         if (largestSide > 0.0f)
             t.outputScale = std::clamp(t.outputScale, 1.0f, std::max(1.0f, maxDimension / largestSide));
+        // HDR+ merges on the RAW grid (the coordinator enforces 1x too).
+        if (t.mergeAlgorithm == 1u) t.outputScale = 1.0f;
         return t;
     }();
     const auto baseFrameMode = work->baseFrameMode;
@@ -111,6 +113,8 @@ void MfsrCaptureJob::run() {
     tuningView.motionThreshold = tuning.motionThreshold;
     tuningView.fallbackChromaGain = tuning.fallbackChromaGain;
     tuningView.fallbackLumaGain = tuning.fallbackLumaGain;
+    tuningView.mergeAlgorithm = tuning.mergeAlgorithm;
+    tuningView.hdrplusStrength = tuning.hdrplusStrength;
     tuningView.baseFrameMode = baseFrameMode;
     MultiframeOutputInfo outputInfo{};
     outputInfo.noiseProfile = "Burst (fitted per capture)";
