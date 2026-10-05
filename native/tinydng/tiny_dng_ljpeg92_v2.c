@@ -136,7 +136,9 @@ typedef struct _ljp {
   // DC Huffman lookup tables indexed by the JPEG table id (0..3). Entry =
   // (mask << 6) | total, where
   // mask = (1 << ssss) - 1 and total = code_length + ssss: the entropy loop
-  // extracts the residual mask without recomputing it per sample.
+  // extracts the residual mask without recomputing it per sample. SSSS 16
+  // carries no residual bits (diff is -32768): mask 0, total = code_length,
+  // flagged by LJ92_LUT_SSSS16.
   u32* hufflut[4];
   int huffbits[4];
   u8 huff_defined[4];
@@ -324,6 +326,9 @@ static inline int bitio_check_overrun(const bitio_t* bio) {
 // ssss == 0 with no special case).
 // Assumes nbits >= 32 (caller refilled) and maxbits <= 16 (total <= 32 fits
 // the pre-refill bits; the single `bb <<= total` is defined for total < 64).
+#define LJ92_LUT_SSSS16_SHIFT 22
+#define LJ92_LUT_SSSS16 (1u << LJ92_LUT_SSSS16_SHIFT)
+
 static inline int bitio_decode_diff(bitio_t* restrict bio,
                                     const u32* restrict hufflut, int maxbits) {
   uint32_t idx = (uint32_t)(bio->bb >> (64 - maxbits));
@@ -339,7 +344,9 @@ static inline int bitio_decode_diff(bitio_t* restrict bio,
   int m = (int)(mask + 1u);  // m == 1 << ssss
   int half = m >> 1;
   int sign = ((int)resid - half) >> 31;     // 0 or -1
-  return (int)resid + (sign & (1 - m));     // sign-extend JPEG-style
+  // SSSS 16 (mask 0, so the extend term is 0) decodes to -32768.
+  return (int)resid + (sign & (1 - m)) -
+         (int)((e >> LJ92_LUT_SSSS16_SHIFT) & 1u) * 32768;
 }
 
 static int find(ljp* self) {
@@ -429,8 +436,11 @@ static int build_huff_lut(const tdng_lj92_allocator* allocator, const u8* table,
     // from the table (total <= 32 fits 6 bits, mask <= 0xFFFF fits 16).
     {
       u32 sym = huffvals[hv];
+      // T.81 H.1.2.2 / DNG: SSSS 16 has no appended bits (diff = 32768).
       hufflut[i++] =
-          ((sym ? ((1u << sym) - 1u) : 0u) << 6) | (u32)(bitsused + (int)sym);
+          sym == 16u ? LJ92_LUT_SSSS16 | (u32)bitsused
+                     : ((sym ? ((1u << sym) - 1u) : 0u) << 6) |
+                           (u32)(bitsused + (int)sym);
     }
     rv++;
   }
@@ -2723,7 +2733,8 @@ static TDNG_ALWAYS_INLINE int enc_emit_diff_ssss(lje* self, int diff,
    * here had hist[ssss] > 0 and therefore a nonzero code (validated once in
    * encode_begin). No per-sample validity check on this hot path. */
   uint32_t e = self->emitlut[ssss];
-  if (ssss == 0) {
+  /* SSSS 16 (diff -32768) has no appended bits (T.81 H.1.2.2). */
+  if (ssss == 0 || ssss == 16) {
     enc_put_bits_raw(self, e >> 16, (int)(e & 0xFFFFu));
   } else {
     /* Fuse Huffman code + residual into ONE accumulator update:
@@ -3233,7 +3244,7 @@ static int enc_write_rows(lje* self, int row0, int row_count) {
         /* See enc_emit_diff: the scan pass guarantees a code exists. */
         {
           uint32_t e = self->emitlut[ssss];
-          if (ssss == 0) {
+          if (ssss == 0 || ssss == 16) {
             enc_put_bits_raw(self, e >> 16, (int)(e & 0xFFFFu));
           } else {
             uint32_t bits_val;

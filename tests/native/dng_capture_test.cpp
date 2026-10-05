@@ -1,6 +1,7 @@
 #include "encoding/dng/DngMetadataAdapter.h"
 
 #include <tinydng.h>
+#include <tiny_dng_ljpeg92_v2.h>
 
 #include <cmath>
 #include <cstdint>
@@ -73,7 +74,42 @@ static bool privateHas(const std::vector<uint8_t>& priv, const std::string& need
     return hay.find(needle) != std::string::npos;
 }
 
+// T.81 H.1.2.2 / DNG: an SSSS 16 residual (diff -32768) carries no appended
+// bits. True 16-bit merged DNGs hit it at hard edges; writing 16 stray bits
+// desyncs Adobe/LibRaw for the rest of the tile.
+static bool ljpegSsss16Conformant() {
+    auto encode = [](std::vector<uint16_t> px, int w) {
+        uint8_t* enc = nullptr;
+        int len = 0;
+        if (tdng_lj92_encode(px.data(), w, 1, 16, w, 0, nullptr, 0, &enc, &len) != TDNG_LJ92_ERROR_NONE) return -1;
+        std::free(enc);
+        return len;
+    };
+    // One sample against the 32768 initial predictor: 0 is SSSS 16, 32769 is
+    // SSSS 1. Both are a single 1-bit code; the residual must not add bytes.
+    const int len16 = encode({0}, 1), len1 = encode({32769}, 1);
+    if (len16 < 0 || len16 != len1) {
+        std::cerr << "ssss16 stream " << len16 << " bytes vs " << len1 << "\n";
+        return false;
+    }
+    std::vector<uint16_t> px = {0, 40000, 7232, 40000, 7232, 7232, 65535, 32767, 0};
+    uint8_t* enc = nullptr;
+    int len = 0;
+    if (tdng_lj92_encode(px.data(), int(px.size()), 1, 16, int(px.size()), 0, nullptr, 0, &enc, &len) !=
+        TDNG_LJ92_ERROR_NONE)
+        return false;
+    tdng_lj92 lj = nullptr;
+    int w = 0, h = 0, bits = 0, comps = 0;
+    std::vector<uint16_t> out(px.size());
+    const bool ok = tdng_lj92_open(&lj, enc, len, &w, &h, &bits, &comps) == TDNG_LJ92_ERROR_NONE &&
+                    tdng_lj92_decode(lj, out.data(), w, 0, nullptr, 0) == TDNG_LJ92_ERROR_NONE && out == px;
+    if (lj) tdng_lj92_close(lj);
+    std::free(enc);
+    return ok;
+}
+
 int main() {
+    if (!ljpegSsss16Conformant()) return 10;
     rawrcam::encoding::dng::DngCaptureContext capture{};
     capture.deviceMake = "vivo";
     capture.deviceModel = "V2562";
@@ -224,6 +260,12 @@ int main() {
         for (uint32_t y = 0; y < dims.second; ++y)
             for (uint32_t x = 0; x < dims.first; ++x)
                 px[size_t(y) * dims.first + x] = uint16_t(64 + ((x * 7 + y * 13 + (x * y) % 97) % 4000));
+        // Hard 16-bit edges with exact -32768 residuals mid-tile (SSSS 16).
+        for (uint32_t y = 5; y < dims.second; y += 37)
+            for (uint32_t x = 3; x + 1 < dims.first; x += 53) {
+                px[size_t(y) * dims.first + x] = 40000;
+                px[size_t(y) * dims.first + x + 1] = 7232;
+            }
         auto ctxBig = std::make_shared<rawrcam::metadata::CameraContextMetadata>(*big.metadata.cameraContext);
         ctxBig->geometry.rawBufferWidth = ctxBig->geometry.pixelArrayWidth = int32_t(dims.first);
         ctxBig->geometry.rawBufferHeight = ctxBig->geometry.pixelArrayHeight = int32_t(dims.second);

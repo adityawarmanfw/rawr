@@ -23,3 +23,8 @@ Opcode-list allocation includes all four 32-bit header fields per opcode.
 Local fix: RATIONAL/SRATIONAL writers pick a per-value power-of-ten denominator
 (<= 1e6) instead of a fixed 1e6, so values above ~4295 (e.g. 16-bit black
 levels) are written exactly instead of saturating at UINT32_MAX/1e6.
+
+Local fix: lossless JPEG SSSS 16 (residual -32768) carries no appended bits
+(T.81 H.1.2.2, DNG). The encoder wrote 16 and the decoder read 16, so tinydng
+round-tripped its own streams while Adobe/LibRaw desynced for the rest of the
+tile. 14-bit input never reaches SSSS 16; 16-bit merged DNGs do at hard edges.
