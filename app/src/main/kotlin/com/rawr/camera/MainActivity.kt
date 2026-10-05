@@ -203,6 +203,14 @@ class MainActivity : ComponentActivity() {
                             )
                         )
                     },
+                    onOpenMultiframeSettings = {
+                        startActivity(
+                            SettingsActivity.openIntent(
+                                this@MainActivity,
+                                com.rawr.camera.settings.model.SettingsSection.Multiframe
+                            )
+                        )
+                    },
                     latestImageUri = latestGalleryImage,
                     onOpenLatestImage = { latestGalleryImage?.let(::openGalleryImage) },
                     onOpenRenderer = { startActivity(Intent(this@MainActivity, com.rawr.camera.renderer.RendererActivity::class.java)) },

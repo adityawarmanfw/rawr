@@ -83,6 +83,7 @@ internal fun CaptureControls(
     onOpenLatestImage: () -> Unit = {},
     onOpenRenderer: () -> Unit = {},
     onOpenFilmSimSettings: () -> Unit = {},
+    onOpenMultiframeSettings: () -> Unit = {},
     videoControls: VideoControlState = VideoControlState(),
     onToggleVideoRecording: () -> Unit = {},
     /** Transparent background for floating over the 16:9 bleed (video overlay slot). */
@@ -140,7 +141,7 @@ internal fun CaptureControls(
                 }
                 Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
                     if (!isVideo) {
-                        PhotoLookToggles(state, dispatch, onOpenFilmSimSettings)
+                        PhotoLookToggles(state, dispatch, onOpenFilmSimSettings, onOpenMultiframeSettings)
                     }
                 }
             }
@@ -183,7 +184,7 @@ internal fun CaptureControls(
             Spacer(Modifier.weight(1f))
             Spacer(Modifier.width(CaptureDimens.ShutterOuter))
             Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                PhotoLookToggles(state, dispatch, onOpenFilmSimSettings)
+                PhotoLookToggles(state, dispatch, onOpenFilmSimSettings, onOpenMultiframeSettings)
             }
         }
     }
@@ -193,7 +194,8 @@ internal fun CaptureControls(
 private fun PhotoLookToggles(
     state: CaptureUiState,
     dispatch: CaptureDispatch,
-    onOpenFilmSimSettings: () -> Unit
+    onOpenFilmSimSettings: () -> Unit,
+    onOpenMultiframeSettings: () -> Unit
 ) {
     Row(
         horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -205,11 +207,13 @@ private fun PhotoLookToggles(
             active = state.experimentalMultiframeEnabled,
             testTag = CaptureTestTags.COMPACT_MULTIFRAME,
             contentDescription = if (state.experimentalMultiframeEnabled) {
-                "Multiframe on. Tap to turn off."
+                "Multiframe on. Tap to turn off. Long press for settings."
             } else {
-                "Multiframe off. Tap to turn on."
+                "Multiframe off. Tap to turn on. Long press for settings."
             },
             onClick = { dispatch(ToggleMultiframe) },
+            onLongClick = onOpenMultiframeSettings,
+            onLongClickLabel = "Multiframe settings",
             modifier = Modifier
         )
         CompactSidePill(
