@@ -4,12 +4,10 @@
 
 # Rawr
 
-An Android RAW camera with GPU image processing, film simulation, JPEG/DNG
-capture, video recording, and a DNG renderer.
+An Android RAW based camera application with GPU image processing, film simulation, JPEG/DNG
+capture, video recording, and DNG renderer.
 
-Requires RAW camera access and compatible Vulkan
-hardware. Camera routing and RAW sizes still contain device-specific assumptions;
-general device compatibility is not yet established.
+Requires RAW camera access and compatible Vulkan hardware. General device compatibility is not yet established.
 
 ## Build
 
@@ -40,7 +38,7 @@ uv run --no-project tools/release/repository_hygiene.py
 
 See [host tests](tests/README.md) for dependencies and sanitizers, and
 [offline replay](docs/replay.md) for the retained MoltenVK tools and limitations.
-Use `tmp/` for local evidence and `uv` for Python packages.
+
 
 ## License
 
