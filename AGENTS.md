@@ -29,8 +29,9 @@
 - Because the remote is squash-only, `main` (squashed snapshots) and `dev`
   (granular commits) share no commits naturally.
 - After each PR squash-merges, `origin/main` is folded into `dev` with
-  `git merge -s ours` so `dev` records main's new commit while keeping its own
-  detailed tree and history.
+  `git merge -s ours --allow-unrelated-histories` so `dev` records main's new
+  commit while keeping its own detailed tree and history. The two histories are
+  unrelated, so the flag is required.
 
 ### The loop
 
@@ -39,7 +40,8 @@
    where the work was authored).
 3. Push and open the PR against `main`.
 4. Squash merge on the remote.
-5. Fetch and absorb the new `origin/main` into `dev`; keep `dev` as the permanent
+5. Land the PR's work on `dev` if it was not authored there (`git cherry-pick`),
+   then absorb the new `origin/main` into `dev`; keep `dev` as the permanent
    full-history archive.
 
 ### Commands
@@ -56,6 +58,13 @@ After the squash merge, sync and maintain `dev`:
 ```sh
 git fetch origin
 git switch main && git pull --ff-only
-git switch dev && git merge -s ours origin/main
+
+git switch dev
+git cherry-pick <work-commits>   # only if the PR's work is not on dev yet
+git merge -s ours --allow-unrelated-histories origin/main
 git switch -
 ```
+
+`-s ours` keeps `dev`'s tree, so `dev` must already contain the PR's content —
+cherry-pick it in first when the work was authored on the PR branch. `dev` is
+local-only and is never pushed.
