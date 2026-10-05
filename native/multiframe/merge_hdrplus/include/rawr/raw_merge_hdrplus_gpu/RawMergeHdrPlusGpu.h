@@ -22,6 +22,14 @@ struct Config {
     // Pyramid stops once the coarsest level is <= this many pixels on the
     // short side: 128 (small motion) / 64 / 32 (large motion).
     std::uint32_t searchDistance = 64;
+    // Frequency merge only: align each companion once (pass-0 padding) and
+    // reuse the tile shifts in the other three passes (~4x less alignment).
+    // Upstream's warp weights jump at every half-tile boundary; its four
+    // differently gridded passes hide that, a shared grid would not (visible
+    // seams on moving subjects). Align-once therefore warps with continuous
+    // bilinear weights, which removes the seams. false = upstream-exact
+    // per-pass alignment (parity reference, ~2x slower overall).
+    bool frequencyAlignOnce = true;
 };
 
 inline bool valid(const Config& c) {
@@ -111,6 +119,8 @@ inline FrequencyNorms frequencyNorms(float strength) {
 // four half-tile-shifted passes sum to one. Each pass pads the frame
 // differently (same padded extent), so alignment runs per pass.
 inline constexpr std::uint32_t kFrequencyTile = 8;  // tile_size_merge
+// Align-once mode keeps each companion's level-0 tile shifts for the later passes.
+inline constexpr std::uint32_t kMaxFrequencyFrames = 64;
 
 struct FrequencyGeometry {
     Geometry align;  // pyramid levels for the padded extent (pads set per pass)

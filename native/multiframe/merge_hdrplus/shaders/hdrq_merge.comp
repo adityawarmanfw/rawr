@@ -3,14 +3,21 @@
 // pick the best of 7x7 sub-pixel Fourier shifts of the aligned tile, then
 // merge each frequency bin with a Wiener-shrinkage weight (Hasinoff 2016,
 // Liba 2019 motion norm, Delbracio 2015 magnitude norm). One 8x8 workgroup
-// per tile: 49 lanes evaluate the shifts (each summing in upstream order),
-// then every lane merges its own bin.
+// per tile, then every lane merges its own bin.
+// Shift search: upstream minimizes sum_k |ref_k - e^{i theta}·al_k|^2 over
+// channels. Rotation preserves |al_k|, so this equals a shift-independent
+// constant minus 2 * sum_k (cos·A_k + sin·B_k) with per-bin cross terms
+// A_k = sum_ch(refRe·alRe + refIm·alIm), B_k = sum_ch(refIm·alRe - refRe·alIm):
+// the same argmin from 2 floats per bin instead of 16 (shared-memory bound on
+// mobile GPUs); first maximum wins like upstream's first minimum.
 layout(local_size_x = 8, local_size_y = 8) in;
 layout(set = 0, binding = 0, rgba32f) readonly uniform image2D refFt;
 layout(set = 0, binding = 1, rgba32f) readonly uniform image2D alignedFt;
 layout(set = 0, binding = 2, rgba32f) uniform image2D outFt;
 layout(set = 0, binding = 3, rgba32f) readonly uniform image2D rms;
 layout(set = 0, binding = 4, r32f) readonly uniform image2D mismatch;
+// (cos, sin) per shift and bin, index shift * 64 + n * 8 + m (hdrq_shift_table).
+layout(std430, set = 0, binding = 5) readonly buffer ShiftTable { vec2 v[]; } shiftTable;
 layout(push_constant) uniform P {
     ivec2 tiles;
     float robustnessNorm;
@@ -18,9 +25,9 @@ layout(push_constant) uniform P {
     float maxMotionNorm;
 } p;
 
-const float PI = 3.14159265358979323846;
 shared vec4 sRefRe[64], sRefIm[64], sAlRe[64], sAlIm[64];  // index dn*8 + dm
 shared float sDiff[49];
+shared float sA[64], sB[64];
 shared int sBest;
 
 void main() {
@@ -35,41 +42,39 @@ void main() {
     sRefIm[lane] = imageLoad(refFt, o + ivec2(1, 0));
     sAlRe[lane] = imageLoad(alignedFt, o);
     sAlIm[lane] = imageLoad(alignedFt, o + ivec2(1, 0));
+    {
+        vec4 a = sRefRe[lane] * sAlRe[lane] + sRefIm[lane] * sAlIm[lane];
+        vec4 b = sRefIm[lane] * sAlRe[lane] - sRefRe[lane] * sAlIm[lane];
+        sA[lane] = a.x + a.y + a.z + a.w;
+        sB[lane] = b.x + b.y + b.z + b.w;
+    }
     barrier();
-    float angle = -2.0 * PI / float(ts);
-    const float step = 1.0 / 6.0;
     if (lane < 49) {
-        float sx = -0.5 + float(lane % 7) * step, sy = -0.5 + float(lane / 7) * step;
         float total = 0.0;
-        for (int n = 0; n < ts; ++n)
-            for (int m = 0; m < ts; ++m) {
-                int k = n * 8 + m;
-                float c = cos(angle * (float(m) * sx + float(n) * sy)), s = sin(angle * (float(m) * sx + float(n) * sy));
-                vec4 re2 = sRefRe[k] - (c * sAlRe[k] - s * sAlIm[k]);
-                vec4 im2 = sRefIm[k] - (s * sAlRe[k] + c * sAlIm[k]);
-                vec4 w4 = re2 * re2 + im2 * im2;
-                total += w4.x + w4.y + w4.z + w4.w;
-            }
+        for (int k = 0; k < 64; ++k) {
+            vec2 cs = shiftTable.v[lane * 64 + k];
+            total += cs.x * sA[k] + cs.y * sB[k];
+        }
         sDiff[lane] = total;
     }
     barrier();
     if (lane == 0) {
-        float best = 1e20;
+        float best = -1e30;
         int bi = 0;
         for (int i = 0; i < 49; ++i)
-            if (sDiff[i] < best) {
+            if (sDiff[i] > best) {
                 best = sDiff[i];
                 bi = i;
             }
         sBest = bi;
     }
     barrier();
-    float bx = -0.5 + float(sBest % 7) * step, by = -0.5 + float(sBest / 7) * step;
     vec4 noiseNorm = (imageLoad(rms, t) + p.readNoise) * float(ts * ts) * p.robustnessNorm;
     float mm = imageLoad(mismatch, t).x;
     float mismatchWeight = clamp(1.0 - 10.0 * (mm - 0.2), 0.0, 1.0);
     float motionNorm = clamp(p.maxMotionNorm - (mm - 0.02) * (p.maxMotionNorm - 1.0) / 0.15, 1.0, p.maxMotionNorm);
-    float c = cos(angle * (float(dm) * bx + float(dn) * by)), s = sin(angle * (float(dm) * bx + float(dn) * by));
+    vec2 cs = shiftTable.v[sBest * 64 + lane];
+    float c = cs.x, s = cs.y;
     vec4 refRe = sRefRe[lane], refIm = sRefIm[lane];
     vec4 alRe = c * sAlRe[lane] - s * sAlIm[lane];
     vec4 alIm = s * sAlRe[lane] + c * sAlIm[lane];

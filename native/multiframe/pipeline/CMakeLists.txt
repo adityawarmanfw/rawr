@@ -74,7 +74,8 @@ set(RAWR_MF_SHADER_SOURCES
   ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_deconvolute.comp
   ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_backward_dft.comp
   ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_border.comp
-  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_accumulate.comp)
+  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_accumulate.comp
+  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_shift_table.comp)
 set(RAWR_MF_SPV_OUTPUTS)
 foreach(RAWR_MF_SRC IN LISTS RAWR_MF_SHADER_SOURCES)
   get_filename_component(RAWR_MF_NAME ${RAWR_MF_SRC} NAME_WE)

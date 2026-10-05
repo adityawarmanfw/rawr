@@ -600,13 +600,20 @@ BurstRunResult AndroidBurstCoordinator::runHdrPlus(const std::vector<BurstFrame>
             recordTimestamp(1u);
         }));
         for (std::uint32_t level = recorder.levelCount(); level-- > 0;) {
-            const double ms = gpuOrWall(executeChunk(11u, i, 2u, [&] {
+            const auto levelTiming = executeChunk(11u, i, 4u, [&] {
                 recordTimestamp(0u);
-                recorder.recordCompanionAlignLevel(command_, level);
-                recordTimestamp(1u);
-            }));
+                recorder.recordCompanionAlignLevel(command_, level, [&](std::uint32_t k) { recordTimestamp(k); });
+                recordTimestamp(3u);
+            });
+            double ms = levelTiming.first;
+            if (!levelTiming.second.empty()) {
+                ms = 0.0;
+                for (const double part : levelTiming.second) ms += part;
+            }
             timings.alignmentMs += ms;
-            if (std::getenv("RAWR_HDRP_PROFILE")) std::fprintf(stderr, "hdrp_profile frame=%u level=%u ms=%.3f\n", i, level, ms);
+            if (std::getenv("RAWR_HDRP_PROFILE") && levelTiming.second.size() == 3u)
+                std::fprintf(stderr, "hdrp_profile frame=%u level=%u ms=%.3f (correct=%.3f cost=%.3f best=%.3f)\n", i,
+                             level, ms, levelTiming.second[0], levelTiming.second[1], levelTiming.second[2]);
         }
         const auto mergeTiming = executeChunk(14u, i, 5u, [&] {
             recordTimestamp(0u);
@@ -651,10 +658,11 @@ BurstRunResult AndroidBurstCoordinator::runHdrPlus(const std::vector<BurstFrame>
 }
 BurstRunResult AndroidBurstCoordinator::runHdrPlusFrequency(const std::vector<BurstFrame>& frames, std::uint32_t ref,
                                                             const FrameConsumed& frameConsumed) {
-    // Four half-tile-shifted passes, each re-aligning every companion on its
-    // own padding (upstream behaviour). Chunk codes: 1=pass reference,
-    // 11=prepare/alignment levels, 14=frequency merge, 15=pass finish,
-    // 20=finalize. Ring frames are consumed only after the last pass.
+    // Four half-tile-shifted passes. Companions are aligned in pass 0 only
+    // (align-once, default) or re-aligned on each pass's padding (upstream).
+    // Chunk codes: 1=pass reference, 11=companion prepare/alignment,
+    // 14=frequency merge, 15=pass finish, 20=finalize. Ring frames are
+    // consumed only after the last pass.
     using Clock = std::chrono::steady_clock;
     const auto runBegin = Clock::now();
     BurstStageTimings timings{};
@@ -685,23 +693,20 @@ BurstRunResult AndroidBurstCoordinator::runHdrPlusFrequency(const std::vector<Bu
         if (initializeLayouts) layoutsInitialized_ = true;
         for (std::uint32_t i = 0; i < frameCount; ++i) {
             if (i == ref) continue;
-            timings.companionPrepareMs += gpuOrWall(executeChunk(11u, i, 2u, [&] {
+            // One submission: prepare + all alignment levels (+ shift store) when
+            // this pass aligns, otherwise only the padded frame.
+            const bool aligns = recorder.alignsThisPass();
+            const double alignMs = gpuOrWall(executeChunk(11u, i, 2u, [&] {
                 recordTimestamp(0u);
-                recorder.alignment().recordCompanionPrepare(command_, frames[i].raw.view, frames[i].parameters.normalization);
+                recorder.recordCompanionAlign(command_, frames[i].raw.view, frames[i].parameters.normalization, i);
                 recordTimestamp(1u);
             }));
-            for (std::uint32_t level = recorder.alignment().levelCount(); level-- > 0;) {
-                timings.alignmentMs += gpuOrWall(executeChunk(11u, i, 2u, [&] {
-                    recordTimestamp(0u);
-                    recorder.alignment().recordCompanionAlignLevel(command_, level);
-                    recordTimestamp(1u);
-                }));
-            }
+            (aligns ? timings.alignmentMs : timings.companionPrepareMs) += alignMs;
             const bool profile = std::getenv("RAWR_HDRP_PROFILE") != nullptr;
             // Query order: 0 start, 1 warp, [2 mismatch when profiling], then fft, norm, merge.
             const auto mergeTiming = executeChunk(14u, i, profile ? 6u : 5u, [&] {
                 recordTimestamp(0u);
-                recorder.recordCompanionMerge(command_, frameCount, [&](std::uint32_t k) {
+                recorder.recordCompanionMerge(command_, frameCount, i, [&](std::uint32_t k) {
                     if (k == 5u) {
                         if (profile) recordTimestamp(2u);  // mismatch boundary, profiling only
                     } else {
@@ -747,7 +752,7 @@ BurstRunResult AndroidBurstCoordinator::runHdrPlusFrequency(const std::vector<Bu
                           out.extent,
                           arena_.physicalImageBytes(),
                           arena_.physicalBufferBytes(),
-                          4u * (2u + companions * (2u + recorder.alignment().levelCount())) + 1u,
+                          4u * (2u + companions * 2u) + 1u,
                           resourcesReused_,
                           pipelineCacheReused_,
                           timings};

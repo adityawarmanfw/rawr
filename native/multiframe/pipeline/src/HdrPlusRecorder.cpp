@@ -209,6 +209,10 @@ void HdrPlusRecorder::recordReference(VkCommandBuffer c, VkImageView rawU16, con
     computeWriteBarrier(c);
 }
 
+void HdrPlusRecorder::recordCompanionPadded(VkCommandBuffer c, VkImageView rawU16, const RawNormalization& frame) {
+    recordPrepare(c, false, rawU16, frame);
+}
+
 void HdrPlusRecorder::recordReferencePrepare(VkCommandBuffer c, VkImageView rawU16, const RawNormalization& frame) {
     reference_ = frame;
     recordPrepare(c, true, rawU16, frame);
@@ -220,7 +224,8 @@ void HdrPlusRecorder::recordCompanionPrepare(VkCommandBuffer c, VkImageView rawU
     recordPyramid(c, false);
 }
 
-void HdrPlusRecorder::recordCompanionAlignLevel(VkCommandBuffer c, std::uint32_t n) {
+void HdrPlusRecorder::recordCompanionAlignLevel(VkCommandBuffer c, std::uint32_t n,
+                                                const std::function<void(std::uint32_t)>& mark) {
     if (n >= geometry_.levels.size()) throw std::invalid_argument("hdrplus recorder: invalid alignment level");
     const auto& cur = arena_.buffer("hdrp_align_a");
     const auto& prev = arena_.buffer("hdrp_align_b");
@@ -245,9 +250,11 @@ void HdrPlusRecorder::recordCompanionAlignLevel(VkCommandBuffer c, std::uint32_t
                      {{ib(0, refLevel), ib(1, compLevel)}, {bb(2, prev), bb(3, corrected)}}, &tc, sizeof(tc),
                      level.tilesX, level.tilesY);
     computeWriteBarrier(c);
+    if (mark) mark(1u);
     executor_.record(c, ShaderId::HdrpTileDiff, {{ib(0, refLevel), ib(1, compLevel)}, {bb(2, corrected), bb(3, cost)}},
                      &tc, sizeof(tc), level.tilesX, level.tilesY);
     computeWriteBarrier(c);
+    if (mark) mark(2u);
     BestTilePc bt{std::int32_t(level.tilesX), std::int32_t(level.tilesY), downscale};
     executor_.record(c, ShaderId::HdrpBestTile, {{}, {bb(0, cost), bb(1, corrected), bb(2, cur)}}, &bt, sizeof(bt),
                      divUp(level.tilesX, 16), divUp(level.tilesY, 16));
@@ -314,11 +321,15 @@ struct TilesPc {
     std::int32_t tilesX, tilesY;
 };
 struct ToRgbaPc {
-    std::int32_t width, height, cropX, cropY;
+    std::int32_t width, height, cropX, cropY, offsetX, offsetY, paddedWidth, paddedHeight;
 };
 struct WarpRgbaPc {
     std::int32_t width, height, cropX, cropY, paddedWidth, paddedHeight, tilesX, tilesY, halfTileSize;
+    std::int32_t alignPad;  // ivec2 offset is 8-byte aligned in the GLSL block
+    std::int32_t offsetX, offsetY;
+    std::int32_t continuous;
 };
+VkDeviceSize alignUp256(VkDeviceSize v) { return (v + 255u) / 256u * 256u; }
 struct MismatchPc {
     std::int32_t tilesX, tilesY, rgbaWidth, rgbaHeight;
 };
@@ -388,6 +399,10 @@ ScratchLayout makeHdrPlusFrequencyScratchLayout(const hp::FrequencyGeometry& f, 
     addBuffer("hdrp_align_c", maxTiles * 8u);
     addBuffer("hdrp_tile_cost", maxTiles * 25u * 4u);
     addBuffer("hdrq_mean", 16u);
+    addBuffer("hdrq_shift_table", 49u * 64u * 8u);
+    const auto& level0 = g.levels.front();
+    addBuffer("hdrq_align_store",
+              hp::kMaxFrequencyFrames * alignUp256(std::uint64_t(level0.tilesX) * level0.tilesY * 8u));
     return l;
 }
 
@@ -398,15 +413,58 @@ HdrPlusFrequencyRecorder::HdrPlusFrequencyRecorder(ResourceArena& arena, VulkanE
 
 void HdrPlusFrequencyRecorder::beginPass(std::uint32_t pass) noexcept {
     pass_ = pass;
-    align_.setPads(geometry_.padLeft(pass), geometry_.padTop(pass));
+    // Align-once keeps every frame in the pass-0 padding; passOffset() maps.
+    const std::uint32_t prepared = config_.frequencyAlignOnce ? 0u : pass;
+    align_.setPads(geometry_.padLeft(prepared), geometry_.padTop(prepared));
+}
+
+std::array<std::int32_t, 2> HdrPlusFrequencyRecorder::passOffset() const noexcept {
+    if (!config_.frequencyAlignOnce) return {0, 0};
+    return {std::int32_t(geometry_.padLeft(0)) - std::int32_t(geometry_.padLeft(pass_)),
+            std::int32_t(geometry_.padTop(0)) - std::int32_t(geometry_.padTop(pass_))};
+}
+
+VkDeviceSize HdrPlusFrequencyRecorder::alignSlotBytes() const noexcept {
+    const auto& level0 = geometry_.align.levels.front();
+    return alignUp256(VkDeviceSize(level0.tilesX) * level0.tilesY * 8u);
+}
+
+void HdrPlusFrequencyRecorder::recordCompanionAlign(VkCommandBuffer c, VkImageView rawU16, const RawNormalization& frame,
+                                                    std::uint32_t slot) {
+    if (!alignsThisPass()) {
+        align_.recordCompanionPadded(c, rawU16, frame);
+        return;
+    }
+    align_.recordCompanionPrepare(c, rawU16, frame);
+    for (std::uint32_t level = align_.levelCount(); level-- > 0;) align_.recordCompanionAlignLevel(c, level);
+    if (!config_.frequencyAlignOnce) return;
+    if (slot >= hp::kMaxFrequencyFrames) throw std::invalid_argument("hdrplus frequency: too many frames");
+    const auto& level0 = geometry_.align.levels.front();
+    VkMemoryBarrier toTransfer{VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr, VK_ACCESS_SHADER_WRITE_BIT,
+                               VK_ACCESS_TRANSFER_READ_BIT};
+    vkCmdPipelineBarrier(c, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &toTransfer, 0,
+                         nullptr, 0, nullptr);
+    const VkBufferCopy copy{0, slot * alignSlotBytes(), VkDeviceSize(level0.tilesX) * level0.tilesY * 8u};
+    vkCmdCopyBuffer(c, arena_.buffer("hdrp_align_a").buffer, arena_.buffer("hdrq_align_store").buffer, 1, &copy);
+    VkMemoryBarrier toCompute{VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr, VK_ACCESS_TRANSFER_WRITE_BIT,
+                              VK_ACCESS_SHADER_READ_BIT};
+    vkCmdPipelineBarrier(c, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &toCompute, 0,
+                         nullptr, 0, nullptr);
 }
 
 void HdrPlusFrequencyRecorder::recordReference(VkCommandBuffer c, VkImageView rawU16, const RawNormalization& frame) {
-    align_.recordReferencePrepare(c, rawU16, frame);
+    if (pass_ == 0u) {
+        executor_.record(c, ShaderId::HdrqShiftTable, {{}, {bb(0, arena_.buffer("hdrq_shift_table"))}}, nullptr, 0u,
+                         divUp(49u * 64u, 64u), 1);
+    }
+    if (alignsThisPass()) align_.recordReferencePrepare(c, rawU16, frame);
     const auto& rgba = arena_.image("hdrq_ref_rgba");
     const std::uint32_t tx = geometry_.tilesX, ty = geometry_.tilesY;
-    ToRgbaPc tr{std::int32_t(geometry_.rgbaWidth), std::int32_t(geometry_.rgbaHeight), std::int32_t(geometry_.cropX),
-                std::int32_t(geometry_.cropY)};
+    const auto offset = passOffset();
+    ToRgbaPc tr{std::int32_t(geometry_.rgbaWidth),         std::int32_t(geometry_.rgbaHeight),
+                std::int32_t(geometry_.cropX),             std::int32_t(geometry_.cropY),
+                offset[0],                                 offset[1],
+                std::int32_t(geometry_.align.paddedWidth), std::int32_t(geometry_.align.paddedHeight)};
     executor_.record(c, ShaderId::HdrqToRgba, {{ib(0, arena_.image("hdrp_ref_padded")), ib(1, rgba)}, {}}, &tr,
                      sizeof(tr), divUp(geometry_.rgbaWidth, 16), divUp(geometry_.rgbaHeight, 16));
     computeWriteBarrier(c);
@@ -432,7 +490,7 @@ void HdrPlusFrequencyRecorder::recordReference(VkCommandBuffer c, VkImageView ra
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &toCompute, 0, nullptr, 0, nullptr);
 }
 
-void HdrPlusFrequencyRecorder::recordCompanionMerge(VkCommandBuffer c, std::uint32_t frameCount,
+void HdrPlusFrequencyRecorder::recordCompanionMerge(VkCommandBuffer c, std::uint32_t frameCount, std::uint32_t slot,
                                                     const std::function<void(std::uint32_t)>& mark) {
     const auto& a = geometry_.align;
     const auto& level0 = a.levels.front();
@@ -440,11 +498,19 @@ void HdrPlusFrequencyRecorder::recordCompanionMerge(VkCommandBuffer c, std::uint
     const auto& refRgba = arena_.image("hdrq_ref_rgba");
     const auto& alignedRgba = arena_.image("hdrq_aligned_rgba");
     const auto& mismatch = arena_.image("hdrq_mismatch");
+    const auto offset = passOffset();
     WarpRgbaPc wp{std::int32_t(geometry_.rgbaWidth), std::int32_t(geometry_.rgbaHeight), std::int32_t(geometry_.cropX),
                   std::int32_t(geometry_.cropY), std::int32_t(a.paddedWidth), std::int32_t(a.paddedHeight),
-                  std::int32_t(level0.tilesX), std::int32_t(level0.tilesY), std::int32_t(level0.tileSize)};
+                  std::int32_t(level0.tilesX), std::int32_t(level0.tilesY), std::int32_t(level0.tileSize), 0,
+                  offset[0], offset[1], config_.frequencyAlignOnce ? 1 : 0};
+    // Align-once: this companion's pass-0 shifts from its store slot.
+    const BufferBinding shifts =
+        config_.frequencyAlignOnce
+            ? BufferBinding{2u, arena_.buffer("hdrq_align_store").buffer, slot * alignSlotBytes(),
+                            VkDeviceSize(level0.tilesX) * level0.tilesY * 8u}
+            : bb(2, arena_.buffer("hdrp_align_a"));
     executor_.record(c, ShaderId::HdrqWarpRgba,
-                     {{ib(0, arena_.image("hdrp_comp_padded")), ib(1, alignedRgba)}, {bb(2, arena_.buffer("hdrp_align_a"))}},
+                     {{ib(0, arena_.image("hdrp_comp_padded")), ib(1, alignedRgba)}, {shifts}},
                      &wp, sizeof(wp), divUp(geometry_.rgbaWidth, 16), divUp(geometry_.rgbaHeight, 16));
     computeWriteBarrier(c);
     if (mark) mark(1u);
@@ -481,7 +547,7 @@ void HdrPlusFrequencyRecorder::recordCompanionMerge(VkCommandBuffer c, std::uint
     executor_.record(c, ShaderId::HdrqMerge,
                      {{ib(0, arena_.image("hdrq_ref_ft")), ib(1, arena_.image("hdrq_aligned_ft")),
                        ib(2, arena_.image("hdrq_final_ft")), ib(3, arena_.image("hdrq_rms")), ib(4, mismatch)},
-                      {}},
+                      {bb(5, arena_.buffer("hdrq_shift_table"))}},
                      &fm, sizeof(fm), tx, ty);
     computeWriteBarrier(c);
 }

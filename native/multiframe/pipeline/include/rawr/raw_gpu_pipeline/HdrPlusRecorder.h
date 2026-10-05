@@ -37,13 +37,17 @@ class HdrPlusRecorder final {
         geometry_.padLeft = left;
         geometry_.padTop = top;
     }
+    // Companion padded frame only (frequency merge passes reusing alignment).
+    void recordCompanionPadded(VkCommandBuffer command, VkImageView rawU16, const RawNormalization& frame);
     // Companion: padded frame and pyramid.
     void recordCompanionPrepare(VkCommandBuffer command, VkImageView rawU16, const RawNormalization& frame);
     // Companion: one coarse-to-fine alignment level against the reference
     // pyramid. Record levels levelCount()-1 down to 0 in order; each may be a
     // separate submission (bounds GPU stalls for interleaved preview work).
     [[nodiscard]] std::uint32_t levelCount() const noexcept { return std::uint32_t(geometry_.levels.size()); }
-    void recordCompanionAlignLevel(VkCommandBuffer command, std::uint32_t level);
+    // mark(k), when set, is called after upsample+correction (1) and tile cost (2).
+    void recordCompanionAlignLevel(VkCommandBuffer command, std::uint32_t level,
+                                   const std::function<void(std::uint32_t)>& mark = {});
     // Companion: warp, blur, robust weight and weighted accumulation.
     // mark(k), when set, is called after warp (1), blur (2) and weight (3)
     // so callers can write sub-stage GPU timestamps.
@@ -84,10 +88,17 @@ class HdrPlusFrequencyRecorder final {
                              rawr::raw_merge_hdrplus_gpu::FrequencyGeometry geometry);
     HdrPlusRecorder& alignment() noexcept { return align_; }
     void beginPass(std::uint32_t pass) noexcept;
+    // Align-once mode: companions are aligned (and the reference prepared)
+    // only in pass 0; later passes read through a coordinate offset.
+    [[nodiscard]] bool alignsThisPass() const noexcept { return !config_.frequencyAlignOnce || pass_ == 0u; }
     void recordReference(VkCommandBuffer command, VkImageView rawU16, const RawNormalization& frame);
+    // Companion for this pass: padded frame + pyramid + all alignment levels
+    // when alignsThisPass() (storing the shifts in slot), else the padded frame.
+    void recordCompanionAlign(VkCommandBuffer command, VkImageView rawU16, const RawNormalization& frame,
+                              std::uint32_t slot);
     // mark(k), when set, is called after warp (1), mismatch+spectrum (2) and
     // mismatch normalization (3) for sub-stage GPU timestamps.
-    void recordCompanionMerge(VkCommandBuffer command, std::uint32_t frameCount,
+    void recordCompanionMerge(VkCommandBuffer command, std::uint32_t frameCount, std::uint32_t slot,
                               const std::function<void(std::uint32_t)>& mark = {});
     void recordPassFinish(VkCommandBuffer command, std::uint32_t frameCount);
     void recordFinalize(VkCommandBuffer command) { align_.recordFinalize(command); }
@@ -99,6 +110,9 @@ class HdrPlusFrequencyRecorder final {
     rawr::raw_merge_hdrplus_gpu::FrequencyGeometry geometry_{};
     HdrPlusRecorder align_;
     std::uint32_t pass_ = 0;
+    // Raw-pixel offset from this pass's padded coordinates into the prepared frame.
+    std::array<std::int32_t, 2> passOffset() const noexcept;
+    VkDeviceSize alignSlotBytes() const noexcept;
 };
 
 }  // namespace rawr::raw_gpu_pipeline

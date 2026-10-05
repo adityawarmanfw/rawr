@@ -72,6 +72,8 @@
 #include "mf_hdrq_border_trace.h"
 #include "mf_hdrq_accumulate_prod.h"
 #include "mf_hdrq_accumulate_trace.h"
+#include "mf_hdrq_shift_table_prod.h"
+#include "mf_hdrq_shift_table_trace.h"
 #include "mf_affine_gate_trace.h"
 #include "mf_alignment_local5_prod.h"
 #include "mf_alignment_local5_trace.h"
@@ -452,7 +454,7 @@ const std::array<Spec, static_cast<size_t>(ShaderId::Count)> specs{{{"raw_normal
                                    mf_hdrq_merge_prod_spv_size,
                                    mf_hdrq_merge_trace_spv,
                                    mf_hdrq_merge_trace_spv_size,
-                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}}},
                                   {"hdrq_deconvolute",
                                    mf_hdrq_deconvolute_prod_spv,
                                    mf_hdrq_deconvolute_prod_spv_size,
@@ -476,7 +478,13 @@ const std::array<Spec, static_cast<size_t>(ShaderId::Count)> specs{{{"raw_normal
                                    mf_hdrq_accumulate_prod_spv_size,
                                    mf_hdrq_accumulate_trace_spv,
                                    mf_hdrq_accumulate_trace_spv_size,
-                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}}}};
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                  {"hdrq_shift_table",
+                                   mf_hdrq_shift_table_prod_spv,
+                                   mf_hdrq_shift_table_prod_spv_size,
+                                   mf_hdrq_shift_table_trace_spv,
+                                   mf_hdrq_shift_table_trace_spv_size,
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}}}}};
 void ck(VkResult r, const char* w) {
     if (r != VK_SUCCESS) throw std::runtime_error(std::string(w) + " VkResult=" + std::to_string(r));
 }
@@ -502,7 +510,7 @@ void VulkanExecutor::initialize(VkDevice d, bool wantTrace) {
         "affine_fit",         "affine_gate",        "support_accumulate", "accumulate",       "reference_accumulate",
         "a11_finalize",       "noise_estimate",     "fallback_chroma",    "hot_pixel_conceal",
         "hdrp_prepare", "hdrp_hot_pixel", "hdrp_avg_pool", "hdrp_blur", "hdrp_upsample_align", "hdrp_correct_upsampling", "hdrp_tile_diff", "hdrp_best_tile", "hdrp_warp", "hdrp_color_diff", "hdrp_column_sum", "hdrp_mean", "hdrp_merge_weight", "hdrp_accumulate", "hdrp_finalize",
-        "hdrq_to_rgba", "hdrq_warp_rgba", "hdrq_rms", "hdrq_mismatch", "hdrq_region_mean", "hdrq_mismatch_norm", "hdrq_forward_dft", "hdrq_merge", "hdrq_deconvolute", "hdrq_backward_dft", "hdrq_border", "hdrq_accumulate",
+        "hdrq_to_rgba", "hdrq_warp_rgba", "hdrq_rms", "hdrq_mismatch", "hdrq_region_mean", "hdrq_mismatch_norm", "hdrq_forward_dft", "hdrq_merge", "hdrq_deconvolute", "hdrq_backward_dft", "hdrq_border", "hdrq_accumulate", "hdrq_shift_table",
     };
     static_assert(sizeof(kOrder) / sizeof(kOrder[0]) == static_cast<size_t>(ShaderId::Count),
                   "executor spec order table out of sync with ShaderId");
