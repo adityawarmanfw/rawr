@@ -36,20 +36,24 @@ std::string systemProperty(const char* name) {
     return value;
 }
 
-// `adb shell setprop debug.rawr.camera_profile generic|v2562` overrides the
-// model-based built-in profile (and any user lens profile) for bring-up on
-// new devices.
+// `adb shell setprop debug.rawr.camera_profile generic|<built-in id>`
+// overrides the device's matched built-in profile (and any user lens profile)
+// for bring-up on new devices.
 const std::string& profileIdFromSetprop() {
     static const std::string overridden = [] {
         const std::string value = systemProperty("debug.rawr.camera_profile");
-        return value == "generic" || value == "v2562" ? value : std::string();
+        return isBuiltInProfileId(value) ? value : std::string();
     }();
     return overridden;
 }
 
-const std::string& activeProfileId(const std::string& model) {
+ProfileMatch deviceProfileMatch() {
+    return matchBuiltInProfile([](const std::string& name) { return systemProperty(name.c_str()); });
+}
+
+const std::string& activeProfileId(const ProfileMatch& match) {
     const auto& overridden = profileIdFromSetprop();
-    return overridden.empty() ? builtInProfileIdForModel(model) : overridden;
+    return overridden.empty() ? match.profileId : overridden;
 }
 
 std::string describeRoute(const LensRoute& route) { return serializeCameraProfile({"", {route}}); }
@@ -62,6 +66,10 @@ struct NativeCameraController::Impl final : CameraEventSink {
           ndkCallbacks(*this),
           requests([this](const std::string& line) { diag(line); }),
           results([this](const std::string& line) { diag(line); }) {
+        // Unverified: matched a model nobody has tested these lenses on yet.
+        diag("CAMERA_PROFILE_BUILTIN profile=" + builtInMatch.profileId + " model=" + deviceModel +
+             " rule=" + builtInMatch.rule + " verified=" + (builtInMatch.verified ? "true" : "false") +
+             " override=" + (profileIdFromSetprop().empty() ? "none" : profileIdFromSetprop()));
         publishProfileLocked();
     }
     ~Impl() {
@@ -92,7 +100,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
     // Built-in profile for this device model until the app supplies the
     // user's lens profile (setProfile).
     const std::string deviceModel = systemProperty("ro.product.model");
-    CameraProfile profile = builtInCameraProfile(activeProfileId(deviceModel));
+    const ProfileMatch builtInMatch = deviceProfileMatch();
+    CameraProfile profile = builtInCameraProfile(activeProfileId(builtInMatch));
     std::string preferredCameraId;
     std::string accessRoute = "direct";
     bool oisEnabledPreference = true;
@@ -780,6 +789,8 @@ NativeCameraController::NativeCameraController(PreviewCallbacks callbacks)
 NativeCameraController::~NativeCameraController() = default;
 void NativeCameraController::setActive(bool active) { impl_->setActive(active); }
 void NativeCameraController::setLensId(const std::string& lensId) { impl_->setLens(lensId); }
+const CameraProfile& deviceBuiltInCameraProfile() { return builtInCameraProfile(activeProfileId(deviceProfileMatch())); }
+
 bool NativeCameraController::setProfile(CameraProfile profile) { return impl_->setProfile(std::move(profile)); }
 void NativeCameraController::setExperimentalZeroCopyEnabled(bool enabled) {
     std::lock_guard<std::mutex> lock(impl_->mutex);

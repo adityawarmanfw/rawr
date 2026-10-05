@@ -2,8 +2,10 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "geometry/RawGeometry.h"
@@ -53,10 +55,38 @@ struct CameraProfile {
     std::vector<LensRoute> lenses;
 };
 
-// "v2562": the development device's tuned routes. "generic": logical back
-// camera 0 with a negotiated RAW stream and no vendor keys.
+// Which devices a built-in profile serves. Exact ro.product.model values win
+// over vendor property prefixes, which catch unlisted regional variants.
+struct ProfileMatchRules {
+    std::vector<std::string> models;
+    std::vector<std::string> verifiedModels;  // Models the profile was tested on.
+    std::vector<std::pair<std::string, std::string>> propertyPrefixes;  // (property, value prefix)
+};
+
+struct BuiltInProfile {
+    CameraProfile profile;
+    std::string name;  // Marketing name, for logs.
+    int version = 1;   // Bumped when the defaults change.
+    ProfileMatchRules match;
+};
+
+// The built-in profile chosen for a device, and why.
+struct ProfileMatch {
+    std::string profileId = "generic";
+    std::string rule = "none";  // "model", "property:<name>", or "none" (generic).
+    bool verified = false;      // The device's model is in verifiedModels.
+};
+
+using PropertyReader = std::function<std::string(const std::string& name)>;
+
+// Device profiles embedded from camera/profiles/*.json, in file-name order.
+[[nodiscard]] const std::vector<BuiltInProfile>& builtInProfiles();
+// Built-in profile by id; "generic" (logical back camera 0, negotiated RAW
+// stream, no vendor keys) for "generic" or an unknown id.
 [[nodiscard]] const CameraProfile& builtInCameraProfile(const std::string& profileId);
-[[nodiscard]] const std::string& builtInProfileIdForModel(const std::string& productModel);
+[[nodiscard]] bool isBuiltInProfileId(const std::string& profileId);
+// Picks the device's profile from system properties (ro.product.model first).
+[[nodiscard]] ProfileMatch matchBuiltInProfile(const PropertyReader& property);
 
 [[nodiscard]] std::optional<LensRoute> routeForLens(const CameraProfile& profile, const std::string& lensId);
 // Explicit camera-id override (debug intent / diagnostics): the profile's

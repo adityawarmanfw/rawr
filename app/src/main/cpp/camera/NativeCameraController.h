@@ -88,4 +88,8 @@ class NativeCameraController {
     std::unique_ptr<Impl> impl_;
 };
 
+// This device's built-in lens profile (system-property match, or the
+// debug.rawr.camera_profile override); the Lens settings start from it.
+[[nodiscard]] const CameraProfile& deviceBuiltInCameraProfile();
+
 }  // namespace rawrcam::camera

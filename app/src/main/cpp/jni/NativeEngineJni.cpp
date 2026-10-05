@@ -12,6 +12,7 @@
 #include "camera/CameraProbe.h"
 #include "camera/CameraProfileJson.h"
 #include "camera/CameraVideoCapabilities.h"
+#include "camera/NativeCameraController.h"
 #include "capture/CaptureRequest.h"
 #include "diagnostics/logging/RuntimeTraceRecorder.h"
 #include "jni/DevelopSettingsReader.h"
@@ -295,9 +296,8 @@ Java_com_rawr_camera_integration_NativePreviewEngine_setCameraProfile(JNIEnv* en
     return rawrcam::session::setCameraProfile(handle(h), jString(env, json)) ? JNI_TRUE : JNI_FALSE;
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_rawr_camera_integration_NativePreviewEngine_builtInCameraProfile(JNIEnv* env, jobject, jstring model) {
-    const auto& profile =
-        rawrcam::camera::builtInCameraProfile(rawrcam::camera::builtInProfileIdForModel(jString(env, model)));
+Java_com_rawr_camera_integration_NativePreviewEngine_builtInCameraProfile(JNIEnv* env, jobject) {
+    const auto& profile = rawrcam::camera::deviceBuiltInCameraProfile();
     return env->NewStringUTF(rawrcam::camera::serializeCameraProfile(profile).c_str());
 }
 extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreviewEngine_setPreferredCameraId(JNIEnv* env,

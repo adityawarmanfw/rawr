@@ -1,7 +1,6 @@
 package com.rawr.camera.integration
 
 import android.app.Application
-import android.os.Build
 import android.util.Log
 import android.view.Surface
 import com.rawr.camera.settings.model.ColorRenderProfile
@@ -215,7 +214,7 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
     /** Enabled lenses in order; null restores the device's built-in lenses. */
     fun setLensProfiles(lenses: List<LensProfile>?) {
         val json = lenses?.let { LensProfileCodec.encode(it, enabledOnly = true) }
-        postNative { native.setCameraProfile(nativeHandle, json ?: native.builtInCameraProfile(Build.MODEL)) }
+        postNative { native.setCameraProfile(nativeHandle, json ?: native.builtInCameraProfile()) }
     }
 
 

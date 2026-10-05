@@ -1,5 +1,6 @@
 #include <cassert>
 #include <iostream>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -12,6 +13,7 @@ using rawrcam::geometry::negotiateRawStream;
 using rawrcam::geometry::RawPixelFormat;
 using rawrcam::geometry::RawStreamOption;
 using rawrcam::geometry::RawStreamPreference;
+using PropertyReaderFn = rawrcam::camera::PropertyReader;
 
 namespace {
 
@@ -70,44 +72,99 @@ void testNegotiation() {
     assert(!negotiateRawStream({{RawPixelFormat::Raw16, 640, 480}}, {}));
 }
 
-// The seeded V2562 profile must reproduce the old hardcoded vivo sensor-mode
-// table: DCG readout modes (main/wide/tele) and ISZ crop modes with 10-bit levels.
+// Every camera/profiles/*.json must parse strictly (the app silently drops a
+// broken one), with a unique id.
+void testEmbeddedProfiles() {
+    using namespace rawrcam::camera;
+    static const char* const sources[] = {
+#include "camera/BuiltInCameraProfiles.inc"
+    };
+    std::vector<std::string> ids;
+    for (const char* source : sources) {
+        std::string error;
+        const auto parsed = parseBuiltInProfile(source, &error);
+        if (!parsed) std::cerr << "built-in profile rejected: " << error << '\n';
+        assert(parsed);
+        for (const auto& id : ids) assert(id != parsed->profile.id);
+        ids.push_back(parsed->profile.id);
+    }
+    assert(builtInProfiles().size() == ids.size());
+}
+
+PropertyReaderFn props(std::map<std::string, std::string> values) {
+    return [values](const std::string& name) {
+        const auto it = values.find(name);
+        return it == values.end() ? std::string() : it->second;
+    };
+}
+
+void testProfileMatching() {
+    using namespace rawrcam::camera;
+    // Global X300 Ultra: exact, tested model.
+    auto m = matchBuiltInProfile(props({{"ro.product.model", "V2562"}, {"ro.vivo.product.model", "PD2547F_EX"}}));
+    assert(m.profileId == "vivo_x300_ultra" && m.rule == "model" && m.verified);
+    // China variants: listed but untested.
+    for (const char* model : {"V2547A", "V2547DA"}) {
+        m = matchBuiltInProfile(props({{"ro.product.model", model}}));
+        assert(m.profileId == "vivo_x300_ultra" && m.rule == "model" && !m.verified);
+    }
+    // An unlisted variant is caught by vivo's project code.
+    m = matchBuiltInProfile(props({{"ro.product.model", "V2547X"}, {"ro.vivo.product.model", "PD2547"}}));
+    assert(m.profileId == "vivo_x300_ultra" && m.rule == "property:ro.vivo.product.model" && !m.verified);
+    // Other phones (X200 Ultra) and missing properties get generic.
+    m = matchBuiltInProfile(props({{"ro.product.model", "V2454A"}, {"ro.vivo.product.model", "PD2454"}}));
+    assert(m.profileId == "generic" && m.rule == "none" && !m.verified);
+    assert(matchBuiltInProfile(props({})).profileId == "generic");
+
+    assert(isBuiltInProfileId("vivo_x300_ultra") && isBuiltInProfileId("generic"));
+    assert(!isBuiltInProfileId("") && !isBuiltInProfileId("user") && !isBuiltInProfileId("v2562"));
+
+    // Rejected built-ins: reserved id, no match rules.
+    const std::string lens = R"("lenses":[{"id":"1x","cameraId":"0"}])";
+    assert(!parseBuiltInProfile(R"({"id":"generic","match":{"models":["X"]},)" + lens + "}"));
+    assert(!parseBuiltInProfile(R"({"id":"x","match":{"models":[]},)" + lens + "}"));
+    const auto ok = parseBuiltInProfile(R"({"id":"x","version":3,"match":{"propertyPrefixes":{"a":"b"}},)" + lens + "}");
+    assert(ok && ok->version == 3 && ok->name == "x" && ok->match.propertyPrefixes.size() == 1);
+}
+
+// The X300 Ultra defaults, as exported from the dev phone's release build:
+// L* = RAW10 with dynamic levels, D* = RAW16 DCG readout modes with static
+// levels, Z* = ISZ crop modes (10-bit) on the tele camera.
 void testProfiles() {
     using namespace rawrcam::camera;
-    assert(builtInProfileIdForModel("V2562") == "v2562");
-    assert(builtInProfileIdForModel("V2454A") == "generic");
-
-    const auto& dev = builtInCameraProfile("v2562");
-    assert(dev.lenses.size() == 5);
-    const char* order[] = {"14", "35", "85", "170", "340"};
-    for (size_t i = 0; i < 5; ++i) assert(dev.lenses[i].lensId == order[i]);
-
+    const auto& dev = builtInCameraProfile("vivo_x300_ultra");
     struct Expected {
         const char* lens;
         const char* camera;
+        RawPixelFormat format;
+        uint32_t width, height;
         int mode;
+        bool isStatic;
         float black, white;
     };
-    // DCG readout modes (main/wide/tele) and ISZ crop modes are plain session keys.
-    const Expected table[] = {{"14", "4", 23, 1024, 8712},
-                              {"35", "3", 17, 1024, 8712},
-                              {"85", "5", 19, 1024, 16383},
-                              {"170", "5", 31, 64, 1023},
-                              {"340", "5", 6, 64, 1023}};
-    for (const auto& e : table) {
-        const auto r = routeForLens(dev, e.lens);
-        assert(r && r->cameraId == e.camera && r->physicalCameraId.empty());
-        assert(r->preferredStream.format == RawPixelFormat::Raw16);
-        const auto& keys = r->keys;
-        const auto& levels = r->levels;
-        assert(keys.size() == 1 && keys[0].tag == "vivo.control.forceSensorMode");
-        assert(keys[0].type == CameraKeySetting::Type::Int32 && keys[0].scope == CameraKeySetting::Scope::Session);
-        assert(keys[0].values == std::vector<double>{double(e.mode)} && keys[0].enabled);
-        assert(levels.isStatic && levels.white == e.white);
-        for (float b : levels.blackRggb) assert(b == e.black);
+    const Expected table[] = {
+        {"L14", "4", RawPixelFormat::Raw10, 4096, 3072, 17, false, 0, 0},
+        {"D14", "4", RawPixelFormat::Raw16, 4096, 3072, 23, true, 1024, 8712},
+        {"L35", "3", RawPixelFormat::Raw10, 4080, 3064, 31, false, 0, 0},
+        {"D35", "3", RawPixelFormat::Raw16, 4080, 3064, 17, true, 1024, 8712},
+        {"L85", "5", RawPixelFormat::Raw10, 4080, 3072, 23, false, 0, 0},
+        {"D85", "5", RawPixelFormat::Raw16, 4080, 3072, 19, true, 1024, 16383},
+        {"Z170", "5", RawPixelFormat::Raw10, 4080, 3072, 31, true, 64, 1023},
+        {"Z340", "5", RawPixelFormat::Raw10, 4080, 3072, 6, true, 64, 1023},
+    };
+    assert(dev.lenses.size() == std::size(table));
+    for (size_t i = 0; i < std::size(table); ++i) {
+        const auto& e = table[i];
+        const auto& r = dev.lenses[i];  // Profile order is the capture-screen order.
+        assert(r.lensId == e.lens && r.cameraId == e.camera && r.physicalCameraId.empty());
+        assert(r.preferredStream.format == e.format);
+        assert(r.preferredStream.width == e.width && r.preferredStream.height == e.height);
+        assert(r.keys.size() == 1 && r.keys[0].tag == "vivo.control.forceSensorMode");
+        assert(r.keys[0].type == CameraKeySetting::Type::Int32 && r.keys[0].scope == CameraKeySetting::Scope::Session);
+        assert(r.keys[0].values == std::vector<double>{double(e.mode)} && r.keys[0].enabled);
+        assert(r.levels.isStatic == e.isStatic && r.levels.white == e.white);
+        for (float b : r.levels.blackRggb) assert(b == e.black);
     }
-    const auto main = routeForLens(dev, "35");
-    assert(main->preferredStream.width == 4080 && main->preferredStream.height == 3064);
 
     const auto& generic = builtInCameraProfile("generic");
     assert(generic.lenses.size() == 1);
@@ -117,8 +174,8 @@ void testProfiles() {
     // Unknown ids fall back to the generic profile.
     assert(builtInCameraProfile("nope").id == "generic");
 
-    // Camera-id override: known id keeps its tuned route, unknown id gets a negotiated one.
-    assert(routeForCameraId(dev, "5").lensId == "85");
+    // Camera-id override: known id keeps its first tuned route, unknown id gets a negotiated one.
+    assert(routeForCameraId(dev, "5").lensId == "L85");
     const auto adHoc = routeForCameraId(dev, "7");
     assert(adHoc.cameraId == "7" && adHoc.keys.empty() && adHoc.preferredStream.width == 0);
 }
@@ -126,7 +183,7 @@ void testProfiles() {
 void testProfileJson() {
     using namespace rawrcam::camera;
     // Round trip keeps every field of the built-in profiles.
-    for (const char* id : {"v2562", "generic"}) {
+    for (const char* id : {"vivo_x300_ultra", "generic"}) {
         const auto& original = builtInCameraProfile(id);
         const auto json = serializeCameraProfile(original);
         std::string error;
@@ -168,6 +225,8 @@ void testProfileJson() {
 int main() {
     testGeometryGate();
     testNegotiation();
+    testEmbeddedProfiles();
+    testProfileMatching();
     testProfiles();
     testProfileJson();
     std::cout << "camera_profile_test passed\n";

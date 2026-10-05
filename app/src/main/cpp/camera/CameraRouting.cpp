@@ -1,59 +1,67 @@
 #include "camera/CameraRouting.h"
 
+#include "camera/CameraProfileJson.h"
+
 namespace rawrcam::camera {
 
 namespace {
-using geometry::RawPixelFormat;
 
-constexpr const char* kVivoForceSensorMode = "vivo.control.forceSensorMode";
+// Profiles that fail to parse are dropped here; camera_profile_test parses
+// every file strictly, so a broken one fails the host tests instead.
+std::vector<BuiltInProfile> loadBuiltInProfiles() {
+    static const char* const kSources[] = {
+#include "camera/BuiltInCameraProfiles.inc"
+        nullptr,  // Keeps the array non-empty when there are no profile files.
+    };
+    std::vector<BuiltInProfile> out;
+    for (const char* source : kSources) {
+        if (!source) continue;
+        if (auto parsed = parseBuiltInProfile(source)) out.push_back(std::move(*parsed));
+    }
+    return out;
+}
 
-LensRoute route(const char* lensId, const char* cameraId, uint32_t width, uint32_t height) {
+CameraProfile makeGeneric() {
     LensRoute r;
-    r.lensId = lensId;
-    r.cameraId = cameraId;
-    r.preferredStream = {RawPixelFormat::Raw16, width, height};
-    return r;
+    r.lensId = "1x";
+    r.cameraId = "0";
+    return {"generic", {r}};
 }
 
-CameraKeySetting forceSensorMode(int32_t mode) {
-    return {kVivoForceSensorMode, CameraKeySetting::Type::Int32, CameraKeySetting::Scope::Session, {double(mode)}};
+bool contains(const std::vector<std::string>& list, const std::string& value) {
+    for (const auto& v : list)
+        if (v == value) return true;
+    return false;
 }
 
-LevelOverride staticLevels(float black, float white) { return {true, {black, black, black, black}, white}; }
-
-// vivo sensor modes are keyed by lens, not camera: the ISZ lenses share
-// camera 5 with tele but need their own crop-readout modes (31/6, 10-bit).
-// The other lenses use their DCG readout modes (more than 10 bits).
-LensRoute withSensorMode(LensRoute r, int32_t mode, float black, float white) {
-    r.keys = {forceSensorMode(mode)};
-    r.levels = staticLevels(black, white);
-    return r;
-}
-
-CameraProfile makeV2562() {
-    return {"v2562",
-            {
-                withSensorMode(route("14", "4", 4096, 3072), 23, 1024.0f, 8712.0f),
-                withSensorMode(route("35", "3", 4080, 3064), 17, 1024.0f, 8712.0f),
-                withSensorMode(route("85", "5", 4080, 3072), 19, 1024.0f, 16383.0f),
-                withSensorMode(route("170", "5", 4080, 3072), 31, 64.0f, 1023.0f),
-                withSensorMode(route("340", "5", 4080, 3072), 6, 64.0f, 1023.0f),
-            }};
-}
-
-CameraProfile makeGeneric() { return {"generic", {route("1x", "0", 0, 0)}}; }
 }  // namespace
 
-const CameraProfile& builtInCameraProfile(const std::string& profileId) {
-    static const CameraProfile v2562 = makeV2562();
-    static const CameraProfile generic = makeGeneric();
-    return profileId == v2562.id ? v2562 : generic;
+const std::vector<BuiltInProfile>& builtInProfiles() {
+    static const std::vector<BuiltInProfile> profiles = loadBuiltInProfiles();
+    return profiles;
 }
 
-const std::string& builtInProfileIdForModel(const std::string& productModel) {
-    static const std::string v2562 = "v2562";
-    static const std::string generic = "generic";
-    return productModel == "V2562" ? v2562 : generic;
+const CameraProfile& builtInCameraProfile(const std::string& profileId) {
+    static const CameraProfile generic = makeGeneric();
+    for (const auto& p : builtInProfiles())
+        if (p.profile.id == profileId) return p.profile;
+    return generic;
+}
+
+bool isBuiltInProfileId(const std::string& profileId) {
+    return profileId == "generic" || builtInCameraProfile(profileId).id == profileId;
+}
+
+ProfileMatch matchBuiltInProfile(const PropertyReader& property) {
+    const std::string model = property("ro.product.model");
+    for (const auto& p : builtInProfiles())
+        if (!model.empty() && contains(p.match.models, model))
+            return {p.profile.id, "model", contains(p.match.verifiedModels, model)};
+    for (const auto& p : builtInProfiles())
+        for (const auto& [name, prefix] : p.match.propertyPrefixes)
+            if (property(name).rfind(prefix, 0) == 0)
+                return {p.profile.id, "property:" + name, contains(p.match.verifiedModels, model)};
+    return {};
 }
 
 std::optional<LensRoute> routeForLens(const CameraProfile& profile, const std::string& lensId) {

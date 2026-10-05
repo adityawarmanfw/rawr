@@ -54,8 +54,8 @@ class NativePreviewEngine {
     /** Lens profile JSON (native CameraProfileJson); false when malformed or pinned by a debug setprop. */
     external fun setCameraProfile(handle: Long, json: String): Boolean
 
-    /** Built-in lens profile JSON for a device model (Build.MODEL). */
-    external fun builtInCameraProfile(model: String): String
+    /** This device's built-in lens profile JSON (matched natively from system properties). */
+    external fun builtInCameraProfile(): String
 
     external fun setPreferredCameraId(handle: Long, cameraId: String?)
 

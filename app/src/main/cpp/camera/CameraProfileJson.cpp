@@ -405,13 +405,16 @@ std::string serializeCameraProfile(const CameraProfile& profile) {
     return out;
 }
 
-std::optional<CameraProfile> parseCameraProfile(const std::string& json, std::string* error) {
-    Json root;
+namespace {
+
+bool parseRoot(const std::string& json, Json& root, std::string* error) {
     Parser parser(json);
-    if (!parser.parse(root) || root.kind != Json::Kind::Object) {
-        if (error) *error = parser.error.empty() ? "not an object" : parser.error;
-        return std::nullopt;
-    }
+    if (parser.parse(root) && root.kind == Json::Kind::Object) return true;
+    if (error) *error = parser.error.empty() ? "not an object" : parser.error;
+    return false;
+}
+
+std::optional<CameraProfile> readProfile(const Json& root, std::string* error) {
     CameraProfile profile;
     profile.id = root.str("id", "user");
     for (const auto& l : root.array("lenses")) {
@@ -445,6 +448,49 @@ std::optional<CameraProfile> parseCameraProfile(const std::string& json, std::st
         return std::nullopt;
     }
     return profile;
+}
+
+std::vector<std::string> strings(const std::vector<Json>& list) {
+    std::vector<std::string> out;
+    for (const auto& v : list)
+        if (v.kind == Json::Kind::String && !v.text.empty()) out.push_back(v.text);
+    return out;
+}
+
+}  // namespace
+
+std::optional<CameraProfile> parseCameraProfile(const std::string& json, std::string* error) {
+    Json root;
+    if (!parseRoot(json, root, error)) return std::nullopt;
+    return readProfile(root, error);
+}
+
+std::optional<BuiltInProfile> parseBuiltInProfile(const std::string& json, std::string* error) {
+    Json root;
+    if (!parseRoot(json, root, error)) return std::nullopt;
+    auto profile = readProfile(root, error);
+    if (!profile) return std::nullopt;
+    if (profile->id.empty() || profile->id == "user" || profile->id == "generic") {
+        if (error) *error = "built-in profile needs its own id";
+        return std::nullopt;
+    }
+    BuiltInProfile out;
+    out.profile = std::move(*profile);
+    out.name = root.str("name", out.profile.id);
+    out.version = int(root.num("version", 1));
+    if (const Json* m = root.get("match"); m && m->kind == Json::Kind::Object) {
+        out.match.models = strings(m->array("models"));
+        out.match.verifiedModels = strings(m->array("verifiedModels"));
+        if (const Json* p = m->get("propertyPrefixes"); p && p->kind == Json::Kind::Object)
+            for (size_t i = 0; i < p->keys.size(); ++i)
+                if (p->items[i].kind == Json::Kind::String && !p->items[i].text.empty())
+                    out.match.propertyPrefixes.emplace_back(p->keys[i], p->items[i].text);
+    }
+    if (out.match.models.empty() && out.match.propertyPrefixes.empty()) {
+        if (error) *error = "built-in profile " + out.profile.id + " matches no device";
+        return std::nullopt;
+    }
+    return out;
 }
 
 }  // namespace rawrcam::camera

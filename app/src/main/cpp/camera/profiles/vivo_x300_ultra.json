@@ -1,0 +1,206 @@
+{
+  "id": "vivo_x300_ultra",
+  "name": "vivo X300 Ultra",
+  "version": 1,
+  "match": {
+    "models": ["V2562", "V2547A", "V2547DA"],
+    "verifiedModels": ["V2562"],
+    "propertyPrefixes": {
+      "ro.vivo.product.model": "PD2547"
+    }
+  },
+  "lenses": [
+    {
+      "id": "L14",
+      "cameraId": "4",
+      "physicalCameraId": "",
+      "stream": {
+        "format": "RAW10",
+        "width": 4096,
+        "height": 3072
+      },
+      "levels": {
+        "static": false,
+        "black": [0, 0, 0, 0],
+        "white": 0
+      },
+      "keys": [
+        {
+          "tag": "vivo.control.forceSensorMode",
+          "type": "int32",
+          "scope": "session",
+          "values": [17],
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "id": "D14",
+      "cameraId": "4",
+      "physicalCameraId": "",
+      "stream": {
+        "format": "RAW16",
+        "width": 4096,
+        "height": 3072
+      },
+      "levels": {
+        "static": true,
+        "black": [1024, 1024, 1024, 1024],
+        "white": 8712
+      },
+      "keys": [
+        {
+          "tag": "vivo.control.forceSensorMode",
+          "type": "int32",
+          "scope": "session",
+          "values": [23],
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "id": "L35",
+      "cameraId": "3",
+      "physicalCameraId": "",
+      "stream": {
+        "format": "RAW10",
+        "width": 4080,
+        "height": 3064
+      },
+      "levels": {
+        "static": false,
+        "black": [0, 0, 0, 0],
+        "white": 0
+      },
+      "keys": [
+        {
+          "tag": "vivo.control.forceSensorMode",
+          "type": "int32",
+          "scope": "session",
+          "values": [31],
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "id": "D35",
+      "cameraId": "3",
+      "physicalCameraId": "",
+      "stream": {
+        "format": "RAW16",
+        "width": 4080,
+        "height": 3064
+      },
+      "levels": {
+        "static": true,
+        "black": [1024, 1024, 1024, 1024],
+        "white": 8712
+      },
+      "keys": [
+        {
+          "tag": "vivo.control.forceSensorMode",
+          "type": "int32",
+          "scope": "session",
+          "values": [17],
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "id": "L85",
+      "cameraId": "5",
+      "physicalCameraId": "",
+      "stream": {
+        "format": "RAW10",
+        "width": 4080,
+        "height": 3072
+      },
+      "levels": {
+        "static": false,
+        "black": [0, 0, 0, 0],
+        "white": 0
+      },
+      "keys": [
+        {
+          "tag": "vivo.control.forceSensorMode",
+          "type": "int32",
+          "scope": "session",
+          "values": [23],
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "id": "D85",
+      "cameraId": "5",
+      "physicalCameraId": "",
+      "stream": {
+        "format": "RAW16",
+        "width": 4080,
+        "height": 3072
+      },
+      "levels": {
+        "static": true,
+        "black": [1024, 1024, 1024, 1024],
+        "white": 16383
+      },
+      "keys": [
+        {
+          "tag": "vivo.control.forceSensorMode",
+          "type": "int32",
+          "scope": "session",
+          "values": [19],
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "id": "Z170",
+      "cameraId": "5",
+      "physicalCameraId": "",
+      "stream": {
+        "format": "RAW10",
+        "width": 4080,
+        "height": 3072
+      },
+      "levels": {
+        "static": true,
+        "black": [64, 64, 64, 64],
+        "white": 1023
+      },
+      "keys": [
+        {
+          "tag": "vivo.control.forceSensorMode",
+          "type": "int32",
+          "scope": "session",
+          "values": [31],
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "id": "Z340",
+      "cameraId": "5",
+      "physicalCameraId": "",
+      "stream": {
+        "format": "RAW10",
+        "width": 4080,
+        "height": 3072
+      },
+      "levels": {
+        "static": true,
+        "black": [64, 64, 64, 64],
+        "white": 1023
+      },
+      "keys": [
+        {
+          "tag": "vivo.control.forceSensorMode",
+          "type": "int32",
+          "scope": "session",
+          "values": [6],
+          "enabled": true
+        }
+      ]
+    }
+  ]
+}

@@ -384,6 +384,8 @@ function(rawrcam_module name)
     endforeach()
   endif()
 endfunction()
+include(cmake/CameraProfiles.cmake)
+rawr_embed_camera_profiles(${GEN}/camera/BuiltInCameraProfiles.inc)
 include(cmake/NativeModules.cmake)
 target_link_libraries(rawrcam_encoding PUBLIC rawrcam_dng_capture)
 
