@@ -440,7 +440,9 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
             captureControlLayout = enumOrDefault(p[Keys.captureControlLayout], d.captureControlLayout),
             jpegEnabled = p[Keys.jpegEnabled] ?: d.jpegEnabled,
             dngEnabled = (p[Keys.dngEnabled] ?: true) || p[Keys.jpegEnabled] == false,
-            dngCompressionId = p[Keys.dngCompressionId]?.takeIf { it == "dng.uncompressed" } ?: "dng.lossless",
+            dngCompressionId =
+                p[Keys.dngCompressionId]?.takeIf { it == "dng.uncompressed" || it == "dng.lossless" }
+                    ?: d.dngCompressionId,
             saveBaseDng = p[Keys.saveBaseDng] ?: true,
             gridMode = enumOrDefault(p[Keys.gridMode], d.gridMode),
             armedOverlays = decodeArmedOverlays(p, d.armedOverlays),
@@ -653,8 +655,8 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.dngCompressionId] = v.dngCompressionId
         p[Keys.saveBaseDng] = v.saveBaseDng
         p[Keys.gridMode] = v.gridMode.name
-        if (v.armedOverlays.isEmpty()) p.remove(Keys.armedOverlays)
-        else p[Keys.armedOverlays] = v.armedOverlays.map { it.name }.distinct().sorted().joinToString(",")
+        // Blank (not absent) = all off, so a non-empty default can't come back.
+        p[Keys.armedOverlays] = v.armedOverlays.map { it.name }.distinct().sorted().joinToString(",")
         p[Keys.falseColorManual] = v.falseColorManual
         p[Keys.activeScopes] = v.activeScopes.distinct().joinToString(",") { it.name }
         p[Keys.waveformMode] = v.waveformMode.name

@@ -681,22 +681,23 @@ fun SettingsValues.isFilmPresetModified(): Boolean {
 fun SettingsValues.isUserFilmPreset(id: String): Boolean =
     filmPresets.any { it.id == id }
 object FilmFactoryPresets {
+    // Shared base: no grain, halation, diffusion or filters; DIR couplers on
+    // (inter-layer colour inhibition) without their spatial spread.
+    val baseLook: FilmSimLook = FilmSimLook(dirCouplersAmount = 1f, dirCouplersDiffusionUm = 0f)
+
     val all: List<FilmPreset> = listOf(
-        FilmPreset("portra400", "Portra 400 Natural", FilmSimLook()),
+        FilmPreset("portra400", "Portra 400 Natural", baseLook),
         FilmPreset(
             "gold200", "Gold 200 Warm",
-            FilmSimLook(film = 6, filmExposureEv = 0.3f, printHighlightShape = 0.2f)
+            baseLook.copy(film = 6, filmExposureEv = 0.3f, printHighlightShape = 0.2f)
         ),
         FilmPreset(
             "ektachrome", "Ektachrome Clean",
-            FilmSimLook(film = 16, rgbToRawMethod = 2, printGamma = 1.1f, process = 1)
+            baseLook.copy(film = 16, rgbToRawMethod = 2, printGamma = 1.1f, process = 1)
         ),
         FilmPreset(
             "velvia", "Velvia Vivid",
-            FilmSimLook(
-                film = 18, filmExposureEv = -0.2f, printGamma = 1.15f,
-                grainEnabled = true, grainAmount = 0.7f, process = 1
-            )
+            baseLook.copy(film = 18, filmExposureEv = -0.2f, printGamma = 1.15f, process = 1)
         )
     )
 }

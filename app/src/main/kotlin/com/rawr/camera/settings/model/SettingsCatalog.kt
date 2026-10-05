@@ -82,14 +82,12 @@ object SettingsCatalog {
             SettingsValues(
                 saveLocationId = c.saveLocationChoices.first().id,
                 falseColorPresetId = c.falseColorPresets.first().id,
-                peakingSensitivityId = "peaking.normal",
+                peakingSensitivityId = "peaking.high",
                 imageTone =
                     ImageToneState(
                         outputColorSpaceId = DEFAULT_OUTPUT_COLOR_SPACE_ID,
                         transferFunctionId = DEFAULT_TRANSFER_FUNCTION_ID
                     ),
-                maxPostGainId = "gain.400",
-                autoMinFpsId = "fps.15",
                 controlSurfaceStyle = controlSurfaceStyle
             )
         return SettingsUiState(

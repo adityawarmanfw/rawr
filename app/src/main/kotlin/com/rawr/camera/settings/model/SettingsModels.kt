@@ -679,7 +679,7 @@ object MultiframeSpecs {
 
 data class MultiframeTuning(
     val outputResolution: MultiframeOutputResolution = MultiframeOutputResolution.Native,
-    val mergeAlgorithm: MultiframeMergeAlgorithm = MultiframeMergeAlgorithm.Wronski,
+    val mergeAlgorithm: MultiframeMergeAlgorithm = MultiframeMergeAlgorithm.HdrPlus,
     val hdrPlusStrength: Float = 13f,
     val hdrPlusTileSize: Int = 32,
     val maxFrames: Int = 16,
@@ -817,19 +817,20 @@ data class SettingsValues(
     val lensProfiles: List<LensProfile>? = null,
     val antiFlicker: AntiFlicker = AntiFlicker.Auto,
     val exposureStep: ExposureStep = ExposureStep.Third,
-    val highlightProtection: HighlightProtection = HighlightProtection.Normal,
-    val maxPostGainId: String = "gain.400",
-    val autoMinFpsId: String = "fps.15",
+    val highlightProtection: HighlightProtection = HighlightProtection.High,
+    val maxPostGainId: String = "gain.200",
+    val autoMinFpsId: String = "fps.12",
     val controlSurfaceStyle: ControlSurfaceStyle = ControlSurfaceStyle.Basic,
     val captureControlLayout: CaptureControlLayout = CaptureControlLayout.Compact,
     val jpegEnabled: Boolean = true,
     val dngEnabled: Boolean = true,
-    val dngCompressionId: String = "dng.lossless",
-    val gridMode: GridMode = GridMode.Off,
-    val armedOverlays: Set<OverlayMode> = emptySet(),
+    val dngCompressionId: String = "dng.uncompressed",
+    val gridMode: GridMode = GridMode.Thirds,
+    val armedOverlays: Set<OverlayMode> =
+        setOf(OverlayMode.Peaking, OverlayMode.TonemapShadows, OverlayMode.RawHighlights),
     val falseColorManual: Boolean = false,
-    val activeScopes: List<ScopeType> = emptyList(),
-    val waveformMode: WaveformMode = WaveformMode.Luma,
+    val activeScopes: List<ScopeType> = listOf(ScopeType.Waveform),
+    val waveformMode: WaveformMode = WaveformMode.RgbOverlay,
     val colorRenderProfile: ColorRenderProfile = ColorRenderProfile.RawrBase,
     val selectedUserLutProfileId: String? = null,
     val userLutProfiles: List<ImportedLutProfile> = emptyList(),
@@ -847,7 +848,7 @@ data class SettingsValues(
     val videoLogEnabled: Boolean = false,
     val videoLogProfile: VideoLogProfile = VideoLogProfile.LogC3,
     val pipelineDiagnosticsEnabled: Boolean = false,
-    val experimentalZeroCopyEnabled: Boolean = false,
+    val experimentalZeroCopyEnabled: Boolean = true,
     val experimentalMultiframeEnabled: Boolean = false,
     val saveBaseDng: Boolean = true,
     val persistentEngineEnabled: Boolean = true,
@@ -855,7 +856,7 @@ data class SettingsValues(
     // Preview-only film downsample divisor (2 = quarter-res, 3, 4).
     // Never touches stills, EXIF, or the look contract.
     val filmPreviewDivisor: Int = 2,
-    val filmSimLook: FilmSimLook = FilmSimLook(),
+    val filmSimLook: FilmSimLook = FilmFactoryPresets.baseLook,
     val selectedFilmPresetId: String? = null,
     val filmPresets: List<FilmPreset> = emptyList(),
     val multiframeBaseFrameMode: MultiframeBaseFrameMode = MultiframeBaseFrameMode.Middle,
@@ -876,7 +877,7 @@ data class SettingsValues(
     val quadfixEnabled: Boolean = false,
     val quadfixFastMedian: Boolean = false,
     // Photo FCC steps (stills). Video has its own enable + steps below.
-    val photoFccSteps: Int = 1,
+    val photoFccSteps: Int = 2,
     val videoFccEnabled: Boolean = false,
     val videoFccSteps: Int = 1,
     // Photo defringe (stills). Video strengths are independent.
@@ -906,7 +907,7 @@ data class SettingsValues(
     // propagation). Video has its own method + controls below.
     val photoHighlightEnabled: Boolean = true,
     // 0 = existing propagation; 1 = RawTherapee Coloropp for still renders.
-    val photoHighlightMethod: Int = 0,
+    val photoHighlightMethod: Int = 1,
     val photoHighlightThreshold: Float = 1f,
     val photoHighlightCompression: Float = 163f,
     val videoHighlightEnabled: Boolean = false,

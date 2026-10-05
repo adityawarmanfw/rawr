@@ -1,12 +1,20 @@
 package com.rawr.camera.settings.model
 
 import com.rawr.camera.model.ControlSurfaceStyle
+import com.rawr.camera.model.CaptureControlLayout
 import com.rawr.camera.model.GridMode
+import com.rawr.camera.model.OverlayMode
+import com.rawr.camera.model.ScopeType
+import com.rawr.camera.model.WaveformMode
 import com.rawr.camera.settings.architecture.*
 import com.rawr.camera.settings.architecture.PersistentSettingsController
 import com.rawr.camera.settings.fixtures.SettingsFixtures
 import com.rawr.camera.settings.preferences.FilmSimCodec
+import com.rawr.camera.settings.model.DemosaicAlgorithm
+import com.rawr.camera.settings.model.FilmFactoryPresets
 import com.rawr.camera.settings.model.FilmSimDetail
+import com.rawr.camera.settings.model.HighlightProtection
+import com.rawr.camera.settings.model.MultiframeMergeAlgorithm
 import com.rawr.camera.settings.model.FilmSimDiscreteField
 import com.rawr.camera.settings.model.FilmSimSection
 import com.rawr.camera.settings.model.SettingsDestination
@@ -65,26 +73,69 @@ class SettingsModelTest {
         assertEquals(1.5f, controller.state.value.values.rawrBaseTone.saturation)
     }
 
-    @Test fun dngCompressionDefaultsToLossless() {
+    @Test fun factoryDefaultsMatchShippedSetup() {
+        val v = PersistentSettingsController().state.value.values
+        // Multiframe stays off, but is set up for HDR+ over 16 frames.
+        assertFalse(v.experimentalMultiframeEnabled)
+        assertEquals(MultiframeMergeAlgorithm.HdrPlus, v.multiframeTuning.mergeAlgorithm)
+        assertEquals(16, v.multiframeTuning.maxFrames)
+        // Monitoring.
+        assertEquals(setOf(OverlayMode.Peaking, OverlayMode.TonemapShadows, OverlayMode.RawHighlights), v.armedOverlays)
+        assertEquals("peaking.high", v.peakingSensitivityId)
+        assertEquals(listOf(ScopeType.Waveform), v.activeScopes)
+        assertEquals(WaveformMode.RgbOverlay, v.waveformMode)
+        // Exposure.
+        assertEquals(HighlightProtection.High, v.highlightProtection)
+        assertEquals("gain.200", v.maxPostGainId)
+        assertEquals("fps.12", v.autoMinFpsId)
+        // Display.
+        assertEquals(CaptureControlLayout.Compact, v.captureControlLayout)
+        assertEquals(ControlSurfaceStyle.Basic, v.controlSurfaceStyle)
+        assertEquals(GridMode.Thirds, v.gridMode)
+        // Output.
+        assertEquals("dng.uncompressed", v.dngCompressionId)
+        assertEquals(98f, v.imageTone.jpegQuality)
+        assertEquals("jpeg.422", v.imageTone.jpegChromaSubsamplingId)
+        assertFalse(v.ultraHdrEnabled)
+        // Engine and develop.
+        assertTrue(v.experimentalZeroCopyEnabled)
+        assertTrue(v.persistentEngineEnabled)
+        assertEquals(DemosaicAlgorithm.Rcd, v.demosaicAlgorithm)
+        assertEquals(2, v.photoFccSteps)
+        assertEquals(1, v.photoHighlightMethod)
+        // Film: off; every factory look has DIR couplers (no spread) and no grain/halation/diffusion/filters.
+        assertFalse(v.filmSimEnabled)
+        assertEquals(FilmFactoryPresets.baseLook, v.filmSimLook)
+        for (preset in FilmFactoryPresets.all) {
+            val look = preset.look
+            assertEquals(1f, look.dirCouplersAmount, preset.id)
+            assertEquals(0f, look.dirCouplersDiffusionUm, preset.id)
+            assertFalse(look.grainEnabled || look.halationEnabled, preset.id)
+            assertFalse(look.cameraDiffusionEnabled || look.printDiffusionEnabled, preset.id)
+            assertFalse(look.cameraUvFilterEnabled || look.cameraIrFilterEnabled, preset.id)
+        }
+    }
+
+    @Test fun dngCompressionDefaultsToUncompressed() {
         val controller = PersistentSettingsController()
-        assertEquals("dng.lossless", controller.state.value.values.dngCompressionId)
+        assertEquals("dng.uncompressed", controller.state.value.values.dngCompressionId)
     }
 
     @Test fun dngCompressionChoiceUpdatesPreferenceAndPublishes() {
         var persisted: SettingsValues? = null
         val controller = PersistentSettingsController(onValuesChanged = { persisted = it })
-        controller.dispatch(SetChoice(ChoiceSelectorKind.DngCompression, "dng.uncompressed"))
-        assertEquals("dng.uncompressed", controller.state.value.values.dngCompressionId)
-        assertEquals("dng.uncompressed", persisted?.dngCompressionId)
         controller.dispatch(SetChoice(ChoiceSelectorKind.DngCompression, "dng.lossless"))
         assertEquals("dng.lossless", controller.state.value.values.dngCompressionId)
+        assertEquals("dng.lossless", persisted?.dngCompressionId)
+        controller.dispatch(SetChoice(ChoiceSelectorKind.DngCompression, "dng.uncompressed"))
+        assertEquals("dng.uncompressed", controller.state.value.values.dngCompressionId)
     }
 
     @Test fun invalidDngCompressionChoiceIsRejectedWithoutMutatingPreference() {
         var writes = 0
         val controller = PersistentSettingsController(onValuesChanged = { writes++ })
         controller.dispatch(SetChoice(ChoiceSelectorKind.DngCompression, "dng.invalid"))
-        assertEquals("dng.lossless", controller.state.value.values.dngCompressionId)
+        assertEquals("dng.uncompressed", controller.state.value.values.dngCompressionId)
         assertEquals(0, writes)
     }
 
@@ -162,7 +213,7 @@ class SettingsModelTest {
             controller.state.value.values.imageTone.outputColorSpaceId
         )
         assertEquals("transfer.srgb", controller.state.value.values.imageTone.transferFunctionId)
-        assertEquals("jpeg.420", controller.state.value.values.imageTone.jpegChromaSubsamplingId)
+        assertEquals("jpeg.422", controller.state.value.values.imageTone.jpegChromaSubsamplingId)
         assertEquals(98f, controller.state.value.values.imageTone.jpegQuality)
     }
 
@@ -528,8 +579,9 @@ class SettingsModelTest {
     @Test fun multiframeMergeAlgorithmIsPersistableAndAppendedToNativeContract() {
         var persisted: SettingsValues? = null
         val controller = PersistentSettingsController(onValuesChanged = { persisted = it })
-        assertEquals(MultiframeMergeAlgorithm.Wronski, controller.state.value.values.multiframeTuning.mergeAlgorithm)
+        assertEquals(MultiframeMergeAlgorithm.HdrPlus, controller.state.value.values.multiframeTuning.mergeAlgorithm)
 
+        controller.dispatch(SetMultiframeMergeAlgorithm(MultiframeMergeAlgorithm.Wronski))
         controller.dispatch(SetMultiframeMergeAlgorithm(MultiframeMergeAlgorithm.HdrPlus))
         controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.HdrPlusStrength, 18f))
         controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.HdrPlusStrength, 40f))

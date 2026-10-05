@@ -18,5 +18,5 @@ data class ImageToneState(
     val outputColorSpaceId: String,
     val transferFunctionId: String,
     val jpegQuality: Float = 98f,
-    val jpegChromaSubsamplingId: String = "jpeg.420"
+    val jpegChromaSubsamplingId: String = "jpeg.422"
 )

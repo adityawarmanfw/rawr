@@ -30,15 +30,6 @@ internal fun MultiframeSettings(state: SettingsUiState, dispatch: SettingsDispat
             ) { dispatch.invoke(SetSaveBaseDng(it)) }
         }
         SettingsGroup(
-            description = "Removes leftover colour blotches from the merged image with the profiled wavelet (chroma only, luma untouched), using the noise measured from the burst. Separate from Image > Denoise, which applies to single frames."
-        ) {
-            SettingsSwitchRow(
-                title = "Chroma Denoise",
-                checked = state.values.multiframeChromaDenoise,
-                enabled = enabled
-            ) { dispatch.invoke(SetMultiframeChromaDenoise(it)) }
-        }
-        SettingsGroup(
             title = "Merge Algorithm",
             description = "Super-resolution: kernel-regression merge, smoother with optional upscaling. HDR+: tile-aligned robust average on the RAW mosaic; keeps natural single-frame grain at higher SNR and avoids blotches in low light. HDR+ Quality: per-frequency merge, cleaner with mild sharpening and blends motion more, slower (both HDR+ modes: native resolution only)."
         ) {
@@ -67,6 +58,18 @@ internal fun MultiframeSettings(state: SettingsUiState, dispatch: SettingsDispat
             title = "Output",
             description = "Double-tap any parameter label to restore its default."
         ) {
+            // Needs the burst noise fit, which only the super-resolution merge
+            // measures; HDR+ would always skip it. JPEG only: the merged DNG is
+            // written before rendering.
+            SettingsSwitchRow(
+                title = "Chroma Denoise",
+                checked = state.values.multiframeChromaDenoise && !hdrPlus,
+                supportingText =
+                    if (hdrPlus) "Not available for HDR+ yet."
+                    else "JPEG only. Removes leftover colour blotches from the merged image (chroma only, luma untouched) using the noise measured from the burst. Separate from Image > Denoise, which applies to single frames.",
+                enabled = enabled && !hdrPlus
+            ) { dispatch.invoke(SetMultiframeChromaDenoise(it)) }
+            SettingDivider()
             if (hdrPlus) {
                 MultiframeSlider(spec(MultiframeNumericParameter.HdrPlusStrength), tuning, enabled, dispatch)
                 SettingDivider()

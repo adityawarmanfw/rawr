@@ -43,7 +43,7 @@ class RendererDevelopStagingTest {
                 before, before.copy(distortionCorrectionEnabled = !before.distortionCorrectionEnabled)
             )
         )
-        assertTrue(RendererDevelopStaging.isStagedChange(before, before.copy(photoHighlightMethod = 1)))
+        assertTrue(RendererDevelopStaging.isStagedChange(before, before.copy(photoHighlightMethod = 1 - before.photoHighlightMethod)))
     }
 
     @Test fun labelsNameChangedGroups() {
