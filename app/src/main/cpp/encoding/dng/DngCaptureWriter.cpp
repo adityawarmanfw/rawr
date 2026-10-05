@@ -153,17 +153,7 @@ bool DngCaptureWriter::start(std::shared_ptr<const rawrcam::imaging::RawSnapshot
                         if (st != TINYDNG_OK) {
                             done.error = errorText(err);
                         } else {
-                            const uint64_t tightRow = uint64_t(params->image.width) * 2u;
-                            const uint32_t rowsPerStrip =
-                                params->tiling.rows_per_strip ? params->tiling.rows_per_strip : params->image.height;
-                            const uint32_t stripCount = (params->image.height + rowsPerStrip - 1u) / rowsPerStrip;
-                            for (uint32_t s = 0; s < stripCount && st == TINYDNG_OK; ++s) {
-                                const uint32_t y = s * rowsPerStrip;
-                                uint32_t ph = rowsPerStrip;
-                                if (y + ph > params->image.height) ph = params->image.height - y;
-                                const void* src = params->pixelData + uint64_t(y) * tightRow;
-                                st = tinydng_writer_write_strip(writer, s, src, &err);
-                            }
+                            st = writeTinyDngPayload(writer, *params, &err);
                             if (st == TINYDNG_OK) st = tinydng_writer_finish(writer, &err);
                             if (st != TINYDNG_OK) {
                                 done.error = errorText(err);

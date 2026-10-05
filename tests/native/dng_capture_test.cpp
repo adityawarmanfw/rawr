@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <cstdio>
 #include <cstring>
 #include <iostream>
 #include <memory>
@@ -205,6 +206,73 @@ int main() {
         if (tctx) tinydng_context_destroy(tctx);
         if (!ok) return 8;
         std::cout << "DNG_CAPTURE_16BIT_LEVELS_PASS\n";
+    }
+
+    // Lossless JPEG is written as 256x256 tiles through the streaming writer
+    // (LibRaw/RawTherapee only decode the first strip of multi-strip LJPEG).
+    // Frames cross tile edges; RAWR_DNG_TILE_OUT also writes a full-size file
+    // for external decoders.
+    const char* tileOut = std::getenv("RAWR_DNG_TILE_OUT");
+    for (const auto dims : {std::pair<uint32_t, uint32_t>{600, 400}, std::pair<uint32_t, uint32_t>{4096, 3072}}) {
+        if (dims.first == 4096 && !tileOut) continue;
+        auto big = makeFrame(true);
+        big.width = dims.first;
+        big.height = dims.second;
+        big.packedRowStrideBytes = big.sourceRowStrideBytes = int32_t(dims.first * 2);
+        big.raw16.resize(size_t(dims.first) * dims.second * 2);
+        auto* px = reinterpret_cast<uint16_t*>(big.raw16.data());
+        for (uint32_t y = 0; y < dims.second; ++y)
+            for (uint32_t x = 0; x < dims.first; ++x)
+                px[size_t(y) * dims.first + x] = uint16_t(64 + ((x * 7 + y * 13 + (x * y) % 97) % 4000));
+        auto ctxBig = std::make_shared<rawrcam::metadata::CameraContextMetadata>(*big.metadata.cameraContext);
+        ctxBig->geometry.rawBufferWidth = ctxBig->geometry.pixelArrayWidth = int32_t(dims.first);
+        ctxBig->geometry.rawBufferHeight = ctxBig->geometry.pixelArrayHeight = int32_t(dims.second);
+        ctxBig->geometry.preCorrectionActiveArray = {0, 0, int32_t(dims.first), int32_t(dims.second), true};
+        big.metadata.cameraContext = ctxBig;
+        capture.compression = rawrcam::encoding::dng::DngCompression::LosslessJpeg;
+        auto params = rawrcam::encoding::dng::makeTinyDngWriteParams(big, capture, &error);
+        if (!params) {
+            std::cerr << error << "\n";
+            return 9;
+        }
+        params->rebind();
+        if (params->tiling.tile_width != rawrcam::encoding::dng::kLjpegTileSize || params->tiling.rows_per_strip != 0)
+            return 9;
+        tinydng_config cfg{};
+        tinydng_error err{};
+        tinydng_context* tctx = tinydng_context_create(&cfg, &err);
+        tinydng_write_io io{};
+        tinydng_writer* writer = nullptr;
+        uint8_t* out = nullptr;
+        size_t outSize = 0;
+        bool ok = tctx && tinydng_write_io_open_memory(tctx, &io, &err) == TINYDNG_OK &&
+                  tinydng_writer_create(tctx, io, &params->image, &params->options, &params->tiling, &writer, &err) ==
+                      TINYDNG_OK &&
+                  rawrcam::encoding::dng::writeTinyDngPayload(writer, *params, &err) == TINYDNG_OK &&
+                  tinydng_writer_finish(writer, &err) == TINYDNG_OK &&
+                  tinydng_write_io_memory_take(tctx, &io, &out, &outSize, &err) == TINYDNG_OK;
+        if (io.close) io.close(&io);
+        tinydng_document* doc = nullptr;
+        tinydng_open_options oopts{};
+        tinydng_pixels decoded{};
+        tinydng_decode_options dopts{};
+        ok = ok && tinydng_open_memory(tctx, out, outSize, &oopts, &doc, &err) == TINYDNG_OK &&
+             tinydng_decode_image(tctx, doc, 0, &dopts, &decoded, &err) == TINYDNG_OK && decoded.size == big.raw16.size() &&
+             std::memcmp(decoded.data, big.raw16.data(), decoded.size) == 0;
+        if (decoded.data) tinydng_pixels_free(tctx, &decoded);
+        if (doc) tinydng_document_destroy(tctx, doc);
+        if (ok && dims.first == 4096) {
+            FILE* f = std::fopen(tileOut, "wb");
+            ok = f && std::fwrite(out, 1, outSize, f) == outSize;
+            if (f) std::fclose(f);
+        }
+        if (out) tinydng_buffer_free(tctx, out);
+        if (tctx) tinydng_context_destroy(tctx);
+        if (!ok) {
+            std::cerr << "tiled ljpeg: " << err.message << "\n";
+            return 9;
+        }
+        std::cout << "DNG_CAPTURE_TILED_LJPEG_PASS " << dims.first << "x" << dims.second << " bytes=" << outSize << "\n";
     }
 
     auto bad = makeFrame(false);

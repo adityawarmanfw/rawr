@@ -11,6 +11,9 @@
 
 namespace rawrcam::encoding::dng {
 
+// Tile edge for lossless-JPEG DNGs (multiple of 16, the TIFF tile rule).
+inline constexpr uint32_t kLjpegTileSize = 256;
+
 // Owned TinyDNG write parameters. All tinydng_* structs borrow from the
 // owning vectors/strings below; the whole bundle outlives the write.
 struct TinyDngWriteParams {
@@ -42,6 +45,10 @@ struct TinyDngWriteParams {
     // relocation); vectors never SSO so their pointers survive moves.
     void rebind() noexcept;
 };
+
+// Feeds params.pixelData to a streaming writer created with params.tiling:
+// edge-cropped tiles (tiled layout) or row strips.
+tinydng_status writeTinyDngPayload(tinydng_writer* writer, const TinyDngWriteParams& params, tinydng_error* err);
 
 std::optional<TinyDngWriteParams> makeTinyDngWriteParams(const rawrcam::imaging::RawSnapshot& frame,
                                                          const DngCaptureContext& captureContext, std::string* error);
