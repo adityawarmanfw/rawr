@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.launch
 
 /** Projects settings onto native preview and reports initial submission to its start gate. */
@@ -32,6 +33,10 @@ internal class CaptureSettingsSync(
         syncSetting({ it.controlSurfaceStyle }) { controller.dispatch(SetControlSurfaceStyle(it)) }
         syncSetting({ it.oisEnabledPreference }) { previewCoordinator.setOisEnabled(it) }
         syncSetting({ it.lensProfiles }) { previewCoordinator.setLensProfiles(it) }
+        // Start on the last used lens. Startup only: later values come from
+        // the user's own switches, and replaying one could undo a newer switch.
+        // Native falls back to the first lens if this one left the profile.
+        syncStream(values.map { it.lastLensId }.take(1)) { id -> id?.let(previewCoordinator::selectLens) }
         syncSetting({ it.antiFlicker }) {
             previewCoordinator.setAntibandingMode(com.rawr.camera.settings.model.antibandingModeFor(it))
         }

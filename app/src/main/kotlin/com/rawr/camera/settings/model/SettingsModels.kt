@@ -815,6 +815,8 @@ data class SettingsValues(
     val oisEnabledPreference: Boolean = true,
     /** User lens configuration in capture-screen order; null = this device's built-in lenses. */
     val lensProfiles: List<LensProfile>? = null,
+    /** Lens in use when the app last switched lenses; null = the profile's first lens. Shared by photo and video. */
+    val lastLensId: String? = null,
     val antiFlicker: AntiFlicker = AntiFlicker.Auto,
     val exposureStep: ExposureStep = ExposureStep.Third,
     val highlightProtection: HighlightProtection = HighlightProtection.High,

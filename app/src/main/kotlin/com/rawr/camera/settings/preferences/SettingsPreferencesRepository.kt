@@ -363,6 +363,8 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
                     33 -> migrateV33RenderProfiles(values)
                     // v34 -> v35: user lens profiles; absent means the device's built-in lenses.
                     34 -> values
+                    // v35 -> v36: last used lens; absent means the profile's first lens.
+                    35 -> values
                     else -> {
                         return defaults
                     }
@@ -479,6 +481,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
             selectedUserLutProfileId = p[Keys.selectedUserLutProfileId],
             userLutProfiles = LutProfileCodec.decode(p[Keys.userLutProfiles]),
             lensProfiles = LensProfileCodec.decode(p[Keys.lensProfiles])?.takeIf { it.isNotEmpty() },
+            lastLensId = p[Keys.lastLensId]?.takeIf { it.isNotBlank() },
             rawrBaseTone = rawrBaseTone,
             pipelineDiagnosticsEnabled = p[Keys.pipelineDiagnosticsEnabled] ?: d.pipelineDiagnosticsEnabled,
             experimentalZeroCopyEnabled = p[Keys.experimentalZeroCopyEnabled] ?: d.experimentalZeroCopyEnabled,
@@ -694,6 +697,8 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.userLutProfiles] = LutProfileCodec.encode(v.userLutProfiles)
         val lensProfiles = v.lensProfiles
         if (lensProfiles == null) p.remove(Keys.lensProfiles) else p[Keys.lensProfiles] = LensProfileCodec.encode(lensProfiles)
+        val lastLensId = v.lastLensId
+        if (lastLensId == null) p.remove(Keys.lastLensId) else p[Keys.lastLensId] = lastLensId
         p[Keys.rawrToneRenderExposure] = v.rawrBaseTone.renderExposure
         p[Keys.rawrToneBlacks] = v.rawrBaseTone.blacks
         p[Keys.rawrToneShadows] = v.rawrBaseTone.shadows
@@ -866,7 +871,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
 
     private companion object {
         const val LEGACY_SCHEMA_VERSION = 0
-        const val CURRENT_SCHEMA_VERSION = 35
+        const val CURRENT_SCHEMA_VERSION = 36
     }
 
     private object Keys {
@@ -936,6 +941,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val selectedUserLutProfileId = stringPreferencesKey("selected_user_lut_profile_id")
         val userLutProfiles = stringPreferencesKey("user_lut_profiles")
         val lensProfiles = stringPreferencesKey("lens_profiles")
+        val lastLensId = stringPreferencesKey("last_lens_id")
         val rawrToneRenderExposure = floatPreferencesKey("profile_tone_rawr_render_exposure")
         val rawrToneBlacks = floatPreferencesKey("profile_tone_rawr_blacks")
         val rawrToneShadows = floatPreferencesKey("profile_tone_rawr_shadows")

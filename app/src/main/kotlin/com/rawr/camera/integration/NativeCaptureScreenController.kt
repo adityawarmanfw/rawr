@@ -23,6 +23,8 @@ class NativeCaptureScreenController(
     private val onCapturePreferencesChanged: (CaptureUiState, CaptureUiState) -> Unit = { _, _ -> },
     private val videoLocked: () -> Boolean = { false },
     private val onRawCpuIngress: () -> Unit = {},
+    /** A lens switch was accepted (persisted as the next launch's lens). */
+    private val onLensSelected: (String) -> Unit = {},
     dispatcher: CoroutineDispatcher = Dispatchers.Default
 ) : CaptureScreenController {
     private val mutableState =
@@ -339,6 +341,7 @@ class NativeCaptureScreenController(
             )
         }
         coordinator.selectLens(lensId)
+        onLensSelected(lensId)
     }
 
     private fun focusAt(point: NormalizedPoint) {

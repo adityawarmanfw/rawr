@@ -103,6 +103,7 @@ class CaptureViewModel(application: Application) : AndroidViewModel(application)
                     ).show()
                 }
             },
+            onLensSelected = { lensId -> settingsEditor.update { it.copy(lastLensId = lensId) } },
             onCapturePreferencesChanged = { before, after ->
                 settingsEditor.update { it.withCapturePreferenceChanges(before, after) }
                 settingsSync.updatePreviewCrop(after.captureMode, after.videoResolution)
