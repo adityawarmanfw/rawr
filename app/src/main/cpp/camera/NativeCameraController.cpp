@@ -178,6 +178,9 @@ struct NativeCameraController::Impl final : CameraEventSink {
         const bool routeChanged = !before || !after || describeRoute(*before) != describeRoute(*after);
         diag("CAMERA_PROFILE_APPLIED profile=" + profile.id + " lenses=" + std::to_string(profile.lenses.size()) +
              " lensId=" + lensId + " routeChanged=" + (routeChanged ? "true" : "false"));
+        // One line per lens (logcat truncates long lines): enough to rebuild
+        // the profile JSON from a diagnostics bundle or `adb logcat`.
+        for (const auto& lens : profile.lenses) diag("CAMERA_PROFILE_LENS " + describeRoute(lens));
         if (!routeChanged || !active || !preferredCameraId.empty()) return true;
         active = false;
         if (!retireSessionLocked(lock, std::chrono::seconds(3), "CAMERA_PROFILE_SWITCH")) {
