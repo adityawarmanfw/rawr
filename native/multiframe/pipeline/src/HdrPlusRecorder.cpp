@@ -209,6 +209,12 @@ void HdrPlusRecorder::recordReference(VkCommandBuffer c, VkImageView rawU16, con
     computeWriteBarrier(c);
 }
 
+void HdrPlusRecorder::recordReferencePrepare(VkCommandBuffer c, VkImageView rawU16, const RawNormalization& frame) {
+    reference_ = frame;
+    recordPrepare(c, true, rawU16, frame);
+    recordPyramid(c, true);
+}
+
 void HdrPlusRecorder::recordCompanionPrepare(VkCommandBuffer c, VkImageView rawU16, const RawNormalization& frame) {
     recordPrepare(c, false, rawU16, frame);
     recordPyramid(c, false);
@@ -300,6 +306,208 @@ void HdrPlusRecorder::recordFinalize(VkCommandBuffer c) {
                       {}},
                      &fp, sizeof(fp),
                      divUp(geometry_.width, 16), divUp(geometry_.height, 16));
+    computeWriteBarrier(c);
+}
+
+namespace {
+struct TilesPc {
+    std::int32_t tilesX, tilesY;
+};
+struct ToRgbaPc {
+    std::int32_t width, height, cropX, cropY;
+};
+struct WarpRgbaPc {
+    std::int32_t width, height, cropX, cropY, paddedWidth, paddedHeight, tilesX, tilesY, halfTileSize;
+};
+struct MismatchPc {
+    std::int32_t tilesX, tilesY, rgbaWidth, rgbaHeight;
+};
+struct RegionPc {
+    std::int32_t originX, originY, width, height;
+};
+struct MismatchNormPc {
+    std::int32_t tilesX, tilesY;
+    float invFrames;
+};
+struct FreqMergePc {
+    std::int32_t tilesX, tilesY;
+    float robustnessNorm, readNoise, maxMotionNorm;
+};
+struct BackwardPc {
+    std::int32_t tilesX, tilesY;
+    float frames;
+};
+struct BorderPc {
+    std::int32_t width, height;
+    float minValue;
+};
+struct FreqAccumulatePc {
+    std::int32_t width, height, offsetX, offsetY, mode;
+};
+}  // namespace
+
+ScratchLayout makeHdrPlusFrequencyScratchLayout(const hp::FrequencyGeometry& f, std::uint32_t width,
+                                                std::uint32_t height) {
+    ScratchLayout l{};
+    const auto& g = f.align;
+    const Extent2D raw{width, height}, padded{g.paddedWidth, g.paddedHeight};
+    const Extent2D rgba{f.rgbaWidth, f.rgbaHeight}, spectrum{2u * f.rgbaWidth, f.rgbaHeight}, tiles{f.tilesX, f.tilesY};
+    const auto add = [&](const std::string& name, Extent2D e, PixelStorage s, Lifetime life) {
+        l.images.push_back({name, e, s, life});
+        l.logicalImageBytes += std::uint64_t(e.width) * e.height * bytesPerPixel(s);
+    };
+    add("hdrp_ref_padded", padded, PixelStorage::R32Float, Lifetime::Burst);
+    add("hdrp_comp_padded", padded, PixelStorage::R32Float, Lifetime::Companion);
+    add("hdrp_pyr_tmp_a", {g.levels.front().width, g.levels.front().height}, PixelStorage::R32Float, Lifetime::PyramidTemp);
+    add("hdrp_pyr_tmp_b", {g.levels.front().width, g.levels.front().height}, PixelStorage::R32Float, Lifetime::PyramidTemp);
+    std::uint64_t maxTiles = 1u;
+    for (std::size_t i = 0; i < g.levels.size(); ++i) {
+        const Extent2D e{g.levels[i].width, g.levels[i].height};
+        add(levelName(true, i), e, PixelStorage::R32Float, Lifetime::Burst);
+        add(levelName(false, i), e, PixelStorage::R32Float, Lifetime::Companion);
+        maxTiles = std::max<std::uint64_t>(maxTiles, std::uint64_t(g.levels[i].tilesX) * g.levels[i].tilesY);
+    }
+    add("hdrq_ref_rgba", rgba, PixelStorage::RGBA32Float, Lifetime::Burst);
+    add("hdrq_aligned_rgba", rgba, PixelStorage::RGBA32Float, Lifetime::Companion);
+    add("hdrq_out_rgba", rgba, PixelStorage::RGBA32Float, Lifetime::Output);
+    add("hdrq_ref_ft", spectrum, PixelStorage::RGBA32Float, Lifetime::Burst);
+    add("hdrq_aligned_ft", spectrum, PixelStorage::RGBA32Float, Lifetime::Companion);
+    add("hdrq_final_ft", spectrum, PixelStorage::RGBA32Float, Lifetime::Output);
+    add("hdrq_rms", tiles, PixelStorage::RGBA32Float, Lifetime::Burst);
+    add("hdrq_mismatch", tiles, PixelStorage::R32Float, Lifetime::Companion);
+    add("hdrq_total_mismatch", tiles, PixelStorage::R32Float, Lifetime::Output);
+    add("hdrp_accum", raw, PixelStorage::R32Float, Lifetime::Output);
+    add("hdrp_output", raw, PixelStorage::RGBA16Float, Lifetime::Output);
+    add("hdrp_cfa", raw, PixelStorage::R32Float, Lifetime::Output);
+    const auto addBuffer = [&](const char* name, std::uint64_t bytes) {
+        l.buffers.push_back({name, bytes, Lifetime::Companion});
+        l.logicalBufferBytes += bytes;
+    };
+    addBuffer("hdrp_align_a", maxTiles * 8u);
+    addBuffer("hdrp_align_b", maxTiles * 8u);
+    addBuffer("hdrp_align_c", maxTiles * 8u);
+    addBuffer("hdrp_tile_cost", maxTiles * 25u * 4u);
+    addBuffer("hdrq_mean", 16u);
+    return l;
+}
+
+HdrPlusFrequencyRecorder::HdrPlusFrequencyRecorder(ResourceArena& arena, VulkanExecutor& executor, hp::Config config,
+                                                   hp::FrequencyGeometry geometry)
+    : arena_(arena), executor_(executor), config_(config), geometry_(std::move(geometry)),
+      align_(arena, executor, config, geometry_.align) {}
+
+void HdrPlusFrequencyRecorder::beginPass(std::uint32_t pass) noexcept {
+    pass_ = pass;
+    align_.setPads(geometry_.padLeft(pass), geometry_.padTop(pass));
+}
+
+void HdrPlusFrequencyRecorder::recordReference(VkCommandBuffer c, VkImageView rawU16, const RawNormalization& frame) {
+    align_.recordReferencePrepare(c, rawU16, frame);
+    const auto& rgba = arena_.image("hdrq_ref_rgba");
+    const std::uint32_t tx = geometry_.tilesX, ty = geometry_.tilesY;
+    ToRgbaPc tr{std::int32_t(geometry_.rgbaWidth), std::int32_t(geometry_.rgbaHeight), std::int32_t(geometry_.cropX),
+                std::int32_t(geometry_.cropY)};
+    executor_.record(c, ShaderId::HdrqToRgba, {{ib(0, arena_.image("hdrp_ref_padded")), ib(1, rgba)}, {}}, &tr,
+                     sizeof(tr), divUp(geometry_.rgbaWidth, 16), divUp(geometry_.rgbaHeight, 16));
+    computeWriteBarrier(c);
+    TilesPc tp{std::int32_t(tx), std::int32_t(ty)};
+    executor_.record(c, ShaderId::HdrqRms, {{ib(0, rgba), ib(1, arena_.image("hdrq_rms"))}, {}}, &tp, sizeof(tp),
+                     divUp(tx, 16), divUp(ty, 16));
+    // The reference spectrum seeds both the reference and the running merge.
+    executor_.record(c, ShaderId::HdrqForwardDft, {{ib(0, rgba), ib(1, arena_.image("hdrq_ref_ft"))}, {}}, &tp,
+                     sizeof(tp), tx, ty);
+    executor_.record(c, ShaderId::HdrqForwardDft, {{ib(0, rgba), ib(1, arena_.image("hdrq_final_ft"))}, {}}, &tp,
+                     sizeof(tp), tx, ty);
+    // Per-pass total mismatch starts at zero.
+    VkMemoryBarrier toTransfer{VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+                               VK_ACCESS_TRANSFER_WRITE_BIT};
+    vkCmdPipelineBarrier(c, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &toTransfer, 0,
+                         nullptr, 0, nullptr);
+    const VkClearColorValue zero{};
+    const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdClearColorImage(c, arena_.image("hdrq_total_mismatch").image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &range);
+    VkMemoryBarrier toCompute{VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr, VK_ACCESS_TRANSFER_WRITE_BIT,
+                              VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT};
+    vkCmdPipelineBarrier(c, VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &toCompute, 0, nullptr, 0, nullptr);
+}
+
+void HdrPlusFrequencyRecorder::recordCompanionMerge(VkCommandBuffer c, std::uint32_t frameCount,
+                                                    const std::function<void(std::uint32_t)>& mark) {
+    const auto& a = geometry_.align;
+    const auto& level0 = a.levels.front();
+    const std::uint32_t tx = geometry_.tilesX, ty = geometry_.tilesY;
+    const auto& refRgba = arena_.image("hdrq_ref_rgba");
+    const auto& alignedRgba = arena_.image("hdrq_aligned_rgba");
+    const auto& mismatch = arena_.image("hdrq_mismatch");
+    WarpRgbaPc wp{std::int32_t(geometry_.rgbaWidth), std::int32_t(geometry_.rgbaHeight), std::int32_t(geometry_.cropX),
+                  std::int32_t(geometry_.cropY), std::int32_t(a.paddedWidth), std::int32_t(a.paddedHeight),
+                  std::int32_t(level0.tilesX), std::int32_t(level0.tilesY), std::int32_t(level0.tileSize)};
+    executor_.record(c, ShaderId::HdrqWarpRgba,
+                     {{ib(0, arena_.image("hdrp_comp_padded")), ib(1, alignedRgba)}, {bb(2, arena_.buffer("hdrp_align_a"))}},
+                     &wp, sizeof(wp), divUp(geometry_.rgbaWidth, 16), divUp(geometry_.rgbaHeight, 16));
+    computeWriteBarrier(c);
+    if (mark) mark(1u);
+    MismatchPc mp{std::int32_t(tx), std::int32_t(ty), std::int32_t(geometry_.rgbaWidth), std::int32_t(geometry_.rgbaHeight)};
+    executor_.record(c, ShaderId::HdrqMismatch,
+                     {{ib(0, refRgba), ib(1, alignedRgba), ib(2, arena_.image("hdrq_rms")), ib(3, mismatch)}, {}}, &mp,
+                     sizeof(mp), tx, ty);
+    if (mark) {
+        computeWriteBarrier(c);
+        mark(5u);
+    }
+    TilesPc tp{std::int32_t(tx), std::int32_t(ty)};
+    executor_.record(c, ShaderId::HdrqForwardDft, {{ib(0, alignedRgba), ib(1, arena_.image("hdrq_aligned_ft"))}, {}}, &tp,
+                     sizeof(tp), tx, ty);
+    computeWriteBarrier(c);
+    if (mark) mark(2u);
+    // Mean mismatch excluding the tile row/column introduced by this pass's shift.
+    const std::uint32_t left = hp::FrequencyGeometry::shiftLeft(pass_) ? 1u : 0u;
+    const std::uint32_t right = hp::FrequencyGeometry::shiftLeft(pass_) ? 0u : 1u;
+    const std::uint32_t top = hp::FrequencyGeometry::shiftTop(pass_) ? 1u : 0u;
+    const std::uint32_t bottom = hp::FrequencyGeometry::shiftTop(pass_) ? 0u : 1u;
+    RegionPc rp{std::int32_t(left), std::int32_t(top), std::int32_t(tx - left - right), std::int32_t(ty - top - bottom)};
+    executor_.record(c, ShaderId::HdrqRegionMean, {{ib(0, mismatch)}, {bb(1, arena_.buffer("hdrq_mean"))}}, &rp,
+                     sizeof(rp), 1, 1);
+    computeWriteBarrier(c);
+    MismatchNormPc np{std::int32_t(tx), std::int32_t(ty), 1.0f / float(frameCount)};
+    executor_.record(c, ShaderId::HdrqMismatchNorm,
+                     {{ib(0, mismatch), ib(1, arena_.image("hdrq_total_mismatch"))}, {bb(2, arena_.buffer("hdrq_mean"))}},
+                     &np, sizeof(np), divUp(tx, 16), divUp(ty, 16));
+    computeWriteBarrier(c);
+    if (mark) mark(3u);
+    const auto norms = hp::frequencyNorms(config_.strength);
+    FreqMergePc fm{std::int32_t(tx), std::int32_t(ty), norms.robustnessNorm, norms.readNoise, norms.maxMotionNorm};
+    executor_.record(c, ShaderId::HdrqMerge,
+                     {{ib(0, arena_.image("hdrq_ref_ft")), ib(1, arena_.image("hdrq_aligned_ft")),
+                       ib(2, arena_.image("hdrq_final_ft")), ib(3, arena_.image("hdrq_rms")), ib(4, mismatch)},
+                      {}},
+                     &fm, sizeof(fm), tx, ty);
+    computeWriteBarrier(c);
+}
+
+void HdrPlusFrequencyRecorder::recordPassFinish(VkCommandBuffer c, std::uint32_t frameCount) {
+    const std::uint32_t tx = geometry_.tilesX, ty = geometry_.tilesY;
+    const auto& finalFt = arena_.image("hdrq_final_ft");
+    const auto& out = arena_.image("hdrq_out_rgba");
+    TilesPc tp{std::int32_t(tx), std::int32_t(ty)};
+    executor_.record(c, ShaderId::HdrqDeconvolute, {{ib(0, finalFt), ib(1, arena_.image("hdrq_total_mismatch"))}, {}}, &tp,
+                     sizeof(tp), tx, ty);
+    computeWriteBarrier(c);
+    BackwardPc bp{std::int32_t(tx), std::int32_t(ty), float(frameCount)};
+    executor_.record(c, ShaderId::HdrqBackwardDft, {{ib(0, finalFt), ib(1, out)}, {}}, &bp, sizeof(bp), tx, ty);
+    computeWriteBarrier(c);
+    // Exposure control off: upstream passes black level -1, so the clamp floor is -2 * window.
+    BorderPc bd{std::int32_t(geometry_.rgbaWidth), std::int32_t(geometry_.rgbaHeight), -2.0f};
+    executor_.record(c, ShaderId::HdrqBorder, {{ib(0, out), ib(1, arena_.image("hdrq_ref_rgba"))}, {}}, &bd, sizeof(bd),
+                     divUp(geometry_.rgbaWidth, 16), divUp(geometry_.rgbaHeight, 16));
+    computeWriteBarrier(c);
+    const auto& accum = arena_.image("hdrp_accum");
+    FreqAccumulatePc ap{std::int32_t(accum.extent.width), std::int32_t(accum.extent.height),
+                        std::int32_t(geometry_.padLeft(pass_) - geometry_.cropX),
+                        std::int32_t(geometry_.padTop(pass_) - geometry_.cropY), pass_ == 0u ? 0 : 1};
+    executor_.record(c, ShaderId::HdrqAccumulate, {{ib(0, out), ib(1, accum)}, {}}, &ap, sizeof(ap),
+                     divUp(accum.extent.width, 16), divUp(accum.extent.height, 16));
     computeWriteBarrier(c);
 }
 

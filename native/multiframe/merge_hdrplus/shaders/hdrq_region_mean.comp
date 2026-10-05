@@ -1,0 +1,26 @@
+#version 450
+// texture_mean over a rectangle of a single-channel tile image, as one
+// workgroup with a fixed-order reduction (stays on the GPU).
+layout(local_size_x = 256) in;
+layout(set = 0, binding = 0, r32f) readonly uniform image2D src;
+layout(std430, set = 0, binding = 1) writeonly buffer Mean { float v[]; } mean;
+layout(push_constant) uniform P {
+    ivec2 origin;
+    ivec2 size;
+} p;
+
+shared float partial[256];
+
+void main() {
+    uint lane = gl_LocalInvocationID.x;
+    int n = p.size.x * p.size.y;
+    float acc = 0.0;
+    for (int i = int(lane); i < n; i += 256) acc += imageLoad(src, p.origin + ivec2(i % p.size.x, i / p.size.x)).x;
+    partial[lane] = acc;
+    barrier();
+    for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+        if (lane < stride) partial[lane] += partial[lane + stride];
+        barrier();
+    }
+    if (lane == 0u) mean.v[0] = partial[0] / float(n);
+}

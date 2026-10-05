@@ -55,8 +55,9 @@ std::string buildParametersBlock(const MultiframeTuningView& tuning, const Multi
         mp << std::fixed << std::setprecision(1) << megapixels;
         out << "- Output: " << outWidth << 'x' << outHeight << " (" << scale.str() << "x, ~" << mp.str() << " MP)\n";
     }
-    if (tuning.mergeAlgorithm == 1u) {
-        out << "- Merge: HDR+ spatial (tile alignment + robust average)\n"
+    if (tuning.mergeAlgorithm != 0u) {
+        out << (tuning.mergeAlgorithm == 2u ? "- Merge: HDR+ frequency (tile alignment + per-frequency Wiener merge)\n"
+                                            : "- Merge: HDR+ spatial (tile alignment + robust average)\n")
             << "- HDR+ strength: " << f3(tuning.hdrplusStrength) << '\n'
             << "- HDR+ tile size: " << tuning.hdrplusTileSize << '\n';
     } else {

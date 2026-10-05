@@ -13,9 +13,10 @@
 
 namespace rawr::raw_gpu_pipeline {
 // Wronski: kernel-regression super-resolution merge (RGB output, optional
-// upscale). HdrPlusSpatial: HDR+ tile-aligned robust average (Bayer values
-// written into the RGBA16F output, 1x only).
-enum class MergeAlgorithm : std::uint32_t { Wronski = 0, HdrPlusSpatial = 1 };
+// upscale). HdrPlusSpatial: HDR+ tile-aligned robust average. HdrPlusFrequency:
+// HDR+ per-frequency Wiener merge (upstream "Higher quality"). Both HDR+
+// variants write Bayer values into the RGBA16F output and run at 1x only.
+enum class MergeAlgorithm : std::uint32_t { Wronski = 0, HdrPlusSpatial = 1, HdrPlusFrequency = 2 };
 struct BurstFrame {
     rawr::zsl_ring::GpuRawImageView raw{};
     MultiframeFrameParameters parameters{};
@@ -155,6 +156,9 @@ class AndroidBurstCoordinator final {
     void recordTimestamp(std::uint32_t query);
     BurstRunResult runHdrPlus(const std::vector<BurstFrame>& frames, std::uint32_t referenceIndex,
                               const FrameConsumed& frameConsumed);
+    BurstRunResult runHdrPlusFrequency(const std::vector<BurstFrame>& frames, std::uint32_t referenceIndex,
+                                       const FrameConsumed& frameConsumed);
+    [[nodiscard]] bool hdrplusSelected() const noexcept { return algorithm_ != MergeAlgorithm::Wronski; }
     bool arenaReady_ = false;
     bool layoutsInitialized_ = false;
     bool submissionInFlight_ = false;

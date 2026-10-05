@@ -544,6 +544,9 @@ class SettingsModelTest {
         controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.HdrPlusTileSize, 64f))
         assertEquals(16, controller.state.value.values.multiframeTuning.hdrPlusTileSize)
         assertEquals(0, MultiframeMergeAlgorithm.Wronski.nativeId)
+        assertEquals(2, MultiframeMergeAlgorithm.HdrPlusQuality.nativeId)
+        controller.dispatch(SetMultiframeMergeAlgorithm(MultiframeMergeAlgorithm.HdrPlusQuality))
+        assertEquals(2f, controller.state.value.values.multiframeTuning.nativeMergeValues()[0])
         assertEquals(13f, MultiframeTuning().copy(hdrPlusStrength = 0f).sanitized().hdrPlusStrength)
     }
 

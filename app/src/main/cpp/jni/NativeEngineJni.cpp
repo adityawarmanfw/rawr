@@ -88,7 +88,7 @@ rawrcam::capture::multiframe::MultiframeTuning multiframeTuning(JNIEnv* env, jfl
     if (count >= 25) {
         std::array<jfloat, 3> merge{0.0f, 13.0f, 32.0f};
         env->GetFloatArrayRegion(values, 23, count - 23, merge.data());
-        if (!(merge[0] == 0.0f || merge[0] == 1.0f) || !inRange(merge[1], 1.0f, 22.0f) ||
+        if (!(merge[0] == 0.0f || merge[0] == 1.0f || merge[0] == 2.0f) || !inRange(merge[1], 1.0f, 22.0f) ||
             !(merge[2] == 16.0f || merge[2] == 32.0f))
             return {};
         out.mergeAlgorithm = static_cast<std::uint32_t>(merge[0]);

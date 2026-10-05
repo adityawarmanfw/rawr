@@ -31,7 +31,8 @@ struct MultiframeTuning {
     float fallbackChromaGain = 0.0f;
     float fallbackLumaGain = 0.0f;
     // Appended (journal prefix-compatible): 0 = Wronski super-resolution
-    // merge, 1 = HDR+ spatial merge (1x only; uses only hdrplusStrength).
+    // merge, 1 = HDR+ spatial, 2 = HDR+ frequency (HDR+: 1x only; uses only
+    // the hdrplus* fields).
     std::uint32_t mergeAlgorithm = 0;
     float hdrplusStrength = 13.0f;
     std::uint32_t hdrplusTileSize = 32;  // 16 tracks small motion better, 32 steadier in heavy noise

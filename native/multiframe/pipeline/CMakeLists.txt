@@ -62,7 +62,19 @@ set(RAWR_MF_SHADER_SOURCES
   ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrp_mean.comp
   ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrp_merge_weight.comp
   ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrp_accumulate.comp
-  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrp_finalize.comp)
+  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrp_finalize.comp
+  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_to_rgba.comp
+  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_warp_rgba.comp
+  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_rms.comp
+  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_mismatch.comp
+  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_region_mean.comp
+  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_mismatch_norm.comp
+  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_forward_dft.comp
+  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_merge.comp
+  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_deconvolute.comp
+  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_backward_dft.comp
+  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_border.comp
+  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_accumulate.comp)
 set(RAWR_MF_SPV_OUTPUTS)
 foreach(RAWR_MF_SRC IN LISTS RAWR_MF_SHADER_SOURCES)
   get_filename_component(RAWR_MF_NAME ${RAWR_MF_SRC} NAME_WE)

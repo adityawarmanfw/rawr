@@ -78,8 +78,8 @@ void MfsrCaptureJob::run() {
         const float largestSide = static_cast<float>(std::max(ctx.rawWidth, ctx.rawHeight));
         if (largestSide > 0.0f)
             t.outputScale = std::clamp(t.outputScale, 1.0f, std::max(1.0f, maxDimension / largestSide));
-        // HDR+ merges on the RAW grid (the coordinator enforces 1x too).
-        if (t.mergeAlgorithm == 1u) t.outputScale = 1.0f;
+        // HDR+ (both modes) merges on the RAW grid (the coordinator enforces 1x too).
+        if (t.mergeAlgorithm != 0u) t.outputScale = 1.0f;
         return t;
     }();
     const auto baseFrameMode = work->baseFrameMode;

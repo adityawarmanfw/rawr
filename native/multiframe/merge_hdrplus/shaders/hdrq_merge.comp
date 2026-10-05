@@ -1,0 +1,90 @@
+#version 450
+// Port of hdr-plus-swift merge_frequency_domain (uniform exposure): per tile,
+// pick the best of 7x7 sub-pixel Fourier shifts of the aligned tile, then
+// merge each frequency bin with a Wiener-shrinkage weight (Hasinoff 2016,
+// Liba 2019 motion norm, Delbracio 2015 magnitude norm). One 8x8 workgroup
+// per tile: 49 lanes evaluate the shifts (each summing in upstream order),
+// then every lane merges its own bin.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0, rgba32f) readonly uniform image2D refFt;
+layout(set = 0, binding = 1, rgba32f) readonly uniform image2D alignedFt;
+layout(set = 0, binding = 2, rgba32f) uniform image2D outFt;
+layout(set = 0, binding = 3, rgba32f) readonly uniform image2D rms;
+layout(set = 0, binding = 4, r32f) readonly uniform image2D mismatch;
+layout(push_constant) uniform P {
+    ivec2 tiles;
+    float robustnessNorm;
+    float readNoise;
+    float maxMotionNorm;
+} p;
+
+const float PI = 3.14159265358979323846;
+shared vec4 sRefRe[64], sRefIm[64], sAlRe[64], sAlIm[64];  // index dn*8 + dm
+shared float sDiff[49];
+shared int sBest;
+
+void main() {
+    ivec2 t = ivec2(gl_WorkGroupID.xy);
+    if (any(greaterThanEqual(t, p.tiles))) return;
+    int dm = int(gl_LocalInvocationID.x), dn = int(gl_LocalInvocationID.y);
+    int lane = dn * 8 + dm;
+    const int ts = 8;
+    ivec2 t0 = t * ts;
+    ivec2 o = ivec2(2 * (t0.x + dm), t0.y + dn);
+    sRefRe[lane] = imageLoad(refFt, o);
+    sRefIm[lane] = imageLoad(refFt, o + ivec2(1, 0));
+    sAlRe[lane] = imageLoad(alignedFt, o);
+    sAlIm[lane] = imageLoad(alignedFt, o + ivec2(1, 0));
+    barrier();
+    float angle = -2.0 * PI / float(ts);
+    const float step = 1.0 / 6.0;
+    if (lane < 49) {
+        float sx = -0.5 + float(lane % 7) * step, sy = -0.5 + float(lane / 7) * step;
+        float total = 0.0;
+        for (int n = 0; n < ts; ++n)
+            for (int m = 0; m < ts; ++m) {
+                int k = n * 8 + m;
+                float c = cos(angle * (float(m) * sx + float(n) * sy)), s = sin(angle * (float(m) * sx + float(n) * sy));
+                vec4 re2 = sRefRe[k] - (c * sAlRe[k] - s * sAlIm[k]);
+                vec4 im2 = sRefIm[k] - (s * sAlRe[k] + c * sAlIm[k]);
+                vec4 w4 = re2 * re2 + im2 * im2;
+                total += w4.x + w4.y + w4.z + w4.w;
+            }
+        sDiff[lane] = total;
+    }
+    barrier();
+    if (lane == 0) {
+        float best = 1e20;
+        int bi = 0;
+        for (int i = 0; i < 49; ++i)
+            if (sDiff[i] < best) {
+                best = sDiff[i];
+                bi = i;
+            }
+        sBest = bi;
+    }
+    barrier();
+    float bx = -0.5 + float(sBest % 7) * step, by = -0.5 + float(sBest / 7) * step;
+    vec4 noiseNorm = (imageLoad(rms, t) + p.readNoise) * float(ts * ts) * p.robustnessNorm;
+    float mm = imageLoad(mismatch, t).x;
+    float mismatchWeight = clamp(1.0 - 10.0 * (mm - 0.2), 0.0, 1.0);
+    float motionNorm = clamp(p.maxMotionNorm - (mm - 0.02) * (p.maxMotionNorm - 1.0) / 0.15, 1.0, p.maxMotionNorm);
+    float c = cos(angle * (float(dm) * bx + float(dn) * by)), s = sin(angle * (float(dm) * bx + float(dn) * by));
+    vec4 refRe = sRefRe[lane], refIm = sRefIm[lane];
+    vec4 alRe = c * sAlRe[lane] - s * sAlIm[lane];
+    vec4 alIm = s * sAlRe[lane] + c * sAlIm[lane];
+    float magnitudeNorm = 1.0;
+    if (dm + dn > 0 && mm < 0.3) {
+        vec4 refMag = sqrt(refRe * refRe + refIm * refIm);
+        vec4 alMag = sqrt(alRe * alRe + alIm * alIm);
+        float ratio = (alMag.x + alMag.y + alMag.z + alMag.w) / (refMag.x + refMag.y + refMag.z + refMag.w);
+        magnitudeNorm = mismatchWeight * clamp(ratio * ratio * ratio * ratio, 0.5, 3.0);
+    }
+    vec4 w4 = (refRe - alRe) * (refRe - alRe) + (refIm - alIm) * (refIm - alIm);
+    w4 = w4 / (w4 + magnitudeNorm * motionNorm * noiseNorm);  // highlights norm = 1 (uniform exposure)
+    float lo = min(w4.x, min(w4.y, min(w4.z, w4.w))), hi = max(w4.x, max(w4.y, max(w4.z, w4.w)));
+    // Mean of the two central channel weights (upstream's robust variant of Liba's max).
+    float weight = clamp(0.5 * (w4.x + w4.y + w4.z + w4.w - lo - hi), 0.0, 1.0);
+    imageStore(outFt, o, imageLoad(outFt, o) + (1.0 - weight) * alRe + weight * refRe);
+    imageStore(outFt, o + ivec2(1, 0), imageLoad(outFt, o + ivec2(1, 0)) + (1.0 - weight) * alIm + weight * refIm);
+}

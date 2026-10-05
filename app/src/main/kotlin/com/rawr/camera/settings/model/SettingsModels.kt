@@ -323,7 +323,8 @@ enum class MultiframeOutputResolution(val label: String, val outputScale: Float)
 
 enum class MultiframeMergeAlgorithm(val nativeId: Int, val label: String) {
     Wronski(0, "Super-resolution"),
-    HdrPlus(1, "HDR+")
+    HdrPlus(1, "HDR+"),
+    HdrPlusQuality(2, "HDR+ Quality")
 }
 
 enum class MultiframeBaseFrameMode(val nativeId: Int, val label: String) {

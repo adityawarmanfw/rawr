@@ -30,6 +30,13 @@ class HdrPlusRecorder final {
     // accumulator initialized with ref / frameCount.
     void recordReference(VkCommandBuffer command, VkImageView rawU16, const RawNormalization& frame,
                          std::uint32_t frameCount);
+    // Reference padded frame and pyramid only (frequency merge passes).
+    void recordReferencePrepare(VkCommandBuffer command, VkImageView rawU16, const RawNormalization& frame);
+    // Per-pass padding offsets inside the fixed padded extent (frequency merge).
+    void setPads(std::uint32_t left, std::uint32_t top) noexcept {
+        geometry_.padLeft = left;
+        geometry_.padTop = top;
+    }
     // Companion: padded frame and pyramid.
     void recordCompanionPrepare(VkCommandBuffer command, VkImageView rawU16, const RawNormalization& frame);
     // Companion: one coarse-to-fine alignment level against the reference
@@ -59,6 +66,39 @@ class HdrPlusRecorder final {
     void recordBlur(VkCommandBuffer, const ArenaImage& src, std::array<std::int32_t, 2> srcOffset,
                     const ArenaImage& tmp, const ArenaImage& dst, std::uint32_t width, std::uint32_t height,
                     std::int32_t kernelSize, std::int32_t stride, bool quantizeHalf);
+};
+
+// Scratch for the HDR+ frequency merge: the alignment resources of the
+// spatial layout plus RGBA tiles, three spectra, per-tile statistics and the
+// raw accumulator (~0.85 GB at 12.5 MP).
+ScratchLayout makeHdrPlusFrequencyScratchLayout(const rawr::raw_merge_hdrplus_gpu::FrequencyGeometry& geometry,
+                                                std::uint32_t width, std::uint32_t height);
+
+// Records the HDR+ frequency-domain merge (upstream "Higher quality"): four
+// half-tile-shifted passes; per pass the reference spectrum, then per
+// companion alignment (via HdrPlusRecorder) and a per-frequency Wiener merge,
+// then deconvolution, inverse transform and accumulation.
+class HdrPlusFrequencyRecorder final {
+   public:
+    HdrPlusFrequencyRecorder(ResourceArena& arena, VulkanExecutor& executor, rawr::raw_merge_hdrplus_gpu::Config config,
+                             rawr::raw_merge_hdrplus_gpu::FrequencyGeometry geometry);
+    HdrPlusRecorder& alignment() noexcept { return align_; }
+    void beginPass(std::uint32_t pass) noexcept;
+    void recordReference(VkCommandBuffer command, VkImageView rawU16, const RawNormalization& frame);
+    // mark(k), when set, is called after warp (1), mismatch+spectrum (2) and
+    // mismatch normalization (3) for sub-stage GPU timestamps.
+    void recordCompanionMerge(VkCommandBuffer command, std::uint32_t frameCount,
+                              const std::function<void(std::uint32_t)>& mark = {});
+    void recordPassFinish(VkCommandBuffer command, std::uint32_t frameCount);
+    void recordFinalize(VkCommandBuffer command) { align_.recordFinalize(command); }
+
+   private:
+    ResourceArena& arena_;
+    VulkanExecutor& executor_;
+    rawr::raw_merge_hdrplus_gpu::Config config_{};
+    rawr::raw_merge_hdrplus_gpu::FrequencyGeometry geometry_{};
+    HdrPlusRecorder align_;
+    std::uint32_t pass_ = 0;
 };
 
 }  // namespace rawr::raw_gpu_pipeline

@@ -89,4 +89,75 @@ inline Geometry makeGeometry(std::uint32_t width, std::uint32_t height, const Co
     return g;
 }
 
+// Frequency-domain ("Higher quality") merge. Uniform-exposure constants from
+// upstream align_merge_frequency_domain.
+struct FrequencyNorms {
+    float robustnessNorm = 0.f;  // scales the noise term of the Wiener shrinkage
+    float readNoise = 0.f;       // added to the per-tile shot-noise estimate
+    float maxMotionNorm = 1.f;   // extra denoising for low-mismatch tiles
+};
+inline FrequencyNorms frequencyNorms(float strength) {
+    const double rev = 0.5 * (26.5 - double(int(strength + 0.5f)));
+    FrequencyNorms n{};
+    n.robustnessNorm = float(std::pow(2.0, -rev + 7.5));
+    n.readNoise = float(std::pow(std::pow(2.0, -rev + 10.0), 1.6));
+    n.maxMotionNorm = float(std::max(1.0, std::pow(1.3, 11.0 - rev)));
+    return n;
+}
+
+// The frequency merge runs four passes over 8x8 RGBA tiles (16x16 raw
+// pixels). Upstream (1-based pass i) shifts the padding by tile_size_merge
+// raw pixels: left for even i, top for i < 3; raised-cosine windows make the
+// four half-tile-shifted passes sum to one. Each pass pads the frame
+// differently (same padded extent), so alignment runs per pass.
+inline constexpr std::uint32_t kFrequencyTile = 8;  // tile_size_merge
+
+struct FrequencyGeometry {
+    Geometry align;  // pyramid levels for the padded extent (pads set per pass)
+    std::uint32_t padAlignX = 0, padAlignY = 0;
+    std::uint32_t cropX = 0, cropY = 0;  // raw pixels dropped before RGBA packing
+    std::uint32_t rgbaWidth = 0, rgbaHeight = 0;
+    std::uint32_t tilesX = 0, tilesY = 0;
+    // pass: 0-based. Shifts in raw pixels (left/top) and in tiles (all sides).
+    static bool shiftLeft(std::uint32_t pass) { return pass % 2u == 1u; }
+    static bool shiftTop(std::uint32_t pass) { return pass < 2u; }
+    std::uint32_t padLeft(std::uint32_t pass) const { return padAlignX + (shiftLeft(pass) ? kFrequencyTile : 0u); }
+    std::uint32_t padTop(std::uint32_t pass) const { return padAlignY + (shiftTop(pass) ? kFrequencyTile : 0u); }
+};
+
+inline FrequencyGeometry makeFrequencyGeometry(std::uint32_t width, std::uint32_t height, const Config& c) {
+    Geometry g = makeGeometry(width, height, c);  // pyramid tile sizes / level count
+    const std::uint32_t tileFactor = g.levels.back().tileSize << g.levels.size();
+    constexpr std::uint32_t merge = kFrequencyTile;
+    const std::uint32_t paddedW = (width + merge + tileFactor - 1u) / tileFactor * tileFactor;
+    const std::uint32_t paddedH = (height + merge + tileFactor - 1u) / tileFactor * tileFactor;
+    FrequencyGeometry f{};
+    f.padAlignX = (paddedW - width - merge) / 2u;
+    f.padAlignY = (paddedH - height - merge) / 2u;
+    if (((paddedW - width - merge) % 2u) || ((paddedH - height - merge) % 2u) || (f.padAlignX & 1u) ||
+        (f.padAlignY & 1u))
+        throw std::invalid_argument("hdrplus frequency geometry: padding would break the Bayer phase");
+    f.cropX = f.padAlignX / (2u * merge) * (2u * merge);
+    f.cropY = f.padAlignY / (2u * merge) * (2u * merge);
+    f.rgbaWidth = (paddedW - 2u * f.cropX) / 2u;
+    f.rgbaHeight = (paddedH - 2u * f.cropY) / 2u;
+    f.tilesX = f.rgbaWidth / merge;
+    f.tilesY = f.rgbaHeight / merge;
+    g.paddedWidth = paddedW;
+    g.paddedHeight = paddedH;
+    g.padLeft = f.padAlignX;
+    g.padTop = f.padAlignY;
+    std::uint32_t w = paddedW, h = paddedH;
+    for (auto& level : g.levels) {
+        w /= 2u;
+        h /= 2u;
+        level.width = w;
+        level.height = h;
+        level.tilesX = w / (level.tileSize / 2u) - 1u;
+        level.tilesY = h / (level.tileSize / 2u) - 1u;
+    }
+    f.align = g;
+    return f;
+}
+
 }  // namespace rawr::raw_merge_hdrplus_gpu

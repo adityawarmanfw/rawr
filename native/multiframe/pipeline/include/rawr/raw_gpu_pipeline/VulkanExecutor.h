@@ -46,6 +46,19 @@ enum class ShaderId : std::uint32_t {
     HdrpMergeWeight,
     HdrpAccumulate,
     HdrpFinalize,
+    // HDR+ frequency-domain merge (merge_hdrplus/hdrq_*).
+    HdrqToRgba,
+    HdrqWarpRgba,
+    HdrqRms,
+    HdrqMismatch,
+    HdrqRegionMean,
+    HdrqMismatchNorm,
+    HdrqForwardDft,
+    HdrqMerge,
+    HdrqDeconvolute,
+    HdrqBackwardDft,
+    HdrqBorder,
+    HdrqAccumulate,
     Count
 };
 struct ImageBinding {

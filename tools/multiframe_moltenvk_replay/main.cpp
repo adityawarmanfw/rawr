@@ -457,7 +457,7 @@ struct TuneOpts {
     bool hotPixels = true;
     std::string hotPixelList;  // test/diagnostic override: "x y" per line
     std::string reference = "recorded";  // recorded|middle|sharpest
-    std::string mergeAlgorithm = "wronski";  // wronski|hdrplus
+    std::string mergeAlgorithm = "wronski";  // wronski|hdrplus|hdrplus-freq
     rawr::raw_merge_hdrplus_gpu::Config hdrplus{};
 };
 
@@ -1014,8 +1014,9 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
                                vktest::ck(vkQueueSubmit(context.q, 1, &info, fence), "burst queue submit");
                            },
                            width, height, tune.scale, {}, alignment, merge,
-                           tune.mergeAlgorithm == "hdrplus" ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusSpatial
-                                                            : rawr::raw_gpu_pipeline::MergeAlgorithm::Wronski,
+                           tune.mergeAlgorithm == "hdrplus"        ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusSpatial
+                           : tune.mergeAlgorithm == "hdrplus-freq" ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusFrequency
+                                                                   : rawr::raw_gpu_pipeline::MergeAlgorithm::Wronski,
                            tune.hdrplus);
     const auto result = coordinator.run(runFrames, runRef);
     if (merge.estimateNoiseFromBurst) {
@@ -1193,7 +1194,7 @@ int main(int argc, char** argv) {
         " [--flat-sigma F] [--detail-floor F] [--scale-bandwidth-gain F]"
         " [--coverage-neff-lo F] [--coverage-neff-hi F] [--coverage-mass-lo F] [--coverage-mass-hi F]"
         " [--robustness-t F] [--robustness-s1 F] [--robustness-s2 F]"
-         " [--max-frames I] [--suffix STR] [--dump-base] [--dump-all-singles] [--dump-raw16] [--export-dng DIR] [--merge wronski|hdrplus] [--hdrplus-strength F] [--hdrplus-tile 16|32] [--hdrplus-search 32|64|128] [--affine-deadzone F] [--affine-softness F] [--affine-isotropic] [--fallback-chroma GAIN] [--fallback-luma GAIN] [--fallback-max-sigma PX] [--no-hot-pixels] [--hot-pixel-list FILE]"
+         " [--max-frames I] [--suffix STR] [--dump-base] [--dump-all-singles] [--dump-raw16] [--export-dng DIR] [--merge wronski|hdrplus|hdrplus-freq] [--hdrplus-strength F] [--hdrplus-tile 16|32] [--hdrplus-search 32|64|128] [--affine-deadzone F] [--affine-softness F] [--affine-isotropic] [--fallback-chroma GAIN] [--fallback-luma GAIN] [--fallback-max-sigma PX] [--no-hot-pixels] [--hot-pixel-list FILE]"
          " [--reference recorded|middle|sharpest] INPUT [INPUT2 ...]\n"
          "  INPUT: FILE.rzsl | DNG_DIR or dng:DNG_DIR (every *.dng, name-sorted, is one burst)"
          " | rawburst:DIR | synthetic:...";
