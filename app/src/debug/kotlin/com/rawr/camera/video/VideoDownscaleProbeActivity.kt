@@ -16,9 +16,11 @@ class VideoDownscaleProbeActivity : Activity() {
         super.onCreate(savedInstanceState)
         Thread {
             val spvDir = File(filesDir, "spv_check")
-            val report = if (intent.getBooleanExtra("compile_check", false))
-                VideoDownscaleProbe.nativeCompileCheck(spvDir.absolutePath)
-            else VideoDownscaleProbe.nativeRun(filesDir.absolutePath)
+            val report = when {
+                intent.getBooleanExtra("compile_check", false) -> VideoDownscaleProbe.nativeCompileCheck(spvDir.absolutePath)
+                intent.getBooleanExtra("demosaic_check", false) -> VideoDownscaleProbe.nativeDemosaicCheck()
+                else -> VideoDownscaleProbe.nativeRun(filesDir.absolutePath)
+            }
             File(filesDir, "downscale_probe.json").writeText(report)
             Process.killProcess(Process.myPid())
         }.start()

@@ -7,7 +7,6 @@ layout(local_size_x = VIDEO_TILE, local_size_y = VIDEO_TILE, local_size_z = 1) i
 #define VIDEO_RAW_IMAGE_BINDING 0
 #define VIDEO_RAW_BUFFER_BINDING 1
 #define VIDEO_LSC_BINDING 3
-#define VIDEO_CLIP_STATE 1
 #include "video_raw_core.glsl"
 layout(binding = 2, rgba16f) uniform writeonly image2D linearOut;
 layout(binding = 4, r16ui) uniform writeonly uimage2D clipStateOut;
@@ -25,10 +24,9 @@ void main() {
             for (int x = 0; x < side; ++x) {
                 ivec2 q = base + ivec2(x, y);
                 int c = videoChannelAt(q);
-                uint code = cachedCode[(q.y - videoTileBase().y + 2) * videoTileSide() +
-                                       (q.x - videoTileBase().x + 2)];
-                float normalized = (float(code) - pc.black[c]) * pc.invRange[c];
-                if (normalized >= 0.995) state |= 1u << uint(c);
+                // The cache holds the normalized sample clamped to [0, 1],
+                // which leaves this >= 0.995 test unchanged.
+                if (videoCachedAt(q) >= 0.995) state |= 1u << uint(c);
             }
         }
         imageStore(clipStateOut, outPixel / 2, uvec4(state, 0u, 0u, 0u));

@@ -12,4 +12,7 @@ internal object VideoDownscaleProbe {
 
     /** Tries every *.spv in [dir] as the strip pass; JSON of VkResult per file. */
     external fun nativeCompileCheck(dir: String): String
+
+    /** 4K and Open Gate RAW stage on the zone plate: timing plus output/clip hashes. */
+    external fun nativeDemosaicCheck(): String
 }

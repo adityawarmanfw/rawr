@@ -29,6 +29,12 @@ embed_spirv(video_demosaic ${VIDEO_PIPELINE_SHADER_DIR}/video_demosaic.comp vide
   FLAGS -I${SC} -I${VIDEO_PIPELINE_SHADER_DIR}
   DEPENDS ${VIDEO_PIPELINE_SHADER_DIR}/video_raw_core.glsl ${VIDEO_PIPELINE_SHADER_DIR}/video_mhc.glsl
           ${SC}/lens_shading.glsl ${SC}/cfa_common.glsl)
+# 1:1 build (4K, Open Gate): cache sized for one sensor pixel per output.
+embed_spirv(video_demosaic_1x ${VIDEO_PIPELINE_SHADER_DIR}/video_demosaic.comp video_demosaic_1x_spv
+  OUTPUT_DIR ${VP_GEN}
+  FLAGS -I${SC} -I${VIDEO_PIPELINE_SHADER_DIR} -DVIDEO_MAX_SCALE=1
+  DEPENDS ${VIDEO_PIPELINE_SHADER_DIR}/video_raw_core.glsl ${VIDEO_PIPELINE_SHADER_DIR}/video_mhc.glsl
+          ${SC}/lens_shading.glsl ${SC}/cfa_common.glsl)
 
 # Optimized SPIR-V: Adreno's compiler rejects the unoptimized strip pass
 # (vkCreateComputePipelines VK_ERROR_UNKNOWN), as with the gain map shaders.
@@ -40,7 +46,8 @@ foreach(PASS h v)
             ${SC}/lens_shading.glsl ${SC}/cfa_common.glsl)
 endforeach()
 
-add_library(video_pipeline STATIC src/VideoDemosaic.cpp ${video_demosaic_HDR} ${video_downscale_h_HDR}
+add_library(video_pipeline STATIC src/VideoDemosaic.cpp ${video_demosaic_HDR} ${video_demosaic_1x_HDR}
+  ${video_downscale_h_HDR}
   ${video_downscale_v_HDR})
 add_library(rawr::video_pipeline ALIAS video_pipeline)
 target_include_directories(video_pipeline PUBLIC include PRIVATE ${VP_GEN})

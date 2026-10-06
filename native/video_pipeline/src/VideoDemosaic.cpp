@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "video_demosaic.h"
+#include "video_demosaic_1x.h"
 #include "video_downscale_h.h"
 #include "video_downscale_v.h"
 #include "video_pipeline/VideoCrop.h"
@@ -91,8 +92,10 @@ VideoDemosaic::VideoDemosaic(const rawr::vk::GpuContext& context, uint32_t rawWi
 
         VkShaderModuleCreateInfo shaderInfo{};
         shaderInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        shaderInfo.codeSize = video_demosaic_spv_size;
-        shaderInfo.pCode = reinterpret_cast<const uint32_t*>(video_demosaic_spv);
+        // 1:1 recordings use the build whose tile cache fits one sensor pixel
+        // per output; 2x reduction (the box A/B path) needs the larger cache.
+        shaderInfo.codeSize = reduceCfa_ ? video_demosaic_spv_size : video_demosaic_1x_spv_size;
+        shaderInfo.pCode = reinterpret_cast<const uint32_t*>(reduceCfa_ ? video_demosaic_spv : video_demosaic_1x_spv);
         VkShaderModule shader = VK_NULL_HANDLE;
         check(vkCreateShaderModule(device, &shaderInfo, nullptr, &shader), "video demosaic shader");
         VkComputePipelineCreateInfo pipelineInfo{};
@@ -134,7 +137,8 @@ VideoDemosaic::VideoDemosaic(const rawr::vk::GpuContext& context, uint32_t rawWi
                                                   VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
             clipStates_[i] =
                 rawr::vk::createOwnedImage(context_.physicalDevice, device, outputWidth_ / 2u,
-                                                  outputHeight_ / 2u, VK_FORMAT_R16_UINT, VK_IMAGE_USAGE_STORAGE_BIT);
+                                                  outputHeight_ / 2u, VK_FORMAT_R16_UINT,
+                                                  VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
             lscBuffers_[i] = makeHostBuffer(kMaxLscBytes);
         }
         if (reduceCfa_) createDownscale();

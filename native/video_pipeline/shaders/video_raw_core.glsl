@@ -34,19 +34,25 @@ layout(push_constant) uniform VideoRawParams {
 #ifndef VIDEO_TILE
 #define VIDEO_TILE 8
 #endif
-const int kVideoTileMax = 2 * VIDEO_TILE + 4;
-shared float cachedRaw[kVideoTileMax * kVideoTileMax];
-#ifdef VIDEO_CLIP_STATE
-// Only the standalone video stage needs the sensor codes. The fused fast
-// path keeps its original shared-memory footprint.
-shared uint cachedCode[kVideoTileMax * kVideoTileMax];
+// Largest sensor scale the shader is built for: 2 serves both 1:1 and fused
+// 2x reduction; 1 sizes the cache for 1:1 only (4K, Open Gate), so it takes
+// a quarter of the shared memory and more workgroups fit on each core.
+#ifndef VIDEO_MAX_SCALE
+#define VIDEO_MAX_SCALE 2
 #endif
+const int kVideoTileMax = VIDEO_MAX_SCALE * VIDEO_TILE + 4;
+shared float cachedRaw[kVideoTileMax * kVideoTileMax];
 
+#if VIDEO_MAX_SCALE == 1
+int videoTileSide() { return VIDEO_TILE + 4; }
+ivec2 videoTileBase() { return ivec2(pc.cropX, pc.cropY) + ivec2(gl_WorkGroupID.xy) * VIDEO_TILE; }
+#else
 int videoTileSide() { return pc.reduceCfa != 0u ? 2 * VIDEO_TILE + 4 : VIDEO_TILE + 4; }
 ivec2 videoTileBase() {
     return ivec2(pc.cropX, pc.cropY) + ivec2(gl_WorkGroupID.xy) *
            (pc.reduceCfa != 0u ? 2 * VIDEO_TILE : VIDEO_TILE);
 }
+#endif
 float videoCachedAt(ivec2 q) {
     ivec2 local = q - videoTileBase() + ivec2(2);
     return cachedRaw[local.y * videoTileSide() + local.x];
@@ -90,11 +96,7 @@ void videoLoadTile() {
     for (uint index = gl_LocalInvocationIndex; index < uint(side * side); index += uint(VIDEO_TILE * VIDEO_TILE)) {
         ivec2 q = videoMirrored(base + ivec2(int(index % uint(side)) - 2,
                                              int(index / uint(side)) - 2));
-        uint code = videoCodeAt(q);
-        cachedRaw[index] = videoRawAt(q, code);
-#ifdef VIDEO_CLIP_STATE
-        cachedCode[index] = code;
-#endif
+        cachedRaw[index] = videoRawAt(q, videoCodeAt(q));
     }
     // Every invocation reaches this barrier, including output-edge threads.
     barrier();

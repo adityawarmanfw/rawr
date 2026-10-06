@@ -4,6 +4,8 @@
 #include <jni.h>
 
 #include <algorithm>
+#include <cstdio>
+#include <memory>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -314,6 +316,157 @@ extern "C" JNIEXPORT jstring JNICALL Java_com_rawr_camera_video_VideoDownscalePr
         report += ",\"success\":true}";
     } catch (const std::exception& error) {
         report += std::string("\"success\":false,\"error\":\"") + error.what() + "\"}";
+    }
+    return env->NewStringUTF(report.c_str());
+}
+
+// Debug: 1:1 recording RAW stage check. Runs 4K (3840x2160 crop) and Open Gate
+// (full frame) on the zone plate, times them interleaved, and hashes the
+// output and clip-state images so shader refactors can be checked bit-exact.
+extern "C" JNIEXPORT jstring JNICALL Java_com_rawr_camera_video_VideoDownscaleProbe_nativeDemosaicCheck(JNIEnv* env,
+                                                                                                    jobject) {
+    std::string report = "{";
+    rawrcam::vulkan::VulkanContext context;
+    HostBuffer raw, outBytes, clipBytes;
+    VkCommandPool pool = VK_NULL_HANDLE;
+    VkFence fence = VK_NULL_HANDLE;
+    VkQueryPool queries = VK_NULL_HANDLE;
+    try {
+        rawrcam::vulkan::dispatch::configure("", "");
+        context.createInstance();
+        context.createDeviceForSurface(VK_NULL_HANDLE);
+        const VkDevice device = context.device();
+        raw = makeBuffer(context, VkDeviceSize(kRawWidth) * kRawHeight * 2, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        outBytes = makeBuffer(context, VkDeviceSize(kRawWidth) * kRawHeight * 8, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+        clipBytes = makeBuffer(context, VkDeviceSize(kRawWidth / 2) * (kRawHeight / 2) * 2,
+                               VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+        // Zone plate with a strong WB cast and a clipped band, so clip state is exercised.
+        fillZonePlate(static_cast<uint16_t*>(raw.mapped), {1.9f, 1, 1, 1.5f});
+        auto* codes = static_cast<uint16_t*>(raw.mapped);
+        for (uint32_t y = 1400; y < 1480; ++y)
+            for (uint32_t x = 0; x < kRawWidth; ++x) codes[size_t(y) * kRawWidth + x] = uint16_t(kWhite);
+        VkCommandPoolCreateInfo poolInfo{};
+        poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+        poolInfo.queueFamilyIndex = context.queueFamily();
+        check(vkCreateCommandPool(device, &poolInfo, nullptr, &pool), "pool");
+        VkCommandBuffer command = VK_NULL_HANDLE;
+        VkCommandBufferAllocateInfo alloc{};
+        alloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        alloc.commandPool = pool;
+        alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        alloc.commandBufferCount = 1;
+        check(vkAllocateCommandBuffers(device, &alloc, &command), "command");
+        VkFenceCreateInfo fenceInfo{};
+        fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        check(vkCreateFence(device, &fenceInfo, nullptr, &fence), "fence");
+        VkQueryPoolCreateInfo queryInfo{};
+        queryInfo.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+        queryInfo.queryType = VK_QUERY_TYPE_TIMESTAMP;
+        queryInfo.queryCount = 2;
+        check(vkCreateQueryPool(device, &queryInfo, nullptr, &queries), "queries");
+        VkPhysicalDeviceProperties properties{};
+        vkGetPhysicalDeviceProperties(context.physicalDevice(), &properties);
+
+        struct Mode {
+            const char* name;
+            uint32_t width, height;
+        };
+        const Mode modes[] = {{"uhd", 3840, 2160}, {"open_gate", kRawWidth, kRawHeight}};
+        std::vector<std::unique_ptr<rawrcam::video::VideoDemosaic>> stages;
+        for (const Mode& m : modes)
+            stages.push_back(std::make_unique<rawrcam::video::VideoDemosaic>(context.gpuContext(), kRawWidth,
+                                                                              kRawHeight, m.width, m.height));
+        rawrcam::video::VideoDemosaic::Frame frame{};
+        frame.rawBuffer = raw.buffer;
+        frame.rawStridePixels = kRawWidth;
+        frame.wb = {1.9f, 1, 1, 1.5f};
+        frame.white = kWhite;
+        uint32_t frameIndex = 0;
+        auto runOnce = [&](size_t mode, bool copy) -> double {
+            auto& stage = *stages[mode];
+            const uint32_t slot = frameIndex++ % rawrcam::video::VideoDemosaic::kFramesInFlight;
+            check(vkResetCommandBuffer(command, 0), "reset");
+            VkCommandBufferBeginInfo begin{};
+            begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+            check(vkBeginCommandBuffer(command, &begin), "begin");
+            vkCmdResetQueryPool(command, queries, 0, 2);
+            vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, queries, 0);
+            stage.record(command, slot, frame);
+            vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queries, 1);
+            if (copy) {
+                VkImageMemoryBarrier toCopy[2]{};
+                for (int i = 0; i < 2; ++i) {
+                    toCopy[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                    toCopy[i].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+                    toCopy[i].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+                    toCopy[i].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    toCopy[i].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    toCopy[i].image = i == 0 ? stage.outputImage(slot) : stage.clipStateImage(slot);
+                    toCopy[i].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                }
+                vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                                     0, nullptr, 0, nullptr, 2, toCopy);
+                VkBufferImageCopy region{};
+                region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                region.imageExtent = {modes[mode].width, modes[mode].height, 1};
+                vkCmdCopyImageToBuffer(command, stage.outputImage(slot), VK_IMAGE_LAYOUT_GENERAL, outBytes.buffer, 1,
+                                       &region);
+                region.imageExtent = {modes[mode].width / 2, modes[mode].height / 2, 1};
+                vkCmdCopyImageToBuffer(command, stage.clipStateImage(slot), VK_IMAGE_LAYOUT_GENERAL, clipBytes.buffer,
+                                       1, &region);
+            }
+            check(vkEndCommandBuffer(command), "end");
+            VkSubmitInfo submit{};
+            submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            submit.commandBufferCount = 1;
+            submit.pCommandBuffers = &command;
+            check(vkResetFences(device, 1, &fence), "reset fence");
+            check(vkQueueSubmit(context.queue(), 1, &submit, fence), "submit");
+            check(vkWaitForFences(device, 1, &fence, VK_TRUE, 5'000'000'000ull), "wait");
+            uint64_t stamps[2]{};
+            if (vkGetQueryPoolResults(device, queries, 0, 2, sizeof(stamps), stamps, sizeof(uint64_t),
+                                      VK_QUERY_RESULT_64_BIT) != VK_SUCCESS ||
+                stamps[1] <= stamps[0])
+                return -1.0;
+            return double(stamps[1] - stamps[0]) * properties.limits.timestampPeriod / 1.0e6;
+        };
+        auto fnv = [](const void* data, size_t bytes) {
+            uint64_t h = 1469598103934665603ull;
+            const auto* p = static_cast<const uint8_t*>(data);
+            for (size_t i = 0; i < bytes; ++i) h = (h ^ p[i]) * 1099511628211ull;
+            char text[17];
+            std::snprintf(text, sizeof(text), "%016llx", static_cast<unsigned long long>(h));
+            return std::string(text);
+        };
+        for (int i = 0; i < 30; ++i) (void)runOnce(size_t(i) % 2, false);
+        std::vector<double> times[2];
+        for (int round = 0; round < 30; ++round)
+            for (size_t m = 0; m < 2; ++m)
+                if (const double ms = runOnce(m, false); ms > 0) times[m].push_back(ms);
+        for (size_t m = 0; m < 2; ++m) {
+            (void)runOnce(m, true);
+            std::sort(times[m].begin(), times[m].end());
+            const size_t outSize = size_t(modes[m].width) * modes[m].height * 8;
+            const size_t clipSize = size_t(modes[m].width / 2) * (modes[m].height / 2) * 2;
+            report += std::string(m ? "," : "") + "\"" + modes[m].name + "\":{\"method\":\"" + stages[m]->method() +
+                      "\",\"gpuMedianMs\":" + std::to_string(times[m].empty() ? 0.0 : times[m][times[m].size() / 2]) +
+                      ",\"outputHash\":\"" + fnv(outBytes.mapped, outSize) + "\",\"clipHash\":\"" +
+                      fnv(clipBytes.mapped, clipSize) + "\"}";
+        }
+        report += ",\"success\":true}";
+    } catch (const std::exception& error) {
+        report += std::string("\"success\":false,\"error\":\"") + error.what() + "\"}";
+    }
+    if (context.device()) {
+        (void)context.waitIdle();
+        if (queries) vkDestroyQueryPool(context.device(), queries, nullptr);
+        if (fence) vkDestroyFence(context.device(), fence, nullptr);
+        if (pool) vkDestroyCommandPool(context.device(), pool, nullptr);
+        destroyBuffer(context.device(), raw);
+        destroyBuffer(context.device(), outBytes);
+        destroyBuffer(context.device(), clipBytes);
     }
     return env->NewStringUTF(report.c_str());
 }
