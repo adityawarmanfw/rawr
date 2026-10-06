@@ -319,7 +319,7 @@ private fun CompactRenderExposureButton(
     )
 }
 
-private fun renderExposureLabel(tenths: Int): String {
+internal fun renderExposureLabel(tenths: Int): String {
     val sign = if (tenths < 0) "-" else "+"
     val abs = kotlin.math.abs(tenths)
     return "$sign${abs / 10}.${abs % 10}"

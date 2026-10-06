@@ -36,11 +36,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rawr.camera.architecture.CaptureDispatch
+import com.rawr.camera.architecture.ScrubRenderExposure
 import com.rawr.camera.architecture.ScrubTone
 import com.rawr.camera.model.CaptureUiState
 import com.rawr.camera.model.RenderProfileQuickState
 import com.rawr.camera.model.TonemapCatalog
 import com.rawr.camera.model.TonemapParam
+import com.rawr.camera.model.renderExposureTenthsOf
 import kotlin.math.roundToInt
 
 /**
@@ -225,7 +227,7 @@ private fun TonemapParamsRow(
         verticalAlignment = Alignment.CenterVertically
     ) {
         StripBackButton(onBack)
-        // Parked at the thumb: BLK starts at the right edge with a peek of
+        // Parked at the thumb: EV starts at the right edge with a peek of
         // the next cell; the rest scrolls in from the right, empty space left.
         BoxWithConstraints(
             Modifier
@@ -240,8 +242,12 @@ private fun TonemapParamsRow(
                 horizontalArrangement = Arrangement.spacedBy(StripDimens.ParamSpacing, Alignment.End),
                 contentPadding = PaddingValues(start = parkedParamsPadding(maxWidth))
             ) {
-                items(TonemapCatalog.tone, key = { it.jsonKey }) { descriptor ->
-                    TonemapParamItem(descriptor, state, dispatch)
+                items(TonemapCatalog.all, key = { it.jsonKey }) { descriptor ->
+                    if (descriptor.param == null) {
+                        RenderExposureParamItem(descriptor, state, dispatch)
+                    } else {
+                        TonemapParamItem(descriptor, state, dispatch)
+                    }
                 }
             }
         }
@@ -321,6 +327,47 @@ private fun TonemapParamItem(
             }
         },
         format = { signedTone(it.roundToInt()) }
+    )
+}
+
+/** Render exposure cell: same 0.1 EV state the full-Manual EV button scrubs. */
+@Composable
+private fun RenderExposureParamItem(
+    descriptor: TonemapParam,
+    state: CaptureUiState,
+    dispatch: CaptureDispatch
+) {
+    val committed = state.renderExposureTenths
+    val latestCommitted by rememberUpdatedState(committed)
+    // Delta base re-seeded only at drag start (see TonemapParamItem).
+    var gesture by remember(descriptor.jsonKey) { mutableIntStateOf(committed) }
+
+    StripNumericItem(
+        key = descriptor.jsonKey,
+        shortLabel = descriptor.shortLabel,
+        value = committed / 10f,
+        display = renderExposureLabel(committed),
+        isDefault = committed == 0,
+        defaultValue = descriptor.defaultValue,
+        min = descriptor.minimum,
+        max = descriptor.maximum,
+        step = descriptor.step,
+        decimals = descriptor.decimals,
+        testTag = CaptureTestTags.tonemapParam(descriptor.jsonKey),
+        onDragStarted = { gesture = latestCommitted },
+        onScrub = { nextEv ->
+            val next = renderExposureTenthsOf(nextEv)
+            if (next != gesture) {
+                dispatch(ScrubRenderExposure(next - gesture))
+                gesture = next
+            }
+        },
+        onReset = {
+            val current = latestCommitted
+            gesture = 0
+            if (current != 0) dispatch(ScrubRenderExposure(-current))
+        },
+        format = { renderExposureLabel(renderExposureTenthsOf(it)) }
     )
 }
 
