@@ -29,12 +29,20 @@ unavailable until the native path can present a repeated frame for each missing
 cadence slot. Rewriting muxer timestamps without those frames would change
 playback speed relative to audio.
 
-Recordings smaller than half the RAW frame (1080p) demosaic the full-resolution
-crop, then `video_downscale.comp` reduces it 2x with a separable Lanczos-3
-(cutoff 0.87x output Nyquist, anti-ringing clamp) instead of a 2x2 box average.
-On a Bayer zone plate this cuts aliasing (moire, stair-stepped edges) about
-4.7x at slightly higher detail, for about 4 ms more GPU time per frame.
-`adb shell setprop debug.rawr.video_downscale box` restores the box average for
-A/B; the journal's `rawStage` records which filter a recording used. The
-debug-only `VideoDownscaleProbeActivity` reruns the zone-plate comparison on
-device without the camera.
+Recordings at half the sensor crop (1080p from the 3840x2160 crop) use two
+separable passes instead of a 2x2 box average. `video_downscale_h.comp`
+demosaics wide 4-row strips (shared MHC math in `video_mhc.glsl`, ~10% apron
+overhead) and filters them horizontally; `video_downscale_v.comp` filters
+vertically. Both work in white-balanced luma/chroma: luma with a Lanczos-3 cut
+at 0.87x the output Nyquist plus an anti-ringing clamp, chroma at half that
+bandwidth to match the encoder's 4:2:0 storage. On a Bayer zone plate this cuts
+aliasing (moire, stair-stepped edges) about 5x and false colour about 2x at
+slightly higher detail, for ~2.5x the box path's GPU time (10.1 vs 4.0 ms at
+the probe's idle clocks). `adb shell setprop debug.rawr.video_downscale box`
+restores the box average for A/B; the journal's `rawStage` records which one a
+recording used. The debug-only `VideoDownscaleProbeActivity` reruns the
+zone-plate comparison on device without the camera; with `--ez compile_check
+true` it instead reports `vkCreateComputePipelines` results for every `.spv` in
+`files/spv_check`, to bisect driver compiler rejections. (Adreno rejects a
+conditional store to the r16ui clip map in the strip pass, hence its
+unconditional store.)

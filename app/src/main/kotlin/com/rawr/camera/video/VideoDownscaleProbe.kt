@@ -9,4 +9,7 @@ internal object VideoDownscaleProbe {
     init { System.loadLibrary("rawrcam_native") }
 
     external fun nativeRun(outDir: String): String
+
+    /** Tries every *.spv in [dir] as the strip pass; JSON of VkResult per file. */
+    external fun nativeCompileCheck(dir: String): String
 }

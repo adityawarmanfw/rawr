@@ -25,6 +25,7 @@ layout(push_constant) uniform VideoRawParams {
 #include "lens_shading.glsl"
 #include "cfa_common.glsl"
 
+#ifndef VIDEO_RAW_CUSTOM_CACHE
 // Square output workgroup side. An N x N tile needs (N+4)^2 RAW samples at
 // full resolution, or (2N+4)^2 for fused 2x reduction, including the 5x5 MHC
 // halo. Larger tiles load each sample fewer times; the fused RAW-input
@@ -50,6 +51,7 @@ float videoCachedAt(ivec2 q) {
     ivec2 local = q - videoTileBase() + ivec2(2);
     return cachedRaw[local.y * videoTileSide() + local.x];
 }
+#endif
 
 int videoChannelAt(ivec2 q) { return rawrCfaChannelAt(pc.pattern, q); }
 
@@ -81,6 +83,7 @@ float videoRawAt(ivec2 q, uint code) {
     return clamp((float(code) - pc.black[c]) * pc.invRange[c], 0.0, 1.0);
 }
 
+#ifndef VIDEO_RAW_CUSTOM_CACHE
 void videoLoadTile() {
     int side = videoTileSide();
     ivec2 base = videoTileBase();
@@ -96,58 +99,12 @@ void videoLoadTile() {
     // Every invocation reaches this barrier, including output-edge threads.
     barrier();
 }
+#endif
 
-vec3 videoFullRgb(ivec2 p) {
-    int c = videoChannelAt(p);
-    float center = videoCachedAt(p);
-    float h1 = videoCachedAt(p + ivec2(-1, 0)) + videoCachedAt(p + ivec2(1, 0));
-    float v1 = videoCachedAt(p + ivec2(0, -1)) + videoCachedAt(p + ivec2(0, 1));
-    float h2 = videoCachedAt(p + ivec2(-2, 0)) + videoCachedAt(p + ivec2(2, 0));
-    float v2 = videoCachedAt(p + ivec2(0, -2)) + videoCachedAt(p + ivec2(0, 2));
-    float diagonals = videoCachedAt(p + ivec2(-1, -1)) + videoCachedAt(p + ivec2(1, -1)) +
-                      videoCachedAt(p + ivec2(-1, 1)) + videoCachedAt(p + ivec2(1, 1));
-    // Green at R/B sites is gradient-directed (Hamilton-Adams style): MHC's
-    // isotropic green is exactly the mean of gh and gv below, and the
-    // along-edge estimate wins. The Laplacian deviation from the local mean
-    // is limited to half the local range instead of hard-clamped to the
-    // neighbour min/max, which clipped asymmetrically per Bayer phase and
-    // left a dotted zipper on high-contrast edges.
-    if (c == 0 || c == 3) {
-        float left = videoCachedAt(p + ivec2(-1, 0)), right = videoCachedAt(p + ivec2(1, 0));
-        float up = videoCachedAt(p + ivec2(0, -1)), down = videoCachedAt(p + ivec2(0, 1));
-        float gh = 0.5 * (h1) + 0.25 * (2.0 * center - h2);
-        float gv = 0.5 * (v1) + 0.25 * (2.0 * center - v2);
-        float dh = abs(left - right) + abs(2.0 * center - h2);
-        float dv = abs(up - down) + abs(2.0 * center - v2);
-        float wsum = dh + dv;
-        float gIso = wsum > 1e-6 ? (dv * gh + dh * gv) / wsum : 0.5 * (gh + gv);
-        float gMean = 0.25 * (h1 + v1);
-        float gAllow = 0.5 * (max(max(left, right), max(up, down)) -
-                              min(min(left, right), min(up, down))) + 1e-4;
-        float g = gMean + clamp(gIso - gMean, -gAllow, gAllow);
-        float oppIso = (6.0 * center + 2.0 * diagonals - 1.5 * (h2 + v2)) * 0.125;
-        float oppMean = 0.25 * diagonals;
-        float d00 = videoCachedAt(p + ivec2(-1, -1)), d10 = videoCachedAt(p + ivec2(1, -1));
-        float d01 = videoCachedAt(p + ivec2(-1, 1)), d11 = videoCachedAt(p + ivec2(1, 1));
-        float oppAllow = 0.5 * (max(max(d00, d10), max(d01, d11)) -
-                                min(min(d00, d10), min(d01, d11))) + 1e-4;
-        float opposite = oppMean + clamp(oppIso - oppMean, -oppAllow, oppAllow);
-        return max(c == 0 ? vec3(center, g, opposite) : vec3(opposite, g, center), vec3(0.0));
-    }
-    float horIso = (5.0 * center + 4.0 * h1 - diagonals - h2 + 0.5 * v2) * 0.125;
-    float verIso = (5.0 * center + 4.0 * v1 - diagonals - v2 + 0.5 * h2) * 0.125;
-    float left = videoCachedAt(p + ivec2(-1, 0)), right = videoCachedAt(p + ivec2(1, 0));
-    float up = videoCachedAt(p + ivec2(0, -1)), down = videoCachedAt(p + ivec2(0, 1));
-    float horMean = 0.5 * (left + right);
-    float verMean = 0.5 * (up + down);
-    float horizontal = horMean + clamp(horIso - horMean, -0.5 * abs(left - right) - 1e-4,
-                                       0.5 * abs(left - right) + 1e-4);
-    float vertical = verMean + clamp(verIso - verMean, -0.5 * abs(up - down) - 1e-4,
-                                     0.5 * abs(up - down) + 1e-4);
-    bool redHorizontal = videoChannelAt(p + ivec2(1, 0)) == 0;
-    return max(redHorizontal ? vec3(horizontal, center, vertical)
-                             : vec3(vertical, center, horizontal), vec3(0.0));
-}
+#ifndef VIDEO_RAW_CUSTOM_CACHE
+#define VIDEO_MHC_AT(q) videoCachedAt(q)
+#endif
+#include "video_mhc.glsl"
 
 vec3 videoGainAt(ivec2 q) {
     // Row parity selects the Camera2 G_even/G_odd map channel, matching the
@@ -155,6 +112,7 @@ vec3 videoGainAt(ivec2 q) {
     return vec3(lensShadingGain(q, 0), lensShadingGain(q, 1), lensShadingGain(q, 3));
 }
 
+#ifndef VIDEO_RAW_CUSTOM_CACHE
 vec3 videoSensorAt(ivec2 outPixel) {
     ivec2 crop = ivec2(pc.cropX, pc.cropY);
     vec3 sensor;
@@ -175,3 +133,4 @@ vec3 videoCameraAt(ivec2 outPixel) {
     float greenWb = 0.5 * (pc.wb.y + pc.wb.z);
     return videoSensorAt(outPixel) * vec3(pc.wb.x, greenWb, pc.wb.w);
 }
+#endif

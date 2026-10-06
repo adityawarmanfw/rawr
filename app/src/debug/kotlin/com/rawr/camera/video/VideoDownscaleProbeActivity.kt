@@ -15,7 +15,10 @@ class VideoDownscaleProbeActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Thread {
-            val report = VideoDownscaleProbe.nativeRun(filesDir.absolutePath)
+            val spvDir = File(filesDir, "spv_check")
+            val report = if (intent.getBooleanExtra("compile_check", false))
+                VideoDownscaleProbe.nativeCompileCheck(spvDir.absolutePath)
+            else VideoDownscaleProbe.nativeRun(filesDir.absolutePath)
             File(filesDir, "downscale_probe.json").writeText(report)
             Process.killProcess(Process.myPid())
         }.start()

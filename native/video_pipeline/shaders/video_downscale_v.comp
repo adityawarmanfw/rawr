@@ -1,0 +1,73 @@
+#version 450
+// Pass 2 of the anti-aliased 2x reduction: vertical luma (Lanczos-3 at 0.87x
+// output Nyquist) and 4:2:0-bandwidth chroma filters over pass 1's half-width
+// strip output, the luma anti-ringing clamp, then back to camera RGB (pre
+// white balance, as the post stage expects).
+#define TILE 16
+layout(local_size_x = TILE, local_size_y = TILE, local_size_z = 1) in;
+layout(binding = 0, rgba16f) uniform readonly image2D lumaChroma;  // (Y, Cr, Cb, Ylo)
+layout(binding = 1, r32f) uniform readonly image2D lumaHigh;
+layout(binding = 2, rgba16f) uniform writeonly image2D outImage;
+layout(push_constant) uniform VerticalParams {
+    uint width;
+    uint height;
+    uint rowApron;  // pass-1 rows above the crop
+    uint inputHeight;
+    float wbR;
+    float wbG;
+    float wbB;
+} pc;
+
+const int LUMA_SIDE = 7;
+// Full tap tables (mirrored), left to right: simple loops for Adreno.
+const float kLuma[14] = float[](0.0015621, 0.0130009, -0.0041872, -0.0571024, -0.0274861, 0.1746549, 0.3995578,
+    0.3995578, 0.1746549, -0.0274861, -0.0571024, -0.0041872, 0.0130009, 0.0015621);
+const int CHROMA_SIDE = 14;
+const float kChroma[28] = float[](0.0001068, 0.0020305, 0.0053021, 0.0067349, 0.0026237, -0.0083442, -0.0226547,
+    -0.0318298, -0.0253889, 0.0040381, 0.0558789, 0.1197948, 0.1783413, 0.2133664, 0.2133664, 0.1783413, 0.1197948,
+    0.0558789, 0.0040381, -0.0253889, -0.0318298, -0.0226547, -0.0083442, 0.0026237, 0.0067349, 0.0053021, 0.0020305,
+    0.0001068);
+const int SPAN = 2 * TILE + 2 * CHROMA_SIDE - 2;  // input rows per workgroup
+shared uvec2 column[SPAN * TILE];                 // half (Y, Cr), (Cb, Ylo)
+shared float columnHigh[SPAN * TILE];
+
+void main() {
+    ivec2 tileOut = ivec2(gl_WorkGroupID.xy) * TILE;
+    // Input row of the topmost chroma tap for output row tileOut.y.
+    int row0 = 2 * tileOut.y - (CHROMA_SIDE - 1) + int(pc.rowApron);
+    for (uint index = gl_LocalInvocationIndex; index < uint(SPAN * TILE); index += uint(TILE * TILE)) {
+        int x = min(tileOut.x + int(index % uint(TILE)), int(pc.width) - 1);
+        int y = clamp(row0 + int(index / uint(TILE)), 0, int(pc.inputHeight) - 1);
+        vec4 v = imageLoad(lumaChroma, ivec2(x, y));
+        column[index] = uvec2(packHalf2x16(v.xy), packHalf2x16(v.zw));
+        columnHigh[index] = imageLoad(lumaHigh, ivec2(x, y)).r;
+    }
+    barrier();
+
+    ivec2 local = ivec2(gl_LocalInvocationID.xy);
+    ivec2 outPixel = tileOut + local;
+    if (outPixel.x >= int(pc.width) || outPixel.y >= int(pc.height)) return;
+    int base = 2 * local.y * TILE + local.x;  // topmost chroma tap
+    vec2 chroma = vec2(0.0);
+    for (int m = 0; m < 2 * CHROMA_SIDE; ++m) {
+        uvec2 packed = column[base + m * TILE];
+        chroma += kChroma[m] * vec2(unpackHalf2x16(packed.x).y, unpackHalf2x16(packed.y).x);
+    }
+    float luma = 0.0;
+    int lumaBase = base + (CHROMA_SIDE - LUMA_SIDE) * TILE;
+    for (int m = 0; m < 2 * LUMA_SIDE; ++m) luma += kLuma[m] * unpackHalf2x16(column[lumaBase + m * TILE].x).x;
+    // Central 4x4 footprint (rows at offsets -1.5 .. +1.5): pass 1 already
+    // reduced each row's four columns to their luma range.
+    float low = 65504.0, high = -65504.0;
+    for (int m = 0; m < 4; ++m) {
+        int index = base + (CHROMA_SIDE - 2 + m) * TILE;
+        low = min(low, unpackHalf2x16(column[index].y).y);
+        high = max(high, columnHigh[index]);
+    }
+    // Anti-ringing: negative lobes cannot draw halos around highlights or
+    // high-contrast edges.
+    luma = clamp(luma, low, high);
+    float g = luma - 0.25 * (chroma.x + chroma.y);
+    vec3 rgb = max(vec3(g + chroma.x, g, g + chroma.y), vec3(0.0));
+    imageStore(outImage, outPixel, vec4(rgb / vec3(pc.wbR, pc.wbG, pc.wbB), 1.0));
+}

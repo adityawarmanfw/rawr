@@ -1,0 +1,120 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// Pass 1 of the anti-aliased 2x reduction for recordings at half the sensor
+// crop (1080p from the 3840x2160 crop). A workgroup demosaics a wide strip of
+// four full-resolution rows and filters it horizontally only, so the filter's
+// apron costs ~10% extra demosaic work instead of the ~90% a square tile
+// needs, and the strip stays small in shared memory.
+//
+// The filtering is done in white-balanced luma/chroma: luma with a Lanczos-3
+// cut at 0.87x the output Nyquist (anti-aliasing: moire, stair-stepped
+// edges), chroma at half that bandwidth to match the encoder's 4:2:0 storage
+// (removes the demosaic's false colour and fringing that a crude 4:2:0
+// subsample would alias). Output is half-width, full-height: (Y, Cr, Cb, Ylo)
+// plus Yhi, where Ylo/Yhi bound luma over each output pixel's central
+// footprint for pass 2's anti-ringing clamp. Pass 2 filters vertically.
+#define OUT_COLUMNS 128
+#define ROWS 4
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+#define VIDEO_RAW_IMAGE_BINDING 0
+#define VIDEO_RAW_BUFFER_BINDING 1
+#define VIDEO_LSC_BINDING 3
+#define VIDEO_RAW_CUSTOM_CACHE 1
+
+// Full-resolution pixel j sits at offset (j + 0.5) - (2o + 1) from the centre
+// of output pixel o. Weights by |offset| = 0.5, 1.5, ...
+const int LUMA_SIDE = 7;
+// Full tap tables (mirrored), left to right: simple loops for Adreno.
+const float kLuma[14] = float[](0.0015621, 0.0130009, -0.0041872, -0.0571024, -0.0274861, 0.1746549, 0.3995578,
+    0.3995578, 0.1746549, -0.0274861, -0.0571024, -0.0041872, 0.0130009, 0.0015621);
+const int CHROMA_SIDE = 14;
+const float kChroma[28] = float[](0.0001068, 0.0020305, 0.0053021, 0.0067349, 0.0026237, -0.0083442, -0.0226547,
+    -0.0318298, -0.0253889, 0.0040381, 0.0558789, 0.1197948, 0.1783413, 0.2133664, 0.2133664, 0.1783413, 0.1197948,
+    0.0558789, 0.0040381, -0.0253889, -0.0318298, -0.0226547, -0.0083442, 0.0026237, 0.0067349, 0.0053021, 0.0020305,
+    0.0001068);
+// Rows of apron above and below the crop that pass 2 reads; a multiple of 4
+// keeps each strip on one 2x2-output clip-state block row.
+const int ROW_APRON = 16;
+const int SPAN = 2 * OUT_COLUMNS + 2 * CHROMA_SIDE - 2;  // full-resolution columns
+const int RAW_COLUMNS = SPAN + 4;
+const int RAW_ROWS = ROWS + 4;
+shared float rawTile[RAW_COLUMNS * RAW_ROWS];
+shared uvec2 strip[SPAN * ROWS];  // half-float (Y, Cr, Cb)
+
+ivec2 gRawOrigin;  // absolute sensor position of rawTile[0]
+float fusedRawAt(ivec2 q) {
+    ivec2 local = q - gRawOrigin;
+    return rawTile[local.y * RAW_COLUMNS + local.x];
+}
+#define VIDEO_MHC_AT(q) fusedRawAt(q)
+#include "video_raw_core.glsl"
+
+layout(binding = 2, rgba16f) uniform writeonly image2D lumaChroma;
+layout(binding = 4, r16ui) uniform writeonly uimage2D clipStateOut;
+layout(binding = 5, r32f) uniform writeonly image2D lumaHigh;  // r32f: a guaranteed storage format
+
+void main() {
+    int column0 = int(gl_WorkGroupID.x) * OUT_COLUMNS;            // first output column
+    int row0 = int(gl_WorkGroupID.y) * ROWS - ROW_APRON;          // first crop row
+    ivec2 crop = ivec2(pc.cropX, pc.cropY);
+    // Strip column 0 is crop column 2 * column0 - (CHROMA_SIDE - 1).
+    gRawOrigin = crop + ivec2(2 * column0 - (CHROMA_SIDE - 1) - 2, row0 - 2);
+    for (uint index = gl_LocalInvocationIndex; index < uint(RAW_COLUMNS * RAW_ROWS); index += 256u) {
+        ivec2 q = videoMirrored(gRawOrigin + ivec2(int(index % uint(RAW_COLUMNS)), int(index / uint(RAW_COLUMNS))));
+        rawTile[index] = videoRawAt(q, videoCodeAt(q));
+    }
+    barrier();
+
+    vec3 balance = vec3(pc.wb.x, 0.5 * (pc.wb.y + pc.wb.z), pc.wb.w);
+    for (uint index = gl_LocalInvocationIndex; index < uint(SPAN * ROWS); index += 256u) {
+        ivec2 p = gRawOrigin + 2 + ivec2(int(index % uint(SPAN)), int(index / uint(SPAN)));
+        vec3 rgb = videoFullRgb(p) * videoGainAt(p) * balance;
+        float luma = 0.25 * (rgb.r + 2.0 * rgb.g + rgb.b);
+        strip[index] = uvec2(packHalf2x16(vec2(luma, rgb.r - rgb.g)), packHalf2x16(vec2(rgb.b - rgb.g, 0.0)));
+    }
+    barrier();
+
+    for (uint index = gl_LocalInvocationIndex; index < uint(OUT_COLUMNS * ROWS); index += 256u) {
+        int column = int(index % uint(OUT_COLUMNS));
+        int row = int(index / uint(OUT_COLUMNS));
+        int base = row * SPAN + 2 * column;  // strip entry of the leftmost chroma tap
+        vec2 chroma = vec2(0.0);
+        for (int m = 0; m < 2 * CHROMA_SIDE; ++m) {
+            uvec2 packed = strip[base + m];
+            chroma += kChroma[m] * vec2(unpackHalf2x16(packed.x).y, unpackHalf2x16(packed.y).x);
+        }
+        float luma = 0.0;
+        int lumaBase = base + CHROMA_SIDE - LUMA_SIDE;
+        for (int m = 0; m < 2 * LUMA_SIDE; ++m) luma += kLuma[m] * unpackHalf2x16(strip[lumaBase + m].x).x;
+        // Central footprint of the output pixel: offsets -1.5 .. +1.5.
+        float low = 65504.0, high = -65504.0;
+        for (int m = 0; m < 4; ++m) {
+            float y = unpackHalf2x16(strip[base + CHROMA_SIDE - 2 + m].x).x;
+            low = min(low, y);
+            high = max(high, y);
+        }
+        ivec2 at = ivec2(column0 + column, int(gl_WorkGroupID.y) * ROWS + row);
+        if (at.x < int(pc.outWidth)) {
+            imageStore(lumaChroma, at, vec4(luma, chroma, low));
+            imageStore(lumaHigh, at, vec4(high));
+        }
+    }
+
+    // Clip state per 2x2 output block: any clipped RAW site among its 4x4
+    // sensor pixels, per channel. Adreno's compiler rejects this store under
+    // a condition, so every strip stores: the apron strips outside the crop
+    // write the nearest real block row, reading its RAW directly, so duplicate
+    // writes carry the same value.
+    int blockRow = clamp(row0 / 4, 0, int(pc.outHeight) / 2 - 1);
+    for (uint block = gl_LocalInvocationIndex; block < uint(OUT_COLUMNS / 2); block += 256u) {
+        ivec2 base = crop + ivec2(2 * (column0 + 2 * int(block)), 4 * blockRow);
+        uint state = 0u;
+        for (int y = 0; y < 4; ++y) {
+            for (int x = 0; x < 4; ++x) {
+                ivec2 q = base + ivec2(x, y);
+                if (videoRawAt(q, videoCodeAt(q)) >= 0.995) state |= 1u << uint(videoChannelAt(q));
+            }
+        }
+        imageStore(clipStateOut, ivec2(column0 / 2 + int(block), blockRow), uvec4(state));
+    }
+}

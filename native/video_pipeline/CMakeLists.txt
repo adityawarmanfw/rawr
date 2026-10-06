@@ -27,11 +27,21 @@ file(MAKE_DIRECTORY ${VP_GEN})
 set(SC ${RAWR_NATIVE_DIR}/shader_common/shaders)
 embed_spirv(video_demosaic ${VIDEO_PIPELINE_SHADER_DIR}/video_demosaic.comp video_demosaic_spv OUTPUT_DIR ${VP_GEN}
   FLAGS -I${SC} -I${VIDEO_PIPELINE_SHADER_DIR}
-  DEPENDS ${VIDEO_PIPELINE_SHADER_DIR}/video_raw_core.glsl ${SC}/lens_shading.glsl ${SC}/cfa_common.glsl)
+  DEPENDS ${VIDEO_PIPELINE_SHADER_DIR}/video_raw_core.glsl ${VIDEO_PIPELINE_SHADER_DIR}/video_mhc.glsl
+          ${SC}/lens_shading.glsl ${SC}/cfa_common.glsl)
 
-embed_spirv(video_downscale ${VIDEO_PIPELINE_SHADER_DIR}/video_downscale.comp video_downscale_spv OUTPUT_DIR ${VP_GEN})
+# Optimized SPIR-V: Adreno's compiler rejects the unoptimized strip pass
+# (vkCreateComputePipelines VK_ERROR_UNKNOWN), as with the gain map shaders.
+foreach(PASS h v)
+  embed_spirv(video_downscale_${PASS} ${VIDEO_PIPELINE_SHADER_DIR}/video_downscale_${PASS}.comp
+    video_downscale_${PASS}_spv OUTPUT_DIR ${VP_GEN}
+    FLAGS -I${SC} -I${VIDEO_PIPELINE_SHADER_DIR} --target-env=vulkan1.1 -O
+    DEPENDS ${VIDEO_PIPELINE_SHADER_DIR}/video_raw_core.glsl ${VIDEO_PIPELINE_SHADER_DIR}/video_mhc.glsl
+            ${SC}/lens_shading.glsl ${SC}/cfa_common.glsl)
+endforeach()
 
-add_library(video_pipeline STATIC src/VideoDemosaic.cpp ${video_demosaic_HDR} ${video_downscale_HDR})
+add_library(video_pipeline STATIC src/VideoDemosaic.cpp ${video_demosaic_HDR} ${video_downscale_h_HDR}
+  ${video_downscale_v_HDR})
 add_library(rawr::video_pipeline ALIAS video_pipeline)
 target_include_directories(video_pipeline PUBLIC include PRIVATE ${VP_GEN})
 target_link_libraries(video_pipeline PUBLIC rawr::vk_common ${VULKAN_LIB} PRIVATE ${LOG_LIB})
