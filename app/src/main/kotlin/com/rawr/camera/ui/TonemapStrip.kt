@@ -63,7 +63,9 @@ internal fun TonemapStrip(
 ) {
     var mode by remember(profiles.log) { mutableStateOf(TonemapStripMode.Collapsed) }
     val profileLabel = profiles.options.firstOrNull { it.id == profiles.selectedId }?.label ?: "RAWR NTRL"
-    val modified = !profiles.log && TonemapCatalog.tone.any { !TonemapCatalog.isDefault(state, requireNotNull(it.param)) }
+    // Render exposure counts too: the manual-mode EV button edits it from capture.
+    val modified = !profiles.log && (state.renderExposureTenths != 0 ||
+        TonemapCatalog.tone.any { !TonemapCatalog.isDefault(state, requireNotNull(it.param)) })
     Column(
         modifier.testTag(CaptureTestTags.TONEMAP_STRIP),
         horizontalAlignment = Alignment.CenterHorizontally

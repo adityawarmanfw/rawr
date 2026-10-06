@@ -158,6 +158,8 @@ data class CaptureUiState(
     val whites: Int = 0,
     val saturation: Int = 0,
     val vibrance: Int = 0,
+    /** Active profile's render exposure in 0.1 EV steps (Tone "Render Exposure"). */
+    val renderExposureTenths: Int = 0,
     val selectedLensId: String = capabilities.lenses.first().id,
     val whiteBalanceMode: WhiteBalanceMode = WhiteBalanceMode.Auto,
     val whiteBalanceTemperatureK: Int = WhiteBalanceMode.TEMP_DEFAULT_K,

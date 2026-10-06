@@ -788,6 +788,28 @@ class CaptureModelTest {
     }
 
     @Test
+    fun manualEvButtonDrivesRenderExposureOnlyWhenTonemapOwnsTheRender() {
+        val manual = state(ExposureMode.Manual)
+        assertTrue(CaptureTransitions.evAdjustsRenderExposure(manual))
+        assertFalse(CaptureTransitions.evAdjustsRenderExposure(state(ExposureMode.ShutterPriority)))
+        assertFalse(CaptureTransitions.evAdjustsRenderExposure(manual.copy(filmSimEnabled = true)))
+        val video = manual.copy(captureMode = CaptureMode.Video, filmSimEnabled = true)
+        assertTrue(CaptureTransitions.evAdjustsRenderExposure(video))
+        assertFalse(CaptureTransitions.evAdjustsRenderExposure(video.copy(videoLogEnabled = true)))
+    }
+
+    @Test
+    fun renderExposureScrubClampsToContractAndSyncQuantizes() {
+        val base = state(ExposureMode.Manual)
+        assertEquals(3, CaptureTransitions.scrubRenderExposure(base, 3).renderExposureTenths)
+        assertEquals(50, CaptureTransitions.scrubRenderExposure(base, 80).renderExposureTenths)
+        assertEquals(-50, CaptureTransitions.scrubRenderExposure(base, -80).renderExposureTenths)
+        assertEquals(-7, renderExposureTenthsOf(-.7f))
+        assertEquals(0, renderExposureTenthsOf(Float.NaN))
+        assertEquals(.3f, TonemapControlContract.exposureEvFromTenths(3))
+    }
+
+    @Test
     fun compactTogglesFlipPresentationState() = withController { controller ->
         val before = controller.state.value
         assertEquals(CaptureControlLayout.Compact, before.captureLayout)

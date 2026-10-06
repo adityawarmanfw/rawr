@@ -20,12 +20,14 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import com.rawr.camera.architecture.CaptureDispatch
 import com.rawr.camera.architecture.CaptureTransitions
+import com.rawr.camera.architecture.ScrubRenderExposure
 import com.rawr.camera.architecture.SetExposureCandidate
 import com.rawr.camera.architecture.SetExposureMode
 import com.rawr.camera.model.CaptureMode
 import com.rawr.camera.model.CaptureUiState
 import com.rawr.camera.model.ExposureMode
 import com.rawr.camera.model.ExposureParameter
+import com.rawr.camera.model.TonemapControlContract
 import com.rawr.camera.model.capabilityFor
 import com.rawr.camera.model.labelsAround
 import com.rawr.camera.model.requestedCandidateIdFor
@@ -39,6 +41,10 @@ internal fun CompactExposureButton(
     dispatch: CaptureDispatch,
     modifier: Modifier = Modifier
 ) {
+    if (parameter == ExposureParameter.Ev && CaptureTransitions.evAdjustsRenderExposure(state)) {
+        CompactRenderExposureButton(state, dispatch, modifier)
+        return
+    }
     val capability = state.capabilities.capabilityFor(parameter)
     val requestedId = state.requestedCandidateIdFor(parameter)
     val index = state.requestedCandidateIndexFor(parameter)
@@ -236,6 +242,87 @@ internal fun CompactExposureButton(
                 }
             )
     )
+}
+
+/**
+ * Full-Manual EV button: SS and ISO are both fixed, so the camera EV axis is a
+ * read-only meter. The same button (icon and title unchanged) instead scrubs
+ * the active profile's render exposure in 0.1 EV steps. Double-tap resets to
+ * +0.0; long-press is haptic-only, like camera EV.
+ */
+@Composable
+private fun CompactRenderExposureButton(
+    state: CaptureUiState,
+    dispatch: CaptureDispatch,
+    modifier: Modifier = Modifier
+) {
+    val haptics = LocalCaptureHaptics.current
+    val tenths = state.renderExposureTenths
+    val latestTenths by rememberUpdatedState(tenths)
+    var dragging by remember { mutableStateOf(false) }
+    val valueText = renderExposureLabel(tenths)
+    CompactParamShell(
+        icon = Icons.Outlined.Exposure,
+        title = "EV",
+        valueText = valueText,
+        locked = tenths != 0,
+        testTag = CaptureTestTags.COMPACT_EV,
+        semanticsDescription = "EV render exposure $valueText. Scrub horizontally or vertically to adjust. " +
+            "Double tap to reset to zero.",
+        modifier = modifier
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onDoubleTap = {
+                        if (!dragging && latestTenths != 0) {
+                            haptics.selection()
+                            dispatch(ScrubRenderExposure(-latestTenths))
+                        }
+                    },
+                    onLongPress = { if (!dragging) haptics.longPress() }
+                )
+            }
+            .pointerInput(state.orientation) {
+                val stepPx = CaptureDimens.ExposureDetentSpacing.toPx() / 3f
+                var gesture = 0
+                var residual = 0f
+                detectDragGestures(
+                    onDragStart = {
+                        dragging = true
+                        gesture = latestTenths
+                        residual = 0f
+                    },
+                    onDrag = { change, drag ->
+                        change.consume()
+                        // Same axes as the camera EV button: right/up = brighter.
+                        residual += drag.x - drag.y
+                        val steps = (residual / stepPx).toInt()
+                        if (steps == 0) return@detectDragGestures
+                        residual -= steps * stepPx
+                        val next = (gesture + steps).coerceIn(
+                            TonemapControlContract.EXPOSURE_MIN_TENTHS,
+                            TonemapControlContract.EXPOSURE_MAX_TENTHS
+                        )
+                        if (next == gesture) {
+                            residual = 0f
+                            return@detectDragGestures
+                        }
+                        // Detents on every half stop keep the 0.1 EV scrub from buzzing.
+                        val crossedHalfStop = (minOf(gesture, next) + 1..maxOf(gesture, next)).any { it % 5 == 0 }
+                        dispatch(ScrubRenderExposure(next - gesture))
+                        gesture = next
+                        if (crossedHalfStop) haptics.detent()
+                    },
+                    onDragEnd = { dragging = false },
+                    onDragCancel = { dragging = false }
+                )
+            }
+    )
+}
+
+private fun renderExposureLabel(tenths: Int): String {
+    val sign = if (tenths < 0) "-" else "+"
+    val abs = kotlin.math.abs(tenths)
+    return "$sign${abs / 10}.${abs % 10}"
 }
 
 private fun compactExposureDescription(

@@ -20,6 +20,7 @@ class NativeCaptureScreenController(
     private val onCaptureQueued: (CaptureOutputFormat) -> Unit = {},
     private val pollStillCompletion: () -> List<StillCaptureCoordinator.CompletionEvent>,
     private val onToneScrubbed: (ToneParameter, Int) -> Unit = { _, _ -> },
+    private val onRenderExposureScrubbed: (Int) -> Unit = {},
     private val onCapturePreferencesChanged: (CaptureUiState, CaptureUiState) -> Unit = { _, _ -> },
     private val videoLocked: () -> Boolean = { false },
     private val onRawCpuIngress: () -> Unit = {},
@@ -77,7 +78,8 @@ class NativeCaptureScreenController(
     override fun dispatch(action: CaptureAction) {
         if (videoLocked() && (action is SetCaptureMode || action is ToggleVideoLog ||
                 action is CycleVideoResolution || action is CycleVideoFps)) return
-        if (action is ScrubTone && state.value.captureMode == CaptureMode.Video && state.value.videoLogEnabled) return
+        if ((action is ScrubTone || action is ScrubRenderExposure) &&
+            state.value.captureMode == CaptureMode.Video && state.value.videoLogEnabled) return
         when (action) {
             is PresentationCaptureAction -> {
                 val before = state.value
@@ -135,9 +137,21 @@ class NativeCaptureScreenController(
                         highlights = action.highlights.coerceIn(-100, 100),
                         whites = action.whites.coerceIn(-100, 100),
                         saturation = action.saturation.coerceIn(-100, 100),
-                        vibrance = action.vibrance.coerceIn(-100, 100)
+                        vibrance = action.vibrance.coerceIn(-100, 100),
+                        renderExposureTenths = action.renderExposureTenths.coerceIn(
+                            TonemapControlContract.EXPOSURE_MIN_TENTHS,
+                            TonemapControlContract.EXPOSURE_MAX_TENTHS
+                        )
                     )
                 }
+            }
+
+            is ScrubRenderExposure -> {
+                val next = CaptureTransitions.scrubRenderExposure(state.value, action.deltaTenths)
+                mutableState.value = next
+                // Persisted by CaptureViewModel; the settings publish applies the
+                // complete ImageToneState to TonemapEngine.
+                onRenderExposureScrubbed(next.renderExposureTenths)
             }
 
             is ScrubTone -> {

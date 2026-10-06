@@ -356,6 +356,24 @@ object CaptureTransitions {
         ToneParameter.Vibrance -> state.copy(vibrance = (state.vibrance + delta).coerceIn(-100, 100))
     }
 
+    fun scrubRenderExposure(state: CaptureUiState, deltaTenths: Int): CaptureUiState =
+        state.copy(
+            renderExposureTenths = (state.renderExposureTenths + deltaTenths).coerceIn(
+                TonemapControlContract.EXPOSURE_MIN_TENTHS,
+                TonemapControlContract.EXPOSURE_MAX_TENTHS
+            )
+        )
+
+    /**
+     * Compact EV button in full Manual drives render exposure instead of the
+     * read-only meter, while the regular tonemap owns the render (Film Sim off
+     * or Video) and is not LOG, where render exposure is ignored.
+     */
+    fun evAdjustsRenderExposure(state: CaptureUiState): Boolean =
+        state.exposureControl.mode == ExposureMode.Manual &&
+            (!state.filmSimEnabled || state.captureMode == CaptureMode.Video) &&
+            !(state.captureMode == CaptureMode.Video && state.videoLogEnabled)
+
     fun selectLens(state: CaptureUiState, lensId: String): CaptureUiState =
         if (state.capabilities.lenses.any { it.id == lensId }) state.copy(selectedLensId = lensId) else state
 

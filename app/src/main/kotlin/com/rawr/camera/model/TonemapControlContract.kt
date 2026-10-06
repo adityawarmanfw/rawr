@@ -13,6 +13,8 @@ object TonemapControlContract {
     const val EXPOSURE_MIN_EV = -5f
     const val EXPOSURE_MAX_EV = 5f
     const val EXPOSURE_NEUTRAL_EV = 0f
+    const val EXPOSURE_MIN_TENTHS = -50
+    const val EXPOSURE_MAX_TENTHS = 50
 
     const val TONE_UI_MIN = -100f
     const val TONE_UI_MAX = 100f
@@ -59,4 +61,15 @@ object TonemapControlContract {
     fun highlightFromQuickControl(value: Int): Float = value.coerceIn(-100, 100).toFloat()
 
     fun highlightToQuickControl(value: Float): Int = value.roundToInt().coerceIn(-100, 100)
+
+    fun exposureEvFromTenths(tenths: Int): Float =
+        tenths.coerceIn(EXPOSURE_MIN_TENTHS, EXPOSURE_MAX_TENTHS) / 10f
 }
+
+/** Render exposure quantized to the 0.1 EV slider step. */
+fun renderExposureTenthsOf(ev: Float): Int =
+    if (ev.isFinite()) {
+        (ev * 10f).roundToInt().coerceIn(TonemapControlContract.EXPOSURE_MIN_TENTHS, TonemapControlContract.EXPOSURE_MAX_TENTHS)
+    } else {
+        0
+    }

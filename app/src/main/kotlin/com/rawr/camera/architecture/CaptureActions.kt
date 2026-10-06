@@ -97,6 +97,9 @@ data class SetExposureCandidate(val parameter: ExposureParameter, val candidateI
 
 data class ScrubTone(val target: ToneParameter, val delta: Int) : ApplicationCaptureAction
 
+/** Shifts the active profile's render exposure by [deltaTenths] × 0.1 EV (manual-mode EV button). */
+data class ScrubRenderExposure(val deltaTenths: Int) : ApplicationCaptureAction
+
 data class SyncToneControls(
     val blacks: Int,
     val shadows: Int,
@@ -105,7 +108,8 @@ data class SyncToneControls(
     val highlights: Int,
     val whites: Int,
     val saturation: Int,
-    val vibrance: Int
+    val vibrance: Int,
+    val renderExposureTenths: Int = 0
 ) : ApplicationCaptureAction {
     companion object {
         fun fromImageTone(tone: ImageToneState) =
@@ -117,7 +121,8 @@ data class SyncToneControls(
                 highlights = tone.highlights.roundToInt().coerceIn(-100, 100),
                 whites = tone.whites.roundToInt().coerceIn(-100, 100),
                 saturation = tone.saturation.roundToInt().coerceIn(-100, 100),
-                vibrance = tone.vibrance.roundToInt().coerceIn(-100, 100)
+                vibrance = tone.vibrance.roundToInt().coerceIn(-100, 100),
+                renderExposureTenths = renderExposureTenthsOf(tone.renderExposure)
             )
     }
 }

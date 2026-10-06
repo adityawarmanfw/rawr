@@ -93,6 +93,7 @@ class CaptureViewModel(application: Application) : AndroidViewModel(application)
             requestStillCapture = stillCaptureCoordinator::capture,
             pollStillCompletion = stillCaptureCoordinator::pollCompletion,
             onToneScrubbed = { parameter, value -> persistQuickTone(parameter, value) },
+            onRenderExposureScrubbed = ::persistRenderExposure,
             videoLocked = { videoSelectionLocked() },
             onRawCpuIngress = {
                 android.os.Handler(android.os.Looper.getMainLooper()).post {
@@ -226,6 +227,11 @@ class CaptureViewModel(application: Application) : AndroidViewModel(application)
         settingsEditor.update { current ->
             current.editActiveProfileTone { it.withToneParameter(parameter, value.coerceIn(-100, 100).toFloat()) }
         }
+    }
+
+    private fun persistRenderExposure(tenths: Int) {
+        val ev = com.rawr.camera.model.TonemapControlContract.exposureEvFromTenths(tenths)
+        settingsEditor.update { current -> current.editActiveProfileTone { it.copy(renderExposure = ev) } }
     }
 
     /** Diagnostic camera-ID override; native routing remains authoritative. */

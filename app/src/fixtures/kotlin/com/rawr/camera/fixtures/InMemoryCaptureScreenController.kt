@@ -14,6 +14,7 @@ import com.rawr.camera.architecture.FocusAt
 import com.rawr.camera.architecture.MoveSpotAe
 import com.rawr.camera.architecture.PresentationCaptureAction
 import com.rawr.camera.architecture.Refocus
+import com.rawr.camera.architecture.ScrubRenderExposure
 import com.rawr.camera.architecture.ScrubTone
 import com.rawr.camera.architecture.SelectLens
 import com.rawr.camera.architecture.SetExposureCandidate
@@ -133,6 +134,10 @@ class InMemoryCaptureScreenController(
                 update { CaptureTransitions.scrubTone(it, action.target, action.delta) }
             }
 
+            is ScrubRenderExposure -> {
+                update { CaptureTransitions.scrubRenderExposure(it, action.deltaTenths) }
+            }
+
             is SyncToneControls -> {
                 update {
                     it.copy(
@@ -143,7 +148,8 @@ class InMemoryCaptureScreenController(
                         highlights = action.highlights.coerceIn(-100, 100),
                         whites = action.whites.coerceIn(-100, 100),
                         saturation = action.saturation.coerceIn(-100, 100),
-                        vibrance = action.vibrance.coerceIn(-100, 100)
+                        vibrance = action.vibrance.coerceIn(-100, 100),
+                        renderExposureTenths = action.renderExposureTenths
                     )
                 }
             }
