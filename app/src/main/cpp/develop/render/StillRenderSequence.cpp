@@ -7,6 +7,7 @@
 #include <cmath>
 #include <stdexcept>
 
+#include "color/FilmExposure.h"
 #include "develop/render/FilmRenderStage.h"
 #include "develop/render/RenderReadback.h"
 
@@ -46,7 +47,10 @@ void recordPostDemosaic(RenderResources& resources, RenderCommandSession& comman
                                                   rendered.lensIntrinsic, rendered.lensDistortion},
             commands.timingPool(), false, rendered.highlightReconstructionMethod, rendered.highlightThreshold,
             rendered.highlightCompression,
-            std::max(rendered.tonemapParams.aePostGain, 1.0e-6f) * std::exp2(rendered.tonemapParams.exposureEV),
+            // Film ignores tonemap render exposure; mirror its folded EV.
+            rendered.filmEnabled
+                ? std::exp2(rawrcam::color::filmExposureEv(rendered.filmLook, rendered.tonemapParams.aePostGain))
+                : std::max(rendered.tonemapParams.aePostGain, 1.0e-6f) * std::exp2(rendered.tonemapParams.exposureEV),
             rendered.lensShading.view(), rendered.cfaPattern, denoiseRequest);
     } catch (...) {
         resources.postDemosaic().setDenoiseTileBoundary({});

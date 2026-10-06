@@ -81,9 +81,9 @@ layout(binding = 1, rgb10_a2) uniform writeonly image2D outputImage;
 layout(binding = 1, rgba8) uniform writeonly image2D outputImage;
 #endif
 
-// knotX01_23, knotX4_exposure_sat_gc.x/.w, curve0-3, renderConfig.x and
-// colorControls.zw are still filled by the host but no longer read here; the
-// layout is kept to match TonemapEngine's GpuParameters.
+// knotX01_23, knotX4_exposure_sat_gc.x/.w, curve0-3 and renderConfig.x are
+// still filled by the host but no longer read here; the layout is kept to
+// match TonemapEngine's GpuParameters.
 layout(std140, binding = 2) uniform TonemapGpuParams {
     mat4 cameraToWorking;         // upper-left mat3; mat4 avoids mat3 packing ambiguity
     vec4 knotX01_23;              // x0,x1,x2,x3
@@ -225,10 +225,11 @@ vec3 sampleRawrNeutralTechnical(vec3 q) {
 }
 
 // ---- Rawr photographic tone controls (Iter24) ---------------------------------
-// These operators were fitted in encoded Rec.709/sRGB luminance. Every control
-// is evaluated from the original display-domain luminance. Their target curves
-// are combined with a convex interaction budget, so stacked controls cannot
-// create tone inversions or become order-dependent.
+// These operators were fitted in encoded Rec.709/sRGB luminance. Each control
+// is a monotonic blend between identity and its fitted endpoint, and the
+// controls are composed in a fixed order. A composition of monotonic curves is
+// monotonic, so stacked controls cannot create tone inversions, and each
+// control keeps its full strength however many others are active.
 
 float logistic(float x) { return 1.0 / (1.0 + exp(-clamp(x, -30.0, 30.0))); }
 float displayEV(float y) { return log2(max(y, 1e-7) / 0.18); }
@@ -304,12 +305,11 @@ float shadowsHighlightsEndpoint(float y, float shadowsUI, float highlightsUI) {
     float ds = shadowHighlightDelta(y, shadowsUI, true);
     float dh = shadowHighlightDelta(y, highlightsUI, false);
     float de = ds + dh;
-    if (shadowsUI * highlightsUI > 0.0) {
-        bool sp = shadowsUI > 0.0, hp = highlightsUI > 0.0;
-        float ws = sp ? evWindow(y, -1.87006384, .24788263, .33845705, .42852663)
-                      : evWindow(y, -3.08100106, .46467750, -1.0, .50487736);
-        float wh = hp ? evWindow(y, 1.0, .53653144, 2.50958786, .21209297)
-                      : evWindow(y, 1.0, .51468118, 2.40928792, .40009883);
+    // Overlap guard for Shadows+ with Highlights+. Negative Highlights runs in
+    // scene-linear before the render (dh is 0 here), so it has no overlap.
+    if (shadowsUI > 0.0 && highlightsUI > 0.0) {
+        float ws = evWindow(y, -1.87006384, .24788263, .33845705, .42852663);
+        float wh = evWindow(y, 1.0, .53653144, 2.50958786, .21209297);
         de *= 1.0 - .28 * ws * wh;
     }
     return clamp(y * exp2(de), 0.0, 1.0);
@@ -321,8 +321,12 @@ float endpointWarp(float y, float A, float lp, float hp, float signv) {
 }
 
 float blacksEndpoint(float y, bool positive) {
-    return positive ? endpointWarp(y, .317947, .510913, 1.601792, 1.0)
-                    : endpointWarp(y, .649198, .429756, 1.855968, -1.0);
+    if (!positive) return endpointWarp(y, .649198, .429756, 1.855968, -1.0);
+    // The fitted y^.51 lift has an infinite slope at black, amplifying
+    // sub-code sensor noise. y/(y+e) fades the lift out below ~1/4 code
+    // (e = .001) and is ~1 from a few codes up, so the fit is kept there.
+    float yc = clamp(y, 0.0, 1.0);
+    return endpointWarp(yc, .317947 * yc / (yc + .001), .510913, 1.601792, 1.0);
 }
 
 float whitesMinusEndpoint(float y) {
@@ -386,8 +390,10 @@ vec3 reconstructOpponent(float y, vec2 uv) {
     return vec3(r, g, b);
 }
 
+// One control stage: monotonic blend between identity and its endpoint.
+float toneStage(float y, float weight, float endpoint) { return mix(y, endpoint, weight); }
+
 vec3 applyPhotographicToneControls(vec3 encodedRgb) {
-    float y = dot(SRGB_LUMA, encodedRgb);
     float S = clamp(P.renderConfig.z, -100.0, 100.0);
     float M = clamp(P.renderConfig.w, -100.0, 100.0);
     float C = clamp(P.toneControls.x, -100.0, 100.0);
@@ -396,49 +402,56 @@ vec3 applyPhotographicToneControls(vec3 encodedRgb) {
     float W = clamp(P.toneControls.w, -100.0, 100.0);
 
     // Highlights < 0 is already consumed by applySceneLinearHighlightCompression().
-    // Do not let that pre-render control consume the post-render convex budget:
-    // doing so silently weakens Shadows/Blacks/Whites/Contrast/Midtones when
-    // Highlights is negative. Only positive Highlights participates here.
+    // Only positive Highlights participates in this display-space stage.
     float displayHighlights = max(H, 0.0);
     float shStrength = max(abs(S), displayHighlights) * 0.01;
-    float wb = abs(B) * 0.01, ww = abs(W) * 0.01, wc = abs(C) * 0.01, wm = abs(M) * 0.01;
-    float total = shStrength + wb + ww + wc + wm;
-    if (total < 1e-7) return encodedRgb;
-    float norm = max(1.0, total);
-    float aSH = shStrength / norm, aB = wb / norm, aW = ww / norm, aC = wc / norm, aM = wm / norm;
-    float base = max(0.0, 1.0 - (aSH + aB + aW + aC + aM));
-    float yd = base * y;
+    if (shStrength + (abs(B) + abs(W) + abs(C) + abs(M)) * 0.01 < 1e-7) return encodedRgb;
 
-    if (aSH > 0.0) {
-        float sn = (shStrength > 0.0) ? S / shStrength : S;
-        float hn = (shStrength > 0.0) ? H / shStrength : H;
-        yd += aSH * shadowsHighlightsEndpoint(y, sn, hn);
-    }
-    if (aB > 0.0) yd += aB * blacksEndpoint(y, B > 0.0);
-    if (aW > 0.0) yd += aW * ((W > 0.0) ? whitesPlusEndpoint(y) : whitesMinusEndpoint(y));
-    if (aC > 0.0) yd += aC * contrastEndpoint(y, C > 0.0);
-    if (aM > 0.0) yd += aM * midtonesEndpoint(y, M > 0.0);
+    // A user LUT used directly may leave [0,1]; the fitted endpoints raise
+    // (1 - y) to fractional powers and would turn that into NaN.
+    encodedRgb = clamp(encodedRgb, 0.0, 1.0);
+    float y = dot(SRGB_LUMA, encodedRgb);
+
+    // Fixed order: global shape first (Contrast, Midtones), then the regional
+    // Shadows/Highlights, then the endpoints (Whites, Blacks).
+    float yd = y;
+    if (C != 0.0) yd = toneStage(yd, abs(C) * 0.01, contrastEndpoint(yd, C > 0.0));
+    if (M != 0.0) yd = toneStage(yd, abs(M) * 0.01, midtonesEndpoint(yd, M > 0.0));
+    if (shStrength > 0.0) yd = toneStage(yd, shStrength, shadowsHighlightsEndpoint(yd, S / shStrength, H / shStrength));
+    float whitesIn = yd;
+    if (W > 0.0) yd = toneStage(yd, W * 0.01, whitesPlusEndpoint(yd));
+    else if (W < 0.0) yd = toneStage(yd, -W * 0.01, whitesMinusEndpoint(yd));
+    float whitesOut = yd;
+    if (B != 0.0) yd = toneStage(yd, abs(B) * 0.01, blacksEndpoint(yd, B > 0.0));
     yd = clamp(yd, 0.0, 1.0);
+    if (y <= EPSILON) return vec3(yd);
 
-    if (W <= 0.0) return (y > EPSILON) ? clamp(encodedRgb * (yd / y), 0.0, 1.0) : vec3(0.0);
-
-    // W20b: direction-aware chroma-magnitude prediction. W10/W20 was fitted
-    // in encoded Rec.709, so this intentionally lives after sRGB OETF.
-    float t = W * .01;
-    float lift = (whitesPlusEndpoint(y) - y) * t;
-    float u = encodedRgb.r - encodedRgb.g, v = encodedRgb.g - encodedRgb.b;
-    float ch = sqrt(u * u + v * v);
-    float nx = u / max(ch, 1e-6), ny = v / max(ch, 1e-6);
-    // Unrolled W20b predictor: avoids local arrays/dynamic indexing on mobile GPUs.
-    float logk = .631159 + 8.065217 * y - 9.626372 * y * y - 2.554686 * ch + 5.688680 * ch * ch + .042475 * lift +
-                 4.735573 * lift * lift + 1.191902 * y * ch - 18.487833 * y * lift - 2.635646 * ch * lift +
-                 .192790 * nx - .243675 * ny - .154911 * nx * ch + 3.653646 * ny * ch + .886294 * nx * lift +
-                 .119229 * ny * lift - 2.196561 * nx * y + .366458 * ny * y;
-    float gate = logistic((lift - .025) / .035);
-    float k = exp(clamp(t * 1.011604 * gate * logk, -1.0, 1.85));
-    vec2 uv = vec2(u, v) * k;
-    float ya = clamp(yd, minLumaForOpponent(uv), maxLumaForOpponent(uv));
-    return clamp(reconstructOpponent(ya, uv), 0.0, 1.0);
+    // Every control scales opponent chroma with luminance (an exposure-like
+    // change). Whites+ additionally applies its fitted W20b chroma magnitude,
+    // expressed relative to that luminance scaling so it is continuous at 0.
+    vec2 uv = vec2(encodedRgb.r - encodedRgb.g, encodedRgb.g - encodedRgb.b) * (yd / y);
+    if (W > 0.0 && whitesIn > EPSILON) {
+        // W20b: direction-aware chroma-magnitude prediction. W10/W20 was fitted
+        // in encoded Rec.709, so this intentionally lives after sRGB OETF.
+        float t = W * .01;
+        float yw = whitesIn;
+        vec2 uvw = vec2(encodedRgb.r - encodedRgb.g, encodedRgb.g - encodedRgb.b) * (yw / y);
+        float lift = whitesOut - yw;
+        float u = uvw.x, v = uvw.y;
+        float ch = sqrt(u * u + v * v);
+        float nx = u / max(ch, 1e-6), ny = v / max(ch, 1e-6);
+        // Unrolled W20b predictor: avoids local arrays/dynamic indexing on mobile GPUs.
+        float logk = .631159 + 8.065217 * yw - 9.626372 * yw * yw - 2.554686 * ch + 5.688680 * ch * ch + .042475 * lift +
+                     4.735573 * lift * lift + 1.191902 * yw * ch - 18.487833 * yw * lift - 2.635646 * ch * lift +
+                     .192790 * nx - .243675 * ny - .154911 * nx * ch + 3.653646 * ny * ch + .886294 * nx * lift +
+                     .119229 * ny * lift - 2.196561 * nx * yw + .366458 * ny * yw;
+        float gate = logistic((lift - .025) / .035);
+        float k = exp(clamp(t * 1.011604 * gate * logk, -1.0, 1.85));
+        uv *= k * yw / max(whitesOut, EPSILON);
+    }
+    // Same per-channel gamut clamp for every control (it was the W <= 0
+    // behaviour), so nothing changes discontinuously when Whites leaves 0.
+    return clamp(reconstructOpponent(yd, uv), 0.0, 1.0);
 }
 // -----------------------------------------------------------------------------
 
@@ -499,7 +512,10 @@ vec3 applyOutputColorControls(vec3 encoded) {
     float vibGain;
     if (vibUI >= 0.0) {
         float selective = pow(max(1.0 - chroma, 0.0), 0.30);
-        vibGain = 1.0 + P.colorControls.y * vibUI * selective;
+        // Fade the boost out in deep shadows (linear Y, config 2%..10%),
+        // where it would mostly amplify chroma noise.
+        float shadowGuard = smoothstep(P.colorControls.z, P.colorControls.w, Y);
+        vibGain = 1.0 + P.colorControls.y * vibUI * selective * shadowGuard;
     } else {
         float minus100Gain = pow(max(chroma, 0.0), 4.0);
         vibGain = mix(1.0, minus100Gain, -vibUI);

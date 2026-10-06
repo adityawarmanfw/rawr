@@ -41,3 +41,17 @@ textures only for tested Adreno 840 video without a custom LUT. Custom chains
 retain buffers. Non-unit domains, extended LUT values, and decoded log outputs
 retain original custom CST arithmetic; sensitive post-render chains also
 retain Neutral's original CST. Intensity zero bypasses LUT evaluation exactly.
+
+## Tone control properties
+
+`--tone B,S,C,M,H,W,SAT,VIB` sets the photographic controls (UI -100..+100;
+requires `--bench-only`). `tests/tone_controls_gpu.py` drives the runner on a
+synthetic AP1 chart and asserts the current renderer's invariants (finite,
+monotonic gray ramps, Whites continuity at 0, stacking strength, LUT
+overshoot, vibrance shadow guard, Blacks+ near-black slope). Pass
+`--before OLD.comp` to print the same metrics for an older shader.
+
+```sh
+uv run --no-project --with numpy native/tonemap_engine/tests/tone_controls_gpu.py \
+  --before tmp/tone-host/tonemap_before.comp
+```

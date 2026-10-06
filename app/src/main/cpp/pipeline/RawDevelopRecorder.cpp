@@ -265,8 +265,13 @@ RawDevelopRecordResult RawDevelopRecorder::record(const RawDevelopRecordInput& i
     params.highlightThreshold = in.highlightThreshold;
     params.highlightCompression = in.highlightCompression;
     params.bypassHighlightTone = in.tonemapParams.renderTransform != tonemap::RenderTransform::Existing;
+    // The tone tap must see the exposure of the render that follows it: film
+    // ignores tonemap render exposure and applies its own folded EV.
+    const std::shared_ptr<spektrafilm_native::SpektraFilm> film = acquireFilm_();
+    const bool useFilm = in.diagnosticMode == 0u && in.filmEnabled && film != nullptr;
     params.highlightExposureGain =
-        std::max(in.tonemapParams.aePostGain * std::exp2(in.tonemapParams.exposureEV), 1.0e-6f);
+        useFilm ? std::exp2(rawrcam::color::filmExposureEv(in.filmLook, in.tonemapParams.aePostGain))
+                : std::max(in.tonemapParams.aePostGain * std::exp2(in.tonemapParams.exposureEV), 1.0e-6f);
     raw_preview::RawPreviewRecordInfo rawRecord{};
     rawRecord.commandBuffer = slot.command;
     rawRecord.inputRawR16UintView = rawPreviewInputView;
@@ -351,10 +356,8 @@ RawDevelopRecordResult RawDevelopRecorder::record(const RawDevelopRecordInput& i
     // by filmPreviewDivisor (2 = quarter-res default; 3/4 for hot GPUs).
     // Tonemap path below is untouched; film runs only in the production
     // diagnostic mode.
-    // Snapshot shared ownership for this frame: the engine may be retired
-    // on another thread mid-record and the local copy keeps it alive.
-    const std::shared_ptr<spektrafilm_native::SpektraFilm> film = acquireFilm_();
-    const bool useFilm = in.diagnosticMode == 0u && in.filmEnabled && film != nullptr;
+    // `film` (snapshotted above, before the RAW record) keeps the engine alive
+    // for this frame even if it is retired on another thread mid-record.
     const uint32_t divisor = std::clamp(in.filmPreviewDivisor, 2u, 4u);
     const uint32_t filmWidth = std::max(1u, in.previewWidth / divisor);
     const uint32_t filmHeight = std::max(1u, in.previewHeight / divisor);

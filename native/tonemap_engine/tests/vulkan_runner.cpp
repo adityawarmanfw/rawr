@@ -617,6 +617,9 @@ struct Args {
     uint32_t outputBits = 8, renderTransform = 0, outputGamut = 0, outputTransfer = 1;
     bool neutralTexture = false, userTexture = false, videoMonitor = false;
     float highlightCompression = 0, highlightGain = 1, exposureEV = 0;
+    // Blacks, Shadows, Contrast, Midtones, Highlights, Whites, Saturation, Vibrance (UI -100..+100).
+    std::array<float, 8> tone{};
+    bool toneSet = false;
     tonemap::color::ColorSpace lutInput{tonemap::color::Gamut::DaVinciWideGamut, tonemap::color::TransferFunction::DaVinciIntermediate};
     tonemap::color::ColorSpace lutOutput{tonemap::color::Gamut::SRgbRec709, tonemap::color::TransferFunction::SRgb};
     tonemap::lut::LutPlacement placement = tonemap::lut::LutPlacement::RenderTransform;
@@ -679,6 +682,15 @@ Args args(int ac, char** av) {
         else if (k == "--highlight-compression") a.highlightCompression = std::stof(val());
         else if (k == "--highlight-gain") a.highlightGain = std::stof(val());
         else if (k == "--exposure-ev") a.exposureEV = std::stof(val());
+        else if (k == "--tone") {
+            std::istringstream values(val());
+            for (size_t n = 0; n < a.tone.size(); ++n) {
+                if (!(values >> a.tone[n]) || !std::isfinite(a.tone[n]) || std::fabs(a.tone[n]) > 100.0f)
+                    throw std::runtime_error("--tone needs eight comma-separated values in -100..100");
+                if (n != 7 && values.get() != ',') throw std::runtime_error("--tone needs eight comma-separated values");
+            }
+            a.toneSet = true;
+        }
         else if (k == "--render-transform") a.renderTransform = std::stoul(val());
         else if (k == "--output-gamut") a.outputGamut = std::stoul(val());
         else if (k == "--output-transfer") a.outputTransfer = std::stoul(val());
@@ -718,7 +730,7 @@ Args args(int ac, char** av) {
         uint32_t(a.afterAction) > 1 || !std::isfinite(a.intensity) || a.intensity < 0 || a.intensity > 1)
         throw std::runtime_error("invalid LUT configuration");
     if (a.outputBits == 10 && !a.videoMonitor) throw std::runtime_error("10-bit shader requires --video-monitor");
-    if (a.validate && (!a.inputFile.empty() || !a.lutFiles.empty() ||
+    if (a.validate && (!a.inputFile.empty() || !a.lutFiles.empty() || a.toneSet ||
         (a.renderTransform == 0 && (a.outputBits != 8 || a.videoMonitor)) ||
         (a.renderTransform != 0 && a.outputBits != 8 && a.outputBits != 10)))
         throw std::runtime_error("CPU oracle is synthetic Neutral RGBA8 only; use --bench-only and compare GPU dumps");
@@ -828,6 +840,16 @@ int main(int argc, char** argv) {
         if (a.colorStress) {
             p.vibrance = 100.0f;
             p.saturation = 35.0f;
+        }
+        if (a.toneSet) {
+            p.blackPointEV = a.tone[0];
+            p.shadowLiftEV = a.tone[1];
+            p.contrast = a.tone[2];
+            p.midtoneLiftEV = a.tone[3];
+            p.highlightBiasEV = a.tone[4];
+            p.whitePointEV = a.tone[5];
+            p.saturation = a.tone[6];
+            p.vibrance = a.tone[7];
         }
         if (a.controlsStress) {
             p.blackPointEV = -35.0f;
