@@ -37,8 +37,10 @@ vertically. Both work in white-balanced luma/chroma: luma with a Lanczos-3 cut
 at 0.87x the output Nyquist plus an anti-ringing clamp, chroma at half that
 bandwidth to match the encoder's 4:2:0 storage. On a Bayer zone plate this cuts
 aliasing (moire, stair-stepped edges) about 5x and false colour about 2x at
-slightly higher detail, for ~2.5x the box path's GPU time (10.1 vs 4.0 ms at
-the probe's idle clocks). `adb shell setprop debug.rawr.video_downscale box`
+slightly higher detail, for ~2.1x the box path's GPU time (6.1 vs 2.9 ms in
+the probe). About 3/4 of it is the strip pass, mostly the full-resolution
+demosaic that supersampling needs; intermediate-format and strip-shape
+changes measured no gain. `adb shell setprop debug.rawr.video_downscale box`
 restores the box average for A/B; the journal's `rawStage` records which one a
 recording used. The debug-only `VideoDownscaleProbeActivity` reruns the
 zone-plate comparison on device without the camera; with `--ez compile_check
