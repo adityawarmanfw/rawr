@@ -61,6 +61,7 @@ class VideoProcessingResources final {
     void updateRenderLut(const tonemap::lut::LutChain* renderLut, bool recording);
     bool hasProcessing(const ProcessingKey& key) const noexcept { return tonemap_ && processingKey_ == key; }
     void beginRecording();
+    const char* rawStageMethod() const noexcept { return demosaic_ ? demosaic_->method() : "none"; }
     VkImageView monitorView(uint32_t slot) const noexcept { return monitor_[slot].view; }
     VkImage monitorImage(uint32_t slot) const noexcept { return monitor_[slot].image; }
     void beginMonitorTiming(VkCommandBuffer command, uint32_t slot);

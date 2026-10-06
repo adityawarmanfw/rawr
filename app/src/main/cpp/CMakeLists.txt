@@ -400,6 +400,7 @@ add_library(rawrcam_native SHARED
   jni/DevelopSettingsReader.cpp
   jni/VideoGpuProbeJni.cpp
   jni/EncoderAbProbeJni.cpp
+  jni/VideoDownscaleProbeJni.cpp
   jni/NativeAvRecorderJni.cpp
 )
 target_link_libraries(rawrcam_native PRIVATE rawrcam_backend_options rawrcam_camera rawrcam_capture rawrcam_color rawrcam_develop rawrcam_diagnostics_logging rawrcam_encoding rawrcam_monitoring rawrcam_renderer rawrcam_session rawrcam_tonemap rawrcam_video rawrcam_vulkan)

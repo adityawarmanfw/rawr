@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.22)
 project(video_pipeline LANGUAGES CXX)
 
-# Recording-resolution RAW stage (Android): fused MHC demosaic, crop or 2x
-# Bayer reduction, lens shading and clip state. Its output feeds
+# Recording-resolution RAW stage (Android): MHC demosaic, crop or anti-aliased
+# 2x reduction, lens shading and clip state. Its output feeds
 # native/post_demosaic.
 find_library(VULKAN_LIB vulkan REQUIRED)
 find_library(LOG_LIB log REQUIRED)
@@ -29,7 +29,9 @@ embed_spirv(video_demosaic ${VIDEO_PIPELINE_SHADER_DIR}/video_demosaic.comp vide
   FLAGS -I${SC} -I${VIDEO_PIPELINE_SHADER_DIR}
   DEPENDS ${VIDEO_PIPELINE_SHADER_DIR}/video_raw_core.glsl ${SC}/lens_shading.glsl ${SC}/cfa_common.glsl)
 
-add_library(video_pipeline STATIC src/VideoDemosaic.cpp ${video_demosaic_HDR})
+embed_spirv(video_downscale ${VIDEO_PIPELINE_SHADER_DIR}/video_downscale.comp video_downscale_spv OUTPUT_DIR ${VP_GEN})
+
+add_library(video_pipeline STATIC src/VideoDemosaic.cpp ${video_demosaic_HDR} ${video_downscale_HDR})
 add_library(rawr::video_pipeline ALIAS video_pipeline)
 target_include_directories(video_pipeline PUBLIC include PRIVATE ${VP_GEN})
 target_link_libraries(video_pipeline PUBLIC rawr::vk_common ${VULKAN_LIB} PRIVATE ${LOG_LIB})

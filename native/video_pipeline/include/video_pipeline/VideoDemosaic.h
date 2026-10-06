@@ -54,6 +54,14 @@ class VideoDemosaic final {
     uint32_t cropX() const noexcept { return cropX_; }
     uint32_t cropY() const noexcept { return cropY_; }
     uint32_t sensorScale() const noexcept { return reduceCfa_ ? 2u : 1u; }
+    // Re-reads the 2x reduction filter at recording start. Debug A/B:
+    // `adb shell setprop debug.rawr.video_downscale box` restores the former
+    // 2x2 box average; anything else uses the anti-aliasing filter.
+    void selectDownscaleFilter();
+    void setAntiAlias(bool enabled) noexcept { antiAlias_ = enabled; }
+    const char* method() const noexcept {
+        return !reduceCfa_ ? "tiled_mhc_5x5" : antiAlias_ ? "tiled_mhc_5x5+lanczos3_aa_2x" : "tiled_mhc_fused_2x_area";
+    }
 
    private:
     struct HostBuffer {
@@ -64,6 +72,8 @@ class VideoDemosaic final {
     HostBuffer makeHostBuffer(VkDeviceSize bytes);
     void destroyHostBuffer(HostBuffer& buffer) noexcept;
     void destroy() noexcept;
+    void createDownscale();
+    void recordDownscale(VkCommandBuffer command, uint32_t frameSlot);
 
     rawr::vk::GpuContext context_;
     uint32_t rawWidth_ = 0, rawHeight_ = 0;
@@ -81,5 +91,18 @@ class VideoDemosaic final {
     rawr::vk::OwnedImage dummyRaw_{};
     std::array<bool, kFramesInFlight> initialized_{};
     bool dummyInitialized_ = false;
+    // 2x reduction: the demosaic writes the full-resolution crop here, then an
+    // anti-aliasing filter decimates it into outputs_. One copy is shared by
+    // all slots; a barrier orders each frame after the previous one's reads.
+    uint32_t fullWidth_ = 0, fullHeight_ = 0;
+    rawr::vk::OwnedImage fullImage_{};
+    rawr::vk::OwnedImage fullClip_{};
+    bool fullInitialized_ = false;
+    bool antiAlias_ = true;
+    VkDescriptorSetLayout downscaleLayout_ = VK_NULL_HANDLE;
+    VkPipelineLayout downscalePipelineLayout_ = VK_NULL_HANDLE;
+    VkPipeline downscalePipeline_ = VK_NULL_HANDLE;
+    VkDescriptorPool downscalePool_ = VK_NULL_HANDLE;
+    std::array<VkDescriptorSet, kFramesInFlight> downscaleSets_{};
 };
 }  // namespace rawrcam::video

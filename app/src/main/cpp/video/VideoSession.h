@@ -89,6 +89,7 @@ class VideoSession final {
     const std::string& offeredFormats() const noexcept { return output_.offeredFormats(); }
     const std::string& startTimingJson() const noexcept { return startTimingJson_; }
     const char* outputFormatName() const noexcept { return output_.outputFormatName(); }
+    const char* rawStageMethod() const noexcept { return resources_.rawStageMethod(); }
     VkImageView monitorView(uint32_t slot) const noexcept { return resources_.monitorView(slot); }
     VkImage monitorImage(uint32_t slot) const noexcept { return resources_.monitorImage(slot); }
     // Waits briefly for an encoder buffer; still none is a video drop. The

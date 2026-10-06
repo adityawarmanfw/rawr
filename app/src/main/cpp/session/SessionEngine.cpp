@@ -186,7 +186,8 @@ std::string SessionEngine::videoStats() {
            ",\"defringeStrength\":" + std::to_string(processing.defringeStrength) +
            ",\"waveletDenoiseStrength\":" + std::to_string(processing.waveletDenoiseStrength) +
            ",\"processingRestartRequired\":" + (videoSession_.processingRestartRequired() ? "true" : "false") +
-           ",\"encoderSurfaceFormat\":\"" + videoSession_.outputFormatName() + "\"" + ",\"encoderSurfaceOffered\":\"" +
+           ",\"encoderSurfaceFormat\":\"" + videoSession_.outputFormatName() + "\"" +
+           ",\"rawStage\":\"" + videoSession_.rawStageMethod() + "\"" + ",\"encoderSurfaceOffered\":\"" +
            videoSession_.offeredFormats() + "\"" +
            ",\"encoderImages\":" + std::to_string(videoSession_.encoderImageCount()) +
            ",\"dropReasons\":{\"ingress\":" + std::to_string(ingressDrops) +

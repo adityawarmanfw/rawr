@@ -21,10 +21,20 @@ The recorder's timestamp policy is selected at recording start through
 `NativeVideoRecorder.Settings.timestampPolicy`. Kotlin can enumerate
 `VideoTimestampPolicy.entries` and query
 `NativeVideoRecorder.supportedTimestampPolicies()` before showing a choice.
-`REALTIME` is supported: the Vulkan encoder Surface supplies video presentation
-times, retaining elapsed time through late or missing frames so audio keeps its
-normal timeline. This is **not** the RAW sensor timestamp; that timestamp is
-currently used for frame/metadata pairing and diagnostics. `FIXED_CADENCE_REPEAT`
-is reserved but unavailable until the native path can present a repeated frame
-for each missing cadence slot. Rewriting muxer timestamps without those frames
-would change playback speed relative to audio.
+`REALTIME` is supported: each encoder frame carries its RAW sensor timestamp
+(converted to `CLOCK_MONOTONIC`) through `VK_GOOGLE_display_timing`, so a late
+present keeps its capture time instead of leaving a gap. Drivers without the
+extension fall back to the queue time. `FIXED_CADENCE_REPEAT` is reserved but
+unavailable until the native path can present a repeated frame for each missing
+cadence slot. Rewriting muxer timestamps without those frames would change
+playback speed relative to audio.
+
+Recordings smaller than half the RAW frame (1080p) demosaic the full-resolution
+crop, then `video_downscale.comp` reduces it 2x with a separable Lanczos-3
+(cutoff 0.87x output Nyquist, anti-ringing clamp) instead of a 2x2 box average.
+On a Bayer zone plate this cuts aliasing (moire, stair-stepped edges) about
+4.7x at slightly higher detail, for about 4 ms more GPU time per frame.
+`adb shell setprop debug.rawr.video_downscale box` restores the box average for
+A/B; the journal's `rawStage` records which filter a recording used. The
+debug-only `VideoDownscaleProbeActivity` reruns the zone-plate comparison on
+device without the camera.

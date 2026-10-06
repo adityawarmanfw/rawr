@@ -93,6 +93,7 @@ VideoProcessingResources::Prepared::~Prepared() {
 }
 VideoProcessingResources::~VideoProcessingResources() { release(); }
 void VideoProcessingResources::beginRecording() {
+    if (demosaic_) demosaic_->selectDownscaleFilter();
     VkPhysicalDeviceProperties properties{};
     vkGetPhysicalDeviceProperties(context_.physicalDevice(), &properties);
     timestampPeriodNs_ = properties.limits.timestampPeriod;

@@ -1,6 +1,7 @@
 #include "video_pipeline/VideoDemosaic.h"
 
 #include <android/log.h>
+#include <sys/system_properties.h>
 
 #include <algorithm>
 #include <cstring>
@@ -8,6 +9,7 @@
 #include <string>
 
 #include "video_demosaic.h"
+#include "video_downscale.h"
 #include "video_pipeline/VideoCrop.h"
 
 namespace rawrcam::video {
@@ -59,7 +61,7 @@ VideoDemosaic::VideoDemosaic(const rawr::vk::GpuContext& context, uint32_t rawWi
     __android_log_print(ANDROID_LOG_INFO, "RawrNativeVideo",
                         "VIDEO_RAW_STAGE input=%ux%u crop=%u,%u %ux%u output=%ux%u method=%s", rawWidth_, rawHeight_,
                         cropX_, cropY_, sourceRect.width, sourceRect.height, outputWidth_, outputHeight_,
-                        reduceCfa_ ? "tiled_mhc_fused_2x_area" : "tiled_mhc_5x5");
+                        method());
 
     try {
         const VkDevice device = context_.device;
@@ -126,12 +128,14 @@ VideoDemosaic::VideoDemosaic(const rawr::vk::GpuContext& context, uint32_t rawWi
         for (uint32_t i = 0; i < slots; ++i) {
             outputs_[i] =
                 rawr::vk::createOwnedImage(context_.physicalDevice, device, outputWidth_, outputHeight_,
-                                                  VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT);
+                                                  VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                  VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
             clipStates_[i] =
                 rawr::vk::createOwnedImage(context_.physicalDevice, device, outputWidth_ / 2u,
                                                   outputHeight_ / 2u, VK_FORMAT_R16_UINT, VK_IMAGE_USAGE_STORAGE_BIT);
             lscBuffers_[i] = makeHostBuffer(kMaxLscBytes);
         }
+        if (reduceCfa_) createDownscale();
     } catch (...) {
         destroy();
         throw;
@@ -139,6 +143,113 @@ VideoDemosaic::VideoDemosaic(const rawr::vk::GpuContext& context, uint32_t rawWi
 }
 
 VideoDemosaic::~VideoDemosaic() { destroy(); }
+
+void VideoDemosaic::selectDownscaleFilter() {
+    char value[PROP_VALUE_MAX]{};
+    const bool box = __system_property_get("debug.rawr.video_downscale", value) > 0 && std::strcmp(value, "box") == 0;
+    setAntiAlias(!box);
+    if (reduceCfa_)
+        __android_log_print(ANDROID_LOG_INFO, "RawrNativeVideo", "VIDEO_DOWNSCALE_FILTER method=%s", method());
+}
+
+void VideoDemosaic::createDownscale() {
+    const VkDevice device = context_.device;
+    fullWidth_ = outputWidth_ * 2u;
+    fullHeight_ = outputHeight_ * 2u;
+    fullImage_ = rawr::vk::createOwnedImage(context_.physicalDevice, device, fullWidth_, fullHeight_,
+                                            VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT);
+    fullClip_ = rawr::vk::createOwnedImage(context_.physicalDevice, device, fullWidth_ / 2u, fullHeight_ / 2u,
+                                           VK_FORMAT_R16_UINT, VK_IMAGE_USAGE_STORAGE_BIT);
+    std::array<VkDescriptorSetLayoutBinding, 4> bindings{};
+    for (uint32_t i = 0; i < bindings.size(); ++i)
+        bindings[i] = {i, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    VkDescriptorSetLayoutCreateInfo setInfo{};
+    setInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    setInfo.bindingCount = bindings.size();
+    setInfo.pBindings = bindings.data();
+    check(vkCreateDescriptorSetLayout(device, &setInfo, nullptr, &downscaleLayout_), "video downscale set layout");
+    VkPushConstantRange pushRange{VK_SHADER_STAGE_COMPUTE_BIT, 0, 4 * sizeof(uint32_t)};
+    VkPipelineLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layoutInfo.setLayoutCount = 1;
+    layoutInfo.pSetLayouts = &downscaleLayout_;
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges = &pushRange;
+    check(vkCreatePipelineLayout(device, &layoutInfo, nullptr, &downscalePipelineLayout_),
+          "video downscale pipeline layout");
+    VkShaderModuleCreateInfo shaderInfo{};
+    shaderInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    shaderInfo.codeSize = video_downscale_spv_size;
+    shaderInfo.pCode = reinterpret_cast<const uint32_t*>(video_downscale_spv);
+    VkShaderModule shader = VK_NULL_HANDLE;
+    check(vkCreateShaderModule(device, &shaderInfo, nullptr, &shader), "video downscale shader");
+    VkComputePipelineCreateInfo pipelineInfo{};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    pipelineInfo.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    pipelineInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    pipelineInfo.stage.module = shader;
+    pipelineInfo.stage.pName = "main";
+    pipelineInfo.layout = downscalePipelineLayout_;
+    const VkResult pipelineResult =
+        vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &downscalePipeline_);
+    vkDestroyShaderModule(device, shader, nullptr);
+    check(pipelineResult, "video downscale pipeline");
+
+    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kFramesInFlight * 4u};
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.maxSets = kFramesInFlight;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &size;
+    check(vkCreateDescriptorPool(device, &poolInfo, nullptr, &downscalePool_), "video downscale pool");
+    std::array<VkDescriptorSetLayout, kFramesInFlight> layouts{};
+    layouts.fill(downscaleLayout_);
+    VkDescriptorSetAllocateInfo allocate{};
+    allocate.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocate.descriptorPool = downscalePool_;
+    allocate.descriptorSetCount = kFramesInFlight;
+    allocate.pSetLayouts = layouts.data();
+    check(vkAllocateDescriptorSets(device, &allocate, downscaleSets_.data()), "video downscale sets");
+    // The images never change, so the sets are written once.
+    for (uint32_t slot = 0; slot < kFramesInFlight; ++slot) {
+        const std::array<VkImageView, 4> views{fullImage_.view, fullClip_.view, outputs_[slot].view,
+                                               clipStates_[slot].view};
+        std::array<VkDescriptorImageInfo, 4> infos{};
+        std::array<VkWriteDescriptorSet, 4> writes{};
+        for (uint32_t i = 0; i < writes.size(); ++i) {
+            infos[i] = {VK_NULL_HANDLE, views[i], VK_IMAGE_LAYOUT_GENERAL};
+            writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[i].dstSet = downscaleSets_[slot];
+            writes[i].dstBinding = i;
+            writes[i].descriptorCount = 1;
+            writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            writes[i].pImageInfo = &infos[i];
+        }
+        vkUpdateDescriptorSets(device, writes.size(), writes.data(), 0, nullptr);
+    }
+}
+
+void VideoDemosaic::recordDownscale(VkCommandBuffer command, uint32_t frameSlot) {
+    std::array<VkImageMemoryBarrier, 2> written{};
+    for (uint32_t i = 0; i < written.size(); ++i) {
+        written[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        written[i].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        written[i].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        written[i].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        written[i].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        written[i].image = i == 0 ? fullImage_.image : fullClip_.image;
+        written[i].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    }
+    vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
+                         nullptr, 0, nullptr, written.size(), written.data());
+    const uint32_t push[4] = {outputWidth_, outputHeight_, fullWidth_, fullHeight_};
+    vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, downscalePipeline_);
+    vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_COMPUTE, downscalePipelineLayout_, 0, 1,
+                            &downscaleSets_[frameSlot], 0, nullptr);
+    vkCmdPushConstants(command, downscalePipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), push);
+    // 16x16 workgroups; see TILE in video_downscale.comp.
+    vkCmdDispatch(command, (outputWidth_ + 15u) / 16u, (outputHeight_ + 15u) / 16u, 1);
+}
 
 VideoDemosaic::HostBuffer VideoDemosaic::makeHostBuffer(VkDeviceSize bytes) {
     HostBuffer out{};
@@ -183,6 +294,16 @@ void VideoDemosaic::destroy() noexcept {
     for (auto& output : outputs_) rawr::vk::destroyOwnedImage(device, output);
     for (auto& clip : clipStates_) rawr::vk::destroyOwnedImage(device, clip);
     rawr::vk::destroyOwnedImage(device, dummyRaw_);
+    rawr::vk::destroyOwnedImage(device, fullImage_);
+    rawr::vk::destroyOwnedImage(device, fullClip_);
+    if (downscalePool_) vkDestroyDescriptorPool(device, downscalePool_, nullptr);
+    if (downscalePipeline_) vkDestroyPipeline(device, downscalePipeline_, nullptr);
+    if (downscalePipelineLayout_) vkDestroyPipelineLayout(device, downscalePipelineLayout_, nullptr);
+    if (downscaleLayout_) vkDestroyDescriptorSetLayout(device, downscaleLayout_, nullptr);
+    downscalePool_ = VK_NULL_HANDLE;
+    downscalePipeline_ = VK_NULL_HANDLE;
+    downscalePipelineLayout_ = VK_NULL_HANDLE;
+    downscaleLayout_ = VK_NULL_HANDLE;
     if (descriptorPool_) vkDestroyDescriptorPool(device, descriptorPool_, nullptr);
     if (pipeline_) vkDestroyPipeline(device, pipeline_, nullptr);
     if (pipelineLayout_) vkDestroyPipelineLayout(device, pipelineLayout_, nullptr);
@@ -208,11 +329,15 @@ void VideoDemosaic::record(VkCommandBuffer command, uint32_t frameSlot, const Fr
     rawImage.imageView = useBuffer ? dummyRaw_.view : frame.rawView;
     rawImage.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     VkDescriptorBufferInfo rawBuffer{useBuffer ? frame.rawBuffer : lscBuffers_[frameSlot].buffer, 0, VK_WHOLE_SIZE};
+    // With anti-aliased 2x reduction the demosaic fills the shared
+    // full-resolution images; recordDownscale then writes this slot's outputs.
+    const bool antiAlias = reduceCfa_ && antiAlias_;
     VkDescriptorImageInfo output{};
-    output.imageView = outputs_[frameSlot].view;
+    output.imageView = antiAlias ? fullImage_.view : outputs_[frameSlot].view;
     output.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     VkDescriptorBufferInfo lsc{lscBuffers_[frameSlot].buffer, 0, VK_WHOLE_SIZE};
-    VkDescriptorImageInfo clip{VK_NULL_HANDLE, clipStates_[frameSlot].view, VK_IMAGE_LAYOUT_GENERAL};
+    VkDescriptorImageInfo clip{VK_NULL_HANDLE, antiAlias ? fullClip_.view : clipStates_[frameSlot].view,
+                               VK_IMAGE_LAYOUT_GENERAL};
     std::array<VkWriteDescriptorSet, 5> writes{};
     for (uint32_t i = 0; i < writes.size(); ++i) {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -232,7 +357,7 @@ void VideoDemosaic::record(VkCommandBuffer command, uint32_t frameSlot, const Fr
     writes[4].pImageInfo = &clip;
     vkUpdateDescriptorSets(device, writes.size(), writes.data(), 0, nullptr);
 
-    std::array<VkImageMemoryBarrier, 3> starts{};
+    std::array<VkImageMemoryBarrier, 5> starts{};
     uint32_t count = 0;
     if (!dummyInitialized_) {
         auto& barrier = starts[count++];
@@ -260,6 +385,20 @@ void VideoDemosaic::record(VkCommandBuffer command, uint32_t frameSlot, const Fr
     clipStart.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
     clipStart.image = clipStates_[frameSlot].image;
     clipStart.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    if (antiAlias) {
+        // The previous frame's downscale may still read the shared images.
+        for (VkImage image : {fullImage_.image, fullClip_.image}) {
+            auto& fullStart = starts[count++];
+            fullStart.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            fullStart.oldLayout = fullInitialized_ ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
+            fullStart.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            fullStart.srcAccessMask = fullInitialized_ ? VK_ACCESS_SHADER_READ_BIT : 0u;
+            fullStart.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            fullStart.image = image;
+            fullStart.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        }
+        fullInitialized_ = true;
+    }
     vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
                          nullptr, 0, nullptr, count, starts.data());
     initialized_[frameSlot] = true;
@@ -283,14 +422,14 @@ void VideoDemosaic::record(VkCommandBuffer command, uint32_t frameSlot, const Fr
     }
     push.width = rawWidth_;
     push.height = rawHeight_;
-    push.outWidth = outputWidth_;
-    push.outHeight = outputHeight_;
+    push.outWidth = antiAlias ? fullWidth_ : outputWidth_;
+    push.outHeight = antiAlias ? fullHeight_ : outputHeight_;
     push.cropX = cropX_;
     push.cropY = cropY_;
     push.pattern = frame.cfa;
     push.stridePixels = frame.rawStridePixels;
     push.bufferEnabled = useBuffer ? 1u : 0u;
-    push.reduceCfa = reduceCfa_ ? 1u : 0u;
+    push.reduceCfa = reduceCfa_ && !antiAlias ? 1u : 0u;  // fused box average only for the debug A/B
     push.lscEnabled = useLsc ? 1u : 0u;
     push.lscWidth = frame.lensShadingWidth;
     push.lscHeight = frame.lensShadingHeight;
@@ -299,7 +438,8 @@ void VideoDemosaic::record(VkCommandBuffer command, uint32_t frameSlot, const Fr
                             nullptr);
     vkCmdPushConstants(command, pipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
     // 16x16 workgroups; see VIDEO_TILE in video_demosaic.comp.
-    vkCmdDispatch(command, (outputWidth_ + 15u) / 16u, (outputHeight_ + 15u) / 16u, 1);
+    vkCmdDispatch(command, (push.outWidth + 15u) / 16u, (push.outHeight + 15u) / 16u, 1);
+    if (antiAlias) recordDownscale(command, frameSlot);
 
     std::array<VkImageMemoryBarrier, 2> ready{};
     for (uint32_t i = 0; i < ready.size(); ++i) {
