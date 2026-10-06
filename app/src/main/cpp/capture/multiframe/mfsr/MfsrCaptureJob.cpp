@@ -228,8 +228,6 @@ void MfsrCaptureJob::run() {
     std::ostringstream replayMetadata;
     replayMetadata << rawr::raw_gpu_pipeline::serializeReplayNoise(resolvedNoise) << "rawrReferenceIndex\t"
                    << job->referenceIndex << '\n';
-    baseDng.mergeReplayMetadata = replayMetadata.str();
-    mergedDng.mergeReplayMetadata = replayMetadata.str();
     auto dumpRzsl = [&]() {
         if (!dumpRzslRequested || rzslDumpAttempted) return;
         rzslDumpAttempted = true;

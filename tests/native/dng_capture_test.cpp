@@ -114,16 +114,14 @@ int main() {
     capture.baselineExposureEV = 2.0f;
     capture.processingRecipe = R"({"schema":"com.rawrcam.processing-recipe","version":1,"filmSimEnabled":true})";
     capture.resolvedRecipe = R"({"version":1,"aePostGain":4})";
-    capture.mergeReplayMetadata = "rawrReferenceIndex\t2\n";
     auto good = makeFrame(true);
     std::string error;
 
     for (int pass = 0; pass < 2; ++pass) {
         capture.compression = pass == 0 ? rawrcam::encoding::dng::DngCompression::LosslessJpeg
                                         : rawrcam::encoding::dng::DngCompression::Uncompressed;
-        // Per-frame recipes are rendered upstream and embedded verbatim; empty ones are omitted.
+        // The frame recipe is rendered upstream and embedded verbatim; empty is omitted.
         capture.frameRecipe = pass == 0 ? R"({"version":1,"frameMarker":1})" : "";
-        capture.denoiseRecipe = pass == 0 ? R"({"version":1,"denoiseMarker":1})" : "";
         auto params = rawrcam::encoding::dng::makeTinyDngWriteParams(good, capture, &error);
         if (!params) {
             std::cerr << error << "\n";
@@ -137,16 +135,17 @@ int main() {
             if (std::abs(params->raw.noise_profile[i] - expectedNoise[i]) >= 1e-12) return 5;
         if (!privateHas(params->privateData, "com.rawrcam.processing.recipe.v1") ||
             !privateHas(params->privateData, "filmSimEnabled") ||
-            !privateHas(params->privateData, "rawrReferenceIndex\\\\u00092\\\\u000a") ||
             !privateHas(params->privateData, "com.rawrcam.processing.resolved.v1") ||
             !privateHas(params->privateData, "aePostGain") ||
             !privateHas(params->privateData, "com.rawrcam.processing.source_role") ||
             !privateHas(params->privateData, "1234"))
             return 6;
         if (privateHas(params->privateData, "com.rawrcam.processing.frame.v1") != (pass == 0) ||
-            privateHas(params->privateData, "frameMarker") != (pass == 0) ||
-            privateHas(params->privateData, "com.rawrcam.processing.denoise.v1") != (pass == 0) ||
-            privateHas(params->privateData, "denoiseMarker") != (pass == 0))
+            privateHas(params->privateData, "frameMarker") != (pass == 0))
+            return 6;
+        // Unread replay blobs stay out of the DNG (merge replay lives in RZSL bundles).
+        if (privateHas(params->privateData, "processing.merge.v1") ||
+            privateHas(params->privateData, "processing.denoise.v1"))
             return 6;
         if (params->exif.orientation != 6 || params->raw.opcode_count != 4 ||
             !params->exif.has_fnumber || !params->exif.has_focal_length ||

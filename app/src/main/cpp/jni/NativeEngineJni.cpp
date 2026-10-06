@@ -105,8 +105,7 @@ rawrcam::capture::multiframe::MultiframeTuning multiframeTuning(JNIEnv* env, jfl
 // distinct jstrings carries no dependencies.
 rawrcam::encoding::dng::DngCaptureContext makeDngContext(jint fd, jint rotation, int64_t wallClockMillis,
                                                          int16_t utcOffsetMinutes, std::string make, std::string model,
-                                                         std::string displayName, jboolean denoiseEnabled,
-                                                         jfloat denoiseStrength, jfloat denoiseDetail) {
+                                                         std::string displayName) {
     rawrcam::encoding::dng::DngCaptureContext out{};
     out.outputFd = fd;
     out.deviceRotationDegrees = rotation;
@@ -115,9 +114,6 @@ rawrcam::encoding::dng::DngCaptureContext makeDngContext(jint fd, jint rotation,
     out.deviceMake = std::move(make);
     out.deviceModel = std::move(model);
     out.displayName = std::move(displayName);
-    out.denoiseEnabled = denoiseEnabled == JNI_TRUE;
-    out.denoiseStrength = std::clamp(static_cast<float>(denoiseStrength), 0.0f, 8.0f);
-    out.denoiseDetail = std::clamp(static_cast<float>(denoiseDetail), 0.0f, 1.8f);
     return out;
 }
 // Collapsed denoise intent at the JNI boundary (see DenoiseConfig
@@ -604,8 +600,7 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_integration_NativePrevie
     const DenoiseIntent denoise = parseDenoiseSpec(env, denoiseModes, denoiseStrengths);
     rawrcam::encoding::dng::DngCaptureContext dng =
         makeDngContext(dngFd, rotation, static_cast<int64_t>(wallClockMillis), static_cast<int16_t>(utcOffsetMinutes),
-                       deviceMake, deviceModel, jString(env, dngDisplayName), denoise.master ? JNI_TRUE : JNI_FALSE,
-                       denoise.waveletStrength, denoise.waveletDetail);
+                       deviceMake, deviceModel, jString(env, dngDisplayName));
     dng.compression = dngCompression == 1 ? rawrcam::encoding::dng::DngCompression::Uncompressed
                                           : rawrcam::encoding::dng::DngCompression::LosslessJpeg;
     dng.processingRecipe = jString(env, captureRecipe);
@@ -638,8 +633,7 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_integration_NativePrevie
     const DenoiseIntent denoise = parseDenoiseSpec(env, denoiseModes, denoiseStrengths);
     rawrcam::encoding::dng::DngCaptureContext base = makeDngContext(
         baseDngFd, rotation, static_cast<int64_t>(wallClockMillis), static_cast<int16_t>(utcOffsetMinutes), deviceMake,
-        deviceModel, jString(env, baseDngDisplayName), denoise.master ? JNI_TRUE : JNI_FALSE, denoise.waveletStrength,
-        denoise.waveletDetail);
+        deviceModel, jString(env, baseDngDisplayName));
     base.compression = dngCompression == 1 ? rawrcam::encoding::dng::DngCompression::Uncompressed
                                            : rawrcam::encoding::dng::DngCompression::LosslessJpeg;
     base.sourceRole = "base";

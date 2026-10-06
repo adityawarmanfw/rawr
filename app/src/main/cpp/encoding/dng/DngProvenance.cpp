@@ -1,30 +1,11 @@
 #include "encoding/dng/DngProvenance.h"
 
-#include <iomanip>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <utility>
 
 namespace rawrcam::encoding::dng {
 namespace {
-
-// The merge replay text contains tabs/newlines; private extension values must
-// be printable ASCII. A JSON string preserves those delimiters for replay.
-std::string mergeReplayJson(const std::string& text) {
-    std::ostringstream out;
-    out << "{\"version\":1,\"replayText\":\"";
-    for (unsigned char c : text) {
-        if (c == '"' || c == '\\')
-            out << '\\' << c;
-        else if (c < 0x20 || c >= 0x7f)
-            out << "\\u00" << std::hex << std::setw(2) << std::setfill('0') << unsigned(c);
-        else
-            out << c;
-    }
-    out << "\"}";
-    return out.str();
-}
 
 // --- DNGPrivateData provenance (byte-identical schema to the legacy writer;
 // the renderer keys on the identifier, so it is intentionally unchanged). ---
@@ -62,9 +43,8 @@ void appendJsonString(std::string& out, const std::string& s) {
 }
 
 struct Provenance {
-    std::optional<std::string> applicationName, applicationVersion, applicationBuild, processingPipelineVersion;
-    std::optional<std::string> logicalCameraId, physicalCameraId, sensorProfile, calibrationProfileVersion;
-    std::optional<std::string> sensorMode, dcgMode, nominalBitDepthMode, vendorCaptureMode, iszMode;
+    std::optional<std::string> applicationName, processingPipelineVersion;
+    std::optional<std::string> logicalCameraId, physicalCameraId, sensorMode;
     std::vector<std::string> captureFlags;
     std::vector<std::pair<std::string, std::string>> extensions;
 };
@@ -80,18 +60,10 @@ std::vector<uint8_t> serializeProvenance(const Provenance& app) {
         appendJsonString(json, *v);
     };
     field("applicationName", app.applicationName);
-    field("applicationVersion", app.applicationVersion);
-    field("applicationBuild", app.applicationBuild);
     field("processingPipelineVersion", app.processingPipelineVersion);
     field("logicalCameraId", app.logicalCameraId);
     field("physicalCameraId", app.physicalCameraId);
-    field("sensorProfile", app.sensorProfile);
-    field("calibrationProfileVersion", app.calibrationProfileVersion);
     field("sensorMode", app.sensorMode);
-    field("dcgMode", app.dcgMode);
-    field("nominalBitDepthMode", app.nominalBitDepthMode);
-    field("vendorCaptureMode", app.vendorCaptureMode);
-    field("iszMode", app.iszMode);
     if (!app.captureFlags.empty()) {
         json.push_back(',');
         json += "\"captureFlags\":[";
@@ -142,13 +114,8 @@ std::vector<uint8_t> buildDngProvenance(const rawrcam::imaging::RawSnapshot& fra
     prov.extensions.emplace_back("com.rawrcam.processing.source_role", captureContext.sourceRole);
     prov.extensions.emplace_back("com.rawrcam.processing.applied",
                                  captureContext.sourceRole == "merged" ? "multiframe_merge" : "sensor_raw");
-    if (!captureContext.mergeReplayMetadata.empty())
-        prov.extensions.emplace_back("com.rawrcam.processing.merge.v1",
-                                     mergeReplayJson(captureContext.mergeReplayMetadata));
     if (!captureContext.frameRecipe.empty())
         prov.extensions.emplace_back("com.rawrcam.processing.frame.v1", captureContext.frameRecipe);
-    if (!captureContext.denoiseRecipe.empty())
-        prov.extensions.emplace_back("com.rawrcam.processing.denoise.v1", captureContext.denoiseRecipe);
 
     // Sensor and capture facts.
     prov.extensions.emplace_back("com.rawrcam.sensor.timestamp_ns", std::to_string(frame.timestampNs));

@@ -31,7 +31,7 @@ struct TinyDngWriteParams {
     std::string uniqueModel, make, model, software, datetime, description;
     std::string dateOriginal, dateDigitized, offsetTime, offsetOrig, offsetDig;
     std::string subsec, subsecOrig, subsecDig;
-    std::string bodySerial, lensMake, lensModel, lensSerial, cameraSerial;
+    std::string lensMake, lensModel;
 
     // Re-point all tinydng char*/data pointers at owned storage. Must be
     // called after any move (short strings may live inline and not survive
