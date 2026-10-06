@@ -2,5 +2,6 @@
     <application>
         <activity android:name=".renderer.RendererValidationActivity" android:exported="true" />
         <activity android:name=".renderer.RendererDngReplayActivity" android:exported="true" />
+        <activity android:name=".video.EncoderAbProbeActivity" android:exported="true" />
     </application>
 </manifest>
