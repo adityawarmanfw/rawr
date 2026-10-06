@@ -333,6 +333,7 @@ void NativeAvRecorder::drainVideo() noexcept {
                         recentVideoPtsUs_.pop_front();
                     const double latency = std::max(0.0, (bootNs() / 1'000.0 - bootPtsUs) / 1'000.0);
                     encoderLatencyMs_ = encodedFrames_ == 0 ? latency : encoderLatencyMs_ * 0.9 + latency * 0.1;
+                    encoderLatencyPeak_.add(bootNs(), latency);
                     ++encodedFrames_;
                 }
             } catch (...) {
@@ -596,6 +597,8 @@ std::string NativeAvRecorder::statsJson() const {
            ",\"targetFrameShortfall\":" + std::to_string(cumulativeTargetDeficit_) +
            ",\"encodedFrameGaps\":" + std::to_string(encodedFrameGaps_) +
            ",\"encoderLatencyMs\":" + std::to_string(encoderLatencyMs_) +
+           ",\"encoderLatencyPeakMs\":" + std::to_string(encoderLatencyPeak_.peak(bootNs())) +
+           ",\"encoderLatencyMaxMs\":" + std::to_string(encoderLatencyPeak_.max()) +
            ",\"firstVideoPtsUs\":" + std::to_string(firstVideoPtsUs_) +
            ",\"lastVideoPtsUs\":" + std::to_string(lastVideoPtsUs_) +
            ",\"firstAudioPtsUs\":" + std::to_string(firstAudioPtsUs_) +

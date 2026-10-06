@@ -28,7 +28,8 @@ internal fun VideoTimingMonitor(state: VideoControlState) {
         MonitorMetric("DROP", timing?.let { t -> t.dropReason?.let { "${t.dropped}·$it" } ?: "${t.dropped}" } ?: "—",
             valueColor = if (timing != null && timing.dropped > 0) CaptureColors.Danger else Color.White)
         MonitorMetric("SHORT", timing?.shortfall?.toString() ?: "—")
-        MonitorMetric("GPU", timing?.let { "%.0fms".format(it.gpuMs) } ?: "—")
-        MonitorMetric("ENC", timing?.let { "%.0fms".format(it.encoderMs) } ?: "—")
+        // Average/recent peak: a drop comes from one slow frame, which the average hides.
+        MonitorMetric("GPU", timing?.let { "%.0f/%.0fms".format(it.gpuMs, it.gpuPeakMs) } ?: "—")
+        MonitorMetric("LAT", timing?.let { "%.0f/%.0fms".format(it.encoderMs, it.encoderPeakMs) } ?: "—")
     }
 }

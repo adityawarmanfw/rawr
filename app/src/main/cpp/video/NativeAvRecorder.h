@@ -13,6 +13,8 @@
 #include <thread>
 #include <vector>
 
+#include "diagnostics/timing/RecentPeak.h"
+
 namespace rawrcam::video {
 
 // Owns the microphone, both hardware encoders, their drain threads, and the
@@ -118,7 +120,9 @@ private:
     int64_t lastSnappedVideoPtsUs_ = -1;
     int64_t firstAudioPtsUs_ = -1;
     int64_t lastAudioPtsUs_ = -1;
+    // Sensor capture to encoded output when frames carry sensor timestamps.
     double encoderLatencyMs_ = 0.0;
+    rawrcam::diagnostics::RecentPeak encoderLatencyPeak_;
     std::deque<int64_t> recentVideoPtsUs_;
     mutable uint64_t cumulativeTargetDeficit_ = 0;
     uint64_t encodedFrameGaps_ = 0;

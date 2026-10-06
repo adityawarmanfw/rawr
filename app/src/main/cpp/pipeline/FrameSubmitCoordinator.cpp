@@ -2,6 +2,7 @@
 
 #include <android/log.h>
 #include <sys/system_properties.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -40,6 +41,20 @@ void vkCheck(VkResult r, const char* what) {
     if (r != VK_SUCCESS) {
         throw std::runtime_error(std::string(what) + " VkResult=" + std::to_string(r));
     }
+}
+
+int64_t clockNs(clockid_t clock) {
+    timespec now{};
+    clock_gettime(clock, &now);
+    return int64_t(now.tv_sec) * 1'000'000'000 + now.tv_nsec;
+}
+
+// The sensor timestamp on the encoder's clock (CLOCK_MONOTONIC), so the
+// encoded PTS records capture time rather than when the frame was queued.
+int64_t encoderTimestampNs(const rawrcam::metadata::FrameMetadataSnapshot& metadata, uint64_t sensorNs) {
+    const bool boottime = metadata.cameraContext && metadata.cameraContext->sensorTimestampRealtime;
+    const int64_t offset = boottime ? clockNs(CLOCK_BOOTTIME) - clockNs(CLOCK_MONOTONIC) : 0;
+    return static_cast<int64_t>(sensorNs) - offset;
 }
 }  // namespace
 
@@ -272,7 +287,11 @@ std::optional<FrameSubmitCoordinator::AcquiredSubmit> FrameSubmitCoordinator::ac
     rawrcam::vulkan::ImportedRaw& raw = ingestRaw(params, slotIndex);
 
     std::optional<uint32_t> videoIndex;
-    if (videoOutput_ && videoOutput_->ready() && config_.diagnosticMode == 0u) {
+    // Frames captured before the encoder swapchain existed predate the
+    // recording; stamping them would put PTS before the file's start.
+    const bool preRoll = videoOutput_ && videoOutput_->ready() && videoOutput_->stampsPresentTime() &&
+                         encoderTimestampNs(metadata, params.timestampNs) < videoOutput_->startedAtNs();
+    if (videoOutput_ && videoOutput_->ready() && config_.diagnosticMode == 0u && !preRoll) {
         if (videoOutput_->extent().width <= config_.rawWidth && videoOutput_->extent().height <= config_.rawHeight) {
             uint32_t index = 0;
             if (videoOutput_->acquire(slotIndex, &index))
@@ -541,7 +560,8 @@ void FrameSubmitCoordinator::submitSplitVideoAndMonitor(const SubmitParams& para
     VkResult videoPresent;
     {
         std::lock_guard<std::mutex> queueLock(queueSubmitMutex_);
-        videoPresent = videoOutput_->present(vulkanContext_.queue(), slotIndex, *acquired.videoIndex);
+        videoPresent = videoOutput_->present(vulkanContext_.queue(), slotIndex, *acquired.videoIndex,
+                                             static_cast<uint64_t>(encoderTimestampNs(metadata, params.timestampNs)));
     }
     if (videoPresent == VK_SUCCESS || videoPresent == VK_SUBOPTIMAL_KHR)
         ++videoSubmitted_;
@@ -798,7 +818,9 @@ void FrameSubmitCoordinator::submitAndPresent(const SubmitParams& params, const 
         VkResult videoPresent = VK_SUCCESS;
         {
             std::lock_guard<std::mutex> queueLock(queueSubmitMutex_);
-            videoPresent = videoOutput_->present(vulkanContext_.queue(), slotIndex, *acquired.videoIndex);
+            videoPresent =
+                videoOutput_->present(vulkanContext_.queue(), slotIndex, *acquired.videoIndex,
+                                      static_cast<uint64_t>(encoderTimestampNs(metadata, params.timestampNs)));
         }
         if (videoPresent == VK_SUCCESS || videoPresent == VK_SUBOPTIMAL_KHR)
             ++videoSubmitted_;
@@ -885,7 +907,9 @@ bool FrameSubmitCoordinator::submitAhb(uint64_t timestampNs, AHardwareBuffer* ah
     const bool videoReady = videoOutput_ && videoOutput_->ready() && config_.diagnosticMode == 0u;
     if (!configured_ || ((!swapchainRenderer_.ready() || presentationPaused_) && !videoReady)) return false;
 
-    if (imageLease && metadata.cameraContext &&
+    // The CPU read below waits on the camera fence and touches the whole RAW
+    // buffer; during recording that stall lands in the encoder's frame cadence.
+    if (!videoReady && imageLease && metadata.cameraContext &&
         (lastRawContentStatsNs_ == 0 || timestampNs < lastRawContentStatsNs_ ||
          timestampNs - lastRawContentStatsNs_ >= 1'000'000'000ull)) {
         lastRawContentStatsNs_ = timestampNs;

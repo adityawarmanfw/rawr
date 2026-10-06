@@ -15,7 +15,11 @@ data class VideoTimingState(
     val dropped: Long,
     val shortfall: Long,
     val gpuMs: Double,
+    /** Sensor capture to encoded output (queue time to output on drivers without display timing). */
     val encoderMs: Double,
     val micDbfs: Double,
-    val dropReason: String? = null
+    val dropReason: String? = null,
+    /** Worst frame in the last ~2 s; the averages hide the single slow frame behind a drop. */
+    val gpuPeakMs: Double = 0.0,
+    val encoderPeakMs: Double = 0.0
 )

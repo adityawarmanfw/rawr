@@ -101,7 +101,9 @@ class VideoSession final {
                 bool monitorEnabled = true, const std::function<VkCommandBuffer(VkCommandBuffer)>& splitSubmit = {});
     VkSemaphore available(uint32_t frameSlot) const { return output_.available(frameSlot); }
     VkSemaphore rendered(uint32_t frameSlot) const { return output_.rendered(frameSlot); }
-    VkResult present(VkQueue queue, uint32_t frameSlot, uint32_t imageIndex);
+    VkResult present(VkQueue queue, uint32_t frameSlot, uint32_t imageIndex, uint64_t presentTimeNs);
+    bool stampsPresentTime() const noexcept { return output_.stampsPresentTime(); }
+    int64_t startedAtNs() const noexcept { return output_.startedAtNs(); }
     // Average GPU ms per recording stage since start(), as a JSON object.
     std::string stageTimingJson() const;
     // Brackets the viewfinder/scopes submission that reads the monitor image.

@@ -72,6 +72,9 @@ class VulkanContext {
     bool float16ComputeEnabled() const noexcept { return float16ComputeEnabled_; }
     // Storage images in formats such as rgb10_a2 (the packed 10-bit encoder Surface).
     bool storageImageExtendedFormats() const noexcept { return storageImageExtendedFormats_; }
+    // VK_GOOGLE_display_timing: Android maps desiredPresentTime to the buffer
+    // timestamp, which the video encoder uses as the frame's PTS.
+    bool displayTimingEnabled() const noexcept { return displayTimingEnabled_; }
 
     const QueueSubmission& primaryQueue() const noexcept { return primarySubmission_; }
     const QueueSubmission& multiframeSubmission() const noexcept {
@@ -102,6 +105,7 @@ class VulkanContext {
     bool samplerYcbcrConversionEnabled_ = false;
     bool storageImageExtendedFormats_ = false;
     bool conditionalRenderingEnabled_ = false;
+    bool displayTimingEnabled_ = false;
     bool float16ComputeEnabled_ = false;
 };
 

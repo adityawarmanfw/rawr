@@ -9,6 +9,7 @@
 #include <cmath>
 #include <stdexcept>
 #include <string>
+#include <ctime>
 
 #include "vulkan/VulkanContext.h"
 
@@ -125,6 +126,9 @@ bool VideoOutput::start(JNIEnv* env, jobject javaSurface, uint32_t width, uint32
                   "video rendered semaphore");
         }
         swapchainMs_ = sinceStartMs();
+        timespec now{};
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        startedAtNs_ = int64_t(now.tv_sec) * 1'000'000'000 + now.tv_nsec;
         return true;
     } catch (...) {
         stop();
@@ -164,6 +168,7 @@ void VideoOutput::stop() noexcept {
     if (window_) ANativeWindow_release(window_);
     window_ = nullptr;
     extent_ = {};
+    startedAtNs_ = 0;
 }
 bool VideoOutput::acquire(uint32_t frameSlot, uint32_t* imageIndex) {
     if (!ready() || frameSlot >= available_.size()) return false;
@@ -173,9 +178,18 @@ bool VideoOutput::acquire(uint32_t frameSlot, uint32_t* imageIndex) {
     check(result, "video acquire");
     return true;
 }
-VkResult VideoOutput::present(VkQueue queue, uint32_t frameSlot, uint32_t imageIndex) {
+bool VideoOutput::stampsPresentTime() const noexcept { return context_.displayTimingEnabled(); }
+VkResult VideoOutput::present(VkQueue queue, uint32_t frameSlot, uint32_t imageIndex, uint64_t presentTimeNs) {
+    VkPresentTimeGOOGLE time{};
+    time.presentID = 0;
+    time.desiredPresentTime = presentTimeNs;
+    VkPresentTimesInfoGOOGLE times{};
+    times.sType = VK_STRUCTURE_TYPE_PRESENT_TIMES_INFO_GOOGLE;
+    times.swapchainCount = 1;
+    times.pTimes = &time;
     VkPresentInfoKHR present{};
     present.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+    if (presentTimeNs != 0 && stampsPresentTime()) present.pNext = &times;
     present.waitSemaphoreCount = 1;
     present.pWaitSemaphores = &rendered_[frameSlot];
     present.swapchainCount = 1;

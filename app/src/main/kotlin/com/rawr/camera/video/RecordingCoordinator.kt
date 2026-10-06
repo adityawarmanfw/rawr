@@ -98,7 +98,9 @@ class RecordingCoordinator(
                                 gpuMs = stats.optDouble("videoGpuMs", stats.optDouble("gpuMs")),
                                 encoderMs = stats.optDouble("encoderLatencyMs"),
                                 micDbfs = stats.optDouble("audioRmsDbfs", -120.0),
-                                dropReason = stats.optString("dropReason").takeIf { it.isNotEmpty() }
+                                dropReason = stats.optString("dropReason").takeIf { it.isNotEmpty() },
+                                gpuPeakMs = stats.optDouble("videoGpuPeakMs", 0.0),
+                                encoderPeakMs = stats.optDouble("encoderLatencyPeakMs", 0.0)
                             )
                         )
                         if (stats.optString("failure").let { it.isNotEmpty() && it != "null" }) {

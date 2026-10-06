@@ -94,6 +94,7 @@ void VulkanContext::createDeviceForSurface(VkSurfaceKHR surface) {
 
     drmFormatModifierEnabled_ = hasExtension(extensions, VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME);
     conditionalRenderingEnabled_ = hasExtension(extensions, VK_EXT_CONDITIONAL_RENDERING_EXTENSION_NAME);
+    displayTimingEnabled_ = hasExtension(extensions, VK_GOOGLE_DISPLAY_TIMING_EXTENSION_NAME);
 
     // GALOSH f16 probe (spec: querying structs from unsupported extensions
     // returns zero, so this is safe on 1.1-only drivers).
@@ -155,6 +156,7 @@ void VulkanContext::createDeviceForSurface(VkSurfaceKHR surface) {
     }
     if (drmFormatModifierEnabled_) enabledExtensions.push_back(VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME);
     if (conditionalRenderingEnabled_) enabledExtensions.push_back(VK_EXT_CONDITIONAL_RENDERING_EXTENSION_NAME);
+    if (displayTimingEnabled_) enabledExtensions.push_back(VK_GOOGLE_DISPLAY_TIMING_EXTENSION_NAME);
     // NOTE: LOW global priority for the merge queue (two same-family create
     // infos) froze the viewfinder on Adreno 840 -- likely a driver scheduler
     // issue with cross-queue semaphore + priority. Both queues stay MEDIUM;

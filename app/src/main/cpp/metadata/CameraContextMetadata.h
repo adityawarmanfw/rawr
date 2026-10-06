@@ -57,6 +57,9 @@ struct CameraContextMetadata {
     std::vector<float> lensIntrinsicCalibration;  // float[5] [fx,fy,cx,cy,s], empty = unknown
     bool hasFlashInfoAvailable = false;
     bool flashInfoAvailable = false;
+    // SENSOR_INFO_TIMESTAMP_SOURCE: REALTIME stamps frames in CLOCK_BOOTTIME,
+    // UNKNOWN in CLOCK_MONOTONIC.
+    bool sensorTimestampRealtime = false;
 };
 
 using CameraContextMetadataPtr = std::shared_ptr<const CameraContextMetadata>;

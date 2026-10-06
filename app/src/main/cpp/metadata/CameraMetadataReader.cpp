@@ -111,6 +111,8 @@ std::optional<CameraContextMetadata> readCameraContextMetadata(const ACameraMeta
     }
     out.rawPreviewCfa = *mappedCfa;
     out.lensFacing = firstU8(characteristics, ACAMERA_LENS_FACING, -1);
+    out.sensorTimestampRealtime = firstU8(characteristics, ACAMERA_SENSOR_INFO_TIMESTAMP_SOURCE, 0) ==
+                                  ACAMERA_SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME;
     const std::array<float, 4> blackPattern{
         static_cast<float>(blackEntry->data.i32[0]), static_cast<float>(blackEntry->data.i32[1]),
         static_cast<float>(blackEntry->data.i32[2]), static_cast<float>(blackEntry->data.i32[3])};

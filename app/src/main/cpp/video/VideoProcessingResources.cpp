@@ -18,6 +18,12 @@
 #include "tonemap_video_rgb10a2_texture.h"
 #include "tonemap_video_rgba8_texture.h"
 #include "vulkan/VulkanContext.h"
+namespace {
+int64_t steadyNs() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+}  // namespace
 
 namespace rawrcam::video {
 namespace {
@@ -98,6 +104,7 @@ void VideoProcessingResources::beginRecording() {
     stagePending_.fill(false);
     stageSumMs_.fill(0.0);
     stageSamples_ = 0;
+    totalPeak_.reset();
 }
 VideoProcessingResources::Prepared VideoProcessingResources::prepare(rawrcam::vulkan::VulkanContext& context,
                                                                      const ProcessingKey& key,
@@ -201,8 +208,13 @@ void VideoProcessingResources::collectStageTiming(uint32_t frameSlot) {
     // defringe and the Inpaint Opposed tone tap.
     const std::array<double, kStageCount> stage{ms(12, 13), ms(13, 0), ms(0, 1),  ms(1, 2),
                                                 ms(2, 3),   ms(4, 5),  ms(5, 14), ms(14, 15)};
-    for (uint32_t i = 0; i < kStageCount; ++i) stageSumMs_[i] += stage[i];
+    double total = 0.0;
+    for (uint32_t i = 0; i < kStageCount; ++i) {
+        stageSumMs_[i] += stage[i];
+        total += stage[i];
+    }
     ++stageSamples_;
+    totalPeak_.add(steadyNs(), total);
 }
 void VideoProcessingResources::beginMonitorTiming(VkCommandBuffer command, uint32_t frameSlot) {
     if (frameSlot >= monitorPools_.size() || !monitorPools_[frameSlot]) return;
@@ -234,6 +246,7 @@ std::string VideoProcessingResources::stageTimingJson() const {
         json += ",\"" + std::string(kStageNames[i]) + "\":" + std::to_string(avg);
     }
     json += ",\"monitor\":" + std::to_string(monitorSamples_ ? monitorSumMs_ / double(monitorSamples_) : 0.0);
-    return json + ",\"total\":" + std::to_string(total) + "}";
+    return json + ",\"total\":" + std::to_string(total) + ",\"totalPeak\":" +
+           std::to_string(totalPeak_.peak(steadyNs())) + ",\"totalMax\":" + std::to_string(totalPeak_.max()) + "}";
 }
 }  // namespace rawrcam::video

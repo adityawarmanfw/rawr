@@ -5,6 +5,7 @@
 #include <memory>
 #include <string>
 
+#include "diagnostics/timing/RecentPeak.h"
 #include "imaging/FrameLimits.h"
 #include "post_demosaic/PostDemosaicProcessor.h"
 #include "video_pipeline/VideoDemosaic.h"
@@ -89,6 +90,7 @@ class VideoProcessingResources final {
     std::array<bool, rawrcam::imaging::kRealtimeFramesInFlight> stagePending_{};
     std::array<double, kStageCount> stageSumMs_{};
     uint64_t stageSamples_ = 0;
+    rawrcam::diagnostics::RecentPeak totalPeak_;
     double timestampPeriodNs_ = 1.0;
     rawrcam::vulkan::OwnedImage dummyMonitor_{};
     bool dummyMonitorInitialized_ = false;

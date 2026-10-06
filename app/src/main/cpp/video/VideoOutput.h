@@ -35,7 +35,13 @@ class VideoOutput final {
     uint32_t encoderImageCount() const noexcept { return static_cast<uint32_t>(images_.size()); }
     VkSemaphore available(uint32_t frameSlot) const { return available_[frameSlot]; }
     VkSemaphore rendered(uint32_t frameSlot) const { return rendered_[frameSlot]; }
-    VkResult present(VkQueue queue, uint32_t frameSlot, uint32_t imageIndex);
+    // presentTimeNs (CLOCK_MONOTONIC) becomes the encoded frame's PTS when the
+    // driver supports display timing; 0 keeps the queue-time timestamp.
+    VkResult present(VkQueue queue, uint32_t frameSlot, uint32_t imageIndex, uint64_t presentTimeNs);
+    // Whether present() stamps frames with the caller's time.
+    bool stampsPresentTime() const noexcept;
+    // CLOCK_MONOTONIC at start(). Frames captured earlier predate the recording.
+    int64_t startedAtNs() const noexcept { return startedAtNs_; }
 
    private:
     friend class VideoRecorder;
@@ -49,6 +55,7 @@ class VideoOutput final {
     VkFormat outputFormat_ = VK_FORMAT_R16G16B16A16_SFLOAT;
     std::string offeredFormats_;
     double swapchainMs_ = 0;
+    int64_t startedAtNs_ = 0;
     std::vector<VkImage> images_;
     std::vector<VkImageView> views_;
     std::vector<bool> initialized_;

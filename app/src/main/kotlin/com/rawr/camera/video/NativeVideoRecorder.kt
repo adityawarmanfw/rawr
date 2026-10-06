@@ -190,16 +190,17 @@ class NativeVideoRecorder(private val context: Context, private val preview: Raw
             val key = keys.next()
             gpu.put(key, native.get(key))
         }
-        // A slow sensor cadence is a target shortfall, not an actual dropped
-        // frame. Keep the causes separate in diagnostics and the UI.
-        val reasons = gpu.optJSONObject("dropReasons")
-        val ingress = reasons?.optLong("ingress") ?: 0L
-        gpu.put("dropped", maxOf(gpu.optLong("encodedFrameGaps"), gpu.optLong("dropped") + ingress))
-        reasons?.let { r ->
+        // "dropped" counts camera frames lost on the way to the encoder. A slow
+        // sensor cadence is a target shortfall instead; encodedFrameGaps stays
+        // in the journal as the file-side cross-check.
+        gpu.optJSONObject("dropReasons")?.let { r ->
             val top = r.keys().asSequence().maxByOrNull { r.optLong(it) }
             if (top != null && r.optLong(top) > 0) gpu.put("dropReason", DROP_REASON_LABELS[top] ?: top)
         }
-        gpu.optJSONObject("stageMs")?.optDouble("total")?.takeIf { it > 0 }?.let { gpu.put("videoGpuMs", it) }
+        gpu.optJSONObject("stageMs")?.let { stage ->
+            stage.optDouble("total").takeIf { it > 0 }?.let { gpu.put("videoGpuMs", it) }
+            stage.optDouble("totalPeak").takeIf { it > 0 }?.let { gpu.put("videoGpuPeakMs", it) }
+        }
         gpu.put("mode", settings.mode)
         gpu.put("timestampPolicy", settings.timestampPolicy.name)
         return gpu

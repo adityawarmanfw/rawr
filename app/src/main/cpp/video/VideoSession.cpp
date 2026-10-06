@@ -56,8 +56,8 @@ void VideoSession::releaseProcessing() noexcept {
 void VideoSession::updateRenderLut(const tonemap::lut::LutChain* lut) { resources_.updateRenderLut(lut, ready()); }
 void VideoSession::stop() noexcept { output_.stop(); }
 bool VideoSession::acquire(uint32_t slot, uint32_t* index) { return output_.acquire(slot, index); }
-VkResult VideoSession::present(VkQueue queue, uint32_t slot, uint32_t index) {
-    return output_.present(queue, slot, index);
+VkResult VideoSession::present(VkQueue queue, uint32_t slot, uint32_t index, uint64_t presentTimeNs) {
+    return output_.present(queue, slot, index, presentTimeNs);
 }
 std::string VideoSession::stageTimingJson() const { return resources_.stageTimingJson(); }
 void VideoSession::beginMonitorTiming(VkCommandBuffer command, uint32_t slot) {
