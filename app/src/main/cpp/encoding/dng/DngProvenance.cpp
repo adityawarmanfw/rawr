@@ -117,13 +117,13 @@ std::vector<uint8_t> buildDngProvenance(const rawrcam::imaging::RawSnapshot& fra
     if (!captureContext.frameRecipe.empty())
         prov.extensions.emplace_back("com.rawrcam.processing.frame.v1", captureContext.frameRecipe);
 
-    // Sensor and capture facts.
+    // Sensor and capture facts not carried by standard DNG/EXIF tags
+    // (WhiteLevel, ISO and Flash already cover the effective values).
     prov.extensions.emplace_back("com.rawrcam.sensor.timestamp_ns", std::to_string(frame.timestampNs));
     prov.extensions.emplace_back("com.rawrcam.source.row_stride_bytes", std::to_string(frame.sourceRowStrideBytes));
     prov.extensions.emplace_back("com.rawrcam.geometry.mapping", geometryMode);
     prov.extensions.emplace_back("com.rawrcam.white.effective_source", rawrcam::metadata::effectiveWhiteLevelSourceName(
                                                                            frame.metadata.effectiveWhiteLevelSource));
-    prov.extensions.emplace_back("com.rawrcam.white.effective", std::to_string(frame.metadata.effectiveWhiteLevel));
     if (frame.metadata.reportedDynamicWhiteLevel)
         prov.extensions.emplace_back("com.rawrcam.white.reported_dynamic",
                                      std::to_string(*frame.metadata.reportedDynamicWhiteLevel));
@@ -133,7 +133,6 @@ std::vector<uint8_t> buildDngProvenance(const rawrcam::imaging::RawSnapshot& fra
     if (frame.metadata.requestedSensitivity)
         prov.extensions.emplace_back("com.rawrcam.sensitivity.requested",
                                      std::to_string(*frame.metadata.requestedSensitivity));
-    prov.extensions.emplace_back("com.rawrcam.sensitivity.reported", std::to_string(frame.metadata.sensitivity));
     if (ctx.hasLensShadingApplied)
         prov.extensions.emplace_back("com.rawrcam.shading.applied", ctx.lensShadingApplied ? "true" : "false");
     if (!frame.metadata.lensShadingMap.empty() && ctx.hasLensShadingApplied && ctx.lensShadingApplied)
@@ -143,8 +142,6 @@ std::vector<uint8_t> buildDngProvenance(const rawrcam::imaging::RawSnapshot& fra
     if (!ctx.opticalBlackRegions.empty())
         prov.extensions.emplace_back("com.rawrcam.optical_black.regions",
                                      std::to_string(ctx.opticalBlackRegions.size()));
-    if (frame.metadata.flashState >= 0)
-        prov.extensions.emplace_back("com.rawrcam.flash.state", std::to_string(frame.metadata.flashState));
     if (ctx.hasFlashInfoAvailable)
         prov.extensions.emplace_back("com.rawrcam.flash.available", ctx.flashInfoAvailable ? "true" : "false");
     if (!ctx.lensDistortion.empty()) prov.extensions.emplace_back("com.rawrcam.lens.distortion_present", "true");
