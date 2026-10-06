@@ -32,11 +32,17 @@ struct DngCaptureContext {
     std::string sourceRole = "single";
     std::string mergeReplayMetadata;          // Derived from the persisted burst noise/reference state.
     std::string resolvedRecipe;               // Frame-time native settings, preserved for replay.
+    // Per-frame replay recipes (color state, denoise model), rendered by
+    // capture::persistence::attachFrameRecipes before the writer starts. The
+    // encoder embeds every recipe string verbatim and never parses it.
+    std::string frameRecipe;
+    std::string denoiseRecipe;
     std::string imageDescription;             // frozen human-readable capture/render settings
     std::optional<float> baselineExposureEV;  // DNG render hint; RAW samples are unchanged.
     bool reconstructedGeometry = false;       // merged CFA is a synthesized output grid, not sensor-pixel geometry
-    // Profiled wavelet denoise intent (still-only). The recipe JSON also
-    // carries these; the fields here drive the DNG denoise extension.
+    // Profiled wavelet denoise intent (still-only), frozen at shutter time.
+    // Input to denoiseRecipe once the frame's noise profile is known; the
+    // encoder does not read these.
     bool denoiseEnabled = false;
     float denoiseStrength = 1.0f;
     float denoiseDetail = 1.0f;

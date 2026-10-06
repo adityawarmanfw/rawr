@@ -13,12 +13,6 @@
 #include <string>
 #include <vector>
 
-// Host-link stub: the adapter calls into raw_denoise only for the denoise
-// extension (disabled in this test). The device build links the real lib.
-namespace raw_denoise {
-bool GreenNoiseToNormalized(const float*, size_t, int, float, float, float&, float&) { return false; }
-}  // namespace raw_denoise
-
 static rawrcam::imaging::RawSnapshot makeFrame(bool resolvable) {
     rawrcam::imaging::RawSnapshot f{};
     f.requestId = 1;
@@ -127,6 +121,9 @@ int main() {
     for (int pass = 0; pass < 2; ++pass) {
         capture.compression = pass == 0 ? rawrcam::encoding::dng::DngCompression::LosslessJpeg
                                         : rawrcam::encoding::dng::DngCompression::Uncompressed;
+        // Per-frame recipes are rendered upstream and embedded verbatim; empty ones are omitted.
+        capture.frameRecipe = pass == 0 ? R"({"version":1,"frameMarker":1})" : "";
+        capture.denoiseRecipe = pass == 0 ? R"({"version":1,"denoiseMarker":1})" : "";
         auto params = rawrcam::encoding::dng::makeTinyDngWriteParams(good, capture, &error);
         if (!params) {
             std::cerr << error << "\n";
@@ -145,6 +142,11 @@ int main() {
             !privateHas(params->privateData, "aePostGain") ||
             !privateHas(params->privateData, "com.rawrcam.processing.source_role") ||
             !privateHas(params->privateData, "1234"))
+            return 6;
+        if (privateHas(params->privateData, "com.rawrcam.processing.frame.v1") != (pass == 0) ||
+            privateHas(params->privateData, "frameMarker") != (pass == 0) ||
+            privateHas(params->privateData, "com.rawrcam.processing.denoise.v1") != (pass == 0) ||
+            privateHas(params->privateData, "denoiseMarker") != (pass == 0))
             return 6;
         if (params->exif.orientation != 6 || params->raw.opcode_count != 4 ||
             !params->exif.has_fnumber || !params->exif.has_focal_length ||

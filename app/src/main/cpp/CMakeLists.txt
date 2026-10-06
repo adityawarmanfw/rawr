@@ -353,11 +353,14 @@ add_subdirectory(../../../../native/monitoring_overlays ${CMAKE_CURRENT_BINARY_D
 # DNG capture writes via the vendored TinyDNG streaming writer (C11); the
 # adapter/async writer stay behind a C++20 TU for consistency with history.
 add_library(rawrcam_dng_capture STATIC
+  encoding/dng/DngExif.cpp
+  encoding/dng/DngGainMapOpcode.cpp
   encoding/dng/DngMetadataAdapter.cpp
+  encoding/dng/DngPixelPayload.cpp
+  encoding/dng/DngProvenance.cpp
   encoding/dng/DngCaptureWriter.cpp)
 target_compile_features(rawrcam_dng_capture PRIVATE cxx_std_20)
-target_include_directories(rawrcam_dng_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ../../../../native/tinydng ../../../../native/raw_denoise/include)
-# raw_denoise/include is used header-only here (noise-profile mapping).
+target_include_directories(rawrcam_dng_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ../../../../native/tinydng)
 target_link_libraries(rawrcam_dng_capture PRIVATE rawr_tinydng)
 target_compile_options(rawrcam_dng_capture PRIVATE -Wall -Wextra -Wpedantic -Werror)
 

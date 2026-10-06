@@ -54,6 +54,39 @@ enum class CfaPattern : std::uint32_t { Rggb = 0, Grbg = 1, Gbrg = 2, Bggr = 3 }
     }
 }
 
+// Pattern code seen from an origin offset by (x, y) sensor pixels; only the
+// offset parity matters. Out-of-range codes behave as BGGR (legacy default).
+[[nodiscard]] inline std::uint32_t shiftCfaPatternCode(std::uint32_t code, std::uint32_t x, std::uint32_t y) noexcept {
+    const bool sx = (x & 1u) != 0;
+    const bool sy = (y & 1u) != 0;
+    if (!sx && !sy) return code;
+    switch (code) {
+        case 0u:
+            return sy ? (sx ? 3u : 2u) : 1u;
+        case 1u:
+            return sy ? (sx ? 2u : 3u) : 0u;
+        case 2u:
+            return sy ? (sx ? 1u : 0u) : 3u;
+        default:
+            return sy ? (sx ? 0u : 1u) : 2u;
+    }
+}
+
+// Row-major 2x2 color indices (0=R, 1=G, 2=B) for a pattern code, the TIFF/DNG
+// CFAPattern byte layout. Out-of-range codes behave as BGGR (legacy default).
+[[nodiscard]] inline std::array<std::uint8_t, 4> cfaColorIndices(std::uint32_t code) noexcept {
+    switch (code) {
+        case 0u:
+            return {0, 1, 1, 2};
+        case 1u:
+            return {1, 0, 2, 1};
+        case 2u:
+            return {1, 2, 0, 1};
+        default:
+            return {2, 1, 1, 0};
+    }
+}
+
 // Converts an app CFA code to a backend BayerPattern enum. All backend enums
 // (rcd/vng4/dual::BayerPattern) are 0..3 ordered like CfaPattern; the layout
 // is pinned per instantiation and out-of-range codes throw with the caller's

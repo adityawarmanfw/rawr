@@ -13,6 +13,11 @@ struct RectI {
     bool valid = false;
 };
 
+// Present, non-negative and non-empty.
+inline bool validRect(const RectI& r) { return r.valid && r.left >= 0 && r.top >= 0 && r.right > r.left && r.bottom > r.top; }
+inline uint32_t rectWidth(const RectI& r) { return static_cast<uint32_t>(r.right - r.left); }
+inline uint32_t rectHeight(const RectI& r) { return static_cast<uint32_t>(r.bottom - r.top); }
+
 struct Matrix3x3 {
     std::array<float, 9> rowMajor{1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f};
     bool valid = false;

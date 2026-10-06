@@ -98,7 +98,12 @@ rawr_test(exif_transpose_test
 rawr_test(raw_image_ring_queue_test
   "${RAWR_ROOT}/tests/native/raw_image_ring_queue_test.cpp"
   "${RAWR_ROOT}/native/zsl_ring/src/RawImageRing.cpp")
-rawr_test(dng_capture_test native/dng_capture_test.cpp "${APP}/encoding/dng/DngMetadataAdapter.cpp")
+rawr_test(dng_capture_test native/dng_capture_test.cpp
+  "${APP}/encoding/dng/DngExif.cpp"
+  "${APP}/encoding/dng/DngGainMapOpcode.cpp"
+  "${APP}/encoding/dng/DngMetadataAdapter.cpp"
+  "${APP}/encoding/dng/DngPixelPayload.cpp"
+  "${APP}/encoding/dng/DngProvenance.cpp")
 target_link_libraries(dng_capture_test PRIVATE rawr_tinydng)
 add_executable(hevc_metadata_helper native/hevc_log_metadata_test.cpp "${APP}/video/HevcLogMetadata.cpp")
 add_executable(mp4_metadata_helper native/mp4_metadata_patcher_test.cpp "${APP}/video/Mp4MetadataPatcher.cpp" "${APP}/video/HevcLogMetadata.cpp")

@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <vector>
 
+#include "capture/persistence/FrameRecipe.h"
 #include "develop/render/DenoiseProfile.h"
 #include "encoding/jpeg/JpegPublicDescription.h"
 
@@ -66,6 +67,7 @@ bool SingleFrameCaptureOutputs::startDng(std::shared_ptr<const imaging::RawSnaps
     auto context = std::move(*dng_);
     dng_.reset();
     context.resolvedRecipe = recipe;
+    persistence::attachFrameRecipes(context, *frame);
     const std::string name = context.displayName;
     context.outputFd = dngFd_.release();
     if (dngWriter_.start(frame, std::move(context))) {
