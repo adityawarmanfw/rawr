@@ -32,6 +32,7 @@ shared float sRef[MAX_TILE * MAX_TILE];
 shared float sComp[MAX_WINDOW * MAX_WINDOW];
 shared float sRow[25 * MAX_TILE];  // [displacement][row]
 shared float sRatio[25];
+shared float sSu[25 * MAX_TILE], sSv[25 * MAX_TILE];  // exposure-ratio row partials
 
 float cost(float d) { return p.useSsd != 0 ? d * d : d; }
 
@@ -52,23 +53,45 @@ void main() {
         sComp[i] = outside ? 2.0 * FLOAT16_MIN_VAL : imageLoad(compLevel, s).x;
     }
     barrier();
-    if (lane < 25) {
-        float ratio = 1.0;
-        if (p.exposureRatio != 0) {
-            // In-frame samples only (outside ones hold the negative high loss).
-            int ox = lane % 5, oy = lane / 5;
-            float su = 0.0, sv = 0.0;
-            for (int y = 0; y < t; ++y)
-                for (int x = 0; x < t; ++x) {
-                    float v = sComp[(y + oy) * win + x + ox];
-                    if (v > -1.0) {
-                        su += max(0.0, sRef[y * t + x]);
-                        sv += v;
-                    }
+    if (p.exposureRatio != 0) {
+        // Ratio of tile means per displacement, in-frame samples only (outside
+        // ones hold the negative high loss): row partials on the cost lanes,
+        // then one row sum per displacement.
+        if (lane < 5 * t) {
+            int dy = lane % t, oy = lane / t;
+            int rr = dy * t, cr = (dy + oy) * win;
+            vec4 su = vec4(0.0), sv = vec4(0.0);
+            float su4 = 0.0, sv4 = 0.0;
+            for (int dx = 0; dx < t; ++dx) {
+                float r = max(0.0, sRef[rr + dx]);
+                vec4 w = vec4(sComp[cr + dx], sComp[cr + dx + 1], sComp[cr + dx + 2], sComp[cr + dx + 3]);
+                float w4 = sComp[cr + dx + 4];
+                vec4 in4 = vec4(greaterThan(w, vec4(-1.0)));
+                su += r * in4;
+                sv += w * in4;
+                if (w4 > -1.0) {
+                    su4 += r;
+                    sv4 += w4;
                 }
-            ratio = clamp(su / (sv + 1e-9), 0.9, 1.1);
+            }
+            for (int ox = 0; ox < 4; ++ox) {
+                sSu[(oy * 5 + ox) * MAX_TILE + dy] = su[ox];
+                sSv[(oy * 5 + ox) * MAX_TILE + dy] = sv[ox];
+            }
+            sSu[(oy * 5 + 4) * MAX_TILE + dy] = su4;
+            sSv[(oy * 5 + 4) * MAX_TILE + dy] = sv4;
         }
-        sRatio[lane] = ratio;
+        barrier();
+        if (lane < 25) {
+            float su = 0.0, sv = 0.0;
+            for (int dy = 0; dy < t; ++dy) {
+                su += sSu[lane * MAX_TILE + dy];
+                sv += sSv[lane * MAX_TILE + dy];
+            }
+            sRatio[lane] = clamp(su / (sv + 1e-9), 0.9, 1.1);
+        }
+    } else if (lane < 25) {
+        sRatio[lane] = 1.0;
     }
     barrier();
     if (lane < 5 * t) {
