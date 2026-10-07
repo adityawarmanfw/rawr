@@ -234,15 +234,22 @@ struct NativeCameraController::Impl final : CameraEventSink {
             return false;
         }
         const auto& caps = control.capabilities;
+        const int32_t isoMin = caps.sensitivityMin, isoMax = std::max(caps.sensitivityMin, caps.sensitivityMax);
+        const int64_t timeMin = caps.exposureTimeMinNs;
+        // Never longer than the preview frame (motion blur, capture time).
+        const int64_t timeMax = std::max(timeMin, std::min(baseExposureTimeNs, caps.exposureTimeMaxNs));
         std::vector<CameraRequestPipeline::BracketExposure> exposures;
         for (const float ev : evOffsets) {
-            // Shorter shutter at the same gain first; lower gain only for what
-            // the minimum shutter cannot take.
-            const double target = double(baseExposureTimeNs) * std::exp2(std::min(0.0f, ev));
-            const int64_t time = std::clamp<int64_t>(std::llround(target), caps.exposureTimeMinNs,
-                                                     std::max(caps.exposureTimeMinNs, caps.exposureTimeMaxNs));
-            const auto iso = static_cast<int32_t>(std::llround(double(sensitivity) * target / double(time)));
-            exposures.push_back({time, std::clamp(iso, caps.sensitivityMin, std::max(caps.sensitivityMin, caps.sensitivityMax))});
+            // Lower gain first, down to base ISO: at high ISO highlights clip
+            // in the gain stage, so the same shutter at lower gain keeps all
+            // the light and only adds headroom. A shorter shutter takes the
+            // rest. The preview ISO may exceed the manual maximum (AE digital
+            // gain), so the product, not the ISO, is matched.
+            const double target = double(baseExposureTimeNs) * double(sensitivity) * std::exp2(std::min(0.0f, ev));
+            const auto iso = static_cast<int32_t>(std::clamp<double>(
+                std::round(target / double(timeMax)), double(isoMin), double(isoMax)));
+            const int64_t time = std::clamp<int64_t>(std::llround(target / double(iso)), timeMin, timeMax);
+            exposures.push_back({time, iso});
         }
         return requests.captureBracket(deviceSession.session(), deviceSession.request(), deviceSession.callbackContext(),
                                        control, exposures, requestId);
