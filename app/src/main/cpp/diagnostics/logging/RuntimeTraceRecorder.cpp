@@ -75,6 +75,12 @@ const char* RuntimeTraceRecorder::stageName(uint16_t stage) noexcept {
             return "JPEG_ENCODE_BEGIN";
         case RuntimeTraceStage::JpegEncodeEnd:
             return "JPEG_ENCODE_END";
+        case RuntimeTraceStage::CameraSessionCreated:
+            return "CAMERA_SESSION_CREATED";
+        case RuntimeTraceStage::CameraCaptureFailed:
+            return "CAMERA_CAPTURE_FAILED";
+        case RuntimeTraceStage::CameraBufferLost:
+            return "CAMERA_BUFFER_LOST";
         case RuntimeTraceStage::Metadata:
             return "METADATA";
         case RuntimeTraceStage::RawImage:
@@ -261,6 +267,8 @@ bool RuntimeTraceRecorder::dumpToFile() noexcept {
     out << "multiframe: TRIGGER flags=status value=ringFrames; SNAPSHOT flags=frameCount value=ringBytes; "
            "ARENA/RECORD/SUBMIT/FENCE flags=stage payload value=imageMiB_x1000; COMPLETE flags=frameCount "
            "value=imageMiB_x1000; FAIL flags=reason; SNAPSHOT_RELEASE flags=frameCount\n";
+    out << "camera: frame=generation; SESSION_CREATED flags=companionStream value=rawW<<32|rawH; CAPTURE_FAILED "
+           "flags=reason(0=error 1=flushed) slot=sequenceId value=frameNumber; BUFFER_LOST value=frameNumber\n";
     uint64_t firstNs = 0;
     for (uint64_t sequence = begin; sequence < end; ++sequence) {
         const auto& event = events_[sequence % kCapacity];

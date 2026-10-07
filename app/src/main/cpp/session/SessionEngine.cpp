@@ -230,6 +230,8 @@ void SessionEngine::consumeIngress(imaging::FrameIngressQueue::Event event, imag
         if (delay > 50 && (++ingressSlowReports_ % 120u) == 1u)
             LOGI("INGRESS_QUEUE_SLOW delayMs=%lld kind=%s", static_cast<long long>(delay), raw ? "raw" : "metadata");
     }
+    // Outside mu_: the controller takes its own lock and must never nest under it.
+    if (raw) cameraControls_.rawFrameArrived(std::get<imaging::RawFrameLease>(event.payload).get().generation);
     std::lock_guard<std::mutex> lock(mu_);
     if (drops.images) realtime_.timing().recordDropped(drops.images);
     if (drops.images && videoSession_.ready() && realtime_.coordinator().videoSubmitted() > 0)

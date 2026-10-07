@@ -6,6 +6,7 @@
 #include <functional>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "geometry/RawGeometry.h"
@@ -23,5 +24,8 @@ std::set<std::string> enumeratedCameraIds(ACameraManager* manager);
 std::vector<std::string> cameraDiscoveryCandidates(ACameraManager* manager);
 // RAW16 (RAW_SENSOR) and RAW10 output streams from the default stream configuration table.
 std::vector<geometry::RawStreamOption> rawOutputStreams(const ACameraMetadata* characteristics);
+// Smallest YUV_420_888 output of at least minWidth x minHeight; {0, 0} when there is none.
+std::pair<int32_t, int32_t> smallestYuvOutput(const ACameraMetadata* characteristics, int32_t minWidth,
+                                              int32_t minHeight);
 
 }  // namespace rawrcam::camera
