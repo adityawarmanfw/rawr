@@ -1,10 +1,12 @@
 #version 450
-// Port of hdr-plus-swift correct_upsampling_error (uniform-exposure path):
+// Port of hdr-plus-swift correct_upsampling_error:
 // after nearest upsampling, each tile also tries the alignment of its
 // horizontal and vertical coarse neighbours and keeps the best of the three
 // (HDR+ paper, improves alignment at moving-object borders). One workgroup
 // per tile stages the reference tile and each candidate patch in shared
 // memory; lanes sum strided partials, reduced in fixed order by lane 0.
+// Bracketed companions first rescale each candidate patch by the ratio of the
+// tile means, clamped to +-10% (upstream's non-uniform-exposure path).
 layout(local_size_x = 64) in;
 layout(set = 0, binding = 0, r32f) readonly uniform image2D refLevel;
 layout(set = 0, binding = 1, r32f) readonly uniform image2D compLevel;
@@ -16,12 +18,14 @@ layout(push_constant) uniform P {
     int downscale;  // 0 at the coarsest level
     int tileSize;
     int useSsd;
+    int exposureRatio;  // 1: bracketed companion
 } p;
 
 const int MAX_TILE = 32;
 shared float sRef[MAX_TILE * MAX_TILE];
 shared float sComp[MAX_TILE * MAX_TILE];
 shared float sPartial[3][64];
+shared vec2 sSums[64];
 
 void main() {
     ivec2 g = ivec2(gl_WorkGroupID.xy);
@@ -44,9 +48,21 @@ void main() {
             sComp[i] = outside ? uintBitsToFloat(0x7f800000u) : imageLoad(compLevel, s).x;
         }
         barrier();
+        float ratio = 1.0;
+        if (p.exposureRatio != 0) {
+            vec2 sums = vec2(0.0);
+            for (int i = lane; i < t * t; i += 64)
+                if (!isinf(sComp[i])) sums += vec2(max(0.0, sRef[i]), max(0.0, sComp[i]));
+            sSums[lane] = sums;
+            barrier();
+            sums = vec2(0.0);
+            for (int i = 0; i < 64; ++i) sums += sSums[i];
+            ratio = clamp(sums.x / (sums.y + 1e-9), 0.9, 1.1);
+            barrier();
+        }
         float partial = 0.0;
         for (int i = lane; i < t * t; i += 64) {
-            float d = abs(sRef[i] - sComp[i]);
+            float d = abs(sRef[i] - ratio * sComp[i]);
             partial += p.useSsd != 0 ? d * d : d;
         }
         sPartial[c][lane] = partial;

@@ -10,6 +10,12 @@
 // A_k = sum_ch(refRe·alRe + refIm·alIm), B_k = sum_ch(refIm·alRe - refRe·alIm):
 // the same argmin from 2 floats per bin instead of 16 (shared-memory bound on
 // mobile GPUs); first maximum wins like upstream's first minimum.
+// Bracketed bursts (Rawr): instead of upstream's equal-weight mean of
+// (1-w)*aligned + w*ref, each frame adds frameWeight*(1-w)*aligned and its
+// weight to a per-bin sum seeded with the reference at weight 1
+// (hdrq_normalize divides). frameWeight is the exposure factor, the inverse
+// shot-noise variance of a frame scaled to the reference exposure, so the
+// brighter frames carry the shadows and rejected bins add nothing.
 layout(local_size_x = 8, local_size_y = 8) in;
 layout(set = 0, binding = 0, rgba32f) readonly uniform image2D refFt;
 layout(set = 0, binding = 1, rgba32f) readonly uniform image2D alignedFt;
@@ -20,12 +26,15 @@ layout(set = 0, binding = 4, r32f) readonly uniform image2D mismatch;
 layout(std430, set = 0, binding = 5) readonly buffer ShiftTable { vec2 v[]; } shiftTable;
 // Per-tile clipped-highlights factor (hdrq_highlights_norm; 1 when uniform).
 layout(set = 0, binding = 6, r32f) readonly uniform image2D highlights;
+// Per-bin weight sum (bracketed only), one texel per bin at (t*8 + (dm, dn)).
+layout(set = 0, binding = 7, r32f) uniform image2D weightSum;
 layout(push_constant) uniform P {
     ivec2 tiles;
     float robustnessNorm;
     float readNoise;
     float maxMotionNorm;
     int uniformExposure;
+    float frameWeight;
 } p;
 
 shared vec4 sRefRe[64], sRefIm[64], sAlRe[64], sAlIm[64];  // index dn*8 + dm
@@ -94,6 +103,14 @@ void main() {
     float lo = min(w4.x, min(w4.y, min(w4.z, w4.w))), hi = max(w4.x, max(w4.y, max(w4.z, w4.w)));
     // Mean of the two central channel weights (upstream's robust variant of Liba's max).
     float weight = clamp(0.5 * (w4.x + w4.y + w4.z + w4.w - lo - hi), 0.0, 1.0);
-    imageStore(outFt, o, imageLoad(outFt, o) + (1.0 - weight) * alRe + weight * refRe);
-    imageStore(outFt, o + ivec2(1, 0), imageLoad(outFt, o + ivec2(1, 0)) + (1.0 - weight) * alIm + weight * refIm);
+    if (p.uniformExposure != 0) {
+        imageStore(outFt, o, imageLoad(outFt, o) + (1.0 - weight) * alRe + weight * refRe);
+        imageStore(outFt, o + ivec2(1, 0), imageLoad(outFt, o + ivec2(1, 0)) + (1.0 - weight) * alIm + weight * refIm);
+    } else {
+        float w = p.frameWeight * (1.0 - weight);
+        ivec2 bin = t0 + ivec2(dm, dn);
+        imageStore(outFt, o, imageLoad(outFt, o) + w * alRe);
+        imageStore(outFt, o + ivec2(1, 0), imageLoad(outFt, o + ivec2(1, 0)) + w * alIm);
+        imageStore(weightSum, bin, imageLoad(weightSum, bin) + w);
+    }
 }

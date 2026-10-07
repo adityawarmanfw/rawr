@@ -8,6 +8,9 @@
 // register window (in upstream's pairwise order), so every staged value is
 // read about once per lane instead of five times. Row sums are then added in
 // row order. L2 on coarse levels, L1 on the finest. Tiles up to 32 px.
+// Bracketed companions (compute_tile_differences_exposure25): each
+// displacement first rescales the comparison window by the ratio of the tile
+// means, clamped to +-10%, absorbing residual exposure mismatch.
 layout(local_size_x = 256) in;
 layout(set = 0, binding = 0, r32f) readonly uniform image2D refLevel;
 layout(set = 0, binding = 1, r32f) readonly uniform image2D compLevel;
@@ -19,6 +22,7 @@ layout(push_constant) uniform P {
     int downscale;
     int tileSize;
     int useSsd;
+    int exposureRatio;  // 1: bracketed companion
 } p;
 
 const float FLOAT16_MIN_VAL = -65504.0;
@@ -27,6 +31,7 @@ const int MAX_WINDOW = MAX_TILE + 4;
 shared float sRef[MAX_TILE * MAX_TILE];
 shared float sComp[MAX_WINDOW * MAX_WINDOW];
 shared float sRow[25 * MAX_TILE];  // [displacement][row]
+shared float sRatio[25];
 
 float cost(float d) { return p.useSsd != 0 ? d * d : d; }
 
@@ -47,8 +52,29 @@ void main() {
         sComp[i] = outside ? 2.0 * FLOAT16_MIN_VAL : imageLoad(compLevel, s).x;
     }
     barrier();
+    if (lane < 25) {
+        float ratio = 1.0;
+        if (p.exposureRatio != 0) {
+            // In-frame samples only (outside ones hold the negative high loss).
+            int ox = lane % 5, oy = lane / 5;
+            float su = 0.0, sv = 0.0;
+            for (int y = 0; y < t; ++y)
+                for (int x = 0; x < t; ++x) {
+                    float v = sComp[(y + oy) * win + x + ox];
+                    if (v > -1.0) {
+                        su += max(0.0, sRef[y * t + x]);
+                        sv += v;
+                    }
+                }
+            ratio = clamp(su / (sv + 1e-9), 0.9, 1.1);
+        }
+        sRatio[lane] = ratio;
+    }
+    barrier();
     if (lane < 5 * t) {
         int dy = lane % t, oy = lane / t;
+        float k0 = sRatio[oy * 5 + 0], k1 = sRatio[oy * 5 + 1], k2 = sRatio[oy * 5 + 2], k3 = sRatio[oy * 5 + 3],
+              k4 = sRatio[oy * 5 + 4];
         int rr = dy * t, cr = (dy + oy) * win;
         float acc[5] = float[5](0.0, 0.0, 0.0, 0.0, 0.0);
         // Register window over comparison columns dx .. dx+5.
@@ -56,11 +82,11 @@ void main() {
         for (int dx = 0; dx < t; dx += 2) {
             float w4 = sComp[cr + dx + 4], w5 = sComp[cr + dx + 5];
             float r0 = sRef[rr + dx], r1 = sRef[rr + dx + 1];
-            acc[0] += cost(abs(r0 - w0)) + cost(abs(r1 - w1));
-            acc[1] += cost(abs(r0 - w1)) + cost(abs(r1 - w2));
-            acc[2] += cost(abs(r0 - w2)) + cost(abs(r1 - w3));
-            acc[3] += cost(abs(r0 - w3)) + cost(abs(r1 - w4));
-            acc[4] += cost(abs(r0 - w4)) + cost(abs(r1 - w5));
+            acc[0] += cost(abs(r0 - k0 * w0)) + cost(abs(r1 - k0 * w1));
+            acc[1] += cost(abs(r0 - k1 * w1)) + cost(abs(r1 - k1 * w2));
+            acc[2] += cost(abs(r0 - k2 * w2)) + cost(abs(r1 - k2 * w3));
+            acc[3] += cost(abs(r0 - k3 * w3)) + cost(abs(r1 - k3 * w4));
+            acc[4] += cost(abs(r0 - k4 * w4)) + cost(abs(r1 - k4 * w5));
             w0 = w2;
             w1 = w3;
             w2 = w4;

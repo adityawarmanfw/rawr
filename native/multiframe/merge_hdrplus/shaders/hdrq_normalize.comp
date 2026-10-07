@@ -1,0 +1,19 @@
+#version 450
+// Bracketed frequency merge (Rawr): divides each merged bin by its weight
+// sum (hdrq_merge), turning the weighted sum into a weighted mean before
+// deconvolution, which compares every bin with its tile's zero frequency.
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0, rgba32f) uniform image2D ft;
+layout(set = 0, binding = 1, r32f) readonly uniform image2D weightSum;
+layout(push_constant) uniform P {
+    ivec2 bins;
+} p;
+
+void main() {
+    ivec2 b = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(b, p.bins))) return;
+    float inv = 1.0 / imageLoad(weightSum, b).x;
+    ivec2 o = ivec2(2 * b.x, b.y);
+    imageStore(ft, o, imageLoad(ft, o) * inv);
+    imageStore(ft, o + ivec2(1, 0), imageLoad(ft, o + ivec2(1, 0)) * inv);
+}

@@ -31,8 +31,21 @@ signal times reference/frame exposure), `calculate_mismatch_rgba` with the
 exposure factor, `calculate_highlights_norm_rgba` (`hdrq_highlights_norm`), the
 28.5 robustness constant with `exposure_corr1/2`, the per-frame
 `min(4, ef) * sqrt(max_motion_norm)` and no magnitude norm. The reference is
-the darkest frame (chosen by the app). Not ported: the exposure-aware tile
-cost (`compute_tile_differences_exposure25`) — frames are already exposure
-matched before alignment — and the exposure-control output curves (the app
-lifts brightness at render time instead). A burst whose exposures are all
-equal merges exactly like the uniform path.
+the darkest frame (chosen by the app). Alignment uses the exposure paths of
+`compute_tile_differences_exposure25` and `correct_upsampling_error`: each
+candidate displacement rescales the companion by the ratio of tile means,
+clamped to +-10%, absorbing residual exposure mismatch from the metadata.
+Not ported: the exposure-control output curves (the app lifts brightness at
+render time instead). A burst whose exposures are all equal merges exactly
+like the uniform path.
+
+Rawr changes to the bracketed path:
+- `hdrq_warp_rgba` replaces a companion cell whose brightest sample nears the
+  companion's own clip point (0.90-0.98 of white) with the reference cell.
+  Scaled-down clipped samples sit below the reference white, so the per-tile
+  highlights norm misses them at tile edges and they turn magenta after WB.
+- Exposure-weighted mean instead of upstream's equal-weight mean: each frame
+  adds exposureFactor * (1 - w) * aligned to the spectrum and to a per-bin
+  weight sum seeded with the reference at weight 1; `hdrq_normalize` divides
+  before deconvolution. Brighter frames carry the shadows (inverse
+  shot-noise variance) and rejected bins add nothing.
