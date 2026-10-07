@@ -1,0 +1,80 @@
+{
+  "id": "vivo_x300_pro",
+  "name": "vivo X300 Pro",
+  "version": 1,
+  "match": {
+    "models": [
+      "V2514",
+      "V2502A",
+      "V2502DA"
+    ],
+    "verifiedModels": [
+      "V2514"
+    ]
+  },
+  "lenses": [
+    {
+      "id": "UW",
+      "cameraId": "4",
+      "physicalCameraId": "",
+      "stream": {
+        "format": "RAW16",
+        "width": 4080,
+        "height": 3060
+      },
+      "levels": {
+        "static": false,
+        "black": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "white": 0
+      },
+      "keys": []
+    },
+    {
+      "id": "1x",
+      "cameraId": "2",
+      "physicalCameraId": "",
+      "stream": {
+        "format": "RAW16",
+        "width": 4096,
+        "height": 3072
+      },
+      "levels": {
+        "static": false,
+        "black": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "white": 0
+      },
+      "keys": []
+    },
+    {
+      "id": "3.5x",
+      "cameraId": "3",
+      "physicalCameraId": "",
+      "stream": {
+        "format": "RAW16",
+        "width": 4080,
+        "height": 3072
+      },
+      "levels": {
+        "static": false,
+        "black": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "white": 0
+      },
+      "keys": []
+    }
+  ]
+}
