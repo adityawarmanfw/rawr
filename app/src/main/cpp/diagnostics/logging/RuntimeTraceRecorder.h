@@ -95,6 +95,9 @@ enum class RuntimeTraceStage : uint16_t {
     StillRecovered = 87,
     JpegEncodeBegin = 88,
     JpegEncodeEnd = 89,
+    CameraSessionCreated = 90,
+    CameraCaptureFailed = 91,
+    CameraBufferLost = 92,
 };
 
 class RuntimeTraceRecorder {

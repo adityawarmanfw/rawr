@@ -50,6 +50,11 @@ class CameraCallbacks final {
     static void onCompleted(void*, ACameraCaptureSession*, ACaptureRequest*, const ACameraMetadata*);
     static void onLogicalCompleted(void*, ACameraCaptureSession*, ACaptureRequest*, const ACameraMetadata*, size_t,
                                    const char**, const ACameraMetadata**);
+    // Failures only feed diagnostics; a HAL that fails every RAW capture is
+    // otherwise indistinguishable from one that never answers.
+    static void onFailed(void*, ACameraCaptureSession*, ACaptureRequest*, ACameraCaptureFailure*);
+    static void onLogicalFailed(void*, ACameraCaptureSession*, ACaptureRequest*, ALogicalCameraCaptureFailure*);
+    static void onBufferLost(void*, ACameraCaptureSession*, ACaptureRequest*, ACameraWindowType*, int64_t);
     std::shared_ptr<CameraEventLifetime> lifetime_ = std::make_shared<CameraEventLifetime>();
 };
 }  // namespace rawrcam::camera
