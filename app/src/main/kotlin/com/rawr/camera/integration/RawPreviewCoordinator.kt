@@ -71,7 +71,11 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
             native.create(
                 application.filesDir.absolutePath,
                 application.applicationInfo.nativeLibraryDir,
-                GpuDriverFileStore(application).activeDriverPath().orEmpty()
+                if (GpuPlatform.supportsCustomDriver) {
+                    GpuDriverFileStore(application).activeDriverPath().orEmpty()
+                } else {
+                    ""
+                }
             )
         native.setAssetManager(nativeHandle, application.assets)
     }

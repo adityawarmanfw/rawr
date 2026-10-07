@@ -226,6 +226,13 @@ void VulkanContext::createDeviceForSurface(VkSurfaceKHR surface) {
     VkPhysicalDeviceProperties properties{};
     vkGetPhysicalDeviceProperties(physical_, &properties);
     gpuName_ = properties.deviceName;
+    vendorId_ = properties.vendorID;
+    deviceId_ = properties.deviceID;
+    switch (vendorId_) {
+        case 0x5143u: gpuVendor_ = GpuVendor::Adreno; break;  // Qualcomm
+        case 0x13B5u: gpuVendor_ = GpuVendor::Mali; break;    // Arm (Mali / Immortalis)
+        default: gpuVendor_ = GpuVendor::Other; break;
+    }
     timestampPeriod_ = properties.limits.timestampPeriod;
 
     driverName_.clear();
@@ -275,6 +282,9 @@ void VulkanContext::destroyDevice() {
     familyQueueCount_ = 0;
     timestampPeriod_ = 1.0f;
     gpuName_.clear();
+    gpuVendor_ = GpuVendor::Other;
+    vendorId_ = 0;
+    deviceId_ = 0;
     driverName_.clear();
     driverInfo_.clear();
     getAhbProps_ = nullptr;

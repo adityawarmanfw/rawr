@@ -26,7 +26,8 @@ void SessionEngine::setPersistentDiagnosticsEnabled(bool enabled) {
             // cannot erase the only proof of which ICD actually created the device.
             if (vulkanContext_.device() != VK_NULL_HANDLE) {
                 std::ostringstream out;
-                out << "VULKAN_DEVICE gpu=" << vulkanContext_.gpuName()
+                out << "VULKAN_DEVICE gpu=" << vulkanContext_.gpuName() << " vendorId=0x" << std::hex
+                    << vulkanContext_.vendorId() << " deviceId=0x" << vulkanContext_.deviceId() << std::dec
                     << " driverName=" << (vulkanContext_.driverName().empty() ? "unknown" : vulkanContext_.driverName())
                     << " driverInfo=" << (vulkanContext_.driverInfo().empty() ? "unknown" : vulkanContext_.driverInfo())
                     << " backend=" << rawrcam::vulkan::dispatch::backendDescription()

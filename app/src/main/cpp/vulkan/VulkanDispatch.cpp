@@ -293,6 +293,9 @@ void configure(const std::string& nativeLibraryDir, const std::string& path) {
     if (gLib) return;
     clearFns();
     const bool requested = !path.empty();
+    // RawPreviewCoordinator only supplies a custom path when GpuPlatform supports
+    // it, using the same check as the settings UI. Do not gate on
+    // ro.hardware.vulkan here: Android can resolve the ICD via ro.board.platform.
     if (requested) {
         const auto slash = path.find_last_of('/');
         if (slash == std::string::npos || slash + 1 >= path.size() || nativeLibraryDir.empty()) {

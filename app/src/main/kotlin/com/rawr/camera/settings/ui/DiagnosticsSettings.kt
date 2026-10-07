@@ -5,6 +5,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.rawr.camera.integration.GpuPlatform
 import com.rawr.camera.settings.architecture.*
 import com.rawr.camera.settings.model.*
 
@@ -88,15 +89,17 @@ internal fun ExperimentalSettings(state: SettingsUiState, dispatch: SettingsDisp
                 title = "Persistent Engine",
                 checked = state.values.persistentEngineEnabled
             ) { dispatch.invoke(SetPersistentEngineEnabled(it)) }
-            SettingDivider()
-            ToggleSubmenuRow(
-                title = "GPU Driver",
-                value = if (state.values.customGpuDriverEnabled) state.values.customGpuDriverName ?: "Custom" else "System",
-                checked = state.values.customGpuDriverEnabled,
-                testTag = SettingsTestTags.row("Experimental", "gpu_driver"),
-                onOpen = { dispatch.invoke(OpenSection(SettingsSection.GpuDriver)) },
-                onCheckedChange = { dispatch.invoke(SetCustomGpuDriverEnabled(it)) }
-            )
+            if (GpuPlatform.supportsCustomDriver) {
+                SettingDivider()
+                ToggleSubmenuRow(
+                    title = "GPU Driver",
+                    value = if (state.values.customGpuDriverEnabled) state.values.customGpuDriverName ?: "Custom" else "System",
+                    checked = state.values.customGpuDriverEnabled,
+                    testTag = SettingsTestTags.row("Experimental", "gpu_driver"),
+                    onOpen = { dispatch.invoke(OpenSection(SettingsSection.GpuDriver)) },
+                    onCheckedChange = { dispatch.invoke(SetCustomGpuDriverEnabled(it)) }
+                )
+            }
         }
     }
 }

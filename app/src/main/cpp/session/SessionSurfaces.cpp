@@ -62,7 +62,8 @@ bool SessionEngine::setPresentationSurface(JNIEnv* env, jobject surfaceObj, int 
                 (vulkanContext_.ahbExternalBufferFeatures() & VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT) ? "yes"
                                                                                                          : "no");
             std::ostringstream out;
-            out << "VULKAN_DEVICE gpu=" << vulkanContext_.gpuName()
+            out << "VULKAN_DEVICE gpu=" << vulkanContext_.gpuName() << " vendorId=0x" << std::hex
+                << vulkanContext_.vendorId() << " deviceId=0x" << vulkanContext_.deviceId() << std::dec
                 << " driverName=" << (vulkanContext_.driverName().empty() ? "unknown" : vulkanContext_.driverName())
                 << " driverInfo=" << (vulkanContext_.driverInfo().empty() ? "unknown" : vulkanContext_.driverInfo())
                 << " backend=" << rawrcam::vulkan::dispatch::backendDescription()

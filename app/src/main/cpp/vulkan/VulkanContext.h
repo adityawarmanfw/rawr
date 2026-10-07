@@ -11,6 +11,11 @@
 
 namespace rawrcam::vulkan {
 
+// Coarse GPU family, from VkPhysicalDeviceProperties::vendorID. Used to pick vendor
+// qualified fast paths; anything unrecognised must take the portable reference path.
+enum class GpuVendor { Other, Adreno, Mali };
+
+
 class VulkanContext {
    public:
     VulkanContext() = default;
@@ -56,6 +61,9 @@ class VulkanContext {
     uint32_t queueFamily() const noexcept { return queueFamily_; }
     float timestampPeriod() const noexcept { return timestampPeriod_; }
     const std::string& gpuName() const noexcept { return gpuName_; }
+    GpuVendor gpuVendor() const noexcept { return gpuVendor_; }
+    uint32_t vendorId() const noexcept { return vendorId_; }
+    uint32_t deviceId() const noexcept { return deviceId_; }
     const std::string& driverName() const noexcept { return driverName_; }
     const std::string& driverInfo() const noexcept { return driverInfo_; }
     PFN_vkGetAndroidHardwareBufferPropertiesANDROID getAhbProperties() const noexcept { return getAhbProps_; }
@@ -96,6 +104,9 @@ class VulkanContext {
     uint32_t queueFamily_ = 0;
     float timestampPeriod_ = 1.0f;
     std::string gpuName_;
+    GpuVendor gpuVendor_ = GpuVendor::Other;
+    uint32_t vendorId_ = 0;
+    uint32_t deviceId_ = 0;
     std::string driverName_;
     std::string driverInfo_;
     PFN_vkGetAndroidHardwareBufferPropertiesANDROID getAhbProps_ = nullptr;
