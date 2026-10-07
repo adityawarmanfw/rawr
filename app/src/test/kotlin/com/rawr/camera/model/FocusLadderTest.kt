@@ -4,68 +4,104 @@ import com.rawr.camera.fixtures.CaptureFixtures
 import com.rawr.camera.ui.detentScrub
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class FocusLadderTest {
-    private fun gaps(ladder: FocusLadder, range: ClosedFloatingPointRange<Float>): List<Float> =
-        ladder.stops.zipWithNext { a, b -> a.diopters - b.diopters }
-            .filterIndexed { i, _ -> ladder.stops[i].diopters in range && ladder.stops[i + 1].diopters in range }
-
-    @Test
-    fun ladderRunsNearToInfinityWithExactAnchors() {
-        val ladder = FocusLadder.build(5f)
-        assertTrue(ladder.stops.zipWithNext().all { (a, b) -> a.normalized < b.normalized })
-        assertEquals(FocusStop(0f, 5f, FocusAnchor.Near), ladder.stops.first())
-        assertEquals(1f, ladder.stops.last().normalized)
-        assertEquals(0f, ladder.stops.last().diopters)
-        assertEquals(FocusAnchor.Infinity, ladder.stops.last().anchor)
-        assertTrue(ladder.isAnchor(ladder.lastIndex))
+    private fun drag(ladder: FocusLadder, from: FocusScrubPosition, totalDp: Float, eventDp: Float = 2f): FocusScrubPosition {
+        var p = from
+        var left = totalDp
+        while (left != 0f) {
+            val d = if (kotlin.math.abs(left) < kotlin.math.abs(eventDp)) left else kotlin.math.sign(left) * kotlin.math.abs(eventDp)
+            p = ladder.scrub(p, d).first
+            left -= d
+        }
+        return p
     }
 
     @Test
-    fun macroStepsAreFinerThanMidRange() {
+    fun anchorsAreExactNearAndInfinity() {
         val ladder = FocusLadder.build(5f)
-        val macro = gaps(ladder, 3f..5f).max()
-        val mid = gaps(ladder, .6f..2.9f).min()
-        assertTrue(macro < mid, "macro $macro mid $mid")
+        assertEquals(listOf(FocusAnchor.Near, FocusAnchor.Infinity), ladder.anchors.map { it.anchor })
+        assertEquals(1f, ladder.normalizedOf(0f))
+        assertEquals(0f, ladder.anchors.last().diopters)
+    }
+
+    @Test
+    fun dragStartsExactlyAtLensPosition() {
+        val ladder = FocusLadder.build(5f)
+        val start = ladder.start(1.2345f)
+        assertEquals(1.2345f, start.diopters)
+        assertNull(start.heldAnchor)
+        val (moved, _) = ladder.scrub(start, 1f)
+        assertTrue(kotlin.math.abs(moved.diopters - start.diopters) <= .02f, "one dp moves at most 0.02 D")
+    }
+
+    @Test
+    fun macroIsFinerThanMidRange() {
+        val ladder = FocusLadder.build(5f)
+        assertTrue(ladder.dioptersPerDp(4f) < ladder.dioptersPerDp(1.5f))
+        assertTrue(ladder.dioptersPerDp(.2f) < ladder.dioptersPerDp(1.5f))
+    }
+
+    @Test
+    fun scrubSnapsToInfinityHoldsAndReleases() {
+        val ladder = FocusLadder.build(5f)
+        val atInfinity = drag(ladder, ladder.start(.3f), 1000f)
+        assertEquals(0f, atInfinity.diopters)
+        assertEquals(FocusAnchor.Infinity, atInfinity.heldAnchor?.anchor)
+        // Pushing past ∞ banks nothing; a small pull back stays held.
+        val stillHeld = drag(ladder, drag(ladder, atInfinity, 200f), -FocusLadder.ANCHOR_RELEASE_DP + 2f)
+        assertEquals(0f, stillHeld.diopters)
+        val released = drag(ladder, stillHeld, -10f)
+        assertTrue(released.diopters > 0f)
+        assertNull(released.heldAnchor)
+    }
+
+    @Test
+    fun fullTraverseIsSeveralHundredDp() {
+        val ladder = FocusLadder.build(5f)
+        var p = ladder.start(5f)
+        var dp = 0f
+        while (p.heldAnchor?.anchor != FocusAnchor.Infinity) {
+            p = ladder.scrub(p, 1f).first
+            dp += 1f
+        }
+        assertTrue(dp in 350f..600f, "traverse $dp dp")
     }
 
     @Test
     fun hyperfocalAnchorOnlyWhenMeaningful() {
-        // V2562 main reports 0.019 D: effectively ∞, so no separate anchor.
-        assertNull(FocusLadder.build(5f, .019f).stops.firstOrNull { it.anchor == FocusAnchor.Hyperfocal })
+        // V2562 main reports 0.019 D (52 m): effectively ∞, so no separate anchor.
+        assertNull(FocusLadder.build(5f, .019f).anchors.firstOrNull { it.anchor == FocusAnchor.Hyperfocal })
         val wide = FocusLadder.build(16.67f, .3f)
-        val hyperfocal = wide.stops.single { it.anchor == FocusAnchor.Hyperfocal }
+        val hyperfocal = wide.anchors.single { it.anchor == FocusAnchor.Hyperfocal }
         assertEquals(.3f, hyperfocal.diopters)
-        assertEquals(1f - .3f / 16.67f, hyperfocal.normalized, 1e-6f)
-    }
-
-    @Test
-    fun indexNearestRoundTrips() {
-        val ladder = FocusLadder.build(6.67f, .24f)
-        ladder.stops.forEachIndexed { i, stop -> assertEquals(i, ladder.indexNearest(stop.normalized)) }
-        assertEquals(ladder.lastIndex, ladder.indexNearest(1f))
-    }
-
-    @Test
-    fun scrubReachesInfinityAndHoldsOnAnchor() {
-        val ladder = FocusLadder.build(5f)
-        var index = ladder.indexNearest(.9f)
-        var offset = 0f
-        val visited = mutableListOf<Int>()
-        repeat(200) {
-            val r = detentScrub(index, offset, 3f, ladder.lastIndex, 3f, 6.75f, true, ladder::isAnchor) { i, _ ->
-                visited += i
-            }
-            index = r.index
-            offset = r.trackOffsetPx
+        // Dragging farther from 1 m catches the hyperfocal stop before ∞.
+        var p = wide.start(1f)
+        var firstLanding: FocusAnchor? = null
+        while (firstLanding == null) {
+            val (next, landed) = wide.scrub(p, 2f)
+            if (landed) firstLanding = next.heldAnchor?.anchor
+            p = next
         }
-        assertEquals(ladder.lastIndex, index)
-        assertTrue(offset < 3f, "rubber-banded past ∞")
-        // Leaving the ∞ anchor costs the magnetic release, not a fine step.
-        val back = detentScrub(index, 0f, -3f, ladder.lastIndex, 3f, 6.75f, true, ladder::isAnchor) { _, _ -> }
-        assertEquals(ladder.lastIndex, back.index)
+        assertEquals(FocusAnchor.Hyperfocal, firstLanding)
+    }
+
+    @Test
+    fun detentScrubKeepsExposureStepping() {
+        var steps = 0
+        val r = detentScrub(0, 0f, 10f, 5, 3f, 6.75f, magnetic = false, isAnchor = { false }) { _, detent ->
+            assertTrue(detent)
+            steps++
+        }
+        assertEquals(3, steps)
+        assertEquals(3, r.index)
+        assertEquals(1f, r.trackOffsetPx)
+        val end = detentScrub(5, 0f, 4f, 5, 3f, 6.75f, magnetic = true, isAnchor = { it == 5 }) { _, _ -> }
+        assertEquals(5, end.index)
+        assertFalse(end.trackOffsetPx > 1f)
     }
 
     @Test

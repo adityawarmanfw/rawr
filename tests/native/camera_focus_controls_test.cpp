@@ -130,6 +130,19 @@ void lockedTapAndModeCleanup() {
     assert(!state.tapAfActive && !focus.expireTap(state, 1000000));
 }
 
+void tapLeavesManualFocus() {
+    CameraFocusControls focus;
+    auto state = controls();
+    assert(focus.requestManualFocus(state, 1.0f, 1));
+    assert(state.focusMode == FocusControlMode::Manual);
+    const auto tap = focus.planTap(state, geometry(), {0.3f, 0.6f});
+    assert(tap);
+    focus.acceptTap(state, *tap, 100);
+    assert(state.focusMode == FocusControlMode::Continuous && state.tapAfActive);
+    assert(focus.request(std::nullopt).afRegion == tap->region);
+    assert(focus.expireTap(state, 4100) && !state.tapAfActive);
+}
+
 void faceHysteresisAndTapOwnership() {
     CameraFocusControls focus;
     auto state = controls();
@@ -225,6 +238,7 @@ void sharedRequestCadence() {
 int main() {
     regionGeometry();
     modeAndManualFocus();
+    tapLeavesManualFocus();
     tapSequenceAndExpiry();
     lockedTapAndModeCleanup();
     faceHysteresisAndTapOwnership();

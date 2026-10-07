@@ -46,8 +46,9 @@ internal fun AfTarget(state: CaptureUiState, dispatch: CaptureDispatch) {
     if (!state.capabilities.tapAfSupported) return
     // Full auto shows no box: the reticle only exists while a tap-AF request
     // is outstanding (Settling/Settled/Failed). Retapping it returns to
-    // continuous AF; auto-dismiss does the same after a few seconds.
-    if (state.focus.status == TargetStatus.Hidden) return
+    // continuous AF; auto-dismiss does the same after a few seconds. MF has
+    // no focus point (the lens sits at a distance), so the box goes too.
+    if (state.focus.status == TargetStatus.Hidden || state.focus.mode == FocusMode.Mf) return
     val haptics = LocalCaptureHaptics.current
     val target = state.focus.target
     val color = targetColor(state.focus.status)
@@ -64,9 +65,7 @@ internal fun AfTarget(state: CaptureUiState, dispatch: CaptureDispatch) {
                     detectTapGestures(
                         onTap = {
                             haptics.selection()
-                            if (state.focus.mode == FocusMode.Mf) {
-                                dispatch(OpenFocusSelector)
-                            } else if (state.focus.mode == FocusMode.Af) {
+                            if (state.focus.mode == FocusMode.Af) {
                                 dispatch(ClearAutofocus)
                             } else {
                                 dispatch(Refocus)
