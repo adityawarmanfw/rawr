@@ -31,11 +31,17 @@ struct MultiframeTuning {
     float fallbackChromaGain = 0.0f;
     float fallbackLumaGain = 0.0f;
     // Appended (journal prefix-compatible): 0 = Wronski super-resolution
-    // merge, 1 = HDR+ spatial, 2 = HDR+ frequency (HDR+: 1x only; uses only
-    // the hdrplus* fields).
+    // merge, 1 = HDR+ spatial, 2 = HDR+ frequency, 3 = HDR+ bracketed
+    // (frequency merge plus post-shutter dark frames) (HDR+: 1x only; uses
+    // only the hdrplus* and bracket* fields).
     std::uint32_t mergeAlgorithm = 0;
     float hdrplusStrength = 13.0f;
     std::uint32_t hdrplusTileSize = 32;  // 16 tracks small motion better, 32 steadier in heavy noise
+    // Appended (journal prefix-compatible), used by mergeAlgorithm 3 only:
+    // exposure of the post-shutter dark frames relative to the burst, and
+    // how many of them to capture.
+    float bracketEv = -2.0f;
+    std::uint32_t bracketFrames = 2;
 };
 
 }  // namespace rawrcam::capture::multiframe

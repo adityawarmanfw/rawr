@@ -65,6 +65,9 @@ std::string RzslBundleSink::serializeMetadata(std::uint64_t zslFrameId,
     writeRect(out, "rawCropRegion", m.rawCropRegion);
     writeOptional(out, "requestedExposureTimeNs", m.requestedExposureTimeNs);
     writeOptional(out, "requestedSensitivity", m.requestedSensitivity);
+    out << "postRawSensitivityBoost\t" << m.postRawSensitivityBoost << '\n';
+    // Non-zero on HDR+ bracket dark frames (post-shutter one-shot requests).
+    writeOptional(out, "optimizedStillRequestId", m.optimizedStillRequestId);
     writeOptional(out, "aperture", m.aperture);
     writeOptional(out, "focalLengthMm", m.focalLengthMm);
     writeOptional(out, "focusDistanceDiopters", m.focusDistanceDiopters);

@@ -591,7 +591,7 @@ class SettingsModelTest {
         assertEquals(18f, tuning.hdrPlusStrength)
         // Native layout: 22 tuning values, chroma flag, then algorithm id + strength.
         assertEquals(22, tuning.nativeValues().size)
-        assertEquals(listOf(1f, 18f, 32f), tuning.nativeMergeValues().toList())
+        assertEquals(listOf(1f, 18f, 32f, -2f, 2f), tuning.nativeMergeValues().toList())
         controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.HdrPlusTileSize, 16f))
         controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.HdrPlusTileSize, 64f))
         assertEquals(16, controller.state.value.values.multiframeTuning.hdrPlusTileSize)
@@ -600,6 +600,20 @@ class SettingsModelTest {
         controller.dispatch(SetMultiframeMergeAlgorithm(MultiframeMergeAlgorithm.HdrPlusQuality))
         assertEquals(2f, controller.state.value.values.multiframeTuning.nativeMergeValues()[0])
         assertEquals(13f, MultiframeTuning().copy(hdrPlusStrength = 0f).sanitized().hdrPlusStrength)
+
+        assertEquals(3, MultiframeMergeAlgorithm.HdrPlusBracketed.nativeId)
+        controller.dispatch(SetMultiframeMergeAlgorithm(MultiframeMergeAlgorithm.HdrPlusBracketed))
+        controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.BracketEv, -2.7f))
+        controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.BracketFrames, 3f))
+        val bracketed = controller.state.value.values.multiframeTuning
+        assertEquals(-2.5f, bracketed.bracketEv)
+        assertEquals(listOf(3f, 18f, 16f, -2.5f, 3f), bracketed.nativeMergeValues().toList())
+        assertEquals(MultiframeMergeAlgorithm.HdrPlusBracketed, persisted?.multiframeTuning?.mergeAlgorithm)
+        assertEquals(-2f, MultiframeTuning().copy(bracketEv = -6f).sanitized().bracketEv)
+        assertEquals(2, MultiframeTuning().copy(bracketFrames = 9).sanitized().bracketFrames)
+        assertEquals(bracketed.maxFrames - 3, bracketed.zslFrames())
+        assertEquals(2, bracketed.copy(maxFrames = 3).zslFrames())
+        assertEquals(16, MultiframeTuning().zslFrames())
     }
 
     @Test fun multiframeDefaultsFollowResearchedOperatingPoint() {

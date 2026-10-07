@@ -61,9 +61,11 @@ int main(int argc, char** argv) {
     j.jpeg.develop.multiframeChromaDenoise = true;
     j.dng.compression = rawrcam::encoding::dng::DngCompression::Uncompressed;
     j.mergedDng.compression = rawrcam::encoding::dng::DngCompression::Uncompressed;
-    j.tuning.mergeAlgorithm = 1;
+    j.tuning.mergeAlgorithm = 3;
     j.tuning.hdrplusStrength = 18.0f;
     j.tuning.hdrplusTileSize = 16;
+    j.tuning.bracketEv = -3.5f;
+    j.tuning.bracketFrames = 4;
     auto path = jobPath(root, j.dng.displayName);
     save(path, j);
     auto restored = load(path);
@@ -87,8 +89,9 @@ int main(int argc, char** argv) {
     // v8: DNG compression survives the journal (multiframe DNGs honour "Uncompressed").
     assert(restored.dng.compression == rawrcam::encoding::dng::DngCompression::Uncompressed);
     assert(restored.mergedDng.compression == rawrcam::encoding::dng::DngCompression::Uncompressed);
-    assert(restored.tuning.mergeAlgorithm == 1 && restored.tuning.hdrplusStrength == 18.0f &&
-           restored.tuning.hdrplusTileSize == 16);
+    assert(restored.tuning.mergeAlgorithm == 3 && restored.tuning.hdrplusStrength == 18.0f &&
+           restored.tuning.hdrplusTileSize == 16 && restored.tuning.bracketEv == -3.5f &&
+           restored.tuning.bracketFrames == 4);
     markFilmFallback(path);
     assert(std::filesystem::exists(path + ".fallback"));
     assert(load(path).dng.processingRecipe == j.dng.processingRecipe);

@@ -9,6 +9,8 @@
 #include <stdexcept>
 
 #include "capture/CaptureRequest.h"
+#include "capture/multiframe/BracketCollector.h"
+#include "capture/multiframe/BracketExposure.h"
 #include "capture/multiframe/mfsr/MfsrCaptureJob.h"
 #include "capture/persistence/CaptureJob.h"
 #include "diagnostics/logging/RuntimeTraceRecorder.h"
@@ -16,6 +18,10 @@
 namespace rawrcam::capture::multiframe {
 namespace {
 constexpr const char* kTag = "RawrCamNative";
+// Post-shutter bracket frames normally land within ~150 ms; past this the
+// burst merges without (the spool keeps the ZSL pins meanwhile).
+constexpr auto kBracketWait = std::chrono::milliseconds(1500);
+constexpr std::size_t kMaxBurstFrames = 30u;  // capture journal limit
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, kTag, __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, kTag, __VA_ARGS__)
 }  // namespace
@@ -150,9 +156,11 @@ std::uint64_t MfsrCaptureService::start(std::unique_ptr<PendingMultiframeCapture
         return 0u;
     }
 
+    const std::size_t reservedFrames =
+        capture->frames.size() + (capture->pendingBracket ? capture->pendingBracket->expected() : 0u);
     auto reservation = persistence::reserve(filesDir_,
                                             uint64_t(capture->frames.front().raw.ref.width) *
-                                                capture->frames.front().raw.ref.height * 2 * capture->frames.size(),
+                                                capture->frames.front().raw.ref.height * 2 * reservedFrames,
                                             false);
     if (!reservation) {
         closeOutputs();
@@ -289,6 +297,29 @@ void MfsrCaptureService::spoolLoop() {
             // its single read-back pass. Middle mode skips this with zero cost.
             // Any failure keeps the frozen middle reference.
             auto& burst = *pending->work->capture;
+            // HDR+ bracketed: append the post-shutter dark frames (whatever
+            // arrived by the deadline; none = plain HDR+ Quality merge).
+            if (auto collector = std::move(burst.pendingBracket)) {
+                const auto begin = std::chrono::steady_clock::now();
+                auto dark = collector->take(begin + kBracketWait);
+                std::size_t appended = 0;
+                for (auto& f : dark) {
+                    if (burst.frames.size() >= kMaxBurstFrames || f.frames.size() != 1u || f.refs.size() != 1u ||
+                        f.metadata.size() != 1u || f.colors.size() != 1u || !f.snapshot ||
+                        f.frames.front().raw.ref.width != burst.frames.front().raw.ref.width ||
+                        f.frames.front().raw.ref.height != burst.frames.front().raw.ref.height)
+                        continue;
+                    burst.extraSnapshots.push_back(std::move(f.snapshot));
+                    burst.refs.push_back(f.refs.front());
+                    burst.frames.push_back(f.frames.front());
+                    burst.metadata.push_back(std::move(f.metadata.front()));
+                    burst.colors.push_back(std::move(f.colors.front()));
+                    ++appended;
+                }
+                LOGI("MULTIFRAME_BRACKET_COLLECT request=%llu expected=%u appended=%zu waitMs=%.1f",
+                     static_cast<unsigned long long>(collector->requestId()), collector->expected(), appended,
+                     std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count());
+            }
             if (pending->work->baseFrameMode == MultiframeBaseFrameMode::Sharpest && burst.frames.size() >= 2u &&
                 burst.frames.size() <= raw_sharpness::RawSharpness::kMaxFrames) {
                 try {
@@ -355,6 +386,18 @@ void MfsrCaptureService::spoolLoop() {
                 } catch (...) {
                     LOGE("MULTIFRAME_SHARPNESS_FALLBACK unknown");
                 }
+            }
+            // Bracketed bursts merge onto the darkest frame (sharpest among
+            // those when scored), whatever the base frame mode.
+            if (pending->work->tuning.mergeAlgorithm == kMergeAlgorithmHdrPlusBracketed &&
+                burst.metadata.size() == burst.frames.size() && burst.colors.size() == burst.frames.size() &&
+                isExposureBracketed(burst.metadata)) {
+                const auto reference =
+                    bracketReference(burst.metadata, pending->work->sharpnessScores, burst.referenceIndex);
+                burst.referenceIndex = reference;
+                burst.referenceMetadata = burst.metadata[reference];
+                burst.referenceColor = burst.colors[reference];
+                LOGI("MULTIFRAME_BASEFRAME mode=bracket-darkest selected=%u/%zu", reference, burst.frames.size());
             }
             persistence::saveBurst(pending->path, *pending->work, vulkan_, queue0Mutex_);
             diagnostics::RuntimeTraceRecorder::instance().record(diagnostics::RuntimeTraceStage::StillDurable, 0,

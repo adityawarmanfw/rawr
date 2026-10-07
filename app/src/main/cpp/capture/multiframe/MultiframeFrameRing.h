@@ -31,13 +31,18 @@ class MultiframeFrameRing {
 
     void commitTimestamp(uint64_t timestampNs) noexcept;
     void discardTimestamp(uint64_t timestampNs) noexcept;
-    // Mark the frame behind a retired preview slot as snapshot-ready.
-    void markReadyForTimestamp(std::uint64_t timestampNs);
+    // Mark the frame behind a retired preview slot as snapshot-ready. Returns
+    // its ring frame id when it became ready.
+    std::optional<std::uint64_t> markReadyForTimestamp(std::uint64_t timestampNs);
+    // Metadata recorded for a ring frame (null once pruned).
+    const rawrcam::metadata::FrameMetadataSnapshot* metadataFor(std::uint64_t frameId) const;
 
     // Freeze up to [2, maxFrames] frames for a shutter capture. Returns nullopt
     // when fewer than 2 ready frames exist or any metadata/color/gpu gap is found.
     // Pins immutable images shared by overlapping bursts; live storage remains bounded.
     std::optional<FrozenBurst> freeze(std::size_t maxFrames);
+    // Pins one ready frame (by ring frame id) as a single-frame burst.
+    std::optional<FrozenBurst> freezeFrame(std::uint64_t frameId);
 
     std::size_t frameCount() const;
     std::uint64_t usedBytes() const;

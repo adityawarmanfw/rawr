@@ -460,7 +460,7 @@ void FrameSubmitCoordinator::submitSplitVideoAndMonitor(const SubmitParams& para
     }
     frame.noiseProfileValid = rawrcam::develop::rendered::resolveDenoiseNoise(metadata, frame.noiseA, frame.noiseB);
     auto tone = tonemapParams_;
-    tone.aePostGain = lifecyclePort_.postGainFor(metadata);
+    tone.aePostGain = previewPostGain(metadata);
     const auto cameraToAp1 = RawDevelopRecorder::composeCameraToAp1(params.sensorToSrgb);
 
     // The first submission waits for the camera buffer and the encoder image
@@ -645,7 +645,7 @@ FrameSubmitCoordinator::RecordedSubmit FrameSubmitCoordinator::recordSubmitComma
     }
 
     auto frameTonemapParams = tonemapParams_;
-    frameTonemapParams.aePostGain = lifecyclePort_.postGainFor(metadata);
+    frameTonemapParams.aePostGain = previewPostGain(metadata);
     trace.record(rawrcam::diagnostics::RuntimeTraceStage::PostGain, params.timestampNs, metadata.frameOrdinal,
                  static_cast<int32_t>(slotIndex), metadata.exposureTimeNs, metadata.sensitivity, 0,
                  static_cast<int64_t>(std::llround(frameTonemapParams.aePostGain * 1000000.0f)));
@@ -897,6 +897,19 @@ void FrameSubmitCoordinator::recoverFailedSubmit(uint32_t slotIndex, bool slotSe
     }
 
     performanceTracker_.recordDropped();
+}
+
+float FrameSubmitCoordinator::previewPostGain(const rawrcam::metadata::FrameMetadataSnapshot& metadata) {
+    const float gain = lifecyclePort_.postGainFor(metadata);
+    const double exposure = double(metadata.exposureTimeNs) * double(metadata.sensitivity);
+    if (!(exposure > 0.0)) return gain;
+    if (!metadata.optimizedStillRequestId || *metadata.optimizedStillRequestId == 0) {
+        lastRepeatingExposure_ = exposure;
+        return gain;
+    }
+    if (lastRepeatingExposure_ <= exposure) return gain;
+    // Same 16x ceiling the tonemap engine enforces.
+    return std::min(16.0f, gain * float(lastRepeatingExposure_ / exposure));
 }
 
 bool FrameSubmitCoordinator::submitAhb(uint64_t timestampNs, AHardwareBuffer* ahb, int acquireFenceFd,

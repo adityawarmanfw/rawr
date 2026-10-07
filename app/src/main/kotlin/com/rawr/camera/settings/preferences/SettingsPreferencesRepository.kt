@@ -505,6 +505,8 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
                         enumOrDefault(p[Keys.multiframeMergeAlgorithm], d.multiframeTuning.mergeAlgorithm),
                     hdrPlusStrength = p[Keys.multiframeHdrPlusStrength] ?: d.multiframeTuning.hdrPlusStrength,
                     hdrPlusTileSize = p[Keys.multiframeHdrPlusTileSize] ?: d.multiframeTuning.hdrPlusTileSize,
+                    bracketEv = p[Keys.multiframeBracketEv] ?: d.multiframeTuning.bracketEv,
+                    bracketFrames = p[Keys.multiframeBracketFrames] ?: d.multiframeTuning.bracketFrames,
                     maxFrames = p[Keys.multiframeMaxFrames] ?: d.multiframeTuning.maxFrames,
                     lkIterations = p[Keys.multiframeLkIterations] ?: d.multiframeTuning.lkIterations,
                     hessianEpsilonExponent =
@@ -730,6 +732,8 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.multiframeMergeAlgorithm] = v.multiframeTuning.mergeAlgorithm.name
         p[Keys.multiframeHdrPlusStrength] = v.multiframeTuning.hdrPlusStrength
         p[Keys.multiframeHdrPlusTileSize] = v.multiframeTuning.hdrPlusTileSize
+        p[Keys.multiframeBracketEv] = v.multiframeTuning.bracketEv
+        p[Keys.multiframeBracketFrames] = v.multiframeTuning.bracketFrames
         p[Keys.multiframeMaxFrames] = v.multiframeTuning.maxFrames
         p[Keys.multiframeLkIterations] = v.multiframeTuning.lkIterations
         p[Keys.multiframeHessianExponent] = v.multiframeTuning.hessianEpsilonExponent
@@ -968,6 +972,8 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val multiframeMergeAlgorithm = stringPreferencesKey("multiframe_merge_algorithm")
         val multiframeHdrPlusStrength = floatPreferencesKey("multiframe_hdrplus_strength")
         val multiframeHdrPlusTileSize = intPreferencesKey("multiframe_hdrplus_tile_size")
+        val multiframeBracketEv = floatPreferencesKey("multiframe_bracket_ev")
+        val multiframeBracketFrames = intPreferencesKey("multiframe_bracket_frames")
         val multiframeMaxFrames = intPreferencesKey("multiframe_max_frames")
         val multiframeLkIterations = intPreferencesKey("multiframe_lk_iterations")
         val multiframeHessianExponent = intPreferencesKey("multiframe_hessian_exponent")

@@ -199,9 +199,10 @@ struct Reader {
             throw std::runtime_error("capture_job_tonemap_schema_mismatch");
         }
     }
-    // Merge algorithm, HDR+ strength and tile size were appended to
-    // MultiframeTuning without a journal bump; older jobs carry a shorter
-    // prefix (88 bytes: Wronski only, 96: before the tile size).
+    // Merge algorithm, HDR+ strength, tile size and the bracket fields were
+    // appended to MultiframeTuning without a journal bump; older jobs carry a
+    // shorter prefix (88 bytes: Wronski only, 96: before the tile size, 100:
+    // before the bracket fields).
     void one(multiframe::MultiframeTuning& v) {
         constexpr uint32_t kPrefixBytes = 2u * sizeof(uint32_t) + 20u * sizeof(float);
         static_assert(offsetof(multiframe::MultiframeTuning, mergeAlgorithm) == kPrefixBytes,
@@ -211,7 +212,10 @@ struct Reader {
         constexpr uint32_t kBeforeTileBytes = kPrefixBytes + 2u * sizeof(uint32_t);
         static_assert(offsetof(multiframe::MultiframeTuning, hdrplusTileSize) == kBeforeTileBytes,
                       "MultiframeTuning journal tile-size layout");
-        if (n != sizeof(v) && n != kPrefixBytes && n != kBeforeTileBytes)
+        constexpr uint32_t kBeforeBracketBytes = kBeforeTileBytes + sizeof(uint32_t);
+        static_assert(offsetof(multiframe::MultiframeTuning, bracketEv) == kBeforeBracketBytes,
+                      "MultiframeTuning journal bracket layout");
+        if (n != sizeof(v) && n != kPrefixBytes && n != kBeforeTileBytes && n != kBeforeBracketBytes)
             throw std::runtime_error("capture_job_tuning_schema_mismatch");
         v = {};
         bytes(&v, n);

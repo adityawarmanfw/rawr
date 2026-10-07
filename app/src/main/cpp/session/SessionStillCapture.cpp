@@ -87,10 +87,28 @@ uint64_t SessionEngine::startPreparedMultiframeCapture(
     rawrcam::capture::JpegCaptureRequest mergedJpeg, bool dumpRzslRequested,
     rawrcam::capture::multiframe::MultiframeTuning tuning,
     rawrcam::capture::multiframe::MultiframeBaseFrameMode baseFrameMode) {
-    std::lock_guard<std::mutex> lock(mu_);
-    return capture_.multiframe().startPreparedMultiframeCapture(
-        std::move(baseDng), std::move(mergedDng), std::move(mergedJpeg), dumpRzslRequested, tuning, baseFrameMode,
-        look_.toneParams(), look_.requestedFilmEnabled(), look_.filmLook());
+    std::optional<rawrcam::capture::multiframe::BracketPlan> bracket;
+    uint64_t requestId = 0;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        requestId = capture_.multiframe().startPreparedMultiframeCapture(
+            std::move(baseDng), std::move(mergedDng), std::move(mergedJpeg), dumpRzslRequested, tuning, baseFrameMode,
+            look_.toneParams(), look_.requestedFilmEnabled(), look_.filmLook(), &bracket);
+    }
+    // HDR+ bracketed: the dark frames are one-shot camera requests, submitted
+    // outside mu_ like every other camera control call.
+    if (requestId != 0u && bracket) {
+        auto* controller = cameraControls_.controller();
+        const bool submitted =
+            controller && controller->captureExposureBracket(bracket->requestId, bracket->baseExposureTimeNs,
+                                                             bracket->baseSensitivity, bracket->evOffsets);
+        if (!submitted) {
+            LOGW("MULTIFRAME_BRACKET_SUBMIT_FAIL request=%llu", static_cast<unsigned long long>(bracket->requestId));
+            std::lock_guard<std::mutex> lock(mu_);
+            capture_.multiframe().abandonBracket(bracket->requestId);
+        }
+    }
+    return requestId;
 }
 void SessionEngine::cancelPreparedMultiframeCapture() {
     std::lock_guard<std::mutex> lock(mu_);

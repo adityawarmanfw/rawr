@@ -1,7 +1,9 @@
 #pragma once
 #include <functional>
+#include <optional>
 
 #include "capture/CaptureRequest.h"
+#include "capture/multiframe/BracketCollector.h"
 #include "capture/multiframe/MultiframeFrameRing.h"
 #include "capture/multiframe/mfsr/MfsrCaptureService.h"
 
@@ -31,8 +33,11 @@ class MultiframeCaptureCoordinator final {
                                             rawrcam::capture::JpegCaptureRequest mergedJpeg, bool dumpRzslRequested,
                                             MultiframeTuning tuning, MultiframeBaseFrameMode baseFrameMode,
                                             const tonemap::TonemapParams& tone, bool filmEnabled,
-                                            const spektrafilm_native::FilmLook& filmLook) noexcept;
+                                            const spektrafilm_native::FilmLook& filmLook,
+                                            std::optional<BracketPlan>* bracketPlan = nullptr) noexcept;
     void cancelPreparedMultiframeCapture() noexcept;
+    // The camera rejected the bracket requests: stop waiting for them.
+    void abandonBracket(std::uint64_t bracketRequestId) noexcept;
     std::string pollMultiframeDngCompletion();
     std::string pollMultiframeJpegCompletion();
     void setFilmAssetManager(AAssetManager* assets) {
@@ -54,5 +59,10 @@ class MultiframeCaptureCoordinator final {
     std::unique_ptr<MultiframeFrameRing> multiframeFrameRing_;
     std::unique_ptr<MfsrCaptureService> mfsrService_;
     std::unique_ptr<PendingMultiframeCapture> pendingMultiframeCapture_;
+    // HDR+ bracketed: collector awaiting this capture's tagged dark frames
+    // (frame lane, under the session lock like the ring).
+    std::shared_ptr<BracketCollector> activeBracket_;
+    std::uint64_t nextBracketRequestId_ = 1;
+    void abandonActiveBracket() noexcept;
 };
 }  // namespace rawrcam::capture::multiframe

@@ -70,6 +70,17 @@ int main() {
     assert(!contains(filmParams, "Tonemap parameters:"));
     MultiframeTuningView defaults{};
     const std::string defaultParams = buildParametersBlock(defaults, output, tone, "", false, 30, 4096, 3072);
+    MultiframeTuningView bracketed = defaults;
+    bracketed.mergeAlgorithm = 3;
+    bracketed.bracketEv = -2.5f;
+    bracketed.bracketFrames = 3;
+    bracketed.bracketLiftEv = 2.5f;
+    const std::string bracketParams = buildParametersBlock(bracketed, output, tone, "", false, 19, 4096, 3072);
+    assert(contains(bracketParams, "HDR+ bracketed"));
+    assert(contains(bracketParams, "Bracket: 3 x -2.500 EV"));
+    assert(contains(bracketParams, "Bracket lift: 2.500 EV"));
+    bracketed.bracketLiftEv = 0.0f;
+    assert(contains(buildParametersBlock(bracketed, output, tone, "", false, 16, 4096, 3072), "none (no dark frames)"));
     assert(contains(defaultParams, "Coverage Neff:"));
     assert(!contains(defaultParams, "Low support rescue"));
 

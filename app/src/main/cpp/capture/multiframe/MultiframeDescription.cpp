@@ -56,10 +56,17 @@ std::string buildParametersBlock(const MultiframeTuningView& tuning, const Multi
         out << "- Output: " << outWidth << 'x' << outHeight << " (" << scale.str() << "x, ~" << mp.str() << " MP)\n";
     }
     if (tuning.mergeAlgorithm != 0u) {
-        out << (tuning.mergeAlgorithm == 2u ? "- Merge: HDR+ frequency (tile alignment + per-frequency Wiener merge)\n"
-                                            : "- Merge: HDR+ spatial (tile alignment + robust average)\n")
+        out << (tuning.mergeAlgorithm == 3u   ? "- Merge: HDR+ bracketed (frequency merge, darkest-frame reference)\n"
+                : tuning.mergeAlgorithm == 2u ? "- Merge: HDR+ frequency (tile alignment + per-frequency Wiener merge)\n"
+                                              : "- Merge: HDR+ spatial (tile alignment + robust average)\n")
             << "- HDR+ strength: " << f3(tuning.hdrplusStrength) << '\n'
             << "- HDR+ tile size: " << tuning.hdrplusTileSize << '\n';
+        if (tuning.mergeAlgorithm == 3u) {
+            out << "- Bracket: " << tuning.bracketFrames << " x " << f3(tuning.bracketEv) << " EV\n"
+                << "- Bracket lift: "
+                << (tuning.bracketLiftEv > 0.0f ? f3(tuning.bracketLiftEv) + " EV" : std::string("none (no dark frames)"))
+                << '\n';
+        }
     } else {
         out << "- Merge: Wronski kernel regression\n"
             << "- LK iterations: " << tuning.lkIterations << '\n'

@@ -214,6 +214,10 @@ class FrameSubmitCoordinator final {
     std::optional<AcquiredSubmit> acquireSubmitSlot(const SubmitParams& params, pipeline::FrameSlot* slot,
                                                     uint32_t slotIndex);
     RecordedSubmit recordSubmitCommands(const SubmitParams& params, const AcquiredSubmit& acquired);
+    // Live post gain; tagged one-shot frames (HDR+ bracket dark frames) are
+    // lifted to the last repeating frame's exposure so the viewfinder does
+    // not flash dark while they pass through.
+    float previewPostGain(const rawrcam::metadata::FrameMetadataSnapshot& metadata);
     void submitSplitVideoAndMonitor(const SubmitParams& params, const AcquiredSubmit& acquired, bool& submitted);
     // Sets submitted=true once the queue submit succeeds; a later present
     // failure still leaves the slot submitted (recovered by fence retire).
@@ -253,6 +257,7 @@ class FrameSubmitCoordinator final {
     uint64_t videoDrops_ = 0;
     // Live RAW content sampling (logcat, at most once per second of sensor time).
     uint64_t lastRawContentStatsNs_ = 0;
+    double lastRepeatingExposure_ = 0.0;  // exposure time x sensitivity of the last untagged frame
     std::string lastSubmitFailure_;
     uint64_t repeatedSubmitFailures_ = 0;
     RawCpuUploadPool cpuUpload_;

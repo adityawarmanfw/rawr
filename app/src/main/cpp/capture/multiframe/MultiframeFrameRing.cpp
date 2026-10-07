@@ -50,15 +50,54 @@ void MultiframeFrameRing::discardTimestamp(uint64_t timestampNs) noexcept {
     committed_.erase(timestampNs);
     byTimestamp_.erase(it);
 }
-void MultiframeFrameRing::markReadyForTimestamp(std::uint64_t timestampNs) {
-    if (!ring_) return;
+std::optional<std::uint64_t> MultiframeFrameRing::markReadyForTimestamp(std::uint64_t timestampNs) {
+    if (!ring_) return std::nullopt;
     const auto it = byTimestamp_.find(timestampNs);
-    if (it == byTimestamp_.end()) return;
+    if (it == byTimestamp_.end()) return std::nullopt;
     const auto committed = committed_.find(timestampNs);
-    if (committed == committed_.end() || !committed->second) return;
+    if (committed == committed_.end() || !committed->second) return std::nullopt;
     committed_.erase(committed);
-    ring_->markReady(it->second);
+    const std::uint64_t frameId = it->second;
+    ring_->markReady(frameId);
     byTimestamp_.erase(it);
+    return frameId;
+}
+
+const rawrcam::metadata::FrameMetadataSnapshot* MultiframeFrameRing::metadataFor(std::uint64_t frameId) const {
+    const auto it = metadata_.find(frameId);
+    return it == metadata_.end() ? nullptr : &it->second;
+}
+
+std::optional<FrozenBurst> MultiframeFrameRing::freezeFrame(std::uint64_t frameId) {
+    if (!ring_) return std::nullopt;
+    const auto meta = metadata_.find(frameId);
+    const auto col = color_.find(frameId);
+    if (meta == metadata_.end() || col == color_.end()) return std::nullopt;
+    FrozenBurst out;
+    // The frame was just marked ready, so it is among the newest ready ones.
+    out.snapshot = ring_->snapshot(4u);
+    if (!out.snapshot) return std::nullopt;
+    for (const auto& ref : out.snapshot->refs()) {
+        if (ref.frameId == frameId)
+            out.refs.push_back(ref);
+        else
+            out.snapshot->release(ref.frameId);
+    }
+    const auto gpu = out.snapshot->gpuImage(frameId);
+    if (out.refs.size() != 1u || !gpu) return std::nullopt;
+    rawr::raw_gpu_pipeline::BurstFrame frame{};
+    frame.raw = *gpu;
+    const std::uint32_t cfa = meta->second.cameraContext ? meta->second.cameraContext->rawPreviewCfa : 0u;
+    frame.parameters.normalization.blackByPhase =
+        rawrcam::geometry::reorderRggbByCode(meta->second.blackLevelPhysicalRggb, cfa);
+    frame.parameters.normalization.whiteLevel = meta->second.effectiveWhiteLevel;
+    frame.parameters.whiteBalance = rawrcam::color::collapseRggbToRgb(col->second.baselineWbRggb);
+    out.frames.push_back(frame);
+    out.metadata.push_back(meta->second);
+    out.colors.push_back(col->second);
+    out.referenceMetadata = meta->second;
+    out.referenceColor = col->second;
+    return out;
 }
 
 std::optional<FrozenBurst> MultiframeFrameRing::freeze(std::size_t maxFrames) {

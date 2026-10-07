@@ -215,6 +215,39 @@ struct NativeCameraController::Impl final : CameraEventSink {
         return route;
     }
 
+    bool captureExposureBracket(uint64_t requestId, int64_t baseExposureTimeNs, int32_t baseReportedSensitivity,
+                                const std::vector<float>& evOffsets) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (!deviceSession.hasSession() || !deviceSession.request() || !control.capabilities.manualExposureSupported ||
+            baseExposureTimeNs <= 0 || baseReportedSensitivity <= 0 || evOffsets.empty()) {
+            diag("CAMERA_BRACKET_REJECTED session=" + std::to_string(deviceSession.hasSession() ? 1 : 0) +
+                 " manual=" + std::to_string(control.capabilities.manualExposureSupported ? 1 : 0));
+            return false;
+        }
+        // CaptureResult ISO -> request coordinate (forced DCG modes report a
+        // different scale; same conversion as the M/I mode seed).
+        int32_t sensitivity = baseReportedSensitivity;
+        if (const auto ratio = results.sensitivityReportedPerRequest(); ratio && *ratio > 0.0) {
+            sensitivity = static_cast<int32_t>(std::llround(baseReportedSensitivity / *ratio));
+        } else if (deviceSession.sensorModeOverridden()) {
+            diag("CAMERA_BRACKET_REJECTED reportedPerRequest=unavailable dcg=on");
+            return false;
+        }
+        const auto& caps = control.capabilities;
+        std::vector<CameraRequestPipeline::BracketExposure> exposures;
+        for (const float ev : evOffsets) {
+            // Shorter shutter at the same gain first; lower gain only for what
+            // the minimum shutter cannot take.
+            const double target = double(baseExposureTimeNs) * std::exp2(std::min(0.0f, ev));
+            const int64_t time = std::clamp<int64_t>(std::llround(target), caps.exposureTimeMinNs,
+                                                     std::max(caps.exposureTimeMinNs, caps.exposureTimeMaxNs));
+            const auto iso = static_cast<int32_t>(std::llround(double(sensitivity) * target / double(time)));
+            exposures.push_back({time, std::clamp(iso, caps.sensitivityMin, std::max(caps.sensitivityMin, caps.sensitivityMax))});
+        }
+        return requests.captureBracket(deviceSession.session(), deviceSession.request(), deviceSession.callbackContext(),
+                                       control, exposures, requestId);
+    }
+
     bool submitRepeatingLocked() {
         return requests.submit(deviceSession.session(), deviceSession.request(), deviceSession.callbackContext(),
                                control, meteringRequestLocked());
@@ -815,6 +848,10 @@ int NativeCameraController::videoRotationDegrees(int deviceRotationDegrees) cons
 bool NativeCameraController::setExposureMode(ExposureControlMode mode) { return impl_->setExposureModeValue(mode); }
 void NativeCameraController::setManualExposureTimeNs(int64_t value) { impl_->setManualExposure(value); }
 void NativeCameraController::setManualSensitivity(int32_t value) { impl_->setManualIso(value); }
+bool NativeCameraController::captureExposureBracket(uint64_t requestId, int64_t baseExposureTimeNs,
+                                                    int32_t baseReportedSensitivity, const std::vector<float>& evOffsets) {
+    return impl_->captureExposureBracket(requestId, baseExposureTimeNs, baseReportedSensitivity, evOffsets);
+}
 void NativeCameraController::setExposureCompensationSteps(int32_t value) { impl_->setEvSteps(value); }
 bool NativeCameraController::setWhiteBalanceMode(WhiteBalanceControlMode mode, int64_t requestId) {
     return impl_->setWhiteBalanceModeValue(mode, requestId);

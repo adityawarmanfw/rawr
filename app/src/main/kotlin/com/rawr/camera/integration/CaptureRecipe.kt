@@ -3,6 +3,7 @@ package com.rawr.camera.integration
 import com.rawr.camera.BuildConfig
 import com.rawr.camera.model.TonemapCatalog
 import com.rawr.camera.model.valueFor
+import com.rawr.camera.settings.model.MultiframeMergeAlgorithm
 import com.rawr.camera.settings.model.SettingsValues
 import com.rawr.camera.settings.model.toLegacy
 import org.json.JSONObject
@@ -235,6 +236,10 @@ internal object CaptureRecipe {
             put("mergeAlgorithm", value.mergeAlgorithm.name)
             put("hdrPlusStrength", value.hdrPlusStrength)
             put("hdrPlusTileSize", value.hdrPlusTileSize)
+            if (value.mergeAlgorithm == MultiframeMergeAlgorithm.HdrPlusBracketed) {
+                put("bracketEv", value.bracketEv)
+                put("bracketFrames", value.bracketFrames)
+            }
             put("maxFrames", value.maxFrames)
             put("lkIterations", value.lkIterations)
             put("hessianEpsilonExponent", value.hessianEpsilonExponent)

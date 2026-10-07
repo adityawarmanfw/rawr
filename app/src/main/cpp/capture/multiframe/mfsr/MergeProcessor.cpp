@@ -2,6 +2,7 @@
 
 #include <stdexcept>
 
+#include "capture/multiframe/BracketExposure.h"
 #include "capture/multiframe/MultiframeQueueHelpers.h"
 #include "diagnostics/logging/NativeLog.h"
 namespace rawrcam::capture::multiframe {
@@ -39,9 +40,21 @@ rawr::raw_gpu_pipeline::BurstRunResult MergeProcessor::run(
     mergeConfig.fallbackLumaGain = tuning.fallbackLumaGain;
     mergeConfig.fallbackChromaMaxSigma = 16.0f;
     auto stageSink = rawrcam::capture::multiframe::makeTraceStageSink();
-    const auto algorithm = tuning.mergeAlgorithm == 2u   ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusFrequency
+    const auto algorithm = tuning.mergeAlgorithm == kMergeAlgorithmHdrPlusBracketed
+                               ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusBracketed
+                           : tuning.mergeAlgorithm == 2u ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusFrequency
                            : tuning.mergeAlgorithm == 1u ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusSpatial
                                                          : rawr::raw_gpu_pipeline::MergeAlgorithm::Wronski;
+    // Per-frame exposure from the (journaled) metadata; a burst whose dark
+    // frames never arrived merges like HDR+ Quality.
+    if (algorithm == rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusBracketed &&
+        burst.metadata.size() == burst.frames.size()) {
+        for (std::size_t i = 0; i < burst.frames.size(); ++i)
+            burst.frames[i].exposure = float(linearExposure(burst.metadata[i]) * 1.0e-6);
+        LOGI("MULTIFRAME_BRACKET merge frames=%zu reference=%u bracketed=%d lift=%.2fEV", burst.frames.size(),
+             burst.referenceIndex, isExposureBracketed(burst.metadata) ? 1 : 0,
+             bracketLiftEv(burst.metadata, burst.referenceIndex));
+    }
     rawr::raw_merge_hdrplus_gpu::Config hdrplusConfig{};
     hdrplusConfig.strength = tuning.hdrplusStrength;
     hdrplusConfig.tileSize = tuning.hdrplusTileSize;

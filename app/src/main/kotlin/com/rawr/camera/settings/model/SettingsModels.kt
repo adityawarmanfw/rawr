@@ -324,7 +324,8 @@ enum class MultiframeOutputResolution(val label: String, val outputScale: Float)
 enum class MultiframeMergeAlgorithm(val nativeId: Int, val label: String) {
     Wronski(0, "Super-resolution"),
     HdrPlus(1, "HDR+"),
-    HdrPlusQuality(2, "HDR+ Quality")
+    HdrPlusQuality(2, "HDR+ Quality"),
+    HdrPlusBracketed(3, "HDR+ Bracketed")
 }
 
 enum class MultiframeBaseFrameMode(val nativeId: Int, val label: String) {
@@ -356,7 +357,9 @@ enum class MultiframeNumericParameter {
     FallbackChroma,
     FallbackLuma,
     HdrPlusStrength,
-    HdrPlusTileSize
+    HdrPlusTileSize,
+    BracketEv,
+    BracketFrames
 }
 
 data class MultiframeNumericSpec(
@@ -645,6 +648,31 @@ object MultiframeSpecs {
             "px"
         )
 
+    val bracketEv =
+        MultiframeNumericSpec(
+            MultiframeNumericParameter.BracketEv,
+            "Bracket Exposure",
+            "Exposure of the extra dark frames taken after the shutter, relative to the burst. Lower: recovers brighter highlights (sun, lamps) but the dark frames are noisier. Higher: cleaner merge, recovers only mildly clipped areas.",
+            -4f,
+            -1f,
+            -2f,
+            .5f,
+            1,
+            "EV"
+        )
+
+    val bracketFrames =
+        MultiframeNumericSpec(
+            MultiframeNumericParameter.BracketFrames,
+            "Bracket Frames",
+            "Dark frames captured after the shutter. Lower: shorter wait after the shutter. Higher: cleaner recovered highlights.",
+            1f,
+            4f,
+            2f,
+            1f,
+            0
+        )
+
     val all =
         listOf(
             maxFrames,
@@ -670,7 +698,9 @@ object MultiframeSpecs {
             fallbackChroma,
             fallbackLuma,
             hdrPlusStrength,
-            hdrPlusTileSize
+            hdrPlusTileSize,
+            bracketEv,
+            bracketFrames
         )
 
     fun forParameter(parameter: MultiframeNumericParameter): MultiframeNumericSpec =
@@ -682,6 +712,8 @@ data class MultiframeTuning(
     val mergeAlgorithm: MultiframeMergeAlgorithm = MultiframeMergeAlgorithm.HdrPlus,
     val hdrPlusStrength: Float = 13f,
     val hdrPlusTileSize: Int = 32,
+    val bracketEv: Float = -2f,
+    val bracketFrames: Int = 2,
     val maxFrames: Int = 16,
     val lkIterations: Int = 5,
     val hessianEpsilonExponent: Int = -10,
@@ -730,6 +762,8 @@ data class MultiframeTuning(
         MultiframeNumericParameter.FallbackLuma -> fallbackLuma
         MultiframeNumericParameter.HdrPlusStrength -> hdrPlusStrength
         MultiframeNumericParameter.HdrPlusTileSize -> hdrPlusTileSize.toFloat()
+        MultiframeNumericParameter.BracketEv -> bracketEv
+        MultiframeNumericParameter.BracketFrames -> bracketFrames.toFloat()
     }
 
     fun withValue(parameter: MultiframeNumericParameter, value: Float): MultiframeTuning = when (parameter) {
@@ -757,6 +791,8 @@ data class MultiframeTuning(
         MultiframeNumericParameter.FallbackLuma -> copy(fallbackLuma = value)
         MultiframeNumericParameter.HdrPlusStrength -> copy(hdrPlusStrength = value.roundToInt().toFloat())
         MultiframeNumericParameter.HdrPlusTileSize -> copy(hdrPlusTileSize = if (value < 24f) 16 else 32)
+        MultiframeNumericParameter.BracketEv -> copy(bracketEv = (value * 2f).roundToInt() / 2f)
+        MultiframeNumericParameter.BracketFrames -> copy(bracketFrames = value.roundToInt())
     }
 
     fun sanitized(defaults: MultiframeTuning = MultiframeTuning()): MultiframeTuning {
@@ -800,9 +836,20 @@ data class MultiframeTuning(
         fallbackLuma
     )
 
-    // Appended after the multiframe chroma-denoise flag (native indices 23-25).
+    /** ZSL frames to freeze at the shutter; HDR+ Bracketed leaves room for its post-shutter dark frames. */
+    fun zslFrames(): Int =
+        if (mergeAlgorithm == MultiframeMergeAlgorithm.HdrPlusBracketed) (maxFrames - bracketFrames).coerceAtLeast(2)
+        else maxFrames
+
+    // Appended after the multiframe chroma-denoise flag (native indices 23-27).
     fun nativeMergeValues(): FloatArray =
-        floatArrayOf(mergeAlgorithm.nativeId.toFloat(), hdrPlusStrength, hdrPlusTileSize.toFloat())
+        floatArrayOf(
+            mergeAlgorithm.nativeId.toFloat(),
+            hdrPlusStrength,
+            hdrPlusTileSize.toFloat(),
+            bracketEv,
+            bracketFrames.toFloat()
+        )
 }
 
 data class SettingsValues(

@@ -17,6 +17,7 @@
 #include <thread>
 #include <utility>
 
+#include "capture/multiframe/BracketExposure.h"
 #include "capture/multiframe/MultiframeDescription.h"
 #include "capture/multiframe/MultiframeQueueHelpers.h"
 #include "capture/multiframe/RzslCaptureWriter.h"
@@ -70,7 +71,6 @@ void MfsrCaptureJob::run() {
     auto mergedJpeg = std::move(work->mergedJpeg);
     const bool jpegRequested = work->jpegRequested;
     const bool dumpRzslRequested = work->dumpRzslRequested;
-    const auto frozenTonemap = work->frozenTonemap;
     const auto tuning = [&] {
         // Super-resolution output must stay within the GPU's 2D image limit
         // (large sensors at the 1.386x maximum would exceed it).
@@ -83,6 +83,19 @@ void MfsrCaptureJob::run() {
         if (t.mergeAlgorithm != 0u) t.outputScale = 1.0f;
         return t;
     }();
+    // Bracketed bursts merge onto their darkest frame; lift the render (and
+    // the merged DNG's BaselineExposure) back to the preview exposure.
+    const float liftEv = tuning.mergeAlgorithm == kMergeAlgorithmHdrPlusBracketed && job &&
+                                 job->metadata.size() == job->frames.size() && isExposureBracketed(job->metadata)
+                             ? bracketLiftEv(job->metadata, job->referenceIndex)
+                             : 0.0f;
+    auto frozenTonemap = work->frozenTonemap;
+    frozenTonemap.exposureEV += liftEv;
+    if (liftEv > 0.0f) {
+        mergedDng.baselineExposureEV = mergedDng.baselineExposureEV.value_or(0.0f) + liftEv;
+        baseDng.baselineExposureEV = baseDng.baselineExposureEV.value_or(0.0f) + liftEv;  // base = dark reference
+        LOGI("MULTIFRAME_BRACKET lift=%.2fEV reference=%u", liftEv, job->referenceIndex);
+    }
     const auto baseFrameMode = work->baseFrameMode;
     const auto sharpnessScores = work->sharpnessScores;
     const double sharpnessMs = work->sharpnessMs;
@@ -117,6 +130,9 @@ void MfsrCaptureJob::run() {
     tuningView.mergeAlgorithm = tuning.mergeAlgorithm;
     tuningView.hdrplusStrength = tuning.hdrplusStrength;
     tuningView.hdrplusTileSize = tuning.hdrplusTileSize;
+    tuningView.bracketEv = tuning.bracketEv;
+    tuningView.bracketFrames = tuning.bracketFrames;
+    tuningView.bracketLiftEv = liftEv;
     tuningView.baseFrameMode = baseFrameMode;
     MultiframeOutputInfo outputInfo{};
     outputInfo.noiseProfile = "Burst (fitted per capture)";
@@ -570,6 +586,8 @@ void MfsrCaptureJob::run() {
                 renderedContext.filmTiled = uint64_t(renderedContext.width) * renderedContext.height >= 12000000u &&
                                             (!work->filmLook.grainEnabled || work->filmLook.grainModel != 2);
                 renderedContext.filmLook = work->filmLook;
+                // Bracket lift is exposure normalization, not a creative film lift (uncapped).
+                renderedContext.filmLook.filmExposureEv += liftEv;
                 renderedContext.sensorToLinearSrgb = job->referenceColor.cameraToLinearSrgbRowMajor;
                 develop::applyDevelopSettings(renderedContext, mergedJpeg.develop);
                 // The single-frame denoisers (Image > Denoise: wavelet, GALOSH
@@ -619,7 +637,7 @@ void MfsrCaptureJob::run() {
                 // tonemap path; the film path mirrors its folded EV.
                 if (renderedContext.filmEnabled) {
                     renderedContext.gainmapParams.hdrExposure =
-                        std::exp2(rawrcam::color::filmExposureEv(work->filmLook, frozenTonemap.aePostGain));
+                        std::exp2(rawrcam::color::filmExposureEv(renderedContext.filmLook, frozenTonemap.aePostGain));
                 } else {
                     renderedContext.gainmapParams.hdrExposure =
                         std::max(frozenTonemap.aePostGain, 1.0e-6f) * std::exp2(frozenTonemap.exposureEV);

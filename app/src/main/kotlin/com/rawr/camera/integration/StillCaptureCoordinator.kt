@@ -124,7 +124,7 @@ class StillCaptureCoordinator(
         val jpegQuality = current.imageTone.jpegQuality.toInt().coerceIn(95, 100)
         val multiframeFrames =
             if (current.experimentalMultiframeEnabled) {
-                preview.prepareExperimentalMultiframe(current.multiframeTuning.maxFrames).coerceIn(0, 30)
+                preview.prepareExperimentalMultiframe(current.multiframeTuning.zslFrames()).coerceIn(0, 30)
             } else {
                 0
             }
