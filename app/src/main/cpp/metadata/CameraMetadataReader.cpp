@@ -37,10 +37,11 @@ RectI rect(const ACameraMetadata* metadata, uint32_t tag) {
     RectI out{};
     const auto e = entry(metadata, tag);
     if (!e || !e->data.i32 || e->count < 4) return out;
+    // Camera2 rectangles are (xmin, ymin, width, height).
     out.left = e->data.i32[0];
     out.top = e->data.i32[1];
-    out.right = e->data.i32[2];
-    out.bottom = e->data.i32[3];
+    out.right = e->data.i32[0] + e->data.i32[2];
+    out.bottom = e->data.i32[1] + e->data.i32[3];
     out.valid = true;
     return out;
 }
