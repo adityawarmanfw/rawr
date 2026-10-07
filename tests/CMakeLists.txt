@@ -55,6 +55,9 @@ rawr_test(camera_result_state_test
   "${RAWR_ROOT}/app/src/main/cpp/camera/WhiteBalanceMath.cpp"
   "${RAWR_ROOT}/app/src/main/cpp/color/WbDisplayEstimate.cpp"
   "${RAWR_ROOT}/app/src/main/cpp/color/ColorMath.cpp")
+rawr_test(sensitivity_probe_startup_test
+  "${RAWR_ROOT}/tests/native/sensitivity_probe_startup_test.cpp")
+
 rawr_test(camera_session_policy_test
   "${RAWR_ROOT}/tests/native/camera_session_policy_test.cpp")
 rawr_test(camera_video_facts_test

@@ -216,6 +216,19 @@ bool FrameSubmitCoordinator::submitMatchedFrame(rawrcam::imaging::MatchedFrame& 
     auto& meta = matched.metadata;
     const uint64_t timestampNs = matched.timestampNs;
 
+    // Calibration and its transition frames must never reach presentation,
+    // scopes, the ZSL ring, or a pending single-frame capture. The camera has
+    // already consumed their results for ISO calibration. Keep the previous
+    // displayed image and release each camera buffer/fence without importing it.
+    if (meta.snapshot.suppressPreview ||
+        meta.snapshot.optimizedStillRequestId == metadata::kSensitivityProbeRequestId) {
+        if (image.acquireFenceFd >= 0) close(image.acquireFenceFd);
+        image.acquireFenceFd = -1;
+        if (image.image) AImage_delete(image.image);
+        image.image = nullptr;
+        return false;
+    }
+
     auto applyCpuSnapshotFence = [&](int gpuAcquireFenceFd, const char* failureTag) -> bool {
         if (gpuAcquireFenceFd == -2) {
             lifecyclePort_.postDiagnostic(std::string(failureTag) + " timestampNs=" + std::to_string(timestampNs));

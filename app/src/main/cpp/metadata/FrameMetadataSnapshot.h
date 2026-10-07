@@ -9,6 +9,8 @@
 
 namespace rawrcam::metadata {
 
+inline constexpr uint64_t kSensitivityProbeRequestId = ~uint64_t{0};
+
 enum class EffectiveWhiteLevelSource : std::uint8_t {
     StaticCharacteristics = 0,
     ReportedDynamic = 1,
@@ -31,6 +33,8 @@ inline const char* effectiveWhiteLevelSourceName(EffectiveWhiteLevelSource sourc
 // The shared cameraContext pins the immutable camera state that produced this
 // frame, so later asynchronous consumers never consult mutable live state.
 struct FrameMetadataSnapshot {
+    // Transient startup routing only; deliberately omitted from capture journals.
+    bool suppressPreview = false;
     CameraContextMetadataPtr cameraContext;
     uint64_t frameOrdinal = 0;
     uint64_t timestampNs = 0;  // SENSOR_TIMESTAMP; AImage/CaptureResult pairing key.

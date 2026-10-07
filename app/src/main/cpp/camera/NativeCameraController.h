@@ -55,8 +55,9 @@ class NativeCameraController {
     // sensitivity coordinate).
     bool captureExposureBracket(uint64_t requestId, int64_t baseExposureTimeNs, int32_t baseReportedSensitivity,
                                 const std::vector<float>& evOffsets);
-    // Allows the once-per-session DCG ISO calibration frame that
-    // captureExposureBracket needs in Auto; off unless HDR+ Bracketed is selected.
+    // Runs DCG ISO calibration during startup, before exposing the viewfinder.
+    // Enabling it on an uncalibrated live session restarts that session.
+    // Off unless HDR+ Bracketed is selected; never probes during video.
     void setSensitivityCalibrationWanted(bool wanted);
     void setExposureCompensationSteps(int32_t steps);
     // White balance. setWhiteBalanceMode returns false when the requested
