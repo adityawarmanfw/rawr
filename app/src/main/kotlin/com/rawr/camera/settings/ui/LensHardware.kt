@@ -1,6 +1,9 @@
 package com.rawr.camera.settings.ui
 
 import android.content.Context
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
+import android.os.Build
 import androidx.compose.runtime.staticCompositionLocalOf
 import com.rawr.camera.integration.CameraInventory
 import com.rawr.camera.integration.CameraInventorySource
@@ -20,9 +23,14 @@ interface LensHardware {
 
     suspend fun keys(cameraId: String, physicalCameraId: String): CameraKeyCatalog
 
+    /** True when any camera advertises a Camera2 shutter/ISO priority mode (API 36+). */
+    suspend fun aePrioritySupported(): Boolean
+
     /** No device access (previews, renderer, tests). */
     object None : LensHardware {
         override val deviceDefaults: List<LensProfile> = emptyList()
+
+        override suspend fun aePrioritySupported() = true
 
         override suspend fun cameras() = CameraInventory(emptyList(), "Camera probing is unavailable here")
 
@@ -42,6 +50,24 @@ class AndroidLensHardware(context: Context) : LensHardware {
 
     override suspend fun cameras(): CameraInventory = mutex.withLock {
         inventory ?: withContext(Dispatchers.IO) { source.cameras() }.also { inventory = it }
+    }
+
+    private val cameraManager = context.getSystemService(CameraManager::class.java)
+    private var aePriority: Boolean? = null
+
+    override suspend fun aePrioritySupported(): Boolean = mutex.withLock {
+        aePriority ?: withContext(Dispatchers.IO) { probeAePriority() }.also { aePriority = it }
+    }
+
+    private fun probeAePriority(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.BAKLAVA) return false
+        return runCatching {
+            cameraManager.cameraIdList.any { id ->
+                val modes = cameraManager.getCameraCharacteristics(id)
+                    .get(CameraCharacteristics.CONTROL_AE_AVAILABLE_PRIORITY_MODES)
+                modes != null && modes.any { it != CameraCharacteristics.CONTROL_AE_PRIORITY_MODE_OFF }
+            }
+        }.getOrDefault(true)
     }
 
     override suspend fun keys(cameraId: String, physicalCameraId: String): CameraKeyCatalog = mutex.withLock {

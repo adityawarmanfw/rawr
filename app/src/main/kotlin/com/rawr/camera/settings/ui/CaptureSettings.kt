@@ -4,6 +4,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.rawr.camera.settings.architecture.*
@@ -67,6 +69,9 @@ internal fun ExposureSettings(state: SettingsUiState, dispatch: SettingsDispatch
         state.capabilities.autoMinFpsChoices
             .firstOrNull { it.id == state.values.autoMinFpsId }
             ?.label ?: "Unavailable"
+    // Optimistic until probed so a supporting camera never flashes disabled.
+    val hardware = LocalLensHardware.current
+    val prioritySupported by produceState(true, hardware) { value = hardware.aePrioritySupported() }
     SettingsPageContainer {
         SettingsGroup(title = "Anti-flicker") {
             CompactChoiceRow(
@@ -90,12 +95,18 @@ internal fun ExposureSettings(state: SettingsUiState, dispatch: SettingsDispatch
             )
         }
         SettingsGroup(
-            description = "Locking shutter or ISO enters full Manual instead of shutter/ISO priority, " +
-                "even when the camera supports priority modes."
+            description =
+                if (prioritySupported) {
+                    "Locking shutter or ISO enters full Manual instead of shutter/ISO priority, " +
+                        "even when the camera supports priority modes."
+                } else {
+                    "This camera has no shutter/ISO priority; locking shutter or ISO always enters full Manual."
+                }
         ) {
             SettingsSwitchRow(
                 title = "Full Manual Instead of Priority",
-                checked = state.values.aePriorityDisabled
+                checked = state.values.aePriorityDisabled || !prioritySupported,
+                enabled = prioritySupported
             ) { dispatch.invoke(SetAePriorityDisabled(it)) }
         }
         SettingsGroup(title = "Auto Exposure Limits") {
