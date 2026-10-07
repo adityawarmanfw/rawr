@@ -99,32 +99,15 @@ class LutProfileFileStore(private val context: Context) {
         )
     }
 
+    /** Rewrites the imported file in the normalized form the renderer can always load, or throws why it cannot. */
     private fun validateCube(file: File) {
-        var size: Int? = null
-        var rows = 0
-        file.bufferedReader().useLines { lines ->
-            lines.forEach { raw ->
-                val line = raw.trim()
-                if (line.isBlank() || line.startsWith("#") || line.startsWith("TITLE")) return@forEach
-                if (line.startsWith("LUT_1D_SIZE")) error("1D LUTs are not supported")
-                if (line.startsWith("LUT_3D_SIZE")) {
-                    size = line.substringAfter("LUT_3D_SIZE").trim().toIntOrNull()
-                    require(size in setOf(17, 33, 65)) { "Supported .cube sizes are 17, 33 and 65" }
-                    return@forEach
-                }
-                if (line.startsWith("DOMAIN_MIN") || line.startsWith("DOMAIN_MAX")) return@forEach
-                if (line.firstOrNull()?.let { it.isDigit() || it == '-' || it == '.' } ==
-                    true
-                ) {
-                    require(line.split(Regex("\\s+")).size >= 3)
-                    rows++
-                } else {
-                    error("Unsupported .cube directive")
-                }
+        val cleaned = file.bufferedReader().useLines { CubeNormalizer.normalize(it) }
+        file.bufferedWriter().use { out ->
+            cleaned.forEach {
+                out.write(it)
+                out.newLine()
             }
         }
-        val n = requireNotNull(size) { "Missing LUT_3D_SIZE" }
-        require(rows == n * n * n) { "LUT table length does not match LUT_3D_SIZE" }
     }
 
     private fun queryName(uri: Uri): String? = context.contentResolver
