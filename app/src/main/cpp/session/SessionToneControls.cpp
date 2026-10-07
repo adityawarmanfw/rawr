@@ -56,7 +56,7 @@ void SessionEngine::setColorMode(const std::string& mode) {
 
 void SessionEngine::setFilmSimEnabled(bool enabled) { look_.setFilmSimEnabled(enabled); }
 
-void SessionEngine::setFilmSimPreviewDivisor(uint32_t divisor) { look_.setFilmSimPreviewDivisor(divisor); }
+void SessionEngine::setViewfinderDivisor(uint32_t divisor) { look_.setViewfinderDivisor(divisor); }
 
 void SessionEngine::setFilmSimLook(const spektrafilm_native::FilmLook& look) { look_.setFilmSimLook(look); }
 

@@ -22,11 +22,6 @@ internal fun FilmSimSettings(state: SettingsUiState, dispatch: SettingsDispatch)
                 title = "Film Simulation",
                 checked = state.values.filmSimEnabled
             ) { dispatch.invoke(SetFilmSimEnabled(it)) }
-            FilmSegmentedRow(
-                "Preview quality",
-                listOf("High", "Balanced", "Fast"),
-                (state.values.filmPreviewDivisor - 2).coerceIn(0, 2)
-            ) { dispatch.invoke(SetFilmSimPreviewDivisor(it + 2)) }
         }
         // Preset first: pick a starting point, then refine below. Edits
         // mark the origin preset Modified (Revert restores it); null is Custom.

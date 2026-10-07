@@ -20,6 +20,8 @@ internal fun DisplayControlsSettings(state: SettingsUiState, dispatch: SettingsD
         SettingsGroup {
             GridModeSettingsRow(state.values.gridMode) { dispatch.invoke(SetGridMode(it)) }
             SettingDivider()
+            ViewfinderResolutionRow(state.values.viewfinderDivisor) { dispatch.invoke(SetViewfinderDivisor(it)) }
+            SettingDivider()
             SettingsRow(
                 "Monitoring",
                 "Focus peaking behavior",
@@ -129,6 +131,34 @@ private fun GridModeSettingsRow(selected: GridMode, onSelect: (GridMode) -> Unit
                     text = { Text(labels.getValue(mode)) },
                     onClick = {
                         onSelect(mode)
+                        expanded.value = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ViewfinderResolutionRow(divisor: Int, onSelect: (Int) -> Unit) {
+    val expanded = remember { mutableStateOf(false) }
+    // Divisor of the preview size the viewfinder look renders at. Film sim
+    // never renders above High, so Full and High look the same there.
+    val labels = mapOf(1 to "Full", 2 to "High", 3 to "Balanced", 4 to "Fast")
+    Box {
+        SettingsRow(
+            "Viewfinder Resolution",
+            labels.getValue(divisor.coerceIn(1, 4)),
+            supportingText = "Lower resolution reduces GPU load and heat. Photos and video are not affected.",
+            testTag = SettingsTestTags.row("DisplayControls", "viewfinder_resolution"),
+            onClick = { expanded.value = true }
+        )
+        DropdownMenu(expanded = expanded.value, onDismissRequest = { expanded.value = false }) {
+            labels.forEach { (value, label) ->
+                DropdownMenuItem(
+                    text = { Text(label) },
+                    onClick = {
+                        onSelect(value)
                         expanded.value = false
                     }
                 )

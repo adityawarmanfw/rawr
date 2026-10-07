@@ -55,5 +55,9 @@ internal fun reduceCaptureSettings(
     is SetGridMode -> {
         state.withValues(state.values.copy(gridMode = action.value))
     }
+
+    is SetViewfinderDivisor -> {
+        state.withValues(state.values.copy(viewfinderDivisor = action.divisor.coerceIn(1, 4)))
+    }
     else -> error("Unsupported capture settings action: $action")
 }

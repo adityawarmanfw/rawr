@@ -77,7 +77,7 @@ class NativePreviewEngine {
 
     external fun setFilmSimEnabled(handle: Long, enabled: Boolean)
 
-    external fun setFilmSimPreviewDivisor(handle: Long, divisor: Int)
+    external fun setViewfinderDivisor(handle: Long, divisor: Int)
 
     external fun setFilmSimLook(handle: Long, values: FloatArray, enums: IntArray)
 

@@ -379,8 +379,8 @@ void PreviewLookController::setFilmSimEnabled(bool enabled) {
     }
 }
 
-void PreviewLookController::setFilmSimPreviewDivisor(uint32_t divisor) {
-    __android_log_print(ANDROID_LOG_INFO, "RawrCamNative", "FILM_SIM_PREVIEW_DIVISOR divisor=%u", divisor);
+void PreviewLookController::setViewfinderDivisor(uint32_t divisor) {
+    __android_log_print(ANDROID_LOG_INFO, "RawrCamNative", "VIEWFINDER_DIVISOR divisor=%u", divisor);
     std::lock_guard<std::mutex> lock(transitionMutex_);
     publishDivisor_(divisor);
 }

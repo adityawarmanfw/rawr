@@ -92,6 +92,7 @@ class SettingsModelTest {
         assertEquals(CaptureControlLayout.Compact, v.captureControlLayout)
         assertEquals(ControlSurfaceStyle.Basic, v.controlSurfaceStyle)
         assertEquals(GridMode.Thirds, v.gridMode)
+        assertEquals(2, v.viewfinderDivisor)
         // Output.
         assertEquals("dng.uncompressed", v.dngCompressionId)
         assertEquals(98f, v.imageTone.jpegQuality)
@@ -430,6 +431,16 @@ class SettingsModelTest {
         val controller = PersistentSettingsController()
         controller.dispatch(SetGridMode(GridMode.Cross))
         assertEquals(GridMode.Cross, controller.state.value.values.gridMode)
+    }
+
+    @Test fun viewfinderDivisorIsDisplaySettingClampedToOneThroughFour() {
+        val controller = PersistentSettingsController()
+        controller.dispatch(SetViewfinderDivisor(3))
+        assertEquals(3, controller.state.value.values.viewfinderDivisor)
+        controller.dispatch(SetViewfinderDivisor(9))
+        assertEquals(4, controller.state.value.values.viewfinderDivisor)
+        controller.dispatch(SetViewfinderDivisor(0))
+        assertEquals(1, controller.state.value.values.viewfinderDivisor)
     }
 
     @Test fun multiframeTunablesAreBoundedAndResettableToCatalogDefaults() {

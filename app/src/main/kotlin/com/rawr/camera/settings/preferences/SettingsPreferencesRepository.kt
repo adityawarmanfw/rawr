@@ -488,7 +488,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
             experimentalMultiframeEnabled = p[Keys.experimentalMultiframeEnabled] ?: d.experimentalMultiframeEnabled,
             persistentEngineEnabled = p[Keys.persistentEngineEnabled] ?: d.persistentEngineEnabled,
             filmSimEnabled = p[Keys.filmSimEnabled] ?: d.filmSimEnabled,
-            filmPreviewDivisor = (p[Keys.filmPreviewDivisor] ?: d.filmPreviewDivisor).coerceIn(2, 4),
+            viewfinderDivisor = (p[Keys.viewfinderDivisor] ?: d.viewfinderDivisor).coerceIn(1, 4),
             filmSimLook = FilmSimCodec.decodeLook(p[Keys.filmSimLook]) ?: d.filmSimLook,
             selectedFilmPresetId = p[Keys.selectedFilmPresetId],
             filmPresets = FilmSimCodec.decodePresets(p[Keys.filmPresets]),
@@ -715,7 +715,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.experimentalMultiframeEnabled] = v.experimentalMultiframeEnabled
         p[Keys.persistentEngineEnabled] = v.persistentEngineEnabled
         p[Keys.filmSimEnabled] = v.filmSimEnabled
-        p[Keys.filmPreviewDivisor] = v.filmPreviewDivisor.coerceIn(2, 4)
+        p[Keys.viewfinderDivisor] = v.viewfinderDivisor.coerceIn(1, 4)
         p[Keys.filmSimLook] = FilmSimCodec.encodeLook(v.filmSimLook)
         if (v.selectedFilmPresetId == null) {
             p.remove(Keys.selectedFilmPresetId)
@@ -960,7 +960,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val experimentalMultiframeEnabled = booleanPreferencesKey("experimental_multiframe_enabled")
         val persistentEngineEnabled = booleanPreferencesKey("persistent_engine_enabled")
         val filmSimEnabled = booleanPreferencesKey("film_sim_enabled")
-        val filmPreviewDivisor = intPreferencesKey("film_preview_divisor")
+        val viewfinderDivisor = intPreferencesKey("viewfinder_divisor")
         val filmSimLook = stringPreferencesKey("film_sim_look")
         val selectedFilmPresetId = stringPreferencesKey("selected_film_preset_id")
         val filmPresets = stringPreferencesKey("film_presets")

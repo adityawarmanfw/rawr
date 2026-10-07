@@ -76,7 +76,7 @@ class SessionEngine {
                               float contrast, float whitePointEV, float highlightBiasEV, float saturation,
                               float vibrance);
     void setFilmSimEnabled(bool enabled);
-    void setFilmSimPreviewDivisor(uint32_t divisor);
+    void setViewfinderDivisor(uint32_t divisor);
     void setFilmSimLook(const spektrafilm_native::FilmLook& look);
     void setAssetManager(AAssetManager* assetManager);
     void setColorRenderProfile(uint32_t profileId, std::string importedProfileId);
@@ -177,7 +177,7 @@ class SessionEngine {
             realtime_.coordinator().setFilmSimEnabled(enabled);
         },
         [this](const tonemap::TonemapParams& tone) { realtime_.coordinator().setTonemapParams(tone); },
-        [this](uint32_t divisor) { realtime_.coordinator().setFilmSimPreviewDivisor(divisor); }};
+        [this](uint32_t divisor) { realtime_.coordinator().setViewfinderDivisor(divisor); }};
     AAssetManager* replayAssetManager_ = nullptr;  // Borrowed APK assets for frozen replay.
     rawrcam::camera::CameraControlCapabilities cameraCapabilities_{};
     rawrcam::diagnostics::RawCpuCopyProbe rawCpuCopyProbe_{[this](const std::string& line) { appendDiagnostic(line); }};

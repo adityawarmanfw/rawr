@@ -52,14 +52,15 @@ void FrameSlotPool::createImages(uint32_t rawWidth, uint32_t rawHeight, uint32_t
         slot.tonemapped = rawrcam::vulkan::createOwnedImage(
             physical_, device_, previewWidth, previewHeight, VK_FORMAT_R8G8B8A8_UNORM,
             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
-        // Quarter-res film pair. TRANSFER bits serve the half->quarter blit
+        // Half-preview look pair (film, or tonemap below Full viewfinder
+        // resolution). TRANSFER bits serve the downscale blit
         // (linear in) and the presentation sampling path (out).
         const uint32_t quarterWidth = std::max(1u, previewWidth / 2u);
         const uint32_t quarterHeight = std::max(1u, previewHeight / 2u);
-        slot.filmQuarterLinear = rawrcam::vulkan::createOwnedImage(
+        slot.lookScaledLinear = rawrcam::vulkan::createOwnedImage(
             physical_, device_, quarterWidth, quarterHeight, VK_FORMAT_R16G16B16A16_SFLOAT,
             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
-        slot.filmQuarterOut = rawrcam::vulkan::createOwnedImage(
+        slot.lookScaledOut = rawrcam::vulkan::createOwnedImage(
             physical_, device_, quarterWidth, quarterHeight, VK_FORMAT_R8G8B8A8_UNORM,
             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
     }
@@ -90,7 +91,7 @@ void FrameSlotPool::transitionImagesToGeneral(VkQueue queue) {
     size_t imageCount = 0;
     for (const auto& slot : slots_) {
         for (VkImage image : {slot.rawCopy.image, slot.linear.image, slot.tonemapped.image,
-                              slot.filmQuarterLinear.image, slot.filmQuarterOut.image}) {
+                              slot.lookScaledLinear.image, slot.lookScaledOut.image}) {
             if (image == VK_NULL_HANDLE) continue;  // bridge copy image may be intentionally unallocated
             images[imageCount++] = image;
         }
@@ -149,8 +150,8 @@ void FrameSlotPool::destroyImages() {
         rawrcam::vulkan::destroyOwnedImage(device_, slot.rawCopy);
         rawrcam::vulkan::destroyOwnedImage(device_, slot.linear);
         rawrcam::vulkan::destroyOwnedImage(device_, slot.tonemapped);
-        rawrcam::vulkan::destroyOwnedImage(device_, slot.filmQuarterLinear);
-        rawrcam::vulkan::destroyOwnedImage(device_, slot.filmQuarterOut);
+        rawrcam::vulkan::destroyOwnedImage(device_, slot.lookScaledLinear);
+        rawrcam::vulkan::destroyOwnedImage(device_, slot.lookScaledOut);
     }
 }
 

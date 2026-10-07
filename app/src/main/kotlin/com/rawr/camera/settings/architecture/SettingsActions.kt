@@ -61,6 +61,8 @@ data class SetCaptureControlLayout(val layout: CaptureControlLayout) : SettingsA
 
 data class SetGridMode(val value: GridMode) : SettingsApplicationAction
 
+data class SetViewfinderDivisor(val divisor: Int) : SettingsApplicationAction
+
 data class SetColorRenderProfile(val value: ColorRenderProfile) : SettingsApplicationAction
 
 data class SelectUserLutProfile(val profileId: String) : SettingsApplicationAction
@@ -98,8 +100,6 @@ data class SetUltraHdrEnabled(val enabled: Boolean) : SettingsApplicationAction
 data class SetPersistentEngineEnabled(val enabled: Boolean) : SettingsApplicationAction
 
 data class SetFilmSimEnabled(val enabled: Boolean) : SettingsApplicationAction
-
-data class SetFilmSimPreviewDivisor(val divisor: Int) : SettingsApplicationAction
 
 data class SetFilmSimNumericValue(val parameter: FilmSimNumericParameter, val value: Float) :
     SettingsApplicationAction
