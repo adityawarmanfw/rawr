@@ -45,6 +45,11 @@ class NativeCameraController {
     // -1 while no selected camera context is available.
     int videoRotationDegrees(int deviceRotationDegrees) const;
     bool setExposureMode(ExposureControlMode mode);
+    // Software shutter/ISO priority. wantsExposureMeter() is cheap and lock-free: the render thread asks it before
+    // spending GPU time on a brightness measurement, then reports the measured frame through submitExposureMeter().
+    [[nodiscard]] bool wantsExposureMeter() const noexcept;
+    void submitExposureMeter(int64_t exposureTimeNs, int32_t sensitivity, float lumaP50, float lumaP95,
+                             float clippedFraction);
     void setManualExposureTimeNs(int64_t exposureTimeNs);
     void setManualSensitivity(int32_t sensitivity);
     void setExposureCompensationSteps(int32_t steps);

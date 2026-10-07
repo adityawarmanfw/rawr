@@ -133,6 +133,9 @@ CameraControlState readInitialCameraControlState(const ACameraMetadata* characte
     state.capabilities.shutterPrioritySupported =
         containsU8(aePriorityModes, camera2_priority::kSensorExposureTimePriority);
     state.capabilities.isoPrioritySupported = containsU8(aePriorityModes, camera2_priority::kSensorSensitivityPriority);
+    state.capabilities.softwarePrioritySupported =
+        state.capabilities.manualExposureSupported &&
+        !(state.capabilities.shutterPrioritySupported && state.capabilities.isoPrioritySupported);
 
     // White balance: gate presets on AWB_AVAILABLE_MODES and manual gains on
     // COLOR_CORRECTION TRANSFORM_MATRIX. Missing tags fall back to Auto-only /
@@ -232,7 +235,7 @@ std::string describeCameraControlCapabilities(const CameraControlState& state) {
         << c.priorityAeTargetFpsMax << " evSteps=" << c.evMinSteps << ".." << c.evMaxSteps
         << " evStep=" << c.evStepNumerator << '/' << c.evStepDenominator
          << " manualExposure=" << c.manualExposureSupported << " shutterPriority=" << c.shutterPrioritySupported
-         << " isoPriority=" << c.isoPrioritySupported << " tapAf=" << c.tapAfSupported
+         << " isoPriority=" << c.isoPrioritySupported << " softPriority=" << c.softwarePrioritySupported << " tapAf=" << c.tapAfSupported
          << " faceDetect=" << c.faceDetectSupported << (c.faceDetectFullMode ? "(full)" : "(simple)")
           << " manualFocus=" << c.manualFocusSupported << " focusCalibrated=" << c.focusDistanceReadoutTrustworthy
          << " ois=" << c.oisSupported << " awbModes=[";

@@ -5,6 +5,7 @@
 #include <sys/system_properties.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <mutex>
@@ -21,6 +22,7 @@
 #include "camera/CameraRequestPipeline.h"
 #include "camera/CameraResultProcessor.h"
 #include "camera/CameraWhiteBalanceControls.h"
+#include "camera/SoftwareAe.h"
 #include "geometry/OrientationTransform.h"
 #include "metadata/MetadataDiagnostics.h"
 
@@ -86,6 +88,11 @@ struct NativeCameraController::Impl final : CameraEventSink {
     CameraFocusControls focusControls;
     CameraSpotMeteringControls spotMetering;
     CameraCadencePolicy cadencePolicy;
+    // Software shutter/ISO priority (see SoftwareAe.h). meterWanted is read lock-free by the render thread to decide
+    // whether to spend GPU time measuring the rendered frame.
+    SoftwareAe softAe;
+    std::atomic<bool> meterWanted{false};
+    bool previousModeWasAuto_ = false;
     mutable std::mutex mutex;
     // Bounded retire for worker-driven stop/start-failure paths. Healthy
     // retires complete in ~0.4s; beyond this the HAL is wedged (fatal device
@@ -217,7 +224,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
 
     bool submitRepeatingLocked() {
         return requests.submit(deviceSession.session(), deviceSession.request(), deviceSession.callbackContext(),
-                               control, meteringRequestLocked());
+                               requestStateFor(control), meteringRequestLocked());
     }
 
     CameraMeteringRequest meteringRequestLocked() const {
@@ -272,6 +279,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
         const bool sameCameraRestart =
             !previousControl.capabilities.cameraId.empty() && previousControl.capabilities.cameraId == route.cameraId;
         control = deviceSession.initialControls(route);
+        softAe.deactivate();
+        meterWanted.store(false, std::memory_order_relaxed);
         publishProfileLocked();
         control.focusRequestId = previousControl.focusRequestId;
         control.whiteBalanceRequestId = previousControl.whiteBalanceRequestId;
@@ -281,9 +290,13 @@ struct NativeCameraController::Impl final : CameraEventSink {
             const bool modeSupported =
                 mode == ExposureControlMode::Auto ||
                 (mode == ExposureControlMode::Manual && control.capabilities.manualExposureSupported) ||
-                (mode == ExposureControlMode::ShutterPriority && control.capabilities.shutterPrioritySupported) ||
-                (mode == ExposureControlMode::IsoPriority && control.capabilities.isoPrioritySupported);
+                (mode == ExposureControlMode::ShutterPriority &&
+                 (control.capabilities.shutterPrioritySupported || control.capabilities.softwarePrioritySupported)) ||
+                (mode == ExposureControlMode::IsoPriority &&
+                 (control.capabilities.isoPrioritySupported || control.capabilities.softwarePrioritySupported));
             control.exposureMode = modeSupported ? mode : ExposureControlMode::Auto;
+            // The meter re-seeds the free axis from the first frame after a restart.
+            meterWanted.store(usesSoftwarePriority(control), std::memory_order_relaxed);
             control.requestedExposureTimeNs =
                 std::clamp(previousControl.requestedExposureTimeNs, control.capabilities.exposureTimeMinNs,
                            control.capabilities.exposureTimeMaxNs);
@@ -499,17 +512,91 @@ struct NativeCameraController::Impl final : CameraEventSink {
         return snapshot;
     }
 
+    // Software priority needs plain photo preview with ordinary sensor coordinates: video owns exposure through
+    // shutter angle, and a forced sensor mode reports sensitivity in a different coordinate than it is requested in.
+    bool softwarePriorityAllowedLocked(bool hardwareSupported) const {
+        return !hardwareSupported && control.capabilities.softwarePrioritySupported && !cadencePolicy.videoMode() &&
+               control.recordingFps == 0 && !deviceSession.sensorModeOverridden();
+    }
+
+    // Starts the software loop from the exposure the camera is using now, so entering a mode never jumps brightness.
+    void seedSoftwarePriorityLocked(bool calibrateFromAuto) {
+        const auto& c = control.capabilities;
+        const int64_t t = std::clamp(control.appliedExposureTimeNs.value_or(control.requestedExposureTimeNs),
+                                     c.exposureTimeMinNs, std::max(c.exposureTimeMinNs, c.exposureTimeMaxNs));
+        const int32_t s = std::clamp(control.appliedSensitivity.value_or(control.requestedSensitivity),
+                                     c.sensitivityMin, std::max(c.sensitivityMin, c.sensitivityMax));
+        control.softExposureTimeNs = t;
+        control.softSensitivity = s;
+        softAe.reset(t, s, calibrateFromAuto);
+        diag("CAMERA_SOFT_PRIORITY_SEED mode=" +
+             std::string(control.exposureMode == ExposureControlMode::ShutterPriority ? "S" : "I") +
+             " shutterNs=" + std::to_string(t) + " sensitivity=" + std::to_string(s) +
+             " calibrate=" + std::string(calibrateFromAuto ? "true" : "false"));
+    }
+
+    // A held axis moved under the loop (the user dragged it): the next frames carry a different exposure product on
+    // purpose, so treat the new request as the loop's baseline instead of waiting for frames that will never match.
+    void rebaseSoftwarePriorityLocked() {
+        if (!usesSoftwarePriority(control) || !softAe.active()) return;
+        const auto effective = requestStateFor(control);
+        softAe.rebase(effective.requestedExposureTimeNs, effective.requestedSensitivity);
+    }
+
+    // Called from the render thread with the measured brightness of a completed frame.
+    void submitExposureMeter(int64_t exposureTimeNs, int32_t sensitivity, float lumaP50, float lumaP95,
+                             float clippedFraction) {
+        // Never block the render thread behind a camera start/stop that may itself be waiting on rendering.
+        std::unique_lock<std::mutex> lock(mutex, std::try_to_lock);
+        if (!lock.owns_lock()) return;
+        if (!active || !usesSoftwarePriority(control)) return;
+        if (!softAe.active()) {
+            control.softExposureTimeNs = exposureTimeNs;
+            control.softSensitivity = sensitivity;
+            softAe.reset(exposureTimeNs, sensitivity, false);
+            return;
+        }
+        const auto& c = control.capabilities;
+        SoftwareAe::Limits limits;
+        limits.shutterMinNs = c.exposureTimeMinNs;
+        limits.shutterMaxNs = c.exposureTimeMaxNs;
+        limits.autoShutterMaxNs =
+            std::min<int64_t>(c.exposureTimeMaxNs, int64_t{1'000'000'000} / std::max(5, control.autoMinFps));
+        limits.sensitivityMin = c.sensitivityMin;
+        limits.sensitivityMax = c.sensitivityMax;
+        const float evStops =
+            static_cast<float>(control.requestedEvSteps) * static_cast<float>(c.evStepNumerator) /
+            static_cast<float>(std::max(1, c.evStepDenominator));
+        const bool shutterFree = control.exposureMode == ExposureControlMode::IsoPriority;
+        const auto command = softAe.update(
+            shutterFree ? SoftwareAe::FreeAxis::Shutter : SoftwareAe::FreeAxis::Sensitivity,
+            control.requestedExposureTimeNs, control.requestedSensitivity, evStops, limits,
+            SoftwareAe::Sample{exposureTimeNs, sensitivity, lumaP50, lumaP95, clippedFraction});
+        if (!command) return;
+        control.softExposureTimeNs = command->exposureTimeNs;
+        control.softSensitivity = command->sensitivity;
+        diag("CAMERA_SOFT_PRIORITY_STEP mode=" + std::string(shutterFree ? "I" : "S") +
+             " shutterNs=" + std::to_string(command->exposureTimeNs) +
+             " sensitivity=" + std::to_string(command->sensitivity) + " luma=" + std::to_string(lumaP50) +
+             " target=" + std::to_string(softAe.target()));
+        submitRepeatingLocked();
+    }
+
     bool setExposureModeValue(ExposureControlMode mode) {
         std::lock_guard<std::mutex> lock(mutex);
+        const ExposureControlMode previousMode = control.exposureMode;
         if (mode == ExposureControlMode::Manual && !control.capabilities.manualExposureSupported) {
             diag("CAMERA_CONTROL_REQUEST exposureMode=M rejected=unsupported");
             return false;
         }
-        if (mode == ExposureControlMode::ShutterPriority && !control.capabilities.shutterPrioritySupported) {
+        if (mode == ExposureControlMode::ShutterPriority &&
+            !control.capabilities.shutterPrioritySupported &&
+            !softwarePriorityAllowedLocked(control.capabilities.shutterPrioritySupported)) {
             diag("CAMERA_CONTROL_REQUEST exposureMode=S rejected=unsupported");
             return false;
         }
-        if (mode == ExposureControlMode::IsoPriority && !control.capabilities.isoPrioritySupported) {
+        if (mode == ExposureControlMode::IsoPriority && !control.capabilities.isoPrioritySupported &&
+            !softwarePriorityAllowedLocked(control.capabilities.isoPrioritySupported)) {
             diag("CAMERA_CONTROL_REQUEST exposureMode=I rejected=unsupported");
             return false;
         }
@@ -547,6 +634,14 @@ struct NativeCameraController::Impl final : CameraEventSink {
             }
         }
         control.exposureMode = mode;
+        softAe.deactivate();
+        control.softExposureTimeNs = 0;
+        control.softSensitivity = 0;
+        if (usesSoftwarePriority(control)) {
+            previousModeWasAuto_ = previousMode == ExposureControlMode::Auto;
+            seedSoftwarePriorityLocked(previousModeWasAuto_);
+        }
+        meterWanted.store(usesSoftwarePriority(control), std::memory_order_relaxed);
         if (mode != ExposureControlMode::Auto) control.spotAeActive = false;
         if (mode == ExposureControlMode::Manual || mode == ExposureControlMode::ShutterPriority) {
             cadencePolicy.bindShutter(control.requestedExposureTimeNs, control.capabilities.exposureTimeMinNs,
@@ -567,6 +662,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         control.requestedExposureTimeNs = cadencePolicy.heldExposure(value, control.capabilities.exposureTimeMinNs,
                                                                      control.capabilities.exposureTimeMaxNs);
         diag("CAMERA_CONTROL_REQUEST shutterNs=" + std::to_string(control.requestedExposureTimeNs));
+        rebaseSoftwarePriorityLocked();
         submitRepeatingLocked();
     }
     void setManualIso(int32_t value) {
@@ -575,6 +671,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
             control.requestedSensitivity =
                 std::clamp(value, control.capabilities.sensitivityMin, control.capabilities.sensitivityMax);
         diag("CAMERA_CONTROL_REQUEST sensitivity=" + std::to_string(control.requestedSensitivity));
+        rebaseSoftwarePriorityLocked();
         submitRepeatingLocked();
     }
     void setEvSteps(int32_t value) {
@@ -654,6 +751,20 @@ struct NativeCameraController::Impl final : CameraEventSink {
         const auto sanitizedFps = fps > 0 ? fps : 30;
         if (cadencePolicy.videoMode() == video && cadencePolicy.videoFps() == sanitizedFps) return;
         const bool enteringVideo = video && !cadencePolicy.videoMode();
+        if (enteringVideo) {
+            // Video owns exposure through shutter angle; a software priority mode cannot follow it there.
+            CameraControlState probe = control;
+            probe.videoMode = false;
+            if (usesSoftwarePriority(probe)) {
+                diag("CAMERA_SOFT_PRIORITY_END reason=video_mode");
+                control.exposureMode = ExposureControlMode::Auto;
+                softAe.deactivate();
+                control.softExposureTimeNs = 0;
+                control.softSensitivity = 0;
+                meterWanted.store(false, std::memory_order_relaxed);
+            }
+        }
+        control.videoMode = video;
         cadencePolicy.setVideoMode(video, fps);
         if (enteringVideo)
             cadencePolicy.bindShutter(control.requestedExposureTimeNs, control.capabilities.exposureTimeMinNs,
@@ -813,6 +924,13 @@ int NativeCameraController::videoRotationDegrees(int deviceRotationDegrees) cons
         impl_->deviceSession.cameraContext()->lensFacing == ACAMERA_LENS_FACING_FRONT);
 }
 bool NativeCameraController::setExposureMode(ExposureControlMode mode) { return impl_->setExposureModeValue(mode); }
+void NativeCameraController::submitExposureMeter(int64_t exposureTimeNs, int32_t sensitivity, float lumaP50,
+                                                 float lumaP95, float clippedFraction) {
+    impl_->submitExposureMeter(exposureTimeNs, sensitivity, lumaP50, lumaP95, clippedFraction);
+}
+bool NativeCameraController::wantsExposureMeter() const noexcept {
+    return impl_->meterWanted.load(std::memory_order_relaxed);
+}
 void NativeCameraController::setManualExposureTimeNs(int64_t value) { impl_->setManualExposure(value); }
 void NativeCameraController::setManualSensitivity(int32_t value) { impl_->setManualIso(value); }
 void NativeCameraController::setExposureCompensationSteps(int32_t value) { impl_->setEvSteps(value); }

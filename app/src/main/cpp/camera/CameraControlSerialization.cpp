@@ -60,8 +60,11 @@ std::string serializeCameraControlState(const CameraControlState& st) {
       << ",\"evMinSteps\":" << c.evMinSteps << ",\"evMaxSteps\":" << c.evMaxSteps
       << ",\"evStepNumerator\":" << c.evStepNumerator << ",\"evStepDenominator\":" << c.evStepDenominator
       << ",\"manualExposureSupported\":" << (c.manualExposureSupported ? "true" : "false")
-      << ",\"shutterPrioritySupported\":" << (c.shutterPrioritySupported ? "true" : "false")
-      << ",\"isoPrioritySupported\":" << (c.isoPrioritySupported ? "true" : "false")
+      << ",\"shutterPrioritySupported\":"
+      << (c.shutterPrioritySupported || c.softwarePrioritySupported ? "true" : "false")
+      << ",\"isoPrioritySupported\":"
+      << (c.isoPrioritySupported || c.softwarePrioritySupported ? "true" : "false")
+      << ",\"softwarePriority\":" << (c.softwarePrioritySupported ? "true" : "false")
        << ",\"tapAfSupported\":" << (c.tapAfSupported ? "true" : "false")
        << ",\"faceDetectSupported\":" << (c.faceDetectSupported ? "true" : "false")
       << ",\"manualFocusSupported\":" << (c.manualFocusSupported ? "true" : "false")

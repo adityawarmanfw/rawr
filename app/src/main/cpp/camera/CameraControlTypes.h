@@ -77,6 +77,10 @@ struct CameraControlCapabilities {
     bool manualExposureSupported = false;
     bool shutterPrioritySupported = false;
     bool isoPrioritySupported = false;
+    // True when the HAL has no Camera2 AE priority for an axis but does have manual sensor control. S/I are then
+    // emulated in software (camera/SoftwareAe.h): AE-off requests whose free axis the app drives from the
+    // rendered frame. Hardware priority always wins when the HAL offers it.
+    bool softwarePrioritySupported = false;
     // Raw NDK antibanding modes from ACAMERA_CONTROL_AE_AVAILABLE_ANTIBANDING_MODES.
     // Values mirror ACAMERA_CONTROL_AE_ANTIBANDING_MODE_* (OFF=0, 50HZ=1, 60HZ=2, AUTO=3).
     // All four when the tag is missing (most HALs accept them).
@@ -112,6 +116,9 @@ struct CameraControlCapabilities {
 struct CameraControlState {
     CameraControlCapabilities capabilities;
     ExposureControlMode exposureMode = ExposureControlMode::Auto;
+    // Free-axis exposure written by SoftwareAe while a software priority mode is active (0 = not seeded yet).
+    int64_t softExposureTimeNs = 0;
+    int32_t softSensitivity = 0;
     FocusControlMode focusMode = FocusControlMode::Continuous;
     bool tapAfActive = false;
     uint64_t focusRequestId = 0;
@@ -207,5 +214,28 @@ struct CameraControlState {
     // to display coordinates for the UI snapshot.
     std::vector<FaceDetection> faceDetections;
 };
+
+// True when the current S/I mode must be emulated in software: the HAL lacks that axis's priority mode, manual
+// sensor control exists, and this is plain photo preview (video cadence owns exposure through shutter angle).
+inline bool usesSoftwarePriority(const CameraControlState& s) {
+    if (!s.capabilities.softwarePrioritySupported || s.videoMode || s.recordingFps > 0) return false;
+    return (s.exposureMode == ExposureControlMode::ShutterPriority && !s.capabilities.shutterPrioritySupported) ||
+           (s.exposureMode == ExposureControlMode::IsoPriority && !s.capabilities.isoPrioritySupported);
+}
+
+// The state a Camera2 request is built from. A software priority mode is sent as ordinary Manual with the
+// app-driven free axis substituted, so request building, provenance and the hardware priority audit need no
+// knowledge of it.
+inline CameraControlState requestStateFor(const CameraControlState& s) {
+    if (!usesSoftwarePriority(s)) return s;
+    CameraControlState out = s;
+    if (s.exposureMode == ExposureControlMode::ShutterPriority) {
+        if (s.softSensitivity > 0) out.requestedSensitivity = s.softSensitivity;
+    } else if (s.softExposureTimeNs > 0) {
+        out.requestedExposureTimeNs = s.softExposureTimeNs;
+    }
+    out.exposureMode = ExposureControlMode::Manual;
+    return out;
+}
 
 }  // namespace rawrcam::camera

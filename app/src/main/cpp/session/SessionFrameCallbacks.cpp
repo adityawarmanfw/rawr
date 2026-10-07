@@ -1,5 +1,6 @@
 // Adapts narrow frame ports to session-owned domain collaborators.
 
+#include "camera/NativeCameraController.h"
 #include "color/AePostGainCurve.h"
 #include "session/SessionEngine.h"
 
@@ -63,6 +64,17 @@ std::optional<rawrcam::pipeline::FrameDiagnosticsPort::RenderedFeedback> Session
     out.brightFraction96 = feedback->brightFraction96;
     out.anyChannelClippedFraction = feedback->anyChannelClippedFraction;
     return out;
+}
+bool SessionFrameCallbacks::exposureMeterWanted() {
+    const auto* camera = engine_->cameraControls().controller();
+    return camera && camera->wantsExposureMeter();
+}
+void SessionFrameCallbacks::exposureMeter(const rawrcam::metadata::FrameMetadataSnapshot& metadata,
+                                          const RenderedFeedback& rendered) {
+    auto* camera = engine_->cameraControls().controller();
+    if (!camera) return;
+    camera->submitExposureMeter(metadata.exposureTimeNs, metadata.sensitivity, rendered.lumaP50, rendered.lumaP95,
+                                rendered.anyChannelClippedFraction);
 }
 bool SessionFrameCallbacks::overlayNeedsRawState() { return engine_->monitoringCoordinator_.overlay().needsRawState(); }
 void SessionFrameCallbacks::recordAuditFrame(const rawrcam::metadata::FrameMetadataSnapshot& metadata,

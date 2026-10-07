@@ -120,6 +120,8 @@ rawr_test(camera_profile_test
   "${RAWR_ROOT}/tests/native/camera_profile_test.cpp"
   "${APP}/camera/CameraRouting.cpp"
   "${APP}/camera/CameraProfileJson.cpp")
+# Software shutter/ISO priority controller and its request-state translation (header only, no device).
+rawr_test(software_ae_test "${RAWR_ROOT}/tests/native/software_ae_test.cpp")
 # GPU RAW10 ingress vs the CPU fallback unpack (needs a Vulkan device).
 add_subdirectory("${RAWR_ROOT}/native/raw_ingress" "${CMAKE_CURRENT_BINARY_DIR}/raw_ingress")
 rawr_test(raw10_unpack_vulkan_test
