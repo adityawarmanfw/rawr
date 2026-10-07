@@ -5,6 +5,7 @@
 #include <raw_sharpness/raw_sharpness_types.hpp>
 #include <tinydng.h>
 
+#include "capture/multiframe/BracketExposure.h"
 #include "color/ColorCalibration.h"
 #include "color/ColorMath.h"
 #include "renderer/DngSource.h"
@@ -116,6 +117,11 @@ rawrcam::metadata::FrameMetadataSnapshot frameMetadata(const std::string& metada
     out.colorCorrectionGainsRggb = floats4(tsv(metadata, "colorCorrectionGainsRggb"), {1, 1, 1, 1});
     const auto white = tsv(metadata, "effectiveWhiteLevel");
     out.effectiveWhiteLevel = white.empty() ? 1023.f : std::stof(white);
+    // Per-frame exposure (bracketed merges scale frames by their ratio).
+    const auto exposureNs = tsv(metadata, "exposureTimeNs");
+    if (!exposureNs.empty()) out.exposureTimeNs = std::stoll(exposureNs);
+    const auto sensitivity = tsv(metadata, "sensitivity");
+    if (!sensitivity.empty()) out.sensitivity = std::stoi(sensitivity);
     const auto neutral = tsv(metadata, "neutralColorPoint");
     if (!neutral.empty()) {
         std::istringstream in(neutral);
@@ -456,8 +462,8 @@ struct TuneOpts {
     float fallbackMaxSigma = -1.f;
     bool hotPixels = true;
     std::string hotPixelList;  // test/diagnostic override: "x y" per line
-    std::string reference = "recorded";  // recorded|middle|sharpest
-    std::string mergeAlgorithm = "wronski";  // wronski|hdrplus|hdrplus-freq
+    std::string reference = "recorded";  // recorded|middle|sharpest|darkest
+    std::string mergeAlgorithm = "wronski";  // wronski|hdrplus|hdrplus-freq|hdrplus-bracket
     rawr::raw_merge_hdrplus_gpu::Config hdrplus{};
 };
 
@@ -672,6 +678,8 @@ rawr::zsl_container::Bundle dngBundle(const std::string& path) {
         putMatrix("forwardMatrix2", fm2);
         meta << "zslFrameId\t" << (i + 1) << '\n'
              << "timestampNs\t" << (1000000000ull + i * 33333333ull) << '\n';
+        if (const auto exposure = source.exposureTimeNs()) meta << "exposureTimeNs\t" << *exposure << '\n';
+        if (const auto iso = source.sensitivity()) meta << "sensitivity\t" << *iso << '\n';
         const auto pixels = source.read(cx, cy, width, height);
         rawr::zsl_container::PackedFrame f{};
         f.width = width;
@@ -768,6 +776,7 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
                                             VkDeviceSize(width) * height * 2u};
         metadata.push_back(frameMetadata(frame.metadata));
         burst.push_back({raw, parameters(metadata.back())});
+        burst.back().exposure = float(rawrcam::capture::multiframe::linearExposure(metadata.back()) * 1.0e-6);
         std::vector<std::uint8_t>().swap(frame.gpuPacket);
     }
     const double decodeMs = std::chrono::duration<double, std::milli>(Clock::now() - decodeBegin).count();
@@ -882,6 +891,17 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
         std::cerr << "reference_source=recorded_scores ref=" << originalRef << '\n';
     } else {
         std::cerr << "reference_source=recorded_index ref=" << originalRef << '\n';
+    }
+    // Bracketed merges reference the darkest frame (the app's rule), unless
+    // middle/sharpest was forced.
+    if (tune.reference == "darkest" || (tune.mergeAlgorithm == "hdrplus-bracket" && tune.reference == "recorded")) {
+        const auto before = originalRef;
+        originalRef = rawrcam::capture::multiframe::bracketReference(metadata, storedScores,
+                                                                     static_cast<std::uint32_t>(originalRef));
+        std::cerr << "reference_source=darkest ref=" << originalRef << " (was " << before << ") bracketed="
+                  << (rawrcam::capture::multiframe::isExposureBracketed(metadata) ? 1 : 0) << " lift_ev="
+                  << rawrcam::capture::multiframe::bracketLiftEv(metadata, static_cast<std::uint32_t>(originalRef))
+                  << '\n';
     }
     if (originalRef >= burst.size()) throw std::invalid_argument("RZSL: reference index out of range");
     if (tune.noiseSource == "recorded" || tune.noiseSource == "burst") {
@@ -1016,6 +1036,8 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
                            width, height, tune.scale, {}, alignment, merge,
                            tune.mergeAlgorithm == "hdrplus"        ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusSpatial
                            : tune.mergeAlgorithm == "hdrplus-freq" ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusFrequency
+                           : tune.mergeAlgorithm == "hdrplus-bracket"
+                               ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusBracketed
                                                                    : rawr::raw_gpu_pipeline::MergeAlgorithm::Wronski,
                            tune.hdrplus);
     const auto result = coordinator.run(runFrames, runRef);
@@ -1194,8 +1216,8 @@ int main(int argc, char** argv) {
         " [--flat-sigma F] [--detail-floor F] [--scale-bandwidth-gain F]"
         " [--coverage-neff-lo F] [--coverage-neff-hi F] [--coverage-mass-lo F] [--coverage-mass-hi F]"
         " [--robustness-t F] [--robustness-s1 F] [--robustness-s2 F]"
-         " [--max-frames I] [--suffix STR] [--dump-base] [--dump-all-singles] [--dump-raw16] [--export-dng DIR] [--merge wronski|hdrplus|hdrplus-freq] [--hdrplus-strength F] [--hdrplus-tile 16|32] [--hdrplus-search 32|64|128] [--hdrplus-faithful] [--affine-deadzone F] [--affine-softness F] [--affine-isotropic] [--fallback-chroma GAIN] [--fallback-luma GAIN] [--fallback-max-sigma PX] [--no-hot-pixels] [--hot-pixel-list FILE]"
-         " [--reference recorded|middle|sharpest] INPUT [INPUT2 ...]\n"
+         " [--max-frames I] [--suffix STR] [--dump-base] [--dump-all-singles] [--dump-raw16] [--export-dng DIR] [--merge wronski|hdrplus|hdrplus-freq|hdrplus-bracket] [--hdrplus-strength F] [--hdrplus-tile 16|32] [--hdrplus-search 32|64|128] [--hdrplus-faithful] [--affine-deadzone F] [--affine-softness F] [--affine-isotropic] [--fallback-chroma GAIN] [--fallback-luma GAIN] [--fallback-max-sigma PX] [--no-hot-pixels] [--hot-pixel-list FILE]"
+         " [--reference recorded|middle|sharpest|darkest] INPUT [INPUT2 ...]\n"
          "  INPUT: FILE.rzsl | DNG_DIR or dng:DNG_DIR (every *.dng, name-sorted, is one burst)"
          " | rawburst:DIR | synthetic:...";
     try {
@@ -1272,8 +1294,9 @@ int main(int argc, char** argv) {
             tune.noiseSource != "calibrated" && tune.noiseSource != "burst")
             throw std::invalid_argument("noise-source must be recorded, camera2, legacy, calibrated, or burst");
         if (inputs.empty()) throw std::invalid_argument("no INPUT given");
-        if (tune.reference != "recorded" && tune.reference != "middle" && tune.reference != "sharpest")
-            throw std::invalid_argument("reference must be recorded, middle, or sharpest");
+        if (tune.reference != "recorded" && tune.reference != "middle" && tune.reference != "sharpest" &&
+            tune.reference != "darkest")
+            throw std::invalid_argument("reference must be recorded, middle, sharpest, or darkest");
         if (!std::isfinite(tune.scale) || tune.scale < 1.f || tune.scale > 2.f)
             throw std::invalid_argument("scale must be finite and 1..2");
         if (tune.lkIterations < 1 || tune.lkIterations > 30)
