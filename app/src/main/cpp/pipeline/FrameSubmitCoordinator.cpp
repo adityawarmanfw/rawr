@@ -1,4 +1,5 @@
 #include "pipeline/FrameSubmitCoordinator.h"
+#include "pipeline/SyntheticLensShading.h"
 
 #include <android/log.h>
 #include <sys/system_properties.h>
@@ -438,6 +439,13 @@ void FrameSubmitCoordinator::submitSplitVideoAndMonitor(const SubmitParams& para
         frame.lensShadingCount = metadata.lensShadingMap.size();
         frame.lensShadingWidth = metadata.lensShadingMapWidth;
         frame.lensShadingHeight = metadata.lensShadingMapHeight;
+    } else if (config_.lensShadingCorrectionEnabled) {
+        // No HAL map (MediaTek): flatten the lens falloff with a built-in radial gain, preview only.
+        const auto& fallback = SyntheticLensShading::gains();
+        frame.lensShading = fallback.data();
+        frame.lensShadingCount = fallback.size();
+        frame.lensShadingWidth = SyntheticLensShading::kWidth;
+        frame.lensShadingHeight = SyntheticLensShading::kHeight;
     }
     frame.noiseProfileValid = rawrcam::develop::rendered::resolveDenoiseNoise(metadata, frame.noiseA, frame.noiseB);
     auto tone = tonemapParams_;
@@ -692,6 +700,12 @@ FrameSubmitCoordinator::RecordedSubmit FrameSubmitCoordinator::recordSubmitComma
             videoFrame.lensShadingCount = metadata.lensShadingMap.size();
             videoFrame.lensShadingWidth = metadata.lensShadingMapWidth;
             videoFrame.lensShadingHeight = metadata.lensShadingMapHeight;
+        } else if (config_.lensShadingCorrectionEnabled) {
+            const auto& fallback = SyntheticLensShading::gains();
+            videoFrame.lensShading = fallback.data();
+            videoFrame.lensShadingCount = fallback.size();
+            videoFrame.lensShadingWidth = SyntheticLensShading::kWidth;
+            videoFrame.lensShadingHeight = SyntheticLensShading::kHeight;
         }
         videoFrame.noiseProfileValid =
             rawrcam::develop::rendered::resolveDenoiseNoise(metadata, videoFrame.noiseA, videoFrame.noiseB);

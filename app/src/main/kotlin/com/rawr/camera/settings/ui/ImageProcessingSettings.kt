@@ -284,7 +284,7 @@ internal fun LensShadingSettings(state: SettingsUiState, dispatch: SettingsDispa
     val v = state.values
     SettingsPageContainer(testTag = SettingsTestTags.sectionRoot("LensShading")) {
         SettingsGroup(
-            description = "Camera2 gain map. Preview and stills follow Photo; recordings follow Video."
+            description = "Flattens the dark corners of the raw image. Uses the camera's gain map when it provides one; phones without it (MediaTek) get a built-in radial correction in the viewfinder and video. Preview and stills follow Photo; recordings follow Video."
         ) {
             PhotoVideoTargetSelector(
                 photoOn = v.photoLensShadingEnabled,
