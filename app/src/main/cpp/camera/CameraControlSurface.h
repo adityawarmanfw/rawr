@@ -48,6 +48,7 @@ class CameraControlSurface final {
     void setOisEnabled(bool enabled);
     void setAntibandingMode(uint8_t mode);
     void setAutoMinFps(int fps);
+    void setAePriorityDisabled(bool disabled);
     void setVideoMode(bool video, int fps);
     bool setRecordingFps(int fps);
     void setShutterAngleDegrees(double degrees);

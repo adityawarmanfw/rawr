@@ -778,6 +778,34 @@ class CaptureModelTest {
     }
 
     @Test
+    fun compactMappingFallsBackToManualWithoutPriorityModes() {
+        val noPriority = setOf(ExposureMode.Auto, ExposureMode.Manual)
+        for (parameter in listOf(ExposureParameter.Shutter, ExposureParameter.Iso)) {
+            assertEquals(ExposureMode.Manual, CaptureTransitions.lockModeFor(parameter, ExposureMode.Auto, noPriority))
+            assertEquals(ExposureMode.Auto, CaptureTransitions.unlockModeFor(parameter, ExposureMode.Manual, noPriority))
+        }
+    }
+
+    @Test
+    fun compactMappingUsesOnlyTheSupportedPriorityAxis() {
+        val isoOnly = setOf(ExposureMode.Auto, ExposureMode.Manual, ExposureMode.IsoPriority)
+        assertEquals(ExposureMode.Manual, CaptureTransitions.lockModeFor(ExposureParameter.Shutter, ExposureMode.Auto, isoOnly))
+        assertEquals(ExposureMode.IsoPriority, CaptureTransitions.lockModeFor(ExposureParameter.Iso, ExposureMode.Auto, isoOnly))
+        assertEquals(
+            ExposureMode.IsoPriority,
+            CaptureTransitions.unlockModeFor(ExposureParameter.Shutter, ExposureMode.Manual, isoOnly)
+        )
+        assertEquals(ExposureMode.Auto, CaptureTransitions.unlockModeFor(ExposureParameter.Iso, ExposureMode.Manual, isoOnly))
+    }
+
+    @Test
+    fun compactMappingIsNullWhenNoLockModeIsSupported() {
+        val autoOnly = setOf(ExposureMode.Auto)
+        assertNull(CaptureTransitions.lockModeFor(ExposureParameter.Shutter, ExposureMode.Auto, autoOnly))
+        assertNull(CaptureTransitions.lockModeFor(ExposureParameter.Iso, ExposureMode.Auto, autoOnly))
+    }
+
+    @Test
     fun compactLockedFlagsFollowExposureMode() {
         assertFalse(CaptureTransitions.isParameterLocked(state(ExposureMode.Auto), ExposureParameter.Shutter))
         assertTrue(

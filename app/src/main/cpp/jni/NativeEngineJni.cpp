@@ -361,6 +361,10 @@ extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreview
                                                                                                         jfloat v) {
     rawrcam::session::setMaxAePostGain(handle(h), v);
 }
+extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreviewEngine_setAePriorityDisabled(
+    JNIEnv*, jobject, jlong h, jboolean v) {
+    rawrcam::session::setAePriorityDisabled(handle(h), v == JNI_TRUE);
+}
 extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreviewEngine_setAutoMinFps(JNIEnv*, jobject,
                                                                                                      jlong h, jint v) {
     rawrcam::session::setAutoMinFps(handle(h), v);

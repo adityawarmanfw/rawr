@@ -136,6 +136,9 @@ void setPostGainKneeWidthEv(EngineHandle h, float widthEv) noexcept {
 void setAutoMinFps(EngineHandle h, int fps) noexcept {
     if (h) engine(h)->cameraControls().setAutoMinFps(fps);
 }
+void setAePriorityDisabled(EngineHandle h, bool disabled) noexcept {
+    if (h) engine(h)->cameraControls().setAePriorityDisabled(disabled);
+}
 bool setRecordingFps(EngineHandle h, int fps) noexcept { return h && engine(h)->cameraControls().setRecordingFps(fps); }
 void setPreviewForeground(EngineHandle h, bool foreground) noexcept {
     if (h) engine(h)->cameraControls().setForeground(foreground);

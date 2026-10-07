@@ -73,6 +73,8 @@ class NativeCameraController {
     // NDK antibanding values OFF=0, 50HZ=1, 60HZ=2, AUTO=3. Out-of-range clamps to AUTO.
     void setAntibandingMode(uint8_t mode);
     void setAutoMinFps(int fps);
+    // Hides the HAL's shutter/ISO priority modes so S/I locks fall back to Manual.
+    void setAePriorityDisabled(bool disabled);
     void setVideoMode(bool video, int fps);
     void setShutterAngleDegrees(double degrees);
     bool setRecordingFps(int fps);

@@ -500,35 +500,56 @@ object CaptureTransitions {
     /**
      * V2 compact-button lock/auto mapping. Locks reuse the global [ExposureMode]
      * (no per-parameter flags): locking an auto axis moves into the matching
-     * priority/manual mode, unlocking returns toward Auto. Returns null when no
-     * mode change is needed (already locked/unlocked or unsupported).
+     * priority/manual mode, unlocking returns toward Auto. Without that axis's
+     * Camera2 priority mode (pre-API-36 or HAL-unsupported), locking falls back
+     * to Manual (native seeds both axes from the live exposure) and unlocking
+     * Manual returns to Auto. Returns null when no mode change is needed or the
+     * target is not in [supported].
      */
-    fun lockModeFor(parameter: ExposureParameter, mode: ExposureMode): ExposureMode? = when (parameter) {
-        ExposureParameter.Shutter -> when (mode) {
-            ExposureMode.Auto -> ExposureMode.ShutterPriority
-            ExposureMode.IsoPriority -> ExposureMode.Manual
-            else -> null
+    fun lockModeFor(
+        parameter: ExposureParameter,
+        mode: ExposureMode,
+        supported: Set<ExposureMode> = ExposureMode.entries.toSet()
+    ): ExposureMode? {
+        val target = when (parameter) {
+            ExposureParameter.Shutter -> when (mode) {
+                ExposureMode.Auto ->
+                    if (ExposureMode.ShutterPriority in supported) ExposureMode.ShutterPriority else ExposureMode.Manual
+                ExposureMode.IsoPriority -> ExposureMode.Manual
+                else -> null
+            }
+            ExposureParameter.Iso -> when (mode) {
+                ExposureMode.Auto ->
+                    if (ExposureMode.IsoPriority in supported) ExposureMode.IsoPriority else ExposureMode.Manual
+                ExposureMode.ShutterPriority -> ExposureMode.Manual
+                else -> null
+            }
+            ExposureParameter.Ev -> null
         }
-        ExposureParameter.Iso -> when (mode) {
-            ExposureMode.Auto -> ExposureMode.IsoPriority
-            ExposureMode.ShutterPriority -> ExposureMode.Manual
-            else -> null
-        }
-        ExposureParameter.Ev -> null
+        return target?.takeIf { it in supported }
     }
 
-    fun unlockModeFor(parameter: ExposureParameter, mode: ExposureMode): ExposureMode? = when (parameter) {
-        ExposureParameter.Shutter -> when (mode) {
-            ExposureMode.Manual -> ExposureMode.IsoPriority
-            ExposureMode.ShutterPriority -> ExposureMode.Auto
-            else -> null
+    fun unlockModeFor(
+        parameter: ExposureParameter,
+        mode: ExposureMode,
+        supported: Set<ExposureMode> = ExposureMode.entries.toSet()
+    ): ExposureMode? {
+        val target = when (parameter) {
+            ExposureParameter.Shutter -> when (mode) {
+                ExposureMode.Manual ->
+                    if (ExposureMode.IsoPriority in supported) ExposureMode.IsoPriority else ExposureMode.Auto
+                ExposureMode.ShutterPriority -> ExposureMode.Auto
+                else -> null
+            }
+            ExposureParameter.Iso -> when (mode) {
+                ExposureMode.Manual ->
+                    if (ExposureMode.ShutterPriority in supported) ExposureMode.ShutterPriority else ExposureMode.Auto
+                ExposureMode.IsoPriority -> ExposureMode.Auto
+                else -> null
+            }
+            ExposureParameter.Ev -> null
         }
-        ExposureParameter.Iso -> when (mode) {
-            ExposureMode.Manual -> ExposureMode.ShutterPriority
-            ExposureMode.IsoPriority -> ExposureMode.Auto
-            else -> null
-        }
-        ExposureParameter.Ev -> null
+        return target?.takeIf { it in supported }
     }
 
     /** True when the compact button for [parameter] represents a locked (manual) axis. */

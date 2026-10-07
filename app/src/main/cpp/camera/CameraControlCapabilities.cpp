@@ -1,6 +1,7 @@
 #include "camera/CameraControlCapabilities.h"
 
 #include <camera/NdkCameraMetadataTags.h>
+#include <sys/system_properties.h>
 
 #include <algorithm>
 #include <cmath>
@@ -26,6 +27,15 @@ bool containsU8(const std::optional<ACameraMetadata_const_entry>& e, uint8_t val
         if (e->data.u8[i] == value) return true;
     }
     return false;
+}
+
+// `adb shell setprop debug.rawr.disable_ae_priority 1|ss|iso` hides the HAL's
+// AE priority modes (both, shutter, ISO) to exercise the no-priority fallback
+// on a device that has them. Read on camera open.
+std::string disabledAePriority() {
+    char value[PROP_VALUE_MAX] = {};
+    __system_property_get("debug.rawr.disable_ae_priority", value);
+    return value;
 }
 
 void readWbMatrix(const ACameraMetadata* characteristics, uint32_t tag,
@@ -134,6 +144,12 @@ CameraControlState readInitialCameraControlState(const ACameraMetadata* characte
     state.capabilities.shutterPrioritySupported =
         containsU8(aePriorityModes, camera2_priority::kSensorExposureTimePriority);
     state.capabilities.isoPrioritySupported = containsU8(aePriorityModes, camera2_priority::kSensorSensitivityPriority);
+    state.capabilities.aePriorityTagAvailable =
+        state.capabilities.shutterPrioritySupported || state.capabilities.isoPrioritySupported;
+    if (const auto disabled = disabledAePriority(); !disabled.empty()) {
+        if (disabled != "iso") state.capabilities.shutterPrioritySupported = false;
+        if (disabled != "ss") state.capabilities.isoPrioritySupported = false;
+    }
 
     // White balance: gate presets on AWB_AVAILABLE_MODES and manual gains on
     // COLOR_CORRECTION TRANSFORM_MATRIX. Missing tags fall back to Auto-only /

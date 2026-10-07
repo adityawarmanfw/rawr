@@ -90,6 +90,7 @@ class NativePreviewEngine {
     external fun setPostGainKneeWidthEv(handle: Long, widthEv: Float)
 
     external fun setAutoMinFps(handle: Long, fps: Int)
+    external fun setAePriorityDisabled(handle: Long, disabled: Boolean)
 
     external fun setPersistentDiagnosticsEnabled(handle: Long, enabled: Boolean)
 

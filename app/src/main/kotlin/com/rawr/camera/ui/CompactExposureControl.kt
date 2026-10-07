@@ -56,7 +56,12 @@ internal fun CompactExposureButton(
     val locked = CaptureTransitions.isParameterLocked(state, parameter)
     val zeroEvId = if (isEv) capability.zeroEvCandidateId() else null
     val zeroEvIndex = if (isEv && zeroEvId != null) capability.indexOf(zeroEvId).takeIf { it >= 0 } else null
-    val interactive = !isManualMeter
+    val supportedModes = state.capabilities.supportedExposureModes
+    val latestSupportedModes by rememberUpdatedState(supportedModes)
+    // An auto axis with no reachable lock mode (no priority, no Manual) is a
+    // read-only readout: scrubbing it could never reach the camera.
+    val interactive = !isManualMeter &&
+        (isEv || locked || CaptureTransitions.lockModeFor(parameter, state.exposureControl.mode, supportedModes) != null)
     // Live backend readout for this axis. While the axis is auto, the button
     // mirrors it (same source as ExposureMonitor, so the two can never drift
     // apart); the requested value is only shown once locked.
@@ -117,7 +122,7 @@ internal fun CompactExposureButton(
 
     fun ensureLocked() {
         if (isEv || isManualMeter) return
-        CaptureTransitions.lockModeFor(parameter, latestMode)?.let {
+        CaptureTransitions.lockModeFor(parameter, latestMode, latestSupportedModes)?.let {
             haptics.selection()
             dispatch(SetExposureMode(it))
         }
@@ -157,7 +162,7 @@ internal fun CompactExposureButton(
                         detectTapGestures(
                             onDoubleTap = {
                                 if (!dragging) {
-                                    CaptureTransitions.unlockModeFor(parameter, latestMode)?.let {
+                                    CaptureTransitions.unlockModeFor(parameter, latestMode, latestSupportedModes)?.let {
                                         haptics.selection()
                                         dispatch(SetExposureMode(it))
                                     }
@@ -165,7 +170,7 @@ internal fun CompactExposureButton(
                             },
                             onLongPress = {
                                 if (!dragging) {
-                                    CaptureTransitions.lockModeFor(parameter, latestMode)?.let {
+                                    CaptureTransitions.lockModeFor(parameter, latestMode, latestSupportedModes)?.let {
                                         haptics.longPress()
                                         dispatch(SetExposureMode(it))
                                     } ?: haptics.longPress()

@@ -107,6 +107,11 @@ struct NativeCameraController::Impl final : CameraEventSink {
     std::string preferredCameraId;
     std::string accessRoute = "direct";
     bool oisEnabledPreference = true;
+    // User preference to bypass Camera2 AE priority; the HAL's advertised
+    // support is kept so the preference can be turned back off live.
+    bool aePriorityDisabledPreference = false;
+    bool halShutterPriority = false;
+    bool halIsoPriority = false;
     uint8_t antibandingPreference = ACAMERA_CONTROL_AE_ANTIBANDING_MODE_AUTO;
     int autoMinFpsPreference = 15;
     int recordingFpsPreference = 0;
@@ -354,6 +359,9 @@ struct NativeCameraController::Impl final : CameraEventSink {
         const bool sameCameraRestart =
             !previousControl.capabilities.cameraId.empty() && previousControl.capabilities.cameraId == route.cameraId;
         control = deviceSession.initialControls(route);
+        halShutterPriority = control.capabilities.shutterPrioritySupported;
+        halIsoPriority = control.capabilities.isoPrioritySupported;
+        applyAePriorityPreferenceLocked();
         publishProfileLocked();
         control.focusRequestId = previousControl.focusRequestId;
         control.whiteBalanceRequestId = previousControl.whiteBalanceRequestId;
@@ -725,6 +733,22 @@ struct NativeCameraController::Impl final : CameraEventSink {
              " accepted=" + (accepted ? "true" : "false"));
         if (accepted) submitRepeatingLocked();
     }
+    void applyAePriorityPreferenceLocked() {
+        control.capabilities.shutterPrioritySupported = halShutterPriority && !aePriorityDisabledPreference;
+        control.capabilities.isoPrioritySupported = halIsoPriority && !aePriorityDisabledPreference;
+    }
+    void setAePriorityDisabledValue(bool disabled) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (aePriorityDisabledPreference == disabled) return;
+        aePriorityDisabledPreference = disabled;
+        applyAePriorityPreferenceLocked();
+        // A running S/I mode the HAL may no longer own drops to Auto, as on restore.
+        const bool priorityMode = control.exposureMode == ExposureControlMode::ShutterPriority ||
+                                  control.exposureMode == ExposureControlMode::IsoPriority;
+        if (disabled && priorityMode) control.exposureMode = ExposureControlMode::Auto;
+        diag(std::string("CAMERA_AE_PRIORITY_PREFERENCE disabled=") + (disabled ? "true" : "false"));
+        submitRepeatingLocked();
+    }
     void setOisEnabledValue(bool enabled) {
         std::lock_guard<std::mutex> lock(mutex);
         oisEnabledPreference = enabled;
@@ -968,6 +992,7 @@ void NativeCameraController::setWhiteBalanceLocked(int32_t temperatureK, int32_t
 void NativeCameraController::setOisEnabled(bool enabled) { impl_->setOisEnabledValue(enabled); }
 void NativeCameraController::setAntibandingMode(uint8_t mode) { impl_->setAntibandingModeValue(mode); }
 void NativeCameraController::setAutoMinFps(int fps) { impl_->setAutoMinFpsValue(fps); }
+void NativeCameraController::setAePriorityDisabled(bool disabled) { impl_->setAePriorityDisabledValue(disabled); }
 void NativeCameraController::setVideoMode(bool video, int fps) { impl_->setVideoModeValue(video, fps); }
 void NativeCameraController::setShutterAngleDegrees(double degrees) { impl_->setShutterAngle(degrees); }
 void NativeCameraController::tickControls(int64_t nowMs) { impl_->tickControls(nowMs); }
