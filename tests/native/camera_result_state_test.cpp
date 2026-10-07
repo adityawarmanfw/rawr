@@ -206,6 +206,43 @@ void sensitivityCoordinate() {
     assert(!results.sensitivityReportedPerRequest());
 }
 
+void sensitivityEndpoints() {
+    CameraResultState results;
+    auto state = controls();
+    state.capabilities.sensitivityMin = 50;
+    state.capabilities.sensitivityMax = 3200;
+    auto request = CameraRequestProvenance::from(state, 1);
+    request.exposureMode = ExposureControlMode::Manual;
+    request.optimizedStillRequestId = 99;
+    auto observed = frame();
+    request.requestedSensitivity = 50;
+    observed.sensitivity = 800;  // Floor would incorrectly train 16x.
+    results.observe(state, observed, {}, &request, 1, true);
+    assert(!results.sensitivityReportedPerRequest());
+    request.requestedSensitivity = 400;
+    observed.sensitivity = 3200;
+    results.observe(state, observed, {}, &request, 1, true);
+    assert(results.sensitivityReportedPerRequest() == 8);
+    request.requestedSensitivity = 50;
+    observed.sensitivity = 800;
+    results.observe(state, observed, {}, &request, 1, true);
+    assert(results.sensitivityReportedPerRequest() == 8);  // Dark frame cannot poison it.
+    request.requestedSensitivity = 3200;
+    observed.sensitivity = 12800;
+    results.observe(state, observed, {}, &request, 1, true);
+    assert(results.sensitivityReportedPerRequest() == 8);
+    request.requestedSensitivity = 800;
+    observed.sensitivity = 6400;  // Report coordinate exceeds manual request max.
+    results.observe(state, observed, {}, &request, 1, true);
+    assert(results.sensitivityReportedPerRequest() == 8);
+    request.exposureMode = ExposureControlMode::Auto;
+    request.optimizedStillRequestId = 0;
+    observed.sensitivity = 25600;  // AE is allowed an even wider range.
+    results.observe(state, observed, {}, &request, 1, true);
+    assert(state.appliedSensitivity == 25600);
+    assert(results.sensitivityReportedPerRequest() == 8);
+}
+
 void priorityContract() {
     CameraResultState results;
     auto state = controls(ExposureControlMode::ShutterPriority);
@@ -278,6 +315,7 @@ int main() {
     frameRateObservation();
     whiteBalanceFreezing();
     sensitivityCoordinate();
+    sensitivityEndpoints();
     priorityContract();
     faceNormalization();
     std::cout << "CAMERA_RESULT_STATE_PASS\n";

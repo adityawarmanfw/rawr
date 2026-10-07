@@ -53,7 +53,14 @@ std::optional<CameraPriorityAudit> CameraResultState::observe(CameraControlState
     // request provenance actually owns sensitivity. Camera2 Auto/S priority does
     // not own that axis and must never be used to calibrate it.
     if (provenance && provenance->requestedSensitivity > 0 && frame.sensitivity > 0 &&
-        provenance->exposureMode == ExposureControlMode::Manual) {
+        provenance->exposureMode == ExposureControlMode::Manual &&
+        // Endpoint requests can be clamped in forced sensor modes. Their
+        // result/request quotient is not a measurement of the gain scale.
+        // These are REQUEST limits: Auto/report ISO may legitimately exceed
+        // the manual range and must not be rejected against that range.
+        provenance->requestedSensitivity > state.capabilities.sensitivityMin &&
+        (state.capabilities.sensitivityMax <= 0 ||
+         provenance->requestedSensitivity < state.capabilities.sensitivityMax)) {
         const double observedRatio =
             static_cast<double>(frame.sensitivity) / static_cast<double>(provenance->requestedSensitivity);
         if (std::isfinite(observedRatio) && observedRatio > 0.0) {

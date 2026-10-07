@@ -259,9 +259,9 @@ struct NativeCameraController::Impl final : CameraEventSink {
     // and the conversion is only learned from AE-off results. HDR+ bracket
     // frames need it in Auto, so once per DCG session while HDR+ Bracketed is
     // selected (after the preview settles) send one AE-off frame at the
-    // minimum ISO and the current shutter; its result calibrates the ratio.
-    // Darker than the preview, so the viewfinder lifts it like a bracket
-    // frame. Never while recording.
+    // interior ISO and the current shutter; minimum-ISO requests can hit a
+    // sensor floor and falsely double the measured ratio. The viewfinder
+    // compensates this one-shot frame like a bracket. Never while recording.
     static constexpr uint64_t kSensitivityProbeTag = ~0ull;
     uint64_t sensitivityProbeGeneration = 0;
     uint32_t resultsBeforeProbe = 0;
@@ -281,12 +281,16 @@ struct NativeCameraController::Impl final : CameraEventSink {
         const int64_t exposure =
             std::clamp(*control.appliedExposureTimeNs, control.capabilities.exposureTimeMinNs,
                        std::max(control.capabilities.exposureTimeMinNs, control.capabilities.exposureTimeMaxNs));
+        const auto& caps = control.capabilities;
+        // Geometric midpoint gives headroom from both manual endpoints.
+        const int32_t probeIso = static_cast<int32_t>(std::llround(
+            std::sqrt(double(std::max(1, caps.sensitivityMin)) * double(std::max(1, caps.sensitivityMax)))));
         const bool sent = requests.captureBracket(deviceSession.session(), deviceSession.request(),
                                                   deviceSession.callbackContext(), control,
-                                                  {{exposure, control.capabilities.sensitivityMin}},
+                                                  {{exposure, probeIso}},
                                                   kSensitivityProbeTag);
         diag(std::string("CAMERA_SENSITIVITY_PROBE sent=") + (sent ? "1" : "0") + " exposureNs=" +
-             std::to_string(exposure) + " iso=" + std::to_string(control.capabilities.sensitivityMin));
+             std::to_string(exposure) + " iso=" + std::to_string(probeIso));
     }
 
     bool submitRepeatingLocked() {

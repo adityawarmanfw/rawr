@@ -907,7 +907,9 @@ float FrameSubmitCoordinator::previewPostGain(const rawrcam::metadata::FrameMeta
         lastRepeatingExposure_ = exposure;
         return gain;
     }
-    if (lastRepeatingExposure_ <= exposure) return gain;
+    if (lastRepeatingExposure_ <= 0.0) return gain;
+    // Interior-ISO calibration probes can also be brighter than preview.
+    // Compensate in both directions without changing the repeating seed.
     // Same 16x ceiling the tonemap engine enforces.
     return std::min(16.0f, gain * float(lastRepeatingExposure_ / exposure));
 }
