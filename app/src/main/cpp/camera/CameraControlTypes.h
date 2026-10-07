@@ -105,6 +105,8 @@ struct CameraControlCapabilities {
     bool focusDistanceReadoutTrustworthy = false;
     bool oisSupported = false;
     float minimumFocusDistance = 0.0f;
+    // LENS_INFO_HYPERFOCAL_DISTANCE in diopters; 0 when unreported.
+    float hyperfocalDistance = 0.0f;
     int32_t maxAfRegions = 0;
     int32_t maxAeRegions = 0;
 };

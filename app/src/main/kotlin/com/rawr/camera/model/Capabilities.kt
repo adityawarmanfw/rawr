@@ -50,7 +50,9 @@ data class ManualFocusCapability(
     val maxNormalized: Float = 1f,
     val distanceReadoutTrustworthy: Boolean = false,
     /** Camera2 LENS_INFO_MINIMUM_FOCUS_DISTANCE in diopters; 0 when unknown/fixed-focus. */
-    val minimumFocusDistance: Float = 0f
+    val minimumFocusDistance: Float = 0f,
+    /** Camera2 LENS_INFO_HYPERFOCAL_DISTANCE in diopters; 0 when unreported. */
+    val hyperfocalDistance: Float = 0f
 ) {
     init {
         require(minNormalized in 0f..1f && maxNormalized in 0f..1f) {

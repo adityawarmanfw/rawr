@@ -197,35 +197,21 @@ internal fun CompactExposureButton(
                                 // value (up = increase): edge columns run out
                                 // of horizontal room, vertical never does.
                                 // Pure-horizontal feel is unchanged.
-                                val delta = drag.x - drag.y
-                                var residual = rawTrackOffsetPx + delta
-                                while (gestureIndex < capability.candidates.lastIndex) {
-                                    val currentIsMagnetic =
-                                        capability.candidates[gestureIndex].id in capability.magneticSnapAnchorIds
-                                    val threshold = if (currentIsMagnetic) magneticReleasePx else fineStepPx
-                                    if (residual < threshold) break
-                                    gestureIndex += 1
-                                    val candidate = capability.candidates[gestureIndex]
-                                    dispatch(SetExposureCandidate(parameter, candidate.id))
-                                    if (!magnetic || candidate.id in capability.magneticSnapAnchorIds) haptics.detent()
-                                    residual -= threshold
+                                val result = detentScrub(
+                                    index = gestureIndex,
+                                    trackOffsetPx = rawTrackOffsetPx,
+                                    deltaPx = drag.x - drag.y,
+                                    lastIndex = capability.candidates.lastIndex,
+                                    fineStepPx = fineStepPx,
+                                    magneticReleasePx = magneticReleasePx,
+                                    magnetic = magnetic,
+                                    isAnchor = { capability.candidates[it].id in capability.magneticSnapAnchorIds }
+                                ) { next, detent ->
+                                    dispatch(SetExposureCandidate(parameter, capability.candidates[next].id))
+                                    if (detent) haptics.detent()
                                 }
-                                while (gestureIndex > 0) {
-                                    val currentIsMagnetic =
-                                        capability.candidates[gestureIndex].id in capability.magneticSnapAnchorIds
-                                    val threshold = if (currentIsMagnetic) magneticReleasePx else fineStepPx
-                                    if (residual > -threshold) break
-                                    gestureIndex -= 1
-                                    val candidate = capability.candidates[gestureIndex]
-                                    dispatch(SetExposureCandidate(parameter, candidate.id))
-                                    if (!magnetic || candidate.id in capability.magneticSnapAnchorIds) haptics.detent()
-                                    residual += threshold
-                                }
-                                val pushingPastMin = gestureIndex == 0 && residual < 0f
-                                val pushingPastMax =
-                                    gestureIndex == capability.candidates.lastIndex && residual > 0f
-                                rawTrackOffsetPx =
-                                    if (pushingPastMin || pushingPastMax) residual * .18f else residual
+                                gestureIndex = result.index
+                                rawTrackOffsetPx = result.trackOffsetPx
                             },
                             onDragEnd = {
                                 dragging = false

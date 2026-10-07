@@ -396,6 +396,8 @@ object CaptureTransitions {
         return state.copy(
             focus =
                 state.focus.copy(
+                    // A tap is an AF request: MF hands back to AF at the tap point.
+                    mode = if (state.focus.mode == FocusMode.Mf) FocusMode.Af else state.focus.mode,
                     target = point.clamped(),
                     status = TargetStatus.Settling,
                     selectorOpen = false

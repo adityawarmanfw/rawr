@@ -152,7 +152,8 @@ internal object NativeCapabilityProjection {
                     ManualFocusCapability(
                         supported = s.manualFocusSupported,
                         distanceReadoutTrustworthy = s.manualFocusSupported && s.focusDistanceReadoutTrustworthy,
-                        minimumFocusDistance = s.minimumFocusDistance
+                        minimumFocusDistance = s.minimumFocusDistance,
+                        hyperfocalDistance = s.hyperfocalDistance
                     ),
                 tapAfSupported = s.tapAfSupported,
                 fpsChoices = emptyList(),

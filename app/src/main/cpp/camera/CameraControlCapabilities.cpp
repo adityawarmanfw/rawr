@@ -3,6 +3,7 @@
 #include <camera/NdkCameraMetadataTags.h>
 
 #include <algorithm>
+#include <cmath>
 #include <optional>
 #include <sstream>
 
@@ -184,6 +185,11 @@ CameraControlState readInitialCameraControlState(const ACameraMetadata* characte
     state.capabilities.minimumFocusDistance = std::max(0.0f, minimumFocusDistance);
     state.capabilities.manualFocusSupported =
         minimumFocusDistance > 0.0f && containsU8(afModes, ACAMERA_CONTROL_AF_MODE_OFF);
+    state.capabilities.hyperfocalDistance = 0.0f;
+    if (const auto e = entry(characteristics, ACAMERA_LENS_INFO_HYPERFOCAL_DISTANCE);
+        e && e->data.f && e->count >= 1 && std::isfinite(e->data.f[0])) {
+        state.capabilities.hyperfocalDistance = std::clamp(e->data.f[0], 0.0f, state.capabilities.minimumFocusDistance);
+    }
 
     if (const auto e = entry(characteristics, ACAMERA_LENS_INFO_FOCUS_DISTANCE_CALIBRATION);
         e && e->data.u8 && e->count >= 1) {

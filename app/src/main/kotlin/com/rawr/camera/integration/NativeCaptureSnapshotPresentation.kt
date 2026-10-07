@@ -57,6 +57,7 @@ internal class NativeCaptureSnapshotPresentation {
         val manualFocus: Boolean,
         val focusReadout: Boolean,
         val focusDistance: Float,
+        val hyperfocalDistance: Float,
         val manualWb: Boolean,
         val awbModes: List<Int>,
         val videoFps: Int?,
@@ -70,7 +71,7 @@ internal class NativeCaptureSnapshotPresentation {
                 s.exposureTimeMinNs, s.exposureTimeMaxNs, s.evMinSteps, s.evMaxSteps, s.evStep,
                 s.manualExposureSupported, s.shutterPrioritySupported, s.isoPrioritySupported,
                 s.tapAfSupported, s.manualFocusSupported, s.focusDistanceReadoutTrustworthy,
-                s.minimumFocusDistance, s.manualWhiteBalanceSupported, s.supportedAwbModes,
+                s.minimumFocusDistance, s.hyperfocalDistance, s.manualWhiteBalanceSupported, s.supportedAwbModes,
                 fps, if (fps != null) s.shutterAngleChoices else emptyList(), s.profileLenses
             )
         }

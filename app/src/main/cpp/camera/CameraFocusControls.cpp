@@ -44,6 +44,9 @@ std::optional<CameraTapFocusPlan> CameraFocusControls::planTap(const CameraContr
 }
 
 void CameraFocusControls::acceptTap(CameraControlState& state, const CameraTapFocusPlan& plan, int64_t nowMs) {
+    // A viewfinder tap is an AF request: leave MF (AF_MODE_OFF would ignore it)
+    // for continuous AF steered to the tap, exactly like a tap from AF.
+    if (state.focusMode == FocusControlMode::Manual) state.focusMode = FocusControlMode::Continuous;
     region_ = plan.region;
     state.tapAfActive = true;
     tapPolicy_.acceptedTap(state.focusMode == FocusControlMode::Continuous, nowMs);

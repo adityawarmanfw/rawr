@@ -339,6 +339,7 @@ class NativeCameraPresentationTest {
         manualFocusSupported = true,
         focusDistanceReadoutTrustworthy = true,
         minimumFocusDistance = 10f,
+        hyperfocalDistance = 0f,
         exposureMode = 0,
         semanticExposureMode = 0,
         focusMode = 0,

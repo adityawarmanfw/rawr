@@ -1,5 +1,7 @@
 package com.rawr.camera.model
 
+import kotlin.math.roundToInt
+
 fun CaptureUiState.exposureOwners(): List<ExposureParameter> = when (exposureControl.mode) {
     ExposureMode.Auto -> listOf(ExposureParameter.Ev)
     ExposureMode.Manual -> listOf(ExposureParameter.Shutter, ExposureParameter.Iso)
@@ -77,4 +79,27 @@ fun DiscreteExposureCapability.labelsAround(candidateId: String): ExposureLabels
         current = candidates[currentIndex].displayLabel,
         nextAnchor = next?.let { candidates[it].displayLabel }.orEmpty()
     )
+}
+
+/**
+ * Compact focus value. In MF it is the *requested* distance (exact ∞ at the
+ * top of the scale) so the readout never lags or under-reports the anchor;
+ * in AF/AF-L it is the lens-reported distance. Untrusted calibration falls
+ * back to a percentage of the range.
+ */
+fun CaptureUiState.focusDistanceLabel(): String {
+    val capability = capabilities.manualFocus
+    val minimum = capability.minimumFocusDistance
+    if (focus.mode == FocusMode.Mf) {
+        if (focus.mfNormalized >= 1f) return "∞"
+        if (!capability.distanceReadoutTrustworthy || !(minimum > 0f)) {
+            return "${(focus.mfNormalized * 100).roundToInt()}%"
+        }
+        return ExposureFormat.formatFocusDistance((1f - focus.mfNormalized) * minimum)
+    }
+    val applied = focus.appliedFocusDiopters?.takeIf { it.isFinite() } ?: return "AUTO"
+    if (!capability.distanceReadoutTrustworthy) {
+        return mfNormalizedFromDiopters(applied, minimum)?.let { "${(it * 100).roundToInt()}%" } ?: "AUTO"
+    }
+    return ExposureFormat.formatFocusDistance(applied)
 }

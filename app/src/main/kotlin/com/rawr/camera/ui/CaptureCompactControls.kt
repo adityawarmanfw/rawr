@@ -97,9 +97,10 @@ internal fun CompactParamRow(state: CaptureUiState, dispatch: CaptureDispatch, m
             .testTag(CaptureTestTags.COMPACT_PARAM_ROW),
         horizontalArrangement = Arrangement.spacedBy(CaptureDimens.ControlGap)
     ) {
-        CompactWbButton(state, dispatch, Modifier.weight(1.3f).fillMaxHeight())
-        CompactExposureButton(ExposureParameter.Shutter, state, dispatch, Modifier.weight(1f).fillMaxHeight())
         CompactExposureButton(ExposureParameter.Iso, state, dispatch, Modifier.weight(1f).fillMaxHeight())
+        CompactExposureButton(ExposureParameter.Shutter, state, dispatch, Modifier.weight(1f).fillMaxHeight())
         CompactExposureButton(ExposureParameter.Ev, state, dispatch, Modifier.weight(1f).fillMaxHeight())
+        CompactWbButton(state, dispatch, Modifier.weight(1.15f).fillMaxHeight())
+        CompactFocusButton(state, dispatch, Modifier.weight(1f).fillMaxHeight())
     }
 }
