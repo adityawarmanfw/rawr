@@ -113,35 +113,25 @@ inline FrequencyNorms frequencyNorms(float strength) {
     return n;
 }
 
-// Bracketed exposure (upstream align_merge_frequency_domain with
-// uniform_exposure false). exposureFactors[i] = frame i exposure / reference
-// exposure (>= 1 when the darkest frame is the reference). Longer exposures
-// carry less noise, so the noise term is lowered on average (corr1) and the
-// motion norm lifted (corr2); per-frame max motion norms come from
-// bracketedMaxMotionNorm().
+// Bracketed exposure. exposureFactor = frame exposure / reference exposure
+// (>= 1 when the darkest frame is the reference).
 inline bool uniformExposure(const std::vector<float>& exposureFactors) {
     for (const float f : exposureFactors)
         if (std::abs(f - 1.f) > 1e-3f) return false;
     return true;
 }
-inline FrequencyNorms bracketedFrequencyNorms(float strength, const std::vector<float>& exposureFactors) {
-    if (exposureFactors.empty() || uniformExposure(exposureFactors)) return frequencyNorms(strength);
-    double corr1 = 0.0, corr2 = 0.0;
-    for (const float f : exposureFactors) {
-        corr1 += 0.5 + 0.5 / double(f);
-        corr2 += std::min(4.0, double(f));
-    }
-    corr1 /= double(exposureFactors.size());
-    corr2 /= double(exposureFactors.size());
-    const double rev = 0.5 * (28.5 - double(int(strength + 0.5f)));
-    FrequencyNorms n{};
-    n.robustnessNorm = float(corr1 / corr2 * std::pow(2.0, -rev + 7.5));
-    n.readNoise = float(std::pow(std::pow(2.0, -rev + 10.0), 1.6));
-    n.maxMotionNorm = float(std::max(1.0, std::pow(1.3, 11.0 - rev)));
+// Per-frame norms for a bracketed burst (Rawr; replaces upstream's
+// burst-averaged exposure_corr1/2, 28.5 constant and min(4, ef) motion
+// boost). The Wiener noise term is the expected variance of the
+// reference-companion difference: rms measures the reference, a companion
+// scaled down by ef adds 1/ef of it (shot noise), so the uniform term is
+// scaled by (1 + 1/ef) / 2. Equal-exposure frames (the dark frames among
+// themselves) merge exactly like the uniform path; brighter frames' larger
+// share comes from the exposure-weighted mean (hdrq_merge), not from norms.
+inline FrequencyNorms bracketedFrequencyNorms(float strength, float exposureFactor) {
+    FrequencyNorms n = frequencyNorms(strength);
+    n.robustnessNorm *= 0.5f + 0.5f / std::max(1.f, exposureFactor);
     return n;
-}
-inline float bracketedMaxMotionNorm(const FrequencyNorms& n, float exposureFactor) {
-    return std::min(4.f, exposureFactor) * std::sqrt(n.maxMotionNorm);
 }
 
 // The frequency merge runs four passes over 8x8 RGBA tiles (16x16 raw

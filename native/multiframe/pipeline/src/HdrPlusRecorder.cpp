@@ -30,6 +30,10 @@ struct HotPixelPc {
 struct SizePc {
     std::int32_t width, height;
 };
+struct AvgPoolPc {
+    std::int32_t width, height;
+    float clampTo;
+};
 struct BlurPc {
     std::int32_t width, height, srcX, srcY, dstX, dstY, kernelSize, stride, direction, quantizeHalf;
 };
@@ -174,7 +178,7 @@ void HdrPlusRecorder::recordPyramid(VkCommandBuffer c, bool reference) {
                        1, true);
             src = &tmpB;
         }
-        SizePc pc{std::int32_t(level.width), std::int32_t(level.height)};
+        AvgPoolPc pc{std::int32_t(level.width), std::int32_t(level.height), i == 0 ? pyramidClamp_ : 0.0f};
         executor_.record(c, ShaderId::HdrpAvgPool, {{ib(0, *src), ib(1, dst)}, {}}, &pc, sizeof(pc),
                          divUp(level.width, 16), divUp(level.height, 16));
         computeWriteBarrier(c);
@@ -184,6 +188,7 @@ void HdrPlusRecorder::recordPyramid(VkCommandBuffer c, bool reference) {
 void HdrPlusRecorder::recordReference(VkCommandBuffer c, VkImageView rawU16, const RawNormalization& frame,
                                       std::uint32_t frameCount) {
     reference_ = frame;
+    pyramidClamp_ = 0.0f;
     recordPrepare(c, true, rawU16, frame);
     recordPyramid(c, true);
     const auto& padded = arena_.image("hdrp_ref_padded");
@@ -222,7 +227,13 @@ void HdrPlusRecorder::recordCompanionPadded(VkCommandBuffer c, VkImageView rawU1
 
 void HdrPlusRecorder::recordReferencePrepare(VkCommandBuffer c, VkImageView rawU16, const RawNormalization& frame) {
     reference_ = frame;
+    pyramidClamp_ = 0.0f;
     recordPrepare(c, true, rawU16, frame);
+    recordPyramid(c, true);
+}
+
+void HdrPlusRecorder::recordClampedReferencePyramid(VkCommandBuffer c, float clampTo) {
+    pyramidClamp_ = clampTo;
     recordPyramid(c, true);
 }
 
@@ -337,6 +348,7 @@ struct WarpRgbaPc {
     std::int32_t offsetX, offsetY;
     std::int32_t continuous;
     float exposureFactor, whiteLevel, blackLevelMean;
+    std::int32_t windowedSubstitute;
 };
 VkDeviceSize alignUp256(VkDeviceSize v) { return (v + 255u) / 256u * 256u; }
 struct MismatchPc {
@@ -367,6 +379,9 @@ struct BackwardPc {
 struct BorderPc {
     std::int32_t width, height;
     float minValue;
+};
+struct NormalizePc {
+    std::int32_t width, height, multiply;
 };
 struct FreqAccumulatePc {
     std::int32_t width, height, offsetX, offsetY, mode;
@@ -459,7 +474,20 @@ VkDeviceSize HdrPlusFrequencyRecorder::alignSlotBytes() const noexcept {
 
 void HdrPlusFrequencyRecorder::recordCompanionAlign(VkCommandBuffer c, VkImageView rawU16, const RawNormalization& frame,
                                                     std::uint32_t slot) {
-    align_.setCompanionGain(1.0f / frameExposure(slot));
+    const float gain = 1.0f / frameExposure(slot);
+    align_.setCompanionGain(gain);
+    if (alignsThisPass() && brighterCompanion(slot) && !pyramidClamped_) {
+        // Brighter companions (merged after the dark ones) align against a
+        // reference pyramid clamped just below their clip point; theirs gets
+        // the same clamp. Assumes they share one exposure (the ZSL frames).
+        float refBlack = 0.0f, black = 0.0f;
+        for (int i = 0; i < 4; ++i) {
+            refBlack += 0.25f * align_.referenceBlack()[std::size_t(i)];
+            black += 0.25f * frame.blackByPhase[std::size_t(i)];
+        }
+        align_.recordClampedReferencePyramid(c, refBlack + 0.9f * (frame.whiteLevel - black) * gain);
+        pyramidClamped_ = true;
+    }
     if (!alignsThisPass()) {
         align_.recordCompanionPadded(c, rawU16, frame);
         return;
@@ -482,6 +510,8 @@ void HdrPlusFrequencyRecorder::recordCompanionAlign(VkCommandBuffer c, VkImageVi
 }
 
 void HdrPlusFrequencyRecorder::recordReference(VkCommandBuffer c, VkImageView rawU16, const RawNormalization& frame) {
+    substitutionReady_ = false;
+    pyramidClamped_ = false;
     if (pass_ == 0u) {
         executor_.record(c, ShaderId::HdrqShiftTable, {{}, {bb(0, arena_.buffer("hdrq_shift_table"))}}, nullptr, 0u,
                          divUp(49u * 64u, 64u), 1);
@@ -541,7 +571,10 @@ void HdrPlusFrequencyRecorder::recordCompanionMerge(VkCommandBuffer c, std::uint
     WarpRgbaPc wp{std::int32_t(geometry_.rgbaWidth), std::int32_t(geometry_.rgbaHeight), std::int32_t(geometry_.cropX),
                   std::int32_t(geometry_.cropY), std::int32_t(a.paddedWidth), std::int32_t(a.paddedHeight),
                   std::int32_t(level0.tilesX), std::int32_t(level0.tilesY), std::int32_t(level0.tileSize), 0,
-                  offset[0], offset[1], config_.frequencyAlignOnce ? 1 : 0, exposureFactor, whiteLevel, blackMean};
+                  offset[0], offset[1], config_.frequencyAlignOnce ? 1 : 0, exposureFactor, whiteLevel, blackMean,
+                  substitutionReady_ ? 1 : 0};
+    // Clipped cells: the dark-frame estimate once captured, else the reference.
+    const auto& substitute = substitutionReady_ ? arena_.image("hdrq_out_rgba") : refRgba;
     // Align-once: this companion's pass-0 shifts from its store slot.
     const BufferBinding shifts =
         config_.frequencyAlignOnce
@@ -549,7 +582,7 @@ void HdrPlusFrequencyRecorder::recordCompanionMerge(VkCommandBuffer c, std::uint
                             VkDeviceSize(level0.tilesX) * level0.tilesY * 8u}
             : bb(2, arena_.buffer("hdrp_align_a"));
     executor_.record(c, ShaderId::HdrqWarpRgba,
-                     {{ib(0, arena_.image("hdrp_comp_padded")), ib(1, alignedRgba), ib(3, refRgba)}, {shifts}},
+                     {{ib(0, arena_.image("hdrp_comp_padded")), ib(1, alignedRgba), ib(3, substitute)}, {shifts}},
                      &wp, sizeof(wp), divUp(geometry_.rgbaWidth, 16), divUp(geometry_.rgbaHeight, 16));
     computeWriteBarrier(c);
     if (mark) mark(1u);
@@ -589,10 +622,8 @@ void HdrPlusFrequencyRecorder::recordCompanionMerge(VkCommandBuffer c, std::uint
                      divUp(tx, 16), divUp(ty, 16));
     computeWriteBarrier(c);
     const auto norms = uniformExposure_ ? hp::frequencyNorms(config_.strength)
-                                        : hp::bracketedFrequencyNorms(config_.strength, exposureFactors_);
-    const float maxMotionNorm =
-        uniformExposure_ ? norms.maxMotionNorm : hp::bracketedMaxMotionNorm(norms, exposureFactor);
-    FreqMergePc fm{std::int32_t(tx), std::int32_t(ty), norms.robustnessNorm, norms.readNoise, maxMotionNorm,
+                                        : hp::bracketedFrequencyNorms(config_.strength, exposureFactor);
+    FreqMergePc fm{std::int32_t(tx), std::int32_t(ty), norms.robustnessNorm, norms.readNoise, norms.maxMotionNorm,
                    uniformExposure_ ? 1 : 0, exposureFactor};
     executor_.record(c, ShaderId::HdrqMerge,
                      {{ib(0, arena_.image("hdrq_ref_ft")), ib(1, arena_.image("hdrq_aligned_ft")),
@@ -603,13 +634,34 @@ void HdrPlusFrequencyRecorder::recordCompanionMerge(VkCommandBuffer c, std::uint
     computeWriteBarrier(c);
 }
 
+void HdrPlusFrequencyRecorder::recordSubstitutionSource(VkCommandBuffer c) {
+    if (uniformExposure_ || substitutionReady_) return;
+    // Weighted mean of the reference and the dark companions merged so far,
+    // inverse transformed into hdrq_out_rgba (free until recordPassFinish);
+    // the running spectrum is restored afterwards.
+    const auto& finalFt = arena_.image("hdrq_final_ft");
+    const auto& weights = arena_.image("hdrq_weight_sum");
+    const std::uint32_t gx = divUp(geometry_.rgbaWidth, 16), gy = divUp(geometry_.rgbaHeight, 16);
+    NormalizePc np{std::int32_t(geometry_.rgbaWidth), std::int32_t(geometry_.rgbaHeight), 0};
+    executor_.record(c, ShaderId::HdrqNormalize, {{ib(0, finalFt), ib(1, weights)}, {}}, &np, sizeof(np), gx, gy);
+    computeWriteBarrier(c);
+    BackwardPc bp{std::int32_t(geometry_.tilesX), std::int32_t(geometry_.tilesY), 1.0f};
+    executor_.record(c, ShaderId::HdrqBackwardDft, {{ib(0, finalFt), ib(1, arena_.image("hdrq_out_rgba"))}, {}}, &bp,
+                     sizeof(bp), geometry_.tilesX, geometry_.tilesY);
+    computeWriteBarrier(c);
+    np.multiply = 1;
+    executor_.record(c, ShaderId::HdrqNormalize, {{ib(0, finalFt), ib(1, weights)}, {}}, &np, sizeof(np), gx, gy);
+    computeWriteBarrier(c);
+    substitutionReady_ = true;
+}
+
 void HdrPlusFrequencyRecorder::recordPassFinish(VkCommandBuffer c, std::uint32_t frameCount) {
     const std::uint32_t tx = geometry_.tilesX, ty = geometry_.tilesY;
     const auto& finalFt = arena_.image("hdrq_final_ft");
     const auto& out = arena_.image("hdrq_out_rgba");
     TilesPc tp{std::int32_t(tx), std::int32_t(ty)};
     if (!uniformExposure_) {
-        SizePc np{std::int32_t(geometry_.rgbaWidth), std::int32_t(geometry_.rgbaHeight)};
+        NormalizePc np{std::int32_t(geometry_.rgbaWidth), std::int32_t(geometry_.rgbaHeight), 0};
         executor_.record(c, ShaderId::HdrqNormalize, {{ib(0, finalFt), ib(1, arena_.image("hdrq_weight_sum"))}, {}}, &np,
                          sizeof(np), divUp(geometry_.rgbaWidth, 16), divUp(geometry_.rgbaHeight, 16));
         computeWriteBarrier(c);

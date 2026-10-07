@@ -691,6 +691,14 @@ BurstRunResult AndroidBurstCoordinator::runHdrPlusFrequency(const std::vector<Bu
     for (std::uint32_t i = 0; i < frameCount; ++i)
         if (frames[i].raw.ref.width != width_ || frames[i].raw.ref.height != height_)
             throw std::invalid_argument("multiframe burst: RAW geometry mismatch");
+    // Bracketed bursts merge the companions as dark as the reference first:
+    // their running merge is the substitute for brighter frames' clipped cells.
+    std::vector<std::uint32_t> order;
+    for (std::uint32_t i = 0; i < frameCount; ++i)
+        if (i != ref) order.push_back(i);
+    std::stable_sort(order.begin(), order.end(), [&](std::uint32_t a, std::uint32_t b) {
+        return !recorder.brighterCompanion(a) && recorder.brighterCompanion(b);
+    });
     std::uint32_t companions = 0;
     for (std::uint32_t pass = 0; pass < 4u; ++pass) {
         recorder.beginPass(pass);
@@ -702,8 +710,13 @@ BurstRunResult AndroidBurstCoordinator::runHdrPlusFrequency(const std::vector<Bu
             recordTimestamp(1u);
         }));
         if (initializeLayouts) layoutsInitialized_ = true;
-        for (std::uint32_t i = 0; i < frameCount; ++i) {
-            if (i == ref) continue;
+        for (const std::uint32_t i : order) {
+            if (recorder.needsSubstitutionSource(i))
+                timings.accumulationMs += gpuOrWall(executeChunk(14u, i, 2u, [&] {
+                    recordTimestamp(0u);
+                    recorder.recordSubstitutionSource(command_);
+                    recordTimestamp(1u);
+                }));
             // One submission: prepare + all alignment levels (+ shift store) when
             // this pass aligns, otherwise only the padded frame.
             const bool aligns = recorder.alignsThisPass();

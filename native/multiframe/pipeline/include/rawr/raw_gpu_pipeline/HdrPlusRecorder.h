@@ -30,6 +30,11 @@ class HdrPlusRecorder final {
     // Bracketed bursts: scale applied to the next companion's black-subtracted
     // signal (reference exposure / companion exposure). 1 for uniform bursts.
     void setCompanionGain(float gain) noexcept { companionGain_ = gain; }
+    // Bracketed bursts: rebuilds the reference pyramid with its finest-level
+    // input clamped to clampTo (raw units); later companion pyramids use the
+    // same clamp. 0 restores unclamped pyramids for later builds.
+    void recordClampedReferencePyramid(VkCommandBuffer command, float clampTo);
+    void setPyramidClamp(float clampTo) noexcept { pyramidClamp_ = clampTo; }
     [[nodiscard]] const std::array<float, 4>& referenceBlack() const noexcept { return reference_.blackByPhase; }
     // Reference: padded frame, pyramid, blurred copy, noise level, and the
     // accumulator initialized with ref / frameCount.
@@ -69,6 +74,7 @@ class HdrPlusRecorder final {
     VkBuffer hotPixelBuffer_ = VK_NULL_HANDLE;
     std::uint32_t hotPixelCount_ = 0;
     float companionGain_ = 1.0f;
+    float pyramidClamp_ = 0.0f;  // finest-level pyramid input clamp (raw units), 0 = none
 
     void recordPrepare(VkCommandBuffer, bool reference, VkImageView rawU16, const RawNormalization&);
     void recordPyramid(VkCommandBuffer, bool reference);
@@ -112,6 +118,17 @@ class HdrPlusFrequencyRecorder final {
                               const std::function<void(std::uint32_t)>& mark = {});
     void recordPassFinish(VkCommandBuffer command, std::uint32_t frameCount);
     void recordFinalize(VkCommandBuffer command) { align_.recordFinalize(command); }
+    // Bracketed bursts: companions brighter than the reference. Merge the
+    // others first, then call recordSubstitutionSource once per pass before
+    // the first brighter companion: it captures the running merge (reference
+    // + dark companions) as the source for brighter frames' clipped cells.
+    [[nodiscard]] bool brighterCompanion(std::uint32_t slot) const noexcept {
+        return !uniformExposure_ && frameExposure(slot) > 1.001f;
+    }
+    void recordSubstitutionSource(VkCommandBuffer command);
+    [[nodiscard]] bool needsSubstitutionSource(std::uint32_t slot) const noexcept {
+        return brighterCompanion(slot) && !substitutionReady_;
+    }
 
    private:
     ResourceArena& arena_;
@@ -123,6 +140,8 @@ class HdrPlusFrequencyRecorder final {
     std::vector<float> exposureFactors_{};
     std::vector<float> whiteLevels_{};
     bool uniformExposure_ = true;
+    bool substitutionReady_ = false;  // this pass's hdrq_out_rgba holds the dark-frame estimate
+    bool pyramidClamped_ = false;     // reference pyramid rebuilt for brighter companions this pass
     float frameExposure(std::uint32_t slot) const noexcept {
         return slot < exposureFactors_.size() ? exposureFactors_[slot] : 1.0f;
     }

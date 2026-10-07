@@ -1,10 +1,13 @@
 #version 450
 // Port of hdr-plus-swift calculate_highlights_norm_rgba (bracketed exposure):
 // per 8x8 RGBA tile of the aligned companion, the mean of a smooth ramp over
-// pixels between 0.50 and 0.99 of the companion's white level (values scaled
+// pixels between 0.90 and 0.99 of the companion's white level (values scaled
 // back to its own exposure), mapped to a factor on the merge noise term so
 // near-clipped tiles of brighter frames defer to the reference. 1.0 (no
-// correction) for frames no brighter than the reference.
+// correction) for frames no brighter than the reference. Rawr starts the ramp
+// at 0.90 instead of upstream's 0.50: hdrq_warp_rgba already replaces
+// near-clipped cells, so unclipped upper midtones of brighter frames keep
+// their weight.
 layout(local_size_x = 16, local_size_y = 16) in;
 layout(set = 0, binding = 0, rgba32f) readonly uniform image2D alignedRgba;
 layout(set = 0, binding = 1, r32f) writeonly uniform image2D highlights;
@@ -27,7 +30,7 @@ void main() {
                 vec4 v = imageLoad(alignedRgba, t * ts + ivec2(dx, dy));
                 float m = max(v.x, max(v.y, max(v.z, v.w)));
                 m = (m - p.blackLevelMean) * p.exposureFactor + p.blackLevelMean;
-                sum += clamp((m / p.whiteLevel - 0.50) / 0.49, 0.0, 1.0);
+                sum += clamp((m / p.whiteLevel - 0.90) / 0.09, 0.0, 1.0);
             }
         float f = sum / float(ts * ts);
         norm = clamp((1.0 - f) * (1.0 - f), 0.04 / min(p.exposureFactor, 4.0), 1.0);

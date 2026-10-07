@@ -5,15 +5,21 @@
 // the pass's padded coordinates into the frame and tile grid the alignment
 // was computed on (align-once mode: pass 0).
 // Bracketed companions (Rawr): a cell whose brightest sample nears the
-// companion's own clip point is replaced by the reference cell. Scaled-down
-// clipped samples sit below the reference white, so neither the per-tile
-// highlights norm nor highlight reconstruction would catch them, and they
-// turn magenta after white balance.
+// companion's own clip point is replaced by the dark frames' merged estimate
+// (substitute). Scaled-down clipped samples sit below the reference white, so
+// neither the per-tile highlights norm nor highlight reconstruction would
+// catch them, and they turn magenta after white balance. The estimate is the
+// pass's running merge of the reference and the equally dark companions
+// (merged first), inverse transformed: windowed by the forward DFT's raised
+// cosine, so it is divided by the window here and the companion's forward
+// DFT restores it exactly. Substituting the reference itself would add a
+// noisy reference copy per bright frame at exposure weight and swamp the
+// other dark frames.
 layout(local_size_x = 16, local_size_y = 16) in;
 layout(set = 0, binding = 0, r32f) readonly uniform image2D compPadded;
 layout(set = 0, binding = 1, rgba32f) writeonly uniform image2D rgba;
 layout(std430, set = 0, binding = 2) readonly buffer Align { ivec2 v[]; } align;
-layout(set = 0, binding = 3, rgba32f) readonly uniform image2D refRgba;
+layout(set = 0, binding = 3, rgba32f) readonly uniform image2D substitute;
 layout(push_constant) uniform P {
     ivec2 size;        // RGBA extent
     ivec2 crop;        // raw-pixel offset into the padded frame
@@ -29,6 +35,7 @@ layout(push_constant) uniform P {
     float exposureFactor;  // companion exposure / reference exposure
     float whiteLevel;      // companion white level (raw units)
     float blackLevelMean;  // reference black mean (raw units)
+    int windowedSubstitute;  // 1: substitute is a windowed inverse transform
 } p;
 
 float sampleComp(ivec2 s) {
@@ -58,7 +65,16 @@ void main() {
     if (p.exposureFactor > 1.001) {
         float m = max(max(v.x, v.y), max(v.z, v.w));
         m = (m - p.blackLevelMean) * p.exposureFactor + p.blackLevelMean;
-        v = mix(v, imageLoad(refRgba, q), clamp((m / p.whiteLevel - 0.90) / 0.08, 0.0, 1.0));
+        float t = clamp((m / p.whiteLevel - 0.90) / 0.08, 0.0, 1.0);
+        if (t > 0.0) {
+            vec4 s = imageLoad(substitute, q);
+            if (p.windowedSubstitute != 0) {
+                const float angle = 2.0 * 3.14159265358979323846 / 8.0;
+                vec2 k = vec2(q % 8) + 0.5;
+                s /= (0.5 - 0.5 * cos(angle * k.x)) * (0.5 - 0.5 * cos(angle * k.y));
+            }
+            v = mix(v, s, t);
+        }
     }
     imageStore(rgba, q, v);
 }

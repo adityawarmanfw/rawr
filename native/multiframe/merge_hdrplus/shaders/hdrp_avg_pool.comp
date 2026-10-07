@@ -1,20 +1,27 @@
 #version 450
 // Port of hdr-plus-swift avg_pool (scale 2, no black/WB normalization: the
 // exposure-control-off path). Output rounded through fp16 like upstream's
-// r16Float pyramid so alignment decisions match.
+// r16Float pyramid so alignment decisions match. clampTo > 0 (Rawr,
+// bracketed bursts, finest level only) clamps every input sample first: a
+// brighter companion and the reference are compared clamped below the
+// companion's clip point, so its clipped plateaus, where the reference still
+// has detail, do not drive the alignment at any pyramid level.
 layout(local_size_x = 16, local_size_y = 16) in;
 layout(set = 0, binding = 0, r32f) readonly uniform image2D src;
 layout(set = 0, binding = 1, r32f) writeonly uniform image2D dst;
 layout(push_constant) uniform P {
     ivec2 dstSize;
+    float clampTo;
 } p;
 
 void main() {
     ivec2 q = ivec2(gl_GlobalInvocationID.xy);
     if (any(greaterThanEqual(q, p.dstSize))) return;
     ivec2 s = q * 2;
-    float v = imageLoad(src, s).x + imageLoad(src, s + ivec2(0, 1)).x + imageLoad(src, s + ivec2(1, 0)).x +
-              imageLoad(src, s + ivec2(1, 1)).x;
+    vec4 x = vec4(imageLoad(src, s).x, imageLoad(src, s + ivec2(0, 1)).x, imageLoad(src, s + ivec2(1, 0)).x,
+                  imageLoad(src, s + ivec2(1, 1)).x);
+    if (p.clampTo > 0.0) x = min(x, vec4(p.clampTo));
+    float v = x.x + x.y + x.z + x.w;
     v = unpackHalf2x16(packHalf2x16(vec2(v * 0.25, 0.0))).x;
     imageStore(dst, q, vec4(v));
 }
