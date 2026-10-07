@@ -970,6 +970,9 @@ data class SettingsValues(
     // UltraHDR (JPEG_R) still output: GPU gain map + MPF/XMP/ISO mux.
     // Off by default; legacy SDR JPEG when off.
     val ultraHdrEnabled: Boolean = false,
+    // Ignore Camera2 shutter/ISO priority modes: locking SS or ISO always enters
+    // full Manual. Off by default.
+    val aePriorityDisabled: Boolean = false,
     // Photo/Video capture mode + video recording selectors. Plain primitives
     // keep the DataStore schema stable; validated through the helpers below.
     val captureModeId: String = "photo",

@@ -618,7 +618,8 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
             videoHighlightMethod = (p[Keys.videoHighlightMethod] ?: p[Keys.highlightMethod] ?: d.videoHighlightMethod).coerceIn(0, 1),
             videoHighlightThreshold = (p[Keys.videoHighlightThreshold] ?: p[Keys.highlightThreshold] ?: d.videoHighlightThreshold).coerceIn(0.5f, 2f),
             videoHighlightCompression = (p[Keys.videoHighlightCompression] ?: p[Keys.highlightCompression] ?: d.videoHighlightCompression).coerceIn(0f, 300f),
-            ultraHdrEnabled = p[Keys.ultraHdr] ?: d.ultraHdrEnabled
+            ultraHdrEnabled = p[Keys.ultraHdr] ?: d.ultraHdrEnabled,
+            aePriorityDisabled = p[Keys.aePriorityDisabled] ?: d.aePriorityDisabled
         )
     }
 
@@ -831,6 +832,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.videoHighlightThreshold] = v.videoHighlightThreshold
         p[Keys.videoHighlightCompression] = v.videoHighlightCompression
         p[Keys.ultraHdr] = v.ultraHdrEnabled
+        p[Keys.aePriorityDisabled] = v.aePriorityDisabled
         // Drop pre-v30 shared keys once the split values are written.
         p.remove(Keys.fccSteps)
         p.remove(Keys.defringeEnabled)
@@ -1073,6 +1075,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val highlightThreshold = floatPreferencesKey("capture_highlight_threshold")
         val highlightCompression = floatPreferencesKey("capture_highlight_compression")
         val ultraHdr = booleanPreferencesKey("capture_ultra_hdr_enabled")
+        val aePriorityDisabled = booleanPreferencesKey("capture_ae_priority_disabled")
     }
 }
 

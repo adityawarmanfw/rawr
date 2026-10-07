@@ -56,6 +56,7 @@ void setHighlightReconstructionEnabled(EngineHandle handle, bool enabled) noexce
 void setMaxAePostGain(EngineHandle handle, float gain) noexcept;
 void setPostGainKneeWidthEv(EngineHandle handle, float widthEv) noexcept;
 void setAutoMinFps(EngineHandle handle, int fps) noexcept;
+void setAePriorityDisabled(EngineHandle handle, bool disabled) noexcept;
 bool setRecordingFps(EngineHandle handle, int fps) noexcept;
 void setPreviewForeground(EngineHandle handle, bool foreground) noexcept;
 void setInitialConfigReady(EngineHandle handle) noexcept;

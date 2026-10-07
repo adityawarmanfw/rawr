@@ -119,6 +119,9 @@ void CameraControlSurface::setAntibandingMode(uint8_t mode) {
 void CameraControlSurface::setAutoMinFps(int fps) {
     if (cameraController_) cameraController_->setAutoMinFps(fps);
 }
+void CameraControlSurface::setAePriorityDisabled(bool disabled) {
+    if (cameraController_) cameraController_->setAePriorityDisabled(disabled);
+}
 void CameraControlSurface::setVideoMode(bool video, int fps) {
     if (cameraController_) cameraController_->setVideoMode(video, fps);
 }

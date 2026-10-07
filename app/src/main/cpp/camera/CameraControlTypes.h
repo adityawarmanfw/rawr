@@ -77,6 +77,10 @@ struct CameraControlCapabilities {
     bool manualExposureSupported = false;
     bool shutterPrioritySupported = false;
     bool isoPrioritySupported = false;
+    // The HAL advertises any AE priority mode. Requests then always write the
+    // priority tag (OFF when unused) so a reused request never keeps a stale
+    // S/I value after priority is hidden by preference or debug override.
+    bool aePriorityTagAvailable = false;
     // Raw NDK antibanding modes from ACAMERA_CONTROL_AE_AVAILABLE_ANTIBANDING_MODES.
     // Values mirror ACAMERA_CONTROL_AE_ANTIBANDING_MODE_* (OFF=0, 50HZ=1, 60HZ=2, AUTO=3).
     // All four when the tag is missing (most HALs accept them).

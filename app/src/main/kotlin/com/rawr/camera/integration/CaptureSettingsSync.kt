@@ -46,6 +46,7 @@ internal class CaptureSettingsSync(
         syncSetting({ it.maxPostGainId }) {
             previewCoordinator.setMaxAePostGain(com.rawr.camera.settings.model.maxPostGainForId(it))
         }
+        syncSetting({ it.aePriorityDisabled }) { previewCoordinator.setAePriorityDisabled(it) }
         syncSetting({ it.autoMinFpsId }) {
             previewCoordinator.setAutoMinFps(com.rawr.camera.settings.model.autoMinFpsForId(it))
         }

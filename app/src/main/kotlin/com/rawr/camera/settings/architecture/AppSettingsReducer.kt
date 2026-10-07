@@ -28,6 +28,10 @@ internal fun reduceAppSettings(
         state.withValues(state.values.copy(ultraHdrEnabled = action.enabled))
     }
 
+    is SetAePriorityDisabled -> {
+        state.withValues(state.values.copy(aePriorityDisabled = action.disabled))
+    }
+
     is SetPersistentEngineEnabled -> {
         state.withValues(state.values.copy(persistentEngineEnabled = action.enabled))
     }

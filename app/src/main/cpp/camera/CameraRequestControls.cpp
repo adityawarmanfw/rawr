@@ -75,7 +75,7 @@ CameraControlApplyResult applyCameraControlState(ACaptureRequest* request, const
     } else if (state.exposureMode == ExposureControlMode::IsoPriority && state.capabilities.isoPrioritySupported) {
         aePriority = camera2_priority::kSensorSensitivityPriority;
     }
-    if (state.capabilities.shutterPrioritySupported || state.capabilities.isoPrioritySupported) {
+    if (state.capabilities.aePriorityTagAvailable) {
         result.aePriorityRequested = true;
         result.aePriorityStatus =
             ACaptureRequest_setEntry_u8(request, camera2_priority::kAePriorityModeTag, 1, &aePriority);

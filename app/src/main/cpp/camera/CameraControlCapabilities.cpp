@@ -144,6 +144,8 @@ CameraControlState readInitialCameraControlState(const ACameraMetadata* characte
     state.capabilities.shutterPrioritySupported =
         containsU8(aePriorityModes, camera2_priority::kSensorExposureTimePriority);
     state.capabilities.isoPrioritySupported = containsU8(aePriorityModes, camera2_priority::kSensorSensitivityPriority);
+    state.capabilities.aePriorityTagAvailable =
+        state.capabilities.shutterPrioritySupported || state.capabilities.isoPrioritySupported;
     if (const auto disabled = disabledAePriority(); !disabled.empty()) {
         if (disabled != "iso") state.capabilities.shutterPrioritySupported = false;
         if (disabled != "ss") state.capabilities.isoPrioritySupported = false;

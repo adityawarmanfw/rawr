@@ -89,6 +89,15 @@ internal fun ExposureSettings(state: SettingsUiState, dispatch: SettingsDispatch
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
             )
         }
+        SettingsGroup(
+            description = "Locking shutter or ISO enters full Manual instead of shutter/ISO priority, " +
+                "even when the camera supports priority modes."
+        ) {
+            SettingsSwitchRow(
+                title = "Full Manual Instead of Priority",
+                checked = state.values.aePriorityDisabled
+            ) { dispatch.invoke(SetAePriorityDisabled(it)) }
+        }
         SettingsGroup(title = "Auto Exposure Limits") {
             SettingsRow(
                 "Maximum Post-RAW Gain",

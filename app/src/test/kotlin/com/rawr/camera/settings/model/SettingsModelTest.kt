@@ -88,6 +88,7 @@ class SettingsModelTest {
         assertEquals(HighlightProtection.High, v.highlightProtection)
         assertEquals("gain.200", v.maxPostGainId)
         assertEquals("fps.12", v.autoMinFpsId)
+        assertFalse(v.aePriorityDisabled)
         // Display.
         assertEquals(CaptureControlLayout.Compact, v.captureControlLayout)
         assertEquals(ControlSurfaceStyle.Basic, v.controlSurfaceStyle)

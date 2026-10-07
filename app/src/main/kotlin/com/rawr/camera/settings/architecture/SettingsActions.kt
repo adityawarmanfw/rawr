@@ -97,6 +97,8 @@ data class SetExperimentalMultiframeEnabled(val enabled: Boolean) : SettingsAppl
 
 data class SetUltraHdrEnabled(val enabled: Boolean) : SettingsApplicationAction
 
+data class SetAePriorityDisabled(val disabled: Boolean) : SettingsApplicationAction
+
 data class SetPersistentEngineEnabled(val enabled: Boolean) : SettingsApplicationAction
 
 data class SetFilmSimEnabled(val enabled: Boolean) : SettingsApplicationAction
