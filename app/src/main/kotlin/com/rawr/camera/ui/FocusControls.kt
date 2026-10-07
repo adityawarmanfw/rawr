@@ -40,7 +40,6 @@ import com.rawr.camera.architecture.Refocus
 import com.rawr.camera.architecture.SetFocusMode
 import com.rawr.camera.architecture.SetManualFocus
 import com.rawr.camera.model.*
-import kotlin.math.roundToInt
 
 @Composable
 internal fun AfTarget(state: CaptureUiState, dispatch: CaptureDispatch) {
@@ -371,15 +370,10 @@ private fun FocusModeSelector(
     }
 }
 
-private fun focusReadout(state: CaptureUiState): String {
-    state.focus.backendNativeReadout?.let { return it }
-    val capability = state.capabilities.manualFocus
-    if (!capability.distanceReadoutTrustworthy) return "FOCUS ${(state.focus.mfNormalized * 100).roundToInt()}%"
-    val p = state.focus.mfNormalized
-    if (p > .96f) return "∞"
-    val meters = .10f + p * p * 4.9f
-    return if (meters < 1f) "%.2f m".format(meters) else "%.1f m".format(meters)
-}
+/** Rail share at each end that snaps a tap to NEAR / ∞. */
+private const val MF_RAIL_END_ZONE = .06f
+/** Drag positions this close to a ladder anchor snap onto it. */
+private const val MF_RAIL_ANCHOR_SNAP = .015f
 
 /**
  * Manual-focus rail using the exact same reference-rail visuals as the
@@ -405,14 +399,15 @@ private fun MfExposureScrub(state: CaptureUiState, dispatch: CaptureDispatch, mo
             mfNormalizedFromDiopters(it, capability.minimumFocusDistance)
         } ?: mf
     )
-    val readout = focusReadout(state)
+    val readout = state.focusDistanceLabel()
+    val ladder = FocusLadder.forCapability(capability)
 
     var railWidthPx by remember { mutableIntStateOf(1) }
     var rawTrackOffsetPx by remember { mutableFloatStateOf(0f) }
     var dragging by remember { mutableStateOf(false) }
     var dragStartValue by remember { mutableFloatStateOf(mf) }
     var accumulatedPx by remember { mutableFloatStateOf(0f) }
-    var lastHapticBucket by remember { mutableIntStateOf((mf * 20f).roundToInt()) }
+    var lastAnchor by remember { mutableStateOf<FocusAnchor?>(null) }
     val animatedTrackOffsetPx by animateFloatAsState(
         targetValue = if (dragging) rawTrackOffsetPx else 0f,
         animationSpec = if (dragging) snap() else spring(dampingRatio = .78f, stiffness = 720f),
@@ -422,21 +417,17 @@ private fun MfExposureScrub(state: CaptureUiState, dispatch: CaptureDispatch, mo
     // far/∞ while the numbered scale travels left underneath the fixed center index.
     val renderedTrackOffsetPx = -(if (dragging) rawTrackOffsetPx else animatedTrackOffsetPx)
 
-    // Backend truth arrives via snapshot; resync haptics when not dragging so
-    // reopen always starts from the current lens distance.
-    LaunchedEffect(mf, state.focus.selectorOpen, dragging) {
-        if (!dragging) lastHapticBucket = (mf * 20f).roundToInt()
-    }
-
+    // Detents fire when landing on a ladder anchor (NEAR / hyperfocal / ∞),
+    // the same stops the compact focus button snaps to.
     fun setFocus(value: Float) {
         if (!interactive) return
-        val normalized = value.coerceIn(capability.minNormalized, capability.maxNormalized)
-        val bucket = (normalized * 20f).roundToInt()
-        if (bucket != lastHapticBucket) {
-            lastHapticBucket = bucket
-            haptics.detent()
+        val clamped = value.coerceIn(capability.minNormalized, capability.maxNormalized)
+        val anchor = ladder?.anchorNear(clamped, MF_RAIL_ANCHOR_SNAP)
+        if (anchor?.anchor != lastAnchor) {
+            lastAnchor = anchor?.anchor
+            if (anchor != null) haptics.detent()
         }
-        dispatch(SetManualFocus(normalized))
+        dispatch(SetManualFocus(anchor?.normalized ?: clamped))
     }
 
     fun elasticVisual(accumulated: Float, start: Float, widthPx: Float): Float {
@@ -464,7 +455,16 @@ private fun MfExposureScrub(state: CaptureUiState, dispatch: CaptureDispatch, mo
                     Modifier.pointerInput(railWidthPx) {
                         detectTapGestures(
                             onTap = { offset ->
-                                if (railWidthPx > 0) setFocus(offset.x / railWidthPx)
+                                if (railWidthPx > 0) {
+                                    val fraction = offset.x / railWidthPx
+                                    setFocus(
+                                        when {
+                                            fraction >= 1f - MF_RAIL_END_ZONE -> 1f
+                                            fraction <= MF_RAIL_END_ZONE -> 0f
+                                            else -> fraction
+                                        }
+                                    )
+                                }
                             }
                         )
                     }
@@ -486,7 +486,7 @@ private fun MfExposureScrub(state: CaptureUiState, dispatch: CaptureDispatch, mo
                                     if (latestInMf) latestMf else latestEntryBase
                                 accumulatedPx = 0f
                                 rawTrackOffsetPx = 0f
-                                lastHapticBucket = (dragStartValue * 20f).roundToInt()
+                                lastAnchor = ladder?.anchorNear(dragStartValue, MF_RAIL_ANCHOR_SNAP)?.anchor
                             },
                             onDrag = { change, drag ->
                                 change.consume()

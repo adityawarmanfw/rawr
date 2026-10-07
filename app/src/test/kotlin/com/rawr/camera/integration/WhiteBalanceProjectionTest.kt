@@ -38,6 +38,7 @@ class WhiteBalanceProjectionTest {
         manualFocusSupported = false,
         focusDistanceReadoutTrustworthy = false,
         minimumFocusDistance = 0f,
+        hyperfocalDistance = 0f,
         exposureMode = 0,
         semanticExposureMode = 0,
         focusMode = 0,

@@ -47,6 +47,7 @@ object CaptureTestTags {
     const val COMPACT_SS = "capture_compact_ss"
     const val COMPACT_ISO = "capture_compact_iso"
     const val COMPACT_EV = "capture_compact_ev"
+    const val COMPACT_FOCUS = "capture_compact_focus"
     const val COMPACT_MULTIFRAME = "capture_compact_multiframe"
     const val COMPACT_FILMSIM = "capture_compact_filmsim"
     const val FILM_STRIP = "capture_film_strip"

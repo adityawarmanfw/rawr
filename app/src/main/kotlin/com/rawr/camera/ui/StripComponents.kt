@@ -300,7 +300,7 @@ internal fun CompactParamShell(
     val valueColor = if (locked) CaptureColors.AccentSoft else Color.White.copy(alpha = .95f)
     // Bare instrument styling (mirrors LensSelector): no card, no border —
     // icon + text only, accent carries the locked state.
-    // Gesture exclusion keeps edge columns (WB left, EV right) scrubbing
+    // Gesture exclusion keeps edge columns (ISO left, Focus right) scrubbing
     // instead of losing outward strokes to system navigation.
     Box(
         modifier

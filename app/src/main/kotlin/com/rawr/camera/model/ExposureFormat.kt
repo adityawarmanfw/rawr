@@ -32,8 +32,11 @@ internal object ExposureFormat {
 
     fun formatEv(ev: Double): String = "%+.1f".format(ev)
 
+    /** Lens readouts at or below this (≥ 100 m) read as ∞; HALs rarely report exactly 0 D. */
+    const val INFINITY_DIOPTERS = .01f
+
     fun formatFocusDistance(diopters: Float): String = when {
-        diopters <= 0.0001f -> {
+        diopters <= INFINITY_DIOPTERS -> {
             "∞"
         }
 

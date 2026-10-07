@@ -68,6 +68,7 @@ std::string serializeCameraControlState(const CameraControlState& st) {
       << ",\"focusDistanceReadoutTrustworthy\":" << (c.focusDistanceReadoutTrustworthy ? "true" : "false")
       << ",\"oisSupported\":" << (c.oisSupported ? "true" : "false")
       << ",\"minimumFocusDistance\":" << std::setprecision(7) << c.minimumFocusDistance
+      << ",\"hyperfocalDistance\":" << std::setprecision(7) << c.hyperfocalDistance
       << ",\"maxAfRegions\":" << c.maxAfRegions << ",\"maxAeRegions\":" << c.maxAeRegions
        << ",\"exposureMode\":" << static_cast<int>(st.exposureMode)
        << ",\"focusMode\":" << static_cast<int>(st.focusMode)
