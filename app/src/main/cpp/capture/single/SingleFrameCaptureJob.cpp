@@ -1,5 +1,7 @@
 #include "capture/single/SingleFrameCaptureJob.h"
 
+#include "develop/render/RenderResources.h"
+
 #include <android/log.h>
 #include <unistd.h>
 
@@ -93,7 +95,8 @@ void SingleFrameCaptureJob::advanceHq() {
     if (auto result = develop_.pollCompletion()) {
         if (result->completion.filmFallbackMemory && outputs_.jpegRequest()) {
             journal_.markFilmFallback();
-            outputs_.failJpeg(result->completion.requestId, "film_memory_saved_as_dng", true);
+            outputs_.failJpeg(result->completion.requestId,
+                              "film_memory_saved_as_dng " + develop::rendered::lastFilmGateSummary(), true);
             develop_.releasePixels();
         } else if (!outputs_.startJpeg(*result)) {
             develop_.releasePixels();

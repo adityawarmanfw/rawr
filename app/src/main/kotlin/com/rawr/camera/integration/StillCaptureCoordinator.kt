@@ -39,6 +39,7 @@ class StillCaptureCoordinator(
         var allDngsSuccessful: Boolean = true,
         var dngDone: Boolean = remainingDngs == 0,
         var fallback: Boolean = false,
+        var fallbackDetail: String = "",
         var jpegSuccessful: Boolean = !jpegRequested,
         val completedDngNames: MutableSet<String> = mutableSetOf(),
         var jpegDone: Boolean = !jpegRequested
@@ -383,6 +384,9 @@ class StillCaptureCoordinator(
             val state = requestStates[requestId] ?: return@let
             if (filmFallbackMemory && state.jpegRequested) {
                 state.fallback = true
+                // "film_memory_saved_as_dng need=3900MB free=2100MB": keep the numbers for the message.
+                state.fallbackDetail = parts.getOrNull(3).orEmpty().substringAfter(' ', "")
+                Log.w(TAG, "Film look skipped for memory: ${state.fallbackDetail}")
                 val replacement = try { outputs.useDngFallback(requestId) }
                     catch (error: Exception) {
                         Log.e(TAG, "DNG substitution deferred; retaining capture input", error)
@@ -427,8 +431,9 @@ class StillCaptureCoordinator(
             finishedEvents += CompletionEvent(requestId, CompletionEvent.Artifact.Finished, success,
                 filmFallbackMemory = state.fallback, dngFailed = !state.allDngsSuccessful)
             if (state.fallback && success) android.os.Handler(android.os.Looper.getMainLooper()).post {
+                val detail = if (state.fallbackDetail.isNotBlank()) " (${state.fallbackDetail})" else ""
                 android.widget.Toast.makeText(application,
-                    "Not enough memory for the film look — saved DNG", android.widget.Toast.LENGTH_LONG).show()
+                    "Not enough memory for the film look$detail — saved DNG", android.widget.Toast.LENGTH_LONG).show()
             }
             val artifact = artifactRequests.remove(requestId)
             artifact?.scratchJpeg?.delete()

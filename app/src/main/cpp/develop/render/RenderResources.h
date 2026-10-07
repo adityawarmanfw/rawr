@@ -137,4 +137,7 @@ class RenderResources final {
     };
     FilmAssets filmAssets_;
 };
+/** "need=<MB> free=<MB>" from the last film memory gate check, for the capture's failure message. */
+std::string lastFilmGateSummary();
+
 }  // namespace rawrcam::develop::rendered

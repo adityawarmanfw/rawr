@@ -20,6 +20,7 @@
 #include <tonemap.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <fstream>
@@ -49,6 +50,9 @@ constexpr std::uint64_t kFilmBuildHeadroomBytes = 768ull * 1024u * 1024u;
 
 // /proc MemAvailable (reclaimable-aware, unlike sysinfo freeram).
 // Returns 0 when unreadable; callers must fail open on 0.
+std::atomic<std::uint64_t> gLastGateRequiredMb{0};
+std::atomic<std::uint64_t> gLastGateAvailMb{0};
+
 std::uint64_t readMemAvailableBytes() noexcept {
     try {
         std::ifstream in("/proc/meminfo");
@@ -331,6 +335,8 @@ bool RenderResources::ensureFilm(const RenderedStillContext& rendered) {
             required += uint64_t(rendered.width) * rendered.height * 8u;
         }
         const std::uint64_t avail = readMemAvailableBytes();
+        gLastGateRequiredMb.store(required >> 20, std::memory_order_relaxed);
+        gLastGateAvailMb.store(avail >> 20, std::memory_order_relaxed);
         emit("STILL_FILM_RAM_GATE requiredMB=" + std::to_string(required >> 20) +
              " availMB=" + std::to_string(avail >> 20));
         __android_log_print(ANDROID_LOG_INFO, "RawrCamNative", "STILL_FILM_RAM_GATE requiredMB=%llu availMB=%llu",
@@ -505,4 +511,9 @@ void RenderResources::reset() noexcept {
     queueFamily_ = 0;
     queueSubmitMutex_ = nullptr;
 }
+std::string lastFilmGateSummary() {
+    return "need=" + std::to_string(gLastGateRequiredMb.load(std::memory_order_relaxed)) +
+           "MB free=" + std::to_string(gLastGateAvailMb.load(std::memory_order_relaxed)) + "MB";
+}
+
 }  // namespace rawrcam::develop::rendered
