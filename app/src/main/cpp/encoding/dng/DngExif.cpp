@@ -73,8 +73,10 @@ void fillDngExif(TinyDngWriteParams& p, const rawrcam::imaging::RawSnapshot& fra
         p.make = captureContext.deviceMake;
         p.lensMake = captureContext.deviceMake;
     }
-    if (!captureContext.deviceModel.empty()) {
-        p.model = captureContext.deviceModel;
+    const auto& displayModel = captureContext.deviceDisplayModel.empty()
+        ? captureContext.deviceModel : captureContext.deviceDisplayModel;
+    if (!displayModel.empty()) {
+        p.model = displayModel;
         p.lensModel = captureContext.deviceModel;
     }
     p.software = "RawrCam";

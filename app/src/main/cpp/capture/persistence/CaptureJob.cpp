@@ -37,7 +37,9 @@ constexpr uint64_t magicV6 = 0x524157524a4f4206ull;
 constexpr uint64_t magicV7 = 0x524157524a4f4207ull;
 // v8 appends the base/merged DNG compression (v7 and older reloaded them as
 // the lossless default, so "Uncompressed" was ignored for multiframe DNGs).
-constexpr uint64_t magic = 0x524157524a4f4208ull;
+constexpr uint64_t magicV8 = 0x524157524a4f4208ull;
+// v9 preserves a separate friendly EXIF model without changing RAW identity.
+constexpr uint64_t magic = 0x524157524a4f4209ull;
 constexpr uint64_t footer = 0x434f4d4d49545445ull;
 constexpr uint64_t MiB = 1024ull * 1024;
 std::mutex budgetMutex;
@@ -385,6 +387,7 @@ void save(const std::string& path, CaptureJob& job, const std::function<std::vec
           job.jpeg.output.ultraHdr, job.jpeg.develop.highlightReconstructionMethod, job.jpeg.develop.highlightThreshold,
           job.jpeg.develop.highlightCompression, job.jpeg.develop.multiframeChromaDenoise, job.dng.compression,
           job.mergedDng.compression);
+        w(job.dng.deviceDisplayModel, job.mergedDng.deviceDisplayModel);
         const size_t count = job.multiframe ? job.metadata.size() : 1;
         for (size_t i = 0; i < count; ++i) {
             if (readFrame) {
@@ -416,11 +419,11 @@ CaptureJob load(const std::string& path,
     Reader r{stream};
     uint64_t version = 0;
     r(version);
-    if (version != magic && version != magicV7 && version != magicV6 && version != magicV5 && version != magicV4 &&
+    if (version != magic && version != magicV8 && version != magicV7 && version != magicV6 && version != magicV5 && version != magicV4 &&
         version != magicV3 && version != magicV2 && version != legacyMagic)
         throw std::runtime_error("capture_job_version_unsupported");
     CaptureJob job;
-    if (version == magic || version == magicV7 || version == magicV6 || version == magicV5) {
+    if (version == magic || version == magicV8 || version == magicV7 || version == magicV6 || version == magicV5) {
         fields(r, job);
         // Same order as save().
         r(job.dng.processingRecipe, job.dng.resolvedRecipe, job.dng.sourceRole, job.mergedDng.processingRecipe,
@@ -430,11 +433,12 @@ CaptureJob load(const std::string& path,
           job.jpeg.develop.denoiseForceY, job.jpeg.develop.denoiseMaxScale, job.jpeg.develop.galoshRawMode,
           job.jpeg.develop.galoshStrength, job.jpeg.develop.galoshLuma, job.jpeg.develop.galoshChroma,
           job.jpeg.develop.galoshYuvMode, job.jpeg.develop.galoshYuvStrengthY, job.jpeg.develop.galoshYuvStrengthC);
-        if (version == magic || version == magicV7 || version == magicV6)
+        if (version == magic || version == magicV8 || version == magicV7 || version == magicV6)
             r(job.jpeg.output.ultraHdr, job.jpeg.develop.highlightReconstructionMethod,
               job.jpeg.develop.highlightThreshold, job.jpeg.develop.highlightCompression);
-        if (version == magic || version == magicV7) r(job.jpeg.develop.multiframeChromaDenoise);
-        if (version == magic) r(job.dng.compression, job.mergedDng.compression);
+        if (version == magic || version == magicV8 || version == magicV7) r(job.jpeg.develop.multiframeChromaDenoise);
+        if (version == magic || version == magicV8) r(job.dng.compression, job.mergedDng.compression);
+        if (version == magic) r(job.dng.deviceDisplayModel, job.mergedDng.deviceDisplayModel);
     } else {
         readLegacyJob(r, job);
         if (version == magicV4 || version == magicV3 || version == magicV2)

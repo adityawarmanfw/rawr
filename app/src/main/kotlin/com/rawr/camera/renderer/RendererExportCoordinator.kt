@@ -85,7 +85,7 @@ internal class RendererExportCoordinator(
                         .put("wallClockMillis", exportMillis)
                         .put("utcOffsetMinutes", TimeZone.getDefault().getOffset(exportMillis) / 60_000)
                         .put("deviceMake", Build.MANUFACTURER)
-                        .put("deviceModel", Build.MODEL)
+                        .put("deviceModel", com.rawr.camera.integration.DeviceNames.marketingModel())
                         .put("filmDescription", if (decoded.filmSimEnabled) decoded.filmSimLook.describeFilm() else "")
                         .put("rendererDisplayName", decoded.captureRendererDisplayName()))
                 }.toString()

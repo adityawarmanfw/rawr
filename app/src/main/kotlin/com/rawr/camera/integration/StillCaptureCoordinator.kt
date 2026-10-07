@@ -226,7 +226,7 @@ class StillCaptureCoordinator(
                     wallClockMillis = now,
                     utcOffsetMinutes = offsetMinutes,
                     deviceMake = Build.MANUFACTURER,
-                    deviceModel = Build.MODEL,
+                    deviceModel = DeviceNames.marketingModel(),
                     baseDngDisplayName = output.jobName,
                     mergedDngDisplayName = output.mergedDng?.displayName ?: "${output.baseName}_MF$namedFrames.dng",
                     jpegDisplayName = jpegDisplayName,
@@ -269,7 +269,7 @@ class StillCaptureCoordinator(
                     wallClockMillis = now,
                     utcOffsetMinutes = offsetMinutes,
                     deviceMake = Build.MANUFACTURER,
-                    deviceModel = Build.MODEL,
+                    deviceModel = DeviceNames.marketingModel(),
                     dngDisplayName = output.jobName,
                     jpegDisplayName = jpegDisplayName
                 )

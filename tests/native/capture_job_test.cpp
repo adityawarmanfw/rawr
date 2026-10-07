@@ -40,6 +40,9 @@ int main(int argc, char** argv) {
     j.frame.colorState.baselineWbRggb = {2, 1, 1, 3};
     j.dng.outputFd = 123;
     j.dng.displayName = "capture.dng";
+    j.dng.deviceModel = "V2562";
+    j.dng.deviceDisplayModel = "X300 Ultra";
+    j.mergedDng.deviceDisplayModel = "X300 Ultra";
     j.jpeg.output.outputFd = 456;
     j.jpegRequested = true;
     j.jpeg.output.displayName = "capture.jpg";
@@ -70,6 +73,9 @@ int main(int argc, char** argv) {
     auto path = jobPath(root, j.dng.displayName);
     save(path, j);
     auto restored = load(path);
+    assert(restored.dng.deviceModel == "V2562");
+    assert(restored.dng.deviceDisplayModel == "X300 Ultra");
+    assert(restored.mergedDng.deviceDisplayModel == "X300 Ultra");
     assert(restored.frame.raw16 == j.frame.raw16);
     assert(restored.frame.metadata.cameraContext->lensDistortion == camera->lensDistortion);
     assert(restored.frame.metadata.requestedSensitivity == 3200);

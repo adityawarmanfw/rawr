@@ -23,7 +23,8 @@ struct DngCaptureContext {
     int64_t wallClockUnixMillis = 0;  // shutter-request wall clock
     int16_t utcOffsetMinutes = 0;
     std::string deviceMake;
-    std::string deviceModel;
+    std::string deviceModel;  // Stable hardware model for UniqueCameraModel.
+    std::string deviceDisplayModel;  // Optional friendly EXIF Model, frozen at capture.
     std::string displayName;
     std::shared_ptr<const tonemap::TonemapParams> captureTone;
     std::shared_ptr<const spektrafilm_native::FilmLook> captureFilm;

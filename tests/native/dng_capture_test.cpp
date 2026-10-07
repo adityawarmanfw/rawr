@@ -107,6 +107,7 @@ int main() {
     rawrcam::encoding::dng::DngCaptureContext capture{};
     capture.deviceMake = "vivo";
     capture.deviceModel = "V2562";
+    capture.deviceDisplayModel = "X300 Ultra";
     capture.deviceRotationDegrees = 0;
     capture.wallClockUnixMillis = 1787706000123LL;
     capture.utcOffsetMinutes = 420;
@@ -127,6 +128,8 @@ int main() {
             std::cerr << error << "\n";
             return 1;
         }
+        if (params->model != "X300 Ultra" || params->uniqueModel.find("V2562") == std::string::npos ||
+            params->uniqueModel.find("X300 Ultra") != std::string::npos) return 20;
         params->rebind();
         // Sensor noise metadata is exported independently of merge-noise selection.
         if (params->raw.noise_profile_count != 6) return 5;
@@ -224,6 +227,8 @@ int main() {
         capture.compression = rawrcam::encoding::dng::DngCompression::Uncompressed;
         auto params = rawrcam::encoding::dng::makeTinyDngWriteParams(wide, capture, &error);
         if (!params) return 8;
+        if (params->model != "X300 Ultra" || params->uniqueModel.find("V2562") == std::string::npos ||
+            params->uniqueModel.find("X300 Ultra") != std::string::npos) return 20;
         params->rebind();
         tinydng_config cfg{};
         tinydng_error err{};
@@ -278,6 +283,8 @@ int main() {
             std::cerr << error << "\n";
             return 9;
         }
+        if (params->model != "X300 Ultra" || params->uniqueModel.find("V2562") == std::string::npos ||
+            params->uniqueModel.find("X300 Ultra") != std::string::npos) return 20;
         params->rebind();
         if (params->tiling.tile_width != rawrcam::encoding::dng::kLjpegTileSize || params->tiling.rows_per_strip != 0)
             return 9;

@@ -1,5 +1,6 @@
 #include <android/asset_manager_jni.h>
 #include <android/log.h>
+#include <sys/system_properties.h>
 #include <tonemap/TonemapMath.h>
 
 #include <algorithm>
@@ -116,7 +117,11 @@ rawrcam::encoding::dng::DngCaptureContext makeDngContext(jint fd, jint rotation,
     out.wallClockUnixMillis = wallClockMillis;
     out.utcOffsetMinutes = utcOffsetMinutes;
     out.deviceMake = std::move(make);
-    out.deviceModel = std::move(model);
+    // Capture DNG identity stays stable even when JPEG uses a marketing name.
+    char rawModel[PROP_VALUE_MAX]{};
+    __system_property_get("ro.product.model", rawModel);
+    out.deviceModel = rawModel[0] ? std::string(rawModel) : model;
+    out.deviceDisplayModel = std::move(model);
     out.displayName = std::move(displayName);
     return out;
 }
@@ -615,7 +620,7 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_integration_NativePrevie
     freezeCaptureIntent(env, dng, captureTone, captureFilmValues, captureFilmEnums, captureFilmEnabled == JNI_TRUE);
     rawrcam::capture::JpegCaptureRequest jpeg{};
     fillJpegContext(env, jpeg, jpegFd, rotation, static_cast<int64_t>(wallClockMillis),
-                    static_cast<int16_t>(utcOffsetMinutes), dng.deviceMake, dng.deviceModel, jpegDisplayName,
+                    static_cast<int16_t>(utcOffsetMinutes), dng.deviceMake, deviceModel, jpegDisplayName,
                     jpegQuality, pipelineDiagnosticsEnabled, colorRenderProfile, importedLutProfileId,
                     rendererDisplayName, demosaicAlgorithm, dualAutoContrast, dualContrastPercent, fccSteps,
                     lensShadingCorrectionEnabled, highlightReconstructionEnabled, jpegSubsampling,
@@ -882,4 +887,11 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_integration_NativePrevie
     JNIEnv* env, jobject, jlong h, jstring name, jboolean multiframe, jint dng, jint merged, jint jpeg) {
     return static_cast<jlong>(
         rawrcam::session::recoverStill(handle(h), jString(env, name), multiframe == JNI_TRUE, dng, merged, jpeg));
+}
+
+extern "C" JNIEXPORT jstring JNICALL Java_com_rawr_camera_integration_SystemPropertiesUtil_read(
+    JNIEnv* env, jobject, jstring key) {
+    char value[PROP_VALUE_MAX]{};
+    __system_property_get(jString(env, key).c_str(), value);
+    return env->NewStringUTF(value);
 }
