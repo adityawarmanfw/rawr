@@ -129,6 +129,8 @@ class StillCaptureCoordinator(
                 0
             }
         val multiframe = multiframeFrames >= 2
+        // File names count every merged frame, including HDR+ Bracketed's post-shutter dark frames.
+        val namedFrames = multiframeFrames + current.multiframeTuning.postShutterFrames()
         if (current.experimentalMultiframeEnabled && !multiframe) {
             Log.i(TAG, "Multiframe ring unavailable; capturing a fresh single frame")
         }
@@ -137,7 +139,7 @@ class StillCaptureCoordinator(
                 current.saveLocationId,
                 now,
                 jpegEnabled,
-                if (multiframe) multiframeFrames else 0,
+                if (multiframe) namedFrames else 0,
                 dngEnabled = current.dngEnabled,
                 saveBaseDng = current.saveBaseDng,
                 filmFallback = current.filmSimEnabled,
@@ -226,7 +228,7 @@ class StillCaptureCoordinator(
                     deviceMake = Build.MANUFACTURER,
                     deviceModel = Build.MODEL,
                     baseDngDisplayName = output.jobName,
-                    mergedDngDisplayName = output.mergedDng?.displayName ?: "${output.baseName}_MF$multiframeFrames.dng",
+                    mergedDngDisplayName = output.mergedDng?.displayName ?: "${output.baseName}_MF$namedFrames.dng",
                     jpegDisplayName = jpegDisplayName,
                     dumpRzslRequested = zslPersistRequested,
                     multiframeTuning = current.multiframeTuning,

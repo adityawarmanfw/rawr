@@ -115,6 +115,9 @@ void setExperimentalZeroCopy(EngineHandle h, bool v) noexcept {
 void setExperimentalMultiframeEnabled(EngineHandle h, bool v) noexcept {
     if (h) engine(h)->setExperimentalMultiframeEnabled(v);
 }
+void setHdrPlusBracketEnabled(EngineHandle h, bool v) noexcept {
+    if (h) engine(h)->setHdrPlusBracketEnabled(v);
+}
 void setPersistentEngineEnabled(EngineHandle h, bool v) noexcept {
     if (h) engine(h)->setPersistentEngineEnabled(v);
 }

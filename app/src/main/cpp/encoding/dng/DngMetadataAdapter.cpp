@@ -269,6 +269,12 @@ std::optional<TinyDngWriteParams> makeTinyDngWriteParams(const rawrcam::imaging:
     if (captureContext.baselineExposureEV && std::isfinite(*captureContext.baselineExposureEV)) {
         raw.baseline_exposure = *captureContext.baselineExposureEV;
         raw.has_baseline_exposure = 1;
+        // BlackLevel is exact; a converter's automatic black subtraction
+        // would be amplified by the lift and crush the shadows.
+        if (raw.baseline_exposure > 0.0) {
+            raw.default_black_render = 1;  // None
+            raw.has_default_black_render = 1;
+        }
     }
 
     // Lens (IFD0 LensInfo; the EXIF LensSpecification lives in DngExif).

@@ -250,17 +250,19 @@ struct NativeCameraController::Impl final : CameraEventSink {
 
     // Forced DCG sensor modes report ISO on a different scale than requests,
     // and the conversion is only learned from AE-off results. HDR+ bracket
-    // frames need it in Auto, so once per DCG session (after the preview
-    // settles) send one AE-off frame at the minimum ISO and the current
-    // shutter; its result calibrates the ratio. Darker than the preview, so
-    // the viewfinder lifts it like a bracket frame. Never while recording.
+    // frames need it in Auto, so once per DCG session while HDR+ Bracketed is
+    // selected (after the preview settles) send one AE-off frame at the
+    // minimum ISO and the current shutter; its result calibrates the ratio.
+    // Darker than the preview, so the viewfinder lifts it like a bracket
+    // frame. Never while recording.
     static constexpr uint64_t kSensitivityProbeTag = ~0ull;
     uint64_t sensitivityProbeGeneration = 0;
     uint32_t resultsBeforeProbe = 0;
+    bool sensitivityCalibrationWanted = false;  // HDR+ Bracketed selected
     void probeSensitivityCoordinateLocked() {
         const uint64_t generation = deviceSession.generation();
         if (sensitivityProbeGeneration == generation) return;
-        if (!deviceSession.sensorModeOverridden() || results.sensitivityReportedPerRequest() ||
+        if (!sensitivityCalibrationWanted || !deviceSession.sensorModeOverridden() || results.sensitivityReportedPerRequest() ||
             !control.capabilities.manualExposureSupported || control.videoMode || control.recordingFps > 0 ||
             !control.appliedExposureTimeNs || *control.appliedExposureTimeNs <= 0) {
             resultsBeforeProbe = 0;
@@ -886,6 +888,10 @@ void NativeCameraController::setManualSensitivity(int32_t value) { impl_->setMan
 bool NativeCameraController::captureExposureBracket(uint64_t requestId, int64_t baseExposureTimeNs,
                                                     int32_t baseReportedSensitivity, const std::vector<float>& evOffsets) {
     return impl_->captureExposureBracket(requestId, baseExposureTimeNs, baseReportedSensitivity, evOffsets);
+}
+void NativeCameraController::setSensitivityCalibrationWanted(bool wanted) {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    impl_->sensitivityCalibrationWanted = wanted;
 }
 void NativeCameraController::setExposureCompensationSteps(int32_t value) { impl_->setEvSteps(value); }
 bool NativeCameraController::setWhiteBalanceMode(WhiteBalanceControlMode mode, int64_t requestId) {

@@ -36,6 +36,7 @@
 #define TD_WTAG_DEFAULT_CROP_ORIGIN 50719u
 #define TD_WTAG_DEFAULT_CROP_SIZE 50720u
 #define TD_WTAG_BASELINE_EXPOSURE 50730u
+#define TD_WTAG_DEFAULT_BLACK_RENDER 51110u
 #define TD_WTAG_CAMERA_SERIAL_NUMBER 50735u
 #define TD_WTAG_LENS_INFO 50736u
 #define TD_WTAG_DNG_PRIVATE_DATA 50740u
@@ -1748,6 +1749,9 @@ tinydng_status tinydng_writer_create(tinydng_context *ctx,
                raw->rawr_private_size,
                (const uint8_t *)raw->rawr_private_data,
                raw->rawr_private_size);
+      }
+      if (raw->has_default_black_render) {
+        td_add_long(&w->w, TD_WTAG_DEFAULT_BLACK_RENDER, raw->default_black_render);
       }
       if (raw->noise_profile_count) {
         uint32_t nn = raw->noise_profile_count;

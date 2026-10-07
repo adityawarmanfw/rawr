@@ -278,6 +278,8 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
     // the zero-copy reader usage no longer depends on the toggle.
     fun setExperimentalMultiframeEnabled(enabled: Boolean) =
         postNative { native.setExperimentalMultiframeEnabled(nativeHandle, enabled) }
+    fun setHdrPlusBracketEnabled(enabled: Boolean) =
+        postNative { native.setHdrPlusBracketEnabled(nativeHandle, enabled) }
 
     // No restart needed: the film engine is created lazily with a queue
     // wait-idle and the preview ingress is untouched.

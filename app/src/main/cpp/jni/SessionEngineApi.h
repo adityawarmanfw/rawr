@@ -49,6 +49,7 @@ void cancelPreparedMultiframeCapture(EngineHandle handle) noexcept;
 void setInternalTraceCaptureEnabled(EngineHandle handle, bool enabled) noexcept;
 void setExperimentalZeroCopy(EngineHandle handle, bool enabled) noexcept;
 void setExperimentalMultiframeEnabled(EngineHandle handle, bool enabled) noexcept;
+void setHdrPlusBracketEnabled(EngineHandle handle, bool enabled) noexcept;
 void setPersistentEngineEnabled(EngineHandle handle, bool enabled) noexcept;
 void setLensShadingCorrectionEnabled(EngineHandle handle, bool enabled) noexcept;
 void setHighlightReconstructionEnabled(EngineHandle handle, bool enabled) noexcept;

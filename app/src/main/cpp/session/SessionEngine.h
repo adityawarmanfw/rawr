@@ -99,6 +99,8 @@ class SessionEngine {
     std::string pollJpegWriteCompletion();
     void setPersistZslRingEnabled(bool enabled);
     void setExperimentalMultiframeEnabled(bool enabled);
+    // HDR+ Bracketed selected (with multiframe on): allows the DCG ISO calibration frame.
+    void setHdrPlusBracketEnabled(bool enabled);
     void setPersistentEngineEnabled(bool enabled);
     uint32_t prepareExperimentalMultiframe(uint32_t maxFrames);
     uint64_t startPreparedMultiframeCapture(rawrcam::encoding::dng::DngCaptureContext baseDng,

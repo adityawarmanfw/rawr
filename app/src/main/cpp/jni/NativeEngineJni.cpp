@@ -372,6 +372,10 @@ extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreview
     JNIEnv*, jobject, jlong h, jboolean v) {
     rawrcam::session::setExperimentalMultiframeEnabled(handle(h), v == JNI_TRUE);
 }
+extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreviewEngine_setHdrPlusBracketEnabled(
+    JNIEnv*, jobject, jlong h, jboolean v) {
+    rawrcam::session::setHdrPlusBracketEnabled(handle(h), v == JNI_TRUE);
+}
 extern "C" JNIEXPORT void JNICALL
 Java_com_rawr_camera_integration_NativePreviewEngine_setPersistentEngineEnabled(JNIEnv*, jobject, jlong h, jboolean v) {
     rawrcam::session::setPersistentEngineEnabled(handle(h), v == JNI_TRUE);

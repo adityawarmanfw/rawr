@@ -67,6 +67,10 @@ internal class CaptureSettingsSync(
         syncSetting({ it.effectiveVideoBitDepth() }) { prewarmVideo() }
         syncSetting({ it.experimentalZeroCopyEnabled }) { previewCoordinator.setExperimentalZeroCopy(it) }
         syncSetting({ it.experimentalMultiframeEnabled }) { previewCoordinator.setExperimentalMultiframeEnabled(it) }
+        syncSetting({
+            it.experimentalMultiframeEnabled &&
+                it.multiframeTuning.mergeAlgorithm == MultiframeMergeAlgorithm.HdrPlusBracketed
+        }) { previewCoordinator.setHdrPlusBracketEnabled(it) }
         syncSetting({ it.persistentEngineEnabled }) { previewCoordinator.setPersistentEngineEnabled(it) }
         syncSetting({ it.internalTraceRetainedRows }) {
             com.rawr.camera.integration.InternalTraceNative.setRetainedRows(it)

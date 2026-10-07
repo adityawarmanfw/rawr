@@ -841,6 +841,10 @@ data class MultiframeTuning(
         if (mergeAlgorithm == MultiframeMergeAlgorithm.HdrPlusBracketed) (maxFrames - bracketFrames).coerceAtLeast(2)
         else maxFrames
 
+    /** Dark frames HDR+ Bracketed requests after the shutter (0 for other merges). */
+    fun postShutterFrames(): Int =
+        if (mergeAlgorithm == MultiframeMergeAlgorithm.HdrPlusBracketed) maxFrames - zslFrames() else 0
+
     // Appended after the multiframe chroma-denoise flag (native indices 23-27).
     fun nativeMergeValues(): FloatArray =
         floatArrayOf(

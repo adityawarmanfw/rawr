@@ -73,6 +73,11 @@ void SessionEngine::setExperimentalMultiframeEnabled(bool enabled) {
     if (enabled) realtime_.ensureMultiframeBridge();
     LOGI("MULTIFRAME_EXPERIMENTAL enabled=%s", enabled ? "true" : "false");
 }
+void SessionEngine::setHdrPlusBracketEnabled(bool enabled) {
+    if (!cameraControls_.controller()) return;
+    cameraControls_.controller()->setSensitivityCalibrationWanted(enabled);
+    LOGI("HDRPLUS_BRACKET enabled=%s", enabled ? "true" : "false");
+}
 void SessionEngine::setPersistentEngineEnabled(bool enabled) {
     std::lock_guard<std::mutex> lock(mu_);
     capture_.multiframe().setPersistentEngineEnabled(enabled);
