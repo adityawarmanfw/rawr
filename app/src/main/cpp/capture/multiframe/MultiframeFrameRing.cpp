@@ -103,9 +103,20 @@ std::optional<FrozenBurst> MultiframeFrameRing::freezeFrame(std::uint64_t frameI
 std::optional<FrozenBurst> MultiframeFrameRing::freeze(std::size_t maxFrames) {
     if (!ring_) return std::nullopt;
     FrozenBurst out;
-    out.snapshot = ring_->snapshot(std::clamp<std::size_t>(maxFrames, 2u, 30u));
-    out.refs = out.snapshot ? out.snapshot->refs() : std::vector<rawr::zsl_ring::RawImageRef>{};
     const std::size_t requested = std::clamp<std::size_t>(maxFrames, 2u, 30u);
+    // Over-fetch so tagged one-shot frames (HDR+ bracket dark frames, the DCG
+    // ISO probe) can be dropped: they are not at the preview exposure.
+    out.snapshot = ring_->snapshot(requested + 8u);
+    out.refs = out.snapshot ? out.snapshot->refs() : std::vector<rawr::zsl_ring::RawImageRef>{};
+    for (auto it = out.refs.begin(); it != out.refs.end();) {
+        const auto meta = metadata_.find(it->frameId);
+        if (meta != metadata_.end() && meta->second.optimizedStillRequestId.value_or(0) != 0) {
+            out.snapshot->release(it->frameId);
+            it = out.refs.erase(it);
+        } else {
+            ++it;
+        }
+    }
     while (out.refs.size() > requested) {
         out.snapshot->release(out.refs.front().frameId);
         out.refs.erase(out.refs.begin());

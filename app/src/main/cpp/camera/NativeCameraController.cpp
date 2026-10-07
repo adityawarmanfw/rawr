@@ -248,6 +248,38 @@ struct NativeCameraController::Impl final : CameraEventSink {
                                        control, exposures, requestId);
     }
 
+    // Forced DCG sensor modes report ISO on a different scale than requests,
+    // and the conversion is only learned from AE-off results. HDR+ bracket
+    // frames need it in Auto, so once per DCG session (after the preview
+    // settles) send one AE-off frame at the minimum ISO and the current
+    // shutter; its result calibrates the ratio. Darker than the preview, so
+    // the viewfinder lifts it like a bracket frame. Never while recording.
+    static constexpr uint64_t kSensitivityProbeTag = ~0ull;
+    uint64_t sensitivityProbeGeneration = 0;
+    uint32_t resultsBeforeProbe = 0;
+    void probeSensitivityCoordinateLocked() {
+        const uint64_t generation = deviceSession.generation();
+        if (sensitivityProbeGeneration == generation) return;
+        if (!deviceSession.sensorModeOverridden() || results.sensitivityReportedPerRequest() ||
+            !control.capabilities.manualExposureSupported || control.videoMode || control.recordingFps > 0 ||
+            !control.appliedExposureTimeNs || *control.appliedExposureTimeNs <= 0) {
+            resultsBeforeProbe = 0;
+            return;
+        }
+        if (++resultsBeforeProbe < 15u) return;
+        sensitivityProbeGeneration = generation;  // one attempt per session
+        resultsBeforeProbe = 0;
+        const int64_t exposure =
+            std::clamp(*control.appliedExposureTimeNs, control.capabilities.exposureTimeMinNs,
+                       std::max(control.capabilities.exposureTimeMinNs, control.capabilities.exposureTimeMaxNs));
+        const bool sent = requests.captureBracket(deviceSession.session(), deviceSession.request(),
+                                                  deviceSession.callbackContext(), control,
+                                                  {{exposure, control.capabilities.sensitivityMin}},
+                                                  kSensitivityProbeTag);
+        diag(std::string("CAMERA_SENSITIVITY_PROBE sent=") + (sent ? "1" : "0") + " exposureNs=" +
+             std::to_string(exposure) + " iso=" + std::to_string(control.capabilities.sensitivityMin));
+    }
+
     bool submitRepeatingLocked() {
         return requests.submit(deviceSession.session(), deviceSession.request(), deviceSession.callbackContext(),
                                control, meteringRequestLocked());
@@ -507,7 +539,10 @@ struct NativeCameraController::Impl final : CameraEventSink {
             control.exposureMode = ExposureControlMode::Auto;
             submitRepeatingLocked();
         }
-        if (!actions.optimizedStill) steerAfToFacesLocked();
+        if (!actions.optimizedStill) {
+            steerAfToFacesLocked();
+            probeSensitivityCoordinateLocked();
+        }
         if (focusControls.finishTrigger()) submitRepeatingLocked();
         lock.unlock();
         if (callbacks.submitMetadata) (void)callbacks.submitMetadata(*actions.frame);
