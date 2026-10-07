@@ -174,6 +174,10 @@ void MfsrCaptureJob::run() {
     const std::string mergedDisplayName = mergedDng.displayName;
     const std::string jpegDisplayName = mergedJpeg.output.displayName;
     auto publishDng = [&](const DngWriteCompletion& done) {
+        __android_log_print(ANDROID_LOG_INFO, "RawrCamNative",
+            "BURST_DNG_DONE requestId=%llu name=%s success=%d writeMs=%.1f fsyncMs=%.1f",
+            static_cast<unsigned long long>(done.requestId), done.displayName.c_str(),
+            done.success ? 1 : 0, done.writeMs, done.fsyncMs);
         std::ostringstream out;
         out << done.requestId << '\t' << (done.success ? 1 : 0) << '\t' << done.displayName << '\t' << done.error;
         ctx.dngBox.push(out.str());
@@ -407,7 +411,11 @@ void MfsrCaptureJob::run() {
                             dngSubtotalMs(baseReadMs, mfStages.multiframeTotalMs(), projectMs)) +
                         " ms\n" + formatMultiframeTimings(mfStages, baseFrameMode) +
                         formatOutputProjection(baseReadMs, projectMs) +
-                        "(Render stages, encode + overall total: see JPEG EXIF)\n";
+                        "(Processing subtotal excludes capture, queue, burst save/load and output encoding/write.)\n" +
+                        (work->acceptedAt != std::chrono::steady_clock::time_point{}
+                             ? "Elapsed since capture accepted (before DNG encoding/write): " +
+                                   rawrcam::encoding::jpeg::formatMs1(wallMs(work->acceptedAt)) + " ms\n"
+                             : "");
                 }
                 auto context = std::move(mergedDng);
                 mergedDng.outputFd = -1;

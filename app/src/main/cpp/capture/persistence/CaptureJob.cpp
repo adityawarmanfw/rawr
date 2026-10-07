@@ -1,5 +1,9 @@
 #include "capture/persistence/CaptureJob.h"
 
+#include <chrono>
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
 #include <fcntl.h>
 #include <sys/statvfs.h>
 #include <unistd.h>
@@ -49,7 +53,15 @@ struct Reservation {
 void syncFile(const std::string& path, bool directory = false) {
     int fd = open(path.c_str(), O_RDONLY | (directory ? O_DIRECTORY : 0));
     if (fd < 0) throw std::runtime_error("capture_job_sync_open_failed");
+    const auto begin = std::chrono::steady_clock::now();
     int result = fsync(fd);
+#ifdef __ANDROID__
+    __android_log_print(ANDROID_LOG_INFO, "RawrCamNative", "CAPTURE_JOB_FSYNC path=%s directory=%d ms=%.1f result=%d",
+        path.c_str(), directory ? 1 : 0,
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count(), result);
+#else
+    (void)begin;
+#endif
     close(fd);
     if (result != 0) throw std::runtime_error("capture_job_sync_failed");
 }

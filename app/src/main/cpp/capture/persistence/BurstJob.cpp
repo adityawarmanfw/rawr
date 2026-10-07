@@ -2,6 +2,8 @@
 #include <rawr/raw_multiframe_output/MultiframeOutputAdapter.h>
 
 #include <cstring>
+#include <chrono>
+#include <android/log.h>
 #include <stdexcept>
 #include <vector>
 
@@ -155,9 +157,12 @@ struct Upload {
 }  // namespace
 void saveBurst(const std::string& path, multiframe::MultiframeWorkItem& work, const vulkan::VulkanContext& vk,
                std::mutex& mutex) {
+    const auto started = std::chrono::steady_clock::now();
+    double readbackMs = 0.0;
     // Sharpest-reference selection already ran on the GPU in the spool thread
     // before this call (MfsrCaptureService::spoolLoop), so the persisted
-    // reference is final here. This stays a single bulk read-back pass.
+    // reference is final here. Each frame is synchronously read back before
+    // its bytes are written; this is not one batched GPU transfer.
     auto& burst = *work.capture;
     CaptureJob job;
     job.multiframe = true;
@@ -195,21 +200,36 @@ void saveBurst(const std::string& path, multiframe::MultiframeWorkItem& work, co
             check(vkQueueSubmit(vk.queue(), 1, &info, fence));
         },
         job.frame.width, job.frame.height);
-    save(path, job, [&](size_t i) { return adapter.readBase(burst.frames[i].raw.image).pixels; });
+    save(path, job, [&](size_t i) {
+        const auto begin = std::chrono::steady_clock::now();
+        auto pixels = adapter.readBase(burst.frames[i].raw.image).pixels;
+        readbackMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
+        return pixels;
+    });
+    const double totalMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+    __android_log_print(ANDROID_LOG_INFO, "RawrCamNative",
+        "BURST_SAVE requestId=%llu frames=%zu bytes=%llu totalMs=%.1f readbackMs=%.1f storageAndSetupMs=%.1f",
+        static_cast<unsigned long long>(work.requestId), burst.frames.size(),
+        static_cast<unsigned long long>(uint64_t(job.frame.width) * job.frame.height * 2 * burst.frames.size()),
+        totalMs, readbackMs, totalMs - readbackMs);
 }
 std::unique_ptr<multiframe::MultiframeWorkItem> loadBurst(const std::string& path, const vulkan::VulkanContext& vk,
                                                           std::mutex& mutex) {
+    const auto started = std::chrono::steady_clock::now();
+    double uploadMs = 0.0;
     auto work = std::make_unique<multiframe::MultiframeWorkItem>();
     work->capture = std::make_unique<multiframe::PendingMultiframeCapture>();
     auto uploaded = std::make_shared<Upload>();
     auto job = load(path, [&](CaptureJob& j, size_t i, const std::vector<uint8_t>& raw) {
         if (!j.multiframe) throw std::runtime_error("capture_job_not_burst");
+        const auto begin = std::chrono::steady_clock::now();
         if (i == 0) uploaded->initialize(vk, raw.size());
         rawr::raw_gpu_pipeline::BurstFrame frame;
         frame.raw = uploaded->add(vk, mutex, j.frame.width, j.frame.height, j.metadata[i].timestampNs, raw);
         frame.parameters = j.parameters[i];
         work->capture->frames.push_back(frame);
         work->capture->refs.push_back(frame.raw.ref);
+        uploadMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
     });
     auto& b = *work->capture;
     b.recoveryImages = uploaded;
@@ -229,6 +249,10 @@ std::unique_ptr<multiframe::MultiframeWorkItem> loadBurst(const std::string& pat
     work->baseFrameMode = job.baseFrameMode;
     work->sharpnessScores = job.sharpnessScores;
     work->sharpnessMs = job.sharpnessMs;
+    const double totalMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+    __android_log_print(ANDROID_LOG_INFO, "RawrCamNative",
+        "BURST_LOAD requestId=%llu frames=%zu totalMs=%.1f uploadMs=%.1f storageAndSetupMs=%.1f",
+        static_cast<unsigned long long>(work->requestId), b.frames.size(), totalMs, uploadMs, totalMs - uploadMs);
     return work;
 }
 }  // namespace rawrcam::capture::persistence

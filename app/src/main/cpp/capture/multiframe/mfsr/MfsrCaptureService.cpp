@@ -169,6 +169,7 @@ std::uint64_t MfsrCaptureService::start(std::unique_ptr<PendingMultiframeCapture
     const uint64_t requestId = nextRequestId_++;
     auto work = std::make_unique<MultiframeWorkItem>();
     work->requestId = requestId;
+    work->acceptedAt = std::chrono::steady_clock::now();
     work->capture = std::move(capture);
     work->baseDng = std::move(baseDng);
     work->mergedDng = std::move(mergedDng);
@@ -223,6 +224,10 @@ std::uint64_t MfsrCaptureService::start(std::unique_ptr<PendingMultiframeCapture
                         }
                     } traceEnd{original.requestId};
                     auto restored = persistence::loadBurst(current->path, vulkan_, queue0Mutex_);
+                    restored->acceptedAt = original.acceptedAt;
+                    LOGI("BURST_READY requestId=%llu acceptedToReadyMs=%.1f",
+                         static_cast<unsigned long long>(original.requestId),
+                         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - original.acceptedAt).count());
                     restored->baseDng.outputFd = original.baseDng.outputFd;
                     restored->mergedDng.outputFd = original.mergedDng.outputFd;
                     restored->mergedJpeg.output.outputFd = original.mergedJpeg.output.outputFd;
@@ -241,6 +246,9 @@ std::uint64_t MfsrCaptureService::start(std::unique_ptr<PendingMultiframeCapture
                                                 jpegBox_,
                                                 filmAssetManager_};
                     MfsrCaptureJob(ctx, std::move(restored)).run();
+                    LOGI("BURST_FINISHED requestId=%llu acceptedToFinishedMs=%.1f",
+                         static_cast<unsigned long long>(original.requestId),
+                         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - original.acceptedAt).count());
                 } catch (const std::exception& e) {
                     for (int fd :
                          {original.baseDng.outputFd, original.mergedDng.outputFd, original.mergedJpeg.output.outputFd})

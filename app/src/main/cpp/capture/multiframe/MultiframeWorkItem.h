@@ -3,6 +3,7 @@
 #include <tonemap/TonemapEngine.h>
 
 #include <cstdint>
+#include <chrono>
 #include <memory>
 #include <vector>
 
@@ -22,6 +23,8 @@ using PendingMultiframeCapture = FrozenBurst;
 
 struct MultiframeWorkItem {
     std::uint64_t requestId = 0;
+    // Live-session wall clock, deliberately not serialized across restarts.
+    std::chrono::steady_clock::time_point acceptedAt{};
     std::unique_ptr<PendingMultiframeCapture> capture;
     rawrcam::encoding::dng::DngCaptureContext baseDng;
     rawrcam::encoding::dng::DngCaptureContext mergedDng;
