@@ -55,9 +55,11 @@ void main() {
                 if (!isinf(sComp[i])) sums += vec2(max(0.0, sRef[i]), max(0.0, sComp[i]));
             sSums[lane] = sums;
             barrier();
-            sums = vec2(0.0);
-            for (int i = 0; i < 64; ++i) sums += sSums[i];
-            ratio = clamp(sums.x / (sums.y + 1e-9), 0.9, 1.1);
+            for (int stride = 32; stride > 0; stride >>= 1) {
+                if (lane < stride) sSums[lane] += sSums[lane + stride];
+                barrier();
+            }
+            ratio = clamp(sSums[0].x / (sSums[0].y + 1e-9), 0.9, 1.1);
             barrier();
         }
         float partial = 0.0;
