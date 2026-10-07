@@ -14,13 +14,23 @@
 namespace rawr::raw_gpu_pipeline {
 // Wronski: kernel-regression super-resolution merge (RGB output, optional
 // upscale). HdrPlusSpatial: HDR+ tile-aligned robust average. HdrPlusFrequency:
-// HDR+ per-frequency Wiener merge (upstream "Higher quality"). Both HDR+
-// variants write Bayer values into the RGBA16F output and run at 1x only.
-enum class MergeAlgorithm : std::uint32_t { Wronski = 0, HdrPlusSpatial = 1, HdrPlusFrequency = 2 };
+// HDR+ per-frequency Wiener merge (upstream "Higher quality").
+// HdrPlusBracketed: the frequency merge over an exposure-bracketed burst
+// (upstream's non-uniform exposure path; the reference should be the darkest
+// frame). All HDR+ variants write Bayer values into the RGBA16F output and run
+// at 1x only.
+enum class MergeAlgorithm : std::uint32_t { Wronski = 0, HdrPlusSpatial = 1, HdrPlusFrequency = 2, HdrPlusBracketed = 3 };
 struct BurstFrame {
     rawr::zsl_ring::GpuRawImageView raw{};
     MultiframeFrameParameters parameters{};
+    // Linear exposure (exposure time x gain, any consistent unit); only ratios
+    // to the reference are used, by HdrPlusBracketed. <= 0 = unknown, treated
+    // as the reference exposure.
+    float exposure = 0.0f;
 };
+[[nodiscard]] constexpr bool usesFrequencyMerge(MergeAlgorithm a) noexcept {
+    return a == MergeAlgorithm::HdrPlusFrequency || a == MergeAlgorithm::HdrPlusBracketed;
+}
 struct BurstStageTimings {
     double initializeMs = 0.0;
     double referencePrepareMs = 0.0;

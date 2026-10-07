@@ -1,6 +1,6 @@
 #version 450
 // Port of hdr-plus-swift calculate_abs_diff_rgba + calculate_mismatch_rgba
-// (uniform exposure): raised-cosine-weighted mean |ref - aligned| over twice
+// raised-cosine-weighted mean |ref - aligned| over twice
 // the tile support, relative to the tile's shot noise (Liba 2019 "spatially
 // varying temporal merging"). One 16x16 workgroup per tile, one lane per
 // window pixel, tree reduction (upstream sums sequentially in one thread).
@@ -12,6 +12,7 @@ layout(set = 0, binding = 3, r32f) writeonly uniform image2D mismatch;
 layout(push_constant) uniform P {
     ivec2 tiles;
     ivec2 rgbaSize;
+    float exposureFactor;  // companion exposure / reference exposure (1 = uniform)
 } p;
 
 const float PI = 3.14159265358979323846;
@@ -49,6 +50,6 @@ void main() {
     if (lane != 0u) return;
     vec4 noise = imageLoad(rms, g);
     vec4 diff = sDiff[0] / sWeight[0];
-    vec4 m4 = diff / sqrt(0.5 * noise + 0.5 * noise + 1.0);
+    vec4 m4 = diff / sqrt(0.5 * noise + 0.5 * noise / p.exposureFactor + 1.0);
     imageStore(mismatch, g, vec4(0.25 * (m4.x + m4.y + m4.z + m4.w)));
 }

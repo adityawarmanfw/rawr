@@ -6,6 +6,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <vector>
 
 namespace rawr::raw_gpu_pipeline {
 
@@ -26,6 +27,10 @@ class HdrPlusRecorder final {
         hotPixelBuffer_ = buffer;
         hotPixelCount_ = count;
     }
+    // Bracketed bursts: scale applied to the next companion's black-subtracted
+    // signal (reference exposure / companion exposure). 1 for uniform bursts.
+    void setCompanionGain(float gain) noexcept { companionGain_ = gain; }
+    [[nodiscard]] const std::array<float, 4>& referenceBlack() const noexcept { return reference_.blackByPhase; }
     // Reference: padded frame, pyramid, blurred copy, noise level, and the
     // accumulator initialized with ref / frameCount.
     void recordReference(VkCommandBuffer command, VkImageView rawU16, const RawNormalization& frame,
@@ -63,6 +68,7 @@ class HdrPlusRecorder final {
     RawNormalization reference_{};
     VkBuffer hotPixelBuffer_ = VK_NULL_HANDLE;
     std::uint32_t hotPixelCount_ = 0;
+    float companionGain_ = 1.0f;
 
     void recordPrepare(VkCommandBuffer, bool reference, VkImageView rawU16, const RawNormalization&);
     void recordPyramid(VkCommandBuffer, bool reference);
@@ -87,6 +93,10 @@ class HdrPlusFrequencyRecorder final {
     HdrPlusFrequencyRecorder(ResourceArena& arena, VulkanExecutor& executor, rawr::raw_merge_hdrplus_gpu::Config config,
                              rawr::raw_merge_hdrplus_gpu::FrequencyGeometry geometry);
     HdrPlusRecorder& alignment() noexcept { return align_; }
+    // Bracketed exposure: exposureFactors[i] = frame i exposure / reference
+    // exposure (all 1, or empty, merges exactly like the uniform path) and
+    // each frame's white level for the clipped-highlights norm.
+    void setExposure(std::vector<float> exposureFactors, std::vector<float> whiteLevels);
     void beginPass(std::uint32_t pass) noexcept;
     // Align-once mode: companions are aligned (and the reference prepared)
     // only in pass 0; later passes read through a coordinate offset.
@@ -110,6 +120,12 @@ class HdrPlusFrequencyRecorder final {
     rawr::raw_merge_hdrplus_gpu::FrequencyGeometry geometry_{};
     HdrPlusRecorder align_;
     std::uint32_t pass_ = 0;
+    std::vector<float> exposureFactors_{};
+    std::vector<float> whiteLevels_{};
+    bool uniformExposure_ = true;
+    float frameExposure(std::uint32_t slot) const noexcept {
+        return slot < exposureFactors_.size() ? exposureFactors_[slot] : 1.0f;
+    }
     // Raw-pixel offset from this pass's padded coordinates into the prepared frame.
     std::array<std::int32_t, 2> passOffset() const noexcept;
     VkDeviceSize alignSlotBytes() const noexcept;

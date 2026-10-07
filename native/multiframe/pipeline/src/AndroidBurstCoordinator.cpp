@@ -160,7 +160,9 @@ void AndroidBurstCoordinator::ensureExecutionInfra(VkPhysicalDevice physical, Vk
 }
 
 bool AndroidBurstCoordinator::arenaMatchesSelection() const noexcept {
-    if (arenaAlgorithm_ != algorithm_) return false;
+    // Frequency and bracketed merges share one layout.
+    if (arenaAlgorithm_ != algorithm_ && !(usesFrequencyMerge(arenaAlgorithm_) && usesFrequencyMerge(algorithm_)))
+        return false;
     return algorithm_ == MergeAlgorithm::Wronski || (arenaHdrPlus_.tileSize == hdrplus_.tileSize &&
                                                      arenaHdrPlus_.searchDistance == hdrplus_.searchDistance);
 }
@@ -169,7 +171,7 @@ void AndroidBurstCoordinator::initializeArenaLocked(VkPhysicalDevice physical, V
         arena_.initialize(physical, device,
                           makeHdrPlusScratchLayout(rawr::raw_merge_hdrplus_gpu::makeGeometry(width_, height_, hdrplus_)));
         arenaHdrPlus_ = hdrplus_;
-    } else if (algorithm_ == MergeAlgorithm::HdrPlusFrequency) {
+    } else if (usesFrequencyMerge(algorithm_)) {
         arena_.initialize(physical, device,
                           makeHdrPlusFrequencyScratchLayout(
                               rawr::raw_merge_hdrplus_gpu::makeFrequencyGeometry(width_, height_, hdrplus_), width_, height_));
@@ -365,7 +367,7 @@ BurstRunResult AndroidBurstCoordinator::run(const std::vector<BurstFrame>& frame
     timings.initializeMs = pendingInitializeMs_;
     const auto timestamp = [&](std::uint32_t query) { recordTimestamp(query); };
     if (algorithm_ == MergeAlgorithm::HdrPlusSpatial) return runHdrPlus(frames, ref, frameConsumed);
-    if (algorithm_ == MergeAlgorithm::HdrPlusFrequency) return runHdrPlusFrequency(frames, ref, frameConsumed);
+    if (usesFrequencyMerge(algorithm_)) return runHdrPlusFrequency(frames, ref, frameConsumed);
     // Burst noise estimation: the profile it fits drives everything below
     // (robustness LUT, kernel GAT, aperture gate), so it runs first. The
     // configured profile is restored after the run (also on failure).
@@ -670,6 +672,15 @@ BurstRunResult AndroidBurstCoordinator::runHdrPlusFrequency(const std::vector<Bu
     const auto gpuOrWall = [](const ChunkTiming& t) { return t.second.empty() ? t.first : t.second.front(); };
     const auto geometry = rawr::raw_merge_hdrplus_gpu::makeFrequencyGeometry(width_, height_, hdrplus_);
     HdrPlusFrequencyRecorder recorder(arena_, executor_, hdrplus_, geometry);
+    if (algorithm_ == MergeAlgorithm::HdrPlusBracketed) {
+        std::vector<float> factors(frames.size(), 1.0f), whites(frames.size(), 65535.0f);
+        const float refExposure = frames[ref].exposure;
+        for (std::size_t i = 0; i < frames.size(); ++i) {
+            if (refExposure > 0.0f && frames[i].exposure > 0.0f) factors[i] = frames[i].exposure / refExposure;
+            whites[i] = frames[i].parameters.normalization.whiteLevel;
+        }
+        recorder.setExposure(std::move(factors), std::move(whites));
+    }
     const std::size_t pairs = std::min<std::size_t>(merge_.hotPixels.size() / 2u, 1u << 20);
     if (pairs > 0u) {
         ensureHostBuffer(hotPixels_, VkDeviceSize(pairs) * 2u * sizeof(std::int32_t));

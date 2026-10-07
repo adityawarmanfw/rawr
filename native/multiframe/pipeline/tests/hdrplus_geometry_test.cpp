@@ -33,6 +33,22 @@ int main() {
     assert(std::fabs(hp::robustness(13.f) - 1.99907f) < 1e-4f);
     assert(hp::robustness(22.f) < hp::robustness(13.f) && hp::robustness(13.f) < hp::robustness(1.f));
 
+    // Bracketed frequency norms (upstream uniform_exposure == false). A
+    // uniform burst falls back to the uniform constants exactly.
+    {
+        const auto uniform = hp::frequencyNorms(13.f);
+        const auto same = hp::bracketedFrequencyNorms(13.f, {1.f, 1.f, 1.0005f});
+        assert(hp::uniformExposure({1.f, 1.f, 1.0005f}) && !hp::uniformExposure({1.f, 4.f}));
+        assert(same.robustnessNorm == uniform.robustnessNorm && same.maxMotionNorm == uniform.maxMotionNorm);
+        const auto b = hp::bracketedFrequencyNorms(13.f, {1.f, 4.f});
+        assert(std::fabs(b.robustnessNorm - 0.273291f) < 1e-5f);
+        assert(std::fabs(b.readNoise - 12.12573f) < 1e-4f);
+        assert(std::fabs(b.maxMotionNorm - 2.345935f) < 1e-5f);
+        assert(std::fabs(hp::bracketedMaxMotionNorm(b, 4.f) - 6.126578f) < 1e-5f);
+        // Brighter-than-4x frames get no further motion-norm boost.
+        assert(hp::bracketedMaxMotionNorm(b, 16.f) == hp::bracketedMaxMotionNorm(b, 4.f));
+    }
+
     bool threw = false;
     try {
         (void)hp::makeGeometry(4081, 3072, hp::Config{});

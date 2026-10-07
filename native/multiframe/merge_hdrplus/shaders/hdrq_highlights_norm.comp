@@ -1,0 +1,36 @@
+#version 450
+// Port of hdr-plus-swift calculate_highlights_norm_rgba (bracketed exposure):
+// per 8x8 RGBA tile of the aligned companion, the mean of a smooth ramp over
+// pixels between 0.50 and 0.99 of the companion's white level (values scaled
+// back to its own exposure), mapped to a factor on the merge noise term so
+// near-clipped tiles of brighter frames defer to the reference. 1.0 (no
+// correction) for frames no brighter than the reference.
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0, rgba32f) readonly uniform image2D alignedRgba;
+layout(set = 0, binding = 1, r32f) writeonly uniform image2D highlights;
+layout(push_constant) uniform P {
+    ivec2 tiles;
+    float exposureFactor;  // companion exposure / reference exposure
+    float whiteLevel;      // companion white level (raw units)
+    float blackLevelMean;  // reference black mean (raw units)
+} p;
+
+void main() {
+    ivec2 t = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(t, p.tiles))) return;
+    float norm = 1.0;
+    if (p.exposureFactor > 1.001) {
+        const int ts = 8;
+        float sum = 0.0;
+        for (int dy = 0; dy < ts; ++dy)
+            for (int dx = 0; dx < ts; ++dx) {
+                vec4 v = imageLoad(alignedRgba, t * ts + ivec2(dx, dy));
+                float m = max(v.x, max(v.y, max(v.z, v.w)));
+                m = (m - p.blackLevelMean) * p.exposureFactor + p.blackLevelMean;
+                sum += clamp((m / p.whiteLevel - 0.50) / 0.49, 0.0, 1.0);
+            }
+        float f = sum / float(ts * ts);
+        norm = clamp((1.0 - f) * (1.0 - f), 0.04 / min(p.exposureFactor, 4.0), 1.0);
+    }
+    imageStore(highlights, t, vec4(norm));
+}

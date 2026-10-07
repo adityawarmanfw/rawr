@@ -113,6 +113,37 @@ inline FrequencyNorms frequencyNorms(float strength) {
     return n;
 }
 
+// Bracketed exposure (upstream align_merge_frequency_domain with
+// uniform_exposure false). exposureFactors[i] = frame i exposure / reference
+// exposure (>= 1 when the darkest frame is the reference). Longer exposures
+// carry less noise, so the noise term is lowered on average (corr1) and the
+// motion norm lifted (corr2); per-frame max motion norms come from
+// bracketedMaxMotionNorm().
+inline bool uniformExposure(const std::vector<float>& exposureFactors) {
+    for (const float f : exposureFactors)
+        if (std::abs(f - 1.f) > 1e-3f) return false;
+    return true;
+}
+inline FrequencyNorms bracketedFrequencyNorms(float strength, const std::vector<float>& exposureFactors) {
+    if (exposureFactors.empty() || uniformExposure(exposureFactors)) return frequencyNorms(strength);
+    double corr1 = 0.0, corr2 = 0.0;
+    for (const float f : exposureFactors) {
+        corr1 += 0.5 + 0.5 / double(f);
+        corr2 += std::min(4.0, double(f));
+    }
+    corr1 /= double(exposureFactors.size());
+    corr2 /= double(exposureFactors.size());
+    const double rev = 0.5 * (28.5 - double(int(strength + 0.5f)));
+    FrequencyNorms n{};
+    n.robustnessNorm = float(corr1 / corr2 * std::pow(2.0, -rev + 7.5));
+    n.readNoise = float(std::pow(std::pow(2.0, -rev + 10.0), 1.6));
+    n.maxMotionNorm = float(std::max(1.0, std::pow(1.3, 11.0 - rev)));
+    return n;
+}
+inline float bracketedMaxMotionNorm(const FrequencyNorms& n, float exposureFactor) {
+    return std::min(4.f, exposureFactor) * std::sqrt(n.maxMotionNorm);
+}
+
 // The frequency merge runs four passes over 8x8 RGBA tiles (16x16 raw
 // pixels). Upstream (1-based pass i) shifts the padding by tile_size_merge
 // raw pixels: left for even i, top for i < 3; raised-cosine windows make the
