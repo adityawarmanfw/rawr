@@ -702,7 +702,7 @@ FrameSubmitCoordinator::RecordedSubmit FrameSubmitCoordinator::recordSubmitComma
     recordInput.videoCropOutHeight = videoCropOutHeight_.load(std::memory_order_relaxed);
     recordInput.filmEnabled = filmSimEnabled_;
     recordInput.filmLook = filmLook_;
-    recordInput.filmPreviewDivisor = filmPreviewDivisor_;
+    recordInput.viewfinderDivisor = viewfinderDivisor_;
     recordInput.presentationEnabled = acquired.swapIndex.has_value();
     recordInput.highlightMethod = highlightMethod_;
     recordInput.highlightThreshold = highlightThreshold_;

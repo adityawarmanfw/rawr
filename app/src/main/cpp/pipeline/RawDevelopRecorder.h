@@ -76,11 +76,12 @@ struct RawDevelopRecordInput {
     // filmLook carries the full look; timeSec derives from timestampNs.
     bool filmEnabled = false;
     spektrafilm_native::FilmLook filmLook{};
-    // Preview film downsample divisor (2 = quarter-res, 3, 4 = eighth-res).
-    // Drives the half->film blit, the record dims, and the upscale source
-    // together; the arena stays sized for 2 so no engine rebuild is needed.
-    // Stills always render full-res and never read this.
-    uint32_t filmPreviewDivisor = 2;
+    // Viewfinder look-stage divisor (1 = preview size, 2..4 = downscaled).
+    // Drives the downscale blit, the tonemap/film record dims, and the
+    // upscale source together. Film clamps to >= 2: its arena and the
+    // scaled slot images are sized for half the preview, so no rebuild is
+    // needed. Stills and video always render full-res and never read this.
+    uint32_t viewfinderDivisor = 2;
     // Recording can continue when the monitor swapchain has no image.
     bool presentationEnabled = true;
     // Optional recording work runs after RAW import/copy is ready and before

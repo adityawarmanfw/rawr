@@ -131,7 +131,7 @@ class FrameSubmitCoordinator final {
     }
     // Preview-only downsample divisor (2..4, default 2). Per-frame, no
     // restart or engine rebuild: the arena stays sized for 2.
-    void setFilmSimPreviewDivisor(uint32_t value) noexcept { filmPreviewDivisor_ = std::clamp(value, 2u, 4u); }
+    void setViewfinderDivisor(uint32_t value) noexcept { viewfinderDivisor_ = std::clamp(value, 1u, 4u); }
     void setColorMode(std::string value) { colorMode_ = std::move(value); }
     void setDiagnosticMode(uint32_t mode) noexcept {
         diagnosticMode_ = mode;
@@ -283,7 +283,7 @@ class FrameSubmitCoordinator final {
     std::atomic<uint32_t> videoCropOutWidth_{0};
     std::atomic<uint32_t> videoCropOutHeight_{0};
     spektrafilm_native::FilmLook filmLook_{};
-    uint32_t filmPreviewDivisor_ = 2;
+    uint32_t viewfinderDivisor_ = 2;
     std::string colorMode_ = "auto";
     uint32_t pipelineAuditMetadataCount_ = 0;
     uint32_t pipelineAuditPairCount_ = 0;

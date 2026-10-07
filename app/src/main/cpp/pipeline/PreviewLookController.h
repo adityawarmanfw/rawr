@@ -29,7 +29,7 @@ class PreviewLookController final {
     void configureGeometry(uint32_t width, uint32_t height);
     void clearProcessing(bool teardownFilm);
     void setFilmSimEnabled(bool enabled);
-    void setFilmSimPreviewDivisor(uint32_t divisor);
+    void setViewfinderDivisor(uint32_t divisor);
     void setFilmSimLook(const spektrafilm_native::FilmLook& look);
     void setQuickToneNativeValue(int target, float value);
     void setTonemapParameters(float exposureEV, float blackPointEV, float shadowLiftEV, float midtoneLiftEV,

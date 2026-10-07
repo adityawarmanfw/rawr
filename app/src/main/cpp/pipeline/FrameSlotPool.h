@@ -30,8 +30,8 @@ struct FrameSlot {
     rawrcam::vulkan::OwnedImage tonemapped;
     // Film-simulation quarter-res pair (W/4 x H/4). Allocated alongside the
     // rest; the film stage is the only consumer.
-    rawrcam::vulkan::OwnedImage filmQuarterLinear;
-    rawrcam::vulkan::OwnedImage filmQuarterOut;
+    rawrcam::vulkan::OwnedImage lookScaledLinear;
+    rawrcam::vulkan::OwnedImage lookScaledOut;
     AImage* imageLease = nullptr;
     uint64_t timestampNs = 0;
     std::optional<rawrcam::metadata::FrameMetadataSnapshot> metadataSnapshot;

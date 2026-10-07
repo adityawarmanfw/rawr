@@ -10,10 +10,6 @@ internal fun reduceFilmSettings(
         state.withValues(state.values.copy(filmSimEnabled = action.enabled))
     }
 
-    is SetFilmSimPreviewDivisor -> {
-        state.withValues(state.values.copy(filmPreviewDivisor = action.divisor.coerceIn(2, 4)))
-    }
-
     is SetFilmSimNumericValue -> state.withValues(state.values.withFilmNumeric(action))
 
     is SetFilmSimDiscreteValue -> state.withValues(state.values.withFilmDiscrete(action))

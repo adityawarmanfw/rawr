@@ -879,6 +879,9 @@ data class SettingsValues(
     val dngEnabled: Boolean = true,
     val dngCompressionId: String = "dng.uncompressed",
     val gridMode: GridMode = GridMode.Thirds,
+    // Preview-only look-stage (tonemap or film) downsample divisor, 1..4.
+    // Film always runs at 2 or more. Never touches stills, video, or EXIF.
+    val viewfinderDivisor: Int = 2,
     val armedOverlays: Set<OverlayMode> =
         setOf(OverlayMode.Peaking, OverlayMode.TonemapShadows, OverlayMode.RawHighlights),
     val falseColorManual: Boolean = false,
@@ -906,9 +909,6 @@ data class SettingsValues(
     val saveBaseDng: Boolean = true,
     val persistentEngineEnabled: Boolean = true,
     val filmSimEnabled: Boolean = false,
-    // Preview-only film downsample divisor (2 = quarter-res, 3, 4).
-    // Never touches stills, EXIF, or the look contract.
-    val filmPreviewDivisor: Int = 2,
     val filmSimLook: FilmSimLook = FilmFactoryPresets.baseLook,
     val selectedFilmPresetId: String? = null,
     val filmPresets: List<FilmPreset> = emptyList(),

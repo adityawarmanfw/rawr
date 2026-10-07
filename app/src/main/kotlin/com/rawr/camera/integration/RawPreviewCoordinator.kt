@@ -293,8 +293,8 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
 
     // No restart needed: the divisor only changes per-frame record dims;
     // the arena stays sized for 2 and the engine is untouched.
-    fun setFilmSimPreviewDivisor(divisor: Int) {
-        postNative { native.setFilmSimPreviewDivisor(nativeHandle, divisor) }
+    fun setViewfinderDivisor(divisor: Int) {
+        postNative { native.setViewfinderDivisor(nativeHandle, divisor) }
     }
 
     // No restart needed: the flag is read at the next capture's render

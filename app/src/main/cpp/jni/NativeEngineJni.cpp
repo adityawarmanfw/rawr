@@ -855,8 +855,8 @@ extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreview
     rawrcam::session::setFilmSimEnabled(handle(h), v == JNI_TRUE);
 }
 extern "C" JNIEXPORT void JNICALL
-Java_com_rawr_camera_integration_NativePreviewEngine_setFilmSimPreviewDivisor(JNIEnv*, jobject, jlong h, jint v) {
-    rawrcam::session::setFilmSimPreviewDivisor(handle(h), static_cast<uint32_t>(v < 2 ? 2 : (v > 4 ? 4 : v)));
+Java_com_rawr_camera_integration_NativePreviewEngine_setViewfinderDivisor(JNIEnv*, jobject, jlong h, jint v) {
+    rawrcam::session::setViewfinderDivisor(handle(h), static_cast<uint32_t>(v < 1 ? 1 : (v > 4 ? 4 : v)));
 }
 extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreviewEngine_setFilmSimLook(
     JNIEnv* env, jobject, jlong h, jfloatArray values, jintArray enums) {

@@ -52,7 +52,7 @@ class PersistentSettingsController(
             is DeleteUserLutProfile, is SetUserLutInputGamut, is SetUserLutInputTransfer,
             is SetUserLutOutputGamut, is SetUserLutOutputTransfer, is SetUserLutAfterAction -> reduceRenderProfileSettings(state, action)
 
-            is SetFilmSimEnabled, is SetFilmSimPreviewDivisor, is SetFilmSimNumericValue,
+            is SetFilmSimEnabled, is SetFilmSimNumericValue,
             is SetFilmSimDiscreteValue, is SetFilmSimFlag, is SelectFilmPreset,
             is SaveFilmPreset, is RenameFilmPreset, is DeleteFilmPreset,
             is RevertFilmPreset, is UpdateFilmPreset -> reduceFilmSettings(state, action)
@@ -95,7 +95,7 @@ class PersistentSettingsController(
             is SetSelfTimer, is SetLocationTagging, is SetOisPreference,
             is SetAntiFlicker, is SetExposureStep,
             is SetHighlightProtection, is SetControlSurfaceStyle, is SetCaptureControlLayout,
-            is SetGridMode, is SetLensProfiles -> reduceCaptureSettings(state, action)
+            is SetGridMode, is SetViewfinderDivisor, is SetLensProfiles -> reduceCaptureSettings(state, action)
 
         }
 }

@@ -82,7 +82,7 @@ internal class CaptureSettingsSync(
             previewCoordinator.setColorRenderProfile(profile, id)
         }
         syncSetting({ it.filmSimEnabled }) { previewCoordinator.setFilmSim(it) }
-        syncSetting({ it.filmPreviewDivisor }) { previewCoordinator.setFilmSimPreviewDivisor(it) }
+        syncSetting({ it.viewfinderDivisor }) { previewCoordinator.setViewfinderDivisor(it) }
         syncSetting({ it.filmSimLook }) { look ->
             previewCoordinator.setFilmSimLook(look.toFloatArray(), look.toIntArray())
         }

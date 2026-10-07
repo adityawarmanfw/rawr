@@ -96,6 +96,6 @@ void setTonemapParameters(EngineHandle handle, float exposureEV, float blackPoin
                           float saturation, float vibrance) noexcept;
 void setAssetManager(EngineHandle handle, AAssetManager* assetManager) noexcept;
 void setFilmSimEnabled(EngineHandle handle, bool enabled) noexcept;
-void setFilmSimPreviewDivisor(EngineHandle handle, uint32_t divisor) noexcept;
+void setViewfinderDivisor(EngineHandle handle, uint32_t divisor) noexcept;
 void setFilmSimLook(EngineHandle handle, spektrafilm_native::FilmLook look) noexcept;
 }  // namespace rawrcam::session

@@ -258,8 +258,8 @@ void setAssetManager(EngineHandle h, AAssetManager* assetManager) noexcept {
 void setFilmSimEnabled(EngineHandle h, bool v) noexcept {
     if (h) engine(h)->setFilmSimEnabled(v);
 }
-void setFilmSimPreviewDivisor(EngineHandle h, uint32_t divisor) noexcept {
-    if (h) engine(h)->setFilmSimPreviewDivisor(divisor);
+void setViewfinderDivisor(EngineHandle h, uint32_t divisor) noexcept {
+    if (h) engine(h)->setViewfinderDivisor(divisor);
 }
 void setFilmSimLook(EngineHandle h, spektrafilm_native::FilmLook look) noexcept {
     if (h) engine(h)->setFilmSimLook(look);

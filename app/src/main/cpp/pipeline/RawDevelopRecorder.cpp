@@ -26,6 +26,46 @@
 
 namespace rawrcam::pipeline {
 
+namespace {
+
+VkImageMemoryBarrier generalImageBarrier(VkImage image, VkAccessFlags srcAccess, VkAccessFlags dstAccess) {
+    VkImageMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.srcAccessMask = srcAccess;
+    barrier.dstAccessMask = dstAccess;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = image;
+    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    return barrier;
+}
+
+// Linear-filter blit between GENERAL-layout images, fenced from the compute
+// work around it: both images are shader-readable when it returns.
+void recordScaledBlit(VkCommandBuffer command, VkImage src, uint32_t srcWidth, uint32_t srcHeight,
+                      VkAccessFlags srcAccess, VkImage dst, uint32_t dstWidth, uint32_t dstHeight,
+                      VkAccessFlags dstAccess) {
+    const VkImageMemoryBarrier before[2] = {generalImageBarrier(src, srcAccess, VK_ACCESS_TRANSFER_READ_BIT),
+                                            generalImageBarrier(dst, dstAccess, VK_ACCESS_TRANSFER_WRITE_BIT)};
+    vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr,
+                         0, nullptr, 2, before);
+    VkImageBlit blit{};
+    blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    blit.srcOffsets[1] = {static_cast<int32_t>(srcWidth), static_cast<int32_t>(srcHeight), 1};
+    blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    blit.dstOffsets[1] = {static_cast<int32_t>(dstWidth), static_cast<int32_t>(dstHeight), 1};
+    vkCmdBlitImage(command, src, VK_IMAGE_LAYOUT_GENERAL, dst, VK_IMAGE_LAYOUT_GENERAL, 1, &blit, VK_FILTER_LINEAR);
+    const VkImageMemoryBarrier after[2] = {
+        generalImageBarrier(dst, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT),
+        generalImageBarrier(src, VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_READ_BIT)};
+    vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr,
+                         0, nullptr, 2, after);
+}
+
+}  // namespace
+
 RawDevelopRecorder::RawDevelopRecorder(raw_preview::RawPreview& rawPreview, tonemap::TonemapEngine& tonemap,
                                        std::function<std::shared_ptr<spektrafilm_native::SpektraFilm>()> acquireFilm,
                                        rawrcam::diagnostics::PipelineDiagnostics& diagnostics,
@@ -351,77 +391,28 @@ RawDevelopRecordResult RawDevelopRecorder::record(const RawDevelopRecordInput& i
 
     performance_.markTonemapInputReady(slot.command, in.slotIndex);
 
-    // Film simulation replaces tonemap 1:1 (same GENERAL layouts, same
-    // barriers/timing points). The film input is the linear image downsampled
-    // by filmPreviewDivisor (2 = quarter-res default; 3/4 for hot GPUs).
-    // Tonemap path below is untouched; film runs only in the production
-    // diagnostic mode.
+    // The look stage (film or tonemap) runs at the preview size divided by
+    // the viewfinder divisor, then upscales into slot.tonemapped so every
+    // downstream consumer (scopes, overlay, probe, presentation) works
+    // unchanged. slot.linear stays at preview size: peaking and RAW-domain
+    // overlays keep full detail. Film never runs above half preview size
+    // (2 = its quarter-res default; the scaled images are sized for that).
     // `film` (snapshotted above, before the RAW record) keeps the engine alive
     // for this frame even if it is retired on another thread mid-record.
-    const uint32_t divisor = std::clamp(in.filmPreviewDivisor, 2u, 4u);
-    const uint32_t filmWidth = std::max(1u, in.previewWidth / divisor);
-    const uint32_t filmHeight = std::max(1u, in.previewHeight / divisor);
+    const uint32_t lookDivisor = std::clamp(in.viewfinderDivisor, useFilm ? 2u : 1u, 4u);
+    const uint32_t lookWidth = std::max(1u, in.previewWidth / lookDivisor);
+    const uint32_t lookHeight = std::max(1u, in.previewHeight / lookDivisor);
     if (useFilm) {
         // Linear -> film input (linear filter blit at the divisor scale).
-        VkImageMemoryBarrier blitSrc{};
-        blitSrc.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        blitSrc.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        blitSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        blitSrc.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-        blitSrc.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        blitSrc.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        blitSrc.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        blitSrc.image = displayImage;
-        blitSrc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        VkImageMemoryBarrier blitDst{};
-        blitDst.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        blitDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        blitDst.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-        blitDst.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        blitDst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        blitDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        blitDst.image = slot.filmQuarterLinear.image;
-        blitDst.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        const VkImageMemoryBarrier blitBarriers[2] = {blitSrc, blitDst};
-        vkCmdPipelineBarrier(slot.command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
-                             nullptr, 0, nullptr, 2, blitBarriers);
-        VkImageBlit blit{};
-        blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        blit.srcOffsets[1] = {static_cast<int32_t>(in.previewWidth), static_cast<int32_t>(in.previewHeight), 1};
-        blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        blit.dstOffsets[1] = {static_cast<int32_t>(filmWidth), static_cast<int32_t>(filmHeight), 1};
-        vkCmdBlitImage(slot.command, displayImage, VK_IMAGE_LAYOUT_GENERAL, slot.filmQuarterLinear.image,
-                       VK_IMAGE_LAYOUT_GENERAL, 1, &blit, VK_FILTER_LINEAR);
-        VkImageMemoryBarrier filmReady{};
-        filmReady.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        filmReady.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        filmReady.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        filmReady.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-        filmReady.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        filmReady.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        filmReady.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        filmReady.image = slot.filmQuarterLinear.image;
-        filmReady.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        VkImageMemoryBarrier linearRead{};
-        linearRead.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        linearRead.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        linearRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        linearRead.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-        linearRead.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        linearRead.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        linearRead.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        linearRead.image = displayImage;
-        linearRead.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        const VkImageMemoryBarrier readyBarriers[2] = {filmReady, linearRead};
-        vkCmdPipelineBarrier(slot.command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
-                             nullptr, 0, nullptr, 2, readyBarriers);
+        recordScaledBlit(slot.command, displayImage, in.previewWidth, in.previewHeight, VK_ACCESS_SHADER_WRITE_BIT,
+                         slot.lookScaledLinear.image, lookWidth, lookHeight, 0);
 
         spektrafilm_native::SpektraFilmRecordInfo filmRecord{};
         filmRecord.commandBuffer = slot.command;
-        filmRecord.input = {slot.filmQuarterLinear.view, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_LAYOUT_GENERAL,
-                            filmWidth, filmHeight};
-        filmRecord.output = {slot.filmQuarterOut.view, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_GENERAL, filmWidth,
-                             filmHeight};
+        filmRecord.input = {slot.lookScaledLinear.view, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_LAYOUT_GENERAL,
+                            lookWidth, lookHeight};
+        filmRecord.output = {slot.lookScaledOut.view, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_GENERAL, lookWidth,
+                             lookHeight};
         filmRecord.frameSlot = in.slotIndex;
         filmRecord.look = in.filmLook;
         filmRecord.timeSec = static_cast<double>(in.timestampNs) / 1e9;
@@ -438,7 +429,7 @@ RawDevelopRecordResult RawDevelopRecorder::record(const RawDevelopRecordInput& i
             film->record(filmRecord);
         } catch (const std::exception& e) {
             // Never let a bad look kill preview: fall back to tonemap for
-            // this frame (writes slot.tonemapped directly, like below).
+            // this frame at full preview size, straight into slot.tonemapped.
             if (audit_) audit_(std::string("PIPELINE_FILM_SIM_FALLBACK error=") + e.what());
             const auto cameraToAp1 = composeCameraToAp1(in.sensorToLinearSrgb);
             tonemap::TonemapRecordInfo toneRecord{};
@@ -457,75 +448,45 @@ RawDevelopRecordResult RawDevelopRecorder::record(const RawDevelopRecordInput& i
             filmOk = false;
         }
         if (filmOk) {
-            // Upscale the film output into the half-res tonemapped
-            // slot (LINEAR): every downstream consumer (scopes, overlay, probe,
-            // presentation) then works unchanged, on the film image.
-            VkImageMemoryBarrier filmOutReady{};
-            filmOutReady.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            filmOutReady.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-            filmOutReady.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-            filmOutReady.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-            filmOutReady.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-            filmOutReady.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            filmOutReady.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            filmOutReady.image = slot.filmQuarterOut.image;
-            filmOutReady.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            VkImageMemoryBarrier toneWrite{};
-            toneWrite.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            toneWrite.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
-            toneWrite.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            toneWrite.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-            toneWrite.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-            toneWrite.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            toneWrite.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            toneWrite.image = slot.tonemapped.image;
-            toneWrite.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            const VkImageMemoryBarrier upscaleBarriers[2] = {filmOutReady, toneWrite};
-            vkCmdPipelineBarrier(slot.command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
-                                 0, nullptr, 0, nullptr, 2, upscaleBarriers);
-            VkImageBlit upscale{};
-            upscale.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-            upscale.srcOffsets[1] = {static_cast<int32_t>(filmWidth), static_cast<int32_t>(filmHeight), 1};
-            upscale.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-            upscale.dstOffsets[1] = {static_cast<int32_t>(in.previewWidth), static_cast<int32_t>(in.previewHeight), 1};
-            vkCmdBlitImage(slot.command, slot.filmQuarterOut.image, VK_IMAGE_LAYOUT_GENERAL, slot.tonemapped.image,
-                           VK_IMAGE_LAYOUT_GENERAL, 1, &upscale, VK_FILTER_LINEAR);
-            VkImageMemoryBarrier toneRead{};
-            toneRead.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            toneRead.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            toneRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-            toneRead.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-            toneRead.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-            toneRead.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            toneRead.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            toneRead.image = slot.tonemapped.image;
-            toneRead.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            vkCmdPipelineBarrier(slot.command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
-                                 0, nullptr, 0, nullptr, 1, &toneRead);
+            recordScaledBlit(slot.command, slot.lookScaledOut.image, lookWidth, lookHeight, VK_ACCESS_SHADER_WRITE_BIT,
+                             slot.tonemapped.image, in.previewWidth, in.previewHeight,
+                             VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT);
             performance_.markTonemapDone(slot.command, in.slotIndex);
             performance_.markTonemapRepeatInputReady(slot.command, in.slotIndex);
             performance_.markTonemapRepeatDone(slot.command, in.slotIndex);
             if (filmOk && auditSubmitCount < 7 && audit_) {
                 audit_("PIPELINE_FILM_SIM_RECORDED generation=" + std::to_string(in.generation) +
-                       " timestampNs=" + std::to_string(in.timestampNs) + " input=" + std::to_string(filmWidth) + "x" +
-                       std::to_string(filmHeight));
+                       " timestampNs=" + std::to_string(in.timestampNs) + " input=" + std::to_string(lookWidth) + "x" +
+                       std::to_string(lookHeight));
             }
         }  // end if (filmOk): upscale film output, else fallback already ran
     } else {
+        const bool scaled = lookDivisor > 1u;
+        if (scaled) {
+            recordScaledBlit(slot.command, displayImage, in.previewWidth, in.previewHeight, VK_ACCESS_SHADER_WRITE_BIT,
+                             slot.lookScaledLinear.image, lookWidth, lookHeight, 0);
+        }
+        const VkImage toneTarget = scaled ? slot.lookScaledOut.image : slot.tonemapped.image;
         const auto cameraToAp1 = composeCameraToAp1(in.sensorToLinearSrgb);
         tonemap::TonemapRecordInfo toneRecord{};
         toneRecord.commandBuffer = slot.command;
-        toneRecord.input = {displayView, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_LAYOUT_GENERAL, in.previewWidth,
-                            in.previewHeight};
-        toneRecord.output = {slot.tonemapped.view, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_GENERAL, in.previewWidth,
-                             in.previewHeight};
+        toneRecord.input = {scaled ? slot.lookScaledLinear.view : displayView, VK_FORMAT_R16G16B16A16_SFLOAT,
+                            VK_IMAGE_LAYOUT_GENERAL, lookWidth, lookHeight};
+        toneRecord.output = {scaled ? slot.lookScaledOut.view : slot.tonemapped.view, VK_FORMAT_R8G8B8A8_UNORM,
+                             VK_IMAGE_LAYOUT_GENERAL, lookWidth, lookHeight};
         toneRecord.frameSlot = in.slotIndex;
         toneRecord.cameraToWorkingColumnMajor3x3 = cameraToAp1.data();
         toneRecord.params = in.tonemapParams;
         tonemap_.record(toneRecord);
+        if (scaled) {
+            recordScaledBlit(slot.command, slot.lookScaledOut.image, lookWidth, lookHeight, VK_ACCESS_SHADER_WRITE_BIT,
+                             slot.tonemapped.image, in.previewWidth, in.previewHeight,
+                             VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT);
+        }
         performance_.markTonemapDone(slot.command, in.slotIndex);
         if (repeatProbe) {
-            rawrcam::vulkan::computeWriteToComputeWrite(slot.command, slot.tonemapped.image);
+            // Timing probe: repeats the tonemap dispatch only.
+            rawrcam::vulkan::computeWriteToComputeWrite(slot.command, toneTarget);
             performance_.markTonemapRepeatInputReady(slot.command, in.slotIndex);
             tonemap_.record(toneRecord);
             performance_.markTonemapRepeatDone(slot.command, in.slotIndex);
