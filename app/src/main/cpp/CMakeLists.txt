@@ -412,3 +412,10 @@ add_dependencies(rawrcam_native rawrcam_shader_headers)
 
 # CPU image loops must remain optimized in debug builds used for device validation.
 set_source_files_properties(renderer/LinearResample.cpp renderer/DngSource.cpp renderer/RendererEngine.cpp PROPERTIES COMPILE_OPTIONS "-O3")
+
+# A burst journals ~650 MB of byte vectors. At -O0, libc++'s value construction
+# and trivial destruction walk every byte: ~5 seconds on the test device before
+# counting any GPU or disk work. Keep symbols/assertions, but optimize these
+# allocation/copy/serialization paths in device Debug builds too.
+set_source_files_properties(capture/persistence/BurstJob.cpp capture/persistence/CaptureJob.cpp
+  PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Debug>:-O2>")

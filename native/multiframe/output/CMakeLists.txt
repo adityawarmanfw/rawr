@@ -37,3 +37,6 @@ target_include_directories(raw_multiframe_output PUBLIC include PRIVATE ${MF_OUT
 target_link_libraries(raw_multiframe_output PUBLIC ${VULKAN_LIB})
 target_compile_features(raw_multiframe_output PUBLIC cxx_std_17)
 target_compile_options(raw_multiframe_output PRIVATE -Wall -Wextra -Wpedantic -Werror)
+# copyMapped() allocates a full RAW byte vector per frame. Unoptimized libc++
+# initializes/destroys each byte individually, dominating burst readback time.
+target_compile_options(raw_multiframe_output PRIVATE $<$<CONFIG:Debug>:-O2>)
