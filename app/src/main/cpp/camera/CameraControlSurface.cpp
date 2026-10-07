@@ -23,6 +23,7 @@ void CameraControlSurface::attach(std::unique_ptr<rawrcam::camera::NativeCameraC
 void CameraControlSurface::shutdown() {
     if (cameraController_) {
         cameraController_->shutdown();
+        std::lock_guard<std::mutex> lock(rawFrameMutex_);
         cameraController_.reset();
     }
 }
@@ -99,6 +100,11 @@ void CameraControlSurface::tickSession() {
 void CameraControlSurface::setZeroCopy(bool enabled) {
     if (cameraController_) cameraController_->setExperimentalZeroCopyEnabled(enabled);
     sessionPolicy_.setZeroCopy(enabled, monotonicMillis());
+}
+void CameraControlSurface::rawFrameArrived(uint64_t generation) {
+    // Ingress outlives the controller during shutdown.
+    std::lock_guard<std::mutex> lock(rawFrameMutex_);
+    if (cameraController_) cameraController_->rawFrameArrived(generation);
 }
 void CameraControlSurface::setInternalTraceCaptureEnabled(bool enabled) {
     rawrcam::diagnostics::RuntimeTraceRecorder::instance().setEnabled(enabled);

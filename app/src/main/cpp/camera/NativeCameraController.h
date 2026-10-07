@@ -79,6 +79,9 @@ class NativeCameraController {
     // Diagnostic mirror of the SessionEngine ingress toggle so SELECTION logs
     // the effective per-session value. CameraSessionPolicy owns restarts.
     void setExperimentalZeroCopyEnabled(bool enabled);
+    // Ingress reports every RAW image; the first one of a generation drops the
+    // companion stream from the repeating request.
+    void rawFrameArrived(uint64_t generation);
     // Camera2-native spot metering used only when ordinary Camera2 Auto AE owns
     // exposure. Coordinates are normalized in sensor/source space.
     void setSpotMeteringTargetSensorNormalized(bool active, float x, float y);

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <condition_variable>
 #include <mutex>
 #include <sstream>
@@ -14,6 +15,7 @@
 #include "camera/CameraControlCapabilities.h"
 #include "camera/CameraDiscovery.h"
 #include "camera/CameraKeyInjection.h"
+#include "diagnostics/logging/RuntimeTraceRecorder.h"
 #include "metadata/CameraMetadataReader.h"
 #include "vivo/VivoVendorTags.h"
 
@@ -49,6 +51,11 @@ void CameraDeviceSession::releaseRequestOutputs(bool orphan) noexcept {
         target_ = nullptr;
         output_ = nullptr;
         outputs_ = nullptr;
+        // The orphaned session may still write to the companion window.
+        companionReader_ = nullptr;
+        companionOutput_ = nullptr;
+        companionTarget_ = nullptr;
+        companionTargeted_ = false;
         return;
     }
     if (request_) ACaptureRequest_free(request_);
@@ -60,6 +67,14 @@ void CameraDeviceSession::releaseRequestOutputs(bool orphan) noexcept {
     if (outputs_ && output_) (void)ACaptureSessionOutputContainer_remove(outputs_, output_);
     if (output_) ACaptureSessionOutput_free(output_);
     output_ = nullptr;
+    if (companionTarget_) ACameraOutputTarget_free(companionTarget_);
+    companionTarget_ = nullptr;
+    companionTargeted_ = false;
+    if (outputs_ && companionOutput_) (void)ACaptureSessionOutputContainer_remove(outputs_, companionOutput_);
+    if (companionOutput_) ACaptureSessionOutput_free(companionOutput_);
+    companionOutput_ = nullptr;
+    if (companionReader_) AImageReader_delete(companionReader_);
+    companionReader_ = nullptr;
     if (outputs_) ACaptureSessionOutputContainer_free(outputs_);
     outputs_ = nullptr;
 }
@@ -208,10 +223,55 @@ bool CameraDeviceSession::open(const LensRoute& route, CameraCallbacks& callback
         backoff = std::min(backoff * 2, kOpenRetryMax);
     }
 }
+bool CameraDeviceSession::addCompanionStream(const std::string& physicalCameraId, const Diagnostic& diag) {
+    const auto size = smallestYuvOutput(characteristics_, 320, 240);
+    const int32_t width = size.first, height = size.second;
+    const auto fail = [&](const std::string& stage, int status) {
+        diag("CAMERA_COMPANION_STREAM size=" + std::to_string(width) + "x" + std::to_string(height) +
+             " stage=" + stage + " status=" + std::to_string(status) + " fallback=raw_only");
+        return false;
+    };
+    if (width <= 0 || height <= 0) return fail("size", 0);
+    const media_status_t ms = AImageReader_new(width, height, AIMAGE_FORMAT_YUV_420_888, 2, &companionReader_);
+    if (ms != AMEDIA_OK || !companionReader_) return fail("reader", ms);
+    // Frames exist only to keep the HAL streaming; drop each one on arrival.
+    AImageReader_ImageListener listener{};
+    listener.onImageAvailable = [](void*, AImageReader* reader) {
+        AImage* image = nullptr;
+        while (AImageReader_acquireNextImage(reader, &image) == AMEDIA_OK && image) {
+            AImage_delete(image);
+            image = nullptr;
+        }
+    };
+    if (const auto ls = AImageReader_setImageListener(companionReader_, &listener); ls != AMEDIA_OK)
+        return fail("listener", ls);
+    ANativeWindow* window = nullptr;
+    if (const auto ws = AImageReader_getWindow(companionReader_, &window); ws != AMEDIA_OK || !window)
+        return fail("window", ws);
+    camera_status_t s = physicalCameraId.empty()
+                            ? ACaptureSessionOutput_create(window, &companionOutput_)
+                            : ACaptureSessionPhysicalOutput_create(window, physicalCameraId.c_str(), &companionOutput_);
+    if (!ok(s)) return fail("output", s);
+    s = ACaptureSessionOutputContainer_add(outputs_, companionOutput_);
+    if (!ok(s)) return fail("add_output", s);
+    s = ACameraOutputTarget_create(window, &companionTarget_);
+    if (!ok(s) || !companionTarget_) return fail("target", s);
+    diag("CAMERA_COMPANION_STREAM size=" + std::to_string(width) + "x" + std::to_string(height) +
+         " format=YUV_420_888 status=0");
+    return true;
+}
+bool CameraDeviceSession::detachCompanionTarget(const Diagnostic& diag) {
+    if (!companionTargeted_ || !request_ || !companionTarget_) return false;
+    const camera_status_t s = ACaptureRequest_removeTarget(request_, companionTarget_);
+    diag("CAMERA_COMPANION_TARGET_DETACHED status=" + statusText(s));
+    if (!ok(s)) return false;
+    companionTargeted_ = false;
+    return true;
+}
 bool CameraDeviceSession::createSession(ANativeWindow* window, const std::optional<LensRoute>& selected,
                                         const CameraControlState& control, const CameraMeteringRequest& metering,
                                         CameraCallbacks& callbacks, CameraRequestPipeline& pipeline,
-                                        const Diagnostic& diag) {
+                                        const Diagnostic& diag, bool companionStream) {
     rawWindow_ = window;
 
     if (!device_ || !rawWindow_) {
@@ -236,6 +296,16 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
 
     s = ACaptureSessionOutputContainer_add(outputs_, output_);
     if (!ok(s)) return fail("add_output", "status=" + statusText(s));
+    if (companionStream && !addCompanionStream(physicalCameraId, diag)) {
+        // RAW-only still works on most devices; never block the start on it.
+        if (outputs_ && companionOutput_) (void)ACaptureSessionOutputContainer_remove(outputs_, companionOutput_);
+        if (companionOutput_) ACaptureSessionOutput_free(companionOutput_);
+        companionOutput_ = nullptr;
+        if (companionTarget_) ACameraOutputTarget_free(companionTarget_);
+        companionTarget_ = nullptr;
+        if (companionReader_) AImageReader_delete(companionReader_);
+        companionReader_ = nullptr;
+    }
 
     auto* callbackContext = callbacks.sessionContext(generation_);
     callbackContext->physicalCameraId = physicalCameraId;
@@ -306,6 +376,11 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
     if (!ok(s)) {
         return fail("add_target", "status=" + statusText(s));
     }
+    if (companionTarget_) {
+        s = ACaptureRequest_addTarget(request_, companionTarget_);
+        if (!ok(s)) return fail("add_companion_target", "status=" + statusText(s));
+        companionTargeted_ = true;
+    }
 
     applyPreviewRequestDefaults(request_, *cameraContext_);
     // Stills, multiframe bursts and video all come from this repeating RAW
@@ -318,7 +393,12 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
     }
     if (!pipeline.submit(session_, request_, callbackContext, control, metering))
         return fail("initial_repeating", "status=control_or_submit_rejected");
-    diag("CAMERA_NDK_SESSION_RUNNING");
+    diag("CAMERA_NDK_SESSION_RUNNING companion=" + std::string(companionTarget_ ? "1" : "0"));
+    const auto& raw = cameraContext_->geometry;
+    diagnostics::RuntimeTraceRecorder::instance().record(
+        diagnostics::RuntimeTraceStage::CameraSessionCreated, 0, generation_, -1, 0, 0, companionTarget_ ? 1u : 0u,
+        (static_cast<int64_t>(raw.rawBufferWidth) << 32) | static_cast<int64_t>(raw.rawBufferHeight),
+        std::atoi(control.capabilities.cameraId.c_str()));
     return true;
 }
 bool CameraDeviceSession::retire(std::unique_lock<std::mutex>& lock, std::optional<std::chrono::milliseconds> timeout,

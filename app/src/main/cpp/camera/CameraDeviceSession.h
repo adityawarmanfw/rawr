@@ -1,6 +1,7 @@
 #pragma once
 #include <android/native_window.h>
 #include <camera/NdkCameraManager.h>
+#include <media/NdkImageReader.h>
 
 #include <chrono>
 #include <functional>
@@ -30,8 +31,11 @@ class CameraDeviceSession final {
     // that lock held before touching session state after each wait.
     bool open(const LensRoute&, CameraCallbacks&, const Diagnostic&, std::unique_lock<std::mutex>&,
               const std::function<bool()>& stillCurrent);
+    // companionStream adds a small discarded YUV output next to RAW: some HALs
+    // (MediaTek) accept a RAW-only session but never deliver a RAW buffer.
     bool createSession(ANativeWindow*, const std::optional<LensRoute>&, const CameraControlState&,
-                       const CameraMeteringRequest&, CameraCallbacks&, CameraRequestPipeline&, const Diagnostic&);
+                       const CameraMeteringRequest&, CameraCallbacks&, CameraRequestPipeline&, const Diagnostic&,
+                       bool companionStream);
     bool retire(std::unique_lock<std::mutex>&, std::optional<std::chrono::milliseconds>, const char*,
                 const Diagnostic&);
     void forceRetire(const char*, const Diagnostic&);
@@ -55,10 +59,15 @@ class CameraDeviceSession final {
     // True when profile session keys changed the sensor readout, so reported
     // sensitivity no longer maps 1:1 onto requested sensitivity.
     bool sensorModeOverridden() const noexcept { return sessionKeysApplied_; }
+    // Removes the companion target from the repeating request; the stream stays
+    // configured. True when a target was removed (resubmit to apply).
+    bool detachCompanionTarget(const Diagnostic&);
 
    private:
     void releaseRequestOutputs(bool orphan) noexcept;
     void releaseCharacteristics() noexcept;
+    // Adds the companion YUV output and request target; false leaves the session RAW-only.
+    bool addCompanionStream(const std::string& physicalCameraId, const Diagnostic&);
     void closeDeviceDetached(std::function<void()> afterClose);
     ACameraManager* manager_ = nullptr;
     ACameraDevice* device_ = nullptr;
@@ -67,6 +76,10 @@ class CameraDeviceSession final {
     ACaptureRequest* sessionParameters_ = nullptr;
     ACameraOutputTarget* target_ = nullptr;
     ACaptureSessionOutput* output_ = nullptr;
+    AImageReader* companionReader_ = nullptr;
+    ACaptureSessionOutput* companionOutput_ = nullptr;
+    ACameraOutputTarget* companionTarget_ = nullptr;
+    bool companionTargeted_ = false;
     ACaptureSessionOutputContainer* outputs_ = nullptr;
     ACameraMetadata* characteristics_ = nullptr;
     ANativeWindow* rawWindow_ = nullptr;

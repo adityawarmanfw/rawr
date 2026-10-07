@@ -5,6 +5,7 @@
 #include <sys/system_properties.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <mutex>
@@ -115,6 +116,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
     // provided the setter ran before start (guaranteed by the Kotlin
     // start-gate for the initial sync).
     bool experimentalZeroCopyEnabled = false;
+    std::atomic<uint64_t> companionDetachGeneration{0};
     void diag(const std::string& line) {
         CAMI("%s", line.c_str());
         if (callbacks.diagnostic) callbacks.diagnostic(line);
@@ -416,6 +418,12 @@ struct NativeCameraController::Impl final : CameraEventSink {
         diag(describeCameraControlCapabilities(control));
 
         diag(metadata::describe(*deviceSession.cameraContext()));
+        // Verified models stream RAW alone. Elsewhere a small YUV stream rides
+        // along: some HALs (MediaTek) accept a RAW-only session but never
+        // deliver a RAW buffer. `debug.rawr.companion_stream 0|1` overrides.
+        const std::string companionOverride = systemProperty("debug.rawr.companion_stream");
+        const bool companionStream =
+            companionOverride == "1" || (companionOverride != "0" && !builtInMatch.verified);
         std::ostringstream selection;
         selection << "CAMERA_NDK_SELECTION profile=" << profile.id << " model=" << deviceModel
                   << " lensId=" << route.lensId << " cameraId=" << route.cameraId
@@ -423,7 +431,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
                   << " generation=" << deviceSession.generation() << " raw=" << route.stream.width << 'x'
                   << route.stream.height << " rawFormat=" << geometry::rawPixelFormatName(route.stream.format)
                   << " ingress=" << (experimentalZeroCopyEnabled ? "imported_AHB_STORAGE_direct" : "vkCmdCopyImage")
-                  << " zeroCopy=" << (experimentalZeroCopyEnabled ? "true" : "false") << " accessRoute=" << accessRoute;
+                  << " zeroCopy=" << (experimentalZeroCopyEnabled ? "true" : "false") << " accessRoute=" << accessRoute
+                  << " companion=" << (companionStream ? 1 : 0);
         diag(selection.str());
         const auto setupGeneration = deviceSession.generation();
         const auto setupContext = deviceSession.cameraContext();
@@ -463,11 +472,16 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // Its teardown owns the old window; do not roll back a newer generation.
         if (!stillCurrent()) return;
         if (!opened || !deviceSession.createSession(window, selected, control, meteringRequestLocked(),
-                                         ndkCallbacks, requests, [this](const std::string& line) { diag(line); })) {
+                                         ndkCallbacks, requests, [this](const std::string& line) { diag(line); },
+                                         companionStream)) {
             rollbackCameraStartLocked(lock, "device_or_session");
             return;
         }
         starting = false;
+        // The companion only has to start the pipeline. Producing it on every
+        // frame holds each capture result back about a frame behind its RAW
+        // image, which starves the preview pairer.
+        companionDetachGeneration.store(companionStream ? deviceSession.generation() : 0, std::memory_order_release);
         diag("CAMERA_START_DONE generation=" + std::to_string(deviceSession.generation()));
     }
 
@@ -900,6 +914,16 @@ bool NativeCameraController::setProfile(CameraProfile profile) { return impl_->s
 void NativeCameraController::setExperimentalZeroCopyEnabled(bool enabled) {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     impl_->experimentalZeroCopyEnabled = enabled;
+}
+void NativeCameraController::rawFrameArrived(uint64_t generation) {
+    uint64_t expected = generation;
+    if (generation == 0 || impl_->companionDetachGeneration.load(std::memory_order_acquire) != generation ||
+        !impl_->companionDetachGeneration.compare_exchange_strong(expected, 0, std::memory_order_acq_rel))
+        return;
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    if (!impl_->active || generation != impl_->deviceSession.generation()) return;
+    if (impl_->deviceSession.detachCompanionTarget([this](const std::string& line) { impl_->diag(line); }))
+        impl_->submitRepeatingLocked();
 }
 void NativeCameraController::setPreferredCameraId(const std::string& id) {
     std::lock_guard<std::mutex> lock(impl_->mutex);

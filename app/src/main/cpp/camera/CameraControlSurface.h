@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <string>
 
 #include "camera/CameraSessionPolicy.h"
@@ -42,6 +43,7 @@ class CameraControlSurface final {
     void setInitialConfigReady();
     void tickSession();
     void setZeroCopy(bool enabled);
+    void rawFrameArrived(uint64_t generation);
     void setInternalTraceCaptureEnabled(bool enabled);
     void setOisEnabled(bool enabled);
     void setAntibandingMode(uint8_t mode);
@@ -61,6 +63,7 @@ class CameraControlSurface final {
    private:
     void applyCameraActive(bool active);
     std::unique_ptr<rawrcam::camera::NativeCameraController> cameraController_;
+    std::mutex rawFrameMutex_;
     // Policy/configuration actions share the adapter's serial lane. Immediate
     // Android intent and capture callback time cross threads through atomics.
     rawrcam::camera::CameraSessionPolicy sessionPolicy_;
