@@ -454,8 +454,15 @@ struct NativeCameraController::Impl final : CameraEventSink {
             return;
         }
         deviceSession.setRawWindow(window);
-        if (!deviceSession.open(route, ndkCallbacks, [this](const std::string& line) { diag(line); }) ||
-            !deviceSession.createSession(window, selected, control, meteringRequestLocked(),
+        const auto stillCurrent = [&] {
+            return active && !shutDown && setupGeneration == deviceSession.generation();
+        };
+        const bool opened = deviceSession.open(route, ndkCallbacks,
+            [this](const std::string& line) { diag(line); }, lock, stillCurrent);
+        // A stop or lens switch may have retired this start while open waited.
+        // Its teardown owns the old window; do not roll back a newer generation.
+        if (!stillCurrent()) return;
+        if (!opened || !deviceSession.createSession(window, selected, control, meteringRequestLocked(),
                                          ndkCallbacks, requests, [this](const std::string& line) { diag(line); })) {
             rollbackCameraStartLocked(lock, "device_or_session");
             return;

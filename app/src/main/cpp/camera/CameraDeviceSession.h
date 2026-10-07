@@ -26,7 +26,10 @@ class CameraDeviceSession final {
     // with `stream` resolved, or nullopt when the camera can't be used.
     std::optional<LensRoute> select(const LensRoute&, const Diagnostic&);
     CameraControlState initialControls(const LensRoute& route) const;
-    bool open(const LensRoute&, CameraCallbacks&, const Diagnostic&);
+    // Releases the controller lock while waiting; stillCurrent is checked with
+    // that lock held before touching session state after each wait.
+    bool open(const LensRoute&, CameraCallbacks&, const Diagnostic&, std::unique_lock<std::mutex>&,
+              const std::function<bool()>& stillCurrent);
     bool createSession(ANativeWindow*, const std::optional<LensRoute>&, const CameraControlState&,
                        const CameraMeteringRequest&, CameraCallbacks&, CameraRequestPipeline&, const Diagnostic&);
     bool retire(std::unique_lock<std::mutex>&, std::optional<std::chrono::milliseconds>, const char*,

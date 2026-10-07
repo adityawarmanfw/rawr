@@ -179,10 +179,6 @@ class MainActivity : ComponentActivity() {
             }
             val selectedVideo by videoSelection.collectAsStateWithLifecycle(initialVideoSelection)
             val recording by captureViewModel.recording.state.collectAsStateWithLifecycle()
-            androidx.compose.runtime.LaunchedEffect(recording.recording) {
-                if (recording.recording) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            }
             androidx.compose.runtime.LaunchedEffect(Unit) {
                 captureViewModel.recording.errors.collect { message ->
                     Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
@@ -233,6 +229,8 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         started = true
+        // A viewfinder you are only looking at must not time out; onStop clears this.
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val generation = ++startGeneration
         lifecycleScope.launch {
             val renderer = com.rawr.camera.renderer.RendererStore.get(this@MainActivity)

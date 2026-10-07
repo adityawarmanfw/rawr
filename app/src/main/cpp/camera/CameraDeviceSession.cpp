@@ -2,7 +2,10 @@
 
 #include <camera/NdkCameraMetadataTags.h>
 
+#include <algorithm>
 #include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <sstream>
 #include <stdexcept>
 #include <thread>
@@ -18,6 +21,18 @@ namespace rawrcam::camera {
 namespace {
 bool ok(camera_status_t status) { return status == ACAMERA_OK; }
 std::string statusText(camera_status_t status) { return std::to_string(static_cast<int>(status)); }
+
+// Detached device closes still in flight. ACameraDevice_close runs on its own thread so a wedged HAL cannot
+// stall teardown, but opening the next camera while one is still closing makes some HALs (MediaTek) refuse with
+// MAX_CAMERA_IN_USE. open() waits for these, bounded, before it tries.
+std::mutex gPendingCloseMutex;
+std::condition_variable gPendingCloseCv;
+int gPendingCloses = 0;
+
+// Total time open() may spend waiting for closes and retrying an "in use" refusal.
+constexpr std::chrono::milliseconds kOpenBudget{2500};
+constexpr std::chrono::milliseconds kOpenRetryInitial{40};
+constexpr std::chrono::milliseconds kOpenRetryMax{400};
 }  // namespace
 CameraDeviceSession::CameraDeviceSession() {
     manager_ = ACameraManager_create();
@@ -54,9 +69,18 @@ void CameraDeviceSession::releaseCharacteristics() noexcept {
 }
 void CameraDeviceSession::closeDeviceDetached(std::function<void()> afterClose) {
     ACameraDevice* closing = std::exchange(device_, nullptr);
+    {
+        std::lock_guard<std::mutex> lock(gPendingCloseMutex);
+        ++gPendingCloses;
+    }
     std::thread([closing, afterClose = std::move(afterClose)] {
         if (closing) ACameraDevice_close(closing);
         if (afterClose) afterClose();
+        {
+            std::lock_guard<std::mutex> lock(gPendingCloseMutex);
+            --gPendingCloses;
+        }
+        gPendingCloseCv.notify_all();
     }).detach();
 }
 
@@ -137,21 +161,52 @@ std::optional<LensRoute> CameraDeviceSession::select(const LensRoute& requested,
 CameraControlState CameraDeviceSession::initialControls(const LensRoute& route) const {
     return readInitialCameraControlState(characteristics_, route, generation_);
 }
-bool CameraDeviceSession::open(const LensRoute& route, CameraCallbacks& callbacks, const Diagnostic& diag) {
-    auto* deviceContext = callbacks.deviceContext(generation_);
-    deviceContext_ = deviceContext;
-    auto state = CameraCallbacks::deviceState(deviceContext);
-    const camera_status_t os = ACameraManager_openCamera(manager_, route.cameraId.c_str(), &state, &device_);
-    if (!ok(os) || !device_) {
+bool CameraDeviceSession::open(const LensRoute& route, CameraCallbacks& callbacks, const Diagnostic& diag,
+                               std::unique_lock<std::mutex>& controllerLock,
+                               const std::function<bool()>& stillCurrent) {
+    const auto deadline = std::chrono::steady_clock::now() + kOpenBudget;
+    {
+        std::unique_lock<std::mutex> lock(gPendingCloseMutex);
+        if (gPendingCloses > 0) {
+            diag("CAMERA_NDK_OPEN_WAIT_CLOSE pending=" + std::to_string(gPendingCloses) +
+                 " cameraId=" + route.cameraId);
+            // Device close drains callbacks that also need the controller lock.
+            controllerLock.unlock();
+            gPendingCloseCv.wait_until(lock, deadline, [] { return gPendingCloses == 0; });
+            // Never reacquire the controller lock while holding the close lock:
+            // a concurrent teardown takes them in the opposite order.
+            lock.unlock();
+            controllerLock.lock();
+        }
+    }
+
+    auto backoff = kOpenRetryInitial;
+    for (int attempt = 1;; ++attempt) {
+        if (!stillCurrent()) return false;
+        auto* deviceContext = callbacks.deviceContext(generation_);
+        deviceContext_ = deviceContext;
+        auto state = CameraCallbacks::deviceState(deviceContext);
+        const camera_status_t os = ACameraManager_openCamera(manager_, route.cameraId.c_str(), &state, &device_);
+        if (ok(os) && device_) {
+            if (attempt > 1) {
+                diag("CAMERA_NDK_OPEN_RECOVERED cameraId=" + route.cameraId + " attempts=" + std::to_string(attempt));
+            }
+            return true;
+        }
         // A failed open has no live device that can retain the context.
         delete deviceContext_;
         deviceContext_ = nullptr;
-        diag("CAMERA_NDK_OPEN_FAILURE cameraId=" + route.cameraId + " status=" + statusText(os));
+        diag("CAMERA_NDK_OPEN_FAILURE cameraId=" + route.cameraId + " status=" + statusText(os) +
+             " attempt=" + std::to_string(attempt));
 
-        return false;
+        // The HAL can keep reporting the previous camera as in use for a moment after its close returns.
+        const bool busy = os == ACAMERA_ERROR_MAX_CAMERA_IN_USE || os == ACAMERA_ERROR_CAMERA_IN_USE;
+        if (!busy || std::chrono::steady_clock::now() + backoff >= deadline) return false;
+        controllerLock.unlock();
+        std::this_thread::sleep_for(backoff);
+        controllerLock.lock();
+        backoff = std::min(backoff * 2, kOpenRetryMax);
     }
-
-    return true;
 }
 bool CameraDeviceSession::createSession(ANativeWindow* window, const std::optional<LensRoute>& selected,
                                         const CameraControlState& control, const CameraMeteringRequest& metering,
