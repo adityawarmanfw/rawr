@@ -69,6 +69,7 @@ import com.rawr.camera.architecture.ToggleMultiframe
 import com.rawr.camera.architecture.TriggerCapture
 import com.rawr.camera.model.CaptureControlLayout
 import com.rawr.camera.model.CaptureMode
+import com.rawr.camera.model.RenderProfileQuickState
 import com.rawr.camera.model.CaptureSavePhase
 import com.rawr.camera.model.CaptureUiState
 import kotlinx.coroutines.Dispatchers
@@ -87,13 +88,17 @@ internal fun CaptureControls(
     videoControls: VideoControlState = VideoControlState(),
     onToggleVideoRecording: () -> Unit = {},
     /** Transparent background for floating over the 16:9 bleed (video overlay slot). */
-    overlay: Boolean = false
+    overlay: Boolean = false,
+    renderProfiles: RenderProfileQuickState = RenderProfileQuickState(),
+    onOpenFilters: () -> Unit = {},
+    onOpenParams: () -> Unit = {}
 ) {
+    val pro = state.captureLayout == CaptureControlLayout.Pro
     val isVideo = state.captureMode == CaptureMode.Video
     // Lens switching and mode switching are disabled while a video recording
     // is active; the native session must not bounce mid-record.
     val recordingLock = isVideo && videoControls.recording
-    if (isVideo || state.captureLayout == CaptureControlLayout.Compact) {
+    if (isVideo || state.captureLayout.usesButtonStrip) {
         // Shared bottom cluster: identical heights and element positions in
         // both modes. The center swaps photo shutter <-> 70dp record button;
         // video sides stay empty (same row height); the mode strip is always
@@ -104,12 +109,21 @@ internal fun CaptureControls(
                 .padding(horizontal = 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            LensSelector(
-                state = state,
-                dispatch = dispatch,
-                enabled = !recordingLock,
-                modifier = Modifier.padding(top = 2.dp)
-            )
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                LensSelector(
+                    state = state,
+                    dispatch = dispatch,
+                    enabled = !recordingLock,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+                if (pro && !isVideo) {
+                    ProMergedToggle(
+                        state = state,
+                        onToggle = { dispatch(ToggleMultiframe) },
+                        onOpenSettings = onOpenMultiframeSettings
+                    )
+                }
+            }
             Row(
                 Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -141,7 +155,11 @@ internal fun CaptureControls(
                 }
                 Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
                     if (!isVideo) {
-                        PhotoLookToggles(state, dispatch, onOpenFilmSimSettings, onOpenMultiframeSettings)
+                        if (pro) {
+                            ProSideButtons(state, renderProfiles, onOpenFilters, onOpenParams)
+                        } else {
+                            PhotoLookToggles(state, dispatch, onOpenFilmSimSettings, onOpenMultiframeSettings)
+                        }
                     }
                 }
             }

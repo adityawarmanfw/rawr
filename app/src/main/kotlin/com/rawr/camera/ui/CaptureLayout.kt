@@ -4,6 +4,10 @@ import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Dp
@@ -44,16 +48,17 @@ internal fun PhysicalCaptureLayout(
     videoControls: VideoControlState = VideoControlState(),
     onToggleVideoRecording: () -> Unit = {}
 ) {
+    var proSheet by rememberSaveable { mutableStateOf(ProSheet.None) }
     val videoLocked = videoControls.busy || videoControls.recording
     val isVideo = state.captureMode == CaptureMode.Video
-    val compactControls = isVideo || state.captureLayout == CaptureControlLayout.Compact
+    val compactControls = isVideo || state.captureLayout.usesButtonStrip
     // 16:9 viewfinders run past the photo frame and behind the shutter
     // cluster; Open Gate is exactly the photo box, so nothing bleeds.
     val videoBleed = isVideo && state.videoResolution != VideoResolutionMode.OPEN_GATE
     BoxWithConstraints(modifier) {
         // Reserve the shutter/record area and both monitors before sizing the
         // 3:4 viewfinder. A short display must not push the readout below nav.
-        val controlsHeight = if (state.captureLayout == CaptureControlLayout.Compact) {
+        val controlsHeight = if (state.captureLayout.usesButtonStrip) {
             CaptureDimens.CompactVideoControlsMinimumHeight
         } else {
             CaptureDimens.VideoControlsClassicHeight
@@ -108,6 +113,9 @@ internal fun PhysicalCaptureLayout(
                         videoControls = videoControls,
                         onToggleVideoRecording = onToggleVideoRecording,
                         overlay = videoBleed,
+                        renderProfiles = renderProfiles,
+                        onOpenFilters = { proSheet = ProSheet.Filters },
+                        onOpenParams = { proSheet = ProSheet.Params },
                         modifier = if (compactControls) {
                             Modifier.fillMaxWidth().weight(1f)
                         } else {
@@ -127,6 +135,25 @@ internal fun PhysicalCaptureLayout(
                 )
             }
             Spacer(Modifier.height(CaptureDimens.VideoMonitorBottomInset))
+        }
+        when (proSheet) {
+            ProSheet.Filters -> FiltersSheet(
+                state = state,
+                dispatch = dispatch,
+                renderProfiles = renderProfiles,
+                onSelectRenderProfile = onSelectRenderProfile,
+                filmQuick = filmQuick,
+                onFilmEvent = onFilmEvent,
+                onClose = { proSheet = ProSheet.None }
+            )
+            ProSheet.Params -> ParamsSheet(
+                state = state,
+                dispatch = dispatch,
+                filmQuick = filmQuick,
+                onFilmEvent = onFilmEvent,
+                onClose = { proSheet = ProSheet.None }
+            )
+            ProSheet.None -> Unit
         }
     }
 }
