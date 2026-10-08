@@ -68,6 +68,28 @@ for pattern, layout in enumerate(patterns):
         if kind != "detail":
             expected = packed[0, 0, [0, 1, 3]]
             assert abs(y[..., :3].astype(float) - expected).max() < 0.002, name
+        # At zero dual contrast, the RCD branch must match standalone RCD exactly.
+        # This catches a caller failing to enable the shared balance policy.
+        settings = cfg.read_text()
+        for mode, contrast in [("rcd_only", 0), ("blend", 20)]:
+            cfg.write_text(
+                settings + f"dualAutoContrast=0\ndualContrastPercent={contrast}\n"
+            )
+            dual_out = root / (name + "_dual_" + mode)
+            command = list(p.args)
+            command.remove("--rcd")
+            command[command.index("--output-dir") + 1] = str(dual_out)
+            result = subprocess.run(command, capture_output=True, text=True, check=True)
+            assert "VARIANT_FAIL" not in result.stdout, result.stdout
+            dual_y = np.fromfile(
+                dual_out / "demosaiced_camera_rgb.rgba16f", np.float16
+            ).reshape(h, w, 4)
+            assert np.isfinite(dual_y).all(), (name, mode)
+            assert (dual_y[..., 3] == 1).all(), (name, mode, "alpha")
+            if contrast == 0:
+                assert np.array_equal(y, dual_y), (name, "standalone/dual RCD mismatch")
+        cfg.write_text(settings)
 print(
-    "PASS RCD all CFA patterns, partial workgroups, native samples, camera-linear scale, black/clipped fallback, finite/alpha"
+    "PASS RCD all CFA patterns, partial workgroups, native samples, camera-linear scale, "
+    "black/clipped fallback, finite/alpha; dual RCD bit-exact parity and finite blended output"
 )

@@ -78,6 +78,7 @@ void DualStillProcessor::ensureRuntimeResources() {
     runtime_.ensureResources();
     {
         ::dual::PipelineConfig cfg{};
+        cfg.autoBalance = true;
         cfg.width = width_;
         cfg.height = height_;
         cfg.pattern = dualPattern(cfa_);

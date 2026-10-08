@@ -309,7 +309,10 @@ internal fun DefringeGroup(state: SettingsUiState, dispatch: SettingsDispatch) {
             onVideoChange = { dispatch.invoke(SetVideoDefringeEnabled(it)) }
         )
     }
-    SettingsGroup(title = "Photo") {
+    SettingsGroup(
+        title = "Photo",
+        description = "Fringe detection and bright-edge protection are automatic. Strength controls how much correction is applied to detected fringes."
+    ) {
         StandaloneNumericSliderRow(
             identity = "defringe_strength_photo",
             label = "Strength",

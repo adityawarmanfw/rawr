@@ -208,7 +208,7 @@ Java_com_rawr_camera_renderer_RendererNative_render(JNIEnv* e, jobject, jlong id
             if (o.bayerBin2x) path += "-same-color-sharp2x-v1";
             path +=
                 "." + o.demosaic + (o.dualAutoContrast ? "-auto" : "-manual") + std::to_string(o.dualContrastPercent);
-            if (o.demosaic != "DualRcdVng4") path += "-balanced-v1";
+            path += "-balanced-v1";
             // quadfix changes demosaic input: version the cache so stale
             // unfiltered tiles can never be served to a filtered render.
             if (o.quadfix) path += o.quadfixFastMedian ? "-qf-fast" : "-qf";

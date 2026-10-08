@@ -2,7 +2,8 @@
 
 ## Production behavior
 
-- RCD still capture computes one robust frame balance on the GPU. Two reductions
+- Standalone RCD and the RCD branch of RCD + VNG4 still capture compute the same
+  robust frame balance on the GPU. Two reductions
   use 8x8 CFA blocks, rejecting any block with invalid/near-black/near-clipped
   samples (normalized .001–.987). Channel means produce relative gains in
   [.05,1]. Empty frames fall back to identity. RCD operates on balanced samples;
@@ -11,14 +12,19 @@
   with normalized rejection thresholds appropriate to the app's input formats;
   it does not claim bit-exact RawTherapee AUTO preprocessing.
 - The DNG editor computes the same frame estimate over 64-row CPU strips and
-  reuses it for all 1024-pixel demosaic tiles. It retains bounded memory and
-  avoids tile-dependent color estimates. Demosaic/render cache keys are bumped.
+  reuses it for all standalone RCD 1024-pixel demosaic tiles. It retains bounded
+  memory and avoids tile-dependent color estimates. Dual remains full-frame
+  and uses the same GPU balance as capture. Demosaic/render cache keys are bumped.
 - Still FCC uses absolute chroma, uniform averaging, and no display-range chroma
-  bound. The factory setting remains two iterations. Video settings and the
-  frozen Dual/VNG4 algorithm are unchanged.
+  bound. The factory setting remains two iterations. Video settings, VNG4 and
+  the dual blend policy are unchanged. Production dual callers enable
+  `autoBalance`; the library default remains false for frozen reference fixtures.
 - Calibrated still processing uses optimized Lab defringe with the actual frame
   camera matrix. Strength zero bypasses it. Video retains the previous shader.
-  Photo UI exposes strength; legacy edge/luma fields remain parseable.
+  Photo UI exposes strength; detection and bright-edge guards are automatic.
+  Strength 1 applies the full *gated* correction and is the tested factory
+  default, not a demonstrated optimum for all scenes. Legacy edge/luma fields
+  remain parseable.
 - Ordering remains demosaic → optional denoise → WB/highlight reconstruction
   → FCC → Lab defringe → SDR highlight compression → tone/film render.
   Highlight reconstruction is not replaced by a post-defringe clipping pass.
@@ -29,6 +35,10 @@
   both macOS/MoltenVK and Android arm64 API 33.
 - GPU RCD tests: all four Bayer patterns, native-sample and camera-linear scale
   preservation, partial workgroups, black/clipped frames, finite output/alpha.
+- Dual follow-up: zero-contrast dual RCD matches standalone RCD bit for bit on
+  all four Bayer patterns, including detailed, constant, black and clipped
+  fixtures. Manual blends stay finite with exact alpha. Full-resolution auto
+  dual + FCC2 + Lab replay of the original 16:08:24 frame also passes.
 - CPU streaming balance test on phone: all patterns, partial blocks, clip/black
   rejection, empty fallback, and invalid fixed-gain rejection.
 - Lab production-component tests: 1x1 and odd sizes, two calibrations, constant

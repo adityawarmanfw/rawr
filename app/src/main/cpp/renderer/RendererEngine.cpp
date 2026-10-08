@@ -377,6 +377,7 @@ void RendererEngine::prepare(DngSource& source, const std::string& path, const R
                         {output.value.image, output.value.view, output.value.format, VK_IMAGE_LAYOUT_GENERAL, tw, th});
                 } else if (options.demosaic == "DualRcdVng4") {
                     dual::PipelineConfig cfg{};
+                    cfg.autoBalance = true;
                     cfg.width = tw;
                     cfg.height = th;
                     cfg.pattern = static_cast<dual::BayerPattern>(source.cfa);

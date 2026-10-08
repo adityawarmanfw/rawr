@@ -537,6 +537,7 @@ int main(int argc, char** argv) {
             return readWords(shaderDir / (std::string(name) + ".spv"));
         };
         dual::PipelineConfig dualConfig{};
+        dualConfig.autoBalance = true;
         dualConfig.width = config.width;
         dualConfig.height = config.height;
         dualConfig.pattern = bayerPattern(config.cfa);
