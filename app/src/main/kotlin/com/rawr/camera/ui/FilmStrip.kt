@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -194,13 +195,7 @@ private fun FilmProfilesRow(
     onOpenParams: () -> Unit
 ) {
     val haptics = LocalCaptureHaptics.current
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(bottom = 2.dp, end = StripDimens.TrailingInset),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        StripBackButton(onBack)
+    StripNavigationRow(onBack, Modifier.padding(bottom = 2.dp)) {
         LazyRow(
             Modifier
                 .weight(1f)
@@ -242,7 +237,7 @@ private fun FilmProfilesRow(
                 }
             }
         }
-        StripParamsEntry(onOpenParams)
+        StripParamsEntry(onOpenParams, Modifier.padding(start = StripDimens.ParamSpacing))
     }
 }
 
@@ -284,41 +279,47 @@ private fun FilmConfigBlock(
         // (up = increase), so scrubbing never fights row scrolling and never
         // runs out of room at the screen edges. Discretes drill to L4 on tap
         // instead of cycling: one-by-one stepping through 20 stocks is not
-        // viable. Each item is at least 68dp wide for a reliable grab target.
-        // Parked at the thumb: first cell starts at the right edge with a
-        // peek of the next; the rest scrolls in from the right, empty left.
+        // viable. Five parameter cells fit in the available row width.
         BoxWithConstraints(
             Modifier
                 .fillMaxWidth()
+                .padding(horizontal = CaptureDimens.CompactParamRowEdgeInset)
                 .height(StripDimens.ParamRowHeight)
         ) {
+            val cellWidths = paramsCellWidths(maxWidth)
+            val hasDirToggle = section?.key == "dir" && subsection?.key == "couplers"
             LazyRow(
                 Modifier.fillMaxSize(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(StripDimens.ParamSpacing, Alignment.End),
-                contentPadding = PaddingValues(start = parkedParamsPadding(maxWidth))
+                horizontalArrangement = Arrangement.spacedBy(CaptureDimens.ControlGap, Alignment.End),
+                contentPadding = PaddingValues(
+                    start = parkedParamsPadding(maxWidth, cellWidths[0], CaptureDimens.ControlGap)
+                )
             ) {
             // DIR has no dedicated flag: amount > 0 is the enable. Offer an
             // explicit ON/OFF cell so disabling never means scrubbing to
             // exactly 0 (mirrors the Settings switch, which writes 1/0).
-            if (section?.key == "dir" && subsection?.key == "couplers") {
+            if (hasDirToggle) {
                 val dirAmount = quick.params["DirCouplersAmount"]?.value ?: 0f
                 item(key = "dir-enable") {
                     FilmFlagItem(
                         key = "DirEnabled",
+                        modifier = Modifier.width(cellWidths[0]),
                         shortLabel = "DIR",
                         enabled = dirAmount > 0f,
                         onToggle = { onScrubParam("DirCouplersAmount", if (it) 1f else 0f) }
                     )
                 }
             }
-            subsection?.items?.forEach { item ->
+            subsection?.items?.forEachIndexed { index, item ->
+                val cellWidth = cellWidths[(index + if (hasDirToggle) 1 else 0) % cellWidths.size]
                 when (item) {
                     is FilmStripItem.Numeric -> {
-                        val param = quick.params[item.key] ?: return@forEach
+                        val param = quick.params[item.key] ?: return@forEachIndexed
                         item(key = item.key) {
                             StripNumericItem(
                                 key = item.key,
+                                modifier = Modifier.width(cellWidth),
                                 shortLabel = param.shortLabel,
                                 value = param.value,
                                 display = param.displayValue,
@@ -334,10 +335,11 @@ private fun FilmConfigBlock(
                         }
                     }
                     is FilmStripItem.Discrete -> {
-                        val entry = quick.discretes[item.key] ?: return@forEach
+                        val entry = quick.discretes[item.key] ?: return@forEachIndexed
                         item(key = item.key) {
                             FilmDiscreteItem(
                                 key = item.key,
+                                modifier = Modifier.width(cellWidth),
                                 shortLabel = entry.shortLabel,
                                 display = entry.displayValue,
                                 drilled = drill?.first == item.key,
@@ -346,10 +348,11 @@ private fun FilmConfigBlock(
                         }
                     }
                     is FilmStripItem.Flag -> {
-                        val entry = quick.flags[item.key] ?: return@forEach
+                        val entry = quick.flags[item.key] ?: return@forEachIndexed
                         item(key = item.key) {
                             FilmFlagItem(
                                 key = item.key,
+                                modifier = Modifier.width(cellWidth),
                                 shortLabel = entry.shortLabel,
                                 enabled = entry.enabled,
                                 onToggle = { onToggleFlag(item.key, it) }
@@ -412,15 +415,8 @@ private fun FilmConfigBlock(
             }
             }
         }
-        // Lower (L1 at the bottom): sticky back left, scrollable sections,
-        // sticky preset name right to jump back to profile picking.
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(bottom = 2.dp, end = StripDimens.TrailingInset),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            StripBackButton(onBack)
+        // Lower (L1): collapse in the first column, scrollable sections, and preset picker.
+        StripNavigationRow(onBack, Modifier.padding(bottom = 2.dp)) {
             // L1 sections parked at the thumb like L2/L3.
             BoxWithConstraints(
                 Modifier
@@ -612,13 +608,7 @@ private fun FilmDiscreteOptionsRow(
     onSelect: (Int) -> Unit
 ) {
     val haptics = LocalCaptureHaptics.current
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .height(StripDimens.ParamRowHeight),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        StripBackButton(onBack)
+    StripNavigationRow(onBack, Modifier.height(StripDimens.ParamRowHeight)) {
         LazyRow(
             Modifier
                 .weight(1f)
