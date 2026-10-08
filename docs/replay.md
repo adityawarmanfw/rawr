@@ -21,8 +21,7 @@ separate render controls and experimental film presets.
 Packed replay also supports `--rcd` for the production RCD demosaicer, using
 the packed CFA input. It cannot be combined with quadfix or RGB input modes.
 The DNG wrapper still validates DualRcdVng4 recipes; `--rcd` is a packed-runner
-override for controlled comparisons. See [still chroma cleanup](still-chroma-cleanup.md)
-for production balancing, FCC and calibrated Lab defringe behavior.
+override for controlled comparisons.
 
 Packed replay accepts `--technical-lut-dwg path/to/look.cube` to replace the
 RAWR NTRL render with a technical LUT at full intensity. Input is converted

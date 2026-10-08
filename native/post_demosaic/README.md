@@ -38,5 +38,3 @@ UV_CACHE_DIR=$PWD/tmp/uv-cache TMPDIR=$PWD/tmp uv run --no-project --with numpy 
   native/post_demosaic/tests/validate_lab.py \
   tmp/offline_rawr_pipeline/post_demosaic/lab_defringe_validate tmp/lab_checks
 ```
-
-See `docs/still-chroma-cleanup.md` for integration scope, verification and phone timing.
