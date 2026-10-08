@@ -300,7 +300,7 @@ internal fun LensShadingSettings(state: SettingsUiState, dispatch: SettingsDispa
 internal fun DefringeGroup(state: SettingsUiState, dispatch: SettingsDispatch) {
     val v = state.values
     SettingsGroup(
-        description = "Desaturates narrow purple halos around bright edges (axial chromatic aberration). Wide purple areas such as flowers are preserved. Photo applies to JPEG stills; Video applies to recordings."
+        description = "Reduces purple and blue halos around bright edges. Photo repairs nearby color while preserving brightness; Video uses a lighter desaturation pass."
     ) {
         PhotoVideoTargetSelector(
             photoOn = v.photoDefringeEnabled,
@@ -310,16 +310,13 @@ internal fun DefringeGroup(state: SettingsUiState, dispatch: SettingsDispatch) {
         )
     }
     SettingsGroup(title = "Photo") {
-        DefringeSliders(
-            enabled = v.photoDefringeEnabled,
-            identitySuffix = "photo",
-            strength = v.photoDefringeStrength,
-            edgeThreshold = v.photoDefringeEdgeThreshold,
-            lumaFloor = v.photoDefringeLumaFloor,
-            onStrength = { dispatch.invoke(SetPhotoDefringeStrength(it)) },
-            onEdgeThreshold = { dispatch.invoke(SetPhotoDefringeEdgeThreshold(it)) },
-            onLumaFloor = { dispatch.invoke(SetPhotoDefringeLumaFloor(it)) }
-        )
+        StandaloneNumericSliderRow(
+            identity = "defringe_strength_photo",
+            label = "Strength",
+            minimum = 0f, maximum = 1f, step = 0.01f, decimals = 2,
+            value = v.photoDefringeStrength,
+            enabled = v.photoDefringeEnabled
+        ) { dispatch.invoke(SetPhotoDefringeStrength(it)) }
     }
     SettingsGroup(title = "Video") {
         DefringeSliders(

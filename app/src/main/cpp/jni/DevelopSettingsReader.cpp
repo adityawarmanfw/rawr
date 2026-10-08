@@ -109,9 +109,9 @@ develop::DevelopSettings readRendererDevelopSettings(Json& json) {
         out.colorRenderProfile = rawrcam::tonemap_integration::ColorRenderProfile::SRgb;
         out.importedLutProfileId.clear();
     }
-    out.fccSteps = uint32_t(json.number("fccSteps", 1));
-    out.fccEdgeSigma = .08f;
-    out.fccChromaBound = 1;
+    out.fccSteps = uint32_t(json.number("fccSteps", 2));
+    out.fccEdgeSigma = 0;
+    out.fccChromaBound = 0;
     out.defringeStrength = json.flag("defringeEnabled", true) ? float(json.number("defringeStrength", 1)) : 0;
     out.defringeEdgeThreshold = float(json.number("defringeEdgeThreshold", .02));
     out.defringeLumaFloor = float(json.number("defringeLumaFloor", .08));

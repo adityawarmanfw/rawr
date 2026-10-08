@@ -1,6 +1,7 @@
 #pragma once
 #include "Types.hpp"
 #include <cstdint>
+#include <array>
 
 namespace rcd {
 
@@ -40,6 +41,10 @@ struct PipelineConfig {
     uint32_t greenSitesWorkgroupY=32;
     uint32_t exportWorkgroupX=4;
     uint32_t exportWorkgroupY=32;
+    // Robust frame balance inside RCD; export restores camera-linear RGB.
+    bool autoBalance=false;
+    // Fixed frame balance for tiled imports; ignored when autoBalance is true.
+    std::array<float,3> inputBalance{1,1,1};
 };
 
 struct PipelineAssets {};

@@ -35,6 +35,8 @@ install(DIRECTORY shaders/ DESTINATION ${CMAKE_INSTALL_DATADIR}/rcd/shaders FILE
 install(EXPORT rcdTargets NAMESPACE rcd:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/rcd)
 
 if(RCD_BUILD_TESTS)
+  add_executable(rcd_balance_test validation/balance_test.cpp)
+  target_link_libraries(rcd_balance_test PRIVATE rcd)
   add_executable(rcd_validate validation/rcd_validate.cpp)
   target_link_libraries(rcd_validate PRIVATE rcd ${VULKAN_LIB})
   target_compile_options(rcd_validate PRIVATE $<$<CXX_COMPILER_ID:AppleClang,Clang,GNU>:-Wall;-Wextra;-Wpedantic;-Werror>)

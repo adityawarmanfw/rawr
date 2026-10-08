@@ -1,0 +1,61 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "lab_defringe_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(binding = 0, rgba16f) uniform readonly image2D src;
+// Each R32UI texel stores two adjacent half-float outlier scores.
+// Full-frame Lab is never materialized. Odd-width padding scores are zero.
+layout(binding = 1, r32ui) uniform writeonly uimage2D dst;
+layout(std430, binding = 3) buffer Stats {
+    float mean;
+    float blocks[];
+}
+stats;
+shared vec2 tile[24 * 24];
+shared vec2 horiz[24 * 16];
+shared float sums[256];
+const float gauss[9] =
+    float[9](.02763055, .06628225, .12383154, .18017382, .20416369, .18017382, .12383154, .06628225, .02763055);
+shared float columns[16];
+void main() {
+    uint lane = gl_LocalInvocationIndex;
+    ivec2 origin = ivec2(gl_WorkGroupID.xy) * 16 - 4;
+    ivec2 maxp = ivec2(pc.width, pc.height) - 1;
+    for (uint i = lane; i < 576; i += 256) {
+        ivec2 q = clamp(origin + ivec2(i % 24, i / 24), ivec2(0), maxp);
+        tile[i] = toLab(imageLoad(src, q).rgb).yz;
+    }
+    barrier();
+    for (uint i = lane; i < 384; i += 256) {
+        uint x = i % 16, y = i / 16;
+        vec2 a = vec2(0);
+        for (uint k = 0; k < 9; k++) a += gauss[k] * tile[y * 24 + x + k];
+        horiz[i] = a;
+    }
+    barrier();
+    ivec2 local = ivec2(gl_LocalInvocationID.xy), p = ivec2(gl_GlobalInvocationID.xy);
+    vec2 lab = tile[(local.y + 4) * 24 + local.x + 4];
+    vec2 blur = vec2(0);
+    for (int k = 0; k < 9; k++) blur += gauss[k] * horiz[(local.y + k) * 16 + local.x];
+    vec2 delta = lab - blur;
+    // Scores are packed as half; keep extreme HDR outliers finite in both reductions.
+    float score = min(dot(delta, delta) * hueWeight(lab), 65504.);
+    bool valid = p.x < int(pc.width) && p.y < int(pc.height);
+
+    sums[lane] = valid ? score : 0.;
+    barrier();
+    if (valid && (p.x & 1) == 0)
+        imageStore(dst, ivec2(p.x / 2, p.y), uvec4(packHalf2x16(vec2(sums[lane], sums[lane + 1])), 0, 0, 0));
+    // Two-stage column reduction avoids the eight barriers in the original tree.
+    if (lane < 16) {
+        float subtotal = 0.;
+        for (uint j = 0; j < 16; j++) subtotal += sums[lane + j * 16];
+        columns[lane] = subtotal;
+    }
+    barrier();
+    if (lane == 0) {
+        float total = 0.;
+        for (uint j = 0; j < 16; j++) total += columns[j];
+        stats.blocks[gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x] = total;
+    }
+}

@@ -13,16 +13,13 @@ struct DevelopSettings {
     DemosaicAlgorithm demosaicAlgorithm = DemosaicAlgorithm::Rcd;
     bool dualAutoContrast = true;
     float dualContrastPercent = 20.0f;
-    std::uint32_t fccSteps = 1;
-    // Edge-aware FCC: bilateral sigma on the 3x3 chroma average in Y units
-    // (0 = legacy uniform). Bound >0 limits display-range chroma to [0,1]
-    // while retaining scene-linear HDR headroom. Production enables both;
-    // standalone FCC lib defaults
-    // stay legacy (0) so pinned references are unaffected.
-    float fccEdgeSigma = 0.08f;
-    float fccChromaBound = 1.0f;
-    // Axial purple-fringe desaturation (linear RGB, post-FCC). 0 disables
-    // (legacy bit-identical); production default 1.0 with the tuned gates.
+    std::uint32_t fccSteps = 2;
+    // Absolute chroma median + uniform reconstruction. Avoid chroma clipping
+    // before the scene-linear highlight/tone stages.
+    float fccEdgeSigma = 0.0f;
+    float fccChromaBound = 0.0f;
+    // Lab chroma repair after highlight reconstruction/FCC; strength 0 bypasses.
+    // Legacy edge/luma fields remain for recipe compatibility (video uses them).
     float defringeStrength = 1.0f;
     float defringeEdgeThreshold = 0.02f;
     float defringeLumaFloor = 0.08f;

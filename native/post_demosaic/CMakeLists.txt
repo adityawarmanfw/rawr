@@ -64,10 +64,22 @@ foreach(NAME fcc_chroma_median fcc_reconstruct fcc_fused)
   pd_embed(${NAME} ${FCC}/${NAME}.comp FLAGS --target-env=vulkan1.1 -O -fshader-stage=compute)
 endforeach()
 
-add_library(post_demosaic STATIC src/PostDemosaicProcessor.cpp ${PD_HEADERS})
+foreach(STAGE prepare reduce reconstruct)
+  pd_embed(lab_defringe_${STAGE} ${CMAKE_CURRENT_LIST_DIR}/shaders/lab_defringe_${STAGE}.comp
+    FLAGS --target-env=vulkan1.1 -O -I${CMAKE_CURRENT_LIST_DIR}/shaders
+    DEPENDS ${CMAKE_CURRENT_LIST_DIR}/shaders/lab_defringe_common.glsl)
+endforeach()
+add_library(post_demosaic STATIC src/PostDemosaicProcessor.cpp src/LabDefringe.cpp ${PD_HEADERS})
 add_library(rawr::post_demosaic ALIAS post_demosaic)
 target_include_directories(post_demosaic PUBLIC include PRIVATE ${PD_GEN})
 target_link_libraries(post_demosaic
   PUBLIC rawr::vk_common rawr::shader_common raw_highlight::raw_highlight raw_denoise::raw_denoise
          fcc::false_color_correction ${VULKAN_LIB})
 target_compile_features(post_demosaic PUBLIC cxx_std_17)
+
+option(POST_DEMOSAIC_BUILD_TESTS "Build production Lab file validation/timing harness" OFF)
+if(POST_DEMOSAIC_BUILD_TESTS)
+  add_executable(lab_defringe_validate tests/lab_defringe_validate.cpp)
+  target_include_directories(lab_defringe_validate PRIVATE ${RAWR_NATIVE_DIR}/vk_common/testing)
+  target_link_libraries(lab_defringe_validate PRIVATE rawr::post_demosaic)
+endif()

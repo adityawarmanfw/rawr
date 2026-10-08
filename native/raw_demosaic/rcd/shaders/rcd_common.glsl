@@ -18,8 +18,12 @@ layout(push_constant) uniform Push {
     vec4 invRange;
     float outputFactor;
     float outputAlpha;
+    uint autoBalance;
+    vec4 fixedBalance;
 }
 pc;
+
+layout(std430, set=0, binding=6) buffer Balance { vec4 gain; vec4 blocks[]; } balance;
 
 const float EPS = 1e-5;
 const float EPS2 = 1e-10;
@@ -40,7 +44,7 @@ int rgbColorAt(ivec2 p) {
 float component(vec4 v, int c) { return c == 0 ? v.x : (c == 1 ? v.y : (c == 2 ? v.z : v.w)); }
 ivec2 clampRaw(ivec2 p) { return clamp(p, ivec2(0), ivec2(int(pc.width) - 1, int(pc.height) - 1)); }
 
-float cfa(ivec2 p) {
+float unbalancedCfa(ivec2 p) {
     p = clampRaw(p);
     int c = cfaComponent(p);
     int parity = ((p.y & 1) << 1) | (p.x & 1);
@@ -55,6 +59,11 @@ float cfa(ivec2 p) {
     }
     vec4 v = texelFetch(packedInput, p >> 1, 0);
     return component(v, c);
+}
+
+float cfa(ivec2 p) {
+    float v = unbalancedCfa(p);
+    return v * (pc.autoBalance != 0u ? balance.gain[rgbColorAt(clampRaw(p))] : pc.fixedBalance[rgbColorAt(clampRaw(p))]);
 }
 
 float hp1d(ivec2 p, ivec2 d) {

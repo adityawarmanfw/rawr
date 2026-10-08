@@ -1,3 +1,5 @@
+#include "rcd_balance.h"
+#include "rcd_balance_reduce.h"
 #include "raw_demosaic/EmbeddedShaders.hpp"
 
 #include <cstring>
@@ -54,6 +56,8 @@ std::vector<uint32_t> words(const unsigned char* bytes, size_t size) {
         if (name == "rcd_diagonal.comp") return words(rcd_diagonal_spv, rcd_diagonal_spv_size);
         if (name == "rcd_green_sites.comp") return words(rcd_green_sites_spv, rcd_green_sites_spv_size);
         if (name == "rcd_export.comp") return words(rcd_export_spv, rcd_export_spv_size);
+        if(name=="rcd_balance.comp") return words(rcd_balance_spv,rcd_balance_spv_size);
+        if(name=="rcd_balance_reduce.comp") return words(rcd_balance_reduce_spv,rcd_balance_reduce_spv_size);
         unknown("RCD", name);
     };
 }

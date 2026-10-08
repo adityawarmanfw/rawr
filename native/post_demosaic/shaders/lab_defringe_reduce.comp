@@ -1,0 +1,22 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "lab_defringe_common.glsl"
+layout(local_size_x = 256) in;
+layout(std430, binding = 3) buffer Stats {
+    float mean;
+    float blocks[];
+}
+stats;
+shared float sums[256];
+void main() {
+    uint i = gl_LocalInvocationIndex, n = ((pc.width + 15) / 16) * ((pc.height + 15) / 16);
+    float s = 0.;
+    for (uint j = i; j < n; j += 256) s += stats.blocks[j];
+    sums[i] = s;
+    barrier();
+    for (uint k = 128; k > 0; k >>= 1) {
+        if (i < k) sums[i] += sums[i + k];
+        barrier();
+    }
+    if (i == 0) stats.mean = sums[0] / float(pc.width * pc.height);
+}

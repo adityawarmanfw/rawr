@@ -18,6 +18,12 @@ tone controls, and no film simulation. The burst tool accepts RZSL or a
 name-sorted DNG directory and exports merge intermediates. Packed replay has
 separate render controls and experimental film presets.
 
+Packed replay also supports `--rcd` for the production RCD demosaicer, using
+the packed CFA input. It cannot be combined with quadfix or RGB input modes.
+The DNG wrapper still validates DualRcdVng4 recipes; `--rcd` is a packed-runner
+override for controlled comparisons. See [still chroma cleanup](still-chroma-cleanup.md)
+for production balancing, FCC and calibrated Lab defringe behavior.
+
 The intended replacement is one production-backed replay pipeline: single DNG,
 RZSL burst, or explicit DNG burst/batch; a versioned recipe plus parameter
 overrides; the app's processing stages and output encoding. It must reject

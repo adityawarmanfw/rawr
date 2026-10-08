@@ -1,4 +1,5 @@
 #include "post_demosaic/PostDemosaicProcessor.h"
+#include "post_demosaic/LabDefringe.h"
 #include "raw_highlight/GuideChain.hpp"
 
 #include <algorithm>
@@ -488,7 +489,7 @@ void PostDemosaicProcessor::record(VkCommandBuffer cmd, VkImage sourceImage, VkI
                                    uint32_t highlightMethod, float highlightThreshold,
                                    float highlightCompression, float exposureGain,
                                    const rawr::shading::LensShadingMapView& shading, uint32_t cfaPattern,
-                                   const DenoiseRequest& denoise, rawr::highlight::ColoroppSensorGeometry geometry) {
+                                   const DenoiseRequest& denoise, rawr::highlight::ColoroppSensorGeometry geometry, const float* cameraToSrgbRowMajor) {
     coloroppActive_ = highlightRecoveryEnabled && highlightMethod == 1u;
     if (coloroppActive_) {
         highlightRecoveryEnabled = false;
@@ -801,28 +802,34 @@ void PostDemosaicProcessor::record(VkCommandBuffer cmd, VkImage sourceImage, VkI
         VkImageMemoryBarrier pre[2]{correctedReady, targetWrite};
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
                              0, nullptr, 0, nullptr, 2, pre);
-        VkDescriptorImageInfo di[2]{{VK_NULL_HANDLE, correctedView, VK_IMAGE_LAYOUT_GENERAL},
-                                    {VK_NULL_HANDLE, targetView, VK_IMAGE_LAYOUT_GENERAL}};
-        VkWriteDescriptorSet dw[2]{};
-        for (uint32_t i = 0; i < 2; ++i) {
-            dw[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            dw[i].dstSet = defringeSet_;
-            dw[i].dstBinding = i;
-            dw[i].descriptorCount = 1;
-            dw[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            dw[i].pImageInfo = &di[i];
+        if (cameraToSrgbRowMajor) {
+            if (!labDefringe_) labDefringe_ = std::make_unique<LabDefringe>(physicalDevice_, device_, width_, height_);
+            labDefringe_->record(cmd, correctedView, targetView, cameraToSrgbRowMajor, defringeStrength_);
+        } else {
+            // Video retains its inexpensive camera-RGB defringe and existing controls.
+            VkDescriptorImageInfo di[2]{{VK_NULL_HANDLE, correctedView, VK_IMAGE_LAYOUT_GENERAL},
+                                        {VK_NULL_HANDLE, targetView, VK_IMAGE_LAYOUT_GENERAL}};
+            VkWriteDescriptorSet dw[2]{};
+            for (uint32_t i = 0; i < 2; ++i) {
+                dw[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                dw[i].dstSet = defringeSet_;
+                dw[i].dstBinding = i;
+                dw[i].descriptorCount = 1;
+                dw[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                dw[i].pImageInfo = &di[i];
+            }
+            vkUpdateDescriptorSets(device_, 2, dw, 0, nullptr);
+            struct DefringePc {
+                uint32_t width, height;
+                float strength, edgeThreshold, lumaFloor;
+                uint32_t pad0, pad1, pad2;
+            } dp{width_, height_, defringeStrength_, defringeEdgeThreshold_, defringeLumaFloor_, 0u, 0u, 0u};
+            static_assert(sizeof(DefringePc) == 32);
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, defringePipeline_);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, defringeLayout_, 0, 1, &defringeSet_, 0, nullptr);
+            vkCmdPushConstants(cmd, defringeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(dp), &dp);
+            vkCmdDispatch(cmd, (width_ + 15u) / 16u, (height_ + 15u) / 16u, 1);
         }
-        vkUpdateDescriptorSets(device_, 2, dw, 0, nullptr);
-        struct DefringePc {
-            uint32_t width, height;
-            float strength, edgeThreshold, lumaFloor;
-            uint32_t pad0, pad1, pad2;
-        } dp{width_, height_, defringeStrength_, defringeEdgeThreshold_, defringeLumaFloor_, 0u, 0u, 0u};
-        static_assert(sizeof(DefringePc) == 32);
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, defringePipeline_);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, defringeLayout_, 0, 1, &defringeSet_, 0, nullptr);
-        vkCmdPushConstants(cmd, defringeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(dp), &dp);
-        vkCmdDispatch(cmd, (width_ + 15u) / 16u, (height_ + 15u) / 16u, 1);
         auto srcReady = barrier(targetImage, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
                              0, nullptr, 0, nullptr, 1, &srcReady);
@@ -856,6 +863,7 @@ VkImageView PostDemosaicProcessor::sdrOutputView() const noexcept {
 VkImage PostDemosaicProcessor::sdrOutputImage() const noexcept {
     return coloroppActive_ && coloropp_ && !deferColoroppTone_ ? coloropp_->toneImage() : outputImage();
 }
+uint64_t PostDemosaicProcessor::defringeAllocatedBytes() const noexcept { return labDefringe_ ? labDefringe_->allocatedBytes() : 0; }
 uint64_t PostDemosaicProcessor::fccAllocatedBytes() const noexcept { return fcc_ ? fcc_->currentAllocatedBytes() : 0; }
 
 }  // namespace rawr::post

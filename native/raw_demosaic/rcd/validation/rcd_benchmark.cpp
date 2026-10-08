@@ -81,11 +81,13 @@ static std::pair<uint32_t, uint32_t> parsePair(const std::string& s) {
 int main(int argc, char** argv) {
     try {
         std::string sd, in;
+        bool autoBalance=false;
         uint32_t W = 0, H = 0, warmup = 20, iters = 100, wgx = 16, wgy = 16;
         std::pair<uint32_t, uint32_t> wgDir{0, 0}, wgGreen{0, 0}, wgDiag{0, 0}, wgSites{0, 0}, wgExport{0, 0};
         for (int i = 1; i < argc; i++) {
             std::string a = argv[i];
-            if (a == "--shader-dir")
+            if (a == "--auto-balance") autoBalance=true;
+            else if (a == "--shader-dir")
                 sd = argv[++i];
             else if (a == "--input-f32")
                 in = argv[++i];
@@ -115,7 +117,7 @@ int main(int argc, char** argv) {
         if (sd.empty() || in.empty() || !W || !H || !iters)
             throw std::runtime_error(
                 "usage: rcd_benchmark --shader-dir DIR --input-f32 FILE --width W --height H [--warmup N] "
-                "[--iterations N] [--wg-x X --wg-y Y] [--wg-direction XxY --wg-green XxY --wg-diagonal XxY "
+                "[--iterations N] [--auto-balance] [--wg-x X --wg-y Y] [--wg-direction XxY --wg-green XxY --wg-diagonal XxY "
                 "--wg-green-sites XxY --wg-export XxY]");
         auto bytes = readBytes(in);
         if (bytes.size() != size_t(W) * H * 4) throw std::runtime_error("input size mismatch");
@@ -135,6 +137,7 @@ int main(int argc, char** argv) {
         vkUnmapMemory(c.dev, ib.m);
         Img oi = mkImg(c.pd, c.dev, W, H, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT);
         rcd::PipelineConfig cfg{};
+        cfg.autoBalance=autoBalance;
         cfg.width = W;
         cfg.height = H;
         cfg.pattern = rcd::BayerPattern::RGGB;

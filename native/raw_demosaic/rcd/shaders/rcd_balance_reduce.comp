@@ -1,0 +1,30 @@
+#version 450
+#include "rcd_common.glsl"
+layout(local_size_x = 256) in;
+shared vec4 sums[256];
+shared vec4 counts[256];
+void main() {
+    uint lane = gl_LocalInvocationIndex, n = ((pc.width + 63) / 64) * ((pc.height + 63) / 64);
+    vec4 s = vec4(0), c = vec4(0);
+    for (uint i = lane; i < n; i += 256) {
+        s += balance.blocks[2 * i];
+        c += balance.blocks[2 * i + 1];
+    }
+    sums[lane] = s;
+    counts[lane] = c;
+    barrier();
+    for (uint k = 128; k > 0; k >>= 1) {
+        if (lane < k) {
+            sums[lane] += sums[lane + k];
+            counts[lane] += counts[lane + k];
+        }
+        barrier();
+    }
+    if (lane == 0) {
+        vec3 mean = sums[0].rgb / max(counts[0].rgb, vec3(1));
+        vec3 g = vec3(1);
+        if (all(greaterThan(counts[0].rgb, vec3(0))) && all(greaterThan(mean, vec3(1e-6))))
+            g = clamp(vec3(min(mean.r, min(mean.g, mean.b))) / mean, vec3(0.05), vec3(1));
+        balance.gain = vec4(g, 1);
+    }
+}
