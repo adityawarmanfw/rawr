@@ -13,10 +13,8 @@ struct VideoProcessingConfig {
     uint32_t highlightMethod = 0;
     float highlightThreshold = 1.0f;
     float highlightCompression = 100.0f;
-    uint32_t fccSteps = 1;  // 0 bypasses FCC for video.
+    uint32_t fccSteps = 0;  // 0 bypasses FCC; enabled video FCC is one step.
     float defringeStrength = 0.0f;
-    float defringeEdgeThreshold = 0.02f;
-    float defringeLumaFloor = 0.08f;
     float waveletDenoiseStrength = 0.0f;
     float waveletDenoiseDetail = 1.0f;
     // Luma-band force (Y0 threshold scale, 0..1; shipped tuning 0.25) and

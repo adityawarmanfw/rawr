@@ -23,18 +23,16 @@ class VideoProcessingResources final {
         uint32_t width = 0, height = 0, rawWidth = 0, rawHeight = 0;
         VkFormat outputFormat = VK_FORMAT_UNDEFINED;
         uint32_t fccSteps = 0;
-        float defringeStrength = 0.0f, defringeEdgeThreshold = 0.0f, defringeLumaFloor = 0.0f;
+        float defringeStrength = 0.0f;
         bool operator==(const ProcessingKey& o) const noexcept {
             return width == o.width && height == o.height && rawWidth == o.rawWidth && rawHeight == o.rawHeight &&
-                   outputFormat == o.outputFormat && fccSteps == o.fccSteps && defringeStrength == o.defringeStrength &&
-                   defringeEdgeThreshold == o.defringeEdgeThreshold && defringeLumaFloor == o.defringeLumaFloor;
+                   outputFormat == o.outputFormat && fccSteps == o.fccSteps && defringeStrength == o.defringeStrength;
         }
         bool operator!=(const ProcessingKey& o) const noexcept { return !(*this == o); }
         std::string describe() const {
             return std::to_string(width) + "x" + std::to_string(height) + " raw " + std::to_string(rawWidth) + "x" +
                    std::to_string(rawHeight) + " fmt " + std::to_string(outputFormat) + " fcc " +
-                   std::to_string(fccSteps) + " defringe " + std::to_string(defringeStrength) + "/" +
-                   std::to_string(defringeEdgeThreshold) + "/" + std::to_string(defringeLumaFloor);
+                   std::to_string(fccSteps) + " defringe " + std::to_string(defringeStrength);
         }
     };
     // Processing built ahead of a recording, possibly off the engine lock.

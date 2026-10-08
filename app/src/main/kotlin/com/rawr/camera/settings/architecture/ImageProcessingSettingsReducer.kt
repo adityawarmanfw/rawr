@@ -34,10 +34,6 @@ internal fun reduceImageProcessingSettings(
         state.withValues(state.values.copy(videoFccEnabled = action.enabled))
     }
 
-    is SetVideoFccSteps -> {
-        state.withValues(state.values.copy(videoFccSteps = action.value.coerceIn(1, 8)))
-    }
-
     is SetVideoEncoder -> {
         state.withValues(state.values.copy(videoEncoder = action.value.sanitized()))
     }
@@ -64,14 +60,6 @@ internal fun reduceImageProcessingSettings(
 
     is SetVideoDefringeStrength -> {
         state.withValues(state.values.copy(videoDefringeStrength = action.value.coerceIn(0f, 1f)))
-    }
-
-    is SetVideoDefringeEdgeThreshold -> {
-        state.withValues(state.values.copy(videoDefringeEdgeThreshold = action.value.coerceIn(0.005f, 0.2f)))
-    }
-
-    is SetVideoDefringeLumaFloor -> {
-        state.withValues(state.values.copy(videoDefringeLumaFloor = action.value.coerceIn(0f, 0.5f)))
     }
 
     is SetPhotoLensShadingEnabled -> {

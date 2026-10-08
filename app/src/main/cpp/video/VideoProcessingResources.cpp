@@ -134,7 +134,8 @@ VideoProcessingResources::Prepared VideoProcessingResources::prepare(rawrcam::vu
     for (auto& stage : out.post) {
         stage = std::make_unique<rawr::post::PostDemosaicProcessor>(
             context.physicalDevice(), context.device(), context.queueFamily(), key.width, key.height, key.fccSteps,
-            false, 0.0f, 0.0f, key.defringeStrength, key.defringeEdgeThreshold, key.defringeLumaFloor);
+            false, 0.0f, 0.0f, key.defringeStrength, 0.02f, 0.08f);
+        // Edge/luma args feed only the legacy defringe; video always runs Lab repair.
         // The video tonemap applies the Inpaint Opposed tone tap on load.
         stage->setDeferColoroppTone(true);
         // Build Inpaint Opposed now rather than on the first recorded frame.

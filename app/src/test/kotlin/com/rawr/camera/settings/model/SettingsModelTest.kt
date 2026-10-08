@@ -477,14 +477,12 @@ class SettingsModelTest {
         assertFalse(controller.state.value.values.videoDefringeEnabled)
     }
 
-    @Test fun photoAndVideoFccStepsAreIndependent() {
+    @Test fun videoFccIsSingleStepAndIndependentOfPhoto() {
         val controller = PersistentSettingsController()
         controller.dispatch(SetPhotoFccSteps(4))
-        controller.dispatch(SetVideoFccSteps(6))
 
         val values = controller.state.value.values
         assertEquals(4, values.photoFccSteps)
-        assertEquals(6, values.videoFccSteps)
         // Video FCC defaults off: recordings skip FCC regardless of steps.
         assertEquals(0, values.toVideoImageSettings().fccSteps)
 
