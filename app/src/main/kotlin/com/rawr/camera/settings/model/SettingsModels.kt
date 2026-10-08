@@ -709,7 +709,7 @@ object MultiframeSpecs {
 
 data class MultiframeTuning(
     val outputResolution: MultiframeOutputResolution = MultiframeOutputResolution.Native,
-    val mergeAlgorithm: MultiframeMergeAlgorithm = MultiframeMergeAlgorithm.HdrPlus,
+    val mergeAlgorithm: MultiframeMergeAlgorithm = MultiframeMergeAlgorithm.HdrPlusQuality,
     val hdrPlusStrength: Float = 13f,
     val hdrPlusTileSize: Int = 32,
     val bracketEv: Float = -2f,
@@ -912,7 +912,7 @@ data class SettingsValues(
     val filmSimLook: FilmSimLook = FilmFactoryPresets.baseLook,
     val selectedFilmPresetId: String? = null,
     val filmPresets: List<FilmPreset> = emptyList(),
-    val multiframeBaseFrameMode: MultiframeBaseFrameMode = MultiframeBaseFrameMode.Middle,
+    val multiframeBaseFrameMode: MultiframeBaseFrameMode = MultiframeBaseFrameMode.Sharpest,
     // Chroma-only profiled wavelet on the merged image, fed the burst-fitted
     // noise / frame count. Independent of Image > Denoise (single frame only).
     val multiframeChromaDenoise: Boolean = true,

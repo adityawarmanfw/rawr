@@ -107,7 +107,8 @@ class SessionEngine {
                                             rawrcam::encoding::dng::DngCaptureContext mergedDng,
                                             rawrcam::capture::JpegCaptureRequest mergedJpeg, bool dumpRzslRequested,
                                             rawrcam::capture::multiframe::MultiframeTuning tuning,
-                                            rawrcam::capture::multiframe::MultiframeBaseFrameMode baseFrameMode = {});
+                                            rawrcam::capture::multiframe::MultiframeBaseFrameMode baseFrameMode =
+                                                rawrcam::capture::multiframe::MultiframeBaseFrameMode::Sharpest);
     void cancelPreparedMultiframeCapture();
     void setPersistentDiagnosticsEnabled(bool enabled);
     void setLensShadingCorrectionEnabled(bool enabled);

@@ -670,8 +670,8 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_integration_NativePrevie
                     ultraHdrEnabled, ultraHdrGainmapQuality);
     fillHighlightIntent(env, jpeg, captureTone);
     jpeg.develop.multiframeChromaDenoise = multiframeChromaDenoise(env, tuningValues);
-    auto baseMode = rawrcam::capture::multiframe::MultiframeBaseFrameMode::Middle;
-    if (baseFrameMode == 1) baseMode = rawrcam::capture::multiframe::MultiframeBaseFrameMode::Sharpest;
+    auto baseMode = rawrcam::capture::multiframe::MultiframeBaseFrameMode::Sharpest;
+    if (baseFrameMode == 0) baseMode = rawrcam::capture::multiframe::MultiframeBaseFrameMode::Middle;
     return static_cast<jlong>(rawrcam::session::startPreparedMultiframeCapture(
         handle(h), std::move(base), std::move(merged), std::move(jpeg), dumpRzslRequested == JNI_TRUE,
         multiframeTuning(env, tuningValues), baseMode));
