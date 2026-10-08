@@ -40,6 +40,8 @@ class VideoDemosaic final {
         bool noiseProfileValid = false;
         float noiseA = 0.0f;
         float noiseB = 0.0f;
+        // Row-major post-WB camera->linear-sRGB; drives the Lab defringe.
+        std::array<float, 9> cameraToLinearSrgb{};
     };
 
     void record(VkCommandBuffer command, uint32_t frameSlot, const Frame& frame);

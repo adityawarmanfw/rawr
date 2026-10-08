@@ -465,6 +465,7 @@ void FrameSubmitCoordinator::submitSplitVideoAndMonitor(const SubmitParams& para
     frame.wb = params.wb;
     frame.white = params.white;
     frame.cfa = config_.cfa;
+    frame.cameraToLinearSrgb = params.sensorToSrgb;
     if (config_.lensShadingCorrectionEnabled && !metadata.lensShadingMap.empty()) {
         frame.lensShading = metadata.lensShadingMap.data();
         frame.lensShadingCount = metadata.lensShadingMap.size();
@@ -720,6 +721,7 @@ FrameSubmitCoordinator::RecordedSubmit FrameSubmitCoordinator::recordSubmitComma
         videoFrame.wb = params.wb;
         videoFrame.white = params.white;
         videoFrame.cfa = config_.cfa;
+        videoFrame.cameraToLinearSrgb = params.sensorToSrgb;
         if (config_.lensShadingCorrectionEnabled && !metadata.lensShadingMap.empty()) {
             videoFrame.lensShading = metadata.lensShadingMap.data();
             videoFrame.lensShadingCount = metadata.lensShadingMap.size();

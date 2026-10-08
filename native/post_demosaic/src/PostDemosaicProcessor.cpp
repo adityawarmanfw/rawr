@@ -806,7 +806,7 @@ void PostDemosaicProcessor::record(VkCommandBuffer cmd, VkImage sourceImage, VkI
             if (!labDefringe_) labDefringe_ = std::make_unique<LabDefringe>(physicalDevice_, device_, width_, height_);
             labDefringe_->record(cmd, correctedView, targetView, cameraToSrgbRowMajor, defringeStrength_);
         } else {
-            // Video retains its inexpensive camera-RGB defringe and existing controls.
+            // Legacy camera-RGB defringe for callers without a color matrix.
             VkDescriptorImageInfo di[2]{{VK_NULL_HANDLE, correctedView, VK_IMAGE_LAYOUT_GENERAL},
                                         {VK_NULL_HANDLE, targetView, VK_IMAGE_LAYOUT_GENERAL}};
             VkWriteDescriptorSet dw[2]{};

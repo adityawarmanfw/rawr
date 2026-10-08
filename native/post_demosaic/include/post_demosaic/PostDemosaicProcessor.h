@@ -70,8 +70,8 @@ class PostDemosaicProcessor final {
     // (WB, plus Inpaint Opposed), 1-2 highlight guide chain, 2-3 highlight
     // recovery, 4-5 FCC, 10-11 wavelet denoise and 16-17 defringe plus the
     // Inpaint Opposed tone tap. Every pair is written, adjacent when skipped.
-    // Still callers supply the post-WB camera->linear-sRGB matrix for Lab repair.
-    // A null matrix retains the legacy video defringe; its edge/luma controls
+    // Still and video callers supply the post-WB camera->linear-sRGB matrix for Lab repair.
+    // A null matrix retains the legacy camera-RGB defringe; its edge/luma controls
     // do not apply to calibrated Lab repair (only strength is user-adjustable).
     void record(VkCommandBuffer command, VkImage sourceImage, VkImageView sourceView, VkImage clipStateImage,
                 VkImageView clipStateView, const std::array<float, 3>& whiteBalanceRgb, bool highlightRecoveryEnabled,

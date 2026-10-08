@@ -19,7 +19,7 @@ struct DevelopSettings {
     float fccEdgeSigma = 0.0f;
     float fccChromaBound = 0.0f;
     // Lab chroma repair after highlight reconstruction/FCC; strength 0 bypasses.
-    // Legacy edge/luma fields remain for recipe compatibility (video uses them).
+    // Legacy edge/luma fields remain for recipe compatibility only.
     float defringeStrength = 1.0f;
     float defringeEdgeThreshold = 0.02f;
     float defringeLumaFloor = 0.08f;

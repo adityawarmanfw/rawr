@@ -104,7 +104,7 @@ void VideoRecorder::record(VkCommandBuffer command, uint32_t frameSlot, uint32_t
                  activeConfig.highlightEnabled, {}, stagePool, false, activeConfig.highlightMethod,
                  activeConfig.highlightThreshold, activeConfig.highlightCompression,
                  std::max(params.aePostGain * std::exp2(params.exposureEV), 1.0e-6f), shading, rawFrame.cfa, denoise,
-                 geometry);
+                 geometry, rawFrame.cameraToLinearSrgb.data());
     timing.markVideoPostDone(command, frameSlot);
     vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, stagePool, 14);
     if (splitSubmit) command = splitSubmit(command);
