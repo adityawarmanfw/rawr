@@ -38,10 +38,10 @@ struct RenderedStillContext {
     void (*filmDiagnosticTap)(void*, VkCommandBuffer, const char*, VkBuffer, uint32_t, uint32_t) = nullptr;
     void* filmDiagnosticUserData = nullptr;
     bool replayBypassFcc = false;  // Diagnostic intervention, never set by normal captures.
-    // Production FCC uses luminance-relative chroma; replay can opt into legacy behavior.
-    bool normalizedFcc = true;
+    // Still FCC uses absolute chroma; diagnostic replay can override it.
+    bool normalizedFcc = false;
     // Edge-aware FCC average: bilateral sigma in Y units (0 = legacy uniform
-    // 3x3). Production default 0.08, wired from JpegCaptureContext.
+    // 3x3). Production still default 0, wired from JpegCaptureContext.
     float fccEdgeSigma = 0.0f;
     // Luminance-preserving chroma bound: >0 keeps display-range RGB in [0,1]
     // and allows scene-linear HDR headroom above 1. 0 = legacy unbounded.
@@ -89,7 +89,7 @@ struct RenderedStillContext {
     bool highlightReconstructionEnabled = true;
     uint32_t highlightReconstructionMethod = 0;
     float highlightThreshold = 1.0f;
-    float highlightCompression = 163.0f;
+    float highlightCompression = 100.0f;
     uint32_t cfaPattern = 0;
     highlight::LensShadingMapSnapshot lensShading;
     // Optional geometric undistort applied in the WB pass (pre-WB camera-linear

@@ -32,6 +32,9 @@ struct PipelineConfig {
     OptimizationMode optimizationMode=OptimizationMode::VngExportBlend;
     // Blend stages. Demosaicer workgroups retain the frozen upstream package defaults.
     uint32_t pixelWorkgroupX=16,pixelWorkgroupY=16;
+    // Same input conditioning as standalone RCD. Production callers enable it;
+    // false retains the unbalanced input contract of frozen reference fixtures.
+    bool autoBalance=false;
 };
 struct PipelineAssets {};
 }

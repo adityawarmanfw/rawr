@@ -29,7 +29,6 @@ class NativePreviewEngine {
     external fun setVideoImageSettings(handle: Long, lensShadingEnabled: Boolean,
         highlightEnabled: Boolean, highlightMethod: Int, highlightThreshold: Float,
         highlightCompression: Float, fccSteps: Int, defringeStrength: Float,
-        defringeEdgeThreshold: Float, defringeLumaFloor: Float,
         waveletDenoiseStrength: Float, waveletDenoiseDetail: Float,
         waveletDenoiseLuma: Float, waveletDenoiseScales: Int)
     external fun setRecordingFps(handle: Long, fps: Int): Boolean

@@ -51,7 +51,7 @@ void recordPostDemosaic(RenderResources& resources, RenderCommandSession& comman
             rendered.filmEnabled
                 ? std::exp2(rawrcam::color::filmExposureEv(rendered.filmLook, rendered.tonemapParams.aePostGain))
                 : std::max(rendered.tonemapParams.aePostGain, 1.0e-6f) * std::exp2(rendered.tonemapParams.exposureEV),
-            rendered.lensShading.view(), rendered.cfaPattern, denoiseRequest);
+            rendered.lensShading.view(), rendered.cfaPattern, denoiseRequest, {}, rendered.sensorToLinearSrgb.data());
     } catch (...) {
         resources.postDemosaic().setDenoiseTileBoundary({});
         throw;
@@ -387,7 +387,8 @@ RenderedStillCompletion executeStillRender(RenderResources& resources, RenderCom
              " threshold=" + std::to_string(rendered.highlightThreshold) +
              " compression=" + std::to_string(rendered.highlightCompression) +
              " defringe=" + std::to_string(done.defringeEnabled ? std::min(rendered.defringeStrength, 1.0f) : 0.0f) +
-             " fccBytes=" + std::to_string(resources.postDemosaic().fccAllocatedBytes()));
+             " fccBytes=" + std::to_string(resources.postDemosaic().fccAllocatedBytes()) +
+             " defringeBytes=" + std::to_string(resources.postDemosaic().defringeAllocatedBytes()));
 
         const bool preWbOk = !rendered.diagnosticsEnabled ||
                              dumpRenderImage(device, sourceImage, rendered.width, rendered.height,

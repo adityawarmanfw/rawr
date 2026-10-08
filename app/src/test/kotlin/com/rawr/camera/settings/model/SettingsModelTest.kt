@@ -77,7 +77,7 @@ class SettingsModelTest {
         val v = PersistentSettingsController().state.value.values
         // Multiframe stays off, but is set up for HDR+ over 16 frames.
         assertFalse(v.experimentalMultiframeEnabled)
-        assertEquals(MultiframeMergeAlgorithm.HdrPlus, v.multiframeTuning.mergeAlgorithm)
+        assertEquals(MultiframeMergeAlgorithm.HdrPlusQuality, v.multiframeTuning.mergeAlgorithm)
         assertEquals(16, v.multiframeTuning.maxFrames)
         // Monitoring.
         assertEquals(setOf(OverlayMode.Peaking, OverlayMode.TonemapShadows, OverlayMode.RawHighlights), v.armedOverlays)
@@ -477,19 +477,18 @@ class SettingsModelTest {
         assertFalse(controller.state.value.values.videoDefringeEnabled)
     }
 
-    @Test fun photoAndVideoFccStepsAreIndependent() {
+    @Test fun videoFccIsSingleStepAndIndependentOfPhoto() {
         val controller = PersistentSettingsController()
         controller.dispatch(SetPhotoFccSteps(4))
-        controller.dispatch(SetVideoFccSteps(6))
 
         val values = controller.state.value.values
         assertEquals(4, values.photoFccSteps)
-        assertEquals(6, values.videoFccSteps)
         // Video FCC defaults off: recordings skip FCC regardless of steps.
         assertEquals(0, values.toVideoImageSettings().fccSteps)
 
+        // Enabled video FCC is fixed at one step.
         controller.dispatch(SetVideoFccEnabled(true))
-        assertEquals(6, controller.state.value.values.toVideoImageSettings().fccSteps)
+        assertEquals(1, controller.state.value.values.toVideoImageSettings().fccSteps)
         assertEquals(4, controller.state.value.values.photoFccSteps)
     }
 
@@ -565,15 +564,15 @@ class SettingsModelTest {
         assertEquals(5, resolved.toModesArray()[4])
     }
 
-    @Test fun multiframeBaseFrameModeDefaultsToMiddleAndIsPersistable() {
+    @Test fun multiframeBaseFrameModeDefaultsToSharpestAndIsPersistable() {
         var persisted: SettingsValues? = null
         val controller = PersistentSettingsController(onValuesChanged = { persisted = it })
-        assertEquals(MultiframeBaseFrameMode.Middle, controller.state.value.values.multiframeBaseFrameMode)
-
-        controller.dispatch(SetMultiframeBaseFrameMode(MultiframeBaseFrameMode.Sharpest))
-
         assertEquals(MultiframeBaseFrameMode.Sharpest, controller.state.value.values.multiframeBaseFrameMode)
-        assertEquals(MultiframeBaseFrameMode.Sharpest, persisted?.multiframeBaseFrameMode)
+
+        controller.dispatch(SetMultiframeBaseFrameMode(MultiframeBaseFrameMode.Middle))
+
+        assertEquals(MultiframeBaseFrameMode.Middle, controller.state.value.values.multiframeBaseFrameMode)
+        assertEquals(MultiframeBaseFrameMode.Middle, persisted?.multiframeBaseFrameMode)
         assertEquals(0, MultiframeBaseFrameMode.Middle.nativeId)
         assertEquals(1, MultiframeBaseFrameMode.Sharpest.nativeId)
     }
@@ -591,7 +590,7 @@ class SettingsModelTest {
     @Test fun multiframeMergeAlgorithmIsPersistableAndAppendedToNativeContract() {
         var persisted: SettingsValues? = null
         val controller = PersistentSettingsController(onValuesChanged = { persisted = it })
-        assertEquals(MultiframeMergeAlgorithm.HdrPlus, controller.state.value.values.multiframeTuning.mergeAlgorithm)
+        assertEquals(MultiframeMergeAlgorithm.HdrPlusQuality, controller.state.value.values.multiframeTuning.mergeAlgorithm)
 
         controller.dispatch(SetMultiframeMergeAlgorithm(MultiframeMergeAlgorithm.Wronski))
         controller.dispatch(SetMultiframeMergeAlgorithm(MultiframeMergeAlgorithm.HdrPlus))

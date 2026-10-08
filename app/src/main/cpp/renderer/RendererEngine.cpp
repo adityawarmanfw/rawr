@@ -1,4 +1,5 @@
 #include "RendererEngine.h"
+#include <rcd/Balance.hpp>
 
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -220,6 +221,21 @@ void RendererEngine::prepare(DngSource& source, const std::string& path, const R
     try {
         MappedFile file(temporary, size_t(w) * h * 8, true);
         auto* dst = static_cast<uint16_t*>(file.data);
+        // Estimate one frame balance with a bounded row buffer, then reuse it
+        // across every tile. Independent tile estimates leave chroma seams.
+        rcd::BalanceAccumulator balance;
+        if (options.demosaic != "DualRcdVng4") {
+            for (uint32_t y = 0; y < h; y += 64) {
+                check();
+                uint32_t rows = std::min(64u, h - y);
+                auto raw = normalized(0, y, w, rows);
+                for (uint32_t by = 0; by < rows; by += 8)
+                    for (uint32_t x = 0; x < w; x += 8)
+                        balance.addBlock(raw.data() + size_t(by) * w + x, w, std::min(8u, w - x),
+                                         std::min(8u, rows - by), static_cast<rcd::BayerPattern>(source.cfa));
+            }
+        }
+        const auto frameBalance = balance.gains();
         // Dual auto contrast uses image-wide statistics: keep it a single frame.
         const uint32_t tile = options.demosaic == "DualRcdVng4" ? std::max(w, h) : 1024, halo = 16;
         // quadfix adapt004 pre-filter halo, frozen after host measurement
@@ -361,6 +377,7 @@ void RendererEngine::prepare(DngSource& source, const std::string& path, const R
                         {output.value.image, output.value.view, output.value.format, VK_IMAGE_LAYOUT_GENERAL, tw, th});
                 } else if (options.demosaic == "DualRcdVng4") {
                     dual::PipelineConfig cfg{};
+                    cfg.autoBalance = true;
                     cfg.width = tw;
                     cfg.height = th;
                     cfg.pattern = static_cast<dual::BayerPattern>(source.cfa);
@@ -376,6 +393,7 @@ void RendererEngine::prepare(DngSource& source, const std::string& path, const R
                         {output.value.image, output.value.view, output.value.format, VK_IMAGE_LAYOUT_GENERAL, tw, th});
                 } else {
                     rcd::PipelineConfig cfg{};
+                    cfg.inputBalance = frameBalance;
                     cfg.width = tw;
                     cfg.height = th;
                     cfg.pattern = static_cast<rcd::BayerPattern>(source.cfa);

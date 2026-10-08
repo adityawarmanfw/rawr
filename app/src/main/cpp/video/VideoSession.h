@@ -78,9 +78,7 @@ class VideoSession final {
     const VideoProcessingConfig& activeProcessingConfig() const noexcept { return activeConfig_; }
     bool processingRestartRequired() const noexcept {
         return ready() && (desiredConfig_.fccSteps != activeConfig_.fccSteps ||
-                           desiredConfig_.defringeStrength != activeConfig_.defringeStrength ||
-                           desiredConfig_.defringeEdgeThreshold != activeConfig_.defringeEdgeThreshold ||
-                           desiredConfig_.defringeLumaFloor != activeConfig_.defringeLumaFloor);
+                           desiredConfig_.defringeStrength != activeConfig_.defringeStrength);
     }
     void stop() noexcept;
     bool ready() const noexcept { return output_.ready(); }

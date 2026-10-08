@@ -60,7 +60,6 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
         native.setVideoImageSettings(nativeHandle, settings.lensShadingEnabled,
             settings.highlightEnabled, settings.highlightMethod, settings.highlightThreshold,
             settings.highlightCompression, settings.fccSteps, settings.defringeStrength,
-            settings.defringeEdgeThreshold, settings.defringeLumaFloor,
             settings.waveletDenoiseStrength, settings.waveletDenoiseDetail,
             settings.waveletDenoiseLuma, settings.waveletDenoiseScales)
         }

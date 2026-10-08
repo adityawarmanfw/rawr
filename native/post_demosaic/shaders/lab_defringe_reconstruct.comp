@@ -1,0 +1,104 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "lab_defringe_common.glsl"
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(binding = 0, r32ui) uniform readonly uimage2D src;
+float scoreAt(ivec2 p) {
+    vec2 v = unpackHalf2x16(imageLoad(src, ivec2(p.x / 2, p.y)).x);
+    return (p.x & 1) == 0 ? v.x : v.y;
+}
+layout(binding = 1, rgba16f) uniform writeonly image2D dst;
+layout(binding = 2, rgba16f) uniform readonly image2D original;
+layout(std430, binding = 3) readonly buffer Stats {
+    float mean;
+    float blocks[];
+}
+stats;
+shared float ls[576], as[576], bs[576], ws[576];
+shared uint groupNeeded;
+shared float maxima[256], columnMax[16], groupMax;
+void main() {
+    uint lane = gl_LocalInvocationIndex;
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy), maxp = ivec2(pc.width, pc.height) - 1;
+    bool valid = p.x < int(pc.width) && p.y < int(pc.height);
+    vec4 orig = imageLoad(original, clamp(p, ivec2(0), maxp));
+    float score = scoreAt(clamp(p, ivec2(0), maxp));
+    float threshold = 5. * pow(pc.threshold / 33., 2.) * stats.mean;
+    bool candidate = valid && pc.strength > 0. && stats.mean > 1e-8 && score > .75 * threshold;
+    if (lane == 0) groupNeeded = 0;
+    barrier();
+    if (candidate) atomicOr(groupNeeded, 1);
+    barrier();
+    if (groupNeeded == 0) {
+        if (valid) imageStore(dst, p, orig);
+        return;
+    }
+    ivec2 origin = ivec2(gl_WorkGroupID.xy) * 16 - 4;
+    // Upper bound on every candidate's 9x9 neighborhood brightness.
+    // Rejecting a whole group here cannot reject a pixel that passes the exact guard below.
+    float localMax = 0.;
+    for (uint i = lane; i < 576; i += 256) {
+        ivec2 q = clamp(origin + ivec2(i % 24, i / 24), ivec2(0), maxp);
+        float Y = (cameraToXyz * imageLoad(original, q).rgb).y;
+        ls[i] = Y;
+        localMax = max(localMax, Y);
+    }
+    maxima[lane] = localMax;
+    barrier();
+    if (lane < 16) {
+        float value = 0.;
+        for (uint i = 0; i < 16; i++) value = max(value, maxima[lane + 16 * i]);
+        columnMax[lane] = value;
+    }
+    barrier();
+    if (lane == 0) {
+        float value = 0.;
+        for (uint i = 0; i < 16; i++) value = max(value, columnMax[i]);
+        groupMax = value;
+        groupNeeded = 0;
+    }
+    barrier();
+    float centerY = (cameraToXyz * orig.rgb).y;
+    candidate = candidate && (pc.edgeMode <= 0. || groupMax - centerY > .10);
+    if (candidate) atomicOr(groupNeeded, 1);
+    barrier();
+    if (groupNeeded == 0) {
+        if (valid) imageStore(dst, p, orig);
+        return;
+    }
+    // Reconstruct neighbor chroma only for groups that can change.
+    for (uint i = lane; i < 576; i += 256) {
+        ivec2 q = clamp(origin + ivec2(i % 24, i / 24), ivec2(0), maxp);
+        vec2 ab = unpackHalf2x16(packHalf2x16(clamp(toLab(imageLoad(original, q).rgb).yz, vec2(-65504.), vec2(65504.))));
+        float w = 1. / max(scoreAt(q) + stats.mean, 1e-8);
+        as[i] = ab.x * w;
+        bs[i] = ab.y * w;
+        ws[i] = w;
+    }
+    barrier();
+    if (!valid) return;
+    if (!candidate) {
+        imageStore(dst, p, orig);
+        return;
+    }
+    vec3 lab = toLab(orig.rgb);
+    float confidence = smoothstep(.75 * threshold, 1.25 * threshold, score);
+    float maxY = centerY;
+    vec2 sum = vec2(0);
+    float norm = 0.;
+    ivec2 local = ivec2(gl_LocalInvocationID.xy);
+    for (int y = 0; y < 9; y++)
+        for (int x = 0; x < 9; x++) {
+            int at = (local.y + y) * 24 + local.x + x;
+            sum += vec2(as[at], bs[at]);
+            norm += ws[at];
+            maxY = max(maxY, ls[at]);
+        }
+    float edge = pc.edgeMode > 0. ? smoothstep(.10, .25, maxY - centerY) : 1.;
+    float weight = clamp(pc.strength * edge * confidence, 0., 1.);
+    if (weight <= 0.) {
+        imageStore(dst, p, orig);
+        return;
+    }
+    imageStore(dst, p, vec4(clamp(fromLab(vec3(lab.x, mix(lab.yz, sum / norm, weight))), vec3(-60000.), vec3(60000.)), orig.a));
+}

@@ -69,10 +69,10 @@ class PersistentSettingsController(
 
             is SetDemosaicAlgorithm, is SetDualAutoContrast, is SetDualContrastPercent,
             is SetQuadfixEnabled, is SetQuadfixFastMedian, is SetPhotoFccSteps,
-            is SetVideoFccEnabled, is SetVideoFccSteps, is SetVideoEncoder,
+            is SetVideoFccEnabled, is SetVideoEncoder,
             is SetPhotoDefringeEnabled, is SetPhotoDefringeStrength, is SetPhotoDefringeEdgeThreshold,
             is SetPhotoDefringeLumaFloor, is SetVideoDefringeEnabled, is SetVideoDefringeStrength,
-            is SetVideoDefringeEdgeThreshold, is SetVideoDefringeLumaFloor, is SetPhotoLensShadingEnabled,
+            is SetPhotoLensShadingEnabled,
             is SetVideoLensShadingEnabled, is SetDistortionCorrectionEnabled, is SetPhotoHighlightEnabled,
             is SetPhotoHighlightMethod, is SetPhotoHighlightThreshold, is SetPhotoHighlightCompression,
             is SetVideoHighlightEnabled, is SetVideoHighlightMethod, is SetVideoHighlightThreshold,

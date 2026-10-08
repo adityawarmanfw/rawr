@@ -2,6 +2,7 @@
 #include "post_demosaic/PostDemosaicProcessor.h"
 
 #include <dual/Dual.hpp>
+#include <rcd/Rcd.hpp>
 #include <quadfix/Pipeline.hpp>
 #include <gainmap/GainmapCompute.h>
 #include <spektrafilm/SpektraFilm.h>
@@ -55,9 +56,12 @@ struct Arguments {
     bool linearRgb = false;
     bool demosaicedRgb = false;
     bool dumpDemosaic = false;
+    bool rcdOnly = false;
     uint32_t benchmarkPost = 0;
     std::filesystem::path config;
     std::filesystem::path outputDir;
+    // Technical DWG/Intermediate LUT, producing display-ready encoded sRGB.
+    std::filesystem::path technicalLutDwg;
     bool hasExposureEV = false;
     bool singleVariant = false;
     bool singleRecovery = true;
@@ -70,7 +74,7 @@ struct Arguments {
     float rtHighlightCompression = 0.0f;
     bool appColoropp = false;
     float appColoroppThreshold = 1.0f;
-    float appColoroppCompression = 163.0f;
+    float appColoroppCompression = 100.0f;
     // Film A/B replay: record the demosaiced frame through SpektraFilm
     // instead of tonemap. Cases are "filmEV:printEV" pairs; each renders
     // once with the given EVs on the shot look.
@@ -197,9 +201,11 @@ Arguments parseArguments(int argc, char** argv) {
         else if (value == "--linear-rgb") args.linearRgb = true;
         else if (value == "--demosaiced-rgb") args.demosaicedRgb = true;
         else if (value == "--dump-demosaic") args.dumpDemosaic = true;
+        else if (value == "--rcd") args.rcdOnly = true;
         else if (value == "--benchmark-post" && i + 1 < argc) args.benchmarkPost = std::stoul(argv[++i]);
         else if (value == "--config" && i + 1 < argc) args.config = argv[++i];
         else if (value == "--output-dir" && i + 1 < argc) args.outputDir = argv[++i];
+        else if (value == "--technical-lut-dwg" && i + 1 < argc) args.technicalLutDwg = argv[++i];
         else if (value == "--quadfix") args.quadfix = true;
         else if (value == "--quadfix-fast-median") { args.quadfix = true; args.quadfixFastMedian = true; }
         else if (value == "--single-recovery" && i + 1 < argc) {
@@ -449,6 +455,13 @@ int main(int argc, char** argv) {
         if (args.hasExposureEV) config.exposureEV = args.exposureEV;
         std::filesystem::create_directories(args.outputDir);
 
+        constexpr float ap1ToSrgb[9] = {1.70485868f, -.621716f, -.08314268f, -.13007682f, 1.14073577f,
+                                        -.01065895f, -.02396407f, -.12897551f, 1.15293958f};
+        std::array<float, 9> cameraToSrgb{};
+        for (int y = 0; y < 3; ++y)
+            for (int x = 0; x < 3; ++x)
+                for (int k = 0; k < 3; ++k)
+                    cameraToSrgb[y * 3 + x] += ap1ToSrgb[y * 3 + k] * config.cameraToWorking[x * 3 + k];
         const auto tagged = readBytes(args.input);
         const size_t expected = static_cast<size_t>(config.width) * config.height * ((args.linearRgb || args.demosaicedRgb) ? 8u : 2u);
         if (tagged.size() != expected) {
@@ -527,6 +540,7 @@ int main(int argc, char** argv) {
             return readWords(shaderDir / (std::string(name) + ".spv"));
         };
         dual::PipelineConfig dualConfig{};
+        dualConfig.autoBalance = true;
         dualConfig.width = config.width;
         dualConfig.height = config.height;
         dualConfig.pattern = bayerPattern(config.cfa);
@@ -539,15 +553,39 @@ int main(int argc, char** argv) {
         dualConfig.telemetry = true;
         dualConfig.optimizationMode = dual::OptimizationMode::VngExportBlend;
         std::unique_ptr<dual::DualDemosaicPipeline> demosaic;
-        if (!args.linearRgb && !args.demosaicedRgb) demosaic = std::make_unique<dual::DualDemosaicPipeline>(
+        if (args.rcdOnly && (args.quadfix || args.linearRgb || args.demosaicedRgb))
+            throw std::runtime_error("--rcd requires packed CFA input without quadfix");
+        std::unique_ptr<rcd::RcdPipeline> rcdDemosaic;
+        if (args.rcdOnly) {
+            rcd::PipelineConfig cfg{};
+            cfg.autoBalance = true;
+            cfg.width = config.width;
+            cfg.height = config.height;
+            cfg.pattern = static_cast<rcd::BayerPattern>(config.cfa);
+            cfg.inputMode = rcd::InputMode::PackedCfaRgba16fImage;
+            rcdDemosaic = std::make_unique<rcd::RcdPipeline>(
+                rcd::VulkanContext{context.pd, context.dev, context.qf, nullptr}, shaderProvider, cfg);
+        }
+        if (!args.rcdOnly && !args.linearRgb && !args.demosaicedRgb) demosaic = std::make_unique<dual::DualDemosaicPipeline>(
             dual::VulkanContext{context.pd, context.dev, context.qf, nullptr}, shaderProvider, dualConfig);
 
+        if (!args.technicalLutDwg.empty() && args.film)
+            throw std::runtime_error("--technical-lut-dwg cannot be combined with --film");
+        tonemap::lut::LutChain technicalLut;
+        if (!args.technicalLutDwg.empty()) {
+            technicalLut.inputSpace = {tonemap::color::Gamut::DaVinciWideGamut,
+                                      tonemap::color::TransferFunction::DaVinciIntermediate};
+            technicalLut.placement = tonemap::lut::LutPlacement::RenderTransform;
+            technicalLut.afterAction = tonemap::lut::LutAfterAction::UseDirectly;
+            technicalLut.stages.push_back(tonemap::lut::parseCubeFile(args.technicalLutDwg.string()));
+        }
         auto tonemapSpirv = readWords(shaderDir / "tonemap.comp.spv");
         tonemap::TonemapCreateInfo tonemapCreate{};
         tonemapCreate.context = {context.pd, context.dev, nullptr};
         tonemapCreate.shaderSpirv = tonemapSpirv.data();
         tonemapCreate.shaderSpirvBytes = tonemapSpirv.size() * sizeof(uint32_t);
         tonemapCreate.maxFramesInFlight = 1;
+        if (!args.technicalLutDwg.empty()) tonemapCreate.lutChain = &technicalLut;
         tonemap::TonemapEngine tonemap(tonemapCreate);
 
         // Production UltraHDR gain map stage (optional).
@@ -659,10 +697,11 @@ int main(int argc, char** argv) {
                  << "gpu=" << context.prop.deviceName << "\n"
                  << "width=" << config.width << "\nheight=" << config.height << "\n"
                  << "cfa=" << config.cfa << "\n"
-                 << "demosaic=production_dual_rcd_vng4\n"
+                 << "demosaic=" << (args.rcdOnly ? "production_rcd" : "production_dual_rcd_vng4") << "\n"
                  << "quadfix=" << (args.quadfix ? (args.quadfixFastMedian ? "fast" : "exact") : "off") << "\n"
                  << "post=production_wb_highlight_fcc\n"
-                 << "tonemap=production_rawr_base\n"
+                 << "tonemap=" << (args.technicalLutDwg.empty() ? "production_rawr_base" : "technical_lut_dwg_direct") << "\n"
+                 << "technicalLutDwg=" << args.technicalLutDwg.string() << "\n"
                  << "clippedComponents=" << clippedComponents << "\n";
         // Direct-RGB checkpoints (--linear-rgb / --dump-linear) are pre-LSC
         // merge output. Device V2 JPEG applies LSC in prepare_rgb (~1.78x
@@ -764,7 +803,7 @@ int main(int argc, char** argv) {
                 }
                 rawr::post::PostDemosaicProcessor post(
                     context.pd, context.dev, context.qf, config.width, config.height, config.fccSteps,
-                    true,config.fccEdgeSigma,config.fccChromaBound,config.defringeStrength,
+                    false,config.fccEdgeSigma,config.fccChromaBound,config.defringeStrength,
                     config.defringeEdgeThreshold,config.defringeLumaFloor);
 
                 try {
@@ -789,6 +828,14 @@ int main(int argc, char** argv) {
                     dual::NormalizedBayerBufferView normalized{
                         {quadFiltered.b,0,rawBytes},config.width,config.height,bayerPattern(config.cfa)};
                     demosaic->record(command,normalized,demosaicOutput);
+                } else if (rcdDemosaic) {
+                    rcd::PackedCfaImageView rcdInput{
+                        packedImage.i, packedImage.v, VK_FORMAT_R16G16B16A16_SFLOAT,
+                        VK_IMAGE_LAYOUT_GENERAL, config.width / 2u, config.height / 2u,
+                        config.width, config.height, static_cast<rcd::BayerPattern>(config.cfa)};
+                    rcd::LinearRgbImage rcdOutput{source.i, source.v, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                VK_IMAGE_LAYOUT_GENERAL, config.width, config.height};
+                    rcdDemosaic->record(command, rcdInput, rcdOutput);
                 } else demosaic->record(command, input, demosaicOutput);
                 }
 
@@ -829,7 +876,7 @@ int main(int argc, char** argv) {
                 post.record(command, source.i, source.v, clipImage.i, clipImage.v,
                             config.wbRgb, recovery, {}, VK_NULL_HANDLE, args.preserveReconstructedHighlights,
                             args.appColoropp ? 1u : 0u, args.appColoroppThreshold,
-                            args.appColoroppCompression, args.postGain * std::exp2(config.exposureEV));
+                            args.appColoroppCompression, args.postGain * std::exp2(config.exposureEV), {}, config.cfa, {}, {}, cameraToSrgb.data());
 
                 auto postReady = imageBarrier(post.sdrOutputImage(), VK_ACCESS_SHADER_WRITE_BIT,
                                               VK_ACCESS_SHADER_READ_BIT,
@@ -1127,7 +1174,7 @@ int main(int argc, char** argv) {
                                     config.wbRgb, recovery, {}, VK_NULL_HANDLE,
                                     args.preserveReconstructedHighlights, args.appColoropp ? 1u : 0u,
                                     args.appColoroppThreshold, args.appColoroppCompression,
-                                    args.postGain * std::exp2(config.exposureEV));
+                                    args.postGain * std::exp2(config.exposureEV), {}, config.cfa, {}, {}, cameraToSrgb.data());
                         vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, queries, 1);
                         submitAndWait(context, command);
                         uint64_t timestamps[2]{};

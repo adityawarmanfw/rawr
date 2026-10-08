@@ -10,9 +10,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -157,13 +159,7 @@ private fun TonemapProfilesRow(
     onOpenParams: () -> Unit
 ) {
     val haptics = LocalCaptureHaptics.current
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(bottom = 2.dp, end = StripDimens.TrailingInset),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        StripBackButton(onBack)
+    StripNavigationRow(onBack, Modifier.padding(bottom = 2.dp)) {
         LazyRow(
             Modifier
                 .weight(1f)
@@ -206,7 +202,7 @@ private fun TonemapProfilesRow(
                 }
             }
         }
-        if (!profiles.log) StripParamsEntry(onOpenParams)
+        if (!profiles.log) StripParamsEntry(onOpenParams, Modifier.padding(start = StripDimens.ParamSpacing))
     }
 }
 
@@ -220,65 +216,65 @@ private fun TonemapParamsRow(
     dispatch: CaptureDispatch
 ) {
     val haptics = LocalCaptureHaptics.current
-    Row(
+    BoxWithConstraints(
         Modifier
             .fillMaxWidth()
-            .padding(bottom = 2.dp, end = StripDimens.TrailingInset),
-        verticalAlignment = Alignment.CenterVertically
+            .padding(horizontal = CaptureDimens.CompactParamRowEdgeInset)
+            .padding(bottom = 2.dp)
     ) {
-        StripBackButton(onBack)
-        // Parked at the thumb: EV starts at the right edge with a peek of
-        // the next cell; the rest scrolls in from the right, empty space left.
-        BoxWithConstraints(
-            Modifier
-                .weight(1f)
-                .height(StripDimens.ParamRowHeight)
+        val widths = paramsCellWidths(maxWidth)
+        val sliderWidths = widths.subList(1, 4)
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(CaptureDimens.ControlGap),
+            verticalAlignment = Alignment.CenterVertically
         ) {
+            StripBackButton(onBack, Modifier.width(widths[0]))
             LazyRow(
                 Modifier
-                    .fillMaxSize()
+                    .weight(CaptureDimens.CompactParamColumnWeights.subList(1, 4).sum())
+                    .height(StripDimens.ParamRowHeight)
                     .testTag(CaptureTestTags.TONEMAP_STRIP_PARAMS),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(StripDimens.ParamSpacing, Alignment.End),
-                contentPadding = PaddingValues(start = parkedParamsPadding(maxWidth))
+                horizontalArrangement = Arrangement.spacedBy(CaptureDimens.ControlGap)
             ) {
-                items(TonemapCatalog.all, key = { it.jsonKey }) { descriptor ->
+                itemsIndexed(TonemapCatalog.all, key = { _, item -> item.jsonKey }) { index, descriptor ->
+                    val cellModifier = Modifier.width(sliderWidths[index % sliderWidths.size])
                     if (descriptor.param == null) {
-                        RenderExposureParamItem(descriptor, state, dispatch)
+                        RenderExposureParamItem(descriptor, state, dispatch, cellModifier)
                     } else {
-                        TonemapParamItem(descriptor, state, dispatch)
+                        TonemapParamItem(descriptor, state, dispatch, cellModifier)
                     }
                 }
             }
-        }
-        Box(
-            Modifier
-                .widthIn(max = 120.dp)
-                .height(CaptureDimens.CompactParamRowHeight)
-                .captureClickable(shape = CaptureTextRippleShape) {
-                    haptics.selection()
-                    onOpenProfiles()
-                }.semantics {
-                    contentDescription = "Render profile $profileLabel. Tap to choose profile."
-                    onClick {
+            Box(
+                Modifier
+                    .width(widths[4])
+                    .height(CaptureDimens.CompactParamRowHeight)
+                    .captureClickable(shape = CaptureTextRippleShape) {
                         haptics.selection()
                         onOpenProfiles()
-                        true
-                    }
-                },
-            contentAlignment = Alignment.CenterEnd
-        ) {
-            Text(
-                if (modified) "$profileLabel •" else profileLabel,
-                color = if (modified) CaptureColors.AccentSoft else Color.White.copy(alpha = .95f),
-                fontFamily = CaptureMono,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 10.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                style = ViewfinderTextStyle,
-                modifier = Modifier.padding(start = 8.dp)
-            )
+                    }.semantics {
+                        contentDescription = "Render profile $profileLabel. Tap to choose profile."
+                        onClick {
+                            haptics.selection()
+                            onOpenProfiles()
+                            true
+                        }
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    if (modified) "$profileLabel •" else profileLabel,
+                    color = if (modified) CaptureColors.AccentSoft else Color.White.copy(alpha = .95f),
+                    fontFamily = CaptureMono,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = ViewfinderTextStyle
+                )
+            }
         }
     }
 }
@@ -287,7 +283,8 @@ private fun TonemapParamsRow(
 private fun TonemapParamItem(
     descriptor: TonemapParam,
     state: CaptureUiState,
-    dispatch: CaptureDispatch
+    dispatch: CaptureDispatch,
+    modifier: Modifier
 ) {
     val parameter = requireNotNull(descriptor.param)
     val committed = TonemapCatalog.valueOf(state, parameter)
@@ -309,6 +306,7 @@ private fun TonemapParamItem(
         max = descriptor.maximum,
         step = descriptor.step,
         decimals = descriptor.decimals,
+        modifier = modifier,
         testTag = CaptureTestTags.tonemapParam(descriptor.jsonKey),
         onDragStarted = { gesture = latestCommitted },
         onScrub = { nextFloat ->
@@ -335,7 +333,8 @@ private fun TonemapParamItem(
 private fun RenderExposureParamItem(
     descriptor: TonemapParam,
     state: CaptureUiState,
-    dispatch: CaptureDispatch
+    dispatch: CaptureDispatch,
+    modifier: Modifier
 ) {
     val committed = state.renderExposureTenths
     val latestCommitted by rememberUpdatedState(committed)
@@ -353,6 +352,7 @@ private fun RenderExposureParamItem(
         max = descriptor.maximum,
         step = descriptor.step,
         decimals = descriptor.decimals,
+        modifier = modifier,
         testTag = CaptureTestTags.tonemapParam(descriptor.jsonKey),
         onDragStarted = { gesture = latestCommitted },
         onScrub = { nextEv ->

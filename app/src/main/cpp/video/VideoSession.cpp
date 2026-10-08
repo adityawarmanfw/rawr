@@ -74,9 +74,7 @@ VideoSession::ProcessingKey VideoSession::predictedKey(uint32_t width, uint32_t 
                          rawHeight,
                          output_.preferredFormat(bitDepth),
                          desiredConfig_.fccSteps,
-                         desiredConfig_.defringeStrength,
-                         desiredConfig_.defringeEdgeThreshold,
-                         desiredConfig_.defringeLumaFloor};
+                         desiredConfig_.defringeStrength};
 }
 void VideoSession::setProcessingConfig(const VideoProcessingConfig& config) noexcept {
     desiredConfig_ = config;
@@ -112,9 +110,7 @@ bool VideoSession::start(JNIEnv* env, jobject javaSurface, uint32_t width, uint3
                           rawHeight,
                           output_.format(),
                           activeConfig_.fccSteps,
-                          activeConfig_.defringeStrength,
-                          activeConfig_.defringeEdgeThreshold,
-                          activeConfig_.defringeLumaFloor};
+                          activeConfig_.defringeStrength};
         const bool reused = hasProcessing(key);
         if (!reused) {
             resources_.release();

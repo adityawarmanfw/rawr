@@ -89,6 +89,7 @@ internal fun CompactViewfinderStrip(
 
 @Composable
 internal fun CompactParamRow(state: CaptureUiState, dispatch: CaptureDispatch, modifier: Modifier = Modifier) {
+    val weights = CaptureDimens.CompactParamColumnWeights
     Row(
         modifier
             .fillMaxWidth()
@@ -97,10 +98,10 @@ internal fun CompactParamRow(state: CaptureUiState, dispatch: CaptureDispatch, m
             .testTag(CaptureTestTags.COMPACT_PARAM_ROW),
         horizontalArrangement = Arrangement.spacedBy(CaptureDimens.ControlGap)
     ) {
-        CompactExposureButton(ExposureParameter.Iso, state, dispatch, Modifier.weight(1f).fillMaxHeight())
-        CompactExposureButton(ExposureParameter.Shutter, state, dispatch, Modifier.weight(1f).fillMaxHeight())
-        CompactExposureButton(ExposureParameter.Ev, state, dispatch, Modifier.weight(1f).fillMaxHeight())
-        CompactWbButton(state, dispatch, Modifier.weight(1.15f).fillMaxHeight())
-        CompactFocusButton(state, dispatch, Modifier.weight(1f).fillMaxHeight())
+        CompactExposureButton(ExposureParameter.Iso, state, dispatch, Modifier.weight(weights[0]).fillMaxHeight())
+        CompactExposureButton(ExposureParameter.Shutter, state, dispatch, Modifier.weight(weights[1]).fillMaxHeight())
+        CompactExposureButton(ExposureParameter.Ev, state, dispatch, Modifier.weight(weights[2]).fillMaxHeight())
+        CompactWbButton(state, dispatch, Modifier.weight(weights[3]).fillMaxHeight())
+        CompactFocusButton(state, dispatch, Modifier.weight(weights[4]).fillMaxHeight())
     }
 }

@@ -86,6 +86,7 @@ void RcdStillProcessor::ensureRuntimeResources() {
 
     ::rcd::PipelineAssets assets{};
     ::rcd::PipelineConfig cfg{};
+    cfg.autoBalance = true;
     cfg.width = width_;
     cfg.height = height_;
     cfg.pattern = pattern_;

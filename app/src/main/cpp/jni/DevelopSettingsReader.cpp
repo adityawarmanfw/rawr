@@ -109,9 +109,9 @@ develop::DevelopSettings readRendererDevelopSettings(Json& json) {
         out.colorRenderProfile = rawrcam::tonemap_integration::ColorRenderProfile::SRgb;
         out.importedLutProfileId.clear();
     }
-    out.fccSteps = uint32_t(json.number("fccSteps", 1));
-    out.fccEdgeSigma = .08f;
-    out.fccChromaBound = 1;
+    out.fccSteps = uint32_t(json.number("fccSteps", 2));
+    out.fccEdgeSigma = 0;
+    out.fccChromaBound = 0;
     out.defringeStrength = json.flag("defringeEnabled", true) ? float(json.number("defringeStrength", 1)) : 0;
     out.defringeEdgeThreshold = float(json.number("defringeEdgeThreshold", .02));
     out.defringeLumaFloor = float(json.number("defringeLumaFloor", .08));
@@ -134,7 +134,7 @@ develop::DevelopSettings readRendererDevelopSettings(Json& json) {
     out.highlightReconstructionEnabled = json.flag("highlightReconstructionEnabled", true);
     out.highlightReconstructionMethod = std::clamp(uint32_t(json.number("highlightReconstructionMethod", 0)), 0u, 1u);
     out.highlightThreshold = std::clamp(float(json.number("highlightThreshold", 1)), 0.5f, 2.0f);
-    out.highlightCompression = std::clamp(float(json.number("highlightCompression", 163)), 0.0f, 300.0f);
+    out.highlightCompression = std::clamp(float(json.number("highlightCompression", 100)), 0.0f, 300.0f);
 
     return out;
 }

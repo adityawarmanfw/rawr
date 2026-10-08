@@ -202,7 +202,7 @@ internal object RendererRecipe {
             photoHighlightEnabled = j.optBoolean("highlightReconstructionEnabled", true),
             photoHighlightMethod = j.optInt("highlightReconstructionMethod", 0).coerceIn(0, 1),
             photoHighlightThreshold = j.optDouble("highlightThreshold", 1.0).toFloat().coerceIn(0.5f, 2f),
-            photoHighlightCompression = j.optDouble("highlightCompression", 163.0).toFloat().coerceIn(0f, 300f),
+            photoHighlightCompression = j.optDouble("highlightCompression", 100.0).toFloat().coerceIn(0f, 300f),
             ultraHdrEnabled = j.optBoolean("ultraHdrEnabled", d.ultraHdrEnabled),
             demosaicAlgorithm = DemosaicAlgorithm.valueOf(j.optString("demosaicAlgorithm", "Rcd")),
             dualAutoContrast = j.optBoolean("dualAutoContrast", true),

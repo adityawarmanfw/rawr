@@ -184,6 +184,7 @@ struct DualDemosaicPipeline::Impl {
     }
     void createSubPipelines() {
         rcd::PipelineConfig r{};
+        r.autoBalance = cfg.autoBalance;
         r.width = cfg.width;
         r.height = cfg.height;
         r.pattern = rp(cfg.pattern);

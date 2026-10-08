@@ -27,6 +27,10 @@ foreach(SPEC "rcd_direction;4;32" "rcd_green;4;32" "rcd_diagonal;32;8" "rcd_gree
     DEPENDS ${RCD_SH}/rcd_common.glsl)
 endforeach()
 
+foreach(NAME rcd_balance rcd_balance_reduce)
+  dm_embed(${NAME} ${RCD_SH}/${NAME}.comp FLAGS --target-env=vulkan1.1 -O -I${RCD_SH} DEPENDS ${RCD_SH}/rcd_common.glsl)
+endforeach()
+
 set(VNG_SH ${DM}/vng4/shaders)
 # vng4_green_diagnostic is a validation-only shader and is not embedded.
 foreach(SPEC "vng4_linear;16;16" "vng4_green;16;16" "vng4_export;16;16" "vng4_export_blend;16;16")

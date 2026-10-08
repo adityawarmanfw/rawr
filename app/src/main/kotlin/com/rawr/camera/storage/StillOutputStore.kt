@@ -99,15 +99,13 @@ class StillOutputStore(
     ): PreparedCapture? {
         val base = captureBaseName(wallClockMillis)
         val destination = CaptureSaveLocation.fromId(saveLocationId)
-        val treeUri = destination.treeUri?.toUri()
-        val relativePath = destination.relativePath
         require(dngEnabled || jpegEnabled)
         val multiframe = multiframeFrames >= 2
         val conditional = !dngEnabled && jpegEnabled && filmFallback
         val suffix = if (multiframe) "_MF$multiframeFrames" else ""
         val opened = mutableListOf<PreparedFile>()
         fun target(name: String, mime: String): PreparedFile =
-            checkNotNull(prepareFile(name, mime, relativePath, treeUri)).also { opened.add(it) }
+            checkNotNull(prepareFile(name, mime, destination)).also { opened.add(it) }
         val output = try {
             PreparedCapture(
                 dng = if ((!multiframe && (dngEnabled || conditional)) || (multiframe && dngEnabled && saveBaseDng))
@@ -381,28 +379,33 @@ class StillOutputStore(
         return CaptureFileNames.baseName(uniqueMillis)
     }
 
-    private fun prepareFile(displayName: String, mimeType: String, relativePath: String, treeUri: Uri?): PreparedFile? {
+    private fun prepareFile(displayName: String, mimeType: String, destination: CaptureSaveLocation): PreparedFile? {
         val resolver = context.contentResolver
-        val uri =
-            if (treeUri != null) {
-                runCatching {
-                    val parent =
-                        DocumentsContract.buildDocumentUriUsingTree(
-                            treeUri,
-                            DocumentsContract.getTreeDocumentId(treeUri)
-                        )
-                    DocumentsContract.createDocument(resolver, parent, mimeType, displayName)
-                }.getOrNull() ?: return null
+        val treeUri = destination.treeUri?.toUri()
+        val mediaUri =
+            if (destination.relativePath.isEmpty()) {
+                null
             } else {
                 val values =
                     ContentValues().apply {
                         put(MediaStore.Images.Media.DISPLAY_NAME, displayName)
                         put(MediaStore.Images.Media.MIME_TYPE, mimeType)
-                        put(MediaStore.Images.Media.RELATIVE_PATH, relativePath)
+                        put(MediaStore.Images.Media.RELATIVE_PATH, destination.relativePath)
                         put(MediaStore.Images.Media.IS_PENDING, 1)
                     }
-                resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return null
+                // A picked folder's volume may be unmounted; its tree grant is the fallback.
+                if (treeUri == null) resolver.insert(destination.imagesCollection(), values) ?: return null
+                else runCatching { resolver.insert(destination.imagesCollection(), values) }.getOrNull()
             }
+        val uri =
+            mediaUri ?: runCatching {
+                val parent =
+                    DocumentsContract.buildDocumentUriUsingTree(
+                        treeUri,
+                        DocumentsContract.getTreeDocumentId(treeUri)
+                    )
+                DocumentsContract.createDocument(resolver, parent, mimeType, displayName)
+            }.getOrNull() ?: return null
         val pfd =
             resolver.openFileDescriptor(uri, "w") ?: run {
                 deleteUri(uri)

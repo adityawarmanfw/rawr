@@ -20,7 +20,7 @@ struct CaptureJob {
     bool filmEnabled = false, jpegRequested = false, multiframe = false;
     spektrafilm_native::FilmLook film{};
     multiframe::MultiframeTuning tuning{};
-    multiframe::MultiframeBaseFrameMode baseFrameMode{};
+    multiframe::MultiframeBaseFrameMode baseFrameMode = multiframe::MultiframeBaseFrameMode::Sharpest;
     // Per-frame sharpness scores, index-aligned with metadata/parameters.
     // Empty when unmeasured (Middle mode, fallback, old jobs).
     std::vector<float> sharpnessScores{};

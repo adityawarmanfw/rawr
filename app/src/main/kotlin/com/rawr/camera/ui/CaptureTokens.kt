@@ -81,6 +81,7 @@ internal object CaptureDimens {
     val CompactParamRowHeight = 30.dp
     val CompactParamTwoLineHeight = 46.dp
     val CompactParamRowEdgeInset = 8.dp
+    val CompactParamColumnWeights = listOf(1f, 1f, 1f, 1.15f, 1f)
     val CompactParamRadius = 12.dp
     val CompactPillHeight = 48.dp
     val CompactPillMinWidth = 56.dp

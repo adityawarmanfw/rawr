@@ -555,7 +555,6 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
             // off (forced off once more in the v29 -> v30 migration).
             photoFccSteps = (p[Keys.photoFccSteps] ?: p[Keys.fccSteps] ?: d.photoFccSteps).coerceIn(1, 8),
             videoFccEnabled = p[Keys.videoFccEnabled] ?: d.videoFccEnabled,
-            videoFccSteps = (p[Keys.videoFccSteps] ?: p[Keys.fccSteps] ?: d.videoFccSteps).coerceIn(1, 8),
             photoDefringeEnabled = p[Keys.photoDefringeEnabled] ?: p[Keys.defringeEnabled] ?: d.photoDefringeEnabled,
             photoDefringeStrength = (p[Keys.photoDefringeStrength] ?: p[Keys.defringeStrength] ?: d.photoDefringeStrength).coerceIn(0f, 1f),
             photoDefringeEdgeThreshold =
@@ -563,9 +562,6 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
             photoDefringeLumaFloor = (p[Keys.photoDefringeLumaFloor] ?: p[Keys.defringeLumaFloor] ?: d.photoDefringeLumaFloor).coerceIn(0f, 0.5f),
             videoDefringeEnabled = p[Keys.videoDefringeEnabled] ?: d.videoDefringeEnabled,
             videoDefringeStrength = (p[Keys.videoDefringeStrength] ?: p[Keys.defringeStrength] ?: d.videoDefringeStrength).coerceIn(0f, 1f),
-            videoDefringeEdgeThreshold =
-                (p[Keys.videoDefringeEdgeThreshold] ?: p[Keys.defringeEdgeThreshold] ?: d.videoDefringeEdgeThreshold).coerceIn(0.005f, 0.2f),
-            videoDefringeLumaFloor = (p[Keys.videoDefringeLumaFloor] ?: p[Keys.defringeLumaFloor] ?: d.videoDefringeLumaFloor).coerceIn(0f, 0.5f),
             // Photo denoise keeps the stable eleven-key schema; video
             // denoise is three new wavelet-only keys (no Galosh on video).
             photoDenoise = run {
@@ -777,15 +773,12 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.quadfixFastMedian] = v.quadfixFastMedian
         p[Keys.photoFccSteps] = v.photoFccSteps.coerceIn(1, 8)
         p[Keys.videoFccEnabled] = v.videoFccEnabled
-        p[Keys.videoFccSteps] = v.videoFccSteps.coerceIn(1, 8)
         p[Keys.photoDefringeEnabled] = v.photoDefringeEnabled
         p[Keys.photoDefringeStrength] = v.photoDefringeStrength.coerceIn(0f, 1f)
         p[Keys.photoDefringeEdgeThreshold] = v.photoDefringeEdgeThreshold.coerceIn(0.005f, 0.2f)
         p[Keys.photoDefringeLumaFloor] = v.photoDefringeLumaFloor.coerceIn(0f, 0.5f)
         p[Keys.videoDefringeEnabled] = v.videoDefringeEnabled
         p[Keys.videoDefringeStrength] = v.videoDefringeStrength.coerceIn(0f, 1f)
-        p[Keys.videoDefringeEdgeThreshold] = v.videoDefringeEdgeThreshold.coerceIn(0.005f, 0.2f)
-        p[Keys.videoDefringeLumaFloor] = v.videoDefringeLumaFloor.coerceIn(0f, 0.5f)
         // Photo denoise persists as the same eleven keys (stable DataStore
         // schema); the sealed value decomposes at the boundary.
         val legacyDenoise = v.photoDenoise.toLegacy()
@@ -843,6 +836,10 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p.remove(Keys.highlightReconstruction)
         p.remove(Keys.highlightMethod)
         p.remove(Keys.highlightThreshold)
+        // Retired video controls: FCC is fixed at one step, defringe is strength-only.
+        p.remove(Keys.videoFccSteps)
+        p.remove(Keys.videoDefringeEdgeThreshold)
+        p.remove(Keys.videoDefringeLumaFloor)
         p.remove(Keys.highlightCompression)
     }
 

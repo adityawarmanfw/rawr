@@ -13,5 +13,6 @@ void main() {
     // Match librtprocess ordering exactly: RCD working passes first, then
     // bayerborder_demosaic() overwrites the outer 9-pixel border.
     vec3 rgb = inRcdInterior(p) ? rgbAt(p) : librtprocessBayerBorderRgb(p);
+    rgb /= pc.autoBalance != 0u ? balance.gain.rgb : pc.fixedBalance.rgb;
     imageStore(outputImage, p, vec4(rgb * pc.outputFactor, pc.outputAlpha));
 }

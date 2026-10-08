@@ -6,18 +6,22 @@ import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.systemGestureExclusion
 import com.rawr.camera.ui.icons.Icons
-import com.rawr.camera.ui.icons.outlined.ChevronLeft
+import com.rawr.camera.ui.icons.rounded.ChevronRight
 import com.rawr.camera.ui.icons.outlined.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -87,6 +91,23 @@ internal fun StripParamsEntry(onOpen: () -> Unit, modifier: Modifier = Modifier)
 }
 
 @Composable
+internal fun StripNavigationRow(
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable RowScope.() -> Unit
+) {
+    BoxWithConstraints(
+        modifier.fillMaxWidth().padding(horizontal = CaptureDimens.CompactParamRowEdgeInset)
+    ) {
+        val widths = paramsCellWidths(maxWidth)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            StripBackButton(onBack, Modifier.width(widths[0]))
+            content()
+        }
+    }
+}
+
+@Composable
 internal fun StripBackButton(onBack: () -> Unit, modifier: Modifier = Modifier) {
     val haptics = LocalCaptureHaptics.current
     Box(
@@ -106,17 +127,25 @@ internal fun StripBackButton(onBack: () -> Unit, modifier: Modifier = Modifier) 
             },
         contentAlignment = Alignment.Center
     ) {
-        ContrastIcon(Icons.Outlined.ChevronLeft, Color.White.copy(alpha = .62f), 16.dp)
+        ContrastIcon(Icons.Rounded.ChevronRight, Color.White.copy(alpha = .62f), 16.dp)
     }
 }
 
-/**
- * Leading scroll padding that parks the first param at the thumb (right)
- * edge with [StripDimens.ParkedVisibleCells] visible. Empty space sits on
- * the left; every cell can be scrolled over to the right for one-hand use.
- */
-internal fun parkedParamsPadding(viewportWidth: Dp): Dp {
-    val visible = StripDimens.ParamMinWidth * StripDimens.ParkedVisibleCells + StripDimens.ParamSpacing
+/** Match the five exposure columns, including the wider white-balance column. */
+internal fun paramsCellWidths(viewportWidth: Dp): List<Dp> {
+    val weights = CaptureDimens.CompactParamColumnWeights
+    val unitWidth = ((viewportWidth - CaptureDimens.ControlGap * (weights.size - 1)) /
+        weights.sum()).coerceAtLeast(0.dp)
+    return weights.map { unitWidth * it }
+}
+
+/** Leading padding that parks the first parameter at the thumb edge with a peek of the next. */
+internal fun parkedParamsPadding(
+    viewportWidth: Dp,
+    cellWidth: Dp = StripDimens.ParamMinWidth,
+    spacing: Dp = StripDimens.ParamSpacing
+): Dp {
+    val visible = cellWidth * StripDimens.ParkedVisibleCells + spacing
     return (viewportWidth - visible).coerceAtLeast(0.dp)
 }
 

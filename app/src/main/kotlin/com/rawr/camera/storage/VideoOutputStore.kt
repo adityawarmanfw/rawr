@@ -10,15 +10,10 @@ import androidx.core.net.toUri
 /** Provider operations for pending MediaStore videos and user-selected document trees. */
 internal class VideoOutputStore(private val context: Context) {
     fun create(saveLocationId: String, displayName: String, capturedAt: Long): Uri {
-        val destination = CaptureSaveLocation.fromId(saveLocationId)
+        val destination = CaptureSaveLocation.fromId(saveLocationId, CaptureSaveLocation.VIDEO_ROOTS)
         val resolver = context.contentResolver
         val tree = destination.treeUri?.toUri()
-        return if (tree != null) {
-            val parent = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
-            checkNotNull(DocumentsContract.createDocument(resolver, parent, "video/mp4", displayName)) {
-                "Could not create video in the selected folder"
-            }
-        } else {
+        if (destination.relativePath.isNotEmpty()) {
             val values = ContentValues().apply {
                 put(MediaStore.Video.Media.DISPLAY_NAME, displayName)
                 put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
@@ -26,9 +21,16 @@ internal class VideoOutputStore(private val context: Context) {
                 put(MediaStore.Video.Media.IS_PENDING, 1)
                 put(MediaStore.Video.Media.DATE_TAKEN, capturedAt)
             }
-            checkNotNull(resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)) {
+            // A picked folder's volume may be unmounted; its tree grant is the fallback.
+            val inserted = if (tree == null) resolver.insert(destination.videoCollection(), values)
+                else runCatching { resolver.insert(destination.videoCollection(), values) }.getOrNull()
+            if (inserted != null || tree == null) return checkNotNull(inserted) {
                 "Could not create video in ${destination.relativePath}"
             }
+        }
+        val parent = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
+        return checkNotNull(DocumentsContract.createDocument(resolver, parent, "video/mp4", displayName)) {
+            "Could not create video in the selected folder"
         }
     }
 

@@ -56,6 +56,9 @@ set(OFFLINE_SHADER_OUTPUTS)
 function(rawr_compile_shader OUTPUT_NAME SOURCE)
   set(OUTPUT "${GEN}/${OUTPUT_NAME}.spv")
   set(EXTRA_SHADER_DEPENDS)
+  if(SOURCE MATCHES "/rcd/shaders/")
+    list(APPEND EXTRA_SHADER_DEPENDS ${RCD_SHADER_DIR}/rcd_common.glsl)
+  endif()
   if(SOURCE STREQUAL "${TONEMAP_SHADER_DIR}/tonemap.comp")
     set(EXTRA_SHADER_DEPENDS ${TONEMAP_SHADER_DIR}/color/cst.glsl ${TONEMAP_SHADER_DIR}/color/gamut_matrices.inc ${TONEMAP_SHADER_DIR}/lut/lut3d.glsl)
   endif()
@@ -80,6 +83,10 @@ rawr_compile_shader(rcd_green_sites.comp "${RCD_SHADER_DIR}/rcd_green_sites.comp
   --target-env=vulkan1.1 -O -DRCD_LOCAL_X=8 -DRCD_LOCAL_Y=32 -I${RCD_SHADER_DIR})
 rawr_compile_shader(rcd_export.comp "${RCD_SHADER_DIR}/rcd_export.comp"
   --target-env=vulkan1.1 -O -DRCD_LOCAL_X=4 -DRCD_LOCAL_Y=32 -I${RCD_SHADER_DIR})
+
+foreach(NAME rcd_balance rcd_balance_reduce)
+  rawr_compile_shader(${NAME}.comp "${RCD_SHADER_DIR}/${NAME}.comp" --target-env=vulkan1.1 -O -I${RCD_SHADER_DIR})
+endforeach()
 
 # The frozen VNG4 and dual-blend variants used in production stills.
 rawr_compile_shader(vng4_linear.comp "${VNG_SHADER_DIR}/vng4_linear.comp"

@@ -35,7 +35,8 @@ struct MultiframeWorkItem {
     bool filmEnabled = false;
     spektrafilm_native::FilmLook filmLook{};
     rawrcam::capture::multiframe::MultiframeTuning tuning{};
-    rawrcam::capture::multiframe::MultiframeBaseFrameMode baseFrameMode{};
+    rawrcam::capture::multiframe::MultiframeBaseFrameMode baseFrameMode =
+        rawrcam::capture::multiframe::MultiframeBaseFrameMode::Sharpest;
     // Per-frame GPU sharpness scores, index-aligned with capture->frames.
     // Populated by spool-time selection in Sharpest mode; empty otherwise
     // (Middle mode, scorer fallback). Persisted for RZSL audit + replay.

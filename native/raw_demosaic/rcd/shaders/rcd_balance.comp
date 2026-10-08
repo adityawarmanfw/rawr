@@ -1,0 +1,38 @@
+#version 450
+#include "rcd_common.glsl"
+layout(local_size_x = 8, local_size_y = 8) in;
+shared vec4 sums[64];
+shared vec4 counts[64];
+void main() {
+    uint lane = gl_LocalInvocationIndex;
+    ivec2 origin = ivec2(gl_GlobalInvocationID.xy) * 8;
+    vec4 s = vec4(0), n = vec4(0);
+    bool valid = true;
+    // Reject the entire 8x8 tile if it includes black, clipped or invalid
+    // samples. Normalized thresholds keep the policy independent of bit depth.
+    for (int y = 0; y < 8; y++)
+        for (int x = 0; x < 8; x++) {
+            ivec2 q = origin + ivec2(x, y);
+            if (q.x >= int(pc.width) || q.y >= int(pc.height)) continue;
+            float v = unbalancedCfa(q);
+            int c = rgbColorAt(q);
+            valid = valid && v > 0.001 && v < 0.987 && !isnan(v) && !isinf(v);
+            s[c] += max(v, 0.);
+            n[c] += 1.;
+        }
+    sums[lane] = valid ? s : vec4(0);
+    counts[lane] = valid ? n : vec4(0);
+    barrier();
+    for (uint k = 32; k > 0; k >>= 1) {
+        if (lane < k) {
+            sums[lane] += sums[lane + k];
+            counts[lane] += counts[lane + k];
+        }
+        barrier();
+    }
+    if (lane == 0) {
+        uint i = gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x;
+        balance.blocks[2 * i] = sums[0];
+        balance.blocks[2 * i + 1] = counts[0];
+    }
+}

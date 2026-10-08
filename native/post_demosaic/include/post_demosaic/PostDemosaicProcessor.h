@@ -20,6 +20,7 @@ class GuideChainPipelines;
 }  // namespace rawr::highlight
 
 namespace rawr::post {
+class LabDefringe;
 
 // Optional geometric undistort for the still WB pass. Coefficients follow the
 // Camera2 LENS_DISTORTION / LENS_INTRINSIC_CALIBRATION convention and are
@@ -69,15 +70,20 @@ class PostDemosaicProcessor final {
     // (WB, plus Inpaint Opposed), 1-2 highlight guide chain, 2-3 highlight
     // recovery, 4-5 FCC, 10-11 wavelet denoise and 16-17 defringe plus the
     // Inpaint Opposed tone tap. Every pair is written, adjacent when skipped.
+    // Still and video callers supply the post-WB camera->linear-sRGB matrix for Lab repair.
+    // A null matrix retains the legacy camera-RGB defringe; its edge/luma controls
+    // do not apply to calibrated Lab repair (only strength is user-adjustable).
     void record(VkCommandBuffer command, VkImage sourceImage, VkImageView sourceView, VkImage clipStateImage,
                 VkImageView clipStateView, const std::array<float, 3>& whiteBalanceRgb, bool highlightRecoveryEnabled,
                 const StillDistortionCorrection& distortion = StillDistortionCorrection{},
                 VkQueryPool timingPool = VK_NULL_HANDLE, bool preserveReconstructedHighlights = false,
                 uint32_t highlightMethod = 0, float highlightThreshold = 1.0f,
-                float highlightCompression = 163.0f, float exposureGain = 1.0f,
+                float highlightCompression = 100.0f, float exposureGain = 1.0f,
                 const rawr::shading::LensShadingMapView& shading = {}, uint32_t cfaPattern = 0,
-                const DenoiseRequest& denoise = DenoiseRequest{}, rawr::highlight::ColoroppSensorGeometry geometry = {});
+                const DenoiseRequest& denoise = DenoiseRequest{}, rawr::highlight::ColoroppSensorGeometry geometry = {},
+                const float* cameraToSrgbRowMajor = nullptr);
     [[nodiscard]] uint64_t fccAllocatedBytes() const noexcept;
+    [[nodiscard]] uint64_t defringeAllocatedBytes() const noexcept;
     // Final tonemap/film input. The selected image depends on whether FCC and
     // defringe ran; record() sets these non-owning handles for the frame.
     [[nodiscard]] VkImage outputImage() const noexcept {
@@ -136,6 +142,7 @@ class PostDemosaicProcessor final {
     VkPipeline hlPipeline_ = VK_NULL_HANDLE;
     VkDescriptorPool hlPool_ = VK_NULL_HANDLE;
     VkDescriptorSet hlSet_ = VK_NULL_HANDLE;
+    std::unique_ptr<LabDefringe> labDefringe_;
     std::unique_ptr<rawr::highlight::GuideChainPipelines> guidePipelines_;
     std::unique_ptr<rawr::highlight::GuideChain> guideChain_;
     VkDescriptorSetLayout deriveClipDsl_ = VK_NULL_HANDLE;

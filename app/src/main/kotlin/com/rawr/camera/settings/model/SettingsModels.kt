@@ -709,7 +709,7 @@ object MultiframeSpecs {
 
 data class MultiframeTuning(
     val outputResolution: MultiframeOutputResolution = MultiframeOutputResolution.Native,
-    val mergeAlgorithm: MultiframeMergeAlgorithm = MultiframeMergeAlgorithm.HdrPlus,
+    val mergeAlgorithm: MultiframeMergeAlgorithm = MultiframeMergeAlgorithm.HdrPlusQuality,
     val hdrPlusStrength: Float = 13f,
     val hdrPlusTileSize: Int = 32,
     val bracketEv: Float = -2f,
@@ -912,7 +912,7 @@ data class SettingsValues(
     val filmSimLook: FilmSimLook = FilmFactoryPresets.baseLook,
     val selectedFilmPresetId: String? = null,
     val filmPresets: List<FilmPreset> = emptyList(),
-    val multiframeBaseFrameMode: MultiframeBaseFrameMode = MultiframeBaseFrameMode.Middle,
+    val multiframeBaseFrameMode: MultiframeBaseFrameMode = MultiframeBaseFrameMode.Sharpest,
     // Chroma-only profiled wavelet on the merged image, fed the burst-fitted
     // noise / frame count. Independent of Image > Denoise (single frame only).
     val multiframeChromaDenoise: Boolean = true,
@@ -929,10 +929,9 @@ data class SettingsValues(
     val dualContrastPercent: Float = 20f,
     val quadfixEnabled: Boolean = false,
     val quadfixFastMedian: Boolean = false,
-    // Photo FCC steps (stills). Video has its own enable + steps below.
+    // Photo FCC steps (stills). Video FCC is an enable with a fixed single step.
     val photoFccSteps: Int = 2,
     val videoFccEnabled: Boolean = false,
-    val videoFccSteps: Int = 1,
     // Photo defringe (stills). Video strengths are independent.
     val photoDefringeEnabled: Boolean = true,
     val photoDefringeStrength: Float = 1f,
@@ -940,8 +939,6 @@ data class SettingsValues(
     val photoDefringeLumaFloor: Float = 0.08f,
     val videoDefringeEnabled: Boolean = false,
     val videoDefringeStrength: Float = 1f,
-    val videoDefringeEdgeThreshold: Float = 0.02f,
-    val videoDefringeLumaFloor: Float = 0.08f,
     // Photo-pipeline denoise, single source of truth (see DenoiseConfig).
     // Off by default; Wavelet is profiled (sensor noise model), Galosh
     // carries the blind RAW and/or YUV lanes (stills only).
@@ -962,11 +959,11 @@ data class SettingsValues(
     // 0 = existing propagation; 1 = RawTherapee Coloropp for still renders.
     val photoHighlightMethod: Int = 1,
     val photoHighlightThreshold: Float = 1f,
-    val photoHighlightCompression: Float = 163f,
+    val photoHighlightCompression: Float = 100f,
     val videoHighlightEnabled: Boolean = false,
     val videoHighlightMethod: Int = 0,
     val videoHighlightThreshold: Float = 1f,
-    val videoHighlightCompression: Float = 163f,
+    val videoHighlightCompression: Float = 100f,
     // UltraHDR (JPEG_R) still output: GPU gain map + MPF/XMP/ISO mux.
     // Off by default; legacy SDR JPEG when off.
     val ultraHdrEnabled: Boolean = false,

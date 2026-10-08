@@ -40,7 +40,7 @@ struct MultiframeTuningView {
     float bracketEv = -2.0f;
     std::uint32_t bracketFrames = 2;
     float bracketLiftEv = 0.0f;  // measured: 0 = no dark frames merged
-    MultiframeBaseFrameMode baseFrameMode = MultiframeBaseFrameMode::Middle;
+    MultiframeBaseFrameMode baseFrameMode = MultiframeBaseFrameMode::Sharpest;
 };
 
 // General-pipeline (non-multiframe) capture settings for the shared

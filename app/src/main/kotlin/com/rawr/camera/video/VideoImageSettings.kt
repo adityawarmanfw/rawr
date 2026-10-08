@@ -12,8 +12,6 @@ data class VideoImageSettings(
     val highlightCompression: Float,
     val fccSteps: Int,
     val defringeStrength: Float,
-    val defringeEdgeThreshold: Float,
-    val defringeLumaFloor: Float,
     val waveletDenoiseStrength: Float,
     val waveletDenoiseDetail: Float,
     val waveletDenoiseLuma: Float,
@@ -27,8 +25,6 @@ data class VideoImageSettings(
         .put("highlightCompression", highlightCompression)
         .put("fccSteps", fccSteps)
         .put("defringeStrength", defringeStrength)
-        .put("defringeEdgeThreshold", defringeEdgeThreshold)
-        .put("defringeLumaFloor", defringeLumaFloor)
         .put("waveletDenoiseStrength", waveletDenoiseStrength)
         .put("waveletDenoiseDetail", waveletDenoiseDetail)
         .put("waveletDenoiseLuma", waveletDenoiseLuma)
@@ -42,10 +38,9 @@ fun SettingsValues.toVideoImageSettings(): VideoImageSettings {
         videoHighlightMethod,
         videoHighlightThreshold,
         videoHighlightCompression,
-        if (videoFccEnabled) videoFccSteps else 0,
+        // Video FCC is a single step when enabled.
+        if (videoFccEnabled) 1 else 0,
         if (videoDefringeEnabled) videoDefringeStrength else 0f,
-        videoDefringeEdgeThreshold,
-        videoDefringeLumaFloor,
         if (videoDenoiseEnabled) videoDenoiseStrength else 0f,
         videoDenoiseDetail,
         videoDenoiseLuma,

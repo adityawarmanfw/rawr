@@ -50,8 +50,8 @@ struct RcdPipeline::Impl {
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
     VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
-    std::array<VkShaderModule, 5> modules{};
-    std::array<VkPipeline, 5> pipelines{};
+    std::array<VkShaderModule, 7> modules{};
+    std::array<VkPipeline, 7> pipelines{};
     VkSampler packedSampler = VK_NULL_HANDLE;
     VkQueryPool timestampPool = VK_NULL_HANDLE;
     float timestampPeriodNs = 0.0f;
@@ -62,6 +62,7 @@ struct RcdPipeline::Impl {
     OwnedImage dummyR32{};
     OwnedImage dummyPacked{};
     OwnedBuffer dummyNormalized{};
+    OwnedBuffer balance{};
     bool internalLayoutsInitialized = false;
 
     uint64_t liveBytes = 0;
@@ -75,8 +76,11 @@ struct RcdPipeline::Impl {
         float invRange[4];
         float outputFactor;
         float outputAlpha;
+        uint32_t autoBalance;
+        uint32_t pad;
+        float fixedBalance[4];
     };
-    static_assert(sizeof(Push) == 56, "RCD push constant ABI changed");
+    static_assert(sizeof(Push) == 80, "RCD push constant ABI changed");
 
     Impl(VulkanContext c, ShaderProvider sp, PipelineConfig pc, PipelineAssets)
         : ctx(c), shaders(std::move(sp)), cfg(pc) {
@@ -205,6 +209,8 @@ struct RcdPipeline::Impl {
         dummyR32 = makeImage(1, 1, VK_FORMAT_R32_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT);
         dummyPacked = makeImage(1, 1, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT);
         dummyNormalized = makeBuffer(sizeof(float));
+        balance =
+            makeBuffer(cfg.autoBalance ? 16 + VkDeviceSize((cfg.width + 63) / 64) * ((cfg.height + 63) / 64) * 32 : 16);
 
         VkSamplerCreateInfo si{};
         si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -215,13 +221,14 @@ struct RcdPipeline::Impl {
         si.maxLod = 0.0f;
         check(vkCreateSampler(ctx.device, &si, ctx.allocator, &packedSampler), "RCD vkCreateSampler failed");
 
-        std::array<VkDescriptorSetLayoutBinding, 6> b{};
+        std::array<VkDescriptorSetLayoutBinding, 7> b{};
         b[0] = {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
         b[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
         b[2] = {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
         b[3] = {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
         b[4] = {4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
         b[5] = {5, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+        b[6] = {6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
         VkDescriptorSetLayoutCreateInfo sl{};
         sl.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
         sl.bindingCount = b.size();
@@ -238,7 +245,7 @@ struct RcdPipeline::Impl {
         pl.pPushConstantRanges = &pr;
         check(vkCreatePipelineLayout(ctx.device, &pl, ctx.allocator, &pipelineLayout), "RCD pipeline layout failed");
 
-        std::array<VkDescriptorPoolSize, 3> ps{{{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1},
+        std::array<VkDescriptorPoolSize, 3> ps{{{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2},
                                                 {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 4},
                                                 {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1}}};
         VkDescriptorPoolCreateInfo dpi{};
@@ -254,9 +261,10 @@ struct RcdPipeline::Impl {
         dai.pSetLayouts = &setLayout;
         check(vkAllocateDescriptorSets(ctx.device, &dai, &descriptorSet), "RCD descriptor set allocation failed");
 
-        const char* names[5] = {"rcd_direction.comp", "rcd_green.comp", "rcd_diagonal.comp", "rcd_green_sites.comp",
-                                "rcd_export.comp"};
-        for (size_t i = 0; i < modules.size(); ++i) {
+        const char* names[7] = {"rcd_direction.comp",     "rcd_green.comp",  "rcd_diagonal.comp",
+                                "rcd_green_sites.comp",   "rcd_export.comp", "rcd_balance.comp",
+                                "rcd_balance_reduce.comp"};
+        for (size_t i = 0; i < (cfg.autoBalance ? 7u : 5u); ++i) {
             auto words = shaders(names[i]);
             if (words.empty()) throw std::runtime_error(std::string("RCD empty SPIR-V: ") + names[i]);
             VkShaderModuleCreateInfo sm{};
@@ -297,6 +305,7 @@ struct RcdPipeline::Impl {
         if (setLayout) vkDestroyDescriptorSetLayout(ctx.device, setLayout, ctx.allocator), setLayout = VK_NULL_HANDLE;
         if (timestampPool) vkDestroyQueryPool(ctx.device, timestampPool, ctx.allocator), timestampPool = VK_NULL_HANDLE;
         if (packedSampler) vkDestroySampler(ctx.device, packedSampler, ctx.allocator), packedSampler = VK_NULL_HANDLE;
+        destroy(balance);
         destroy(dummyNormalized);
         destroy(dummyPacked);
         destroy(dummyR32);
@@ -359,7 +368,7 @@ struct RcdPipeline::Impl {
                                  packed ? packedLayout : VK_IMAGE_LAYOUT_GENERAL};
         VkDescriptorImageInfo i4{VK_NULL_HANDLE, direction.view, VK_IMAGE_LAYOUT_GENERAL};
         VkDescriptorImageInfo i5{VK_NULL_HANDLE, output, VK_IMAGE_LAYOUT_GENERAL};
-        std::array<VkWriteDescriptorSet, 6> w{};
+        std::array<VkWriteDescriptorSet, 7> w{};
         for (uint32_t i = 0; i < w.size(); ++i) {
             w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             w[i].dstSet = descriptorSet;
@@ -378,6 +387,9 @@ struct RcdPipeline::Impl {
         w[4].pImageInfo = &i4;
         w[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         w[5].pImageInfo = &i5;
+        VkDescriptorBufferInfo balanceInfo{balance.buffer, 0, VK_WHOLE_SIZE};
+        w[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        w[6].pBufferInfo = &balanceInfo;
         vkUpdateDescriptorSets(ctx.device, w.size(), w.data(), 0, nullptr);
     }
 
@@ -393,6 +405,9 @@ struct RcdPipeline::Impl {
         }
         p.outputFactor = cfg.outputScale * 255.0f;
         p.outputAlpha = cfg.outputAlpha;
+        p.autoBalance = cfg.autoBalance;
+        for (int c = 0; c < 3; ++c) p.fixedBalance[c] = cfg.inputBalance[c];
+        p.fixedBalance[3] = 1;
         return p;
     }
 
@@ -418,8 +433,29 @@ struct RcdPipeline::Impl {
             gy[i] = (cfg.height + wy[i] - 1u) / wy[i];
         }
         if (timestampPool) vkCmdResetQueryPool(cmd, timestampPool, 0, 10);
+        if (timestampPool) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, timestampPool, 0);
+        if (cfg.autoBalance) {
+            // Cover reuse after the preceding frame, then publish both reductions.
+            VkMemoryBarrier mb{};
+            mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+            mb.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+            mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+            auto sync = [&] {
+                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
+                                     1, &mb, 0, nullptr, 0, nullptr);
+            };
+            sync();
+            for (uint32_t i = 5; i < 7; ++i) {
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines[i]);
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1, &descriptorSet, 0,
+                                        nullptr);
+                vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Push), &pc);
+                vkCmdDispatch(cmd, i == 5 ? (cfg.width + 63) / 64 : 1, i == 5 ? (cfg.height + 63) / 64 : 1, 1);
+                sync();
+            }
+        }
         auto dispatch = [&](size_t i) {
-            if (timestampPool)
+            if (timestampPool && i != 0)
                 vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, timestampPool, uint32_t(i * 2));
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines[i]);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1, &descriptorSet, 0,
@@ -535,9 +571,13 @@ struct RcdPipeline::Impl {
     }
 };
 
-
 bool RcdPipeline::validateConfig(const PipelineConfig& c, const PipelineAssets&, const char** reason) noexcept {
     const char* why = nullptr;
+    for (float g : c.inputBalance)
+        if (!std::isfinite(g) || g < .05f || g > 1.f) {
+            if (reason) *reason = "invalid RCD input balance";
+            return false;
+        }
     if (c.width < 19u || c.height < 19u)
         why = "RCD requires width and height >= 19";
     else if (c.inputMode == InputMode::PackedCfaRgba16fImage && ((c.width & 1u) || (c.height & 1u)))

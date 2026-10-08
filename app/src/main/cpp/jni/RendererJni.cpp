@@ -208,6 +208,7 @@ Java_com_rawr_camera_renderer_RendererNative_render(JNIEnv* e, jobject, jlong id
             if (o.bayerBin2x) path += "-same-color-sharp2x-v1";
             path +=
                 "." + o.demosaic + (o.dualAutoContrast ? "-auto" : "-manual") + std::to_string(o.dualContrastPercent);
+            path += "-balanced-v1";
             // quadfix changes demosaic input: version the cache so stale
             // unfiltered tiles can never be served to a filtered render.
             if (o.quadfix) path += o.quadfixFastMedian ? "-qf-fast" : "-qf";
@@ -244,7 +245,7 @@ Java_com_rawr_camera_renderer_RendererNative_render(JNIEnv* e, jobject, jlong id
         array("cameraToLinearSrgbRowMajor", s->source.cameraToSrgb.data(), 9);
         std::vector<uint8_t> pixels;
         const std::string key =
-            "renderer-v1\n" + std::to_string(o.width) + "x" + std::to_string(o.height) + "\n" + str(e, recipe);
+            "renderer-v2-lab-rcd\n" + std::to_string(o.width) + "x" + std::to_string(o.height) + "\n" + str(e, recipe);
         const std::string renderedPath = path + ".rendered", keyPath = renderedPath + ".key";
         bool cached = false;
         // Exports bypass the rendered-pixel cache: a hit would skip

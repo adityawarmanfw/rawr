@@ -315,7 +315,6 @@ data class SetQuadfixFastMedian(val enabled: Boolean) : SettingsApplicationActio
 
     data class SetPhotoFccSteps(val value: Int) : SettingsApplicationAction
     data class SetVideoFccEnabled(val enabled: Boolean) : SettingsApplicationAction
-    data class SetVideoFccSteps(val value: Int) : SettingsApplicationAction
     data class SetVideoEncoder(val value: VideoEncoderConfig) : SettingsApplicationAction
 
     data class SetPhotoDefringeEnabled(val enabled: Boolean) : SettingsApplicationAction
@@ -330,9 +329,7 @@ data class SetQuadfixFastMedian(val enabled: Boolean) : SettingsApplicationActio
 
     data class SetVideoDefringeStrength(val value: Float) : SettingsApplicationAction
 
-    data class SetVideoDefringeEdgeThreshold(val value: Float) : SettingsApplicationAction
 
-    data class SetVideoDefringeLumaFloor(val value: Float) : SettingsApplicationAction
 
     data class SetPhotoDenoiseEnabled(val enabled: Boolean) : SettingsApplicationAction
 
