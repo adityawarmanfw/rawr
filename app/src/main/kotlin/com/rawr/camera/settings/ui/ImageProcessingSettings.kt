@@ -125,7 +125,7 @@ internal fun ImageSettings(state: SettingsUiState, dispatch: SettingsDispatch) {
             SettingsRow(
                 "Demosaic",
                 if (v.videoFccEnabled) {
-                    "Photo FCC ${v.photoFccSteps} · Video FCC ${v.videoFccSteps}"
+                    "Photo FCC ${v.photoFccSteps} · Video FCC on"
                 } else {
                     "Photo FCC ${v.photoFccSteps} · Video FCC off"
                 },
@@ -250,25 +250,12 @@ internal fun DemosaicGroup(state: SettingsUiState, dispatch: SettingsDispatch) {
     }
     SettingsGroup(
         title = "False color correction · Video",
-        description = "Runs in new video recordings when enabled."
+        description = "Runs one correction step in new video recordings when enabled."
     ) {
         SettingsSwitchRow(
             title = "Video false color correction",
             checked = state.values.videoFccEnabled
         ) { dispatch.invoke(SetVideoFccEnabled(it)) }
-        if (state.values.videoFccEnabled) {
-            SettingDivider()
-            StandaloneNumericSliderRow(
-                identity = "fcc_steps_video",
-                label = "False color correction steps",
-                supportingText = "New video recordings",
-                minimum = 1f,
-                maximum = 8f,
-                step = 1f,
-                decimals = 0,
-                value = state.values.videoFccSteps.toFloat()
-            ) { dispatch.invoke(SetVideoFccSteps(it.toInt())) }
-        }
     }
 }
 
@@ -300,7 +287,7 @@ internal fun LensShadingSettings(state: SettingsUiState, dispatch: SettingsDispa
 internal fun DefringeGroup(state: SettingsUiState, dispatch: SettingsDispatch) {
     val v = state.values
     SettingsGroup(
-        description = "Reduces purple and blue halos around bright edges. Photo repairs nearby color while preserving brightness; Video uses a lighter desaturation pass."
+        description = "Reduces purple and blue halos around bright edges by repairing nearby color while preserving brightness. Fringe detection and bright-edge protection are automatic; Strength controls how much correction is applied."
     ) {
         PhotoVideoTargetSelector(
             photoOn = v.photoDefringeEnabled,
@@ -309,10 +296,7 @@ internal fun DefringeGroup(state: SettingsUiState, dispatch: SettingsDispatch) {
             onVideoChange = { dispatch.invoke(SetVideoDefringeEnabled(it)) }
         )
     }
-    SettingsGroup(
-        title = "Photo",
-        description = "Fringe detection and bright-edge protection are automatic. Strength controls how much correction is applied to detected fringes."
-    ) {
+    SettingsGroup(title = "Photo") {
         StandaloneNumericSliderRow(
             identity = "defringe_strength_photo",
             label = "Strength",
@@ -322,62 +306,14 @@ internal fun DefringeGroup(state: SettingsUiState, dispatch: SettingsDispatch) {
         ) { dispatch.invoke(SetPhotoDefringeStrength(it)) }
     }
     SettingsGroup(title = "Video") {
-        DefringeSliders(
-            enabled = v.videoDefringeEnabled,
-            identitySuffix = "video",
-            strength = v.videoDefringeStrength,
-            edgeThreshold = v.videoDefringeEdgeThreshold,
-            lumaFloor = v.videoDefringeLumaFloor,
-            onStrength = { dispatch.invoke(SetVideoDefringeStrength(it)) },
-            onEdgeThreshold = { dispatch.invoke(SetVideoDefringeEdgeThreshold(it)) },
-            onLumaFloor = { dispatch.invoke(SetVideoDefringeLumaFloor(it)) }
-        )
+        StandaloneNumericSliderRow(
+            identity = "defringe_strength_video",
+            label = "Strength",
+            minimum = 0f, maximum = 1f, step = 0.01f, decimals = 2,
+            value = v.videoDefringeStrength,
+            enabled = v.videoDefringeEnabled
+        ) { dispatch.invoke(SetVideoDefringeStrength(it)) }
     }
-}
-
-@Composable
-private fun DefringeSliders(
-    enabled: Boolean,
-    identitySuffix: String,
-    strength: Float,
-    edgeThreshold: Float,
-    lumaFloor: Float,
-    onStrength: (Float) -> Unit,
-    onEdgeThreshold: (Float) -> Unit,
-    onLumaFloor: (Float) -> Unit
-) {
-    StandaloneNumericSliderRow(
-        identity = "defringe_strength_$identitySuffix",
-        label = "Strength",
-        minimum = 0f,
-        maximum = 1f,
-        step = 0.01f,
-        decimals = 2,
-        value = strength,
-        enabled = enabled
-    ) { onStrength(it) }
-    SettingDivider()
-    StandaloneNumericSliderRow(
-        identity = "defringe_edge_threshold_$identitySuffix",
-        label = "Edge threshold",
-        minimum = 0.005f,
-        maximum = 0.2f,
-        step = 0.005f,
-        decimals = 3,
-        value = edgeThreshold,
-        enabled = enabled
-    ) { onEdgeThreshold(it) }
-    SettingDivider()
-    StandaloneNumericSliderRow(
-        identity = "defringe_luma_floor_$identitySuffix",
-        label = "Luma floor",
-        minimum = 0f,
-        maximum = 0.5f,
-        step = 0.01f,
-        decimals = 2,
-        value = lumaFloor,
-        enabled = enabled
-    ) { onLumaFloor(it) }
 }
 
 /**

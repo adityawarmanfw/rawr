@@ -134,7 +134,7 @@ VideoProcessingResources::Prepared VideoProcessingResources::prepare(rawrcam::vu
     for (auto& stage : out.post) {
         stage = std::make_unique<rawr::post::PostDemosaicProcessor>(
             context.physicalDevice(), context.device(), context.queueFamily(), key.width, key.height, key.fccSteps,
-            true, 0.08f, 1.0f, key.defringeStrength, key.defringeEdgeThreshold, key.defringeLumaFloor);
+            false, 0.0f, 0.0f, key.defringeStrength, key.defringeEdgeThreshold, key.defringeLumaFloor);
         // The video tonemap applies the Inpaint Opposed tone tap on load.
         stage->setDeferColoroppTone(true);
         // Build Inpaint Opposed now rather than on the first recorded frame.

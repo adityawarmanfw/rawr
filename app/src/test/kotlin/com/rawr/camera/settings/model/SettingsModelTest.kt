@@ -488,8 +488,9 @@ class SettingsModelTest {
         // Video FCC defaults off: recordings skip FCC regardless of steps.
         assertEquals(0, values.toVideoImageSettings().fccSteps)
 
+        // Enabled video FCC is fixed at one step.
         controller.dispatch(SetVideoFccEnabled(true))
-        assertEquals(6, controller.state.value.values.toVideoImageSettings().fccSteps)
+        assertEquals(1, controller.state.value.values.toVideoImageSettings().fccSteps)
         assertEquals(4, controller.state.value.values.photoFccSteps)
     }
 

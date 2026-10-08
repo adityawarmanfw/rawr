@@ -42,7 +42,8 @@ fun SettingsValues.toVideoImageSettings(): VideoImageSettings {
         videoHighlightMethod,
         videoHighlightThreshold,
         videoHighlightCompression,
-        if (videoFccEnabled) videoFccSteps else 0,
+        // Video FCC is a single step when enabled.
+        if (videoFccEnabled) 1 else 0,
         if (videoDefringeEnabled) videoDefringeStrength else 0f,
         videoDefringeEdgeThreshold,
         videoDefringeLumaFloor,
