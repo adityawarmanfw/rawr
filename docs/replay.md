@@ -24,6 +24,15 @@ The DNG wrapper still validates DualRcdVng4 recipes; `--rcd` is a packed-runner
 override for controlled comparisons. See [still chroma cleanup](still-chroma-cleanup.md)
 for production balancing, FCC and calibrated Lab defringe behavior.
 
+Packed replay accepts `--technical-lut-dwg path/to/look.cube` to replace the
+RAWR NTRL render with a technical LUT at full intensity. Input is converted
+to DaVinci Wide Gamut / DaVinci Intermediate. Output uses **Use directly**:
+the LUT must produce display-ready values treated as encoded sRGB, with no
+additional output color-space conversion. This option cannot be combined with
+`--film`. It does not change highlight recovery or its compression; use
+`--app-coloropp --app-compression 0` to retain Inpaint Opposed reconstruction
+while bypassing its separate SDR compression during a comparison.
+
 The intended replacement is one production-backed replay pipeline: single DNG,
 RZSL burst, or explicit DNG burst/batch; a versioned recipe plus parameter
 overrides; the app's processing stages and output encoding. It must reject

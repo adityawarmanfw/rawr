@@ -60,6 +60,8 @@ struct Arguments {
     uint32_t benchmarkPost = 0;
     std::filesystem::path config;
     std::filesystem::path outputDir;
+    // Technical DWG/Intermediate LUT, producing display-ready encoded sRGB.
+    std::filesystem::path technicalLutDwg;
     bool hasExposureEV = false;
     bool singleVariant = false;
     bool singleRecovery = true;
@@ -203,6 +205,7 @@ Arguments parseArguments(int argc, char** argv) {
         else if (value == "--benchmark-post" && i + 1 < argc) args.benchmarkPost = std::stoul(argv[++i]);
         else if (value == "--config" && i + 1 < argc) args.config = argv[++i];
         else if (value == "--output-dir" && i + 1 < argc) args.outputDir = argv[++i];
+        else if (value == "--technical-lut-dwg" && i + 1 < argc) args.technicalLutDwg = argv[++i];
         else if (value == "--quadfix") args.quadfix = true;
         else if (value == "--quadfix-fast-median") { args.quadfix = true; args.quadfixFastMedian = true; }
         else if (value == "--single-recovery" && i + 1 < argc) {
@@ -566,12 +569,23 @@ int main(int argc, char** argv) {
         if (!args.rcdOnly && !args.linearRgb && !args.demosaicedRgb) demosaic = std::make_unique<dual::DualDemosaicPipeline>(
             dual::VulkanContext{context.pd, context.dev, context.qf, nullptr}, shaderProvider, dualConfig);
 
+        if (!args.technicalLutDwg.empty() && args.film)
+            throw std::runtime_error("--technical-lut-dwg cannot be combined with --film");
+        tonemap::lut::LutChain technicalLut;
+        if (!args.technicalLutDwg.empty()) {
+            technicalLut.inputSpace = {tonemap::color::Gamut::DaVinciWideGamut,
+                                      tonemap::color::TransferFunction::DaVinciIntermediate};
+            technicalLut.placement = tonemap::lut::LutPlacement::RenderTransform;
+            technicalLut.afterAction = tonemap::lut::LutAfterAction::UseDirectly;
+            technicalLut.stages.push_back(tonemap::lut::parseCubeFile(args.technicalLutDwg.string()));
+        }
         auto tonemapSpirv = readWords(shaderDir / "tonemap.comp.spv");
         tonemap::TonemapCreateInfo tonemapCreate{};
         tonemapCreate.context = {context.pd, context.dev, nullptr};
         tonemapCreate.shaderSpirv = tonemapSpirv.data();
         tonemapCreate.shaderSpirvBytes = tonemapSpirv.size() * sizeof(uint32_t);
         tonemapCreate.maxFramesInFlight = 1;
+        if (!args.technicalLutDwg.empty()) tonemapCreate.lutChain = &technicalLut;
         tonemap::TonemapEngine tonemap(tonemapCreate);
 
         // Production UltraHDR gain map stage (optional).
@@ -686,7 +700,8 @@ int main(int argc, char** argv) {
                  << "demosaic=" << (args.rcdOnly ? "production_rcd" : "production_dual_rcd_vng4") << "\n"
                  << "quadfix=" << (args.quadfix ? (args.quadfixFastMedian ? "fast" : "exact") : "off") << "\n"
                  << "post=production_wb_highlight_fcc\n"
-                 << "tonemap=production_rawr_base\n"
+                 << "tonemap=" << (args.technicalLutDwg.empty() ? "production_rawr_base" : "technical_lut_dwg_direct") << "\n"
+                 << "technicalLutDwg=" << args.technicalLutDwg.string() << "\n"
                  << "clippedComponents=" << clippedComponents << "\n";
         // Direct-RGB checkpoints (--linear-rgb / --dump-linear) are pre-LSC
         // merge output. Device V2 JPEG applies LSC in prepare_rgb (~1.78x
