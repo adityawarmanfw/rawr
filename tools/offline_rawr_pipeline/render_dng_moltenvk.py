@@ -56,7 +56,7 @@ def main():
                         help="post-demosaic policy: on=current, off=common-ceiling clip, preserve=keep pre-demosaic result")
     parser.add_argument("--clip", type=float, default=0.987)
     parser.add_argument("--hlth", type=float, default=1.0, help="Coloropp threshold gain (RawTherapee Hlth)")
-    parser.add_argument("--app-compression", type=float, default=163.0,
+    parser.add_argument("--app-compression", type=float, default=100.0,
                         help="app Coloropp SDR highlight compression, 0..300")
     parser.add_argument("--rt-compression", type=float, default=0.0,
                         help="offline RawTherapee-style highlight compression control, 0..500")

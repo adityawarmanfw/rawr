@@ -60,7 +60,7 @@ struct RawFrameParameters {
     // 1 Inpaint Opposed (RawTherapee Coloropp + SDR highlight compression).
     uint32_t highlightMethod = 0;
     float highlightThreshold = 1.0f;
-    float highlightCompression = 163.0f;
+    float highlightCompression = 100.0f;
     bool bypassHighlightTone = false;
     float highlightExposureGain = 1.0f;  // aePostGain * 2^exposureEV
 

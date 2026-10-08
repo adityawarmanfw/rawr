@@ -70,7 +70,7 @@ struct Arguments {
     float rtHighlightCompression = 0.0f;
     bool appColoropp = false;
     float appColoroppThreshold = 1.0f;
-    float appColoroppCompression = 163.0f;
+    float appColoroppCompression = 100.0f;
     // Film A/B replay: record the demosaiced frame through SpektraFilm
     // instead of tonemap. Cases are "filmEV:printEV" pairs; each renders
     // once with the given EVs on the shot look.

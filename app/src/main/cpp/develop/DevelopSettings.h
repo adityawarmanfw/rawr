@@ -56,7 +56,7 @@ struct DevelopSettings {
     bool highlightReconstructionEnabled = true;
     std::uint32_t highlightReconstructionMethod = 0;  // 0 propagation, 1 RawTherapee Coloropp
     float highlightThreshold = 1.0f;
-    float highlightCompression = 163.0f;
+    float highlightCompression = 100.0f;
     // Geometric undistort in the still WB pass (Camera2 LENS_DISTORTION model).
     // Default off; gated on full-pixel-array geometry + calibration upstream.
     bool distortionCorrectionEnabled = false;

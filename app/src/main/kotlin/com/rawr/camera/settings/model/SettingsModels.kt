@@ -962,11 +962,11 @@ data class SettingsValues(
     // 0 = existing propagation; 1 = RawTherapee Coloropp for still renders.
     val photoHighlightMethod: Int = 1,
     val photoHighlightThreshold: Float = 1f,
-    val photoHighlightCompression: Float = 163f,
+    val photoHighlightCompression: Float = 100f,
     val videoHighlightEnabled: Boolean = false,
     val videoHighlightMethod: Int = 0,
     val videoHighlightThreshold: Float = 1f,
-    val videoHighlightCompression: Float = 163f,
+    val videoHighlightCompression: Float = 100f,
     // UltraHDR (JPEG_R) still output: GPU gain map + MPF/XMP/ISO mux.
     // Off by default; legacy SDR JPEG when off.
     val ultraHdrEnabled: Boolean = false,

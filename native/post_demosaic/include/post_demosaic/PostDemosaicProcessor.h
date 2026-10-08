@@ -74,7 +74,7 @@ class PostDemosaicProcessor final {
                 const StillDistortionCorrection& distortion = StillDistortionCorrection{},
                 VkQueryPool timingPool = VK_NULL_HANDLE, bool preserveReconstructedHighlights = false,
                 uint32_t highlightMethod = 0, float highlightThreshold = 1.0f,
-                float highlightCompression = 163.0f, float exposureGain = 1.0f,
+                float highlightCompression = 100.0f, float exposureGain = 1.0f,
                 const rawr::shading::LensShadingMapView& shading = {}, uint32_t cfaPattern = 0,
                 const DenoiseRequest& denoise = DenoiseRequest{}, rawr::highlight::ColoroppSensorGeometry geometry = {});
     [[nodiscard]] uint64_t fccAllocatedBytes() const noexcept;

@@ -298,7 +298,7 @@ class FrameSubmitCoordinator final {
     bool highlightReconstructionEnabled_ = true;
     uint32_t highlightMethod_ = 0;
     float highlightThreshold_ = 1.0f;
-    float highlightCompression_ = 163.0f;
+    float highlightCompression_ = 100.0f;
 };
 
 }  // namespace rawrcam::pipeline

@@ -90,7 +90,7 @@ struct RawDevelopRecordInput {
     // Highlight method and tuning shared with still/video capture.
     uint32_t highlightMethod = 0;
     float highlightThreshold = 1.0f;
-    float highlightCompression = 163.0f;
+    float highlightCompression = 100.0f;
     // Idle video-mode preview crop: recording output size (0 = full frame).
     // Appended last to preserve the positional aggregate-init order above.
     // The recorder resolves the exact record window (see VideoCrop.h) so the

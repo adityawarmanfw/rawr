@@ -91,7 +91,7 @@ private fun HighlightMethodOptions(
             label = "Highlight compression",
             supportingText = "SDR shoulder strength; UltraHDR color stays uncompressed",
             minimum = 0f, maximum = 300f, step = 1f, decimals = 0,
-            value = compression, defaultValue = 163f, enabled = strengthEnabled
+            value = compression, defaultValue = 100f, enabled = strengthEnabled
         ) { onCompression(it) }
     }
 }

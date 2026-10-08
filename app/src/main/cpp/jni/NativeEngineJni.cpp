@@ -226,7 +226,7 @@ extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreview
     config.highlightEnabled = highlightEnabled == JNI_TRUE;
     config.highlightMethod = static_cast<uint32_t>(std::clamp(static_cast<int>(highlightMethod), 0, 1));
     config.highlightThreshold = finiteClamped(highlightThreshold, 1.0f, 0.5f, 2.0f);
-    config.highlightCompression = finiteClamped(highlightCompression, 163.0f, 0.0f, 500.0f);
+    config.highlightCompression = finiteClamped(highlightCompression, 100.0f, 0.0f, 500.0f);
     config.fccSteps = static_cast<uint32_t>(std::clamp(static_cast<int>(fccSteps), 0, 8));
     config.defringeStrength = finiteClamped(defringeStrength, 0.0f, 0.0f, 1.0f);
     config.defringeEdgeThreshold = finiteClamped(defringeEdgeThreshold, 0.02f, 0.005f, 0.2f);
@@ -599,7 +599,7 @@ static void fillHighlightIntent(JNIEnv* env, rawrcam::capture::JpegCaptureReques
     env->GetFloatArrayRegion(toneValues, 9, 3, values);
     jpeg.develop.highlightReconstructionMethod = std::isfinite(values[0]) && values[0] >= 0.5f ? 1u : 0u;
     jpeg.develop.highlightThreshold = std::isfinite(values[1]) ? std::clamp(values[1], 0.5f, 2.0f) : 1.0f;
-    jpeg.develop.highlightCompression = std::isfinite(values[2]) ? std::clamp(values[2], 0.0f, 300.0f) : 163.0f;
+    jpeg.develop.highlightCompression = std::isfinite(values[2]) ? std::clamp(values[2], 0.0f, 300.0f) : 100.0f;
 }
 extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_integration_NativePreviewEngine_requestRawStillCapture(
     JNIEnv* env, jobject, jlong h, jint dngFd, jint jpegFd, jint jpegQuality, jint jpegSubsampling,

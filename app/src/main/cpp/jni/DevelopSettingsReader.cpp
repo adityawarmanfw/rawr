@@ -134,7 +134,7 @@ develop::DevelopSettings readRendererDevelopSettings(Json& json) {
     out.highlightReconstructionEnabled = json.flag("highlightReconstructionEnabled", true);
     out.highlightReconstructionMethod = std::clamp(uint32_t(json.number("highlightReconstructionMethod", 0)), 0u, 1u);
     out.highlightThreshold = std::clamp(float(json.number("highlightThreshold", 1)), 0.5f, 2.0f);
-    out.highlightCompression = std::clamp(float(json.number("highlightCompression", 163)), 0.0f, 300.0f);
+    out.highlightCompression = std::clamp(float(json.number("highlightCompression", 100)), 0.0f, 300.0f);
 
     return out;
 }

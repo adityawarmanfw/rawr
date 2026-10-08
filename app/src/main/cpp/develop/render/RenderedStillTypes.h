@@ -89,7 +89,7 @@ struct RenderedStillContext {
     bool highlightReconstructionEnabled = true;
     uint32_t highlightReconstructionMethod = 0;
     float highlightThreshold = 1.0f;
-    float highlightCompression = 163.0f;
+    float highlightCompression = 100.0f;
     uint32_t cfaPattern = 0;
     highlight::LensShadingMapSnapshot lensShading;
     // Optional geometric undistort applied in the WB pass (pre-WB camera-linear

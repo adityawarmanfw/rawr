@@ -12,7 +12,7 @@ struct VideoProcessingConfig {
     bool highlightEnabled = true;
     uint32_t highlightMethod = 0;
     float highlightThreshold = 1.0f;
-    float highlightCompression = 163.0f;
+    float highlightCompression = 100.0f;
     uint32_t fccSteps = 1;  // 0 bypasses FCC for video.
     float defringeStrength = 0.0f;
     float defringeEdgeThreshold = 0.02f;
