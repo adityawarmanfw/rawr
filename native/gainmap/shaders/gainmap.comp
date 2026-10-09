@@ -15,10 +15,11 @@ layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 layout(set = 0, binding = 0, rgba16f) uniform readonly image2D hdrImage;
 layout(set = 0, binding = 1, rgba8) uniform readonly image2D sdrImage;
 layout(set = 0, binding = 2, rgba8) uniform writeonly image2D mapImage;
-// Sensor clip-state mask (R16UI bitmask, half res, same grid as the map: one
+// Sensor clip-state mask (R16UI bitmask on the half-res sensor grid: one
 // texel per 2x2 base block). Nonzero = that block clipped at the sensor, so
 // no real detail exists there and the texel renders at clipBoost instead.
-// Unbound (useClip == 0) when the caller has no mask; the load is skipped.
+// Full-res maps sample it at gid/2 (see below). Unbound (useClip == 0) when
+// the caller has no mask; the load is skipped.
 layout(set = 0, binding = 3, r16ui) uniform readonly uimage2D clipImage;
 // Film glow factor (RGBA16F, full res on the HDR-tap grid): dimensionless
 // post/pre scatter quotient (~1.0 = no glow). Unbound (useGlow == 0) when
@@ -46,6 +47,7 @@ layout(push_constant) uniform Push {
     float glowStrength;
     float glowMax;
     float hdrToLinearSrgb[9];
+    uint fullRes;
 } pc;
 
 vec3 srgbEotf(vec3 c) {
@@ -140,8 +142,9 @@ void main() {
     vec3 sdrEnc = sanitize(sampleBilinearSdr(uv));
 
     // Local-detail (flatness) probe for the specular-boost gate below.
-    // Per-channel spatial spread over this texel's OWN 2x2 base block (the
-    // map is exactly half res, so the block is the texel's footprint):
+    // Per-channel spatial spread over a 2x2 base footprint (half-res maps:
+    // the texel's own block; full-res maps: the 2x2 block starting at the
+    // texel, so the statistic keeps the same spatial scale):
     // relative range per channel, maxed across channels. A truly
     // sensor-pinned block is flat in every channel (zero spread): no detail
     // exists, so dazzle is the only option. Highlight-recovered blocks
@@ -153,8 +156,8 @@ void main() {
     // must not count as detail. <1% spread: pinned; >8%: real detail.
     // (Calibrated on replay dumps: recovery leaves 0% of masked blocks
     // pinned, ceiling clip leaves ~21% pinned.)
-    int bx0 = int(gid.x) * 2;
-    int by0 = int(gid.y) * 2;
+    int bx0 = (pc.fullRes != 0u) ? int(gid.x) : int(gid.x) * 2;
+    int by0 = (pc.fullRes != 0u) ? int(gid.y) : int(gid.y) * 2;
     int bx1 = min(bx0 + 1, int(pc.hdrWidth) - 1);
     int by1 = min(by0 + 1, int(pc.hdrHeight) - 1);
     vec3 fbt0 = sanitize(imageLoad(hdrImage, ivec2(bx0, by0)).rgb);
@@ -261,12 +264,15 @@ void main() {
     // image and the loads are pinned to (0,0), so they stay in bounds.
     uint clipBits = 0u;
     uint clipCenter = 0u;
+    // Clip mask lives on the half-res sensor grid regardless of map density.
+    ivec2 mxy = (pc.fullRes != 0u) ? ivec2(int(gid.x) / 2, int(gid.y) / 2) : ivec2(int(gid.x), int(gid.y));
+    ivec2 cdim = imageSize(clipImage);
     for (int dy = -3; dy <= 3; ++dy)
         for (int dx = -3; dx <= 3; ++dx) {
-            ivec2 cxy = ivec2(int(gid.x), int(gid.y)) + ivec2(dx, dy);
+            ivec2 cxy = mxy + ivec2(dx, dy);
             // Data-flow select, not control flow (see NOTE above).
             cxy = (pc.useClip != 0u) ? cxy : ivec2(0, 0);
-            cxy = ivec2(clamp(cxy.x, 0, int(pc.mapWidth) - 1), clamp(cxy.y, 0, int(pc.mapHeight) - 1));
+            cxy = ivec2(clamp(cxy.x, 0, cdim.x - 1), clamp(cxy.y, 0, cdim.y - 1));
             uint bits = bitCount(imageLoad(clipImage, cxy).r & 15u);
             clipBits += bits;
             if (dx == 0 && dy == 0) clipCenter = bits;

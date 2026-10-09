@@ -34,6 +34,7 @@ struct Push {
     float glowStrength;
     float glowMax;
     float hdrToLinearSrgb[9];
+    uint32_t fullRes;
 };
 
 struct BlurPush {
@@ -545,6 +546,7 @@ void GainmapCompute::record(const GainmapRecordInfo& ri) {
     push.useGlow = useGlow ? 1u : 0u;
     push.glowStrength = ri.params.glowStrength;
     push.glowMax = ri.params.glowMax;
+    push.fullRes = ri.params.fullResMap ? 1u : 0u;
     const float* m = ri.hdrToLinearSrgbRowMajor3x3 != nullptr ? ri.hdrToLinearSrgbRowMajor3x3
                                                               : ri.params.hdrToLinearSrgbRowMajor;
     std::memcpy(push.hdrToLinearSrgb, m, sizeof(push.hdrToLinearSrgb));

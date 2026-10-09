@@ -102,7 +102,7 @@ struct RenderedStillContext {
     std::array<float, 5> lensDistortion{0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
     bool hasLensCalibration = false;
     // UltraHDR gain map (GPU-direct, still-capture only). When enabled, the
-    // still records a half-res recovery map (multi-channel RGB by default)
+    // still records a full-res recovery map (multi-channel RGB by default)
     // from the scene-linear HDR tap (post-demosaic, white-balanced *camera*
     // RGB) plus an optional film glow quotient (post/pre scatter ratio, so
     // halation/camera-diffusion glow carries HDR headroom with hue) against

@@ -468,6 +468,7 @@ int main(int argc, char** argv) {
     gci.shaderSpirvBytes = spv.size() * 4;
     gainmap::GainmapCompute gainmap(gci);
     gainmap::GainmapParams params;  // production default = AP1->sRGB
+    params.fullResMap = false;  // this test feeds an explicit half-res grid + half-res clip mask
     float cstIdent[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
     const float* cst = cstAp1 ? params.hdrToLinearSrgbRowMajor : cstIdent;
     if (!cstAp1)
