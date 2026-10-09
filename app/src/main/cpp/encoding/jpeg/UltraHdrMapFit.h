@@ -1,0 +1,128 @@
+#pragma once
+// Single-pass adaptive gainmap ceiling + soft shoulder + soft-knee chroma
+// compression, applied in the JPEG writer on the GPU wide-range map (no
+// second render). Header-only so host tests can include it directly.
+// Mirrors the validated offline prototype (tmp/final_stack.py::remux_final)
+// exactly: fit = ceil((p99.9(mean log-gain) + margin) / step) * step clamped
+// to [floor, min(displayCap, wideMax)]; shoulder y = knee + W*(1-exp(-(x-knee)/W))
+// above knee = fitted - kneeBelow; chroma d' = T*tanh(d/T) around the
+// per-pixel mean of shouldered channels.
+#include <algorithm>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <thread>
+#include <vector>
+
+#include "color/UltraHdrParams.h"
+
+namespace rawrcam::encoding::jpeg {
+
+// Fast tanh for the chroma knee: 4097-entry LUT over [-3, 3] with linear
+// interpolation (max error ~1e-7, far below 1 LSB). std::tanh costs
+// 30-100ns/call and the knee evaluates it on most map texels (12.5M at
+// full res): measured 4.3s per file on device. LUT brings it under ~150ms.
+inline float fastTanh(float x) {
+    static float lut[4097];
+    static const bool init = [] {
+        for (int i = 0; i <= 4096; ++i) lut[i] = std::tanh(-3.0f + 6.0f * i / 4096.0f);
+        return true;
+    }();
+    (void)init;
+    const float t = std::clamp((x + 3.0f) * (4096.0f / 6.0f), 0.0f, 4096.0f);
+    const int i = static_cast<int>(t);
+    const float f = t - static_cast<float>(i);
+    const float a = lut[i];
+    const float b = lut[i < 4096 ? i + 1 : 4096];
+    return a + (b - a) * f;
+}
+
+// Returns false (leave pixels + metadata wide) when the map is degenerate
+// or gamma != 1 (codes wouldn't decode linear).
+inline bool fitAndRemapMap(const unsigned char* src, std::uint32_t w, std::uint32_t h,
+                           const color::UltraHdrParams& uh, std::vector<unsigned char>& dst, float& fittedMax) {
+    const std::size_t n = static_cast<std::size_t>(w) * h;
+    const float wideMax = uh.gainMapMaxLog2;
+    if (n == 0 || wideMax <= 0.0f || uh.gamma != 1.0f) return false;
+    // p99.9 of per-pixel channel-mean log-gain via a 2048-bin histogram
+    // (~0.0023 EV bins at wide 4.7: exact enough, single pass, no 50MB sort).
+    constexpr int kBins = 2048;
+    std::vector<std::uint32_t> hist(kBins, 0);
+    for (std::size_t i = 0; i < n; ++i) {
+        const float mean = (static_cast<float>(src[i * 4 + 0]) + static_cast<float>(src[i * 4 + 1]) +
+                            static_cast<float>(src[i * 4 + 2])) /
+                           765.0f * wideMax;
+        int b = static_cast<int>(mean / wideMax * kBins);
+        hist[std::clamp(b, 0, kBins - 1)]++;
+    }
+    const std::uint64_t target = static_cast<std::uint64_t>(static_cast<double>(n) * 0.999);
+    std::uint64_t acc = 0;
+    float p999 = 0.0f;
+    for (int b = 0; b < kBins; ++b) {
+        acc += hist[b];
+        if (acc >= target) {
+            p999 = (static_cast<float>(b) + 1.0f) / kBins * wideMax;
+            break;
+        }
+    }
+    if (!(p999 >= 0.0f) || !(p999 <= wideMax)) return false;
+    float fitted = std::ceil((p999 + uh.gainMapFitMargin) / uh.gainMapFitStep) * uh.gainMapFitStep;
+    fitted = std::clamp(fitted, uh.gainMapFitFloor, std::min(uh.gainMapDisplayCap, wideMax));
+    fittedMax = fitted;
+    const float knee = fitted - uh.shoulderKneeBelowMax;
+    const float W = uh.shoulderWidth;
+    const float T = uh.chromaKnee;
+    dst.resize(n * 4);
+    const float inv255 = 1.0f / 255.0f;
+    (void)fastTanh(0.0f);  // force LUT init once, outside the threaded loop
+    const std::uint32_t h32 = h;
+    unsigned workers = std::thread::hardware_concurrency();
+    if (workers < 1) workers = 1;
+    if (workers > 4) workers = 4;
+    if (n < 4096) workers = 1;
+    std::vector<std::thread> threads;
+    threads.reserve(workers);
+    for (unsigned t = 0; t < workers; ++t) {
+        const std::uint32_t y0 = h32 * t / workers;
+        const std::uint32_t y1 = h32 * (t + 1) / workers;
+        threads.emplace_back([=, &src, &dst] {
+            for (std::uint32_t y = y0; y < y1; ++y) {
+                const std::size_t row = static_cast<std::size_t>(y) * w;
+                for (std::uint32_t x = 0; x < w; ++x) {
+                    const std::size_t i = row + x;
+                    float c[3];
+                    for (int k = 0; k < 3; ++k) c[k] = static_cast<float>(src[i * 4 + k]) * inv255 * wideMax;
+                    // Shoulder each channel, then average: mean of shouldered
+                    // channels, not shoulder of the mean.
+                    float ms = 0.0f;
+                    for (int k = 0; k < 3; ++k) {
+                        c[k] = (c[k] > knee) ? knee + W * (1.0f - std::exp(-(c[k] - knee) / W)) : c[k];
+                        ms += c[k];
+                    }
+                    ms /= 3.0f;
+                    for (int k = 0; k < 3; ++k) {
+                        const float d = (c[k] - ms) / T;
+                        float dk;
+                        if (d > 3.0f) {
+                            dk = T;
+                        } else if (d < -3.0f) {
+                            dk = -T;
+                        } else if (d > -0.02f && d < 0.02f) {
+                            dk = T * d;  // tanh(x) ~= x: skip the call, exact to 1e-3 LSB
+                        } else {
+                            dk = T * fastTanh(d);
+                        }
+                        const float yy = ms + dk;
+                        const float q = std::round(std::clamp(yy / fitted, 0.0f, 1.0f) * 255.0f);
+                        dst[i * 4 + k] = static_cast<unsigned char>(q);
+                    }
+                    dst[i * 4 + 3] = src[i * 4 + 3];
+                }
+            }
+        });
+    }
+    for (auto& th : threads) th.join();
+    return true;
+}
+
+}  // namespace rawrcam::encoding::jpeg

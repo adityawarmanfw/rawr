@@ -105,7 +105,10 @@ ExternalProject_Add(libjpeg_turbo_external
     -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}
     -DANDROID_ABI=${ANDROID_ABI}
     -DANDROID_PLATFORM=${ANDROID_PLATFORM}
-    -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+    # Always optimized: a -O0 turbojpeg (Debug default) makes JPEG encode
+    # ~20x slower on device (DCT/entropy/SIMD helpers de-optimized) while
+    # nobody debugs into this vendored lib. RelWithDebInfo keeps symbols.
+    -DCMAKE_BUILD_TYPE=RelWithDebInfo
     -DENABLE_SHARED=OFF
     -DENABLE_STATIC=ON
     -DWITH_TURBOJPEG=ON
@@ -412,6 +415,11 @@ add_dependencies(rawrcam_native rawrcam_shader_headers)
 
 # CPU image loops must remain optimized in debug builds used for device validation.
 set_source_files_properties(renderer/LinearResample.cpp renderer/DngSource.cpp renderer/RendererEngine.cpp PROPERTIES COMPILE_OPTIONS "-O3")
+
+# The UltraHDR writer runs the adaptive map fit over 12.5M full-res texels
+# (histogram + shoulder + knee) on the save path. At -O0 that is ~2.6s on
+# the test device; -O3 brings it to thumbnail time. Same rationale as above.
+set_source_files_properties(encoding/jpeg/JpegCaptureWriter.cpp PROPERTIES COMPILE_OPTIONS "-O3")
 
 # A burst journals ~650 MB of byte vectors. At -O0, libc++'s value construction
 # and trivial destruction walk every byte: ~5 seconds on the test device before

@@ -21,6 +21,7 @@
 
 #include "diagnostics/logging/RuntimeTraceRecorder.h"
 #include "encoding/jpeg/JpegTimingsFormat.h"
+#include "encoding/jpeg/UltraHdrMapFit.h"
 
 namespace rawrcam::encoding::jpeg {
 namespace {
@@ -335,20 +336,20 @@ int tjSubsampling(ChromaSubsampling s) {
 JpegCaptureWriter::~JpegCaptureWriter() { reset(); }
 
 namespace {
-// UltraHDR file assembly from two turbojpeg outputs + EXIF payload.
 // Pure byte mux (MPF + GContainer/hdrgm XMP + ISO 21496-1); ported constants
 // live in gainmap::UltrahdrMux.
-bool assembleUltraHdr(const unsigned char* baseJpeg, std::size_t baseSize, const unsigned char* mapJpeg,
-                      std::size_t mapSize, const std::vector<unsigned char>& exif, const JpegCaptureContext& context,
-                      std::vector<unsigned char>& out, std::string& error) {
-    gainmap::UltrahdrMuxParams params;
-    params.gainMapMinLog2 = context.ultraHdr.gainMapMinLog2;
-    params.gainMapMaxLog2 = context.ultraHdr.gainMapMaxLog2;
-    params.gamma = context.ultraHdr.gamma;
-    params.offsetSdr = context.ultraHdr.offsetSdr;
-    params.offsetHdr = context.ultraHdr.offsetHdr;
-    params.hdrCapacityMinLog2 = context.ultraHdr.hdrCapacityMinLog2;
-    params.hdrCapacityMaxLog2 = context.ultraHdr.hdrCapacityMaxLog2;
+ bool assembleUltraHdr(const unsigned char* baseJpeg, std::size_t baseSize, const unsigned char* mapJpeg,
+                       std::size_t mapSize, const std::vector<unsigned char>& exif, const JpegCaptureContext& context,
+                       std::vector<unsigned char>& out, std::string& error) {
+     gainmap::UltrahdrMuxParams params;
+     params.gainMapMinLog2 = context.ultraHdr.gainMapMinLog2;
+     params.gainMapMaxLog2 = context.ultraHdr.gainMapMaxLog2;
+     params.gamma = context.ultraHdr.gamma;
+     params.offsetSdr = context.ultraHdr.offsetSdr;
+     params.offsetHdr = context.ultraHdr.offsetHdr;
+     params.hdrCapacityMinLog2 = context.ultraHdr.hdrCapacityMinLog2;
+     params.hdrCapacityMaxLog2 = context.ultraHdr.hdrCapacityMaxLog2;
+     params.multiChannel = context.ultraHdr.multiChannelMap;
     gainmap::UltrahdrMuxResult result = gainmap::UltrahdrMux::assemble(
         baseJpeg, baseSize, mapJpeg, mapSize, exif.empty() ? nullptr : exif.data(), exif.size(), params, out);
     if (!result.ok) {
@@ -602,21 +603,41 @@ bool JpegCaptureWriter::startUltraHdr(std::uint64_t requestId, const void* rgba8
                     done.error = tj3GetErrorStr(baseHandle);
                 } else if (baseSize < 2 || baseBuf[0] != 0xFFu || baseBuf[1] != 0xD8u) {
                     done.error = "libjpeg-turbo returned invalid base JPEG SOI";
-                } else if (tj3Set(mapHandle, TJPARAM_QUALITY, mapQuality) != 0 ||
-                           // Gain map is gray (R=G=B) but carries the whole HDR
-                           // effect in its luma steps: 4:4:4 keeps chroma
-                           // full-res so subsample ringing can't print a
-                           // border along boost shoulders. Negligible size
-                           // cost at half res (chroma planes are ~flat).
-                           tj3Set(mapHandle, TJPARAM_SUBSAMP, TJSAMP_444) != 0 ||
+                 } else if (tj3Set(mapHandle, TJPARAM_QUALITY, mapQuality) != 0 ||
+                            // Gain map is multi-channel RGB: 4:4:4 keeps
+                            // chroma full-res so subsample ringing can't
+                            // print a border along boost shoulders. The
+                            // writer fits the ceiling + shoulder + chroma
+                            // knee on a copy just above (fitAndRemapMap).
+                            tj3Set(mapHandle, TJPARAM_SUBSAMP, TJSAMP_444) != 0 ||
                            tj3Set(mapHandle, TJPARAM_FASTDCT, 0) != 0) {
                     done.error = tj3GetErrorStr(mapHandle);
                 } else {
-                    const auto baseDone = std::chrono::steady_clock::now();
-                    baseMs = std::chrono::duration<double, std::milli>(baseDone - t0).count();
-                    std::string uhError;
-                    if (tj3Compress8(mapHandle, mapPixels, static_cast<int>(mapWidth), 0, static_cast<int>(mapHeight),
-                                     TJPF_RGBA, &mapBuf, &mapSize) != 0) {
+                     const auto baseDone = std::chrono::steady_clock::now();
+                     baseMs = std::chrono::duration<double, std::milli>(baseDone - t0).count();
+                     std::string uhError;
+                     // Single-pass adaptive ceiling: fit + shoulder + chroma
+                     // knee on a worker-local copy (caller's readback stays
+                     // untouched for telemetry). Metadata follows the fit.
+                     std::vector<unsigned char> fittedMap;
+                     float fittedMax = context.ultraHdr.gainMapMaxLog2;
+                     const unsigned char* mapEncodePixels = mapPixels;
+                     const auto fitT0 = std::chrono::steady_clock::now();
+                     const bool didFit =
+                         fitAndRemapMap(mapPixels, mapWidth, mapHeight, context.ultraHdr, fittedMap, fittedMax);
+                     const auto fitT1 = std::chrono::steady_clock::now();
+                     if (didFit) {
+                         mapEncodePixels = fittedMap.data();
+                         context.ultraHdr.gainMapMaxLog2 = fittedMax;
+                         context.ultraHdr.hdrCapacityMaxLog2 = fittedMax;
+                     }
+                     __android_log_print(ANDROID_LOG_INFO, "RawrCamNative",
+                                         "JPEG_UHDR_FIT requestId=%llu fit=%d max=%.2f fitMs=%.1f mapPx=%ux%u",
+                                         (unsigned long long)requestId, didFit ? 1 : 0, fittedMax,
+                                         std::chrono::duration<double, std::milli>(fitT1 - fitT0).count(), mapWidth,
+                                         mapHeight);
+                     if (tj3Compress8(mapHandle, mapEncodePixels, static_cast<int>(mapWidth), 0,
+                                      static_cast<int>(mapHeight), TJPF_RGBA, &mapBuf, &mapSize) != 0) {
                         uhError = tj3GetErrorStr(mapHandle);
                     } else if (mapSize < 2 || mapBuf[0] != 0xFFu || mapBuf[1] != 0xD8u) {
                         uhError = "libjpeg-turbo returned invalid gain map JPEG SOI";
