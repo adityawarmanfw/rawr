@@ -110,6 +110,10 @@ struct Arguments {
     // aePostGain * 2^exposureEV / folded film EV). Default 1.0 = legacy.
     float gainmapExposure = 1.0f;
     gainmap::GainmapParams gainmapParams{};
+    // Offline experiments (host tool only, never shipped): single-channel
+    // (luma) map encode and full-res map grid for dense-map A/B renders.
+    bool gainmapMono = false;
+    bool gainmapFullRes = false;
 };
 
 void check(VkResult result, const char* what) {
@@ -271,6 +275,10 @@ Arguments parseArguments(int argc, char** argv) {
             args.gainmapParams.mapBlurSigma = std::stof(argv[++i]);
         } else if (value == "--gainmap-rgb") {
             args.gainmapParams.multiChannelMap = true;
+        } else if (value == "--gainmap-mono") {
+            args.gainmapMono = true;
+        } else if (value == "--gainmap-fullres") {
+            args.gainmapFullRes = true;
         } else if (value == "--gainmap-glow-strength" && i + 1 < argc) {
             args.gainmapParams.glowStrength = std::stof(argv[++i]);
         } else if (value == "--gainmap-glow-max" && i + 1 < argc) {
@@ -283,6 +291,7 @@ Arguments parseArguments(int argc, char** argv) {
     if (args.input.empty() || args.config.empty() || args.outputDir.empty()) {
         throw std::runtime_error("usage: rawr_offline_pipeline --input tagged.rgba16f --config replay.txt --output-dir DIR");
     }
+    if (args.gainmapMono) args.gainmapParams.multiChannelMap = false;
     if (args.preserveReconstructedHighlights && (!args.singleVariant || args.singleRecovery))
         throw std::runtime_error("--preserve-reconstructed requires --single-recovery 0");
     if (args.rtHighlightCompression < 0 || args.rtHighlightCompression > 500)
@@ -771,8 +780,9 @@ int main(int argc, char** argv) {
                 // for the HDR linear dump and the map. Film variants run the
                 // gain map too (scene-linear tap with folded EV, plus the
                 // glow quotient when the look has a linear scatter path).
-                const uint32_t mapW = std::max(1u, config.width / 2u);
-                const uint32_t mapH = std::max(1u, config.height / 2u);
+                const uint32_t mapDiv = args.gainmapFullRes ? 1u : 2u;
+                const uint32_t mapW = std::max(1u, config.width / mapDiv);
+                const uint32_t mapH = std::max(1u, config.height / mapDiv);
                 const bool wantHdrDump = args.dumpHdr;
                 const bool wantGainmap = args.gainmap;
                 Img mapImg{};
@@ -1093,6 +1103,7 @@ int main(int argc, char** argv) {
                                     config.width / 2u, config.height / 2u};
                     gri.params = args.gainmapParams;
                     gri.params.hdrExposure = effHdrExposure;
+                    gri.params.fullResMap = args.gainmapFullRes;
                     if (args.hasGainmapMatrix) {
                         std::memcpy(gri.params.hdrToLinearSrgbRowMajor, args.gainmapMatrix.data(),
                                     sizeof(gri.params.hdrToLinearSrgbRowMajor));
