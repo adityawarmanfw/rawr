@@ -353,6 +353,9 @@ bool PreviewLookController::applyFilmSimState(bool enabled, const spektrafilm_na
 }
 
 std::optional<tonemap::lut::LutChain> PreviewLookController::videoRenderLut() const {
+    // RAWR NTRL's built-in still look stays off video: any LUT disables the
+    // Adreno 840 texture tonemap path (VideoProcessingResources).
+    if (colorRenderProfile_ == tonemap_integration::ColorRenderProfile::RawrBase) return std::nullopt;
     return rawrcam::tonemap_integration::loadRenderTransformLut(colorRenderProfile_, filesDir_, importedLutProfileId_);
 }
 

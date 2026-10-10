@@ -4,6 +4,7 @@
 #include <tonemap/lut/Lut3D.h>
 
 #include <fstream>
+#include <sstream>
 #include <cmath>
 #include <stdexcept>
 #include <string>
@@ -131,10 +132,35 @@ void validateMetadata(const ProfileMetadata& metadata) {
     }
 }
 
+// RAWR NTRL look (tonemap/luts/rawr_ntrl.cube): sRGB in,
+// sRGB out, applied directly on the existing render like an imported
+// sRGB/sRGB profile. Parsed once; the chain is copied per tonemap build.
+const tonemap::lut::LutChain& rawrNtrlChain() {
+    static const tonemap::lut::LutChain chain = [] {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Woverlength-strings"
+        static constexpr const char kCube[] =
+#include "tonemap/BuiltInRawrNtrlLut.inc"
+            ;
+#pragma clang diagnostic pop
+        std::istringstream in(std::string(kCube, sizeof(kCube) - 1));
+        tonemap::lut::LutChain c{};
+        c.placement = tonemap::lut::LutPlacement::RenderTransform;
+        c.intensity = 1.0f;
+        c.inputSpace = {tonemap::color::Gamut::SRgbRec709, tonemap::color::TransferFunction::SRgb};
+        c.outputSpace = {tonemap::color::Gamut::SRgbRec709, tonemap::color::TransferFunction::SRgb};
+        c.afterAction = tonemap::lut::LutAfterAction::UseDirectly;
+        c.stages.push_back(tonemap::lut::parseCube(in, 65));
+        return c;
+    }();
+    return chain;
+}
+
 }  // namespace
 
 std::optional<tonemap::lut::LutChain> loadRenderTransformLut(ColorRenderProfile profile, const std::string& filesDir,
                                                              const std::string& importedProfileId) {
+    if (profile == ColorRenderProfile::RawrBase) return rawrNtrlChain();
     if (profile != ColorRenderProfile::UserLut) return std::nullopt;
     if (!safeProfileId(importedProfileId)) throw std::invalid_argument("invalid imported LUT profile id");
 

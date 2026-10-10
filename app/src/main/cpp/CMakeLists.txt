@@ -393,6 +393,8 @@ function(rawrcam_module name)
 endfunction()
 include(cmake/CameraProfiles.cmake)
 rawr_embed_camera_profiles(${GEN}/camera/BuiltInCameraProfiles.inc)
+include(cmake/BuiltInLuts.cmake)
+rawr_embed_builtin_lut(${CMAKE_CURRENT_SOURCE_DIR}/tonemap/luts/rawr_ntrl.cube ${GEN}/tonemap/BuiltInRawrNtrlLut.inc)
 include(cmake/NativeModules.cmake)
 target_link_libraries(rawrcam_encoding PUBLIC rawrcam_dng_capture)
 

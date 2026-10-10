@@ -59,7 +59,7 @@ struct UltraHdrParams {
     // shadows stay at identity and read underexposed once the display dims
     // SDR white for HDR. Relative to the fitted max so the floor scales with
     // display headroom like the highlights. 0.75 / 0.4 from the on-device
-    // A/B (EOS + NTRL); the lower exponent keeps deep-shadow profiles lifted.
+    // A/B across profiles; the lower exponent keeps deep-shadow profiles lifted.
     // baseShare 0 disables (measured ratio only).
     float baseShare = 0.75f;
     float baseExponent = 0.4f;
