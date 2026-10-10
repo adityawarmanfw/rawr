@@ -100,6 +100,8 @@ target_compile_options(raw_still_capture_manager_test PRIVATE -DNDEBUG)
 target_include_directories(raw_still_capture_manager_test BEFORE PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/native/capture_stubs")
 rawr_test(exif_transpose_test
   "${RAWR_ROOT}/tests/native/exif_transpose_test.cpp")
+rawr_test(ultrahdr_map_fit_test
+  "${RAWR_ROOT}/tests/native/ultrahdr_map_fit_test.cpp")
 rawr_test(raw_image_ring_queue_test
   "${RAWR_ROOT}/tests/native/raw_image_ring_queue_test.cpp"
   "${RAWR_ROOT}/native/zsl_ring/src/RawImageRing.cpp")

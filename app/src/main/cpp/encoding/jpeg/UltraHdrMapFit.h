@@ -38,9 +38,12 @@ inline float fastTanh(float x) {
 }
 
 // Returns false (leave pixels + metadata wide) when the map is degenerate
-// or gamma != 1 (codes wouldn't decode linear).
+// or gamma != 1 (codes wouldn't decode linear). base (RGBA8 sRGB, baseW x
+// baseH) drives the luma baseline floor; nullptr skips it. Map texels sample
+// the base at the nearest scaled pixel (identity for full-res maps).
 inline bool fitAndRemapMap(const unsigned char* src, std::uint32_t w, std::uint32_t h,
-                           const color::UltraHdrParams& uh, std::vector<unsigned char>& dst, float& fittedMax) {
+                           const color::UltraHdrParams& uh, std::vector<unsigned char>& dst, float& fittedMax,
+                           const unsigned char* base = nullptr, std::uint32_t baseW = 0, std::uint32_t baseH = 0) {
     const std::size_t n = static_cast<std::size_t>(w) * h;
     const float wideMax = uh.gainMapMaxLog2;
     if (n == 0 || wideMax <= 0.0f || uh.gamma != 1.0f) return false;
@@ -72,6 +75,17 @@ inline bool fitAndRemapMap(const unsigned char* src, std::uint32_t w, std::uint3
     const float knee = fitted - uh.shoulderKneeBelowMax;
     const float W = uh.shoulderWidth;
     const float T = uh.chromaKnee;
+    // Luma baseline floor (UltraHdrParams::baseShare): sRGB EOTF via a
+    // 256-entry LUT, Rec.709 luma, then fitted * share * Y^exp. Max with
+    // the measured channels before the shoulder, so it never lowers a code.
+    const bool useFloor = base != nullptr && baseW > 0 && baseH > 0 && uh.baseShare > 0.0f;
+    float eotf[256];
+    for (int i = 0; i < 256; ++i) {
+        const float c = static_cast<float>(i) / 255.0f;
+        eotf[i] = c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
+    }
+    const float floorScale = fitted * uh.baseShare;
+    const float floorExp = uh.baseExponent;
     dst.resize(n * 4);
     const float inv255 = 1.0f / 255.0f;
     (void)fastTanh(0.0f);  // force LUT init once, outside the threaded loop
@@ -85,13 +99,24 @@ inline bool fitAndRemapMap(const unsigned char* src, std::uint32_t w, std::uint3
     for (unsigned t = 0; t < workers; ++t) {
         const std::uint32_t y0 = h32 * t / workers;
         const std::uint32_t y1 = h32 * (t + 1) / workers;
-        threads.emplace_back([=, &src, &dst] {
+        threads.emplace_back([=, &src, &dst, &eotf] {
             for (std::uint32_t y = y0; y < y1; ++y) {
                 const std::size_t row = static_cast<std::size_t>(y) * w;
+                const std::uint32_t by = useFloor ? std::min(baseH - 1, static_cast<std::uint32_t>(
+                                                                            std::uint64_t(y) * baseH / h))
+                                                  : 0;
                 for (std::uint32_t x = 0; x < w; ++x) {
                     const std::size_t i = row + x;
                     float c[3];
                     for (int k = 0; k < 3; ++k) c[k] = static_cast<float>(src[i * 4 + k]) * inv255 * wideMax;
+                    if (useFloor) {
+                        const std::uint32_t bx =
+                            std::min(baseW - 1, static_cast<std::uint32_t>(std::uint64_t(x) * baseW / w));
+                        const unsigned char* p = base + (static_cast<std::size_t>(by) * baseW + bx) * 4;
+                        const float luma = 0.2126f * eotf[p[0]] + 0.7152f * eotf[p[1]] + 0.0722f * eotf[p[2]];
+                        const float fl = luma > 0.0f ? floorScale * std::pow(luma, floorExp) : 0.0f;
+                        for (int k = 0; k < 3; ++k) c[k] = std::max(c[k], fl);
+                    }
                     // Shoulder each channel, then average: mean of shouldered
                     // channels, not shoulder of the mean.
                     float ms = 0.0f;

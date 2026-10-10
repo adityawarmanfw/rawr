@@ -52,6 +52,17 @@ struct UltraHdrParams {
     // white. Encode-only like satProtect.
     float shoulderWidth = 0.5f;
     float shoulderKneeBelowMax = 0.5f;
+    // Luma baseline floor (applied before the shoulder): every texel gets at
+    // least fitted * baseShare * Y^baseExponent EV, Y = linear Rec.709 luma
+    // of the SDR base. The measured ratio is <= 1x below the highlights (the
+    // tonemap lifts mids above the HDR tap), so without a floor mids and
+    // shadows stay at identity and read underexposed once the display dims
+    // SDR white for HDR. Relative to the fitted max so the floor scales with
+    // display headroom like the highlights. 0.75 / 0.4 from the on-device
+    // A/B (EOS + NTRL); the lower exponent keeps deep-shadow profiles lifted.
+    // baseShare 0 disables (measured ratio only).
+    float baseShare = 0.75f;
+    float baseExponent = 0.4f;
     // Soft-knee chroma compression around the per-pixel channel mean
     // (d' = T*tanh(d/T)): slope 1 at neutral, asymptote +/-T. Kills hue
     // fringing (magenta windows) without the contour a hard clip prints.

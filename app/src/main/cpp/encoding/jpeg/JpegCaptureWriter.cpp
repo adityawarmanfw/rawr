@@ -624,7 +624,8 @@ bool JpegCaptureWriter::startUltraHdr(std::uint64_t requestId, const void* rgba8
                      const unsigned char* mapEncodePixels = mapPixels;
                      const auto fitT0 = std::chrono::steady_clock::now();
                      const bool didFit =
-                         fitAndRemapMap(mapPixels, mapWidth, mapHeight, context.ultraHdr, fittedMap, fittedMax);
+                         fitAndRemapMap(mapPixels, mapWidth, mapHeight, context.ultraHdr, fittedMap, fittedMax,
+                                        pixels, width, height);
                      const auto fitT1 = std::chrono::steady_clock::now();
                      if (didFit) {
                          mapEncodePixels = fittedMap.data();
@@ -632,8 +633,9 @@ bool JpegCaptureWriter::startUltraHdr(std::uint64_t requestId, const void* rgba8
                          context.ultraHdr.hdrCapacityMaxLog2 = fittedMax;
                      }
                      __android_log_print(ANDROID_LOG_INFO, "RawrCamNative",
-                                         "JPEG_UHDR_FIT requestId=%llu fit=%d max=%.2f fitMs=%.1f mapPx=%ux%u",
+                                         "JPEG_UHDR_FIT requestId=%llu fit=%d max=%.2f base=%.2f/%.2f fitMs=%.1f mapPx=%ux%u",
                                          (unsigned long long)requestId, didFit ? 1 : 0, fittedMax,
+                                         context.ultraHdr.baseShare, context.ultraHdr.baseExponent,
                                          std::chrono::duration<double, std::milli>(fitT1 - fitT0).count(), mapWidth,
                                          mapHeight);
                      if (tj3Compress8(mapHandle, mapEncodePixels, static_cast<int>(mapWidth), 0,
