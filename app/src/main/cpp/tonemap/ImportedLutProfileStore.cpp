@@ -134,7 +134,7 @@ void validateMetadata(const ProfileMetadata& metadata) {
 
 // RAWR NTRL look (tonemap/luts/rawr_ntrl.cube): sRGB in,
 // sRGB out, applied directly on the existing render like an imported
-// sRGB/sRGB profile. Parsed once; the chain is copied per tonemap build.
+// sRGB/sRGB profile, everywhere (preview, stills, replay, video). Parsed once; the chain is copied per tonemap build.
 const tonemap::lut::LutChain& rawrNtrlChain() {
     static const tonemap::lut::LutChain chain = [] {
 #pragma clang diagnostic push
