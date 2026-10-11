@@ -100,7 +100,8 @@ class AutoKeySmoother {
             timestampNs > lastNs_ ? std::min(static_cast<float>(timestampNs - lastNs_) * 1.0e-9f, kMaxStepSec) : 0.0f;
         lastNs_ = std::max(lastNs_, timestampNs);
         const float error = targetEv - ev_;
-        if (std::abs(error) < kDeadbandEv) return ev_;
+        // No lift needed: keep decaying so the deadband cannot strand a residual lift.
+        if (std::abs(error) < kDeadbandEv && targetEv > 0.0f) return ev_;
         const float tau = recording ? kRecordingTimeConstantSec : kTimeConstantSec;
         ev_ += error * (1.0f - std::exp(-dt / tau));
         return ev_;

@@ -91,6 +91,14 @@ int main() {
         assert(s.update(0.92f, 200'000'000ull, false) == 1.0f);
         assert(s.update(1.5f, 300'000'000ull, false) > 1.0f);
     }
+    // A zero target is approached all the way, not stranded at the deadband.
+    {
+        AutoKeySmoother s;
+        s.update(0.15f, 0, false);
+        float v = 0.15f;
+        for (std::uint64_t t = 1; t <= 60; ++t) v = s.update(0.0f, t * 33'000'000ull, false);
+        assert(v < 0.01f);
+    }
     // Long gaps are capped and time going backwards does not move the value.
     {
         AutoKeySmoother s;
