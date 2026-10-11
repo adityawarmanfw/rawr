@@ -41,6 +41,9 @@ struct Vng4Pipeline::Impl {
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     VkDescriptorPool pool = VK_NULL_HANDLE;
     VkDescriptorSet set = VK_NULL_HANDLE;
+    // The blended export has its own set so a plain record and a blended record can
+    // share one command buffer (Dual's diagnostic branch outputs do).
+    VkDescriptorSet blendSet = VK_NULL_HANDLE;
     std::array<VkShaderModule, 5> modules{};
     std::array<VkPipeline, 5> pipelines{};
     VkSampler sampler = VK_NULL_HANDLE;
@@ -200,12 +203,12 @@ struct Vng4Pipeline::Impl {
         pl.pushConstantRangeCount = 1;
         pl.pPushConstantRanges = &pr;
         check(vkCreatePipelineLayout(ctx.device, &pl, ctx.allocator, &pipelineLayout), "VNG4 pipeline layout");
-        std::array<VkDescriptorPoolSize, 3> ps{{{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2},
-                                                {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 6},
-                                                {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1}}};
+        std::array<VkDescriptorPoolSize, 3> ps{{{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4},
+                                                {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 12},
+                                                {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2}}};
         VkDescriptorPoolCreateInfo pi{};
         pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        pi.maxSets = 1;
+        pi.maxSets = 2;
         pi.poolSizeCount = ps.size();
         pi.pPoolSizes = ps.data();
         check(vkCreateDescriptorPool(ctx.device, &pi, ctx.allocator, &pool), "VNG4 descriptor pool");
@@ -215,6 +218,7 @@ struct Vng4Pipeline::Impl {
         da.descriptorSetCount = 1;
         da.pSetLayouts = &setLayout;
         check(vkAllocateDescriptorSets(ctx.device, &da, &set), "VNG4 descriptor set");
+        check(vkAllocateDescriptorSets(ctx.device, &da, &blendSet), "VNG4 blend descriptor set");
         const char* names[5] = {"vng4_linear.comp", "vng4_green.comp", "vng4_export.comp", "vng4_green_diagnostic.comp",
                                 "vng4_export_blend.comp"};
         constexpr size_t kDiagnosticShader = 3;
@@ -320,7 +324,7 @@ struct Vng4Pipeline::Impl {
         std::array<VkWriteDescriptorSet, 9> w{};
         for (uint32_t i = 0; i < 9; ++i) {
             w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            w[i].dstSet = set;
+            w[i].dstSet = blendMask ? blendSet : set;
             w[i].dstBinding = i;
             w[i].descriptorCount = 1;
         }
@@ -354,6 +358,13 @@ struct Vng4Pipeline::Impl {
     }
     void dispatchAll(VkCommandBuffer cmd, const Push& pc, bool blendedExport = false) {
         init(cmd);
+        // working4/green may still be in use by an earlier record in this command buffer.
+        VkMemoryBarrier mb{};
+        mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        mb.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb,
+                             0, nullptr, 0, nullptr);
         uint32_t wx[3] = {cfg.linearWorkgroupX, cfg.greenWorkgroupX, cfg.exportWorkgroupX},
                  wy[3] = {cfg.linearWorkgroupY, cfg.greenWorkgroupY, cfg.exportWorkgroupY};
         if (queries) vkCmdResetQueryPool(cmd, queries, 0, 6);
@@ -361,7 +372,8 @@ struct Vng4Pipeline::Impl {
             if (queries) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, queries, i * 2);
             const uint32_t pipeIndex = (i == 2 && blendedExport) ? 4u : i;
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines[pipeIndex]);
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1, &set, 0, nullptr);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1,
+                                    blendedExport ? &blendSet : &set, 0, nullptr);
             vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Push), &pc);
             vkCmdDispatch(cmd, (cfg.width + wx[i] - 1) / wx[i], (cfg.height + wy[i] - 1) / wy[i], 1);
             if (queries) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, queries, i * 2 + 1);
