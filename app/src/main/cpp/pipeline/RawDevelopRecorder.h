@@ -119,6 +119,9 @@ class RawDevelopRecorder final {
                        rawrcam::diagnostics::GpuTimingTracker& performance, Audit audit);
 
     RawDevelopRecordResult record(const RawDevelopRecordInput& input, uint32_t auditSubmitCount) const;
+    void recordSceneExposure(VkCommandBuffer command, uint32_t frameSlot, VkImageView view, uint32_t width,
+                             uint32_t height, const std::array<float, 9>& sensorToSrgb,
+                             const std::array<float, 4>& wb) const;
     void recordVideoScopes(VkCommandBuffer command, uint32_t frameSlot, VkImageView monitorView, VkImage monitorImage,
                            uint32_t width, uint32_t height, int sensorOrientationDegrees,
                            int deviceRotationDegrees) const;

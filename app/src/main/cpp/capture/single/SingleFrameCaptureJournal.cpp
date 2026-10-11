@@ -32,8 +32,7 @@ void SingleFrameCaptureJournal::commit(SingleFrameSnapshot& deferred) {
     persistence::CaptureJob job;
     job.frame = std::move(*deferred.frame);
     frozen_.dng.resolvedRecipe = persistence::resolvedRecipe(deferred.tonemapParams, deferred.aePostGain,
-                                                             deferred.filmEnabled, deferred.filmLook,
-                                                             frozen_.dng.autoKeyEv);
+                                                             deferred.filmEnabled, deferred.filmLook);
     job.dng = frozen_.dng;
     if (frozen_.jpegRequested) job.jpeg = frozen_.jpeg;
     job.jpegRequested = frozen_.jpegRequested;

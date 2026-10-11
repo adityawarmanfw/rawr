@@ -141,7 +141,7 @@ cpp/
 │   ├── ImageResources.h
 │   └── shaders/
 ├── support/UniqueFd.h                 # Move-only descriptor ownership
-├── color/                            # Color transforms, WB, AE post-gain, auto key exposure, UltraHDR values
+├── color/                            # Color transforms, WB, AE post-gain, adaptive scene-key tone curve, UltraHDR values
 ├── geometry/                         # CFA, orientation, display/sensor mapping
 ├── metadata/                         # Camera/frame values, reading, validation
 ├── tonemap/                          # Profile and LUT integration, film field contract

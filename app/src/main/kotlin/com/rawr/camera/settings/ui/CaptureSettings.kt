@@ -96,7 +96,7 @@ internal fun ExposureSettings(state: SettingsUiState, dispatch: SettingsDispatch
         }
         SettingsGroup(
             title = "Auto Key Exposure",
-            description = "Brightens dark midtones in high-contrast scenes with a render gain. " +
+            description = "Balances shadows and midtones while preserving highlight exposure. " +
                 "Sensor exposure is unchanged. LOG profiles are never lifted."
         ) {
             CompactChoiceRow(AutoKeyExposure.entries, state.values.autoKeyExposure, {

@@ -42,6 +42,11 @@ uint64_t SessionEngine::requestRawStillCapture(rawrcam::encoding::dng::DngCaptur
         return 0;
     }
     dngContext.autoKeyEv = appliedAutoKeyEv();
+    if (dngContext.captureTone) {
+        auto capturedTone = std::make_shared<tonemap::TonemapParams>(*dngContext.captureTone);
+        applyAutoKey(*capturedTone);
+        dngContext.captureTone = std::move(capturedTone);
+    }
     const uint64_t requestId = capture_.requestSingle(std::move(dngContext), std::move(jpegContext), [this] {
         return ingressQueue_.latestTimestamp(realtime_.generation());
     });
@@ -97,11 +102,23 @@ uint64_t SessionEngine::startPreparedMultiframeCapture(
     uint64_t requestId = 0;
     {
         std::lock_guard<std::mutex> lock(mu_);
-        baseDng.autoKeyEv = appliedAutoKeyEv();
+        auto tone = look_.toneParams();
+        applyAutoKey(tone);
+        if (baseDng.captureTone) {
+            auto capturedTone = std::make_shared<tonemap::TonemapParams>(*baseDng.captureTone);
+            applyAutoKey(*capturedTone);
+            baseDng.captureTone = std::move(capturedTone);
+        }
+        if (mergedDng.captureTone) {
+            auto capturedTone = std::make_shared<tonemap::TonemapParams>(*mergedDng.captureTone);
+            applyAutoKey(*capturedTone);
+            mergedDng.captureTone = std::move(capturedTone);
+        }
+        baseDng.autoKeyEv = tone.adaptiveTone.liftEv;
         mergedDng.autoKeyEv = baseDng.autoKeyEv;
         requestId = capture_.multiframe().startPreparedMultiframeCapture(
             std::move(baseDng), std::move(mergedDng), std::move(mergedJpeg), dumpRzslRequested, tuning, baseFrameMode,
-            look_.toneParams(), look_.requestedFilmEnabled(), look_.filmLook(), &bracket);
+            tone, look_.requestedFilmEnabled(), look_.filmLook(), &bracket);
     }
     // HDR+ bracketed: the dark frames are one-shot camera requests, submitted
     // outside mu_ like every other camera control call.

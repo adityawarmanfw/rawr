@@ -475,6 +475,7 @@ void FrameSubmitCoordinator::submitSplitVideoAndMonitor(const SubmitParams& para
     frame.noiseProfileValid = rawrcam::develop::rendered::resolveDenoiseNoise(metadata, frame.noiseA, frame.noiseB);
     auto tone = tonemapParams_;
     tone.aePostGain = previewPostGain(metadata);
+    lifecyclePort_.applyAutoKey(tone);
     const auto cameraToAp1 = RawDevelopRecorder::composeCameraToAp1(params.sensorToSrgb);
 
     // The first submission waits for the camera buffer and the encoder image
@@ -532,7 +533,12 @@ void FrameSubmitCoordinator::submitSplitVideoAndMonitor(const SubmitParams& para
     try {
         performanceTracker_.markVideoProcessBegin(current, slotIndex, true);
         videoOutput_->record(current, slotIndex, *acquired.videoIndex, config_.rawWidth, config_.rawHeight, frame,
-                             cameraToAp1, tone, performanceTracker_, acquired.swapIndex.has_value(), splitSubmit);
+                             cameraToAp1, tone, performanceTracker_, acquired.swapIndex.has_value(), splitSubmit,
+                             [&](VkCommandBuffer cmd, VkImageView view, uint32_t width, uint32_t height) {
+                                 if (diagnosticsPort_.sceneKeyMeteringEnabled())
+                                     resources_.recorder()->recordSceneExposure(cmd, slotIndex, view, width, height,
+                                                                                params.sensorToSrgb, params.wb);
+                             });
         if (!directBuffer && !bridgeCopy) {
             releaseRawInputImage(current, *acquired.raw, vulkanContext_.queueFamily(),
                                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
@@ -660,6 +666,7 @@ FrameSubmitCoordinator::RecordedSubmit FrameSubmitCoordinator::recordSubmitComma
 
     auto frameTonemapParams = tonemapParams_;
     frameTonemapParams.aePostGain = previewPostGain(metadata);
+    lifecyclePort_.applyAutoKey(frameTonemapParams);
     trace.record(rawrcam::diagnostics::RuntimeTraceStage::PostGain, params.timestampNs, metadata.frameOrdinal,
                  static_cast<int32_t>(slotIndex), metadata.exposureTimeNs, metadata.sensitivity, 0,
                  static_cast<int64_t>(std::llround(frameTonemapParams.aePostGain * 1000000.0f)));

@@ -2,6 +2,8 @@
 #include <array>
 #include <cmath>
 #include <stdexcept>
+
+#include "tonemap/AdaptiveTone.h"
 #include "tonemap/color/ColorSpace.h"
 
 namespace tonemap {
@@ -40,6 +42,7 @@ struct TonemapParams {
     float aePostGain = 1.0f;
     RenderTransform renderTransform = RenderTransform::Existing;
     color::ColorSpace outputSpace{};
+    AdaptiveToneParams adaptiveTone{};
 };
 
 // Renderer configuration. These values describe the current validated rendering

@@ -85,14 +85,14 @@ if(SPEKTRA_FILM_BUILD_STANDALONE)
             add_custom_command(
                 OUTPUT ${SPV}
                 COMMAND ${GLSLANG_VALIDATOR} -V ${CMAKE_CURRENT_SOURCE_DIR}/${SHADER} -o ${SPV}
-                DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${SHADER}
+                DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${SHADER} ${CMAKE_CURRENT_SOURCE_DIR}/../shader_common/shaders/adaptive_tone.glsl
                 VERBATIM
             )
         else()
             add_custom_command(
                 OUTPUT ${SPV}
                 COMMAND ${GLSLC} -fshader-stage=compute ${CMAKE_CURRENT_SOURCE_DIR}/${SHADER} -o ${SPV}
-                DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${SHADER}
+                DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${SHADER} ${CMAKE_CURRENT_SOURCE_DIR}/../shader_common/shaders/adaptive_tone.glsl
                 VERBATIM
             )
         endif()

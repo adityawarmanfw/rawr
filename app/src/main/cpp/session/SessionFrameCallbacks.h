@@ -15,6 +15,7 @@ class SessionFrameCallbacks final : public pipeline::FrameLifecyclePort,
     void notifySwapchainOutOfDate() override;
     void finalizeDetachedStill() override;
     float postGainFor(const rawrcam::metadata::FrameMetadataSnapshot& metadata) override;
+    void applyAutoKey(tonemap::TonemapParams& tone) override;
     void advanceStill() override;
     bool isStillCaptureRequested() override;
     bool deferSubmittedFrame(const rawrcam::metadata::FrameMetadataSnapshot& metadata,
@@ -56,6 +57,7 @@ class SessionFrameCallbacks final : public pipeline::FrameLifecyclePort,
     SessionEngine* engine_;
     // Frame-thread only (slot retire).
     rawrcam::color::AutoKeySmoother autoKeySmoother_;
+    rawrcam::color::AutoKeySmoother keySmoother_, highlightSmoother_;
 };
 
 }  // namespace rawrcam::session

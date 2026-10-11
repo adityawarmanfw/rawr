@@ -32,7 +32,7 @@ struct DngCaptureContext {
     std::string processingRecipe;  // Versioned named-field JSON; independent of whether JPEG is requested.
     std::string sourceRole = "single";
     std::string resolvedRecipe;               // Frame-time native settings, preserved for replay.
-    float autoKeyEv = 0.0f;                   // Shutter-time auto key lift; recipe diagnostics only.
+    float autoKeyEv = 0.0f;                   // Shutter-time key lift; rendering uses captureTone.adaptiveTone.
     // Per-frame color state for replay, rendered by
     // capture::persistence::attachFrameRecipes before the writer starts. The
     // encoder embeds every recipe string verbatim and never parses it.

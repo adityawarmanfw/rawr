@@ -21,7 +21,7 @@
 namespace spektrafilm_native {
 namespace {
 
-constexpr uint32_t kCorePushBytes = 104;
+constexpr uint32_t kCorePushBytes = 120;
 constexpr uint32_t kIoPushBytes = 64;
 
 struct CorePush {
@@ -51,6 +51,7 @@ struct CorePush {
     uint32_t activeOriginY = 0;
     uint32_t activeWidth = 0;
     uint32_t activeHeight = 0;
+    float adaptiveTone[4] = {0.0f, -4.0f, 0.0f, 1.0f};
 };
 static_assert(sizeof(CorePush) == kCorePushBytes, "core push layout");
 
@@ -1260,7 +1261,7 @@ struct SpektraFilm::Impl {
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(context.physicalDevice, &props);
         if (props.limits.maxPushConstantsSize < kCorePushBytes) {
-            fail("maxPushConstantsSize < 104");
+            fail("maxPushConstantsSize < 120");
         }
         const VkDeviceSize biggest =
             static_cast<VkDeviceSize>(spektrafilm::kSpektraColorSpaceCount) *
@@ -2968,6 +2969,7 @@ void SpektraFilm::Impl::recordBoostMilestone(const SpektraFilmRecordInfo& ri) {
 
     CorePush push{};
     push.filmExposureEv = ri.look.filmExposureEv;
+    std::copy(ri.adaptiveTone.begin(), ri.adaptiveTone.end(), push.adaptiveTone);
     push.filmGamma = tables::effectiveFilmGamma(ri.look.filmPushPullMode,
                                                 ri.look.filmGamma,
                                                 ri.look.filmPushPullStops);
@@ -3257,6 +3259,7 @@ void SpektraFilm::Impl::recordTiledMemory(const SpektraFilmRecordInfo& ri,
 
     CorePush push{};
     push.filmExposureEv = ri.look.filmExposureEv;
+    std::copy(ri.adaptiveTone.begin(), ri.adaptiveTone.end(), push.adaptiveTone);
     push.filmGamma = tables::effectiveFilmGamma(ri.look.filmPushPullMode,
                                                 ri.look.filmGamma,
                                                 ri.look.filmPushPullStops);
@@ -3879,6 +3882,10 @@ bool SpektraFilm::validateRecordInfo(const SpektraFilmRecordInfo& ri,
         }
         return false;
     };
+    if (!std::all_of(ri.adaptiveTone.begin(), ri.adaptiveTone.end(), [](float v) { return std::isfinite(v); }) ||
+        ri.adaptiveTone[0] < 0.0f || ri.adaptiveTone[0] > 3.0f || !(ri.adaptiveTone[3] > 0.0f)) {
+        return reject("spektrafilm: invalid adaptive tone curve");
+    }
     if (!ri.commandBuffer) {
         return reject("spektrafilm: command buffer null");
     }
@@ -4106,6 +4113,7 @@ void SpektraFilm::record(const SpektraFilmRecordInfo& ri) {
     push.width = w;
     push.height = h;
     push.filmExposureEv = ri.look.filmExposureEv;
+    std::copy(ri.adaptiveTone.begin(), ri.adaptiveTone.end(), push.adaptiveTone);
     push.filmGamma = tables::effectiveFilmGamma(ri.look.filmPushPullMode,
                                                 ri.look.filmGamma,
                                                 ri.look.filmPushPullStops);

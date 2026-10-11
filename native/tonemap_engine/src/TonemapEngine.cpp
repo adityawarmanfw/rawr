@@ -35,8 +35,9 @@ struct alignas(16) GpuParameters {
     float lutDomainMax[lut::kMaxGpuLutStages][4];
     float neutralGamut[16], userInputGamut[16], userOutputGamut[16];
     uint32_t directRender[4];
+    float adaptiveTone[4];
 };
-static_assert(sizeof(GpuParameters) == 864, "GPU parameter layout changed");
+static_assert(sizeof(GpuParameters) == 880, "GPU parameter layout changed");
 
 constexpr VkDeviceSize kRawLscBytes = 64 * 1024;
 struct RawPush {
@@ -92,16 +93,16 @@ bool validParams(const TonemapParams& params) noexcept {
     if (static_cast<unsigned>(params.renderTransform) > 3 ||
         static_cast<unsigned>(params.outputSpace.gamut) > 7 ||
         static_cast<unsigned>(params.outputSpace.transfer) > 10) return false;
-    return finite(params.exposureEV) && finite(params.blackPointEV) && finite(params.shadowLiftEV) &&
-           finite(params.midtoneLiftEV) && finite(params.contrast) && finite(params.shoulderStartEV) &&
-           finite(params.whitePointEV) && finite(params.highlightBiasEV) && finite(params.saturation) &&
-           finite(params.vibrance) && finite(params.aePostGain) && params.blackPointEV >= -100.0f &&
-           params.blackPointEV <= 100.0f && params.shadowLiftEV >= -100.0f && params.shadowLiftEV <= 100.0f &&
-           params.midtoneLiftEV >= -100.0f && params.midtoneLiftEV <= 100.0f && params.contrast >= -100.0f &&
-           params.contrast <= 100.0f && params.whitePointEV >= -100.0f && params.whitePointEV <= 100.0f &&
-           params.highlightBiasEV >= -100.0f && params.highlightBiasEV <= 100.0f && params.saturation >= -100.0f &&
-           params.saturation <= 100.0f && params.vibrance >= -100.0f && params.vibrance <= 100.0f &&
-           params.aePostGain > 0.0f && params.aePostGain <= kMaxAePostGain;
+    return validAdaptiveTone(params.adaptiveTone) && finite(params.exposureEV) && finite(params.blackPointEV) &&
+           finite(params.shadowLiftEV) && finite(params.midtoneLiftEV) && finite(params.contrast) &&
+           finite(params.shoulderStartEV) && finite(params.whitePointEV) && finite(params.highlightBiasEV) &&
+           finite(params.saturation) && finite(params.vibrance) && finite(params.aePostGain) &&
+           params.blackPointEV >= -100.0f && params.blackPointEV <= 100.0f && params.shadowLiftEV >= -100.0f &&
+           params.shadowLiftEV <= 100.0f && params.midtoneLiftEV >= -100.0f && params.midtoneLiftEV <= 100.0f &&
+           params.contrast >= -100.0f && params.contrast <= 100.0f && params.whitePointEV >= -100.0f &&
+           params.whitePointEV <= 100.0f && params.highlightBiasEV >= -100.0f && params.highlightBiasEV <= 100.0f &&
+           params.saturation >= -100.0f && params.saturation <= 100.0f && params.vibrance >= -100.0f &&
+           params.vibrance <= 100.0f && params.aePostGain > 0.0f && params.aePostGain <= kMaxAePostGain;
 }
 
 bool supportsStorageImage(VkPhysicalDevice physicalDevice, VkFormat format) noexcept {
@@ -127,6 +128,9 @@ GpuParameters buildGpuParameters(const TonemapParams& params, const float* matri
     base.highlightBiasEV = 0.0f;
     const CurveCoefficients curve = compileCurve(base, config);
     GpuParameters gpu{};
+    gpu.adaptiveTone[0] = params.adaptiveTone.liftEv;
+    gpu.adaptiveTone[1] = params.adaptiveTone.keyEv;
+    gpu.adaptiveTone[2] = params.adaptiveTone.highlightEv;
     gpu.directRender[0] = static_cast<uint32_t>(params.renderTransform);
     gpu.directRender[1] = static_cast<uint32_t>(params.outputSpace.gamut);
     gpu.directRender[2] = static_cast<uint32_t>(params.outputSpace.transfer);

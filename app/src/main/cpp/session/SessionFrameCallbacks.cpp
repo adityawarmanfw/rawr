@@ -30,14 +30,11 @@ float SessionFrameCallbacks::postGainFor(const rawrcam::metadata::FrameMetadataS
     // Camera2 boost (100 == 1x) shaped by the user cap + HighlightProtection
     // knee width. Both live on SessionEngine so preview/stills share one
     // choke point.
-    // Auto scene key exposure multiplies on top; the total keeps the
-    // TonemapEngine ceiling (TonemapMath.h kMaxAePostGain).
-    const float halGain = rawrcam::color::effectiveAePostGain(
-        metadata.postRawSensitivityBoost, engine_->maxAePostGain(), engine_->postGainKneeWidthEv());
-    const float liftEv = engine_->appliedAutoKeyEv();
-    if (liftEv <= 0.0f) return halGain;
-    return std::min(halGain * std::exp2(liftEv), tonemap::kMaxAePostGain);
+    return rawrcam::color::effectiveAePostGain(metadata.postRawSensitivityBoost, engine_->maxAePostGain(),
+                                               engine_->postGainKneeWidthEv());
 }
+
+void SessionFrameCallbacks::applyAutoKey(tonemap::TonemapParams& tone) { engine_->applyAutoKey(tone); }
 
 bool SessionFrameCallbacks::sceneKeyMeteringEnabled() {
     return engine_->autoKeyMode() != rawrcam::color::AutoKeyMode::Off &&
@@ -52,20 +49,32 @@ std::optional<rawrcam::pipeline::FrameDiagnosticsPort::SceneKeyFeedback> Session
     static_assert(image_scopes::kSceneExposureMaxEv == rawrcam::color::kSceneKeyMaxEv);
     const auto stats = engine_->monitoringCoordinator_.scopes().consumeSceneExposure(slotIndex);
     const auto mode = engine_->autoKeyMode();
-    if (mode == rawrcam::color::AutoKeyMode::Off) {
+    if (mode == rawrcam::color::AutoKeyMode::Off || !sceneKeyMeteringEnabled()) {
         autoKeySmoother_.reset();
-        engine_->autoKeyEv_.store(0.0f, std::memory_order_relaxed);
+        keySmoother_.reset();
+        highlightSmoother_.reset();
+        std::lock_guard<std::mutex> lock(engine_->autoKeyMutex_);
+        engine_->autoKeyCurve_ = {};
         return std::nullopt;
     }
-    if (!stats) return std::nullopt;
+    // One-shot bracket/probe exposures must not move the repeating-scene curve.
+    if (!stats || (metadata.optimizedStillRequestId && *metadata.optimizedStillRequestId != 0)) return std::nullopt;
     const auto keyEv = rawrcam::color::sceneKeyEv(stats->weightedBins);
     if (!keyEv) return std::nullopt;
     const float halGain = rawrcam::color::effectiveAePostGain(
         metadata.postRawSensitivityBoost, engine_->maxAePostGain(), engine_->postGainKneeWidthEv());
-    const float target = rawrcam::color::autoKeyTargetEv(*keyEv, halGain, rawrcam::color::autoKeyPolicy(mode));
-    const float lift = autoKeySmoother_.update(target, timestampNs, recording);
-    engine_->autoKeyEv_.store(lift, std::memory_order_relaxed);
-    return SceneKeyFeedback{*keyEv, lift};
+    const auto highEv = rawrcam::color::scenePercentileEv(stats->weightedBins, 0.95f);
+    if (!highEv) return std::nullopt;
+    auto curve = rawrcam::color::autoKeyCurve(*keyEv, *highEv, halGain, rawrcam::color::autoKeyPolicy(mode));
+    curve.liftEv = autoKeySmoother_.update(curve.liftEv, timestampNs, recording);
+    curve.keyEv = keySmoother_.update(curve.keyEv, timestampNs, recording);
+    curve.highlightEv = highlightSmoother_.update(curve.highlightEv, timestampNs, recording);
+    curve.liftEv = std::min(curve.liftEv, tonemap::adaptiveToneMaxLift(curve));
+    {
+        std::lock_guard<std::mutex> lock(engine_->autoKeyMutex_);
+        engine_->autoKeyCurve_ = curve;
+    }
+    return SceneKeyFeedback{*keyEv, curve.liftEv};
 }
 
 void SessionFrameCallbacks::advanceStill() { engine_->capture_.single().advance(); }
@@ -77,7 +86,9 @@ bool SessionFrameCallbacks::deferSubmittedFrame(const rawrcam::metadata::FrameMe
     // The processing worker may still hold frames that arrived before the
     // shutter was accepted. Do not let queue delay turn one into the photo.
     if (!engine_->capture_.acceptsStillTimestamp(metadata.timestampNs)) return false;
-    return engine_->capture_.single().deferSubmittedFrame(metadata, colorState, tonemapParams, aePostGain, filmEnabled,
+    auto tone = tonemapParams;
+    engine_->applyAutoKey(tone);
+    return engine_->capture_.single().deferSubmittedFrame(metadata, colorState, tone, aePostGain, filmEnabled,
                                                           filmLook);
 }
 bool SessionFrameCallbacks::beginDeferredSnapshot(AImage* imageLease, AHardwareBuffer* ahb, std::uint64_t timestampNs,

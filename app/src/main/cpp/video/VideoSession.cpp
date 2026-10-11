@@ -137,13 +137,14 @@ void VideoSession::record(VkCommandBuffer command, uint32_t frameSlot, uint32_t 
                           uint32_t rawHeight, const VideoDemosaic::Frame& rawFrame,
                           const std::array<float, 9>& cameraToAp1, const tonemap::TonemapParams& params,
                           rawrcam::diagnostics::GpuTimingTracker& timing, bool monitorEnabled,
-                          const std::function<VkCommandBuffer(VkCommandBuffer)>& splitSubmit) {
+                          const std::function<VkCommandBuffer(VkCommandBuffer)>& splitSubmit,
+                          const std::function<void(VkCommandBuffer, VkImageView, uint32_t, uint32_t)>& sceneMeter) {
     if (!recordingTone_) recordingTone_ = params;
     auto frozen = params;
     frozen.renderTransform = recordingTone_->renderTransform;
     frozen.outputSpace = recordingTone_->outputSpace;
     recorder_.record(command, frameSlot, imageIndex, rawWidth, rawHeight, rawFrame, cameraToAp1, frozen, timing,
-                     activeConfig_, monitorEnabled, splitSubmit);
+                     activeConfig_, monitorEnabled, splitSubmit, sceneMeter);
 }
 bool VideoSession::prewarmVideo(uint32_t width, uint32_t height, uint32_t bitDepth) {
     VideoSession::ProcessingKey key{};

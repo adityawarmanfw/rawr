@@ -107,6 +107,8 @@ FilmRenderOutcome renderFilmOrTone(RenderResources& resources, RenderCommandSess
         // Use the captured frame's gain just as preview does. Re-metering
         // the RAW here would normalize away camera EV compensation.
         fri.look.filmExposureEv = rawrcam::color::filmExposureEv(rendered.filmLook, rendered.tonemapParams.aePostGain);
+        fri.adaptiveTone = {rendered.tonemapParams.adaptiveTone.liftEv, rendered.tonemapParams.adaptiveTone.keyEv,
+                            rendered.tonemapParams.adaptiveTone.highlightEv, rendered.tonemapParams.aePostGain};
         __android_log_print(ANDROID_LOG_INFO, "RawrCamNative", "STILL_FILM_EXPOSURE mode=fold gain=%.3f finalEv=%.2f",
                             rendered.tonemapParams.aePostGain, fri.look.filmExposureEv);
         fri.timeSec = static_cast<double>(rendered.timestampNs) / 1e9;

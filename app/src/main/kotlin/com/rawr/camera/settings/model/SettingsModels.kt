@@ -203,8 +203,8 @@ enum class HighlightProtection(val label: String, val kneeSummary: String) {
 /** Render-side scene key lift on top of the AE post-gain; native AutoKeyMode ids. */
 enum class AutoKeyExposure(val label: String, val summary: String, val nativeId: Int) {
     Off("Off", "Renders the HAL exposure as delivered", 0),
-    Natural("Natural", "Lifts dark midtones up to 2 EV · keeps a low-key look", 1),
-    Strong("Strong", "Lifts midtones to middle grey, up to 3 EV · brightest shadows", 2)
+    Natural("Natural", "Balanced midtones, up to 1 EV · protects highlights", 1),
+    Strong("Strong", "Brighter midtones, up to 3 EV · protects highlights", 2)
 }
 
 enum class ColorRenderProfile(val label: String) {

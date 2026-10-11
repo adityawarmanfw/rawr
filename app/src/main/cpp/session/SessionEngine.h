@@ -124,11 +124,20 @@ class SessionEngine {
     [[nodiscard]] rawrcam::color::AutoKeyMode autoKeyMode() const noexcept {
         return rawrcam::color::autoKeyModeFromId(autoKeyMode_.load(std::memory_order_relaxed));
     }
-    // Lift postGainFor applies now: 0 when Off or for scene-referred (LOG) renders.
+    // Snapshot the adaptive curve independently of HAL gain; LOG always bypasses it.
     [[nodiscard]] float appliedAutoKeyEv() const noexcept {
         if (autoKeyMode() == rawrcam::color::AutoKeyMode::Off || sceneReferredRender_.load(std::memory_order_relaxed))
             return 0.0f;
-        return autoKeyEv_.load(std::memory_order_relaxed);
+        std::lock_guard<std::mutex> lock(autoKeyMutex_);
+        return autoKeyCurve_.liftEv;
+    }
+    void applyAutoKey(tonemap::TonemapParams& tone) const {
+        std::lock_guard<std::mutex> lock(autoKeyMutex_);
+        tone.adaptiveTone = autoKeyMode() == rawrcam::color::AutoKeyMode::Off ||
+                                    sceneReferredRender_.load(std::memory_order_relaxed) ||
+                                    tone.renderTransform == tonemap::RenderTransform::Log
+                                ? tonemap::AdaptiveToneParams{}
+                                : autoKeyCurve_;
     }
     void setExperimentalZeroCopy(bool enabled);
     void setPipelineDiagnostic(uint32_t mode);
@@ -246,9 +255,10 @@ class SessionEngine {
     std::atomic<float> postGainKneeWidthEv_{1.0f};
     // Auto scene key exposure (AutoKeyExposure.h). The mode is written from
     // Kotlin sync; the smoothed lift by SessionFrameCallbacks at slot retire;
-    // both are read lock-free by postGainFor.
+    // curve snapshots are protected separately from the session mutex.
     std::atomic<int> autoKeyMode_{0};
-    std::atomic<float> autoKeyEv_{0.0f};
+    mutable std::mutex autoKeyMutex_;
+    tonemap::AdaptiveToneParams autoKeyCurve_{};
     // LOG profiles stay scene-referred: no auto key lift.
     std::atomic<bool> sceneReferredRender_{false};
 };

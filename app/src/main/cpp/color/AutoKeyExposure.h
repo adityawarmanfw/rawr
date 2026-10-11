@@ -6,10 +6,13 @@
 #include <cstdint>
 #include <optional>
 
+#include "tonemap/AdaptiveTone.h"
+
 namespace rawrcam::color {
 
-// Auto scene key exposure: a render-side digital lift on top of the AE
-// post-gain (AePostGainCurve.h). In high-contrast scenes the HAL underexposes
+// Auto scene key exposure: an adaptive luminance curve after the AE
+// post-gain (AePostGainCurve.h), with highlights anchored at their original EV.
+// In high-contrast scenes the HAL underexposes
 // the RAW to protect highlights and expects ISP local tone mapping to lift
 // the rest; this places the scene's midtones instead. Sensor exposure stays
 // with Camera2.
@@ -26,7 +29,7 @@ struct AutoKeyPolicy {
 
 constexpr AutoKeyPolicy autoKeyPolicy(AutoKeyMode mode) noexcept {
     switch (mode) {
-        case AutoKeyMode::Natural: return {0.12f, 2.0f};
+        case AutoKeyMode::Natural: return {0.075f, 1.0f};
         case AutoKeyMode::Strong: return {0.18f, 3.0f};
         case AutoKeyMode::Off: break;
     }
@@ -45,17 +48,16 @@ inline constexpr float kSceneKeyMaxEv = 4.0f;
 inline constexpr float kSceneKeyTrimLow = 0.01f;
 inline constexpr float kSceneKeyTrimHigh = 0.02f;
 
-// Weighted median of log2 luma after trimming the bottom 1% and top 2% of
-// weight, interpolated inside its bin. nullopt for an empty histogram.
-inline std::optional<float> sceneKeyEv(const std::uint32_t* weightedBins, std::size_t binCount = kSceneKeyBins,
-                                       float minEv = kSceneKeyMinEv, float maxEv = kSceneKeyMaxEv) noexcept {
+// Weighted percentile of log2 luma, interpolated inside its bin.
+// nullopt for an empty histogram.
+inline std::optional<float> scenePercentileEv(const std::uint32_t* weightedBins, float percentile,
+                                              std::size_t binCount = kSceneKeyBins, float minEv = kSceneKeyMinEv,
+                                              float maxEv = kSceneKeyMaxEv) noexcept {
     if (!weightedBins || binCount == 0 || !(maxEv > minEv)) return std::nullopt;
     double total = 0.0;
     for (std::size_t b = 0; b < binCount; ++b) total += weightedBins[b];
     if (!(total > 0.0)) return std::nullopt;
-    const double lo = kSceneKeyTrimLow * total;
-    const double hi = (1.0 - kSceneKeyTrimHigh) * total;
-    const double target = lo + 0.5 * (hi - lo);
+    const double target = std::clamp(percentile, 0.0f, 1.0f) * total;
     const double binWidth = double(maxEv - minEv) / double(binCount);
     double before = 0.0;
     for (std::size_t b = 0; b < binCount; ++b) {
@@ -69,6 +71,13 @@ inline std::optional<float> sceneKeyEv(const std::uint32_t* weightedBins, std::s
     return maxEv;
 }
 
+// Median after trimming the bottom 1% and top 2% of weight.
+inline std::optional<float> sceneKeyEv(const std::uint32_t* bins, std::size_t count = kSceneKeyBins,
+                                       float minEv = kSceneKeyMinEv, float maxEv = kSceneKeyMaxEv) noexcept {
+    return scenePercentileEv(bins, kSceneKeyTrimLow + 0.5f * (1.0f - kSceneKeyTrimHigh - kSceneKeyTrimLow), count,
+                             minEv, maxEv);
+}
+
 // Lift that brings the rendered key (scene key times the HAL post-gain) to
 // the policy target, clamped to [0, maxLiftEv].
 inline float autoKeyTargetEv(float keyEv, float halGain, const AutoKeyPolicy& policy) noexcept {
@@ -76,6 +85,20 @@ inline float autoKeyTargetEv(float keyEv, float halGain, const AutoKeyPolicy& po
         return 0.0f;
     const float lift = std::log2(policy.targetLuma) - (keyEv + std::log2(halGain));
     return std::clamp(lift, 0.0f, policy.maxLiftEv);
+}
+
+// Protect the upper scene (P95), bounded to diffuse white / upper midtones.
+// The floor avoids pinning an entirely dark scene at its dark P95; the ceiling
+// ensures HDR/specular values never push the protected range beyond 1.0.
+inline tonemap::AdaptiveToneParams autoKeyCurve(float keyEv, float highEv, float halGain,
+                                                const AutoKeyPolicy& policy) noexcept {
+    if (!std::isfinite(keyEv) || !std::isfinite(highEv) || !std::isfinite(halGain) || !(halGain > 0.0f)) return {};
+    const float gainEv = std::log2(halGain);
+    tonemap::AdaptiveToneParams p;
+    p.keyEv = keyEv + gainEv;
+    p.highlightEv = std::clamp(highEv + gainEv, std::log2(0.36f), 0.0f);
+    p.liftEv = std::min(autoKeyTargetEv(keyEv, halGain, policy), tonemap::adaptiveToneMaxLift(p));
+    return p;
 }
 
 // Exponential smoothing in the EV domain with a deadband so the lift does

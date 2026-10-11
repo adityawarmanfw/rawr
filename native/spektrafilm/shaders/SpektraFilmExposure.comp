@@ -1,4 +1,6 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
+#include "../../shader_common/shaders/adaptive_tone.glsl"
 
 layout(local_size_x = 32, local_size_y = 8, local_size_z = 1) in;
 
@@ -64,6 +66,7 @@ layout(push_constant) uniform CoreParams {
   uint activeOriginY;
   uint activeWidth;
   uint activeHeight;
+  float adaptiveTone[4];
 } params;
 
 vec4 loadSourcePixel(uint index) {
@@ -249,7 +252,17 @@ void main() {
   const float exposure = exp2(params.filmExposureEv);
   const uint colorSpace = colorSpaceIndex();
   const vec4 source = loadSourcePixel(sourceIndex);
-  const vec3 decoded = decodeInputRgb(source.rgb, colorSpace);
+  vec3 decoded = decodeInputRgb(source.rgb, colorSpace);
+  if (params.adaptiveTone[0] > 0.0) {
+    // Same AP1 luminance as the scene meter and tonemap path (D65 sRGB -> AP1).
+    vec3 srgb = multiplyInputToSrgb(decoded, colorSpace);
+    mat3 toAp1 = mat3(0.613097, 0.070194, 0.020616,
+                      0.339523, 0.916354, 0.109570,
+                      0.047380, 0.013452, 0.869815);
+    float y = dot(vec3(0.2722287168, 0.6740817658, 0.0536895174), toAp1 * srgb);
+    decoded *= rawrAdaptiveToneGain(y * params.adaptiveTone[3],
+        vec3(params.adaptiveTone[0], params.adaptiveTone[1], params.adaptiveTone[2]));
+  }
   const vec3 linearSrgb = multiplyInputToSrgb(decoded, colorSpace);
   const vec3 referenceXyz = multiplyInputToReferenceXyz(decoded, colorSpace);
   const vec3 raw = params.rgbToRawMethod == 1 ? mallettRaw(linearSrgb) : hanatosRaw(referenceXyz);

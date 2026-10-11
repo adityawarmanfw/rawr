@@ -47,9 +47,9 @@ int main() {
     {
         const auto natural = autoKeyPolicy(AutoKeyMode::Natural);
         const auto strong = autoKeyPolicy(AutoKeyMode::Strong);
-        // key -5 EV, HAL 2x -> rendered -4 EV; Natural target log2(0.12) ~ -3.06.
+        // key -5 EV, HAL 2x -> rendered -4 EV; Natural target log2(0.075) ~ -3.74.
         const float lift = autoKeyTargetEv(-5.0f, 2.0f, natural);
-        assert(near(lift, std::log2(0.12f) + 4.0f, 1e-4f));
+        assert(near(lift, std::log2(0.075f) + 4.0f, 1e-4f));
         // Clamped to maxLift.
         assert(near(autoKeyTargetEv(-12.0f, 1.0f, natural), natural.maxLiftEv, 1e-6f));
         assert(near(autoKeyTargetEv(-12.0f, 1.0f, strong), strong.maxLiftEv, 1e-6f));
@@ -109,6 +109,71 @@ int main() {
         assert(s.update(3.0f, 1'000'000'000ull, false) == capped);
         s.reset();
         assert(s.value() == 0.0f);
+    }
+    // P95 identifies sky while the key stays on the darker subject.
+    {
+        Bins bins{};
+        bins[binFor(-6.0f)] = 900;
+        bins[binFor(-0.5f)] = 100;
+        assert(near(*scenePercentileEv(bins.data(), 0.95f), -0.5f, kBinEv));
+        assert(!scenePercentileEv(nullptr, 0.95f));
+        const auto p = autoKeyCurve(*sceneKeyEv(bins.data()), *scenePercentileEv(bins.data(), .95f), 1.0f,
+                                    autoKeyPolicy(AutoKeyMode::Natural));
+        assert(p.liftEv == 1.0f);
+        assert(tonemap::adaptiveToneGain(std::exp2(p.highlightEv), p) == 1.0f);
+    }
+    {
+        const auto p = autoKeyCurve(-5.0f, -1.0f, 2.0f, autoKeyPolicy(AutoKeyMode::Natural));
+        // Full lift lands below the key; the key itself gets most of it.
+        const float key = std::exp2(p.keyEv), peak = std::exp2(tonemap::adaptiveTonePeakEv(p));
+        assert(near(std::log2(tonemap::adaptiveToneGain(peak, p)), p.liftEv, 1e-5f));
+        const float keyOut = key * tonemap::adaptiveToneGain(key, p);
+        assert(keyOut > key && keyOut < .075f);
+        // Baseline HAL gain is accounted for exactly once.
+        assert(p.keyEv == -4.0f && p.highlightEv == 0.0f);
+        assert(autoKeyCurve(NAN, 0, 1, autoKeyPolicy(AutoKeyMode::Natural)).liftEv == 0);
+        assert(autoKeyCurve(-5, 0, INFINITY, autoKeyPolicy(AutoKeyMode::Natural)).liftEv == 0);
+    }
+    {
+        const auto p = autoKeyCurve(-6.0f, 0.0f, 1.0f, autoKeyPolicy(AutoKeyMode::Natural));
+        const auto liftAt = [&](float ev) { return std::log2(tonemap::adaptiveToneGain(std::exp2(ev), p)); };
+        // Shadows just below the key are lifted more than the key itself.
+        assert(near(liftAt(p.keyEv - 1.5f), 1.0f, 1e-5f));
+        assert(liftAt(p.keyEv - 2.0f) > liftAt(p.keyEv) && liftAt(p.keyEv) > .85f && liftAt(p.keyEv) < 1.0f);
+        assert(liftAt(p.keyEv - 4.0f) > .45f && liftAt(p.keyEv - 6.5f) == 0.0f);
+    }
+    for (float key : {-12.0f, -6.0f, -4.0f, -2.0f, 0.0f}) {
+        for (float high : {-8.0f, -2.0f, 0.0f, 4.0f}) {
+            for (auto mode : {AutoKeyMode::Off, AutoKeyMode::Natural, AutoKeyMode::Strong}) {
+                auto p = autoKeyCurve(key, high, 1.0f, autoKeyPolicy(mode));
+                assert(p.highlightEv >= std::log2(.36f) && p.highlightEv <= 0.0f);
+                // Stress an intermediate smoothed state that exceeds the new span.
+                for (float lift : {p.liftEv, 3.0f}) {
+                    p.liftEv = lift;
+                    float previous = 0.0f, previousEv = -24.0f;
+                    for (int i = 0; i <= 32000; ++i) {
+                        const float ev = -24.0f + float(i) * .001f;
+                        const float y = std::exp2(ev);
+                        const float gain = tonemap::adaptiveToneGain(y, p);
+                        const float out = y * gain;
+                        assert(std::isfinite(out) && out >= y && out > previous);
+                        assert(gain <= std::exp2(lift) * 1.000001f);
+                        if (ev >= p.highlightEv || ev <= p.keyEv - 6.5f) assert(gain == 1.0f);
+                        // Log-domain contrast never drops below 5/8.
+                        const float outEv = std::log2(out);
+                        if (i > 0) assert((outEv - previousEv) / .001f > .62f);
+                        previous = out;
+                        previousEv = outEv;
+                    }
+                    assert(tonemap::adaptiveToneGain(0.0f, p) == 1.0f);
+                    assert(tonemap::adaptiveToneGain(-.1f, p) == 1.0f);
+                    // Smooth highlight join: derivative tends to one from both sides.
+                    const float anchor = std::exp2(p.highlightEv), d = anchor * .0001f;
+                    const float slope = (anchor - (anchor - d) * tonemap::adaptiveToneGain(anchor - d, p)) / d;
+                    assert(std::abs(slope - 1.0f) < .01f);
+                }
+            }
+        }
     }
     return 0;
 }

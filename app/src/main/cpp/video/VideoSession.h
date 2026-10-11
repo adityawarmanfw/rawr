@@ -97,7 +97,8 @@ class VideoSession final {
     void record(VkCommandBuffer command, uint32_t frameSlot, uint32_t imageIndex, uint32_t rawWidth, uint32_t rawHeight,
                 const VideoDemosaic::Frame& rawFrame, const std::array<float, 9>& cameraToAp1,
                 const tonemap::TonemapParams& params, rawrcam::diagnostics::GpuTimingTracker& timing,
-                bool monitorEnabled = true, const std::function<VkCommandBuffer(VkCommandBuffer)>& splitSubmit = {});
+                bool monitorEnabled = true, const std::function<VkCommandBuffer(VkCommandBuffer)>& splitSubmit = {},
+                const std::function<void(VkCommandBuffer, VkImageView, uint32_t, uint32_t)>& sceneMeter = {});
     VkSemaphore available(uint32_t frameSlot) const { return output_.available(frameSlot); }
     VkSemaphore rendered(uint32_t frameSlot) const { return output_.rendered(frameSlot); }
     VkResult present(VkQueue queue, uint32_t frameSlot, uint32_t imageIndex, uint64_t presentTimeNs);

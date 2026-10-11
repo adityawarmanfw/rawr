@@ -31,7 +31,7 @@ class FrameDiagnosticsPort {
     // Auto key exposure state after a retired frame's scene measurement.
     struct SceneKeyFeedback {
         float keyEv = 0.0f;      // trimmed weighted median log2 scene luma
-        float autoKeyEv = 0.0f;  // smoothed lift now applied by postGainFor
+        float autoKeyEv = 0.0f;  // smoothed lift of the adaptive curve at the scene key
     };
     struct CpuCopyOutcome {
         bool frameRejected = false;

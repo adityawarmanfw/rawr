@@ -1,5 +1,6 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
+#include "../../shader_common/shaders/adaptive_tone.glsl"
 // Compile-time workgroup variants used by validation: 8x8, 16x8, 8x16, 16x16.
 #ifndef LOCAL_X
 #define LOCAL_X 8
@@ -106,6 +107,7 @@ layout(std140, binding = 2) uniform TonemapGpuParams {
     mat4 userInputGamut;
     mat4 userOutputGamut;
     uvec4 directRender; // transform, output gamut, output transfer, reserved
+    vec4 adaptiveTone; // lift EV, key EV, protected highlight EV
 }
 P;
 
@@ -558,6 +560,10 @@ void main() {
 #endif
     vec3 work = mat3(P.cameraToWorking) * camera;
 
+    if (P.directRender.x != 3u && P.adaptiveTone.x > 0.0) {
+        float baselineY = dot(vec3(0.2722287168, 0.6740817658, 0.0536895174), work) * exp2(P.renderConfig.y);
+        work *= rawrAdaptiveToneGain(baselineY, P.adaptiveTone.xyz);
+    }
     vec3 encoded;
     if (P.directRender.x == 3u) {
         // LOG is scene-referred: only the capture AE gain applies. No render

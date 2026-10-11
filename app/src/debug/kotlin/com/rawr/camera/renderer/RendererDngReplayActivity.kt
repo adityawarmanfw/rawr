@@ -33,6 +33,9 @@ class RendererDngReplayActivity : Activity() {
                     check(original.isNull("importedProfileId")) { "Replay needs the imported LUT asset" }
                     val resolved = JSONObject(extensions.getString("com.rawrcam.processing.resolved.v1"))
                     val frame = JSONObject(extensions.getString("com.rawrcam.processing.frame.v1"))
+                    resolved.optJSONObject("tonemap")?.optJSONObject("adaptiveTone")?.let {
+                        original.put("adaptiveTone", it)
+                    }
                     original.put("aePostGain", resolved.getDouble("aePostGain"))
                         .put("timestampNs", frame.getLong("timestampNs"))
                         .put("resolvedFrame", frame)

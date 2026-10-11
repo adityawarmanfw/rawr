@@ -21,7 +21,8 @@ void VideoRecorder::record(VkCommandBuffer command, uint32_t frameSlot, uint32_t
                            uint32_t rawHeight, const VideoDemosaic::Frame& rawFrame,
                            const std::array<float, 9>& cameraToAp1, const tonemap::TonemapParams& params,
                            rawrcam::diagnostics::GpuTimingTracker& timing, const VideoProcessingConfig& activeConfig,
-                           bool monitorEnabled, const std::function<VkCommandBuffer(VkCommandBuffer)>& splitSubmit) {
+                           bool monitorEnabled, const std::function<VkCommandBuffer(VkCommandBuffer)>& splitSubmit,
+                           const std::function<void(VkCommandBuffer, VkImageView, uint32_t, uint32_t)>& sceneMeter) {
     if (!resources_.tonemap_ || imageIndex >= output_.images_.size() || frameSlot >= resources_.monitor_.size() ||
         rawWidth < output_.extent_.width || rawHeight < output_.extent_.height)
         throw std::runtime_error("video output unavailable or RAW geometry invalid");
@@ -74,6 +75,8 @@ void VideoRecorder::record(VkCommandBuffer command, uint32_t frameSlot, uint32_t
         developedFrame.lensShadingCount = 0;
     }
     resources_.demosaic_->record(command, frameSlot, developedFrame);
+    if (sceneMeter)
+        sceneMeter(command, resources_.demosaic_->outputView(frameSlot), output_.extent_.width, output_.extent_.height);
     timing.markVideoDemosaicDone(command, frameSlot);
     vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, stagePool, 13);
     // Submitting the frame in parts lets the GPU run the encoder's own
