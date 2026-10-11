@@ -69,6 +69,11 @@ if(GAINMAP_BUILD_VULKAN)
             if(NOT ANDROID)
                 add_executable(gainmap_vulkan_validation tests/gainmap_vulkan_validation.cpp)
                 target_link_libraries(gainmap_vulkan_validation PRIVATE gainmap_compute)
+                # --agx-tap checks the AgX tap against the tonemap engine's CPU reference.
+                target_include_directories(gainmap_vulkan_validation PRIVATE
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tonemap_engine/include)
+                target_sources(gainmap_vulkan_validation PRIVATE
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../tonemap_engine/src/color/ColorSpace.cpp)
                 gainmap_enable_project_warnings(gainmap_vulkan_validation)
                 find_program(GLSLC_HOST glslc)
                 if(GLSLC_HOST)
@@ -77,6 +82,7 @@ if(GAINMAP_BUILD_VULKAN)
                             ${CMAKE_CURRENT_SOURCE_DIR}/shaders/gainmap.comp -o ${CMAKE_CURRENT_BINARY_DIR}/gainmap.spv
                         DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/shaders/gainmap.comp
                                 ${CMAKE_CURRENT_SOURCE_DIR}/../shader_common/shaders/adaptive_tone.glsl
+                                ${CMAKE_CURRENT_SOURCE_DIR}/../tonemap_engine/shaders/agx.glsl
                         VERBATIM)
                     add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/gainmap_blur.spv
                         COMMAND ${GLSLC_HOST} --target-env=vulkan1.1 -O

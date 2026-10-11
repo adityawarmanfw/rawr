@@ -27,6 +27,24 @@ layout(set = 0, binding = 3, r16ui) uniform readonly uimage2D clipImage;
 // the caller has no glow map; the load is pinned to a 1.0 fallback texel.
 layout(set = 0, binding = 4, rgba16f) uniform readonly image2D glowImage;
 
+// AgX tap (flags bit 2): tonemap::AgxGpuBlock for the display headroom; its
+// input matrix maps the HDR input to linear Rec2020 and lookLuma.w is the
+// headroom the result is scaled by. Always bound; read only when flagged.
+layout(std140, set = 0, binding = 5) uniform AgxTap {
+    mat4 agxAp1ToBase;
+    mat4 agxBaseToRendering;
+    mat4 agxRenderingToSrgb;
+    vec4 agxLog;
+    vec4 agxLine;
+    vec4 agxToe;
+    vec4 agxShoulder;
+    vec4 agxFallback;
+    vec4 agxLook;
+    vec4 agxLookLuma;
+    uvec4 agxFlags;
+} P;
+#include "../../tonemap_engine/shaders/agx.glsl"
+
 layout(push_constant) uniform Push {
     uint mapWidth;
     uint mapHeight;
@@ -48,7 +66,7 @@ layout(push_constant) uniform Push {
     float glowStrength;
     float glowMax;
     float hdrToLinearSrgb[9];
-    uint flags;  // bit 0 full-res map, bit 1 write HDR chromaticity plane
+    uint flags;  // bit 0 full-res map, bit 1 write HDR chromaticity plane, bit 2 AgX tap
     // SDR adaptive tone curve (lift, key, highlight EV), pre-shifted into the
     // exposed HDR tap's log2 AP1 luminance. Keeps the block at 128 bytes.
     float adaptiveTone[3];
@@ -210,6 +228,10 @@ void main() {
         pc.hdrToLinearSrgb[0] * hdrWork.x + pc.hdrToLinearSrgb[1] * hdrWork.y + pc.hdrToLinearSrgb[2] * hdrWork.z,
         pc.hdrToLinearSrgb[3] * hdrWork.x + pc.hdrToLinearSrgb[4] * hdrWork.y + pc.hdrToLinearSrgb[5] * hdrWork.z,
         pc.hdrToLinearSrgb[6] * hdrWork.x + pc.hdrToLinearSrgb[7] * hdrWork.y + pc.hdrToLinearSrgb[8] * hdrWork.z);
+    // AgX profile: render the exposed tap through AgX for the display
+    // headroom so the quotient carries AgX's own highlight color (less
+    // desaturated with more headroom) rather than raw scene color.
+    if ((pc.flags & 4u) != 0u) hdrLin = agxRender(hdrWork) * P.agxLookLuma.w;
     hdrLin = max(hdrLin, vec3(0.0));
 
     // Carry the actual capture color past the legacy brightness fit. Two

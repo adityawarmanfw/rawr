@@ -5,9 +5,11 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <stdexcept>
 
 #include "color/FilmExposure.h"
+#include "color/UltraHdrParams.h"
 #include "develop/render/FilmRenderStage.h"
 #include "develop/render/RenderReadback.h"
 
@@ -280,6 +282,26 @@ GainmapRecording recordGainmapAndReadback(RenderResources& resources, RenderComm
         if (rendered.hasGainmapCst) {
             std::memcpy(gri.params.hdrToLinearSrgbRowMajor, rendered.gainmapCstRowMajor.data(),
                         sizeof(gri.params.hdrToLinearSrgbRowMajor));
+        }
+        // AgX: render the exposed tap through AgX for the map's display
+        // ceiling, so HDR highlights follow AgX's hue path and desaturate
+        // less with more headroom instead of reverting to raw scene color.
+        if (!rendered.filmEnabled && rawrcam::tonemap_integration::isAgxProfile(rendered.colorRenderProfile)) {
+            const float headroom = std::exp2(rawrcam::color::UltraHdrParams{}.gainMapDisplayCap);
+            const auto toBase =
+                tonemap::color::linearGamutMatrix(tonemap::color::Gamut::SRgbRec709, tonemap::color::Gamut::Rec2020);
+            tonemap::color::Mat3 inputToBase{};
+            for (int r = 0; r < 3; ++r)
+                for (int c = 0; c < 3; ++c)
+                    for (int k = 0; k < 3; ++k)
+                        inputToBase[r * 3 + c] += toBase[r * 3 + k] * gri.params.hdrToLinearSrgbRowMajor[k * 3 + c];
+            const auto block =
+                tonemap::packAgxGpuBlock(tonemap::agxForHeadroom(rendered.tonemapParams.agx, headroom),
+                                         rendered.tonemapParams.highlightBiasEV, inputToBase, headroom);
+            static_assert(sizeof(block) == sizeof(gri.params.agxTapBlock));
+            std::memcpy(gri.params.agxTapBlock.data(), &block, sizeof(block));
+            gri.params.agxTap = true;
+            emit("STILL_GAINMAP_HDR_TAP tap=agx headroom=" + std::to_string(headroom));
         }
         if (filmUsedGlow) {
             emit("STILL_GAINMAP_HDR_TAP tap=film_glow_gain");

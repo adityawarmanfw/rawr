@@ -1,5 +1,6 @@
 #include "gainmap/GainmapCompute.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <stdexcept>
@@ -70,6 +71,12 @@ struct GainmapCompute::Impl {
     VkImage fallbackGlow = VK_NULL_HANDLE;
     VkDeviceMemory fallbackGlowMemory = VK_NULL_HANDLE;
     VkImageView fallbackGlowView = VK_NULL_HANDLE;
+    // Binding 5: per-frame-slot AgX tap uniform (GainmapParams::agxTapBlock),
+    // persistently mapped host-coherent memory, one aligned slice per slot.
+    VkBuffer agxBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory agxMemory = VK_NULL_HANDLE;
+    void* agxMapped = nullptr;
+    VkDeviceSize agxStride = 0;
     // Blur stage (separable Gaussian over the encoded map): second pipeline
     // with its own descriptor pool/sets, plus a lazily-sized scratch image
     // (same dims/format as the map). Null when the caller passes no blur
@@ -98,16 +105,16 @@ struct GainmapCompute::Impl {
         mci.pCode = ci.shaderSpirv;
         check(vkCreateShaderModule(ctx.device, &mci, ctx.allocator, &module), "gainmap vkCreateShaderModule");
 
-        std::array<VkDescriptorSetLayoutBinding, 5> bindings{};
-        for (uint32_t i = 0; i < 5; ++i) {
+        std::array<VkDescriptorSetLayoutBinding, 6> bindings{};
+        for (uint32_t i = 0; i < 6; ++i) {
             bindings[i].binding = i;
-            bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            bindings[i].descriptorType = i == 5 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             bindings[i].descriptorCount = 1;
             bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         }
         VkDescriptorSetLayoutCreateInfo lci{};
         lci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        lci.bindingCount = 5;
+        lci.bindingCount = 6;
         lci.pBindings = bindings.data();
         check(vkCreateDescriptorSetLayout(ctx.device, &lci, ctx.allocator, &setLayout),
               "gainmap vkCreateDescriptorSetLayout");
@@ -136,14 +143,16 @@ struct GainmapCompute::Impl {
               "gainmap vkCreateComputePipelines");
 
         const uint32_t frames = ci.maxFramesInFlight == 0 ? 1 : ci.maxFramesInFlight;
-        VkDescriptorPoolSize poolSize{};
-        poolSize.type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        poolSize.descriptorCount = frames * 5;
+        std::array<VkDescriptorPoolSize, 2> poolSizes{};
+        poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        poolSizes[0].descriptorCount = frames * 5;
+        poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        poolSizes[1].descriptorCount = frames;
         VkDescriptorPoolCreateInfo pci2{};
         pci2.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         pci2.maxSets = frames;
-        pci2.poolSizeCount = 1;
-        pci2.pPoolSizes = &poolSize;
+        pci2.poolSizeCount = 2;
+        pci2.pPoolSizes = poolSizes.data();
         check(vkCreateDescriptorPool(ctx.device, &pci2, ctx.allocator, &pool), "gainmap vkCreateDescriptorPool");
 
         sets.resize(frames);
@@ -154,6 +163,38 @@ struct GainmapCompute::Impl {
         ai.descriptorSetCount = frames;
         ai.pSetLayouts = layouts.data();
         check(vkAllocateDescriptorSets(ctx.device, &ai, sets.data()), "gainmap vkAllocateDescriptorSets");
+
+        // AgX tap uniform slices (see member doc).
+        {
+            VkPhysicalDeviceProperties props{};
+            vkGetPhysicalDeviceProperties(ctx.physicalDevice, &props);
+            const VkDeviceSize align = std::max<VkDeviceSize>(props.limits.minUniformBufferOffsetAlignment, 16);
+            constexpr VkDeviceSize kBlockBytes = sizeof(GainmapParams::agxTapBlock);
+            agxStride = (kBlockBytes + align - 1) / align * align;
+            VkBufferCreateInfo bci{};
+            bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+            bci.size = agxStride * frames;
+            bci.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+            check(vkCreateBuffer(ctx.device, &bci, ctx.allocator, &agxBuffer), "gainmap agx buffer");
+            VkMemoryRequirements bmr{};
+            vkGetBufferMemoryRequirements(ctx.device, agxBuffer, &bmr);
+            VkPhysicalDeviceMemoryProperties bmp{};
+            vkGetPhysicalDeviceMemoryProperties(ctx.physicalDevice, &bmp);
+            constexpr VkMemoryPropertyFlags kHost =
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+            uint32_t type = ~0u;
+            for (uint32_t i = 0; i < bmp.memoryTypeCount && type == ~0u; ++i)
+                if ((bmr.memoryTypeBits & (1u << i)) && (bmp.memoryTypes[i].propertyFlags & kHost) == kHost) type = i;
+            if (type == ~0u) throw std::runtime_error("gainmap: no host-visible memory for agx buffer");
+            VkMemoryAllocateInfo bai{};
+            bai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            bai.allocationSize = bmr.size;
+            bai.memoryTypeIndex = type;
+            check(vkAllocateMemory(ctx.device, &bai, ctx.allocator, &agxMemory), "gainmap agx memory");
+            check(vkBindBufferMemory(ctx.device, agxBuffer, agxMemory, 0), "gainmap agx bind");
+            check(vkMapMemory(ctx.device, agxMemory, 0, VK_WHOLE_SIZE, 0, &agxMapped), "gainmap agx map");
+            std::memset(agxMapped, 0, size_t(bci.size));
+        }
 
         // All-clear 1x1 R16UI fallback for the clip binding (see member doc).
         // LINEAR tiling + host-visible heap so it can be zero-filled on CPU
@@ -357,6 +398,8 @@ struct GainmapCompute::Impl {
         if (fallbackGlowView) vkDestroyImageView(ctx.device, fallbackGlowView, ctx.allocator);
         if (fallbackGlow) vkDestroyImage(ctx.device, fallbackGlow, ctx.allocator);
         if (fallbackGlowMemory) vkFreeMemory(ctx.device, fallbackGlowMemory, ctx.allocator);
+        if (agxBuffer) vkDestroyBuffer(ctx.device, agxBuffer, ctx.allocator);
+        if (agxMemory) vkFreeMemory(ctx.device, agxMemory, ctx.allocator);
         if (pipeline) vkDestroyPipeline(ctx.device, pipeline, ctx.allocator);
         if (module) vkDestroyShaderModule(ctx.device, module, ctx.allocator);
         if (pool) vkDestroyDescriptorPool(ctx.device, pool, ctx.allocator);
@@ -518,8 +561,12 @@ void GainmapCompute::record(const GainmapRecordInfo& ri) {
     VkDescriptorImageInfo glowInfo{};
     glowInfo.imageView = glowView;
     glowInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-    std::array<VkWriteDescriptorSet, 5> writes{};
-    for (int i = 0; i < 5; ++i) {
+    // The slot's previous GPU use has completed (frame-slot contract).
+    std::memcpy(static_cast<char*>(impl_->agxMapped) + impl_->agxStride * ri.frameSlot, ri.params.agxTapBlock.data(),
+                sizeof(ri.params.agxTapBlock));
+    VkDescriptorBufferInfo agxInfo{impl_->agxBuffer, impl_->agxStride * ri.frameSlot, sizeof(ri.params.agxTapBlock)};
+    std::array<VkWriteDescriptorSet, 6> writes{};
+    for (int i = 0; i < 6; ++i) {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet = impl_->sets[ri.frameSlot];
         writes[i].dstBinding = i;
@@ -531,7 +578,9 @@ void GainmapCompute::record(const GainmapRecordInfo& ri) {
     writes[2].pImageInfo = &mapInfo;
     writes[3].pImageInfo = &clipInfo;
     writes[4].pImageInfo = &glowInfo;
-    vkUpdateDescriptorSets(impl_->ctx.device, 5, writes.data(), 0, nullptr);
+    writes[5].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    writes[5].pBufferInfo = &agxInfo;
+    vkUpdateDescriptorSets(impl_->ctx.device, 6, writes.data(), 0, nullptr);
 
     Push push{};
     push.mapWidth = ri.map.width;
@@ -553,7 +602,8 @@ void GainmapCompute::record(const GainmapRecordInfo& ri) {
     push.useGlow = useGlow ? 1u : 0u;
     push.glowStrength = ri.params.glowStrength;
     push.glowMax = ri.params.glowMax;
-    push.flags = (ri.params.fullResMap ? 1u : 0u) | (ri.params.writeHdrChromaticity ? 2u : 0u);
+    push.flags = (ri.params.fullResMap ? 1u : 0u) | (ri.params.writeHdrChromaticity ? 2u : 0u) |
+                 (ri.params.agxTap ? 4u : 0u);
     // Shift the curve anchors into the exposed tap's luminance so the shader
     // needs no separate scale: log2(y * s) vs EV  <=>  log2(y) vs EV - log2(s).
     const float toneShift = std::log2(ri.params.adaptiveToneLumaScale);

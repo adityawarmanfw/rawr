@@ -1,5 +1,5 @@
 // MoltenVK parity + timing: CPU fp32 mirror vs GainmapCompute shader output.
-// Usage: gainmap_vulkan_validation <gainmap.spv> [--tolerance-lsb N] [--cst-ap1]
+// Usage: gainmap_vulkan_validation <gainmap.spv> [--tolerance-lsb N] [--cst-ap1] [--agx-tap]
 //        [--bench-base N] [--iters K]
 // Exit 0 when max abs diff <= tolerance (default 1 LSB, 2 near black).
 // --cst-ap1 runs the production AP1->sRGB CST instead of identity.
@@ -17,6 +17,7 @@
 #include <vulkan/vulkan.h>
 
 #include "gainmap/GainmapCompute.h"
+#include "tonemap/Agx.h"
 
 namespace {
 void check(VkResult r, const char* what) {
@@ -44,6 +45,14 @@ float srgbEotf(float c) {
     if (c <= 0.04045f) return c / 12.92f;
     return std::pow((c + 0.055f) / 1.055f, 2.4f);
 }
+// --agx-tap oracle: the AgX curve/matrices the packed block was built from.
+struct AgxTapOracle {
+    tonemap::AgxCurve curve;
+    tonemap::AgxMatrices matrices;
+    float headroom;
+};
+const AgxTapOracle* gAgxTap = nullptr;
+
 void cpuEncode(const float hdr[3], const float sdr[3], const gainmap::GainmapParams& p, const float* cst,
                float out[3], float cover = 0.0f, float flatness = 1.0f, const float* glow = nullptr) {
     // Scene-exposure match (mirrors the shader): the HDR tap is pre-exposure.
@@ -63,6 +72,10 @@ void cpuEncode(const float hdr[3], const float sdr[3], const gainmap::GainmapPar
     float hdrLin[3] = {0, 0, 0};
     for (int r = 0; r < 3; ++r) {
         hdrLin[r] = cst[r * 3 + 0] * hw[0] + cst[r * 3 + 1] * hw[1] + cst[r * 3 + 2] * hw[2];
+    }
+    if (p.agxTap && gAgxTap) {
+        const auto agx = tonemap::agxRender({hw[0], hw[1], hw[2]}, gAgxTap->curve, gAgxTap->matrices);
+        for (int r = 0; r < 3; ++r) hdrLin[r] = agx[r] * gAgxTap->headroom;
     }
     float hdrPos[3] = {std::fmax(hdrLin[0], 0.0f), std::fmax(hdrLin[1], 0.0f), std::fmax(hdrLin[2], 0.0f)};
     // Single-channel luminance gain + per-channel RGB gains (matches shader).
@@ -225,6 +238,7 @@ int main(int argc, char** argv) {
     int toleranceLsb = 1;
     bool cstAp1 = false;
     bool clipBoostTest = false;
+    bool agxTapTest = false;
     uint32_t benchW = 0, benchH = 0;
     for (int i = 2; i < argc; ++i) {
         std::string a = argv[i];
@@ -235,6 +249,9 @@ int main(int argc, char** argv) {
         // integer storage-image reads (Adreno ✓; MoltenVK/M5 reads garbage on
         // binding 3 as of Sep 2026, so this stays off on Mac).
         if (a == "--clip-boost") clipBoostTest = true;
+        // --agx-tap: render the HDR tap through AgX for a 2.73x display
+        // (default preset) and check it against the CPU AgX reference.
+        if (a == "--agx-tap") agxTapTest = true;
         // --bench 2048 | --bench 4080x3060 | (legacy) --bench-base N
         auto parseBench = [&](const char* s) {
             unsigned w = 0, h = 0;
@@ -474,6 +491,30 @@ int main(int argc, char** argv) {
     const float* cst = cstAp1 ? params.hdrToLinearSrgbRowMajor : cstIdent;
     if (!cstAp1)
         for (int i = 0; i < 9; ++i) params.hdrToLinearSrgbRowMajor[i] = cstIdent[i];
+    AgxTapOracle agxOracle{};
+    if (agxTapTest) {
+        // The tap's input is linear sRGB scaled by the test CST; AgX takes it
+        // to Rec2020 itself. No chromaticity plane: production writes it only
+        // for RAWR NTRL.
+        const float headroom = std::exp2(1.45f);
+        const tonemap::AgxParams agx = tonemap::agxForHeadroom(tonemap::AgxParams{}, headroom);
+        tonemap::color::Mat3 cstM{}, inputToBase{};
+        for (int i = 0; i < 9; ++i) cstM[i] = cst[i];
+        const auto toBase = tonemap::color::linearGamutMatrix(tonemap::color::Gamut::SRgbRec709,
+                                                              tonemap::color::Gamut::Rec2020);
+        for (int r = 0; r < 3; ++r)
+            for (int c = 0; c < 3; ++c)
+                for (int k = 0; k < 3; ++k) inputToBase[r * 3 + c] += toBase[r * 3 + k] * cstM[k * 3 + c];
+        const auto block = tonemap::packAgxGpuBlock(agx, 0.0f, inputToBase, headroom);
+        std::memcpy(params.agxTapBlock.data(), &block, sizeof(block));
+        params.agxTap = true;
+        params.writeHdrChromaticity = false;
+        agxOracle.curve = tonemap::compileAgxCurve(agx);
+        agxOracle.matrices = tonemap::compileAgxMatrices(agx.primaries);
+        agxOracle.matrices.ap1ToBase = inputToBase;
+        agxOracle.headroom = headroom;
+        gAgxTap = &agxOracle;
+    }
 
     // Timestamp pool for dispatch timing (2 queries around the dispatch).
     VkQueryPool tsPool = VK_NULL_HANDLE;
@@ -612,7 +653,8 @@ int main(int argc, char** argv) {
             const auto* cp = gpu.data() + size_t(mapW)*mapH*4 + (size_t(y)*mapW+x)*4;
             const unsigned cr = unsigned(cp[0]) | (unsigned(cp[1]) << 8);
             const unsigned cg = unsigned(cp[2]) | (unsigned(cp[3]) << 8);
-            if (sum > 1e-8f) {
+            if (!params.writeHdrChromaticity) {
+            } else if (sum > 1e-8f) {
                 if (std::abs(float(cr)/65535-ch[0]/sum) > .0005f ||
                     std::abs(float(cg)/65535-ch[1]/sum) > .0005f)
                     throw std::runtime_error("capture chromaticity sidecar mismatch");

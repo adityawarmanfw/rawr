@@ -481,4 +481,67 @@ inline color::Vec3 agxRenderReference(const color::Vec3& ap1, const AgxParams& p
     return agxRender(ap1, compileAgxCurve(p), compileAgxMatrices(p.primaries));
 }
 
+// Same AgX rendered for a display with `headroom` x SDR white: the white
+// point rises by log2(headroom) and middle gray keeps its absolute level.
+// Multiply the result by headroom. Used for the UltraHDR gain-map tap, so
+// HDR highlights follow AgX's own hue path instead of raw scene color.
+inline AgxParams agxForHeadroom(AgxParams p, float headroom) noexcept {
+    if (!(headroom > 1.0f)) return p;
+    p.whiteEv = std::min(p.whiteEv + std::log2(headroom), 20.0f);
+    p.pivotOutput /= headroom;
+    return p;
+}
+
+// std140 layout of the AgX block read by agx.glsl (members agxAp1ToBase ..
+// agxFlags), shared by tonemap.comp and the gain-map tap.
+struct AgxGpuBlock {
+    float inputToBase[16], baseToRendering[16], renderingToSrgb[16];  // column-major mat4
+    float log[4];       // black EV, range EV, gamma, preserve hue
+    float line[4];      // slope, intercept, target black, target white
+    float toe[4];       // power, transition x, transition y, scale
+    float shoulder[4];  // power, transition x, transition y, scale
+    float fallback[4];  // toe coefficient, toe power, shoulder coefficient, shoulder power
+    float look[4];      // lift, slope, power, saturation
+    float lookLuma[4];  // inset-space luma; w: output scale (gain-map tap headroom)
+    uint32_t flags[4];  // convex toe, concave shoulder, look tuned, restore hue
+};
+static_assert(sizeof(AgxGpuBlock) == 320, "AgX GPU block must match agx.glsl");
+
+// inputToBase maps the caller's linear input to linear Rec2020; the engine
+// passes AP1 -> Rec2020. Negative Highlights (UI -100..0) softens the shoulder.
+inline AgxGpuBlock packAgxGpuBlock(const AgxParams& params, float highlightsUI, const color::Mat3& inputToBase,
+                                   float outputScale = 1.0f) {
+    const auto columnMajor = [](float (&out)[16], const color::Mat3& rowMajor) {
+        for (int row = 0; row < 3; ++row)
+            for (int col = 0; col < 3; ++col) out[col * 4 + row] = rowMajor[row * 3 + col];
+        out[15] = 1.0f;
+    };
+    const AgxCurve t = compileAgxCurve(agxWithHighlights(params, highlightsUI));
+    const AgxMatrices m = compileAgxMatrices(params.primaries);
+    AgxGpuBlock b{};
+    columnMajor(b.inputToBase, inputToBase);
+    columnMajor(b.baseToRendering, m.baseToRendering);
+    columnMajor(b.renderingToSrgb, m.renderingToSrgb);
+    const float log[4] = {t.blackEv, t.rangeEv, t.gamma, t.preserveHue};
+    const float line[4] = {t.slope, t.intercept, t.targetBlack, t.targetWhite};
+    const float toe[4] = {t.toePower, t.toeTransitionX, t.toeTransitionY, t.toeScale};
+    const float shoulder[4] = {t.shoulderPower, t.shoulderTransitionX, t.shoulderTransitionY, t.shoulderScale};
+    const float fallback[4] = {t.toeFallbackCoefficient, t.toeFallbackPower, t.shoulderFallbackCoefficient,
+                               t.shoulderFallbackPower};
+    const float look[4] = {t.lookLift, t.lookSlope, t.lookPower, t.lookSaturation};
+    const float lookLuma[4] = {m.renderingLuma[0], m.renderingLuma[1], m.renderingLuma[2], outputScale};
+    std::copy(log, log + 4, b.log);
+    std::copy(line, line + 4, b.line);
+    std::copy(toe, toe + 4, b.toe);
+    std::copy(shoulder, shoulder + 4, b.shoulder);
+    std::copy(fallback, fallback + 4, b.fallback);
+    std::copy(look, look + 4, b.look);
+    std::copy(lookLuma, lookLuma + 4, b.lookLuma);
+    b.flags[0] = t.convexToe ? 1u : 0u;
+    b.flags[1] = t.concaveShoulder ? 1u : 0u;
+    b.flags[2] = t.lookTuned ? 1u : 0u;
+    b.flags[3] = t.preserveHue != 0.0f ? 1u : 0u;
+    return b;
+}
+
 }  // namespace tonemap
