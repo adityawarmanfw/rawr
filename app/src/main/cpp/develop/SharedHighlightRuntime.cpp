@@ -9,6 +9,7 @@
 #include <limits>
 #include <raw_preview/RawPreview.hpp>
 #include <stdexcept>
+#include <utility>
 
 #include "develop/galosh/GaloshShaderTable.h"
 #include "galosh/GaloshVkUtils.hpp"
@@ -132,9 +133,11 @@ void SharedHighlightRuntime::ensureResources() {
         cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         cai.commandBufferCount = 1;
         vkCheck(vkAllocateCommandBuffers(device_, &cai, &command_), label_ + " allocate command buffer");
+        vkCheck(vkAllocateCommandBuffers(device_, &cai, &spareCommand_), label_ + " allocate spare command buffer");
         VkFenceCreateInfo fi{};
         fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
         vkCheck(vkCreateFence(device_, &fi, nullptr, &fence_), label_ + " create fence");
+        vkCheck(vkCreateFence(device_, &fi, nullptr, &spareFence_), label_ + " create spare fence");
     } catch (...) {
         discardWorkspace();
         throw;
@@ -143,6 +146,7 @@ void SharedHighlightRuntime::ensureResources() {
 
 VkCommandBuffer SharedHighlightRuntime::beginExternal() {
     ensureResources();
+    waitSpare();
     vkCheck(vkResetFences(device_, 1, &fence_), label_ + " external reset fence");
     vkCheck(vkResetCommandBuffer(command_, 0), label_ + " external reset command buffer");
     VkCommandBufferBeginInfo begin{};
@@ -175,6 +179,7 @@ VkCommandBuffer SharedHighlightRuntime::beginTaggedPackedReplay(const std::vecto
     if (taggedPackedRgba16f.size() != expected || expected != static_cast<size_t>(uploadBytes_))
         throw std::runtime_error(label_ + " tagged replay payload size mismatch");
     std::memcpy(uploadMapped_, taggedPackedRgba16f.data(), expected);
+    waitSpare();
     vkCheck(vkResetFences(device_, 1, &fence_), label_ + " tagged replay reset fence");
     vkCheck(vkResetCommandBuffer(command_, 0), label_ + " tagged replay reset command buffer");
     VkCommandBufferBeginInfo begin{};
@@ -282,6 +287,7 @@ VkCommandBuffer SharedHighlightRuntime::beginFrame(
         throw std::runtime_error(label_ + " worker RAW payload size mismatch");
     }
     std::memcpy(uploadMapped_, rawCopy.data(), static_cast<size_t>(uploadBytes_));
+    waitSpare();
     vkCheck(vkResetFences(device_, 1, &fence_), label_ + " reset fence");
     vkCheck(vkResetCommandBuffer(command_, 0), label_ + " reset command buffer");
     VkCommandBufferBeginInfo begin{};
@@ -433,6 +439,48 @@ void SharedHighlightRuntime::flush() {
                          nullptr, 0, nullptr);
 }
 
+VkCommandBuffer SharedHighlightRuntime::flushPipelined() {
+    vkCheck(vkEndCommandBuffer(command_), label_ + " pipelined flush end");
+    VkSubmitInfo si{};
+    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &command_;
+    {
+        std::lock_guard<std::mutex> lock(*queueSubmitMutex_);
+        vkCheck(vkQueueSubmit(queue_, 1, &si, fence_), label_ + " pipelined flush submit");
+    }
+    // The spare holds the submission before this one; once it retires, its
+    // buffer and fence become the recording pair.
+    if (sparePending_) {
+        vkCheck(vkWaitForFences(device_, 1, &spareFence_, VK_TRUE, UINT64_MAX), label_ + " pipelined flush wait");
+        vkCheck(vkResetFences(device_, 1, &spareFence_), label_ + " pipelined flush reset fence");
+    }
+    std::swap(command_, spareCommand_);
+    std::swap(fence_, spareFence_);
+    sparePending_ = true;
+    vkCheck(vkResetCommandBuffer(command_, 0), label_ + " pipelined flush reset command");
+    VkCommandBufferBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkCheck(vkBeginCommandBuffer(command_, &begin), label_ + " pipelined flush begin");
+    // Same-queue barrier: orders this buffer after every earlier submission.
+    VkMemoryBarrier previous{};
+    previous.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    previous.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+    previous.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &previous, 0,
+                         nullptr, 0, nullptr);
+    return command_;
+}
+
+void SharedHighlightRuntime::waitSpare() noexcept {
+    if (!sparePending_) return;
+    vkWaitForFences(device_, 1, &spareFence_, VK_TRUE, UINT64_MAX);
+    vkResetFences(device_, 1, &spareFence_);
+    sparePending_ = false;
+}
+
 void SharedHighlightRuntime::submit(VkCommandBuffer command) {
     vkCheck(vkEndCommandBuffer(command), label_ + " end command buffer");
     VkSubmitInfo si{};
@@ -447,6 +495,7 @@ void SharedHighlightRuntime::submit(VkCommandBuffer command) {
 
 void SharedHighlightRuntime::waitForCompletion() {
     vkCheck(vkWaitForFences(device_, 1, &fence_, VK_TRUE, UINT64_MAX), label_ + " wait fence");
+    waitSpare();
 }
 
 void SharedHighlightRuntime::discardWorkspace() noexcept { destroyWorkspaceResources(false); }
@@ -762,7 +811,9 @@ void SharedHighlightRuntime::destroyWorkspaceResources(bool keepOutput) noexcept
     if (device_) {
         if (uploadMapped_ && uploadMemory_) vkUnmapMemory(device_, uploadMemory_);
         uploadMapped_ = nullptr;
+        waitSpare();
         if (fence_) vkDestroyFence(device_, fence_, nullptr);
+        if (spareFence_) vkDestroyFence(device_, spareFence_, nullptr);
         if (commandPool_) vkDestroyCommandPool(device_, commandPool_, nullptr);
         if (uploadBuffer_) vkDestroyBuffer(device_, uploadBuffer_, nullptr);
         if (uploadMemory_) vkFreeMemory(device_, uploadMemory_, nullptr);
@@ -776,6 +827,9 @@ void SharedHighlightRuntime::destroyWorkspaceResources(bool keepOutput) noexcept
     }
     fence_ = VK_NULL_HANDLE;
     command_ = VK_NULL_HANDLE;
+    spareFence_ = VK_NULL_HANDLE;
+    spareCommand_ = VK_NULL_HANDLE;
+    sparePending_ = false;
     commandPool_ = VK_NULL_HANDLE;
     uploadBuffer_ = VK_NULL_HANDLE;
     uploadMemory_ = VK_NULL_HANDLE;

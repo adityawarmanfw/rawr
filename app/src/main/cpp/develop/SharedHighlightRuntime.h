@@ -82,6 +82,14 @@ class SharedHighlightRuntime final {
     // submissions lets the preview queue run in between: queues of equal
     // priority are not preempted mid-submission on Adreno.
     void flush();
+    // Same bounded submission as flush(), but without the CPU round trip: the
+    // batch is submitted and recording continues in a second command buffer,
+    // waiting only for the submission before it. At most two submissions are
+    // in flight, so the queue never drains between batches and the preview
+    // still gets a turn at each boundary. Returns the buffer to record into.
+    VkCommandBuffer flushPipelined();
+    // The command buffer currently being recorded (changes after flushPipelined()).
+    [[nodiscard]] VkCommandBuffer currentCommand() const noexcept { return command_; }
     void submit(VkCommandBuffer command);
     void waitForCompletion();
     void discardWorkspace() noexcept;
@@ -133,6 +141,11 @@ class SharedHighlightRuntime final {
     VkCommandPool commandPool_ = VK_NULL_HANDLE;
     VkCommandBuffer command_ = VK_NULL_HANDLE;
     VkFence fence_ = VK_NULL_HANDLE;
+    // flushPipelined() double buffer: the previous, possibly still running submission.
+    VkCommandBuffer spareCommand_ = VK_NULL_HANDLE;
+    VkFence spareFence_ = VK_NULL_HANDLE;
+    bool sparePending_ = false;
+    void waitSpare() noexcept;
 
     VkDescriptorSetLayout highlightDsl_ = VK_NULL_HANDLE;
     VkPipelineLayout highlightLayout_ = VK_NULL_HANDLE;
