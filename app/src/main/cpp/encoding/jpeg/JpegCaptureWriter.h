@@ -36,8 +36,10 @@ class JpegCaptureWriter final {
 
     bool start(std::uint64_t requestId, const void* rgba8, std::size_t rgbaBytes, std::uint32_t width,
                std::uint32_t height, JpegCaptureContext context);
-    // UltraHDR path: mapRgba8 is the half-res single-channel (gray, R=G=B)
-    // recovery map (RGBA8, A ignored) from StillImageRenderer. Requires
+    // UltraHDR path: mapRgba8 contains the RGBA8 recovery map, optionally
+    // followed by an equally sized packed capture-chromaticity plane (see
+    // GainmapParams::writeHdrChromaticity). mapBytes includes both planes.
+    // mapWidth/mapHeight are the logical recovery-map dimensions. Requires
     // context.ultraHdr.enabled; otherwise behaves like start(). If the gain
     // map encode or mux fails, degrades to a legacy SDR file from the base
     // pixels (logged as JPEG_UHDR_FALLBACK) instead of failing the capture.

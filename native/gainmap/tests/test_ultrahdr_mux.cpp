@@ -235,8 +235,7 @@ int main() {
         check(!rr.ok, "bad params rejected");
     }
 
-    // 7. Multi-channel: same bytes except the ISO flags (metadata stays
-    // channel-identical, so XMP is byte-identical to single-channel).
+    // 7. RGB image components share one metadata set, in both ISO and XMP.
     {
         gainmap::UltrahdrMuxParams mp = params;
         mp.multiChannel = true;
@@ -256,7 +255,7 @@ int main() {
             check(msiso != nullptr, "multi secondary ISO present");
             if (msiso) {
                 const uint8_t* b = msiso->payload.data() + 28;
-                check(b[4] == 0xC0, "iso flags multi+baseCS");
+                check(b[4] == 0x40, "RGB uses one shared ISO parameter set");
                 check(msiso->payload.size() == 28 + 4 + 1 + 8 + 8 + 5 * 8, "multi ISO same size as single");
             }
             check(msxmp != nullptr, "multi secondary XMP present");

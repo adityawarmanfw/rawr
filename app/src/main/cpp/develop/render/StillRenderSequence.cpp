@@ -261,6 +261,8 @@ GainmapRecording recordGainmapAndReadback(RenderResources& resources, RenderComm
         }
         // Cached for the GPU-timing log below (gri dies with its block).
         gri.params = rendered.gainmapParams;
+        gri.params.writeHdrChromaticity =
+            resources.gainmapStorageHeight() == 2u * resources.outputView().gainmapHeight;
         gainmapClipUsed = gri.clip.view != VK_NULL_HANDLE;
         gainmapClipBoost = gri.params.clipBoost;
         // HDR pixels are camera RGB: the calibrated matrix wins over
@@ -336,7 +338,7 @@ GainmapRecording recordGainmapAndReadback(RenderResources& resources, RenderComm
                              0, 0, nullptr, 0, nullptr, 1, &mapCopy);
         VkBufferImageCopy mbc{};
         mbc.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        mbc.imageExtent = {resources.outputView().gainmapWidth, resources.outputView().gainmapHeight, 1};
+        mbc.imageExtent = {resources.outputView().gainmapWidth, resources.gainmapStorageHeight(), 1};
         vkCmdCopyImageToBuffer(commands.command(), resources.map().image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                resources.gainmapReadbackBuffer(), 1, &mbc);
     }

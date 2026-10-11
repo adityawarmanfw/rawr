@@ -43,6 +43,9 @@ class RenderResources final {
     VkImageView prepareGlow(uint32_t width, uint32_t height);
     VkBuffer readbackBuffer() const noexcept { return readback_; }
     VkBuffer gainmapReadbackBuffer() const noexcept { return mapReadback_; }
+    uint32_t gainmapStorageHeight() const noexcept {
+        return mapWidth_ ? uint32_t(mapReadbackBytes_ / (VkDeviceSize(mapWidth_) * 4)) : 0;
+    }
 
     bool ensureFilm(const RenderedStillContext& rendered);
     void destroyFilm() noexcept;

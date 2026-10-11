@@ -114,10 +114,7 @@ std::string buildSecondaryXmp(const UltrahdrMuxParams& p) {
     return xml;
 }
 
-// ISO 21496-1 gain map metadata box (version 0, single channel,
-// use-base-colorspace like upstream API-0 encode; multi-channel sets the
-// channel-count flag while carrying channel-identical values, like
-// libultrahdr's merged XMP: single-channel readers keep parsing).
+// ISO 21496-1 metadata: one shared parameter set for gray or RGB maps.
 bool buildIsoBox(const UltrahdrMuxParams& p, std::vector<uint8_t>& out, std::string& error) {
     int32_t minN = 0, maxN = 0, offSN = 0, offHN = 0;
     uint32_t minD = 0, maxD = 0, gamN = 0, gamD = 0, offSD = 0, offHD = 0, capMinN = 0, capMinD = 0, capMaxN = 0,
@@ -134,7 +131,9 @@ bool buildIsoBox(const UltrahdrMuxParams& p, std::vector<uint8_t>& out, std::str
     }
     putU16BE(out, 0);  // min_version
     putU16BE(out, 0);  // writer_version
-    putU8(out, p.multiChannel ? 0xC0 : 0x40);  // flags: [multi] channel + use base color space
+    // One shared parameter set, including for an RGB gain-map JPEG. The
+    // channel-count flag describes metadata sets, not JPEG components.
+    putU8(out, 0x40);  // shared metadata + use base color space
     putU32BE(out, capMinN);
     putU32BE(out, capMinD);
     putU32BE(out, capMaxN);

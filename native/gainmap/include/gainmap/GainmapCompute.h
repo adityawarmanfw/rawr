@@ -49,8 +49,8 @@ struct GainmapParams {
     float satProtect = 0.6f;
     // Multi-channel (RGB) map: per-channel ratios instead of the luminance
     // ratio, so hue survives a white SDR base (warm lamp stays yellow).
-    // Metadata stays channel-identical (XMP/readers unaffected); only the
-    // ISO box flags the map as multi-channel. Default on (Photos verdict).
+    // Metadata uses one shared parameter set for all JPEG components.
+    // Default on (Photos verdict).
     bool multiChannelMap = true;
     // Film glow factor (see GlowImageView): dimensionless post/pre scatter
     // quotient, ~1.0 where the film look adds no glow. Multiplies the HDR
@@ -78,6 +78,12 @@ struct GainmapParams {
     // sampled at gid/2), so output is identical apart from grid density.
     // Default true: full-res A/B shows sharper maps with no extra halo.
     bool fullResMap = true;
+    // Optional capture-color sidecar. The caller allocates the RGBA8 map
+    // image with twice the logical map height. The lower plane stores
+    // R/(R+G+B), G/(R+G+B) as two UNORM16 values, little-endian byte pairs.
+    // 0xffffffff means no usable HDR color. The upper plane remains the
+    // ordinary wide-range map; blur only touches that plane. Not JPEG data.
+    bool writeHdrChromaticity = false;
     // Row-major 3x3 HDR-input -> linear-sRGB. The HDR input is white-balanced
     // camera RGB, so this must be the calibrated camera->linear-sRGB matrix,
     // supplied per capture (see RenderedStillContext::gainmapCstRowMajor).

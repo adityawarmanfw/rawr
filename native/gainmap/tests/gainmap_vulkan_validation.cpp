@@ -327,7 +327,7 @@ int main(int argc, char** argv) {
                             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
     Image sdr = createImage(dev, pd, baseW, baseH, VK_FORMAT_R8G8B8A8_UNORM,
                             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
-    Image map = createImage(dev, pd, mapW, mapH, VK_FORMAT_R8G8B8A8_UNORM,
+    Image map = createImage(dev, pd, mapW, mapH * 2, VK_FORMAT_R8G8B8A8_UNORM,
                             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
     // Synthetic clip mask on the map grid: left half clear, right half
     // clipped. Exercises the specular-boost path on GPU vs the oracle.
@@ -358,7 +358,7 @@ int main(int argc, char** argv) {
     };
     const VkDeviceSize hdrBytes = VkDeviceSize(baseW) * baseH * 8;
     const VkDeviceSize sdrBytes = VkDeviceSize(baseW) * baseH * 4;
-    const VkDeviceSize mapBytes = VkDeviceSize(mapW) * mapH * 4;
+    const VkDeviceSize mapBytes = VkDeviceSize(mapW) * mapH * 8;
     const VkDeviceSize clipBytes = VkDeviceSize(mapW) * mapH * 2;
     auto [hdrStaging, hdrMem] = makeStaging(hdrBytes);
     auto [sdrStaging, sdrMem] = makeStaging(sdrBytes);
@@ -468,6 +468,7 @@ int main(int argc, char** argv) {
     gci.shaderSpirvBytes = spv.size() * 4;
     gainmap::GainmapCompute gainmap(gci);
     gainmap::GainmapParams params;  // production default = AP1->sRGB
+    params.writeHdrChromaticity = true;
     params.fullResMap = false;  // this test feeds an explicit half-res grid + half-res clip mask
     float cstIdent[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
     const float* cst = cstAp1 ? params.hdrToLinearSrgbRowMajor : cstIdent;
@@ -540,7 +541,7 @@ int main(int argc, char** argv) {
                          nullptr, 1, &toCopy);
     VkBufferImageCopy bicOut{};
     bicOut.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    bicOut.imageExtent = {mapW, mapH, 1};
+    bicOut.imageExtent = {mapW, mapH * 2, 1};
     vkCmdCopyImageToBuffer(cmd, map.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, mapStaging, 1, &bicOut);
     check(vkEndCommandBuffer(cmd), "end");
     VkSubmitInfo si{};
@@ -604,6 +605,21 @@ int main(int argc, char** argv) {
             float u = (x + 0.5f) / mapW, v = (y + 0.5f) / mapH;
             auto h = bilinearCpu(hdrLin, baseW, baseH, u, v);
             auto s = bilinearCpu(sdrEnc, baseW, baseH, u, v);
+            float ch[3];
+            for (int k = 0; k < 3; ++k)
+                ch[k] = std::max(0.0f, cst[k*3]*h[0] + cst[k*3+1]*h[1] + cst[k*3+2]*h[2]);
+            const float sum = ch[0] + ch[1] + ch[2];
+            const auto* cp = gpu.data() + size_t(mapW)*mapH*4 + (size_t(y)*mapW+x)*4;
+            const unsigned cr = unsigned(cp[0]) | (unsigned(cp[1]) << 8);
+            const unsigned cg = unsigned(cp[2]) | (unsigned(cp[3]) << 8);
+            if (sum > 1e-8f) {
+                if (std::abs(float(cr)/65535-ch[0]/sum) > .0005f ||
+                    std::abs(float(cg)/65535-ch[1]/sum) > .0005f)
+                    throw std::runtime_error("capture chromaticity sidecar mismatch");
+            } else if (cr != 65535 || cg != 65535) {
+                throw std::runtime_error("black capture tap must be invalid");
+            }
+
             float fh[3] = {h[0], h[1], h[2]}, fs[3] = {s[0], s[1], s[2]}, fo[3]{};
             // Channel-weighted cover over the synthetic mask (mirrors the
             // shader: bitCount/4 per texel, center maxed with the clamped 7x7
