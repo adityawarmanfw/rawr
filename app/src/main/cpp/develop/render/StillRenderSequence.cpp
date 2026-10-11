@@ -16,7 +16,6 @@ namespace {
 void recordPostDemosaic(RenderResources& resources, RenderCommandSession& commands,
                         const RenderedStillContext& rendered, VkImage sourceImage, VkImageView sourceView,
                         VkImage clipStateImage, VkImageView clipStateView) {
-    const bool effectiveHighlightReconstruction = rendered.highlightReconstructionEnabled || rendered.ultraHdrEnabled;
     VkImageMemoryBarrier src{};
     src.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     src.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -42,7 +41,7 @@ void recordPostDemosaic(RenderResources& resources, RenderCommandSession& comman
     try {
         resources.postDemosaic().record(
             commands.command(), sourceImage, sourceView, clipStateImage, clipStateView, rendered.whiteBalanceRgb,
-            effectiveHighlightReconstruction,
+            rendered.highlightReconstructionEnabled,
             rawr::post::StillDistortionCorrection{rendered.distortionCorrectionEnabled && rendered.hasLensCalibration,
                                                   rendered.lensIntrinsic, rendered.lensDistortion},
             commands.timingPool(), false, rendered.highlightReconstructionMethod, rendered.highlightThreshold,
@@ -366,9 +365,8 @@ RenderedStillCompletion executeStillRender(RenderResources& resources, RenderCom
     done.width = rendered.width;
     done.height = rendered.height;
     {
-        const bool highlight = rendered.highlightReconstructionEnabled || rendered.ultraHdrEnabled;
-        done.highlightStage = !highlight ? 0 : (rendered.highlightReconstructionMethod == 1u ? 2 : 1);
-        done.highlightForcedByUltraHdr = !rendered.highlightReconstructionEnabled && rendered.ultraHdrEnabled;
+        done.highlightStage =
+            !rendered.highlightReconstructionEnabled ? 0 : (rendered.highlightReconstructionMethod == 1u ? 2 : 1);
         done.defringeEnabled = std::isfinite(rendered.defringeStrength) && rendered.defringeStrength > 0.0f;
     }
     done.presentationQuarterTurns = rendered.presentationQuarterTurns;
@@ -382,10 +380,6 @@ RenderedStillCompletion executeStillRender(RenderResources& resources, RenderCom
         // mask (merged-derived, optionally ORed with reference sensor bits
         // via 1A). A null view falls back to PostDemosaicProcessor's
         // conservative pre-WB RGB derive.
-        const bool effectiveHighlightReconstruction =
-            rendered.highlightReconstructionEnabled || rendered.ultraHdrEnabled;
-        if (rendered.ultraHdrEnabled && !rendered.highlightReconstructionEnabled)
-            emit("STILL_GAINMAP_RECOVERY_FORCED recovery=on requestId=" + std::to_string(rendered.requestId));
         const char* clipEvidence = !hasSensorClipState                      ? "derived_normalized_rgb"
                                    : rendered.multiframeSensorClipOrApplied ? "multiframe_sensor_or"
                                    : rendered.clipFromMultiframe            ? "multiframe_derived_rgb"
@@ -393,7 +387,7 @@ RenderedStillCompletion executeStillRender(RenderResources& resources, RenderCom
         emit(std::string("STILL_HIGHLIGHT_RECOVERY_CONFIGURED mode=") +
              (rendered.highlightReconstructionMethod == 1u ? "coloropp" : "guided_channel_fit") +
              " requested=" + (rendered.highlightReconstructionEnabled ? "true" : "false") +
-             " enabled=" + (effectiveHighlightReconstruction ? "true" : "false") + " evidence=" + clipEvidence +
+             " enabled=" + (rendered.highlightReconstructionEnabled ? "true" : "false") + " evidence=" + clipEvidence +
              " domain=" + (rendered.highlightReconstructionMethod == 1u ? "pre_wb_camera_rgb" : "post_wb_camera_rgb") +
              " requestId=" + std::to_string(rendered.requestId) + " steps=" + std::to_string(rendered.fccSteps) +
              " threshold=" + std::to_string(rendered.highlightThreshold) +

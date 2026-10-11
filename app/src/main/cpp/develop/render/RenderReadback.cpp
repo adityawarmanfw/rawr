@@ -132,7 +132,6 @@ void completeReadback(RenderResources& resources, RenderCommandSession& commands
                       bool galoshYuvSuccess, bool gainmapClipUsed, float gainmapClipBoost,
                       std::chrono::steady_clock::time_point tFence, RenderedStillCompletion& done,
                       const RenderResources::Diagnostic& emit) {
-    const bool effectiveHighlightReconstruction = rendered.highlightReconstructionEnabled || rendered.ultraHdrEnabled;
     if (rendered.diagnosticsEnabled) {
         const bool preFccOk =
             dumpRenderImage(resources.deviceContext(), sourceImage, rendered.width, rendered.height,
@@ -169,7 +168,7 @@ void completeReadback(RenderResources& resources, RenderCommandSession& commands
                << "postTonemap=rawrcam_prejpeg_latest.ppm format=P6_sRGB8 domain=exact_pre_JPEG\n"
                << "highlightReconstructionRequested=" << (rendered.highlightReconstructionEnabled ? "true" : "false")
                << "\n"
-               << "highlightReconstructionApplied=" << (effectiveHighlightReconstruction ? "true" : "false") << "\n"
+               << "highlightReconstructionApplied=" << (rendered.highlightReconstructionEnabled ? "true" : "false") << "\n"
                << "highlightClipEvidence=" << clipEvidence << "\n"
                << "whiteBalanceRgb=" << rendered.whiteBalanceRgb[0] << ',' << rendered.whiteBalanceRgb[1] << ','
                << rendered.whiteBalanceRgb[2] << "\n"

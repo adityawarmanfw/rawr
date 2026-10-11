@@ -285,7 +285,7 @@ std::string appendProcessingTimes(const JpegCaptureContext& c, double jpegEncodi
                                      c.appliedLensShadingCorrection, c.appliedFccSteps, c.refinementMs,
                                      c.colorProcessingMs, c.tonemapMs, c.filmRendered, c.queueGapsMs, c.readbackMs,
                                      false, c.gainmapMs, c.denoiseMs, c.galoshYuvMs, c.highlightStage, c.postTailMs,
-                                     c.defringeEnabled, c.highlightForcedByUltraHdr)
+                                     c.defringeEnabled)
             << setupBreakdown(c) << formatJpegEncoding(jpegEncodingMs);
         if (ultraHdr) {
             out << "- UltraHDR gain map JPEG: " << formatMs1(gainmapEncodeMs) << " ms (included in JPEG encoding)\n";
@@ -309,8 +309,7 @@ std::string appendProcessingTimes(const JpegCaptureContext& c, double jpegEncodi
                                      c.renderSetupMs, c.highlightReconstructionMs, c.appliedLensShadingCorrection,
                                      c.appliedFccSteps, c.refinementMs, c.colorProcessingMs, c.tonemapMs,
                                      c.filmRendered, c.queueGapsMs, c.readbackMs, true, c.gainmapMs, c.denoiseMs,
-                                     c.galoshYuvMs, c.highlightStage, c.postTailMs, c.defringeEnabled,
-                                     c.highlightForcedByUltraHdr)
+                                     c.galoshYuvMs, c.highlightStage, c.postTailMs, c.defringeEnabled)
             << setupBreakdown(c) << formatJpegEncoding(jpegEncodingMs);
         if (ultraHdr) {
             out << "- UltraHDR gain map JPEG: " << formatMs1(gainmapEncodeMs) << " ms (included in JPEG encoding)\n";

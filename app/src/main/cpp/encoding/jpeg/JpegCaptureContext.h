@@ -64,7 +64,6 @@ struct JpegCaptureContext {
     // propagation, 2 Inpaint Opposed) and whether defringe ran.
     double postTailMs = 0.0;
     int highlightStage = -1;
-    bool highlightForcedByUltraHdr = false;
     bool defringeEnabled = false;
     double renderTotalMs = 0.0;
     // Wall-clock attribution of renderTotalMs so EXIF parts sum to the
