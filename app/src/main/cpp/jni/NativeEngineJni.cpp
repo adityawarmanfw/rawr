@@ -371,6 +371,10 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_rawr_camera_integration_NativePreviewEngine_setPostGainKneeWidthEv(JNIEnv*, jobject, jlong h, jfloat v) {
     rawrcam::session::setPostGainKneeWidthEv(handle(h), v);
 }
+extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreviewEngine_setAutoKeyMode(JNIEnv*, jobject,
+                                                                                                      jlong h, jint v) {
+    rawrcam::session::setAutoKeyMode(handle(h), v);
+}
 extern "C" JNIEXPORT void JNICALL
 Java_com_rawr_camera_integration_NativePreviewEngine_setExperimentalZeroCopy(JNIEnv*, jobject, jlong h, jboolean v) {
     rawrcam::session::setExperimentalZeroCopy(handle(h), v == JNI_TRUE);

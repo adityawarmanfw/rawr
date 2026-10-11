@@ -90,6 +90,8 @@ int main(int argc, char** argv) {
     assert(restored.dng.processingRecipe == j.dng.processingRecipe);
     assert(restored.dng.resolvedRecipe == j.dng.resolvedRecipe);
     assert(restored.dng.resolvedRecipe.find("\"aePostGain\":1.25") != std::string::npos);
+    assert(restored.dng.resolvedRecipe.find("\"autoKeyEv\":0") != std::string::npos);
+    assert(resolvedRecipe(j.tone, 2.5f, j.filmEnabled, j.film, 1.25f).find("\"autoKeyEv\":1.25") != std::string::npos);
     assert(restored.jpeg.develop.defringeStrength == .37f && restored.jpeg.develop.fccEdgeSigma == .12f);
     assert(restored.jpeg.output.ultraHdr.enabled && restored.jpeg.output.ultraHdr.mapBlurSigma == 1.5f);
     assert(restored.jpeg.develop.highlightReconstructionMethod == 1 && restored.jpeg.develop.highlightThreshold == .9f);

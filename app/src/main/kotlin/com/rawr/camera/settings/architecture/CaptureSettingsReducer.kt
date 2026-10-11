@@ -40,6 +40,10 @@ internal fun reduceCaptureSettings(
         state.withValues(state.values.copy(highlightProtection = action.value))
     }
 
+    is SetAutoKeyExposure -> {
+        state.withValues(state.values.copy(autoKeyExposure = action.value))
+    }
+
     is SetControlSurfaceStyle -> {
         state.withValues(state.values.copy(controlSurfaceStyle = action.style))
     }

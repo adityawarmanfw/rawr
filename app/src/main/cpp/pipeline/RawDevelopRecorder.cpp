@@ -389,6 +389,22 @@ RawDevelopRecordResult RawDevelopRecorder::record(const RawDevelopRecordInput& i
     vkCmdPipelineBarrier(slot.command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
                          nullptr, 0, nullptr, displayImage == slot.linear.image ? 1u : 2u, linearBarriers);
 
+    if (in.sceneExposureEnabled && in.diagnosticMode == 0u) {
+        // Luma row = AP1 luma . camera->AP1 (column-major), the same working
+        // space the render applies its gain in. White is the WB ceiling.
+        constexpr std::array<float, 3> ap1Luma{0.2722287168f, 0.6740817658f, 0.0536895174f};
+        const auto cameraToAp1 = composeCameraToAp1(in.sensorToLinearSrgb);
+        std::array<float, 3> lumaRow{};
+        for (size_t c = 0; c < 3; ++c)
+            for (size_t r = 0; r < 3; ++r) lumaRow[c] += ap1Luma[r] * cameraToAp1[c * 3 + r];
+        const std::array<float, 3> ceilings{in.whiteBalance[0], 0.5f * (in.whiteBalance[1] + in.whiteBalance[2]),
+                                            in.whiteBalance[3]};
+        float whiteLuma = 0.0f;
+        for (size_t c = 0; c < 3; ++c) whiteLuma += lumaRow[c] * ceilings[c];
+        monitor_.recordSceneExposure(slot.command, in.slotIndex, slot.linear.view, in.previewWidth, in.previewHeight,
+                                     lumaRow, 0.9f * whiteLuma);
+    }
+
     performance_.markTonemapInputReady(slot.command, in.slotIndex);
 
     // The look stage (film or tonemap) runs at the preview size divided by

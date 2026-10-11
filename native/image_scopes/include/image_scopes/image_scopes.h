@@ -22,6 +22,20 @@ struct DisplayExposureStatsRecordInfo {
     std::uint32_t sampleBlockSize = 4;  // supported: 2 or 4
 };
 
+struct SceneExposureStatsRecordInfo {
+    VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+    // Scene-linear R16G16B16A16_SFLOAT input in GENERAL layout, measured
+    // before any render gain so the result never feeds back on itself.
+    DisplayImageView input{VK_NULL_HANDLE, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_LAYOUT_GENERAL, 0, 0};
+    std::uint32_t frameSlot = 0;
+    // One deterministic sample per block, as the display exposure meter.
+    std::uint32_t sampleBlockSize = 4;  // supported: 2 or 4
+    // Input RGB -> luma row (e.g. AP1 luma times camera->AP1).
+    float lumaWeights[3] = {0.0f, 0.0f, 0.0f};
+    // Samples at or above this luma land in the top bin. <= 0 disables.
+    float clipLuma = 0.0f;
+};
+
 struct DisplayWaveformRecordInfo {
     VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
     DisplayImageView input{};
@@ -77,6 +91,8 @@ class ImageScopes {
     ImageScopes& operator=(ImageScopes&&) noexcept;
 
     void recordDisplayExposureStats(const DisplayExposureStatsRecordInfo& info);
+    // Weighted log2-luma histogram of a scene-linear image (SceneExposureStatsData).
+    void recordSceneExposureStats(const SceneExposureStatsRecordInfo& info);
     void recordDisplayWaveform(const DisplayWaveformRecordInfo& info);
     // Render the most recently measured display waveform for frameSlot without
     // rereading the source image or changing numerical density. The requested
@@ -106,6 +122,8 @@ class ImageScopes {
     // memory, submission and synchronization/readback.
     void recordCopyDisplayExposureStats(VkCommandBuffer cmd, std::uint32_t frameSlot, VkBuffer dst,
                                         VkDeviceSize dstOffset) const;
+    void recordCopySceneExposureStats(VkCommandBuffer cmd, std::uint32_t frameSlot, VkBuffer dst,
+                                      VkDeviceSize dstOffset) const;
     void recordCopyDisplayWaveform(VkCommandBuffer cmd, std::uint32_t frameSlot, VkBuffer dst,
                                    VkDeviceSize dstOffset) const;
     void recordCopyVectorscope(VkCommandBuffer cmd, std::uint32_t frameSlot, VkBuffer dst,

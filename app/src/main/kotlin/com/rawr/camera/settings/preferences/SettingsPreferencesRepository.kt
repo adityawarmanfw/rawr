@@ -436,6 +436,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
             antiFlicker = enumOrDefault(p[Keys.antiFlicker], d.antiFlicker),
             exposureStep = enumOrDefault(p[Keys.exposureStep], d.exposureStep),
             highlightProtection = enumOrDefault(p[Keys.highlightProtection], d.highlightProtection),
+            autoKeyExposure = enumOrDefault(p[Keys.autoKeyExposure], d.autoKeyExposure),
             maxPostGainId = p[Keys.maxPostGainId] ?: d.maxPostGainId,
             autoMinFpsId = p[Keys.autoMinFpsId] ?: d.autoMinFpsId,
             controlSurfaceStyle = enumOrDefault(p[Keys.controlSurfaceStyle], d.controlSurfaceStyle),
@@ -648,6 +649,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.antiFlicker] = v.antiFlicker.name
         p[Keys.exposureStep] = v.exposureStep.name
         p[Keys.highlightProtection] = v.highlightProtection.name
+        p[Keys.autoKeyExposure] = v.autoKeyExposure.name
         p[Keys.maxPostGainId] = v.maxPostGainId
         p[Keys.autoMinFpsId] = v.autoMinFpsId
         p[Keys.controlSurfaceStyle] = v.controlSurfaceStyle.name
@@ -904,6 +906,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val antiFlicker = stringPreferencesKey("anti_flicker")
         val exposureStep = stringPreferencesKey("exposure_step")
         val highlightProtection = stringPreferencesKey("highlight_protection")
+        val autoKeyExposure = stringPreferencesKey("auto_key_exposure")
         val maxPostGainId = stringPreferencesKey("max_post_gain_id")
         val autoMinFpsId = stringPreferencesKey("auto_min_fps_id")
         val controlSurfaceStyle = stringPreferencesKey("control_surface_style")

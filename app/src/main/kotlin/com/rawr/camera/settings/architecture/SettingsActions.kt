@@ -55,6 +55,8 @@ data class SetExposureStep(val value: ExposureStep) : SettingsApplicationAction
 
 data class SetHighlightProtection(val value: HighlightProtection) : SettingsApplicationAction
 
+data class SetAutoKeyExposure(val value: AutoKeyExposure) : SettingsApplicationAction
+
 data class SetControlSurfaceStyle(val style: ControlSurfaceStyle) : SettingsApplicationAction
 
 data class SetCaptureControlLayout(val layout: CaptureControlLayout) : SettingsApplicationAction

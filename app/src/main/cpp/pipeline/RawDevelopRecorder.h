@@ -97,6 +97,8 @@ struct RawDevelopRecordInput {
     // idle preview frames what the recorder will write.
     uint32_t videoCropOutWidth = 0;
     uint32_t videoCropOutHeight = 0;
+    // Auto key exposure: meter the scene-linear preview before render gain.
+    bool sceneExposureEnabled = false;
 };
 
 struct RawDevelopRecordResult {

@@ -41,6 +41,7 @@ uint64_t SessionEngine::requestRawStillCapture(rawrcam::encoding::dng::DngCaptur
         if (jpegRequested) close(jpegContext.output.outputFd);
         return 0;
     }
+    dngContext.autoKeyEv = appliedAutoKeyEv();
     const uint64_t requestId = capture_.requestSingle(std::move(dngContext), std::move(jpegContext), [this] {
         return ingressQueue_.latestTimestamp(realtime_.generation());
     });
@@ -96,6 +97,8 @@ uint64_t SessionEngine::startPreparedMultiframeCapture(
     uint64_t requestId = 0;
     {
         std::lock_guard<std::mutex> lock(mu_);
+        baseDng.autoKeyEv = appliedAutoKeyEv();
+        mergedDng.autoKeyEv = baseDng.autoKeyEv;
         requestId = capture_.multiframe().startPreparedMultiframeCapture(
             std::move(baseDng), std::move(mergedDng), std::move(mergedJpeg), dumpRzslRequested, tuning, baseFrameMode,
             look_.toneParams(), look_.requestedFilmEnabled(), look_.filmLook(), &bracket);

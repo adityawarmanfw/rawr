@@ -49,6 +49,23 @@ struct DisplayExposureStatsData {
     std::uint32_t reserved = 0;
 };
 
+// Scene-linear key meter. Bins are log2(luma) over [kSceneExposureMinEv,
+// kSceneExposureMaxEv); the last bin also holds every clipped sample. Bins
+// carry sample weights (centre samples count 3, edges 1), not raw counts.
+inline constexpr std::uint32_t kSceneExposureBins = 256;
+inline constexpr float kSceneExposureMinEv = -20.0f;
+inline constexpr float kSceneExposureMaxEv = 4.0f;
+inline constexpr std::uint32_t kSceneExposureCentreWeight = 3;
+
+struct SceneExposureStatsData {
+    std::uint32_t weightedBins[kSceneExposureBins]{};
+    std::uint32_t totalWeight = 0;
+    std::uint32_t sampleCount = 0;
+    std::uint32_t clippedWeight = 0;
+    std::uint32_t reserved = 0;
+};
+static_assert(sizeof(SceneExposureStatsData) == (kSceneExposureBins + 4u) * 4u);
+
 struct RawStatus {
     std::uint32_t completeCellCount = 0;
     std::uint32_t logicalClippedCount[3]{};

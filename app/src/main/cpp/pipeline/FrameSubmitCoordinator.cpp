@@ -708,6 +708,7 @@ FrameSubmitCoordinator::RecordedSubmit FrameSubmitCoordinator::recordSubmitComma
     recordInput.highlightMethod = highlightMethod_;
     recordInput.highlightThreshold = highlightThreshold_;
     recordInput.highlightCompression = highlightCompression_;
+    recordInput.sceneExposureEnabled = diagnosticsPort_.sceneKeyMeteringEnabled();
     if (acquired.videoIndex && videoOutput_) {
         const auto cameraToAp1 = RawDevelopRecorder::composeCameraToAp1(params.sensorToSrgb);
         rawrcam::video::VideoDemosaic::Frame videoFrame{};
@@ -1034,6 +1035,20 @@ void FrameSubmitCoordinator::reportRenderedFeedback(uint32_t slotIndex, const pi
                  static_cast<int64_t>(std::llround(rendered->anyChannelClippedFraction * 1000000.0f)));
 }
 
+void FrameSubmitCoordinator::reportSceneKey(uint32_t slotIndex, const pipeline::FrameSlot& slot) {
+    if (!slot.metadataSnapshot) return;
+    const auto& metadata = *slot.metadataSnapshot;
+    const auto key = diagnosticsPort_.updateSceneKey(slotIndex, metadata, slot.timestampNs, videoActive());
+    if (!key) return;
+    auto& trace = rawrcam::diagnostics::RuntimeTraceRecorder::instance();
+    trace.record(rawrcam::diagnostics::RuntimeTraceStage::SceneKeyEv, slot.timestampNs, metadata.frameOrdinal,
+                 static_cast<int32_t>(slotIndex), metadata.exposureTimeNs, metadata.sensitivity, 0,
+                 static_cast<int64_t>(std::llround(key->keyEv * 1000000.0f)));
+    trace.record(rawrcam::diagnostics::RuntimeTraceStage::AutoKeyEv, slot.timestampNs, metadata.frameOrdinal,
+                 static_cast<int32_t>(slotIndex), metadata.exposureTimeNs, metadata.sensitivity, 0,
+                 static_cast<int64_t>(std::llround(key->autoKeyEv * 1000000.0f)));
+}
+
 void FrameSubmitCoordinator::reportAuditFrame(const pipeline::FrameSlot& slot) {
     if (!slot.metadataSnapshot || !slot.colorStateSnapshot) {
         return;
@@ -1059,6 +1074,7 @@ void FrameSubmitCoordinator::retireSlot(uint32_t slotIndex, pipeline::FrameSlot&
     trace.record(rawrcam::diagnostics::RuntimeTraceStage::ScopesEnd, slot.timestampNs, frameOrdinal,
                  static_cast<int32_t>(slotIndex));
     reportRenderedFeedback(slotIndex, slot);
+    reportSceneKey(slotIndex, slot);
     reportAuditFrame(slot);
 
     if (slot.imageLease) {

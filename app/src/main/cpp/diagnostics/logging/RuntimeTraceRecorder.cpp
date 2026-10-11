@@ -81,6 +81,10 @@ const char* RuntimeTraceRecorder::stageName(uint16_t stage) noexcept {
             return "CAMERA_CAPTURE_FAILED";
         case RuntimeTraceStage::CameraBufferLost:
             return "CAMERA_BUFFER_LOST";
+        case RuntimeTraceStage::SceneKeyEv:
+            return "SCENE_KEY_EV";
+        case RuntimeTraceStage::AutoKeyEv:
+            return "AUTO_KEY_EV";
         case RuntimeTraceStage::Metadata:
             return "METADATA";
         case RuntimeTraceStage::RawImage:

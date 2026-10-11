@@ -95,6 +95,11 @@ void MonitorRecorder::transitionImageForCompute(VkCommandBuffer command, VkImage
                          nullptr, 0, nullptr, 1, &barrier);
 }
 VkImageView MonitorRecorder::rawStateView(uint32_t slot) const { return monitoringOverlay_.rawStateView(slot); }
+void MonitorRecorder::recordSceneExposure(VkCommandBuffer command, uint32_t slotIndex, VkImageView linearView,
+                                          uint32_t width, uint32_t height, const std::array<float, 3>& lumaWeights,
+                                          float clipLuma) const {
+    imageScopes_.recordSceneExposure(command, slotIndex, linearView, width, height, lumaWeights, clipLuma);
+}
 void MonitorRecorder::recordOverlays(const MonitorFrame& in) const {
     if (in.diagnosticMode == 0u) {
         const uint32_t sourceQuarterTurns =

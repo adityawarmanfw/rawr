@@ -250,14 +250,17 @@ void VulkanTestContext::invalidate(const Buffer& b, VkDeviceSize offset, VkDevic
     check(vkInvalidateMappedMemoryRanges(device_, 1, &r), "vkInvalidateMappedMemoryRanges failed");
 }
 
-RgbaImage VulkanTestContext::createRgbaImage(std::uint32_t width, std::uint32_t height) const {
+RgbaImage VulkanTestContext::createRgbaImage(std::uint32_t width, std::uint32_t height, VkFormat format) const {
+    if (format != VK_FORMAT_R8G8B8A8_UNORM && format != VK_FORMAT_R16G16B16A16_SFLOAT)
+        throw std::invalid_argument("unsupported test image format");
     RgbaImage out{};
     out.width = width;
     out.height = height;
+    out.bytesPerPixel = format == VK_FORMAT_R16G16B16A16_SFLOAT ? 8u : 4u;
     VkImageCreateInfo ci{};
     ci.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     ci.imageType = VK_IMAGE_TYPE_2D;
-    ci.format = VK_FORMAT_R8G8B8A8_UNORM;
+    ci.format = format;
     ci.extent = {width, height, 1};
     ci.mipLevels = 1;
     ci.arrayLayers = 1;
@@ -280,7 +283,7 @@ RgbaImage VulkanTestContext::createRgbaImage(std::uint32_t width, std::uint32_t 
         vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         vi.image = out.image;
         vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        vi.format = VK_FORMAT_R8G8B8A8_UNORM;
+        vi.format = format;
         vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         vi.subresourceRange.levelCount = 1;
         vi.subresourceRange.layerCount = 1;
@@ -321,7 +324,7 @@ void VulkanTestContext::submitAndWait() {
 }
 
 void VulkanTestContext::uploadRgba(RgbaImage& image, std::span<const std::uint8_t> rgba) {
-    const VkDeviceSize bytes = VkDeviceSize(image.width) * image.height * 4u;
+    const VkDeviceSize bytes = VkDeviceSize(image.width) * image.height * image.bytesPerPixel;
     if (rgba.size_bytes() < bytes) throw std::invalid_argument("RGBA upload span too small");
     Buffer staging = createBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
                                   VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
@@ -377,7 +380,7 @@ void VulkanTestContext::uploadRgba(RgbaImage& image, std::span<const std::uint8_
 }
 
 std::vector<std::uint8_t> VulkanTestContext::downloadRgba(RgbaImage& image) {
-    const VkDeviceSize bytes = VkDeviceSize(image.width) * image.height * 4u;
+    const VkDeviceSize bytes = VkDeviceSize(image.width) * image.height * image.bytesPerPixel;
     Buffer staging = createBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
                                   VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     try {

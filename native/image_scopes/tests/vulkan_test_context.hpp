@@ -24,6 +24,7 @@ struct RgbaImage {
     std::uint32_t width = 0;
     std::uint32_t height = 0;
     VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    std::uint32_t bytesPerPixel = 4;
 };
 
 class VulkanTestContext {
@@ -52,7 +53,8 @@ public:
     void flush(const Buffer& b, VkDeviceSize offset = 0, VkDeviceSize size = VK_WHOLE_SIZE) const;
     void invalidate(const Buffer& b, VkDeviceSize offset = 0, VkDeviceSize size = VK_WHOLE_SIZE) const;
 
-    RgbaImage createRgbaImage(std::uint32_t width, std::uint32_t height) const;
+    RgbaImage createRgbaImage(std::uint32_t width, std::uint32_t height,
+                              VkFormat format = VK_FORMAT_R8G8B8A8_UNORM) const;
     void destroyRgbaImage(RgbaImage& image) const;
     void uploadRgba(RgbaImage& image, std::span<const std::uint8_t> rgba);
     std::vector<std::uint8_t> downloadRgba(RgbaImage& image);

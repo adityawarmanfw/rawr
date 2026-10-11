@@ -20,6 +20,7 @@
 
 #include "camera/CameraControlSurface.h"
 #include "camera/CameraControlTypes.h"
+#include "color/AutoKeyExposure.h"
 #include "capture/CaptureCoordinator.h"
 #include "capture/CaptureRequest.h"
 #include "diagnostics/logging/DiagnosticSink.h"
@@ -118,6 +119,16 @@ class SessionEngine {
     void setPostGainKneeWidthEv(float widthEv);
     [[nodiscard]] float postGainKneeWidthEv() const noexcept {
         return postGainKneeWidthEv_.load(std::memory_order_relaxed);
+    }
+    void setAutoKeyMode(int mode);
+    [[nodiscard]] rawrcam::color::AutoKeyMode autoKeyMode() const noexcept {
+        return rawrcam::color::autoKeyModeFromId(autoKeyMode_.load(std::memory_order_relaxed));
+    }
+    // Lift postGainFor applies now: 0 when Off or for scene-referred (LOG) renders.
+    [[nodiscard]] float appliedAutoKeyEv() const noexcept {
+        if (autoKeyMode() == rawrcam::color::AutoKeyMode::Off || sceneReferredRender_.load(std::memory_order_relaxed))
+            return 0.0f;
+        return autoKeyEv_.load(std::memory_order_relaxed);
     }
     void setExperimentalZeroCopy(bool enabled);
     void setPipelineDiagnostic(uint32_t mode);
@@ -233,5 +244,12 @@ class SessionEngine {
     std::atomic<float> maxAePostGain_{4.0f};
     // HighlightProtection-driven knee width in EV (Low=2, Normal=1, High=0.5).
     std::atomic<float> postGainKneeWidthEv_{1.0f};
+    // Auto scene key exposure (AutoKeyExposure.h). The mode is written from
+    // Kotlin sync; the smoothed lift by SessionFrameCallbacks at slot retire;
+    // both are read lock-free by postGainFor.
+    std::atomic<int> autoKeyMode_{0};
+    std::atomic<float> autoKeyEv_{0.0f};
+    // LOG profiles stay scene-referred: no auto key lift.
+    std::atomic<bool> sceneReferredRender_{false};
 };
 }  // namespace rawrcam::session

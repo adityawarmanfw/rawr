@@ -55,6 +55,7 @@ void setLensShadingCorrectionEnabled(EngineHandle handle, bool enabled) noexcept
 void setHighlightReconstructionEnabled(EngineHandle handle, bool enabled) noexcept;
 void setMaxAePostGain(EngineHandle handle, float gain) noexcept;
 void setPostGainKneeWidthEv(EngineHandle handle, float widthEv) noexcept;
+void setAutoKeyMode(EngineHandle handle, int mode) noexcept;
 void setAutoMinFps(EngineHandle handle, int fps) noexcept;
 void setAePriorityDisabled(EngineHandle handle, bool disabled) noexcept;
 bool setRecordingFps(EngineHandle handle, int fps) noexcept;

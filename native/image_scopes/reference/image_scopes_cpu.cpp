@@ -1,6 +1,7 @@
 #include "image_scopes_cpu.h"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <stdexcept>
 
@@ -91,6 +92,45 @@ WaveformData measureDisplayWaveform(Rgba8ImageView im, WaveformMode mode, Sampli
     out.sampling.samplingFraction = out.sampling.sourcePixelCount ? static_cast<float>(out.sampling.sampledPixelCount) /
                                                                         out.sampling.sourcePixelCount
                                                                   : 0.f;
+    return out;
+}
+
+std::uint32_t sceneExposureBin(float luma) noexcept {
+    if (!(luma > 0.0f)) return 0u;
+    constexpr float binsPerEv = float(kSceneExposureBins) / (kSceneExposureMaxEv - kSceneExposureMinEv);
+    const float t =
+        std::clamp((std::log2(luma) - kSceneExposureMinEv) * binsPerEv, 0.0f, float(kSceneExposureBins - 2u));
+    return static_cast<std::uint32_t>(t);
+}
+
+SceneExposureStatsData measureSceneExposure(RgbaF32ImageView im, const float lumaWeights[3], float clipLuma,
+                                            std::uint32_t block) {
+    if (!im.data || !im.width || !im.height) throw std::invalid_argument("image_scopes CPU: invalid scene image");
+    if (im.rowStrideFloats < static_cast<std::uint64_t>(im.width) * 4u)
+        throw std::invalid_argument("image_scopes CPU: scene row stride too small");
+    if (block != 2u && block != 4u) throw std::invalid_argument("image_scopes CPU: scene block must be 2 or 4");
+    SceneExposureStatsData out{};
+    const std::uint32_t blocksX = (im.width + block - 1u) / block, blocksY = (im.height + block - 1u) / block;
+    for (std::uint32_t by = 0; by < blocksY; ++by) {
+        const std::uint32_t y0 = by * block, validH = std::min(block, im.height - y0);
+        for (std::uint32_t bx = 0; bx < blocksX; ++bx) {
+            const std::uint32_t x0 = bx * block, validW = std::min(block, im.width - x0);
+            const std::uint32_t lane = hash2(bx, by) % (validW * validH);
+            const std::uint32_t x = x0 + lane % validW, y = y0 + lane / validW;
+            const float* p = im.data + static_cast<std::size_t>(y) * im.rowStrideFloats + std::size_t(x) * 4u;
+            float luma = 0.0f;
+            for (int c = 0; c < 3; ++c) luma += lumaWeights[c] * std::max(p[c], 0.0f);
+            if (std::isnan(luma)) luma = 0.0f;
+            const bool centre = 4u * x >= im.width && 4u * x < 3u * im.width && 4u * y >= im.height &&
+                                4u * y < 3u * im.height;
+            const std::uint32_t w = centre ? kSceneExposureCentreWeight : 1u;
+            const bool clipped = clipLuma > 0.0f && luma >= clipLuma;
+            out.weightedBins[clipped ? kSceneExposureBins - 1u : sceneExposureBin(luma)] += w;
+            out.totalWeight += w;
+            ++out.sampleCount;
+            if (clipped) out.clippedWeight += w;
+        }
+    }
     return out;
 }
 

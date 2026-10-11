@@ -98,6 +98,8 @@ enum class RuntimeTraceStage : uint16_t {
     CameraSessionCreated = 90,
     CameraCaptureFailed = 91,
     CameraBufferLost = 92,
+    SceneKeyEv = 93,
+    AutoKeyEv = 94,
 };
 
 class RuntimeTraceRecorder {

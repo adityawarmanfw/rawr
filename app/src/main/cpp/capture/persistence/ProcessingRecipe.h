@@ -8,11 +8,13 @@
 
 namespace rawrcam::capture::persistence {
 // Named scalar fields are portable across native ABI and struct-layout changes.
+// autoKeyEv is diagnostics only: aePostGain already carries the applied total.
 inline std::string resolvedRecipe(const tonemap::TonemapParams& tone, float gain, bool filmEnabled,
-                                  const spektrafilm_native::FilmLook& film) {
+                                  const spektrafilm_native::FilmLook& film, float autoKeyEv = 0.0f) {
     std::ostringstream out;
     out.imbue(std::locale::classic());
     out << std::boolalpha << std::setprecision(9) << "{\"version\":1,\"aePostGain\":" << gain
+        << ",\"autoKeyEv\":" << autoKeyEv
         << ",\"filmEnabled\":" << (filmEnabled ? "true" : "false") << ",\"tonemap\":{\"version\":1";
 #define RAWR_TONE_FIELD(name) out << ",\"" #name "\":" << tone.name;
     RAWR_TONE_FIELD(exposureEV)

@@ -1,0 +1,81 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "shared/common.glsl"
+
+// Scene-linear key meter. One deterministic sample per NxN block, binned as
+// log2(luma) over [-20, +4) EV. Centre samples weigh 3, edges 1; clipped
+// samples go to the top bin. Measured before any render gain.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+layout(binding = 0, rgba16f) uniform readonly image2D src;
+layout(std430, binding = 1) buffer Partial { uint data[]; }
+partial;
+
+const uint PARTITIONS = 16u;
+const uint BIN_COUNT = 256u;
+const uint COUNTERS = 4u;  // total weight, samples, clipped weight, reserved
+const uint STRIDE = BIN_COUNT + COUNTERS;
+const float MIN_EV = -20.0;
+const float BINS_PER_EV = 256.0 / 24.0;
+shared uint bins[BIN_COUNT];
+shared uint counters[COUNTERS];
+layout(push_constant) uniform PC {
+    uint width;
+    uint height;
+    uint sampleBlockSize;
+    float lumaR;
+    float lumaG;
+    float lumaB;
+    float clipLuma;
+    uint p0;
+}
+pc;
+
+uint sceneBin(float y) {
+    if (!(y > 0.0)) return 0u;
+    float t = clamp((log2(y) - MIN_EV) * BINS_PER_EV, 0.0, float(BIN_COUNT - 2u));
+    return uint(t);
+}
+
+void main() {
+    uint li = gl_LocalInvocationIndex;
+    bins[li] = 0u;
+    if (li < COUNTERS) counters[li] = 0u;
+    barrier();
+
+    uint block = pc.sampleBlockSize;
+    uint blocksX = (pc.width + block - 1u) / block;
+    uint blocksY = (pc.height + block - 1u) / block;
+    uint part = gl_WorkGroupID.x;
+    uint by0 = (part * blocksY) / PARTITIONS;
+    uint by1 = ((part + 1u) * blocksY) / PARTITIONS;
+    vec3 lumaRow = vec3(pc.lumaR, pc.lumaG, pc.lumaB);
+
+    for (uint by = by0; by < by1; ++by) {
+        uint y0 = by * block;
+        uint validH = min(block, pc.height - y0);
+        for (uint bx = li; bx < blocksX; bx += 256u) {
+            uint x0 = bx * block;
+            uint validW = min(block, pc.width - x0);
+            uint validCount = validW * validH;
+            uint lane = hash2(uvec2(bx, by)) % validCount;
+            uint x = x0 + (lane % validW);
+            uint y = y0 + (lane / validW);
+
+            vec3 c = max(imageLoad(src, ivec2(x, y)).rgb, vec3(0.0));
+            float luma = dot(lumaRow, c);
+            if (isnan(luma)) luma = 0.0;
+            bool centre = 4u * x >= pc.width && 4u * x < 3u * pc.width && 4u * y >= pc.height &&
+                          4u * y < 3u * pc.height;
+            uint w = centre ? 3u : 1u;
+            bool clipped = pc.clipLuma > 0.0 && luma >= pc.clipLuma;
+            atomicAdd(bins[clipped ? BIN_COUNT - 1u : sceneBin(luma)], w);
+            atomicAdd(counters[0], w);
+            atomicAdd(counters[1], 1u);
+            if (clipped) atomicAdd(counters[2], w);
+        }
+    }
+    barrier();
+    uint base = part * STRIDE;
+    partial.data[base + li] = bins[li];
+    if (li < COUNTERS) partial.data[base + BIN_COUNT + li] = counters[li];
+}

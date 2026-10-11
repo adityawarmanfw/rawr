@@ -43,6 +43,7 @@ internal class CaptureSettingsSync(
         syncSetting({ it.highlightProtection }) {
             previewCoordinator.setPostGainKneeWidthEv(com.rawr.camera.settings.model.postGainKneeWidthEvFor(it))
         }
+        syncSetting({ it.autoKeyExposure }) { previewCoordinator.setAutoKeyMode(it.nativeId) }
         syncSetting({ it.maxPostGainId }) {
             previewCoordinator.setMaxAePostGain(com.rawr.camera.settings.model.maxPostGainForId(it))
         }

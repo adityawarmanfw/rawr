@@ -200,6 +200,13 @@ enum class HighlightProtection(val label: String, val kneeSummary: String) {
     High("High", "Hard 0.5EV knee past the cap · darkest shadows, safest highlights")
 }
 
+/** Render-side scene key lift on top of the AE post-gain; native AutoKeyMode ids. */
+enum class AutoKeyExposure(val label: String, val summary: String, val nativeId: Int) {
+    Off("Off", "Renders the HAL exposure as delivered", 0),
+    Natural("Natural", "Lifts dark midtones up to 2 EV · keeps a low-key look", 1),
+    Strong("Strong", "Lifts midtones to middle grey, up to 3 EV · brightest shadows", 2)
+}
+
 enum class ColorRenderProfile(val label: String) {
     RawrBase("RAWR NTRL"),
     UserLut("Imported LUT"),
@@ -873,6 +880,7 @@ data class SettingsValues(
     val antiFlicker: AntiFlicker = AntiFlicker.Auto,
     val exposureStep: ExposureStep = ExposureStep.Third,
     val highlightProtection: HighlightProtection = HighlightProtection.High,
+    val autoKeyExposure: AutoKeyExposure = AutoKeyExposure.Off,
     val maxPostGainId: String = "gain.200",
     val autoMinFpsId: String = "fps.12",
     val controlSurfaceStyle: ControlSurfaceStyle = ControlSurfaceStyle.Basic,
