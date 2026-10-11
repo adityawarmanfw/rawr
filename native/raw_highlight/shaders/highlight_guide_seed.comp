@@ -56,7 +56,9 @@ void main() {
             float sum = rawrHighlightSum(rgb);
             if (sum <= 1e-6) continue;
             float peak = rawrHighlightMaximum(rgb / max(pc.channelCeilings.rgb, vec3(1e-4)));
-            if (peak < 0.52 || peak > 1.02) continue;
+            // The sensor mask already excludes clipped channels. Lens shading
+            // may legitimately put valid seeds above the nominal WB ceiling.
+            if (peak < 0.52) continue;
             vec3 dx = imageLoad(rgbImage, px1).rgb - imageLoad(rgbImage, px0).rgb;
             vec3 dy = imageLoad(rgbImage, py1).rgb - imageLoad(rgbImage, py0).rgb;
             float variation = max(rawrHighlightMaximum(abs(dx)), rawrHighlightMaximum(abs(dy))) / sum;

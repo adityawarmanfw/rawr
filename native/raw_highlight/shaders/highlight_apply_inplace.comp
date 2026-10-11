@@ -1,11 +1,11 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
 // Colour-propagation apply, in place on the preview image (RAWR_HL_SCALE 1).
-// Repairs exactly the pixels highlight_recover.comp repairs for stills: any
-// channel approaching its post-WB ceiling blends continuously into repair.
+// Repairs the same sensor-clipped channels as highlight_recover.comp.
+// Lens shading and WB cannot turn a valid channel into a clipped one.
 layout(local_size_x = 16, local_size_y = 16) in;
 layout(binding = 0, rgba16f) uniform image2D rgbImage;
-layout(binding = 1, r16ui) uniform readonly uimage2D clipStateImage;  // bound by the host; unused
+layout(binding = 1, r16ui) uniform readonly uimage2D clipStateImage;  // pre-LSC sensor clipping
 layout(binding = 2, rgba16f) uniform readonly image2D guideImage;
 layout(push_constant) uniform Pc {
     uint width;
@@ -21,14 +21,15 @@ void main() {
     ivec2 p = ivec2(gl_GlobalInvocationID.xy);
     if (p.x >= int(pc.width) || p.y >= int(pc.height)) return;
     vec4 original = imageLoad(rgbImage, p);
-    bool needs = pc.enabled != 0u &&
-                 rawrHighlightMaximum(rawrHighlightRepairWeights(original.rgb, pc.channelCeilings.rgb)) > 1e-6;
+    vec3 repair = rawrHighlightSensorRepair(p);
+    bool needs = pc.enabled != 0u && rawrHighlightMaximum(repair) > 0.0;
     if (!needs) return;
     vec4 guide = rawrHighlightGuideAt(p);
     bool normalizedValid;
     vec3 normalizedGuide = rawrHighlightNormalizeGuide(guide.rgb, normalizedValid);
-    vec3 recovered = rawrHighlightRecoverDetailSmoothed(
+    vec3 recovered = rawrHighlightRecoverDetailWithRepair(
         rawrHighlightSanitize(original.rgb), max(pc.channelCeilings.rgb, vec3(1e-4)), normalizedGuide,
-        normalizedValid && rawrHighlightSum(guide.rgb) > 1e-6, guide.a, 0.35);
+        normalizedValid && rawrHighlightSum(guide.rgb) > 1e-6, repair,
+        all(greaterThan(repair, vec3(0.5))) ? rawrHighlightCoreFraction(p) : 1.0);
     imageStore(rgbImage, p, vec4(rawrHighlightSanitize(recovered), original.a));
 }

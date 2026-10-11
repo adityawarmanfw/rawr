@@ -9,13 +9,13 @@
 layout(local_size_x = 16, local_size_y = 16) in;
 layout(binding = 0, rgba16f) uniform readonly image2D srcImage;
 layout(binding = 1, rgba16f) uniform writeonly image2D dstImage;
-layout(binding = 2, r16ui) uniform readonly uimage2D clipStateImage;  // bound by the host; unused
+layout(binding = 2, r16ui) uniform readonly uimage2D clipStateImage;  // pre-LSC sensor clipping
 layout(binding = 3, rgba16f) uniform readonly image2D guideImage;
 layout(push_constant) uniform Pc {
     uint width;
     uint height;
     uint enabled;
-    uint pad;
+    uint unalignedClipMask;  // distortion-resampled RGB uses the legacy numeric fallback
     vec4 channelCeilings;
 }
 pc;
@@ -32,8 +32,10 @@ void main() {
         return;
     }
     bool recoverDetail = pc.enabled != 0u;
-    bool needsGuide =
-        recoverDetail && rawrHighlightMaximum(rawrHighlightRepairWeights(original.rgb, pc.channelCeilings.rgb)) > 1e-6;
+    vec3 repair = pc.unalignedClipMask != 0u
+        ? rawrHighlightRepairWeights(original.rgb, pc.channelCeilings.rgb)
+        : rawrHighlightSensorRepair(p);
+    bool needsGuide = recoverDetail && rawrHighlightMaximum(repair) > 0.0;
     vec4 guide = needsGuide ? rawrHighlightGuideAt(p) : vec4(0.0);
     vec3 recovered;
     if (!recoverDetail) {
@@ -41,9 +43,10 @@ void main() {
     } else {
         bool normalizedValid;
         vec3 normalizedGuide = rawrHighlightNormalizeGuide(guide.rgb, normalizedValid);
-        recovered = rawrHighlightRecoverDetailSmoothed(
+        recovered = rawrHighlightRecoverDetailWithRepair(
             rawrHighlightSanitize(original.rgb), max(pc.channelCeilings.rgb, vec3(1e-4)), normalizedGuide,
-            normalizedValid && rawrHighlightSum(guide.rgb) > 1e-6, guide.a, 0.35);
+            normalizedValid && rawrHighlightSum(guide.rgb) > 1e-6, repair,
+        all(greaterThan(repair, vec3(0.5))) ? rawrHighlightCoreFraction(p) : 1.0);
         recovered = rawrHighlightSanitize(recovered);
     }
     imageStore(dstImage, p, vec4(recovered, original.a));

@@ -687,7 +687,9 @@ void PostDemosaicProcessor::record(VkCommandBuffer cmd, VkImage sourceImage, VkI
     // Make the WB-written predicate flag visible to the predicated guide
     // chain. The conditional-rendering stage bit is only valid when the
     // extension is enabled, hence the fallback stage for old devices.
-    const bool predicatedGuide = beginConditional_ != nullptr && endConditional_ != nullptr;
+    // The numeric WB predicate is conservative only without lens shading:
+    // gain below unity can hide a clipped sensor sample from that predicate.
+    const bool predicatedGuide = beginConditional_ != nullptr && endConditional_ != nullptr && !shading.valid();
     {
         auto predReady =
             predicatedGuide
@@ -711,7 +713,7 @@ void PostDemosaicProcessor::record(VkCommandBuffer cmd, VkImage sourceImage, VkI
     } else if (highlightRecoveryEnabled) {
         // Predicated when supported: highlight-free frames (flag word zero)
         // skip the whole chain. The recovery pass below still runs and
-        // provably reproduces the clamped input for such frames.
+        // reproduces the valid input for such frames.
         const rawr::highlight::GuideChain::Conditional conditional{beginConditional_, endConditional_, &condBegin};
         VkImageView finalGuide = guideChain_->record(cmd, wbImage_.view, clipStateView, width_, height_, gains.data(),
                                                      predicatedGuide ? &conditional : nullptr);
@@ -750,7 +752,7 @@ void PostDemosaicProcessor::record(VkCommandBuffer cmd, VkImage sourceImage, VkI
         uint32_t width, height, enabled, pad;
         float clipR, clipG, clipB, clipPad;
     } hp{width_, height_, preserveReconstructedHighlights ? 2u : (highlightRecoveryEnabled ? 1u : 0u),
-         0u, gains[0], gains[1], gains[2], 0.0f};
+         distortion.enabled ? 1u : 0u, gains[0], gains[1], gains[2], 0.0f};
     static_assert(sizeof(HlPc) == 32);
     if (timingPool) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, timingPool, 2);
     if (!highlightFused) {

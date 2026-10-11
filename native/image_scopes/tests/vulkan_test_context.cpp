@@ -251,12 +251,13 @@ void VulkanTestContext::invalidate(const Buffer& b, VkDeviceSize offset, VkDevic
 }
 
 RgbaImage VulkanTestContext::createRgbaImage(std::uint32_t width, std::uint32_t height, VkFormat format) const {
-    if (format != VK_FORMAT_R8G8B8A8_UNORM && format != VK_FORMAT_R16G16B16A16_SFLOAT)
+    if (format != VK_FORMAT_R8G8B8A8_UNORM && format != VK_FORMAT_R16G16B16A16_SFLOAT &&
+        format != VK_FORMAT_R16_UINT)
         throw std::invalid_argument("unsupported test image format");
     RgbaImage out{};
     out.width = width;
     out.height = height;
-    out.bytesPerPixel = format == VK_FORMAT_R16G16B16A16_SFLOAT ? 8u : 4u;
+    out.bytesPerPixel = format == VK_FORMAT_R16G16B16A16_SFLOAT ? 8u : format == VK_FORMAT_R16_UINT ? 2u : 4u;
     VkImageCreateInfo ci{};
     ci.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     ci.imageType = VK_IMAGE_TYPE_2D;
