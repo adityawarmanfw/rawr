@@ -132,9 +132,10 @@ void validateMetadata(const ProfileMetadata& metadata) {
     }
 }
 
-// RAWR NTRL look (tonemap/luts/rawr_ntrl.cube): sRGB in,
-// sRGB out, applied directly on the existing render like an imported
-// sRGB/sRGB profile, everywhere (preview, stills, replay, video). Parsed once; the chain is copied per tonemap build.
+// RAWR NTRL look (tonemap/luts/rawr_ntrl.cube): DaVinci Wide Gamut /
+// DaVinci Intermediate in, sRGB out, used directly as the render transform
+// from scene-linear, like an imported DWG/DI profile, everywhere (preview,
+// stills, replay, video). Parsed once; the chain is copied per tonemap build.
 const tonemap::lut::LutChain& rawrNtrlChain() {
     static const tonemap::lut::LutChain chain = [] {
 #pragma clang diagnostic push
@@ -147,7 +148,7 @@ const tonemap::lut::LutChain& rawrNtrlChain() {
         tonemap::lut::LutChain c{};
         c.placement = tonemap::lut::LutPlacement::RenderTransform;
         c.intensity = 1.0f;
-        c.inputSpace = {tonemap::color::Gamut::SRgbRec709, tonemap::color::TransferFunction::SRgb};
+        c.inputSpace = {tonemap::color::Gamut::DaVinciWideGamut, tonemap::color::TransferFunction::DaVinciIntermediate};
         c.outputSpace = {tonemap::color::Gamut::SRgbRec709, tonemap::color::TransferFunction::SRgb};
         c.afterAction = tonemap::lut::LutAfterAction::UseDirectly;
         c.stages.push_back(tonemap::lut::parseCube(in, 65));
