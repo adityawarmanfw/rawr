@@ -33,11 +33,24 @@ internal fun SettingsValues.editActiveProfileTone(edit: (ProfileTone) -> Profile
     if (isLogActive) return this
     if (regularRenderProfile() == ColorRenderProfile.SRgb) return copy(srgbTone = edit(srgbTone))
     if (regularRenderProfile() == ColorRenderProfile.Rec709) return copy(rec709Tone = edit(rec709Tone))
+    if (regularRenderProfile() == ColorRenderProfile.AgX) return copy(agxTone = edit(agxTone))
     val selected = selectedLutProfile()
     return if (selected == null) copy(rawrBaseTone = edit(rawrBaseTone)) else copy(
         userLutProfiles = userLutProfiles.map { if (it.id == selected.id) it.copy(tone = edit(it.tone)) else it }
     )
 }
+
+/** Edits the active AgX preset's control; ignored unless AgX is the active profile. */
+internal fun SettingsValues.withAgxValue(parameter: AgxParameter, value: Float): SettingsValues {
+    if (!isAgxActive() || !value.isFinite()) return this
+    val preset = regularAgxPreset()
+    val next = agxValuesFor(preset).with(parameter, AgxCatalog.spec(parameter).clamp(value))
+    return copy(agxValues = agxValues + (preset to next))
+}
+
+/** Restores the active AgX preset's control to the preset default. */
+internal fun SettingsValues.withAgxDefault(parameter: AgxParameter): SettingsValues =
+    withAgxValue(parameter, regularAgxPreset().defaults.valueOf(parameter))
 
 /** Commits only changed capture fields; unrelated settings edited by another screen are retained. */
 internal fun SettingsValues.withCapturePreferenceChanges(

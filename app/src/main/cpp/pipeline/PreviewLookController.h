@@ -35,6 +35,8 @@ class PreviewLookController final {
     void setTonemapParameters(float exposureEV, float blackPointEV, float shadowLiftEV, float midtoneLiftEV,
                               float contrast, float whitePointEV, float highlightBiasEV, float saturation,
                               float vibrance);
+    // values: tonemap_integration::kAgxControlCount AgX controls.
+    void setAgxParameters(uint32_t preset, const float* values);
     void setAssetManager(AAssetManager* assets) noexcept { assetManager_ = assets; }
     bool requestedFilmEnabled() const noexcept { return requestedFilmEnabled_; }
     const spektrafilm_native::FilmLook& filmLook() const noexcept { return filmLook_; }

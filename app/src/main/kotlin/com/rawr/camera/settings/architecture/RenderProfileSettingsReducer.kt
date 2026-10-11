@@ -8,7 +8,7 @@ internal fun reduceRenderProfileSettings(
 ): SettingsUiState {
     val v = state.values
     if (v.isLogActive) return state
-    if (action is SetColorRenderProfile && action.value !in listOf(ColorRenderProfile.RawrBase,
+    if (action is SetColorRenderProfile && action.value !in listOf(ColorRenderProfile.RawrBase, ColorRenderProfile.AgX,
             if (v.isVideo) ColorRenderProfile.Rec709 else ColorRenderProfile.SRgb)) return state
     val editing = if (v.isVideo) state.copy(values = v.copy(
         captureModeId = "photo", colorRenderProfile = v.videoColorRenderProfile,

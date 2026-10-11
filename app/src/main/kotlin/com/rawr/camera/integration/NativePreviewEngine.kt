@@ -269,6 +269,16 @@ class NativePreviewEngine {
 
     external fun setColorRenderProfile(handle: Long, profile: Int, importedLutProfileId: String)
 
+    external fun setAgxParameters(
+        handle: Long,
+        preset: Int,
+        whiteEv: Float,
+        shoulderPower: Float,
+        toePower: Float,
+        purity: Float,
+        preserveHue: Float
+    )
+
     external fun setTonemapParameters(
         handle: Long,
         exposureEV: Float,

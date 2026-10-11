@@ -12,13 +12,32 @@ const char* colorRenderProfileName(ColorRenderProfile profile) noexcept {
         case ColorRenderProfile::VLog: return "vlog";
         case ColorRenderProfile::FLog2C: return "flog2c";
         case ColorRenderProfile::DaVinciIntermediate: return "davinci_intermediate";
+        case ColorRenderProfile::AgX: return "agx";
+        case ColorRenderProfile::AgXRec709: return "agx_rec709";
     }
     return "unknown";
 }
 
 bool colorRenderProfileFromId(std::uint32_t id, ColorRenderProfile* out) noexcept {
-    if (!out || id > 8) return false;
+    if (!out || id > 10) return false;
     *out = static_cast<ColorRenderProfile>(id);
+    return true;
+}
+
+bool isAgxProfile(ColorRenderProfile profile) noexcept {
+    return profile == ColorRenderProfile::AgX || profile == ColorRenderProfile::AgXRec709;
+}
+
+bool agxFromControls(std::uint32_t preset, const float* values, tonemap::AgxParams* out) noexcept {
+    if (!values || !out || preset >= tonemap::kAgxPresetCount) return false;
+    tonemap::AgxParams p = tonemap::agxPreset(static_cast<tonemap::AgxPreset>(preset));
+    p.whiteEv = values[0];
+    p.shoulderPower = values[1];
+    p.toePower = values[2];
+    p.primaries.masterOutset = values[3];
+    p.preserveHue = values[4];
+    if (!tonemap::validAgx(p)) return false;
+    *out = p;
     return true;
 }
 
@@ -32,6 +51,13 @@ void applyRenderProfile(ColorRenderProfile profile, tonemap::TonemapParams& para
         case ColorRenderProfile::UserLut: return;
         case ColorRenderProfile::SRgb:
             params.renderTransform = RenderTransform::SRgb;
+            return;
+        case ColorRenderProfile::AgX:
+            params.renderTransform = RenderTransform::AgX;
+            return;
+        case ColorRenderProfile::AgXRec709:
+            params.renderTransform = RenderTransform::AgX;
+            params.outputSpace = {Gamut::SRgbRec709, TransferFunction::Rec709};
             return;
         case ColorRenderProfile::Rec709:
             params.renderTransform = RenderTransform::Rec709;

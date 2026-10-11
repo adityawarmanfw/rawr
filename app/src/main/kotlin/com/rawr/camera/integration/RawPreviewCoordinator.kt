@@ -477,7 +477,7 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
             jpegQuality,
             subsampling,
             pipelineDiagnosticsEnabled,
-            colorRenderProfile.ordinal,
+            colorRenderProfile.nativeId,
             importedLutProfileId,
             rendererDisplayName,
             demosaic,
@@ -563,7 +563,7 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
             jpegQuality,
             subsampling,
             pipelineDiagnosticsEnabled,
-            colorRenderProfile.ordinal,
+            colorRenderProfile.nativeId,
             importedLutProfileId,
             rendererDisplayName,
             demosaic,
@@ -665,7 +665,13 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
         postNative { native.setColorRenderProfile(nativeHandle, profile, importedLutProfileId.orEmpty()) }
 
     fun setColorRenderProfile(profile: ColorRenderProfile, importedLutProfileId: String?) =
-        postNative { native.setColorRenderProfile(nativeHandle, profile.ordinal, importedLutProfileId.orEmpty()) }
+        postNative { native.setColorRenderProfile(nativeHandle, profile.nativeId, importedLutProfileId.orEmpty()) }
+
+    fun setAgxParameters(preset: com.rawr.camera.settings.model.AgxPreset, values: com.rawr.camera.settings.model.AgxValues) =
+        postNative {
+            native.setAgxParameters(nativeHandle, preset.nativeId, values.whiteEv, values.shoulderPower,
+                values.toePower, values.purity, values.preserveHue)
+        }
 
     fun setTonemapParameters(tone: com.rawr.camera.model.ImageToneState) {
         val contract = com.rawr.camera.model.TonemapControlContract

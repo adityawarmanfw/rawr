@@ -21,6 +21,7 @@ class NativeCaptureScreenController(
     private val pollStillCompletion: () -> List<StillCaptureCoordinator.CompletionEvent>,
     private val onToneScrubbed: (ToneParameter, Int) -> Unit = { _, _ -> },
     private val onRenderExposureScrubbed: (Int) -> Unit = {},
+    private val onAgxControl: (com.rawr.camera.settings.model.AgxParameter, Float?) -> Unit = { _, _ -> },
     private val onCapturePreferencesChanged: (CaptureUiState, CaptureUiState) -> Unit = { _, _ -> },
     private val videoLocked: () -> Boolean = { false },
     private val onRawCpuIngress: () -> Unit = {},
@@ -78,7 +79,7 @@ class NativeCaptureScreenController(
     override fun dispatch(action: CaptureAction) {
         if (videoLocked() && (action is SetCaptureMode || action is ToggleVideoLog ||
                 action is CycleVideoResolution || action is CycleVideoFps)) return
-        if ((action is ScrubTone || action is ScrubRenderExposure) &&
+        if ((action is ScrubTone || action is ScrubRenderExposure || action is SetAgxControl) &&
             state.value.captureMode == CaptureMode.Video && state.value.videoLogEnabled) return
         when (action) {
             is PresentationCaptureAction -> {
@@ -145,6 +146,9 @@ class NativeCaptureScreenController(
                     )
                 }
             }
+
+            // Persisted by CaptureViewModel; LiveTonemapState applies it natively.
+            is SetAgxControl -> onAgxControl(action.parameter, action.value)
 
             is ScrubRenderExposure -> {
                 val next = CaptureTransitions.scrubRenderExposure(state.value, action.deltaTenths)

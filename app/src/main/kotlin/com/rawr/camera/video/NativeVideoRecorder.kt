@@ -92,7 +92,11 @@ class NativeVideoRecorder(private val context: Context, private val preview: Raw
                         val renderProfileId: Int = 0,
                         val logProfile: com.rawr.camera.settings.model.VideoLogProfile? = null,
                         val timestampPolicy: VideoTimestampPolicy = VideoTimestampPolicy.REALTIME,
-                        val saveLocationId: String = "storage.dcim_camera")
+                        val saveLocationId: String = "storage.dcim_camera") {
+        /** Rec.709 and AgX (video) write BT.709; other display profiles write sRGB. */
+        val rec709: Boolean get() = renderProfileId == com.rawr.camera.settings.model.ColorRenderProfile.Rec709.nativeId ||
+            renderProfileId == com.rawr.camera.settings.model.ColorRenderProfile.AGX_REC709_NATIVE_ID
+    }
 
     private val engine = NativeAvEngine()
     private val outputStore = VideoOutputStore(context)
@@ -144,7 +148,7 @@ class NativeVideoRecorder(private val context: Context, private val preview: Raw
                 request.timestampPolicy.nativeId, Build.MANUFACTURER.orEmpty(), Build.MODEL.orEmpty(),
                 "RAWR ${BuildConfig.VERSION_NAME}", request.renderProfile,
                 request.logProfile?.gamut?.label ?: "Rec.709 / sRGB",
-                request.logProfile?.transfer?.label ?: if (request.renderProfileId == 3) "BT.709" else "sRGB",
+                request.logProfile?.transfer?.label ?: if (request.rec709) "BT.709" else "sRGB",
                 request.logProfile != null)
             check(handle != 0L) { "Native recorder did not start" }
             surface = engine.nativeSurface(handle)
@@ -164,7 +168,7 @@ class NativeVideoRecorder(private val context: Context, private val preview: Raw
                 .put("renderProfile", request.renderProfile).put("renderProfileId", request.renderProfileId)
                 .put("logProfile", request.logProfile?.name)
                 .put("gamut", request.logProfile?.gamut?.name ?: "SRgbRec709")
-                .put("transfer", request.logProfile?.transfer?.name ?: if (request.renderProfileId == 3) "Rec709" else "SRgb")
+                .put("transfer", request.logProfile?.transfer?.name ?: if (request.rec709) "Rec709" else "SRgb")
                 .put("timestampPolicy", request.timestampPolicy.name)
                 .put("processing", preview.videoImageSettingsSnapshot()?.toJson()))
         } catch (error: Throwable) {

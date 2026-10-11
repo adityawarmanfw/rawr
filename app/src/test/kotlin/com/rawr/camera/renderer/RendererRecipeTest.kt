@@ -13,4 +13,18 @@ class RendererRecipeTest {
         assertEquals(values.srgbTone, decoded.activeProfileTone())
         assertEquals("photo", decoded.captureModeId)
     }
+
+    @Test fun agxRecipeRetainsPresetControlsAndTone() {
+        val values = SettingsCatalog.initialState().values.copy(
+            colorRenderProfile = ColorRenderProfile.AgX,
+            agxPreset = AgxPreset.Sigmoid,
+            agxValues = mapOf(AgxPreset.Sigmoid to AgxPreset.Sigmoid.defaults.copy(whiteEv = 8.5f, purity = 0.4f)),
+            agxTone = ProfileTone(highlights = -40f))
+        val library = SettingsCatalog.initialState().values
+        val decoded = RendererRecipe.decode(RendererRecipe.encode(values), library)
+        assertEquals(ColorRenderProfile.AgX, decoded.colorRenderProfile)
+        assertEquals(AgxPreset.Sigmoid, decoded.agxPreset)
+        assertEquals(values.activeAgxValues(), decoded.activeAgxValues())
+        assertEquals(values.agxTone, decoded.activeProfileTone())
+    }
 }

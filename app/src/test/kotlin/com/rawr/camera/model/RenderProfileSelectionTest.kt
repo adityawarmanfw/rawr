@@ -14,9 +14,9 @@ class RenderProfileSelectionTest {
 
     @Test fun catalogsAndSelectionsAreIndependent() {
         val photo = defaults.withRenderProfile(builtIn(ColorRenderProfile.SRgb))
-        assertEquals(listOf("RAWR NTRL", "sRGB"), photo.toRenderProfileQuickState().options.map { it.label })
+        assertEquals(listOf("RAWR NTRL", "AgX", "AgX Blender", "AgX Punchy", "AgX Sigmoid", "AgX Smooth", "sRGB"), photo.toRenderProfileQuickState().options.map { it.label })
         val video = photo.copy(captureModeId = "video").withRenderProfile(builtIn(ColorRenderProfile.Rec709))
-        assertEquals(listOf("RAWR NTRL", "Rec.709"), video.toRenderProfileQuickState().options.map { it.label })
+        assertEquals(listOf("RAWR NTRL", "AgX", "AgX Blender", "AgX Punchy", "AgX Sigmoid", "AgX Smooth", "Rec.709"), video.toRenderProfileQuickState().options.map { it.label })
         assertEquals(ColorRenderProfile.SRgb, video.copy(captureModeId = "photo").regularRenderProfile())
         assertEquals(video, video.withRenderProfile(builtIn(ColorRenderProfile.SRgb)))
         assertEquals(photo, photo.withRenderProfile(builtIn(ColorRenderProfile.Rec709)))
@@ -34,6 +34,32 @@ class RenderProfileSelectionTest {
         assertEquals(ProfileTone.Neutral, log.activeProfileTone())
         assertEquals(log, log.editActiveProfileTone { it.copy(contrast = 99f) })
         assertEquals(-30f, log.copy(videoLogEnabled = false).activeProfileTone().contrast)
+    }
+
+    @Test fun agxPresetsAreSeparateSelectionsWithOwnControls() {
+        val photo = defaults.withRenderProfile(RenderProfileSelection.Agx(AgxPreset.Smooth))
+        assertEquals(ColorRenderProfile.AgX, photo.colorRenderProfile)
+        assertEquals(RenderProfileSelection.Agx(AgxPreset.Smooth), photo.toRenderProfileQuickState().selectedId)
+        assertEquals(AgxPreset.Smooth.defaults, photo.toRenderProfileQuickState().agx?.values)
+        assertEquals("AgX Smooth", photo.activeProfileLabel())
+        // Stills write sRGB (native 9); video writes Rec.709 (native 10).
+        assertEquals(9, photo.effectiveRenderProfileId())
+        val video = photo.copy(captureModeId = "video").withRenderProfile(RenderProfileSelection.Agx(AgxPreset.BlenderPunchy))
+        assertEquals(10, video.effectiveRenderProfileId())
+        assertEquals(AgxPreset.Smooth, video.agxPreset)
+        // Controls are per preset, clamped, and reset to the preset default.
+        val edited = photo.withAgxValue(AgxParameter.WhiteEv, 99f).withAgxValue(AgxParameter.Purity, 0.5f)
+        assertEquals(AgxCatalog.whiteEv.maximum, edited.activeAgxValues().whiteEv)
+        assertEquals(AgxPreset.Default.defaults, edited.agxValuesFor(AgxPreset.Default))
+        assertTrue(edited.toRenderProfileQuickState().agx!!.modified)
+        assertEquals(0f, edited.withAgxDefault(AgxParameter.Purity).activeAgxValues().purity)
+        // AgX keeps its own TONE set; edits are ignored on other profiles.
+        val toned = edited.editActiveProfileTone { it.copy(contrast = 12f) }
+        assertEquals(12f, toned.agxTone.contrast)
+        assertEquals(ProfileTone.Neutral, toned.rawrBaseTone)
+        val ntrl = toned.withRenderProfile(builtIn(ColorRenderProfile.RawrBase))
+        assertNull(ntrl.toRenderProfileQuickState().agx)
+        assertEquals(ntrl, ntrl.withAgxValue(AgxParameter.ToePower, 2f))
     }
 
     @Test fun logCatalogAndRememberedSelection() {

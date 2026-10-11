@@ -183,14 +183,25 @@ internal object RendererRecipe {
                 LutGamut.valueOf(p.getString("outputGamut")), LutTransfer.valueOf(p.getString("outputTransfer")),
                 AfterLutAction.valueOf(p.getString("afterLut")), profileTone)
         }
+        // AgX recipes carry their preset and the five controls (defaults fill gaps).
+        val agx = j.optJSONObject("agx")?.let { a ->
+            val preset = AgxPreset.entries.firstOrNull { it.name == a.optString("preset") } ?: AgxPreset.Default
+            preset to AgxCatalog.sanitized(AgxCatalog.all.fold(preset.defaults) { acc, spec ->
+                acc.with(spec.parameter, a.optDouble(spec.jsonKey, acc.valueOf(spec.parameter).toDouble()).toFloat())
+            }, preset.defaults)
+        }
         val profile = when {
             j.optString("colorRenderProfile") == ColorRenderProfile.SRgb.name -> ColorRenderProfile.SRgb
+            j.optString("colorRenderProfile") == ColorRenderProfile.AgX.name -> ColorRenderProfile.AgX
             selected != null -> ColorRenderProfile.UserLut
             else -> ColorRenderProfile.RawrBase
         }
         return d.copy(imageTone = tone,
             colorRenderProfile = profile,
             srgbTone = if (profile == ColorRenderProfile.SRgb) profileTone else d.srgbTone,
+            agxTone = if (profile == ColorRenderProfile.AgX) profileTone else d.agxTone,
+            agxPreset = agx?.first ?: d.agxPreset,
+            agxValues = agx?.let { d.agxValues + it } ?: d.agxValues,
             rawrBaseTone = if (profile == ColorRenderProfile.RawrBase) profileTone else d.rawrBaseTone,
             filmSimEnabled = j.optBoolean("filmSimEnabled"), filmSimLook = film,
             selectedUserLutProfileId = selected.takeIf { profile == ColorRenderProfile.UserLut },

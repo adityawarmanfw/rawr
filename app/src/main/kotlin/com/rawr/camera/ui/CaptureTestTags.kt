@@ -95,5 +95,7 @@ object CaptureTestTags {
 
     fun renderProfile(id: String): String = "capture_render_profile_$id"
 
+    fun tonemapSection(key: String): String = "capture_tonemap_section_$key"
+
     fun toneScrub(label: String): String = "capture_tone_scrub_$label"
 }

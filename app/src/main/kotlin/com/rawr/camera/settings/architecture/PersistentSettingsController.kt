@@ -52,6 +52,11 @@ class PersistentSettingsController(
             is DeleteUserLutProfile, is SetUserLutInputGamut, is SetUserLutInputTransfer,
             is SetUserLutOutputGamut, is SetUserLutOutputTransfer, is SetUserLutAfterAction -> reduceRenderProfileSettings(state, action)
 
+            is SetAgxPreset -> state.withValues(state.values.withRenderProfile(
+                com.rawr.camera.model.RenderProfileSelection.Agx(action.preset)))
+            is SetAgxValue -> state.withValues(state.values.withAgxValue(action.parameter, action.value))
+            is ResetAgxValue -> state.withValues(state.values.withAgxDefault(action.parameter))
+
             is SetFilmSimEnabled, is SetFilmSimNumericValue,
             is SetFilmSimDiscreteValue, is SetFilmSimFlag, is SelectFilmPreset,
             is SaveFilmPreset, is RenameFilmPreset, is DeleteFilmPreset,

@@ -42,16 +42,27 @@ internal fun ImageToneSettings(
                 if (state.values.isLogActive) {
                     SettingsRow(state.values.videoLogProfile.label)
                 } else {
-                    listOf(ColorRenderProfile.RawrBase,
-                        if (state.values.isVideo) ColorRenderProfile.Rec709 else ColorRenderProfile.SRgb
-                    ).forEach { profile ->
+                    SettingsSelectionRow(
+                        title = ColorRenderProfile.RawrBase.label,
+                        selected = state.values.regularRenderProfile() == ColorRenderProfile.RawrBase,
+                        testTag = SettingsTestTags.row("ImageTone", "profile_rawr_ntrl"),
+                        onClick = { dispatch.invoke(SetColorRenderProfile(ColorRenderProfile.RawrBase)) }
+                    )
+                    AgxPreset.entries.forEach { preset ->
                         SettingsSelectionRow(
-                            title = profile.label,
-                            selected = state.values.regularRenderProfile() == profile,
-                            testTag = SettingsTestTags.row("ImageTone", if (profile == ColorRenderProfile.RawrBase) "profile_rawr_ntrl" else "profile_${profile.name}"),
-                            onClick = { dispatch.invoke(SetColorRenderProfile(profile)) }
+                            title = preset.label,
+                            selected = state.values.isAgxActive() && state.values.regularAgxPreset() == preset,
+                            testTag = SettingsTestTags.row("ImageTone", "profile_agx_${preset.name}"),
+                            onClick = { dispatch.invoke(SetAgxPreset(preset)) }
                         )
                     }
+                    val display = if (state.values.isVideo) ColorRenderProfile.Rec709 else ColorRenderProfile.SRgb
+                    SettingsSelectionRow(
+                        title = display.label,
+                        selected = state.values.regularRenderProfile() == display,
+                        testTag = SettingsTestTags.row("ImageTone", "profile_${display.name}"),
+                        onClick = { dispatch.invoke(SetColorRenderProfile(display)) }
+                    )
                 }
                 if (!state.values.isLogActive) state.values.userLutProfiles.forEach { profile ->
                     SettingDivider()
@@ -74,6 +85,31 @@ internal fun ImageToneSettings(
                 if (!state.values.isLogActive) SettingsRow("Import LUT", leadingIcon = Icons.Rounded.Add, onClick = {
                     onImportLut(null)
                 })
+            }
+        }
+        if (state.values.isAgxActive()) item {
+            val preset = state.values.regularAgxPreset()
+            val values = state.values.activeAgxValues()
+            SettingsGroup(
+                title = "AgX — ${preset.label}",
+                description = "Stored per AgX preset. The tone controls below still apply after AgX."
+            ) {
+                AgxCatalog.all.forEachIndexed { index, spec ->
+                    if (index > 0) SettingDivider()
+                    StandaloneNumericSliderRow(
+                        identity = "agx_${spec.parameter.name}",
+                        label = spec.longLabel,
+                        minimum = spec.minimum,
+                        maximum = spec.maximum,
+                        step = spec.step,
+                        decimals = spec.valueDecimals,
+                        value = values.valueOf(spec.parameter),
+                        defaultValue = preset.defaults.valueOf(spec.parameter),
+                        valueFormatter = spec::format,
+                        dimDisabledText = false,
+                        onValueChange = { dispatch.invoke(SetAgxValue(spec.parameter, it)) }
+                    )
+                }
             }
         }
         if (!state.values.isLogActive) item {

@@ -20,6 +20,8 @@ import com.rawr.camera.settings.architecture.SetFilmSimFlag
 import com.rawr.camera.settings.architecture.SetFilmSimNumericValue
 import com.rawr.camera.settings.architecture.capturePreferences
 import com.rawr.camera.settings.architecture.editActiveProfileTone
+import com.rawr.camera.settings.architecture.withAgxDefault
+import com.rawr.camera.settings.architecture.withAgxValue
 import com.rawr.camera.settings.architecture.withCapturePreferenceChanges
 import com.rawr.camera.settings.architecture.withFilmDiscrete
 import com.rawr.camera.settings.architecture.withFilmFlag
@@ -94,6 +96,7 @@ class CaptureViewModel(application: Application) : AndroidViewModel(application)
             pollStillCompletion = stillCaptureCoordinator::pollCompletion,
             onToneScrubbed = { parameter, value -> persistQuickTone(parameter, value) },
             onRenderExposureScrubbed = ::persistRenderExposure,
+            onAgxControl = ::persistAgxControl,
             videoLocked = { videoSelectionLocked() },
             onRawCpuIngress = {
                 android.os.Handler(android.os.Looper.getMainLooper()).post {
@@ -226,6 +229,12 @@ class CaptureViewModel(application: Application) : AndroidViewModel(application)
     private fun persistQuickTone(parameter: ToneParameter, value: Int) {
         settingsEditor.update { current ->
             current.editActiveProfileTone { it.withToneParameter(parameter, value.coerceIn(-100, 100).toFloat()) }
+        }
+    }
+
+    private fun persistAgxControl(parameter: com.rawr.camera.settings.model.AgxParameter, value: Float?) {
+        settingsEditor.update { current ->
+            if (value == null) current.withAgxDefault(parameter) else current.withAgxValue(parameter, value)
         }
     }
 

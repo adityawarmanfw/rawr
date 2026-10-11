@@ -69,6 +69,13 @@ data class SetColorRenderProfile(val value: ColorRenderProfile) : SettingsApplic
 
 data class SelectUserLutProfile(val profileId: String) : SettingsApplicationAction
 
+/** Selects the AgX render profile with this preset. */
+data class SetAgxPreset(val preset: AgxPreset) : SettingsApplicationAction
+
+data class SetAgxValue(val parameter: AgxParameter, val value: Float) : SettingsApplicationAction
+
+data class ResetAgxValue(val parameter: AgxParameter) : SettingsApplicationAction
+
 data class ImportLutStage(val targetProfileId: String?, val stage: ImportedLutStage) : SettingsApplicationAction
 
 data class RenameUserLutProfile(val profileId: String, val name: String) : SettingsApplicationAction

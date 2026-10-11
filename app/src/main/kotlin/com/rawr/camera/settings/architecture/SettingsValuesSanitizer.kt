@@ -116,6 +116,8 @@ internal fun sanitizeSettingsValues(persisted: SettingsValues, defaults: Setting
             rawrBaseTone = cleanRawrBase,
             srgbTone = validProfileTone(persisted.srgbTone, ProfileTone.Neutral),
             rec709Tone = validProfileTone(persisted.rec709Tone, ProfileTone.Neutral),
+            agxTone = validProfileTone(persisted.agxTone, ProfileTone.Neutral),
+            agxValues = persisted.agxValues.mapValues { (preset, values) -> AgxCatalog.sanitized(values, preset.defaults) },
             colorRenderProfile = persisted.colorRenderProfile.takeUnless { it == ColorRenderProfile.Rec709 } ?: ColorRenderProfile.RawrBase,
             videoColorRenderProfile = persisted.videoColorRenderProfile.takeUnless { it == ColorRenderProfile.SRgb } ?: ColorRenderProfile.RawrBase,
             userLutProfiles = cleanProfiles,

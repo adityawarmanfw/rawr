@@ -96,6 +96,8 @@ void setColorRenderProfile(EngineHandle handle, uint32_t profile, std::string im
 void setTonemapParameters(EngineHandle handle, float exposureEV, float blackPointEV, float shadowLiftEV,
                           float midtoneLiftEV, float contrast, float whitePointEV, float highlightBiasEV,
                           float saturation, float vibrance) noexcept;
+// values: tonemap_integration::kAgxControlCount AgX controls.
+void setAgxParameters(EngineHandle handle, uint32_t preset, const float* values) noexcept;
 void setAssetManager(EngineHandle handle, AAssetManager* assetManager) noexcept;
 void setFilmSimEnabled(EngineHandle handle, bool enabled) noexcept;
 void setViewfinderDivisor(EngineHandle handle, uint32_t divisor) noexcept;

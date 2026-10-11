@@ -208,11 +208,20 @@ enum class AutoKeyExposure(val label: String, val summary: String, val nativeId:
     Strong("Strong", "Lifts shadows up to 3 EV", 2)
 }
 
-enum class ColorRenderProfile(val label: String) {
-    RawrBase("RAWR NTRL"),
-    UserLut("Imported LUT"),
-    SRgb("sRGB"),
-    Rec709("Rec.709")
+/** [nativeId] matches tonemap_integration::ColorRenderProfile; ids 4-8 are the LOG profiles. */
+enum class ColorRenderProfile(val label: String, val nativeId: Int) {
+    RawrBase("RAWR NTRL", 0),
+    UserLut("Imported LUT", 1),
+    SRgb("sRGB", 2),
+    Rec709("Rec.709", 3),
+    AgX("AgX", 9);
+
+    /** AgX writes sRGB for stills and Rec.709 for video (native id 10). */
+    fun nativeIdFor(video: Boolean): Int = if (this == AgX && video) AGX_REC709_NATIVE_ID else nativeId
+
+    companion object {
+        const val AGX_REC709_NATIVE_ID = 10
+    }
 }
 
 enum class LutGamut(val label: String, val nativeId: Int) {
@@ -910,6 +919,12 @@ data class SettingsValues(
     val rawrBaseTone: ProfileTone = ProfileTone.Neutral,
     val srgbTone: ProfileTone = ProfileTone.Neutral,
     val rec709Tone: ProfileTone = ProfileTone.Neutral,
+    /** AgX's TONE set, shared by its presets; each preset keeps its own [agxValues]. */
+    val agxTone: ProfileTone = ProfileTone.Neutral,
+    val agxPreset: AgxPreset = AgxPreset.Default,
+    val videoAgxPreset: AgxPreset = AgxPreset.Default,
+    /** Edited AgX controls per preset; a missing preset uses its defaults. */
+    val agxValues: Map<AgxPreset, AgxValues> = emptyMap(),
     val videoColorRenderProfile: ColorRenderProfile = ColorRenderProfile.RawrBase,
     val videoUserLutProfileId: String? = null,
     val videoLogEnabled: Boolean = false,
@@ -993,7 +1008,12 @@ data class SettingsValues(
     fun regularRenderProfile(): ColorRenderProfile = if (isVideo) videoColorRenderProfile else colorRenderProfile
     fun regularLutProfileId(): String? = if (isVideo) videoUserLutProfileId else selectedUserLutProfileId
     fun effectiveVideoBitDepth(): Int = if (videoLogEnabled) 10 else videoEncoder.sanitized().bitDepth
-    fun effectiveRenderProfileId(): Int = if (isLogActive) videoLogProfile.nativeId else regularRenderProfile().ordinal
+    fun effectiveRenderProfileId(): Int =
+        if (isLogActive) videoLogProfile.nativeId else regularRenderProfile().nativeIdFor(isVideo)
+    fun regularAgxPreset(): AgxPreset = if (isVideo) videoAgxPreset else agxPreset
+    fun agxValuesFor(preset: AgxPreset): AgxValues = agxValues[preset] ?: preset.defaults
+    fun activeAgxValues(): AgxValues = agxValuesFor(regularAgxPreset())
+    fun isAgxActive(): Boolean = !isLogActive && regularRenderProfile() == ColorRenderProfile.AgX
 
     fun captureRendererDisplayName(): String = activeProfileLabel()
 
@@ -1013,6 +1033,7 @@ data class SettingsValues(
         isLogActive -> ProfileTone.Neutral
         regularRenderProfile() == ColorRenderProfile.SRgb -> srgbTone
         regularRenderProfile() == ColorRenderProfile.Rec709 -> rec709Tone
+        regularRenderProfile() == ColorRenderProfile.AgX -> agxTone
         else -> selectedLutProfile()?.tone ?: rawrBaseTone
     }
 
@@ -1020,8 +1041,11 @@ data class SettingsValues(
         acc.withValue(descriptor, activeProfileTone().valueFor(descriptor))
     }
 
-    fun activeProfileLabel(): String = if (isLogActive) videoLogProfile.label
-        else selectedLutProfile()?.name?.takeIf { it.isNotBlank() } ?: regularRenderProfile().label
+    fun activeProfileLabel(): String = when {
+        isLogActive -> videoLogProfile.label
+        isAgxActive() -> regularAgxPreset().label
+        else -> selectedLutProfile()?.name?.takeIf { it.isNotBlank() } ?: regularRenderProfile().label
+    }
 
     /** Copy of [ProfileTone] derived from the legacy global tone (v22 migration source). */
     fun profileToneFromLegacyImageTone(): ProfileTone = ProfileTone(
