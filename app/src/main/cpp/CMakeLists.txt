@@ -262,7 +262,7 @@ set(GAINMAP_BUILD_VULKAN ON CACHE BOOL "" FORCE)
 add_subdirectory(../../../../native/gainmap ${CMAKE_CURRENT_BINARY_DIR}/gainmap)
 set(GAINMAP_SHADER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../native/gainmap/shaders)
 set(EMBED_FLAGS_gainmap --target-env=vulkan1.1 -O)
-embed_shader(gainmap ${GAINMAP_SHADER_DIR}/gainmap.comp gainmap_spv)
+embed_shader(gainmap ${GAINMAP_SHADER_DIR}/gainmap.comp gainmap_spv ${RAWR_SHADER_COMMON_DIR}/adaptive_tone.glsl)
 set(EMBED_FLAGS_gainmap_blur --target-env=vulkan1.1 -O)
 embed_shader(gainmap_blur ${GAINMAP_SHADER_DIR}/gainmap_blur.comp gainmap_blur_spv)
 

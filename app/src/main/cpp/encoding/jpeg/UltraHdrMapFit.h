@@ -151,6 +151,8 @@ inline bool fitAndRemapMap(const unsigned char* src, std::uint32_t w, std::uint3
 }
 
 // Restore capture highlight chromaticity at the already-fitted luminance.
+// The capture colour is highlight recovery's output (the HDR tap); this only
+// carries it through an SDR base that rendered it white.
 // The SDR base and the brightness fit are immutable. Negative per-channel
 // gains are necessary to restore color through a pale/white SDR highlight;
 // they do not mean that shadow or midtone exposure is being lowered.
@@ -178,8 +180,11 @@ inline bool restoreHighlightColor(std::vector<unsigned char>& map, const unsigne
             g[k] = float(map[i * 4 + k]) / 255 * fittedMax;
             original[k] = (s[k] + uh.offsetSdr) * boost[map[i * 4 + k]] - uh.offsetHdr;
         }
-        const float sy = .2126f * s[0] + .7152f * s[1] + .0722f * s[2];
-        float t = std::clamp((sy - .18f) / .32f, 0.0f, 1.0f);
+        // Restore only where the SDR lost colour: channels pressed against
+        // white. A brightness ramp would also recolour well-exposed SDR
+        // highlights and draw a ring at the ramp's onset.
+        const float smax = std::max(s[0], std::max(s[1], s[2]));
+        float t = std::clamp((smax - .75f) / .20f, 0.0f, 1.0f);
         t = t * t * (3 - 2 * t);
         if (t == 0) return;
         const auto* c = chromaticity + i * 4;

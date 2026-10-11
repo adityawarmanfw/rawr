@@ -84,6 +84,13 @@ struct GainmapParams {
     // 0xffffffff means no usable HDR color. The upper plane remains the
     // ordinary wide-range map; blur only touches that plane. Not JPEG data.
     bool writeHdrChromaticity = false;
+    // The SDR render's adaptive tone curve (tonemap/AdaptiveTone.h: lift,
+    // key, highlight EV), applied to the HDR tap as the same luminance gain
+    // so the map encodes headroom only, never an inverse of the shadow lift.
+    // adaptiveToneLumaScale maps the exposed HDR tap's AP1 luminance into the
+    // curve's coordinates (aePostGain / hdrExposure). liftEv 0 = off.
+    float adaptiveTone[3] = {0.0f, -4.0f, 0.0f};
+    float adaptiveToneLumaScale = 1.0f;
     // Row-major 3x3 HDR-input -> linear-sRGB. The HDR input is white-balanced
     // camera RGB, so this must be the calibrated camera->linear-sRGB matrix,
     // supplied per capture (see RenderedStillContext::gainmapCstRowMajor).

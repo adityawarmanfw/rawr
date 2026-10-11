@@ -263,6 +263,16 @@ GainmapRecording recordGainmapAndReadback(RenderResources& resources, RenderComm
         gri.params = rendered.gainmapParams;
         gri.params.writeHdrChromaticity =
             resources.gainmapStorageHeight() == 2u * resources.outputView().gainmapHeight;
+        // The SDR base carries the adaptive tone lift (tonemap or film
+        // exposure stage); give the HDR tap the same luminance gain. Both
+        // stages evaluate the curve at Y * aePostGain of the unexposed input.
+        const auto& adaptive = rendered.tonemapParams.adaptiveTone;
+        if (rendered.filmEnabled || rendered.tonemapParams.renderTransform != tonemap::RenderTransform::Log) {
+            gri.params.adaptiveTone[0] = adaptive.liftEv;
+            gri.params.adaptiveTone[1] = adaptive.keyEv;
+            gri.params.adaptiveTone[2] = adaptive.highlightEv;
+            gri.params.adaptiveToneLumaScale = rendered.tonemapParams.aePostGain / gri.params.hdrExposure;
+        }
         gainmapClipUsed = gri.clip.view != VK_NULL_HANDLE;
         gainmapClipBoost = gri.params.clipBoost;
         // HDR pixels are camera RGB: the calibrated matrix wins over

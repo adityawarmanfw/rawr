@@ -34,9 +34,10 @@ struct Push {
     float glowStrength;
     float glowMax;
     float hdrToLinearSrgb[9];
-    uint32_t fullRes;
-    uint32_t writeHdrChromaticity;
+    uint32_t flags;
+    float adaptiveTone[3];
 };
+static_assert(sizeof(Push) == 128, "gain map push constants must fit the 128-byte minimum");
 
 struct BlurPush {
     uint32_t width;
@@ -468,6 +469,11 @@ bool GainmapCompute::validateParams(const GainmapParams& p, const char** reason)
     if (!(p.hdrCapacityMin >= 0.0f)) return fail("gainmap: hdrCapacityMin must be >= 0");
     for (int i = 0; i < 9; ++i)
         if (!std::isfinite(p.hdrToLinearSrgbRowMajor[i])) return fail("gainmap: hdrToLinearSrgb must be finite");
+    if (!(p.adaptiveToneLumaScale > 0.0f) || !std::isfinite(p.adaptiveToneLumaScale))
+        return fail("gainmap: adaptiveToneLumaScale must be finite and > 0");
+    if (!(p.adaptiveTone[0] >= 0.0f) || !std::isfinite(p.adaptiveTone[0]) || !std::isfinite(p.adaptiveTone[1]) ||
+        !std::isfinite(p.adaptiveTone[2]))
+        return fail("gainmap: adaptiveTone must be finite with lift >= 0");
     return true;
 }
 
@@ -547,8 +553,13 @@ void GainmapCompute::record(const GainmapRecordInfo& ri) {
     push.useGlow = useGlow ? 1u : 0u;
     push.glowStrength = ri.params.glowStrength;
     push.glowMax = ri.params.glowMax;
-    push.fullRes = ri.params.fullResMap ? 1u : 0u;
-    push.writeHdrChromaticity = ri.params.writeHdrChromaticity ? 1u : 0u;
+    push.flags = (ri.params.fullResMap ? 1u : 0u) | (ri.params.writeHdrChromaticity ? 2u : 0u);
+    // Shift the curve anchors into the exposed tap's luminance so the shader
+    // needs no separate scale: log2(y * s) vs EV  <=>  log2(y) vs EV - log2(s).
+    const float toneShift = std::log2(ri.params.adaptiveToneLumaScale);
+    push.adaptiveTone[0] = ri.params.adaptiveTone[0];
+    push.adaptiveTone[1] = ri.params.adaptiveTone[1] - toneShift;
+    push.adaptiveTone[2] = ri.params.adaptiveTone[2] - toneShift;
     const float* m = ri.hdrToLinearSrgbRowMajor3x3 != nullptr ? ri.hdrToLinearSrgbRowMajor3x3
                                                               : ri.params.hdrToLinearSrgbRowMajor;
     std::memcpy(push.hdrToLinearSrgb, m, sizeof(push.hdrToLinearSrgb));

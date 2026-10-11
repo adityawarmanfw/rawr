@@ -74,7 +74,7 @@ int main() {
     // shadows/mids keep the fitted brightness, including the scene lift.
     {
         using rawrcam::encoding::jpeg::restoreHighlightColor;
-        std::vector<unsigned char> b = {0,0,0,255, 80,80,80,255, 240,240,240,255, 240,240,240,255};
+        std::vector<unsigned char> b = {0,0,0,255, 80,80,80,255, 250,250,250,255, 250,250,250,255};
         const auto savedBase = b;
         std::vector<unsigned char> m(16, 128), color(16, 0);
         for (int i = 0; i < 4; ++i) {
@@ -108,7 +108,7 @@ int main() {
         using rawrcam::encoding::jpeg::restoreHighlightColor;
         const float colors[][3] = {{1,1,1}, {1,.65f,.45f}, {1,0,0}, {0,1,0},
                                    {0,0,1}, {1,1,0}, {0,1,1}, {1,0,1}};
-        std::vector<unsigned char> b(32, 240), m(32, 160), c(32);
+        std::vector<unsigned char> b(32, 250), m(32, 160), c(32);
         for (unsigned i = 0; i < 8; ++i) {
             const float sum = colors[i][0] + colors[i][1] + colors[i][2];
             const unsigned r = unsigned(std::round(colors[i][0]/sum*65535));
@@ -117,7 +117,7 @@ int main() {
         }
         float lo = 0, hi = 1.45f;
         check(restoreHighlightColor(m, c.data(), 8, 1, b.data(), 8, 1, uh, 1.45f, lo, hi), "color sweep restore");
-        const float linear = std::pow((240.0f/255+.055f)/1.055f, 2.4f);
+        const float linear = std::pow((250.0f/255+.055f)/1.055f, 2.4f);
         const float expectedY = (linear+uh.offsetSdr)*std::exp2(160.0f/255*1.45f)-uh.offsetHdr;
         for (unsigned i = 0; i < 8; ++i) {
             float rgb[3];

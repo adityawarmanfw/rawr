@@ -76,6 +76,7 @@ if(GAINMAP_BUILD_VULKAN)
                         COMMAND ${GLSLC_HOST} --target-env=vulkan1.1 -O
                             ${CMAKE_CURRENT_SOURCE_DIR}/shaders/gainmap.comp -o ${CMAKE_CURRENT_BINARY_DIR}/gainmap.spv
                         DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/shaders/gainmap.comp
+                                ${CMAKE_CURRENT_SOURCE_DIR}/../shader_common/shaders/adaptive_tone.glsl
                         VERBATIM)
                     add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/gainmap_blur.spv
                         COMMAND ${GLSLC_HOST} --target-env=vulkan1.1 -O
