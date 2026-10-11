@@ -3,6 +3,7 @@
 #include "ShaderProvider.hpp"
 #include "Telemetry.hpp"
 #include "Types.hpp"
+#include <array>
 #include <functional>
 #include <memory>
 namespace dual {
@@ -21,6 +22,12 @@ public:
     // passes); the caller may submit and re-begin the same command buffer to bound one GPU
     // submission. See rcd::RcdPipeline::setPassBoundary.
     void setPassBoundary(std::function<void()> boundary);
+    // Double-buffered alternative for the AMaZE and blend passes: returns the
+    // command buffer recording continues in. RCD/VNG4 sub-pipelines keep using
+    // setPassBoundary (same buffer).
+    void setCommandBoundary(std::function<VkCommandBuffer()> boundary);
+    // Primary::Amaze: camera RGB gains applied before AMaZE (green normally 1).
+    void setWhiteBalance(const std::array<float,3>& rgb);
     // Runtime setting; call only between record() submissions for this single-flight pipeline.
     // Uses RawTherapee slider units (0..100); 0 is exact RCD-only.
     void setContrastPercent(float contrastPercent);

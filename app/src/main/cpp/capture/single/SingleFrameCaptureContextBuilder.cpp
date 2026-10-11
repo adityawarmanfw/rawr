@@ -19,6 +19,10 @@ const char* singleFrameDemosaicName(develop::DemosaicAlgorithm algorithm) noexce
             return "VNG4";
         case develop::DemosaicAlgorithm::DualRcdVng4:
             return "RCD+VNG4";
+        case develop::DemosaicAlgorithm::Amaze:
+            return "AMaZE";
+        case develop::DemosaicAlgorithm::DualAmazeVng4:
+            return "AMaZE+VNG4";
     }
     return "UNKNOWN";
 }

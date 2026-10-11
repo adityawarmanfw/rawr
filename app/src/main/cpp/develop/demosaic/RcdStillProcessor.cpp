@@ -31,7 +31,7 @@ void RcdStillProcessor::configure(const rawrcam::vulkan::VulkanContext& context,
                                   uint64_t generation, const std::string& cameraId, uint32_t width, uint32_t height,
                                   uint32_t cfa, RcdStillInputMode inputMode,
                                   rawrcam::develop::StillDemosaicGeometry geometry, VkQueue queueOverride,
-                                  std::mutex* queueSubmitMutexOverride) {
+                                  std::mutex* queueSubmitMutexOverride, bool externalPackedInput) {
     if (!context.physicalDevice() || !context.device() || !context.queue()) {
         throw std::invalid_argument("RCD requires an initialized RawrCam Vulkan context");
     }
@@ -48,6 +48,9 @@ void RcdStillProcessor::configure(const rawrcam::vulkan::VulkanContext& context,
 
     const auto pattern = mapCfa(cfa);
     const bool sharedHighlight = inputMode == RcdStillInputMode::SharedHighlightPacked;
+    if (externalPackedInput && !sharedHighlight) {
+        throw std::invalid_argument("RCD external packed input requires the shared highlight packed mode");
+    }
     if (configured()) {
         if (cameraContextGeneration_ != generation || cameraId_ != cameraId || width_ != width || height_ != height ||
             pattern_ != pattern || inputMode_ != inputMode || geometry_ != geometry ||
@@ -55,12 +58,12 @@ void RcdStillProcessor::configure(const rawrcam::vulkan::VulkanContext& context,
             throw std::logic_error("RCD reconfiguration requires reset after GPU completion");
         }
         runtime_.configure(context, queueSubmitMutex, width, height, cfa, sharedHighlight, queueOverride,
-                           queueSubmitMutexOverride);
+                           queueSubmitMutexOverride, externalPackedInput);
         return;
     }
 
     runtime_.configure(context, queueSubmitMutex, width, height, cfa, sharedHighlight, queueOverride,
-                       queueSubmitMutexOverride);
+                       queueSubmitMutexOverride, externalPackedInput);
     cameraContextGeneration_ = generation;
     cameraId_ = cameraId;
     width_ = width;
@@ -216,6 +219,59 @@ bool RcdStillProcessor::start(const rawrcam::imaging::RawSnapshot& frame,
             done.error = e.what();
         }
 
+        done.submitToFenceMs =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+        worker_.finish(std::move(done));
+    });
+    return true;
+}
+
+bool RcdStillProcessor::startExternalPacked(VkImage packedImage, VkImageView packedView, uint64_t requestId,
+                                            uint64_t timestampNs) {
+    if (!configured() || inputMode_ != RcdStillInputMode::SharedHighlightPacked || packedImage == VK_NULL_HANDLE ||
+        packedView == VK_NULL_HANDLE)
+        return false;
+    if (!worker_.tryClaim()) return false;
+    joinWorker();
+    worker_.spawn([this, packedImage, packedView, requestId, timestampNs]() {
+        StillCompletion done{};
+        done.requestId = requestId;
+        done.timestampNs = timestampNs;
+        const auto started = std::chrono::steady_clock::now();
+        try {
+            ensureRuntimeResources();
+            done.setupMs =
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+            VkCommandBuffer command = runtime_.beginExternal();
+            done.persistentBytes = currentAllocatedBytes();
+            pipeline_->setPassBoundary([this] { runtime_.flush(); });
+
+            ::rcd::LinearRgbImage output{};
+            output.image = runtime_.outputImage();
+            output.view = runtime_.outputView();
+            output.format = runtime_.outputFormat();
+            output.layout = VK_IMAGE_LAYOUT_GENERAL;
+            output.width = width_;
+            output.height = height_;
+
+            ::rcd::PackedCfaImageView input{};
+            input.image = packedImage;
+            input.view = packedView;
+            input.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+            input.layout = VK_IMAGE_LAYOUT_GENERAL;
+            input.width = width_ / 2u;
+            input.height = height_ / 2u;
+            input.rawWidth = width_;
+            input.rawHeight = height_;
+            input.pattern = pattern_;
+            pipeline_->record(command, input, output);
+
+            runtime_.submit(command);
+            runtime_.waitForCompletion();
+            done.success = true;
+        } catch (const std::exception& e) {
+            done.error = e.what();
+        }
         done.submitToFenceMs =
             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
         worker_.finish(std::move(done));

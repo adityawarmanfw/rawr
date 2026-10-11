@@ -1,0 +1,15 @@
+#version 450
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Writes one tile's AMaZE result into the caller's RGBA16F image, removing the
+// white balance applied for AMaZE so the output is camera-linear like RCD's.
+layout(local_size_x = 16, local_size_y = 16) in;
+#include "amaze_tile.glsl"
+layout(std430, set = 0, binding = 2) readonly buffer TileOutput { vec4 rgb[]; } result;
+layout(set = 0, binding = 6, rgba16f) uniform writeonly image2D outputImage;
+void main() {
+    uvec2 l = gl_GlobalInvocationID.xy;
+    if (l.x >= tile.outWidth || l.y >= tile.outHeight) return;
+    vec3 rgb = result.rgb[l.y * tile.outWidth + l.x].rgb / vec3(tile.wbR, tile.wbG, tile.wbB);
+    imageStore(outputImage, ivec2(tile.outOriginX + l.x, tile.outOriginY + l.y),
+               vec4(rgb * tile.outputScale, tile.outputAlpha));
+}

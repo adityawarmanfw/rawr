@@ -1,4 +1,4 @@
-# Embedded demosaic shaders: SPIR-V for RCD, VNG4, Dual and quadfix compiled
+# Embedded demosaic shaders: SPIR-V for AMaZE, RCD, VNG4, Dual and quadfix compiled
 # with the production workgroup sizes, exposed as ShaderProviders
 # (raw_demosaic/EmbeddedShaders.hpp). Standalone validation builds load
 # SPIR-V from files instead and do not need this target.
@@ -16,6 +16,25 @@ set(DM_HEADERS)
 macro(dm_embed NAME SRC)
   embed_spirv(${NAME} ${SRC} ${NAME}_spv OUTPUT_DIR ${DM_GEN} HEADERS_VAR DM_HEADERS ${ARGN})
 endmacro()
+
+# AMaZE: GLSL glue via glslc; the algorithm passes are naga SPIR-V committed
+# under amaze/shaders/spv (regenerate with amaze/tools/build_spv.sh).
+set(AMAZE_SH ${DM}/amaze/shaders)
+set(DM_EMBED_BINARY ${CMAKE_CURRENT_LIST_DIR}/../../vk_common/cmake/EmbedBinary.cmake)
+foreach(NAME amaze_import amaze_export)
+  dm_embed(${NAME} ${AMAZE_SH}/${NAME}.comp FLAGS --target-env=vulkan1.1 -O -I${AMAZE_SH}
+    DEPENDS ${AMAZE_SH}/amaze_tile.glsl)
+endforeach()
+foreach(NAME amaze_gradients amaze_candidates amaze_choose amaze_cddiff amaze_weights amaze_nyquist
+             amaze_nyquist_vote amaze_area amaze_hvwt_seq amaze_green amaze_refine amaze_diagonal amaze_pmwt_seq
+             amaze_rbint amaze_correct amaze_chroma amaze_finish)
+  add_custom_command(OUTPUT ${DM_GEN}/${NAME}.h
+    COMMAND ${CMAKE_COMMAND} -DINPUT=${AMAZE_SH}/spv/${NAME}.spv -DOUTPUT=${DM_GEN}/${NAME}.h -DSYMBOL=${NAME}_spv
+            -P ${DM_EMBED_BINARY}
+    DEPENDS ${AMAZE_SH}/spv/${NAME}.spv ${DM_EMBED_BINARY}
+    VERBATIM)
+  list(APPEND DM_HEADERS ${DM_GEN}/${NAME}.h)
+endforeach()
 
 set(RCD_SH ${DM}/rcd/shaders)
 foreach(SPEC "rcd_direction;4;32" "rcd_green;4;32" "rcd_diagonal;32;8" "rcd_green_sites;8;32" "rcd_export;4;32")
@@ -65,5 +84,6 @@ endforeach()
 add_library(raw_demosaic_embedded_shaders STATIC src/EmbeddedShaders.cpp ${DM_HEADERS})
 add_library(raw_demosaic::embedded_shaders ALIAS raw_demosaic_embedded_shaders)
 target_include_directories(raw_demosaic_embedded_shaders PUBLIC include PRIVATE ${DM_GEN})
-target_link_libraries(raw_demosaic_embedded_shaders PUBLIC rcd::rcd vng4::vng4 dual::dual_demosaic quadfix::quadfix)
+target_link_libraries(raw_demosaic_embedded_shaders PUBLIC amaze::amaze rcd::rcd vng4::vng4 dual::dual_demosaic
+                      quadfix::quadfix)
 target_compile_features(raw_demosaic_embedded_shaders PUBLIC cxx_std_17)

@@ -414,9 +414,11 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
 
     private fun demosaicCode(algorithm: DemosaicAlgorithm): Int =
         when (algorithm) {
+            DemosaicAlgorithm.Amaze -> 4
             DemosaicAlgorithm.Rcd -> 0
             DemosaicAlgorithm.Vng4 -> 2
             DemosaicAlgorithm.DualRcdVng4 -> 3
+            DemosaicAlgorithm.DualAmazeVng4 -> 5
         }
 
     private fun dngCompressionCode(id: String): Int =

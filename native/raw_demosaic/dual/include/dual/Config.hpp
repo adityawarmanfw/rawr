@@ -6,6 +6,10 @@ inline constexpr float kRawTherapeeDualContrastMinPercent = 0.0f;
 inline constexpr float kRawTherapeeDualContrastMaxPercent = 100.0f;
 inline constexpr float kRawTherapeeDualContrastDefaultPercent = 20.0f;
 enum class InputMode : uint32_t { NormalizedFloatBuffer=0, RawR16UintImage=1, RawR32FloatImage=2, PackedCfaRgba16fImage=3 };
+// Detail demosaicer whose output the VNG4 blend refines in flat regions
+// (RawTherapee RCD+VNG4 / AMaZE+VNG4). AMaZE takes packed or normalized-buffer
+// input and needs the shot white balance (setWhiteBalance).
+enum class Primary : uint32_t { Rcd=0, Amaze=1 };
 // Frozen production modes. VNG export+blend fusion is the production default; Baseline is retained only as a validation/reference path.
 enum class OptimizationMode : uint32_t {
     Baseline=0,
@@ -35,6 +39,7 @@ struct PipelineConfig {
     // Same input conditioning as standalone RCD. Production callers enable it;
     // false retains the unbalanced input contract of frozen reference fixtures.
     bool autoBalance=false;
+    Primary primary=Primary::Rcd;
 };
 struct PipelineAssets {};
 }

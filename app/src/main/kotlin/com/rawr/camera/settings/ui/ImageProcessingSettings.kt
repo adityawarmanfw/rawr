@@ -190,6 +190,18 @@ internal fun DemosaicGroup(state: SettingsUiState, dispatch: SettingsDispatch) {
         description = "Still-capture demosaic only. The live RAW preview pipeline is unchanged."
     ) {
         SettingsSelectionRow(
+            title = "AMaZE",
+            selected = state.values.demosaicAlgorithm == DemosaicAlgorithm.Amaze,
+            onClick = { dispatch.invoke(SetDemosaicAlgorithm(DemosaicAlgorithm.Amaze)) }
+        )
+        SettingDivider()
+        SettingsSelectionRow(
+            title = "AMaZE + VNG4",
+            selected = state.values.demosaicAlgorithm == DemosaicAlgorithm.DualAmazeVng4,
+            onClick = { dispatch.invoke(SetDemosaicAlgorithm(DemosaicAlgorithm.DualAmazeVng4)) }
+        )
+        SettingDivider()
+        SettingsSelectionRow(
             title = "RCD",
             selected = state.values.demosaicAlgorithm == DemosaicAlgorithm.Rcd,
             onClick = { dispatch.invoke(SetDemosaicAlgorithm(DemosaicAlgorithm.Rcd)) }
@@ -206,7 +218,9 @@ internal fun DemosaicGroup(state: SettingsUiState, dispatch: SettingsDispatch) {
             selected = state.values.demosaicAlgorithm == DemosaicAlgorithm.DualRcdVng4,
             onClick = { dispatch.invoke(SetDemosaicAlgorithm(DemosaicAlgorithm.DualRcdVng4)) }
         )
-        if (state.values.demosaicAlgorithm == DemosaicAlgorithm.DualRcdVng4) {
+        if (state.values.demosaicAlgorithm == DemosaicAlgorithm.DualRcdVng4 ||
+            state.values.demosaicAlgorithm == DemosaicAlgorithm.DualAmazeVng4
+        ) {
             SettingDivider()
             SettingsSwitchRow(
                 title = "Auto threshold",

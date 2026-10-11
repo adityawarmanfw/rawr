@@ -28,7 +28,9 @@
 #include "color/FilmExposure.h"
 #include "color/WhiteBalance.h"
 #include "develop/DevelopContextBuilder.h"
+#include "develop/demosaic/AmazeStillProcessor.h"
 #include "develop/demosaic/DualStillProcessor.h"
+#include "develop/demosaic/RcdStillProcessor.h"
 #include "develop/highlight/LensShadingMapSnapshot.h"
 #include "develop/render/StillImageRenderer.h"
 #include "diagnostics/logging/RuntimeTraceRecorder.h"
@@ -516,8 +518,11 @@ void MfsrCaptureJob::run() {
             // Declared outside try so the catch below can release mapped
             // pixels after a worker exception (persistent-engine poison).
             develop::rendered::StillImageRenderer localRendered(ctx.filesDir);
-            // Per capture, like the single-frame still demosaicers.
-            develop::demosaic::dual::DualStillProcessor mergedDemosaic;
+            // Per capture, like the single-frame still demosaicers. VNG4 alone
+            // has no merged-CFA entry point and falls back to RCD+VNG4.
+            develop::demosaic::amaze::AmazeStillProcessor mergedAmaze;
+            develop::demosaic::dual::DualStillProcessor mergedDual;
+            develop::demosaic::rcd::RcdStillProcessor mergedRcd;
             develop::rendered::StillImageRenderer& rendered =
                 ctx.persistentEngine ? ctx.renderedStill : localRendered;
             try {
@@ -541,40 +546,76 @@ void MfsrCaptureJob::run() {
                 const std::uint32_t mergedW = mergeResult->outputExtent.width;
                 const std::uint32_t mergedH = mergeResult->outputExtent.height;
                 const auto demosaicBegin = std::chrono::steady_clock::now();
-                mergedDemosaic.configure(
-                    ctx.vulkan, ctx.queue0Mutex, camera.cameraContextGeneration, camera.cameraId, mergedW, mergedH,
-                    ctx.cfa, mergedJpeg.develop.dualAutoContrast, mergedJpeg.develop.dualContrastPercent,
-                    mergedJpeg.develop.pipelineDiagnosticsEnabled,
-                    tuning.outputScale > 1.0001f ? develop::StillDemosaicGeometry::ReconstructedCfa
-                                                 : develop::StillDemosaicGeometry::SensorNative,
-                    useMfQueue ? mfQueue : VK_NULL_HANDLE, useMfQueue ? &ctx.vulkan.mfSubmitMutex() : nullptr,
-                    /*externalPackedInput=*/true);
-                if (!mergedDemosaic.startExternalPacked(outputAdapter.rgbImage(), outputAdapter.rgbView(), requestId,
-                                                        job->referenceMetadata.timestampNs)) {
-                    throw std::runtime_error("merged_demosaic_start_rejected");
-                }
+                const auto geometry = tuning.outputScale > 1.0001f ? develop::StillDemosaicGeometry::ReconstructedCfa
+                                                                   : develop::StillDemosaicGeometry::SensorNative;
+                VkQueue demosaicQueue = useMfQueue ? mfQueue : VK_NULL_HANDLE;
+                std::mutex* demosaicMutex = useMfQueue ? &ctx.vulkan.mfSubmitMutex() : nullptr;
                 std::optional<develop::demosaic::StillCompletion> demosaicDone;
-                while (!(demosaicDone = mergedDemosaic.pollCompletion())) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                VkImage demosaicedImage = VK_NULL_HANDLE;
+                VkImageView demosaicedView = VK_NULL_HANDLE;
+                auto runDemosaic = [&](auto& processor, auto&& start) {
+                    if (!start()) throw std::runtime_error("merged_demosaic_start_rejected");
+                    while (!(demosaicDone = processor.pollCompletion())) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                    }
+                    if (!demosaicDone->success)
+                        throw std::runtime_error("merged_demosaic_failed: " + demosaicDone->error);
+                    processor.releaseWorkspaceKeepOutput();
+                    demosaicedImage = processor.outputImage();
+                    demosaicedView = processor.outputView();
+                };
+                const auto algorithm = mergedJpeg.develop.demosaicAlgorithm;
+                if (algorithm == develop::DemosaicAlgorithm::Amaze) {
+                    mergedAmaze.configure(ctx.vulkan, ctx.queue0Mutex, camera.cameraContextGeneration,
+                                          camera.cameraId, mergedW, mergedH, ctx.cfa, geometry, demosaicQueue,
+                                          demosaicMutex, /*externalPackedInput=*/true);
+                    runDemosaic(mergedAmaze, [&] {
+                        return mergedAmaze.startExternalPacked(outputAdapter.rgbImage(), outputAdapter.rgbView(),
+                                                         job->referenceColor.baselineWbRggb, requestId,
+                                                         job->referenceMetadata.timestampNs);
+                    });
+                    outputInfo.demosaicLabel = "AMaZE (merged CFA)";
+                    outputInfo.dualLabel = "n/a";
+                } else if (algorithm == develop::DemosaicAlgorithm::Rcd) {
+                    mergedRcd.configure(ctx.vulkan, ctx.queue0Mutex, camera.cameraContextGeneration, camera.cameraId,
+                                        mergedW, mergedH, ctx.cfa,
+                                        develop::demosaic::rcd::RcdStillInputMode::SharedHighlightPacked, geometry,
+                                        demosaicQueue, demosaicMutex, /*externalPackedInput=*/true);
+                    runDemosaic(mergedRcd, [&] {
+                        return mergedRcd.startExternalPacked(outputAdapter.rgbImage(), outputAdapter.rgbView(),
+                                                             requestId, job->referenceMetadata.timestampNs);
+                    });
+                    outputInfo.demosaicLabel = "RCD (merged CFA)";
+                    outputInfo.dualLabel = "n/a";
+                } else {
+                    const bool amazePrimary = algorithm == develop::DemosaicAlgorithm::DualAmazeVng4;
+                    mergedDual.configure(ctx.vulkan, ctx.queue0Mutex, camera.cameraContextGeneration, camera.cameraId,
+                                         mergedW, mergedH, ctx.cfa, mergedJpeg.develop.dualAutoContrast,
+                                         mergedJpeg.develop.dualContrastPercent,
+                                         mergedJpeg.develop.pipelineDiagnosticsEnabled, geometry, demosaicQueue,
+                                         demosaicMutex, /*externalPackedInput=*/true,
+                                         amazePrimary ? ::dual::Primary::Amaze : ::dual::Primary::Rcd);
+                    runDemosaic(mergedDual, [&] {
+                        return mergedDual.startExternalPacked(outputAdapter.rgbImage(), outputAdapter.rgbView(),
+                                                              requestId, job->referenceMetadata.timestampNs,
+                                                              job->referenceColor.baselineWbRggb);
+                    });
+                    outputInfo.demosaicLabel = std::string(mergedDual.algorithmName()) + " (merged CFA)";
+                    outputInfo.dualLabel =
+                        mergedJpeg.develop.dualAutoContrast
+                            ? std::string("auto")
+                            : rawrcam::encoding::jpeg::formatMs1(mergedJpeg.develop.dualContrastPercent) + "%";
                 }
-                if (!demosaicDone->success) throw std::runtime_error("merged_demosaic_failed: " + demosaicDone->error);
-                mergedDemosaic.releaseWorkspaceKeepOutput();
                 const double demosaicMs = wallMs(demosaicBegin);
-                VkImage demosaicedImage = mergedDemosaic.outputImage();
-                VkImageView demosaicedView = mergedDemosaic.outputView();
                 VkImage clipStateImage = outputAdapter.clipImage();
                 VkImageView clipStateView = outputAdapter.clipView();
                 if (demosaicedImage == VK_NULL_HANDLE || demosaicedView == VK_NULL_HANDLE ||
                     clipStateView == VK_NULL_HANDLE) {
                     throw std::runtime_error("merged_demosaic_output_unavailable");
                 }
-                outputInfo.demosaicLabel = "RCD+VNG4 (merged CFA)";
-                outputInfo.dualLabel =
-                    mergedJpeg.develop.dualAutoContrast
-                        ? std::string("auto")
-                        : rawrcam::encoding::jpeg::formatMs1(mergedJpeg.develop.dualContrastPercent) + "%";
-                LOGI("MULTIFRAME_JPEG_INPUT mode=merged_cfa_dual requestId=%llu raw=%ux%u demosaicMs=%.1f",
-                     static_cast<unsigned long long>(requestId), mergedW, mergedH, demosaicMs);
+                LOGI("MULTIFRAME_JPEG_INPUT mode=merged_cfa demosaic=%s requestId=%llu raw=%ux%u setupMs=%.1f demosaicMs=%.1f",
+                     outputInfo.demosaicLabel.c_str(), static_cast<unsigned long long>(requestId), mergedW, mergedH,
+                     demosaicDone->setupMs, demosaicMs);
 
                 const rawrcam::color::math::Vec3 whiteBalanceRgb =
                     rawrcam::color::collapseRggbToRgb(job->referenceColor.baselineWbRggb);
@@ -715,7 +756,7 @@ void MfsrCaptureJob::run() {
                     mergedJpeg.output.readbackMs = renderedDone->readbackMs;
                     mergedJpeg.output.filmRendered = renderedDone->filmRendered;
                     mergedJpeg.output.filmFallbackMemory = renderedDone->filmFallbackMemory;
-                    // Demosaic covers the CFA packing and the Dual demosaic.
+                    // Demosaic covers the CFA packing and the merged-CFA demosaic.
                     mergedJpeg.output.demosaicMs = rgbPrepMs + demosaicMs;
                     mergedJpeg.output.renderTotalMs = mergedJpeg.output.demosaicMs + renderedDone->totalMs;
                     // The JPEG description is what gallery apps (e.g. Google Photos)

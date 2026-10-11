@@ -8,6 +8,7 @@
 #include <utility>
 #include <vector>
 
+#include "develop/demosaic/AmazeStillProcessor.h"
 #include "develop/highlight/LensShadingMapSnapshot.h"
 #include "geometry/CfaPattern.h"
 #include "geometry/RawGeometry.h"
@@ -18,7 +19,9 @@ namespace rawrcam::develop::demosaic::dual {
 DualStillProcessor::DualStillProcessor(Diagnostic diagnostic) : worker_(diagnostic), runtime_("RCDVNG", diagnostic) {}
 DualStillProcessor::~DualStillProcessor() { reset(); }
 
-const char* DualStillProcessor::algorithmName() noexcept { return "RCD+VNG4"; }
+const char* DualStillProcessor::algorithmName() const noexcept {
+    return primary_ == ::dual::Primary::Amaze ? "AMaZE+VNG4" : "RCD+VNG4";
+}
 ::dual::BayerPattern DualStillProcessor::dualPattern(uint32_t cfa) {
     return rawrcam::geometry::toBackendPattern<::dual::BayerPattern>(cfa, "unsupported RawrCam CFA for Dual");
 }
@@ -28,12 +31,13 @@ void DualStillProcessor::configure(const rawrcam::vulkan::VulkanContext& context
                                    uint32_t cfa, bool dualAutoContrast, float dualContrastPercent,
                                    bool diagnosticsEnabled, rawrcam::develop::StillDemosaicGeometry geometry,
                                    VkQueue queueOverride, std::mutex* queueSubmitMutexOverride,
-                                   bool externalPackedInput) {
+                                   bool externalPackedInput, ::dual::Primary primary) {
     if (!context.physicalDevice() || !context.device() || !context.queue())
         throw std::invalid_argument("RCD/VNG requires initialized Vulkan context");
     const bool reconstructedGeometry = geometry == rawrcam::develop::StillDemosaicGeometry::ReconstructedCfa;
+    const uint32_t minSide = primary == ::dual::Primary::Amaze ? 32u : 20u;
     const bool geometrySupported = reconstructedGeometry
-                                       ? width >= 20u && height >= 20u && (width & 1u) == 0u && (height & 1u) == 0u
+                                       ? width >= minSide && height >= minSide && (width & 1u) == 0u && (height & 1u) == 0u
                                        : rawrcam::geometry::isSupportedRawGeometry(width, height);
     if (!geometrySupported) throw std::invalid_argument("RCD/VNG geometry is not a supported RAW geometry");
     if (!generation || cameraId.empty()) throw std::invalid_argument("RCD/VNG requires immutable camera identity");
@@ -42,7 +46,7 @@ void DualStillProcessor::configure(const rawrcam::vulkan::VulkanContext& context
         if (cameraContextGeneration_ != generation || cameraId_ != cameraId || width_ != width || height_ != height ||
             cfa_ != cfa || dualAutoContrast_ != dualAutoContrast ||
             std::abs(dualContrastPercent_ - dualContrastPercent) > 1e-6f || diagnosticsEnabled_ != diagnosticsEnabled ||
-            geometry_ != geometry || runtime_.device() != context.device())
+            geometry_ != geometry || primary_ != primary || runtime_.device() != context.device())
             throw std::logic_error("RCD/VNG reconfiguration requires reset after GPU completion");
         runtime_.configure(context, queueSubmitMutex, width, height, cfa, true, queueOverride, queueSubmitMutexOverride,
                            externalPackedInput);
@@ -57,6 +61,7 @@ void DualStillProcessor::configure(const rawrcam::vulkan::VulkanContext& context
     width_ = width;
     height_ = height;
     cfa_ = cfa;
+    primary_ = primary;
     dualAutoContrast_ = dualAutoContrast;
     dualContrastPercent_ = std::clamp(dualContrastPercent, 0.0f, 100.0f);
     diagnosticsEnabled_ = diagnosticsEnabled;
@@ -91,6 +96,7 @@ void DualStillProcessor::ensureRuntimeResources() {
         cfg.telemetry = true;
         cfg.diagnosticBranchOutputs = diagnosticsEnabled_;
         cfg.optimizationMode = ::dual::OptimizationMode::VngExportBlend;
+        cfg.primary = primary_;
         ::dual::VulkanContext dc{runtime_.physicalDevice(), runtime_.device(), runtime_.queueFamily(), nullptr,
                                  pipelineCache_};
         dual_ = std::make_unique<::dual::DualDemosaicPipeline>(dc, raw_demosaic::embeddedDualShaders(), cfg);
@@ -100,6 +106,16 @@ void DualStillProcessor::ensureRuntimeResources() {
 }
 
 bool DualStillProcessor::busy() const noexcept { return worker_.busy(); }
+
+void DualStillProcessor::prepareRecord(const std::array<float, 4>& whiteBalanceRggb, bool boundedSubmissions) {
+    if (primary_ == ::dual::Primary::Amaze)
+        dual_->setWhiteBalance(amaze::AmazeStillProcessor::amazeWhiteBalance(whiteBalanceRggb));
+    if (!boundedSubmissions) return;
+    // Bounded submissions so the preview queue is not starved for the whole
+    // still; AMaZE's tile batches are double-buffered (no CPU round trip).
+    dual_->setPassBoundary([this] { runtime_.flush(); });
+    dual_->setCommandBoundary([this] { return runtime_.flushPipelined(); });
+}
 
 bool DualStillProcessor::start(const rawrcam::imaging::RawSnapshot& frame,
                                std::shared_ptr<const std::vector<uint8_t>> raw, bool lensShadingCorrectionEnabled,
@@ -135,10 +151,8 @@ bool DualStillProcessor::start(const rawrcam::imaging::RawSnapshot& frame,
                 runtime_.beginFrame(*raw, black, white, wb, lensShading, highlightReconstructionEnabled, galosh);
             raw.reset();
             done.persistentBytes = currentAllocatedBytes();
-            // Bounded submissions (upload/highlight, then each demosaic pass) so the
-            // preview queue is not starved for the whole still.
             runtime_.flush();
-            dual_->setPassBoundary([this] { runtime_.flush(); });
+            prepareRecord(wb, true);
             {
                 ::dual::PackedCfaImageView in{runtime_.packedImage(),
                                               runtime_.packedView(),
@@ -157,7 +171,7 @@ bool DualStillProcessor::start(const rawrcam::imaging::RawSnapshot& frame,
                                            height_};
                 dual_->record(cmd, in, out);
             }
-            runtime_.submit(cmd);
+            runtime_.submit(runtime_.currentCommand());
             runtime_.waitForCompletion();
             if (dual_) {
                 std::ostringstream diag;
@@ -192,11 +206,13 @@ bool DualStillProcessor::start(const rawrcam::imaging::RawSnapshot& frame,
 }
 
 bool DualStillProcessor::startExternalPacked(VkImage packedImage, VkImageView packedView, uint64_t requestId,
-                                             uint64_t timestampNs) {
+                                             uint64_t timestampNs, const std::array<float, 4>& whiteBalanceRggb) {
     if (!configured() || packedImage == VK_NULL_HANDLE || packedView == VK_NULL_HANDLE) return false;
+    for (float g : whiteBalanceRggb)
+        if (!(g > 0.0f)) return false;
     if (!worker_.tryClaim()) return false;
     joinWorker();
-    worker_.spawn([this, packedImage, packedView, requestId, timestampNs]() {
+    worker_.spawn([this, packedImage, packedView, requestId, timestampNs, whiteBalanceRggb]() {
         StillCompletion done{};
         done.requestId = requestId;
         done.timestampNs = timestampNs;
@@ -207,8 +223,7 @@ bool DualStillProcessor::startExternalPacked(VkImage packedImage, VkImageView pa
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
             VkCommandBuffer cmd = runtime_.beginExternal();
             done.persistentBytes = currentAllocatedBytes();
-            // Bounded submissions per demosaic pass, as in start().
-            dual_->setPassBoundary([this] { runtime_.flush(); });
+            prepareRecord(whiteBalanceRggb, true);
             ::dual::PackedCfaImageView in{packedImage,
                                           packedView,
                                           VK_FORMAT_R16G16B16A16_SFLOAT,
@@ -225,7 +240,7 @@ bool DualStillProcessor::startExternalPacked(VkImage packedImage, VkImageView pa
                                        width_,
                                        height_};
             dual_->record(cmd, in, out);
-            runtime_.submit(cmd);
+            runtime_.submit(runtime_.currentCommand());
             runtime_.waitForCompletion();
             std::ostringstream diag;
             diag << "DUAL_CONTRAST_RESOLVED requestId=" << requestId << " input=external_packed"
@@ -264,6 +279,7 @@ bool DualStillProcessor::startTaggedPackedReplay(std::vector<uint8_t> taggedPack
             tagged.clear();
             tagged.shrink_to_fit();
             done.persistentBytes = currentAllocatedBytes();
+            prepareRecord(whiteBalanceRggb, false);
             {
                 ::dual::PackedCfaImageView in{runtime_.packedImage(),
                                               runtime_.packedView(),
@@ -282,7 +298,7 @@ bool DualStillProcessor::startTaggedPackedReplay(std::vector<uint8_t> taggedPack
                                            height_};
                 dual_->record(cmd, in, out);
             }
-            runtime_.submit(cmd);
+            runtime_.submit(runtime_.currentCommand());
             runtime_.waitForCompletion();
             done.success = true;
         } catch (const std::exception& e) {
@@ -317,6 +333,7 @@ void DualStillProcessor::reset() noexcept {
     dualContrastPercent_ = 20.0f;
     diagnosticsEnabled_ = false;
     geometry_ = rawrcam::develop::StillDemosaicGeometry::SensorNative;
+    primary_ = ::dual::Primary::Rcd;
     pipelineCache_ = VK_NULL_HANDLE;
 }
 uint64_t DualStillProcessor::currentAllocatedBytes() const noexcept {

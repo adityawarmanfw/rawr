@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "amaze/Amaze.hpp"
 #include "rcd/Pipeline.hpp"
 #include "vng4/Pipeline.hpp"
 namespace dual {
@@ -45,14 +46,24 @@ rcd::BayerPattern rp(BayerPattern p) { return static_cast<rcd::BayerPattern>(sta
 vng4::BayerPattern vp(BayerPattern p) { return static_cast<vng4::BayerPattern>(static_cast<uint32_t>(p)); }
 rcd::InputMode rm(InputMode m) { return static_cast<rcd::InputMode>(static_cast<uint32_t>(m)); }
 vng4::InputMode vm(InputMode m) { return static_cast<vng4::InputMode>(static_cast<uint32_t>(m)); }
+amaze::BayerPattern ap(BayerPattern p) { return static_cast<amaze::BayerPattern>(static_cast<uint32_t>(p)); }
 }  // namespace
 struct DualDemosaicPipeline::Impl {
     VulkanContext ctx{};
     ShaderProvider shaders;
     PipelineConfig cfg{};
     std::unique_ptr<rcd::RcdPipeline> rcdPipe;
+    std::unique_ptr<amaze::AmazePipeline> amazePipe;
     std::unique_ptr<vng4::Vng4Pipeline> vngPipe;
     std::function<void()> passBoundary;
+    std::function<VkCommandBuffer()> commandBoundary;
+    // The command buffer run() records into; AMaZE's swapping boundary updates it.
+    VkCommandBuffer* active = nullptr;
+    std::array<float, 3> whiteBalance{1.0f, 1.0f, 1.0f};
+    uint64_t primaryLive() const {
+        return rcdPipe ? rcdPipe->currentAllocatedBytes() : amazePipe->currentAllocatedBytes();
+    }
+    uint64_t primaryPeak() const { return rcdPipe ? rcdPipe->peakAllocatedBytes() : amazePipe->peakAllocatedBytes(); }
     static constexpr size_t kAutoTilesPipe = 5;  // dual_auto_tiles.comp
     void boundary() {
         if (passBoundary) passBoundary();
@@ -202,7 +213,22 @@ struct DualDemosaicPipeline::Impl {
         v.telemetry = cfg.telemetry;
         rcd::VulkanContext rc{ctx.physicalDevice, ctx.device, ctx.queueFamilyIndex, ctx.allocator, ctx.pipelineCache};
         vng4::VulkanContext vc{ctx.physicalDevice, ctx.device, ctx.queueFamilyIndex, ctx.allocator, ctx.pipelineCache};
-        rcdPipe = std::make_unique<rcd::RcdPipeline>(rc, [this](std::string_view n) { return shaders(n); }, r);
+        if (cfg.primary == Primary::Amaze) {
+            amaze::PipelineConfig a{};
+            a.width = cfg.width;
+            a.height = cfg.height;
+            a.pattern = ap(cfg.pattern);
+            a.inputMode = cfg.inputMode == InputMode::PackedCfaRgba16fImage ? amaze::InputMode::PackedCfaRgba16fImage
+                                                                           : amaze::InputMode::NormalizedFloatBuffer;
+            // AMaZE's 0..1 working domain already exports at nominal white = 1.
+            a.outputScale = 1.0f;
+            a.outputAlpha = 1.0f;
+            amaze::VulkanContext ac{ctx.physicalDevice, ctx.device, ctx.queueFamilyIndex, ctx.allocator,
+                                    ctx.pipelineCache};
+            amazePipe = std::make_unique<amaze::AmazePipeline>(ac, [this](std::string_view n) { return shaders(n); }, a);
+        } else {
+            rcdPipe = std::make_unique<rcd::RcdPipeline>(rc, [this](std::string_view n) { return shaders(n); }, r);
+        }
         vngPipe = std::make_unique<vng4::Vng4Pipeline>(vc, [this](std::string_view n) { return shaders(n); }, v);
     }
     void createDualPipelines() {
@@ -284,6 +310,7 @@ struct DualDemosaicPipeline::Impl {
     void cleanup() noexcept {
         if (!ctx.device) return;
         vngPipe.reset();
+        amazePipe.reset();
         rcdPipe.reset();
         for (auto& p : pipes)
             if (p) vkDestroyPipeline(ctx.device, p, ctx.allocator);
@@ -497,15 +524,16 @@ struct DualDemosaicPipeline::Impl {
                              0, nullptr, 1, &post);
     }
     template <class RRecord, class VRecord, class VBRecord>
-    void run(VkCommandBuffer cmd, const LinearRgbImage& out, RRecord&& rr, VRecord&& vr, VBRecord&& vbr) {
+    void run(VkCommandBuffer& cmd, const LinearRgbImage& out, RRecord&& rr, VRecord&& vr, VBRecord&& vbr) {
+        active = &cmd;
         validateOut(out);
         init(cmd);
         setDescriptors(out);
         rr(rout(out));
         if (cfg.diagnosticBranchOutputs) diagnosticCopy(cmd, out.image, diagRcd.image);
         if (!cfg.autoContrast && cfg.contrastPercent == 0.0f) {
-            last.peakAllocatedBytes = peak + rcdPipe->peakAllocatedBytes() + vngPipe->peakAllocatedBytes();
-            last.liveAllocatedBytes = live + rcdPipe->currentAllocatedBytes() + vngPipe->currentAllocatedBytes();
+            last.peakAllocatedBytes = peak + primaryPeak() + vngPipe->peakAllocatedBytes();
+            last.liveAllocatedBytes = live + primaryLive() + vngPipe->currentAllocatedBytes();
             last.bufferAllocationsTotal = allocs;
             return;
         }
@@ -566,13 +594,14 @@ struct DualDemosaicPipeline::Impl {
             dispatch(cmd, 4, 9, (cfg.width + 15) / 16, (cfg.height + 15) / 16, pc);
         }
         if (cfg.autoContrast) bufferHostBarrier(cmd);
-        last.peakAllocatedBytes = peak + rcdPipe->peakAllocatedBytes() + vngPipe->peakAllocatedBytes();
-        last.liveAllocatedBytes = live + rcdPipe->currentAllocatedBytes() + vngPipe->currentAllocatedBytes();
+        last.peakAllocatedBytes = peak + primaryPeak() + vngPipe->peakAllocatedBytes();
+        last.liveAllocatedBytes = live + primaryLive() + vngPipe->currentAllocatedBytes();
         last.bufferAllocationsTotal = allocs;
     }
     void raw(VkCommandBuffer c, const RawCfaImageView& i, const LinearRgbImage& o) {
         if (i.width != cfg.width || i.height != cfg.height || i.pattern != cfg.pattern)
             throw std::runtime_error("dual RAW mismatch");
+        if (!rcdPipe) throw std::runtime_error("dual AMaZE primary has no RAW image input");
         rcd::RawCfaImageView ri{
             i.image,     i.view,   i.format,      i.layout,
             i.width,     i.height, rp(i.pattern), {i.blackLevel[0], i.blackLevel[1], i.blackLevel[2], i.blackLevel[3]},
@@ -594,8 +623,16 @@ struct DualDemosaicPipeline::Impl {
             {i.buffer.buffer, i.buffer.offset, i.buffer.range}, i.width, i.height, rp(i.pattern)};
         vng4::NormalizedBayerBufferView vi{
             {i.buffer.buffer, i.buffer.offset, i.buffer.range}, i.width, i.height, vp(i.pattern)};
+        amaze::NormalizedBayerBufferView ai{
+            {i.buffer.buffer, i.buffer.offset, i.buffer.range}, i.width, i.height, ap(i.pattern)};
         run(
-            c, o, [&](const rcd::LinearRgbImage& x) { rcdPipe->record(c, ri, x); },
+            c, o,
+            [&](const rcd::LinearRgbImage& x) {
+                if (amazePipe)
+                    amazePipe->record(c, ai, {x.image, x.view, x.format, x.layout, x.width, x.height}, whiteBalance);
+                else
+                    rcdPipe->record(c, ri, x);
+            },
             [&](const vng4::LinearRgbImage& x) { vngPipe->record(c, vi, x); },
             [&](const rcd::LinearRgbImage& x, VkImageView m, float f, float a) {
                 vng4::LinearRgbImage y{x.image, x.view, x.format, x.layout, x.width, x.height};
@@ -607,8 +644,16 @@ struct DualDemosaicPipeline::Impl {
                                    i.height, i.rawWidth, i.rawHeight, rp(i.pattern)};
         vng4::PackedCfaImageView vi{i.image,  i.view,     i.format,    i.layout,     i.width,
                                     i.height, i.rawWidth, i.rawHeight, vp(i.pattern)};
+        amaze::PackedCfaImageView ai{i.image,  i.view,     i.format,    i.layout,     i.width,
+                                     i.height, i.rawWidth, i.rawHeight, ap(i.pattern)};
         run(
-            c, o, [&](const rcd::LinearRgbImage& x) { rcdPipe->record(c, ri, x); },
+            c, o,
+            [&](const rcd::LinearRgbImage& x) {
+                if (amazePipe)
+                    amazePipe->record(c, ai, {x.image, x.view, x.format, x.layout, x.width, x.height}, whiteBalance);
+                else
+                    rcdPipe->record(c, ri, x);
+            },
             [&](const vng4::LinearRgbImage& x) { vngPipe->record(c, vi, x); },
             [&](const rcd::LinearRgbImage& x, VkImageView m, float f, float a) {
                 vng4::LinearRgbImage y{x.image, x.view, x.format, x.layout, x.width, x.height};
@@ -618,9 +663,11 @@ struct DualDemosaicPipeline::Impl {
     bool telemetry(FrameTelemetry& o) {
         o = last;
         o.gpuEvents.clear();
-        rcd::FrameTelemetry rt{};
-        if (!rcdPipe->collectTelemetry(rt)) return false;
-        for (const auto& e : rt.gpuEvents) o.gpuEvents.push_back({e.name, e.milliseconds});
+        if (rcdPipe) {
+            rcd::FrameTelemetry rt{};
+            if (!rcdPipe->collectTelemetry(rt)) return false;
+            for (const auto& e : rt.gpuEvents) o.gpuEvents.push_back({e.name, e.milliseconds});
+        }
         if (cfg.autoContrast || cfg.contrastPercent > 0.0f) {
             vng4::FrameTelemetry vt{};
             if (!vngPipe->collectTelemetry(vt)) return false;
@@ -664,6 +711,13 @@ bool DualDemosaicPipeline::validateConfig(const PipelineConfig& c, const Pipelin
         w = "unknown optimizationMode";
     else if (c.pixelWorkgroupX != 16 || c.pixelWorkgroupY != 16)
         w = "dual pixel workgroup is compiled as 16x16";
+    else if (static_cast<uint32_t>(c.primary) > static_cast<uint32_t>(Primary::Amaze))
+        w = "unknown primary demosaicer";
+    else if (c.primary == Primary::Amaze && c.inputMode != InputMode::PackedCfaRgba16fImage &&
+             c.inputMode != InputMode::NormalizedFloatBuffer)
+        w = "dual AMaZE primary requires packed CFA or normalized buffer input";
+    else if (c.primary == Primary::Amaze && (c.width < 32 || c.height < 32))
+        w = "dual AMaZE primary requires width,height >= 32";
     if (reason) *reason = w;
     return !w;
 }
@@ -680,9 +734,29 @@ void DualDemosaicPipeline::record(VkCommandBuffer c, const PackedCfaImageView& i
     impl_->packed(c, i, o);
 }
 void DualDemosaicPipeline::setPassBoundary(std::function<void()> boundary) {
-    impl_->rcdPipe->setPassBoundary(boundary);
+    if (impl_->rcdPipe) impl_->rcdPipe->setPassBoundary(boundary);
+    if (impl_->amazePipe) impl_->amazePipe->setPassBoundary(boundary);
     impl_->vngPipe->setPassBoundary(boundary);
     impl_->passBoundary = std::move(boundary);
+}
+void DualDemosaicPipeline::setCommandBoundary(std::function<VkCommandBuffer()> boundary) {
+    impl_->commandBoundary = std::move(boundary);
+    if (!impl_->amazePipe) return;
+    if (!impl_->commandBoundary) {
+        impl_->amazePipe->setCommandBoundary({});
+        return;
+    }
+    Impl* impl = impl_.get();
+    impl_->amazePipe->setCommandBoundary([impl] {
+        const VkCommandBuffer next = impl->commandBoundary();
+        if (impl->active) *impl->active = next;
+        return next;
+    });
+}
+void DualDemosaicPipeline::setWhiteBalance(const std::array<float, 3>& rgb) {
+    for (float g : rgb)
+        if (!std::isfinite(g) || !(g > 0.0f)) throw std::invalid_argument("dual white balance must be finite > 0");
+    impl_->whiteBalance = rgb;
 }
 const PipelineConfig& DualDemosaicPipeline::config() const { return impl_->cfg; }
 void DualDemosaicPipeline::setContrastPercent(float v) {
@@ -709,10 +783,10 @@ uint32_t DualDemosaicPipeline::autoDetectionTileSize() const {
 }
 bool DualDemosaicPipeline::collectTelemetry(FrameTelemetry& o) { return impl_->telemetry(o); }
 uint64_t DualDemosaicPipeline::currentAllocatedBytes() const {
-    return impl_->live + impl_->rcdPipe->currentAllocatedBytes() + impl_->vngPipe->currentAllocatedBytes();
+    return impl_->live + impl_->primaryLive() + impl_->vngPipe->currentAllocatedBytes();
 }
 uint64_t DualDemosaicPipeline::peakAllocatedBytes() const {
-    return impl_->peak + impl_->rcdPipe->peakAllocatedBytes() + impl_->vngPipe->peakAllocatedBytes();
+    return impl_->peak + impl_->primaryPeak() + impl_->vngPipe->peakAllocatedBytes();
 }
 VkImage DualDemosaicPipeline::diagnosticRcdImage() const noexcept {
     return impl_ ? impl_->diagRcd.image : VK_NULL_HANDLE;
