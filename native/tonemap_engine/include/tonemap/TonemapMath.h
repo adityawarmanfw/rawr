@@ -4,6 +4,7 @@
 #include <stdexcept>
 
 #include "tonemap/AdaptiveTone.h"
+#include "tonemap/Agx.h"
 #include "tonemap/color/ColorSpace.h"
 
 namespace tonemap {
@@ -16,7 +17,9 @@ namespace tonemap {
 // value; TonemapEngine rejects larger values and never silently clamps them.
 inline constexpr float kMaxAePostGain = 16.0f;
 
-enum class RenderTransform : unsigned { Existing = 0, SRgb = 1, Rec709 = 2, Log = 3 };
+// AgX writes outputSpace.transfer (sRGB or Rec.709) from a parametric curve
+// instead of the RAWR NTRL LUT; see Agx.h.
+enum class RenderTransform : unsigned { Existing = 0, SRgb = 1, Rec709 = 2, Log = 3, AgX = 4 };
 
 struct TonemapParams {
     float exposureEV;
@@ -43,6 +46,8 @@ struct TonemapParams {
     RenderTransform renderTransform = RenderTransform::Existing;
     color::ColorSpace outputSpace{};
     AdaptiveToneParams adaptiveTone{};
+    // Read only by RenderTransform::AgX.
+    AgxParams agx{};
 };
 
 // Renderer configuration. These values describe the current validated rendering

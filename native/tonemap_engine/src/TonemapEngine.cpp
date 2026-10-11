@@ -36,8 +36,17 @@ struct alignas(16) GpuParameters {
     float neutralGamut[16], userInputGamut[16], userOutputGamut[16];
     uint32_t directRender[4];
     float adaptiveTone[4];
+    float agxAp1ToBase[16], agxBaseToRendering[16], agxRenderingToSrgb[16];
+    float agxLog[4];       // black EV, range EV, gamma, preserve hue
+    float agxLine[4];      // slope, intercept, target black, target white
+    float agxToe[4];       // power, transition x, transition y, scale
+    float agxShoulder[4];  // power, transition x, transition y, scale
+    float agxFallback[4];  // toe coefficient, toe power, shoulder coefficient, shoulder power
+    float agxLook[4];      // lift, slope, power, saturation
+    float agxLookLuma[4];
+    uint32_t agxFlags[4];  // convex toe, concave shoulder, look tuned, restore hue
 };
-static_assert(sizeof(GpuParameters) == 880, "GPU parameter layout changed");
+static_assert(sizeof(GpuParameters) == 1200, "GPU parameter layout changed");
 
 constexpr VkDeviceSize kRawLscBytes = 64 * 1024;
 struct RawPush {
@@ -90,9 +99,13 @@ bool validConfig(const TonemapConfig& config) noexcept {
 }
 
 bool validParams(const TonemapParams& params) noexcept {
-    if (static_cast<unsigned>(params.renderTransform) > 3 ||
+    if (static_cast<unsigned>(params.renderTransform) > 4 ||
         static_cast<unsigned>(params.outputSpace.gamut) > 7 ||
         static_cast<unsigned>(params.outputSpace.transfer) > 10) return false;
+    if (params.renderTransform == RenderTransform::AgX &&
+        (!validAgx(params.agx) || (params.outputSpace.transfer != color::TransferFunction::SRgb &&
+                                   params.outputSpace.transfer != color::TransferFunction::Rec709)))
+        return false;
     return validAdaptiveTone(params.adaptiveTone) && finite(params.exposureEV) && finite(params.blackPointEV) &&
            finite(params.shadowLiftEV) && finite(params.midtoneLiftEV) && finite(params.contrast) &&
            finite(params.shoulderStartEV) && finite(params.whitePointEV) && finite(params.highlightBiasEV) &&
@@ -109,6 +122,38 @@ bool supportsStorageImage(VkPhysicalDevice physicalDevice, VkFormat format) noex
     VkFormatProperties properties{};
     vkGetPhysicalDeviceFormatProperties(physicalDevice, format, &properties);
     return (properties.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) != 0;
+}
+
+void writeColumnMajor(float (&out)[16], const color::Mat3& rowMajor) {
+    for (int row = 0; row < 3; ++row)
+        for (int col = 0; col < 3; ++col) out[col * 4 + row] = rowMajor[row * 3 + col];
+    out[15] = 1.0f;
+}
+
+void writeAgxParameters(GpuParameters& gpu, const TonemapParams& params) {
+    const AgxCurve t = compileAgxCurve(agxWithHighlights(params.agx, params.highlightBiasEV));
+    const AgxMatrices m = compileAgxMatrices(params.agx.primaries);
+    writeColumnMajor(gpu.agxAp1ToBase, m.ap1ToBase);
+    writeColumnMajor(gpu.agxBaseToRendering, m.baseToRendering);
+    writeColumnMajor(gpu.agxRenderingToSrgb, m.renderingToSrgb);
+    const float log[4] = {t.blackEv, t.rangeEv, t.gamma, t.preserveHue};
+    const float line[4] = {t.slope, t.intercept, t.targetBlack, t.targetWhite};
+    const float toe[4] = {t.toePower, t.toeTransitionX, t.toeTransitionY, t.toeScale};
+    const float shoulder[4] = {t.shoulderPower, t.shoulderTransitionX, t.shoulderTransitionY, t.shoulderScale};
+    const float fallback[4] = {t.toeFallbackCoefficient, t.toeFallbackPower, t.shoulderFallbackCoefficient,
+                               t.shoulderFallbackPower};
+    const float look[4] = {t.lookLift, t.lookSlope, t.lookPower, t.lookSaturation};
+    std::memcpy(gpu.agxLog, log, sizeof(log));
+    std::memcpy(gpu.agxLine, line, sizeof(line));
+    std::memcpy(gpu.agxToe, toe, sizeof(toe));
+    std::memcpy(gpu.agxShoulder, shoulder, sizeof(shoulder));
+    std::memcpy(gpu.agxFallback, fallback, sizeof(fallback));
+    std::memcpy(gpu.agxLook, look, sizeof(look));
+    std::memcpy(gpu.agxLookLuma, m.renderingLuma.data(), sizeof(float) * 3);
+    gpu.agxFlags[0] = t.convexToe ? 1u : 0u;
+    gpu.agxFlags[1] = t.concaveShoulder ? 1u : 0u;
+    gpu.agxFlags[2] = t.lookTuned ? 1u : 0u;
+    gpu.agxFlags[3] = t.preserveHue != 0.0f ? 1u : 0u;
 }
 
 GpuParameters buildGpuParameters(const TonemapParams& params, const float* matrix,
@@ -134,6 +179,7 @@ GpuParameters buildGpuParameters(const TonemapParams& params, const float* matri
     gpu.directRender[0] = static_cast<uint32_t>(params.renderTransform);
     gpu.directRender[1] = static_cast<uint32_t>(params.outputSpace.gamut);
     gpu.directRender[2] = static_cast<uint32_t>(params.outputSpace.transfer);
+    if (params.renderTransform == RenderTransform::AgX) writeAgxParameters(gpu, params);
     std::memcpy(gpu.neutralGamut, conversions.neutral.data(), sizeof(gpu.neutralGamut));
     std::memcpy(gpu.userInputGamut, conversions.userInput.data(), sizeof(gpu.userInputGamut));
     std::memcpy(gpu.userOutputGamut, conversions.userOutput.data(), sizeof(gpu.userOutputGamut));

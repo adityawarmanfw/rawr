@@ -108,8 +108,21 @@ layout(std140, binding = 2) uniform TonemapGpuParams {
     mat4 userOutputGamut;
     uvec4 directRender; // transform, output gamut, output transfer, reserved
     vec4 adaptiveTone; // lift EV, key EV, protected highlight EV
+    mat4 agxAp1ToBase;       // AgX (directRender.x == 4) only, see agx.glsl
+    mat4 agxBaseToRendering;
+    mat4 agxRenderingToSrgb;
+    vec4 agxLog;             // black EV, range EV, gamma, preserve hue
+    vec4 agxLine;            // slope, intercept, target black, target white
+    vec4 agxToe;             // power, transition x, transition y, scale
+    vec4 agxShoulder;        // power, transition x, transition y, scale
+    vec4 agxFallback;        // toe coefficient, toe power, shoulder coefficient, shoulder power
+    vec4 agxLook;            // lift, slope, power, saturation
+    vec4 agxLookLuma;
+    uvec4 agxFlags;          // convex toe, concave shoulder, look tuned, restore hue
 }
 P;
+
+#include "agx.glsl"
 
 // RAWR NTRL production technical LUT. Baked 65^3 transform with contract:
 // DaVinci Wide Gamut / DaVinci Intermediate -> encoded sRGB.
@@ -555,7 +568,7 @@ void main() {
 #else
     vec3 camera = imageLoad(inputImage, source).rgb;
 #if RAWR_TONEMAP_VIDEO_MONITOR
-    if (P.directRender.x == 0u) camera = applyHighlightTone(camera);
+    if (P.directRender.x == 0u || P.directRender.x == 4u) camera = applyHighlightTone(camera);
 #endif
 #endif
     vec3 work = mat3(P.cameraToWorking) * camera;
@@ -572,17 +585,25 @@ void main() {
                           RAWR_TF_LINEAR, P.directRender.y, P.directRender.z);
     } else if (P.directRender.x != 0u) {
         vec3 linear = work * exp2(P.renderConfig.y + P.knotX4_exposure_sat_gc.y);
-        linear = applySceneLinearHighlightCompression(linear, P.toneControls.y);
-        vec3 srgbLinear = clamp(rawrToSrgbLinear(linear, RAWR_GAMUT_ACESCG_AP1), 0.0, 1.0);
+        vec3 srgbLinear;
+        if (P.directRender.x == 4u) {
+            // AgX has its own shoulder; negative Highlights softens it on the
+            // host instead of compressing scene-linear here.
+            srgbLinear = clamp(agxRender(linear), 0.0, 1.0);
+        } else {
+            linear = applySceneLinearHighlightCompression(linear, P.toneControls.y);
+            srgbLinear = clamp(rawrToSrgbLinear(linear, RAWR_GAMUT_ACESCG_AP1), 0.0, 1.0);
+        }
+        bool rec709 = P.directRender.x == 2u || (P.directRender.x == 4u && P.directRender.z == RAWR_TF_REC709);
         // Preserve the direct path exactly when creative controls are neutral.
         bool adjusted = any(notEqual(P.toneControls, vec4(0.0))) ||
                         any(notEqual(P.renderConfig.zw, vec2(0.0))) ||
                         P.knotX4_exposure_sat_gc.z != 0.0 || P.colorControls.x != 0.0;
         if (adjusted) {
             encoded = applyOutputColorControls(applyPhotographicToneControls(srgbOETF(srgbLinear)));
-            if (P.directRender.x == 2u) encoded = rawrEncodeTransfer(srgbEOTF(encoded), RAWR_TF_REC709);
+            if (rec709) encoded = rawrEncodeTransfer(srgbEOTF(encoded), RAWR_TF_REC709);
         } else {
-            encoded = P.directRender.x == 2u ? rawrEncodeTransfer(srgbLinear, RAWR_TF_REC709) : srgbOETF(srgbLinear);
+            encoded = rec709 ? rawrEncodeTransfer(srgbLinear, RAWR_TF_REC709) : srgbOETF(srgbLinear);
         }
     } else {
         // RAWR NTRL technical render. cameraToWorking produces scene-linear AP1.
