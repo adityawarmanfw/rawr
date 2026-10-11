@@ -194,17 +194,18 @@ enum class ExposureStep(val label: String) {
     Half("1/2 EV")
 }
 
+/** How a boost request above the limit rolls off (native knee width 2 / 1 / 0.5 EV). */
 enum class HighlightProtection(val label: String, val kneeSummary: String) {
-    Low("Low", "Soft 2EV knee past the cap · brightest shadows, most clipping risk"),
-    Normal("Normal", "1EV knee past the cap · balanced"),
-    High("High", "Hard 0.5EV knee past the cap · darkest shadows, safest highlights")
+    Low("Soft", "Up to 2 EV more past the limit · brightest, most clipping risk"),
+    Normal("Normal", "Up to 1 EV more past the limit · balanced"),
+    High("Hard", "Up to 0.5 EV more past the limit · darkest, safest highlights")
 }
 
-/** Render-side scene key lift on top of the AE post-gain; native AutoKeyMode ids. */
+/** Shadow lift (adaptive scene-key curve) after the brightness boost; native AutoKeyMode ids. */
 enum class AutoKeyExposure(val label: String, val summary: String, val nativeId: Int) {
-    Off("Off", "Renders the HAL exposure as delivered", 0),
-    Natural("Natural", "Balanced midtones, up to 1 EV · protects highlights", 1),
-    Strong("Strong", "Brighter midtones, up to 3 EV · protects highlights", 2)
+    Off("Off", "No lift · renders the boosted exposure as is", 0),
+    Natural("Natural", "Lifts shadows up to 1 EV", 1),
+    Strong("Strong", "Lifts shadows up to 3 EV", 2)
 }
 
 enum class ColorRenderProfile(val label: String) {
@@ -880,7 +881,7 @@ data class SettingsValues(
     val antiFlicker: AntiFlicker = AntiFlicker.Auto,
     val exposureStep: ExposureStep = ExposureStep.Third,
     val highlightProtection: HighlightProtection = HighlightProtection.High,
-    val autoKeyExposure: AutoKeyExposure = AutoKeyExposure.Off,
+    val autoKeyExposure: AutoKeyExposure = AutoKeyExposure.Natural,
     val maxPostGainId: String = "gain.200",
     val autoMinFpsId: String = "fps.12",
     val controlSurfaceStyle: ControlSurfaceStyle = ControlSurfaceStyle.Basic,
