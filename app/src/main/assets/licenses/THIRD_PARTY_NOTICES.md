@@ -12,11 +12,13 @@ of this file. The GNU GPL v3 text is the repository `LICENSE`.
 
 | Component | Used in | Upstream | License |
 |---|---|---|---|
-| darktable (`denoiseprofile`) | `native/raw_denoise` | https://github.com/darktable-org/darktable | GPL-3.0-or-later |
-| RawTherapee (dual demosaic, Coloropp highlight, false-colour correction) | `native/raw_demosaic/dual`, `native/raw_highlight`, `native/false_color_correction` | https://github.com/RawTherapee/RawTherapee | GPL-3.0-or-later |
-| librtprocess (RCD, VNG4 demosaic) | `native/raw_demosaic/rcd`, `native/raw_demosaic/vng4` | https://github.com/CarVac/librtprocess | GPL-3.0-or-later |
+| darktable (`denoiseprofile`, AMaZE demosaic reference) | `native/raw_denoise`, `native/raw_demosaic/amaze` | https://github.com/darktable-org/darktable | GPL-3.0-or-later |
+| RawTherapee (dual demosaic RCD+VNG4 / AMaZE+VNG4, Coloropp highlight, false-colour correction) | `native/raw_demosaic/dual`, `native/raw_highlight`, `native/false_color_correction` | https://github.com/RawTherapee/RawTherapee | GPL-3.0-or-later |
+| librtprocess (RCD, VNG4, AMaZE demosaic) | `native/raw_demosaic/rcd`, `native/raw_demosaic/vng4`, `native/raw_demosaic/amaze` | https://github.com/CarVac/librtprocess | GPL-3.0-or-later |
+| AMaZE GPU pass structure, adapted from a privately shared GPL-3.0 implementation (2026) | `native/raw_demosaic/amaze` | — | GPL-3.0-or-later |
 | spektrafilm / spektrafilm-ofx | `native/spektrafilm`, `app/src/main/assets/spektrafilm` | https://github.com/chaert-s/spektrafilm-ofx , https://github.com/andreavolpato/spektrafilm | GPL-3.0-only |
 | Handheld Multi-Frame Super-Resolution (Wronski et al.) | `native/multiframe` | https://github.com/Jamy-L/Handheld-Multi-Frame-Super-Resolution | MIT |
+| hdr-plus-swift / Burst Photo (HDR+ spatial merge) | `native/multiframe/merge_hdrplus` | https://github.com/martin-marek/hdr-plus-swift | GPL-3.0 |
 | GALOSH | `native/galosh` | https://github.com/luxgrain/GALOSH | Apache-2.0 |
 | libultrahdr (Ultra HDR / JPEG_R mux) | `native/gainmap` | https://github.com/google/libultrahdr | Apache-2.0 |
 | Oklab gamut clipping (Björn Ottosson) | `native/tonemap_engine` | https://bottosson.github.io/posts/gamutclipping/ | MIT |
@@ -25,6 +27,7 @@ of this file. The GNU GPL v3 text is the repository `LICENSE`.
 | libadrenotools | build-time fetch (Adreno driver loading) | https://github.com/bylaws/libadrenotools | BSD-2-Clause |
 | AndroidX, Jetpack Compose, Media3 | Gradle dependencies | https://developer.android.com/jetpack | Apache-2.0 |
 | Kotlin standard library, kotlinx.coroutines | Gradle dependencies | https://kotlinlang.org | Apache-2.0 |
+| Reorderable (Compose drag-to-reorder) | Gradle dependency | https://github.com/Calvin-LL/Reorderable | Apache-2.0 |
 
 Vendored full license texts in this repository:
 
@@ -46,7 +49,12 @@ Legal notices screen: `LICENSE`, `NOTICE`, `THIRD_PARTY_NOTICES.md`,
 - **darktable** — Copyright (C) the darktable developers. GPL-3.0-or-later.
 - **RawTherapee** — Copyright (C) the RawTherapee contributors. GPL-3.0-or-later.
 - **librtprocess** — Copyright (C) the librtprocess contributors; RCD algorithm
-  by Luis Sanz Rodríguez. GPL-3.0-or-later.
+  by Luis Sanz Rodríguez; AMaZE (Aliasing Minimization and Zipper Elimination)
+  algorithm Copyright (C) 2008-2010 Emil Martinec, optimizations by Ingo
+  Weyrich. GPL-3.0-or-later.
+- **AMaZE GPU port** — the WGSL pass structure was adapted from a privately
+  shared GPL-3.0 implementation (2026); copyright in that work remains with its
+  author. GPL-3.0-or-later.
 - **spektrafilm / spektrafilm-ofx** — Copyright (C) Aedan Diez; profiles
   Copyright (C) 2026 Andrea Volpato. GPL-3.0-only (code); CC BY-SA 4.0
   (profiles).
