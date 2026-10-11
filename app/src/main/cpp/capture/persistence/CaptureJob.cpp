@@ -483,6 +483,9 @@ CaptureJob load(const std::string& path,
     uint64_t marker = 0;
     r(marker);
     if (marker != footer) throw std::runtime_error("capture_job_commit_invalid");
+    // Not persisted: the DNG shading decision follows the job's develop setting.
+    job.dng.appLensShadingCorrection = job.jpeg.develop.lensShadingCorrectionEnabled;
+    job.mergedDng.appLensShadingCorrection = job.jpeg.develop.lensShadingCorrectionEnabled;
     return job;
 }
 }  // namespace rawrcam::capture::persistence

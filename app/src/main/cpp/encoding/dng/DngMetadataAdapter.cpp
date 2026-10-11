@@ -328,9 +328,11 @@ std::optional<TinyDngWriteParams> makeTinyDngWriteParams(const rawrcam::imaging:
         raw.noise_profile_count = 6;
     }
 
-    // GainMap OpcodeList2 from the Camera2 lens-shading map.
-    const bool shadingAlreadyApplied = ctx.hasLensShadingApplied && ctx.lensShadingApplied;
-    if (!frame.metadata.lensShadingMap.empty() && !shadingAlreadyApplied) {
+    // GainMap OpcodeList2 from the Camera2 lens-shading map, written exactly
+    // when the app's render applies that map, so the DNG renders like the
+    // capture's JPEG. The HAL's shading-applied flag is recorded in provenance
+    // but does not decide this: the app applies the map regardless of it.
+    if (!frame.metadata.lensShadingMap.empty() && captureContext.appLensShadingCorrection) {
         const DngGainMapArea area{gm->activeTop, gm->activeLeft, gm->activeBottom - gm->activeTop,
                                   gm->activeRight - gm->activeLeft, storedPattern};
         if (!appendLensShadingGainMaps(p, frame.metadata, area, error)) return std::nullopt;

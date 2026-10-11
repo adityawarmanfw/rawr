@@ -135,8 +135,11 @@ std::vector<uint8_t> buildDngProvenance(const rawrcam::imaging::RawSnapshot& fra
                                      std::to_string(*frame.metadata.requestedSensitivity));
     if (ctx.hasLensShadingApplied)
         prov.extensions.emplace_back("com.rawrcam.shading.applied", ctx.lensShadingApplied ? "true" : "false");
-    if (!frame.metadata.lensShadingMap.empty() && ctx.hasLensShadingApplied && ctx.lensShadingApplied)
-        prov.extensions.emplace_back("com.rawrcam.shading.gainmap_skipped", "already_applied");
+    // HAL-reported flag above; whether this DNG carries the map follows the
+    // app's own render decision (DngMetadataAdapter).
+    if (!frame.metadata.lensShadingMap.empty())
+        prov.extensions.emplace_back("com.rawrcam.shading.gainmap",
+                                     captureContext.appLensShadingCorrection ? "written" : "skipped_app_lsc_off");
     if (ctx.hasGreenSplit)
         prov.extensions.emplace_back("com.rawrcam.sensor.green_split", std::to_string(ctx.greenSplit));
     if (!ctx.opticalBlackRegions.empty())

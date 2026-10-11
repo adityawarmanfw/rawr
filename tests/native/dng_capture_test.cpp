@@ -115,8 +115,28 @@ int main() {
     capture.baselineExposureEV = 2.0f;
     capture.processingRecipe = R"({"schema":"com.rawrcam.processing-recipe","version":1,"filmSimEnabled":true})";
     capture.resolvedRecipe = R"({"version":1,"aePostGain":4})";
+    capture.appLensShadingCorrection = true;
     auto good = makeFrame(true);
     std::string error;
+
+    // The GainMap follows the app's render decision, not the HAL flag: a HAL
+    // reporting shading as applied still gets the map when the app applies it,
+    // and the map is omitted when the app renders without it.
+    for (const bool hal : {false, true}) {
+        for (const bool app : {false, true}) {
+            auto frame = makeFrame(true);
+            auto ctx = std::make_shared<rawrcam::metadata::CameraContextMetadata>(*frame.metadata.cameraContext);
+            ctx->hasLensShadingApplied = true;
+            ctx->lensShadingApplied = hal;
+            frame.metadata.cameraContext = ctx;
+            auto shading = capture;
+            shading.appLensShadingCorrection = app;
+            auto params = rawrcam::encoding::dng::makeTinyDngWriteParams(frame, shading, &error);
+            if (!params) return 30;
+            if (params->raw.opcode_count != (app ? 4 : 0)) return 31;
+            if (!privateHas(params->privateData, app ? "\"written\"" : "\"skipped_app_lsc_off\"")) return 32;
+        }
+    }
 
     for (int pass = 0; pass < 2; ++pass) {
         capture.compression = pass == 0 ? rawrcam::encoding::dng::DngCompression::LosslessJpeg
