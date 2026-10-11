@@ -169,6 +169,12 @@ tasks.withType<org.gradle.api.tasks.compile.JavaCompile>().configureEach {
     options.compilerArgs.addAll(listOf(allLint, "-Werror"))
 }
 
+// AgxPresetSyncTest reads the native AgX preset table; rerun it when the header changes.
+tasks.withType<Test>().configureEach {
+    inputs.file(rootProject.file("native/tonemap_engine/include/tonemap/Agx.h"))
+        .withPropertyName("agxPresetHeader").withPathSensitivity(PathSensitivity.RELATIVE)
+}
+
 // Kotlin LSP's Android importer reads generated source providers and javac arguments.
 // Its prepare task currently misses BuildConfig and nested test preparation (upstream #253).
 // Wire the producers into that task only during language-server import; ordinary Gradle

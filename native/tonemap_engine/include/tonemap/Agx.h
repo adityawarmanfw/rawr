@@ -191,16 +191,31 @@ inline AgxPrimaries agxSmoothPrimaries() {
     return p;
 }
 
+// Per-preset defaults of the five app-facing controls, in AgxPreset order:
+// white EV, shoulder power, toe power, purity (master outset), preserve hue.
+// The app mirrors this table in AgxSettings.kt; AgxPresetSyncTest reads it
+// from this file, so keep it a plain table of float literals.
+// AGX_PRESET_CONTROLS_BEGIN
+inline constexpr float kAgxPresetControls[kAgxPresetCount][5] = {
+    {6.5f, 3.30f, 1.50f, 1.0f, 0.6f},  // Default
+    {6.5f, 1.50f, 1.50f, 1.0f, 0.6f},  // BlenderBase
+    {6.5f, 1.50f, 1.50f, 1.0f, 0.6f},  // BlenderPunchy
+    {6.5f, 3.71f, 1.40f, 1.0f, 1.0f},  // Sigmoid
+    {6.5f, 3.02f, 1.61f, 0.0f, 0.0f},  // Smooth
+};
+// AGX_PRESET_CONTROLS_END
+
 // darktable's built-in presets.
 inline AgxParams agxPreset(AgxPreset preset) {
     AgxParams p{};
     switch (preset) {
         case AgxPreset::Default:
             break;
+        case AgxPreset::Sigmoid:
+            p.contrast = 3.07f;
+            break;
         case AgxPreset::BlenderBase:
         case AgxPreset::BlenderPunchy: {
-            p.toePower = 1.5f;
-            p.shoulderPower = 1.5f;
             p.gamma = 2.4f;
             // Blender's 2.4 contrast at gamma 2.4, expressed relative to the
             // 2.2-gamma slope compensation applied when compiling.
@@ -212,20 +227,17 @@ inline AgxParams agxPreset(AgxPreset preset) {
             }
             break;
         }
-        case AgxPreset::Sigmoid:
-            p.preserveHue = 1.0f;
-            p.contrast = 3.07f;
-            p.toePower = 1.40f;
-            p.shoulderPower = 3.71f;
-            break;
         case AgxPreset::Smooth:
             p.primaries = agxSmoothPrimaries();
-            p.preserveHue = 0.0f;
             p.contrast = 2.98f;
-            p.toePower = 1.61f;
-            p.shoulderPower = 3.02f;
             break;
     }
+    const float* c = kAgxPresetControls[static_cast<uint32_t>(preset)];
+    p.whiteEv = c[0];
+    p.shoulderPower = c[1];
+    p.toePower = c[2];
+    p.primaries.masterOutset = c[3];
+    p.preserveHue = c[4];
     return p;
 }
 
