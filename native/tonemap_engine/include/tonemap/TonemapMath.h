@@ -85,7 +85,7 @@ constexpr TonemapPreset NeutralBaseline() noexcept {
          1.0f},  // aePostGain
         {        /* config */
          0.18f,  // middleGray
-         0.70f,  // vibranceStrength (+100 weak-color boost)
+         0.85f,  // vibranceStrength (+100 weak-color boost, as Saturation+100)
          0.02f,  // vibranceShadowStart
          0.10f}  // vibranceShadowEnd
     };

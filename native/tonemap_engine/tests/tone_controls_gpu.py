@@ -145,7 +145,9 @@ REFERENCE_SPACES = {'ntrl': (), 'srgb': SRGB, 'rec709': REC709, 'lut_srgb': iden
 
 
 def reference_error(render, identity):
-    """Worst gray-ramp deviation from the pre-0.4.0 response, per space."""
+    """Worst gray-ramp Shadows deviation from the pre-0.4.0 response, per space.
+    (Midtones and Contrast were redesigned; their pre-0.4.0 curves stay in the
+    fixture for reference only.)"""
     ref = json.loads((ENGINE / 'tests/lut_fixtures/grade_reference_pre040.json').read_text())
     ev = np.array(ref['ev'])
     worst = {}
@@ -153,7 +155,7 @@ def reference_error(render, identity):
         lut = identity if space.startswith('lut_') else None
         base = np.interp(ev, GRAY_EV, luma(render(tone(), lut, extra))[0])
         for key, target in ref['curves'].items():
-            if not key.startswith(space + '/'):
+            if not key.startswith(space + '/S'):
                 continue
             name, value = key.split('/')[1][0], int(key.split('/')[1][1:])
             got = np.interp(ev, GRAY_EV, luma(render(tone(**{name: value}), lut, extra))[0]) - base
@@ -249,6 +251,33 @@ def metrics(render, lut, identity):
     m['srgb_lut_recovered_slope_after'] = float(np.diff(l1[above_white]).min())
     # Single sliders are unchanged except where intended (gray + moderate color rows).
     m.update({f'grade_vs_pre040_{k}': v for k, v in reference_error(render, identity).items()})
+    # Midtones: the lift peaks near 18% gray and does not flatten the midtones
+    # (-2..0 EV span) the way the pre-0.4.0 lower-midtone bump did.
+    for space, extra in (('ntrl', ()), ('srgb', SRGB), ('lut', REFERENCE_SPACES['lut_srgb'])):
+        lut_ = identity if space == 'lut' else None
+        y0, y1 = (luma(render(t, lut_, extra))[0] for t in (tone(), tone(M=100)))
+        lift = np.where(GRAY_EV < 2.0, y1 - y0, 0.0)
+        m[f'mid_peak_ev_{space}'] = float(GRAY_EV[np.argmax(lift)])
+        span = lambda y: float(np.interp(0.0, GRAY_EV, y) - np.interp(-2.0, GRAY_EV, y))
+        m[f'mid_span_ratio_{space}'] = span(y1) / span(y0)
+        # Contrast +-100: a visible S-curve, mean |delta| at -2 and +1 EV.
+        for c in (100, -100):
+            yc = luma(render(tone(C=c), lut_, extra))[0]
+            m[f'contrast{c:+d}_size_{space}'] = float(np.mean(np.abs(
+                np.interp((-2.0, 1.0), GRAY_EV, yc) - np.interp((-2.0, 1.0), GRAY_EV, y0))))
+    # Vibrance vs Saturation: gain on muted vs strong midtone colors.
+    def sat_gain(t):
+        def lsat(img):
+            c = img[GRAY_ROWS:GRAY_ROWS + COLOR_ROWS]
+            c = np.where(c <= 0.04045, c / 12.92, ((np.maximum(c, 0) + 0.055) / 1.055) ** 2.4)
+            return (c.max(axis=2) - c.min(axis=2)) / np.maximum(c.max(axis=2), 1e-6)
+        img0 = render(tone())
+        s0, s1 = lsat(img0), lsat(render(t))
+        y = luma(img0[GRAY_ROWS:GRAY_ROWS + COLOR_ROWS])
+        g = lambda lo, hi: float(np.median((s1 / np.maximum(s0, 1e-6))[(y > 0.15) & (y < 0.8) & (s0 >= lo) & (s0 < hi)]))
+        return g(0.2, 0.4), g(0.6, 0.8)
+    m['vib_plus_muted'], m['vib_plus_strong'] = sat_gain(tone(VIB=100))
+    m['vib_minus_muted'], m['vib_minus_strong'] = sat_gain(tone(VIB=-100))
     rows = slice(0, GRAY_ROWS + COLOR_ROWS)
     for n in ('S', 'H', 'C', 'M'):
         for s in (-100, 50, 100):
@@ -288,14 +317,20 @@ def main():
         ('LUT overshoot stays finite', after['lut_bad_pixels'] == 0),
         ('Vibrance+ spares deep shadows', after['vibrance_gain_deep_shadow'] < 1.05 < after['vibrance_gain_midtone']),
         ('Blacks+ does not amplify sub-code noise', after['blacks_plus_subcode_slope'] < 8.0),
+        # Vibrance spares strong color, so the all-color median boost is ~1.13.
         ('Vibrance guard is in linear light (sRGB)',
-         after['vibrance_srgb_deep_shadow'] < 1.05 < 1.2 < after['vibrance_srgb_low_midtone']),
+         after['vibrance_srgb_deep_shadow'] < 1.05 < 1.1 < after['vibrance_srgb_low_midtone']),
         ('Contrast keeps 18% gray in every grade space', after['contrast_pivot_drift'] < 3e-3),
         ('Log black stays at the curve black', after['log_black_drift'] < 1e-2),
         ('Highlights- compresses the top', after['highlights_minus_top_drop'] > 0.01),
         ('Highlights- leaves shadows alone', after['highlights_minus_shadow_change'] < 1e-4),
         ('Highlights- recovers clipped sRGB', after['srgb_clipped_slope_before'] < 1e-6 < after['srgb_recovered_slope_after']),
-        ('Grade matches the pre-0.4.0 response in every space (<0.03)', max(v for k, v in after.items() if k.startswith('grade_vs_pre040_')) < 0.03),
+        ('Shadows matches the pre-0.4.0 response in every space (<0.03)', max(v for k, v in after.items() if k.startswith('grade_vs_pre040_')) < 0.03),
+        ('Midtones+ peaks within 1 stop of 18% gray', all(abs(v) <= 1.0 for k, v in after.items() if k.startswith('mid_peak_ev_'))),
+        ('Midtones+ keeps midtone contrast (-2..0 EV span >= 0.95x)', all(v >= 0.95 for k, v in after.items() if k.startswith('mid_span_ratio_'))),
+        ('Contrast +-100 is a visible S-curve (0.04-0.12 at -2/+1 EV)', all(0.04 <= v <= 0.12 for k, v in after.items() if k.startswith(('contrast+', 'contrast-')))),
+        ('Vibrance+ boosts muted color, spares strong', after['vib_plus_muted'] > 1.5 and after['vib_plus_strong'] < 1.15),
+        ('Vibrance- removes muted color first', after['vib_minus_muted'] < 0.35 and after['vib_minus_strong'] > 0.8),
         ('Highlights- recovers under an sRGB-input LUT',
          after['srgb_lut_clipped_slope_before'] < 1e-6 < after['srgb_lut_recovered_slope_after']),
     ]

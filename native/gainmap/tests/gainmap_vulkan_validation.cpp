@@ -63,12 +63,13 @@ struct GradeTapOracle {
 };
 const GradeTapOracle* gGradeTap = nullptr;
 
-// grade.glsl rawrGradeParams: contrast +/-, midtones +/-, center, width, shadows +/-, center, width.
-constexpr float kGradeParams[3][10] = {
-    {0.0900f, 0.1245f, 0.0370f, 0.0421f, -0.1491f, 0.1061f, 0.0464f, 0.0094f, -0.1448f, 0.0925f},
-    {0.0925f, 0.1256f, 0.0412f, 0.0457f, -0.1648f, 0.1031f, 0.0517f, 0.0103f, -0.2211f, 0.1595f},
-    {0.1068f, 0.1352f, 0.0509f, 0.0522f, -0.2330f, 0.1612f, 0.0627f, 0.0106f, -0.3414f, 0.2961f},
+// grade.glsl rawrGradeParams: contrast +/-, shadows +/-, center, width.
+constexpr float kGradeParams[3][6] = {
+    {0.4961f, 0.6851f, 0.0464f, 0.0094f, -0.1448f, 0.0925f},
+    {0.5192f, 0.7394f, 0.0517f, 0.0103f, -0.2211f, 0.1595f},
+    {0.5389f, 0.7143f, 0.0627f, 0.0106f, -0.3414f, 0.2961f},
 };
+constexpr float kMidStops = 0.6f, kMidWidth = 1.8f;
 
 float smooth01(float a, float b, float x) {
     const float t = std::fmin(std::fmax((x - a) / (b - a), 0.0f), 1.0f);
@@ -85,8 +86,15 @@ float gradeToneLuma(float y, const GradeTapOracle& g) {
     const auto bump = [](float x, float c, float w) { return std::exp(-((x - c) / w) * ((x - c) / w)); };
     const float x = std::fmax(d - 0.30f, 0.0f), w = 0.10f;
     const float hl = 0.10f * smooth01(0.02f, 0.30f, d) + 0.25f * (x < w ? x * x / (2.0f * w) : x - 0.5f * w);
-    y += g.tone[3] * (g.tone[3] > 0.0f ? G[2] : G[3]) * bump(d, G[4], G[5]);
-    y += g.tone[2] * (g.tone[2] > 0.0f ? G[6] : G[7]) * bump(d, G[8], G[9]) *
+    if (g.tone[3] != 0.0f) {
+        const float lin = tonemap::color::decodeTransfer(y, g.transfer);
+        const float gray = tonemap::color::decodeTransfer(g.pivot, g.transfer);
+        if (lin > 0.0f && gray > 0.0f) {
+            const float ev = std::log2(lin / gray) / kMidWidth;
+            y = tonemap::color::encodeTransfer(lin * std::exp2(g.tone[3] * kMidStops * std::exp(-ev * ev)), g.transfer);
+        }
+    }
+    y += g.tone[2] * (g.tone[2] > 0.0f ? G[2] : G[3]) * bump(d, G[4], G[5]) *
          smooth01(g.black, g.black + 0.25f * (g.pivot - g.black), yr);
     y += g.tone[1] * hl;
     return y;
@@ -95,11 +103,17 @@ float gradeChromaGain(const float lin[3], float linY, const GradeTapOracle& g) {
     if (g.sat == 0.0f && g.vib == 0.0f) return 1.0f;
     const float satGain = g.sat >= 0.0f ? 1.0f + 0.85f * g.sat : std::fmax(0.0f, 1.0f + g.sat);
     const float r = std::fmax(lin[0], 0.0f), gg = std::fmax(lin[1], 0.0f), b = std::fmax(lin[2], 0.0f);
-    const float hi = std::fmax(r, std::fmax(gg, b));
-    const float occ = std::fmin(std::fmax((hi - std::fmin(r, std::fmin(gg, b))) / std::fmax(hi, 0.06f), 0.0f), 1.0f);
-    const float vibGain = g.vib >= 0.0f ? 1.0f + g.vibStrength * g.vib * std::pow(std::fmax(1.0f - occ, 0.0f), 0.30f) *
-                                                    smooth01(g.guardStart, g.guardEnd, linY)
-                                        : 1.0f + (std::pow(occ, 4.0f) - 1.0f) * -g.vib;
+    const float hi = std::fmax(r, std::fmax(gg, b)), lo = std::fmin(r, std::fmin(gg, b));
+    const float occ = std::fmin(std::fmax((hi - lo) / std::fmax(hi, 0.06f), 0.0f), 1.0f);
+    float vibGain;
+    if (g.vib >= 0.0f) {
+        const float weak = 1.0f - smooth01(0.30f, 0.85f, occ);
+        const float hue = (gg - b) / std::fmax(r - b, 1e-6f);
+        const float skin = r >= gg && gg >= b ? std::exp(-((hue - 0.45f) / 0.22f) * ((hue - 0.45f) / 0.22f)) : 0.0f;
+        vibGain = 1.0f + g.vibStrength * g.vib * weak * (1.0f - 0.67f * skin) * smooth01(g.guardStart, g.guardEnd, linY);
+    } else {
+        vibGain = 1.0f + g.vib * (1.0f - smooth01(0.25f, 0.75f, occ));
+    }
     return satGain * vibGain;
 }
 

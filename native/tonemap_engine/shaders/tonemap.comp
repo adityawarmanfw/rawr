@@ -257,7 +257,8 @@ bool gradeActive() {
 }
 
 // sceneLinear (AP1) feeds only Vibrance's protections, which are thresholds in
-// light, not slider feel, so they act the same in every grade space.
+// light, not slider feel, so they act the same in every grade space. They are
+// judged in linear sRGB, as the gain-map tap does.
 // Tone is applied as a linear-light gain (decoded new luma over old), as the
 // gain-map tap does, so it moves brightness without changing saturation; a
 // shift of the encoded channels would desaturate lifts and oversaturate cuts.
@@ -265,13 +266,13 @@ vec3 applyGrade(vec3 e, vec3 lumaWeights, float pivot, float black, uint tf, uin
     if (!gradeActive()) return e;
     vec4 tone = clamp(vec4(P.toneControls.x, P.toneControls.y, P.renderConfig.z, P.renderConfig.w), -100.0, 100.0) * 0.01;
     float y0 = dot(lumaWeights, e);
-    float y = rawrGradeToneLuma(y0, pivot, black, tone, set);
+    float y = rawrGradeToneLuma(y0, pivot, black, tone, set, tf);
     float lin0 = rawrTfDecode1(y0, tf);
     if (y != y0 && lin0 > 1e-6) {
         e = rawrEncodeTransfer(rawrDecodeTransfer(e, tf) * (max(rawrTfDecode1(y, tf), 0.0) / lin0), tf);
         y0 = dot(lumaWeights, e);
     }
-    float chromaGain = rawrGradeChromaGain(sceneLinear, dot(AP1_LUMA, sceneLinear),
+    float chromaGain = rawrGradeChromaGain(rawrToSrgbLinear(sceneLinear, RAWR_GAMUT_ACESCG_AP1), dot(AP1_LUMA, sceneLinear),
                                            clamp(P.exposureSaturation.z, -100.0, 100.0) * 0.01,
                                            clamp(P.colorControls.x, -100.0, 100.0) * 0.01, P.colorControls.y,
                                            P.colorControls.zw);
