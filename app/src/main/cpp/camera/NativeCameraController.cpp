@@ -10,6 +10,7 @@
 #include <cmath>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <thread>
 #include <utility>
@@ -105,6 +106,9 @@ struct NativeCameraController::Impl final : CameraEventSink {
     const ProfileMatch builtInMatch = deviceProfileMatch();
     CameraProfile profile = builtInCameraProfile(activeProfileId(builtInMatch));
     std::string preferredCameraId;
+    // cameraId/physicalCameraId routes whose HAL rejected the companion YUV
+    // stream; they start RAW-only for the rest of this process.
+    std::set<std::string> rawOnlyRoutes;
     std::string accessRoute = "direct";
     bool oisEnabledPreference = true;
     // User preference to bypass Camera2 AE priority; the HAL's advertised
@@ -430,8 +434,10 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // along: some HALs (MediaTek) accept a RAW-only session but never
         // deliver a RAW buffer. `debug.rawr.companion_stream 0|1` overrides.
         const std::string companionOverride = systemProperty("debug.rawr.companion_stream");
+        const std::string companionRouteKey = route.cameraId + '/' + route.physicalCameraId;
         const bool companionStream =
-            companionOverride == "1" || (companionOverride != "0" && !builtInMatch.verified);
+            companionOverride == "1" || (companionOverride != "0" && !builtInMatch.verified &&
+                                         !rawOnlyRoutes.count(companionRouteKey));
         std::ostringstream selection;
         selection << "CAMERA_NDK_SELECTION profile=" << profile.id << " model=" << deviceModel
                   << " lensId=" << route.lensId << " cameraId=" << route.cameraId
@@ -482,6 +488,19 @@ struct NativeCameraController::Impl final : CameraEventSink {
         if (!opened || !deviceSession.createSession(window, selected, control, meteringRequestLocked(),
                                          ndkCallbacks, requests, [this](const std::string& line) { diag(line); },
                                          companionStream)) {
+            // Some HALs reject RAW + YUV at configure time (observed: physical
+            // RAW16 + YUV on a Xiaomi logical camera). Retry this route once
+            // RAW-only through a full reopen: the failed configure can take
+            // the device down with it.
+            if (opened && companionStream && companionOverride != "1" &&
+                rawOnlyRoutes.insert(companionRouteKey).second) {
+                rollbackCameraStartLocked(lock, "companion_session_rejected");
+                if (shutDown) return;
+                diag("CAMERA_COMPANION_FALLBACK route=" + companionRouteKey + " retry=raw_only");
+                active = true;
+                startLocked(lock);
+                return;
+            }
             rollbackCameraStartLocked(lock, "device_or_session");
             return;
         }

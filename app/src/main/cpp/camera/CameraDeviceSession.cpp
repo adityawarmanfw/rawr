@@ -224,7 +224,14 @@ bool CameraDeviceSession::open(const LensRoute& route, CameraCallbacks& callback
     }
 }
 bool CameraDeviceSession::addCompanionStream(const std::string& physicalCameraId, const Diagnostic& diag) {
-    const auto size = smallestYuvOutput(characteristics_, 320, 240);
+    // A physical output must use a size the physical camera advertises; the
+    // logical camera's list can differ and the HAL rejects the configure.
+    ACameraMetadata* sizeChars = characteristics_;
+    if (!physicalCameraId.empty() &&
+        !ok(ACameraManager_getCameraCharacteristics(manager_, physicalCameraId.c_str(), &sizeChars)))
+        sizeChars = nullptr;
+    const auto size = sizeChars ? smallestYuvOutput(sizeChars, 320, 240) : std::pair<int32_t, int32_t>{0, 0};
+    if (sizeChars && sizeChars != characteristics_) ACameraMetadata_free(sizeChars);
     const int32_t width = size.first, height = size.second;
     const auto fail = [&](const std::string& stage, int status) {
         diag("CAMERA_COMPANION_STREAM size=" + std::to_string(width) + "x" + std::to_string(height) +
