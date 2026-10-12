@@ -36,9 +36,9 @@ data class AgxValues(
     fun toNativeArray(): FloatArray = floatArrayOf(whiteEv, shoulderPower, toePower, purity, preserveHue)
 }
 
+/** Native also has Blender base (id 1); the app does not offer it. Saved selections fall back to [Default]. */
 enum class AgxPreset(val label: String, val nativeId: Int, val defaults: AgxValues) {
     Default("AgX", 0, AgxValues()),
-    BlenderBase("AgX Blender", 1, AgxValues(shoulderPower = 1.5f)),
     BlenderPunchy("AgX Punchy", 2, AgxValues(shoulderPower = 1.5f)),
     Sigmoid("AgX Sigmoid", 3, AgxValues(shoulderPower = 3.71f, toePower = 1.40f, preserveHue = 1f)),
     Smooth("AgX Smooth", 4, AgxValues(shoulderPower = 3.02f, toePower = 1.61f, purity = 0f, preserveHue = 0f))

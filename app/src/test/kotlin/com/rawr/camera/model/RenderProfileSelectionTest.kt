@@ -14,9 +14,9 @@ class RenderProfileSelectionTest {
 
     @Test fun catalogsAndSelectionsAreIndependent() {
         val photo = defaults.withRenderProfile(builtIn(ColorRenderProfile.SRgb))
-        assertEquals(listOf("RAWR NTRL", "AgX", "AgX Blender", "AgX Punchy", "AgX Sigmoid", "AgX Smooth", "sRGB"), photo.toRenderProfileQuickState().options.map { it.label })
+        assertEquals(listOf("RAWR NTRL", "AgX", "AgX Punchy", "AgX Sigmoid", "AgX Smooth", "sRGB"), photo.toRenderProfileQuickState().options.map { it.label })
         val video = photo.copy(captureModeId = "video").withRenderProfile(builtIn(ColorRenderProfile.Rec709))
-        assertEquals(listOf("RAWR NTRL", "AgX", "AgX Blender", "AgX Punchy", "AgX Sigmoid", "AgX Smooth", "Rec.709"), video.toRenderProfileQuickState().options.map { it.label })
+        assertEquals(listOf("RAWR NTRL", "AgX", "AgX Punchy", "AgX Sigmoid", "AgX Smooth", "Rec.709"), video.toRenderProfileQuickState().options.map { it.label })
         assertEquals(ColorRenderProfile.SRgb, video.copy(captureModeId = "photo").regularRenderProfile())
         assertEquals(video, video.withRenderProfile(builtIn(ColorRenderProfile.SRgb)))
         assertEquals(photo, photo.withRenderProfile(builtIn(ColorRenderProfile.Rec709)))

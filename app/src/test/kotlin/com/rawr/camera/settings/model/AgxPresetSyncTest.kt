@@ -24,9 +24,9 @@ class AgxPresetSyncTest {
 
     @Test fun presetDefaultsMatchNative() {
         val rows = nativeTable()
-        assertEquals(AgxPreset.entries.size, rows.size)
+        assertEquals(5, rows.size)  // native keeps all five darktable presets
+        assertEquals(AgxPreset.entries.size, AgxPreset.entries.map { it.nativeId }.distinct().size)
         AgxPreset.entries.forEach { preset ->
-            assertEquals(preset.ordinal, preset.nativeId)
             assertEquals(rows[preset.nativeId], preset.defaults.toNativeArray().toList(), "preset ${preset.name}")
         }
     }
