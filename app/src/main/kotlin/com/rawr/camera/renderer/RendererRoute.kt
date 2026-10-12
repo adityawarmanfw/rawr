@@ -10,8 +10,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import com.rawr.camera.ui.icons.Icons
-import com.rawr.camera.ui.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
@@ -29,10 +27,15 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.rawr.camera.storage.PickFile
+import com.rawr.camera.storage.launchPicker
+import com.rawr.camera.ui.icons.Icons
+import com.rawr.camera.ui.icons.automirrored.rounded.ArrowBack
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -59,7 +62,8 @@ internal fun RendererRoute(viewModel: RendererViewModel, onExit: () -> Unit) {
         }
     }
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
-    val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+    val context = LocalContext.current
+    val importer = rememberLauncherForActivityResult(PickFile()) { uri ->
         uri?.let(viewModel::import)
     }
     val exit: () -> Unit = viewModel::back
@@ -89,7 +93,7 @@ internal fun RendererRoute(viewModel: RendererViewModel, onExit: () -> Unit) {
                 actions = {
                     FilledTonalButton(
                         enabled = !busy && !loading,
-                        onClick = { importer.launch(arrayOf("image/x-adobe-dng", "image/dng", "application/octet-stream")) },
+                        onClick = { importer.launchPicker(context, arrayOf("image/x-adobe-dng", "image/dng", "application/octet-stream")) },
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
                         modifier = Modifier.testTag("renderer_import").padding(end = 8.dp).height(32.dp)
                     ) { Text("Import DNG", maxLines = 1) }
@@ -118,7 +122,7 @@ internal fun RendererRoute(viewModel: RendererViewModel, onExit: () -> Unit) {
                     jobs = jobs,
                     busy = busy,
                     loading = loading,
-                    onImport = { importer.launch(arrayOf("image/x-adobe-dng", "image/dng", "application/octet-stream")) },
+                    onImport = { importer.launchPicker(context, arrayOf("image/x-adobe-dng", "image/dng", "application/octet-stream")) },
                     onEdit = viewModel::edit,
                     onRenderOriginal = { item ->
                         notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)

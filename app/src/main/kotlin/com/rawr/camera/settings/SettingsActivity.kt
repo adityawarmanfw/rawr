@@ -1,6 +1,5 @@
 package com.rawr.camera.settings
 
-import androidx.core.net.toUri
 import android.Manifest
 import android.content.Context
 import android.content.Intent
@@ -13,6 +12,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.core.content.ContextCompat
+import androidx.core.net.toUri
 import com.rawr.camera.MainActivity
 import com.rawr.camera.integration.InternalTraceNative
 import com.rawr.camera.settings.architecture.ImportLutStage
@@ -26,6 +26,8 @@ import com.rawr.camera.settings.preferences.GpuDriverFileStore
 import com.rawr.camera.settings.preferences.LutProfileFileStore
 import com.rawr.camera.settings.ui.AndroidLensHardware
 import com.rawr.camera.settings.ui.SettingsRoute
+import com.rawr.camera.storage.PickFile
+import com.rawr.camera.storage.launchPicker
 import com.rawr.camera.ui.CaptureTheme
 import java.io.File
 import java.time.LocalDateTime
@@ -62,7 +64,7 @@ class SettingsActivity : ComponentActivity() {
             }
         }
     private val gpuDriverPicker =
-        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        registerForActivityResult(PickFile()) { uri ->
             if (uri != null) {
                 runCatching { GpuDriverFileStore(this).importZip(uri) }
                     .onSuccess { viewModel.controller.dispatch(SetCustomGpuDriverInstalled(it.displayName)) }
@@ -96,7 +98,7 @@ class SettingsActivity : ComponentActivity() {
         }
 
     private val lutPicker =
-        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        registerForActivityResult(PickFile()) { uri ->
             if (uri != null) {
                 runCatching { LutProfileFileStore(this).importCube(uri) }
                     .onSuccess { viewModel.controller.dispatch(ImportLutStage(pendingLutTargetProfileId, it)) }
@@ -214,12 +216,12 @@ class SettingsActivity : ComponentActivity() {
     }
 
     private fun pickGpuDriver() {
-        gpuDriverPicker.launch(arrayOf("application/zip", "application/octet-stream", "*/*"))
+        gpuDriverPicker.launchPicker(this, arrayOf("application/zip", "application/octet-stream", "*/*"))
     }
 
     private fun pickLut(targetProfileId: String?) {
         pendingLutTargetProfileId = targetProfileId
-        lutPicker.launch(arrayOf("application/octet-stream", "text/plain", "*/*"))
+        lutPicker.launchPicker(this, arrayOf("application/octet-stream", "text/plain", "*/*"))
     }
 
     private fun returnToCapture() {
