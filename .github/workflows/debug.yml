@@ -6,6 +6,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 concurrency:
   group: debug-${{ github.ref }}
   cancel-in-progress: true
@@ -44,6 +47,19 @@ jobs:
           name: rawr-debug-${{ github.sha }}
           path: app/build/outputs/apk/debug/*.apk
           retention-days: 14
+
+      # Merges to main republish the `debug` prerelease so its download link
+      # stays stable. PRs only keep the run artifact.
+      - name: Publish debug prerelease
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk rawr-debug.apk
+          gh release delete debug --cleanup-tag --yes || true
+          gh release create debug rawr-debug.apk --prerelease --target "$GITHUB_SHA" \
+            --title "Debug build" \
+            --notes "Debug build of ${GITHUB_SHA::8}. Installs alongside release as Rawr Debug."
 
       - uses: actions/upload-artifact@v4
         if: failure()
