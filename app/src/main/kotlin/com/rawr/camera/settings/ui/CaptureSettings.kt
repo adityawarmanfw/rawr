@@ -74,7 +74,6 @@ internal fun ExposureSettings(state: SettingsUiState, dispatch: SettingsDispatch
     val prioritySupported by produceState(true, hardware) { value = hardware.aePrioritySupported() }
     val boostLimited = state.values.maxPostGainId != "gain.100"
     SettingsPageContainer {
-        // Order follows the render: brightness boost first, then shadow lift.
         SettingsGroup(
             title = "Brightness Boost",
             description = "Digital gain the camera adds in low light, applied evenly to the whole image."
@@ -101,21 +100,6 @@ internal fun ExposureSettings(state: SettingsUiState, dispatch: SettingsDispatch
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                 )
             }
-        }
-        SettingsGroup(
-            title = "Shadow Lift",
-            description = "Applied after the brightness boost. Brightens shadows in high-contrast scenes; " +
-                "highlights keep their brightness. Not applied to LOG."
-        ) {
-            CompactChoiceRow(AutoKeyExposure.entries, state.values.autoKeyExposure, {
-                it.label
-            }) { dispatch.invoke(SetAutoKeyExposure(it)) }
-            Text(
-                state.values.autoKeyExposure.summary,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-            )
         }
         SettingsGroup(title = "Anti-flicker") {
             CompactChoiceRow(

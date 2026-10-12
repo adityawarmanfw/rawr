@@ -46,6 +46,7 @@ int main() {
     // Policy: lift = log2(target) - (key + log2(halGain)), clamped.
     {
         const auto natural = autoKeyPolicy(AutoKeyMode::Natural);
+        const auto medium = autoKeyPolicy(AutoKeyMode::Medium);
         const auto strong = autoKeyPolicy(AutoKeyMode::Strong);
         // key -5 EV, HAL 2x -> rendered -4 EV; Natural target log2(0.075) ~ -3.74.
         const float lift = autoKeyTargetEv(-5.0f, 2.0f, natural);
@@ -57,6 +58,13 @@ int main() {
         assert(autoKeyTargetEv(0.0f, 1.0f, strong) == 0.0f);
         // Strong lifts at least as much as Natural.
         assert(autoKeyTargetEv(-6.0f, 1.0f, strong) >= autoKeyTargetEv(-6.0f, 1.0f, natural));
+        // Medium sits strictly between Natural and Strong.
+        assert(medium.targetLuma > natural.targetLuma && medium.targetLuma < strong.targetLuma);
+        assert(medium.maxLiftEv > natural.maxLiftEv && medium.maxLiftEv < strong.maxLiftEv);
+        for (float key : {-12.0f, -8.0f, -6.0f}) {
+            const float m = autoKeyTargetEv(key, 1.0f, medium);
+            assert(m > autoKeyTargetEv(key, 1.0f, natural) && m < autoKeyTargetEv(key, 1.0f, strong));
+        }
         // Bad inputs give no lift.
         assert(autoKeyTargetEv(NAN, 1.0f, strong) == 0.0f);
         assert(autoKeyTargetEv(-6.0f, 0.0f, strong) == 0.0f);
@@ -68,6 +76,7 @@ int main() {
         assert(autoKeyModeFromId(0) == AutoKeyMode::Off);
         assert(autoKeyModeFromId(1) == AutoKeyMode::Natural);
         assert(autoKeyModeFromId(2) == AutoKeyMode::Strong);
+        assert(autoKeyModeFromId(3) == AutoKeyMode::Medium);
         assert(autoKeyModeFromId(99) == AutoKeyMode::Off);
     }
     // Smoother: first sample lands, then exponential approach with tau.
@@ -144,7 +153,7 @@ int main() {
     }
     for (float key : {-12.0f, -6.0f, -4.0f, -2.0f, 0.0f}) {
         for (float high : {-8.0f, -2.0f, 0.0f, 4.0f}) {
-            for (auto mode : {AutoKeyMode::Off, AutoKeyMode::Natural, AutoKeyMode::Strong}) {
+            for (auto mode : {AutoKeyMode::Off, AutoKeyMode::Natural, AutoKeyMode::Medium, AutoKeyMode::Strong}) {
                 auto p = autoKeyCurve(key, high, 1.0f, autoKeyPolicy(mode));
                 assert(p.highlightEv >= std::log2(.36f) && p.highlightEv <= 0.0f);
                 // Stress an intermediate smoothed state that exceeds the new span.

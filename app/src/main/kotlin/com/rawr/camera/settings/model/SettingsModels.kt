@@ -205,6 +205,7 @@ enum class HighlightProtection(val label: String, val kneeSummary: String) {
 enum class AutoKeyExposure(val label: String, val summary: String, val nativeId: Int) {
     Off("Off", "No lift · renders the boosted exposure as is", 0),
     Natural("Natural", "Lifts shadows up to 1 EV", 1),
+    Medium("Medium", "Lifts shadows up to 2 EV", 3),
     Strong("Strong", "Lifts shadows up to 3 EV", 2)
 }
 
