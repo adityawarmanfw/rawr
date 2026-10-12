@@ -257,17 +257,26 @@ bool gradeActive() {
 }
 
 // sceneLinear (AP1) feeds only Vibrance's protections, which are thresholds in
-// light, not slider feel, so they act the same in every grade space.
-vec3 applyGrade(vec3 e, vec3 lumaWeights, float pivot, float black, vec3 sceneLinear) {
+// light, not slider feel, so they act the same in every grade space. They are
+// judged in linear sRGB, as the gain-map tap does.
+// Tone is applied as a linear-light gain (decoded new luma over old), as the
+// gain-map tap does, so it moves brightness without changing saturation; a
+// shift of the encoded channels would desaturate lifts and oversaturate cuts.
+vec3 applyGrade(vec3 e, vec3 lumaWeights, float pivot, float black, uint tf, uint set, vec3 sceneLinear) {
     if (!gradeActive()) return e;
     vec4 tone = clamp(vec4(P.toneControls.x, P.toneControls.y, P.renderConfig.z, P.renderConfig.w), -100.0, 100.0) * 0.01;
     float y0 = dot(lumaWeights, e);
-    float y = rawrGradeToneLuma(y0, pivot, black, tone);
-    float chromaGain = rawrGradeChromaGain(sceneLinear, dot(AP1_LUMA, sceneLinear),
+    float y = rawrGradeToneLuma(y0, pivot, black, tone, set, tf);
+    float lin0 = rawrTfDecode1(y0, tf);
+    if (y != y0 && lin0 > 1e-6) {
+        e = rawrEncodeTransfer(rawrDecodeTransfer(e, tf) * (max(rawrTfDecode1(y, tf), 0.0) / lin0), tf);
+        y0 = dot(lumaWeights, e);
+    }
+    float chromaGain = rawrGradeChromaGain(rawrToSrgbLinear(sceneLinear, RAWR_GAMUT_ACESCG_AP1), dot(AP1_LUMA, sceneLinear),
                                            clamp(P.exposureSaturation.z, -100.0, 100.0) * 0.01,
                                            clamp(P.colorControls.x, -100.0, 100.0) * 0.01, P.colorControls.y,
                                            P.colorControls.zw);
-    return vec3(y) + (e - vec3(y0)) * chromaGain;
+    return vec3(y0) + (e - vec3(y0)) * chromaGain;
 }
 
 // ---- Display trims: Whites and Blacks after the render ---------------------------
@@ -443,7 +452,7 @@ void main() {
         uint tf = rec709 ? RAWR_TF_REC709 : RAWR_TF_SRGB;
         vec3 linear = work * exp2(P.renderConfig.y + P.exposureSaturation.y);
         vec3 srgbLinear = rawrToSrgbLinear(linear, RAWR_GAMUT_ACESCG_AP1);
-        encoded = clamp(applyGrade(rawrEncodeTransfer(srgbLinear, tf), SRGB_LUMA, P.gradePivot.z, 0.0, linear), 0.0, 1.0);
+        encoded = clamp(applyGrade(rawrEncodeTransfer(srgbLinear, tf), SRGB_LUMA, P.gradePivot.z, 0.0, tf, RAWR_GRADE_SET_DIRECT, linear), 0.0, 1.0);
         if (displayTrimsActive()) {
             // The trims were fitted on encoded sRGB.
             vec3 srgb = rec709 ? srgbOETF(rawrDecodeTransfer(encoded, RAWR_TF_REC709)) : encoded;
@@ -465,15 +474,22 @@ void main() {
         // never an implicit CST between LUT stages. A post-render LUT starts
         // from Rawr's encoded sRGB result (below).
         if (P.lutControl.x != 0u && P.lutControl.y > 0u && P.lutBlend.x > 0.0 && P.lutOutput.z == 0u) {
-            vec3 lutIn = rawrUserCst(renderedLinear, RAWR_GAMUT_ACESCG_AP1, RAWR_TF_LINEAR, P.lutControl.z, P.lutControl.w, P.userInputGamut);
-            if (P.lutControl.w == RAWR_TF_LINEAR && gradeActive()) {
-                // Linear LUT input has no tonal scale to grade on: grade in
-                // DaVinci Intermediate (pivot/black sent for DI) and return.
-                lutIn = rawrDecodeTransfer(applyGrade(rawrEncodeTransfer(lutIn, RAWR_TF_DAVINCI_INTERMEDIATE),
-                                                      P.gradeLuma.xyz, P.gradePivot.y, P.gradePivot.w, renderedLinear),
-                                           RAWR_TF_DAVINCI_INTERMEDIATE);
+            uint lutTf = P.lutControl.w;
+            bool logInput = lutTf == RAWR_TF_DAVINCI_INTERMEDIATE || lutTf == RAWR_TF_LOGC3 || lutTf == RAWR_TF_SLOG3 ||
+                            lutTf == RAWR_TF_VLOG || lutTf == RAWR_TF_FLOG2C;
+            vec3 lutIn;
+            if (!logInput && gradeActive()) {
+                // Linear and display-referred (look LUT) inputs have no headroom
+                // to grade on: grade in DaVinci Intermediate in the LUT input
+                // gamut (pivot/black sent for DI), then encode the LUT input, so
+                // Highlights can pull scene headroom under the LUT's edge.
+                vec3 di = rawrUserCst(renderedLinear, RAWR_GAMUT_ACESCG_AP1, RAWR_TF_LINEAR, P.lutControl.z,
+                                      RAWR_TF_DAVINCI_INTERMEDIATE, P.userInputGamut);
+                di = applyGrade(di, P.gradeLuma.xyz, P.gradePivot.y, P.gradePivot.w, RAWR_TF_DAVINCI_INTERMEDIATE, RAWR_GRADE_SET_LUT, renderedLinear);
+                lutIn = rawrEncodeTransfer(rawrDecodeTransfer(di, RAWR_TF_DAVINCI_INTERMEDIATE), lutTf);
             } else {
-                lutIn = applyGrade(lutIn, P.gradeLuma.xyz, P.gradePivot.y, P.gradePivot.w, renderedLinear);
+                lutIn = rawrUserCst(renderedLinear, RAWR_GAMUT_ACESCG_AP1, RAWR_TF_LINEAR, P.lutControl.z, lutTf, P.userInputGamut);
+                lutIn = applyGrade(lutIn, P.gradeLuma.xyz, P.gradePivot.y, P.gradePivot.w, lutTf, RAWR_GRADE_SET_LUT, renderedLinear);
             }
             vec3 lutOut = rawrEvaluateUserLutChain(lutIn);
             encoded = P.lutOutput.w == 0u
@@ -483,7 +499,7 @@ void main() {
             vec3 rawrNeutralInput = !COMBINE_NEUTRAL_GAMUT
                 ? rawrCst(renderedLinear, RAWR_GAMUT_ACESCG_AP1, RAWR_TF_LINEAR, RAWR_GAMUT_DWG, RAWR_TF_DAVINCI_INTERMEDIATE)
                 : rawrTonemapCst(renderedLinear, RAWR_GAMUT_ACESCG_AP1, RAWR_TF_LINEAR, RAWR_GAMUT_DWG, RAWR_TF_DAVINCI_INTERMEDIATE, P.neutralGamut);
-            encoded = sampleRawrNeutralTechnical(applyGrade(rawrNeutralInput, DWG_LUMA, P.gradePivot.x, 0.0, renderedLinear));
+            encoded = sampleRawrNeutralTechnical(applyGrade(rawrNeutralInput, DWG_LUMA, P.gradePivot.x, 0.0, RAWR_TF_DAVINCI_INTERMEDIATE, RAWR_GRADE_SET_NTRL, renderedLinear));
         }
 
         // The NTRL LUT and "use directly" user LUTs can overshoot [0,1] slightly;

@@ -169,6 +169,10 @@ class FrameSubmitCoordinator final {
     }
     // True once this configuration delivered a frame through CPU upload
     // (latched fallback, forced, or a RAW10 stream). Surfaced to the UI.
+    // RAW16 readers then need GPU buffer access instead of image usage.
+    [[nodiscard]] bool raw16BufferIngressRequired() const noexcept {
+        return raw16ImageImportLatched_.load(std::memory_order_relaxed);
+    }
     [[nodiscard]] bool cpuIngressActive() const noexcept { return cpuIngressActive_.load(std::memory_order_relaxed); }
     void setForceCpuIngress(bool enabled) noexcept { forceCpuIngress_.store(enabled, std::memory_order_relaxed); }
     // Frees CPU-upload resources. Caller must have the GPU idle.
@@ -269,6 +273,11 @@ class FrameSubmitCoordinator final {
     // Set when the RAW10 GPU unpack failed once; RAW10 then stays on the CPU upload.
     std::atomic<bool> raw10GpuUnpackLatched_{false};
     bool raw10GpuUnpackLogged_ = false;
+    // Set when the RAW16 image import failed once; RAW16 then goes through the
+    // GPU buffer copy (or, if that fails too, the CPU upload).
+    std::atomic<bool> raw16ImageImportLatched_{false};
+    bool raw16GpuCopyLogged_ = false;
+    bool raw16GpuCopyDeferredLogged_ = false;
     bool raw10ParityEnabled_ = false;  // debug.rawr.raw10_parity
     uint32_t raw10ParityFrame_ = 0;
     rawrcam::vulkan::ImportedRaw& ingestRaw(const SubmitParams& params, uint32_t slotIndex);

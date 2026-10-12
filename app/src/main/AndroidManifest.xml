@@ -11,6 +11,14 @@
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.raw" android:required="true" />
     <uses-feature android:name="android.hardware.vulkan.level" android:version="1" android:required="true" />
+    <!-- FilePicker: list GET_CONTENT handlers for the fallback picker list (photo picker excluded). -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.GET_CONTENT" />
+            <data android:mimeType="*/*" />
+        </intent>
+    </queries>
+
     <application
         android:fullBackupContent="@xml/capture_backup_rules"
         android:dataExtractionRules="@xml/capture_data_extraction_rules"

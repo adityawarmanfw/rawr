@@ -13,6 +13,7 @@ older shader (for review; only the current shader is asserted).
 """
 from pathlib import Path
 import argparse
+import json
 import subprocess
 import sys
 
@@ -83,6 +84,15 @@ def write_cube(path):
     return path
 
 
+def write_identity_cube(path):
+    """33^3 identity LUT; with declared input == output and convert-after, the
+    image is the straight encode and only the Grade space differs."""
+    g = np.linspace(0, 1, 33)
+    rows = (f'{r:.6f} {gg:.6f} {b:.6f}' for b in g for gg in g for r in g)
+    path.write_text('LUT_3D_SIZE 33\n' + '\n'.join(rows) + '\n')
+    return path
+
+
 class Renderer:
     def __init__(self, runner, spv, chart_path):
         self.runner, self.spv, self.chart = runner, spv, chart_path
@@ -115,6 +125,7 @@ SRGB, REC709 = ['--render-transform', '1'], ['--render-transform', '2']
 LOGC3_LUT = ['--lut-placement', '0', '--lut-input-gamut', '4', '--lut-input-transfer', '6']
 VLOG_LUT = ['--lut-placement', '0', '--lut-input-gamut', '6', '--lut-input-transfer', '8']
 LINEAR_LUT = ['--lut-placement', '0', '--lut-input-gamut', '3', '--lut-input-transfer', '0']
+SRGB_LUT = ['--lut-placement', '0', '--lut-input-gamut', '0', '--lut-input-transfer', '1']
 GRAY_EV = np.linspace(-12.0, 4.0, W)
 
 
@@ -123,7 +134,36 @@ def gray_at(render, t, ev, lut=None, extra=()):
     return float(np.interp(ev, GRAY_EV, luma(render(t, lut, extra))[0]))
 
 
-def metrics(render, lut):
+def identity_lut_space(gamut, transfer):
+    return ['--lut-placement', '0', '--lut-input-gamut', str(gamut), '--lut-input-transfer', str(transfer),
+            '--lut-output-gamut', str(gamut), '--lut-output-transfer', str(transfer), '--lut-after-action', '1']
+
+
+# Grade spaces checked against the pre-0.4.0 slider response (sliders after the render, as in 0.3.1).
+REFERENCE_SPACES = {'ntrl': (), 'srgb': SRGB, 'rec709': REC709, 'lut_srgb': identity_lut_space(0, 1),
+                    'lut_logc3': identity_lut_space(4, 6), 'lut_slog3': identity_lut_space(5, 7)}
+
+
+def reference_error(render, identity):
+    """Worst gray-ramp Shadows deviation from the pre-0.4.0 response, per space.
+    (Midtones and Contrast were redesigned; their pre-0.4.0 curves stay in the
+    fixture for reference only.)"""
+    ref = json.loads((ENGINE / 'tests/lut_fixtures/grade_reference_pre040.json').read_text())
+    ev = np.array(ref['ev'])
+    worst = {}
+    for space, extra in REFERENCE_SPACES.items():
+        lut = identity if space.startswith('lut_') else None
+        base = np.interp(ev, GRAY_EV, luma(render(tone(), lut, extra))[0])
+        for key, target in ref['curves'].items():
+            if not key.startswith(space + '/S'):
+                continue
+            name, value = key.split('/')[1][0], int(key.split('/')[1][1:])
+            got = np.interp(ev, GRAY_EV, luma(render(tone(**{name: value}), lut, extra))[0]) - base
+            worst[space] = max(worst.get(space, 0.0), float(np.abs(got - np.array(target)).max()))
+    return worst
+
+
+def metrics(render, lut, identity):
     m = {}
     stacks = [tone(S=100, W=100), tone(B=100, S=100, C=100, M=100, H=100, W=100),
               tone(B=-100, S=-100, C=-100, M=-100, W=-100), tone(B=100, S=100, H=-100, W=100, C=-50),
@@ -183,7 +223,8 @@ def metrics(render, lut):
     m['blacks_plus_subcode_slope'] = float(slope[near].max()) if near.any() else float('nan')
     # Contrast pivots at 18% gray in each render's input encoding.
     setups = [('ntrl', None, ()), ('srgb', None, SRGB), ('rec709', None, REC709), ('logc3_lut', lut, LOGC3_LUT),
-              ('vlog_lut', lut, VLOG_LUT), ('linear_lut', lut, LINEAR_LUT)]
+              ('vlog_lut', lut, VLOG_LUT), ('linear_lut', lut, LINEAR_LUT),
+              ('srgb_lut', lut, SRGB_LUT)]
     m['contrast_pivot_drift'] = max(abs(gray_at(render, tone(C=c), 0.0, l, x) - gray_at(render, tone(), 0.0, l, x))
                                     for _, l, x in setups for c in (-100, 100))
     # Contrast and Shadows keep true black where the log curve puts it
@@ -201,7 +242,42 @@ def metrics(render, lut):
     clipped = (GRAY_EV > 2.7) & (GRAY_EV < 3.0)
     m['srgb_clipped_slope_before'] = float(np.diff(s0[clipped]).max())
     m['srgb_recovered_slope_after'] = float(np.diff(s1[clipped]).min())
+    # A look LUT (sRGB input) gets the straight encode, clipped above white;
+    # graded in DI, Highlights- pulls that headroom under the LUT's edge.
+    # (Window below where the test LUT's own overshoot reaches the output clamp.)
+    l0, l1 = (luma(render(t, lut, SRGB_LUT))[0] for t in (tone(), tone(H=-100)))
+    above_white = (GRAY_EV > 2.5) & (GRAY_EV < 2.9)
+    m['srgb_lut_clipped_slope_before'] = float(np.diff(l0[above_white]).max())
+    m['srgb_lut_recovered_slope_after'] = float(np.diff(l1[above_white]).min())
     # Single sliders are unchanged except where intended (gray + moderate color rows).
+    m.update({f'grade_vs_pre040_{k}': v for k, v in reference_error(render, identity).items()})
+    # Midtones: the lift peaks near 18% gray and does not flatten the midtones
+    # (-2..0 EV span) the way the pre-0.4.0 lower-midtone bump did.
+    for space, extra in (('ntrl', ()), ('srgb', SRGB), ('lut', REFERENCE_SPACES['lut_srgb'])):
+        lut_ = identity if space == 'lut' else None
+        y0, y1 = (luma(render(t, lut_, extra))[0] for t in (tone(), tone(M=100)))
+        lift = np.where(GRAY_EV < 2.0, y1 - y0, 0.0)
+        m[f'mid_peak_ev_{space}'] = float(GRAY_EV[np.argmax(lift)])
+        span = lambda y: float(np.interp(0.0, GRAY_EV, y) - np.interp(-2.0, GRAY_EV, y))
+        m[f'mid_span_ratio_{space}'] = span(y1) / span(y0)
+        # Contrast +-100: a visible S-curve, mean |delta| at -2 and +1 EV.
+        for c in (100, -100):
+            yc = luma(render(tone(C=c), lut_, extra))[0]
+            m[f'contrast{c:+d}_size_{space}'] = float(np.mean(np.abs(
+                np.interp((-2.0, 1.0), GRAY_EV, yc) - np.interp((-2.0, 1.0), GRAY_EV, y0))))
+    # Vibrance vs Saturation: gain on muted vs strong midtone colors.
+    def sat_gain(t):
+        def lsat(img):
+            c = img[GRAY_ROWS:GRAY_ROWS + COLOR_ROWS]
+            c = np.where(c <= 0.04045, c / 12.92, ((np.maximum(c, 0) + 0.055) / 1.055) ** 2.4)
+            return (c.max(axis=2) - c.min(axis=2)) / np.maximum(c.max(axis=2), 1e-6)
+        img0 = render(tone())
+        s0, s1 = lsat(img0), lsat(render(t))
+        y = luma(img0[GRAY_ROWS:GRAY_ROWS + COLOR_ROWS])
+        g = lambda lo, hi: float(np.median((s1 / np.maximum(s0, 1e-6))[(y > 0.15) & (y < 0.8) & (s0 >= lo) & (s0 < hi)]))
+        return g(0.2, 0.4), g(0.6, 0.8)
+    m['vib_plus_muted'], m['vib_plus_strong'] = sat_gain(tone(VIB=100))
+    m['vib_minus_muted'], m['vib_minus_strong'] = sat_gain(tone(VIB=-100))
     rows = slice(0, GRAY_ROWS + COLOR_ROWS)
     for n in ('S', 'H', 'C', 'M'):
         for s in (-100, 50, 100):
@@ -217,10 +293,11 @@ def main():
     runner = build_runner()
     chart_path = chart()
     lut = str(write_cube(WORK / 'overshoot.cube'))
-    after = metrics(Renderer(runner, compile_shader(ENGINE / 'shaders/tonemap.comp', 'after'), chart_path), lut)
+    identity = str(write_identity_cube(WORK / 'identity.cube'))
+    after = metrics(Renderer(runner, compile_shader(ENGINE / 'shaders/tonemap.comp', 'after'), chart_path), lut, identity)
     before = None
     if args.before:
-        before = metrics(Renderer(runner, compile_shader(args.before, 'before'), chart_path), lut)
+        before = metrics(Renderer(runner, compile_shader(args.before, 'before'), chart_path), lut, identity)
 
     scalar = [k for k in after if not k.startswith('single_')]
     print(f'{"metric":34s} {"before":>12s} {"after":>12s}')
@@ -240,13 +317,22 @@ def main():
         ('LUT overshoot stays finite', after['lut_bad_pixels'] == 0),
         ('Vibrance+ spares deep shadows', after['vibrance_gain_deep_shadow'] < 1.05 < after['vibrance_gain_midtone']),
         ('Blacks+ does not amplify sub-code noise', after['blacks_plus_subcode_slope'] < 8.0),
+        # Vibrance spares strong color, so the all-color median boost is ~1.13.
         ('Vibrance guard is in linear light (sRGB)',
-         after['vibrance_srgb_deep_shadow'] < 1.05 < 1.2 < after['vibrance_srgb_low_midtone']),
+         after['vibrance_srgb_deep_shadow'] < 1.05 < 1.1 < after['vibrance_srgb_low_midtone']),
         ('Contrast keeps 18% gray in every grade space', after['contrast_pivot_drift'] < 3e-3),
         ('Log black stays at the curve black', after['log_black_drift'] < 1e-2),
         ('Highlights- compresses the top', after['highlights_minus_top_drop'] > 0.01),
         ('Highlights- leaves shadows alone', after['highlights_minus_shadow_change'] < 1e-4),
         ('Highlights- recovers clipped sRGB', after['srgb_clipped_slope_before'] < 1e-6 < after['srgb_recovered_slope_after']),
+        ('Shadows matches the pre-0.4.0 response in every space (<0.03)', max(v for k, v in after.items() if k.startswith('grade_vs_pre040_')) < 0.03),
+        ('Midtones+ peaks within 1 stop of 18% gray', all(abs(v) <= 1.0 for k, v in after.items() if k.startswith('mid_peak_ev_'))),
+        ('Midtones+ keeps midtone contrast (-2..0 EV span >= 0.95x)', all(v >= 0.95 for k, v in after.items() if k.startswith('mid_span_ratio_'))),
+        ('Contrast +-100 is a visible S-curve (0.04-0.12 at -2/+1 EV)', all(0.04 <= v <= 0.12 for k, v in after.items() if k.startswith(('contrast+', 'contrast-')))),
+        ('Vibrance+ boosts muted color, spares strong', after['vib_plus_muted'] > 1.5 and after['vib_plus_strong'] < 1.15),
+        ('Vibrance- removes muted color first', after['vib_minus_muted'] < 0.35 and after['vib_minus_strong'] > 0.8),
+        ('Highlights- recovers under an sRGB-input LUT',
+         after['srgb_lut_clipped_slope_before'] < 1e-6 < after['srgb_lut_recovered_slope_after']),
     ]
     failed = [name for name, ok in checks if not ok]
     for name, ok in checks:

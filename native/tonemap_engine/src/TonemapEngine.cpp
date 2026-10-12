@@ -112,9 +112,20 @@ bool supportsStorageImage(VkPhysicalDevice physicalDevice, VkFormat format) noex
 }
 
 // A linear LUT input is graded in DaVinci Intermediate (see tonemap.comp).
+// Log LUT inputs are graded in their own encoding. Linear and display-referred
+// inputs (look LUTs) have no headroom to grade on, so they grade in DaVinci
+// Intermediate and convert to the LUT input afterwards (tonemap.comp).
 color::TransferFunction userGradeTransfer(const lut::LutGpuPayload& lutPayload) noexcept {
-    return lutPayload.inputSpace.transfer == color::TransferFunction::Linear ? color::TransferFunction::DaVinciIntermediate
-                                                                             : lutPayload.inputSpace.transfer;
+    switch (lutPayload.inputSpace.transfer) {
+        case color::TransferFunction::DaVinciIntermediate:
+        case color::TransferFunction::LogC3:
+        case color::TransferFunction::SLog3:
+        case color::TransferFunction::VLog:
+        case color::TransferFunction::FLog2C:
+            return lutPayload.inputSpace.transfer;
+        default:
+            return color::TransferFunction::DaVinciIntermediate;
+    }
 }
 
 color::TransferFunction directGradeTransfer(const TonemapParams& params) noexcept {
@@ -1079,6 +1090,7 @@ std::optional<GradeTapBlock> TonemapEngine::gradeTapBlock(const TonemapParams& p
     const auto transfer = p.renderTransform != RenderTransform::Existing ? directGradeTransfer(p)
                           : userLut ? userGradeTransfer(payload)
                                     : color::TransferFunction::DaVinciIntermediate;
+    const uint32_t gradeSet = p.renderTransform != RenderTransform::Existing ? 2u : userLut ? 1u : 0u;
     const auto& cfg = impl_->rendererConfig;
     const auto unit = [](float v) { return std::clamp(v, -100.0f, 100.0f) * 0.01f; };
     return GradeTapBlock{unit(p.contrast),
@@ -1092,7 +1104,8 @@ std::optional<GradeTapBlock> TonemapEngine::gradeTapBlock(const TonemapParams& p
                          cfg.vibranceShadowEnd,
                          color::encodeTransfer(cfg.middleGray, transfer),
                          color::encodeTransfer(0.0f, transfer),
-                         static_cast<float>(transfer)};
+                         // Transfer id + 16 * grade parameter set (grade.glsl: NTRL 0, LUT 1, direct 2).
+                         static_cast<float>(static_cast<uint32_t>(transfer) + 16u * gradeSet)};
 }
 uint32_t TonemapEngine::maxFramesInFlight() const noexcept { return impl_->frameSlotCount; }
 

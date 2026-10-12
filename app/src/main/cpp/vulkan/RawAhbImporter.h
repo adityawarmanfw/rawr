@@ -78,6 +78,9 @@ struct ImportedRaw {
     // holds the packed RAW10 rows, rowStrideBytes apart. On the pool's slot
     // entry, image/view are the owned R16 target that acquireRawInputImage
     // fills by unpacking unpackSource with unpacker (descriptor slot unpackSlot).
+    // RAW16 buffer ingress (importRaw16Buffer) uses the same entries with no
+    // unpacker: unpackSource already holds R16 rows, rowStrideBytes apart, and
+    // is copied into the owned image.
     bool gpuUnpack = false;
     uint32_t rowStrideBytes = 0;
     VkBuffer unpackSource = VK_NULL_HANDLE;
@@ -107,10 +110,16 @@ class RawAhbImporter {
     // the caller can fall back to the CPU upload.
     ImportedRaw& importRaw10Buffer(AHardwareBuffer* ahb, uint32_t expectedWidth, uint32_t expectedHeight,
                                    uint32_t rowStrideBytes);
+    // Buffer-only import of a RAW16 camera AHB, for drivers that reject the
+    // R16 image import but accept the buffer one. Throws when the buffer
+    // import is unavailable so the caller can fall back to the CPU upload.
+    ImportedRaw& importRaw16Buffer(AHardwareBuffer* ahb, uint32_t expectedWidth, uint32_t expectedHeight);
     void clear() noexcept;
     size_t size() const noexcept { return imported_.size(); }
 
    private:
+    // Cache entry for a buffer-only import (no image), created on first use.
+    ImportedRaw& bufferEntry(AHardwareBuffer* ahb, uint32_t expectedWidth, uint32_t expectedHeight);
     VkPhysicalDevice physical_;
     VkDevice device_;
     uint32_t queueFamily_;

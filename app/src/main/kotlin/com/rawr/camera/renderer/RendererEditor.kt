@@ -3,7 +3,6 @@ package com.rawr.camera.renderer
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -16,11 +15,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import com.rawr.camera.ui.icons.Icons
-import com.rawr.camera.ui.icons.rounded.ArrowDropDown
-import com.rawr.camera.ui.icons.rounded.Check
-import com.rawr.camera.ui.icons.rounded.Download
-import com.rawr.camera.ui.icons.rounded.Image
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -42,6 +36,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
@@ -52,6 +47,13 @@ import com.rawr.camera.settings.architecture.DismissReset
 import com.rawr.camera.settings.architecture.NavigateBack
 import com.rawr.camera.settings.architecture.SettingsDispatch
 import com.rawr.camera.settings.model.ResetTarget
+import com.rawr.camera.storage.PickFile
+import com.rawr.camera.storage.launchPicker
+import com.rawr.camera.ui.icons.Icons
+import com.rawr.camera.ui.icons.rounded.ArrowDropDown
+import com.rawr.camera.ui.icons.rounded.Check
+import com.rawr.camera.ui.icons.rounded.Download
+import com.rawr.camera.ui.icons.rounded.Image
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -78,7 +80,8 @@ internal fun RendererEditor(
     val appliedValues by session.applied.collectAsStateWithLifecycle()
     var confirmDiscard by remember(job.id) { mutableStateOf(false) }
     var lutTarget by remember(session) { mutableStateOf<String?>(null) }
-    val lutImporter = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+    val context = LocalContext.current
+    val lutImporter = rememberLauncherForActivityResult(PickFile()) { uri ->
         if (uri != null) onImportLut(lutTarget, uri)
     }
     val settings by controller.state.collectAsStateWithLifecycle()
@@ -149,7 +152,7 @@ internal fun RendererEditor(
             settings = settings,
             dispatch = gatedDispatch,
             busy = busy,
-            onImportLut = { target -> lutTarget = target; lutImporter.launch(arrayOf("*/*")) },
+            onImportLut = { target -> lutTarget = target; lutImporter.launchPicker(context, arrayOf("*/*")) },
             modifier = Modifier.weight(1f)
         )
         if (stagedDirty) {

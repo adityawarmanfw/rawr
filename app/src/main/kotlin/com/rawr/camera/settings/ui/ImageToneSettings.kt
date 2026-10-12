@@ -418,13 +418,23 @@ private fun <T> EnumChoice(
     )
 }
 
-/** The encoding the Grade sliders run in: the imported LUT's input, else the render's own. */
+/**
+ * The encoding the Grade sliders run in: a log LUT's own input, DaVinci
+ * Intermediate for linear and display-referred (look) LUT inputs, else the
+ * render's own.
+ */
 private fun gradeSpaceLabel(values: SettingsValues): String =
-    values.selectedLutProfile()?.inputTransfer?.label ?: when (values.regularRenderProfile()) {
-        ColorRenderProfile.SRgb -> "sRGB"
-        ColorRenderProfile.Rec709 -> "Rec.709"
-        else -> "DaVinci Intermediate"
-    }
+    values.selectedLutProfile()?.inputTransfer?.let { it.takeIf(::isLogTransfer)?.label ?: "DaVinci Intermediate" }
+        ?: when (values.regularRenderProfile()) {
+            ColorRenderProfile.SRgb -> "sRGB"
+            ColorRenderProfile.Rec709 -> "Rec.709"
+            else -> "DaVinci Intermediate"
+        }
+
+private fun isLogTransfer(transfer: LutTransfer): Boolean = when (transfer) {
+    LutTransfer.DaVinciIntermediate, LutTransfer.LogC3, LutTransfer.SLog3, LutTransfer.VLog, LutTransfer.FLog2C -> true
+    else -> false
+}
 
 @Composable
 private fun ToneSlider(spec: NumericSettingSpec, value: Float, dispatch: SettingsDispatch) {
