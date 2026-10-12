@@ -18,6 +18,7 @@ SingleFrameCaptureDevelop::SingleFrameCaptureDevelop(const vulkan::VulkanContext
       queueSubmitMutex_(mutex),
       filesDir_(std::move(filesDir)),
       diagnostic_(std::move(diagnostic)),
+      amaze_(diagnostic_),
       rcd_(diagnostic_),
       vng_(diagnostic_),
       dual_(diagnostic_),
@@ -84,6 +85,16 @@ bool SingleFrameCaptureDevelop::start(const std::shared_ptr<const rawrcam::imagi
             // Demosaic on the multiframe queue when present (same
             // rationale as the rendered still chain): keep queue0 for
             // preview. CPU fence-waits order the handoff.
+            case develop::DemosaicAlgorithm::Amaze:
+                amaze_.configure(vulkanContext_, queueSubmitMutex_, camera.cameraContextGeneration, camera.cameraId,
+                                 captured.width, captured.height, camera.rawPreviewCfa,
+                                 rawrcam::develop::StillDemosaicGeometry::SensorNative,
+                                 vulkanContext_.hasMultiframeQueue() ? vulkanContext_.multiframeQueue() : VK_NULL_HANDLE,
+                                 vulkanContext_.hasMultiframeQueue() ? &vulkanContext_.mfSubmitMutex() : nullptr);
+                if (!amaze_.start(captured, demosaicRaw, jpegContext.develop.lensShadingCorrectionEnabled,
+                                  jpegContext.develop.highlightReconstructionEnabled, galoshRequest))
+                    throw std::runtime_error("AMaZE start rejected");
+                break;
             case develop::DemosaicAlgorithm::Rcd:
                 rcd_.configure(vulkanContext_, queueSubmitMutex_, camera.cameraContextGeneration, camera.cameraId,
                                captured.width, captured.height, camera.rawPreviewCfa,
@@ -108,14 +119,19 @@ bool SingleFrameCaptureDevelop::start(const std::shared_ptr<const rawrcam::imagi
                         std::string(singleFrameDemosaicName(jpegContext.develop.demosaicAlgorithm)) +
                         " start rejected");
                 break;
-            case develop::DemosaicAlgorithm::DualRcdVng4: {
+            case develop::DemosaicAlgorithm::DualRcdVng4:
+            case develop::DemosaicAlgorithm::DualAmazeVng4: {
                 dual_.configure(vulkanContext_, queueSubmitMutex_, camera.cameraContextGeneration, camera.cameraId,
                                 captured.width, captured.height, camera.rawPreviewCfa,
                                 jpegContext.develop.dualAutoContrast, jpegContext.develop.dualContrastPercent,
                                 jpegContext.develop.pipelineDiagnosticsEnabled,
                                 rawrcam::develop::StillDemosaicGeometry::SensorNative,
                                 vulkanContext_.hasMultiframeQueue() ? vulkanContext_.multiframeQueue() : VK_NULL_HANDLE,
-                                vulkanContext_.hasMultiframeQueue() ? &vulkanContext_.mfSubmitMutex() : nullptr);
+                                vulkanContext_.hasMultiframeQueue() ? &vulkanContext_.mfSubmitMutex() : nullptr,
+                                /*externalPackedInput=*/false,
+                                jpegContext.develop.demosaicAlgorithm == develop::DemosaicAlgorithm::DualAmazeVng4
+                                    ? ::dual::Primary::Amaze
+                                    : ::dual::Primary::Rcd);
                 if (!dual_.start(captured, demosaicRaw, jpegContext.develop.lensShadingCorrectionEnabled,
                                  jpegContext.develop.highlightReconstructionEnabled, galoshRequest))
                     throw std::runtime_error(
@@ -131,6 +147,7 @@ bool SingleFrameCaptureDevelop::start(const std::shared_ptr<const rawrcam::imagi
     } catch (const std::exception& e) {
         emit("JPEG_DEMOSAIC_PROCESS_FAIL requestId=" + std::to_string(captured.requestId) + " error=" + e.what());
         failPendingJpeg(captured.requestId, e.what());
+        amaze_.reset();
         rcd_.reset();
         vng_.reset();
         dual_.reset();
@@ -149,8 +166,10 @@ void SingleFrameCaptureDevelop::advanceDemosaic(Processor& processor, const char
     if (!completed) return;
     std::ostringstream status;
     constexpr bool rcd = std::is_same_v<Processor, develop::demosaic::rcd::RcdStillProcessor>;
-    status << (rcd ? (completed->success ? "RCD_STILL_PROCESS_PASS" : "RCD_STILL_PROCESS_FAIL")
-                   : (completed->success ? "RCDVNG_STILL_PROCESS_PASS" : "RCDVNG_STILL_PROCESS_FAIL"))
+    constexpr bool amaze = std::is_same_v<Processor, develop::demosaic::amaze::AmazeStillProcessor>;
+    status << (amaze ? (completed->success ? "AMAZE_STILL_PROCESS_PASS" : "AMAZE_STILL_PROCESS_FAIL")
+               : rcd ? (completed->success ? "RCD_STILL_PROCESS_PASS" : "RCD_STILL_PROCESS_FAIL")
+                     : (completed->success ? "RCDVNG_STILL_PROCESS_PASS" : "RCDVNG_STILL_PROCESS_FAIL"))
            << " requestId=" << completed->requestId << " demosaic=" << name << " timestampNs=" << completed->timestampNs
            << " totalMs=" << completed->submitToFenceMs << " persistentBytes=" << completed->persistentBytes;
     if (!completed->success) status << " error=" << completed->error;
@@ -175,7 +194,7 @@ void SingleFrameCaptureDevelop::advanceDemosaic(Processor& processor, const char
             const bool maskOk = processor.dumpDualBlendMaskR32f(filesDir_ + "/rawrcam_diag_dual_mask_latest.r32f");
             branchesOk = rcdOk && vngOk && preMaskOk && maskOk;
         }
-        emit(std::string(rcd ? "DEMOSAIC_DIAG_RCD_DUMP " : "DEMOSAIC_DIAG_RCDVNG_DUMP ") +
+        emit(std::string(amaze ? "DEMOSAIC_DIAG_AMAZE_DUMP " : rcd ? "DEMOSAIC_DIAG_RCD_DUMP " : "DEMOSAIC_DIAG_RCDVNG_DUMP ") +
              (packedOk && rgbOk && branchesOk ? "PASS" : "FAIL") +
              " requestId=" + std::to_string(completed->requestId) + " demosaic=" + name);
     }
@@ -191,9 +210,10 @@ void SingleFrameCaptureDevelop::advanceDemosaic(Processor& processor, const char
     }
 }
 std::optional<SingleFrameDevelopResult> SingleFrameCaptureDevelop::pollCompletion() {
+    advanceDemosaic(amaze_, "AMaZE");
     advanceDemosaic(rcd_, "RCD");
     advanceDemosaic(vng_, "VNG4");
-    advanceDemosaic(dual_, "RCD+VNG4");
+    advanceDemosaic(dual_, dual_.algorithmName());
     auto done = renderer_.pollCompletion();
     if (!done && failure_) {
         done = std::move(failure_);
@@ -207,6 +227,8 @@ std::optional<SingleFrameDevelopResult> SingleFrameCaptureDevelop::pollCompletio
            << " totalMs=" << done->totalMs;
     if (!done->success) status << " error=" << done->error;
     emit(status.str());
+    amaze_.releaseOutput();
+    amaze_.reset();
     rcd_.releaseOutput();
     rcd_.reset();
     vng_.releaseOutput();
@@ -220,11 +242,12 @@ std::optional<SingleFrameDevelopResult> SingleFrameCaptureDevelop::pollCompletio
     return SingleFrameDevelopResult{std::move(*done), context_, pixels, demosaicMs_, demosaicSetupMs_};
 }
 bool SingleFrameCaptureDevelop::busy() const noexcept {
-    return requestId_.has_value() || rcd_.busy() || vng_.busy() || dual_.busy() || renderer_.busy() ||
+    return requestId_.has_value() || amaze_.busy() || rcd_.busy() || vng_.busy() || dual_.busy() || renderer_.busy() ||
            failure_.has_value();
 }
 void SingleFrameCaptureDevelop::reset() noexcept {
     renderer_.reset();
+    amaze_.reset();
     rcd_.reset();
     vng_.reset();
     dual_.reset();

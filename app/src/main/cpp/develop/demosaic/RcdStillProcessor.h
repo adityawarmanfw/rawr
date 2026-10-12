@@ -46,7 +46,8 @@ class RcdStillProcessor final {
         const std::string& cameraId, uint32_t width, uint32_t height, uint32_t rawPreviewCfa,
         RcdStillInputMode inputMode = RcdStillInputMode::RawLegacy,
         rawrcam::develop::StillDemosaicGeometry geometry = rawrcam::develop::StillDemosaicGeometry::SensorNative,
-        VkQueue queueOverride = VK_NULL_HANDLE, std::mutex* queueSubmitMutexOverride = nullptr);
+        VkQueue queueOverride = VK_NULL_HANDLE, std::mutex* queueSubmitMutexOverride = nullptr,
+        bool externalPackedInput = false);
 
     void reset() noexcept;
     bool dumpPackedCfaRgba16f(const std::string& path);
@@ -75,6 +76,9 @@ class RcdStillProcessor final {
                // GALOSH-RAW Bayer denoise (P1a): forwarded per-shot into the
                // shared highlight runtime. Off = legacy path untouched.
                const ::galosh::GaloshRawParams& galosh = ::galosh::GaloshRawParams{});
+    // Demosaics a caller-owned packed CFA (SharedHighlightPacked contract),
+    // e.g. the multiframe merge output. Requires externalPackedInput.
+    bool startExternalPacked(VkImage packedImage, VkImageView packedView, uint64_t requestId, uint64_t timestampNs = 0);
     std::optional<StillCompletion> pollCompletion();
 
    private:

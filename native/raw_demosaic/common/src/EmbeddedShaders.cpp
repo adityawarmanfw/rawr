@@ -8,6 +8,25 @@
 #include <utility>
 #include <vector>
 
+#include "amaze_import.h"
+#include "amaze_export.h"
+#include "amaze_gradients.h"
+#include "amaze_candidates.h"
+#include "amaze_choose.h"
+#include "amaze_cddiff.h"
+#include "amaze_weights.h"
+#include "amaze_nyquist.h"
+#include "amaze_nyquist_vote.h"
+#include "amaze_area.h"
+#include "amaze_hvwt_seq.h"
+#include "amaze_green.h"
+#include "amaze_refine.h"
+#include "amaze_diagonal.h"
+#include "amaze_pmwt_seq.h"
+#include "amaze_rbint.h"
+#include "amaze_correct.h"
+#include "amaze_chroma.h"
+#include "amaze_finish.h"
 #include "dual_auto_refine.h"
 #include "dual_auto_select.h"
 #include "dual_auto_threshold.h"
@@ -49,6 +68,31 @@ std::vector<uint32_t> words(const unsigned char* bytes, size_t size) {
 }
 }  // namespace
 
+::amaze::ShaderProvider embeddedAmazeShaders() {
+    return [](std::string_view name) -> std::vector<uint32_t> {
+        if (name == "amaze_import.comp") return words(amaze_import_spv, amaze_import_spv_size);
+        if (name == "amaze_export.comp") return words(amaze_export_spv, amaze_export_spv_size);
+        if (name == "amaze_gradients.wgsl") return words(amaze_gradients_spv, amaze_gradients_spv_size);
+        if (name == "amaze_candidates.wgsl") return words(amaze_candidates_spv, amaze_candidates_spv_size);
+        if (name == "amaze_choose.wgsl") return words(amaze_choose_spv, amaze_choose_spv_size);
+        if (name == "amaze_cddiff.wgsl") return words(amaze_cddiff_spv, amaze_cddiff_spv_size);
+        if (name == "amaze_weights.wgsl") return words(amaze_weights_spv, amaze_weights_spv_size);
+        if (name == "amaze_nyquist.wgsl") return words(amaze_nyquist_spv, amaze_nyquist_spv_size);
+        if (name == "amaze_nyquist_vote.wgsl") return words(amaze_nyquist_vote_spv, amaze_nyquist_vote_spv_size);
+        if (name == "amaze_area.wgsl") return words(amaze_area_spv, amaze_area_spv_size);
+        if (name == "amaze_hvwt_seq.wgsl") return words(amaze_hvwt_seq_spv, amaze_hvwt_seq_spv_size);
+        if (name == "amaze_green.wgsl") return words(amaze_green_spv, amaze_green_spv_size);
+        if (name == "amaze_refine.wgsl") return words(amaze_refine_spv, amaze_refine_spv_size);
+        if (name == "amaze_diagonal.wgsl") return words(amaze_diagonal_spv, amaze_diagonal_spv_size);
+        if (name == "amaze_pmwt_seq.wgsl") return words(amaze_pmwt_seq_spv, amaze_pmwt_seq_spv_size);
+        if (name == "amaze_rbint.wgsl") return words(amaze_rbint_spv, amaze_rbint_spv_size);
+        if (name == "amaze_correct.wgsl") return words(amaze_correct_spv, amaze_correct_spv_size);
+        if (name == "amaze_chroma.wgsl") return words(amaze_chroma_spv, amaze_chroma_spv_size);
+        if (name == "amaze_finish.wgsl") return words(amaze_finish_spv, amaze_finish_spv_size);
+        unknown("AMaZE", name);
+    };
+}
+
 ::rcd::ShaderProvider embeddedRcdShaders() {
     return [](std::string_view name) -> std::vector<uint32_t> {
         if (name == "rcd_direction.comp") return words(rcd_direction_spv, rcd_direction_spv_size);
@@ -75,7 +119,9 @@ std::vector<uint32_t> words(const unsigned char* bytes, size_t size) {
 ::dual::ShaderProvider embeddedDualShaders() {
     auto vng = embeddedVng4Shaders();
     auto rcd = embeddedRcdShaders();
-    return [vng = std::move(vng), rcd = std::move(rcd)](std::string_view name) -> std::vector<uint32_t> {
+    auto amaze = embeddedAmazeShaders();
+    return [vng = std::move(vng), rcd = std::move(rcd), amaze = std::move(amaze)](std::string_view name)
+               -> std::vector<uint32_t> {
         if (name == "dual_luminance.comp") return words(dual_luminance_spv, dual_luminance_spv_size);
         if (name == "dual_mask.comp") return words(dual_mask_spv, dual_mask_spv_size);
         if (name == "dual_gauss_h.comp") return words(dual_gauss_h_spv, dual_gauss_h_spv_size);
@@ -85,9 +131,10 @@ std::vector<uint32_t> words(const unsigned char* bytes, size_t size) {
         if (name == "dual_auto_select.comp") return words(dual_auto_select_spv, dual_auto_select_spv_size);
         if (name == "dual_auto_refine.comp") return words(dual_auto_refine_spv, dual_auto_refine_spv_size);
         if (name == "dual_auto_threshold.comp") return words(dual_auto_threshold_spv, dual_auto_threshold_spv_size);
-        // The blend reuses the frozen RCD passes and a VNG4 sub-pipeline.
+        // The blend reuses the frozen RCD (or AMaZE) passes and a VNG4 sub-pipeline.
         if (name.rfind("vng4_", 0) == 0) return vng(name);
         if (name.rfind("rcd_", 0) == 0) return rcd(name);
+        if (name.rfind("amaze_", 0) == 0) return amaze(name);
         unknown("dual", name);
     };
 }

@@ -92,6 +92,12 @@ develop::DevelopSettings readCaptureDevelopSettings(const CaptureDevelopInput& i
         case 3:
             out.demosaicAlgorithm = rawrcam::develop::DemosaicAlgorithm::DualRcdVng4;
             break;
+        case 4:
+            out.demosaicAlgorithm = rawrcam::develop::DemosaicAlgorithm::Amaze;
+            break;
+        case 5:
+            out.demosaicAlgorithm = rawrcam::develop::DemosaicAlgorithm::DualAmazeVng4;
+            break;
         default:
             out.demosaicAlgorithm = rawrcam::develop::DemosaicAlgorithm::Rcd;
             break;

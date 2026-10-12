@@ -1,0 +1,23 @@
+#version 450
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copies one tile of the CFA into the AMaZE source buffer as f32 bits
+// (amaze.wgsl reads them with sourceIsFloat = 1 and applies WB). Input is either
+// the packed half-resolution RGBA16F image (inputMode 0) or a full-resolution
+// float buffer in the 0..255 working domain (inputMode 1, rcd::NormalizedBayerBufferView).
+layout(local_size_x = 16, local_size_y = 16) in;
+#include "amaze_tile.glsl"
+layout(std430, set = 0, binding = 0) writeonly buffer Source { uint words[]; } source;
+layout(set = 0, binding = 5) uniform sampler2D packedInput;
+layout(std430, set = 0, binding = 7) readonly buffer Normalized { float bayer255[]; } normalizedInput;
+void main() {
+    uvec2 l = gl_GlobalInvocationID.xy;
+    if (l.x >= tile.srcWidth || l.y >= tile.srcHeight) return;
+    ivec2 g = ivec2(tile.srcOriginX + l.x, tile.srcOriginY + l.y);
+    float v;
+    if (tile.inputMode > 0.5) {
+        v = normalizedInput.bayer255[uint(g.y) * uint(tile.inputWidth) + uint(g.x)] * (1.0 / 255.0);
+    } else {
+        v = texelFetch(packedInput, g >> 1, 0)[cfaComponent(g, uint(tile.pattern))];
+    }
+    source.words[l.y * tile.srcWidth + l.x] = floatBitsToUint(v);
+}

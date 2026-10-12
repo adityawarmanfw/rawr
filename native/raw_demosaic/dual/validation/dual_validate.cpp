@@ -1,3 +1,4 @@
+#include <array>
 #include <cstring>
 #include <dual/Dual.hpp>
 #include <fstream>
@@ -90,6 +91,8 @@ int main(int argc, char** argv) {
         float contrast = 20.f;
         uint32_t mode = 1;
         bool autoContrast = false;
+        bool amazePrimary = false;
+        std::array<float, 3> wb{1.0f, 1.0f, 1.0f};
         for (int i = 1; i < argc; ++i) {
             std::string a = argv[i];
             if (a == "--shader-dir")
@@ -110,11 +113,18 @@ int main(int argc, char** argv) {
                 mode = uint32_t(std::stoul(argv[++i]));
             else if (a == "--auto-contrast")
                 autoContrast = true;
+            else if (a == "--primary")
+                amazePrimary = std::string(argv[++i]) == "amaze";
+            else if (a == "--wb") {
+                wb[0] = std::stof(argv[++i]);
+                wb[1] = std::stof(argv[++i]);
+                wb[2] = std::stof(argv[++i]);
+            }
         }
         if (sd.empty() || in.empty() || out.empty() || !W || !H || pattern > 3)
             throw std::runtime_error(
                 "usage: dual_validate --shader-dir DIR --input-f32 FILE --output-rgba16f FILE --width W --height H "
-                "--pattern 0..3 [--contrast-percent P]");
+                "--pattern 0..3 [--contrast-percent P] [--auto-contrast] [--primary rcd|amaze] [--wb r g b]");
         auto bytes = readBytes(in);
         if (bytes.size() != size_t(W) * H * 4) throw std::runtime_error("input size mismatch");
         Ctx c = ctx();
@@ -140,8 +150,10 @@ int main(int argc, char** argv) {
         cfg.contrastPercent = contrast;
         cfg.autoContrast = autoContrast;
         cfg.optimizationMode = static_cast<dual::OptimizationMode>(mode);
+        if (amazePrimary) cfg.primary = dual::Primary::Amaze;
         auto pipe = std::make_unique<dual::DualDemosaicPipeline>(dual::VulkanContext{c.pd, c.dev, c.qf, nullptr},
                                                                  provider(sd), cfg);
+        pipe->setWhiteBalance(wb);
         VkCommandBuffer cmd{};
         VkCommandBufferAllocateInfo cai{};
         cai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;

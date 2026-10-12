@@ -1,5 +1,6 @@
 #pragma once
 #include "capture/single/SingleFrameCaptureContextBuilder.h"
+#include "develop/demosaic/AmazeStillProcessor.h"
 #include "develop/demosaic/DualStillProcessor.h"
 #include "develop/demosaic/RcdStillProcessor.h"
 #include "develop/demosaic/VngStillProcessor.h"
@@ -32,6 +33,7 @@ class SingleFrameCaptureDevelop final {
     std::mutex& queueSubmitMutex_;
     std::string filesDir_;
     CaptureDiagnostic diagnostic_;
+    develop::demosaic::amaze::AmazeStillProcessor amaze_;
     develop::demosaic::rcd::RcdStillProcessor rcd_;
     develop::demosaic::vng4::VngStillProcessor vng_;
     develop::demosaic::dual::DualStillProcessor dual_;

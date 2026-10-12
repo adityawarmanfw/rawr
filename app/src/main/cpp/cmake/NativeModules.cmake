@@ -94,6 +94,7 @@ rawrcam_module(develop
     develop/HotPixelConceal.cpp
     develop/DevelopContextBuilder.cpp
     develop/galosh/GaloshShaderTable.cpp
+    develop/demosaic/AmazeStillProcessor.cpp
     develop/demosaic/RcdStillProcessor.cpp
     develop/demosaic/VngStillProcessor.cpp
     develop/demosaic/DualStillProcessor.cpp

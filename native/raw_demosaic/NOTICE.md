@@ -13,7 +13,14 @@ Copyright in the original code remains with its authors:
   Rodríguez; librtprocess and RawTherapee contributors.
 - **VNG4** demosaic: derived from **librtprocess** (unclamped variant),
   GPL-3.0-or-later.
-- **Dual** (RCD+VNG4) blend: derived from **RawTherapee**, GPL-3.0-or-later.
+- **AMaZE** demosaic: derived from **librtprocess** / RawTherapee `amaze.cc`
+  and **darktable** `src/iop/demosaicing/amaze.cc`, GPL-3.0-or-later. AMaZE
+  algorithm Copyright (C) 2008-2010 Emil Martinec, optimizations by Ingo
+  Weyrich; darktable Copyright (C) 2011-2024 darktable developers. The GPU pass
+  structure was adapted from a privately shared GPL-3.0 WGSL implementation
+  (2026), whose copyright remains with its author.
+- **Dual** (RCD+VNG4 / AMaZE+VNG4) blend: derived from **RawTherapee**,
+  GPL-3.0-or-later.
 - **quadfix** pre-filter: original to Rawr.
 
 Files here are modified ports; individual files carry provenance comments naming

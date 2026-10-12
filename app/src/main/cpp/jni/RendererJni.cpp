@@ -100,7 +100,8 @@ rawrcam::renderer::RenderOptions options(JNIEnv* env, jstring recipe, int workin
 #undef RAWR_FILM_FIELD
     o.demosaic = json.text("demosaicAlgorithm");
     if (o.demosaic.empty()) o.demosaic = "Rcd";
-    if (o.demosaic != "Rcd" && o.demosaic != "Vng4" && o.demosaic != "DualRcdVng4")
+    if (o.demosaic != "Amaze" && o.demosaic != "Rcd" && o.demosaic != "Vng4" && o.demosaic != "DualRcdVng4" &&
+        o.demosaic != "DualAmazeVng4")
         throw std::runtime_error("Unsupported demosaic recipe");
     o.dualAutoContrast = json.flag("dualAutoContrast", true);
     o.dualContrastPercent = std::clamp(float(json.number("dualContrastPercent", 20)), 0.f, 100.f);

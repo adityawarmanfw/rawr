@@ -32,10 +32,14 @@ elseif(NOT TARGET vng4::vng4)
   add_subdirectory(../vng4 ${CMAKE_CURRENT_BINARY_DIR}/vng4_fallback EXCLUDE_FROM_ALL)
 endif()
 
+if(NOT TARGET amaze::amaze)
+  add_subdirectory(../amaze ${CMAKE_CURRENT_BINARY_DIR}/amaze_fallback EXCLUDE_FROM_ALL)
+endif()
+
 add_library(dual_demosaic STATIC src/Pipeline.cpp)
 add_library(dual::dual_demosaic ALIAS dual_demosaic)
 target_include_directories(dual_demosaic PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(dual_demosaic PUBLIC rcd::rcd vng4::vng4 ${VULKAN_LIB})
+target_link_libraries(dual_demosaic PUBLIC rcd::rcd vng4::vng4 amaze::amaze ${VULKAN_LIB})
 target_compile_options(dual_demosaic PRIVATE $<$<CXX_COMPILER_ID:AppleClang,Clang,GNU>:-O3;-Wall;-Wextra;-Wpedantic;-Werror>)
 
 option(DUAL_BUILD_VALIDATION "Build dual Vulkan validation harness" OFF)

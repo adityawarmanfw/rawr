@@ -309,9 +309,11 @@ data class ImportedLutProfile(
 )
 
 enum class DemosaicAlgorithm(val label: String) {
+    Amaze("AMaZE"),
     Rcd("RCD"),
     Vng4("VNG4"),
-    DualRcdVng4("RCD + VNG4")
+    DualRcdVng4("RCD + VNG4"),
+    DualAmazeVng4("AMaZE + VNG4")
 }
 
 enum class MultiframeOutputResolution(val label: String, val outputScale: Float) {
@@ -924,7 +926,7 @@ data class SettingsValues(
     val persistZslRingOnShutterEnabled: Boolean = false,
     val internalTraceCaptureEnabled: Boolean = false,
     val internalTraceRetainedRows: Int = 8192,
-    val demosaicAlgorithm: DemosaicAlgorithm = DemosaicAlgorithm.Rcd,
+    val demosaicAlgorithm: DemosaicAlgorithm = DemosaicAlgorithm.Amaze,
     val dualAutoContrast: Boolean = true,
     val dualContrastPercent: Float = 20f,
     val quadfixEnabled: Boolean = false,

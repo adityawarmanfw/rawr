@@ -4,13 +4,13 @@
 
 #include "tonemap/ColorRenderProfile.h"
 namespace rawrcam::develop {
-enum class DemosaicAlgorithm : std::uint8_t { Rcd = 0, Vng4 = 2, DualRcdVng4 = 3 };
+enum class DemosaicAlgorithm : std::uint8_t { Rcd = 0, Vng4 = 2, DualRcdVng4 = 3, Amaze = 4, DualAmazeVng4 = 5 };
 struct DevelopSettings {
     bool pipelineDiagnosticsEnabled = false;
     rawrcam::tonemap_integration::ColorRenderProfile colorRenderProfile =
         rawrcam::tonemap_integration::ColorRenderProfile::RawrBase;
     std::string importedLutProfileId;
-    DemosaicAlgorithm demosaicAlgorithm = DemosaicAlgorithm::Rcd;
+    DemosaicAlgorithm demosaicAlgorithm = DemosaicAlgorithm::Amaze;
     bool dualAutoContrast = true;
     float dualContrastPercent = 20.0f;
     std::uint32_t fccSteps = 2;

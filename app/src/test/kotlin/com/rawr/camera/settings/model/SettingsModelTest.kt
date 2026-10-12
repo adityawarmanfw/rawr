@@ -98,11 +98,11 @@ class SettingsModelTest {
         assertEquals("dng.uncompressed", v.dngCompressionId)
         assertEquals(98f, v.imageTone.jpegQuality)
         assertEquals("jpeg.422", v.imageTone.jpegChromaSubsamplingId)
-        assertFalse(v.ultraHdrEnabled)
+        assertTrue(v.ultraHdrEnabled)
         // Engine and develop.
         assertTrue(v.experimentalZeroCopyEnabled)
         assertTrue(v.persistentEngineEnabled)
-        assertEquals(DemosaicAlgorithm.Rcd, v.demosaicAlgorithm)
+        assertEquals(DemosaicAlgorithm.Amaze, v.demosaicAlgorithm)
         assertEquals(2, v.photoFccSteps)
         assertEquals(1, v.photoHighlightMethod)
         // Film: off; every factory look has DIR couplers (no spread) and no grain/halation/diffusion/filters.

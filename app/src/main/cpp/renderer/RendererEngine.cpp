@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <amaze/Amaze.hpp>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -223,8 +224,9 @@ void RendererEngine::prepare(DngSource& source, const std::string& path, const R
         auto* dst = static_cast<uint16_t*>(file.data);
         // Estimate one frame balance with a bounded row buffer, then reuse it
         // across every tile. Independent tile estimates leave chroma seams.
+        const bool dualDemosaic = options.demosaic == "DualRcdVng4" || options.demosaic == "DualAmazeVng4";
         rcd::BalanceAccumulator balance;
-        if (options.demosaic != "DualRcdVng4") {
+        if (!dualDemosaic) {
             for (uint32_t y = 0; y < h; y += 64) {
                 check();
                 uint32_t rows = std::min(64u, h - y);
@@ -237,7 +239,7 @@ void RendererEngine::prepare(DngSource& source, const std::string& path, const R
         }
         const auto frameBalance = balance.gains();
         // Dual auto contrast uses image-wide statistics: keep it a single frame.
-        const uint32_t tile = options.demosaic == "DualRcdVng4" ? std::max(w, h) : 1024, halo = 16;
+        const uint32_t tile = dualDemosaic ? std::max(w, h) : 1024, halo = 16;
         // quadfix adapt004 pre-filter halo, frozen after host measurement
         // (tiled-vs-full sky delta: H=96 max 0.076 DN, H=128 max 0.021 DN,
         // interior tiles ~0 with real neighbor data). Must stay % 16 == 0 so
@@ -245,6 +247,7 @@ void RendererEngine::prepare(DngSource& source, const std::string& path, const R
         const uint32_t quadHalo = 128;
         Commands commands(vulkan_);
         std::map<std::pair<uint32_t, uint32_t>, std::unique_ptr<rcd::RcdPipeline>> pipelines;
+        std::map<std::pair<uint32_t, uint32_t>, std::unique_ptr<amaze::AmazePipeline>> amazePipelines;
         std::map<std::tuple<uint32_t, uint32_t, bool>, std::unique_ptr<quadfix::QuadfixPipeline>> quadPipes;
         // Filters the expanded quadfix tile covering core [cx0,cx0+cw) x
         // [cy0,cy0+ch) and copies the core rows into dst (row pitch dstStride,
@@ -297,7 +300,7 @@ void RendererEngine::prepare(DngSource& source, const std::string& path, const R
         // dual once from it. Interior tiles see real neighbor data, so the
         // result matches the tiled RCD/VNG4 path up to frame-border clamping.
         std::unique_ptr<Buffer> dualFiltered;
-        if (options.quadfix && options.demosaic == "DualRcdVng4" && (w & 15u) == 0 && (h & 15u) == 0) {
+        if (options.quadfix && dualDemosaic && (w & 15u) == 0 && (h & 15u) == 0) {
             dualFiltered = std::make_unique<Buffer>(vulkan_, size_t(w) * h * 4);
             const uint32_t qtile = 1024;
             bool ok = true;
@@ -362,7 +365,29 @@ void RendererEngine::prepare(DngSource& source, const std::string& path, const R
                 std::unique_ptr<vng4::Vng4Pipeline> vng;
                 std::unique_ptr<dual::DualDemosaicPipeline> dualPipeline;
                 rcd::RcdPipeline* rcdPipeline = nullptr;
-                if (options.demosaic == "Vng4") {
+                // AMaZE needs >= 32 px per side; a smaller edge tile uses RCD. The float
+                // input takes odd sizes (only packed input needs the 2x2 pairing).
+                const bool amazeTile = options.demosaic == "Amaze" && tw >= 32u && th >= 32u;
+                if (amazeTile) {
+                    amaze::PipelineConfig cfg{};
+                    cfg.width = tw;
+                    cfg.height = th;
+                    cfg.pattern = static_cast<amaze::BayerPattern>(source.cfa);
+                    cfg.inputMode = amaze::InputMode::NormalizedFloatBuffer;
+                    auto& pipeline = amazePipelines[{tw, th}];
+                    if (!pipeline)
+                        pipeline = std::make_unique<amaze::AmazePipeline>(
+                            amaze::VulkanContext{vulkan_.physicalDevice(), vulkan_.device(), vulkan_.queueFamily(),
+                                                 nullptr},
+                            raw_demosaic::embeddedAmazeShaders(), cfg);
+                    // AMaZE's highlight logic expects white-balanced data
+                    // (DNG AsShotNeutral gains, green = 1); export removes it.
+                    pipeline->record(
+                        commands.command,
+                        amaze::NormalizedBayerBufferView{{upload.buffer, 0, size_t(bayerBytes)}, tw, th, cfg.pattern},
+                        {output.value.image, output.value.view, output.value.format, VK_IMAGE_LAYOUT_GENERAL, tw, th},
+                        source.wb);
+                } else if (options.demosaic == "Vng4") {
                     vng4::PipelineConfig cfg{};
                     cfg.width = tw;
                     cfg.height = th;
@@ -375,7 +400,7 @@ void RendererEngine::prepare(DngSource& source, const std::string& path, const R
                         commands.command,
                         vng4::NormalizedBayerBufferView{{upload.buffer, 0, size_t(bayerBytes)}, tw, th, cfg.pattern},
                         {output.value.image, output.value.view, output.value.format, VK_IMAGE_LAYOUT_GENERAL, tw, th});
-                } else if (options.demosaic == "DualRcdVng4") {
+                } else if (dualDemosaic) {
                     dual::PipelineConfig cfg{};
                     cfg.autoBalance = true;
                     cfg.width = tw;
@@ -384,9 +409,14 @@ void RendererEngine::prepare(DngSource& source, const std::string& path, const R
                     cfg.inputMode = dual::InputMode::NormalizedFloatBuffer;
                     cfg.autoContrast = options.dualAutoContrast;
                     cfg.contrastPercent = options.dualContrastPercent;
+                    // Dual demosaics one full-frame tile; AMaZE needs >= 32 px per side.
+                    if (options.demosaic == "DualAmazeVng4" && tw >= 32 && th >= 32)
+                        cfg.primary = dual::Primary::Amaze;
                     dualPipeline = std::make_unique<dual::DualDemosaicPipeline>(
                         dual::VulkanContext{vulkan_.physicalDevice(), vulkan_.device(), vulkan_.queueFamily(), nullptr},
                         raw_demosaic::embeddedDualShaders(), cfg);
+                    // AMaZE primary: AsShotNeutral gains (green = 1), as in the Amaze branch.
+                    if (cfg.primary == dual::Primary::Amaze) dualPipeline->setWhiteBalance(source.wb);
                     dualPipeline->record(
                         commands.command,
                         dual::NormalizedBayerBufferView{{upload.buffer, 0, size_t(bayerBytes)}, tw, th, cfg.pattern},
