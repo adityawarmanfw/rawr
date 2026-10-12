@@ -141,13 +141,19 @@ GpuParameters buildGpuParameters(const TonemapParams& params, const float* matri
     gpu.cameraToWorking[10] = matrix[8];
     gpu.cameraToWorking[15] = 1.0f;
 
-    // Grade space anchors: where 18% gray lands in each render's input
-    // encoding, and the luma weights of the imported LUT's input gamut.
+    // Grade space anchors: where 18% gray and black land in each render's
+    // input encoding, and the luma weights of the imported LUT's input gamut.
+    // A linear LUT input is graded in DaVinci Intermediate (see tonemap.comp).
+    const auto userGradeTransfer = lutPayload.inputSpace.transfer == color::TransferFunction::Linear
+                                       ? color::TransferFunction::DaVinciIntermediate
+                                       : lutPayload.inputSpace.transfer;
     gpu.gradePivot[0] = color::encodeTransfer(config.middleGray, color::TransferFunction::DaVinciIntermediate);
-    gpu.gradePivot[1] = color::encodeTransfer(config.middleGray, lutPayload.inputSpace.transfer);
+    gpu.gradePivot[1] = color::encodeTransfer(config.middleGray, userGradeTransfer);
     gpu.gradePivot[2] = color::encodeTransfer(config.middleGray, params.renderTransform == RenderTransform::Rec709
                                                                      ? color::TransferFunction::Rec709
                                                                      : color::TransferFunction::SRgb);
+    // Black code of the LUT input (0 linear): log encodings put it above 0.
+    gpu.gradePivot[3] = color::encodeTransfer(0.0f, userGradeTransfer);
     const color::Mat3 toSrgb = color::linearGamutMatrix(lutPayload.inputSpace.gamut, color::Gamut::SRgbRec709);
     constexpr float kSrgbLuma[3] = {0.2126f, 0.7152f, 0.0722f};
     for (int c = 0; c < 3; ++c)

@@ -113,6 +113,8 @@ def luma(img):
 # Render setups for the grade-space contract: (name, lut, runner args).
 SRGB, REC709 = ['--render-transform', '1'], ['--render-transform', '2']
 LOGC3_LUT = ['--lut-placement', '0', '--lut-input-gamut', '4', '--lut-input-transfer', '6']
+VLOG_LUT = ['--lut-placement', '0', '--lut-input-gamut', '6', '--lut-input-transfer', '8']
+LINEAR_LUT = ['--lut-placement', '0', '--lut-input-gamut', '3', '--lut-input-transfer', '0']
 GRAY_EV = np.linspace(-12.0, 4.0, W)
 
 
@@ -173,9 +175,16 @@ def metrics(render, lut):
     slope = np.diff(g1) / np.maximum(np.diff(g0), 1e-12)
     m['blacks_plus_subcode_slope'] = float(slope[near].max()) if near.any() else float('nan')
     # Contrast pivots at 18% gray in each render's input encoding.
-    setups = [('ntrl', None, ()), ('srgb', None, SRGB), ('rec709', None, REC709), ('logc3_lut', lut, LOGC3_LUT)]
+    setups = [('ntrl', None, ()), ('srgb', None, SRGB), ('rec709', None, REC709), ('logc3_lut', lut, LOGC3_LUT),
+              ('vlog_lut', lut, VLOG_LUT), ('linear_lut', lut, LINEAR_LUT)]
     m['contrast_pivot_drift'] = max(abs(gray_at(render, tone(C=c), 0.0, l, x) - gray_at(render, tone(), 0.0, l, x))
                                     for _, l, x in setups for c in (-100, 100))
+    # Contrast and Shadows keep true black where the log curve puts it
+    # (LogC3 0.093, V-Log 0.125), not at code 0. Anchored at code 0 this was
+    # ~0.1; the residual is Contrast- legitimately lifting the -12 EV sample
+    # just above black.
+    m['log_black_drift'] = max(abs(gray_at(render, t, -12.0, lut, x) - gray_at(render, tone(), -12.0, lut, x))
+                               for x in (LOGC3_LUT, VLOG_LUT) for t in (tone(C=100), tone(C=-100), tone(S=100)))
     # Highlights-100 compresses the top under the NTRL shoulder and leaves the
     # shadows alone; on direct sRGB it brings clipped values back into range.
     g0, g1 = luma(render(tone()))[0], luma(render(tone(H=-100)))[0]
@@ -225,6 +234,7 @@ def main():
         ('Vibrance+ spares deep shadows', after['vibrance_gain_deep_shadow'] < 1.05 < after['vibrance_gain_midtone']),
         ('Blacks+ does not amplify sub-code noise', after['blacks_plus_subcode_slope'] < 8.0),
         ('Contrast keeps 18% gray in every grade space', after['contrast_pivot_drift'] < 3e-3),
+        ('Log black stays at the curve black', after['log_black_drift'] < 1e-2),
         ('Highlights- compresses the top', after['highlights_minus_top_drop'] > 0.01),
         ('Highlights- leaves shadows alone', after['highlights_minus_shadow_change'] < 1e-4),
         ('Highlights- recovers clipped sRGB', after['srgb_clipped_slope_before'] < 1e-6 < after['srgb_recovered_slope_after']),

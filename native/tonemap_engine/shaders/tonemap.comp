@@ -86,7 +86,7 @@ layout(binding = 1, rgba8) uniform writeonly image2D outputImage;
 // not read here; the layout is kept to match TonemapEngine's GpuParameters.
 layout(std140, binding = 2) uniform TonemapGpuParams {
     mat4 cameraToWorking;         // upper-left mat3; mat4 avoids mat3 packing ambiguity
-    vec4 gradePivot;              // grade-space 18% gray: NTRL (DI), user LUT input, direct, unused
+    vec4 gradePivot;              // grade-space 18% gray: NTRL (DI), user LUT, direct; w: user LUT black code
     vec4 knotX4_exposure_sat_gc;  // x4, exposureEV, saturation, gamutCompressionStart
     vec4 colorControls;           // vibrance, strength, shadow guard start/end (DI offsets from the pivot)
     vec4 renderConfig;            // middleGray, aePostGainEV, ShadowsUI, MidtonesUI
@@ -244,6 +244,8 @@ vec3 sampleRawrNeutralTechnical(vec3 q) {
 // LUT input before an imported LUT chain, and the sRGB/Rec.709 encoding before
 // the direct clamp. Distances are encoded units from the space's 18% gray
 // pivot, so the same value acts proportionally differently per encoding.
+// Contrast and the Shadows guard are anchored between the space's black code
+// (0 linear: 0.093 in LogC3, 0.125 in V-Log, 0 in DI/sRGB) and its pivot.
 // Tone moves luma and shifts all three channels equally (a gain in linear for
 // log encodings); chroma around luma carries Saturation/Vibrance. Nothing is
 // clamped here so headroom above display white reaches the render.
@@ -268,7 +270,7 @@ bool gradeActive() {
            P.knotX4_exposure_sat_gc.z != 0.0 || P.colorControls.x != 0.0;
 }
 
-vec3 applyGrade(vec3 e, vec3 lumaWeights, float pivot) {
+vec3 applyGrade(vec3 e, vec3 lumaWeights, float pivot, float black) {
     if (!gradeActive()) return e;
     float C = clamp(P.toneControls.x, -100.0, 100.0) * 0.01;
     float H = clamp(P.toneControls.y, -100.0, 100.0) * 0.01;
@@ -280,18 +282,19 @@ vec3 applyGrade(vec3 e, vec3 lumaWeights, float pivot) {
     float y0 = dot(lumaWeights, e);
     vec3 chroma = e - vec3(y0);
     float y = y0;
-    // Contrast: power below the pivot keeps black fixed, a linear stretch above
-    // it; both have slope g at the pivot. g > 0 so tones never invert.
-    if (C != 0.0 && y > 0.0) {
+    // Contrast: power between black and the pivot keeps black fixed, a linear
+    // stretch above it; both have slope g at the pivot. g > 0 so tones never
+    // invert. Values below black (noise) are left alone.
+    if (C != 0.0 && y > black) {
         float g = exp2(0.7 * C);
         float d = y - pivot;
-        y = d >= 0.0 ? pivot + d * g : pivot * pow(y / pivot, g);
+        y = d >= 0.0 ? pivot + d * g : black + (pivot - black) * pow((y - black) / (pivot - black), g);
     }
     // Regional controls (widths keep every stacked combination monotonic).
     float d = y - pivot;
     float yr = y;
     y += M * 0.05 * gradeBump(d, 0.0, 0.10);
-    y += S * 0.06 * gradeBump(d, -0.14, 0.10) * smoothstep(0.0, 0.25 * pivot, yr);
+    y += S * 0.06 * gradeBump(d, -0.14, 0.10) * smoothstep(black, black + 0.25 * (pivot - black), yr);
     y += H * highlightsShape(d);
 
     if (satUI != 0.0 || vibUI != 0.0) {
@@ -494,7 +497,7 @@ void main() {
         uint tf = rec709 ? RAWR_TF_REC709 : RAWR_TF_SRGB;
         vec3 srgbLinear = rawrToSrgbLinear(work * exp2(P.renderConfig.y + P.knotX4_exposure_sat_gc.y),
                                            RAWR_GAMUT_ACESCG_AP1);
-        encoded = clamp(applyGrade(rawrEncodeTransfer(srgbLinear, tf), SRGB_LUMA, P.gradePivot.z), 0.0, 1.0);
+        encoded = clamp(applyGrade(rawrEncodeTransfer(srgbLinear, tf), SRGB_LUMA, P.gradePivot.z, 0.0), 0.0, 1.0);
         if (displayTrimsActive()) {
             // The trims were fitted on encoded sRGB.
             vec3 srgb = rec709 ? srgbOETF(rawrDecodeTransfer(encoded, RAWR_TF_REC709)) : encoded;
@@ -513,7 +516,7 @@ void main() {
         vec3 rawrNeutralInput = !COMBINE_NEUTRAL_GAMUT
             ? rawrCst(renderedLinear, RAWR_GAMUT_ACESCG_AP1, RAWR_TF_LINEAR, RAWR_GAMUT_DWG, RAWR_TF_DAVINCI_INTERMEDIATE)
             : rawrTonemapCst(renderedLinear, RAWR_GAMUT_ACESCG_AP1, RAWR_TF_LINEAR, RAWR_GAMUT_DWG, RAWR_TF_DAVINCI_INTERMEDIATE, P.neutralGamut);
-        vec3 rawrNeutral = sampleRawrNeutralTechnical(applyGrade(rawrNeutralInput, DWG_LUMA, P.gradePivot.x));
+        vec3 rawrNeutral = sampleRawrNeutralTechnical(applyGrade(rawrNeutralInput, DWG_LUMA, P.gradePivot.x, 0.0));
         encoded = rawrNeutral;
 
         // A render-transform user LUT starts from scene-linear AP1 and replaces RAWR
@@ -524,7 +527,15 @@ void main() {
         // space, so 0 is an exact Rawr Neutral bypass even when LUT spaces differ.
         if (P.lutControl.x != 0u && P.lutControl.y > 0u && P.lutBlend.x > 0.0 && P.lutOutput.z == 0u) {
             vec3 lutIn = rawrUserCst(renderedLinear, RAWR_GAMUT_ACESCG_AP1, RAWR_TF_LINEAR, P.lutControl.z, P.lutControl.w, P.userInputGamut);
-            lutIn = applyGrade(lutIn, P.gradeLuma.xyz, P.gradePivot.y);
+            if (P.lutControl.w == RAWR_TF_LINEAR && gradeActive()) {
+                // Linear LUT input has no tonal scale to grade on: grade in
+                // DaVinci Intermediate (pivot/black sent for DI) and return.
+                lutIn = rawrDecodeTransfer(applyGrade(rawrEncodeTransfer(lutIn, RAWR_TF_DAVINCI_INTERMEDIATE),
+                                                      P.gradeLuma.xyz, P.gradePivot.y, P.gradePivot.w),
+                                           RAWR_TF_DAVINCI_INTERMEDIATE);
+            } else {
+                lutIn = applyGrade(lutIn, P.gradeLuma.xyz, P.gradePivot.y, P.gradePivot.w);
+            }
             vec3 lutOut = rawrEvaluateUserLutChain(lutIn);
             vec3 lutSrgb = P.lutOutput.w == 0u
                                ? lutOut
