@@ -459,18 +459,11 @@ void main() {
         vec3 color = work;
         float renderExposureEV = P.renderConfig.y + P.exposureSaturation.y;
         vec3 renderedLinear = color * exp2(renderExposureEV);
-        vec3 rawrNeutralInput = !COMBINE_NEUTRAL_GAMUT
-            ? rawrCst(renderedLinear, RAWR_GAMUT_ACESCG_AP1, RAWR_TF_LINEAR, RAWR_GAMUT_DWG, RAWR_TF_DAVINCI_INTERMEDIATE)
-            : rawrTonemapCst(renderedLinear, RAWR_GAMUT_ACESCG_AP1, RAWR_TF_LINEAR, RAWR_GAMUT_DWG, RAWR_TF_DAVINCI_INTERMEDIATE, P.neutralGamut);
-        vec3 rawrNeutral = sampleRawrNeutralTechnical(applyGrade(rawrNeutralInput, DWG_LUMA, P.gradePivot.x, 0.0, renderedLinear));
-        encoded = rawrNeutral;
-
-        // A render-transform user LUT starts from scene-linear AP1 and replaces RAWR
-        // NTRL as the render transform. A post-render LUT starts from Rawr's
-        // encoded sRGB result. In both cases the user's declared input/output color
-        // spaces drive only the boundary CSTs; there is never an implicit CST
-        // between LUT stages. Intensity is blended in Rawr's encoded-sRGB downstream
-        // space, so 0 is an exact Rawr Neutral bypass even when LUT spaces differ.
+        // A render-transform user LUT replaces RAWR NTRL outright (NTRL is not
+        // computed): it starts from scene-linear AP1 in its declared input
+        // space, and only the boundary CSTs use the declared spaces; there is
+        // never an implicit CST between LUT stages. A post-render LUT starts
+        // from Rawr's encoded sRGB result (below).
         if (P.lutControl.x != 0u && P.lutControl.y > 0u && P.lutBlend.x > 0.0 && P.lutOutput.z == 0u) {
             vec3 lutIn = rawrUserCst(renderedLinear, RAWR_GAMUT_ACESCG_AP1, RAWR_TF_LINEAR, P.lutControl.z, P.lutControl.w, P.userInputGamut);
             if (P.lutControl.w == RAWR_TF_LINEAR && gradeActive()) {
@@ -483,10 +476,14 @@ void main() {
                 lutIn = applyGrade(lutIn, P.gradeLuma.xyz, P.gradePivot.y, P.gradePivot.w, renderedLinear);
             }
             vec3 lutOut = rawrEvaluateUserLutChain(lutIn);
-            vec3 lutSrgb = P.lutOutput.w == 0u
-                               ? lutOut
-                               : rawrUserCst(lutOut, P.lutOutput.x, P.lutOutput.y, RAWR_GAMUT_SRGB_REC709, RAWR_TF_SRGB, P.userOutputGamut);
-            encoded = mix(rawrNeutral, lutSrgb, clamp(P.lutBlend.x, 0.0, 1.0));
+            encoded = P.lutOutput.w == 0u
+                          ? lutOut
+                          : rawrUserCst(lutOut, P.lutOutput.x, P.lutOutput.y, RAWR_GAMUT_SRGB_REC709, RAWR_TF_SRGB, P.userOutputGamut);
+        } else {
+            vec3 rawrNeutralInput = !COMBINE_NEUTRAL_GAMUT
+                ? rawrCst(renderedLinear, RAWR_GAMUT_ACESCG_AP1, RAWR_TF_LINEAR, RAWR_GAMUT_DWG, RAWR_TF_DAVINCI_INTERMEDIATE)
+                : rawrTonemapCst(renderedLinear, RAWR_GAMUT_ACESCG_AP1, RAWR_TF_LINEAR, RAWR_GAMUT_DWG, RAWR_TF_DAVINCI_INTERMEDIATE, P.neutralGamut);
+            encoded = sampleRawrNeutralTechnical(applyGrade(rawrNeutralInput, DWG_LUMA, P.gradePivot.x, 0.0, renderedLinear));
         }
 
         // The NTRL LUT and "use directly" user LUTs can overshoot [0,1] slightly;

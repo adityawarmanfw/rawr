@@ -1071,8 +1071,8 @@ std::optional<GradeTapBlock> TonemapEngine::gradeTapBlock(const TonemapParams& p
         p.saturation == 0.0f && p.vibrance == 0.0f)
         return std::nullopt;
     // Same space selection as the shader: a render-transform LUT replaces
-    // NTRL's grade space (its NTRL blend share is graded in DI, close enough
-    // for the tap), the direct profiles grade in their output encoding.
+    // NTRL and its grade space, the direct profiles grade in their output
+    // encoding.
     const auto& payload = impl_->userLutPayload;
     const bool userLut = p.renderTransform == RenderTransform::Existing && payload.enabled &&
                          payload.intensity > 0.0f && payload.placement == lut::LutPlacement::RenderTransform;
