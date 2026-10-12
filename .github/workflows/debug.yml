@@ -28,6 +28,9 @@ jobs:
         with:
           packages: platform-tools ndk;29.0.14206865 cmake;3.31.6
 
+      # native/image_scopes embeds its SPIR-V through `uv run`.
+      - uses: astral-sh/setup-uv@v6
+
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Unit tests
