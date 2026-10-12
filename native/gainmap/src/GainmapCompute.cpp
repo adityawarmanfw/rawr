@@ -71,7 +71,8 @@ struct GainmapCompute::Impl {
     VkImage fallbackGlow = VK_NULL_HANDLE;
     VkDeviceMemory fallbackGlowMemory = VK_NULL_HANDLE;
     VkImageView fallbackGlowView = VK_NULL_HANDLE;
-    // Binding 5: per-frame-slot AgX tap uniform (GainmapParams::agxTapBlock),
+    // Binding 5: per-frame-slot tap uniform (GainmapParams::agxTapBlock then
+    // gradeTapBlock),
     // persistently mapped host-coherent memory, one aligned slice per slot.
     VkBuffer agxBuffer = VK_NULL_HANDLE;
     VkDeviceMemory agxMemory = VK_NULL_HANDLE;
@@ -169,7 +170,7 @@ struct GainmapCompute::Impl {
             VkPhysicalDeviceProperties props{};
             vkGetPhysicalDeviceProperties(ctx.physicalDevice, &props);
             const VkDeviceSize align = std::max<VkDeviceSize>(props.limits.minUniformBufferOffsetAlignment, 16);
-            constexpr VkDeviceSize kBlockBytes = sizeof(GainmapParams::agxTapBlock);
+            constexpr VkDeviceSize kBlockBytes = sizeof(GainmapParams::agxTapBlock) + sizeof(GainmapParams::gradeTapBlock);
             agxStride = (kBlockBytes + align - 1) / align * align;
             VkBufferCreateInfo bci{};
             bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -562,9 +563,12 @@ void GainmapCompute::record(const GainmapRecordInfo& ri) {
     glowInfo.imageView = glowView;
     glowInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     // The slot's previous GPU use has completed (frame-slot contract).
-    std::memcpy(static_cast<char*>(impl_->agxMapped) + impl_->agxStride * ri.frameSlot, ri.params.agxTapBlock.data(),
-                sizeof(ri.params.agxTapBlock));
-    VkDescriptorBufferInfo agxInfo{impl_->agxBuffer, impl_->agxStride * ri.frameSlot, sizeof(ri.params.agxTapBlock)};
+    char* tapSlice = static_cast<char*>(impl_->agxMapped) + impl_->agxStride * ri.frameSlot;
+    std::memcpy(tapSlice, ri.params.agxTapBlock.data(), sizeof(ri.params.agxTapBlock));
+    std::memcpy(tapSlice + sizeof(ri.params.agxTapBlock), ri.params.gradeTapBlock.data(),
+                sizeof(ri.params.gradeTapBlock));
+    VkDescriptorBufferInfo agxInfo{impl_->agxBuffer, impl_->agxStride * ri.frameSlot,
+                                   sizeof(ri.params.agxTapBlock) + sizeof(ri.params.gradeTapBlock)};
     std::array<VkWriteDescriptorSet, 6> writes{};
     for (int i = 0; i < 6; ++i) {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -603,7 +607,7 @@ void GainmapCompute::record(const GainmapRecordInfo& ri) {
     push.glowStrength = ri.params.glowStrength;
     push.glowMax = ri.params.glowMax;
     push.flags = (ri.params.fullResMap ? 1u : 0u) | (ri.params.writeHdrChromaticity ? 2u : 0u) |
-                 (ri.params.agxTap ? 4u : 0u);
+                 (ri.params.agxTap ? 4u : 0u) | (ri.params.gradeTap ? 8u : 0u);
     // Shift the curve anchors into the exposed tap's luminance so the shader
     // needs no separate scale: log2(y * s) vs EV  <=>  log2(y) vs EV - log2(s).
     const float toneShift = std::log2(ri.params.adaptiveToneLumaScale);

@@ -1,6 +1,7 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
 #include "../../shader_common/shaders/adaptive_tone.glsl"
+#include "../../shader_common/shaders/grade.glsl"
 // Compile-time workgroup variants used by validation: 8x8, 16x8, 8x16, 16x16.
 #ifndef LOCAL_X
 #define LOCAL_X 8
@@ -242,28 +243,13 @@ vec3 sampleRawrNeutralTechnical(vec3 q) {
 // Contrast, Midtones, Shadows, Highlights, Saturation and Vibrance run in the
 // render's input encoding: DaVinci Intermediate before RAWR NTRL, the declared
 // LUT input before an imported LUT chain, and the sRGB/Rec.709 encoding before
-// the direct clamp. Distances are encoded units from the space's 18% gray
-// pivot, so the same value acts proportionally differently per encoding.
-// Contrast and the Shadows guard are anchored between the space's black code
-// (0 linear: 0.093 in LogC3, 0.125 in V-Log, 0 in DI/sRGB) and its pivot.
+// the direct clamp. Operators live in grade.glsl (shared with the gain map's
+// HDR tap). Black codes: 0.093 in LogC3, 0.125 in V-Log, 0 in DI/sRGB.
 // Tone moves luma and shifts all three channels equally (a gain in linear for
 // log encodings); chroma around luma carries Saturation/Vibrance. Nothing is
 // clamped here so headroom above display white reaches the render.
 
 const vec3 DWG_LUMA = vec3(0.27396, 0.87375, -0.14773);
-
-float gradeBump(float d, float center, float width) {
-    float t = (d - center) / width;
-    return exp(-t * t);
-}
-// Highlights: a ramp above the pivot plus a slope change past it, so negative
-// values compress the top (pulling headroom under the shoulder) instead of
-// only shifting it. The quadratic ease keeps the slope continuous.
-float highlightsShape(float d) {
-    const float w = 0.10;
-    float x = max(d - 0.30, 0.0);
-    return 0.10 * smoothstep(0.02, 0.30, d) + 0.25 * (x < w ? x * x / (2.0 * w) : x - 0.5 * w);
-}
 
 bool gradeActive() {
     return P.toneControls.x != 0.0 || P.toneControls.y != 0.0 || any(notEqual(P.renderConfig.zw, vec2(0.0))) ||
@@ -274,50 +260,14 @@ bool gradeActive() {
 // light, not slider feel, so they act the same in every grade space.
 vec3 applyGrade(vec3 e, vec3 lumaWeights, float pivot, float black, vec3 sceneLinear) {
     if (!gradeActive()) return e;
-    float C = clamp(P.toneControls.x, -100.0, 100.0) * 0.01;
-    float H = clamp(P.toneControls.y, -100.0, 100.0) * 0.01;
-    float S = clamp(P.renderConfig.z, -100.0, 100.0) * 0.01;
-    float M = clamp(P.renderConfig.w, -100.0, 100.0) * 0.01;
-    float satUI = clamp(P.exposureSaturation.z, -100.0, 100.0) * 0.01;
-    float vibUI = clamp(P.colorControls.x, -100.0, 100.0) * 0.01;
-
+    vec4 tone = clamp(vec4(P.toneControls.x, P.toneControls.y, P.renderConfig.z, P.renderConfig.w), -100.0, 100.0) * 0.01;
     float y0 = dot(lumaWeights, e);
-    vec3 chroma = e - vec3(y0);
-    float y = y0;
-    // Contrast: power between black and the pivot keeps black fixed, a linear
-    // stretch above it; both have slope g at the pivot. g > 0 so tones never
-    // invert. Values below black (noise) are left alone.
-    if (C != 0.0 && y > black) {
-        float g = exp2(0.7 * C);
-        float d = y - pivot;
-        y = d >= 0.0 ? pivot + d * g : black + (pivot - black) * pow((y - black) / (pivot - black), g);
-    }
-    // Regional controls (widths keep every stacked combination monotonic).
-    float d = y - pivot;
-    float yr = y;
-    y += M * 0.05 * gradeBump(d, 0.0, 0.10);
-    y += S * 0.06 * gradeBump(d, -0.14, 0.10) * smoothstep(black, black + 0.25 * (pivot - black), yr);
-    y += H * highlightsShape(d);
-
-    if (satUI != 0.0 || vibUI != 0.0) {
-        // Saturation: -100 monochrome, +100 nominal 1.85x opponent chroma.
-        float satGain = satUI >= 0.0 ? 1.0 + 0.85 * satUI : max(0.0, 1.0 + satUI);
-        // Vibrance prioritizes weak color (+) or removes it first (-).
-        // Occupancy: 0 for neutral, ~1 near the gamut edge, in linear light.
-        vec3 lin = max(sceneLinear, vec3(0.0));
-        float peak = max(max(lin.r, max(lin.g, lin.b)), 0.06);
-        float occupancy = clamp((max(lin.r, max(lin.g, lin.b)) - min(lin.r, min(lin.g, lin.b))) / peak, 0.0, 1.0);
-        float vibGain;
-        if (vibUI >= 0.0) {
-            // Fade the boost out in deep shadows, where it mostly lifts chroma noise.
-            float shadowGuard = smoothstep(P.colorControls.z, P.colorControls.w, dot(AP1_LUMA, sceneLinear));
-            vibGain = 1.0 + P.colorControls.y * vibUI * pow(max(1.0 - occupancy, 0.0), 0.30) * shadowGuard;
-        } else {
-            vibGain = mix(1.0, pow(occupancy, 4.0), -vibUI);
-        }
-        chroma *= satGain * vibGain;
-    }
-    return vec3(y) + chroma;
+    float y = rawrGradeToneLuma(y0, pivot, black, tone);
+    float chromaGain = rawrGradeChromaGain(sceneLinear, dot(AP1_LUMA, sceneLinear),
+                                           clamp(P.exposureSaturation.z, -100.0, 100.0) * 0.01,
+                                           clamp(P.colorControls.x, -100.0, 100.0) * 0.01, P.colorControls.y,
+                                           P.colorControls.zw);
+    return vec3(y) + (e - vec3(y0)) * chromaGain;
 }
 
 // ---- Display trims: Whites and Blacks after the render ---------------------------

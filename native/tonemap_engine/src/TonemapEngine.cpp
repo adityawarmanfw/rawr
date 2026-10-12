@@ -111,6 +111,17 @@ bool supportsStorageImage(VkPhysicalDevice physicalDevice, VkFormat format) noex
     return (properties.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) != 0;
 }
 
+// A linear LUT input is graded in DaVinci Intermediate (see tonemap.comp).
+color::TransferFunction userGradeTransfer(const lut::LutGpuPayload& lutPayload) noexcept {
+    return lutPayload.inputSpace.transfer == color::TransferFunction::Linear ? color::TransferFunction::DaVinciIntermediate
+                                                                             : lutPayload.inputSpace.transfer;
+}
+
+color::TransferFunction directGradeTransfer(const TonemapParams& params) noexcept {
+    return params.renderTransform == RenderTransform::Rec709 ? color::TransferFunction::Rec709
+                                                             : color::TransferFunction::SRgb;
+}
+
 GpuParameters buildGpuParameters(const TonemapParams& params, const float* matrix,
                                  uint32_t outputWidth, uint32_t outputHeight,
                                  uint32_t inputWidth, uint32_t inputHeight, const TonemapConfig& config,
@@ -142,17 +153,11 @@ GpuParameters buildGpuParameters(const TonemapParams& params, const float* matri
 
     // Grade space anchors: where 18% gray and black land in each render's
     // input encoding, and the luma weights of the imported LUT's input gamut.
-    // A linear LUT input is graded in DaVinci Intermediate (see tonemap.comp).
-    const auto userGradeTransfer = lutPayload.inputSpace.transfer == color::TransferFunction::Linear
-                                       ? color::TransferFunction::DaVinciIntermediate
-                                       : lutPayload.inputSpace.transfer;
     gpu.gradePivot[0] = color::encodeTransfer(config.middleGray, color::TransferFunction::DaVinciIntermediate);
-    gpu.gradePivot[1] = color::encodeTransfer(config.middleGray, userGradeTransfer);
-    gpu.gradePivot[2] = color::encodeTransfer(config.middleGray, params.renderTransform == RenderTransform::Rec709
-                                                                     ? color::TransferFunction::Rec709
-                                                                     : color::TransferFunction::SRgb);
+    gpu.gradePivot[1] = color::encodeTransfer(config.middleGray, userGradeTransfer(lutPayload));
+    gpu.gradePivot[2] = color::encodeTransfer(config.middleGray, directGradeTransfer(params));
     // Black code of the LUT input (0 linear): log encodings put it above 0.
-    gpu.gradePivot[3] = color::encodeTransfer(0.0f, userGradeTransfer);
+    gpu.gradePivot[3] = color::encodeTransfer(0.0f, userGradeTransfer(lutPayload));
     const color::Mat3 toSrgb = color::linearGamutMatrix(lutPayload.inputSpace.gamut, color::Gamut::SRgbRec709);
     constexpr float kSrgbLuma[3] = {0.2126f, 0.7152f, 0.0722f};
     for (int c = 0; c < 3; ++c)
@@ -1059,6 +1064,36 @@ void TonemapEngine::recordRaw(const TonemapRawRecordInfo& r) {
 }
 
 const TonemapConfig& TonemapEngine::config() const noexcept { return impl_->rendererConfig; }
+
+std::optional<GradeTapBlock> TonemapEngine::gradeTapBlock(const TonemapParams& p) const noexcept {
+    if (p.renderTransform == RenderTransform::AgX || p.renderTransform == RenderTransform::Log) return std::nullopt;
+    if (p.contrast == 0.0f && p.highlightBiasEV == 0.0f && p.shadowLiftEV == 0.0f && p.midtoneLiftEV == 0.0f &&
+        p.saturation == 0.0f && p.vibrance == 0.0f)
+        return std::nullopt;
+    // Same space selection as the shader: a render-transform LUT replaces
+    // NTRL's grade space (its NTRL blend share is graded in DI, close enough
+    // for the tap), the direct profiles grade in their output encoding.
+    const auto& payload = impl_->userLutPayload;
+    const bool userLut = p.renderTransform == RenderTransform::Existing && payload.enabled &&
+                         payload.intensity > 0.0f && payload.placement == lut::LutPlacement::RenderTransform;
+    const auto transfer = p.renderTransform != RenderTransform::Existing ? directGradeTransfer(p)
+                          : userLut ? userGradeTransfer(payload)
+                                    : color::TransferFunction::DaVinciIntermediate;
+    const auto& cfg = impl_->rendererConfig;
+    const auto unit = [](float v) { return std::clamp(v, -100.0f, 100.0f) * 0.01f; };
+    return GradeTapBlock{unit(p.contrast),
+                         unit(p.highlightBiasEV),
+                         unit(p.shadowLiftEV),
+                         unit(p.midtoneLiftEV),
+                         unit(p.saturation),
+                         unit(p.vibrance),
+                         cfg.vibranceStrength,
+                         cfg.vibranceShadowStart,
+                         cfg.vibranceShadowEnd,
+                         color::encodeTransfer(cfg.middleGray, transfer),
+                         color::encodeTransfer(0.0f, transfer),
+                         static_cast<float>(transfer)};
+}
 uint32_t TonemapEngine::maxFramesInFlight() const noexcept { return impl_->frameSlotCount; }
 
 }  // namespace tonemap

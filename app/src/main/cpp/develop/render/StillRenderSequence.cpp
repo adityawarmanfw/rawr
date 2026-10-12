@@ -274,6 +274,15 @@ GainmapRecording recordGainmapAndReadback(RenderResources& resources, RenderComm
             gri.params.adaptiveTone[2] = adaptive.highlightEv;
             gri.params.adaptiveToneLumaScale = rendered.tonemapParams.aePostGain / gri.params.hdrExposure;
         }
+        // The SDR base also carries the Grade sliders (before the render);
+        // grade the tap the same way so HDR displays keep them (Highlights-
+        // would otherwise be undone). The engine knows its grade space.
+        if (!rendered.filmEnabled) {
+            if (const auto block = resources.tone().gradeTapBlock(rendered.tonemapParams)) {
+                gri.params.gradeTapBlock = *block;
+                gri.params.gradeTap = true;
+            }
+        }
         gainmapClipUsed = gri.clip.view != VK_NULL_HANDLE;
         gainmapClipBoost = gri.params.clipBoost;
         // HDR pixels are camera RGB: the calibrated matrix wins over

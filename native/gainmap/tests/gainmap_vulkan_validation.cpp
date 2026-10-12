@@ -1,6 +1,6 @@
 // MoltenVK parity + timing: CPU fp32 mirror vs GainmapCompute shader output.
 // Usage: gainmap_vulkan_validation <gainmap.spv> [--tolerance-lsb N] [--cst-ap1] [--agx-tap]
-//        [--bench-base N] [--iters K]
+//        [--grade-tap di|logc3] [--bench-base N] [--iters K]
 // Exit 0 when max abs diff <= tolerance (default 1 LSB, 2 near black).
 // --cst-ap1 runs the production AP1->sRGB CST instead of identity.
 // --bench-base N skips verification and times N*N -> N/2*N/2 dispatches.
@@ -18,6 +18,7 @@
 
 #include "gainmap/GainmapCompute.h"
 #include "tonemap/Agx.h"
+#include "tonemap/color/ColorSpace.h"
 
 namespace {
 void check(VkResult r, const char* what) {
@@ -53,12 +54,65 @@ struct AgxTapOracle {
 };
 const AgxTapOracle* gAgxTap = nullptr;
 
+// --grade-tap oracle: CPU mirror of shader_common/shaders/grade.glsl.
+struct GradeTapOracle {
+    float tone[4];  // Contrast, Highlights, Shadows, Midtones
+    float sat, vib, vibStrength, guardStart, guardEnd, pivot, black;
+    tonemap::color::TransferFunction transfer;
+};
+const GradeTapOracle* gGradeTap = nullptr;
+
+float smooth01(float a, float b, float x) {
+    const float t = std::fmin(std::fmax((x - a) / (b - a), 0.0f), 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+float gradeToneLuma(float y, const GradeTapOracle& g) {
+    if (g.tone[0] != 0.0f && y > g.black) {
+        const float k = std::exp2(0.7f * g.tone[0]), d = y - g.pivot;
+        y = d >= 0.0f ? g.pivot + d * k
+                      : g.black + (g.pivot - g.black) * std::pow((y - g.black) / (g.pivot - g.black), k);
+    }
+    const float d = y - g.pivot, yr = y;
+    const auto bump = [](float x, float c, float w) { return std::exp(-((x - c) / w) * ((x - c) / w)); };
+    const float x = std::fmax(d - 0.30f, 0.0f), w = 0.10f;
+    const float hl = 0.10f * smooth01(0.02f, 0.30f, d) + 0.25f * (x < w ? x * x / (2.0f * w) : x - 0.5f * w);
+    y += g.tone[3] * 0.05f * bump(d, 0.0f, 0.10f);
+    y += g.tone[2] * 0.06f * bump(d, -0.14f, 0.10f) * smooth01(g.black, g.black + 0.25f * (g.pivot - g.black), yr);
+    y += g.tone[1] * hl;
+    return y;
+}
+float gradeChromaGain(const float lin[3], float linY, const GradeTapOracle& g) {
+    if (g.sat == 0.0f && g.vib == 0.0f) return 1.0f;
+    const float satGain = g.sat >= 0.0f ? 1.0f + 0.85f * g.sat : std::fmax(0.0f, 1.0f + g.sat);
+    const float r = std::fmax(lin[0], 0.0f), gg = std::fmax(lin[1], 0.0f), b = std::fmax(lin[2], 0.0f);
+    const float hi = std::fmax(r, std::fmax(gg, b));
+    const float occ = std::fmin(std::fmax((hi - std::fmin(r, std::fmin(gg, b))) / std::fmax(hi, 0.06f), 0.0f), 1.0f);
+    const float vibGain = g.vib >= 0.0f ? 1.0f + g.vibStrength * g.vib * std::pow(std::fmax(1.0f - occ, 0.0f), 0.30f) *
+                                                    smooth01(g.guardStart, g.guardEnd, linY)
+                                        : 1.0f + (std::pow(occ, 4.0f) - 1.0f) * -g.vib;
+    return satGain * vibGain;
+}
+
 void cpuEncode(const float hdr[3], const float sdr[3], const gainmap::GainmapParams& p, const float* cst,
                float out[3], float cover = 0.0f, float flatness = 1.0f, const float* glow = nullptr) {
     // Scene-exposure match (mirrors the shader): the HDR tap is pre-exposure.
     const float e = std::fmax(p.hdrExposure, 1e-6f);
     float hw[3] = {std::isfinite(hdr[0]) ? hdr[0] * e : 0.0f, std::isfinite(hdr[1]) ? hdr[1] * e : 0.0f,
                    std::isfinite(hdr[2]) ? hdr[2] * e : 0.0f};
+    // Grade tap (mirrors the shader): tone as a luminance gain in the grade
+    // space, chroma gain measured here and applied after the CST.
+    float gradeChroma = 1.0f;
+    if (p.gradeTap && gGradeTap) {
+        float lin[3];
+        for (int r = 0; r < 3; ++r) lin[r] = cst[r * 3 + 0] * hw[0] + cst[r * 3 + 1] * hw[1] + cst[r * 3 + 2] * hw[2];
+        const float y = 0.21532597f * lin[0] + 0.71600819f * lin[1] + 0.06866589f * lin[2];
+        if (y > 1e-8f) {
+            const float graded = gradeToneLuma(tonemap::color::encodeTransfer(y, gGradeTap->transfer), *gGradeTap);
+            const float k = std::fmax(tonemap::color::decodeTransfer(graded, gGradeTap->transfer), 0.0f) / y;
+            for (float& c : hw) c *= k;
+        }
+        gradeChroma = gradeChromaGain(lin, y, *gGradeTap);
+    }
     // Film glow factor (mirrors the shader): dimensionless post/pre
     // quotient applied pre-CST; null keeps the pure scene tap.
     if (glow != nullptr && p.glowStrength > 0.0f) {
@@ -76,6 +130,10 @@ void cpuEncode(const float hdr[3], const float sdr[3], const gainmap::GainmapPar
     if (p.agxTap && gAgxTap) {
         const auto agx = tonemap::agxRender({hw[0], hw[1], hw[2]}, gAgxTap->curve, gAgxTap->matrices);
         for (int r = 0; r < 3; ++r) hdrLin[r] = agx[r] * gAgxTap->headroom;
+    }
+    if (gradeChroma != 1.0f) {
+        const float hy = 0.21532597f * hdrLin[0] + 0.71600819f * hdrLin[1] + 0.06866589f * hdrLin[2];
+        for (float& c : hdrLin) c = hy + (c - hy) * gradeChroma;
     }
     float hdrPos[3] = {std::fmax(hdrLin[0], 0.0f), std::fmax(hdrLin[1], 0.0f), std::fmax(hdrLin[2], 0.0f)};
     // Single-channel luminance gain + per-channel RGB gains (matches shader).
@@ -239,6 +297,7 @@ int main(int argc, char** argv) {
     bool cstAp1 = false;
     bool clipBoostTest = false;
     bool agxTapTest = false;
+    std::string gradeTapSpace;
     uint32_t benchW = 0, benchH = 0;
     for (int i = 2; i < argc; ++i) {
         std::string a = argv[i];
@@ -252,6 +311,9 @@ int main(int argc, char** argv) {
         // --agx-tap: render the HDR tap through AgX for a 2.73x display
         // (default preset) and check it against the CPU AgX reference.
         if (a == "--agx-tap") agxTapTest = true;
+        // --grade-tap di|logc3: apply a stacked Grade (all six sliders) to
+        // the tap in DaVinci Intermediate or LogC3 (black code above 0).
+        if (a == "--grade-tap" && i + 1 < argc) gradeTapSpace = argv[++i];
         // --bench 2048 | --bench 4080x3060 | (legacy) --bench-base N
         auto parseBench = [&](const char* s) {
             unsigned w = 0, h = 0;
@@ -515,6 +577,18 @@ int main(int argc, char** argv) {
         agxOracle.headroom = headroom;
         gAgxTap = &agxOracle;
     }
+    GradeTapOracle gradeOracle{};
+    if (!gradeTapSpace.empty()) {
+        using TF = tonemap::color::TransferFunction;
+        const TF tf = gradeTapSpace == "logc3" ? TF::LogC3 : TF::DaVinciIntermediate;
+        gradeOracle = {{0.4f, -0.8f, 0.3f, -0.2f}, 0.5f, 0.6f, 0.7f, 0.02f, 0.10f,
+                       tonemap::color::encodeTransfer(0.18f, tf), tonemap::color::encodeTransfer(0.0f, tf), tf};
+        const auto& g = gradeOracle;
+        params.gradeTapBlock = {g.tone[0], g.tone[1], g.tone[2], g.tone[3], g.sat, g.vib, g.vibStrength,
+                                g.guardStart, g.guardEnd, g.pivot, g.black, float(static_cast<uint32_t>(tf))};
+        params.gradeTap = true;
+        gGradeTap = &gradeOracle;
+    }
 
     // Timestamp pool for dispatch timing (2 queries around the dispatch).
     VkQueryPool tsPool = VK_NULL_HANDLE;
@@ -648,7 +722,18 @@ int main(int argc, char** argv) {
             auto s = bilinearCpu(sdrEnc, baseW, baseH, u, v);
             float ch[3];
             for (int k = 0; k < 3; ++k)
-                ch[k] = std::max(0.0f, cst[k*3]*h[0] + cst[k*3+1]*h[1] + cst[k*3+2]*h[2]);
+                ch[k] = cst[k*3]*h[0] + cst[k*3+1]*h[1] + cst[k*3+2]*h[2];
+            if (params.gradeTap && gGradeTap) {
+                // The sidecar carries the graded color too (tone is a scalar
+                // gain and cancels in the fractions; chroma does not).
+                const float e = std::fmax(params.hdrExposure, 1e-6f);
+                const float lin[3] = {ch[0] * e, ch[1] * e, ch[2] * e};
+                const float gain = gradeChromaGain(lin, 0.21532597f * lin[0] + 0.71600819f * lin[1] +
+                                                            0.06866589f * lin[2], *gGradeTap);
+                const float hy = 0.21532597f * ch[0] + 0.71600819f * ch[1] + 0.06866589f * ch[2];
+                for (float& c : ch) c = hy + (c - hy) * gain;
+            }
+            for (float& c : ch) c = std::max(0.0f, c);
             const float sum = ch[0] + ch[1] + ch[2];
             const auto* cp = gpu.data() + size_t(mapW)*mapH*4 + (size_t(y)*mapW+x)*4;
             const unsigned cr = unsigned(cp[0]) | (unsigned(cp[1]) << 8);

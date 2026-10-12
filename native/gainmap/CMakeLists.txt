@@ -69,7 +69,8 @@ if(GAINMAP_BUILD_VULKAN)
             if(NOT ANDROID)
                 add_executable(gainmap_vulkan_validation tests/gainmap_vulkan_validation.cpp)
                 target_link_libraries(gainmap_vulkan_validation PRIVATE gainmap_compute)
-                # --agx-tap checks the AgX tap against the tonemap engine's CPU reference.
+                # --agx-tap checks the AgX tap against the tonemap engine's CPU reference;
+                # --grade-tap di|logc3 checks the Grade tap against a CPU mirror.
                 target_include_directories(gainmap_vulkan_validation PRIVATE
                     ${CMAKE_CURRENT_SOURCE_DIR}/../tonemap_engine/include)
                 target_sources(gainmap_vulkan_validation PRIVATE

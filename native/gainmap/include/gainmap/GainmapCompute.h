@@ -106,6 +106,14 @@ struct GainmapParams {
     // (tonemap::AgxGpuBlock, 320 bytes); hdrToLinearSrgbRowMajor is unused then.
     bool agxTap = false;
     std::array<float, 80> agxTapBlock{};
+    // Grade tap: the SDR render's Grade sliders (Contrast, Highlights,
+    // Shadows, Midtones, Saturation, Vibrance) applied to the exposed tap as
+    // a luminance gain plus a chroma gain, like adaptiveTone, so the map never
+    // encodes an inverse of a slider (Highlights- would otherwise be undone
+    // on HDR displays). Packed by tonemap::TonemapEngine::gradeTapBlock;
+    // gradeTap false = off. Encode-only; the mux never sees it.
+    bool gradeTap = false;
+    std::array<float, 12> gradeTapBlock{};
 };
 
 struct GainmapCreateInfo {
