@@ -22,11 +22,11 @@ jobs:
           distribution: temurin
           java-version: 17
 
+      # Explicit packages: the action's default list still names the removed
+      # 'tools' package. Versions pinned in app/build.gradle.kts.
       - uses: android-actions/setup-android@v3
-
-      # Versions pinned in app/build.gradle.kts (ndkVersion, cmake version).
-      - name: Install NDK and CMake
-        run: sdkmanager --install "ndk;29.0.14206865" "cmake;3.31.6"
+        with:
+          packages: platform-tools ndk;29.0.14206865 cmake;3.31.6
 
       - uses: gradle/actions/setup-gradle@v4
 
