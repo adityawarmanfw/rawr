@@ -17,8 +17,8 @@ internal object CaptureRecipe {
             contract.shadowNativeFromUi(tone.shadows), contract.midtoneNativeFromUi(tone.midtones),
             contract.contrastNativeFromUi(tone.contrast), contract.whitePointNativeFromUi(tone.whites),
             contract.highlightNativeFromUi(tone.highlights), tone.saturation, tone.vibrance,
-            v.photoHighlightMethod.toFloat(), v.photoHighlightThreshold, v.photoHighlightCompression,
-            v.agxPreset.nativeId.toFloat()) + v.agxValuesFor(v.agxPreset).toNativeArray()
+            v.photoHighlightMethod.toFloat(), v.photoHighlightThreshold, v.photoHighlightCompression) +
+            v.agxValuesFor(v.agxPreset).toNativeArray()
     }
 
     fun freezeAssets(context: android.content.Context, v: SettingsValues): SettingsValues {

@@ -667,11 +667,8 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
     fun setColorRenderProfile(profile: ColorRenderProfile, importedLutProfileId: String?) =
         postNative { native.setColorRenderProfile(nativeHandle, profile.nativeId, importedLutProfileId.orEmpty()) }
 
-    fun setAgxParameters(preset: com.rawr.camera.settings.model.AgxPreset, values: com.rawr.camera.settings.model.AgxValues) =
-        postNative {
-            native.setAgxParameters(nativeHandle, preset.nativeId, values.whiteEv, values.shoulderPower,
-                values.toePower, values.purity, values.preserveHue)
-        }
+    fun setAgxParameters(values: com.rawr.camera.settings.model.AgxValues) =
+        postNative { native.setAgxParameters(nativeHandle, values.toNativeArray()) }
 
     fun setTonemapParameters(tone: com.rawr.camera.model.ImageToneState) {
         val contract = com.rawr.camera.model.TonemapControlContract

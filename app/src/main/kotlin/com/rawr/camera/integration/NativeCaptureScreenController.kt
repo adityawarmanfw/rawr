@@ -79,7 +79,8 @@ class NativeCaptureScreenController(
     override fun dispatch(action: CaptureAction) {
         if (videoLocked() && (action is SetCaptureMode || action is ToggleVideoLog ||
                 action is CycleVideoResolution || action is CycleVideoFps)) return
-        if ((action is ScrubTone || action is ScrubRenderExposure || action is SetAgxControl) &&
+        if ((action is ScrubTone || action is ScrubRenderExposure || action is SetAgxControl ||
+                action is SetRenderExposureTenths) &&
             state.value.captureMode == CaptureMode.Video && state.value.videoLogEnabled) return
         when (action) {
             is PresentationCaptureAction -> {
@@ -149,6 +150,9 @@ class NativeCaptureScreenController(
 
             // Persisted by CaptureViewModel; LiveTonemapState applies it natively.
             is SetAgxControl -> onAgxControl(action.parameter, action.value)
+
+            is SetRenderExposureTenths ->
+                dispatchApplication(ScrubRenderExposure(action.tenths - state.value.renderExposureTenths))
 
             is ScrubRenderExposure -> {
                 val next = CaptureTransitions.scrubRenderExposure(state.value, action.deltaTenths)

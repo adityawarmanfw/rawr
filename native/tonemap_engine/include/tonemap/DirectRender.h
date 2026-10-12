@@ -14,7 +14,7 @@ inline color::Vec3 renderDirectReference(color::Vec3 ap1, const TonemapParams& p
     const color::ColorSpace source{color::Gamut::AcesCgAp1, color::TransferFunction::Linear};
     if (log) return color::convert(ap1, source, p.outputSpace);
     const bool agx = p.renderTransform == RenderTransform::AgX;
-    auto linear = agx ? agxRenderReference(ap1, agxWithHighlights(p.agx, p.highlightBiasEV))
+    auto linear = agx ? agxRenderReference(ap1, p.agx)
                       : color::convert(ap1, source, {color::Gamut::SRgbRec709, color::TransferFunction::Linear});
     for (float& v : linear) v = std::clamp(v, 0.0f, 1.0f);
     const bool rec709 = p.renderTransform == RenderTransform::Rec709 ||

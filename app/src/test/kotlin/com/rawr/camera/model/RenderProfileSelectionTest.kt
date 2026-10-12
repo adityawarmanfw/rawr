@@ -48,14 +48,18 @@ class RenderProfileSelectionTest {
         assertEquals(10, video.effectiveRenderProfileId())
         assertEquals(AgxPreset.Smooth, video.agxPreset)
         // Controls are per preset, clamped, and reset to the preset default.
-        val edited = photo.withAgxValue(AgxParameter.WhiteEv, 99f).withAgxValue(AgxParameter.Purity, 0.5f)
-        assertEquals(AgxCatalog.whiteEv.maximum, edited.activeAgxValues().whiteEv)
+        val edited = photo.withAgxValue(AgxParameter.WhiteEv, 99f).withAgxValue(AgxParameter.MasterOutset, 0.5f)
+        assertEquals(AgxCatalog.spec(AgxParameter.WhiteEv).maximum, edited.activeAgxValues().valueOf(AgxParameter.WhiteEv))
+        // The pivot stays inside the exposure range.
+        val squeezed = photo.withAgxValue(AgxParameter.PivotEv, 5f).withAgxValue(AgxParameter.WhiteEv, 1f)
+        assertTrue(squeezed.activeAgxValues().valueOf(AgxParameter.PivotEv) <= 0.5f)
         assertEquals(AgxPreset.Default.defaults, edited.agxValuesFor(AgxPreset.Default))
         assertTrue(edited.toRenderProfileQuickState().agx!!.modified)
-        assertEquals(0f, edited.withAgxDefault(AgxParameter.Purity).activeAgxValues().purity)
-        // AgX keeps its own TONE set; edits are ignored on other profiles.
-        val toned = edited.editActiveProfileTone { it.copy(contrast = 12f) }
-        assertEquals(12f, toned.agxTone.contrast)
+        assertEquals(0f, edited.withAgxDefault(AgxParameter.MasterOutset).activeAgxValues().valueOf(AgxParameter.MasterOutset))
+        // AgX skips the display tone controls: only its render exposure is kept.
+        val toned = edited.editActiveProfileTone { it.copy(contrast = 12f, renderExposure = 0.5f) }
+        assertEquals(ProfileTone(renderExposure = 0.5f), toned.agxTone)
+        assertEquals(ProfileTone(renderExposure = 0.5f), toned.activeProfileTone())
         assertEquals(ProfileTone.Neutral, toned.rawrBaseTone)
         val ntrl = toned.withRenderProfile(builtIn(ColorRenderProfile.RawrBase))
         assertNull(ntrl.toRenderProfileQuickState().agx)

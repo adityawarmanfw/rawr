@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.sp
 import com.rawr.camera.model.FilmSimQuickDiscrete
 import com.rawr.camera.model.FilmSimQuickState
 import com.rawr.camera.model.FilmStripItem
+import com.rawr.camera.model.formatFilmStripValue
 
 /**
  * Compact film-sim overlay. Bare viewfinder text with drop shadows, no cards.
@@ -242,7 +243,7 @@ private fun FilmProfilesRow(
 }
 
 @Composable
-private fun FilmConfigBlock(
+internal fun FilmConfigBlock(
     quick: FilmSimQuickState,
     sectionKey: String,
     subsectionKey: String?,
@@ -256,7 +257,9 @@ private fun FilmConfigBlock(
     onScrubParam: (String, Float) -> Unit,
     onResetParam: (String) -> Unit,
     onScrubDiscrete: (String, Int) -> Unit,
-    onToggleFlag: (String, Boolean) -> Unit
+    onToggleFlag: (String, Boolean) -> Unit,
+    /** Spoken name of the block (the AgX strip reuses it). */
+    kind: String = "Film"
 ) {
     val haptics = LocalCaptureHaptics.current
     val section = quick.sections.firstOrNull { it.key == sectionKey }
@@ -330,7 +333,11 @@ private fun FilmConfigBlock(
                                 step = param.step,
                                 decimals = param.decimals,
                                 onScrub = { onScrubParam(item.key, it) },
-                                onReset = { onResetParam(item.key) }
+                                onReset = { onResetParam(item.key) },
+                                format = {
+                                    formatFilmStripValue(it * param.displayScale, param.minimum * param.displayScale,
+                                        param.displayDecimals) + param.unit
+                                }
                             )
                         }
                     }
@@ -388,7 +395,7 @@ private fun FilmConfigBlock(
                                 haptics.selection()
                                 onSubsection(sub.key)
                             }.semantics {
-                                contentDescription = "Film subsection ${sub.label}" +
+                                contentDescription = "$kind subsection ${sub.label}" +
                                     if (active) ", active" else ""
                                 role = Role.Tab
                                 selected = active
@@ -441,7 +448,7 @@ private fun FilmConfigBlock(
                                 haptics.selection()
                                 onSection(item.key)
                             }.semantics {
-                                contentDescription = "Film section ${item.label}" +
+                                contentDescription = "$kind section ${item.label}" +
                                     if (active) ", active" else ""
                                 role = Role.Tab
                                 selected = active
@@ -475,7 +482,7 @@ private fun FilmConfigBlock(
                         haptics.selection()
                         onOpenProfiles()
                     }.semantics {
-                        contentDescription = "Film preset ${quick.activePresetName}. Tap to choose preset."
+                        contentDescription = "$kind preset ${quick.activePresetName}. Tap to choose preset."
                         onClick {
                             haptics.selection()
                             onOpenProfiles()

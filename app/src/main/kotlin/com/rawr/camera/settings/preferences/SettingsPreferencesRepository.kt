@@ -1,5 +1,7 @@
 package com.rawr.camera.settings.preferences
 
+import com.rawr.camera.settings.model.AgxCatalog
+import com.rawr.camera.settings.model.AgxParameter
 import com.rawr.camera.settings.model.AgxPreset
 import com.rawr.camera.settings.model.AgxValues
 import com.rawr.camera.settings.model.ProfileTone
@@ -904,7 +906,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
             .take(3)
     }
 
-    /** `Preset=white,shoulder,toe,purity,hue;...` for presets with edited AgX controls. */
+    /** `Preset=c0,c1,...;...` (AgxParameter order) for presets with edited AgX controls. */
     private fun encodeAgxValues(values: Map<AgxPreset, AgxValues>): String =
         values.entries.sortedBy { it.key.ordinal }.joinToString(";") { (preset, v) ->
             preset.name + "=" + v.toNativeArray().joinToString(",")
@@ -914,7 +916,11 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         raw.orEmpty().split(';').mapNotNull { entry ->
             val preset = AgxPreset.entries.firstOrNull { it.name == entry.substringBefore('=') } ?: return@mapNotNull null
             val n = entry.substringAfter('=').split(',').mapNotNull { it.toFloatOrNull() }
-            if (n.size != 5) null else preset to AgxValues(n[0], n[1], n[2], n[3], n[4])
+            when (n.size) {
+                AgxParameter.entries.size -> preset to AgxValues(n)
+                5 -> preset to AgxCatalog.fromLegacy(n, preset)
+                else -> null
+            }
         }.toMap()
 
     private companion object {
@@ -1160,9 +1166,7 @@ object SettingsPreferencesStore {
                     gpuEnabled = values.customGpuDriverEnabled
                 }
                 com.rawr.camera.integration.LiveTonemapState.publish(values.activeImageTone())
-                com.rawr.camera.integration.LiveTonemapState.publishAgx(
-                    com.rawr.camera.integration.LiveTonemapState.Agx(values.regularAgxPreset(), values.activeAgxValues())
-                )
+                com.rawr.camera.integration.LiveTonemapState.publishAgx(values.activeAgxValues())
             }
         ).also { instance = it }
     }

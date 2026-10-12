@@ -87,32 +87,41 @@ internal fun ImageToneSettings(
                 })
             }
         }
-        if (state.values.isAgxActive()) item {
+        if (state.values.isAgxActive()) {
             val preset = state.values.regularAgxPreset()
             val values = state.values.activeAgxValues()
-            SettingsGroup(
-                title = "AgX — ${preset.label}",
-                description = "Stored per AgX preset. The tone controls below still apply after AgX."
-            ) {
-                AgxCatalog.all.forEachIndexed { index, spec ->
-                    if (index > 0) SettingDivider()
-                    StandaloneNumericSliderRow(
-                        identity = "agx_${spec.parameter.name}",
-                        label = spec.longLabel,
-                        minimum = spec.minimum,
-                        maximum = spec.maximum,
-                        step = spec.step,
-                        decimals = spec.valueDecimals,
-                        value = values.valueOf(spec.parameter),
-                        defaultValue = preset.defaults.valueOf(spec.parameter),
-                        valueFormatter = spec::format,
-                        dimDisabledText = false,
-                        onValueChange = { dispatch.invoke(SetAgxValue(spec.parameter, it)) }
-                    )
+            AgxGroup.entries.forEach { group ->
+                item(key = "agx_${group.name}") {
+                    SettingsGroup(
+                        title = group.title,
+                        description = if (group == AgxGroup.Range)
+                            "${preset.label}: stored per preset. AgX replaces the display tone controls." else null
+                    ) {
+                        if (group == AgxGroup.Range) {
+                            ToneSlider(ImageToneSpecs.renderExposure, tone.renderExposure, dispatch)
+                            SettingDivider()
+                        }
+                        AgxCatalog.group(group).forEachIndexed { index, spec ->
+                            if (index > 0) SettingDivider()
+                            StandaloneNumericSliderRow(
+                                identity = "agx_${spec.parameter.name}",
+                                label = spec.longLabel,
+                                minimum = spec.minimum,
+                                maximum = spec.maximum,
+                                step = spec.step,
+                                decimals = spec.valueDecimals,
+                                value = values.valueOf(spec.parameter),
+                                defaultValue = preset.defaults.valueOf(spec.parameter),
+                                valueFormatter = { spec.format(it) },
+                                dimDisabledText = false,
+                                onValueChange = { dispatch.invoke(SetAgxValue(spec.parameter, it)) }
+                            )
+                        }
+                    }
                 }
             }
         }
-        if (!state.values.isLogActive) item {
+        if (!state.values.isLogActive && !state.values.isAgxActive()) item {
             SettingsGroup(
                 title = "Tone — $profileLabel",
                 description = "Stored per render profile. Edits affect only $profileLabel."

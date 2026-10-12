@@ -140,8 +140,7 @@ GpuParameters buildGpuParameters(const TonemapParams& params, const float* matri
     gpu.directRender[1] = static_cast<uint32_t>(params.outputSpace.gamut);
     gpu.directRender[2] = static_cast<uint32_t>(params.outputSpace.transfer);
     if (params.renderTransform == RenderTransform::AgX)
-        gpu.agx = packAgxGpuBlock(params.agx, params.highlightBiasEV,
-                                  color::linearGamutMatrix(color::Gamut::AcesCgAp1, color::Gamut::Rec2020));
+        gpu.agx = packAgxGpuBlock(params.agx, color::linearGamutMatrix(color::Gamut::AcesCgAp1, color::Gamut::Rec2020));
     std::memcpy(gpu.neutralGamut, conversions.neutral.data(), sizeof(gpu.neutralGamut));
     std::memcpy(gpu.userInputGamut, conversions.userInput.data(), sizeof(gpu.userInputGamut));
     std::memcpy(gpu.userOutputGamut, conversions.userOutput.data(), sizeof(gpu.userOutputGamut));

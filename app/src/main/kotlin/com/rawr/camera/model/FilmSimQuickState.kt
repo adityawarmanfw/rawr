@@ -15,7 +15,11 @@ data class FilmSimQuickParam(
     val step: Float,
     val decimals: Int,
     val displayValue: String,
-    val isDefault: Boolean
+    val isDefault: Boolean,
+    /** Live readout while scrubbing: value * displayScale, displayDecimals, unit (AgX % and °). */
+    val displayScale: Float = 1f,
+    val displayDecimals: Int = decimals,
+    val unit: String = ""
 )
 
 data class FilmSimQuickDiscrete(

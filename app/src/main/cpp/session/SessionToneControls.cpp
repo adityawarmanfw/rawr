@@ -73,6 +73,6 @@ void SessionEngine::setTonemapParameters(float exposureEV, float blackPointEV, f
                                highlightBiasEV, saturation, vibrance);
 }
 
-void SessionEngine::setAgxParameters(uint32_t preset, const float* values) { look_.setAgxParameters(preset, values); }
+void SessionEngine::setAgxParameters(const float* values) { look_.setAgxParameters(values); }
 
 }  // namespace rawrcam::session

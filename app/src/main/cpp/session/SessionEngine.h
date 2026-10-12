@@ -76,7 +76,7 @@ class SessionEngine {
     void setTonemapParameters(float exposureEV, float blackPointEV, float shadowLiftEV, float midtoneLiftEV,
                               float contrast, float whitePointEV, float highlightBiasEV, float saturation,
                               float vibrance);
-    void setAgxParameters(uint32_t preset, const float* values);
+    void setAgxParameters(const float* values);
     void setFilmSimEnabled(bool enabled);
     void setViewfinderDivisor(uint32_t divisor);
     void setFilmSimLook(const spektrafilm_native::FilmLook& look);

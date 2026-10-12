@@ -591,15 +591,14 @@ static void freezeCaptureIntent(JNIEnv* env, rawrcam::encoding::dng::DngCaptureC
         tone.highlightBiasEV = values[6];
         tone.saturation = values[7];
         tone.vibrance = values[8];
-        // Optional AgX tail after the three highlight values: preset, then
-        // the tonemap_integration::kAgxControlCount controls.
+        // Optional AgX tail after the three highlight values: the
+        // tonemap_integration::kAgxControlCount controls.
         constexpr jsize kAgxOffset = 12;
         constexpr auto kAgxCount = static_cast<jsize>(rawrcam::tonemap_integration::kAgxControlCount);
-        if (env->GetArrayLength(toneValues) >= kAgxOffset + 1 + kAgxCount) {
-            jfloat agx[1 + kAgxCount];
-            env->GetFloatArrayRegion(toneValues, kAgxOffset, 1 + kAgxCount, agx);
-            if (agx[0] >= 0.0f && agx[0] < float(tonemap::kAgxPresetCount))
-                (void)rawrcam::tonemap_integration::agxFromControls(static_cast<uint32_t>(agx[0]), agx + 1, &tone.agx);
+        if (env->GetArrayLength(toneValues) >= kAgxOffset + kAgxCount) {
+            jfloat agx[kAgxCount];
+            env->GetFloatArrayRegion(toneValues, kAgxOffset, kAgxCount, agx);
+            (void)rawrcam::tonemap_integration::agxFromControls(agx, &tone.agx);
         }
         context.captureTone = std::make_shared<tonemap::TonemapParams>(tone);
     }
@@ -814,11 +813,12 @@ extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreview
     rawrcam::session::setTonemapParameters(handle(h), a, b, c, d, e, f, g, i, j);
 }
 extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreviewEngine_setAgxParameters(
-    JNIEnv*, jobject, jlong h, jint preset, jfloat whiteEv, jfloat shoulderPower, jfloat toePower, jfloat purity,
-    jfloat preserveHue) {
-    const float values[rawrcam::tonemap_integration::kAgxControlCount] = {whiteEv, shoulderPower, toePower, purity,
-                                                                         preserveHue};
-    rawrcam::session::setAgxParameters(handle(h), static_cast<uint32_t>(std::max(preset, 0)), values);
+    JNIEnv* env, jobject, jlong h, jfloatArray controls) {
+    constexpr auto kCount = static_cast<jsize>(rawrcam::tonemap_integration::kAgxControlCount);
+    if (!controls || env->GetArrayLength(controls) != kCount) return;
+    float values[kCount];
+    env->GetFloatArrayRegion(controls, 0, kCount, values);
+    rawrcam::session::setAgxParameters(handle(h), values);
 }
 // Film simulation (neutral naming; Experimental placement is UI-only).
 // Float array contract (must be FILM_LOOK_FLOAT_COUNT):

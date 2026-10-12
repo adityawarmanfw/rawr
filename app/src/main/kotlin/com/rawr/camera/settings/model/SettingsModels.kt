@@ -919,7 +919,7 @@ data class SettingsValues(
     val rawrBaseTone: ProfileTone = ProfileTone.Neutral,
     val srgbTone: ProfileTone = ProfileTone.Neutral,
     val rec709Tone: ProfileTone = ProfileTone.Neutral,
-    /** AgX's TONE set, shared by its presets; each preset keeps its own [agxValues]. */
+    /** AgX's render exposure (its other display tone fields are unused), shared by its presets. */
     val agxTone: ProfileTone = ProfileTone.Neutral,
     val agxPreset: AgxPreset = AgxPreset.Default,
     val videoAgxPreset: AgxPreset = AgxPreset.Default,
@@ -1033,7 +1033,8 @@ data class SettingsValues(
         isLogActive -> ProfileTone.Neutral
         regularRenderProfile() == ColorRenderProfile.SRgb -> srgbTone
         regularRenderProfile() == ColorRenderProfile.Rec709 -> rec709Tone
-        regularRenderProfile() == ColorRenderProfile.AgX -> agxTone
+        // AgX skips the display tone controls; only render exposure applies.
+        regularRenderProfile() == ColorRenderProfile.AgX -> ProfileTone(renderExposure = agxTone.renderExposure)
         else -> selectedLutProfile()?.tone ?: rawrBaseTone
     }
 

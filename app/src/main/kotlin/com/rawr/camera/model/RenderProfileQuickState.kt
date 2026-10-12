@@ -24,7 +24,7 @@ sealed interface RenderProfileSelection {
 
 data class RenderProfileQuickOption(val id: RenderProfileSelection, val label: String)
 
-/** AgX controls shown in the strip's AGX section while an AgX preset is active. */
+/** AgX controls for the strip's AgX sections while an AgX preset is active. */
 data class AgxQuickState(
     val values: com.rawr.camera.settings.model.AgxValues,
     val defaults: com.rawr.camera.settings.model.AgxValues

@@ -296,8 +296,8 @@ GainmapRecording recordGainmapAndReadback(RenderResources& resources, RenderComm
                     for (int k = 0; k < 3; ++k)
                         inputToBase[r * 3 + c] += toBase[r * 3 + k] * gri.params.hdrToLinearSrgbRowMajor[k * 3 + c];
             const auto block =
-                tonemap::packAgxGpuBlock(tonemap::agxForHeadroom(rendered.tonemapParams.agx, headroom),
-                                         rendered.tonemapParams.highlightBiasEV, inputToBase, headroom);
+                tonemap::packAgxGpuBlock(tonemap::agxForHeadroom(rendered.tonemapParams.agx, headroom), inputToBase,
+                                         headroom);
             static_assert(sizeof(block) == sizeof(gri.params.agxTapBlock));
             std::memcpy(gri.params.agxTapBlock.data(), &block, sizeof(block));
             gri.params.agxTap = true;

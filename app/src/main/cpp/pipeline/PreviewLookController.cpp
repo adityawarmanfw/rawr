@@ -481,9 +481,9 @@ void PreviewLookController::setTonemapParameters(float exposureEV, float blackPo
     publishTone_(tonemapParams_);
 }
 
-void PreviewLookController::setAgxParameters(uint32_t preset, const float* values) {
+void PreviewLookController::setAgxParameters(const float* values) {
     tonemap::AgxParams agx{};
-    if (!tonemap_integration::agxFromControls(preset, values, &agx)) {
+    if (!tonemap_integration::agxFromControls(values, &agx)) {
         LOGW("Rejected invalid AgX control update");
         return;
     }

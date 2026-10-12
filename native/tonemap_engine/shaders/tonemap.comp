@@ -587,8 +587,7 @@ void main() {
         vec3 linear = work * exp2(P.renderConfig.y + P.knotX4_exposure_sat_gc.y);
         vec3 srgbLinear;
         if (P.directRender.x == 4u) {
-            // AgX has its own shoulder; negative Highlights softens it on the
-            // host instead of compressing scene-linear here.
+            // AgX has its own shoulder: no scene-linear Highlights compression.
             srgbLinear = clamp(agxRender(linear), 0.0, 1.0);
         } else {
             linear = applySceneLinearHighlightCompression(linear, P.toneControls.y);
@@ -596,9 +595,10 @@ void main() {
         }
         bool rec709 = P.directRender.x == 2u || (P.directRender.x == 4u && P.directRender.z == RAWR_TF_REC709);
         // Preserve the direct path exactly when creative controls are neutral.
-        bool adjusted = any(notEqual(P.toneControls, vec4(0.0))) ||
-                        any(notEqual(P.renderConfig.zw, vec2(0.0))) ||
-                        P.knotX4_exposure_sat_gc.z != 0.0 || P.colorControls.x != 0.0;
+        // AgX carries its own curve and look: the display controls never run.
+        bool adjusted = P.directRender.x != 4u &&
+                        (any(notEqual(P.toneControls, vec4(0.0))) || any(notEqual(P.renderConfig.zw, vec2(0.0))) ||
+                         P.knotX4_exposure_sat_gc.z != 0.0 || P.colorControls.x != 0.0);
         if (adjusted) {
             encoded = applyOutputColorControls(applyPhotographicToneControls(srgbOETF(srgbLinear)));
             if (rec709) encoded = rawrEncodeTransfer(srgbEOTF(encoded), RAWR_TF_REC709);

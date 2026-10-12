@@ -103,6 +103,9 @@ data class SetAgxControl(
     val value: Float?
 ) : ApplicationCaptureAction
 
+/** Sets the active profile's render exposure to [tenths] × 0.1 EV (AgX strip RANGE cell). */
+data class SetRenderExposureTenths(val tenths: Int) : ApplicationCaptureAction
+
 /** Shifts the active profile's render exposure by [deltaTenths] × 0.1 EV (manual-mode EV button). */
 data class ScrubRenderExposure(val deltaTenths: Int) : ApplicationCaptureAction
 

@@ -20,16 +20,15 @@ enum class ColorRenderProfile : std::uint8_t {
     AgXRec709 = 10,
 };
 
-// Number of AgX values sent from the app, in this order: white EV, shoulder
-// power, toe power, purity (master outset), preserve hue.
-inline constexpr std::size_t kAgxControlCount = 5;
+// AgX values sent from the app, in tonemap::AgxControl order.
+inline constexpr std::size_t kAgxControlCount = tonemap::kAgxControlCount;
 
 void applyRenderProfile(ColorRenderProfile profile, tonemap::TonemapParams& params) noexcept;
 
 [[nodiscard]] const char* colorRenderProfileName(ColorRenderProfile profile) noexcept;
 [[nodiscard]] bool colorRenderProfileFromId(std::uint32_t id, ColorRenderProfile* out) noexcept;
 [[nodiscard]] bool isAgxProfile(ColorRenderProfile profile) noexcept;
-// Preset defaults overridden by the app's AgX controls; false when invalid.
-[[nodiscard]] bool agxFromControls(std::uint32_t preset, const float* values, tonemap::AgxParams* out) noexcept;
+// AgX parameters from the app's kAgxControlCount controls; false when invalid.
+[[nodiscard]] bool agxFromControls(const float* values, tonemap::AgxParams* out) noexcept;
 
 }  // namespace rawrcam::tonemap_integration

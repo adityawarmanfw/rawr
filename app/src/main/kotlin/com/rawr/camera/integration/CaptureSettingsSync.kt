@@ -98,7 +98,7 @@ internal class CaptureSettingsSync(
             previewCoordinator.setFocusPeakingSensitivity(sensitivity)
         }
         syncStream(LiveTonemapState.values.filterNotNull()) { applyTonemapState(it) }
-        syncStream(LiveTonemapState.agx.filterNotNull()) { previewCoordinator.setAgxParameters(it.preset, it.values) }
+        syncStream(LiveTonemapState.agx.filterNotNull()) { previewCoordinator.setAgxParameters(it) }
         firstApplies = bindings.size
         bindings.forEach { collect -> scope.launch { collect() } }
     }

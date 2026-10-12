@@ -101,7 +101,8 @@ rawrcam::renderer::RenderOptions options(JNIEnv* env, jstring recipe, int workin
                       float(adaptive.number("highlightEv", 0))};
     if (!tonemap::validAdaptiveTone(t.adaptiveTone)) throw std::runtime_error("Invalid adaptive tone recipe");
     if (rawrcam::tonemap_integration::isAgxProfile(developSettings.colorRenderProfile)) {
-        // Preset names match tonemap::AgxPreset; the five controls override it.
+        // Preset names match tonemap::AgxPreset; recipe keys (kAgxControlKeys)
+        // override its control row, so older recipes fill in from the preset.
         Json agx(env, json.child("agx"));
         static constexpr const char* kPresets[tonemap::kAgxPresetCount] = {"Default", "BlenderBase", "BlenderPunchy",
                                                                            "Sigmoid", "Smooth"};
@@ -109,13 +110,10 @@ rawrcam::renderer::RenderOptions options(JNIEnv* env, jstring recipe, int workin
         uint32_t preset = 0;
         for (uint32_t i = 0; i < tonemap::kAgxPresetCount; ++i)
             if (name == kPresets[i]) preset = i;
-        const auto defaults = tonemap::agxPreset(static_cast<tonemap::AgxPreset>(preset));
-        const float controls[rawrcam::tonemap_integration::kAgxControlCount] = {
-            float(agx.number("whiteEv", defaults.whiteEv)), float(agx.number("shoulderPower", defaults.shoulderPower)),
-            float(agx.number("toePower", defaults.toePower)),
-            float(agx.number("purity", defaults.primaries.masterOutset)),
-            float(agx.number("preserveHue", defaults.preserveHue))};
-        if (!rawrcam::tonemap_integration::agxFromControls(preset, controls, &t.agx))
+        float controls[tonemap::kAgxControlCount];
+        for (uint32_t i = 0; i < tonemap::kAgxControlCount; ++i)
+            controls[i] = float(agx.number(tonemap::kAgxControlKeys[i], tonemap::kAgxPresetControls[preset][i]));
+        if (!rawrcam::tonemap_integration::agxFromControls(controls, &t.agx))
             throw std::runtime_error("Invalid AgX recipe");
     }
 #define RAWR_FILM_FIELD(type, name) c.filmLook.name = film.scalar<type>(#name, c.filmLook.name);

@@ -28,14 +28,9 @@ bool isAgxProfile(ColorRenderProfile profile) noexcept {
     return profile == ColorRenderProfile::AgX || profile == ColorRenderProfile::AgXRec709;
 }
 
-bool agxFromControls(std::uint32_t preset, const float* values, tonemap::AgxParams* out) noexcept {
-    if (!values || !out || preset >= tonemap::kAgxPresetCount) return false;
-    tonemap::AgxParams p = tonemap::agxPreset(static_cast<tonemap::AgxPreset>(preset));
-    p.whiteEv = values[0];
-    p.shoulderPower = values[1];
-    p.toePower = values[2];
-    p.primaries.masterOutset = values[3];
-    p.preserveHue = values[4];
+bool agxFromControls(const float* values, tonemap::AgxParams* out) noexcept {
+    if (!values || !out) return false;
+    const tonemap::AgxParams p = tonemap::agxFromControls(values);
     if (!tonemap::validAgx(p)) return false;
     *out = p;
     return true;

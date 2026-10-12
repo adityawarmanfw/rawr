@@ -57,12 +57,6 @@ struct AgxParams {
 enum class AgxPreset : uint32_t { Default = 0, BlenderBase = 1, BlenderPunchy = 2, Sigmoid = 3, Smooth = 4 };
 inline constexpr uint32_t kAgxPresetCount = 5;
 
-// Negative Highlights softens the AgX shoulder instead of compressing scene
-// linear luminance before the render: -100 scales shoulder power by this.
-// (Widening the white point barely moves highlights, because the contrast
-// is range-adjusted: +3 EV lowers +4 EV gray by only ~0.006 encoded.)
-inline constexpr float kAgxHighlightShoulderScale = 0.45f;
-
 namespace agx_detail {
 inline constexpr double kEpsilon = 1e-6;
 inline constexpr double kDefaultGamma = 2.2;
@@ -178,67 +172,104 @@ inline double slopeGammaCompensation(const AgxParams& p, double gamma, double pi
 
 inline AgxPrimaries agxBlenderPrimaries() { return {}; }
 
-inline AgxPrimaries agxSmoothPrimaries() {
-    constexpr float kDeg = 3.14159265358979f / 180.0f;
-    AgxPrimaries p{};
-    p.inset = {0.10f, 0.10f, 0.15f};
-    p.rotation = {2.0f * kDeg, -1.0f * kDeg, -3.0f * kDeg};
-    // Sigmoid smooth does not restore purity, but the master control can.
-    p.masterOutset = 0.0f;
-    p.masterUnrotation = 1.0f;
-    p.outset = p.inset;
-    p.unrotation = p.rotation;
-    return p;
-}
+// App-facing controls, in darktable's UI order: input exposure range, basic
+// and advanced curve, look, then primaries before and after tone mapping.
+// Rotations are radians. Every AgxParams field except autoGamma is a control,
+// so a preset is just a row of kAgxPresetControls.
+enum class AgxControl : uint32_t {
+    WhiteEv, BlackEv,
+    Contrast, ShoulderPower, ToePower, PivotEv, PivotOutput, ShoulderStart, ToeStart, TargetWhite, TargetBlack, Gamma,
+    LookSlope, LookLift, LookBrightness, LookSaturation, PreserveHue,
+    RedInset, RedRotation, GreenInset, GreenRotation, BlueInset, BlueRotation,
+    MasterOutset, MasterUnrotation, RedOutset, RedUnrotation, GreenOutset, GreenUnrotation, BlueOutset, BlueUnrotation,
+};
+inline constexpr uint32_t kAgxControlCount = 31;
 
-// Per-preset defaults of the five app-facing controls, in AgxPreset order:
-// white EV, shoulder power, toe power, purity (master outset), preserve hue.
-// The app mirrors this table in AgxSettings.kt; AgxPresetSyncTest reads it
-// from this file, so keep it a plain table of float literals.
+// Recipe JSON keys, in AgxControl order. The app's AgxParameter mirrors this
+// list and kAgxPresetControls; AgxPresetSyncTest parses both from this file,
+// so keep them plain literals.
+// AGX_CONTROL_KEYS_BEGIN
+inline constexpr const char* kAgxControlKeys[kAgxControlCount] = {
+    "whiteEv", "blackEv",
+    "contrast", "shoulderPower", "toePower", "pivotEv", "pivotOutput", "shoulderStart", "toeStart", "targetWhite",
+    "targetBlack", "gamma",
+    "lookSlope", "lookLift", "lookBrightness", "lookSaturation", "preserveHue",
+    "redAttenuation", "redRotation", "greenAttenuation", "greenRotation", "blueAttenuation", "blueRotation",
+    "purity", "rotationReversal", "redPurity", "redReverseRotation", "greenPurity", "greenReverseRotation",
+    "bluePurity", "blueReverseRotation",
+};
+// AGX_CONTROL_KEYS_END
+
+// darktable's presets as control rows, in AgxPreset order. Blender contrast
+// is its 2.4 at gamma 2.4, expressed relative to the 2.2-gamma slope
+// compensation; Punchy adds Blender's look (brightness 1/1.35^2, sat 1.4).
 // AGX_PRESET_CONTROLS_BEGIN
-inline constexpr float kAgxPresetControls[kAgxPresetCount][5] = {
-    {6.5f, 3.30f, 1.50f, 1.0f, 0.6f},  // Default
-    {6.5f, 1.50f, 1.50f, 1.0f, 0.6f},  // BlenderBase
-    {6.5f, 1.50f, 1.50f, 1.0f, 0.6f},  // BlenderPunchy
-    {6.5f, 3.71f, 1.40f, 1.0f, 1.0f},  // Sigmoid
-    {6.5f, 3.02f, 1.61f, 0.0f, 0.0f},  // Smooth
+inline constexpr float kAgxPresetControls[kAgxPresetCount][kAgxControlCount] = {
+    // Default
+    {6.5f, -10.0f,
+     3.0f, 3.3f, 1.5f, 0.0f, 0.18f, 0.0f, 0.0f, 1.0f, 0.0f, 2.2f,
+     1.0f, 0.0f, 1.0f, 1.0f, 0.6f,
+     0.2946245f, 0.03540329f, 0.25861925f, -0.02108586f, 0.14641371f, -0.06305724f,
+     1.0f, 0.0f, 0.2907764f, 0.03540329f, 0.2631554f, -0.02108586f, 0.04581072f, -0.06305724f},
+    // BlenderBase
+    {6.5f, -10.0f,
+     2.4535246f, 1.5f, 1.5f, 0.0f, 0.18f, 0.0f, 0.0f, 1.0f, 0.0f, 2.4f,
+     1.0f, 0.0f, 1.0f, 1.0f, 0.6f,
+     0.2946245f, 0.03540329f, 0.25861925f, -0.02108586f, 0.14641371f, -0.06305724f,
+     1.0f, 0.0f, 0.2907764f, 0.03540329f, 0.2631554f, -0.02108586f, 0.04581072f, -0.06305724f},
+    // BlenderPunchy
+    {6.5f, -10.0f,
+     2.4535246f, 1.5f, 1.5f, 0.0f, 0.18f, 0.0f, 0.0f, 1.0f, 0.0f, 2.4f,
+     1.0f, 0.0f, 0.5486968f, 1.4f, 0.6f,
+     0.2946245f, 0.03540329f, 0.25861925f, -0.02108586f, 0.14641371f, -0.06305724f,
+     1.0f, 0.0f, 0.2907764f, 0.03540329f, 0.2631554f, -0.02108586f, 0.04581072f, -0.06305724f},
+    // Sigmoid
+    {6.5f, -10.0f,
+     3.07f, 3.71f, 1.4f, 0.0f, 0.18f, 0.0f, 0.0f, 1.0f, 0.0f, 2.2f,
+     1.0f, 0.0f, 1.0f, 1.0f, 1.0f,
+     0.2946245f, 0.03540329f, 0.25861925f, -0.02108586f, 0.14641371f, -0.06305724f,
+     1.0f, 0.0f, 0.2907764f, 0.03540329f, 0.2631554f, -0.02108586f, 0.04581072f, -0.06305724f},
+    // Smooth
+    {6.5f, -10.0f,
+     2.98f, 3.02f, 1.61f, 0.0f, 0.18f, 0.0f, 0.0f, 1.0f, 0.0f, 2.2f,
+     1.0f, 0.0f, 1.0f, 1.0f, 0.0f,
+     0.1f, 0.034906585f, 0.1f, -0.017453292f, 0.15f, -0.05235988f,
+     0.0f, 1.0f, 0.1f, 0.034906585f, 0.1f, -0.017453292f, 0.15f, -0.05235988f},
 };
 // AGX_PRESET_CONTROLS_END
 
-// darktable's built-in presets.
-inline AgxParams agxPreset(AgxPreset preset) {
+inline AgxParams agxFromControls(const float* v) noexcept {
     AgxParams p{};
-    switch (preset) {
-        case AgxPreset::Default:
-            break;
-        case AgxPreset::Sigmoid:
-            p.contrast = 3.07f;
-            break;
-        case AgxPreset::BlenderBase:
-        case AgxPreset::BlenderPunchy: {
-            p.gamma = 2.4f;
-            // Blender's 2.4 contrast at gamma 2.4, expressed relative to the
-            // 2.2-gamma slope compensation applied when compiling.
-            const double pivotY = std::pow(0.18, 1.0 / 2.4);
-            p.contrast = float(2.4 * agx_detail::slopeGammaCompensation(p, 2.4, pivotY));
-            if (preset == AgxPreset::BlenderPunchy) {
-                p.lookBrightness = 1.0f / (1.35f * 1.35f);
-                p.lookSaturation = 1.4f;
-            }
-            break;
-        }
-        case AgxPreset::Smooth:
-            p.primaries = agxSmoothPrimaries();
-            p.contrast = 2.98f;
-            break;
+    p.whiteEv = v[0];
+    p.blackEv = v[1];
+    p.contrast = v[2];
+    p.shoulderPower = v[3];
+    p.toePower = v[4];
+    p.pivotEv = v[5];
+    p.pivotOutput = v[6];
+    p.shoulderLinear = v[7];
+    p.toeLinear = v[8];
+    p.targetWhite = v[9];
+    p.targetBlack = v[10];
+    p.gamma = v[11];
+    p.lookSlope = v[12];
+    p.lookLift = v[13];
+    p.lookBrightness = v[14];
+    p.lookSaturation = v[15];
+    p.preserveHue = v[16];
+    for (int c = 0; c < 3; ++c) {
+        p.primaries.inset[c] = v[17 + 2 * c];
+        p.primaries.rotation[c] = v[18 + 2 * c];
+        p.primaries.outset[c] = v[25 + 2 * c];
+        p.primaries.unrotation[c] = v[26 + 2 * c];
     }
-    const float* c = kAgxPresetControls[static_cast<uint32_t>(preset)];
-    p.whiteEv = c[0];
-    p.shoulderPower = c[1];
-    p.toePower = c[2];
-    p.primaries.masterOutset = c[3];
-    p.preserveHue = c[4];
+    p.primaries.masterOutset = v[23];
+    p.primaries.masterUnrotation = v[24];
     return p;
+}
+
+inline AgxParams agxPreset(AgxPreset preset) {
+    return agxFromControls(kAgxPresetControls[static_cast<uint32_t>(preset)]);
 }
 
 // Ranges are darktable's slider limits.
@@ -255,13 +286,6 @@ inline bool validAgx(const AgxParams& p) noexcept {
         ok = ok && in(p.primaries.inset[i], 0.0f, 0.99f) && in(p.primaries.outset[i], 0.0f, 0.99f) &&
              in(p.primaries.rotation[i], -0.5236f, 0.5236f) && in(p.primaries.unrotation[i], -0.5236f, 0.5236f);
     return ok;
-}
-
-// The engine's negative Highlights control maps onto the AgX shoulder.
-inline AgxParams agxWithHighlights(AgxParams p, float highlightsUI) noexcept {
-    const float recovery = std::clamp(-highlightsUI * 0.01f, 0.0f, 1.0f);
-    p.shoulderPower *= 1.0f - recovery * (1.0f - kAgxHighlightShoulderScale);
-    return p;
 }
 
 struct AgxCurve {
@@ -508,15 +532,14 @@ struct AgxGpuBlock {
 static_assert(sizeof(AgxGpuBlock) == 320, "AgX GPU block must match agx.glsl");
 
 // inputToBase maps the caller's linear input to linear Rec2020; the engine
-// passes AP1 -> Rec2020. Negative Highlights (UI -100..0) softens the shoulder.
-inline AgxGpuBlock packAgxGpuBlock(const AgxParams& params, float highlightsUI, const color::Mat3& inputToBase,
-                                   float outputScale = 1.0f) {
+// passes AP1 -> Rec2020.
+inline AgxGpuBlock packAgxGpuBlock(const AgxParams& params, const color::Mat3& inputToBase, float outputScale = 1.0f) {
     const auto columnMajor = [](float (&out)[16], const color::Mat3& rowMajor) {
         for (int row = 0; row < 3; ++row)
             for (int col = 0; col < 3; ++col) out[col * 4 + row] = rowMajor[row * 3 + col];
         out[15] = 1.0f;
     };
-    const AgxCurve t = compileAgxCurve(agxWithHighlights(params, highlightsUI));
+    const AgxCurve t = compileAgxCurve(params);
     const AgxMatrices m = compileAgxMatrices(params.primaries);
     AgxGpuBlock b{};
     columnMajor(b.inputToBase, inputToBase);

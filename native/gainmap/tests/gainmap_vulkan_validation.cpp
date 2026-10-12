@@ -505,7 +505,7 @@ int main(int argc, char** argv) {
         for (int r = 0; r < 3; ++r)
             for (int c = 0; c < 3; ++c)
                 for (int k = 0; k < 3; ++k) inputToBase[r * 3 + c] += toBase[r * 3 + k] * cstM[k * 3 + c];
-        const auto block = tonemap::packAgxGpuBlock(agx, 0.0f, inputToBase, headroom);
+        const auto block = tonemap::packAgxGpuBlock(agx, inputToBase, headroom);
         std::memcpy(params.agxTapBlock.data(), &block, sizeof(block));
         params.agxTap = true;
         params.writeHdrChromaticity = false;

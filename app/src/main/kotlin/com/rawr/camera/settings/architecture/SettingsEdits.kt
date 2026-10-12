@@ -33,7 +33,9 @@ internal fun SettingsValues.editActiveProfileTone(edit: (ProfileTone) -> Profile
     if (isLogActive) return this
     if (regularRenderProfile() == ColorRenderProfile.SRgb) return copy(srgbTone = edit(srgbTone))
     if (regularRenderProfile() == ColorRenderProfile.Rec709) return copy(rec709Tone = edit(rec709Tone))
-    if (regularRenderProfile() == ColorRenderProfile.AgX) return copy(agxTone = edit(agxTone))
+    // AgX skips the display tone controls; only render exposure applies.
+    if (regularRenderProfile() == ColorRenderProfile.AgX)
+        return copy(agxTone = ProfileTone(renderExposure = edit(agxTone).renderExposure))
     val selected = selectedLutProfile()
     return if (selected == null) copy(rawrBaseTone = edit(rawrBaseTone)) else copy(
         userLutProfiles = userLutProfiles.map { if (it.id == selected.id) it.copy(tone = edit(it.tone)) else it }
@@ -44,7 +46,7 @@ internal fun SettingsValues.editActiveProfileTone(edit: (ProfileTone) -> Profile
 internal fun SettingsValues.withAgxValue(parameter: AgxParameter, value: Float): SettingsValues {
     if (!isAgxActive() || !value.isFinite()) return this
     val preset = regularAgxPreset()
-    val next = agxValuesFor(preset).with(parameter, AgxCatalog.spec(parameter).clamp(value))
+    val next = AgxCatalog.sanitized(agxValuesFor(preset).with(parameter, value), preset.defaults)
     return copy(agxValues = agxValues + (preset to next))
 }
 

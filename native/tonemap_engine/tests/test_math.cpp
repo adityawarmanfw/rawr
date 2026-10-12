@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 
@@ -44,15 +45,24 @@ static int testAgx() {
         std::cerr << "agx pivot drift\n";
         return 23;
     }
-    // Negative Highlights softens the shoulder: highlights darken, gray holds.
+    // Controls land on the intended fields (primaries are interleaved R/G/B).
     {
-        const AgxParams base{};
-        const AgxParams recovered = agxWithHighlights(base, -100.0f);
-        if (std::abs(recovered.shoulderPower - base.shoulderPower * kAgxHighlightShoulderScale) > 1e-6f ||
-            agxWithHighlights(base, 50.0f).shoulderPower != base.shoulderPower ||
-            !(gray(recovered, 0.18f * 16.0f)[1] < gray(base, 0.18f * 16.0f)[1] - 0.02f) ||
-            std::abs(gray(recovered, 0.18f)[1] - gray(base, 0.18f)[1]) > 1e-4f) {
-            std::cerr << "agx highlight recovery\n";
+        float v[kAgxControlCount];
+        std::copy(kAgxPresetControls[0], kAgxPresetControls[0] + kAgxControlCount, v);
+        const auto at = [&](AgxControl c) -> float& { return v[static_cast<uint32_t>(c)]; };
+        at(AgxControl::BlackEv) = -12.0f;
+        at(AgxControl::Gamma) = 2.6f;
+        at(AgxControl::LookLift) = 0.1f;
+        at(AgxControl::GreenRotation) = 0.2f;
+        at(AgxControl::BlueInset) = 0.3f;
+        at(AgxControl::MasterUnrotation) = 0.5f;
+        at(AgxControl::RedOutset) = 0.4f;
+        at(AgxControl::BlueUnrotation) = -0.25f;
+        const AgxParams p = agxFromControls(v);
+        if (p.blackEv != -12.0f || p.gamma != 2.6f || p.lookLift != 0.1f || p.primaries.rotation[1] != 0.2f ||
+            p.primaries.inset[2] != 0.3f || p.primaries.masterUnrotation != 0.5f || p.primaries.outset[0] != 0.4f ||
+            p.primaries.unrotation[2] != -0.25f || !validAgx(p)) {
+            std::cerr << "agx control mapping\n";
             return 24;
         }
     }

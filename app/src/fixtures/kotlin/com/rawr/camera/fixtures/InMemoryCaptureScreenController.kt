@@ -4,6 +4,7 @@ import com.rawr.camera.architecture.ActivateSpotAe
 import com.rawr.camera.architecture.ApplicationCaptureAction
 import com.rawr.camera.architecture.ApplyCameraCapabilities
 import com.rawr.camera.architecture.SetAgxControl
+import com.rawr.camera.architecture.SetRenderExposureTenths
 import com.rawr.camera.architecture.CancelSpotAe
 import com.rawr.camera.architecture.CaptureAction
 import com.rawr.camera.architecture.CaptureReducer
@@ -141,6 +142,10 @@ class InMemoryCaptureScreenController(
 
             // AgX controls live in settings, not capture state.
             is SetAgxControl -> Unit
+
+            is SetRenderExposureTenths -> update {
+                CaptureTransitions.scrubRenderExposure(it, action.tenths - it.renderExposureTenths)
+            }
 
             is SyncToneControls -> {
                 update {
