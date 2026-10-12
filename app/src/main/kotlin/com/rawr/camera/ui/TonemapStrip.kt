@@ -1,5 +1,6 @@
 package com.rawr.camera.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -278,10 +279,25 @@ private fun TonemapParamsRow(
             ) {
                 itemsIndexed(TonemapCatalog.all, key = { _, item -> item.jsonKey }) { index, descriptor ->
                     val cellModifier = Modifier.width(sliderWidths[index % sliderWidths.size])
-                    if (descriptor.param == null) {
-                        RenderExposureParamItem(descriptor, state, dispatch, cellModifier)
-                    } else {
-                        TonemapParamItem(descriptor, state, dispatch, cellModifier)
+                    // Divider where the controls move to another stage of the render.
+                    val startsGroup = index > 0 && TonemapCatalog.all[index - 1].group != descriptor.group
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(CaptureDimens.ControlGap)
+                    ) {
+                        if (startsGroup) {
+                            Box(
+                                Modifier
+                                    .width(1.dp)
+                                    .height(StripDimens.ParamRowHeight / 2)
+                                    .background(Color.White.copy(alpha = .25f))
+                            )
+                        }
+                        if (descriptor.param == null) {
+                            RenderExposureParamItem(descriptor, state, dispatch, cellModifier)
+                        } else {
+                            TonemapParamItem(descriptor, state, dispatch, cellModifier)
+                        }
                     }
                 }
             }

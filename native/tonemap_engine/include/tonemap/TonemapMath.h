@@ -55,8 +55,6 @@ struct TonemapParams {
 // the public control semantics or recompiling shaders.
 struct TonemapConfig {
     float middleGray;
-    float shadowAnchorEV;
-    float shoulderOutputCap;
     float gamutCompressionStart;
     float vibranceStrength;
     float vibranceShadowStart;
@@ -87,8 +85,6 @@ constexpr TonemapPreset NeutralBaseline() noexcept {
          1.0f},  // aePostGain
         {        /* config */
          0.18f,  // middleGray
-         -3.0f,  // shadowAnchorEV
-         0.90f,  // shoulderOutputCap
          0.85f,  // gamutCompressionStart
          0.70f,  // vibranceStrength (+100 weak-color boost)
          0.02f,  // vibranceShadowStart
@@ -96,87 +92,5 @@ constexpr TonemapPreset NeutralBaseline() noexcept {
     };
 }
 }  // namespace TonemapPresets
-
-struct CurveCoefficients {
-    std::array<float, 5> x{};
-    std::array<float, 5> y{};
-    std::array<std::array<float, 4>, 4> cubic{};  // a,b,c,d in normalized t
-};
-
-inline CurveCoefficients compileCurve(const TonemapParams& p, const TonemapConfig& cfg) {
-    (void)p;
-    const double middleGray = cfg.middleGray;
-    // Iter24 photographic controls are post-render operators. The base render
-    // spline keeps fixed neutral anchors and is never reshaped by Blacks,
-    // Contrast, Highlights, or Whites.
-    const double x0 = -10.0, x1 = cfg.shadowAnchorEV, x2 = 0.0, x3 = 2.0, x4 = 6.0;
-    if (!(middleGray > 0.0 && middleGray < 1.0)) throw std::invalid_argument("illegal middleGray");
-    if (!(cfg.shoulderOutputCap > middleGray && cfg.shoulderOutputCap < 1.0f))
-        throw std::invalid_argument("illegal shoulderOutputCap");
-    if (!(x0 < x1 && x1 < x2 && x2 < x3 && x3 < x4)) throw std::invalid_argument("illegal tone anchor ordering");
-
-    std::array<double, 5> x{x0, x1, x2, x3, x4};
-    const double tiny = 1e-6;
-    double y1 = middleGray * std::exp2(x1);
-    // V2 keeps the base shoulder neutral. Highlight shaping is a monotonic
-    // post-curve transform that preserves both middle gray and display white.
-    double y3 = middleGray * std::exp2(x3);
-    y1 = std::min(std::max(y1, tiny), middleGray - tiny);
-    y3 = std::min(std::max(y3, middleGray + tiny), double(cfg.shoulderOutputCap));
-    std::array<double, 5> y{0.0, y1, middleGray, y3, 1.0};
-
-    std::array<double, 4> h{}, d{};
-    for (int i = 0; i < 4; i++) {
-        h[i] = x[i + 1] - x[i];
-        d[i] = (y[i + 1] - y[i]) / h[i];
-    }
-    std::array<double, 5> m{};
-    m[0] = 0.0;
-    m[4] = 0.0;
-    auto harmonic = [&](int i) -> double {
-        const double dp = d[i - 1], dn = d[i];
-        if (dp <= 0.0 || dn <= 0.0) return 0.0;
-        const double hp = h[i - 1], hn = h[i], w1 = 2.0 * hn + hp, w2 = hn + 2.0 * hp;
-        return (w1 + w2) / (w1 / dp + w2 / dn);
-    };
-    m[1] = harmonic(1);
-    m[3] = harmonic(3);
-    // V2 base curve has a fixed neutral middle-gray slope. Contrast is applied
-    // afterward as a monotonic pivot-preserving transform, avoiding limiter collapse.
-    m[2] = middleGray * std::log(2.0);
-
-    for (int pass = 0; pass < 3; pass++) {
-        for (int i = 0; i < 4; i++) {
-            if (d[i] <= 0.0) {
-                m[i] = m[i + 1] = 0.0;
-                continue;
-            }
-            const double aa = m[i] / d[i], bb = m[i + 1] / d[i], ss = aa * aa + bb * bb;
-            if (ss > 9.0) {
-                const double tau = 3.0 / std::sqrt(ss);
-                m[i] = tau * aa * d[i];
-                m[i + 1] = tau * bb * d[i];
-            }
-        }
-    }
-
-    CurveCoefficients out;
-    for (int i = 0; i < 5; i++) {
-        out.x[i] = float(x[i]);
-        out.y[i] = float(y[i]);
-    }
-    for (int i = 0; i < 4; i++) {
-        const double hi = h[i], yi = y[i], yj = y[i + 1], mi = m[i], mj = m[i + 1];
-        out.cubic[i] = {float(2 * yi - 2 * yj + hi * (mi + mj)), float(-3 * yi + 3 * yj - hi * (2 * mi + mj)),
-                        float(hi * mi), float(yi)};
-    }
-    return out;
-}
-
-// Convenience overload for tools/tests that explicitly want the validated
-// baseline. Production engine code passes its TonemapConfig explicitly.
-inline CurveCoefficients compileCurve(const TonemapParams& p) {
-    return compileCurve(p, TonemapPresets::NeutralBaseline().config);
-}
 
 }  // namespace tonemap

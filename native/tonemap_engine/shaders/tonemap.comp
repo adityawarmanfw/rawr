@@ -82,17 +82,16 @@ layout(binding = 1, rgb10_a2) uniform writeonly image2D outputImage;
 layout(binding = 1, rgba8) uniform writeonly image2D outputImage;
 #endif
 
-// knotX01_23, knotX4_exposure_sat_gc.x/.w, curve0-3 and renderConfig.x are
-// still filled by the host but no longer read here; the layout is kept to
-// match TonemapEngine's GpuParameters.
+// knotX4_exposure_sat_gc.x/.w, curve1-3 and renderConfig.x are reserved and
+// not read here; the layout is kept to match TonemapEngine's GpuParameters.
 layout(std140, binding = 2) uniform TonemapGpuParams {
     mat4 cameraToWorking;         // upper-left mat3; mat4 avoids mat3 packing ambiguity
-    vec4 knotX01_23;              // x0,x1,x2,x3
+    vec4 gradePivot;              // grade-space 18% gray: NTRL (DI), user LUT input, direct, unused
     vec4 knotX4_exposure_sat_gc;  // x4, exposureEV, saturation, gamutCompressionStart
-    vec4 colorControls;           // vibrance, strength, shadowStart, shadowEnd
+    vec4 colorControls;           // vibrance, strength, shadow guard start/end (DI offsets from the pivot)
     vec4 renderConfig;            // middleGray, aePostGainEV, ShadowsUI, MidtonesUI
     vec4 toneControls;            // ContrastUI, HighlightsUI, BlacksUI, WhitesUI
-    vec4 curve0;
+    vec4 gradeLuma;               // user LUT input gamut luma weights
     vec4 curve1;
     vec4 curve2;
     vec4 curve3;
@@ -239,96 +238,87 @@ vec3 sampleRawrNeutralTechnical(vec3 q) {
     return outc;
 }
 
-// ---- Rawr photographic tone controls (Iter24) ---------------------------------
-// These operators were fitted in encoded Rec.709/sRGB luminance. Each control
-// is a monotonic blend between identity and its fitted endpoint, and the
-// controls are composed in a fixed order. A composition of monotonic curves is
-// monotonic, so stacked controls cannot create tone inversions, and each
-// control keeps its full strength however many others are active.
+// ---- Grade: tone and color controls before the render ------------------------
+// Contrast, Midtones, Shadows, Highlights, Saturation and Vibrance run in the
+// render's input encoding: DaVinci Intermediate before RAWR NTRL, the declared
+// LUT input before an imported LUT chain, and the sRGB/Rec.709 encoding before
+// the direct clamp. Distances are encoded units from the space's 18% gray
+// pivot, so the same value acts proportionally differently per encoding.
+// Tone moves luma and shifts all three channels equally (a gain in linear for
+// log encodings); chroma around luma carries Saturation/Vibrance. Nothing is
+// clamped here so headroom above display white reaches the render.
+
+const vec3 DWG_LUMA = vec3(0.27396, 0.87375, -0.14773);
+
+float gradeBump(float d, float center, float width) {
+    float t = (d - center) / width;
+    return exp(-t * t);
+}
+// Highlights: a ramp above the pivot plus a slope change past it, so negative
+// values compress the top (pulling headroom under the shoulder) instead of
+// only shifting it. The quadratic ease keeps the slope continuous.
+float highlightsShape(float d) {
+    const float w = 0.10;
+    float x = max(d - 0.30, 0.0);
+    return 0.10 * smoothstep(0.02, 0.30, d) + 0.25 * (x < w ? x * x / (2.0 * w) : x - 0.5 * w);
+}
+
+bool gradeActive() {
+    return P.toneControls.x != 0.0 || P.toneControls.y != 0.0 || any(notEqual(P.renderConfig.zw, vec2(0.0))) ||
+           P.knotX4_exposure_sat_gc.z != 0.0 || P.colorControls.x != 0.0;
+}
+
+vec3 applyGrade(vec3 e, vec3 lumaWeights, float pivot) {
+    if (!gradeActive()) return e;
+    float C = clamp(P.toneControls.x, -100.0, 100.0) * 0.01;
+    float H = clamp(P.toneControls.y, -100.0, 100.0) * 0.01;
+    float S = clamp(P.renderConfig.z, -100.0, 100.0) * 0.01;
+    float M = clamp(P.renderConfig.w, -100.0, 100.0) * 0.01;
+    float satUI = clamp(P.knotX4_exposure_sat_gc.z, -100.0, 100.0) * 0.01;
+    float vibUI = clamp(P.colorControls.x, -100.0, 100.0) * 0.01;
+
+    float y0 = dot(lumaWeights, e);
+    vec3 chroma = e - vec3(y0);
+    float y = y0;
+    // Contrast: power below the pivot keeps black fixed, a linear stretch above
+    // it; both have slope g at the pivot. g > 0 so tones never invert.
+    if (C != 0.0 && y > 0.0) {
+        float g = exp2(0.7 * C);
+        float d = y - pivot;
+        y = d >= 0.0 ? pivot + d * g : pivot * pow(y / pivot, g);
+    }
+    // Regional controls (widths keep every stacked combination monotonic).
+    float d = y - pivot;
+    float yr = y;
+    y += M * 0.05 * gradeBump(d, 0.0, 0.10);
+    y += S * 0.06 * gradeBump(d, -0.14, 0.10) * smoothstep(0.0, 0.25 * pivot, yr);
+    y += H * highlightsShape(d);
+
+    if (satUI != 0.0 || vibUI != 0.0) {
+        // Saturation: -100 monochrome, +100 nominal 1.85x opponent chroma.
+        float satGain = satUI >= 0.0 ? 1.0 + 0.85 * satUI : max(0.0, 1.0 + satUI);
+        // Vibrance prioritizes weak color (+) or removes it first (-). Occupancy
+        // is the encoded channel spread; 0.30 is ~4 stops in a log encoding.
+        float spread = max(chroma.r, max(chroma.g, chroma.b)) - min(chroma.r, min(chroma.g, chroma.b));
+        float occupancy = clamp(spread / 0.30, 0.0, 1.0);
+        float vibGain;
+        if (vibUI >= 0.0) {
+            // Fade the boost out in deep shadows, where it mostly lifts chroma noise.
+            float shadowGuard = smoothstep(pivot + P.colorControls.z, pivot + P.colorControls.w, y);
+            vibGain = 1.0 + P.colorControls.y * vibUI * pow(max(1.0 - occupancy, 0.0), 0.30) * shadowGuard;
+        } else {
+            vibGain = mix(1.0, pow(occupancy, 4.0), -vibUI);
+        }
+        chroma *= satGain * vibGain;
+    }
+    return vec3(y) + chroma;
+}
+
+// ---- Display trims: Whites and Blacks after the render ---------------------------
+// These operators were fitted in encoded sRGB luminance. Each is a monotonic
+// blend between identity and its fitted endpoint, applied in a fixed order.
 
 float logistic(float x) { return 1.0 / (1.0 + exp(-clamp(x, -30.0, 30.0))); }
-float displayEV(float y) { return log2(max(y, 1e-7) / 0.18); }
-
-float evWindow(float y, float lo, float lw, float hi, float hw) {
-    float e = displayEV(y);
-    return logistic((e - lo) / lw) * logistic((hi - e) / hw);
-}
-
-float shadowHighlightDelta(float y, float slider, bool shadows) {
-    if (abs(slider) < 1e-6) return 0.0;
-    float t = abs(slider) * 0.01;
-    bool pos = slider > 0.0;
-    float gain, lo, lw, hi, hw;
-    if (shadows) {
-        if (pos) {
-            gain = .63736424;
-            lo = -1.87006384;
-            lw = .24788263;
-            hi = .33845705;
-            hw = .42852663;
-        } else {
-            gain = .53939196;
-            lo = -3.08100106;
-            lw = .46467750;
-            hi = -1.0;
-            hw = .50487736;
-        }
-    } else {
-        // Negative Highlights is handled before the Rawr neutral render so it
-        // can use scene-linear/reconstructed headroom that would otherwise be
-        // compressed or clipped by the display transform. Keep only the
-        // positive endpoint here in display space.
-        if (!pos) return 0.0;
-        gain = .33178878;
-        lo = 1.0;
-        lw = .53653144;
-        hi = 2.50958786;
-        hw = .21209297;
-    }
-    return (pos ? 1.0 : -1.0) * t * gain * evWindow(y, lo, lw, hi, hw);
-}
-
-vec3 applySceneLinearHighlightCompression(vec3 rgb, float highlightsUI) {
-    // Negative Highlights is defined in scene exposure (EV), not linear-code-value
-    // space. RGB remains scene-linear AP1; only luminance is mapped to log2 exposure,
-    // adjusted there with a C1-smooth influence ramp, then converted back to a single
-    // RGB scale. This keeps the control renderer/LUT independent and preserves ratios.
-    float amount = clamp(-highlightsUI * 0.01, 0.0, 1.0);
-    if (amount <= 1e-6) return rgb;
-
-    const vec3 AP1_LUMA = vec3(0.2722287168, 0.6740817658, 0.0536895174);
-    const float middleGray = 0.18;
-    float y = dot(AP1_LUMA, rgb);
-    if (y <= 1e-8) return rgb;
-
-    float ev = log2(max(y, 1e-8) / middleGray);
-    // Leave upper midtones and ordinary blue sky alone. Begin at +1.5 EV and
-    // reach full influence at +3 EV, where reconstructed RAW headroom lives.
-    // smoothstep has zero first derivative at both ends, avoiding a hard pivot.
-    const float startEv = 1.5;
-    float influence = smoothstep(startEv, 3.0, ev);
-    if (influence <= 1e-6) return rgb;
-    // At -100, fold half the distance above the start into the display
-    // shoulder. This reveals reconstructed texture while keeping the cloud/sun
-    // core bright instead of turning the entire highlight region grey.
-    float compressedEv = startEv + (ev - startEv) * (1.0 - 0.50 * amount * influence);
-    float target = middleGray * exp2(compressedEv);
-    return rgb * (target / y);
-}
-
-float shadowsHighlightsEndpoint(float y, float shadowsUI, float highlightsUI) {
-    float ds = shadowHighlightDelta(y, shadowsUI, true);
-    float dh = shadowHighlightDelta(y, highlightsUI, false);
-    float de = ds + dh;
-    // Overlap guard for Shadows+ with Highlights+. Negative Highlights runs in
-    // scene-linear before the render (dh is 0 here), so it has no overlap.
-    if (shadowsUI > 0.0 && highlightsUI > 0.0) {
-        float ws = evWindow(y, -1.87006384, .24788263, .33845705, .42852663);
-        float wh = evWindow(y, 1.0, .53653144, 2.50958786, .21209297);
-        de *= 1.0 - .28 * ws * wh;
-    }
-    return clamp(y * exp2(de), 0.0, 1.0);
-}
 
 float endpointWarp(float y, float A, float lp, float hp, float signv) {
     float d = A * pow(clamp(y, 0.0, 1.0), lp) * pow(clamp(1.0 - y, 0.0, 1.0), hp);
@@ -362,35 +352,13 @@ float whitesPlusEndpoint(float y) {
     return clamp(y + gate * d, 0.0, 1.0);
 }
 
-float contrastEndpoint(float y, bool positive) {
-    float gammaMag = positive ? .887506 : 1.127733;
-    float pivot = positive ? .466132 : .462911;
-    float bc = positive ? .019372 : .036008;
-    float bw = positive ? .032458 : .097921;
-    float wc = positive ? .629605 : .874738;
-    float ww = positive ? .124712 : .162069;
-    float gamma = 1.0 / gammaMag;
-    float yp = pivot * pow(max(y, 1e-7) / pivot, gamma);
-    float gate = logistic((y - bc) / bw) * logistic((wc - y) / ww);
-    return clamp(y + gate * (yp - y), 0.0, 1.0);
-}
-
-float midtonesEndpoint(float y, bool positive) {
-    // Candidate5: localized photographic midtone warp. The y^p*(1-y)^q
-    // envelope fixes black/white exactly; the EV window keeps the action out
-    // of deep shadows and strong highlights. Both endpoints are monotonic.
-    const float A = .28, lp = .70, hp = 1.30;
-    float w = evWindow(y, -2.20, .55, .70, .55);
-    float d = A * pow(clamp(y, 0.0, 1.0), lp) * pow(clamp(1.0 - y, 0.0, 1.0), hp) * w;
-    return clamp(y + (positive ? d : -d), 0.0, 1.0);
-}
-
 float maxLumaForOpponent(vec2 uv) {
     float offB = -SRGB_LUMA.r * uv.x - (SRGB_LUMA.r + SRGB_LUMA.g) * uv.y;
     float offG = offB + uv.y;
     float offR = offG + uv.x;
     return clamp(1.0 - max(offR, max(offG, offB)), 0.0, 1.0);
 }
+
 float minLumaForOpponent(vec2 uv) {
     float offB = -SRGB_LUMA.r * uv.x - (SRGB_LUMA.r + SRGB_LUMA.g) * uv.y;
     float offG = offB + uv.y;
@@ -408,31 +376,18 @@ vec3 reconstructOpponent(float y, vec2 uv) {
 // One control stage: monotonic blend between identity and its endpoint.
 float toneStage(float y, float weight, float endpoint) { return mix(y, endpoint, weight); }
 
-vec3 applyPhotographicToneControls(vec3 encodedRgb) {
-    float S = clamp(P.renderConfig.z, -100.0, 100.0);
-    float M = clamp(P.renderConfig.w, -100.0, 100.0);
-    float C = clamp(P.toneControls.x, -100.0, 100.0);
-    float H = clamp(P.toneControls.y, -100.0, 100.0);
+bool displayTrimsActive() { return P.toneControls.z != 0.0 || P.toneControls.w != 0.0; }
+
+vec3 applyDisplayTrims(vec3 encodedRgb) {
     float B = clamp(P.toneControls.z, -100.0, 100.0);
     float W = clamp(P.toneControls.w, -100.0, 100.0);
-
-    // Highlights < 0 is already consumed by applySceneLinearHighlightCompression().
-    // Only positive Highlights participates in this display-space stage.
-    float displayHighlights = max(H, 0.0);
-    float shStrength = max(abs(S), displayHighlights) * 0.01;
-    if (shStrength + (abs(B) + abs(W) + abs(C) + abs(M)) * 0.01 < 1e-7) return encodedRgb;
+    if (B == 0.0 && W == 0.0) return encodedRgb;
 
     // A user LUT used directly may leave [0,1]; the fitted endpoints raise
     // (1 - y) to fractional powers and would turn that into NaN.
     encodedRgb = clamp(encodedRgb, 0.0, 1.0);
     float y = dot(SRGB_LUMA, encodedRgb);
-
-    // Fixed order: global shape first (Contrast, Midtones), then the regional
-    // Shadows/Highlights, then the endpoints (Whites, Blacks).
     float yd = y;
-    if (C != 0.0) yd = toneStage(yd, abs(C) * 0.01, contrastEndpoint(yd, C > 0.0));
-    if (M != 0.0) yd = toneStage(yd, abs(M) * 0.01, midtonesEndpoint(yd, M > 0.0));
-    if (shStrength > 0.0) yd = toneStage(yd, shStrength, shadowsHighlightsEndpoint(yd, S / shStrength, H / shStrength));
     float whitesIn = yd;
     if (W > 0.0) yd = toneStage(yd, W * 0.01, whitesPlusEndpoint(yd));
     else if (W < 0.0) yd = toneStage(yd, -W * 0.01, whitesMinusEndpoint(yd));
@@ -441,7 +396,7 @@ vec3 applyPhotographicToneControls(vec3 encodedRgb) {
     yd = clamp(yd, 0.0, 1.0);
     if (y <= EPSILON) return vec3(yd);
 
-    // Every control scales opponent chroma with luminance (an exposure-like
+    // Both trims scale opponent chroma with luminance (an exposure-like
     // change). Whites+ additionally applies its fitted W20b chroma magnitude,
     // expressed relative to that luminance scaling so it is continuous at 0.
     vec2 uv = vec2(encodedRgb.r - encodedRgb.g, encodedRgb.g - encodedRgb.b) * (yd / y);
@@ -464,8 +419,8 @@ vec3 applyPhotographicToneControls(vec3 encodedRgb) {
         float k = exp(clamp(t * 1.011604 * gate * logk, -1.0, 1.85));
         uv *= k * yw / max(whitesOut, EPSILON);
     }
-    // Same per-channel gamut clamp for every control (it was the W <= 0
-    // behaviour), so nothing changes discontinuously when Whites leaves 0.
+    // Same per-channel gamut clamp for both trims, so nothing changes
+    // discontinuously when Whites leaves 0.
     return clamp(reconstructOpponent(yd, uv), 0.0, 1.0);
 }
 // -----------------------------------------------------------------------------
@@ -484,63 +439,6 @@ vec3 srgbEOTF(vec3 x) {
     vec3 lo = x / 12.92;
     vec3 hi = pow((x + 0.055) / 1.055, vec3(2.4));
     return mix(hi, lo, lessThanEqual(x, vec3(0.04045)));
-}
-
-vec3 srgbOETF(vec3 x);
-
-float maxOpponentGain(vec3 Yv, vec3 C) {
-    float limit = 1e6;
-    for (int i = 0; i < 3; ++i) {
-        if (C[i] > EPSILON)
-            limit = min(limit, (1.0 - Yv[i]) / C[i]);
-        else if (C[i] < -EPSILON)
-            limit = min(limit, (0.0 - Yv[i]) / C[i]);
-    }
-    return max(limit, 0.0);
-}
-
-vec3 applyOutputColorControls(vec3 encoded) {
-    // Color controls deliberately operate after the Rawr neutral render and
-    // photographic tone controls. Neutral (0/0) is bitwise identity before dither.
-    float satUI = clamp(P.knotX4_exposure_sat_gc.z, -100.0, 100.0) * 0.01;
-    float vibUI = clamp(P.colorControls.x, -100.0, 100.0) * 0.01;
-    if (abs(satUI) < 1e-7 && abs(vibUI) < 1e-7) return encoded;
-
-    vec3 rgb = srgbEOTF(encoded);
-    float Y = dot(vec3(0.2126, 0.7152, 0.0722), rgb);
-    vec3 Yv = vec3(Y);
-    vec3 C = rgb - Yv;
-
-    // Normalized chroma occupancy: 0 for neutral, ~1 near an RGB gamut edge.
-    float span = max(rgb.r, max(rgb.g, rgb.b)) - min(rgb.r, min(rgb.g, rgb.b));
-    float peak = max(max(rgb.r, max(rgb.g, rgb.b)), 0.06);
-    float chroma = clamp(span / peak, 0.0, 1.0);
-
-    // Saturation is conventional: -100 => monochrome, 0 => identity,
-    // +100 => nominal 2x opponent chroma before gamut limiting.
-    float satGain = (satUI >= 0.0) ? (1.0 + 0.85 * satUI) : max(0.0, 1.0 + satUI);
-
-    // Vibrance is selective and asymmetric by design. Positive vibrance
-    // prioritizes weak/moderate colors while leaving saturated colors alone.
-    // Negative vibrance removes weak color first and preserves strongly
-    // saturated color longer, matching conventional editor behavior.
-    float vibGain;
-    if (vibUI >= 0.0) {
-        float selective = pow(max(1.0 - chroma, 0.0), 0.30);
-        // Fade the boost out in deep shadows (linear Y, config 2%..10%),
-        // where it would mostly amplify chroma noise.
-        float shadowGuard = smoothstep(P.colorControls.z, P.colorControls.w, Y);
-        vibGain = 1.0 + P.colorControls.y * vibUI * selective * shadowGuard;
-    } else {
-        float minus100Gain = pow(max(chroma, 0.0), 4.0);
-        vibGain = mix(1.0, minus100Gain, -vibUI);
-    }
-
-    float wantedGain = satGain * vibGain;
-    float gamutGain = maxOpponentGain(Yv, C);
-    float gain = min(wantedGain, gamutGain);
-    vec3 outLinear = Yv + gain * C;
-    return srgbOETF(clamp(outLinear, 0.0, 1.0));
 }
 
 vec3 srgbOETF(vec3 x) {
@@ -583,27 +481,25 @@ void main() {
         // exposure, creative controls, SDR shoulder or LUT may alter this curve.
         encoded = rawrCst(work * exp2(P.renderConfig.y), RAWR_GAMUT_ACESCG_AP1,
                           RAWR_TF_LINEAR, P.directRender.y, P.directRender.z);
+    } else if (P.directRender.x == 4u) {
+        // AgX carries its own curve and look: neither the grade nor the display
+        // trims run.
+        vec3 srgbLinear = clamp(agxRender(work * exp2(P.renderConfig.y + P.knotX4_exposure_sat_gc.y)), 0.0, 1.0);
+        encoded = P.directRender.z == RAWR_TF_REC709 ? rawrEncodeTransfer(srgbLinear, RAWR_TF_REC709)
+                                                     : srgbOETF(srgbLinear);
     } else if (P.directRender.x != 0u) {
-        vec3 linear = work * exp2(P.renderConfig.y + P.knotX4_exposure_sat_gc.y);
-        vec3 srgbLinear;
-        if (P.directRender.x == 4u) {
-            // AgX has its own shoulder: no scene-linear Highlights compression.
-            srgbLinear = clamp(agxRender(linear), 0.0, 1.0);
-        } else {
-            linear = applySceneLinearHighlightCompression(linear, P.toneControls.y);
-            srgbLinear = clamp(rawrToSrgbLinear(linear, RAWR_GAMUT_ACESCG_AP1), 0.0, 1.0);
-        }
-        bool rec709 = P.directRender.x == 2u || (P.directRender.x == 4u && P.directRender.z == RAWR_TF_REC709);
-        // Preserve the direct path exactly when creative controls are neutral.
-        // AgX carries its own curve and look: the display controls never run.
-        bool adjusted = P.directRender.x != 4u &&
-                        (any(notEqual(P.toneControls, vec4(0.0))) || any(notEqual(P.renderConfig.zw, vec2(0.0))) ||
-                         P.knotX4_exposure_sat_gc.z != 0.0 || P.colorControls.x != 0.0);
-        if (adjusted) {
-            encoded = applyOutputColorControls(applyPhotographicToneControls(srgbOETF(srgbLinear)));
-            if (rec709) encoded = rawrEncodeTransfer(srgbEOTF(encoded), RAWR_TF_REC709);
-        } else {
-            encoded = rec709 ? rawrEncodeTransfer(srgbLinear, RAWR_TF_REC709) : srgbOETF(srgbLinear);
+        // Direct sRGB/Rec.709: grade in the output encoding before the clamp, so
+        // Highlights can still pull values above display white into range.
+        bool rec709 = P.directRender.x == 2u;
+        uint tf = rec709 ? RAWR_TF_REC709 : RAWR_TF_SRGB;
+        vec3 srgbLinear = rawrToSrgbLinear(work * exp2(P.renderConfig.y + P.knotX4_exposure_sat_gc.y),
+                                           RAWR_GAMUT_ACESCG_AP1);
+        encoded = clamp(applyGrade(rawrEncodeTransfer(srgbLinear, tf), SRGB_LUMA, P.gradePivot.z), 0.0, 1.0);
+        if (displayTrimsActive()) {
+            // The trims were fitted on encoded sRGB.
+            vec3 srgb = rec709 ? srgbOETF(rawrDecodeTransfer(encoded, RAWR_TF_REC709)) : encoded;
+            srgb = applyDisplayTrims(srgb);
+            encoded = rec709 ? rawrEncodeTransfer(srgbEOTF(srgb), RAWR_TF_REC709) : srgb;
         }
     } else {
         // RAWR NTRL technical render. cameraToWorking produces scene-linear AP1.
@@ -614,11 +510,10 @@ void main() {
         vec3 color = work;
         float renderExposureEV = P.renderConfig.y + P.knotX4_exposure_sat_gc.y;
         vec3 renderedLinear = color * exp2(renderExposureEV);
-        renderedLinear = applySceneLinearHighlightCompression(renderedLinear, P.toneControls.y);
         vec3 rawrNeutralInput = !COMBINE_NEUTRAL_GAMUT
             ? rawrCst(renderedLinear, RAWR_GAMUT_ACESCG_AP1, RAWR_TF_LINEAR, RAWR_GAMUT_DWG, RAWR_TF_DAVINCI_INTERMEDIATE)
             : rawrTonemapCst(renderedLinear, RAWR_GAMUT_ACESCG_AP1, RAWR_TF_LINEAR, RAWR_GAMUT_DWG, RAWR_TF_DAVINCI_INTERMEDIATE, P.neutralGamut);
-        vec3 rawrNeutral = sampleRawrNeutralTechnical(rawrNeutralInput);
+        vec3 rawrNeutral = sampleRawrNeutralTechnical(applyGrade(rawrNeutralInput, DWG_LUMA, P.gradePivot.x));
         encoded = rawrNeutral;
 
         // A render-transform user LUT starts from scene-linear AP1 and replaces RAWR
@@ -629,6 +524,7 @@ void main() {
         // space, so 0 is an exact Rawr Neutral bypass even when LUT spaces differ.
         if (P.lutControl.x != 0u && P.lutControl.y > 0u && P.lutBlend.x > 0.0 && P.lutOutput.z == 0u) {
             vec3 lutIn = rawrUserCst(renderedLinear, RAWR_GAMUT_ACESCG_AP1, RAWR_TF_LINEAR, P.lutControl.z, P.lutControl.w, P.userInputGamut);
+            lutIn = applyGrade(lutIn, P.gradeLuma.xyz, P.gradePivot.y);
             vec3 lutOut = rawrEvaluateUserLutChain(lutIn);
             vec3 lutSrgb = P.lutOutput.w == 0u
                                ? lutOut
@@ -636,8 +532,10 @@ void main() {
             encoded = mix(rawrNeutral, lutSrgb, clamp(P.lutBlend.x, 0.0, 1.0));
         }
 
-        encoded = applyPhotographicToneControls(encoded);
-        encoded = applyOutputColorControls(encoded);
+        // The NTRL LUT and "use directly" user LUTs can overshoot [0,1] slightly;
+        // any active control clamps, while neutral stays an exact bypass.
+        if (gradeActive() || displayTrimsActive()) encoded = clamp(encoded, 0.0, 1.0);
+        encoded = applyDisplayTrims(encoded);
 
         if (P.lutControl.x != 0u && P.lutControl.y > 0u && P.lutBlend.x > 0.0 && P.lutOutput.z == 1u) {
             vec3 beforeLut = encoded;

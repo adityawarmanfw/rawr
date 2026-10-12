@@ -17,15 +17,13 @@ namespace {
 
 struct alignas(16) GpuParameters {
     float cameraToWorking[16];
-    float toneKnots0123[4];
+    float gradePivot[4];
     float toneKnot4ExposureSaturationGamut[4];
     float vibranceControls[4];
     float renderingConfig[4];
     float toneControls[4];
-    float curveSegment0[4];
-    float curveSegment1[4];
-    float curveSegment2[4];
-    float curveSegment3[4];
+    float gradeLuma[4];
+    float reserved[3][4];
     uint32_t imageExtent[4];
     uint32_t lutControl[4];
     uint32_t lutOutput[4];
@@ -81,11 +79,9 @@ void checkVulkanResult(VkResult result, const char* message) {
 bool finite(float value) noexcept { return std::isfinite(value); }
 
 bool validConfig(const TonemapConfig& config) noexcept {
-    return finite(config.middleGray) && finite(config.shadowAnchorEV) && finite(config.shoulderOutputCap) &&
-           finite(config.gamutCompressionStart) && finite(config.vibranceStrength) &&
+    return finite(config.middleGray) && finite(config.gamutCompressionStart) && finite(config.vibranceStrength) &&
            finite(config.vibranceShadowStart) && finite(config.vibranceShadowEnd) && config.middleGray > 0.0f &&
-           config.middleGray < 1.0f && config.shadowAnchorEV < 0.0f && config.shoulderOutputCap > config.middleGray &&
-           config.shoulderOutputCap < 1.0f && config.gamutCompressionStart > 0.0f &&
+           config.middleGray < 1.0f && config.gamutCompressionStart > 0.0f &&
            config.gamutCompressionStart < 1.0f && config.vibranceStrength >= 0.0f &&
            config.vibranceShadowStart >= 0.0f && config.vibranceShadowEnd > config.vibranceShadowStart;
 }
@@ -120,18 +116,6 @@ GpuParameters buildGpuParameters(const TonemapParams& params, const float* matri
                                  uint32_t outputWidth, uint32_t outputHeight,
                                  uint32_t inputWidth, uint32_t inputHeight, const TonemapConfig& config,
                                  const lut::LutGpuPayload& lutPayload, const detail::GamutConversions& conversions) {
-    // The photographic controls are post-render display-domain operators.
-    // Compile the base render curve from fixed neutral anchors so slider changes
-    // cannot alter the base spline a second time.
-    TonemapParams base = params;
-    base.blackPointEV = -10.0f;
-    base.shadowLiftEV = 0.0f;
-    base.midtoneLiftEV = 0.0f;
-    base.contrast = 1.0f;
-    base.shoulderStartEV = 2.0f;
-    base.whitePointEV = 6.0f;
-    base.highlightBiasEV = 0.0f;
-    const CurveCoefficients curve = compileCurve(base, config);
     GpuParameters gpu{};
     gpu.adaptiveTone[0] = params.adaptiveTone.liftEv;
     gpu.adaptiveTone[1] = params.adaptiveTone.keyEv;
@@ -157,16 +141,29 @@ GpuParameters buildGpuParameters(const TonemapParams& params, const float* matri
     gpu.cameraToWorking[10] = matrix[8];
     gpu.cameraToWorking[15] = 1.0f;
 
-    std::memcpy(gpu.toneKnots0123, curve.x.data(), sizeof(gpu.toneKnots0123));
-    gpu.toneKnot4ExposureSaturationGamut[0] = curve.x[4];
+    // Grade space anchors: where 18% gray lands in each render's input
+    // encoding, and the luma weights of the imported LUT's input gamut.
+    gpu.gradePivot[0] = color::encodeTransfer(config.middleGray, color::TransferFunction::DaVinciIntermediate);
+    gpu.gradePivot[1] = color::encodeTransfer(config.middleGray, lutPayload.inputSpace.transfer);
+    gpu.gradePivot[2] = color::encodeTransfer(config.middleGray, params.renderTransform == RenderTransform::Rec709
+                                                                     ? color::TransferFunction::Rec709
+                                                                     : color::TransferFunction::SRgb);
+    const color::Mat3 toSrgb = color::linearGamutMatrix(lutPayload.inputSpace.gamut, color::Gamut::SRgbRec709);
+    constexpr float kSrgbLuma[3] = {0.2126f, 0.7152f, 0.0722f};
+    for (int c = 0; c < 3; ++c)
+        gpu.gradeLuma[c] = kSrgbLuma[0] * toSrgb[c] + kSrgbLuma[1] * toSrgb[3 + c] + kSrgbLuma[2] * toSrgb[6 + c];
     gpu.toneKnot4ExposureSaturationGamut[1] = params.exposureEV;
     gpu.toneKnot4ExposureSaturationGamut[2] = params.saturation;
     gpu.toneKnot4ExposureSaturationGamut[3] = config.gamutCompressionStart;
 
     gpu.vibranceControls[0] = params.vibrance;
     gpu.vibranceControls[1] = config.vibranceStrength;
-    gpu.vibranceControls[2] = config.vibranceShadowStart;
-    gpu.vibranceControls[3] = config.vibranceShadowEnd;
+    // The vibrance shadow guard is configured in linear luma; the grade runs in
+    // encoded space, so send it as DaVinci Intermediate offsets from the pivot.
+    gpu.vibranceControls[2] = color::encodeTransfer(config.vibranceShadowStart,
+                                                    color::TransferFunction::DaVinciIntermediate) - gpu.gradePivot[0];
+    gpu.vibranceControls[3] = color::encodeTransfer(config.vibranceShadowEnd,
+                                                    color::TransferFunction::DaVinciIntermediate) - gpu.gradePivot[0];
     gpu.renderingConfig[0] = config.middleGray;
     // A scalar scene-linear gain commutes with the camera->working matrix.
     // Store it in stops so the shader can add it at the existing pre-tone
@@ -178,11 +175,6 @@ GpuParameters buildGpuParameters(const TonemapParams& params, const float* matri
     gpu.toneControls[1] = params.highlightBiasEV;
     gpu.toneControls[2] = params.blackPointEV;
     gpu.toneControls[3] = params.whitePointEV;
-
-    std::memcpy(gpu.curveSegment0, curve.cubic[0].data(), sizeof(gpu.curveSegment0));
-    std::memcpy(gpu.curveSegment1, curve.cubic[1].data(), sizeof(gpu.curveSegment1));
-    std::memcpy(gpu.curveSegment2, curve.cubic[2].data(), sizeof(gpu.curveSegment2));
-    std::memcpy(gpu.curveSegment3, curve.cubic[3].data(), sizeof(gpu.curveSegment3));
 
     gpu.imageExtent[0] = outputWidth;
     gpu.imageExtent[1] = outputHeight;

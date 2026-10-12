@@ -121,28 +121,43 @@ internal fun ImageToneSettings(
                 }
             }
         }
-        if (!state.values.isLogActive && !state.values.isAgxActive()) item {
-            SettingsGroup(
-                title = "Tone — $profileLabel",
-                description = "Stored per render profile. Edits affect only $profileLabel."
-            ) {
-                ToneSlider(ImageToneSpecs.renderExposure, tone.renderExposure, dispatch)
-                SettingDivider()
-                ToneSlider(ImageToneSpecs.blacks, tone.blacks, dispatch)
-                SettingDivider()
-                ToneSlider(ImageToneSpecs.shadows, tone.shadows, dispatch)
-                SettingDivider()
-                ToneSlider(ImageToneSpecs.contrast, tone.contrast, dispatch)
-                SettingDivider()
-                ToneSlider(ImageToneSpecs.midtones, tone.midtones, dispatch)
-                SettingDivider()
-                ToneSlider(ImageToneSpecs.highlights, tone.highlights, dispatch)
-                SettingDivider()
-                ToneSlider(ImageToneSpecs.whites, tone.whites, dispatch)
-                SettingDivider()
-                ToneSlider(ImageToneSpecs.saturation, tone.saturation, dispatch)
-                SettingDivider()
-                ToneSlider(ImageToneSpecs.vibrance, tone.vibrance, dispatch)
+        if (!state.values.isLogActive && !state.values.isAgxActive()) {
+            item {
+                SettingsGroup(
+                    title = "Tone — $profileLabel",
+                    description = "Stored per render profile. Edits affect only $profileLabel. " +
+                        "Exposure applies to scene light, before everything."
+                ) {
+                    ToneSlider(ImageToneSpecs.renderExposure, tone.renderExposure, dispatch)
+                }
+            }
+            item {
+                SettingsGroup(
+                    title = "Grade",
+                    description = "Before the render, in ${gradeSpaceLabel(state.values)}."
+                ) {
+                    ToneSlider(ImageToneSpecs.highlights, tone.highlights, dispatch)
+                    SettingDivider()
+                    ToneSlider(ImageToneSpecs.shadows, tone.shadows, dispatch)
+                    SettingDivider()
+                    ToneSlider(ImageToneSpecs.midtones, tone.midtones, dispatch)
+                    SettingDivider()
+                    ToneSlider(ImageToneSpecs.contrast, tone.contrast, dispatch)
+                    SettingDivider()
+                    ToneSlider(ImageToneSpecs.saturation, tone.saturation, dispatch)
+                    SettingDivider()
+                    ToneSlider(ImageToneSpecs.vibrance, tone.vibrance, dispatch)
+                }
+            }
+            item {
+                SettingsGroup(
+                    title = "Output",
+                    description = "After the render. Sets where display white and black land."
+                ) {
+                    ToneSlider(ImageToneSpecs.whites, tone.whites, dispatch)
+                    SettingDivider()
+                    ToneSlider(ImageToneSpecs.blacks, tone.blacks, dispatch)
+                }
             }
         }
         item { Spacer(Modifier.height(20.dp)) }
@@ -402,6 +417,14 @@ private fun <T> EnumChoice(
         onSelect = onSelect
     )
 }
+
+/** The encoding the Grade sliders run in: the imported LUT's input, else the render's own. */
+private fun gradeSpaceLabel(values: SettingsValues): String =
+    values.selectedLutProfile()?.inputTransfer?.label ?: when (values.regularRenderProfile()) {
+        ColorRenderProfile.SRgb -> "sRGB"
+        ColorRenderProfile.Rec709 -> "Rec.709"
+        else -> "DaVinci Intermediate"
+    }
 
 @Composable
 private fun ToneSlider(spec: NumericSettingSpec, value: Float, dispatch: SettingsDispatch) {
