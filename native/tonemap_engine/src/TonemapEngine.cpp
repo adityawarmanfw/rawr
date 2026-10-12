@@ -112,9 +112,20 @@ bool supportsStorageImage(VkPhysicalDevice physicalDevice, VkFormat format) noex
 }
 
 // A linear LUT input is graded in DaVinci Intermediate (see tonemap.comp).
+// Log LUT inputs are graded in their own encoding. Linear and display-referred
+// inputs (look LUTs) have no headroom to grade on, so they grade in DaVinci
+// Intermediate and convert to the LUT input afterwards (tonemap.comp).
 color::TransferFunction userGradeTransfer(const lut::LutGpuPayload& lutPayload) noexcept {
-    return lutPayload.inputSpace.transfer == color::TransferFunction::Linear ? color::TransferFunction::DaVinciIntermediate
-                                                                             : lutPayload.inputSpace.transfer;
+    switch (lutPayload.inputSpace.transfer) {
+        case color::TransferFunction::DaVinciIntermediate:
+        case color::TransferFunction::LogC3:
+        case color::TransferFunction::SLog3:
+        case color::TransferFunction::VLog:
+        case color::TransferFunction::FLog2C:
+            return lutPayload.inputSpace.transfer;
+        default:
+            return color::TransferFunction::DaVinciIntermediate;
+    }
 }
 
 color::TransferFunction directGradeTransfer(const TonemapParams& params) noexcept {

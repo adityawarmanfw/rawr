@@ -115,6 +115,7 @@ SRGB, REC709 = ['--render-transform', '1'], ['--render-transform', '2']
 LOGC3_LUT = ['--lut-placement', '0', '--lut-input-gamut', '4', '--lut-input-transfer', '6']
 VLOG_LUT = ['--lut-placement', '0', '--lut-input-gamut', '6', '--lut-input-transfer', '8']
 LINEAR_LUT = ['--lut-placement', '0', '--lut-input-gamut', '3', '--lut-input-transfer', '0']
+SRGB_LUT = ['--lut-placement', '0', '--lut-input-gamut', '0', '--lut-input-transfer', '1']
 GRAY_EV = np.linspace(-12.0, 4.0, W)
 
 
@@ -183,7 +184,8 @@ def metrics(render, lut):
     m['blacks_plus_subcode_slope'] = float(slope[near].max()) if near.any() else float('nan')
     # Contrast pivots at 18% gray in each render's input encoding.
     setups = [('ntrl', None, ()), ('srgb', None, SRGB), ('rec709', None, REC709), ('logc3_lut', lut, LOGC3_LUT),
-              ('vlog_lut', lut, VLOG_LUT), ('linear_lut', lut, LINEAR_LUT)]
+              ('vlog_lut', lut, VLOG_LUT), ('linear_lut', lut, LINEAR_LUT),
+              ('srgb_lut', lut, SRGB_LUT)]
     m['contrast_pivot_drift'] = max(abs(gray_at(render, tone(C=c), 0.0, l, x) - gray_at(render, tone(), 0.0, l, x))
                                     for _, l, x in setups for c in (-100, 100))
     # Contrast and Shadows keep true black where the log curve puts it
@@ -201,6 +203,13 @@ def metrics(render, lut):
     clipped = (GRAY_EV > 2.7) & (GRAY_EV < 3.0)
     m['srgb_clipped_slope_before'] = float(np.diff(s0[clipped]).max())
     m['srgb_recovered_slope_after'] = float(np.diff(s1[clipped]).min())
+    # A look LUT (sRGB input) gets the straight encode, clipped above white;
+    # graded in DI, Highlights- pulls that headroom under the LUT's edge.
+    # (Window below where the test LUT's own overshoot reaches the output clamp.)
+    l0, l1 = (luma(render(t, lut, SRGB_LUT))[0] for t in (tone(), tone(H=-100)))
+    above_white = (GRAY_EV > 2.5) & (GRAY_EV < 2.9)
+    m['srgb_lut_clipped_slope_before'] = float(np.diff(l0[above_white]).max())
+    m['srgb_lut_recovered_slope_after'] = float(np.diff(l1[above_white]).min())
     # Single sliders are unchanged except where intended (gray + moderate color rows).
     rows = slice(0, GRAY_ROWS + COLOR_ROWS)
     for n in ('S', 'H', 'C', 'M'):
@@ -247,6 +256,8 @@ def main():
         ('Highlights- compresses the top', after['highlights_minus_top_drop'] > 0.01),
         ('Highlights- leaves shadows alone', after['highlights_minus_shadow_change'] < 1e-4),
         ('Highlights- recovers clipped sRGB', after['srgb_clipped_slope_before'] < 1e-6 < after['srgb_recovered_slope_after']),
+        ('Highlights- recovers under an sRGB-input LUT',
+         after['srgb_lut_clipped_slope_before'] < 1e-6 < after['srgb_lut_recovered_slope_after']),
     ]
     failed = [name for name, ok in checks if not ok]
     for name, ok in checks:
