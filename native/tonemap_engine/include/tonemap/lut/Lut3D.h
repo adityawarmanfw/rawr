@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include <istream>
 #include <string>
 #include <vector>
 
@@ -15,4 +16,6 @@ struct Lut3D {
     color::Vec3 sampleTetrahedral(color::Vec3 input) const;
 };
 Lut3D parseCubeFile(const std::string& path, uint32_t maxSize = 65);
+// Same grammar as parseCubeFile, from an already-open stream (embedded LUTs).
+Lut3D parseCube(std::istream& in, uint32_t maxSize = 65);
 }  // namespace tonemap::lut

@@ -15,6 +15,9 @@ color::Vec3 mul(color::Vec3 a, float s) { return {a[0] * s, a[1] * s, a[2] * s};
 Lut3D parseCubeFile(const std::string& path, uint32_t maxSize) {
     std::ifstream f(path);
     if (!f) throw std::runtime_error("cannot open cube: " + path);
+    return parseCube(f, maxSize);
+}
+Lut3D parseCube(std::istream& f, uint32_t maxSize) {
     Lut3D out;
     std::string line;
     uint64_t lineNo = 0;

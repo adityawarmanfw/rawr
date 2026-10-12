@@ -90,8 +90,8 @@ void RenderResources::createPixels(const RenderedStillContext& rendered) {
         const char* paramReason = nullptr;
         if (!gainmap::GainmapCompute::validateParams(rendered.gainmapParams, &paramReason))
             throw std::runtime_error(std::string("gainmap params: ") + (paramReason ? paramReason : "invalid"));
-        mapWidth_ = std::max(1u, rendered.width / 2u);
-        mapHeight_ = std::max(1u, rendered.height / 2u);
+        mapWidth_ = std::max(1u, rendered.width / (rendered.gainmapParams.fullResMap ? 1u : 2u));
+        mapHeight_ = std::max(1u, rendered.height / (rendered.gainmapParams.fullResMap ? 1u : 2u));
         map_ = rawrcam::vulkan::createOwnedImage(
             physicalDevice_, device_, mapWidth_, mapHeight_, VK_FORMAT_R8G8B8A8_UNORM,
             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);

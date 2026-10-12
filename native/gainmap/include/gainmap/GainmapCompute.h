@@ -64,13 +64,20 @@ struct GainmapParams {
     // Must be >= 1. Default 2.0 (glow can add at most ~1 stop pre-strength).
     float glowMax = 2.0f;
     // Post-encode map blur (separable Gaussian, map texels): melts
-    // quantization contouring and residual kinks the half-res grid preserves
+    // quantization contouring and residual kinks the map grid preserves
     // (recovery/tap C1 discontinuities transmit straight through the ratio).
-    // 0 = off. Default 3.0 (validated against the B30 Photos verdict).
-    // Encode-only; the mux never sees it.
-    float mapBlurSigma = 3.0f;
+    // 0 = off (blur passes skipped). Default 0: full-res A/B shows unblurred
+    // maps are sharper with no halo lift at dark edges; raise only for
+    // banding-prone smooth gradients. Encode-only; the mux never sees it.
+    float mapBlurSigma = 0.0f;
     float hdrCapacityMin = 0.0f;
     float hdrCapacityMax = 4.7090998f;
+    // Full-resolution map grid (1 map texel per base pixel) instead of the
+    // legacy half-res grid. The shader's 2x2 flatness probe and the half-res
+    // clip mask are resolution-aware (probe keeps a 2x2 footprint, clip is
+    // sampled at gid/2), so output is identical apart from grid density.
+    // Default true: full-res A/B shows sharper maps with no extra halo.
+    bool fullResMap = true;
     // Row-major 3x3 HDR-input -> linear-sRGB. The HDR input is white-balanced
     // camera RGB, so this must be the calibrated camera->linear-sRGB matrix,
     // supplied per capture (see RenderedStillContext::gainmapCstRowMajor).
@@ -118,7 +125,10 @@ class GainmapCompute {
     GainmapCompute& operator=(const GainmapCompute&) = delete;
 
     // Caller owns all image layout transitions to GENERAL. Map dimensions
-    // must equal floor(base/scale); shader bilinearly samples both inputs.
+    // must equal floor(base/scale): full base size when
+    // GainmapParams::fullResMap is set, half size legacy. The shader
+    // bilinearly samples both inputs at any density; the clip mask stays
+    // half-res and is sampled at gid/2.
     void record(const GainmapRecordInfo& recordInfo);
 
    private:

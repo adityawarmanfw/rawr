@@ -965,8 +965,8 @@ data class SettingsValues(
     val videoHighlightThreshold: Float = 1f,
     val videoHighlightCompression: Float = 100f,
     // UltraHDR (JPEG_R) still output: GPU gain map + MPF/XMP/ISO mux.
-    // Off by default; legacy SDR JPEG when off.
-    val ultraHdrEnabled: Boolean = false,
+    // On by default; legacy SDR JPEG when off.
+    val ultraHdrEnabled: Boolean = true,
     // Ignore Camera2 shutter/ISO priority modes: locking SS or ISO always enters
     // full Manual. Off by default.
     val aePriorityDisabled: Boolean = false,

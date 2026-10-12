@@ -58,7 +58,8 @@ struct GlowImageView {
 // encoding the Rec.709 luminance ratio in single-channel mode, per-channel
 // RGB ratios in multi-channel mode (default on; ISO flags it multi-channel
 // while XMP stays channel-identical so single-channel readers keep parsing
-// channel 0). Dimensions are base/scale (typically half res each axis).
+// channel 0). Dimensions are base/scale (full res when the caller sets
+// GainmapParams::fullResMap, half res legacy).
 struct MapImageView {
     VkImageView view = VK_NULL_HANDLE;
     VkFormat format = VK_FORMAT_R8G8B8A8_UNORM;

@@ -15,7 +15,7 @@ enum class ChromaSubsampling : std::uint8_t {
 };
 
 // UltraHDR (JPEG_R) output intent. Disabled by default; the file stays a
-// legacy SDR JPEG. When enabled, StillImageRenderer records a half-res
+// legacy SDR JPEG. When enabled, StillImageRenderer records a full-res
 // recovery map on GPU (multi-channel RGB by default, preserving hue) and
 // this writer dual-encodes + muxes (MPF + GContainer XMP + hdrgm +
 // ISO 21496-1). Log2 fields mirror
