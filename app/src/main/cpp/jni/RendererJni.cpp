@@ -95,6 +95,10 @@ rawrcam::renderer::RenderOptions options(JNIEnv* env, jstring recipe, int workin
     t.saturation = tone.number("saturation", 0);
     t.vibrance = tone.number("vibrance", 0);
     t.aePostGain = json.number("aePostGain", 1);
+    Json adaptive(env, json.child("adaptiveTone"));
+    t.adaptiveTone = {float(adaptive.number("liftEv", 0)), float(adaptive.number("keyEv", -4)),
+                      float(adaptive.number("highlightEv", 0))};
+    if (!tonemap::validAdaptiveTone(t.adaptiveTone)) throw std::runtime_error("Invalid adaptive tone recipe");
 #define RAWR_FILM_FIELD(type, name) c.filmLook.name = film.scalar<type>(#name, c.filmLook.name);
 #include "tonemap/FilmLookFields.inc"
 #undef RAWR_FILM_FIELD

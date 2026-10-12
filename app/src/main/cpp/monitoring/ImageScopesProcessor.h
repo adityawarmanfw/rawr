@@ -21,6 +21,7 @@ class ImageScopes;
 namespace rawrcam::monitoring {
 
 using RenderedExposureFeedback = image_scopes::DisplayExposureStatsData;
+using SceneExposureStats = image_scopes::SceneExposureStatsData;
 
 class ImageScopesProcessor final {
    public:
@@ -42,6 +43,11 @@ class ImageScopesProcessor final {
                 uint32_t sourceQuarterTurns, bool measureExposureFeedback, uint32_t sourceWidth = 0,
                 uint32_t sourceHeight = 0,
                 image_scopes::SamplingMode sampling = image_scopes::SamplingMode::FullReference);
+    // Scene key meter on the scene-linear rgba16f image (before render gain).
+    // lumaWeights maps its RGB to luma; samples at/above clipLuma are clipped.
+    void recordSceneExposure(VkCommandBuffer command, uint32_t frameSlot, VkImageView linearView, uint32_t width,
+                             uint32_t height, const std::array<float, 3>& lumaWeights, float clipLuma);
+    [[nodiscard]] std::optional<SceneExposureStats> consumeSceneExposure(uint32_t frameSlot);
     void retireFrameSlot(uint32_t frameSlot);
     [[nodiscard]] std::optional<RenderedExposureFeedback> consumeExposureFeedback(uint32_t frameSlot);
     void discardFrameSlot(uint32_t frameSlot) noexcept;
@@ -82,6 +88,10 @@ class ImageScopesProcessor final {
     };
     VkPhysicalDevice physicalDevice_ = VK_NULL_HANDLE;
     std::array<ExposureStatsReadback, rawrcam::imaging::kRealtimeFramesInFlight> exposureStatsReadback_{};
+    std::array<ExposureStatsReadback, rawrcam::imaging::kRealtimeFramesInFlight> sceneStatsReadback_{};
+    void createReadback(ExposureStatsReadback& rb, VkDeviceSize bytes);
+    void destroyReadback(ExposureStatsReadback& rb) noexcept;
+    bool readReadback(ExposureStatsReadback& rb, void* out, size_t bytes);
     std::array<std::array<rawrcam::vulkan::OwnedImage, 3>, rawrcam::imaging::kRealtimeFramesInFlight> targets_{};
 };
 

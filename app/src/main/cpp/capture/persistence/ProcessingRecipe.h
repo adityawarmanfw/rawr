@@ -8,12 +8,14 @@
 
 namespace rawrcam::capture::persistence {
 // Named scalar fields are portable across native ABI and struct-layout changes.
+// The adaptive curve is serialized independently of the baseline HAL gain.
 inline std::string resolvedRecipe(const tonemap::TonemapParams& tone, float gain, bool filmEnabled,
                                   const spektrafilm_native::FilmLook& film) {
     std::ostringstream out;
     out.imbue(std::locale::classic());
     out << std::boolalpha << std::setprecision(9) << "{\"version\":1,\"aePostGain\":" << gain
-        << ",\"filmEnabled\":" << (filmEnabled ? "true" : "false") << ",\"tonemap\":{\"version\":1";
+        << ",\"autoKeyEv\":" << tone.adaptiveTone.liftEv << ",\"filmEnabled\":" << (filmEnabled ? "true" : "false")
+        << ",\"tonemap\":{\"version\":1";
 #define RAWR_TONE_FIELD(name) out << ",\"" #name "\":" << tone.name;
     RAWR_TONE_FIELD(exposureEV)
     RAWR_TONE_FIELD(blackPointEV)
@@ -25,6 +27,8 @@ inline std::string resolvedRecipe(const tonemap::TonemapParams& tone, float gain
     RAWR_TONE_FIELD(highlightBiasEV)
     RAWR_TONE_FIELD(saturation)
     RAWR_TONE_FIELD(vibrance)
+    out << ",\"adaptiveTone\":{\"version\":1,\"liftEv\":" << tone.adaptiveTone.liftEv
+        << ",\"keyEv\":" << tone.adaptiveTone.keyEv << ",\"highlightEv\":" << tone.adaptiveTone.highlightEv << "}";
 #undef RAWR_TONE_FIELD
     out << "},\"film\":{\"version\":1";
 #define RAWR_FILM_FIELD(type, name) out << ",\"" #name "\":" << film.name;

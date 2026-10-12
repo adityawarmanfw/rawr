@@ -13,12 +13,13 @@
 #include <tuple>
 #include <vector>
 
-#include "../tools/vk_bench_common.hpp"
-#include "../src/SpektraTables.h"
+#include "../../tonemap_engine/include/tonemap/AdaptiveTone.h"
 #include "../src/DirCouplers.h"
+#include "../src/SpektraTables.h"
+#include "../tools/vk_bench_common.hpp"
+#include "SpektraVulkanRenderer.h"
 #include "spektrafilm/SpektraFilm.h"
 #include "spektrafilm/SpektraProfileCurves.h"
-#include "SpektraVulkanRenderer.h"
 
 namespace {
 
@@ -349,6 +350,7 @@ int main(int argc, char** argv) {
         // Negative path: record() must throw (reject loudly, never silently
         // wrong).
         bool expectThrow = false;
+        std::array<float, 4> adaptiveTone{0.0f, -4.0f, 0.0f, 1.0f};
     };
     auto baseLook = [] {
         spektrafilm_native::FilmLook look{};
@@ -374,6 +376,26 @@ int main(int argc, char** argv) {
         c.look.rgbToRawMethod = method;
         c.ref.rgbToRawMethod =
             static_cast<spektrafilm::RgbToRawMethod>(method);
+        cases.push_back(c);
+    }
+    // Compare the production adaptive film input against a CPU-warped source
+    // through the reference renderer, in both full-frame and tiled dispatches.
+    for (bool tiled : {false, true}) {
+        Case c{tiled ? "adaptive-tone-tiled" : "adaptive-tone", baseLook(), baseRef()};
+        c.adaptiveTone = {2.0f, -5.0f, -1.0f, 2.0f};
+        c.look.filmExposureEv = c.ref.filmExposureEv = 1.0f;  // HAL 2x, applied once.
+        c.tiled = tiled;
+        c.customHalves.resize(halves.size());
+        for (uint32_t y = 0; y < height; ++y) {
+            for (uint32_t x = 0; x < width; ++x) {
+                const float v = std::exp2(-12.0f + 13.0f * float(x) / float(width - 1));
+                const size_t p = (size_t(y) * width + x) * 4;
+                c.customHalves[p] = spektra_test::floatToHalf(v);
+                c.customHalves[p + 1] = spektra_test::floatToHalf(v * (y % 2 ? .8f : 1.0f));
+                c.customHalves[p + 2] = spektra_test::floatToHalf(v * (y % 2 ? .6f : 1.0f));
+                c.customHalves[p + 3] = spektra_test::floatToHalf(1.0f);
+            }
+        }
         cases.push_back(c);
     }
     auto addCase = [&](const char* label, auto setLook, auto setRef) {
@@ -1525,6 +1547,7 @@ int main(int argc, char** argv) {
             engine = engineFor(c.look);
         }
         ri.look = c.look;
+        ri.adaptiveTone = c.adaptiveTone;
         ri.timeSec = c.timeSec;
         if (!c.customHalves.empty()) {
             spektra_test::uploadRgba16f(ctx, pool, inputAlt, width, height,
@@ -1803,6 +1826,20 @@ int main(int argc, char** argv) {
             for (size_t i = 0; i < (size_t)width * height * 4; ++i) {
                 refSrcCustom[i] = halfToFloat(c.customHalves[i]);
             }
+            refSrc = refSrcCustom.data();
+        }
+        if (c.adaptiveTone[0] > 0.0f) {
+            std::vector<float> warped(refSrc, refSrc + size_t(width) * height * 4);
+            const tonemap::AdaptiveToneParams curve{c.adaptiveTone[0], c.adaptiveTone[1], c.adaptiveTone[2]};
+            for (size_t p = 0; p < warped.size(); p += 4) {
+                const float r = warped[p], g = warped[p + 1], b = warped[p + 2];
+                const float y = .2722287168f * (.613097f * r + .339523f * g + .047380f * b) +
+                                .6740817658f * (.070194f * r + .916354f * g + .013452f * b) +
+                                .0536895174f * (.020616f * r + .109570f * g + .869815f * b);
+                const float gain = tonemap::adaptiveToneGain(y * c.adaptiveTone[3], curve);
+                for (int ch = 0; ch < 3; ++ch) warped[p + ch] *= gain;
+            }
+            refSrcCustom = std::move(warped);
             refSrc = refSrcCustom.data();
         }
     spektrafilm::ImageView refSourceView{};

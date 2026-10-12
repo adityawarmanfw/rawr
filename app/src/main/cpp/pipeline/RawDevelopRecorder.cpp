@@ -389,6 +389,11 @@ RawDevelopRecordResult RawDevelopRecorder::record(const RawDevelopRecordInput& i
     vkCmdPipelineBarrier(slot.command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
                          nullptr, 0, nullptr, displayImage == slot.linear.image ? 1u : 2u, linearBarriers);
 
+    if (in.sceneExposureEnabled && in.diagnosticMode == 0u) {
+        recordSceneExposure(slot.command, in.slotIndex, slot.linear.view, in.previewWidth, in.previewHeight,
+                            in.sensorToLinearSrgb, in.whiteBalance);
+    }
+
     performance_.markTonemapInputReady(slot.command, in.slotIndex);
 
     // The look stage (film or tonemap) runs at the preview size divided by
@@ -417,6 +422,8 @@ RawDevelopRecordResult RawDevelopRecorder::record(const RawDevelopRecordInput& i
         filmRecord.look = in.filmLook;
         filmRecord.timeSec = static_cast<double>(in.timestampNs) / 1e9;
         filmRecord.look.filmExposureEv = rawrcam::color::filmExposureEv(in.filmLook, in.tonemapParams.aePostGain);
+        filmRecord.adaptiveTone = {in.tonemapParams.adaptiveTone.liftEv, in.tonemapParams.adaptiveTone.keyEv,
+                                   in.tonemapParams.adaptiveTone.highlightEv, in.tonemapParams.aePostGain};
         // The film input buffer holds sensor-native linear; the film model
         // declares LinearRec709 input, so convert on load (same matrix the
         // tonemap path uses in-shader).
@@ -575,6 +582,22 @@ RawDevelopRecordResult RawDevelopRecorder::record(const RawDevelopRecordInput& i
 std::array<float, 9> RawDevelopRecorder::composeCameraToAp1(const std::array<float, 9>& matrix) {
     return rawrcam::color::math::toColumnMajor(
         rawrcam::color::math::multiply(rawrcam::color::math::kLinearSrgbToAcesAp1, matrix));
+}
+
+void RawDevelopRecorder::recordSceneExposure(VkCommandBuffer command, uint32_t frameSlot, VkImageView view,
+                                             uint32_t width, uint32_t height, const std::array<float, 9>& sensorToSrgb,
+                                             const std::array<float, 4>& wb) const {
+    // Luma row = AP1 luma . camera->AP1 (column-major), the same working
+    // space the render applies its gain in. White is the WB ceiling.
+    constexpr std::array<float, 3> ap1Luma{0.2722287168f, 0.6740817658f, 0.0536895174f};
+    const auto cameraToAp1 = composeCameraToAp1(sensorToSrgb);
+    std::array<float, 3> lumaRow{};
+    for (size_t c = 0; c < 3; ++c)
+        for (size_t r = 0; r < 3; ++r) lumaRow[c] += ap1Luma[r] * cameraToAp1[c * 3 + r];
+    const std::array<float, 3> ceilings{wb[0], 0.5f * (wb[1] + wb[2]), wb[3]};
+    float whiteLuma = 0.0f;
+    for (size_t c = 0; c < 3; ++c) whiteLuma += lumaRow[c] * ceilings[c];
+    monitor_.recordSceneExposure(command, frameSlot, view, width, height, lumaRow, 0.9f * whiteLuma);
 }
 
 void RawDevelopRecorder::recordVideoScopes(VkCommandBuffer command, uint32_t slot, VkImageView view, VkImage image,

@@ -82,6 +82,18 @@ void SessionEngine::setPostGainKneeWidthEv(float widthEv) {
     appendDiagnostic("AE_POSTGAIN_KNEE widthEv=" + std::to_string(widthEv));
 }
 
+void SessionEngine::setAutoKeyMode(int mode) {
+    const auto parsed = rawrcam::color::autoKeyModeFromId(mode);
+    autoKeyMode_.store(static_cast<int>(parsed), std::memory_order_relaxed);
+    if (parsed == rawrcam::color::AutoKeyMode::Off) {
+        std::lock_guard<std::mutex> lock(autoKeyMutex_);
+        autoKeyCurve_ = {};
+    }
+    const auto policy = rawrcam::color::autoKeyPolicy(parsed);
+    appendDiagnostic("AUTO_KEY_EXPOSURE mode=" + std::to_string(static_cast<int>(parsed)) +
+                     " target=" + std::to_string(policy.targetLuma) + " maxLiftEv=" + std::to_string(policy.maxLiftEv));
+}
+
 void SessionEngine::setExperimentalZeroCopy(bool enabled) {
     std::lock_guard<std::mutex> lock(mu_);
     realtime_.coordinator().setExperimentalZeroCopy(enabled);

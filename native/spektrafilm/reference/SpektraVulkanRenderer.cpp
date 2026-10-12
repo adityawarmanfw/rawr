@@ -1290,9 +1290,10 @@ struct VulkanCorePushConstants {
   uint32_t activeOriginY = 0;
   uint32_t activeWidth = 0;
   uint32_t activeHeight = 0;
+  float adaptiveTone[4] = {0.0f, -4.0f, 0.0f, 1.0f};
 };
 
-static_assert(sizeof(VulkanCorePushConstants) == 104u);
+static_assert(sizeof(VulkanCorePushConstants) == 120u);
 
 struct VulkanDiffusionInfo {
   uint32_t componentCount = 0;

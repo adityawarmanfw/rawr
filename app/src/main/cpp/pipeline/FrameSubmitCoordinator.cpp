@@ -475,6 +475,7 @@ void FrameSubmitCoordinator::submitSplitVideoAndMonitor(const SubmitParams& para
     frame.noiseProfileValid = rawrcam::develop::rendered::resolveDenoiseNoise(metadata, frame.noiseA, frame.noiseB);
     auto tone = tonemapParams_;
     tone.aePostGain = previewPostGain(metadata);
+    lifecyclePort_.applyAutoKey(tone);
     const auto cameraToAp1 = RawDevelopRecorder::composeCameraToAp1(params.sensorToSrgb);
 
     // The first submission waits for the camera buffer and the encoder image
@@ -532,7 +533,12 @@ void FrameSubmitCoordinator::submitSplitVideoAndMonitor(const SubmitParams& para
     try {
         performanceTracker_.markVideoProcessBegin(current, slotIndex, true);
         videoOutput_->record(current, slotIndex, *acquired.videoIndex, config_.rawWidth, config_.rawHeight, frame,
-                             cameraToAp1, tone, performanceTracker_, acquired.swapIndex.has_value(), splitSubmit);
+                             cameraToAp1, tone, performanceTracker_, acquired.swapIndex.has_value(), splitSubmit,
+                             [&](VkCommandBuffer cmd, VkImageView view, uint32_t width, uint32_t height) {
+                                 if (diagnosticsPort_.sceneKeyMeteringEnabled())
+                                     resources_.recorder()->recordSceneExposure(cmd, slotIndex, view, width, height,
+                                                                                params.sensorToSrgb, params.wb);
+                             });
         if (!directBuffer && !bridgeCopy) {
             releaseRawInputImage(current, *acquired.raw, vulkanContext_.queueFamily(),
                                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
@@ -660,6 +666,7 @@ FrameSubmitCoordinator::RecordedSubmit FrameSubmitCoordinator::recordSubmitComma
 
     auto frameTonemapParams = tonemapParams_;
     frameTonemapParams.aePostGain = previewPostGain(metadata);
+    lifecyclePort_.applyAutoKey(frameTonemapParams);
     trace.record(rawrcam::diagnostics::RuntimeTraceStage::PostGain, params.timestampNs, metadata.frameOrdinal,
                  static_cast<int32_t>(slotIndex), metadata.exposureTimeNs, metadata.sensitivity, 0,
                  static_cast<int64_t>(std::llround(frameTonemapParams.aePostGain * 1000000.0f)));
@@ -708,6 +715,7 @@ FrameSubmitCoordinator::RecordedSubmit FrameSubmitCoordinator::recordSubmitComma
     recordInput.highlightMethod = highlightMethod_;
     recordInput.highlightThreshold = highlightThreshold_;
     recordInput.highlightCompression = highlightCompression_;
+    recordInput.sceneExposureEnabled = diagnosticsPort_.sceneKeyMeteringEnabled();
     if (acquired.videoIndex && videoOutput_) {
         const auto cameraToAp1 = RawDevelopRecorder::composeCameraToAp1(params.sensorToSrgb);
         rawrcam::video::VideoDemosaic::Frame videoFrame{};
@@ -1034,6 +1042,20 @@ void FrameSubmitCoordinator::reportRenderedFeedback(uint32_t slotIndex, const pi
                  static_cast<int64_t>(std::llround(rendered->anyChannelClippedFraction * 1000000.0f)));
 }
 
+void FrameSubmitCoordinator::reportSceneKey(uint32_t slotIndex, const pipeline::FrameSlot& slot) {
+    if (!slot.metadataSnapshot) return;
+    const auto& metadata = *slot.metadataSnapshot;
+    const auto key = diagnosticsPort_.updateSceneKey(slotIndex, metadata, slot.timestampNs, videoActive());
+    if (!key) return;
+    auto& trace = rawrcam::diagnostics::RuntimeTraceRecorder::instance();
+    trace.record(rawrcam::diagnostics::RuntimeTraceStage::SceneKeyEv, slot.timestampNs, metadata.frameOrdinal,
+                 static_cast<int32_t>(slotIndex), metadata.exposureTimeNs, metadata.sensitivity, 0,
+                 static_cast<int64_t>(std::llround(key->keyEv * 1000000.0f)));
+    trace.record(rawrcam::diagnostics::RuntimeTraceStage::AutoKeyEv, slot.timestampNs, metadata.frameOrdinal,
+                 static_cast<int32_t>(slotIndex), metadata.exposureTimeNs, metadata.sensitivity, 0,
+                 static_cast<int64_t>(std::llround(key->autoKeyEv * 1000000.0f)));
+}
+
 void FrameSubmitCoordinator::reportAuditFrame(const pipeline::FrameSlot& slot) {
     if (!slot.metadataSnapshot || !slot.colorStateSnapshot) {
         return;
@@ -1059,6 +1081,7 @@ void FrameSubmitCoordinator::retireSlot(uint32_t slotIndex, pipeline::FrameSlot&
     trace.record(rawrcam::diagnostics::RuntimeTraceStage::ScopesEnd, slot.timestampNs, frameOrdinal,
                  static_cast<int32_t>(slotIndex));
     reportRenderedFeedback(slotIndex, slot);
+    reportSceneKey(slotIndex, slot);
     reportAuditFrame(slot);
 
     if (slot.imageLease) {

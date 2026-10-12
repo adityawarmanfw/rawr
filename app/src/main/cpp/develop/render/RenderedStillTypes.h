@@ -149,7 +149,6 @@ struct RenderedStillCompletion {
     // propagation, 2 Inpaint Opposed (timed inside colour processing).
     int highlightStage = 0;
     // HL was off in settings but UltraHDR turned it on (the gain map needs it).
-    bool highlightForcedByUltraHdr = false;
     bool defringeEnabled = false;
     // Map content telemetry (computed on the CPU readback post-fence, so it
     // reports what the file will actually carry): max stored texel (0..1),

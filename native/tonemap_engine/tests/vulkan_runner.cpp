@@ -631,6 +631,7 @@ struct Args {
          postGainSequence = false, handoffBench = false;
     std::string producerSpv;
     float aePostGain = 1.0f;
+    tonemap::AdaptiveToneParams adaptiveTone{};
 };
 Args args(int ac, char** av) {
     Args a;
@@ -711,7 +712,13 @@ Args args(int ac, char** av) {
         }
         else if (k == "--lut")
             a.lutFiles.push_back(val());
-        else if (k == "--ae-post-gain")
+        else if (k == "--adaptive-tone") {
+            std::istringstream values(val());
+            if (!(values >> a.adaptiveTone.liftEv) || values.get() != ',' || !(values >> a.adaptiveTone.keyEv) ||
+                values.get() != ',' || !(values >> a.adaptiveTone.highlightEv) ||
+                !tonemap::validAdaptiveTone(a.adaptiveTone) || values.peek() != std::char_traits<char>::eof())
+                throw std::runtime_error("--adaptive-tone needs lift,key,highlight EV");
+        } else if (k == "--ae-post-gain")
             a.aePostGain = std::stof(val());
         else if (k == "--ae-post-gain-sequence") {
             a.postGainSequence = true;
@@ -834,6 +841,7 @@ int main(int argc, char** argv) {
         TonemapParams p = tonemap::TonemapPresets::NeutralBaseline().params;
         const TonemapConfig cfg = ci.config;
         p.aePostGain = a.aePostGain;
+        p.adaptiveTone = a.adaptiveTone;
         p.exposureEV = a.exposureEV;
         p.renderTransform = static_cast<tonemap::RenderTransform>(a.renderTransform);
         p.outputSpace = {static_cast<tonemap::color::Gamut>(a.outputGamut), static_cast<tonemap::color::TransferFunction>(a.outputTransfer)};

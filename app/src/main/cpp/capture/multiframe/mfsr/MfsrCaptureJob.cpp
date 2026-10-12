@@ -747,7 +747,6 @@ void MfsrCaptureJob::run() {
                     mergedJpeg.output.gainmapMs = renderedDone->gainmapMs;
                     mergedJpeg.output.postTailMs = renderedDone->postTailMs;
                     mergedJpeg.output.highlightStage = renderedDone->highlightStage;
-                    mergedJpeg.output.highlightForcedByUltraHdr = renderedDone->highlightForcedByUltraHdr;
                     mergedJpeg.output.defringeEnabled = renderedDone->defringeEnabled;
                     mergedJpeg.output.renderSetupMs = renderedDone->renderSetupMs;
                     mergedJpeg.output.renderEngineBuildMs = renderedDone->engineBuildMs;

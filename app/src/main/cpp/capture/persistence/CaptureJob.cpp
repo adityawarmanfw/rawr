@@ -187,13 +187,16 @@ struct Reader {
             fields(*this, v);
     }
     // Render profiles appended three words to TonemapParams without changing the
-    // journal version. Accept the two known layouts; never read a short POD into
+    // journal version. Adaptive tone appends another three words. Accept known layouts; never read a short POD into
     // the current struct or discard newly saved profile selection.
     void one(tonemap::TonemapParams& v) {
         uint32_t n = 0;
         bytes(&n, sizeof(n));
         if (n == sizeof(v)) {
             bytes(&v, sizeof(v));
+        } else if (n == offsetof(tonemap::TonemapParams, adaptiveTone)) {
+            v = {};
+            bytes(&v, n);  // Historical profile-aware layout; adaptive curve stays disabled.
         } else if (n == 11u * sizeof(float)) {
             std::array<float, 11> old{};
             bytes(old.data(), sizeof(old));
@@ -480,6 +483,9 @@ CaptureJob load(const std::string& path,
     uint64_t marker = 0;
     r(marker);
     if (marker != footer) throw std::runtime_error("capture_job_commit_invalid");
+    // Not persisted: the DNG shading decision follows the job's develop setting.
+    job.dng.appLensShadingCorrection = job.jpeg.develop.lensShadingCorrectionEnabled;
+    job.mergedDng.appLensShadingCorrection = job.jpeg.develop.lensShadingCorrectionEnabled;
     return job;
 }
 }  // namespace rawrcam::capture::persistence

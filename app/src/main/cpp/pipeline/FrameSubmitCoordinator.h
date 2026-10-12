@@ -236,6 +236,7 @@ class FrameSubmitCoordinator final {
     void retireSlot(std::uint32_t slotIndex, pipeline::FrameSlot& slot);
     void reportRenderedFeedback(std::uint32_t slotIndex, const pipeline::FrameSlot& slot);
     void reportAuditFrame(const pipeline::FrameSlot& slot);
+    void reportSceneKey(std::uint32_t slotIndex, const pipeline::FrameSlot& slot);
 
     rawrcam::vulkan::VulkanContext& vulkanContext_;
     pipeline::FrameSlotPool& frameSlots_;

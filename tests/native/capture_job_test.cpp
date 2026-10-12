@@ -1,6 +1,7 @@
 #include <unistd.h>
 
 #include <cassert>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -15,6 +16,7 @@ int main(int argc, char** argv) {
         assert(legacy.jpegRequested && legacy.filmEnabled && legacy.film.film == 14);
         assert(legacy.tone.exposureEV == -1.5f && legacy.dng.processingRecipe.empty());
         assert(legacy.tone.renderTransform == tonemap::RenderTransform::Existing);
+        assert(legacy.tone.adaptiveTone.liftEv == 0.0f);
         assert(legacy.dng.outputFd == -1 && legacy.jpeg.output.outputFd == -1);
     }
     std::string directory = (std::filesystem::temp_directory_path() / "rawr-capture-job-XXXXXX").string();
@@ -49,6 +51,7 @@ int main(int argc, char** argv) {
     j.jpeg.output.filmDescription = "Frozen C200";
     j.jpeg.output.quality = 99;
     j.tone.exposureEV = -1.5f;
+    j.tone.adaptiveTone = {1.25f, -5.0f, -0.5f};
     j.tone.renderTransform = tonemap::RenderTransform::Rec709;
     j.filmEnabled = true;
     j.film.film = 14;
@@ -73,6 +76,30 @@ int main(int argc, char** argv) {
     auto path = jobPath(root, j.dng.displayName);
     save(path, j);
     auto restored = load(path);
+    // Profile-aware jobs written before adaptive tone used the same POD prefix.
+    // Recreate that on-disk layout and ensure the new curve defaults to Off.
+    {
+        std::ifstream in(path, std::ios::binary);
+        std::string bytes((std::istreambuf_iterator<char>(in)), {});
+        uint32_t fullSize = sizeof(j.tone);
+        std::string record(reinterpret_cast<const char*>(&fullSize), sizeof(fullSize));
+        record.append(reinterpret_cast<const char*>(&j.tone), sizeof(j.tone));
+        const auto pos = bytes.find(record);
+        assert(pos != std::string::npos && bytes.find(record, pos + 1) == std::string::npos);
+        const uint32_t oldSize = offsetof(tonemap::TonemapParams, adaptiveTone);
+        bytes.erase(pos + sizeof(fullSize) + oldSize, fullSize - oldSize);
+        std::memcpy(bytes.data() + pos, &oldSize, sizeof(oldSize));
+        const auto oldPath = root + "/old-profile.job";
+        {
+            std::ofstream out(oldPath, std::ios::binary);
+            out.write(bytes.data(), bytes.size());
+        }
+        const auto old = load(oldPath);
+        assert(old.tone.renderTransform == j.tone.renderTransform && old.tone.exposureEV == j.tone.exposureEV);
+        assert(old.tone.adaptiveTone.liftEv == 0.0f);
+        std::filesystem::remove(oldPath);
+    }
+
     assert(restored.dng.deviceModel == "V2562");
     assert(restored.dng.deviceDisplayModel == "X300 Ultra");
     assert(restored.mergedDng.deviceDisplayModel == "X300 Ultra");
@@ -86,10 +113,14 @@ int main(int argc, char** argv) {
     assert(restored.jpeg.output.filmDescription == "Frozen C200" && restored.jpeg.output.quality == 99);
     assert(restored.film.film == 14 && restored.film.filmExposureEv == .75f && restored.tone.exposureEV == -1.5f);
     assert(restored.tone.renderTransform == tonemap::RenderTransform::Rec709);
+    assert(restored.tone.adaptiveTone.liftEv == 1.25f && restored.tone.adaptiveTone.keyEv == -5.0f &&
+           restored.tone.adaptiveTone.highlightEv == -0.5f);
     assert(restored.sharpnessScores.empty());
     assert(restored.dng.processingRecipe == j.dng.processingRecipe);
     assert(restored.dng.resolvedRecipe == j.dng.resolvedRecipe);
     assert(restored.dng.resolvedRecipe.find("\"aePostGain\":1.25") != std::string::npos);
+    assert(restored.dng.resolvedRecipe.find("\"autoKeyEv\":1.25") != std::string::npos);
+    assert(resolvedRecipe(j.tone, 2.5f, j.filmEnabled, j.film).find("\"autoKeyEv\":1.25") != std::string::npos);
     assert(restored.jpeg.develop.defringeStrength == .37f && restored.jpeg.develop.fccEdgeSigma == .12f);
     assert(restored.jpeg.output.ultraHdr.enabled && restored.jpeg.output.ultraHdr.mapBlurSigma == 1.5f);
     assert(restored.jpeg.develop.highlightReconstructionMethod == 1 && restored.jpeg.develop.highlightThreshold == .9f);

@@ -1,9 +1,9 @@
 #pragma once
-// Single-pass adaptive gainmap ceiling + soft shoulder + soft-knee chroma
+// Legacy brightness fit: adaptive gainmap ceiling + shoulder + chroma
 // compression, applied in the JPEG writer on the GPU wide-range map (no
 // second render). Header-only so host tests can include it directly.
 // Mirrors the validated offline prototype (tmp/final_stack.py::remux_final)
-// exactly: fit = ceil((p99.9(mean log-gain) + margin) / step) * step clamped
+// brightness baseline: fit = ceil((p99.9(mean log-gain) + margin) / step) * step clamped
 // to [floor, min(displayCap, wideMax)]; shoulder y = knee + W*(1-exp(-(x-knee)/W))
 // above knee = fitted - kneeBelow; chroma d' = T*tanh(d/T) around the
 // per-pixel mean of shouldered channels.
@@ -147,6 +147,91 @@ inline bool fitAndRemapMap(const unsigned char* src, std::uint32_t w, std::uint3
         });
     }
     for (auto& th : threads) th.join();
+    return true;
+}
+
+// Restore capture highlight chromaticity at the already-fitted luminance.
+// The capture colour is highlight recovery's output (the HDR tap); this only
+// carries it through an SDR base that rendered it white.
+// The SDR base and the brightness fit are immutable. Negative per-channel
+// gains are necessary to restore color through a pale/white SDR highlight;
+// they do not mean that shadow or midtone exposure is being lowered.
+inline bool restoreHighlightColor(std::vector<unsigned char>& map, const unsigned char* chromaticity,
+                                  uint32_t w, uint32_t h, const unsigned char* base,
+                                  uint32_t baseW, uint32_t baseH, const color::UltraHdrParams& uh,
+                                  float fittedMax, float& encodedMin, float& encodedMax) {
+    const size_t n = size_t(w) * h;
+    if (!chromaticity || !base || !baseW || !baseH || !n || map.size() != n * 4 ||
+        !(fittedMax > 0) || !(uh.offsetSdr > 0) || !(uh.offsetHdr > 0) || uh.gamma != 1) return false;
+    float linear[256], boost[256];
+    for (int i = 0; i < 256; ++i) {
+        const float c = float(i) / 255;
+        linear[i] = c <= .04045f ? c / 12.92f : std::pow((c + .055f) / 1.055f, 2.4f);
+        boost[i] = std::exp2(float(i) / 255 * fittedMax);
+    }
+    const auto gains = [&](uint32_t x, uint32_t y, float* g) {
+        const size_t i = size_t(y) * w + x;
+        const uint32_t bx = std::min(baseW - 1, uint32_t(uint64_t(x) * baseW / w));
+        const uint32_t by = std::min(baseH - 1, uint32_t(uint64_t(y) * baseH / h));
+        const auto* b = base + (size_t(by) * baseW + bx) * 4;
+        float s[3], original[3];
+        for (int k = 0; k < 3; ++k) {
+            s[k] = linear[b[k]];
+            g[k] = float(map[i * 4 + k]) / 255 * fittedMax;
+            original[k] = (s[k] + uh.offsetSdr) * boost[map[i * 4 + k]] - uh.offsetHdr;
+        }
+        // Restore only where the SDR lost colour: channels pressed against
+        // white. A brightness ramp would also recolour well-exposed SDR
+        // highlights and draw a ring at the ramp's onset.
+        const float smax = std::max(s[0], std::max(s[1], s[2]));
+        float t = std::clamp((smax - .75f) / .20f, 0.0f, 1.0f);
+        t = t * t * (3 - 2 * t);
+        if (t == 0) return;
+        const auto* c = chromaticity + i * 4;
+        const unsigned r = unsigned(c[0]) | (unsigned(c[1]) << 8);
+        const unsigned green = unsigned(c[2]) | (unsigned(c[3]) << 8);
+        if (r == 65535 && green == 65535) return;  // invalid/black tap
+        float color[3] = {float(r) / 65535, float(green) / 65535,
+                          std::max(0.0f, 1 - float(r + green) / 65535)};
+        const float cy = .2126f * color[0] + .7152f * color[1] + .0722f * color[2];
+        const float oy = .2126f * original[0] + .7152f * original[1] + .0722f * original[2];
+        if (!(cy > 1e-8f) || !(oy > 0)) return;
+        for (int k = 0; k < 3; ++k) {
+            const float target = original[k] * (1 - t) + color[k] * (oy / cy) * t;
+            g[k] = std::log2((std::max(target, 0.0f) + uh.offsetHdr) / (s[k] + uh.offsetSdr));
+        }
+    };
+    // Two bounded-memory passes. First find the signed encoding range;
+    // then quantize. Each worker only reads/writes its own rows.
+    const unsigned workers = n < 4096 ? 1u : std::clamp(std::thread::hardware_concurrency(), 1u, 4u);
+    std::vector<float> low(workers, 0), high(workers, fittedMax);
+    std::vector<std::thread> threads;
+    for (unsigned worker = 0; worker < workers; ++worker) {
+        threads.emplace_back([&, worker] {
+            for (uint32_t y = h * worker / workers; y < h * (worker + 1) / workers; ++y)
+                for (uint32_t x = 0; x < w; ++x) {
+                    float g[3]; gains(x, y, g);
+                    for (float v : g) { low[worker] = std::min(low[worker], v); high[worker] = std::max(high[worker], v); }
+                }
+        });
+    }
+    for (auto& thread : threads) thread.join();
+    encodedMin = std::floor(*std::min_element(low.begin(), low.end()) * 4) / 4;
+    encodedMax = std::ceil(*std::max_element(high.begin(), high.end()) * 4) / 4;
+    const float scale = 255 / (encodedMax - encodedMin);
+    threads.clear();
+    for (unsigned worker = 0; worker < workers; ++worker) {
+        threads.emplace_back([&, worker] {
+            for (uint32_t y = h * worker / workers; y < h * (worker + 1) / workers; ++y)
+                for (uint32_t x = 0; x < w; ++x) {
+                    float g[3]; gains(x, y, g);
+                    const size_t i = size_t(y) * w + x;
+                    for (int k = 0; k < 3; ++k)
+                        map[i * 4 + k] = static_cast<unsigned char>(std::round(std::clamp((g[k] - encodedMin) * scale, 0.0f, 255.0f)));
+                }
+        });
+    }
+    for (auto& thread : threads) thread.join();
     return true;
 }
 

@@ -371,6 +371,10 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_rawr_camera_integration_NativePreviewEngine_setPostGainKneeWidthEv(JNIEnv*, jobject, jlong h, jfloat v) {
     rawrcam::session::setPostGainKneeWidthEv(handle(h), v);
 }
+extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreviewEngine_setAutoKeyMode(JNIEnv*, jobject,
+                                                                                                      jlong h, jint v) {
+    rawrcam::session::setAutoKeyMode(handle(h), v);
+}
 extern "C" JNIEXPORT void JNICALL
 Java_com_rawr_camera_integration_NativePreviewEngine_setExperimentalZeroCopy(JNIEnv*, jobject, jlong h, jboolean v) {
     rawrcam::session::setExperimentalZeroCopy(handle(h), v == JNI_TRUE);
@@ -619,6 +623,7 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_integration_NativePrevie
     dng.compression = dngCompression == 1 ? rawrcam::encoding::dng::DngCompression::Uncompressed
                                           : rawrcam::encoding::dng::DngCompression::LosslessJpeg;
     dng.processingRecipe = jString(env, captureRecipe);
+    dng.appLensShadingCorrection = lensShadingCorrectionEnabled == JNI_TRUE;
     freezeCaptureIntent(env, dng, captureTone, captureFilmValues, captureFilmEnums, captureFilmEnabled == JNI_TRUE);
     rawrcam::capture::JpegCaptureRequest jpeg{};
     fillJpegContext(env, jpeg, jpegFd, rotation, static_cast<int64_t>(wallClockMillis),
@@ -653,6 +658,7 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_integration_NativePrevie
                                            : rawrcam::encoding::dng::DngCompression::LosslessJpeg;
     base.sourceRole = "base";
     base.processingRecipe = jString(env, captureRecipe);
+    base.appLensShadingCorrection = lensShadingCorrectionEnabled == JNI_TRUE;
     freezeCaptureIntent(env, base, captureTone, captureFilmValues, captureFilmEnums, captureFilmEnabled == JNI_TRUE);
     rawrcam::encoding::dng::DngCaptureContext merged = base;
     merged.outputFd = mergedDngFd;

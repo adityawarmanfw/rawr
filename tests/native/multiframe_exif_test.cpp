@@ -161,11 +161,10 @@ int main() {
     assert(contains(propagation, "- HL reconstruction (color propagation): 4.2 ms"));
     assert(contains(propagation, "- Defringe: 1.5 ms"));
     assert(contains(propagation, "- Color processing: 5.0 ms"));
-    const std::string forced = formatImageProcessing(0.0, 0.0, false, 100.0, 0.0, 10.0, 0.1, true, 1, 20.0, 6.0,
-                                                     30.0, false, 2.0, 8.0, false, 0.0, 0.0, 0.0, 2, 2.4, false,
-                                                     true);
-    assert(contains(forced, "- HL reconstruction (Inpaint Opposed, forced on by UltraHDR): in Color processing"));
-    assert(contains(forced, "- Highlight tone (Inpaint Opposed): 2.4 ms"));
+    const std::string opposed = formatImageProcessing(0.0, 0.0, false, 100.0, 0.0, 10.0, 0.1, true, 1, 20.0, 6.0,
+                                                      30.0, false, 2.0, 8.0, false, 0.0, 0.0, 0.0, 2, 2.4, false);
+    assert(contains(opposed, "- HL reconstruction (Inpaint Opposed): in Color processing"));
+    assert(contains(opposed, "- Highlight tone (Inpaint Opposed): 2.4 ms"));
 
     assert(contains(formatOutputProjection(24.8, 31.2), "CFA projection: 31.2 ms"));
     assert(contains(buildExifHeader(), "Multiframe GPU merge"));

@@ -47,7 +47,7 @@ inline std::string formatImageProcessing(double baseReadMs, double projectMs, bo
                                          bool filmRendered, double gapsMs, double readbackMs,
                                          bool showOutputLines = true, double gainmapMs = 0.0, double denoiseMs = 0.0,
                                          double galoshYuvMs = 0.0, int highlightStage = -1, double postTailMs = 0.0,
-                                         bool defringeEnabled = false, bool highlightForced = false) {
+                                         bool defringeEnabled = false) {
     // highlightStage -1 keeps the legacy lines. Otherwise: 0 off, 1 colour
     // propagation, 2 Inpaint Opposed, whose reconstruction runs inside the
     // colour-processing pass; defringe and the Inpaint Opposed tone tap get
@@ -88,12 +88,10 @@ inline std::string formatImageProcessing(double baseReadMs, double projectMs, bo
         // Off still clamps to the common channel ceiling inside colour processing.
         out << "- HL reconstruction: off\n";
     } else {
-        // UltraHDR turns HL on even when it is off in settings.
-        const char* forced = highlightForced ? ", forced on by UltraHDR" : "";
         if (highlightStage == 1)
-            out << "- HL reconstruction (color propagation" << forced << "): " << formatMs1(hlMs) << " ms\n";
+            out << "- HL reconstruction (color propagation): " << formatMs1(hlMs) << " ms\n";
         else
-            out << "- HL reconstruction (Inpaint Opposed" << forced << "): in Color processing\n";
+            out << "- HL reconstruction (Inpaint Opposed): in Color processing\n";
     }
     out << "- Vignette correction (LSC): " << (lscOn ? "on (time in Demosaic)" : "off") << '\n'
         << "- FCC (chroma cleanup, " << fccSteps << (fccSteps == 1u ? " step" : " steps") << "): " << formatMs1(fccMs)

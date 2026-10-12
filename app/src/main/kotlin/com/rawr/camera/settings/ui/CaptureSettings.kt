@@ -95,6 +95,21 @@ internal fun ExposureSettings(state: SettingsUiState, dispatch: SettingsDispatch
             )
         }
         SettingsGroup(
+            title = "Auto Key Exposure",
+            description = "Balances shadows and midtones while preserving highlight exposure. " +
+                "Sensor exposure is unchanged. LOG profiles are never lifted."
+        ) {
+            CompactChoiceRow(AutoKeyExposure.entries, state.values.autoKeyExposure, {
+                it.label
+            }) { dispatch.invoke(SetAutoKeyExposure(it)) }
+            Text(
+                state.values.autoKeyExposure.summary,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+            )
+        }
+        SettingsGroup(
             description =
                 if (prioritySupported) {
                     "Locking shutter or ISO enters full Manual instead of shutter/ISO priority, " +

@@ -1,0 +1,32 @@
+#version 450
+// Sums the 16 measure partitions into SceneExposureStatsData.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+layout(std430, binding = 0) readonly buffer Partial { uint data[]; }
+partial;
+layout(std430, binding = 1) buffer Out {
+    uint weightedBins[256];
+    uint totalWeight;
+    uint sampleCount;
+    uint clippedWeight;
+    uint reserved;
+}
+outb;
+const uint PARTITIONS = 16u;
+const uint BIN_COUNT = 256u;
+const uint COUNTERS = 4u;
+const uint STRIDE = BIN_COUNT + COUNTERS;
+
+void main() {
+    uint i = gl_LocalInvocationIndex;
+    uint sum = 0u;
+    for (uint p = 0u; p < PARTITIONS; ++p) sum += partial.data[p * STRIDE + i];
+    outb.weightedBins[i] = sum;
+    if (i < COUNTERS) {
+        uint c = 0u;
+        for (uint p = 0u; p < PARTITIONS; ++p) c += partial.data[p * STRIDE + BIN_COUNT + i];
+        if (i == 0u) outb.totalWeight = c;
+        if (i == 1u) outb.sampleCount = c;
+        if (i == 2u) outb.clippedWeight = c;
+        if (i == 3u) outb.reserved = 0u;
+    }
+}

@@ -1,6 +1,7 @@
 // Tone/LUT/color-mode controls.
 #include "diagnostics/logging/NativeLog.h"
 #include "session/SessionEngine.h"
+#include "tonemap/ColorRenderProfile.h"
 
 namespace rawrcam::session {
 
@@ -21,6 +22,9 @@ void SessionEngine::setColorRenderProfile(uint32_t profileId, std::string import
     std::lock_guard<std::mutex> lock(mu_);
     if (videoSession_.ready()) return;
     if (realtime_.setColorRenderProfile(profile, std::move(importedProfileId))) {
+        tonemap::TonemapParams probe{};
+        rawrcam::tonemap_integration::applyRenderProfile(profile, probe);
+        sceneReferredRender_.store(probe.renderTransform == tonemap::RenderTransform::Log, std::memory_order_relaxed);
         videoSession_.renderLutChanged();
         // Also refreshes processing cached between recordings.
         {

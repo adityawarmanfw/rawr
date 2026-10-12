@@ -27,3 +27,25 @@ vec4 rawrHighlightGuideAt(ivec2 p) {
     }
     return weight > 1e-6 ? sum / weight : vec4(0.0);
 }
+
+// The mask is classified before lens shading and WB. Corrected RGB magnitude
+// cannot classify clipping: a valid sensor sample may exceed its nominal WB
+// ceiling after lens shading. Trust every channel that the sensor retained.
+vec3 rawrHighlightSensorRepair(ivec2 p) {
+    ivec2 q = p / RAWR_HL_SCALE;
+    uint state = imageLoad(clipStateImage, clamp(q, ivec2(0), imageSize(clipStateImage) - ivec2(1))).r & 15u;
+    return vec3(float((state & 1u) != 0u), float((state & 6u) != 0u), float((state & 8u) != 0u));
+}
+
+// Share of fully clipped (all four CFA channels) mask texels in a 9x9 grid at
+// 3-texel stride around p (+-12 mask texels). Only evaluated for fully
+// clipped pixels, so the loop cost stays confined to light-source cores.
+float rawrHighlightCoreFraction(ivec2 p) {
+    ivec2 q = p / RAWR_HL_SCALE;
+    ivec2 last = imageSize(clipStateImage) - ivec2(1);
+    float full = 0.0;
+    for (int dy = -12; dy <= 12; dy += 3)
+        for (int dx = -12; dx <= 12; dx += 3)
+            full += float((imageLoad(clipStateImage, clamp(q + ivec2(dx, dy), ivec2(0), last)).r & 15u) == 15u);
+    return full / 81.0;
+}

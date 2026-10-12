@@ -1,4 +1,5 @@
 #pragma once
+#include "color/AutoKeyExposure.h"
 #include "pipeline/FrameCapturePort.h"
 #include "pipeline/FrameDiagnosticsPort.h"
 #include "pipeline/FrameLifecyclePort.h"
@@ -14,6 +15,7 @@ class SessionFrameCallbacks final : public pipeline::FrameLifecyclePort,
     void notifySwapchainOutOfDate() override;
     void finalizeDetachedStill() override;
     float postGainFor(const rawrcam::metadata::FrameMetadataSnapshot& metadata) override;
+    void applyAutoKey(tonemap::TonemapParams& tone) override;
     void advanceStill() override;
     bool isStillCaptureRequested() override;
     bool deferSubmittedFrame(const rawrcam::metadata::FrameMetadataSnapshot& metadata,
@@ -25,6 +27,10 @@ class SessionFrameCallbacks final : public pipeline::FrameLifecyclePort,
     void discardScopesSlot(std::uint32_t slotIndex) override;
     void retireScopesSlot(std::uint32_t slotIndex) override;
     std::optional<RenderedFeedback> consumeExposureFeedback(std::uint32_t slotIndex) override;
+    bool sceneKeyMeteringEnabled() override;
+    std::optional<SceneKeyFeedback> updateSceneKey(std::uint32_t slotIndex,
+                                                   const rawrcam::metadata::FrameMetadataSnapshot& metadata,
+                                                   std::uint64_t timestampNs, bool recording) override;
     bool overlayNeedsRawState() override;
     void recordAuditFrame(const rawrcam::metadata::FrameMetadataSnapshot& metadata,
                           const rawrcam::color::FrameColorTransform& colorState) override;
@@ -49,6 +55,9 @@ class SessionFrameCallbacks final : public pipeline::FrameLifecyclePort,
 
    private:
     SessionEngine* engine_;
+    // Frame-thread only (slot retire).
+    rawrcam::color::AutoKeySmoother autoKeySmoother_;
+    rawrcam::color::AutoKeySmoother keySmoother_, highlightSmoother_;
 };
 
 }  // namespace rawrcam::session

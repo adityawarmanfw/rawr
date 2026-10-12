@@ -74,7 +74,7 @@ internal class RendererJobRepository(private val context: Context, private val s
         draftWrites.remove(id)?.cancel()
         val job = current(id)
         val draft = JSONObject(RendererRecipe.encode(values)); val original = JSONObject(job.original)
-        listOf("aePostGain", "timestampNs", "resolvedFrame").forEach { key -> if (original.has(key)) draft.put(key, original.get(key)) }
+        listOf("aePostGain", "adaptiveTone", "timestampNs", "resolvedFrame").forEach { key -> if (original.has(key)) draft.put(key, original.get(key)) }
         val updated = job.copy(draft = draft.toString(), status = "Editing", error = "")
         mutableJobs.value = mutableJobs.value.map { if (it.id == id) updated else it }
         draftWrites[id] = scope.launch { delay(500); saveLane.withLock { save(current(id)) } }

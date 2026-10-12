@@ -133,6 +133,9 @@ void setMaxAePostGain(EngineHandle h, float gain) noexcept {
 void setPostGainKneeWidthEv(EngineHandle h, float widthEv) noexcept {
     if (h) engine(h)->setPostGainKneeWidthEv(widthEv);
 }
+void setAutoKeyMode(EngineHandle h, int mode) noexcept {
+    if (h) engine(h)->setAutoKeyMode(mode);
+}
 void setAutoMinFps(EngineHandle h, int fps) noexcept {
     if (h) engine(h)->cameraControls().setAutoMinFps(fps);
 }

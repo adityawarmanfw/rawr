@@ -31,10 +31,13 @@ vec3 rawrHighlightNormalizeGuide(vec3 guide, out bool valid) {
 // and removes the old whole-RGB mask-shaped replacement. When all three
 // channels lose reliability there is no recoverable texture, so converge to the
 // bright neutral fallback rather than preserving invalid clipped chromaticity.
-vec3 rawrHighlightRecoverDetailSmoothed(vec3 center, vec3 channelCeilings, vec3 guide, bool guideValid,
-                                        float smoothGuidePeak, float smoothAmount) {
+// coreFraction: share of the neighbourhood whose every channel is clipped
+// (1 = deep inside a light source, 0 = at its edge). Fully clipped pixels
+// fade from the propagated guide colour at the clip edge to the neutral core,
+// so a light keeps a soft coloured rim instead of a one-pixel white contour.
+vec3 rawrHighlightRecoverDetailWithRepair(vec3 center, vec3 channelCeilings, vec3 guide, bool guideValid, vec3 repair,
+                                          float coreFraction) {
     vec3 ceilings = max(channelCeilings, vec3(1e-4));
-    vec3 repair = rawrHighlightRepairWeights(center, ceilings);
     float repairStrength = rawrHighlightMaximum(repair);
     if (repairStrength <= 1e-6) return center;
 
@@ -49,14 +52,17 @@ vec3 rawrHighlightRecoverDetailSmoothed(vec3 center, vec3 channelCeilings, vec3 
     float denominator = dot(guide * guide, reliability);
     float reliableStrength = rawrHighlightMaximum(reliability);
     if (denominator <= 1e-8 || reliableStrength <= 1e-6) {
-        return neutralFallback;
+        // No surviving channel: colour from the guide at the core magnitude,
+        // fading to neutral with depth into the fully clipped region.
+        vec3 guided = guide / max(rawrHighlightMaximum(guide), 1e-6) * neutralFallback.r;
+        return mix(guided, neutralFallback, smoothstep(0.15, 0.85, coreFraction));
     }
 
     float fitScale = dot(center * guide, reliability) / denominator;
-    if (smoothGuidePeak > 1e-6 && smoothAmount > 0.0) {
-        float smoothScale = smoothGuidePeak / max(rawrHighlightMaximum(guide), 1e-6);
-        fitScale = mix(fitScale, smoothScale, clamp(smoothAmount * repairStrength, 0.0, 1.0));
-    }
+    // Only chromaticity is spatially propagated. The surviving channels at
+    // this pixel determine intensity: mixing a neighborhood peak into this
+    // scale changes only repaired channels, causing magenta/green rims at
+    // brightness edges even when the guide describes a neutral highlight.
     vec3 target = max(center, guide * max(fitScale, 0.0));
     vec3 recovered = mix(center, target, repair);
 
@@ -66,8 +72,10 @@ vec3 rawrHighlightRecoverDetailSmoothed(vec3 center, vec3 channelCeilings, vec3 
     return mix(neutralFallback, recovered, fitConfidence);
 }
 
+// Legacy callers without a sensor clip image retain the numeric ceiling path.
 vec3 rawrHighlightRecoverDetail(vec3 center, vec3 channelCeilings, vec3 guide, bool guideValid) {
-    return rawrHighlightRecoverDetailSmoothed(center, channelCeilings, guide, guideValid, 0.0, 0.0);
+    return rawrHighlightRecoverDetailWithRepair(center, channelCeilings, guide, guideValid,
+                                                rawrHighlightRepairWeights(center, channelCeilings), 1.0);
 }
 
 vec3 reconstructPostWbHighlight(vec3 inputRgb, vec3 channelCeilings, vec3 propagatedGuide, bool propagatedGuideValid,

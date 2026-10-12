@@ -30,11 +30,8 @@ struct UltrahdrMuxParams {
     float offsetHdr = 0.015625f;
     float hdrCapacityMinLog2 = 0.0f;
     float hdrCapacityMaxLog2 = 4.7090998f;
-    // Multi-channel (RGB) gain map image: per-channel gains sharing
-    // channel-identical metadata. Sets the ISO multi-channel flag; XMP stays
-    // single-valued (same as libultrahdr's merged XMP), so single-channel
-    // readers keep parsing (channel 0) while flag-aware decoders (Photos)
-    // apply all three.
+    // RGB image hint. All components use the single shared ISO/XMP
+    // parameter set; JPEG components determine the actual map channels.
     bool multiChannel = false;
 };
 

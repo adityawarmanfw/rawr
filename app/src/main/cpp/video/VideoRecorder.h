@@ -12,7 +12,8 @@ class VideoRecorder final {
                 const VideoDemosaic::Frame& rawFrame, const std::array<float, 9>& cameraToAp1,
                 const tonemap::TonemapParams& params, rawrcam::diagnostics::GpuTimingTracker& timing,
                 const VideoProcessingConfig& activeConfig, bool monitorEnabled,
-                const std::function<VkCommandBuffer(VkCommandBuffer)>& splitSubmit);
+                const std::function<VkCommandBuffer(VkCommandBuffer)>& splitSubmit,
+                const std::function<void(VkCommandBuffer, VkImageView, uint32_t, uint32_t)>& sceneMeter);
 
    private:
     VideoProcessingResources& resources_;

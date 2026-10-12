@@ -60,7 +60,7 @@ function(rawr_compile_shader OUTPUT_NAME SOURCE)
     list(APPEND EXTRA_SHADER_DEPENDS ${RCD_SHADER_DIR}/rcd_common.glsl)
   endif()
   if(SOURCE STREQUAL "${TONEMAP_SHADER_DIR}/tonemap.comp")
-    set(EXTRA_SHADER_DEPENDS ${TONEMAP_SHADER_DIR}/color/cst.glsl ${TONEMAP_SHADER_DIR}/color/gamut_matrices.inc ${TONEMAP_SHADER_DIR}/lut/lut3d.glsl)
+    set(EXTRA_SHADER_DEPENDS ${RAWR_ROOT}/native/shader_common/shaders/adaptive_tone.glsl ${TONEMAP_SHADER_DIR}/color/cst.glsl ${TONEMAP_SHADER_DIR}/color/gamut_matrices.inc ${TONEMAP_SHADER_DIR}/lut/lut3d.glsl)
   endif()
   add_custom_command(
     OUTPUT "${OUTPUT}"

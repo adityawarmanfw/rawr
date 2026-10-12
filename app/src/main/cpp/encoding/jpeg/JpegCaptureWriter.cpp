@@ -285,7 +285,7 @@ std::string appendProcessingTimes(const JpegCaptureContext& c, double jpegEncodi
                                      c.appliedLensShadingCorrection, c.appliedFccSteps, c.refinementMs,
                                      c.colorProcessingMs, c.tonemapMs, c.filmRendered, c.queueGapsMs, c.readbackMs,
                                      false, c.gainmapMs, c.denoiseMs, c.galoshYuvMs, c.highlightStage, c.postTailMs,
-                                     c.defringeEnabled, c.highlightForcedByUltraHdr)
+                                     c.defringeEnabled)
             << setupBreakdown(c) << formatJpegEncoding(jpegEncodingMs);
         if (ultraHdr) {
             out << "- UltraHDR gain map JPEG: " << formatMs1(gainmapEncodeMs) << " ms (included in JPEG encoding)\n";
@@ -309,8 +309,7 @@ std::string appendProcessingTimes(const JpegCaptureContext& c, double jpegEncodi
                                      c.renderSetupMs, c.highlightReconstructionMs, c.appliedLensShadingCorrection,
                                      c.appliedFccSteps, c.refinementMs, c.colorProcessingMs, c.tonemapMs,
                                      c.filmRendered, c.queueGapsMs, c.readbackMs, true, c.gainmapMs, c.denoiseMs,
-                                     c.galoshYuvMs, c.highlightStage, c.postTailMs, c.defringeEnabled,
-                                     c.highlightForcedByUltraHdr)
+                                     c.galoshYuvMs, c.highlightStage, c.postTailMs, c.defringeEnabled)
             << setupBreakdown(c) << formatJpegEncoding(jpegEncodingMs);
         if (ultraHdr) {
             out << "- UltraHDR gain map JPEG: " << formatMs1(gainmapEncodeMs) << " ms (included in JPEG encoding)\n";
@@ -550,7 +549,8 @@ bool JpegCaptureWriter::startUltraHdr(std::uint64_t requestId, const void* rgba8
     const std::uint64_t required = static_cast<std::uint64_t>(width) * height * 4u;
     const std::uint64_t mapRequired = static_cast<std::uint64_t>(mapWidth) * mapHeight * 4u;
     if (required > std::numeric_limits<std::size_t>::max() || rgbaBytes != static_cast<std::size_t>(required) ||
-        mapRequired > std::numeric_limits<std::size_t>::max() || mapBytes != static_cast<std::size_t>(mapRequired)) {
+        mapRequired > std::numeric_limits<std::size_t>::max() / 2u ||
+        (mapBytes != static_cast<std::size_t>(mapRequired) && mapBytes != static_cast<std::size_t>(mapRequired * 2u))) {
         __android_log_print(ANDROID_LOG_WARN, "RawrCamNative", "JPEG_UHDR_REJECTED requestId=%llu size_mismatch",
                             (unsigned long long)requestId);
         ::close(context.outputFd);
@@ -570,10 +570,11 @@ bool JpegCaptureWriter::startUltraHdr(std::uint64_t requestId, const void* rgba8
     const auto* pixels = static_cast<const unsigned char*>(rgba8);
     const auto* mapPixels = static_cast<const unsigned char*>(mapRgba8);
     const int ownedFd = context.outputFd;
-    const int mapQuality = std::clamp(context.ultraHdr.gainmapQuality, 1, 100);
+    const bool hasCaptureColor = mapBytes == mapRequired * 2u;
+    const int mapQuality = hasCaptureColor ? 95 : std::clamp(context.ultraHdr.gainmapQuality, 1, 100);
     try {
         worker_ = std::thread([this, requestId, pixels, width, height, mapPixels, mapWidth, mapHeight, mapQuality,
-                               context = std::move(context)]() mutable {
+                               hasCaptureColor, context = std::move(context)]() mutable {
             ::setpriority(PRIO_PROCESS, 0, 10);
             JpegWriteCompletion done{};
             done.requestId = requestId;
@@ -626,18 +627,27 @@ bool JpegCaptureWriter::startUltraHdr(std::uint64_t requestId, const void* rgba8
                      const bool didFit =
                          fitAndRemapMap(mapPixels, mapWidth, mapHeight, context.ultraHdr, fittedMap, fittedMax,
                                         pixels, width, height);
-                     const auto fitT1 = std::chrono::steady_clock::now();
+                     bool colorRestored = false;
                      if (didFit) {
                          mapEncodePixels = fittedMap.data();
                          context.ultraHdr.gainMapMaxLog2 = fittedMax;
                          context.ultraHdr.hdrCapacityMaxLog2 = fittedMax;
+                         if (hasCaptureColor) {
+                             const auto* chromaticity = mapPixels + size_t(mapWidth) * mapHeight * 4;
+                             colorRestored = restoreHighlightColor(
+                                 fittedMap, chromaticity, mapWidth, mapHeight, pixels, width, height,
+                                 context.ultraHdr, fittedMax, context.ultraHdr.gainMapMinLog2,
+                                 context.ultraHdr.gainMapMaxLog2);
+                         }
                      }
+                     const auto fitT1 = std::chrono::steady_clock::now();
                      __android_log_print(ANDROID_LOG_INFO, "RawrCamNative",
-                                         "JPEG_UHDR_FIT requestId=%llu fit=%d max=%.2f base=%.2f/%.2f fitMs=%.1f mapPx=%ux%u",
+                                         "JPEG_UHDR_FIT requestId=%llu fit=%d max=%.2f base=%.2f/%.2f fitMs=%.1f mapPx=%ux%u color=%d range=%.2f/%.2f",
                                          (unsigned long long)requestId, didFit ? 1 : 0, fittedMax,
                                          context.ultraHdr.baseShare, context.ultraHdr.baseExponent,
                                          std::chrono::duration<double, std::milli>(fitT1 - fitT0).count(), mapWidth,
-                                         mapHeight);
+                                         mapHeight, colorRestored ? 1 : 0, context.ultraHdr.gainMapMinLog2,
+                                         context.ultraHdr.gainMapMaxLog2);
                      if (tj3Compress8(mapHandle, mapEncodePixels, static_cast<int>(mapWidth), 0,
                                       static_cast<int>(mapHeight), TJPF_RGBA, &mapBuf, &mapSize) != 0) {
                         uhError = tj3GetErrorStr(mapHandle);

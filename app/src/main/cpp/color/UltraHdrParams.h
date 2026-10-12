@@ -28,8 +28,7 @@ struct UltraHdrParams {
     float satProtect = 0.6f;
     // Multi-channel (RGB) gain map (see gainmap::GainmapParams): per-channel
     // gains preserve hue through a white SDR base (warm lamp stays yellow).
-    // Metadata stays channel-identical so single-channel readers keep
-    // parsing; verified on Photos with the lamp/neon scenes.
+    // RGB JPEG components share one ISO/XMP metadata parameter set.
     bool multiChannelMap = true;
     // Post-encode map blur sigma in map texels (see gainmap::GainmapParams).
     // Default 0 (off: blur passes skipped, sharper maps, no edge halo).

@@ -28,8 +28,15 @@ With reconstruction **on**:
 2. `highlight_guide_propagate.comp` fills clipped regions by jump flooding.
 3. `highlight_guide_smooth.comp` runs four smoothing passes.
 4. The apply pass fits the guide to the channels that still carry detail and
-   raises only the unreliable ones (`raw_highlight_post_rgb.glsl`). If every
-   channel is lost, the result converges to a bright neutral core.
+   raises only sensor-clipped channels (`raw_highlight_post_rgb.glsl`). Lens
+   shading may lift valid RGB above the nominal WB ceiling; those channels stay
+   reliable because classification uses the pre-LSC clip mask. The fit uses
+   pixel-local surviving channels for intensity; spatial smoothing applies only
+   to the colour guide, so neighboring brightness cannot create a colored rim. If every
+   channel is lost, the pixel takes the guide colour at the clip edge and fades
+   to a bright neutral core with depth (share of fully clipped mask texels
+   within +-12 texels), so a light keeps a soft coloured rim instead of a
+   one-pixel white contour.
 
 `GuideChain` (host) records steps 1–3; each caller owns the apply pass:
 
@@ -38,9 +45,22 @@ With reconstruction **on**:
 - Still and video: `highlight_recover.comp`, `RAWR_HL_SCALE=2` (full
   resolution, 8 px guide cells), through `PostDemosaicProcessor`.
 
-Both cover 8 sensor pixels per guide cell and repair the same pixels: any
-channel above 85% of its post-WB ceiling blends continuously into repair, so
-preview matches the saved image.
+Both cover 8 sensor pixels per guide cell and repair the same sensor-clipped
+channels, so preview matches the saved image. Distortion-resampled stills retain
+the numeric fallback until their sensor mask is resampled with the RGB; the
+unaligned mask must not select channels at unrelated coordinates.
+
+Regression validation uses both production apply shaders on neutral and colored
+intensity edges, clipping each channel independently. It checks that an unrelated
+brightness field in the guide cannot change local reconstructed color or detail.
+It also applies 2.5x lens shading after sensor clipping to verify that surviving
+channels keep their color, including valid RGB above the nominal WB ceiling:
+
+```sh
+cmake -S native/raw_highlight/tests -B tmp/highlight-fit
+cmake --build tmp/highlight-fit
+ctest --test-dir tmp/highlight-fit --output-on-failure
+```
 
 Preview requires these shaders: `RawPreview` refuses to start without them
 rather than falling back to a different guide. (`raw_preview.comp`, the path

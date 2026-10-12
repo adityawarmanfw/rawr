@@ -1,7 +1,13 @@
 // Adapts narrow frame ports to session-owned domain collaborators.
 
+#include <algorithm>
+#include <cmath>
+
 #include "color/AePostGainCurve.h"
+#include "color/AutoKeyExposure.h"
+#include "image_scopes/types.h"
 #include "session/SessionEngine.h"
+#include "tonemap/TonemapMath.h"
 
 namespace rawrcam::session {
 
@@ -28,6 +34,49 @@ float SessionFrameCallbacks::postGainFor(const rawrcam::metadata::FrameMetadataS
                                                engine_->postGainKneeWidthEv());
 }
 
+void SessionFrameCallbacks::applyAutoKey(tonemap::TonemapParams& tone) { engine_->applyAutoKey(tone); }
+
+bool SessionFrameCallbacks::sceneKeyMeteringEnabled() {
+    return engine_->autoKeyMode() != rawrcam::color::AutoKeyMode::Off &&
+           !engine_->sceneReferredRender_.load(std::memory_order_relaxed);
+}
+
+std::optional<rawrcam::pipeline::FrameDiagnosticsPort::SceneKeyFeedback> SessionFrameCallbacks::updateSceneKey(
+    std::uint32_t slotIndex, const rawrcam::metadata::FrameMetadataSnapshot& metadata, std::uint64_t timestampNs,
+    bool recording) {
+    static_assert(image_scopes::kSceneExposureBins == rawrcam::color::kSceneKeyBins);
+    static_assert(image_scopes::kSceneExposureMinEv == rawrcam::color::kSceneKeyMinEv);
+    static_assert(image_scopes::kSceneExposureMaxEv == rawrcam::color::kSceneKeyMaxEv);
+    const auto stats = engine_->monitoringCoordinator_.scopes().consumeSceneExposure(slotIndex);
+    const auto mode = engine_->autoKeyMode();
+    if (mode == rawrcam::color::AutoKeyMode::Off || !sceneKeyMeteringEnabled()) {
+        autoKeySmoother_.reset();
+        keySmoother_.reset();
+        highlightSmoother_.reset();
+        std::lock_guard<std::mutex> lock(engine_->autoKeyMutex_);
+        engine_->autoKeyCurve_ = {};
+        return std::nullopt;
+    }
+    // One-shot bracket/probe exposures must not move the repeating-scene curve.
+    if (!stats || (metadata.optimizedStillRequestId && *metadata.optimizedStillRequestId != 0)) return std::nullopt;
+    const auto keyEv = rawrcam::color::sceneKeyEv(stats->weightedBins);
+    if (!keyEv) return std::nullopt;
+    const float halGain = rawrcam::color::effectiveAePostGain(
+        metadata.postRawSensitivityBoost, engine_->maxAePostGain(), engine_->postGainKneeWidthEv());
+    const auto highEv = rawrcam::color::scenePercentileEv(stats->weightedBins, 0.95f);
+    if (!highEv) return std::nullopt;
+    auto curve = rawrcam::color::autoKeyCurve(*keyEv, *highEv, halGain, rawrcam::color::autoKeyPolicy(mode));
+    curve.liftEv = autoKeySmoother_.update(curve.liftEv, timestampNs, recording);
+    curve.keyEv = keySmoother_.update(curve.keyEv, timestampNs, recording);
+    curve.highlightEv = highlightSmoother_.update(curve.highlightEv, timestampNs, recording);
+    curve.liftEv = std::min(curve.liftEv, tonemap::adaptiveToneMaxLift(curve));
+    {
+        std::lock_guard<std::mutex> lock(engine_->autoKeyMutex_);
+        engine_->autoKeyCurve_ = curve;
+    }
+    return SceneKeyFeedback{*keyEv, curve.liftEv};
+}
+
 void SessionFrameCallbacks::advanceStill() { engine_->capture_.single().advance(); }
 bool SessionFrameCallbacks::isStillCaptureRequested() { return engine_->capture_.single().captureRequested(); }
 bool SessionFrameCallbacks::deferSubmittedFrame(const rawrcam::metadata::FrameMetadataSnapshot& metadata,
@@ -37,7 +86,9 @@ bool SessionFrameCallbacks::deferSubmittedFrame(const rawrcam::metadata::FrameMe
     // The processing worker may still hold frames that arrived before the
     // shutter was accepted. Do not let queue delay turn one into the photo.
     if (!engine_->capture_.acceptsStillTimestamp(metadata.timestampNs)) return false;
-    return engine_->capture_.single().deferSubmittedFrame(metadata, colorState, tonemapParams, aePostGain, filmEnabled,
+    auto tone = tonemapParams;
+    engine_->applyAutoKey(tone);
+    return engine_->capture_.single().deferSubmittedFrame(metadata, colorState, tone, aePostGain, filmEnabled,
                                                           filmLook);
 }
 bool SessionFrameCallbacks::beginDeferredSnapshot(AImage* imageLease, AHardwareBuffer* ahb, std::uint64_t timestampNs,

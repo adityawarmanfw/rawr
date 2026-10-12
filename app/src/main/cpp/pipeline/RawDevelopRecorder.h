@@ -97,6 +97,8 @@ struct RawDevelopRecordInput {
     // idle preview frames what the recorder will write.
     uint32_t videoCropOutWidth = 0;
     uint32_t videoCropOutHeight = 0;
+    // Auto key exposure: meter the scene-linear preview before render gain.
+    bool sceneExposureEnabled = false;
 };
 
 struct RawDevelopRecordResult {
@@ -117,6 +119,9 @@ class RawDevelopRecorder final {
                        rawrcam::diagnostics::GpuTimingTracker& performance, Audit audit);
 
     RawDevelopRecordResult record(const RawDevelopRecordInput& input, uint32_t auditSubmitCount) const;
+    void recordSceneExposure(VkCommandBuffer command, uint32_t frameSlot, VkImageView view, uint32_t width,
+                             uint32_t height, const std::array<float, 9>& sensorToSrgb,
+                             const std::array<float, 4>& wb) const;
     void recordVideoScopes(VkCommandBuffer command, uint32_t frameSlot, VkImageView monitorView, VkImage monitorImage,
                            uint32_t width, uint32_t height, int sensorOrientationDegrees,
                            int deviceRotationDegrees) const;

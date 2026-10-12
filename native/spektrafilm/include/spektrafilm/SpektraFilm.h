@@ -16,6 +16,7 @@
 // Film/paper stocks are fixed at create time; per-frame controls below.
 #include <vulkan/vulkan.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -444,6 +445,9 @@ struct SpektraFilmCreateInfo {
 };
 
 struct SpektraFilmRecordInfo {
+    // Render-side adaptive luminance curve: lift/key/highlight EV, baseline HAL gain.
+    // Independent of the film look and its creative exposure; zero lift is identity.
+    std::array<float, 4> adaptiveTone{0.0f, -4.0f, 0.0f, 1.0f};
     VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
     LinearRgbImageView input{};
     SrgbImageView output{};

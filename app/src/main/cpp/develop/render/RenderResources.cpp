@@ -92,10 +92,21 @@ void RenderResources::createPixels(const RenderedStillContext& rendered) {
             throw std::runtime_error(std::string("gainmap params: ") + (paramReason ? paramReason : "invalid"));
         mapWidth_ = std::max(1u, rendered.width / (rendered.gainmapParams.fullResMap ? 1u : 2u));
         mapHeight_ = std::max(1u, rendered.height / (rendered.gainmapParams.fullResMap ? 1u : 2u));
+        // Restore scene highlight color for the approved RawrBase path.
+        // Film and imported looks retain their authored color treatment.
+        bool captureColor = !rendered.filmEnabled && rendered.gainmapParams.multiChannelMap &&
+                            rendered.colorRenderProfile == rawrcam::tonemap_integration::ColorRenderProfile::RawrBase;
+        VkPhysicalDeviceProperties properties{};
+        vkGetPhysicalDeviceProperties(physicalDevice_, &properties);
+        if (captureColor && mapHeight_ > properties.limits.maxImageDimension2D / 2u) {
+            captureColor = false;
+            emit("STILL_GAINMAP_CAPTURE_COLOR unavailable=map_extent retaining_brightness_map");
+        }
+        const uint32_t storageHeight = mapHeight_ * (captureColor ? 2u : 1u);
         map_ = rawrcam::vulkan::createOwnedImage(
-            physicalDevice_, device_, mapWidth_, mapHeight_, VK_FORMAT_R8G8B8A8_UNORM,
+            physicalDevice_, device_, mapWidth_, storageHeight, VK_FORMAT_R8G8B8A8_UNORM,
             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
-        const uint64_t mapBytes64 = static_cast<uint64_t>(mapWidth_) * mapHeight_ * 4u;
+        const uint64_t mapBytes64 = static_cast<uint64_t>(mapWidth_) * storageHeight * 4u;
         mapReadbackBytes_ = static_cast<VkDeviceSize>(mapBytes64);
         VkBufferCreateInfo mbi{};
         mbi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;

@@ -16,7 +16,7 @@ namespace image_scopes {
 namespace {
 using detail::DisplayWaveformStd430;
 using detail::VectorscopeStd430;
-constexpr std::uint32_t kSetKinds = 8;
+constexpr std::uint32_t kSetKinds = 10;
 constexpr std::uint32_t kDescriptorInvocationsPerKind = 16;
 enum SetKind : std::uint32_t {
     ExposureMeasure,
@@ -26,9 +26,12 @@ enum SetKind : std::uint32_t {
     VecMeasure,
     VecReduce,
     VecRender,
-    RawWaveRender
+    RawWaveRender,
+    SceneMeasure,
+    SceneReduce
 };
 constexpr VkDeviceSize kExposureScratchBytes = 16ull * 260ull * 4ull;
+constexpr VkDeviceSize kSceneScratchBytes = 16ull * (kSceneExposureBins + 4ull) * 4ull;
 constexpr VkDeviceSize kVecScratchBytes = static_cast<VkDeviceSize>(detail::kVectorScratchBytes);
 constexpr std::uint32_t kMaxDisplayWidth = (std::numeric_limits<std::uint32_t>::max() - 511u) / 512u;
 constexpr std::uint32_t kMaxDisplayHeight = std::numeric_limits<std::uint32_t>::max() / 64u;
@@ -60,6 +63,16 @@ void validateImage(const DisplayImageView& v) {
     if (v.format != VK_FORMAT_R8G8B8A8_UNORM)
         throw std::invalid_argument("image_scopes: display input must be R8G8B8A8_UNORM");
     if (v.layout != VK_IMAGE_LAYOUT_GENERAL) throw std::invalid_argument("image_scopes: display input must be GENERAL");
+}
+void validateSceneImage(const DisplayImageView& v) {
+    if (!v.view || !v.width || !v.height) throw std::invalid_argument("image_scopes: invalid scene image");
+    if (v.width > kMaxDisplayWidth || v.height > kMaxDisplayHeight)
+        throw std::invalid_argument("image_scopes: scene dimensions exceed shader-safe bounds");
+    if (std::uint64_t(v.width) * std::uint64_t(v.height) > std::numeric_limits<std::uint32_t>::max())
+        throw std::invalid_argument("image_scopes: scene image exceeds uint32 sample-count contract");
+    if (v.format != VK_FORMAT_R16G16B16A16_SFLOAT)
+        throw std::invalid_argument("image_scopes: scene input must be R16G16B16A16_SFLOAT");
+    if (v.layout != VK_IMAGE_LAYOUT_GENERAL) throw std::invalid_argument("image_scopes: scene input must be GENERAL");
 }
 void validateTarget(const ScopeRenderTarget& v) {
     if (!v.view || !v.width || !v.height) throw std::invalid_argument("image_scopes: invalid render target");
@@ -181,6 +194,12 @@ struct ExposureReducePush {
     std::uint32_t width, height, p0, p1, p2, p3, p4, p5;
 };
 static_assert(sizeof(ExposureReducePush) == 32);
+struct SceneMeasurePush {
+    std::uint32_t width, height, sampleBlockSize;
+    float lumaR, lumaG, lumaB, clipLuma;
+    std::uint32_t p0;
+};
+static_assert(sizeof(SceneMeasurePush) == 32);
 struct WaveMeasurePush {
     std::uint32_t width, height, mode, samplingMode, sampledCountOffset, maxOffset, sampledPixelCount, p1;
 };
@@ -218,11 +237,11 @@ struct ImageScopes::Impl {
     VkPipelineLayout measurePl{}, reducePl{}, renderPl{};
     VkDescriptorPool pool{};
     VkPipeline exposureMeasure{}, exposureReduce{}, waveMeasure{}, vecMeasure{}, vecReduce{}, waveRender{},
-        vecRender{}, rawWaveRender{};
+        vecRender{}, rawWaveRender{}, sceneMeasure{}, sceneReduce{};
     std::vector<std::array<VkDescriptorSet, kSetKinds>> sets;
     std::vector<std::array<std::array<VkDescriptorSet, kDescriptorInvocationsPerKind>, kSetKinds>> invocationSets;
     std::vector<std::array<std::uint32_t, kSetKinds>> invocationCursor;
-    std::vector<Buffer> exposure, exposureScratch, wave, vec, vecScratch;
+    std::vector<Buffer> exposure, exposureScratch, scene, sceneScratch, wave, vec, vecScratch;
     std::vector<SamplingMetadata> waveMeta, vecMeta;
     std::vector<SamplingMetadata> pendingWaveMeta, pendingVecMeta;
     std::vector<WaveformMode> pendingWaveMode, validWaveMode;
@@ -293,6 +312,9 @@ struct ImageScopes::Impl {
             exposureMeasure =
                 mkpipe(generated::exposure_stats_measure, generated::exposure_stats_measure_bytes, measurePl);
             exposureReduce = mkpipe(generated::exposure_stats_reduce, generated::exposure_stats_reduce_bytes, reducePl);
+            sceneMeasure =
+                mkpipe(generated::scene_exposure_measure, generated::scene_exposure_measure_bytes, measurePl);
+            sceneReduce = mkpipe(generated::scene_exposure_reduce, generated::scene_exposure_reduce_bytes, reducePl);
             waveMeasure = mkpipe(generated::waveform_measure, generated::waveform_measure_bytes, measurePl);
             vecMeasure = mkpipe(generated::vectorscope_measure, generated::vectorscope_measure_bytes, measurePl);
             vecReduce = mkpipe(generated::vectorscope_reduce, generated::vectorscope_reduce_bytes, reducePl);
@@ -305,7 +327,7 @@ struct ImageScopes::Impl {
             // Vulkan descriptor contents are consumed at execution, not recording.
             const std::uint32_t perSlotSets = kSetKinds * kDescriptorInvocationsPerKind;
             // Per kind each set has exactly two descriptors. Count by its DSL.
-            const std::uint32_t measureKinds = 3u, reduceKinds = 2u, renderKinds = 3u;
+            const std::uint32_t measureKinds = 4u, reduceKinds = 3u, renderKinds = 3u;
             std::array<VkDescriptorPoolSize, 2> ps{
                 {{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
                   (measureKinds + renderKinds) * kDescriptorInvocationsPerKind * slots},
@@ -323,8 +345,9 @@ struct ImageScopes::Impl {
             std::vector<VkDescriptorSetLayout> layouts;
             layouts.reserve(perSlotSets * slots);
             auto layoutFor = [&](std::uint32_t k) {
-                if (k == ExposureMeasure || k == WaveMeasure || k == VecMeasure) return measureDsl;
-                if (k == ExposureReduce || k == VecReduce) return reduceDsl;
+                if (k == ExposureMeasure || k == WaveMeasure || k == VecMeasure || k == SceneMeasure)
+                    return measureDsl;
+                if (k == ExposureReduce || k == VecReduce || k == SceneReduce) return reduceDsl;
                 return renderDsl;
             };
             for (std::uint32_t slot = 0; slot < slots; ++slot)
@@ -346,6 +369,8 @@ struct ImageScopes::Impl {
 
             exposure.reserve(slots);
             exposureScratch.reserve(slots);
+            scene.reserve(slots);
+            sceneScratch.reserve(slots);
             wave.reserve(slots);
             vec.reserve(slots);
             vecScratch.reserve(slots);
@@ -364,6 +389,8 @@ struct ImageScopes::Impl {
             for (std::uint32_t s = 0; s < slots; ++s) {
                 exposure.push_back(makeBuffer(pd, d, sizeof(DisplayExposureStatsData), alloc));
                 exposureScratch.push_back(makeBuffer(pd, d, kExposureScratchBytes, alloc));
+                scene.push_back(makeBuffer(pd, d, sizeof(SceneExposureStatsData), alloc));
+                sceneScratch.push_back(makeBuffer(pd, d, kSceneScratchBytes, alloc));
                 wave.push_back(makeBuffer(pd, d, sizeof(DisplayWaveformStd430), alloc));
                 vec.push_back(makeBuffer(pd, d, sizeof(VectorscopeStd430), alloc));
                 vecScratch.push_back(makeBuffer(pd, d, kVecScratchBytes, alloc));
@@ -382,12 +409,14 @@ struct ImageScopes::Impl {
     void cleanup() {
         for (auto& b : exposure) destroyBuffer(d, b, alloc);
         for (auto& b : exposureScratch) destroyBuffer(d, b, alloc);
+        for (auto& b : scene) destroyBuffer(d, b, alloc);
+        for (auto& b : sceneScratch) destroyBuffer(d, b, alloc);
         for (auto& b : wave) destroyBuffer(d, b, alloc);
         for (auto& b : vec) destroyBuffer(d, b, alloc);
         for (auto& b : vecScratch) destroyBuffer(d, b, alloc);
         if (pool) vkDestroyDescriptorPool(d, pool, alloc);
         for (VkPipeline p : {exposureMeasure, exposureReduce, waveMeasure, vecMeasure, vecReduce, waveRender,
-                             vecRender, rawWaveRender})
+                             vecRender, rawWaveRender, sceneMeasure, sceneReduce})
             if (p) vkDestroyPipeline(d, p, alloc);
         if (measurePl) vkDestroyPipelineLayout(d, measurePl, alloc);
         if (reducePl) vkDestroyPipelineLayout(d, reducePl, alloc);
@@ -606,6 +635,34 @@ void ImageScopes::recordDisplayExposureStats(const DisplayExposureStatsRecordInf
     vkCmdPushConstants(i.commandBuffer, impl_->reducePl, VK_SHADER_STAGE_COMPUTE_BIT, 0, 32, &rp);
     vkCmdDispatch(i.commandBuffer, 1u, 1u, 1u);
 }
+void ImageScopes::recordSceneExposureStats(const SceneExposureStatsRecordInfo& i) {
+    if (!impl_ || !i.commandBuffer) throw std::invalid_argument("image_scopes: invalid scene stats record");
+    impl_->slot(i.frameSlot);
+    validateSceneImage(i.input);
+    if (i.sampleBlockSize != 2u && i.sampleBlockSize != 4u)
+        throw std::invalid_argument("image_scopes: scene stats sampleBlockSize must be 2 or 4");
+    for (float w : i.lumaWeights)
+        if (!std::isfinite(w)) throw std::invalid_argument("image_scopes: scene luma weights must be finite");
+    if (!std::isfinite(i.clipLuma)) throw std::invalid_argument("image_scopes: scene clipLuma must be finite");
+    auto& out = impl_->scene[i.frameSlot];
+    auto& scratch = impl_->sceneScratch[i.frameSlot];
+    Impl::computeReuseBarrier(i.commandBuffer, scratch.b, scratch.size);
+    Impl::computeReuseBarrier(i.commandBuffer, out.b, out.size);
+    auto ms = impl_->bindMeasure(i.frameSlot, SceneMeasure, i.input.view, i.input.layout, scratch);
+    SceneMeasurePush mp{i.input.width,    i.input.height,   i.sampleBlockSize, i.lumaWeights[0],
+                        i.lumaWeights[1], i.lumaWeights[2], i.clipLuma,        0};
+    vkCmdBindPipeline(i.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, impl_->sceneMeasure);
+    vkCmdBindDescriptorSets(i.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, impl_->measurePl, 0, 1, &ms, 0, nullptr);
+    vkCmdPushConstants(i.commandBuffer, impl_->measurePl, VK_SHADER_STAGE_COMPUTE_BIT, 0, 32, &mp);
+    vkCmdDispatch(i.commandBuffer, 16u, 1u, 1u);
+    Impl::computeBarrier(i.commandBuffer, scratch.b, scratch.size);
+    auto rs = impl_->bindReduce(i.frameSlot, SceneReduce, scratch, out);
+    ExposureReducePush rp{i.input.width, i.input.height, 0, 0, 0, 0, 0, 0};
+    vkCmdBindPipeline(i.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, impl_->sceneReduce);
+    vkCmdBindDescriptorSets(i.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, impl_->reducePl, 0, 1, &rs, 0, nullptr);
+    vkCmdPushConstants(i.commandBuffer, impl_->reducePl, VK_SHADER_STAGE_COMPUTE_BIT, 0, 32, &rp);
+    vkCmdDispatch(i.commandBuffer, 1u, 1u, 1u);
+}
 void ImageScopes::recordDisplayWaveform(const DisplayWaveformRecordInfo& i) {
     if (!impl_ || !i.commandBuffer) throw std::invalid_argument("image_scopes: invalid waveform record");
     impl_->slot(i.frameSlot);
@@ -804,6 +861,13 @@ void ImageScopes::recordCopyDisplayExposureStats(VkCommandBuffer c, std::uint32_
     Impl::computeToTransfer(c, impl_->exposure[s].b, impl_->exposure[s].size);
     VkBufferCopy r{0, off, sizeof(DisplayExposureStatsData)};
     vkCmdCopyBuffer(c, impl_->exposure[s].b, dst, 1, &r);
+}
+void ImageScopes::recordCopySceneExposureStats(VkCommandBuffer c, std::uint32_t s, VkBuffer dst,
+                                               VkDeviceSize off) const {
+    impl_->slot(s);
+    Impl::computeToTransfer(c, impl_->scene[s].b, impl_->scene[s].size);
+    VkBufferCopy r{0, off, sizeof(SceneExposureStatsData)};
+    vkCmdCopyBuffer(c, impl_->scene[s].b, dst, 1, &r);
 }
 void ImageScopes::recordCopyDisplayWaveform(VkCommandBuffer c, std::uint32_t s, VkBuffer dst, VkDeviceSize off) const {
     impl_->slot(s);

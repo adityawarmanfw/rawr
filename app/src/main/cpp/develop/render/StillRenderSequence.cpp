@@ -16,7 +16,6 @@ namespace {
 void recordPostDemosaic(RenderResources& resources, RenderCommandSession& commands,
                         const RenderedStillContext& rendered, VkImage sourceImage, VkImageView sourceView,
                         VkImage clipStateImage, VkImageView clipStateView) {
-    const bool effectiveHighlightReconstruction = rendered.highlightReconstructionEnabled || rendered.ultraHdrEnabled;
     VkImageMemoryBarrier src{};
     src.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     src.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -42,7 +41,7 @@ void recordPostDemosaic(RenderResources& resources, RenderCommandSession& comman
     try {
         resources.postDemosaic().record(
             commands.command(), sourceImage, sourceView, clipStateImage, clipStateView, rendered.whiteBalanceRgb,
-            effectiveHighlightReconstruction,
+            rendered.highlightReconstructionEnabled,
             rawr::post::StillDistortionCorrection{rendered.distortionCorrectionEnabled && rendered.hasLensCalibration,
                                                   rendered.lensIntrinsic, rendered.lensDistortion},
             commands.timingPool(), false, rendered.highlightReconstructionMethod, rendered.highlightThreshold,
@@ -261,6 +260,18 @@ GainmapRecording recordGainmapAndReadback(RenderResources& resources, RenderComm
         }
         // Cached for the GPU-timing log below (gri dies with its block).
         gri.params = rendered.gainmapParams;
+        gri.params.writeHdrChromaticity =
+            resources.gainmapStorageHeight() == 2u * resources.outputView().gainmapHeight;
+        // The SDR base carries the adaptive tone lift (tonemap or film
+        // exposure stage); give the HDR tap the same luminance gain. Both
+        // stages evaluate the curve at Y * aePostGain of the unexposed input.
+        const auto& adaptive = rendered.tonemapParams.adaptiveTone;
+        if (rendered.filmEnabled || rendered.tonemapParams.renderTransform != tonemap::RenderTransform::Log) {
+            gri.params.adaptiveTone[0] = adaptive.liftEv;
+            gri.params.adaptiveTone[1] = adaptive.keyEv;
+            gri.params.adaptiveTone[2] = adaptive.highlightEv;
+            gri.params.adaptiveToneLumaScale = rendered.tonemapParams.aePostGain / gri.params.hdrExposure;
+        }
         gainmapClipUsed = gri.clip.view != VK_NULL_HANDLE;
         gainmapClipBoost = gri.params.clipBoost;
         // HDR pixels are camera RGB: the calibrated matrix wins over
@@ -336,7 +347,7 @@ GainmapRecording recordGainmapAndReadback(RenderResources& resources, RenderComm
                              0, 0, nullptr, 0, nullptr, 1, &mapCopy);
         VkBufferImageCopy mbc{};
         mbc.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        mbc.imageExtent = {resources.outputView().gainmapWidth, resources.outputView().gainmapHeight, 1};
+        mbc.imageExtent = {resources.outputView().gainmapWidth, resources.gainmapStorageHeight(), 1};
         vkCmdCopyImageToBuffer(commands.command(), resources.map().image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                resources.gainmapReadbackBuffer(), 1, &mbc);
     }
@@ -354,9 +365,8 @@ RenderedStillCompletion executeStillRender(RenderResources& resources, RenderCom
     done.width = rendered.width;
     done.height = rendered.height;
     {
-        const bool highlight = rendered.highlightReconstructionEnabled || rendered.ultraHdrEnabled;
-        done.highlightStage = !highlight ? 0 : (rendered.highlightReconstructionMethod == 1u ? 2 : 1);
-        done.highlightForcedByUltraHdr = !rendered.highlightReconstructionEnabled && rendered.ultraHdrEnabled;
+        done.highlightStage =
+            !rendered.highlightReconstructionEnabled ? 0 : (rendered.highlightReconstructionMethod == 1u ? 2 : 1);
         done.defringeEnabled = std::isfinite(rendered.defringeStrength) && rendered.defringeStrength > 0.0f;
     }
     done.presentationQuarterTurns = rendered.presentationQuarterTurns;
@@ -370,10 +380,6 @@ RenderedStillCompletion executeStillRender(RenderResources& resources, RenderCom
         // mask (merged-derived, optionally ORed with reference sensor bits
         // via 1A). A null view falls back to PostDemosaicProcessor's
         // conservative pre-WB RGB derive.
-        const bool effectiveHighlightReconstruction =
-            rendered.highlightReconstructionEnabled || rendered.ultraHdrEnabled;
-        if (rendered.ultraHdrEnabled && !rendered.highlightReconstructionEnabled)
-            emit("STILL_GAINMAP_RECOVERY_FORCED recovery=on requestId=" + std::to_string(rendered.requestId));
         const char* clipEvidence = !hasSensorClipState                      ? "derived_normalized_rgb"
                                    : rendered.multiframeSensorClipOrApplied ? "multiframe_sensor_or"
                                    : rendered.clipFromMultiframe            ? "multiframe_derived_rgb"
@@ -381,7 +387,7 @@ RenderedStillCompletion executeStillRender(RenderResources& resources, RenderCom
         emit(std::string("STILL_HIGHLIGHT_RECOVERY_CONFIGURED mode=") +
              (rendered.highlightReconstructionMethod == 1u ? "coloropp" : "guided_channel_fit") +
              " requested=" + (rendered.highlightReconstructionEnabled ? "true" : "false") +
-             " enabled=" + (effectiveHighlightReconstruction ? "true" : "false") + " evidence=" + clipEvidence +
+             " enabled=" + (rendered.highlightReconstructionEnabled ? "true" : "false") + " evidence=" + clipEvidence +
              " domain=" + (rendered.highlightReconstructionMethod == 1u ? "pre_wb_camera_rgb" : "post_wb_camera_rgb") +
              " requestId=" + std::to_string(rendered.requestId) + " steps=" + std::to_string(rendered.fccSteps) +
              " threshold=" + std::to_string(rendered.highlightThreshold) +

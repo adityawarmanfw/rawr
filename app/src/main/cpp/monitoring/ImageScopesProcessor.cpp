@@ -95,25 +95,8 @@ void ImageScopesProcessor::initialize(VkPhysicalDevice physicalDevice, VkDevice 
     ci.context.device = device;
     ci.maxFramesInFlight = rawrcam::imaging::kRealtimeFramesInFlight;
     backend_ = std::make_unique<image_scopes::ImageScopes>(ci);
-    for (auto& rb : exposureStatsReadback_) {
-        VkBufferCreateInfo bi{};
-        bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        bi.size = sizeof(image_scopes::DisplayExposureStatsData);
-        bi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-        bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        vkCheck(vkCreateBuffer(device_, &bi, nullptr, &rb.buffer), "AE feedback exposure stats buffer");
-        VkMemoryRequirements req{};
-        vkGetBufferMemoryRequirements(device_, rb.buffer, &req);
-        VkMemoryAllocateInfo ai{};
-        ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        ai.allocationSize = req.size;
-        ai.memoryTypeIndex = findHostVisibleMemoryType(physicalDevice_, req.memoryTypeBits, &rb.coherent);
-        vkCheck(vkAllocateMemory(device_, &ai, nullptr, &rb.memory), "AE feedback exposure stats memory");
-        vkCheck(vkBindBufferMemory(device_, rb.buffer, rb.memory, 0), "AE feedback exposure stats bind");
-        vkCheck(vkMapMemory(device_, rb.memory, 0, VK_WHOLE_SIZE, 0, &rb.mapped), "AE feedback exposure stats map");
-        rb.allocationSize = req.size;
-        std::memset(rb.mapped, 0, sizeof(image_scopes::DisplayExposureStatsData));
-    }
+    for (auto& rb : exposureStatsReadback_) createReadback(rb, sizeof(image_scopes::DisplayExposureStatsData));
+    for (auto& rb : sceneStatsReadback_) createReadback(rb, sizeof(image_scopes::SceneExposureStatsData));
     for (auto& slot : targets_) {
         for (auto& target : slot) {
             target = rawrcam::vulkan::createOwnedImage(physicalDevice, device, kRenderWidth, kRenderHeight,
@@ -122,6 +105,48 @@ void ImageScopesProcessor::initialize(VkPhysicalDevice physicalDevice, VkDevice 
         }
     }
     transitionImagesToGeneral(queue, commandPool);
+}
+
+void ImageScopesProcessor::createReadback(ExposureStatsReadback& rb, VkDeviceSize bytes) {
+    VkBufferCreateInfo bi{};
+    bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bi.size = bytes;
+    bi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    vkCheck(vkCreateBuffer(device_, &bi, nullptr, &rb.buffer), "image scopes readback buffer");
+    VkMemoryRequirements req{};
+    vkGetBufferMemoryRequirements(device_, rb.buffer, &req);
+    VkMemoryAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    ai.allocationSize = req.size;
+    ai.memoryTypeIndex = findHostVisibleMemoryType(physicalDevice_, req.memoryTypeBits, &rb.coherent);
+    vkCheck(vkAllocateMemory(device_, &ai, nullptr, &rb.memory), "image scopes readback memory");
+    vkCheck(vkBindBufferMemory(device_, rb.buffer, rb.memory, 0), "image scopes readback bind");
+    vkCheck(vkMapMemory(device_, rb.memory, 0, VK_WHOLE_SIZE, 0, &rb.mapped), "image scopes readback map");
+    rb.allocationSize = req.size;
+    std::memset(rb.mapped, 0, static_cast<size_t>(bytes));
+}
+
+void ImageScopesProcessor::destroyReadback(ExposureStatsReadback& rb) noexcept {
+    if (rb.mapped && rb.memory) vkUnmapMemory(device_, rb.memory);
+    if (rb.buffer) vkDestroyBuffer(device_, rb.buffer, nullptr);
+    if (rb.memory) vkFreeMemory(device_, rb.memory, nullptr);
+    rb = {};
+}
+
+bool ImageScopesProcessor::readReadback(ExposureStatsReadback& rb, void* out, size_t bytes) {
+    if (!rb.recorded || !rb.mapped || !rb.memory) return false;
+    if (!rb.coherent) {
+        VkMappedMemoryRange range{};
+        range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+        range.memory = rb.memory;
+        range.offset = 0;
+        range.size = rb.allocationSize;
+        vkInvalidateMappedMemoryRanges(device_, 1, &range);
+    }
+    std::memcpy(out, rb.mapped, bytes);
+    rb.recorded = false;
+    return true;
 }
 
 void ImageScopesProcessor::reset() noexcept {
@@ -139,12 +164,8 @@ void ImageScopesProcessor::reset() noexcept {
     exposureStatsTimingComplete_ = false;
 
     if (device_ != VK_NULL_HANDLE) {
-        for (auto& rb : exposureStatsReadback_) {
-            if (rb.mapped && rb.memory) vkUnmapMemory(device_, rb.memory);
-            if (rb.buffer) vkDestroyBuffer(device_, rb.buffer, nullptr);
-            if (rb.memory) vkFreeMemory(device_, rb.memory, nullptr);
-            rb = {};
-        }
+        for (auto& rb : exposureStatsReadback_) destroyReadback(rb);
+        for (auto& rb : sceneStatsReadback_) destroyReadback(rb);
     }
     if (device_ != VK_NULL_HANDLE) {
         for (auto& slot : targets_)
@@ -237,24 +258,53 @@ void ImageScopesProcessor::record(VkCommandBuffer command, uint32_t frameSlot, V
     }
 }
 
+void ImageScopesProcessor::recordSceneExposure(VkCommandBuffer command, uint32_t frameSlot, VkImageView linearView,
+                                               uint32_t width, uint32_t height,
+                                               const std::array<float, 3>& lumaWeights, float clipLuma) {
+    if (!backend_ || frameSlot >= rawrcam::imaging::kRealtimeFramesInFlight || linearView == VK_NULL_HANDLE) return;
+    auto& rb = sceneStatsReadback_[frameSlot];
+    rb.recorded = false;
+    image_scopes::SceneExposureStatsRecordInfo info{};
+    info.commandBuffer = command;
+    info.input = {linearView, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_LAYOUT_GENERAL, width, height};
+    info.frameSlot = frameSlot;
+    info.sampleBlockSize = 4u;
+    info.lumaWeights[0] = lumaWeights[0];
+    info.lumaWeights[1] = lumaWeights[1];
+    info.lumaWeights[2] = lumaWeights[2];
+    info.clipLuma = clipLuma;
+    backend_->recordSceneExposureStats(info);
+    backend_->recordCopySceneExposureStats(command, frameSlot, rb.buffer, 0);
+    VkBufferMemoryBarrier host{};
+    host.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+    host.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    host.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    host.buffer = rb.buffer;
+    host.offset = 0;
+    host.size = sizeof(image_scopes::SceneExposureStatsData);
+    vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &host,
+                         0, nullptr);
+    rb.recorded = true;
+}
+
+std::optional<SceneExposureStats> ImageScopesProcessor::consumeSceneExposure(uint32_t frameSlot) {
+    if (frameSlot >= sceneStatsReadback_.size()) return std::nullopt;
+    SceneExposureStats out{};
+    if (!readReadback(sceneStatsReadback_[frameSlot], &out, sizeof(out))) return std::nullopt;
+    if (out.sampleCount == 0) return std::nullopt;
+    return out;
+}
+
 void ImageScopesProcessor::retireFrameSlot(uint32_t frameSlot) {
     if (backend_) backend_->retireFrameSlot(frameSlot);
 }
 std::optional<RenderedExposureFeedback> ImageScopesProcessor::consumeExposureFeedback(uint32_t frameSlot) {
     if (frameSlot >= exposureStatsReadback_.size()) return std::nullopt;
     consumeExposureStatsTiming(frameSlot);
-    auto& rb = exposureStatsReadback_[frameSlot];
-    if (!rb.recorded || !rb.mapped || !rb.memory) return std::nullopt;
-    if (!rb.coherent) {
-        VkMappedMemoryRange range{};
-        range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
-        range.memory = rb.memory;
-        range.offset = 0;
-        range.size = rb.allocationSize;
-        vkInvalidateMappedMemoryRanges(device_, 1, &range);
-    }
-    const auto out = *static_cast<const image_scopes::DisplayExposureStatsData*>(rb.mapped);
-    rb.recorded = false;
+    RenderedExposureFeedback out{};
+    if (!readReadback(exposureStatsReadback_[frameSlot], &out, sizeof(out))) return std::nullopt;
     if (out.sampleCount == 0) return std::nullopt;
     return out;
 }
@@ -302,6 +352,7 @@ void ImageScopesProcessor::consumeExposureStatsTiming(uint32_t frameSlot) noexce
 
 void ImageScopesProcessor::discardFrameSlot(uint32_t frameSlot) noexcept {
     if (frameSlot < exposureStatsReadback_.size()) exposureStatsReadback_[frameSlot].recorded = false;
+    if (frameSlot < sceneStatsReadback_.size()) sceneStatsReadback_[frameSlot].recorded = false;
     if (!backend_) return;
     try {
         backend_->discardFrameSlotRecordings(frameSlot);

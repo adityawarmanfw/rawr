@@ -124,7 +124,6 @@ bool SingleFrameCaptureOutputs::startJpeg(const SingleFrameDevelopResult& result
     jpegContext.output.gainmapMs = completed.gainmapMs;
     jpegContext.output.postTailMs = completed.postTailMs;
     jpegContext.output.highlightStage = completed.highlightStage;
-    jpegContext.output.highlightForcedByUltraHdr = completed.highlightForcedByUltraHdr;
     jpegContext.output.defringeEnabled = completed.defringeEnabled;
     jpegContext.output.filmRendered = completed.filmRendered;
     jpegContext.output.filmFallbackMemory = completed.filmFallbackMemory;
