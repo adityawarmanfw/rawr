@@ -921,7 +921,7 @@ void RawAhbImporter::ensureBufferImport(AHardwareBuffer* ahb) noexcept {
         VkBufferCreateInfo bi{};
         bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
         bi.size = hp.allocationSize;
-        bi.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        bi.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
         bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         vkCheck(vkCreateBuffer(device_, &bi, nullptr, &r.importBuffer), "create imported AHB buffer");
         VkMemoryRequirements req{};
@@ -974,6 +974,26 @@ void RawAhbImporter::ensureBufferImport(AHardwareBuffer* ahb) noexcept {
 ImportedRaw& RawAhbImporter::importRaw10Buffer(AHardwareBuffer* ahb, uint32_t expectedWidth, uint32_t expectedHeight,
                                                uint32_t rowStrideBytes) {
     if (ahb == nullptr) throw std::runtime_error("RAW10 buffer import: missing AHB");
+    ImportedRaw& r = bufferEntry(ahb, expectedWidth, expectedHeight);
+    r.gpuUnpack = true;
+    r.rowStrideBytes = rowStrideBytes;
+    ensureBufferImport(ahb);
+    if (!r.importBufferAvailable) throw std::runtime_error("RAW10 buffer import unavailable");
+    return r;
+}
+
+ImportedRaw& RawAhbImporter::importRaw16Buffer(AHardwareBuffer* ahb, uint32_t expectedWidth,
+                                               uint32_t expectedHeight) {
+    if (ahb == nullptr) throw std::runtime_error("RAW16 buffer import: missing AHB");
+    ImportedRaw& r = bufferEntry(ahb, expectedWidth, expectedHeight);
+    r.gpuUnpack = true;
+    ensureBufferImport(ahb);
+    if (!r.importBufferAvailable) throw std::runtime_error("RAW16 buffer import unavailable");
+    r.rowStrideBytes = r.importBufferStridePixels * static_cast<uint32_t>(sizeof(uint16_t));
+    return r;
+}
+
+ImportedRaw& RawAhbImporter::bufferEntry(AHardwareBuffer* ahb, uint32_t expectedWidth, uint32_t expectedHeight) {
     const uintptr_t key = reinterpret_cast<uintptr_t>(ahb);
     auto it = imported_.find(key);
     if (it == imported_.end()) {
@@ -988,12 +1008,7 @@ ImportedRaw& RawAhbImporter::importRaw10Buffer(AHardwareBuffer* ahb, uint32_t ex
         AHardwareBuffer_acquire(ahb);
         it = imported_.emplace(key, r).first;
     }
-    ImportedRaw& r = it->second;
-    r.gpuUnpack = true;
-    r.rowStrideBytes = rowStrideBytes;
-    ensureBufferImport(ahb);
-    if (!r.importBufferAvailable) throw std::runtime_error("RAW10 buffer import unavailable");
-    return r;
+    return it->second;
 }
 
 void RawAhbImporter::clear() noexcept {

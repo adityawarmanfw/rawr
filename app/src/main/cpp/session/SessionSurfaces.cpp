@@ -117,6 +117,24 @@ ANativeWindow* SessionEngine::createRawInputWindow(uint64_t generation, uint32_t
             return rawFrameIngress_.create(generation, width, height, format, usage);
         }
 
+        // RAW16 whose image import this driver rejected goes through the GPU
+        // buffer copy: request buffer access, plus CPU read for the fallback.
+        if (realtime_.coordinator().raw16BufferIngressRequired() && realtime_.coordinator().diagnosticMode() == 0u) {
+            const std::string line = "RAW_READER_GPU_BUFFER_INGRESS format=RAW16";
+            SESSION_LOGI("%s", line.c_str());
+            appendDiagnostic(line);
+            try {
+                return rawFrameIngress_.create(generation, width, height, format,
+                                               AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN |
+                                                   AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER);
+            } catch (const std::exception& e) {
+                // The buffer copy then fails per frame and the CPU upload takes over.
+                appendDiagnostic(std::string("RAW_READER_GPU_BUFFER_INGRESS_FALLBACK reason=") + e.what());
+                return rawFrameIngress_.create(generation, width, height, format,
+                                               AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN);
+            }
+        }
+
         const uint32_t diagnosticMode = realtime_.coordinator().diagnosticMode();
         const VkImageUsageFlags importedVkUsage = realtime_.coordinator().importedRawUsage();
         uint64_t baselineReaderUsage = realtime_.importer()->requiredHardwareBufferUsage(importedVkUsage);

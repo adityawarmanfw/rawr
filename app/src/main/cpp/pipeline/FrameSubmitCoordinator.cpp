@@ -92,10 +92,14 @@ void FrameSubmitCoordinator::configure(const FrameSubmitConfiguration& config) {
         char value[PROP_VALUE_MAX]{};
         const bool forced = __system_property_get("debug.rawr.force_cpu_ingress", value) > 0 && value[0] == '1';
         if (forced) forceCpuIngress_.store(true, std::memory_order_relaxed);
+        // Exercises the RAW16 GPU buffer copy on devices whose image import works.
+        if (__system_property_get("debug.rawr.raw16_buffer_ingress", value) > 0 && value[0] == '1')
+            raw16ImageImportLatched_.store(true, std::memory_order_relaxed);
         raw10ParityEnabled_ = __system_property_get("debug.rawr.raw10_parity", value) > 0 && value[0] == '1';
     }
     cpuUpload_.configure(config_.rawWidth, config_.rawHeight);
     cpuIngressActive_.store(false, std::memory_order_relaxed);
+    raw16GpuCopyDeferredLogged_ = false;
     pipelineAuditMetadataCount_ = 0;
     capturePort_.configureMultiframe(config_.rawWidth, config_.rawHeight, config_.cfa);
     pipelineAuditPairCount_ = 0;
@@ -357,7 +361,7 @@ std::optional<FrameSubmitCoordinator::AcquiredSubmit> FrameSubmitCoordinator::ac
 rawrcam::vulkan::ImportedRaw& FrameSubmitCoordinator::ingestRaw(const SubmitParams& params, uint32_t slotIndex) {
     const auto format = rawrcam::imaging::rawPixelFormatOf(params.imageLease);
     const bool raw10 = format == rawrcam::geometry::RawPixelFormat::Raw10;
-    if (!raw10 && !cpuIngressRequired()) {
+    if (!raw10 && !cpuIngressRequired() && !raw16ImageImportLatched_.load(std::memory_order_relaxed)) {
         try {
             rawrcam::vulkan::ImportedRaw& raw =
                 resources_.importer()->import(params.ahb, config_.rawWidth, config_.rawHeight, importedRawUsage(),
@@ -368,10 +372,44 @@ rawrcam::vulkan::ImportedRaw& FrameSubmitCoordinator::ingestRaw(const SubmitPara
         } catch (const std::exception& e) {
             // Diagnostic modes exist to exercise the import itself; never mask them.
             if (config_.diagnosticMode != 0u) throw;
-            cpuIngressLatched_.store(true, std::memory_order_relaxed);
-            const std::string line = std::string("RAW_INGRESS_FALLBACK to=cpu_upload reason=") + e.what();
+            // Some drivers reject the R16 image import of camera AHBs but accept
+            // the buffer import: try the GPU copy before the CPU upload.
+            raw16ImageImportLatched_.store(true, std::memory_order_relaxed);
+            const std::string line = std::string("RAW_INGRESS_FALLBACK to=gpu_copy reason=") + e.what();
             LOGE("%s", line.c_str());
             lifecyclePort_.postDiagnostic(line);
+        }
+    }
+    // RAW16 whose image import was rejected: copy the imported camera buffer
+    // into the pool's owned R16 image on the GPU.
+    if (!raw10 && !cpuIngressRequired() && config_.diagnosticMode == 0u) {
+        try {
+            const auto& camera =
+                resources_.importer()->importRaw16Buffer(params.ahb, config_.rawWidth, config_.rawHeight);
+            rawrcam::vulkan::ImportedRaw& raw = cpuUpload_.gpuCopy(slotIndex, camera);
+            if (!raw16GpuCopyLogged_) {
+                raw16GpuCopyLogged_ = true;
+                const std::string line =
+                    "RAW_INGRESS_GPU_COPY format=RAW16 rowStrideBytes=" + std::to_string(camera.rowStrideBytes);
+                LOGI("%s", line.c_str());
+                lifecyclePort_.postDiagnostic(line);
+            }
+            return raw;
+        } catch (const std::exception& e) {
+            // A reader configured before the latch has no GPU buffer usage, so
+            // its failure says nothing about the driver: upload this session
+            // and retry once the reader is reconfigured for buffer access.
+            AHardwareBuffer_Desc desc{};
+            if (params.ahb) AHardwareBuffer_describe(params.ahb, &desc);
+            const bool bufferReader = (desc.usage & AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER) != 0;
+            if (bufferReader) cpuIngressLatched_.store(true, std::memory_order_relaxed);
+            if (bufferReader || !raw16GpuCopyDeferredLogged_) {
+                raw16GpuCopyDeferredLogged_ = true;
+                const std::string line = std::string("RAW_INGRESS_FALLBACK from=gpu_copy to=cpu_upload latched=") +
+                                         (bufferReader ? "true" : "false") + " reason=" + e.what();
+                LOGE("%s", line.c_str());
+                lifecyclePort_.postDiagnostic(line);
+            }
         }
     }
     // RAW10: unpack the imported camera buffer on the GPU into the pool's
@@ -433,7 +471,7 @@ void FrameSubmitCoordinator::submitSplitVideoAndMonitor(const SubmitParams& para
     // ahead of any bridge copy, so the camera fence must gate compute too.
     const VkPipelineStageFlags rawWaitStage =
         (bridgeCopy ? VK_PIPELINE_STAGE_TRANSFER_BIT : VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT) |
-        (acquired.raw->gpuUnpack ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : 0u);
+        (acquired.raw->gpuUnpack ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT : 0u);
     vkCheck(vkResetFences(vulkanContext_.device(), 1, &slot->fence), "video reset fence");
     vkCheck(vkResetCommandBuffer(slot->videoCommand, 0), "video reset command");
     VkCommandBufferBeginInfo begin{};
@@ -757,10 +795,11 @@ FrameSubmitCoordinator::RecordedSubmit FrameSubmitCoordinator::recordSubmitComma
     trace.record(rawrcam::diagnostics::RuntimeTraceStage::RecordEnd, params.timestampNs, metadata.frameOrdinal,
                  static_cast<int32_t>(slotIndex), metadata.exposureTimeNs, metadata.sensitivity);
     vkCheck(vkEndCommandBuffer(slot->command), "vkEndCommandBuffer");
-    // The GPU RAW10 unpack reads the camera buffer in compute before the
-    // recorder's own first RAW access (possibly a transfer).
+    // The GPU RAW10 unpack (compute) or RAW16 copy (transfer) reads the camera
+    // buffer before the recorder's own first RAW access.
     return RecordedSubmit{recordResult.rawWaitStage |
-                          (acquired.raw->gpuUnpack ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : 0u)};
+                          (acquired.raw->gpuUnpack ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT
+                                                   : 0u)};
 }
 
 void FrameSubmitCoordinator::submitAndPresent(const SubmitParams& params, const AcquiredSubmit& acquired,

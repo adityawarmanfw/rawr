@@ -47,6 +47,10 @@ class RawCpuUploadPool final {
     // to the slot's owned image through the GPU unpacker. Same retirement
     // contract as upload(). Throws if the unpacker can't be created.
     rawrcam::vulkan::ImportedRaw& gpuUnpack(uint32_t slotIndex, const rawrcam::vulkan::ImportedRaw& camera);
+    // Routes a RAW16 camera buffer import (RawAhbImporter::importRaw16Buffer)
+    // to the slot's owned image through a GPU buffer-to-image copy. Same
+    // retirement contract as upload().
+    rawrcam::vulkan::ImportedRaw& gpuCopy(uint32_t slotIndex, const rawrcam::vulkan::ImportedRaw& camera);
     // Debug-only GPU/CPU parity check for the RAW10 unpack. arm() CPU-locks the
     // camera frame and keeps sample rows; the next gpuUnpack of that slot
     // records GPU readbacks; once the slot comes round again (retired),
@@ -90,7 +94,8 @@ class RawCpuUploadPool final {
 // Barriers for the frame's RAW image. Camera AHB imports are foreign-owned and
 // use queue-family ownership transfers; CPU-uploaded frames are app-owned and
 // are filled from their buffer instead; GPU-unpacked frames acquire the
-// foreign RAW10 buffer and unpack it into the owned image.
+// foreign RAW10 buffer and unpack it into the owned image (RAW16 buffers are
+// copied instead).
 void acquireRawInputImage(VkCommandBuffer command, const rawrcam::vulkan::ImportedRaw& raw, uint32_t queueFamily,
                           VkPipelineStageFlags dstStage, VkAccessFlags dstAccess);
 void releaseRawInputImage(VkCommandBuffer command, const rawrcam::vulkan::ImportedRaw& raw, uint32_t queueFamily,

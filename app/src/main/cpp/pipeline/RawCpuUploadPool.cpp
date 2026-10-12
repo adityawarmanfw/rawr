@@ -322,6 +322,32 @@ std::string RawCpuUploadPool::takeRaw10ParityReport(uint32_t slotIndex) {
     return out.str();
 }
 
+rawrcam::vulkan::ImportedRaw& RawCpuUploadPool::gpuCopy(uint32_t slotIndex, const rawrcam::vulkan::ImportedRaw& camera) {
+    if (!device_ || slotIndex >= slots_.size() || !width_ || !height_)
+        throw std::runtime_error("RAW GPU copy: pool not configured");
+    if (!camera.gpuUnpack || !camera.importBufferAvailable || !camera.importBuffer)
+        throw std::runtime_error("RAW GPU copy: camera buffer not imported");
+    if (camera.desc.width != width_ || camera.desc.height != height_)
+        throw std::runtime_error("RAW GPU copy: frame dimensions do not match configured RAW geometry");
+    Slot& slot = slots_[slotIndex];
+    allocateImage(slot);
+    auto& raw = slot.gpuRaw;
+    raw = {};
+    raw.ahb = camera.ahb;
+    raw.desc = camera.desc;
+    raw.image = slot.image.image;
+    raw.memory = slot.image.memory;
+    raw.view = slot.image.view;
+    // Consumers read the owned image, not the foreign camera buffer.
+    raw.importBufferAvailable = false;
+    raw.importBufferAttempted = true;
+    raw.gpuUnpack = true;
+    raw.rowStrideBytes = camera.rowStrideBytes;
+    raw.unpackSource = camera.importBuffer;
+    raw.unpackSlot = slotIndex;
+    return raw;
+}
+
 void acquireRawInputImage(VkCommandBuffer command, const rawrcam::vulkan::ImportedRaw& raw, uint32_t queueFamily,
                           VkPipelineStageFlags dstStage, VkAccessFlags dstAccess) {
     if (raw.gpuUnpack) {
@@ -338,6 +364,24 @@ void acquireRawInputImage(VkCommandBuffer command, const rawrcam::vulkan::Import
         toWrite.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         toWrite.image = raw.image;
         toWrite.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        if (!raw.unpacker) {
+            // RAW16 buffer ingress: the rows are already R16, copy them in.
+            toWrite.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
+                                 nullptr, 0, nullptr, 1, &toWrite);
+            VkBufferImageCopy region{};
+            region.bufferRowLength = raw.rowStrideBytes / static_cast<uint32_t>(sizeof(uint16_t));
+            region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            region.imageExtent = {raw.desc.width, raw.desc.height, 1};
+            vkCmdCopyBufferToImage(command, raw.unpackSource, raw.image, VK_IMAGE_LAYOUT_GENERAL, 1, &region);
+            VkImageMemoryBarrier toRead = toWrite;
+            toRead.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            toRead.dstAccessMask = dstAccess;
+            toRead.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, dstStage, 0, 0, nullptr, 0, nullptr, 1,
+                                 &toRead);
+            return;
+        }
         vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
                              nullptr, 0, nullptr, 1, &toWrite);
         raw.unpacker->record(command, raw.unpackSlot, raw.unpackSource, raw.view, raw.desc.width, raw.desc.height,
@@ -386,8 +430,12 @@ void releaseRawInputImage(VkCommandBuffer command, const rawrcam::vulkan::Import
     // App-owned images stay with this queue; the slot fence guards reuse.
     // A GPU-unpacked frame hands the camera buffer back after the unpack read it.
     if (raw.gpuUnpack) {
-        rawrcam::vulkan::releaseForeignBuffer(command, raw.unpackSource, queueFamily,
-                                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+        if (!raw.unpacker)
+            rawrcam::vulkan::releaseForeignBuffer(command, raw.unpackSource, queueFamily,
+                                                  VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+        else
+            rawrcam::vulkan::releaseForeignBuffer(command, raw.unpackSource, queueFamily,
+                                                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
         return;
     }
     if (!raw.cpuUploaded) rawrcam::vulkan::releaseForeignImage(command, raw.image, queueFamily, srcStage, srcAccess);
