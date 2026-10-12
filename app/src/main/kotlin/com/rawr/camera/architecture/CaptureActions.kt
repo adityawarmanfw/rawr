@@ -97,6 +97,15 @@ data class SetExposureCandidate(val parameter: ExposureParameter, val candidateI
 
 data class ScrubTone(val target: ToneParameter, val delta: Int) : ApplicationCaptureAction
 
+/** Sets an AgX control of the active AgX preset; null restores the preset default. */
+data class SetAgxControl(
+    val parameter: com.rawr.camera.settings.model.AgxParameter,
+    val value: Float?
+) : ApplicationCaptureAction
+
+/** Sets the active profile's render exposure to [tenths] × 0.1 EV (AgX strip RANGE cell). */
+data class SetRenderExposureTenths(val tenths: Int) : ApplicationCaptureAction
+
 /** Shifts the active profile's render exposure by [deltaTenths] × 0.1 EV (manual-mode EV button). */
 data class ScrubRenderExposure(val deltaTenths: Int) : ApplicationCaptureAction
 

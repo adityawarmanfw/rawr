@@ -24,6 +24,7 @@
 #include "encoding/jpeg/JpegCaptureWriter.h"
 #include "encoding/jpeg/JpegPublicDescription.h"
 #include "jni/DevelopSettingsReader.h"
+#include "tonemap/ColorRenderProfile.h"
 #include "renderer/ExifTranspose.h"
 #include "renderer/RendererEngine.h"
 #include "vulkan/VulkanDispatch.h"
@@ -99,6 +100,22 @@ rawrcam::renderer::RenderOptions options(JNIEnv* env, jstring recipe, int workin
     t.adaptiveTone = {float(adaptive.number("liftEv", 0)), float(adaptive.number("keyEv", -4)),
                       float(adaptive.number("highlightEv", 0))};
     if (!tonemap::validAdaptiveTone(t.adaptiveTone)) throw std::runtime_error("Invalid adaptive tone recipe");
+    if (rawrcam::tonemap_integration::isAgxProfile(developSettings.colorRenderProfile)) {
+        // Preset names match tonemap::AgxPreset; recipe keys (kAgxControlKeys)
+        // override its control row, so older recipes fill in from the preset.
+        Json agx(env, json.child("agx"));
+        static constexpr const char* kPresets[tonemap::kAgxPresetCount] = {"Default", "BlenderBase", "BlenderPunchy",
+                                                                           "Sigmoid", "Smooth"};
+        const std::string name = agx.text("preset");
+        uint32_t preset = 0;
+        for (uint32_t i = 0; i < tonemap::kAgxPresetCount; ++i)
+            if (name == kPresets[i]) preset = i;
+        float controls[tonemap::kAgxControlCount];
+        for (uint32_t i = 0; i < tonemap::kAgxControlCount; ++i)
+            controls[i] = float(agx.number(tonemap::kAgxControlKeys[i], tonemap::kAgxPresetControls[preset][i]));
+        if (!rawrcam::tonemap_integration::agxFromControls(controls, &t.agx))
+            throw std::runtime_error("Invalid AgX recipe");
+    }
 #define RAWR_FILM_FIELD(type, name) c.filmLook.name = film.scalar<type>(#name, c.filmLook.name);
 #include "tonemap/FilmLookFields.inc"
 #undef RAWR_FILM_FIELD

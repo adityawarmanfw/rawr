@@ -50,9 +50,9 @@ object SettingsCatalog {
             ),
         maxPostGainChoices =
             listOf(
-                ChoiceCandidate("gain.100", "1x", "No post-RAW lift; darkest but never boosted"),
-                ChoiceCandidate("gain.200", "2x", "Up to +1EV linear, then 1EV soft knee"),
-                ChoiceCandidate("gain.400", "4x", "Up to +2EV linear, then 1EV soft knee")
+                ChoiceCandidate("gain.100", "1x", "Never boosted; darkest in low light"),
+                ChoiceCandidate("gain.200", "2x", "Up to +1 EV, then rolls off"),
+                ChoiceCandidate("gain.400", "4x", "Up to +2 EV, then rolls off")
             ),
         autoMinFpsChoices =
             listOf(

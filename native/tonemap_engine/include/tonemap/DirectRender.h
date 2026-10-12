@@ -3,8 +3,8 @@
 #include "tonemap/TonemapMath.h"
 
 namespace tonemap {
-// CPU reference for neutral direct display profiles and LOG (which ignores
-// creative controls). Input is calibrated scene-linear AP1 before AE gain.
+// CPU reference for neutral direct display profiles, AgX and LOG (which
+// ignores creative controls). Input is calibrated scene-linear AP1 before AE gain.
 inline color::Vec3 renderDirectReference(color::Vec3 ap1, const TonemapParams& p) {
     const bool log = p.renderTransform == RenderTransform::Log;
     if (p.renderTransform == RenderTransform::Existing)
@@ -13,9 +13,12 @@ inline color::Vec3 renderDirectReference(color::Vec3 ap1, const TonemapParams& p
     for (float& v : ap1) v *= gain;
     const color::ColorSpace source{color::Gamut::AcesCgAp1, color::TransferFunction::Linear};
     if (log) return color::convert(ap1, source, p.outputSpace);
-    auto linear = color::convert(ap1, source, {color::Gamut::SRgbRec709, color::TransferFunction::Linear});
+    const bool agx = p.renderTransform == RenderTransform::AgX;
+    auto linear = agx ? agxRenderReference(ap1, p.agx)
+                      : color::convert(ap1, source, {color::Gamut::SRgbRec709, color::TransferFunction::Linear});
     for (float& v : linear) v = std::clamp(v, 0.0f, 1.0f);
-    return color::encodeTransfer(linear, p.renderTransform == RenderTransform::Rec709
-        ? color::TransferFunction::Rec709 : color::TransferFunction::SRgb);
+    const bool rec709 = p.renderTransform == RenderTransform::Rec709 ||
+                        (agx && p.outputSpace.transfer == color::TransferFunction::Rec709);
+    return color::encodeTransfer(linear, rec709 ? color::TransferFunction::Rec709 : color::TransferFunction::SRgb);
 }
 }  // namespace tonemap

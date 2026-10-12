@@ -1,7 +1,11 @@
 package com.rawr.camera.settings.ui
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import com.rawr.camera.settings.architecture.*
 import com.rawr.camera.settings.model.*
 
@@ -119,6 +123,20 @@ internal fun ImageSettings(state: SettingsUiState, dispatch: SettingsDispatch) {
                 testTag = SettingsTestTags.row("Image", "film_simulation"),
                 onOpen = { dispatch.invoke(OpenSection(SettingsSection.FilmSim)) },
                 onCheckedChange = { dispatch.invoke(SetFilmSimEnabled(it)) }
+            )
+        }
+        SettingsGroup(
+            title = "Shadow Lift",
+            description = "Brightens shadows in high-contrast scenes; highlights keep their brightness. Not applied to LOG."
+        ) {
+            CompactChoiceRow(AutoKeyExposure.entries, state.values.autoKeyExposure, {
+                it.label
+            }) { dispatch.invoke(SetAutoKeyExposure(it)) }
+            Text(
+                state.values.autoKeyExposure.summary,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
             )
         }
         SettingsGroup(title = "Enhancement") {

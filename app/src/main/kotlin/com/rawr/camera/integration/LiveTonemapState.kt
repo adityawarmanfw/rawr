@@ -19,4 +19,12 @@ object LiveTonemapState {
     fun publish(value: ImageToneState) {
         mutable.value = value
     }
+
+    /** Active AgX preset's controls; applied even while another profile is active. */
+    private val mutableAgx = MutableStateFlow<com.rawr.camera.settings.model.AgxValues?>(null)
+    val agx: StateFlow<com.rawr.camera.settings.model.AgxValues?> = mutableAgx.asStateFlow()
+
+    fun publishAgx(value: com.rawr.camera.settings.model.AgxValues) {
+        mutableAgx.value = value
+    }
 }

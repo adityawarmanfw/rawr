@@ -16,6 +16,8 @@ struct LutChain {
     color::ColorSpace inputSpace{};
     color::ColorSpace outputSpace{};
     std::vector<Lut3D> stages;  // one or more; never insert implicit CSTs between stages
+    // PostRender: blend with the incoming render. RenderTransform: the LUT
+    // replaces RAWR NTRL outright when > 0 (no blend; NTRL is not computed).
     float intensity = 1.0f;
     LutPlacement placement = LutPlacement::PostRender;
     LutAfterAction afterAction = LutAfterAction::ConvertToSrgb;

@@ -187,13 +187,17 @@ struct Reader {
             fields(*this, v);
     }
     // Render profiles appended three words to TonemapParams without changing the
-    // journal version. Adaptive tone appends another three words. Accept known layouts; never read a short POD into
+    // journal version. Adaptive tone appends another three words, then AgX its
+    // parameters. Accept known layouts; never read a short POD into
     // the current struct or discard newly saved profile selection.
     void one(tonemap::TonemapParams& v) {
         uint32_t n = 0;
         bytes(&n, sizeof(n));
         if (n == sizeof(v)) {
             bytes(&v, sizeof(v));
+        } else if (n == offsetof(tonemap::TonemapParams, agx)) {
+            v = {};
+            bytes(&v, n);  // Pre-AgX layout; AgX keeps its defaults.
         } else if (n == offsetof(tonemap::TonemapParams, adaptiveTone)) {
             v = {};
             bytes(&v, n);  // Historical profile-aware layout; adaptive curve stays disabled.
@@ -206,7 +210,6 @@ struct Reader {
             v.shadowLiftEV = old[2];
             v.midtoneLiftEV = old[3];
             v.contrast = old[4];
-            v.shoulderStartEV = old[5];
             v.whitePointEV = old[6];
             v.highlightBiasEV = old[7];
             v.saturation = old[8];

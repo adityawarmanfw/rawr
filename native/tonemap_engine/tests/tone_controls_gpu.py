@@ -4,8 +4,9 @@
 Runs the production tonemap.comp through tonemap_vulkan_test (MoltenVK on
 macOS) on a synthetic scene-linear AP1 chart and checks invariants of the
 current renderer: finite output, monotonic tone ramps, slider continuity,
-stacking strength, LUT robustness, the vibrance shadow guard and the Blacks+
-near-black tail. Pass --before SHADER.comp to print the same metrics for an
+stacking strength, LUT robustness, the vibrance shadow guard, the Blacks+
+near-black tail, and the grade-space contract (Contrast pivots at 18% gray in
+every render's input encoding; Highlights- recovers headroom above white). Pass --before SHADER.comp to print the same metrics for an
 older shader (for review; only the current shader is asserted).
 
     uv run --no-project --with numpy native/tonemap_engine/tests/tone_controls_gpu.py
@@ -87,8 +88,8 @@ class Renderer:
         self.runner, self.spv, self.chart = runner, spv, chart_path
         self.cache = {}
 
-    def __call__(self, values, lut=None):
-        key = (tuple(values), lut)
+    def __call__(self, values, lut=None, extra=()):
+        key = (tuple(values), lut, tuple(extra))
         if key in self.cache:
             return self.cache[key]
         out = WORK / 'out.f32'
@@ -98,6 +99,7 @@ class Renderer:
                '--dump-output', out]
         if lut:
             cmd += ['--lut', lut, '--lut-after-action', '0']
+        cmd += [str(a) for a in extra]
         subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL)
         img = np.fromfile(out, dtype=np.float32).reshape(H, W, 4)[..., :3].astype(np.float64)
         self.cache[key] = img
@@ -106,6 +108,19 @@ class Renderer:
 
 def luma(img):
     return img @ SRGB_LUMA
+
+
+# Render setups for the grade-space contract: (name, lut, runner args).
+SRGB, REC709 = ['--render-transform', '1'], ['--render-transform', '2']
+LOGC3_LUT = ['--lut-placement', '0', '--lut-input-gamut', '4', '--lut-input-transfer', '6']
+VLOG_LUT = ['--lut-placement', '0', '--lut-input-gamut', '6', '--lut-input-transfer', '8']
+LINEAR_LUT = ['--lut-placement', '0', '--lut-input-gamut', '3', '--lut-input-transfer', '0']
+GRAY_EV = np.linspace(-12.0, 4.0, W)
+
+
+def gray_at(render, t, ev, lut=None, extra=()):
+    """Gray-ramp output luma interpolated at scene EV relative to 18% gray."""
+    return float(np.interp(ev, GRAY_EV, luma(render(t, lut, extra))[0]))
 
 
 def metrics(render, lut):
@@ -138,9 +153,11 @@ def metrics(render, lut):
     region = alone > 0.5 * alone.max()
     m['shadows_strength_when_stacked'] = float(np.median(lift(tone(S=100, W=-100), tone(W=-100))[region] / alone[region]))
     # NaN from pow() of a negative base is driver-defined: Apple clamps it to
-    # black, Adreno may keep NaN. Count both.
+    # black, Adreno may keep NaN. Count both. The display trims are what see
+    # the overshooting LUT output, so compare with and without them (the grade
+    # may legitimately crush below the LUT's own black point).
     img = render(tone(S=40, W=60, C=30), lut=lut)
-    lit = render(tone(), lut=lut).max(axis=2) > 0
+    lit = render(tone(S=40, C=30), lut=lut).max(axis=2) > 0
     m['lut_bad_pixels'] = int((~np.isfinite(img)).any(axis=2).sum() + (lit & (img.max(axis=2) <= 0)).sum())
     # Vibrance+ in deep shadows (linear Y < 2%) vs midtones.
     def chroma(i):
@@ -151,12 +168,39 @@ def metrics(render, lut):
     deep, mid = (y0 > 1e-4) & (y0 < 0.015), (y0 > 0.15) & (y0 < 0.4)
     m['vibrance_gain_deep_shadow'] = float(np.median(c1[deep] / np.maximum(c0[deep], 1e-9)))
     m['vibrance_gain_midtone'] = float(np.median(c1[mid] / np.maximum(c0[mid], 1e-9)))
+    # The guard is defined in linear light, so in sRGB it must also release by
+    # 10% linear (an encoded-unit guard held it back until ~13%).
+    s0, sy = chroma(render(tone(), extra=SRGB)[GRAY_ROWS:GRAY_ROWS + COLOR_ROWS])
+    s1, _ = chroma(render(tone(VIB=100), extra=SRGB)[GRAY_ROWS:GRAY_ROWS + COLOR_ROWS])
+    sdeep, slow = (sy > 1e-4) & (sy < 0.015), (sy > 0.105) & (sy < 0.125)
+    m['vibrance_srgb_deep_shadow'] = float(np.median(s1[sdeep] / np.maximum(s0[sdeep], 1e-9)))
+    m['vibrance_srgb_low_midtone'] = float(np.median(s1[slow] / np.maximum(s0[slow], 1e-9)))
     # Blacks+100 slope (noise gain) below one output code; the fitted y^.51
     # lift is unbounded at black.
     g0, g1 = luma(render(tone()))[0], luma(render(tone(B=100)))[0]
     near = (g0[1:] > 1e-6) & (g0[1:] < 1 / 255)
     slope = np.diff(g1) / np.maximum(np.diff(g0), 1e-12)
     m['blacks_plus_subcode_slope'] = float(slope[near].max()) if near.any() else float('nan')
+    # Contrast pivots at 18% gray in each render's input encoding.
+    setups = [('ntrl', None, ()), ('srgb', None, SRGB), ('rec709', None, REC709), ('logc3_lut', lut, LOGC3_LUT),
+              ('vlog_lut', lut, VLOG_LUT), ('linear_lut', lut, LINEAR_LUT)]
+    m['contrast_pivot_drift'] = max(abs(gray_at(render, tone(C=c), 0.0, l, x) - gray_at(render, tone(), 0.0, l, x))
+                                    for _, l, x in setups for c in (-100, 100))
+    # Contrast and Shadows keep true black where the log curve puts it
+    # (LogC3 0.093, V-Log 0.125), not at code 0. Anchored at code 0 this was
+    # ~0.1; the residual is Contrast- legitimately lifting the -12 EV sample
+    # just above black.
+    m['log_black_drift'] = max(abs(gray_at(render, t, -12.0, lut, x) - gray_at(render, tone(), -12.0, lut, x))
+                               for x in (LOGC3_LUT, VLOG_LUT) for t in (tone(C=100), tone(C=-100), tone(S=100)))
+    # Highlights-100 compresses the top under the NTRL shoulder and leaves the
+    # shadows alone; on direct sRGB it brings clipped values back into range.
+    g0, g1 = luma(render(tone()))[0], luma(render(tone(H=-100)))[0]
+    m['highlights_minus_top_drop'] = float(np.min((g0 - g1)[(GRAY_EV > 3.0) & (GRAY_EV < 4.0)]))
+    m['highlights_minus_shadow_change'] = float(np.abs(g0 - g1)[GRAY_EV < -2.0].max())
+    s0, s1 = luma(render(tone(), extra=SRGB))[0], luma(render(tone(H=-100), extra=SRGB))[0]
+    clipped = (GRAY_EV > 2.7) & (GRAY_EV < 3.0)
+    m['srgb_clipped_slope_before'] = float(np.diff(s0[clipped]).max())
+    m['srgb_recovered_slope_after'] = float(np.diff(s1[clipped]).min())
     # Single sliders are unchanged except where intended (gray + moderate color rows).
     rows = slice(0, GRAY_ROWS + COLOR_ROWS)
     for n in ('S', 'H', 'C', 'M'):
@@ -196,6 +240,13 @@ def main():
         ('LUT overshoot stays finite', after['lut_bad_pixels'] == 0),
         ('Vibrance+ spares deep shadows', after['vibrance_gain_deep_shadow'] < 1.05 < after['vibrance_gain_midtone']),
         ('Blacks+ does not amplify sub-code noise', after['blacks_plus_subcode_slope'] < 8.0),
+        ('Vibrance guard is in linear light (sRGB)',
+         after['vibrance_srgb_deep_shadow'] < 1.05 < 1.2 < after['vibrance_srgb_low_midtone']),
+        ('Contrast keeps 18% gray in every grade space', after['contrast_pivot_drift'] < 3e-3),
+        ('Log black stays at the curve black', after['log_black_drift'] < 1e-2),
+        ('Highlights- compresses the top', after['highlights_minus_top_drop'] > 0.01),
+        ('Highlights- leaves shadows alone', after['highlights_minus_shadow_change'] < 1e-4),
+        ('Highlights- recovers clipped sRGB', after['srgb_clipped_slope_before'] < 1e-6 < after['srgb_recovered_slope_after']),
     ]
     failed = [name for name, ok in checks if not ok]
     for name, ok in checks:

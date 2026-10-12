@@ -20,7 +20,8 @@ namespace rawrcam::color {
 // The key is measured on the scene-linear preview image before any gain
 // (image_scopes SceneExposureStatsData), so the lift never feeds back into
 // its own measurement.
-enum class AutoKeyMode : int { Off = 0, Natural = 1, Strong = 2 };
+// Ids are persisted/JNI values; Medium was added later, hence id 3.
+enum class AutoKeyMode : int { Off = 0, Natural = 1, Strong = 2, Medium = 3 };
 
 struct AutoKeyPolicy {
     float targetLuma;  // rendered scene-linear luma the key is placed at
@@ -30,6 +31,8 @@ struct AutoKeyPolicy {
 constexpr AutoKeyPolicy autoKeyPolicy(AutoKeyMode mode) noexcept {
     switch (mode) {
         case AutoKeyMode::Natural: return {0.075f, 1.0f};
+        // Geometric midpoint of Natural and Strong targets.
+        case AutoKeyMode::Medium: return {0.116f, 2.0f};
         case AutoKeyMode::Strong: return {0.18f, 3.0f};
         case AutoKeyMode::Off: break;
     }
@@ -37,7 +40,12 @@ constexpr AutoKeyPolicy autoKeyPolicy(AutoKeyMode mode) noexcept {
 }
 
 constexpr AutoKeyMode autoKeyModeFromId(int id) noexcept {
-    return id == 1 ? AutoKeyMode::Natural : id == 2 ? AutoKeyMode::Strong : AutoKeyMode::Off;
+    switch (id) {
+        case 1: return AutoKeyMode::Natural;
+        case 2: return AutoKeyMode::Strong;
+        case 3: return AutoKeyMode::Medium;
+        default: return AutoKeyMode::Off;
+    }
 }
 
 // Histogram layout shared with image_scopes::SceneExposureStatsData.

@@ -1,5 +1,6 @@
 package com.rawr.camera.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -40,6 +41,11 @@ import androidx.compose.ui.unit.sp
 import com.rawr.camera.architecture.CaptureDispatch
 import com.rawr.camera.architecture.ScrubRenderExposure
 import com.rawr.camera.architecture.ScrubTone
+import com.rawr.camera.architecture.SetAgxControl
+import com.rawr.camera.architecture.SetRenderExposureTenths
+import com.rawr.camera.model.AGX_STRIP_EXPOSURE_KEY
+import com.rawr.camera.model.agxStripState
+import com.rawr.camera.settings.model.AgxCatalog
 import com.rawr.camera.model.CaptureUiState
 import com.rawr.camera.model.RenderProfileQuickState
 import com.rawr.camera.model.TonemapCatalog
@@ -69,7 +75,11 @@ internal fun TonemapStrip(
     val profileLabel = profiles.options.firstOrNull { it.id == profiles.selectedId }?.label ?: "RAWR NTRL"
     // Render exposure counts too: the manual-mode EV button edits it from capture.
     val modified = !profiles.log && (state.renderExposureTenths != 0 ||
-        TonemapCatalog.tone.any { !TonemapCatalog.isDefault(state, requireNotNull(it.param)) })
+        TonemapCatalog.tone.any { !TonemapCatalog.isDefault(state, requireNotNull(it.param)) } ||
+        profiles.agx?.modified == true)
+    // AgX replaces the TONE row with darktable's sections (FilmConfigBlock levels).
+    var agxSection by remember { mutableStateOf<String?>(null) }
+    var agxSubsection by remember { mutableStateOf<String?>(null) }
     Column(
         modifier.testTag(CaptureTestTags.TONEMAP_STRIP),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -90,14 +100,43 @@ internal fun TonemapStrip(
                 onOpenParams = { mode = TonemapStripMode.Params }
             )
 
-            TonemapStripMode.Params -> TonemapParamsRow(
-                state = state,
-                profileLabel = profileLabel,
-                modified = modified,
-                onBack = { mode = TonemapStripMode.Collapsed },
-                onOpenProfiles = { mode = TonemapStripMode.Profiles },
-                dispatch = dispatch
-            )
+            TonemapStripMode.Params -> {
+                val agx = profiles.agx
+                if (agx != null) {
+                    val quick = agxStripState(agx, state.renderExposureTenths, profileLabel)
+                    val section = quick.sections.firstOrNull { it.key == agxSection } ?: quick.sections.first()
+                    val subsection = section.subsections.firstOrNull { it.key == agxSubsection } ?: section.subsections.first()
+                    FilmConfigBlock(
+                        quick = quick,
+                        sectionKey = section.key,
+                        subsectionKey = subsection.key,
+                        onSection = {
+                            agxSection = it
+                            agxSubsection = null
+                        },
+                        onSubsection = { agxSubsection = it },
+                        onBack = { mode = TonemapStripMode.Collapsed },
+                        onOpenProfiles = { mode = TonemapStripMode.Profiles },
+                        l4Key = null,
+                        onOpenDiscrete = {},
+                        onCloseL4 = {},
+                        onScrubParam = { key, value -> dispatchAgx(dispatch, key, value) },
+                        onResetParam = { key -> dispatchAgx(dispatch, key, null) },
+                        onScrubDiscrete = { _, _ -> },
+                        onToggleFlag = { _, _ -> },
+                        kind = "AgX"
+                    )
+                } else {
+                    TonemapParamsRow(
+                        state = state,
+                        profileLabel = profileLabel,
+                        modified = modified,
+                        onBack = { mode = TonemapStripMode.Collapsed },
+                        onOpenProfiles = { mode = TonemapStripMode.Profiles },
+                        dispatch = dispatch
+                    )
+                }
+            }
         }
     }
 }
@@ -240,10 +279,25 @@ private fun TonemapParamsRow(
             ) {
                 itemsIndexed(TonemapCatalog.all, key = { _, item -> item.jsonKey }) { index, descriptor ->
                     val cellModifier = Modifier.width(sliderWidths[index % sliderWidths.size])
-                    if (descriptor.param == null) {
-                        RenderExposureParamItem(descriptor, state, dispatch, cellModifier)
-                    } else {
-                        TonemapParamItem(descriptor, state, dispatch, cellModifier)
+                    // Divider where the controls move to another stage of the render.
+                    val startsGroup = index > 0 && TonemapCatalog.all[index - 1].group != descriptor.group
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(CaptureDimens.ControlGap)
+                    ) {
+                        if (startsGroup) {
+                            Box(
+                                Modifier
+                                    .width(1.dp)
+                                    .height(StripDimens.ParamRowHeight / 2)
+                                    .background(Color.White.copy(alpha = .25f))
+                            )
+                        }
+                        if (descriptor.param == null) {
+                            RenderExposureParamItem(descriptor, state, dispatch, cellModifier)
+                        } else {
+                            TonemapParamItem(descriptor, state, dispatch, cellModifier)
+                        }
                     }
                 }
             }
@@ -369,6 +423,16 @@ private fun RenderExposureParamItem(
         },
         format = { renderExposureLabel(renderExposureTenthsOf(it)) }
     )
+}
+
+/** AgX strip edits: the RANGE exposure cell is render exposure, every other key an AgX control. */
+private fun dispatchAgx(dispatch: CaptureDispatch, key: String, value: Float?) {
+    if (key == AGX_STRIP_EXPOSURE_KEY) {
+        dispatch(SetRenderExposureTenths(value?.let { renderExposureTenthsOf(it) } ?: 0))
+        return
+    }
+    val spec = AgxCatalog.byJsonKey(key) ?: return
+    dispatch(SetAgxControl(spec.parameter, value?.let(spec::clamp)))
 }
 
 private fun signedTone(value: Int): String = if (value >= 0) "+$value" else "$value"

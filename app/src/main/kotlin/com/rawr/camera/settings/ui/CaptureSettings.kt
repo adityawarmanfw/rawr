@@ -72,7 +72,35 @@ internal fun ExposureSettings(state: SettingsUiState, dispatch: SettingsDispatch
     // Optimistic until probed so a supporting camera never flashes disabled.
     val hardware = LocalLensHardware.current
     val prioritySupported by produceState(true, hardware) { value = hardware.aePrioritySupported() }
+    val boostLimited = state.values.maxPostGainId != "gain.100"
     SettingsPageContainer {
+        SettingsGroup(
+            title = "Brightness Boost",
+            description = "Digital gain the camera adds in low light, applied evenly to the whole image."
+        ) {
+            SettingsRow(
+                "Boost Limit",
+                maxPostGain,
+                onClick = { dispatch.invoke(OpenSelector(ChoiceSelectorKind.MaxPostGain)) }
+            )
+            if (boostLimited) {
+                SettingDivider()
+                Text(
+                    "Above the Limit",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp)
+                )
+                CompactChoiceRow(HighlightProtection.entries, state.values.highlightProtection, {
+                    it.label
+                }) { dispatch.invoke(SetHighlightProtection(it)) }
+                Text(
+                    state.values.highlightProtection.kneeSummary,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+            }
+        }
         SettingsGroup(title = "Anti-flicker") {
             CompactChoiceRow(
                 AntiFlicker.entries,
@@ -80,33 +108,11 @@ internal fun ExposureSettings(state: SettingsUiState, dispatch: SettingsDispatch
                 { it.label }
             ) { dispatch.invoke(SetAntiFlicker(it)) }
         }
-        SettingsGroup(
-            title = "Highlight Protection",
-            description = "Soft-knee width past Maximum Post-RAW Gain. Narrower protects highlights; wider keeps shadows brighter."
-        ) {
-            CompactChoiceRow(HighlightProtection.entries, state.values.highlightProtection, {
-                it.label
-            }) { dispatch.invoke(SetHighlightProtection(it)) }
-            Text(
-                state.values.highlightProtection.kneeSummary,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-            )
-        }
-        SettingsGroup(
-            title = "Auto Key Exposure",
-            description = "Balances shadows and midtones while preserving highlight exposure. " +
-                "Sensor exposure is unchanged. LOG profiles are never lifted."
-        ) {
-            CompactChoiceRow(AutoKeyExposure.entries, state.values.autoKeyExposure, {
-                it.label
-            }) { dispatch.invoke(SetAutoKeyExposure(it)) }
-            Text(
-                state.values.autoKeyExposure.summary,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+        SettingsGroup {
+            SettingsRow(
+                "Auto Minimum FPS",
+                autoMinFps,
+                onClick = { dispatch.invoke(OpenSelector(ChoiceSelectorKind.AutoMinFps)) }
             )
         }
         SettingsGroup(
@@ -123,19 +129,6 @@ internal fun ExposureSettings(state: SettingsUiState, dispatch: SettingsDispatch
                 checked = state.values.aePriorityDisabled || !prioritySupported,
                 enabled = prioritySupported
             ) { dispatch.invoke(SetAePriorityDisabled(it)) }
-        }
-        SettingsGroup(title = "Auto Exposure Limits") {
-            SettingsRow(
-                "Maximum Post-RAW Gain",
-                maxPostGain,
-                onClick = { dispatch.invoke(OpenSelector(ChoiceSelectorKind.MaxPostGain)) }
-            )
-            SettingDivider()
-            SettingsRow(
-                "Auto Minimum FPS",
-                autoMinFps,
-                onClick = { dispatch.invoke(OpenSelector(ChoiceSelectorKind.AutoMinFps)) }
-            )
         }
     }
 }

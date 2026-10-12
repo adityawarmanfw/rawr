@@ -1,6 +1,7 @@
 #pragma once
 #include <vulkan/vulkan.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 
@@ -98,6 +99,21 @@ struct GainmapParams {
     // override with identity.
     float hdrToLinearSrgbRowMajor[9] = {1.70505154f, -0.62179068f, -0.08325840f, -0.13025714f, 1.14080269f,
                                         -0.01054853f, -0.02400328f, -0.12896877f, 1.15297184f};
+    // AgX tap: the exposed HDR tap is rendered through AgX for the display
+    // headroom (tonemap::packAgxGpuBlock with agxForHeadroom, its input matrix
+    // mapping the HDR input to linear Rec2020) instead of being used as scene
+    // linear, so HDR highlights keep AgX's hue path. Opaque std140 block
+    // (tonemap::AgxGpuBlock, 320 bytes); hdrToLinearSrgbRowMajor is unused then.
+    bool agxTap = false;
+    std::array<float, 80> agxTapBlock{};
+    // Grade tap: the SDR render's Grade sliders (Contrast, Highlights,
+    // Shadows, Midtones, Saturation, Vibrance) applied to the exposed tap as
+    // a luminance gain plus a chroma gain, like adaptiveTone, so the map never
+    // encodes an inverse of a slider (Highlights- would otherwise be undone
+    // on HDR displays). Packed by tonemap::TonemapEngine::gradeTapBlock;
+    // gradeTap false = off. Encode-only; the mux never sees it.
+    bool gradeTap = false;
+    std::array<float, 12> gradeTapBlock{};
 };
 
 struct GainmapCreateInfo {

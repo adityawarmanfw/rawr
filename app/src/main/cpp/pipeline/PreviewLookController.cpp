@@ -480,4 +480,15 @@ void PreviewLookController::setTonemapParameters(float exposureEV, float blackPo
     tonemapParams_.vibrance = vibrance;
     publishTone_(tonemapParams_);
 }
+
+void PreviewLookController::setAgxParameters(const float* values) {
+    tonemap::AgxParams agx{};
+    if (!tonemap_integration::agxFromControls(values, &agx)) {
+        LOGW("Rejected invalid AgX control update");
+        return;
+    }
+    std::lock_guard<std::mutex> lock(transitionMutex_);
+    tonemapParams_.agx = agx;
+    publishTone_(tonemapParams_);
+}
 }  // namespace rawrcam::pipeline

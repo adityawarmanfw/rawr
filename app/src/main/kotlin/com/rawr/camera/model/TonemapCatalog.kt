@@ -9,6 +9,18 @@ import kotlin.math.roundToInt
  * live here and are consumed by the capture strip, the Settings "Tone" group
  * and the Renderer recipe so none of them redefine the list or the numbers.
  */
+/** Where a control runs relative to the render (see tonemap.comp). */
+enum class TonemapGroup(val label: String) {
+    /** Scene-linear gain before everything. */
+    Exposure("Exposure"),
+
+    /** Before the render, in its input encoding (DaVinci Intermediate, LUT input, sRGB/Rec.709). */
+    Grade("Grade"),
+
+    /** After the render, on the display image. */
+    Output("Output")
+}
+
 data class TonemapParam(
     /** Capture/settings enum binding; null for render exposure (not a scrub target). */
     val param: ToneParameter?,
@@ -23,6 +35,7 @@ data class TonemapParam(
     val defaultValue: Float,
     val step: Float,
     val decimals: Int,
+    val group: TonemapGroup,
     val unit: String = ""
 )
 
@@ -38,21 +51,25 @@ object TonemapCatalog {
             defaultValue = TonemapControlContract.EXPOSURE_NEUTRAL_EV,
             step = .1f,
             decimals = 1,
+            group = TonemapGroup.Exposure,
             unit = " EV"
         )
 
-    val blacks = tone(ToneParameter.Blacks, "blacks", "BLK", "Blacks")
-    val shadows = tone(ToneParameter.Shadows, "shadows", "SHD", "Shadows")
-    val contrast = tone(ToneParameter.Contrast, "contrast", "CON", "Contrast")
-    val midtones = tone(ToneParameter.Midtones, "midtones", "MID", "Midtones")
-    val highlights = tone(ToneParameter.Highlights, "highlights", "HL", "Highlights")
-    val whites = tone(ToneParameter.Whites, "whites", "WHT", "Whites")
-    val saturation = tone(ToneParameter.Saturation, "saturation", "SAT", "Saturation")
-    val vibrance = tone(ToneParameter.Vibrance, "vibrance", "VIB", "Vibrance")
+    val highlights = tone(ToneParameter.Highlights, "highlights", "HL", "Highlights", TonemapGroup.Grade)
+    val shadows = tone(ToneParameter.Shadows, "shadows", "SHD", "Shadows", TonemapGroup.Grade)
+    val midtones = tone(ToneParameter.Midtones, "midtones", "MID", "Midtones", TonemapGroup.Grade)
+    val contrast = tone(ToneParameter.Contrast, "contrast", "CON", "Contrast", TonemapGroup.Grade)
+    val saturation = tone(ToneParameter.Saturation, "saturation", "SAT", "Saturation", TonemapGroup.Grade)
+    val vibrance = tone(ToneParameter.Vibrance, "vibrance", "VIB", "Vibrance", TonemapGroup.Grade)
+    val whites = tone(ToneParameter.Whites, "whites", "WHT", "Whites", TonemapGroup.Output)
+    val blacks = tone(ToneParameter.Blacks, "blacks", "BLK", "Blacks", TonemapGroup.Output)
 
-    /** Canonical strip/settings order. */
+    /**
+     * Canonical strip/settings order, grouped by where each control runs.
+     * Display order only: the shader's processing order inside Grade differs.
+     */
     val tone: List<TonemapParam> =
-        listOf(blacks, shadows, contrast, midtones, highlights, whites, saturation, vibrance)
+        listOf(highlights, shadows, midtones, contrast, saturation, vibrance, whites, blacks)
 
     /** Every tone control (render exposure included), in canonical order. */
     val all: List<TonemapParam> = listOf(renderExposure) + tone
@@ -71,7 +88,8 @@ object TonemapCatalog {
         param: ToneParameter,
         jsonKey: String,
         shortLabel: String,
-        longLabel: String
+        longLabel: String,
+        group: TonemapGroup
     ) = TonemapParam(
         param = param,
         jsonKey = jsonKey,
@@ -81,6 +99,7 @@ object TonemapCatalog {
         maximum = TonemapControlContract.TONE_UI_MAX,
         defaultValue = TonemapControlContract.TONE_UI_NEUTRAL,
         step = 1f,
-        decimals = 0
+        decimals = 0,
+        group = group
     )
 }

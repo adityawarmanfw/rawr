@@ -258,6 +258,9 @@ void setTonemapParameters(EngineHandle h, float a, float b, float c, float d, fl
                           float j) noexcept {
     if (h) engine(h)->setTonemapParameters(a, b, c, d, e, f, g, i, j);
 }
+void setAgxParameters(EngineHandle h, const float* values) noexcept {
+    if (h) engine(h)->setAgxParameters(values);
+}
 void setAssetManager(EngineHandle h, AAssetManager* assetManager) noexcept {
     if (h) engine(h)->setAssetManager(assetManager);
 }

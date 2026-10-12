@@ -114,6 +114,9 @@ develop::DevelopSettings readRendererDevelopSettings(Json& json) {
     if (json.text("colorRenderProfile") == "SRgb") {
         out.colorRenderProfile = rawrcam::tonemap_integration::ColorRenderProfile::SRgb;
         out.importedLutProfileId.clear();
+    } else if (json.text("colorRenderProfile") == "AgX") {
+        out.colorRenderProfile = rawrcam::tonemap_integration::ColorRenderProfile::AgX;
+        out.importedLutProfileId.clear();
     }
     out.fccSteps = uint32_t(json.number("fccSteps", 2));
     out.fccEdgeSigma = 0;

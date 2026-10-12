@@ -17,15 +17,13 @@ namespace {
 
 struct alignas(16) GpuParameters {
     float cameraToWorking[16];
-    float toneKnots0123[4];
-    float toneKnot4ExposureSaturationGamut[4];
+    float gradePivot[4];
+    float exposureSaturation[4];
     float vibranceControls[4];
     float renderingConfig[4];
     float toneControls[4];
-    float curveSegment0[4];
-    float curveSegment1[4];
-    float curveSegment2[4];
-    float curveSegment3[4];
+    float gradeLuma[4];
+    float reserved[3][4];
     uint32_t imageExtent[4];
     uint32_t lutControl[4];
     uint32_t lutOutput[4];
@@ -36,8 +34,9 @@ struct alignas(16) GpuParameters {
     float neutralGamut[16], userInputGamut[16], userOutputGamut[16];
     uint32_t directRender[4];
     float adaptiveTone[4];
+    AgxGpuBlock agx;
 };
-static_assert(sizeof(GpuParameters) == 880, "GPU parameter layout changed");
+static_assert(sizeof(GpuParameters) == 1200, "GPU parameter layout changed");
 
 constexpr VkDeviceSize kRawLscBytes = 64 * 1024;
 struct RawPush {
@@ -80,22 +79,23 @@ void checkVulkanResult(VkResult result, const char* message) {
 bool finite(float value) noexcept { return std::isfinite(value); }
 
 bool validConfig(const TonemapConfig& config) noexcept {
-    return finite(config.middleGray) && finite(config.shadowAnchorEV) && finite(config.shoulderOutputCap) &&
-           finite(config.gamutCompressionStart) && finite(config.vibranceStrength) &&
+    return finite(config.middleGray) && finite(config.vibranceStrength) &&
            finite(config.vibranceShadowStart) && finite(config.vibranceShadowEnd) && config.middleGray > 0.0f &&
-           config.middleGray < 1.0f && config.shadowAnchorEV < 0.0f && config.shoulderOutputCap > config.middleGray &&
-           config.shoulderOutputCap < 1.0f && config.gamutCompressionStart > 0.0f &&
-           config.gamutCompressionStart < 1.0f && config.vibranceStrength >= 0.0f &&
+           config.middleGray < 1.0f && config.vibranceStrength >= 0.0f &&
            config.vibranceShadowStart >= 0.0f && config.vibranceShadowEnd > config.vibranceShadowStart;
 }
 
 bool validParams(const TonemapParams& params) noexcept {
-    if (static_cast<unsigned>(params.renderTransform) > 3 ||
+    if (static_cast<unsigned>(params.renderTransform) > 4 ||
         static_cast<unsigned>(params.outputSpace.gamut) > 7 ||
         static_cast<unsigned>(params.outputSpace.transfer) > 10) return false;
+    if (params.renderTransform == RenderTransform::AgX &&
+        (!validAgx(params.agx) || (params.outputSpace.transfer != color::TransferFunction::SRgb &&
+                                   params.outputSpace.transfer != color::TransferFunction::Rec709)))
+        return false;
     return validAdaptiveTone(params.adaptiveTone) && finite(params.exposureEV) && finite(params.blackPointEV) &&
            finite(params.shadowLiftEV) && finite(params.midtoneLiftEV) && finite(params.contrast) &&
-           finite(params.shoulderStartEV) && finite(params.whitePointEV) && finite(params.highlightBiasEV) &&
+           finite(params.whitePointEV) && finite(params.highlightBiasEV) &&
            finite(params.saturation) && finite(params.vibrance) && finite(params.aePostGain) &&
            params.blackPointEV >= -100.0f && params.blackPointEV <= 100.0f && params.shadowLiftEV >= -100.0f &&
            params.shadowLiftEV <= 100.0f && params.midtoneLiftEV >= -100.0f && params.midtoneLiftEV <= 100.0f &&
@@ -111,22 +111,21 @@ bool supportsStorageImage(VkPhysicalDevice physicalDevice, VkFormat format) noex
     return (properties.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) != 0;
 }
 
+// A linear LUT input is graded in DaVinci Intermediate (see tonemap.comp).
+color::TransferFunction userGradeTransfer(const lut::LutGpuPayload& lutPayload) noexcept {
+    return lutPayload.inputSpace.transfer == color::TransferFunction::Linear ? color::TransferFunction::DaVinciIntermediate
+                                                                             : lutPayload.inputSpace.transfer;
+}
+
+color::TransferFunction directGradeTransfer(const TonemapParams& params) noexcept {
+    return params.renderTransform == RenderTransform::Rec709 ? color::TransferFunction::Rec709
+                                                             : color::TransferFunction::SRgb;
+}
+
 GpuParameters buildGpuParameters(const TonemapParams& params, const float* matrix,
                                  uint32_t outputWidth, uint32_t outputHeight,
                                  uint32_t inputWidth, uint32_t inputHeight, const TonemapConfig& config,
                                  const lut::LutGpuPayload& lutPayload, const detail::GamutConversions& conversions) {
-    // The photographic controls are post-render display-domain operators.
-    // Compile the base render curve from fixed neutral anchors so slider changes
-    // cannot alter the base spline a second time.
-    TonemapParams base = params;
-    base.blackPointEV = -10.0f;
-    base.shadowLiftEV = 0.0f;
-    base.midtoneLiftEV = 0.0f;
-    base.contrast = 1.0f;
-    base.shoulderStartEV = 2.0f;
-    base.whitePointEV = 6.0f;
-    base.highlightBiasEV = 0.0f;
-    const CurveCoefficients curve = compileCurve(base, config);
     GpuParameters gpu{};
     gpu.adaptiveTone[0] = params.adaptiveTone.liftEv;
     gpu.adaptiveTone[1] = params.adaptiveTone.keyEv;
@@ -134,6 +133,8 @@ GpuParameters buildGpuParameters(const TonemapParams& params, const float* matri
     gpu.directRender[0] = static_cast<uint32_t>(params.renderTransform);
     gpu.directRender[1] = static_cast<uint32_t>(params.outputSpace.gamut);
     gpu.directRender[2] = static_cast<uint32_t>(params.outputSpace.transfer);
+    if (params.renderTransform == RenderTransform::AgX)
+        gpu.agx = packAgxGpuBlock(params.agx, color::linearGamutMatrix(color::Gamut::AcesCgAp1, color::Gamut::Rec2020));
     std::memcpy(gpu.neutralGamut, conversions.neutral.data(), sizeof(gpu.neutralGamut));
     std::memcpy(gpu.userInputGamut, conversions.userInput.data(), sizeof(gpu.userInputGamut));
     std::memcpy(gpu.userOutputGamut, conversions.userOutput.data(), sizeof(gpu.userOutputGamut));
@@ -150,17 +151,24 @@ GpuParameters buildGpuParameters(const TonemapParams& params, const float* matri
     gpu.cameraToWorking[10] = matrix[8];
     gpu.cameraToWorking[15] = 1.0f;
 
-    std::memcpy(gpu.toneKnots0123, curve.x.data(), sizeof(gpu.toneKnots0123));
-    gpu.toneKnot4ExposureSaturationGamut[0] = curve.x[4];
-    gpu.toneKnot4ExposureSaturationGamut[1] = params.exposureEV;
-    gpu.toneKnot4ExposureSaturationGamut[2] = params.saturation;
-    gpu.toneKnot4ExposureSaturationGamut[3] = config.gamutCompressionStart;
+    // Grade space anchors: where 18% gray and black land in each render's
+    // input encoding, and the luma weights of the imported LUT's input gamut.
+    gpu.gradePivot[0] = color::encodeTransfer(config.middleGray, color::TransferFunction::DaVinciIntermediate);
+    gpu.gradePivot[1] = color::encodeTransfer(config.middleGray, userGradeTransfer(lutPayload));
+    gpu.gradePivot[2] = color::encodeTransfer(config.middleGray, directGradeTransfer(params));
+    // Black code of the LUT input (0 linear): log encodings put it above 0.
+    gpu.gradePivot[3] = color::encodeTransfer(0.0f, userGradeTransfer(lutPayload));
+    const color::Mat3 toSrgb = color::linearGamutMatrix(lutPayload.inputSpace.gamut, color::Gamut::SRgbRec709);
+    constexpr float kSrgbLuma[3] = {0.2126f, 0.7152f, 0.0722f};
+    for (int c = 0; c < 3; ++c)
+        gpu.gradeLuma[c] = kSrgbLuma[0] * toSrgb[c] + kSrgbLuma[1] * toSrgb[3 + c] + kSrgbLuma[2] * toSrgb[6 + c];
+    gpu.exposureSaturation[1] = params.exposureEV;
+    gpu.exposureSaturation[2] = params.saturation;
 
     gpu.vibranceControls[0] = params.vibrance;
     gpu.vibranceControls[1] = config.vibranceStrength;
     gpu.vibranceControls[2] = config.vibranceShadowStart;
     gpu.vibranceControls[3] = config.vibranceShadowEnd;
-    gpu.renderingConfig[0] = config.middleGray;
     // A scalar scene-linear gain commutes with the camera->working matrix.
     // Store it in stops so the shader can add it at the existing pre-tone
     // exposure position without three RGB multiplies.
@@ -171,11 +179,6 @@ GpuParameters buildGpuParameters(const TonemapParams& params, const float* matri
     gpu.toneControls[1] = params.highlightBiasEV;
     gpu.toneControls[2] = params.blackPointEV;
     gpu.toneControls[3] = params.whitePointEV;
-
-    std::memcpy(gpu.curveSegment0, curve.cubic[0].data(), sizeof(gpu.curveSegment0));
-    std::memcpy(gpu.curveSegment1, curve.cubic[1].data(), sizeof(gpu.curveSegment1));
-    std::memcpy(gpu.curveSegment2, curve.cubic[2].data(), sizeof(gpu.curveSegment2));
-    std::memcpy(gpu.curveSegment3, curve.cubic[3].data(), sizeof(gpu.curveSegment3));
 
     gpu.imageExtent[0] = outputWidth;
     gpu.imageExtent[1] = outputHeight;
@@ -1061,6 +1064,36 @@ void TonemapEngine::recordRaw(const TonemapRawRecordInfo& r) {
 }
 
 const TonemapConfig& TonemapEngine::config() const noexcept { return impl_->rendererConfig; }
+
+std::optional<GradeTapBlock> TonemapEngine::gradeTapBlock(const TonemapParams& p) const noexcept {
+    if (p.renderTransform == RenderTransform::AgX || p.renderTransform == RenderTransform::Log) return std::nullopt;
+    if (p.contrast == 0.0f && p.highlightBiasEV == 0.0f && p.shadowLiftEV == 0.0f && p.midtoneLiftEV == 0.0f &&
+        p.saturation == 0.0f && p.vibrance == 0.0f)
+        return std::nullopt;
+    // Same space selection as the shader: a render-transform LUT replaces
+    // NTRL and its grade space, the direct profiles grade in their output
+    // encoding.
+    const auto& payload = impl_->userLutPayload;
+    const bool userLut = p.renderTransform == RenderTransform::Existing && payload.enabled &&
+                         payload.intensity > 0.0f && payload.placement == lut::LutPlacement::RenderTransform;
+    const auto transfer = p.renderTransform != RenderTransform::Existing ? directGradeTransfer(p)
+                          : userLut ? userGradeTransfer(payload)
+                                    : color::TransferFunction::DaVinciIntermediate;
+    const auto& cfg = impl_->rendererConfig;
+    const auto unit = [](float v) { return std::clamp(v, -100.0f, 100.0f) * 0.01f; };
+    return GradeTapBlock{unit(p.contrast),
+                         unit(p.highlightBiasEV),
+                         unit(p.shadowLiftEV),
+                         unit(p.midtoneLiftEV),
+                         unit(p.saturation),
+                         unit(p.vibrance),
+                         cfg.vibranceStrength,
+                         cfg.vibranceShadowStart,
+                         cfg.vibranceShadowEnd,
+                         color::encodeTransfer(cfg.middleGray, transfer),
+                         color::encodeTransfer(0.0f, transfer),
+                         static_cast<float>(transfer)};
+}
 uint32_t TonemapEngine::maxFramesInFlight() const noexcept { return impl_->frameSlotCount; }
 
 }  // namespace tonemap

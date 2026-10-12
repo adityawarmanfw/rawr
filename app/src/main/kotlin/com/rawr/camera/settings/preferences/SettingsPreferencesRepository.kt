@@ -1,5 +1,9 @@
 package com.rawr.camera.settings.preferences
 
+import com.rawr.camera.settings.model.AgxCatalog
+import com.rawr.camera.settings.model.AgxParameter
+import com.rawr.camera.settings.model.AgxPreset
+import com.rawr.camera.settings.model.AgxValues
 import com.rawr.camera.settings.model.ProfileTone
 import com.rawr.camera.settings.model.VideoLogProfile
 
@@ -365,6 +369,8 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
                     34 -> values
                     // v35 -> v36: last used lens; absent means the profile's first lens.
                     35 -> values
+                    // v36 -> v37: AgX render profile; absent keys use AgX defaults.
+                    36 -> values
                     else -> {
                         return defaults
                     }
@@ -464,6 +470,20 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
                 saturation = p[Keys.rec709ToneSaturation] ?: 0f,
                 vibrance = p[Keys.rec709ToneVibrance] ?: 0f
             ),
+            agxTone = ProfileTone(
+                renderExposure = p[Keys.agxToneRenderExposure] ?: 0f,
+                blacks = p[Keys.agxToneBlacks] ?: 0f,
+                shadows = p[Keys.agxToneShadows] ?: 0f,
+                contrast = p[Keys.agxToneContrast] ?: 0f,
+                midtones = p[Keys.agxToneMidtones] ?: 0f,
+                highlights = p[Keys.agxToneHighlights] ?: 0f,
+                whites = p[Keys.agxToneWhites] ?: 0f,
+                saturation = p[Keys.agxToneSaturation] ?: 0f,
+                vibrance = p[Keys.agxToneVibrance] ?: 0f
+            ),
+            agxPreset = enumOrDefault(p[Keys.agxPreset], d.agxPreset),
+            videoAgxPreset = enumOrDefault(p[Keys.videoAgxPreset], d.videoAgxPreset),
+            agxValues = decodeAgxValues(p[Keys.agxValues]),
             srgbTone = ProfileTone(
                 renderExposure = p[Keys.srgbToneRenderExposure] ?: 0f,
                 blacks = p[Keys.srgbToneBlacks] ?: 0f,
@@ -678,6 +698,18 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.rec709ToneWhites] = v.rec709Tone.whites
         p[Keys.rec709ToneSaturation] = v.rec709Tone.saturation
         p[Keys.rec709ToneVibrance] = v.rec709Tone.vibrance
+        p[Keys.agxToneRenderExposure] = v.agxTone.renderExposure
+        p[Keys.agxToneBlacks] = v.agxTone.blacks
+        p[Keys.agxToneShadows] = v.agxTone.shadows
+        p[Keys.agxToneContrast] = v.agxTone.contrast
+        p[Keys.agxToneMidtones] = v.agxTone.midtones
+        p[Keys.agxToneHighlights] = v.agxTone.highlights
+        p[Keys.agxToneWhites] = v.agxTone.whites
+        p[Keys.agxToneSaturation] = v.agxTone.saturation
+        p[Keys.agxToneVibrance] = v.agxTone.vibrance
+        p[Keys.agxPreset] = v.agxPreset.name
+        p[Keys.videoAgxPreset] = v.videoAgxPreset.name
+        p[Keys.agxValues] = encodeAgxValues(v.agxValues)
         p[Keys.srgbToneRenderExposure] = v.srgbTone.renderExposure
         p[Keys.srgbToneBlacks] = v.srgbTone.blacks
         p[Keys.srgbToneShadows] = v.srgbTone.shadows
@@ -874,9 +906,26 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
             .take(3)
     }
 
+    /** `Preset=c0,c1,...;...` (AgxParameter order) for presets with edited AgX controls. */
+    private fun encodeAgxValues(values: Map<AgxPreset, AgxValues>): String =
+        values.entries.sortedBy { it.key.ordinal }.joinToString(";") { (preset, v) ->
+            preset.name + "=" + v.toNativeArray().joinToString(",")
+        }
+
+    private fun decodeAgxValues(raw: String?): Map<AgxPreset, AgxValues> =
+        raw.orEmpty().split(';').mapNotNull { entry ->
+            val preset = AgxPreset.entries.firstOrNull { it.name == entry.substringBefore('=') } ?: return@mapNotNull null
+            val n = entry.substringAfter('=').split(',').mapNotNull { it.toFloatOrNull() }
+            when (n.size) {
+                AgxParameter.entries.size -> preset to AgxValues(n)
+                5 -> preset to AgxCatalog.fromLegacy(n, preset)
+                else -> null
+            }
+        }.toMap()
+
     private companion object {
         const val LEGACY_SCHEMA_VERSION = 0
-        const val CURRENT_SCHEMA_VERSION = 36
+        const val CURRENT_SCHEMA_VERSION = 37
     }
 
     private object Keys {
@@ -939,6 +988,18 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val rec709ToneWhites = floatPreferencesKey("rec709Tone_whites")
         val rec709ToneSaturation = floatPreferencesKey("rec709Tone_saturation")
         val rec709ToneVibrance = floatPreferencesKey("rec709Tone_vibrance")
+        val agxToneRenderExposure = floatPreferencesKey("agxTone_renderExposure")
+        val agxToneBlacks = floatPreferencesKey("agxTone_blacks")
+        val agxToneShadows = floatPreferencesKey("agxTone_shadows")
+        val agxToneContrast = floatPreferencesKey("agxTone_contrast")
+        val agxToneMidtones = floatPreferencesKey("agxTone_midtones")
+        val agxToneHighlights = floatPreferencesKey("agxTone_highlights")
+        val agxToneWhites = floatPreferencesKey("agxTone_whites")
+        val agxToneSaturation = floatPreferencesKey("agxTone_saturation")
+        val agxToneVibrance = floatPreferencesKey("agxTone_vibrance")
+        val agxPreset = stringPreferencesKey("agx_preset")
+        val videoAgxPreset = stringPreferencesKey("video_agx_preset")
+        val agxValues = stringPreferencesKey("agx_values")
         val videoColorRenderProfile = stringPreferencesKey("video_color_render_profile")
         val videoUserLutProfileId = stringPreferencesKey("video_user_lut_profile_id")
         val videoLogEnabled = booleanPreferencesKey("video_log_enabled")
@@ -1105,6 +1166,7 @@ object SettingsPreferencesStore {
                     gpuEnabled = values.customGpuDriverEnabled
                 }
                 com.rawr.camera.integration.LiveTonemapState.publish(values.activeImageTone())
+                com.rawr.camera.integration.LiveTonemapState.publishAgx(values.activeAgxValues())
             }
         ).also { instance = it }
     }

@@ -42,16 +42,27 @@ internal fun ImageToneSettings(
                 if (state.values.isLogActive) {
                     SettingsRow(state.values.videoLogProfile.label)
                 } else {
-                    listOf(ColorRenderProfile.RawrBase,
-                        if (state.values.isVideo) ColorRenderProfile.Rec709 else ColorRenderProfile.SRgb
-                    ).forEach { profile ->
+                    SettingsSelectionRow(
+                        title = ColorRenderProfile.RawrBase.label,
+                        selected = state.values.regularRenderProfile() == ColorRenderProfile.RawrBase,
+                        testTag = SettingsTestTags.row("ImageTone", "profile_rawr_ntrl"),
+                        onClick = { dispatch.invoke(SetColorRenderProfile(ColorRenderProfile.RawrBase)) }
+                    )
+                    AgxPreset.entries.forEach { preset ->
                         SettingsSelectionRow(
-                            title = profile.label,
-                            selected = state.values.regularRenderProfile() == profile,
-                            testTag = SettingsTestTags.row("ImageTone", if (profile == ColorRenderProfile.RawrBase) "profile_rawr_ntrl" else "profile_${profile.name}"),
-                            onClick = { dispatch.invoke(SetColorRenderProfile(profile)) }
+                            title = preset.label,
+                            selected = state.values.isAgxActive() && state.values.regularAgxPreset() == preset,
+                            testTag = SettingsTestTags.row("ImageTone", "profile_agx_${preset.name}"),
+                            onClick = { dispatch.invoke(SetAgxPreset(preset)) }
                         )
                     }
+                    val display = if (state.values.isVideo) ColorRenderProfile.Rec709 else ColorRenderProfile.SRgb
+                    SettingsSelectionRow(
+                        title = display.label,
+                        selected = state.values.regularRenderProfile() == display,
+                        testTag = SettingsTestTags.row("ImageTone", "profile_${display.name}"),
+                        onClick = { dispatch.invoke(SetColorRenderProfile(display)) }
+                    )
                 }
                 if (!state.values.isLogActive) state.values.userLutProfiles.forEach { profile ->
                     SettingDivider()
@@ -76,28 +87,77 @@ internal fun ImageToneSettings(
                 })
             }
         }
-        if (!state.values.isLogActive) item {
-            SettingsGroup(
-                title = "Tone — $profileLabel",
-                description = "Stored per render profile. Edits affect only $profileLabel."
-            ) {
-                ToneSlider(ImageToneSpecs.renderExposure, tone.renderExposure, dispatch)
-                SettingDivider()
-                ToneSlider(ImageToneSpecs.blacks, tone.blacks, dispatch)
-                SettingDivider()
-                ToneSlider(ImageToneSpecs.shadows, tone.shadows, dispatch)
-                SettingDivider()
-                ToneSlider(ImageToneSpecs.contrast, tone.contrast, dispatch)
-                SettingDivider()
-                ToneSlider(ImageToneSpecs.midtones, tone.midtones, dispatch)
-                SettingDivider()
-                ToneSlider(ImageToneSpecs.highlights, tone.highlights, dispatch)
-                SettingDivider()
-                ToneSlider(ImageToneSpecs.whites, tone.whites, dispatch)
-                SettingDivider()
-                ToneSlider(ImageToneSpecs.saturation, tone.saturation, dispatch)
-                SettingDivider()
-                ToneSlider(ImageToneSpecs.vibrance, tone.vibrance, dispatch)
+        if (state.values.isAgxActive()) {
+            val preset = state.values.regularAgxPreset()
+            val values = state.values.activeAgxValues()
+            AgxGroup.entries.forEach { group ->
+                item(key = "agx_${group.name}") {
+                    SettingsGroup(
+                        title = group.title,
+                        description = if (group == AgxGroup.Range)
+                            "${preset.label}: stored per preset. AgX replaces the display tone controls." else null
+                    ) {
+                        if (group == AgxGroup.Range) {
+                            ToneSlider(ImageToneSpecs.renderExposure, tone.renderExposure, dispatch)
+                            SettingDivider()
+                        }
+                        AgxCatalog.group(group).forEachIndexed { index, spec ->
+                            if (index > 0) SettingDivider()
+                            StandaloneNumericSliderRow(
+                                identity = "agx_${spec.parameter.name}",
+                                label = spec.longLabel,
+                                minimum = spec.minimum,
+                                maximum = spec.maximum,
+                                step = spec.step,
+                                decimals = spec.valueDecimals,
+                                value = values.valueOf(spec.parameter),
+                                defaultValue = preset.defaults.valueOf(spec.parameter),
+                                valueFormatter = { spec.format(it) },
+                                dimDisabledText = false,
+                                onValueChange = { dispatch.invoke(SetAgxValue(spec.parameter, it)) }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        if (!state.values.isLogActive && !state.values.isAgxActive()) {
+            item {
+                SettingsGroup(
+                    title = "Tone — $profileLabel",
+                    description = "Stored per render profile. Edits affect only $profileLabel. " +
+                        "Exposure applies to scene light, before everything."
+                ) {
+                    ToneSlider(ImageToneSpecs.renderExposure, tone.renderExposure, dispatch)
+                }
+            }
+            item {
+                SettingsGroup(
+                    title = "Grade",
+                    description = "Before the render, in ${gradeSpaceLabel(state.values)}."
+                ) {
+                    ToneSlider(ImageToneSpecs.highlights, tone.highlights, dispatch)
+                    SettingDivider()
+                    ToneSlider(ImageToneSpecs.shadows, tone.shadows, dispatch)
+                    SettingDivider()
+                    ToneSlider(ImageToneSpecs.midtones, tone.midtones, dispatch)
+                    SettingDivider()
+                    ToneSlider(ImageToneSpecs.contrast, tone.contrast, dispatch)
+                    SettingDivider()
+                    ToneSlider(ImageToneSpecs.saturation, tone.saturation, dispatch)
+                    SettingDivider()
+                    ToneSlider(ImageToneSpecs.vibrance, tone.vibrance, dispatch)
+                }
+            }
+            item {
+                SettingsGroup(
+                    title = "Output",
+                    description = "After the render. Sets where display white and black land."
+                ) {
+                    ToneSlider(ImageToneSpecs.whites, tone.whites, dispatch)
+                    SettingDivider()
+                    ToneSlider(ImageToneSpecs.blacks, tone.blacks, dispatch)
+                }
             }
         }
         item { Spacer(Modifier.height(20.dp)) }
@@ -357,6 +417,14 @@ private fun <T> EnumChoice(
         onSelect = onSelect
     )
 }
+
+/** The encoding the Grade sliders run in: the imported LUT's input, else the render's own. */
+private fun gradeSpaceLabel(values: SettingsValues): String =
+    values.selectedLutProfile()?.inputTransfer?.label ?: when (values.regularRenderProfile()) {
+        ColorRenderProfile.SRgb -> "sRGB"
+        ColorRenderProfile.Rec709 -> "Rec.709"
+        else -> "DaVinci Intermediate"
+    }
 
 @Composable
 private fun ToneSlider(spec: NumericSettingSpec, value: Float, dispatch: SettingsDispatch) {

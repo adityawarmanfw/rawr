@@ -18,7 +18,7 @@ internal fun selectorTitle(kind: ChoiceSelectorKind): String = when (kind) {
     ChoiceSelectorKind.TransferFunction -> "Transfer Function"
     ChoiceSelectorKind.JpegChromaSubsampling -> "Chroma Subsampling"
     ChoiceSelectorKind.DngCompression -> "DNG Compression"
-    ChoiceSelectorKind.MaxPostGain -> "Maximum Post-RAW Gain"
+    ChoiceSelectorKind.MaxPostGain -> "Boost Limit"
     ChoiceSelectorKind.AutoMinFps -> "Auto Minimum FPS"
     ChoiceSelectorKind.FilmOutputSpace -> "Film Output Color Space"
 }

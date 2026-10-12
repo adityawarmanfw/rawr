@@ -53,6 +53,7 @@ int main(int argc, char** argv) {
     j.tone.exposureEV = -1.5f;
     j.tone.adaptiveTone = {1.25f, -5.0f, -0.5f};
     j.tone.renderTransform = tonemap::RenderTransform::Rec709;
+    j.tone.agx.whiteEv = 9.25f;
     j.filmEnabled = true;
     j.film.film = 14;
     j.film.paper = 5;
@@ -76,9 +77,11 @@ int main(int argc, char** argv) {
     auto path = jobPath(root, j.dng.displayName);
     save(path, j);
     auto restored = load(path);
-    // Profile-aware jobs written before adaptive tone used the same POD prefix.
-    // Recreate that on-disk layout and ensure the new curve defaults to Off.
-    {
+    // Profile-aware jobs written before adaptive tone, and before AgX, used
+    // the same POD prefix. Recreate those on-disk layouts and ensure the newer
+    // fields keep their defaults.
+    for (const uint32_t oldSize : {uint32_t(offsetof(tonemap::TonemapParams, adaptiveTone)),
+                                   uint32_t(offsetof(tonemap::TonemapParams, agx))}) {
         std::ifstream in(path, std::ios::binary);
         std::string bytes((std::istreambuf_iterator<char>(in)), {});
         uint32_t fullSize = sizeof(j.tone);
@@ -86,7 +89,6 @@ int main(int argc, char** argv) {
         record.append(reinterpret_cast<const char*>(&j.tone), sizeof(j.tone));
         const auto pos = bytes.find(record);
         assert(pos != std::string::npos && bytes.find(record, pos + 1) == std::string::npos);
-        const uint32_t oldSize = offsetof(tonemap::TonemapParams, adaptiveTone);
         bytes.erase(pos + sizeof(fullSize) + oldSize, fullSize - oldSize);
         std::memcpy(bytes.data() + pos, &oldSize, sizeof(oldSize));
         const auto oldPath = root + "/old-profile.job";
@@ -96,7 +98,9 @@ int main(int argc, char** argv) {
         }
         const auto old = load(oldPath);
         assert(old.tone.renderTransform == j.tone.renderTransform && old.tone.exposureEV == j.tone.exposureEV);
-        assert(old.tone.adaptiveTone.liftEv == 0.0f);
+        assert(old.tone.adaptiveTone.liftEv ==
+               (oldSize == offsetof(tonemap::TonemapParams, agx) ? j.tone.adaptiveTone.liftEv : 0.0f));
+        assert(old.tone.agx.whiteEv == tonemap::AgxParams{}.whiteEv);
         std::filesystem::remove(oldPath);
     }
 
@@ -112,7 +116,7 @@ int main(int argc, char** argv) {
     assert(restored.dng.outputFd == -1 && restored.jpeg.output.outputFd == -1);
     assert(restored.jpeg.output.filmDescription == "Frozen C200" && restored.jpeg.output.quality == 99);
     assert(restored.film.film == 14 && restored.film.filmExposureEv == .75f && restored.tone.exposureEV == -1.5f);
-    assert(restored.tone.renderTransform == tonemap::RenderTransform::Rec709);
+    assert(restored.tone.renderTransform == tonemap::RenderTransform::Rec709 && restored.tone.agx.whiteEv == 9.25f);
     assert(restored.tone.adaptiveTone.liftEv == 1.25f && restored.tone.adaptiveTone.keyEv == -5.0f &&
            restored.tone.adaptiveTone.highlightEv == -0.5f);
     assert(restored.sharpnessScores.empty());

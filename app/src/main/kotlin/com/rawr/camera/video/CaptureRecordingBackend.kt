@@ -31,6 +31,7 @@ internal class CaptureRecordingBackend(
         // Queue the exact selection before the synchronous recording-start barrier.
         preview.setColorRenderProfile(imageSettings.effectiveRenderProfileId(), imageSettings.regularLutProfileId())
         preview.setTonemapParameters(imageSettings.activeImageTone())
+        preview.setAgxParameters(imageSettings.activeAgxValues())
         // The Activity stays portrait-locked; freeze the physical posture at shutter press.
         val deviceRotationDegrees = preview.captureDeviceRotationDegrees
         val recorder = NativeVideoRecorder(application, preview)

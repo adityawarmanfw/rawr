@@ -269,6 +269,9 @@ class NativePreviewEngine {
 
     external fun setColorRenderProfile(handle: Long, profile: Int, importedLutProfileId: String)
 
+    /** All AgX controls in AgxParameter (native AgxControl) order. */
+    external fun setAgxParameters(handle: Long, controls: FloatArray)
+
     external fun setTonemapParameters(
         handle: Long,
         exposureEV: Float,

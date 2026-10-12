@@ -1,9 +1,11 @@
 #pragma once
 #include <vulkan/vulkan.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 
 #include "tonemap/TonemapMath.h"
 #include "tonemap/Types.h"
@@ -84,6 +86,12 @@ struct TonemapRecordInfo {
     TonemapParams params = TonemapPresets::NeutralBaseline().params;
 };
 
+// The Grade sliders packed for the UltraHDR HDR tap (gainmap.comp), std140
+// vec4 x3: tone (Contrast, Highlights, Shadows, Midtones, -1..1), color
+// (saturation, vibrance, vibrance strength, guard start), space (guard end,
+// pivot, black, transfer id). In the grade space the engine renders with.
+using GradeTapBlock = std::array<float, 12>;
+
 struct TonemapRawRecordInfo {
     VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
     TonemapRawFrame raw{};
@@ -117,6 +125,8 @@ class TonemapEngine {
     void recordRaw(const TonemapRawRecordInfo& recordInfo);
 
     const TonemapConfig& config() const noexcept;
+    // nullopt for AgX/LOG (no grade) or when every Grade slider is neutral.
+    std::optional<GradeTapBlock> gradeTapBlock(const TonemapParams& params) const noexcept;
     uint32_t maxFramesInFlight() const noexcept;
 
    private:

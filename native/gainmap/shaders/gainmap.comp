@@ -1,6 +1,8 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
 #include "../../shader_common/shaders/adaptive_tone.glsl"
+#include "../../shader_common/shaders/grade.glsl"
+#include "../../tonemap_engine/shaders/color/cst.glsl"
 
 // UltraHDR gain map encode: scene-linear HDR + SDR sRGB -> RGB/gray
 // recovery map. Metadata parameters may be shared by all JPEG components.
@@ -27,6 +29,28 @@ layout(set = 0, binding = 3, r16ui) uniform readonly uimage2D clipImage;
 // the caller has no glow map; the load is pinned to a 1.0 fallback texel.
 layout(set = 0, binding = 4, rgba16f) uniform readonly image2D glowImage;
 
+// AgX tap (flags bit 2): tonemap::AgxGpuBlock for the display headroom; its
+// input matrix maps the HDR input to linear Rec2020 and lookLuma.w is the
+// headroom the result is scaled by. Always bound; read only when flagged.
+layout(std140, set = 0, binding = 5) uniform AgxTap {
+    mat4 agxAp1ToBase;
+    mat4 agxBaseToRendering;
+    mat4 agxRenderingToSrgb;
+    vec4 agxLog;
+    vec4 agxLine;
+    vec4 agxToe;
+    vec4 agxShoulder;
+    vec4 agxFallback;
+    vec4 agxLook;
+    vec4 agxLookLuma;
+    uvec4 agxFlags;
+    // Grade tap (flags bit 3): GainmapParams::gradeTapBlock.
+    vec4 gradeTone;   // Contrast, Highlights, Shadows, Midtones (-1..1)
+    vec4 gradeColor;  // saturation, vibrance, vibrance strength, guard start
+    vec4 gradeSpace;  // guard end, pivot, black, transfer id
+} P;
+#include "../../tonemap_engine/shaders/agx.glsl"
+
 layout(push_constant) uniform Push {
     uint mapWidth;
     uint mapHeight;
@@ -48,7 +72,7 @@ layout(push_constant) uniform Push {
     float glowStrength;
     float glowMax;
     float hdrToLinearSrgb[9];
-    uint flags;  // bit 0 full-res map, bit 1 write HDR chromaticity plane
+    uint flags;  // bit 0 full-res map, bit 1 write HDR chromaticity plane, bit 2 AgX tap, bit 3 grade tap
     // SDR adaptive tone curve (lift, key, highlight EV), pre-shifted into the
     // exposed HDR tap's log2 AP1 luminance. Keeps the block at 128 bytes.
     float adaptiveTone[3];
@@ -191,6 +215,25 @@ void main() {
         hdrWork *= rawrAdaptiveToneGain(y, vec3(pc.adaptiveTone[0], pc.adaptiveTone[1], pc.adaptiveTone[2]));
     }
 
+    // The SDR base also carries the Grade sliders (tonemap.comp applyGrade).
+    // Apply the same tone to the tap as a luminance gain, evaluated on its
+    // luma in the SDR's grade space; the chroma gain is applied after the CST.
+    float gradeChroma = 1.0;
+    if ((pc.flags & 8u) != 0u) {
+        vec3 lin = vec3(
+            pc.hdrToLinearSrgb[0] * hdrWork.x + pc.hdrToLinearSrgb[1] * hdrWork.y + pc.hdrToLinearSrgb[2] * hdrWork.z,
+            pc.hdrToLinearSrgb[3] * hdrWork.x + pc.hdrToLinearSrgb[4] * hdrWork.y + pc.hdrToLinearSrgb[5] * hdrWork.z,
+            pc.hdrToLinearSrgb[6] * hdrWork.x + pc.hdrToLinearSrgb[7] * hdrWork.y + pc.hdrToLinearSrgb[8] * hdrWork.z);
+        float y = dot(vec3(0.21532597, 0.71600819, 0.06866589), lin);
+        if (y > 1e-8) {
+            uint tf = uint(P.gradeSpace.w + 0.5);
+            float graded = rawrGradeToneLuma(rawrTfEncode1(y, tf), P.gradeSpace.y, P.gradeSpace.z, P.gradeTone);
+            hdrWork *= max(rawrTfDecode1(graded, tf), 0.0) / y;
+        }
+        gradeChroma = rawrGradeChromaGain(lin, y, P.gradeColor.x, P.gradeColor.y, P.gradeColor.z,
+                                          vec2(P.gradeColor.w, P.gradeSpace.x));
+    }
+
     // Film glow factor (agnostic post/pre scatter quotient, ~1.0 = no glow):
     // film response and exposure cancel in the ratio, so no per-stock scale
     // is needed. Applied pre-CST on camera RGB; the residual axis mismatch
@@ -210,6 +253,14 @@ void main() {
         pc.hdrToLinearSrgb[0] * hdrWork.x + pc.hdrToLinearSrgb[1] * hdrWork.y + pc.hdrToLinearSrgb[2] * hdrWork.z,
         pc.hdrToLinearSrgb[3] * hdrWork.x + pc.hdrToLinearSrgb[4] * hdrWork.y + pc.hdrToLinearSrgb[5] * hdrWork.z,
         pc.hdrToLinearSrgb[6] * hdrWork.x + pc.hdrToLinearSrgb[7] * hdrWork.y + pc.hdrToLinearSrgb[8] * hdrWork.z);
+    // AgX profile: render the exposed tap through AgX for the display
+    // headroom so the quotient carries AgX's own highlight color (less
+    // desaturated with more headroom) rather than raw scene color.
+    if ((pc.flags & 4u) != 0u) hdrLin = agxRender(hdrWork) * P.agxLookLuma.w;
+    if (gradeChroma != 1.0) {
+        float hdrY = dot(vec3(0.21532597, 0.71600819, 0.06866589), hdrLin);
+        hdrLin = vec3(hdrY) + (hdrLin - vec3(hdrY)) * gradeChroma;
+    }
     hdrLin = max(hdrLin, vec3(0.0));
 
     // Carry the actual capture color past the legacy brightness fit. Two

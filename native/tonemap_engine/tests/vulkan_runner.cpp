@@ -632,6 +632,7 @@ struct Args {
     std::string producerSpv;
     float aePostGain = 1.0f;
     tonemap::AdaptiveToneParams adaptiveTone{};
+    tonemap::AgxParams agx{};
 };
 Args args(int ac, char** av) {
     Args a;
@@ -693,6 +694,19 @@ Args args(int ac, char** av) {
             a.toneSet = true;
         }
         else if (k == "--render-transform") a.renderTransform = std::stoul(val());
+        else if (k == "--agx-preset") {
+            const uint32_t preset = std::stoul(val());
+            if (preset >= tonemap::kAgxPresetCount) throw std::runtime_error("--agx-preset out of range");
+            a.agx = tonemap::agxPreset(static_cast<tonemap::AgxPreset>(preset));
+        } else if (k == "--agx") {
+            // White EV, shoulder power, toe power, master purity, preserve hue.
+            std::istringstream values(val());
+            char c1 = 0, c2 = 0, c3 = 0, c4 = 0;
+            if (!(values >> a.agx.whiteEv >> c1 >> a.agx.shoulderPower >> c2 >> a.agx.toePower >> c3 >>
+                  a.agx.primaries.masterOutset >> c4 >> a.agx.preserveHue) ||
+                c1 != ',' || c2 != ',' || c3 != ',' || c4 != ',' || !tonemap::validAgx(a.agx))
+                throw std::runtime_error("--agx needs white,shoulder,toe,purity,hue");
+        }
         else if (k == "--output-gamut") a.outputGamut = std::stoul(val());
         else if (k == "--output-transfer") a.outputTransfer = std::stoul(val());
         else if (k == "--lut-input-gamut") a.lutInput.gamut = static_cast<tonemap::color::Gamut>(std::stoul(val()));
@@ -845,6 +859,7 @@ int main(int argc, char** argv) {
         p.exposureEV = a.exposureEV;
         p.renderTransform = static_cast<tonemap::RenderTransform>(a.renderTransform);
         p.outputSpace = {static_cast<tonemap::color::Gamut>(a.outputGamut), static_cast<tonemap::color::TransferFunction>(a.outputTransfer)};
+        p.agx = a.agx;
         if (a.colorStress) {
             p.vibrance = 100.0f;
             p.saturation = 35.0f;

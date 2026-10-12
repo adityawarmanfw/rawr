@@ -17,7 +17,8 @@ internal object CaptureRecipe {
             contract.shadowNativeFromUi(tone.shadows), contract.midtoneNativeFromUi(tone.midtones),
             contract.contrastNativeFromUi(tone.contrast), contract.whitePointNativeFromUi(tone.whites),
             contract.highlightNativeFromUi(tone.highlights), tone.saturation, tone.vibrance,
-            v.photoHighlightMethod.toFloat(), v.photoHighlightThreshold, v.photoHighlightCompression)
+            v.photoHighlightMethod.toFloat(), v.photoHighlightThreshold, v.photoHighlightCompression) +
+            v.agxValuesFor(v.agxPreset).toNativeArray()
     }
 
     fun freezeAssets(context: android.content.Context, v: SettingsValues): SettingsValues {
@@ -91,6 +92,11 @@ internal object CaptureRecipe {
         put("galoshYuvStrengthC", legacyDenoise.yuvStrengthC)
         put("filmSimEnabled", v.filmSimEnabled)
         put("colorRenderProfile", v.colorRenderProfile.name)
+        if (v.colorRenderProfile == com.rawr.camera.settings.model.ColorRenderProfile.AgX) put("agx", JSONObject().apply {
+            val values = v.agxValuesFor(v.agxPreset)
+            put("preset", v.agxPreset.name)
+            com.rawr.camera.settings.model.AgxCatalog.all.forEach { put(it.jsonKey, values.valueOf(it.parameter).toDouble()) }
+        })
         put("multiframeBaseFrameMode", v.multiframeBaseFrameMode.name)
         put("tone", JSONObject().apply {
             val value = v.activeImageTone()
