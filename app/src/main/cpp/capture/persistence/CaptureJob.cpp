@@ -210,7 +210,6 @@ struct Reader {
             v.shadowLiftEV = old[2];
             v.midtoneLiftEV = old[3];
             v.contrast = old[4];
-            v.shoulderStartEV = old[5];
             v.whitePointEV = old[6];
             v.highlightBiasEV = old[7];
             v.saturation = old[8];

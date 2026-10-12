@@ -168,6 +168,13 @@ def metrics(render, lut):
     deep, mid = (y0 > 1e-4) & (y0 < 0.015), (y0 > 0.15) & (y0 < 0.4)
     m['vibrance_gain_deep_shadow'] = float(np.median(c1[deep] / np.maximum(c0[deep], 1e-9)))
     m['vibrance_gain_midtone'] = float(np.median(c1[mid] / np.maximum(c0[mid], 1e-9)))
+    # The guard is defined in linear light, so in sRGB it must also release by
+    # 10% linear (an encoded-unit guard held it back until ~13%).
+    s0, sy = chroma(render(tone(), extra=SRGB)[GRAY_ROWS:GRAY_ROWS + COLOR_ROWS])
+    s1, _ = chroma(render(tone(VIB=100), extra=SRGB)[GRAY_ROWS:GRAY_ROWS + COLOR_ROWS])
+    sdeep, slow = (sy > 1e-4) & (sy < 0.015), (sy > 0.105) & (sy < 0.125)
+    m['vibrance_srgb_deep_shadow'] = float(np.median(s1[sdeep] / np.maximum(s0[sdeep], 1e-9)))
+    m['vibrance_srgb_low_midtone'] = float(np.median(s1[slow] / np.maximum(s0[slow], 1e-9)))
     # Blacks+100 slope (noise gain) below one output code; the fitted y^.51
     # lift is unbounded at black.
     g0, g1 = luma(render(tone()))[0], luma(render(tone(B=100)))[0]
@@ -233,6 +240,8 @@ def main():
         ('LUT overshoot stays finite', after['lut_bad_pixels'] == 0),
         ('Vibrance+ spares deep shadows', after['vibrance_gain_deep_shadow'] < 1.05 < after['vibrance_gain_midtone']),
         ('Blacks+ does not amplify sub-code noise', after['blacks_plus_subcode_slope'] < 8.0),
+        ('Vibrance guard is in linear light (sRGB)',
+         after['vibrance_srgb_deep_shadow'] < 1.05 < 1.2 < after['vibrance_srgb_low_midtone']),
         ('Contrast keeps 18% gray in every grade space', after['contrast_pivot_drift'] < 3e-3),
         ('Log black stays at the curve black', after['log_black_drift'] < 1e-2),
         ('Highlights- compresses the top', after['highlights_minus_top_drop'] > 0.01),

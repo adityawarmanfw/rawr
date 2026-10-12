@@ -24,7 +24,6 @@ inline std::string resolvedRecipe(const tonemap::TonemapParams& tone, float gain
     RAWR_TONE_FIELD(shadowLiftEV)
     RAWR_TONE_FIELD(midtoneLiftEV)
     RAWR_TONE_FIELD(contrast)
-    RAWR_TONE_FIELD(shoulderStartEV)
     RAWR_TONE_FIELD(whitePointEV)
     RAWR_TONE_FIELD(highlightBiasEV)
     RAWR_TONE_FIELD(saturation)

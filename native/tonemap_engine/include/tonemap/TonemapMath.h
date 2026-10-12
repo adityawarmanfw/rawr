@@ -29,7 +29,8 @@ struct TonemapParams {
     float shadowLiftEV;     // Shadows UI
     float midtoneLiftEV;    // Midtones UI
     float contrast;         // Contrast UI
-    float shoulderStartEV;  // renderer-internal fixed base-curve anchor
+    // Unused; keeps the byte layout CaptureJob persists for pending jobs.
+    float persistedLayoutSlot;
     float whitePointEV;     // Whites UI
     // Independent tone-shaping control. It never enables, tunes, or re-runs RAW
     // channel reconstruction; negative values compress scene-linear highlights.
@@ -55,7 +56,6 @@ struct TonemapParams {
 // the public control semantics or recompiling shaders.
 struct TonemapConfig {
     float middleGray;
-    float gamutCompressionStart;
     float vibranceStrength;
     float vibranceShadowStart;
     float vibranceShadowEnd;
@@ -77,7 +77,7 @@ constexpr TonemapPreset NeutralBaseline() noexcept {
          0.0f,   // Shadows UI
          0.0f,   // Midtones UI
          0.0f,   // Contrast UI
-         2.0f,   // shoulderStartEV (fixed base-render anchor)
+         0.0f,   // persistedLayoutSlot
          0.0f,   // Whites UI
          0.0f,   // Highlights UI
          0.0f,   // saturation UI
@@ -85,7 +85,6 @@ constexpr TonemapPreset NeutralBaseline() noexcept {
          1.0f},  // aePostGain
         {        /* config */
          0.18f,  // middleGray
-         0.85f,  // gamutCompressionStart
          0.70f,  // vibranceStrength (+100 weak-color boost)
          0.02f,  // vibranceShadowStart
          0.10f}  // vibranceShadowEnd

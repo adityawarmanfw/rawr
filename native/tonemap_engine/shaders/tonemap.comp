@@ -82,19 +82,19 @@ layout(binding = 1, rgb10_a2) uniform writeonly image2D outputImage;
 layout(binding = 1, rgba8) uniform writeonly image2D outputImage;
 #endif
 
-// knotX4_exposure_sat_gc.x/.w, curve1-3 and renderConfig.x are reserved and
-// not read here; the layout is kept to match TonemapEngine's GpuParameters.
+// exposureSaturation.x/.w, renderConfig.x and reserved0-2 are unused; the
+// layout is kept to match TonemapEngine's GpuParameters.
 layout(std140, binding = 2) uniform TonemapGpuParams {
     mat4 cameraToWorking;         // upper-left mat3; mat4 avoids mat3 packing ambiguity
     vec4 gradePivot;              // grade-space 18% gray: NTRL (DI), user LUT, direct; w: user LUT black code
-    vec4 knotX4_exposure_sat_gc;  // x4, exposureEV, saturation, gamutCompressionStart
-    vec4 colorControls;           // vibrance, strength, shadow guard start/end (DI offsets from the pivot)
-    vec4 renderConfig;            // middleGray, aePostGainEV, ShadowsUI, MidtonesUI
+    vec4 exposureSaturation;      // unused, exposureEV, saturation, unused
+    vec4 colorControls;           // vibrance, strength, shadow guard start/end (linear luma)
+    vec4 renderConfig;            // unused, aePostGainEV, ShadowsUI, MidtonesUI
     vec4 toneControls;            // ContrastUI, HighlightsUI, BlacksUI, WhitesUI
     vec4 gradeLuma;               // user LUT input gamut luma weights
-    vec4 curve1;
-    vec4 curve2;
-    vec4 curve3;
+    vec4 reserved0;
+    vec4 reserved1;
+    vec4 reserved2;
     uvec4 extent;                // output width/height, input width/height
     uvec4 lutControl;            // enabled,stageCount,inputGamut,inputTransfer
     uvec4 lutOutput;             // outputGamut,outputTransfer,placement,afterAction(0=direct,1=convert sRGB)
@@ -267,16 +267,18 @@ float highlightsShape(float d) {
 
 bool gradeActive() {
     return P.toneControls.x != 0.0 || P.toneControls.y != 0.0 || any(notEqual(P.renderConfig.zw, vec2(0.0))) ||
-           P.knotX4_exposure_sat_gc.z != 0.0 || P.colorControls.x != 0.0;
+           P.exposureSaturation.z != 0.0 || P.colorControls.x != 0.0;
 }
 
-vec3 applyGrade(vec3 e, vec3 lumaWeights, float pivot, float black) {
+// sceneLinear (AP1) feeds only Vibrance's protections, which are thresholds in
+// light, not slider feel, so they act the same in every grade space.
+vec3 applyGrade(vec3 e, vec3 lumaWeights, float pivot, float black, vec3 sceneLinear) {
     if (!gradeActive()) return e;
     float C = clamp(P.toneControls.x, -100.0, 100.0) * 0.01;
     float H = clamp(P.toneControls.y, -100.0, 100.0) * 0.01;
     float S = clamp(P.renderConfig.z, -100.0, 100.0) * 0.01;
     float M = clamp(P.renderConfig.w, -100.0, 100.0) * 0.01;
-    float satUI = clamp(P.knotX4_exposure_sat_gc.z, -100.0, 100.0) * 0.01;
+    float satUI = clamp(P.exposureSaturation.z, -100.0, 100.0) * 0.01;
     float vibUI = clamp(P.colorControls.x, -100.0, 100.0) * 0.01;
 
     float y0 = dot(lumaWeights, e);
@@ -300,14 +302,15 @@ vec3 applyGrade(vec3 e, vec3 lumaWeights, float pivot, float black) {
     if (satUI != 0.0 || vibUI != 0.0) {
         // Saturation: -100 monochrome, +100 nominal 1.85x opponent chroma.
         float satGain = satUI >= 0.0 ? 1.0 + 0.85 * satUI : max(0.0, 1.0 + satUI);
-        // Vibrance prioritizes weak color (+) or removes it first (-). Occupancy
-        // is the encoded channel spread; 0.30 is ~4 stops in a log encoding.
-        float spread = max(chroma.r, max(chroma.g, chroma.b)) - min(chroma.r, min(chroma.g, chroma.b));
-        float occupancy = clamp(spread / 0.30, 0.0, 1.0);
+        // Vibrance prioritizes weak color (+) or removes it first (-).
+        // Occupancy: 0 for neutral, ~1 near the gamut edge, in linear light.
+        vec3 lin = max(sceneLinear, vec3(0.0));
+        float peak = max(max(lin.r, max(lin.g, lin.b)), 0.06);
+        float occupancy = clamp((max(lin.r, max(lin.g, lin.b)) - min(lin.r, min(lin.g, lin.b))) / peak, 0.0, 1.0);
         float vibGain;
         if (vibUI >= 0.0) {
             // Fade the boost out in deep shadows, where it mostly lifts chroma noise.
-            float shadowGuard = smoothstep(pivot + P.colorControls.z, pivot + P.colorControls.w, y);
+            float shadowGuard = smoothstep(P.colorControls.z, P.colorControls.w, dot(AP1_LUMA, sceneLinear));
             vibGain = 1.0 + P.colorControls.y * vibUI * pow(max(1.0 - occupancy, 0.0), 0.30) * shadowGuard;
         } else {
             vibGain = mix(1.0, pow(occupancy, 4.0), -vibUI);
@@ -353,20 +356,6 @@ float whitesPlusEndpoint(float y) {
     float d = A * logistic((y - c) / w) * pow(y, lp) * pow(1.0 - y, hp) + B * pow(y, lp2) * pow(1.0 - y, hp2);
     float gate = pow(logistic((y - gc) / gw), gp);
     return clamp(y + gate * d, 0.0, 1.0);
-}
-
-float maxLumaForOpponent(vec2 uv) {
-    float offB = -SRGB_LUMA.r * uv.x - (SRGB_LUMA.r + SRGB_LUMA.g) * uv.y;
-    float offG = offB + uv.y;
-    float offR = offG + uv.x;
-    return clamp(1.0 - max(offR, max(offG, offB)), 0.0, 1.0);
-}
-
-float minLumaForOpponent(vec2 uv) {
-    float offB = -SRGB_LUMA.r * uv.x - (SRGB_LUMA.r + SRGB_LUMA.g) * uv.y;
-    float offG = offB + uv.y;
-    float offR = offG + uv.x;
-    return clamp(-min(offR, min(offG, offB)), 0.0, 1.0);
 }
 
 vec3 reconstructOpponent(float y, vec2 uv) {
@@ -422,9 +411,16 @@ vec3 applyDisplayTrims(vec3 encodedRgb) {
         float k = exp(clamp(t * 1.011604 * gate * logk, -1.0, 1.85));
         uv *= k * yw / max(whitesOut, EPSILON);
     }
-    // Same per-channel gamut clamp for both trims, so nothing changes
-    // discontinuously when Whites leaves 0.
-    return clamp(reconstructOpponent(yd, uv), 0.0, 1.0);
+    // Fit chroma into [0,1] by scaling it, not by clipping channels: a
+    // per-channel clip lowers luma near white, so a brighter input could come
+    // out darker. Opponent offsets carry no luma, so yd is kept exactly.
+    vec3 offset = reconstructOpponent(0.0, uv);
+    float fit = 1.0;
+    for (int c = 0; c < 3; ++c) {
+        if (offset[c] > EPSILON) fit = min(fit, (1.0 - yd) / offset[c]);
+        else if (offset[c] < -EPSILON) fit = min(fit, yd / -offset[c]);
+    }
+    return clamp(vec3(yd) + max(fit, 0.0) * offset, 0.0, 1.0);
 }
 // -----------------------------------------------------------------------------
 
@@ -487,7 +483,7 @@ void main() {
     } else if (P.directRender.x == 4u) {
         // AgX carries its own curve and look: neither the grade nor the display
         // trims run.
-        vec3 srgbLinear = clamp(agxRender(work * exp2(P.renderConfig.y + P.knotX4_exposure_sat_gc.y)), 0.0, 1.0);
+        vec3 srgbLinear = clamp(agxRender(work * exp2(P.renderConfig.y + P.exposureSaturation.y)), 0.0, 1.0);
         encoded = P.directRender.z == RAWR_TF_REC709 ? rawrEncodeTransfer(srgbLinear, RAWR_TF_REC709)
                                                      : srgbOETF(srgbLinear);
     } else if (P.directRender.x != 0u) {
@@ -495,9 +491,9 @@ void main() {
         // Highlights can still pull values above display white into range.
         bool rec709 = P.directRender.x == 2u;
         uint tf = rec709 ? RAWR_TF_REC709 : RAWR_TF_SRGB;
-        vec3 srgbLinear = rawrToSrgbLinear(work * exp2(P.renderConfig.y + P.knotX4_exposure_sat_gc.y),
-                                           RAWR_GAMUT_ACESCG_AP1);
-        encoded = clamp(applyGrade(rawrEncodeTransfer(srgbLinear, tf), SRGB_LUMA, P.gradePivot.z, 0.0), 0.0, 1.0);
+        vec3 linear = work * exp2(P.renderConfig.y + P.exposureSaturation.y);
+        vec3 srgbLinear = rawrToSrgbLinear(linear, RAWR_GAMUT_ACESCG_AP1);
+        encoded = clamp(applyGrade(rawrEncodeTransfer(srgbLinear, tf), SRGB_LUMA, P.gradePivot.z, 0.0, linear), 0.0, 1.0);
         if (displayTrimsActive()) {
             // The trims were fitted on encoded sRGB.
             vec3 srgb = rec709 ? srgbOETF(rawrDecodeTransfer(encoded, RAWR_TF_REC709)) : encoded;
@@ -511,12 +507,12 @@ void main() {
         // The baked LUT outputs encoded sRGB, so there is intentionally no sRGB OETF
         // after the LUT. CineEI shift in the LUT is 0.00; no legacy +1.375 EV offset.
         vec3 color = work;
-        float renderExposureEV = P.renderConfig.y + P.knotX4_exposure_sat_gc.y;
+        float renderExposureEV = P.renderConfig.y + P.exposureSaturation.y;
         vec3 renderedLinear = color * exp2(renderExposureEV);
         vec3 rawrNeutralInput = !COMBINE_NEUTRAL_GAMUT
             ? rawrCst(renderedLinear, RAWR_GAMUT_ACESCG_AP1, RAWR_TF_LINEAR, RAWR_GAMUT_DWG, RAWR_TF_DAVINCI_INTERMEDIATE)
             : rawrTonemapCst(renderedLinear, RAWR_GAMUT_ACESCG_AP1, RAWR_TF_LINEAR, RAWR_GAMUT_DWG, RAWR_TF_DAVINCI_INTERMEDIATE, P.neutralGamut);
-        vec3 rawrNeutral = sampleRawrNeutralTechnical(applyGrade(rawrNeutralInput, DWG_LUMA, P.gradePivot.x, 0.0));
+        vec3 rawrNeutral = sampleRawrNeutralTechnical(applyGrade(rawrNeutralInput, DWG_LUMA, P.gradePivot.x, 0.0, renderedLinear));
         encoded = rawrNeutral;
 
         // A render-transform user LUT starts from scene-linear AP1 and replaces RAWR
@@ -531,10 +527,10 @@ void main() {
                 // Linear LUT input has no tonal scale to grade on: grade in
                 // DaVinci Intermediate (pivot/black sent for DI) and return.
                 lutIn = rawrDecodeTransfer(applyGrade(rawrEncodeTransfer(lutIn, RAWR_TF_DAVINCI_INTERMEDIATE),
-                                                      P.gradeLuma.xyz, P.gradePivot.y, P.gradePivot.w),
+                                                      P.gradeLuma.xyz, P.gradePivot.y, P.gradePivot.w, renderedLinear),
                                            RAWR_TF_DAVINCI_INTERMEDIATE);
             } else {
-                lutIn = applyGrade(lutIn, P.gradeLuma.xyz, P.gradePivot.y, P.gradePivot.w);
+                lutIn = applyGrade(lutIn, P.gradeLuma.xyz, P.gradePivot.y, P.gradePivot.w, renderedLinear);
             }
             vec3 lutOut = rawrEvaluateUserLutChain(lutIn);
             vec3 lutSrgb = P.lutOutput.w == 0u

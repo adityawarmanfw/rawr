@@ -18,7 +18,7 @@ namespace {
 struct alignas(16) GpuParameters {
     float cameraToWorking[16];
     float gradePivot[4];
-    float toneKnot4ExposureSaturationGamut[4];
+    float exposureSaturation[4];
     float vibranceControls[4];
     float renderingConfig[4];
     float toneControls[4];
@@ -79,10 +79,9 @@ void checkVulkanResult(VkResult result, const char* message) {
 bool finite(float value) noexcept { return std::isfinite(value); }
 
 bool validConfig(const TonemapConfig& config) noexcept {
-    return finite(config.middleGray) && finite(config.gamutCompressionStart) && finite(config.vibranceStrength) &&
+    return finite(config.middleGray) && finite(config.vibranceStrength) &&
            finite(config.vibranceShadowStart) && finite(config.vibranceShadowEnd) && config.middleGray > 0.0f &&
-           config.middleGray < 1.0f && config.gamutCompressionStart > 0.0f &&
-           config.gamutCompressionStart < 1.0f && config.vibranceStrength >= 0.0f &&
+           config.middleGray < 1.0f && config.vibranceStrength >= 0.0f &&
            config.vibranceShadowStart >= 0.0f && config.vibranceShadowEnd > config.vibranceShadowStart;
 }
 
@@ -96,7 +95,7 @@ bool validParams(const TonemapParams& params) noexcept {
         return false;
     return validAdaptiveTone(params.adaptiveTone) && finite(params.exposureEV) && finite(params.blackPointEV) &&
            finite(params.shadowLiftEV) && finite(params.midtoneLiftEV) && finite(params.contrast) &&
-           finite(params.shoulderStartEV) && finite(params.whitePointEV) && finite(params.highlightBiasEV) &&
+           finite(params.whitePointEV) && finite(params.highlightBiasEV) &&
            finite(params.saturation) && finite(params.vibrance) && finite(params.aePostGain) &&
            params.blackPointEV >= -100.0f && params.blackPointEV <= 100.0f && params.shadowLiftEV >= -100.0f &&
            params.shadowLiftEV <= 100.0f && params.midtoneLiftEV >= -100.0f && params.midtoneLiftEV <= 100.0f &&
@@ -158,19 +157,13 @@ GpuParameters buildGpuParameters(const TonemapParams& params, const float* matri
     constexpr float kSrgbLuma[3] = {0.2126f, 0.7152f, 0.0722f};
     for (int c = 0; c < 3; ++c)
         gpu.gradeLuma[c] = kSrgbLuma[0] * toSrgb[c] + kSrgbLuma[1] * toSrgb[3 + c] + kSrgbLuma[2] * toSrgb[6 + c];
-    gpu.toneKnot4ExposureSaturationGamut[1] = params.exposureEV;
-    gpu.toneKnot4ExposureSaturationGamut[2] = params.saturation;
-    gpu.toneKnot4ExposureSaturationGamut[3] = config.gamutCompressionStart;
+    gpu.exposureSaturation[1] = params.exposureEV;
+    gpu.exposureSaturation[2] = params.saturation;
 
     gpu.vibranceControls[0] = params.vibrance;
     gpu.vibranceControls[1] = config.vibranceStrength;
-    // The vibrance shadow guard is configured in linear luma; the grade runs in
-    // encoded space, so send it as DaVinci Intermediate offsets from the pivot.
-    gpu.vibranceControls[2] = color::encodeTransfer(config.vibranceShadowStart,
-                                                    color::TransferFunction::DaVinciIntermediate) - gpu.gradePivot[0];
-    gpu.vibranceControls[3] = color::encodeTransfer(config.vibranceShadowEnd,
-                                                    color::TransferFunction::DaVinciIntermediate) - gpu.gradePivot[0];
-    gpu.renderingConfig[0] = config.middleGray;
+    gpu.vibranceControls[2] = config.vibranceShadowStart;
+    gpu.vibranceControls[3] = config.vibranceShadowEnd;
     // A scalar scene-linear gain commutes with the camera->working matrix.
     // Store it in stops so the shader can add it at the existing pre-tone
     // exposure position without three RGB multiplies.
