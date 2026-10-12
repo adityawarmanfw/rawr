@@ -127,8 +127,7 @@ internal fun ImageSettings(state: SettingsUiState, dispatch: SettingsDispatch) {
         }
         SettingsGroup(
             title = "Shadow Lift",
-            description = "Applied after the Brightness Boost (Capture → Exposure). Brightens shadows in high-contrast scenes; " +
-                "highlights keep their brightness. Not applied to LOG."
+            description = "Brightens shadows in high-contrast scenes; highlights keep their brightness. Not applied to LOG."
         ) {
             CompactChoiceRow(AutoKeyExposure.entries, state.values.autoKeyExposure, {
                 it.label
