@@ -20,21 +20,49 @@ float rawrGradeHighlightsShape(float d) {
     return 0.10 * smoothstep(0.02, 0.30, d) + 0.25 * (x < w ? x * x / (2.0 * w) : x - 0.5 * w);
 }
 
+// Grade parameter sets, fitted so each slider's response on the gray ramp
+// matches pre-0.4.0 (sliders after the render, as in 0.3.1) within ~0.01-0.026 output at
+// +-50/+-100: NTRL, imported LUTs (log or DI grade space), direct sRGB/Rec.709.
+const uint RAWR_GRADE_SET_NTRL = 0u;
+const uint RAWR_GRADE_SET_LUT = 1u;
+const uint RAWR_GRADE_SET_DIRECT = 2u;
+
+struct RawrGradeParams {
+    vec2 contrast;   // log2 slope gain per unit slider: +, -
+    vec2 midAmp;     // +, -
+    vec2 midShape;   // center, width (encoded units from the pivot)
+    vec2 shadowAmp;  // +, -
+    vec2 shadowShape;
+};
+
+RawrGradeParams rawrGradeParams(uint set) {
+    if (set == RAWR_GRADE_SET_NTRL)
+        return RawrGradeParams(vec2(0.0900, 0.1245), vec2(0.0370, 0.0421), vec2(-0.1491, 0.1061),
+                               vec2(0.0464, 0.0094), vec2(-0.1448, 0.0925));
+    if (set == RAWR_GRADE_SET_LUT)
+        return RawrGradeParams(vec2(0.0925, 0.1256), vec2(0.0412, 0.0457), vec2(-0.1648, 0.1031),
+                               vec2(0.0517, 0.0103), vec2(-0.2211, 0.1595));
+    return RawrGradeParams(vec2(0.1068, 0.1352), vec2(0.0509, 0.0522), vec2(-0.2330, 0.1612),
+                           vec2(0.0627, 0.0106), vec2(-0.3414, 0.2961));
+}
+
 // tone = Contrast, Highlights, Shadows, Midtones.
-float rawrGradeToneLuma(float y, float pivot, float black, vec4 tone) {
+float rawrGradeToneLuma(float y, float pivot, float black, vec4 tone, uint set) {
+    RawrGradeParams G = rawrGradeParams(set);
     // Contrast: power between black and the pivot keeps black fixed, a linear
     // stretch above it; both have slope g at the pivot. g > 0 so tones never
     // invert. Values below black (noise) are left alone.
     if (tone.x != 0.0 && y > black) {
-        float g = exp2(0.7 * tone.x);
+        float g = exp2((tone.x > 0.0 ? G.contrast.x : G.contrast.y) * tone.x);
         float d = y - pivot;
         y = d >= 0.0 ? pivot + d * g : black + (pivot - black) * pow((y - black) / (pivot - black), g);
     }
-    // Regional controls (widths keep every stacked combination monotonic).
+    // Regional controls.
     float d = y - pivot;
     float yr = y;
-    y += tone.w * 0.05 * rawrGradeBump(d, 0.0, 0.10);
-    y += tone.z * 0.06 * rawrGradeBump(d, -0.14, 0.10) * smoothstep(black, black + 0.25 * (pivot - black), yr);
+    y += tone.w * (tone.w > 0.0 ? G.midAmp.x : G.midAmp.y) * rawrGradeBump(d, G.midShape.x, G.midShape.y);
+    y += tone.z * (tone.z > 0.0 ? G.shadowAmp.x : G.shadowAmp.y) * rawrGradeBump(d, G.shadowShape.x, G.shadowShape.y) *
+         smoothstep(black, black + 0.25 * (pivot - black), yr);
     y += tone.y * rawrGradeHighlightsShape(d);
     return y;
 }

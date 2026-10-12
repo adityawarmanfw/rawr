@@ -13,6 +13,7 @@ older shader (for review; only the current shader is asserted).
 """
 from pathlib import Path
 import argparse
+import json
 import subprocess
 import sys
 
@@ -83,6 +84,15 @@ def write_cube(path):
     return path
 
 
+def write_identity_cube(path):
+    """33^3 identity LUT; with declared input == output and convert-after, the
+    image is the straight encode and only the Grade space differs."""
+    g = np.linspace(0, 1, 33)
+    rows = (f'{r:.6f} {gg:.6f} {b:.6f}' for b in g for gg in g for r in g)
+    path.write_text('LUT_3D_SIZE 33\n' + '\n'.join(rows) + '\n')
+    return path
+
+
 class Renderer:
     def __init__(self, runner, spv, chart_path):
         self.runner, self.spv, self.chart = runner, spv, chart_path
@@ -124,7 +134,34 @@ def gray_at(render, t, ev, lut=None, extra=()):
     return float(np.interp(ev, GRAY_EV, luma(render(t, lut, extra))[0]))
 
 
-def metrics(render, lut):
+def identity_lut_space(gamut, transfer):
+    return ['--lut-placement', '0', '--lut-input-gamut', str(gamut), '--lut-input-transfer', str(transfer),
+            '--lut-output-gamut', str(gamut), '--lut-output-transfer', str(transfer), '--lut-after-action', '1']
+
+
+# Grade spaces checked against the pre-0.4.0 slider response (sliders after the render, as in 0.3.1).
+REFERENCE_SPACES = {'ntrl': (), 'srgb': SRGB, 'rec709': REC709, 'lut_srgb': identity_lut_space(0, 1),
+                    'lut_logc3': identity_lut_space(4, 6), 'lut_slog3': identity_lut_space(5, 7)}
+
+
+def reference_error(render, identity):
+    """Worst gray-ramp deviation from the pre-0.4.0 response, per space."""
+    ref = json.loads((ENGINE / 'tests/lut_fixtures/grade_reference_pre040.json').read_text())
+    ev = np.array(ref['ev'])
+    worst = {}
+    for space, extra in REFERENCE_SPACES.items():
+        lut = identity if space.startswith('lut_') else None
+        base = np.interp(ev, GRAY_EV, luma(render(tone(), lut, extra))[0])
+        for key, target in ref['curves'].items():
+            if not key.startswith(space + '/'):
+                continue
+            name, value = key.split('/')[1][0], int(key.split('/')[1][1:])
+            got = np.interp(ev, GRAY_EV, luma(render(tone(**{name: value}), lut, extra))[0]) - base
+            worst[space] = max(worst.get(space, 0.0), float(np.abs(got - np.array(target)).max()))
+    return worst
+
+
+def metrics(render, lut, identity):
     m = {}
     stacks = [tone(S=100, W=100), tone(B=100, S=100, C=100, M=100, H=100, W=100),
               tone(B=-100, S=-100, C=-100, M=-100, W=-100), tone(B=100, S=100, H=-100, W=100, C=-50),
@@ -211,6 +248,7 @@ def metrics(render, lut):
     m['srgb_lut_clipped_slope_before'] = float(np.diff(l0[above_white]).max())
     m['srgb_lut_recovered_slope_after'] = float(np.diff(l1[above_white]).min())
     # Single sliders are unchanged except where intended (gray + moderate color rows).
+    m.update({f'grade_vs_pre040_{k}': v for k, v in reference_error(render, identity).items()})
     rows = slice(0, GRAY_ROWS + COLOR_ROWS)
     for n in ('S', 'H', 'C', 'M'):
         for s in (-100, 50, 100):
@@ -226,10 +264,11 @@ def main():
     runner = build_runner()
     chart_path = chart()
     lut = str(write_cube(WORK / 'overshoot.cube'))
-    after = metrics(Renderer(runner, compile_shader(ENGINE / 'shaders/tonemap.comp', 'after'), chart_path), lut)
+    identity = str(write_identity_cube(WORK / 'identity.cube'))
+    after = metrics(Renderer(runner, compile_shader(ENGINE / 'shaders/tonemap.comp', 'after'), chart_path), lut, identity)
     before = None
     if args.before:
-        before = metrics(Renderer(runner, compile_shader(args.before, 'before'), chart_path), lut)
+        before = metrics(Renderer(runner, compile_shader(args.before, 'before'), chart_path), lut, identity)
 
     scalar = [k for k in after if not k.startswith('single_')]
     print(f'{"metric":34s} {"before":>12s} {"after":>12s}')
@@ -256,6 +295,7 @@ def main():
         ('Highlights- compresses the top', after['highlights_minus_top_drop'] > 0.01),
         ('Highlights- leaves shadows alone', after['highlights_minus_shadow_change'] < 1e-4),
         ('Highlights- recovers clipped sRGB', after['srgb_clipped_slope_before'] < 1e-6 < after['srgb_recovered_slope_after']),
+        ('Grade matches the pre-0.4.0 response in every space (<0.03)', max(v for k, v in after.items() if k.startswith('grade_vs_pre040_')) < 0.03),
         ('Highlights- recovers under an sRGB-input LUT',
          after['srgb_lut_clipped_slope_before'] < 1e-6 < after['srgb_lut_recovered_slope_after']),
     ]

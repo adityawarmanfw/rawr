@@ -47,7 +47,7 @@ layout(std140, set = 0, binding = 5) uniform AgxTap {
     // Grade tap (flags bit 3): GainmapParams::gradeTapBlock.
     vec4 gradeTone;   // Contrast, Highlights, Shadows, Midtones (-1..1)
     vec4 gradeColor;  // saturation, vibrance, vibrance strength, guard start
-    vec4 gradeSpace;  // guard end, pivot, black, transfer id
+    vec4 gradeSpace;  // guard end, pivot, black, transfer id + 16 * grade set
 } P;
 #include "../../tonemap_engine/shaders/agx.glsl"
 
@@ -226,8 +226,9 @@ void main() {
             pc.hdrToLinearSrgb[6] * hdrWork.x + pc.hdrToLinearSrgb[7] * hdrWork.y + pc.hdrToLinearSrgb[8] * hdrWork.z);
         float y = dot(vec3(0.21532597, 0.71600819, 0.06866589), lin);
         if (y > 1e-8) {
-            uint tf = uint(P.gradeSpace.w + 0.5);
-            float graded = rawrGradeToneLuma(rawrTfEncode1(y, tf), P.gradeSpace.y, P.gradeSpace.z, P.gradeTone);
+            uint packed = uint(P.gradeSpace.w + 0.5);
+            uint tf = packed % 16u;
+            float graded = rawrGradeToneLuma(rawrTfEncode1(y, tf), P.gradeSpace.y, P.gradeSpace.z, P.gradeTone, packed / 16u);
             hdrWork *= max(rawrTfDecode1(graded, tf), 0.0) / y;
         }
         gradeChroma = rawrGradeChromaGain(lin, y, P.gradeColor.x, P.gradeColor.y, P.gradeColor.z,

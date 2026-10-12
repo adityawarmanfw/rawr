@@ -59,16 +59,25 @@ struct GradeTapOracle {
     float tone[4];  // Contrast, Highlights, Shadows, Midtones
     float sat, vib, vibStrength, guardStart, guardEnd, pivot, black;
     tonemap::color::TransferFunction transfer;
+    uint32_t set;  // grade.glsl parameter set: NTRL 0, LUT 1, direct 2
 };
 const GradeTapOracle* gGradeTap = nullptr;
+
+// grade.glsl rawrGradeParams: contrast +/-, midtones +/-, center, width, shadows +/-, center, width.
+constexpr float kGradeParams[3][10] = {
+    {0.0900f, 0.1245f, 0.0370f, 0.0421f, -0.1491f, 0.1061f, 0.0464f, 0.0094f, -0.1448f, 0.0925f},
+    {0.0925f, 0.1256f, 0.0412f, 0.0457f, -0.1648f, 0.1031f, 0.0517f, 0.0103f, -0.2211f, 0.1595f},
+    {0.1068f, 0.1352f, 0.0509f, 0.0522f, -0.2330f, 0.1612f, 0.0627f, 0.0106f, -0.3414f, 0.2961f},
+};
 
 float smooth01(float a, float b, float x) {
     const float t = std::fmin(std::fmax((x - a) / (b - a), 0.0f), 1.0f);
     return t * t * (3.0f - 2.0f * t);
 }
 float gradeToneLuma(float y, const GradeTapOracle& g) {
+    const float* G = kGradeParams[g.set];
     if (g.tone[0] != 0.0f && y > g.black) {
-        const float k = std::exp2(0.7f * g.tone[0]), d = y - g.pivot;
+        const float k = std::exp2((g.tone[0] > 0.0f ? G[0] : G[1]) * g.tone[0]), d = y - g.pivot;
         y = d >= 0.0f ? g.pivot + d * k
                       : g.black + (g.pivot - g.black) * std::pow((y - g.black) / (g.pivot - g.black), k);
     }
@@ -76,8 +85,9 @@ float gradeToneLuma(float y, const GradeTapOracle& g) {
     const auto bump = [](float x, float c, float w) { return std::exp(-((x - c) / w) * ((x - c) / w)); };
     const float x = std::fmax(d - 0.30f, 0.0f), w = 0.10f;
     const float hl = 0.10f * smooth01(0.02f, 0.30f, d) + 0.25f * (x < w ? x * x / (2.0f * w) : x - 0.5f * w);
-    y += g.tone[3] * 0.05f * bump(d, 0.0f, 0.10f);
-    y += g.tone[2] * 0.06f * bump(d, -0.14f, 0.10f) * smooth01(g.black, g.black + 0.25f * (g.pivot - g.black), yr);
+    y += g.tone[3] * (g.tone[3] > 0.0f ? G[2] : G[3]) * bump(d, G[4], G[5]);
+    y += g.tone[2] * (g.tone[2] > 0.0f ? G[6] : G[7]) * bump(d, G[8], G[9]) *
+         smooth01(g.black, g.black + 0.25f * (g.pivot - g.black), yr);
     y += g.tone[1] * hl;
     return y;
 }
@@ -582,10 +592,11 @@ int main(int argc, char** argv) {
         using TF = tonemap::color::TransferFunction;
         const TF tf = gradeTapSpace == "logc3" ? TF::LogC3 : TF::DaVinciIntermediate;
         gradeOracle = {{0.4f, -0.8f, 0.3f, -0.2f}, 0.5f, 0.6f, 0.7f, 0.02f, 0.10f,
-                       tonemap::color::encodeTransfer(0.18f, tf), tonemap::color::encodeTransfer(0.0f, tf), tf};
+                       tonemap::color::encodeTransfer(0.18f, tf), tonemap::color::encodeTransfer(0.0f, tf), tf,
+                       tf == TF::LogC3 ? 1u : 0u};
         const auto& g = gradeOracle;
         params.gradeTapBlock = {g.tone[0], g.tone[1], g.tone[2], g.tone[3], g.sat, g.vib, g.vibStrength,
-                                g.guardStart, g.guardEnd, g.pivot, g.black, float(static_cast<uint32_t>(tf))};
+                                g.guardStart, g.guardEnd, g.pivot, g.black, float(static_cast<uint32_t>(tf) + 16u * g.set)};
         params.gradeTap = true;
         gGradeTap = &gradeOracle;
     }
