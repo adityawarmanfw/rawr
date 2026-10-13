@@ -31,5 +31,15 @@ int main() {
     for (unsigned y = 4; y < 64; ++y)
         for (unsigned x = 4; x < 86; ++x)
             if (std::abs(float(output[(y * 90 + x) * 4]) - .5f) > .002f) return 4;
+    // Identity crop is bit-exact, including alpha, and still checks cancellation per row.
+    std::vector<_Float16> identity(90 * 68 * 4);
+    unsigned checkedRows = 0;
+    rawrcam::renderer::resampleLinear(input.data(), w, h, identity.data(), 90, 68, {4, 6, 90, 68},
+        [&](auto y) { if (y == checkedRows) ++checkedRows; });
+    if (checkedRows != 68) return 5;
+    for (unsigned y = 0; y < 68; ++y)
+        for (unsigned x = 0; x < 90; ++x)
+            for (unsigned c = 0; c < 4; ++c)
+                if (identity[(y * 90 + x) * 4 + c] != input[((y + 6) * w + x + 4) * 4 + c]) return 6;
     puts("RENDERER_RESAMPLE_PASS");
 }

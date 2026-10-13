@@ -18,14 +18,6 @@ internal fun reduceImageProcessingSettings(
         state.withValues(state.values.copy(dualContrastPercent = action.value.coerceIn(0f, 100f)))
     }
 
-    is SetQuadfixEnabled -> {
-        state.withValues(state.values.copy(quadfixEnabled = action.enabled))
-    }
-
-    is SetQuadfixFastMedian -> {
-        state.withValues(state.values.copy(quadfixFastMedian = action.enabled))
-    }
-
     is SetPhotoFccSteps -> {
         state.withValues(state.values.copy(photoFccSteps = action.value.coerceIn(1, 8)))
     }

@@ -54,6 +54,7 @@ class StillImageRenderer final {
     std::optional<RenderedStillCompletion> pollCompletion();
     [[nodiscard]] bool busy() const noexcept;
     [[nodiscard]] const void* pixelData() const noexcept { return resources_.outputView().pixels; }
+    [[nodiscard]] VkImage outputImage() const noexcept { return resources_.output().image; }
     [[nodiscard]] VkImageView outputImageView() const noexcept { return resources_.outputView().imageView; }
     [[nodiscard]] size_t pixelBytes() const noexcept { return static_cast<size_t>(resources_.outputView().bytes); }
     // Half-res recovery map (RGBA8, A ignored; RGB when multi-channel, gray

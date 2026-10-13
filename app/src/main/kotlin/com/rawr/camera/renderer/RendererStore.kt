@@ -4,7 +4,6 @@ import androidx.core.net.toUri
 import android.content.Context
 import android.net.Uri
 import android.os.ParcelFileDescriptor
-import android.view.Surface
 import com.rawr.camera.settings.model.SettingsValues
 import com.rawr.camera.storage.StillOutputStore
 import java.io.File
@@ -14,7 +13,6 @@ import java.nio.file.StandardCopyOption
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -42,14 +40,33 @@ internal class RendererStore private constructor(private val context: Context) {
     fun save(job: RenderJob) = repository.save(job)
     fun current(id: String) = repository.current(id)
     fun updateDraft(id: String, values: SettingsValues) = repository.updateDraft(id, values)
-    suspend fun preview(job: RenderJob, region: FloatArray? = null) = previews.preview(job, region)
-    suspend fun attachPreviewSurface(job: RenderJob, surface: Surface?) = previews.attachPreviewSurface(job, surface)
-    fun detachPreviewSurface(after: Job? = null) = previews.detachPreviewSurface(after)
-    suspend fun previewSurface(job: RenderJob) = previews.previewSurface(job)
-    suspend fun previewHd(job: RenderJob) = previews.previewHd(job)
+    suspend fun metadata(job: RenderJob): String = withContext(Dispatchers.IO) {
+        lane.withLock { native.metadata(job) }
+    }
+    suspend fun previewPixels(job: RenderJob, size: RendererImageSize, refined: Boolean, waveform: Boolean,
+        crop: IntArray? = null) = previews.render(job, size, refined, waveform, crop)
+    fun previewStage() = native.stage()
+    fun previewBudget(): RendererPreviewBudget {
+        val info = android.app.ActivityManager.MemoryInfo()
+        context.getSystemService(android.app.ActivityManager::class.java).getMemoryInfo(info)
+        val runtime = Runtime.getRuntime()
+        return RendererPreviewBudget.admit(runtime.maxMemory() - runtime.totalMemory() + runtime.freeMemory(),
+            (info.availMem - info.threshold).coerceAtLeast(0), info.lowMemory)
+    }
+    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
+    fun observePreviewMemory(trim: () -> Unit): AutoCloseable {
+        val callback = object : android.content.ComponentCallbacks2 {
+            override fun onConfigurationChanged(config: android.content.res.Configuration) = Unit
+            override fun onLowMemory() = trim()
+            override fun onTrimMemory(level: Int) { if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) trim() }
+        }
+        context.registerComponentCallbacks(callback)
+        return AutoCloseable { context.unregisterComponentCallbacks(callback) }
+    }
     suspend fun closePreview() = previews.closePreview()
     fun releasePreview() = previews.releasePreview()
     fun cancel() = exports.cancel()
+    fun cancelPreview() { if (!busy.value) native.cancelRefinement() }
     fun hasInterruptedExport() = exports.hasInterruptedExport()
     fun resumeInterrupted() = exports.resumeInterrupted()
     fun export(id: String, original: Boolean = false, resume: Boolean = false) = exports.export(id, original, resume)
@@ -91,7 +108,8 @@ internal class RendererStore private constructor(private val context: Context) {
             if (frame != null) put("resolvedFrame", frame)
         }.toString().let(assets::resolve)
         RendererRecipe.decode(frozen, library) // Validate before the editor is composed.
-        return job.copy(original = frozen, draft = frozen, width = w, height = h, rawr = rawr,
+        val draft = assets.resolve(RendererRecipe.startingDraft(frozen, library, captured = job.capture.isNotBlank()))
+        return job.copy(original = frozen, draft = draft, width = w, height = h, rawr = rawr,
             orientation = data[2].toInt(), megapixels = RenderResolution.defaultMegapixels(w, h, rawr))
     }
     suspend fun edit(job: RenderJob, library: SettingsValues): RenderJob = withContext(Dispatchers.IO) {

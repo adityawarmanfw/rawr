@@ -1,5 +1,7 @@
 package com.rawr.camera.ui
 
+import android.os.VibrationEffect
+import android.os.VibratorManager
 import android.view.HapticFeedbackConstants
 import android.view.View
 import androidx.compose.runtime.Composable
@@ -14,6 +16,9 @@ import com.rawr.camera.model.TargetStatus
 internal interface CaptureHaptics {
     fun detent()
 
+    /** Softer detent for editing sliders, which tick far more often than capture controls. */
+    fun sliderTick() = detent()
+
     fun selection()
 
     fun longPress()
@@ -27,6 +32,8 @@ internal interface CaptureHaptics {
 
 private object NoOpCaptureHaptics : CaptureHaptics {
     override fun detent() = Unit
+
+    override fun sliderTick() = Unit
 
     override fun selection() = Unit
 
@@ -44,6 +51,10 @@ internal val LocalCaptureHaptics = staticCompositionLocalOf<CaptureHaptics> { No
 internal class AndroidCaptureHaptics(private val view: View) : CaptureHaptics {
     override fun detent() = perform(HapticFeedbackConstants.CLOCK_TICK)
 
+    private val softTick = SoftTick(view)
+
+    override fun sliderTick() = softTick.perform()
+
     override fun selection() = perform(HapticFeedbackConstants.CONTEXT_CLICK)
 
     override fun longPress() = perform(HapticFeedbackConstants.LONG_PRESS)
@@ -56,6 +67,20 @@ internal class AndroidCaptureHaptics(private val view: View) : CaptureHaptics {
 
     private fun perform(type: Int) {
         view.performHapticFeedback(type)
+    }
+}
+
+/** Low-amplitude tick for dense slider detents; falls back to CLOCK_TICK without primitive support. */
+internal class SoftTick(private val view: View) {
+    private val vibrator = view.context.getSystemService(VibratorManager::class.java)?.defaultVibrator
+    private val effect = vibrator
+        ?.takeIf { it.areAllPrimitivesSupported(VibrationEffect.Composition.PRIMITIVE_LOW_TICK) }
+        ?.let { VibrationEffect.startComposition().addPrimitive(VibrationEffect.Composition.PRIMITIVE_LOW_TICK, 0.4f).compose() }
+
+    fun perform() {
+        val effect = effect
+        if (effect == null || !view.isHapticFeedbackEnabled) view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+        else vibrator?.vibrate(effect)
     }
 }
 

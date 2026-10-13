@@ -33,7 +33,9 @@ internal class RendererJobRepository(private val context: Context, private val s
         return RenderJob(j.getString("id"), j.getString("name"), j.optString("capture"),
             j.optString("original"), j.optString("draft"), j.optInt("width"), j.optInt("height"),
             j.optInt("orientation", 1), j.optBoolean("rawr"), j.optDouble("megapixels", 0.0),
-            j.optString("status", "Editing"), j.optString("error"), j.optString("output"), j.optString("runRecipe"))
+            j.optString("status", "Editing"), j.optString("error"), j.optString("output"), j.optString("runRecipe")).let { job ->
+                if (RenderResolution.is200Mp(job.width, job.height) && job.megapixels == 0.0) job.copy(megapixels = 50.0) else job
+            }
     }
     @Synchronized fun refresh() {
         val saved = root.listFiles().orEmpty().mapNotNull { d -> runCatching { read(File(d, "job.json")) }.getOrNull() }

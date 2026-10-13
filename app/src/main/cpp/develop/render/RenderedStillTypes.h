@@ -33,6 +33,8 @@ struct RenderedStillContext {
     // Renderer editor only: leave the RGBA8 output on the GPU for direct
     // surface presentation. Still exports continue to use CPU readback.
     bool surfacePreview = false;
+    // Renderer owns the dependency key and keeps the post engine alive.
+    bool reuseLinearResult = false;
     bool filmTiled = false;
     float lutStrength = 1.0f;
     void (*filmDiagnosticTap)(void*, VkCommandBuffer, const char*, VkBuffer, uint32_t, uint32_t) = nullptr;
@@ -161,7 +163,7 @@ struct RenderedStillCompletion {
     // (resource creation, LUT load, TonemapEngine/PostDemosaicProcessor and
     // per-capture SpektraFilm construction, command recording), submit→fence
     // gaps beyond the GPU timestamp ranges (queue contention/scheduling),
-    // and post-fence readback + checksum (+ diagnostic dumps when enabled).
+    // and post-fence readback (+ diagnostic dumps when enabled).
     double renderSetupMs = 0.0;
     // Part of renderSetupMs spent loading the LUT and building the tonemap /
     // post-demosaic engines (pipeline compile); ~0 when persistence reuses them.
@@ -169,7 +171,6 @@ struct RenderedStillCompletion {
     double queueGapsMs = 0.0;
     double readbackMs = 0.0;
     uint64_t pixelBytes = 0;
-    uint64_t checksum = 0;
 };
 
 }  // namespace rawrcam::develop::rendered

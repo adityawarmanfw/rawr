@@ -2,38 +2,92 @@ package com.rawr.camera.renderer
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONObject
 
 internal data class RendererPreviewKey(val draft: String, val megapixels: Double)
-internal fun RenderJob.previewKey() = RendererPreviewKey(draft, megapixels)
+// Requests read this key many times per slider tick; parsing the draft each time stalls the main thread.
+// Two entries: updates compare the previous job against the new one.
+@Volatile private var previewKeys = emptyList<Triple<String, Double, RendererPreviewKey>>()
+internal fun RenderJob.previewKey(): RendererPreviewKey {
+    val cached = previewKeys
+    cached.firstOrNull { it.first === draft && it.second == megapixels }?.let { return it.third }
+    return computePreviewKey().also { previewKeys = listOf(Triple(draft, megapixels, it)) + cached.take(1) }
+}
+private fun RenderJob.computePreviewKey(): RendererPreviewKey {
+    val pixels = runCatching {
+        JSONObject(draft).apply {
+            remove("export")
+            remove("editorProfiles")
+            remove("editorTones")
+            remove("editorAgx")
+            remove("editorFilmPresets")
+            remove("editorFilmPresetId")
+            remove("ultraHdrEnabled")
+            optJSONObject("tone")?.apply { remove("jpegQuality"); remove("jpegChromaSubsamplingId") }
+        }.toString()
+    }.getOrDefault(draft)
+    return RendererPreviewKey(pixels, megapixels)
+}
 
-/** Serial proxy renders consume the latest draft after each render, without restarting on slider ticks. */
+internal data class RendererPreviewRequest(
+    val job: RenderJob,
+    val viewport: RendererViewport = RendererViewport(),
+    val visible: Boolean = true,
+    val exporting: Boolean = false,
+    val waveformGeneration: Long = 0,
+    val waveform: Boolean = false,
+    val navigationEdge: Int = navigationEdge(viewport)
+) {
+    val overviewKey get() = job.previewKey() to waveformGeneration
+    // Fitted refinement is the same image regardless of the panel/canvas size.
+    val refinementKey get() = Triple(overviewKey, navigationEdge, viewport.takeIf { it.zoom > 1.05f })
+    val eligible get() = visible && !exporting && job.width > 0 && viewport.width > 1 && viewport.height > 1
+}
+
+/** One owner for both preview qualities. Latest edits get an overview first;
+ * refinement starts only after requests settle. Native work never overlaps.
+ * Viewport changes don't abort RAW preparation or rebuild the fitted image.
+ */
 internal class RendererProxyScheduler(
     scope: CoroutineScope,
-    jobs: StateFlow<RenderJob>,
-    ready: () -> Boolean,
-    busy: () -> Boolean,
-    generation: () -> Long,
-    render: suspend (RenderJob) -> Unit,
+    private val requests: StateFlow<RendererPreviewRequest>,
+    overview: suspend (RendererPreviewRequest) -> Unit,
+    refine: suspend (RendererPreviewRequest) -> Unit,
     onFailure: (Exception) -> Unit
 ) {
+    private val wakeups = Channel<Unit>(Channel.CONFLATED)
     init {
+        scope.launch { requests.collect { wakeups.trySend(Unit) } }
         scope.launch {
-            var rendered: Pair<Long, RendererPreviewKey>? = null
-            while (isActive) {
-                if (busy()) { delay(100); continue }
-                if (!ready()) { rendered = null; delay(30); continue }
-                val current = jobs.value
-                val token = generation() to current.previewKey()
-                if (token == rendered || current.width <= 0) { delay(30); continue }
-                try { render(current) }
+            var shown: Pair<RendererPreviewKey, Long>? = null
+            var refined: Triple<Pair<RendererPreviewKey, Long>, Int, RendererViewport?>? = null
+            suspend fun attempt(work: suspend () -> Unit) {
+                try { work() }
                 catch (e: CancellationException) { throw e }
                 catch (e: Exception) { onFailure(e) }
-                // A persistent failure waits for a new draft or surface instead of hot-looping.
-                rendered = token
+            }
+            for (ignored in wakeups) {
+                while (true) {
+                    val current = requests.value
+                    if (!current.eligible) { shown = null; refined = null; break }
+                    if (shown != current.overviewKey) {
+                        attempt { overview(current) }
+                        shown = current.overviewKey
+                        continue
+                    }
+                    if (refined == current.refinementKey) break
+                    val region = displayRegion(current.viewport)
+                    if (region[2] <= 0f || region[3] <= 0f) break
+                    // A new intent interrupts the quiet period, not an active GPU operation.
+                    if (withTimeoutOrNull(350) { wakeups.receive(); true } == true) continue
+                    if (requests.value != current) continue
+                    attempt { refine(current) }
+                    refined = current.refinementKey
+                }
             }
         }
     }

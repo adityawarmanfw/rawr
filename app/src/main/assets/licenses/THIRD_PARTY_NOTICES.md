@@ -12,10 +12,11 @@ of this file. The GNU GPL v3 text is the repository `LICENSE`.
 
 | Component | Used in | Upstream | License |
 |---|---|---|---|
-| darktable (`denoiseprofile`, AMaZE demosaic reference) | `native/raw_denoise`, `native/raw_demosaic/amaze` | https://github.com/darktable-org/darktable | GPL-3.0-or-later |
+| darktable (`denoiseprofile`, AMaZE demosaic reference, `agx` render transform) | `native/raw_denoise`, `native/raw_demosaic/amaze`, `native/tonemap_engine` (`Agx.h`, `agx.glsl`) | https://github.com/darktable-org/darktable | GPL-3.0-or-later |
 | RawTherapee (dual demosaic RCD+VNG4 / AMaZE+VNG4, Coloropp highlight, false-colour correction) | `native/raw_demosaic/dual`, `native/raw_highlight`, `native/false_color_correction` | https://github.com/RawTherapee/RawTherapee | GPL-3.0-or-later |
 | librtprocess (RCD, VNG4, AMaZE demosaic) | `native/raw_demosaic/rcd`, `native/raw_demosaic/vng4`, `native/raw_demosaic/amaze` | https://github.com/CarVac/librtprocess | GPL-3.0-or-later |
 | AMaZE GPU pass structure, adapted from a privately shared GPL-3.0 implementation (2026) | `native/raw_demosaic/amaze` | — | GPL-3.0-or-later |
+| QB binning, adapted from a privately shared GPL-3.0 implementation (2026) | `app/src/main/cpp/renderer/NaturalBayerBin.h` | — | GPL-3.0 |
 | spektrafilm / spektrafilm-ofx | `native/spektrafilm`, `app/src/main/assets/spektrafilm` | https://github.com/chaert-s/spektrafilm-ofx , https://github.com/andreavolpato/spektrafilm | GPL-3.0-only |
 | Handheld Multi-Frame Super-Resolution (Wronski et al.) | `native/multiframe` | https://github.com/Jamy-L/Handheld-Multi-Frame-Super-Resolution | MIT |
 | hdr-plus-swift / Burst Photo (HDR+ spatial merge) | `native/multiframe/merge_hdrplus` | https://github.com/martin-marek/hdr-plus-swift | GPL-3.0 |

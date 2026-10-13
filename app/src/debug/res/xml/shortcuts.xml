@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Static shortcut intents need the installed package, including the debug suffix. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/ic_notification"
+        android:shortcutId="open-renderer"
+        android:shortcutLongLabel="@string/renderer_shortcut_long"
+        android:shortcutShortLabel="@string/renderer_shortcut_short">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.rawr.camera.debug"
+            android:targetClass="com.rawr.camera.renderer.RendererActivity" />
+    </shortcut>
+</shortcuts>

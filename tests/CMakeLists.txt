@@ -30,6 +30,12 @@ function(rawr_test name)
   set_tests_properties(${name} PROPERTIES ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}")
 endfunction()
 
+rawr_test(renderer_bayer_bin_test
+  "${RAWR_ROOT}/tests/native/renderer_bayer_bin_test.cpp")
+rawr_test(renderer_resample_test
+  "${RAWR_ROOT}/tests/native/renderer_resample_test.cpp"
+  "${APP}/renderer/LinearResample.cpp")
+
 rawr_test(ae_post_gain_curve_test
   "${RAWR_ROOT}/tests/native/ae_post_gain_curve_test.cpp")
 rawr_test(auto_key_exposure_test

@@ -11,6 +11,8 @@ import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -50,10 +52,11 @@ internal class RendererExportCoordinator(
         check(!mutableBusy.value)
         val admitted = repository.current(id)
         repository.cancelDraftWrite(id)
+        mutableProgress.value = 0
         mutableBusy.value = true; cancelled = false
         try { RendererService.start(context) } catch (e: Exception) { mutableBusy.value = false; throw e }
         scope.launch {
-            val ticker = launch { while (isActive) { mutableProgress.value = native.progress(); delay(250) } }
+            var ticker: Job? = null
             try { lane.withLock {
                 var job = admitted; check(job.width > 0) { "Open this capture before rendering" }
                 if (job.output.isNotEmpty() && (job.status == "Complete" || output.isPublished(job.output.toUri()))) {
@@ -93,17 +96,27 @@ internal class RendererExportCoordinator(
                 val (w, h) = RenderResolution.dimensions(job.width, job.height, job.megapixels)
                 val uri = if (job.output.isNotEmpty()) job.output.toUri() else output.createPending(displayName)
                 job = job.copy(output = uri.toString()); repository.save(job)
+                // Start polling only after the preview lane is drained and its progress reset.
+                native.resetProgress()
+                ticker = launch { while (isActive) {
+                    val value = native.progress().coerceIn(0, 98)
+                    mutableProgress.update { previous -> maxOf(previous, value) }
+                    delay(250)
+                } }
                 output.write(uri) { fd -> native.render(job, job.runRecipe, w, h, fd) }
+                ticker?.cancel()
+                mutableProgress.value = 99
                 check(!cancelled) { "Cancelled" }
                 repository.save(job.copy(status = "Publishing"))
                 output.publish(uri)
+                mutableProgress.value = 100
                 job = job.copy(status = "Complete"); repository.save(job)
                 mutableCompletion.value = uri.toString()
                 runCatching { RendererService.completed(context, visible(), uri) }
                 removeCompleted(job)
             } } catch (error: Exception) {
                 repository.jobs.value.firstOrNull { it.id == id }?.let { runCatching { repository.save(it.copy(status = if (it.status == "Complete") "Complete" else "Failed", error = error.message ?: "Render failed")) } }
-            } finally { ticker.cancel(); mutableBusy.value = false; RendererService.stop(context) }
+            } finally { ticker?.cancel(); mutableBusy.value = false; RendererService.stop(context) }
         }
     }
 }

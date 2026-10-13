@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -126,8 +127,10 @@ rawrcam::renderer::RenderOptions options(JNIEnv* env, jstring recipe, int workin
         throw std::runtime_error("Unsupported demosaic recipe");
     o.dualAutoContrast = json.flag("dualAutoContrast", true);
     o.dualContrastPercent = std::clamp(float(json.number("dualContrastPercent", 20)), 0.f, 100.f);
-    o.quadfix = json.flag("quadfixEnabled", false);
-    o.quadfixFastMedian = json.flag("quadfixFastMedian", false);
+    o.waveform = json.flag("rendererWaveform", false);
+    // Retired renderer control: ignore flags in older drafts/capture recipes.
+    o.quadfix = false;
+    o.quadfixFastMedian = false;
     o.temperature = float(tone.number("wbTemperature", 0));
     o.tint = float(tone.number("wbTint", 0));
     c.lutStrength = float(tone.number("colorRenderingStrength", 1));
@@ -167,6 +170,37 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_renderer_RendererNative_
         return 0;
     }
 }
+extern "C" JNIEXPORT jintArray JNICALL Java_com_rawr_camera_renderer_RendererNative_waveform(JNIEnv* e, jobject, jlong id) {
+    try {
+        auto session = get(id);
+        if (!session->engine || session->engine->waveform().empty()) return nullptr;
+        const auto& pixels = session->engine->waveform();
+        auto result = e->NewIntArray(jsize(pixels.size()));
+        if (result) e->SetIntArrayRegion(result, 0, jsize(pixels.size()), reinterpret_cast<const jint*>(pixels.data()));
+        return result;
+    } catch (const std::exception& error) { fail(e, error); return nullptr; }
+}
+
+extern "C" JNIEXPORT jstring JNICALL Java_com_rawr_camera_renderer_RendererNative_metadata(JNIEnv* e, jobject,
+                                                                                           jlong id) {
+    try {
+        auto session = get(id);
+        const auto& source = session->source;
+        std::ostringstream text;
+        text << "{\"iso\":" << source.sensitivity().value_or(0)
+             << ",\"exposureNs\":" << source.exposureTimeNs().value_or(0)
+             << ",\"aperture\":" << source.aperture().value_or(0)
+             << ",\"whiteLevel\":" << source.whiteLevel
+             << ",\"cfa\":" << source.cfa
+             << ",\"blackLevels\":[" << source.black[0] << ',' << source.black[1] << ','
+             << source.black[2] << ',' << source.black[3] << "]}";
+        return e->NewStringUTF(text.str().c_str());
+    } catch (const std::exception& error) {
+        fail(e, error);
+        return nullptr;
+    }
+}
+
 extern "C" JNIEXPORT jstring JNICALL Java_com_rawr_camera_renderer_RendererNative_inspect(JNIEnv* e, jobject,
                                                                                           jlong id) {
     try {
@@ -196,16 +230,21 @@ Java_com_rawr_camera_renderer_RendererNative_render(JNIEnv* e, jobject, jlong id
         auto& engine = *s->engine;
         engine.cancelled = false;
         engine.progress = 0;
+        engine.stage = 0;
         if (w < 1 || h < 1 || fullWidth < 1 || fullHeight < 1 || uint64_t(fullWidth) * fullHeight > 250000000)
             throw std::runtime_error("Invalid render dimensions");
-        auto o = options(e, recipe, crop ? fullWidth : w, crop ? fullHeight : h, w, h);
+        auto o = options(e, recipe, w, h, w, h);
         o.overview = fd < 0 && !crop;
         o.surfacePreview = fd == -2;
         const auto croppedPixels = uint64_t(s->source.crop[2]) * s->source.crop[3];
-        o.bayerBin2x = !o.overview && croppedPixels >= 180000000u && croppedPixels <= 220000000u &&
+        const bool highResolutionSource = croppedPixels >= 180000000u && croppedPixels <= 220000000u;
+        if (highResolutionSource && ((s->source.crop[0] | s->source.crop[1] | s->source.crop[2] | s->source.crop[3]) & 1u))
+            throw std::runtime_error("200MP binning requires an even Bayer crop");
+        o.bayerBin2x = croppedPixels >= 180000000u && croppedPixels <= 220000000u &&
                        !(s->source.crop[0] & 1u) && !(s->source.crop[1] & 1u) && !(s->source.crop[2] & 1u) &&
-                       !(s->source.crop[3] & 1u) && o.width == s->source.crop[2] / 2u &&
-                       o.height == s->source.crop[3] / 2u;
+                       !(s->source.crop[3] & 1u);
+        if (o.bayerBin2x && (o.width > s->source.crop[2] / 2u || o.height > s->source.crop[3] / 2u))
+            throw std::runtime_error("200MP sources must render at 50MP or below");
         auto path = s->cache + (o.shading ? "-lsc" : "-plain");
 #ifndef NDEBUG
         Json replayJson(e, recipe);
@@ -222,29 +261,6 @@ Java_com_rawr_camera_renderer_RendererNative_render(JNIEnv* e, jobject, jlong id
             path += "-replay-" + replayCfa.substr(0, 16);
         }
 #endif
-        if (o.overview) {
-            path += ".proxy";
-            engine.prepareProxy(s->source, path, o.shading);
-        } else {
-            // The sharp kernel must not reuse a cache from the previous filter.
-            if (o.bayerBin2x) path += "-same-color-sharp2x-v1";
-            path +=
-                "." + o.demosaic + (o.dualAutoContrast ? "-auto" : "-manual") + std::to_string(o.dualContrastPercent);
-            path += "-balanced-v1";
-            // quadfix changes demosaic input: version the cache so stale
-            // unfiltered tiles can never be served to a filtered render.
-            if (o.quadfix) path += o.quadfixFastMedian ? "-qf-fast" : "-qf";
-            engine.prepare(s->source, path, o);
-        }
-        jint region[4]{0, 0, jint(s->source.crop[2]), jint(s->source.crop[3])};
-        if (crop) {
-            if (e->GetArrayLength(crop) != 4) throw std::runtime_error("Invalid preview region");
-            e->GetIntArrayRegion(crop, 0, 4, region);
-            if (region[0] < 0 || region[1] < 0 || region[2] < 1 || region[3] < 1 ||
-                uint64_t(region[0]) + region[2] > s->source.crop[2] ||
-                uint64_t(region[1]) + region[3] > s->source.crop[3])
-                throw std::runtime_error("Invalid preview region");
-        }
         Json recipeJson(e, recipe);
         Json frame(e, recipeJson.child("resolvedFrame"));
         auto array = [&](const char* key, float* target, int count) {
@@ -265,9 +281,66 @@ Java_com_rawr_camera_renderer_RendererNative_render(JNIEnv* e, jobject, jlong id
         array("whiteBalanceRggb", wb, 4);
         s->source.wb = {wb[0], (wb[1] + wb[2]) * .5f, wb[3]};
         array("cameraToLinearSrgbRowMajor", s->source.cameraToSrgb.data(), 9);
+        const auto proxyPath = path + ".proxy";
+        if (o.bayerBin2x) path += "-natural2x-f32-v1";
+        // Calibration participates in both binning and demosaic cache identity.
+        for (float gain : s->source.wb) path += "-" + std::to_string(gain);
+        const auto binnedPath = path + ".cfa";
+        path += "." + o.demosaic + (o.dualAutoContrast ? "-auto" : "-manual") + std::to_string(o.dualContrastPercent);
+        path += "-balanced-v2";
+        if (o.quadfix) path += o.quadfixFastMedian ? "-qf-pad-v2-fast" : "-qf-pad-v2";
+        const uint64_t expected = uint64_t(s->source.info().width / (o.bayerBin2x ? 2 : 1)) *
+            (s->source.info().height / (o.bayerBin2x ? 2 : 1)) * 8;
+        const bool prepared = std::filesystem::exists(path) && std::filesystem::file_size(path) == expected;
+        if (o.overview && !prepared) {
+            o.quickProxy = true;
+            o.bayerBin2x = false;
+            path = proxyPath;
+            engine.stage = 1;
+            engine.prepareProxy(s->source, path, o.shading);
+        } else if (!prepared) {
+            const auto prepareStarted = std::chrono::steady_clock::now();
+            if (o.bayerBin2x) {
+                engine.stage = 2;
+                s->source.prepareBinned(binnedPath, o.shading, [&] {
+                    if (engine.cancelled) throw std::runtime_error("Cancelled");
+                });
+                __android_log_print(ANDROID_LOG_INFO, "RawrRenderer", "Bayer bin/cache ready in %lldms",
+                    static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-prepareStarted).count()));
+            }
+            engine.stage = 3;
+            engine.prepare(s->source, path, o);
+            __android_log_print(ANDROID_LOG_INFO, "RawrRenderer", "Working RAW ready in %lldms",
+                static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-prepareStarted).count()));
+        }
+        jint region[4]{0, 0, jint(s->source.crop[2]), jint(s->source.crop[3])};
+        if (crop) {
+            if (e->GetArrayLength(crop) != 4) throw std::runtime_error("Invalid preview region");
+            e->GetIntArrayRegion(crop, 0, 4, region);
+            if (region[0] < 0 || region[1] < 0 || region[2] < 1 || region[3] < 1 ||
+                uint64_t(region[0]) + region[2] > s->source.crop[2] ||
+                uint64_t(region[1]) + region[3] > s->source.crop[3])
+                throw std::runtime_error("Invalid preview region");
+        }
+        if (crop) {
+            // Spatial stages see neighbors beyond the visible viewport. Keep
+            // this bounded in preview pixels, independent of source size.
+            constexpr int margin = 128;
+            const int px = int(std::ceil(double(region[2]) * margin / w));
+            const int py = int(std::ceil(double(region[3]) * margin / h));
+            const int left = std::max(0, region[0] - px) & ~1;
+            const int top = std::max(0, region[1] - py) & ~1;
+            const int right = std::min(int(s->source.crop[2]), (region[0] + region[2] + px + 1) & ~1);
+            const int bottom = std::min(int(s->source.crop[3]), (region[1] + region[3] + py + 1) & ~1);
+            o.region = {uint32_t(left), uint32_t(top), uint32_t(right-left), uint32_t(bottom-top)};
+            o.width = std::max(2u, uint32_t(std::lround(double(w) * o.region[2] / region[2])));
+            o.height = std::max(2u, uint32_t(std::lround(double(h) * o.region[3] / region[3])));
+        }
         std::vector<uint8_t> pixels;
         const std::string key =
-            "renderer-v2-lab-rcd\n" + std::to_string(o.width) + "x" + std::to_string(o.height) + "\n" + str(e, recipe);
+            "renderer-v2-lab-rcd\n" + std::to_string(o.width) + "x" + std::to_string(o.height) + "\n" + std::to_string(region[0]) + "," +
+            std::to_string(region[1]) + "," + std::to_string(region[2]) + "," + std::to_string(region[3]) + "\n" +
+            std::to_string(o.region[0]) + "," + std::to_string(o.region[1]) + "," + std::to_string(o.region[2]) + "," + std::to_string(o.region[3]) + "\n" + str(e, recipe);
         const std::string renderedPath = path + ".rendered", keyPath = renderedPath + ".key";
         bool cached = false;
         // Exports bypass the rendered-pixel cache: a hit would skip
@@ -277,7 +350,7 @@ Java_com_rawr_camera_renderer_RendererNative_render(JNIEnv* e, jobject, jlong id
         // UltraHDR gain map is export-only: previews (overview and detail)
         // never allocate map resources, matching the still-capture contract.
         if (!isExport) o.context.ultraHdrEnabled = false;
-        if (!o.overview && !isExport && !o.surfacePreview && std::filesystem::exists(renderedPath) &&
+        if (!o.overview && !isExport && !o.surfacePreview && !o.waveform && std::filesystem::exists(renderedPath) &&
             std::filesystem::file_size(renderedPath) == uint64_t(o.width) * o.height * 4) {
             std::ifstream k(keyPath);
             std::string previous((std::istreambuf_iterator<char>(k)), {});
@@ -410,10 +483,15 @@ Java_com_rawr_camera_renderer_RendererNative_render(JNIEnv* e, jobject, jlong id
             return nullptr;
         }
         std::vector<jint> argb(size_t(w) * h);
+        if (!crop) {
+            for (size_t i = 0; i < argb.size(); ++i)
+                argb[i] = jint(0xff000000u | (uint32_t(pixels[i * 4]) << 16) |
+                    (uint32_t(pixels[i * 4 + 1]) << 8) | pixels[i * 4 + 2]);
+        } else
         for (int yy = 0; yy < h; ++yy)
             for (int xx = 0; xx < w; ++xx) {
-                double px = crop ? (region[0] + (xx + .5) * region[2] / w) * o.width / s->source.crop[2] - .5 : xx;
-                double py = crop ? (region[1] + (yy + .5) * region[3] / h) * o.height / s->source.crop[3] - .5 : yy;
+                double px = crop ? (region[0] + (xx + .5) * region[2] / w - o.region[0]) * o.width / o.region[2] - .5 : xx;
+                double py = crop ? (region[1] + (yy + .5) * region[3] / h - o.region[1]) * o.height / o.region[3] - .5 : yy;
                 int x0 = std::clamp(int(std::floor(px)), 0, int(o.width) - 1),
                     y0 = std::clamp(int(std::floor(py)), 0, int(o.height) - 1);
                 int x1 = std::min(x0 + 1, int(o.width) - 1), y1 = std::min(y0 + 1, int(o.height) - 1);
@@ -453,29 +531,44 @@ extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_renderer_RendererNative_s
         fail(e, x);
     }
 }
-extern "C" JNIEXPORT jint JNICALL Java_com_rawr_camera_renderer_RendererNative_progress(JNIEnv*, jobject, jlong id) {
-    try {
-        auto s = get(id);
-        auto* p = s->activeEngine.load();
-        return p ? p->progress.load() : 0;
-    } catch (...) {
-        return 0;
-    }
-}
-extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_renderer_RendererNative_cancel(JNIEnv*, jobject, jlong id) {
-    try {
-        auto s = get(id);
-        if (auto* p = s->activeEngine.load()) p->cancelled = true;
-    } catch (...) {
-    }
-}
-extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_renderer_RendererNative_close(JNIEnv* e, jobject, jlong id) {
+// These UI-facing operations borrow the engine only while holding the registry
+// lock. They must not become the last shared_ptr owner and destroy a GPU session
+// on the caller's thread if close() runs concurrently.
+extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_renderer_RendererNative_resetProgress(JNIEnv*, jobject, jlong id) {
     std::lock_guard<std::mutex> lock(handlesMutex);
     auto it = handles.find(id);
-    if (it != handles.end()) {
-        e->DeleteGlobalRef(it->second->assets);
-        handles.erase(it);
+    if (it != handles.end()) if (auto* engine = it->second->activeEngine.load()) engine->progress = 0;
+}
+extern "C" JNIEXPORT jint JNICALL Java_com_rawr_camera_renderer_RendererNative_stage(JNIEnv*, jobject, jlong id) {
+    std::lock_guard<std::mutex> lock(handlesMutex);
+    auto it = handles.find(id);
+    if (it != handles.end()) if (auto* engine = it->second->activeEngine.load()) return engine->stage.load();
+    return 0;
+}
+extern "C" JNIEXPORT jint JNICALL Java_com_rawr_camera_renderer_RendererNative_progress(JNIEnv*, jobject, jlong id) {
+    std::lock_guard<std::mutex> lock(handlesMutex);
+    auto it = handles.find(id);
+    if (it != handles.end()) if (auto* engine = it->second->activeEngine.load()) return engine->progress.load();
+    return 0;
+}
+extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_renderer_RendererNative_cancel(JNIEnv*, jobject, jlong id) {
+    std::lock_guard<std::mutex> lock(handlesMutex);
+    auto it = handles.find(id);
+    if (it != handles.end()) if (auto* engine = it->second->activeEngine.load()) engine->cancelled = true;
+}
+extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_renderer_RendererNative_close(JNIEnv* e, jobject, jlong id) {
+    std::shared_ptr<Session> retired;
+    {
+        std::lock_guard<std::mutex> lock(handlesMutex);
+        auto it = handles.find(id);
+        if (it != handles.end()) {
+            retired = std::move(it->second);
+            handles.erase(it);
+        }
     }
+    // Session destruction can wait for GPU work. Never hold the handle registry
+    // lock here: cancellation/progress are also queried from the UI thread.
+    if (retired) e->DeleteGlobalRef(retired->assets);
 }
 
 extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_renderer_RendererNative_materialize(JNIEnv* e, jobject,

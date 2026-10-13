@@ -55,7 +55,7 @@ void RenderCommandSession::begin() {
     begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkCheck(vkBeginCommandBuffer(command_, &begin), "rendered begin command");
-    if (timingPool_) vkCmdResetQueryPool(command_, timingPool_, 0, 16);
+    if (timingPool_) vkCmdResetQueryPool(command_, timingPool_, 0, timingQueryCount);
 }
 void RenderCommandSession::submitAndRestart(const std::string& stage) {
     VkCommandBufferBeginInfo begin{};

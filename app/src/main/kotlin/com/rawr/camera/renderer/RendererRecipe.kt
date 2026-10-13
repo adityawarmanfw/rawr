@@ -6,11 +6,33 @@ import com.rawr.camera.model.valueFor
 import com.rawr.camera.model.withValue
 import com.rawr.camera.settings.model.*
 import com.rawr.camera.settings.preferences.LutProfileCodec
+import com.rawr.camera.settings.preferences.FilmSimCodec
 import org.json.JSONObject
 
 internal object RendererRecipe {
+    /** Freeze defaults once. A captured job owns its recipe; a new DNG uses the user's current look. */
+    fun startingDraft(source: String, library: SettingsValues, captured: Boolean): String {
+        val snapshot = if (captured) decode(source, library) else library.copy(captureModeId = "photo")
+        return JSONObject(encode(snapshot)).apply {
+            val metadata = JSONObject(source)
+            listOf("aePostGain", "adaptiveTone", "timestampNs", "resolvedFrame").forEach { key ->
+                if (metadata.has(key)) put(key, metadata.get(key))
+            }
+        }.toString()
+    }
+
     fun encode(v: SettingsValues): String = JSONObject(CaptureRecipe.encode(v)).apply {
+        put("editorFilmPresets", FilmSimCodec.encodePresets(v.filmPresets))
+        put("editorFilmPresetId", v.selectedFilmPresetId)
         put("editorProfiles", LutProfileCodec.encode(v.userLutProfiles))
+        put("editorTones", JSONObject().apply {
+            put("rawr", LutProfileCodec.encodeTone(v.rawrBaseTone))
+            put("srgb", LutProfileCodec.encodeTone(v.srgbTone))
+            put("agx", LutProfileCodec.encodeTone(v.agxTone))
+        })
+        put("editorAgx", JSONObject().apply { v.agxValues.forEach { (preset, values) ->
+            put(preset.name, org.json.JSONArray(values.values))
+        } })
     }.toString()
 
     fun decode(text: String, library: SettingsValues): SettingsValues {
@@ -19,7 +41,17 @@ internal object RendererRecipe {
         require(j.optInt("version") == 1) { "Unsupported processing recipe version" }
         val t = j.optJSONObject("tone") ?: JSONObject()
         val f = j.optJSONObject("film") ?: JSONObject()
-        val d = neutral(library)
+        val savedTones = j.optJSONObject("editorTones")
+        val d = library.copy(captureModeId = "photo",
+            rawrBaseTone = savedTones?.optString("rawr")?.let(LutProfileCodec::decodeTone) ?: library.rawrBaseTone,
+            srgbTone = savedTones?.optString("srgb")?.let(LutProfileCodec::decodeTone) ?: library.srgbTone,
+            agxTone = savedTones?.optString("agx")?.let(LutProfileCodec::decodeTone) ?: library.agxTone,
+            agxValues = library.agxValues + AgxPreset.entries.mapNotNull { preset ->
+                j.optJSONObject("editorAgx")?.optJSONArray(preset.name)?.takeIf { it.length() == AgxParameter.entries.size }?.let { a ->
+                    preset to AgxCatalog.sanitized(AgxValues(List(a.length()) { a.getDouble(it).toFloat() }),preset.defaults)
+                }
+            }.toMap()
+        )
         val tone = TonemapCatalog.all.fold(d.imageTone) { acc, descriptor ->
             acc.withValue(
                 descriptor,
@@ -204,6 +236,8 @@ internal object RendererRecipe {
             agxValues = agx?.let { d.agxValues + it } ?: d.agxValues,
             rawrBaseTone = if (profile == ColorRenderProfile.RawrBase) profileTone else d.rawrBaseTone,
             filmSimEnabled = j.optBoolean("filmSimEnabled"), filmSimLook = film,
+            filmPresets = if (j.has("editorFilmPresets")) FilmSimCodec.decodePresets(j.getString("editorFilmPresets")) else library.filmPresets,
+            selectedFilmPresetId = j.optString("editorFilmPresetId").takeIf { it.isNotBlank() && it != "null" },
             selectedUserLutProfileId = selected.takeIf { profile == ColorRenderProfile.UserLut },
             userLutProfiles = (profiles.filterNot { it.id == embedded?.id } + listOfNotNull(embedded)).map {
                 if (it.id == selected) it.copy(tone = profileTone) else it
@@ -218,8 +252,6 @@ internal object RendererRecipe {
             demosaicAlgorithm = DemosaicAlgorithm.valueOf(j.optString("demosaicAlgorithm", "Rcd")),
             dualAutoContrast = j.optBoolean("dualAutoContrast", true),
             dualContrastPercent = j.optDouble("dualContrastPercent", 20.0).toFloat().coerceIn(0f, 100f),
-            quadfixEnabled = j.optBoolean("quadfixEnabled", false),
-            quadfixFastMedian = j.optBoolean("quadfixFastMedian", false),
             photoDefringeEdgeThreshold = j.optDouble("defringeEdgeThreshold", .02).toFloat(),
             photoDefringeLumaFloor = j.optDouble("defringeLumaFloor", .08).toFloat(),
             photoFccSteps = j.optInt("fccSteps", 1), photoDefringeEnabled = j.optBoolean("defringeEnabled", true),

@@ -1,4 +1,8 @@
+#include "color/FilmExposure.h"
 #include "RendererEngine.h"
+#include <android/log.h>
+#include <sstream>
+#include <iomanip>
 #include <rcd/Balance.hpp>
 
 #include <fcntl.h>
@@ -15,6 +19,7 @@
 #include <filesystem>
 #include <map>
 #include <quadfix/Pipeline.hpp>
+#include "BayerTilePadding.h"
 #include <raw_denoise/DenoisePipeline.hpp>
 #include <rcd/Pipeline.hpp>
 #include <stdexcept>
@@ -24,6 +29,7 @@
 
 #include "LinearResample.h"
 #include "RendererSurface.h"
+#include "image_scopes/image_scopes.h"
 #include "color/ColorMath.h"
 #include "raw_demosaic/EmbeddedShaders.hpp"
 #include "vulkan/VulkanDispatch.h"
@@ -186,7 +192,11 @@ float lanczos(float x) {
 }
 }  // namespace
 RendererEngine::RendererEngine(const std::string& dir, const std::string& lib, AAssetManager* assets)
-    : filesDir_(dir), processor_(dir) {
+    : filesDir_(dir), processor_(dir, [this](const std::string& message) {
+          __android_log_print(ANDROID_LOG_INFO, "RawrRenderer", "%s", message.c_str());
+          if (message == "STILL_RENDER_STAGE tone") progress = 82;
+          else if (message == "STILL_RENDER_STAGE gainmap") progress = 90;
+      }) {
     if (!vkCreateInstance) vulkan::dispatch::configure(lib, "");
     vulkan_.createInstance();
     vulkan_.createDeviceForSurface(VK_NULL_HANDLE);
@@ -194,11 +204,77 @@ RendererEngine::RendererEngine(const std::string& dir, const std::string& lib, A
     processor_.setEnginePersistenceEnabled(true);
 }
 RendererEngine::~RendererEngine() {
+    scopeEngine_.reset();
+    vulkan::destroyOwnedImage(vulkan_.device(), scopeImage_);
     surface_.reset();
     processor_.reset();
     processor_.shutdownFilm();
+    vulkan::destroyOwnedImage(vulkan_.device(), overviewWorking_);
     vulkan::destroyOwnedImage(vulkan_.device(), overviewInput_);
 }
+void RendererEngine::renderWaveform(uint32_t width, uint32_t height, uint32_t orientation, bool surfacePreview) {
+    // Same GPU measurement/render backend, target size and defaults as ImageScopesProcessor.
+    constexpr uint32_t scopeWidth = 512, scopeHeight = 384;
+    if (!scopeEngine_) {
+        image_scopes::CreateInfo create{};
+        create.context.physicalDevice = vulkan_.physicalDevice();
+        create.context.device = vulkan_.device();
+        create.maxFramesInFlight = 1;
+        scopeEngine_ = std::make_unique<image_scopes::ImageScopes>(create);
+    }
+    const bool newTarget = scopeImage_.image == VK_NULL_HANDLE;
+    if (newTarget) scopeImage_ = vulkan::createOwnedImage(vulkan_.physicalDevice(), vulkan_.device(), scopeWidth,
+        scopeHeight, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+    Commands commands(vulkan_);
+    Buffer readback(vulkan_, scopeWidth * scopeHeight * 4);
+    const auto inputLayout = surfacePreview ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    commands.begin();
+    barrier(commands.command, processor_.outputImage(), inputLayout, VK_IMAGE_LAYOUT_GENERAL);
+    barrier(commands.command, scopeImage_.image, newTarget ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        VK_IMAGE_LAYOUT_GENERAL);
+    image_scopes::DisplayWaveformRecordInfo info{};
+    info.commandBuffer = commands.command;
+    info.input = {processor_.outputImageView(), VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_GENERAL, width, height};
+    info.renderTarget = {scopeImage_.view, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_GENERAL, scopeWidth, scopeHeight};
+    info.render.mode = image_scopes::WaveformMode::RgbOverlay;
+    info.samplingMode = image_scopes::SamplingMode::FullReference;
+    info.sourceQuarterTurns = orientation == 5 || orientation == 6 ? 1 : orientation == 3 || orientation == 4 ? 2 : orientation == 7 || orientation == 8 ? 3 : 0;
+    struct PendingScopeFrame {
+        image_scopes::ImageScopes& engine;
+        bool retired = false;
+        ~PendingScopeFrame() {
+            if (!retired) engine.discardFrameSlotRecordings(0);
+        }
+    } pendingFrame{*scopeEngine_};
+    scopeEngine_->recordDisplayWaveform(info);
+    barrier(commands.command, scopeImage_.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    VkBufferImageCopy copy{};
+    copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    copy.imageExtent = {scopeWidth, scopeHeight, 1};
+    vkCmdCopyImageToBuffer(commands.command, scopeImage_.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback.buffer, 1, &copy);
+    barrier(commands.command, processor_.outputImage(), VK_IMAGE_LAYOUT_GENERAL, inputLayout);
+    VkBufferMemoryBarrier host{};
+    host.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+    host.srcQueueFamilyIndex = host.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    host.buffer = readback.buffer;
+    host.size = VK_WHOLE_SIZE;
+    vkCmdPipelineBarrier(commands.command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &host, 0, nullptr);
+    commands.submit();  // Waits for the fence before this slot can be reused.
+    scopeEngine_->retireFrameSlot(0);
+    pendingFrame.retired = true;
+    const auto* rgba = static_cast<const uint8_t*>(readback.data);
+    waveformPixels_.resize(scopeWidth * scopeHeight);
+    const bool mirror = orientation == 2 || orientation == 4 || orientation == 5 || orientation == 7;
+    for (uint32_t y = 0; y < scopeHeight; ++y)
+        for (uint32_t x = 0; x < scopeWidth; ++x) {
+            const size_t index = (size_t(y) * scopeWidth + (mirror ? scopeWidth - 1 - x : x)) * 4;
+            waveformPixels_[size_t(y) * scopeWidth + x] = (uint32_t(rgba[index + 3]) << 24) |
+                (uint32_t(rgba[index]) << 16) | (uint32_t(rgba[index + 1]) << 8) | rgba[index + 2];
+        }
+}
+
 void RendererEngine::setSurface(ANativeWindow* window) {
     if (!surface_) surface_ = std::make_unique<RendererSurface>(vulkan_);
     surface_->attach(window);
@@ -249,20 +325,29 @@ void RendererEngine::prepare(DngSource& source, const std::string& path, const R
         std::map<std::pair<uint32_t, uint32_t>, std::unique_ptr<rcd::RcdPipeline>> pipelines;
         std::map<std::pair<uint32_t, uint32_t>, std::unique_ptr<amaze::AmazePipeline>> amazePipelines;
         std::map<std::tuple<uint32_t, uint32_t, bool>, std::unique_ptr<quadfix::QuadfixPipeline>> quadPipes;
+        // Recorded commands reference these buffers until submit's fence completes.
+        std::vector<std::unique_ptr<Buffer>> quadBuffers;
         // Filters the expanded quadfix tile covering core [cx0,cx0+cw) x
         // [cy0,cy0+ch) and copies the core rows into dst (row pitch dstStride,
         // placed at (dstX,dstY)). Records into the already-begun command
-        // buffer; the caller submits. Returns false when the expanded tile
-        // violates quadfix alignment (caller falls back to unfiltered).
+        // buffer; the caller submits. Pad the image edge to the filter's
+        // 16-pixel alignment instead of silently skipping the filter.
         auto quadfixCore = [&](uint32_t cx0, uint32_t cy0, uint32_t cw, uint32_t ch, VkBuffer dst, uint32_t dstStride,
                                uint32_t dstX, uint32_t dstY) {
             uint32_t qleft = cx0 > quadHalo ? cx0 - quadHalo : 0, qtop = cy0 > quadHalo ? cy0 - quadHalo : 0,
                      qright = std::min(cx0 + cw + quadHalo, w), qbottom = std::min(cy0 + ch + quadHalo, h);
-            uint32_t qw = qright - qleft, qh = qbottom - qtop;
-            if ((qw & 15u) != 0 || (qh & 15u) != 0 || qw < 64 || qh < 64) return false;
-            auto qraw = normalized(qleft, qtop, qw, qh);
+            const uint32_t sourceWidth = qright - qleft, sourceHeight = qbottom - qtop;
+            const uint32_t qw = std::max(64u, (sourceWidth + 15u) & ~15u);
+            const uint32_t qh = std::max(64u, (sourceHeight + 15u) & ~15u);
+            auto sourceTile = normalized(qleft, qtop, sourceWidth, sourceHeight);
+            auto qraw = padBayerTile(sourceTile, sourceWidth, sourceHeight, qw, qh);
             const VkDeviceSize qbytes = VkDeviceSize(size_t(qw) * qh * 4);
-            Buffer qUpload(vulkan_, size_t(qbytes)), qFiltered(vulkan_, size_t(qbytes));
+            auto uploadBuffer = std::make_unique<Buffer>(vulkan_, size_t(qbytes));
+            auto filteredBuffer = std::make_unique<Buffer>(vulkan_, size_t(qbytes));
+            auto& qUpload = *uploadBuffer;
+            auto& qFiltered = *filteredBuffer;
+            quadBuffers.push_back(std::move(uploadBuffer));
+            quadBuffers.push_back(std::move(filteredBuffer));
             std::memcpy(qUpload.data, qraw.data(), size_t(qbytes));
             quadfix::PipelineConfig qcfg{};
             qcfg.width = qw;
@@ -300,7 +385,7 @@ void RendererEngine::prepare(DngSource& source, const std::string& path, const R
         // dual once from it. Interior tiles see real neighbor data, so the
         // result matches the tiled RCD/VNG4 path up to frame-border clamping.
         std::unique_ptr<Buffer> dualFiltered;
-        if (options.quadfix && dualDemosaic && (w & 15u) == 0 && (h & 15u) == 0) {
+        if (options.quadfix && dualDemosaic) {
             dualFiltered = std::make_unique<Buffer>(vulkan_, size_t(w) * h * 4);
             const uint32_t qtile = 1024;
             bool ok = true;
@@ -311,6 +396,7 @@ void RendererEngine::prepare(DngSource& source, const std::string& path, const R
                     ok = quadfixCore(x, y, std::min(qtile, w - x), std::min(qtile, h - y), dualFiltered->buffer, w, x,
                                      y);
                     commands.submit();
+                    quadBuffers.clear();
                     progress = 5 + int(15.0 * (size_t(y) * w + x) / (size_t(w) * h));
                 }
             if (!ok) dualFiltered.reset();  // aligned frame checked above; paranoia only
@@ -325,12 +411,8 @@ void RendererEngine::prepare(DngSource& source, const std::string& path, const R
                 // quadfix runs on an expanded tile and compacts its core back
                 // to tw x th, so demosaic work is unchanged. The dual
                 // full-frame tile is served from the pre-pass buffer above;
-                // unaligned geometries fall back to the plain path.
-                uint32_t qleft = x > quadHalo ? x - quadHalo : 0, qtop = y > quadHalo ? y - quadHalo : 0,
-                         qright = std::min(x + tile + quadHalo, w), qbottom = std::min(y + tile + quadHalo, h);
-                uint32_t qw = qright - qleft, qh = qbottom - qtop;
-                const bool quad = options.quadfix && !dualFiltered && tile <= 1024 && (qw & 15u) == 0 &&
-                                  (qh & 15u) == 0 && qw >= 64 && qh >= 64;
+                // image borders are padded with same-CFA-color samples.
+                const bool quad = options.quadfix && !dualFiltered && !dualDemosaic;
                 const VkDeviceSize bayerBytes = VkDeviceSize(size_t(tw) * th * 4);
                 Buffer upload(vulkan_, size_t(bayerBytes)), download(vulkan_, size_t(tw) * th * 8);
                 Image output(vulkan_, tw, th);
@@ -448,6 +530,7 @@ void RendererEngine::prepare(DngSource& source, const std::string& path, const R
                 vkCmdCopyImageToBuffer(commands.command, output.value.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                        download.buffer, 1, &region);
                 commands.submit();
+                quadBuffers.clear();
                 auto* pixels = static_cast<uint16_t*>(download.data);
                 for (uint32_t yy = 0; yy < ch; ++yy)
                     std::memcpy(dst + (size_t(y + yy) * w + x) * 4, pixels + (size_t(y - top + yy) * tw + x - left) * 4,
@@ -512,19 +595,25 @@ void RendererEngine::prepareProxy(DngSource& source, const std::string& path, bo
 }
 std::vector<uint8_t> RendererEngine::render(DngSource& source, const std::string& path, const RenderOptions& options) {
     check();
+    stage = 4;
+    progress = 45;
     // Overview previews never feed the JPEG writer; keep stale export
     // timings from leaking into a later export's attribution.
     if (options.overview) lastDemosaicMs_ = 0.0;
     const uint32_t w = options.width, h = options.height;
-    const uint32_t sw = options.overview ? std::min(2048u, source.info().width / 2)
+    const uint32_t sw = options.quickProxy ? std::min(2048u, source.info().width / 2)
                                          : source.info().width / (options.bayerBin2x ? 2u : 1u);
-    const uint32_t sh = options.overview
+    const uint32_t sh = options.quickProxy
                             ? std::max(1u, uint32_t(uint64_t(source.info().height) * sw / source.info().width))
                             : source.info().height / (options.bayerBin2x ? 2u : 1u);
     auto crop = source.crop;
+    if (options.region[2]) {
+        crop[0] += options.region[0]; crop[1] += options.region[1];
+        crop[2] = options.region[2]; crop[3] = options.region[3];
+    }
     if (options.bayerBin2x)
         for (auto& component : crop) component /= 2u;
-    if (options.overview) {
+    if (options.quickProxy) {
         crop[0] = uint32_t(uint64_t(crop[0]) * sw / source.info().width);
         crop[1] = uint32_t(uint64_t(crop[1]) * sh / source.info().height);
         crop[2] = std::min(sw - crop[0], uint32_t(uint64_t(crop[2]) * sw / source.info().width));
@@ -561,8 +650,9 @@ std::vector<uint8_t> RendererEngine::render(DngSource& source, const std::string
             throw;
         }
     }
+    progress = 70;
     std::unique_ptr<Image> transientImage;
-    std::unique_ptr<Image> workingOverview;
+
     vulkan::OwnedImage* preparedImage = &overviewInput_;
     if (!reuseOverview) {
         auto reduced = std::make_unique<MappedFile>(reducedPath, size_t(w) * h * 8, false);
@@ -633,26 +723,14 @@ std::vector<uint8_t> RendererEngine::render(DngSource& source, const std::string
             preparedImage = &transientImage->value;
         }
     }
-    if (options.overview) {
-        // PostDemosaicProcessor writes highlight recovery and defringe into
-        // its source image. Keep the uploaded overview pristine and copy it
-        // on the GPU for every slider render.
-        workingOverview = std::make_unique<Image>(vulkan_, w, h);
-        Commands commands(vulkan_);
-        commands.begin();
-        barrier(commands.command, workingOverview->value.image, VK_IMAGE_LAYOUT_UNDEFINED,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-        VkImageCopy region{};
-        region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        region.extent = {w, h, 1};
-        vkCmdCopyImage(commands.command, overviewInput_.image, VK_IMAGE_LAYOUT_GENERAL, workingOverview->value.image,
-                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-        barrier(commands.command, workingOverview->value.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_IMAGE_LAYOUT_GENERAL);
-        commands.submit();
-        preparedImage = &workingOverview->value;
-    }
+    // Viewport reductions are transient: retaining every pan position on disk
+    // would grow the cache without bound.
+    const bool fullFrame = !options.region[2] ||
+        (options.region[0] == 0 && options.region[1] == 0 &&
+         options.region[2] == source.crop[2] && options.region[3] == source.crop[3]);
+    // HD preview supplies an explicit full-image region to request real demosaic.
+    // Retain its reduction; only moving detail crops should be transient.
+    if (!fullFrame) std::filesystem::remove(reducedPath);
     lastDemosaicMs_ += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - preBegin).count();
     auto context = options.context;
     context.width = w;
@@ -701,12 +779,54 @@ std::vector<uint8_t> RendererEngine::render(DngSource& source, const std::string
         context.gainmapCstRowMajor = source.cameraToSrgb;
         context.hasGainmapCst = true;
     }
-    // Self-heal: a prior aborted render may have left pixels mapped or a
-    // completion unconsumed, both of which reject start(). Mirrors
-    // MfsrCaptureJob's reset-before-start. Cheap here: engine
-    // persistence is enabled, so cached tonemap/post/film engines survive
-    // and only pixel resources are dropped.
-    processor_.reset();
+    // reset() destroys persisted engines. Only release the previous output;
+    // successful calls have already consumed the worker completion.
+    processor_.releasePixels();
+    std::ostringstream linearKey;
+    linearKey << std::setprecision(9) << inputKey << ':';
+    for (float f : context.whiteBalanceRgb) linearKey << f << ',';
+    for (float f : context.sensorToLinearSrgb) linearKey << f << ',';
+    linearKey << context.fccSteps << ',' << context.normalizedFcc << ',' << context.fccEdgeSigma << ','
+        << context.fccChromaBound << ',' << context.defringeStrength << ',' << context.defringeEdgeThreshold << ','
+        << context.defringeLumaFloor << ',' << context.highlightReconstructionEnabled << ','
+        << context.highlightReconstructionMethod << ',' << context.highlightThreshold << ',' << context.highlightCompression << ','
+        << context.denoiseStrength << ',' << context.denoiseDetail << ',' << context.denoiseForceY << ','
+        << context.denoiseMaxScale << ',' << context.denoiseNoiseA << ',' << context.denoiseNoiseB << ','
+        << context.galoshYuvMode << ',' << context.galoshYuvStrengthY << ',' << context.galoshYuvStrengthC;
+    if (context.highlightReconstructionEnabled && context.highlightReconstructionMethod == 1u)
+        linearKey << ',' << (context.filmEnabled ? color::filmExposureEv(context.filmLook, context.tonemapParams.aePostGain)
+            : context.tonemapParams.exposureEV + std::log2(std::max(context.tonemapParams.aePostGain, 1e-6f)));
+    context.reuseLinearResult = options.overview && linearResultKey_ == linearKey.str();
+    linearResultKey_.clear();
+    if (options.overview && !context.reuseLinearResult) {
+        // PostDemosaicProcessor writes highlight recovery and defringe into
+        // its source image. Keep the uploaded overview pristine and copy it
+        // on the GPU for every slider render.
+        const bool freshWorking = !overviewWorking_.image || overviewWorkingKey_ != inputKey;
+        if (freshWorking) {
+            vulkan::destroyOwnedImage(vulkan_.device(), overviewWorking_);
+            Image image(vulkan_, w, h);
+            overviewWorking_ = image.value; image.value = {};
+            overviewWorkingKey_ = inputKey;
+        }
+        Commands commands(vulkan_);
+        commands.begin();
+        barrier(commands.command, overviewWorking_.image, freshWorking ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        VkImageCopy region{};
+        region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.extent = {w, h, 1};
+        vkCmdCopyImage(commands.command, overviewInput_.image, VK_IMAGE_LAYOUT_GENERAL, overviewWorking_.image,
+                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        barrier(commands.command, overviewWorking_.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_GENERAL);
+        commands.submit();
+        preparedImage = &overviewWorking_;
+    }
+    if (options.overview) preparedImage = &overviewWorking_;
+    stage = 5;
+    progress = 75;
     if (!processor_.start(vulkan_, queueMutex_, context, preparedImage->image, preparedImage->view))
         throw std::runtime_error("Renderer is busy");
     try {
@@ -715,6 +835,9 @@ std::vector<uint8_t> RendererEngine::render(DngSource& source, const std::string
         check();
         if (!completion->success) throw std::runtime_error(completion->error);
         lastCompletion_ = *completion;
+        if (options.overview) linearResultKey_ = linearKey.str();
+        if (options.waveform) renderWaveform(w, h, source.orientation, options.surfacePreview);
+        else waveformPixels_.clear();
         if (options.surfacePreview) {
             if (!hasSurface()) throw std::runtime_error("Renderer display is unavailable");
             surface_->present(processor_.outputImageView(), w, h, source.orientation);
@@ -741,6 +864,7 @@ std::vector<uint8_t> RendererEngine::render(DngSource& source, const std::string
         progress = 95;
         return result;
     } catch (...) {
+        linearResultKey_.clear();
         // Never wedge the session: an abort (slider cancel) or render
         // failure must not leave mapped pixels behind to reject the next
         // start(). The worker has always published its completion before

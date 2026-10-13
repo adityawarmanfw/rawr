@@ -1,165 +1,217 @@
 package com.rawr.camera.renderer
 
 import android.graphics.Bitmap
-import android.view.Surface
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 internal data class RendererViewport(
     val zoom: Float = 1f,
     val offsetX: Float = 0f,
     val offsetY: Float = 0f,
     val width: Int = 1,
-    val height: Int = 1
+    val height: Int = 1,
+    val canvasWidth: Int = width,
+    val canvasHeight: Int = height
 )
 
+internal data class RendererPreviewFrame(
+    val revision: Pair<RendererPreviewKey, Long>,
+    val bitmap: Bitmap,
+    val waveform: Bitmap?,
+    val tiles: Map<RendererTileKey, Bitmap> = emptyMap()
+)
 internal data class RendererPreviewState(
-    val surfaceHasFrame: Boolean = false,
+    val frame: RendererPreviewFrame? = null,
     val failed: Boolean = false,
-    val busy: Boolean = false,
-    val detail: Bitmap? = null,
-    val hdBitmap: Bitmap? = null,
-    val hdKey: RendererPreviewKey? = null,
-    val hdBusy: Boolean = false
+    val activity: String = ""
 )
 
-/** Owns preview scheduling and surface operations; the UI only supplies viewport measurements. */
+/** One publication owner for navigation, detail and scopes. UI changes never block on native work. */
 internal class RendererPreviewSession(
     initialJob: RenderJob,
     private val store: RendererStore,
     private val onError: (String?) -> Unit
 ) : AutoCloseable {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val job = MutableStateFlow(initialJob)
-    private val viewport = MutableStateFlow(RendererViewport())
+    private val requests = MutableStateFlow(RendererPreviewRequest(initialJob))
     private val mutableState = MutableStateFlow(RendererPreviewState())
     val state = mutableState.asStateFlow()
-    private val visible = MutableStateFlow(true)
-    private var surfaceReady = false
-    private var hdJob: Job? = null
-    private var surfaceGeneration = 0L
-    private var surfaceJob: Job? = null
-    private var detachJob: Job? = null
+    private var budget = store.previewBudget()
+    private val tiles = RendererTileCache<Bitmap>(budget.cacheBytes)
+    private var fitted: Pair<Pair<RendererPreviewKey, Long>, RendererImageSize>? = null
+    private val memory = store.observePreviewMemory { scope.launch {
+        budget = store.previewBudget()
+        tiles.clear(); tiles.limitBytes = budget.cacheBytes
+        fitted = null
+        mutableState.update { it.copy(frame = it.frame?.copy(tiles = emptyMap())) }
+    } }
 
     init {
-        RendererProxyScheduler(
-            scope, job,
-            ready = { visible.value && surfaceReady },
-            busy = { store.busy.value },
-            generation = { surfaceGeneration },
-            render = { current ->
-                val generation = surfaceGeneration
-                mutableState.update { it.copy(busy = true) }
-                try {
-                    store.previewSurface(current)
-                    if (visible.value && surfaceReady && generation == surfaceGeneration) {
-                        mutableState.update { it.copy(surfaceHasFrame = true, failed = false) }
+        RendererProxyScheduler(scope, requests,
+            overview = { request ->
+                // Same scale as the fitted image already on screen: only the look changed, so re-render
+                // at that size instead of dropping to a coarse overview and resizing back up.
+                val keep = fitted?.second?.takeIf { it == fittedPreviewSize(request.job, request.navigationEdge, budget.maxRenderPixels) }
+                render(request, if (keep != null) "APPLYING LOOK" else "UPDATING PREVIEW") {
+                    budget = store.previewBudget()
+                    if (budget.cacheBytes < tiles.limitBytes) tiles.clear()
+                    tiles.limitBytes = budget.cacheBytes
+                    check(budget.maxRenderPixels >= 64 * 64) { "Not enough memory for preview" }
+                    val size = keep ?: fittedPreviewSize(request.job, minOf(1280, request.navigationEdge), budget.maxRenderPixels)
+                    // Overview mode keeps the reduced RAW and linear result on the GPU, so a look edit only reruns tone stages.
+                    val result = store.previewPixels(request.job, size, refined = false, request.waveform)
+                    if (keep != null && current(request)) fitted = request.overviewKey to keep
+                    // Renders are serialized, so a finished look is always newer than the one on screen.
+                    // Showing it while the slider is still moving keeps the preview live mid-drag.
+                    if (current(request) || (keep != null && requests.value.eligible)) {
+                        val old = mutableState.value.frame
+                        val retained = if (old?.revision?.first == request.overviewKey.first) old.tiles else emptyMap()
+                        mutableState.update { it.copy(frame = RendererPreviewFrame(request.overviewKey, result.bitmap, result.waveform, retained), failed = false) }
                     }
-                } finally { mutableState.update { it.copy(busy = false) } }
+                }
             },
-            onFailure = {
-                mutableState.update { state -> state.copy(failed = true) }
-                report(it)
-            }
-        )
-        scope.launch {
-            combine(job, viewport, store.busy, visible) { current, view, busy, shown -> Triple(current, view, busy || !shown) }
-                .collectLatest { (current, view, busy) ->
-                    mutableState.update { it.copy(detail = null) }
-                    if (view.zoom > 1.05f && !busy && visible.value) {
-                        delay(250)
-                        try {
-                            val bitmap = store.preview(current, detailRegion(current.orientation, view))
-                            mutableState.update { it.copy(detail = bitmap) }
-                        } catch (e: CancellationException) { throw e }
-                        catch (e: Exception) { report(e) }
+            refine = { request ->
+                render(request, "PREPARING DETAIL") {
+                    check(budget.maxRenderPixels >= 64 * 64) { "Not enough memory for preview" }
+                    val size = fittedPreviewSize(request.job, request.navigationEdge, budget.maxRenderPixels)
+                    if (fitted != (request.overviewKey to size) || mutableState.value.frame?.revision != request.overviewKey) {
+                        val result = store.previewPixels(request.job, size, refined = true, request.waveform)
+                        if (!current(request)) return@render
+                        fitted = request.overviewKey to size
+                        mutableState.update { it.copy(frame = RendererPreviewFrame(request.overviewKey, result.bitmap, result.waveform), failed = false) }
+                    }
+                    if (requests.value.refinementKey != request.refinementKey) return@render
+                    val plan = rendererTilePlan(request.job, request.viewport, budget)
+                    publishTiles(request, plan)
+                    for (tile in plan.visible + plan.prefetch) {
+                        if (!current(request) || requests.value.refinementKey != request.refinementKey) break
+                        if (tiles[tile] == null) {
+                            // Read back only the tile core; native supplies neighboring pixels for filters.
+                            val result = store.previewPixels(request.job, tile.output, refined = true, waveform = false, crop = tile.crop())
+                            if (!current(request)) break
+                            tiles.put(tile, result.bitmap, plan.visible.toSet())
+                        }
+                        publishTiles(request, plan)
                     }
                 }
-        }
-    }
-
-    fun updateJob(current: RenderJob) { job.value = current }
-    fun updateViewport(current: RendererViewport) { viewport.value = current }
-
-    fun setVisible(value: Boolean) {
-        visible.value = value
-        if (!value) { hdJob?.cancel(); surfaceDestroyed() }
-    }
-
-    fun surfaceAvailable(surface: Surface) {
-        val generation = ++surfaceGeneration
-        surfaceJob?.cancel()
-        val detach = detachJob
-        surfaceJob = scope.launch {
-            try {
-                detach?.join()
-                store.attachPreviewSurface(job.value, surface)
-                if (generation == surfaceGeneration && visible.value) {
-                    surfaceReady = true
-                    mutableState.update { it.copy(surfaceHasFrame = false, failed = false) }
+            },
+            onFailure = { error ->
+                if (error !is IllegalStateException || error.message !in setOf("Cancelled", "Export in progress")) {
+                    mutableState.update { it.copy(failed = true) }
+                    onError(error.message)
                 }
-            } catch (e: CancellationException) { throw e }
-            catch (e: Exception) { report(e) }
+            })
+        scope.launch { store.busy.collect { busy -> requests.update { it.copy(exporting = busy) } } }
+    }
+
+    private fun current(request: RendererPreviewRequest) =
+        requests.value.overviewKey == request.overviewKey && requests.value.eligible
+
+    private fun publishTiles(request: RendererPreviewRequest, plan: RendererTilePlan) {
+        if (!current(request) || requests.value.refinementKey != request.refinementKey || plan.visible.isEmpty()) return
+        val ready = tiles.complete(plan.visible) ?: return
+        mutableState.update { state ->
+            val frame = state.frame
+            if (frame?.revision == request.overviewKey) state.copy(frame = frame.copy(tiles = ready)) else state
         }
     }
 
-    fun surfaceDestroyed() {
-        surfaceGeneration++
-        surfaceJob?.cancel()
-        surfaceReady = false
-        mutableState.update { it.copy(surfaceHasFrame = false) }
-        if (!store.busy.value) store.cancel()
-        detachJob = store.detachPreviewSurface(surfaceJob)
-    }
-
-    fun requestHd() {
-        if (store.busy.value || !visible.value) return
-        hdJob?.cancel()
-        hdJob = scope.launch {
-            delay(300)
-            if (store.busy.value || !visible.value) return@launch
-            store.cancel()
-            mutableState.update { it.copy(hdBusy = true) }
-            val current = job.value
-            try {
-                val bitmap = store.previewHd(current)
-                mutableState.update { it.copy(hdBitmap = bitmap, hdKey = current.previewKey()) }
-            } catch (e: CancellationException) { throw e }
-            catch (e: Exception) { report(e) }
-            finally { mutableState.update { it.copy(hdBusy = false) } }
+    private suspend fun render(request: RendererPreviewRequest, initial: String, work: suspend () -> Unit) = coroutineScope {
+        val started = android.os.SystemClock.elapsedRealtime()
+        mutableState.update { it.copy(activity = initial) }
+        val progress = launch {
+            while (true) {
+                delay(250)
+                val stage = withContext(Dispatchers.IO) { store.previewStage() }
+                val label = when (stage) {
+                    1 -> "BUILDING PREVIEW"
+                    2 -> "BINNING 200 → 50 MP"
+                    3 -> "DEMOSAICING"
+                    4 -> "RESIZING PREVIEW"
+                    5 -> "APPLYING LOOK"
+                    else -> initial
+                }
+                mutableState.update { it.copy(activity = label) }
+            }
+        }
+        try { work() }
+        catch (error: OutOfMemoryError) {
+            tiles.clear(); fitted = null
+            mutableState.update { it.copy(frame = it.frame?.copy(tiles = emptyMap())) }
+            throw IllegalStateException("Preview memory exhausted; retained the last image", error)
+        }
+        finally {
+            progress.cancel()
+            mutableState.update { it.copy(activity = "") }
+            android.util.Log.i("RawrRenderer", "$initial ${request.job.width}x${request.job.height}: ${android.os.SystemClock.elapsedRealtime()-started}ms")
         }
     }
 
-    private fun report(e: Exception) {
-        if (e !is IllegalStateException || e.message !in setOf("Cancelled", "Export in progress")) onError(e.message)
+    fun setWaveformEnabled(enabled: Boolean) {
+        if (requests.value.waveform == enabled) return
+        requests.update { it.copy(waveform = enabled, waveformGeneration = it.waveformGeneration + 1) }
     }
-
+    suspend fun metadata(): String = store.metadata(requests.value.job)
+    fun updateJob(current: RenderJob) {
+        if (requests.value.job.previewKey() != current.previewKey()) {
+            // Keep `fitted`: its size still describes the on-screen scale, so the next look renders there directly.
+            // Those renders are short; letting one finish beats discarding it for every slider tick.
+            if (fitted == null) store.cancelPreview()
+            tiles.clear()
+        }
+        requests.update { it.copy(job = current) }
+    }
+    fun updateViewport(current: RendererViewport) {
+        requests.update { it.copy(viewport = current, navigationEdge = maxOf(it.navigationEdge, navigationEdge(current))) }
+        val request = requests.value
+        publishTiles(request, rendererTilePlan(request.job, current, budget))
+    }
+    fun setVisible(value: Boolean) {
+        requests.update { it.copy(visible = value) }
+        if (!value) {
+            store.cancelPreview(); tiles.clear(); fitted = null
+            mutableState.update { it.copy(frame = it.frame?.copy(tiles = emptyMap())) }
+        }
+    }
     override fun close() {
-        surfaceDestroyed()
+        memory.close()
+        store.cancelPreview()
         scope.cancel()
+        tiles.clear()
     }
 }
 
-/** EXIF-aware mapping from a display viewport into a normalized sensor crop. */
+/** Intersection of the transformed image and canvas in display-image coordinates. */
+internal fun displayRegion(view: RendererViewport): FloatArray {
+    val w = (view.width * view.zoom).coerceAtLeast(1f)
+    val h = (view.height * view.zoom).coerceAtLeast(1f)
+    val x = (view.canvasWidth - w) / 2 + view.offsetX
+    val y = (view.canvasHeight - h) / 2 + view.offsetY
+    val left = (-x / w).coerceIn(0f, 1f)
+    val top = (-y / h).coerceIn(0f, 1f)
+    val right = ((view.canvasWidth - x) / w).coerceIn(0f, 1f)
+    val bottom = ((view.canvasHeight - y) / h).coerceIn(0f, 1f)
+    return floatArrayOf(left, top, (right-left).coerceAtLeast(0f), (bottom-top).coerceAtLeast(0f))
+}
+
+/** EXIF-aware mapping from the visible canvas intersection to sensor coordinates. */
 internal fun detailRegion(orientation: Int, view: RendererViewport): FloatArray {
-    val fraction = 1f / view.zoom
-    val left = (.5f - view.offsetX / (view.width.coerceAtLeast(1) * view.zoom) - fraction / 2).coerceIn(0f, 1f - fraction)
-    val top = (.5f - view.offsetY / (view.height.coerceAtLeast(1) * view.zoom) - fraction / 2).coerceIn(0f, 1f - fraction)
+    val (left, top, width, height) = displayRegion(view)
     return when (orientation) {
-        2 -> floatArrayOf(1 - left - fraction, top, fraction, fraction)
-        4 -> floatArrayOf(left, 1 - top - fraction, fraction, fraction)
-        5 -> floatArrayOf(top, left, fraction, fraction)
-        7 -> floatArrayOf(1 - top - fraction, 1 - left - fraction, fraction, fraction)
-        6 -> floatArrayOf(top, 1 - left - fraction, fraction, fraction)
-        8 -> floatArrayOf(1 - top - fraction, left, fraction, fraction)
-        3 -> floatArrayOf(1 - left - fraction, 1 - top - fraction, fraction, fraction)
-        else -> floatArrayOf(left, top, fraction, fraction)
+        2 -> floatArrayOf(1-left-width, top, width, height)
+        4 -> floatArrayOf(left, 1-top-height, width, height)
+        5 -> floatArrayOf(top, left, height, width)
+        7 -> floatArrayOf(1-top-height, 1-left-width, height, width)
+        6 -> floatArrayOf(top, 1-left-width, height, width)
+        8 -> floatArrayOf(1-top-height, left, height, width)
+        3 -> floatArrayOf(1-left-width, 1-top-height, width, height)
+        else -> floatArrayOf(left, top, width, height)
     }
 }

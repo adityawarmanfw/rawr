@@ -386,22 +386,32 @@ internal fun StandaloneNumericSliderRow(
                 modifier = Modifier.padding(top = 2.dp)
             )
         }
-        Slider(
-            value = value.coerceIn(minimum, maximum),
-            onValueChange = { candidate ->
-                val nextStep = stepIndex(candidate)
-                if (nextStep != lastHapticStep) {
-                    haptics.detent()
-                    lastHapticStep = nextStep
-                }
-                onValueChange(candidate)
-            },
-            onValueChangeFinished = { lastHapticStep = stepIndex(value) },
-            valueRange = minimum..maximum,
-            steps = sliderSteps,
-            modifier = Modifier.fillMaxWidth(),
-            enabled = enabled
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Slider(
+                value = value.coerceIn(minimum, maximum),
+                onValueChange = { candidate ->
+                    val nextStep = stepIndex(candidate)
+                    if (nextStep != lastHapticStep) {
+                        haptics.sliderTick()
+                        lastHapticStep = nextStep
+                    }
+                    onValueChange(candidate)
+                },
+                onValueChangeFinished = { lastHapticStep = stepIndex(value) },
+                valueRange = minimum..maximum,
+                steps = sliderSteps,
+                modifier = Modifier.weight(1f),
+                enabled = enabled
+            )
+            SliderNudge("−", enabled && currentStepIndex > 0) {
+                haptics.sliderTick()
+                onValueChange((minimum + (currentStepIndex - 1) * step).coerceIn(minimum, maximum))
+            }
+            SliderNudge("+", enabled && currentStepIndex < stepCount) {
+                haptics.sliderTick()
+                onValueChange((minimum + (currentStepIndex + 1) * step).coerceIn(minimum, maximum))
+            }
+        }
         if (supportingText != null && supportingTextBelowSlider) {
             Text(
                 supportingText,
@@ -409,6 +419,19 @@ internal fun StandaloneNumericSliderRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+    }
+}
+
+/** One-step fine adjustment beside a slider. */
+@Composable
+private fun SliderNudge(symbol: String, enabled: Boolean, onClick: () -> Unit) {
+    TextButton(
+        onClick = onClick,
+        enabled = enabled,
+        contentPadding = PaddingValues(0.dp),
+        modifier = Modifier.size(36.dp)
+    ) {
+        Text(symbol, style = MaterialTheme.typography.titleMedium)
     }
 }
 

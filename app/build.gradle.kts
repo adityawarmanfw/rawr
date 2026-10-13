@@ -35,6 +35,7 @@ android {
     defaultConfig {
         applicationId = "com.rawr.camera"
         minSdk = 33
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk { abiFilters += "arm64-v8a" }
         targetSdk = 36
         versionCode = 26
@@ -55,6 +56,8 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    testOptions { unitTests.isIncludeAndroidResources = true }
+
     buildFeatures {
         compose = true
         buildConfig = true
@@ -65,6 +68,8 @@ android {
         getByName("main").java.srcDir("src/main/kotlin")
         getByName("debug").java.srcDir("src/debug/kotlin")
         getByName("test").java.srcDir("src/test/kotlin")
+        getByName("test").java.srcDir("src/uiTest/kotlin")
+        getByName("androidTest").java.srcDirs("src/androidTest/kotlin", "src/uiTest/kotlin")
         // Preview/test fixtures belong in debug builds, never in the release APK. Release unit
         // tests compile the same sources directly because they do not inherit the debug variant.
         getByName("debug").java.srcDir("src/fixtures/kotlin")
@@ -150,6 +155,13 @@ dependencies {
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation(kotlin("test"))
+    testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    androidTestImplementation(platform("androidx.compose:compose-bom:2025.05.01"))
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
     // Exercise portable capture/renderer recipes on the JVM rather than Android stub methods.
     testImplementation("org.json:json:20260719")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
