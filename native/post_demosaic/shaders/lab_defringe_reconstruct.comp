@@ -15,6 +15,10 @@ layout(std430, binding = 3) readonly buffer Stats {
 }
 stats;
 shared float ls[576], as[576], bs[576], ws[576];
+// Purple chroma over a 32x32 tile (16x16 group plus an 8-pixel apron) for the
+// 17x17 purple-object test.
+const int kObjectRadius = 8, kObjectTile = 16 + 2 * kObjectRadius;
+shared float ps[kObjectTile * kObjectTile];
 shared uint groupNeeded;
 shared float maxima[256], columnMax[16], groupMax;
 void main() {
@@ -75,6 +79,11 @@ void main() {
         bs[i] = ab.y * w;
         ws[i] = w;
     }
+    ivec2 objectOrigin = ivec2(gl_WorkGroupID.xy) * 16 - kObjectRadius;
+    for (uint i = lane; i < uint(kObjectTile * kObjectTile); i += 256) {
+        ivec2 q = clamp(objectOrigin + ivec2(int(i) % kObjectTile, int(i) / kObjectTile), ivec2(0), maxp);
+        ps[i] = purpleChroma(toLab(imageLoad(original, q).rgb).yz);
+    }
     barrier();
     if (!valid) return;
     if (!candidate) {
@@ -85,7 +94,7 @@ void main() {
     float confidence = smoothstep(.75 * threshold, 1.25 * threshold, score);
     float maxY = centerY;
     vec2 sum = vec2(0);
-    float norm = 0.;
+    float norm = 0., purpleMass = 0.;
     ivec2 local = ivec2(gl_LocalInvocationID.xy);
     for (int y = 0; y < 9; y++)
         for (int x = 0; x < 9; x++) {
@@ -95,7 +104,18 @@ void main() {
             maxY = max(maxY, ls[at]);
         }
     float edge = pc.edgeMode > 0. ? smoothstep(.10, .25, maxY - centerY) : 1.;
-    float weight = clamp(pc.strength * edge * confidence, 0., 1.);
+    // A fringe is a thin purple line between neutral surfaces, so purple fills
+    // little of a 17x17 window; the edge of a real purple object (a petal
+    // against sky) has the object's own purple across much of it. Back off
+    // as the window's purple approaches the pixel's own.
+    float similar = .5 * purpleChroma(lab.yz);
+    for (int y = 0; y <= 2 * kObjectRadius; y++)
+        for (int x = 0; x <= 2 * kObjectRadius; x++)
+            purpleMass += step(similar, ps[(local.y + y) * kObjectTile + local.x + x]);
+    const float objectArea = float((2 * kObjectRadius + 1) * (2 * kObjectRadius + 1));
+    float purpleShare = purpleMass / objectArea;
+    float object = smoothstep(kPurpleObjectLo, kPurpleObjectHi, purpleShare);
+    float weight = clamp(pc.strength * edge * confidence * (1. - object), 0., 1.);
     if (weight <= 0.) {
         imageStore(dst, p, orig);
         return;
