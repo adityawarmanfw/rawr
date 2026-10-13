@@ -9,7 +9,7 @@ layout(set = 0, binding = 6, rgba16f) uniform writeonly image2D outputImage;
 void main() {
     uvec2 l = gl_GlobalInvocationID.xy;
     if (l.x >= tile.outWidth || l.y >= tile.outHeight) return;
-    vec3 rgb = result.rgb[l.y * tile.outWidth + l.x].rgb / vec3(tile.wbR, tile.wbG, tile.wbB);
+    vec3 rgb = result.rgb[TILE_SLOT * kOutPix + l.y * tile.outWidth + l.x].rgb / vec3(tile.wbR, tile.wbG, tile.wbB);
     imageStore(outputImage, ivec2(tile.outOriginX + l.x, tile.outOriginY + l.y),
                vec4(rgb * tile.outputScale, tile.outputAlpha));
 }

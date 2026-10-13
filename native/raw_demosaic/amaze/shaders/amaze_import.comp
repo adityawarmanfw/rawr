@@ -19,5 +19,5 @@ void main() {
     } else {
         v = texelFetch(packedInput, g >> 1, 0)[cfaComponent(g, uint(tile.pattern))];
     }
-    source.words[l.y * tile.srcWidth + l.x] = floatBitsToUint(v);
+    source.words[TILE_SLOT * kSrcPix + l.y * tile.srcWidth + l.x] = floatBitsToUint(v);
 }

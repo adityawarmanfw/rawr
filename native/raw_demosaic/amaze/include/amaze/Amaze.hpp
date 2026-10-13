@@ -76,8 +76,8 @@ struct PipelineConfig {
     // so the output is camera-linear like RCD's.
     float outputScale = 1.0f;
     float outputAlpha = 1.0f;
-    // Tiles recorded concurrently per pass; each owns ~7.3 MB of scratch.
-    uint32_t tileSlots = 8;
+    // Tiles recorded concurrently per pass; each owns ~3.9 MB of scratch.
+    uint32_t tileSlots = 16;
 };
 
 // Records AMaZE into a caller-owned command buffer on librtprocess's tile grid
