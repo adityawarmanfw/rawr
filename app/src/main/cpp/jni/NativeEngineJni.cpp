@@ -172,7 +172,9 @@ void fillJpegContext(JNIEnv* env, rawrcam::capture::JpegCaptureRequest& jpeg, ji
 extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_integration_NativePreviewEngine_create(
     JNIEnv* env, jobject, jstring filesDir, jstring nativeLibraryDir, jstring customDriverPath) {
     rawrcam::vulkan::dispatch::configure(jString(env, nativeLibraryDir), jString(env, customDriverPath));
-    return static_cast<jlong>(reinterpret_cast<intptr_t>(rawrcam::session::createEngine(jString(env, filesDir))));
+    const std::string files = jString(env, filesDir);
+    if (!files.empty()) rawrcam::vulkan::dispatch::setPipelineCacheFile(files + "/vk_pipeline_cache.bin");
+    return static_cast<jlong>(reinterpret_cast<intptr_t>(rawrcam::session::createEngine(files)));
 }
 extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreviewEngine_destroy(JNIEnv*, jobject,
                                                                                                jlong h) {
