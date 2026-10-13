@@ -207,7 +207,8 @@ void completeReadback(RenderResources& resources, RenderCommandSession& commands
             done.colorProcessingMs = ms(0, 1);
             // 1->3 includes the colour-propagation guide chain before the recovery pass.
             done.highlightReconstructionMs = ms(1, 3);
-            done.postTailMs = ms(16, 17);
+            // FCC (4-5) runs inside the defringe/tone bracket (16-17).
+            done.postTailMs = ms(16, 17) - ms(4, 5);
             done.refinementMs = ms(4, 5);
             done.tonemapMs = ms(6, 7);
             done.denoiseMs = rendered.denoiseStrength > 0.0f ? ms(10, 11) : 0.0;

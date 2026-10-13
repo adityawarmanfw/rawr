@@ -763,11 +763,9 @@ void PostDemosaicProcessor::record(VkCommandBuffer cmd, VkImage sourceImage, VkI
     }
     if (timingPool) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, timingPool, 3);
     // The highlight-stage result lives in wbImage_ when fused, otherwise in
-    // the source image; FCC and defringe then ping-pong between the two.
+    // the source image; defringe and FCC then ping-pong between the two.
     const VkImage stagedImage = highlightFused ? wbImage_.image : sourceImage;
     const VkImageView stagedView = highlightFused ? wbImage_.view : sourceView;
-    const VkImage spareImage = highlightFused ? sourceImage : wbImage_.image;
-    const VkImageView spareView = highlightFused ? sourceView : wbImage_.view;
     if (!highlightFused) {
         auto recovered = barrier(sourceImage, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
         auto wbOut = barrier(wbImage_.image, VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_SHADER_WRITE_BIT);
@@ -777,23 +775,10 @@ void PostDemosaicProcessor::record(VkCommandBuffer cmd, VkImage sourceImage, VkI
     }
     VkImage correctedImage = stagedImage;
     VkImageView correctedView = stagedView;
-    if (fcc_) {
-        ::fcc::LinearRgbImage in{stagedImage, stagedView, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_LAYOUT_GENERAL,
-                                 width_, height_};
-        ::fcc::LinearRgbImage out{spareImage, spareView, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_LAYOUT_GENERAL,
-                                  width_, height_};
-        if (timingPool) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, timingPool, 4);
-        fcc_->record(cmd, in, out, fccSteps_);
-        if (timingPool) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, timingPool, 5);
-        correctedImage = spareImage;
-        correctedView = spareView;
-    } else if (timingPool) {
-        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, timingPool, 4);
-        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, timingPool, 5);
-    }
     finalImage_ = correctedImage;
     finalView_ = correctedView;
-    // Timestamps 16-17 bracket defringe and the Inpaint Opposed tone tap.
+    // Timestamps 16-17 bracket defringe, FCC (4-5, nested) and the Inpaint
+    // Opposed tone tap.
     if (timingPool) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, timingPool, 16);
     if (defringeEnabled_) {
         // Alternate between the two existing images; no copy is needed.
@@ -837,6 +822,34 @@ void PostDemosaicProcessor::record(VkCommandBuffer cmd, VkImage sourceImage, VkI
                              0, nullptr, 0, nullptr, 1, &srcReady);
         finalImage_ = targetImage;
         finalView_ = targetView;
+    }
+    // FCC after defringe: its chroma median smears thin fringes into smooth
+    // bands that the defringe's local-outlier test no longer catches.
+    if (fcc_) {
+        const VkImage fccIn = finalImage_;
+        const VkImageView fccInView = finalView_;
+        const VkImage fccOut = fccIn == sourceImage ? wbImage_.image : sourceImage;
+        const VkImageView fccOutView = fccIn == sourceImage ? wbImage_.view : sourceView;
+        auto inReady = barrier(fccIn, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+        auto outWrite = barrier(fccOut, VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_SHADER_WRITE_BIT);
+        VkImageMemoryBarrier pre[2]{inReady, outWrite};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
+                             0, nullptr, 0, nullptr, 2, pre);
+        ::fcc::LinearRgbImage in{fccIn, fccInView, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_LAYOUT_GENERAL,
+                                 width_, height_};
+        ::fcc::LinearRgbImage out{fccOut, fccOutView, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_LAYOUT_GENERAL,
+                                  width_, height_};
+        if (timingPool) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, timingPool, 4);
+        fcc_->record(cmd, in, out, fccSteps_);
+        if (timingPool) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, timingPool, 5);
+        auto outReady = barrier(fccOut, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
+                             0, nullptr, 0, nullptr, 1, &outReady);
+        finalImage_ = fccOut;
+        finalView_ = fccOutView;
+    } else if (timingPool) {
+        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, timingPool, 4);
+        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, timingPool, 5);
     }
     if (coloroppActive_ && !deferColoroppTone_) {
         auto ready = barrier(outputImage(), VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
