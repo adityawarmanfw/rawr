@@ -1,5 +1,7 @@
 package com.rawr.camera.renderer
 
+import androidx.compose.ui.draw.rotate
+import com.rawr.camera.ui.icons.rounded.ChevronRight
 import android.net.Uri
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -112,7 +114,7 @@ internal fun RendererEditorContent(
                         paneFraction = (paneFraction - dy / with(density) { height.toPx() }).coerceIn(.1f, .85f)
                     }
                 }
-                RendererControlPane(modifier, paneDrag, selectedStage, pane,
+                RendererControlPane(modifier, paneDrag, selectedStage, pane, landscape,
                     onStage = { stage = it },
                     onExpand = {
                         pane = if (pane == 1) 2 else 1
@@ -225,7 +227,7 @@ private fun RendererToolbar(pane: Int, busy: Boolean, waveform: Boolean, metadat
 }
 
 @Composable
-private fun RendererControlPane(modifier: Modifier, drag: Modifier, stage: RendererStage, pane: Int,
+private fun RendererControlPane(modifier: Modifier, drag: Modifier, stage: RendererStage, pane: Int, landscape: Boolean,
     onStage: (RendererStage) -> Unit, onExpand: () -> Unit, content: @Composable () -> Unit) {
     val pages = rememberSaveableStateHolder()
     Column(modifier.clipEditorViewport().background(CaptureColors.Panel)) {
@@ -245,7 +247,12 @@ private fun RendererControlPane(modifier: Modifier, drag: Modifier, stage: Rende
                 }
             }
             Box(Modifier.width(36.dp).fillMaxHeight().testTag("renderer_expand_pane").clickable(onClick = onExpand), contentAlignment = Alignment.Center) {
-                Text(if (pane == 1) "+" else "−", style = EditorValueStyle, color = CaptureColors.AccentSoft)
+                Icon(com.rawr.camera.ui.icons.Icons.Rounded.ChevronRight, if (pane == 1) "Expand" else "Collapse",
+                    tint = CaptureColors.AccentSoft, // The pane grows up in portrait and leftward from the right edge in landscape.
+                    modifier = Modifier.size(20.dp).rotate(when {
+                        landscape -> if (pane == 1) 180f else 0f
+                        else -> if (pane == 1) -90f else 90f
+                    }))
             }
         }
         HorizontalDivider(color = CaptureColors.Line)

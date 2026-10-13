@@ -10,6 +10,9 @@ import androidx.compose.ui.platform.LocalView
 /** Presentation-only haptics for Settings interactions. */
 internal interface SettingsHaptics {
     fun detent()
+
+    /** Softer detent for sliders, which tick far more often than other controls. */
+    fun sliderTick() = detent()
 }
 
 private object NoOpSettingsHaptics : SettingsHaptics {
@@ -19,9 +22,13 @@ private object NoOpSettingsHaptics : SettingsHaptics {
 internal val LocalSettingsHaptics = staticCompositionLocalOf<SettingsHaptics> { NoOpSettingsHaptics }
 
 private class AndroidSettingsHaptics(private val view: View) : SettingsHaptics {
+    private val softTick = com.rawr.camera.ui.SoftTick(view)
+
     override fun detent() {
         view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
     }
+
+    override fun sliderTick() = softTick.perform()
 }
 
 @Composable

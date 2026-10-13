@@ -10,6 +10,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.rotate
+import com.rawr.camera.ui.icons.rounded.ChevronRight
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -70,7 +72,7 @@ internal fun EditorNumber(label: String, value: Float, min: Float, max: Float, s
         val next = (min + ((v.coerceIn(min, max) - min) / step).roundToInt() * step).coerceIn(min, max)
         if (kotlin.math.abs(next - lastHaptic) >= hapticStep ||
             (next != lastHaptic && (next == min || next == max))) {
-            haptics.detent()
+            haptics.sliderTick()
             lastHaptic = next
         }
         latestChange(next)
@@ -86,32 +88,45 @@ internal fun EditorNumber(label: String, value: Float, min: Float, max: Float, s
                 style = EditorValueStyle, color = color, textAlign = TextAlign.End,
                 modifier = Modifier.clickable { entry = value.toString() }.padding(vertical = 4.dp))
         }
-        Canvas(Modifier.fillMaxWidth().height(32.dp).semantics {
-            contentDescription = label
-            progressBarRangeInfo = ProgressBarRangeInfo(value.coerceIn(min, max), min..max)
-            setProgress { set(it); true }
-        }.pointerInput(min, max, step) {
-            detectTapGestures {
-                lastHaptic = latestValue
-                haptics.selection()
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Canvas(Modifier.weight(1f).height(32.dp).semantics {
+                contentDescription = label
+                progressBarRangeInfo = ProgressBarRangeInfo(value.coerceIn(min, max), min..max)
+                setProgress { set(it); true }
+            }.pointerInput(min, max, step) {
+                detectTapGestures {
+                    lastHaptic = latestValue
+                    haptics.sliderTick()
+                    val inset = 6.dp.toPx()
+                    set(min + ((it.x - inset) / (size.width - inset * 2).coerceAtLeast(1f)) * (max - min))
+                }
+            }.pointerInput(min, max, step) {
                 val inset = 6.dp.toPx()
-                set(min + ((it.x - inset) / (size.width - inset * 2).coerceAtLeast(1f)) * (max - min))
+                fun at(x: Float) = min + ((x - inset) / (size.width - inset * 2).coerceAtLeast(1f)) * (max - min)
+                detectHorizontalDragGestures(onDragStart = {
+                    lastHaptic = latestValue
+                    haptics.sliderTick()
+                    set(at(it.x))
+                }) { event, _ -> event.consume(); set(at(event.position.x)) }
+            }) {
+                val inset = 6.dp.toPx()
+                val x = inset + ((value - min) / (max - min)).coerceIn(0f, 1f) * (size.width - inset * 2)
+                val y = size.height / 2
+                drawLine(CaptureColors.StrongLine, Offset(inset, y), Offset(size.width - inset, y), 2.dp.toPx())
+                drawLine(color.copy(alpha = .65f), Offset(inset, y), Offset(x, y), 2.dp.toPx())
+                drawCircle(color, 5.dp.toPx(), Offset(x, y))
             }
-        }.pointerInput(min, max, step) {
-            val inset = 6.dp.toPx()
-            fun at(x: Float) = min + ((x - inset) / (size.width - inset * 2).coerceAtLeast(1f)) * (max - min)
-            detectHorizontalDragGestures(onDragStart = {
-                lastHaptic = latestValue
-                haptics.selection()
-                set(at(it.x))
-            }) { event, _ -> event.consume(); set(at(event.position.x)) }
-        }) {
-            val inset = 6.dp.toPx()
-            val x = inset + ((value - min) / (max - min)).coerceIn(0f, 1f) * (size.width - inset * 2)
-            val y = size.height / 2
-            drawLine(CaptureColors.StrongLine, Offset(inset, y), Offset(size.width - inset, y), 2.dp.toPx())
-            drawLine(color.copy(alpha = .65f), Offset(inset, y), Offset(x, y), 2.dp.toPx())
-            drawCircle(color, 5.dp.toPx(), Offset(x, y))
+            @Composable fun nudge(symbol: String, delta: Float) {
+                val target = value + delta
+                val enabled = if (delta < 0) value > min else value < max
+                Box(Modifier.size(36.dp, 32.dp).clickable(enabled = enabled) { haptics.sliderTick(); lastHaptic = target; set(target) },
+                    contentAlignment = Alignment.Center) {
+                    Text(symbol, style = EditorValueStyle.copy(fontSize = 18.sp),
+                        color = if (enabled) color else EditorMuted.copy(alpha = .3f))
+                }
+            }
+            nudge("−", -step)
+            nudge("+", step)
         }
     }
     entry?.let { text ->
@@ -204,8 +219,8 @@ private fun EditorGroup(title: String, enabled: Boolean? = null, onEnabled: (Boo
                 Text(title.uppercase(java.util.Locale.ROOT), style = EditorHeadingStyle,
                     color = if (expanded) CaptureColors.AccentSoft else Color.White.copy(alpha = .8f),
                     modifier = Modifier.weight(1f))
-                Text(if (expanded) "−" else "+", style = EditorValueStyle, color = EditorMuted,
-                    modifier = Modifier.padding(horizontal = 12.dp))
+                Icon(com.rawr.camera.ui.icons.Icons.Rounded.ChevronRight, null, tint = EditorMuted,
+                    modifier = Modifier.padding(horizontal = 10.dp).size(18.dp).rotate(if (expanded) 90f else 0f))
             }
             if (enabled != null) Box(Modifier.width(52.dp).height(44.dp)
                 .testTag("renderer_film_toggle_$title")

@@ -416,7 +416,8 @@ add_dependencies(rawrcam_native rawrcam_shader_headers)
 
 
 # CPU image loops must remain optimized in debug builds used for device validation.
-set_source_files_properties(renderer/LinearResample.cpp renderer/DngSource.cpp renderer/RendererEngine.cpp PROPERTIES COMPILE_OPTIONS "-O3")
+set_source_files_properties(renderer/LinearResample.cpp renderer/DngSource.cpp renderer/RendererEngine.cpp
+  jni/RendererJni.cpp PROPERTIES COMPILE_OPTIONS "-O3")
 
 # The UltraHDR writer runs the adaptive map fit over 12.5M full-res texels
 # (histogram + shoulder + knee) on the save path. At -O0 that is ~2.6s on

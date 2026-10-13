@@ -239,16 +239,9 @@ void completeReadback(RenderResources& resources, RenderCommandSession& commands
 
     // Keep the canonical TonemapEngine RGBA8 byte order. Step 3 has no
     // Android Bitmap/JPEG consumer yet, so no platform-specific channel swap belongs here.
-    if (!rendered.surfacePreview) {
-        const auto* bytes = static_cast<const uint8_t*>(resources.outputView().pixels);
-        uint64_t checksum = 1469598103934665603ull;  // FNV-1a 64-bit
-        for (VkDeviceSize i = 0; i < resources.outputView().bytes; ++i) {
-            checksum ^= static_cast<uint64_t>(bytes[i]);
-            checksum *= 1099511628211ull;
-        }
-        done.pixelBytes = static_cast<uint64_t>(resources.outputView().bytes);
-        done.checksum = checksum;
-    }
+    // No full-image checksum here: a byte-wise pass over mapped memory cost
+    // ~45 ms per renderer slider frame and only fed a diagnostic log line.
+    if (!rendered.surfacePreview) done.pixelBytes = static_cast<uint64_t>(resources.outputView().bytes);
     if (rendered.ultraHdrEnabled && resources.outputView().gainmapPixels != nullptr &&
         resources.outputView().gainmapWidth > 0 && resources.outputView().gainmapHeight > 0) {
         // Map content telemetry on the already-mapped readback: max

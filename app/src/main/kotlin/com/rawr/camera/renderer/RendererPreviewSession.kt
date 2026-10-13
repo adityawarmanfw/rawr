@@ -56,14 +56,21 @@ internal class RendererPreviewSession(
     init {
         RendererProxyScheduler(scope, requests,
             overview = { request ->
-                render(request, "UPDATING PREVIEW") {
+                // Same scale as the fitted image already on screen: only the look changed, so re-render
+                // at that size instead of dropping to a coarse overview and resizing back up.
+                val keep = fitted?.second?.takeIf { it == fittedPreviewSize(request.job, request.navigationEdge, budget.maxRenderPixels) }
+                render(request, if (keep != null) "APPLYING LOOK" else "UPDATING PREVIEW") {
                     budget = store.previewBudget()
                     if (budget.cacheBytes < tiles.limitBytes) tiles.clear()
                     tiles.limitBytes = budget.cacheBytes
                     check(budget.maxRenderPixels >= 64 * 64) { "Not enough memory for preview" }
-                    val size = fittedPreviewSize(request.job, minOf(1280, request.navigationEdge), budget.maxRenderPixels)
+                    val size = keep ?: fittedPreviewSize(request.job, minOf(1280, request.navigationEdge), budget.maxRenderPixels)
+                    // Overview mode keeps the reduced RAW and linear result on the GPU, so a look edit only reruns tone stages.
                     val result = store.previewPixels(request.job, size, refined = false, request.waveform)
-                    if (current(request)) {
+                    if (keep != null && current(request)) fitted = request.overviewKey to keep
+                    // Renders are serialized, so a finished look is always newer than the one on screen.
+                    // Showing it while the slider is still moving keeps the preview live mid-drag.
+                    if (current(request) || (keep != null && requests.value.eligible)) {
                         val old = mutableState.value.frame
                         val retained = if (old?.revision?.first == request.overviewKey.first) old.tiles else emptyMap()
                         mutableState.update { it.copy(frame = RendererPreviewFrame(request.overviewKey, result.bitmap, result.waveform, retained), failed = false) }
@@ -154,8 +161,10 @@ internal class RendererPreviewSession(
     suspend fun metadata(): String = store.metadata(requests.value.job)
     fun updateJob(current: RenderJob) {
         if (requests.value.job.previewKey() != current.previewKey()) {
-            store.cancelPreview()
-            tiles.clear(); fitted = null
+            // Keep `fitted`: its size still describes the on-screen scale, so the next look renders there directly.
+            // Those renders are short; letting one finish beats discarding it for every slider tick.
+            if (fitted == null) store.cancelPreview()
+            tiles.clear()
         }
         requests.update { it.copy(job = current) }
     }

@@ -223,7 +223,7 @@ std::optional<SingleFrameDevelopResult> SingleFrameCaptureDevelop::pollCompletio
     std::ostringstream status;
     status << (done->success ? "RENDERED_STILL_MEMORY_PASS" : "RENDERED_STILL_MEMORY_FAIL")
            << " requestId=" << done->requestId << " raw=" << done->width << 'x' << done->height
-           << " rgba8Bytes=" << done->pixelBytes << " checksum=0x" << std::hex << done->checksum << std::dec
+           << " rgba8Bytes=" << done->pixelBytes
            << " totalMs=" << done->totalMs;
     if (!done->success) status << " error=" << done->error;
     emit(status.str());

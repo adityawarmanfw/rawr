@@ -9,7 +9,15 @@ import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 
 internal data class RendererPreviewKey(val draft: String, val megapixels: Double)
+// Requests read this key many times per slider tick; parsing the draft each time stalls the main thread.
+// Two entries: updates compare the previous job against the new one.
+@Volatile private var previewKeys = emptyList<Triple<String, Double, RendererPreviewKey>>()
 internal fun RenderJob.previewKey(): RendererPreviewKey {
+    val cached = previewKeys
+    cached.firstOrNull { it.first === draft && it.second == megapixels }?.let { return it.third }
+    return computePreviewKey().also { previewKeys = listOf(Triple(draft, megapixels, it)) + cached.take(1) }
+}
+private fun RenderJob.computePreviewKey(): RendererPreviewKey {
     val pixels = runCatching {
         JSONObject(draft).apply {
             remove("export")
