@@ -183,6 +183,27 @@ RawDevelopRecordResult RawDevelopRecorder::record(const RawDevelopRecordInput& i
     // every frame until the next reconfigure.
     const bool bridgeMissingPreviewOnly =
         in.diagnosticMode == 0u && useBufferDirect && !skipBridgeCopy && slot.rawCopy.image == VK_NULL_HANDLE;
+    // In production the bridge copies from the import buffer, addressed by the
+    // AHB row stride: the R16 image import can bind yet sample with the
+    // driver's own pitch (e.g. 4096 for 4080-px rows), striping the ring.
+    const bool bridgeFromBuffer = in.diagnosticMode == 0u && useBufferDirect;
+    if (useBufferDirect) {
+        // Imported camera memory was written externally; make it visible to
+        // the bridge copy and the compute stages that read it below. Covers
+        // demosaic and (in mode 16) the parity probe's own dispatch as well.
+        VkBufferMemoryBarrier importBarrier{};
+        importBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        importBarrier.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+        importBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+        importBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        importBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        importBarrier.buffer = in.raw.importBuffer;
+        importBarrier.offset = 0;
+        importBarrier.size = VK_WHOLE_SIZE;
+        vkCmdPipelineBarrier(slot.command, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 1,
+                             &importBarrier, 0, nullptr);
+    }
     if (in.diagnosticMode == 6u) {
         if (slot.rawCopy.image == VK_NULL_HANDLE)
             throw std::runtime_error(
@@ -218,10 +239,20 @@ RawDevelopRecordResult RawDevelopRecorder::record(const RawDevelopRecordInput& i
                     "so FRAME_SLOTS_BRIDGE_COPY is retained)");
             if (multiframeBridgeFill && auditSubmitCount < 3u && audit_) {
                 audit_("MULTIFRAME_BRIDGE_FILL generation=" + std::to_string(in.generation) +
-                       " timestampNs=" + std::to_string(in.timestampNs) + " zeroCopyBackground=true");
+                       " timestampNs=" + std::to_string(in.timestampNs) + " zeroCopyBackground=true" +
+                       " source=" + (bridgeFromBuffer ? "import_buffer" : "import_image"));
             }
-            rawrcam::vulkan::recordImageCopy(slot.command, transferOracleImage, slot.rawCopy.image, in.rawWidth,
-                                             in.rawHeight);
+            if (bridgeFromBuffer) {
+                VkBufferImageCopy region{};
+                region.bufferRowLength = in.raw.importBufferStridePixels;
+                region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                region.imageExtent = {in.rawWidth, in.rawHeight, 1};
+                vkCmdCopyBufferToImage(slot.command, in.raw.importBuffer, slot.rawCopy.image, VK_IMAGE_LAYOUT_GENERAL,
+                                       1, &region);
+            } else {
+                rawrcam::vulkan::recordImageCopy(slot.command, transferOracleImage, slot.rawCopy.image, in.rawWidth,
+                                                 in.rawHeight);
+            }
             rawrcam::vulkan::transferWriteToComputeRead(slot.command, slot.rawCopy.image);
         }
         if (zeroCopySweep) {
@@ -246,22 +277,6 @@ RawDevelopRecordResult RawDevelopRecorder::record(const RawDevelopRecordInput& i
         // Without the bridge the owned copy is stale; point image consumers
         // at the fresh import (compute stages read the buffer instead).
         rawPreviewInputView = (skipBridgeCopy || bridgeMissingPreviewOnly) ? in.raw.view : slot.rawCopy.view;
-    }
-    if (useBufferDirect) {
-        // Imported camera memory was written externally; make it visible to
-        // the compute stages that read it below. Covers demosaic
-        // and (in mode 16) the parity probe's own dispatch as well.
-        VkBufferMemoryBarrier importBarrier{};
-        importBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-        importBarrier.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
-        importBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        importBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        importBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        importBarrier.buffer = in.raw.importBuffer;
-        importBarrier.offset = 0;
-        importBarrier.size = VK_WHOLE_SIZE;
-        vkCmdPipelineBarrier(slot.command, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
-                             0, nullptr, 1, &importBarrier, 0, nullptr);
     }
     if (bufferImportParity && in.raw.importBufferAvailable) {
         integrityProbe_.recordBufferImportParity(slot.command, slot.rawCopy.view, in.raw.importBuffer,

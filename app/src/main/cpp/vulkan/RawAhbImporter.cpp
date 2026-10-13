@@ -918,6 +918,11 @@ void RawAhbImporter::ensureBufferImport(AHardwareBuffer* ahb) noexcept {
         vkCheck(getProperties_(device_, ahb, &hp), "AHB buffer properties");
         if (hp.allocationSize == 0 || hp.memoryTypeBits == 0) throw std::runtime_error("empty AHB properties");
 
+        // Deliberately not spec-shaped: on the Adreno 840 driver a buffer created
+        // with VkExternalMemoryBufferCreateInfo reads camera AHBs back black, and
+        // the plain buffer's memoryTypeBits exclude the AHB's type, so requiring
+        // a type in both rejects every import (bisected 2026-10-13). Plain
+        // buffer + AHB memory type reads the camera data correctly.
         VkBufferCreateInfo bi{};
         bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
         bi.size = hp.allocationSize;

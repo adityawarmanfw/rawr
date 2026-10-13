@@ -401,7 +401,8 @@ rawrcam::vulkan::ImportedRaw& FrameSubmitCoordinator::ingestRaw(const SubmitPara
             // and retry once the reader is reconfigured for buffer access.
             AHardwareBuffer_Desc desc{};
             if (params.ahb) AHardwareBuffer_describe(params.ahb, &desc);
-            const bool bufferReader = (desc.usage & AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER) != 0;
+            const bool bufferReader = (desc.usage & AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER) != 0 ||
+                                      cpuOnlyReader_.load(std::memory_order_relaxed);
             if (bufferReader) cpuIngressLatched_.store(true, std::memory_order_relaxed);
             if (bufferReader || !raw16GpuCopyDeferredLogged_) {
                 raw16GpuCopyDeferredLogged_ = true;

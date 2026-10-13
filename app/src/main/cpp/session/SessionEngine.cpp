@@ -1,5 +1,7 @@
 #include "diagnostics/timing/GpuTimingTracker.h"
 // Composition root: construction, core lifecycle, metadata ingress, shutdown.
+#include <chrono>
+#include <sstream>
 #include <stdexcept>
 #include <utility>
 
@@ -9,9 +11,14 @@
 #include "metadata/MetadataDiagnostics.h"
 #include "session/SessionEngine.h"
 #include "video_pipeline/VideoCrop.h"
+#include "vulkan/VulkanDispatch.h"
 
 namespace rawrcam::session {
 namespace {
+int64_t steadyMillis() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
 std::string jsonEscape(const std::string& value) {
     std::string out;
     for (char ch : value) {
@@ -55,12 +62,20 @@ SessionEngine::SessionEngine(std::string filesDir) : filesDir_(std::move(filesDi
         std::lock_guard<std::mutex> lock(mu_);
         if (generation != cameraSetupGeneration_) return static_cast<ANativeWindow*>(nullptr);
         auto* window = createRawInputWindow(generation, width, height, format);
-        if (window) cameraReaderGeneration_ = generation;
+        if (window) {
+            cameraReaderGeneration_ = generation;
+            constexpr uint64_t kGpuUsage = AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE |
+                                           AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER |
+                                           AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT;
+            rawReaderUsage_.readerCreated(generation, (rawFrameIngress_.requestedUsage() & kGpuUsage) != 0,
+                                          steadyMillis());
+        }
         return window;
     };
     callbacks.destroyRawWindow = [this](uint64_t generation) {
         std::lock_guard<std::mutex> lock(mu_);
         if (generation != cameraReaderGeneration_) return;
+        rawReaderUsage_.readerDestroyed(generation);
         destroyRawInput();
         cameraReaderGeneration_ = 0;
     };
@@ -88,6 +103,8 @@ bool SessionEngine::setSurface(JNIEnv* env, jobject surfaceObj, int displayRotat
             videoSession_.stop();
             videoSession_.releaseProcessing();
             swapchainRenderer_.setVideoFrameSources({});
+            // Backgrounding may end the process without a device teardown.
+            rawrcam::vulkan::dispatch::savePipelineCache(vulkanContext_.device());
         }
         ready = setPresentationSurface(env, surfaceObj, displayRotationDegrees);
     }
@@ -221,6 +238,21 @@ bool SessionEngine::submitMetadata(const metadata::FrameMetadataSnapshot& metada
 }
 void SessionEngine::enqueueRawFrame(imaging::AcquiredRawFrame frame) { ingressQueue_.enqueue(std::move(frame)); }
 void SessionEngine::stopIngress() { ingressQueue_.stop(); }
+void SessionEngine::tickRawReaderUsage() {
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (!rawReaderUsage_.advance(steadyMillis())) return;
+        std::ostringstream out;
+        out << "RAW_READER_USAGE_DEMOTED to=cpu_read_only noRawFrameWithinMs="
+            << imaging::RawReaderUsageLadder::kFirstFrameDeadlineMs << " requestedUsage=0x" << std::hex
+            << rawFrameIngress_.requestedUsage();
+        const std::string line = out.str();
+        LOGE("%s", line.c_str());
+        appendDiagnostic(line);
+    }
+    // Outside mu_: the restart reconfigures through callbacks that take it.
+    cameraControls_.requestSessionRestart();
+}
 void SessionEngine::consumeIngress(imaging::FrameIngressQueue::Event event, imaging::FrameIngressQueue::Drops drops) {
     const bool raw = std::holds_alternative<imaging::RawFrameLease>(event.payload);
     if (!std::holds_alternative<std::monostate>(event.payload)) {
@@ -233,6 +265,7 @@ void SessionEngine::consumeIngress(imaging::FrameIngressQueue::Event event, imag
     // Outside mu_: the controller takes its own lock and must never nest under it.
     if (raw) cameraControls_.rawFrameArrived(std::get<imaging::RawFrameLease>(event.payload).get().generation);
     std::lock_guard<std::mutex> lock(mu_);
+    if (raw) rawReaderUsage_.rawArrived(std::get<imaging::RawFrameLease>(event.payload).get().generation);
     if (drops.images) realtime_.timing().recordDropped(drops.images);
     if (drops.images && videoSession_.ready() && realtime_.coordinator().videoSubmitted() > 0)
         videoIngressDrops_.fetch_add(drops.images, std::memory_order_relaxed);

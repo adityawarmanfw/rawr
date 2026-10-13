@@ -153,7 +153,9 @@ void setStillCaptureInFlight(EngineHandle h, bool begin) noexcept {
     if (h) engine(h)->cameraControls().setStillCaptureInFlight(begin);
 }
 void tickCameraSession(EngineHandle h) noexcept {
-    if (h) engine(h)->cameraControls().tickSession();
+    if (!h) return;
+    engine(h)->tickRawReaderUsage();
+    engine(h)->cameraControls().tickSession();
 }
 bool canRecoverStills(EngineHandle h) noexcept { return h && engine(h)->cameraControls().canRecoverStills(); }
 void setVideoMode(EngineHandle h, bool video, int fps) noexcept {

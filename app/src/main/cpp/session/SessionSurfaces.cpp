@@ -98,6 +98,18 @@ ANativeWindow* SessionEngine::createRawInputWindow(uint64_t generation, uint32_t
             throw std::runtime_error("RAW AHB importer is unavailable");
         }
 
+        // A GPU-usage reader never delivered a frame on this HAL: request CPU
+        // read only. The GPU then reads the camera buffer through the buffer
+        // import (copy/unpack), never the R16 image import that needs GPU usage.
+        if (rawReaderUsage_.cpuOnly() && realtime_.coordinator().diagnosticMode() == 0u) {
+            realtime_.coordinator().latchRaw16BufferIngress();
+            const std::string line = std::string("RAW_READER_CPU_ONLY_USAGE format=") +
+                                     rawrcam::geometry::rawPixelFormatName(format) + " reason=gpu_usage_starved";
+            SESSION_LOGI("%s", line.c_str());
+            appendDiagnostic(line);
+            return rawFrameIngress_.create(generation, width, height, format, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN);
+        }
+
         // RAW10 can't be imported as R16 and a latched CPU ingress never imports
         // at all: request a plain CPU-readable buffer so the HAL doesn't pick a
         // GPU-private (compressed) layout the CPU copy can't read.

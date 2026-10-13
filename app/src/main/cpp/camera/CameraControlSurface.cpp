@@ -75,6 +75,7 @@ bool CameraControlSurface::canRecoverStills() const {
 void CameraControlSurface::noteFrameResult() noexcept {
     lastFrameTime_.store(monotonicMillis(), std::memory_order_relaxed);
 }
+void CameraControlSurface::requestSessionRestart() { sessionPolicy_.requestRestart(monotonicMillis()); }
 void CameraControlSurface::tickSession() {
     if (!cameraController_) return;
     cameraController_->tickControls(monotonicMillis());

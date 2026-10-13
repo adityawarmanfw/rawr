@@ -40,6 +40,14 @@ class CameraSessionPolicy final {
         }
     }
 
+    // Rebuilds the running session after a short settle, e.g. so a new RAW
+    // reader picks up different buffer usage. No-op while a restart is pending.
+    void requestRestart(int64_t now) {
+        if (!running_ || !foreground_ || !surfaceReady_ || restartDeadline_) return;
+        restartDeadline_ = now + 400;
+        restartForRecovery_ = false;
+    }
+
     Action advance(int64_t now, int64_t lastFrameTime) {
         if (!configReady_ && configDeadline_ && now >= *configDeadline_) configReady_ = true;
         const bool requested = foreground_ && surfaceReady_ && configReady_;

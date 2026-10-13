@@ -26,6 +26,7 @@ ANativeWindow* RawFrameIngress::create(uint64_t generation, uint32_t width, uint
                                        geometry::RawPixelFormat format, uint64_t ahbUsage) {
     destroy();
     generation_ = generation;
+    usage_ = ahbUsage;
     imageDescriptionLogged_ = false;
     auditImageCount_ = 0;
 
