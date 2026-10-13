@@ -82,6 +82,9 @@ set(IMAGE_SCOPES_VULKAN_LIB vulkan CACHE STRING "Rawr Vulkan dispatch placeholde
 set(FCC_VULKAN_LIB vulkan CACHE STRING "Rawr Vulkan dispatch placeholder" FORCE)
 set(MONITORING_OVERLAYS_VULKAN_LINK vulkan CACHE STRING "Rawr Vulkan dispatch placeholder" FORCE)
 add_compile_definitions(VK_NO_PROTOTYPES)
+if(DEFINED RAWR_VERSION_NAME)
+  add_compile_definitions(RAWR_VERSION_NAME="${RAWR_VERSION_NAME}")
+endif()
 add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:-include${CMAKE_CURRENT_SOURCE_DIR}/vulkan/VulkanDispatch.h>)
 
 find_library(ANDROID_LIB android REQUIRED)

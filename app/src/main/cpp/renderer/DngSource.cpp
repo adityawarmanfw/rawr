@@ -136,8 +136,10 @@ DngSource::DngSource(const std::string& path) : rawCachePath_(path + ".raw16-v1"
         }
         whiteLevel = p.raw.white_level_present ? double(p.raw.white_level[0]) : 0.0;
         auto& r = p.raw;
+        // "RawrCam ..." markers come from DNGs written before the rename; keep reading them.
         if (r.rawr_private_data && r.rawr_private_size > 31 &&
-            (std::string(r.rawr_private_data) == "RawrCam tinydng provenance" ||
+            (std::string(r.rawr_private_data) == "Rawr tinydng provenance" ||
+             std::string(r.rawr_private_data) == "RawrCam tinydng provenance" ||
              std::string(r.rawr_private_data) == "RawrCam dng_writer provenance")) {
             rawr = true;
             provenance = r.rawr_private_data + std::strlen(r.rawr_private_data) + 1;

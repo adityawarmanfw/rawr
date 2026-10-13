@@ -217,7 +217,7 @@ int main() {
                   img->raw.has_active_area && img->raw.noise_profile_count == 6 &&
                   img->raw.opcode_count >= 1 && img->raw.gainmap_count == 4 &&
                   img->raw.rawr_private_data != nullptr &&
-                  std::string(img->raw.rawr_private_data) == "RawrCam tinydng provenance" &&
+                  std::string(img->raw.rawr_private_data) == "Rawr tinydng provenance" &&
                   img->exif.make && std::string(img->exif.make) == "vivo";
         if (ok) {
             tinydng_pixels px{};
