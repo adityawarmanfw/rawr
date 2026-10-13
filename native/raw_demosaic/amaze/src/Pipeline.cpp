@@ -31,8 +31,12 @@ uint32_t memoryType(VkPhysicalDevice pd, uint32_t bits, VkMemoryPropertyFlags fl
 constexpr int kTile = 160;
 constexpr int kMargin = 16;
 constexpr int kStep = kTile - 2 * kMargin;
-constexpr uint32_t kPlanes = 16;  // scratch_a planes in amaze.wgsl
 constexpr uint32_t kLocal = 16;   // @workgroup_size(16,16) everywhere
+// Per-tile slot sizes and scalar scratch channels; must match amaze.wgsl
+// (SRC_PIX, OUT_PIX, CHANNELS) and amaze_tile.glsl.
+constexpr VkDeviceSize kSrcPix = VkDeviceSize(kTile) * kTile;
+constexpr VkDeviceSize kOutPix = VkDeviceSize(kStep) * kStep;
+constexpr VkDeviceSize kChannels = 34;
 
 // Recorded in this order; must match tools/build_spv.sh. Import first, export last.
 constexpr std::array<const char*, 19> kPasses = {
@@ -42,6 +46,7 @@ constexpr std::array<const char*, 19> kPasses = {
     "amaze_correct",  "amaze_chroma",    "amaze_finish",     "amaze_export"};
 // Serial-chain passes: choose runs one invocation per (row|column, parity) in
 // workgroups of 64; the row-sequential refinements run as one workgroup per tile.
+// Every pass is one dispatch per tile batch, with workgroup z selecting the tile.
 constexpr size_t kChoosePass = 3, kHvwtPass = 9, kPmwtPass = 13;
 constexpr uint32_t kChooseLocal = 64;
 static_assert(kTile <= 256, "row-sequential passes use one lane per tile column");
@@ -116,7 +121,8 @@ struct AmazePipeline::Impl {
     std::function<VkCommandBuffer()> commandBoundary;
 
     std::vector<Tile> tiles;
-    VkDeviceSize paramStride = 0;
+    uint32_t batchTiles = 0;          // tiles per dispatch (slots)
+    VkDeviceSize batchParamStride = 0;  // aligned bytes per batch of TileParams
 
     VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
@@ -125,11 +131,9 @@ struct AmazePipeline::Impl {
     std::array<VkPipeline, kPasses.size()> pipelines{};
     VkSampler packedSampler = VK_NULL_HANDLE;
 
-    struct Slot {
-        OwnedBuffer source, result, scratchA, scratchB;
-        VkDescriptorSet set = VK_NULL_HANDLE;
-    };
-    std::vector<Slot> slots;
+    // Slot-strided tile buffers shared by one batch (the bulk of the footprint).
+    OwnedBuffer source, result, scratch;
+    VkDescriptorSet set = VK_NULL_HANDLE;
     OwnedBuffer params;
     void* paramsMapped = nullptr;
     // Binding placeholders for the input the configured mode does not read.
@@ -229,9 +233,11 @@ struct AmazePipeline::Impl {
     void createResources() {
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(ctx.physicalDevice, &props);
-        const VkDeviceSize align = std::max<VkDeviceSize>(props.limits.minUniformBufferOffsetAlignment, 16);
-        paramStride = (sizeof(TileParams) + align - 1) / align * align;
-        params = makeBuffer(paramStride * tiles.size(), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+        batchTiles = std::min<uint32_t>(cfg.tileSlots, uint32_t(tiles.size()));
+        const VkDeviceSize align = std::max<VkDeviceSize>(props.limits.minStorageBufferOffsetAlignment, 16);
+        batchParamStride = (sizeof(TileParams) * batchTiles + align - 1) / align * align;
+        const VkDeviceSize batches = (tiles.size() + batchTiles - 1) / batchTiles;
+        params = makeBuffer(batchParamStride * batches, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
         check(vkMapMemory(ctx.device, params.memory, 0, VK_WHOLE_SIZE, 0, &paramsMapped), "AMaZE map params failed");
 
@@ -247,15 +253,14 @@ struct AmazePipeline::Impl {
             dummyNormalized = makeBuffer(16, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
         // One layout for every pass; each module declares the subset it uses.
-        std::array<VkDescriptorSetLayoutBinding, 8> b{};
+        std::array<VkDescriptorSetLayoutBinding, 7> b{};
         b[0] = {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};          // source
-        b[1] = {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};  // tile params
-        b[2] = {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};          // tile result
-        b[3] = {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};          // scratch_a
-        b[4] = {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};          // scratch_b
-        b[5] = {5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};  // packed CFA
-        b[6] = {6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};           // output
-        b[7] = {7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};          // float CFA
+        b[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};  // batch params
+        b[2] = {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};          // tile results
+        b[3] = {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};          // scratch
+        b[4] = {5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};  // packed CFA
+        b[5] = {6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};           // output
+        b[6] = {7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};          // float CFA
         VkDescriptorSetLayoutCreateInfo sl{};
         sl.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
         sl.bindingCount = uint32_t(b.size());
@@ -267,28 +272,24 @@ struct AmazePipeline::Impl {
         pl.pSetLayouts = &setLayout;
         check(vkCreatePipelineLayout(ctx.device, &pl, ctx.allocator, &pipelineLayout), "AMaZE pipeline layout failed");
 
-        const uint32_t n = std::min<uint32_t>(cfg.tileSlots, uint32_t(tiles.size()));
-        std::array<VkDescriptorPoolSize, 4> ps{{{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 5 * n},
-                                                {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, n},
-                                                {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, n},
-                                                {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, n}}};
+        std::array<VkDescriptorPoolSize, 4> ps{{{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4},
+                                                {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, 1},
+                                                {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1},
+                                                {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1}}};
         VkDescriptorPoolCreateInfo dpi{};
         dpi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        dpi.maxSets = n;
+        dpi.maxSets = 1;
         dpi.poolSizeCount = uint32_t(ps.size());
         dpi.pPoolSizes = ps.data();
         check(vkCreateDescriptorPool(ctx.device, &dpi, ctx.allocator, &descriptorPool), "AMaZE descriptor pool failed");
 
-        slots.resize(n);
         ensureScratch();
-        for (auto& s : slots) {
-            VkDescriptorSetAllocateInfo dai{};
-            dai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-            dai.descriptorPool = descriptorPool;
-            dai.descriptorSetCount = 1;
-            dai.pSetLayouts = &setLayout;
-            check(vkAllocateDescriptorSets(ctx.device, &dai, &s.set), "AMaZE descriptor set allocation failed");
-        }
+        VkDescriptorSetAllocateInfo dai{};
+        dai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dai.descriptorPool = descriptorPool;
+        dai.descriptorSetCount = 1;
+        dai.pSetLayouts = &setLayout;
+        check(vkAllocateDescriptorSets(ctx.device, &dai, &set), "AMaZE descriptor set allocation failed");
 
         for (size_t i = 0; i < kPasses.size(); ++i) {
             const std::string name = std::string(kPasses[i]) + (isGlsl(i) ? ".comp" : ".wgsl");
@@ -311,27 +312,19 @@ struct AmazePipeline::Impl {
         }
     }
 
-    // Per-slot tile buffers (the bulk of the footprint).
+    // Slot-strided tile buffers for one batch (the bulk of the footprint).
     void ensureScratch() {
-        const VkDeviceSize srcPixels = VkDeviceSize(kTile) * kTile;
-        const VkDeviceSize outPixels = VkDeviceSize(kStep) * kStep;
-        for (auto& s : slots) {
-            if (s.source.buffer) continue;
-            s.source = makeBuffer(srcPixels * 4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-            s.result = makeBuffer(outPixels * 16, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-            s.scratchA = makeBuffer(srcPixels * 16 * kPlanes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-            s.scratchB =
-                makeBuffer(srcPixels * 16, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-        }
+        if (source.buffer) return;
+        const VkDeviceSize n = batchTiles;
+        source = makeBuffer(n * kSrcPix * 4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        result = makeBuffer(n * kOutPix * 16, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        scratch = makeBuffer(n * kChannels * kSrcPix * 4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     }
     void releaseScratch() noexcept {
-        for (auto& s : slots) {
-            destroy(s.scratchB);
-            destroy(s.scratchA);
-            destroy(s.result);
-            destroy(s.source);
-        }
+        destroy(scratch);
+        destroy(result);
+        destroy(source);
     }
 
     void cleanup() noexcept {
@@ -347,7 +340,7 @@ struct AmazePipeline::Impl {
         if (setLayout) vkDestroyDescriptorSetLayout(ctx.device, setLayout, ctx.allocator), setLayout = VK_NULL_HANDLE;
         if (packedSampler) vkDestroySampler(ctx.device, packedSampler, ctx.allocator), packedSampler = VK_NULL_HANDLE;
         releaseScratch();
-        slots.clear();
+        set = VK_NULL_HANDLE;
         destroy(dummyPacked);
         destroy(dummyNormalized);
         if (paramsMapped) vkUnmapMemory(ctx.device, params.memory), paramsMapped = nullptr;
@@ -372,46 +365,44 @@ struct AmazePipeline::Impl {
             p.inputMode = inputMode;
             p.inputWidth = float(cfg.width);
             p.pattern = float(static_cast<uint32_t>(cfg.pattern));
-            std::memcpy(static_cast<char*>(paramsMapped) + i * paramStride, &p, sizeof(p));
+            const VkDeviceSize offset = (i / batchTiles) * batchParamStride + (i % batchTiles) * sizeof(TileParams);
+            std::memcpy(static_cast<char*>(paramsMapped) + offset, &p, sizeof(p));
         }
     }
 
     // packedView == VK_NULL_HANDLE selects the float buffer input.
-    void bindSlots(VkImageView packedView, VkImageLayout packedLayout, const BufferView& floatInput,
+    void bindBatch(VkImageView packedView, VkImageLayout packedLayout, const BufferView& floatInput,
                    const LinearRgbImage& out) {
-        for (auto& s : slots) {
-            VkDescriptorBufferInfo src{s.source.buffer, 0, VK_WHOLE_SIZE};
-            VkDescriptorBufferInfo prm{params.buffer, 0, sizeof(TileParams)};
-            VkDescriptorBufferInfo res{s.result.buffer, 0, VK_WHOLE_SIZE};
-            VkDescriptorBufferInfo sa{s.scratchA.buffer, 0, VK_WHOLE_SIZE};
-            VkDescriptorBufferInfo sb{s.scratchB.buffer, 0, VK_WHOLE_SIZE};
-            VkDescriptorImageInfo packed{packedSampler, packedView ? packedView : dummyPacked.view,
-                                         packedView ? packedLayout : VK_IMAGE_LAYOUT_GENERAL};
-            VkDescriptorBufferInfo cfa{floatInput.buffer ? floatInput.buffer : dummyNormalized.buffer,
-                                       floatInput.buffer ? floatInput.offset : 0,
-                                       floatInput.buffer ? floatInput.range : VK_WHOLE_SIZE};
-            VkDescriptorImageInfo target{VK_NULL_HANDLE, out.view, VK_IMAGE_LAYOUT_GENERAL};
-            std::array<VkWriteDescriptorSet, 8> w{};
-            for (uint32_t i = 0; i < w.size(); ++i) {
-                w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                w[i].dstSet = s.set;
-                w[i].dstBinding = i;
-                w[i].descriptorCount = 1;
-                w[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            }
-            w[0].pBufferInfo = &src;
-            w[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-            w[1].pBufferInfo = &prm;
-            w[2].pBufferInfo = &res;
-            w[3].pBufferInfo = &sa;
-            w[4].pBufferInfo = &sb;
-            w[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            w[5].pImageInfo = &packed;
-            w[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            w[6].pImageInfo = &target;
-            w[7].pBufferInfo = &cfa;
-            vkUpdateDescriptorSets(ctx.device, uint32_t(w.size()), w.data(), 0, nullptr);
+        VkDescriptorBufferInfo src{source.buffer, 0, VK_WHOLE_SIZE};
+        VkDescriptorBufferInfo prm{params.buffer, 0, sizeof(TileParams) * batchTiles};
+        VkDescriptorBufferInfo res{result.buffer, 0, VK_WHOLE_SIZE};
+        VkDescriptorBufferInfo scr{scratch.buffer, 0, VK_WHOLE_SIZE};
+        VkDescriptorImageInfo packed{packedSampler, packedView ? packedView : dummyPacked.view,
+                                     packedView ? packedLayout : VK_IMAGE_LAYOUT_GENERAL};
+        VkDescriptorBufferInfo cfa{floatInput.buffer ? floatInput.buffer : dummyNormalized.buffer,
+                                   floatInput.buffer ? floatInput.offset : 0,
+                                   floatInput.buffer ? floatInput.range : VK_WHOLE_SIZE};
+        VkDescriptorImageInfo target{VK_NULL_HANDLE, out.view, VK_IMAGE_LAYOUT_GENERAL};
+        std::array<VkWriteDescriptorSet, 7> w{};
+        const std::array<uint32_t, 7> bindings{0, 1, 2, 3, 5, 6, 7};
+        for (uint32_t i = 0; i < w.size(); ++i) {
+            w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[i].dstSet = set;
+            w[i].dstBinding = bindings[i];
+            w[i].descriptorCount = 1;
+            w[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         }
+        w[0].pBufferInfo = &src;
+        w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
+        w[1].pBufferInfo = &prm;
+        w[2].pBufferInfo = &res;
+        w[3].pBufferInfo = &scr;
+        w[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w[4].pImageInfo = &packed;
+        w[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        w[5].pImageInfo = &target;
+        w[6].pBufferInfo = &cfa;
+        vkUpdateDescriptorSets(ctx.device, uint32_t(w.size()), w.data(), 0, nullptr);
     }
 
     static void computeBarrier(VkCommandBuffer cmd) {
@@ -478,26 +469,29 @@ struct AmazePipeline::Impl {
             dummyLayoutReady = true;
         }
         writeParams(wb);
-        bindSlots(packedView, packedLayout, floatInput, out);
+        bindBatch(packedView, packedLayout, floatInput, out);
         computeBarrier(cmd);  // covers scratch reuse after a preceding frame
-        for (size_t first = 0; first < tiles.size(); first += slots.size()) {
-            const size_t count = std::min(slots.size(), tiles.size() - first);
+        for (size_t first = 0; first < tiles.size(); first += batchTiles) {
+            const uint32_t count = uint32_t(std::min<size_t>(batchTiles, tiles.size() - first));
+            // Each dispatch covers the batch's largest tile; shaders bound-check per tile.
+            uint32_t srcW = 0, srcH = 0, outW = 0, outH = 0;
+            for (size_t k = 0; k < count; ++k) {
+                const Tile& t = tiles[first + k];
+                srcW = std::max(srcW, t.srcW), srcH = std::max(srcH, t.srcH);
+                outW = std::max(outW, t.outW), outH = std::max(outH, t.outH);
+            }
+            const uint32_t offset = uint32_t((first / batchTiles) * batchParamStride);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1, &set, 1, &offset);
             for (size_t pass = 0; pass < kPasses.size(); ++pass) {
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines[pass]);
-                for (size_t k = 0; k < count; ++k) {
-                    const Tile& t = tiles[first + k];
-                    const uint32_t offset = uint32_t((first + k) * paramStride);
-                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1, &slots[k].set, 1,
-                                            &offset);
-                    if (pass == kChoosePass) {
-                        vkCmdDispatch(cmd, (2 * (t.srcW + t.srcH) + kChooseLocal - 1) / kChooseLocal, 1, 1);
-                    } else if (pass == kHvwtPass || pass == kPmwtPass) {
-                        vkCmdDispatch(cmd, 1, 1, 1);
-                    } else {
-                        const uint32_t w = coversOutput(pass) ? t.outW : t.srcW;
-                        const uint32_t h = coversOutput(pass) ? t.outH : t.srcH;
-                        vkCmdDispatch(cmd, (w + kLocal - 1) / kLocal, (h + kLocal - 1) / kLocal, 1);
-                    }
+                if (pass == kChoosePass) {
+                    vkCmdDispatch(cmd, (2 * (srcW + srcH) + kChooseLocal - 1) / kChooseLocal, 1, count);
+                } else if (pass == kHvwtPass || pass == kPmwtPass) {
+                    vkCmdDispatch(cmd, 1, 1, count);
+                } else {
+                    const uint32_t w = coversOutput(pass) ? outW : srcW;
+                    const uint32_t h = coversOutput(pass) ? outH : srcH;
+                    vkCmdDispatch(cmd, (w + kLocal - 1) / kLocal, (h + kLocal - 1) / kLocal, count);
                 }
                 computeBarrier(cmd);
             }
