@@ -94,9 +94,13 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
             resValue("string", "app_name", "Rawr Debug")
+            // Native EXIF Software tag; must match BuildConfig.VERSION_NAME.
+            externalNativeBuild { cmake { arguments += "-DRAWR_VERSION_NAME=${defaultConfig.versionName}-debug" } }
         }
         release {
+            externalNativeBuild { cmake { arguments += "-DRAWR_VERSION_NAME=${defaultConfig.versionName}" } }
             isDebuggable = false
             isMinifyEnabled = true
             isShrinkResources = true

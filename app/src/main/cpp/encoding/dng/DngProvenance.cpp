@@ -1,3 +1,4 @@
+#include "encoding/SoftwareName.h"
 #include "encoding/dng/DngProvenance.h"
 
 #include <optional>
@@ -50,7 +51,7 @@ struct Provenance {
 };
 
 std::vector<uint8_t> serializeProvenance(const Provenance& app) {
-    const std::string identifier = "RawrCam tinydng provenance";
+    const std::string identifier = "Rawr tinydng provenance";
     std::string json = "{\"schema\":\"tinydng.provenance\",\"version\":1";
     const auto field = [&](const char* key, const std::optional<std::string>& v) {
         if (!v) return;
@@ -97,7 +98,7 @@ std::vector<uint8_t> buildDngProvenance(const rawrcam::imaging::RawSnapshot& fra
                                         const DngCaptureContext& captureContext, const char* geometryMode) {
     const auto& ctx = *frame.metadata.cameraContext;
     Provenance prov{};
-    prov.applicationName = "RawrCam";
+    prov.applicationName = rawrcam::encoding::kSoftwareName;
     prov.processingPipelineVersion = "rawr-still-1";
     prov.logicalCameraId = ctx.cameraId;
     prov.physicalCameraId = ctx.cameraId;

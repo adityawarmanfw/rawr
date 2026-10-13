@@ -1,3 +1,4 @@
+#include "encoding/SoftwareName.h"
 #include "encoding/jpeg/JpegCaptureWriter.h"
 
 #include <android/log.h>
@@ -126,7 +127,8 @@ std::vector<unsigned char> buildExif(const JpegCaptureContext& c, std::uint32_t 
     if (!c.deviceModel.empty())
         ifd0.push_back({0x0110, 2, static_cast<std::uint32_t>(c.deviceModel.size() + 1), asciiData(c.deviceModel)});
     ifd0.push_back({0x0112, 3, 1, shortData(c.exifOrientation)});
-    ifd0.push_back({0x0131, 2, 8, asciiData("RawrCam")});
+    const std::string software = rawrcam::encoding::kSoftwareName;
+    ifd0.push_back({0x0131, 2, static_cast<std::uint32_t>(software.size() + 1), asciiData(software)});
     if (!dateTime.empty()) ifd0.push_back({0x0132, 2, 20, asciiData(dateTime)});
     // ExifIFDPointer placeholder; value is patched after IFD0 layout is known.
     ifd0.push_back({0x8769, 4, 1, longData(0)});

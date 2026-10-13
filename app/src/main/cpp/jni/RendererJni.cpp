@@ -379,6 +379,9 @@ Java_com_rawr_camera_renderer_RendererNative_render(JNIEnv* e, jobject, jlong id
                 o.context.tonemapParams, rendererDisplayName, c.filmRendered, filmDescription,
                 o.context.denoiseStrength, o.context.denoiseDetail, o.context.denoiseNoiseA, o.context.denoiseNoiseB,
                 o.context.galoshYuvMode, o.context.galoshYuvStrengthY, o.context.galoshYuvStrengthC);
+            // Shared builder speaks for captures; a Renderer export was rendered, not captured.
+            if (constexpr std::string_view captured = "Captured with Rawr"; c.imageDescription.compare(0, captured.size(), captured) == 0)
+                c.imageDescription.replace(0, captured.size(), "Rendered with Rawr");
             // Full parity with still captures: dual-encode + mux when the
             // GPU gain map ran, legacy SDR otherwise (same fallback contract
             // as SingleFrame/MFSR: missing map degrades, never fails).

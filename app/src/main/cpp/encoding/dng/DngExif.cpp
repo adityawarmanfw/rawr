@@ -1,3 +1,4 @@
+#include "encoding/SoftwareName.h"
 #include "encoding/dng/DngExif.h"
 
 #include <algorithm>
@@ -79,7 +80,7 @@ void fillDngExif(TinyDngWriteParams& p, const rawrcam::imaging::RawSnapshot& fra
         p.model = displayModel;
         p.lensModel = captureContext.deviceModel;
     }
-    p.software = "RawrCam";
+    p.software = rawrcam::encoding::kSoftwareName;
     p.description = tiffAsciiDescription(captureContext.imageDescription.empty() ? "Captured with Rawr"
                                                                                  : captureContext.imageDescription);
     switch (rawrcam::geometry::presentationQuarterTurns(ctx.geometry.sensorOrientationDegrees,
