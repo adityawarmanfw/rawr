@@ -52,6 +52,7 @@ extern PFN_vkCreateInstance vkCreateInstance;
 extern PFN_vkCreatePipelineLayout vkCreatePipelineLayout;
 extern PFN_vkCreatePipelineCache vkCreatePipelineCache;
 extern PFN_vkDestroyPipelineCache vkDestroyPipelineCache;
+extern PFN_vkGetPipelineCacheData vkGetPipelineCacheData;
 extern PFN_vkCreateQueryPool vkCreateQueryPool;
 extern PFN_vkCreateRenderPass vkCreateRenderPass;
 extern PFN_vkCreateSampler vkCreateSampler;
@@ -138,7 +139,13 @@ const std::string& backendDescription();
 // gain map) reuses compiled pipelines instead of recompiling shaders. Pipeline
 // caches are internally synchronized; null if the driver refuses one.
 VkPipelineCache pipelineCache(VkDevice device);
-// Destroys the cache; call before vkDestroyDevice.
+// Backs the cache with a file so compiled pipelines survive app restarts.
+// Set before the first pipelineCache(); the driver validates the blob header
+// (vendor, device, driver UUID) and ignores stale data.
+void setPipelineCacheFile(const std::string& path);
+// Writes the cache to its file (atomic rename) when it grew since the last save.
+void savePipelineCache(VkDevice device) noexcept;
+// Saves, then destroys the cache; call before vkDestroyDevice.
 void releasePipelineCache(VkDevice device);
 }  // namespace rawrcam::vulkan::dispatch
 #endif

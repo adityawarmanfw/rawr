@@ -10,6 +10,7 @@
 #include "develop/HotPixelConceal.h"
 #include "develop/render/DenoiseProfile.h"
 #include "geometry/OrientationTransform.h"
+#include "vulkan/VulkanDispatch.h"
 
 namespace rawrcam::capture {
 SingleFrameCaptureDevelop::SingleFrameCaptureDevelop(const vulkan::VulkanContext& vk, std::mutex& mutex,
@@ -227,6 +228,8 @@ std::optional<SingleFrameDevelopResult> SingleFrameCaptureDevelop::pollCompletio
            << " totalMs=" << done->totalMs;
     if (!done->success) status << " error=" << done->error;
     emit(status.str());
+    // First-launch shots compile every develop pipeline; keep them for next launch.
+    rawrcam::vulkan::dispatch::savePipelineCache(vulkanContext_.device());
     amaze_.releaseOutput();
     amaze_.reset();
     rcd_.releaseOutput();

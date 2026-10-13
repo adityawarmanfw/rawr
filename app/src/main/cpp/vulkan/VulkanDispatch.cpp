@@ -4,8 +4,13 @@
 #include <android/log.h>
 #include <dlfcn.h>
 
+#include <cstdio>
+#include <fstream>
+#include <iterator>
 #include <mutex>
 #include <stdexcept>
+#include <string>
+#include <vector>
 
 PFN_vkAcquireNextImageKHR vkAcquireNextImageKHR = nullptr;
 PFN_vkAllocateCommandBuffers vkAllocateCommandBuffers = nullptr;
@@ -51,6 +56,7 @@ PFN_vkCreateInstance vkCreateInstance = nullptr;
 PFN_vkCreatePipelineLayout vkCreatePipelineLayout = nullptr;
 PFN_vkCreatePipelineCache vkCreatePipelineCache = nullptr;
 PFN_vkDestroyPipelineCache vkDestroyPipelineCache = nullptr;
+PFN_vkGetPipelineCacheData vkGetPipelineCacheData = nullptr;
 PFN_vkCreateQueryPool vkCreateQueryPool = nullptr;
 PFN_vkCreateRenderPass vkCreateRenderPass = nullptr;
 PFN_vkCreateSampler vkCreateSampler = nullptr;
@@ -176,6 +182,7 @@ void clearFns() {
     vkCreatePipelineLayout = nullptr;
     vkCreatePipelineCache = nullptr;
     vkDestroyPipelineCache = nullptr;
+    vkGetPipelineCacheData = nullptr;
     vkCreateQueryPool = nullptr;
     vkCreateRenderPass = nullptr;
     vkCreateSampler = nullptr;
@@ -258,6 +265,8 @@ PFN_vkCreateComputePipelines gDriverCreateComputePipelines = nullptr;
 std::mutex gCacheMutex;
 VkDevice gCacheDevice = VK_NULL_HANDLE;
 VkPipelineCache gCache = VK_NULL_HANDLE;
+std::string gCacheFile;
+size_t gCacheSavedBytes = 0;
 VKAPI_ATTR VkResult VKAPI_CALL cachedCreateComputePipelines(VkDevice device, VkPipelineCache cache,
                                                             uint32_t count,
                                                             const VkComputePipelineCreateInfo* infos,
@@ -272,20 +281,67 @@ VkPipelineCache pipelineCache(VkDevice device) {
     if (device == VK_NULL_HANDLE || !vkCreatePipelineCache) return VK_NULL_HANDLE;
     if (gCacheDevice != device) {
         if (gCacheDevice != VK_NULL_HANDLE) return VK_NULL_HANDLE;  // one device at a time
+        std::vector<char> blob;
+        if (!gCacheFile.empty()) {
+            std::ifstream in(gCacheFile, std::ios::binary);
+            blob.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        }
         VkPipelineCacheCreateInfo info{};
         info.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
-        if (vkCreatePipelineCache(device, &info, nullptr, &gCache) != VK_SUCCESS) return VK_NULL_HANDLE;
+        info.initialDataSize = blob.size();
+        info.pInitialData = blob.empty() ? nullptr : blob.data();
+        VkResult result = vkCreatePipelineCache(device, &info, nullptr, &gCache);
+        if (result != VK_SUCCESS && !blob.empty()) {
+            // A driver may reject a corrupt blob outright: start empty.
+            info.initialDataSize = 0;
+            info.pInitialData = nullptr;
+            blob.clear();
+            result = vkCreatePipelineCache(device, &info, nullptr, &gCache);
+        }
+        if (result != VK_SUCCESS) return VK_NULL_HANDLE;
         gCacheDevice = device;
+        gCacheSavedBytes = blob.size();
+        __android_log_print(ANDROID_LOG_INFO, "RawrCamNative", "VK_PIPELINE_CACHE_LOADED bytes=%zu file=%s",
+                            blob.size(), gCacheFile.empty() ? "none" : "yes");
     }
     return gCache;
 }
+void setPipelineCacheFile(const std::string& path) {
+    std::lock_guard<std::mutex> lock(gCacheMutex);
+    gCacheFile = path;
+}
+namespace {
+void saveLocked() noexcept {
+    if (gCache == VK_NULL_HANDLE || gCacheFile.empty() || !vkGetPipelineCacheData) return;
+    size_t size = 0;
+    if (vkGetPipelineCacheData(gCacheDevice, gCache, &size, nullptr) != VK_SUCCESS || size == 0) return;
+    if (size == gCacheSavedBytes) return;  // the cache only grows: unchanged
+    std::vector<char> blob(size);
+    if (vkGetPipelineCacheData(gCacheDevice, gCache, &size, blob.data()) != VK_SUCCESS) return;
+    const std::string temp = gCacheFile + ".tmp";
+    {
+        std::ofstream out(temp, std::ios::binary | std::ios::trunc);
+        out.write(blob.data(), static_cast<std::streamsize>(size));
+        if (!out) return;
+    }
+    if (std::rename(temp.c_str(), gCacheFile.c_str()) != 0) return;
+    gCacheSavedBytes = size;
+    __android_log_print(ANDROID_LOG_INFO, "RawrCamNative", "VK_PIPELINE_CACHE_SAVED bytes=%zu", size);
+}
+}  // namespace
+void savePipelineCache(VkDevice device) noexcept {
+    std::lock_guard<std::mutex> lock(gCacheMutex);
+    if (device != VK_NULL_HANDLE && device == gCacheDevice) saveLocked();
+}
 void releasePipelineCache(VkDevice device) {
     std::lock_guard<std::mutex> lock(gCacheMutex);
+    if (device != VK_NULL_HANDLE && device == gCacheDevice) saveLocked();
     if (device != VK_NULL_HANDLE && device == gCacheDevice && gCache != VK_NULL_HANDLE && vkDestroyPipelineCache)
         vkDestroyPipelineCache(device, gCache, nullptr);
     if (device == gCacheDevice) {
         gCache = VK_NULL_HANDLE;
         gCacheDevice = VK_NULL_HANDLE;
+        gCacheSavedBytes = 0;
     }
 }
 void configure(const std::string& nativeLibraryDir, const std::string& path) {
@@ -368,6 +424,7 @@ void configure(const std::string& nativeLibraryDir, const std::string& path) {
     setIf(vkCreatePipelineLayout, gGipa(VK_NULL_HANDLE, "vkCreatePipelineLayout"));
     setIf(vkCreatePipelineCache, gGipa(VK_NULL_HANDLE, "vkCreatePipelineCache"));
     setIf(vkDestroyPipelineCache, gGipa(VK_NULL_HANDLE, "vkDestroyPipelineCache"));
+    setIf(vkGetPipelineCacheData, gGipa(VK_NULL_HANDLE, "vkGetPipelineCacheData"));
     setIf(vkCreateQueryPool, gGipa(VK_NULL_HANDLE, "vkCreateQueryPool"));
     setIf(vkCreateRenderPass, gGipa(VK_NULL_HANDLE, "vkCreateRenderPass"));
     setIf(vkCreateSampler, gGipa(VK_NULL_HANDLE, "vkCreateSampler"));
@@ -499,6 +556,7 @@ void loadInstance(VkInstance instance) {
     setIf(vkCreatePipelineLayout, gGipa(instance, "vkCreatePipelineLayout"));
     setIf(vkCreatePipelineCache, gGipa(instance, "vkCreatePipelineCache"));
     setIf(vkDestroyPipelineCache, gGipa(instance, "vkDestroyPipelineCache"));
+    setIf(vkGetPipelineCacheData, gGipa(instance, "vkGetPipelineCacheData"));
     setIf(vkCreateQueryPool, gGipa(instance, "vkCreateQueryPool"));
     setIf(vkCreateRenderPass, gGipa(instance, "vkCreateRenderPass"));
     setIf(vkCreateSampler, gGipa(instance, "vkCreateSampler"));
@@ -625,6 +683,7 @@ void loadDevice(VkDevice device) {
     setIf(vkCreatePipelineLayout, gGdpa(device, "vkCreatePipelineLayout"));
     setIf(vkCreatePipelineCache, gGdpa(device, "vkCreatePipelineCache"));
     setIf(vkDestroyPipelineCache, gGdpa(device, "vkDestroyPipelineCache"));
+    setIf(vkGetPipelineCacheData, gGdpa(device, "vkGetPipelineCacheData"));
     setIf(vkCreateQueryPool, gGdpa(device, "vkCreateQueryPool"));
     setIf(vkCreateRenderPass, gGdpa(device, "vkCreateRenderPass"));
     setIf(vkCreateSampler, gGdpa(device, "vkCreateSampler"));

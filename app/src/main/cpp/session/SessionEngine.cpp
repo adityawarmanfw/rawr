@@ -11,6 +11,7 @@
 #include "video_pipeline/VideoCrop.h"
 
 namespace rawrcam::session {
+#include "vulkan/VulkanDispatch.h"
 namespace {
 std::string jsonEscape(const std::string& value) {
     std::string out;
@@ -102,6 +103,8 @@ bool SessionEngine::setVideoSurface(JNIEnv* env, jobject surfaceObj, uint32_t wi
     std::lock_guard<std::mutex> lock(mu_);
     const auto restoreFilm = [this] { look_.suppressForVideo(false); };
     try {
+            // Backgrounding may end the process without a device teardown.
+            rawrcam::vulkan::dispatch::savePipelineCache(vulkanContext_.device());
         if (!surfaceObj) {
             videoSession_.stop();
             swapchainRenderer_.setVideoFrameSources({});
