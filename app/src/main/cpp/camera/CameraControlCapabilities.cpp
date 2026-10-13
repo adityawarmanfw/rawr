@@ -86,8 +86,10 @@ CameraControlState readInitialCameraControlState(const ACameraMetadata* characte
     // modes. TEMPLATE_PREVIEW commonly defaults to 30/30; that silently caps
     // shutter-priority exposure near 1/30 even though the new priority mode
     // promises application ownership of SENSOR_EXPOSURE_TIME. Prefer a range
-    // whose upper bound is <=30 fps (normal preview) and whose lower bound is
-    // as small as possible, preserving headroom for long priority exposures.
+    // whose upper bound is <=30 fps (normal preview), then the fastest upper
+    // bound, then the smallest lower bound for long priority exposures. The
+    // upper bound comes first: a HAL listing [10,10] beside [15,30] (MT6789)
+    // otherwise pins the viewfinder at 10 fps.
     if (const auto e = entry(characteristics, ACAMERA_CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES);
         e && e->data.i32 && e->count >= 2) {
         bool havePreferred = false;
@@ -100,7 +102,7 @@ CameraControlState readInitialCameraControlState(const ACameraMetadata* characte
             state.capabilities.aeTargetFpsRanges.push_back({lo, hi});
             const bool preferred = hi <= 30;
             if (bestMin == 0 || (preferred && !havePreferred) ||
-                (preferred == havePreferred && (lo < bestMin || (lo == bestMin && hi > bestMax)))) {
+                (preferred == havePreferred && (hi > bestMax || (hi == bestMax && lo < bestMin)))) {
                 havePreferred = preferred;
                 bestMin = lo;
                 bestMax = hi;

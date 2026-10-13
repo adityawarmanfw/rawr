@@ -20,6 +20,7 @@ struct PreviewCallbacks {
         configurePreview;
     std::function<ANativeWindow*(uint64_t, uint32_t, uint32_t, geometry::RawPixelFormat)> createRawWindow;
     std::function<void(uint64_t)> destroyRawWindow;
+    std::function<void(uint64_t)> captureFailed;
     std::function<bool(const metadata::FrameMetadataSnapshot&)> submitMetadata;
     std::function<void(const std::string&)> diagnostic;
 };

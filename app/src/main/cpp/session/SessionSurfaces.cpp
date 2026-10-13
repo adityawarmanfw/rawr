@@ -159,6 +159,32 @@ ANativeWindow* SessionEngine::createRawInputWindow(uint64_t generation, uint32_t
             baselineReaderUsage |= realtime_.importer()->requiredHardwareBufferUsage(VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
         }
         const bool zeroCopySweep = diagnosticMode >= 11u && diagnosticMode <= 15u;
+
+        // Some grallocs (MT6878 / Mali-G615) refuse RAW16 with the GPU usage
+        // Vulkan asks for: the session runs but every request fails. Ask the
+        // allocator up front with the bits the camera adds, and go straight to
+        // the CPU-read reader the ladder would otherwise reach seconds later.
+        if (diagnosticMode == 0u && format == rawrcam::geometry::RawPixelFormat::Raw16) {
+            constexpr uint32_t kHalPixelFormatRaw16 = 0x20;
+            constexpr uint64_t kCameraWrite = 1ull << 17;  // GRALLOC_USAGE_HW_CAMERA_WRITE
+            AHardwareBuffer_Desc desc{};
+            desc.width = width;
+            desc.height = height;
+            desc.layers = 1;
+            desc.format = kHalPixelFormatRaw16;
+            desc.usage = baselineReaderUsage | AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN |
+                         AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN | kCameraWrite;
+            if (AHardwareBuffer_isSupported(&desc) == 0) {
+                rawReaderUsage_.demote();
+                realtime_.coordinator().latchRaw16BufferIngress();
+                std::ostringstream out;
+                out << "RAW_READER_CPU_ONLY_USAGE format=RAW16 reason=gpu_usage_unallocatable usage=0x" << std::hex
+                    << desc.usage;
+                SESSION_LOGI("%s", out.str().c_str());
+                appendDiagnostic(out.str());
+                return rawFrameIngress_.create(generation, width, height, format, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN);
+            }
+        }
         const bool sweepCpuReader = diagnosticMode == 11u || diagnosticMode == 13u || diagnosticMode == 15u;
         const bool cpuReadableRawRequested =
             zeroCopySweep ? sweepCpuReader : (capture_.single().rawSnapshotConfigured() || rawCpuCopyProbe_.enabled());

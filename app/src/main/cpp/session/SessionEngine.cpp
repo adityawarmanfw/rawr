@@ -79,6 +79,10 @@ SessionEngine::SessionEngine(std::string filesDir) : filesDir_(std::move(filesDi
         destroyRawInput();
         cameraReaderGeneration_ = 0;
     };
+    callbacks.captureFailed = [this](uint64_t generation) {
+        std::lock_guard<std::mutex> lock(mu_);
+        rawReaderUsage_.captureFailed(generation);
+    };
     callbacks.submitMetadata = [this](const rawrcam::metadata::FrameMetadataSnapshot& metadata) {
         return submitMetadata(metadata);
     };

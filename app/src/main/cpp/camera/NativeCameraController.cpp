@@ -581,6 +581,10 @@ struct NativeCameraController::Impl final : CameraEventSink {
         std::lock_guard<std::mutex> lock(mutex);
         if (callbackGeneration == deviceSession.generation()) diag(message);
     }
+    void cameraCaptureFailed(uint64_t callbackGeneration) override {
+        // Set once at construction; the receiver checks the generation.
+        if (callbacks.captureFailed) callbacks.captureFailed(callbackGeneration);
+    }
     void cameraSessionClosed(uint64_t callbackGeneration, ACameraCaptureSession* session) override {
         std::lock_guard<std::mutex> lock(mutex);
         diag("CAMERA_NDK_SESSION_CLOSED generation=" + std::to_string(callbackGeneration));

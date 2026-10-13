@@ -15,8 +15,9 @@ void reportFailure(CameraSessionCallbackContext* callback, const char* kind, int
     else
         trace.record(diagnostics::RuntimeTraceStage::CameraBufferLost, 0, callback->generation, -1, 0, 0, 0u,
                      frameNumber);
-    if (gFailureDiagnostics.fetch_add(1, std::memory_order_relaxed) >= 6) return;
     CameraCallbackGuard<CameraEventSink> guard(callback->lifetime);
+    if (guard.owner) guard.owner->cameraCaptureFailed(callback->generation);
+    if (gFailureDiagnostics.fetch_add(1, std::memory_order_relaxed) >= 6) return;
     if (guard.owner)
         guard.owner->cameraDeviceEvent(callback->generation, std::string(kind) + " frame=" +
                                                                  std::to_string(frameNumber) + " reason=" +

@@ -44,7 +44,28 @@ void cpuReaderAndRetiredReaderAreIgnored() {
     assert(ladder.advance(kDeadline));
 }
 
+void failedCapturesDemoteEarly() {
+    Ladder ladder;
+    ladder.readerCreated(1, true, 0);
+    for (uint32_t i = 1; i < Ladder::kFailedCapturesToDemote; ++i) ladder.captureFailed(1);
+    ladder.captureFailed(7);  // another generation's failures don't count
+    assert(!ladder.advance(1));
+    ladder.captureFailed(1);
+    assert(ladder.advance(1));
+    assert(ladder.cpuOnly());
+}
+
+void demoteSkipsTheGpuReader() {
+    Ladder ladder;
+    ladder.demote();
+    ladder.readerCreated(1, true, 0);
+    assert(ladder.cpuOnly());
+    assert(!ladder.advance(10 * kDeadline));
+}
+
 int main() {
+    failedCapturesDemoteEarly();
+    demoteSkipsTheGpuReader();
     silentGpuReaderDemotesOnce();
     deliveringReaderNeverDemotes();
     cpuReaderAndRetiredReaderAreIgnored();
