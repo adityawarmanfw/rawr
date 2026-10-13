@@ -9,28 +9,20 @@ import com.rawr.camera.settings.model.SettingsValues
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-/** Independent recipe state. Staged Develop edits never change global user preferences. */
+/** Job-local recipe state. No preference writer or shared preset editor is attached. */
 internal class RendererEditorSession(
     initial: SettingsValues,
     private val onDraftChanged: (SettingsValues) -> Unit
 ) {
     private val mutableApplied = MutableStateFlow(initial)
     val applied = mutableApplied.asStateFlow()
-    private val mutableDirty = MutableStateFlow(false)
-    val dirty = mutableDirty.asStateFlow()
     private val mutableController = MutableStateFlow<SettingsController>(createController(initial))
     val controller = mutableController.asStateFlow()
 
     private fun createController(initial: SettingsValues): SettingsController = PersistentSettingsController(
         SettingsCatalog.initialState().copy(values = initial),
-        onValuesChanged = { edited ->
-            if (mutableDirty.value) {
-                val live = RendererDevelopStaging.appliedPreview(mutableApplied.value, edited)
-                if (live != mutableApplied.value) publish(live)
-            } else if (RendererDevelopStaging.isStagedChange(mutableApplied.value, edited)) {
-                mutableDirty.value = true
-            } else publish(edited)
-        }
+        defaults = initial,
+        onValuesChanged = ::publish
     ).apply { dispatch(OpenSection(SettingsSection.ImageTone)) }
 
     private fun publish(values: SettingsValues) {
@@ -38,13 +30,4 @@ internal class RendererEditorSession(
         onDraftChanged(values)
     }
 
-    fun apply() {
-        mutableDirty.value = false
-        publish(controller.value.state.value.values)
-    }
-
-    fun discard() {
-        mutableDirty.value = false
-        mutableController.value = createController(mutableApplied.value)
-    }
 }

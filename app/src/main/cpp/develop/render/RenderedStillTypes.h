@@ -33,6 +33,8 @@ struct RenderedStillContext {
     // Renderer editor only: leave the RGBA8 output on the GPU for direct
     // surface presentation. Still exports continue to use CPU readback.
     bool surfacePreview = false;
+    // Renderer owns the dependency key and keeps the post engine alive.
+    bool reuseLinearResult = false;
     bool filmTiled = false;
     float lutStrength = 1.0f;
     void (*filmDiagnosticTap)(void*, VkCommandBuffer, const char*, VkBuffer, uint32_t, uint32_t) = nullptr;

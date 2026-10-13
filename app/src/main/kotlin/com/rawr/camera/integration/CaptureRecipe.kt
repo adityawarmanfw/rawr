@@ -61,8 +61,6 @@ internal object CaptureRecipe {
         put("demosaicAlgorithm", v.demosaicAlgorithm.name)
         put("dualAutoContrast", v.dualAutoContrast)
         put("dualContrastPercent", v.dualContrastPercent)
-        put("quadfixEnabled", v.quadfixEnabled)
-        put("quadfixFastMedian", v.quadfixFastMedian)
         put("fccSteps", v.photoFccSteps)
         put("lensShadingCorrectionEnabled", v.photoLensShadingEnabled)
         put("highlightReconstructionEnabled", v.photoHighlightEnabled)

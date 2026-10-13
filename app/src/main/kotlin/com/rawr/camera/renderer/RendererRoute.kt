@@ -72,7 +72,7 @@ internal fun RendererRoute(viewModel: RendererViewModel, onExit: () -> Unit) {
         modifier = Modifier.testTag("renderer_screen"),
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
-            TopAppBar(
+            if (job == null || job.width <= 0 || session == null || preview == null) TopAppBar(
                 title = {
                     Column {
                         Text("Renderer")
@@ -111,7 +111,7 @@ internal fun RendererRoute(viewModel: RendererViewModel, onExit: () -> Unit) {
                     onSaveResolution = viewModel::saveResolution,
                     onImportLut = viewModel::importEditorLut,
                     busy = busy || loading,
-                    onBackToQueue = viewModel::backToQueue,
+                    onBackToQueue = { if (busy) viewModel.back() else viewModel.backToQueue() },
                     onExport = {
                         notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
                         viewModel.export(job.id)

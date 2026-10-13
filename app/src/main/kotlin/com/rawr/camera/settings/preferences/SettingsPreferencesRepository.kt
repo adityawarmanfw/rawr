@@ -567,8 +567,6 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
             demosaicAlgorithm = enumOrDefault(p[Keys.demosaicAlgorithm], d.demosaicAlgorithm),
             dualAutoContrast = p[Keys.dualAutoContrast] ?: d.dualAutoContrast,
             dualContrastPercent = (p[Keys.dualContrastPercent] ?: d.dualContrastPercent).coerceIn(0f, 100f),
-            quadfixEnabled = p[Keys.quadfixEnabled] ?: d.quadfixEnabled,
-            quadfixFastMedian = p[Keys.quadfixFastMedian] ?: d.quadfixFastMedian,
             // v30 split: photo reads the new key, falling back to the
             // legacy shared key for pre-v30 installs. Video strengths
             // seed from the legacy value so enabling video later starts
@@ -803,8 +801,6 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.demosaicAlgorithm] = v.demosaicAlgorithm.name
         p[Keys.dualAutoContrast] = v.dualAutoContrast
         p[Keys.dualContrastPercent] = v.dualContrastPercent.coerceIn(0f, 100f)
-        p[Keys.quadfixEnabled] = v.quadfixEnabled
-        p[Keys.quadfixFastMedian] = v.quadfixFastMedian
         p[Keys.photoFccSteps] = v.photoFccSteps.coerceIn(1, 8)
         p[Keys.videoFccEnabled] = v.videoFccEnabled
         p[Keys.photoDefringeEnabled] = v.photoDefringeEnabled
@@ -1069,8 +1065,6 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val demosaicAlgorithm = stringPreferencesKey("capture_demosaic_algorithm")
         val dualAutoContrast = booleanPreferencesKey("dual_auto_contrast")
         val dualContrastPercent = floatPreferencesKey("dual_contrast_percent")
-        val quadfixEnabled = booleanPreferencesKey("quadfix_enabled")
-        val quadfixFastMedian = booleanPreferencesKey("quadfix_fast_median")
         val photoFccSteps = intPreferencesKey("photo_fcc_steps")
         val videoFccEnabled = booleanPreferencesKey("video_fcc_enabled")
         val videoFccSteps = intPreferencesKey("video_fcc_steps")

@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #include "BayerBin.h"
+#include "NaturalBayerBin.h"
 
 namespace rawrcam::renderer {
 namespace {
@@ -207,6 +208,7 @@ DngSource::DngSource(const std::string& path) : rawCachePath_(path + ".raw16-v1"
     }
 }
 DngSource::~DngSource() {
+    if (binCache_) munmap(const_cast<float*>(binCache_), binCacheBytes_);
     if (rawCache_) munmap(const_cast<uint16_t*>(rawCache_), rawCacheBytes_);
     tinydng_document_destroy(context_, document_);
     tinydng_context_destroy(context_);
@@ -358,10 +360,65 @@ std::vector<float> DngSource::normalized(uint32_t x, uint32_t y, uint32_t w, uin
         }
     return result;
 }
+void DngSource::prepareBinned(const std::string& path, bool shading, const std::function<void()>& check) {
+    if (binCache_ && binCachePath_ == path) return;
+    if (binCache_) { munmap(const_cast<float*>(binCache_), binCacheBytes_); binCache_ = nullptr; }
+    const uint32_t sw = image_->width, sh = image_->height, ow = sw / 2, oh = sh / 2;
+    const size_t bytes = size_t(ow) * oh * sizeof(float);
+    const std::string temp = path + ".tmp";
+    if (!std::filesystem::exists(path) || std::filesystem::file_size(path) != bytes) {
+        std::ofstream file(temp, std::ios::binary | std::ios::trunc);
+        if (!file) throw std::runtime_error("Cannot create binned CFA cache");
+        try {
+            std::array<float,4> gains{};
+            int red = 0;
+            const float maxGain = std::max({wb[0],wb[1],wb[2]});
+            for (int i=0;i<4;++i) {
+                gains[i] = wb[image_->cfa.pattern[i]] / maxGain;
+                if (!(gains[i] > 0) || !std::isfinite(gains[i])) throw std::runtime_error("Invalid binning calibration");
+                if (image_->cfa.pattern[i] == 0) red = i;
+            }
+            const float floor = std::max(1e-20f, std::pow(0.25f * 255.f / float(std::max(1.0, whiteLevel)), 2.f));
+            NaturalBayerTile tile;
+            for (uint32_t y=0;y<oh;y+=32) {
+                check();
+                const uint32_t rows=std::min(32u,oh-y), top=y*2>=20?y*2-20:0;
+                const uint32_t bottom=std::min(sh,(y+rows)*2+20);
+                const auto band=normalized(0,top,sw,bottom-top,shading);
+                std::vector<float> out(size_t(ow)*rows);
+                auto sample=[&](uint32_t sx,uint32_t sy){return band[size_t(sy-top)*sw+sx];};
+                for(uint32_t x=0;x<ow;x+=128) {
+                    check(); const uint32_t cols=std::min(128u,ow-x);
+                    if(sw>=16 && sh>=16 && sw%4==0 && sh%4==0)
+                        tile.run(x,y,cols,rows,sw,sh,gains,red,floor,sample,check,out.data()+x,ow);
+                    else for(uint32_t yy=0;yy<rows;++yy)for(uint32_t xx=0;xx<cols;++xx)
+                        out[size_t(yy)*ow+x+xx]=binSameColor2x(x+xx,y+yy,sw,sh,sample);
+                }
+                file.write(reinterpret_cast<const char*>(out.data()), std::streamsize(out.size()*sizeof(float)));
+                if (!file) throw std::runtime_error("Cannot write binned CFA cache");
+            }
+            file.close();
+            if (!file) throw std::runtime_error("Cannot finish binned CFA cache");
+            std::filesystem::rename(temp,path);
+        } catch (...) { file.close(); std::filesystem::remove(temp); throw; }
+    }
+    const int fd = ::open(path.c_str(), O_RDONLY);
+    if (fd < 0) throw std::runtime_error("Cannot open binned CFA cache");
+    void* mapped = mmap(nullptr, bytes, PROT_READ, MAP_SHARED, fd, 0);
+    ::close(fd);
+    if (mapped == MAP_FAILED) throw std::runtime_error("Cannot map binned CFA cache");
+    binCache_ = static_cast<const float*>(mapped); binCacheBytes_ = bytes; binCachePath_ = path;
+}
 std::vector<float> DngSource::binnedNormalized(uint32_t x, uint32_t y, uint32_t w, uint32_t h, bool shading) {
     const uint32_t sw = image_->width, sh = image_->height;
     if ((sw & 1u) || (sh & 1u) || x + w > sw / 2 || y + h > sh / 2)
         throw std::runtime_error("Invalid Bayer bin region");
+    if (binCache_) {
+        std::vector<float> out(size_t(w)*h);
+        for (uint32_t yy=0; yy<h; ++yy)
+            std::copy_n(binCache_+size_t(y+yy)*(sw/2)+x,w,out.data()+size_t(yy)*w);
+        return out;
+    }
     const uint32_t left = x * 2u >= 4u ? x * 2u - 4u : 0u;
     const uint32_t top = y * 2u >= 4u ? y * 2u - 4u : 0u;
     const uint32_t right = std::min(sw, (x + w) * 2u + 4u);

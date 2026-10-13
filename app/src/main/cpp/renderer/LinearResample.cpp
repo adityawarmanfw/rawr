@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <map>
 #include <vector>
 namespace rawrcam::renderer {
@@ -36,6 +37,16 @@ std::vector<std::vector<Tap>> taps(uint32_t source, uint32_t destination, uint32
 }  // namespace
 void resampleLinear(const _Float16* source, uint32_t sw, uint32_t sh, _Float16* destination, uint32_t dw, uint32_t dh,
                     std::array<uint32_t, 4> crop, const std::function<void(uint32_t)>& rowDone) {
+    // Native-size exports are an exact crop, not a filtering operation.
+    if (dw == crop[2] && dh == crop[3]) {
+        for (uint32_t y = 0; y < dh; ++y) {
+            rowDone(y);  // Retain cancellation checks even on the copy path.
+            std::memcpy(destination + size_t(y) * dw * 4,
+                        source + (size_t(y + crop[1]) * sw + crop[0]) * 4,
+                        size_t(dw) * 4 * sizeof(_Float16));
+        }
+        return;
+    }
     const auto xt = taps(sw, dw, crop[0], crop[2]), yt = taps(sh, dh, crop[1], crop[3]);
     std::map<int, std::vector<float>> rows;
     for (uint32_t y = 0; y < dh; ++y) {

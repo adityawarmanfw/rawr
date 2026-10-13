@@ -954,8 +954,6 @@ data class SettingsValues(
     val demosaicAlgorithm: DemosaicAlgorithm = DemosaicAlgorithm.Amaze,
     val dualAutoContrast: Boolean = true,
     val dualContrastPercent: Float = 20f,
-    val quadfixEnabled: Boolean = false,
-    val quadfixFastMedian: Boolean = false,
     // Photo FCC steps (stills). Video FCC is an enable with a fixed single step.
     val photoFccSteps: Int = 2,
     val videoFccEnabled: Boolean = false,

@@ -46,7 +46,7 @@ internal fun RendererStatusBar(loading: Boolean, busy: Boolean, progress: Int, o
     if (busy) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Rendering · $progress%", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f).testTag("renderer_progress_text"))
+                Text("${when { progress == 0 -> "Preparing"; progress < 45 -> "Demosaicing"; progress < 70 -> "Resizing"; progress < 75 -> "Uploading"; progress < 82 -> "Processing image"; progress < 90 -> "Rendering look"; progress < 95 -> "Finishing pixels"; progress < 99 -> "Encoding JPEG"; else -> "Saving JPEG" }} · $progress%", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f).testTag("renderer_progress_text"))
                 OutlinedButton(onClick = onCancel, modifier = Modifier.testTag("renderer_cancel")) { Text("Cancel") }
             }
             Spacer(Modifier.height(8.dp))

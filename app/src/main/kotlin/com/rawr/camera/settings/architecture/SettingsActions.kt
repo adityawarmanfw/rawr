@@ -318,10 +318,6 @@ data class SetDualAutoContrast(val enabled: Boolean) : SettingsApplicationAction
 
 data class SetDualContrastPercent(val value: Float) : SettingsApplicationAction
 
-data class SetQuadfixEnabled(val enabled: Boolean) : SettingsApplicationAction
-
-data class SetQuadfixFastMedian(val enabled: Boolean) : SettingsApplicationAction
-
     data class SetPhotoFccSteps(val value: Int) : SettingsApplicationAction
     data class SetVideoFccEnabled(val enabled: Boolean) : SettingsApplicationAction
     data class SetVideoEncoder(val value: VideoEncoderConfig) : SettingsApplicationAction

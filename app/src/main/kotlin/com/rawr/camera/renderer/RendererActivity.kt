@@ -15,30 +15,32 @@ class RendererActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        if (savedInstanceState == null) extractIncomingDngUri(intent)?.let(viewModel::import)
+        if (savedInstanceState == null) extractIncomingDngUri(intent, contentResolver::getType)?.let(viewModel::import)
         setContent { CaptureTheme { RendererRoute(viewModel, onExit = ::finish) } }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        extractIncomingDngUri(intent)?.let(viewModel::import)
+        extractIncomingDngUri(intent, contentResolver::getType)?.let(viewModel::import)
     }
 
     override fun onStart() { super.onStart(); viewModel.onVisible() }
     override fun onStop() { viewModel.onHidden(); super.onStop() }
 }
 
-/** Single incoming DNG: share sheet (ACTION_SEND via EXTRA_STREAM) or
- * an external editor request such as Google Photos "Edit in" (ACTION_EDIT via data). */
-internal fun extractIncomingDngUri(intent: Intent?): Uri? {
+/** Single incoming DNG from Open, Edit, or Share. The importer copies the granted
+ * URI into app storage, so later editing does not depend on the sender's grant. */
+internal fun extractIncomingDngUri(intent: Intent?, resolveType: (Uri) -> String? = { null }): Uri? {
     val uri =
         when (intent?.action) {
             Intent.ACTION_SEND -> intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
-            Intent.ACTION_EDIT -> intent.data
+            Intent.ACTION_VIEW, Intent.ACTION_EDIT -> intent.data
             else -> return null
         } ?: return null
-    when (intent.type?.substringBefore(';')?.trim()?.lowercase()) {
+    if (uri.scheme != "content" && uri.scheme != "file") return null
+    val mime = intent.type ?: runCatching { resolveType(uri) }.getOrNull()
+    when (mime?.substringBefore(';')?.trim()?.lowercase(java.util.Locale.ROOT)) {
         "image/x-adobe-dng", "image/dng", "image/x-dng" -> Unit
         else -> return null
     }

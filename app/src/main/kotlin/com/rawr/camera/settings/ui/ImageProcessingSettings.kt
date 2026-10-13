@@ -257,18 +257,6 @@ internal fun DemosaicGroup(state: SettingsUiState, dispatch: SettingsDispatch) {
             ) { dispatch.invoke(SetDualContrastPercent(it)) }
         }
         SettingDivider()
-        SettingsSwitchRow(
-            title = "Quad-cell lattice filter",
-            checked = state.values.quadfixEnabled
-        ) { dispatch.invoke(SetQuadfixEnabled(it)) }
-        if (state.values.quadfixEnabled) {
-            SettingDivider()
-            SettingsSwitchRow(
-                title = "Fast guide median",
-                checked = state.values.quadfixFastMedian
-            ) { dispatch.invoke(SetQuadfixFastMedian(it)) }
-        }
-        SettingDivider()
         StandaloneNumericSliderRow(
             identity = "fcc_steps_photo",
             label = "False color correction steps",

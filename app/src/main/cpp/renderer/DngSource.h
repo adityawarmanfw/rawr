@@ -3,6 +3,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -18,6 +19,7 @@ class DngSource {
     const tinydng_image_info& info() const { return *image_; }
     std::vector<uint16_t> read(uint32_t x, uint32_t y, uint32_t w, uint32_t h);
     std::vector<float> normalized(uint32_t x, uint32_t y, uint32_t w, uint32_t h, bool shading);
+    void prepareBinned(const std::string& path, bool shading, const std::function<void()>& check);
     std::vector<float> binnedNormalized(uint32_t x, uint32_t y, uint32_t w, uint32_t h, bool shading);
 #ifndef NDEBUG
     // An offline replay may replace the pre-shading CFA while retaining all
@@ -47,6 +49,9 @@ class DngSource {
     size_t memoryPeak() const { return tinydng_context_memory_peak(context_); }
 
    private:
+    const float* binCache_ = nullptr;
+    size_t binCacheBytes_ = 0;
+    std::string binCachePath_;
     tinydng_context* context_ = nullptr;
     tinydng_document* document_ = nullptr;
     const tinydng_image_info* image_ = nullptr;

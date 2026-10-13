@@ -1,319 +1,276 @@
 package com.rawr.camera.renderer
 
 import android.net.Uri
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import com.rawr.camera.ui.icons.Icons
+import com.rawr.camera.ui.icons.rounded.Info
+import com.rawr.camera.ui.CaptureColors
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.rawr.camera.settings.architecture.ConfirmReset
-import com.rawr.camera.settings.architecture.DismissReset
-import com.rawr.camera.settings.architecture.NavigateBack
 import com.rawr.camera.settings.architecture.SettingsDispatch
-import com.rawr.camera.settings.model.ResetTarget
 import com.rawr.camera.storage.PickFile
 import com.rawr.camera.storage.launchPicker
-import com.rawr.camera.ui.icons.Icons
-import com.rawr.camera.ui.icons.rounded.ArrowDropDown
-import com.rawr.camera.ui.icons.rounded.Check
-import com.rawr.camera.ui.icons.rounded.Download
-import com.rawr.camera.ui.icons.rounded.Image
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
-
-private fun resetTitle(target: ResetTarget): String = when (target) {
-    ResetTarget.ExposureTonality -> "Reset Exposure & Tonality?"
-    ResetTarget.Color -> "Reset Color?"
-    ResetTarget.Output -> "Reset Output?"
-    ResetTarget.AllImageTone -> "Reset all Image / Tone?"
-}
 
 @Composable
-internal fun RendererEditor(
-    job: RenderJob,
-    session: RendererEditorSession,
-    previewSession: RendererPreviewSession,
-    onSaveResolution: (RenderJob, Double) -> Unit,
-    onImportLut: (String?, Uri) -> Unit,
-    busy: Boolean,
-    onBackToQueue: () -> Unit,
-    onExport: () -> Unit
-) {
+internal fun RendererEditor(job: RenderJob, session: RendererEditorSession, previewSession: RendererPreviewSession,
+    onSaveResolution: (RenderJob,Double)->Unit, onImportLut: (String?,Uri)->Unit,
+    busy: Boolean, onBackToQueue: ()->Unit, onExport: ()->Unit) {
     val controller by session.controller.collectAsStateWithLifecycle()
-    val stagedDirty by session.dirty.collectAsStateWithLifecycle()
-    val appliedValues by session.applied.collectAsStateWithLifecycle()
-    var confirmDiscard by remember(job.id) { mutableStateOf(false) }
-    var lutTarget by remember(session) { mutableStateOf<String?>(null) }
-    val context = LocalContext.current
-    val lutImporter = rememberLauncherForActivityResult(PickFile()) { uri ->
-        if (uri != null) onImportLut(lutTarget, uri)
-    }
     val settings by controller.state.collectAsStateWithLifecycle()
-    val gatedDispatch = SettingsDispatch { if (!busy) controller.dispatch(it) }
-
-    // In-tab back first pops settings navigation, then leaves the editor.
-    // Staged Develop changes need an explicit Apply/Discard decision first.
-    BackHandler {
-        if (stagedDirty) {
-            confirmDiscard = true
-        } else {
-            val destination = controller.state.value.presentation.destination
-            if (!isRendererTabRoot(destination) || controller.state.value.presentation.backStack.isNotEmpty()) {
-                if (!busy) controller.dispatch(NavigateBack)
-            } else {
-                onBackToQueue()
-            }
-        }
-    }
-
     val preview by previewSession.state.collectAsStateWithLifecycle()
-    var zoom by remember(job.id) { mutableFloatStateOf(1f) }
-    var viewport by remember(job.id) { mutableStateOf(IntSize(1, 1)) }
-    var offset by remember(job.id) { mutableStateOf(Offset.Zero) }
-    LaunchedEffect(previewSession, zoom, offset, viewport) {
-        previewSession.updateViewport(RendererViewport(zoom, offset.x, offset.y, viewport.width, viewport.height))
-    }
-    val hdFresh = preview.hdBitmap != null && preview.hdKey == job.previewKey() && !stagedDirty
-    val displayBitmap = if (hdFresh) preview.hdBitmap else null
-
-    Column(Modifier.fillMaxSize().testTag("renderer_editor")) {
-        if (job.error.isNotBlank()) {
-            Card(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
-            ) {
-                Text(job.error, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onErrorContainer, modifier = Modifier.padding(12.dp))
-            }
-        }
-        RendererPreviewCard(
-            job = job,
-            bitmap = displayBitmap,
-            surfaceHasFrame = preview.surfaceHasFrame,
-            previewFailed = preview.failed,
-            detail = preview.detail,
-            previewBusy = preview.busy || preview.hdBusy,
-            hdShowing = hdFresh,
-            approxShowing = stagedDirty,
-            zoom = zoom,
-            offset = offset,
-            onZoomChange = { z, o -> zoom = z; offset = o },
-            onViewportChange = { viewport = it },
-            onSurfaceAvailable = previewSession::surfaceAvailable,
-            onSurfaceDestroyed = previewSession::surfaceDestroyed
-        )
-        RendererActionBar(
-            job = job,
-            busy = busy,
-            hdBusy = preview.hdBusy,
-            hdEnabled = !busy && !preview.hdBusy && !stagedDirty,
-            hdShowing = hdFresh,
-            onHd = previewSession::requestHd,
-            onFit = { zoom = 1f; offset = Offset.Zero },
-            onSaveResolution = onSaveResolution
-        )
-        RendererSectionTabs(settings = settings, busy = busy, dispatch = gatedDispatch)
-        RendererTabContent(
-            settings = settings,
-            dispatch = gatedDispatch,
-            busy = busy,
-            onImportLut = { target -> lutTarget = target; lutImporter.launchPicker(context, arrayOf("*/*")) },
-            modifier = Modifier.weight(1f)
-        )
-        if (stagedDirty) {
-            val labels = RendererDevelopStaging.stagedLabels(appliedValues, settings.values)
-            RendererStagedBar(
-                summary = if (labels.isEmpty()) "Develop changes staged" else "Staged · ${labels.joinToString(", ")}",
-                busy = busy,
-                onDiscard = session::discard,
-                onApply = {
-                    session.apply()
-                    previewSession.requestHd()
-                }
-            )
-        }
-        RendererExportBar(job = job, busy = busy, enabled = !stagedDirty, onExport = onExport)
-    }
-    if (confirmDiscard) AlertDialog(
-        onDismissRequest = { confirmDiscard = false },
-        title = { Text("Discard staged changes?") },
-        text = { Text("Develop changes have not been applied. Discard them and leave the editor?") },
-        confirmButton = { OutlinedButton(onClick = { confirmDiscard = false; session.discard(); onBackToQueue() }) { Text("Discard") } },
-        dismissButton = { FilledTonalButton(onClick = { confirmDiscard = false }) { Text("Keep editing") } }
-    )
-    settings.presentation.pendingReset?.let { target ->
-        AlertDialog(
-            onDismissRequest = { gatedDispatch.invoke(DismissReset) },
-            title = { Text(resetTitle(target)) },
-            text = { Text("Restore the selected Image / Tone controls to their defaults?") },
-            confirmButton = { OutlinedButton(onClick = { gatedDispatch.invoke(ConfirmReset(target)) }) { Text("Reset") } },
-            dismissButton = { FilledTonalButton(onClick = { gatedDispatch.invoke(DismissReset) }) { Text("Cancel") } }
-        )
-    }
+    val context = LocalContext.current
+    var lutTarget by remember { mutableStateOf<String?>(null) }
+    val importer = rememberLauncherForActivityResult(PickFile()) { uri -> if (uri != null) onImportLut(lutTarget, uri) }
+    RendererEditorContent(job, settings.values, SettingsDispatch { if (!busy) controller.dispatch(it) }, preview,
+        busy, onBackToQueue, onExport, previewSession::updateViewport, previewSession::setWaveformEnabled,
+        onSaveResolution = { onSaveResolution(job, it) },
+        onImportLut = { lutTarget = it; importer.launchPicker(context, arrayOf("*/*")) },
+        metadata = { dismiss -> RendererMetadata(job, previewSession, dismiss) })
 }
 
+/** UI-only editor. Tests drive this exact layout without native rendering or job mutation. */
 @Composable
-private fun RendererActionBar(
-    job: RenderJob,
-    busy: Boolean,
-    hdBusy: Boolean = false,
-    hdEnabled: Boolean = false,
-    hdShowing: Boolean = false,
-    onHd: () -> Unit = {},
-    onFit: () -> Unit,
-    onSaveResolution: (RenderJob, Double) -> Unit
+internal fun RendererEditorContent(
+    job: RenderJob, values: com.rawr.camera.settings.model.SettingsValues, dispatch: SettingsDispatch,
+    preview: RendererPreviewState, busy: Boolean, onBackToQueue: () -> Unit, onExport: () -> Unit,
+    onViewport: (RendererViewport) -> Unit, onWaveform: (Boolean) -> Unit,
+    onSaveResolution: (Double) -> Unit, onImportLut: (String?) -> Unit,
+    metadata: @Composable (() -> Unit) -> Unit
 ) {
-    var expanded by remember { mutableStateOf(false) }
-    val (w, h) = RenderResolution.dimensions(job.width, job.height, job.megapixels)
-    val resolutionLabel = if (job.megapixels == 0.0) "Original · $w × $h" else "${job.megapixels} MP · $w × $h"
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).testTag("renderer_actionbar"),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        // All controls share the 32dp chip height so the row reads as one strip.
-        OutlinedButton(
-            onClick = onFit,
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-            modifier = Modifier.testTag("renderer_fit").height(32.dp)
-        ) { Text("Fit", maxLines = 1) }
-        FilterChip(
-            selected = hdShowing,
-            onClick = onHd,
-            enabled = hdEnabled || hdShowing,
-            label = { Text(if (hdBusy) "HD…" else "HD", maxLines = 1) },
-            modifier = Modifier.testTag("renderer_hd").height(32.dp)
-        )
-        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
-            FilterChip(
-                selected = true,
-                onClick = { if (!busy) expanded = true },
-                enabled = !busy,
-                label = { Text(resolutionLabel, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                trailingIcon = { Icon(Icons.Rounded.ArrowDropDown, contentDescription = null) },
-                modifier = Modifier.testTag("renderer_resolution")
-            )
-            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                RenderResolution.choices(job.width, job.height, job.rawr).forEach { mp ->
-                    val dims = RenderResolution.dimensions(job.width, job.height, mp)
-                    DropdownMenuItem(
-                        text = {
-                            Column {
-                                Text(
-                                    if (mp == 0.0) "Original" else "$mp MP",
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    "${dims.first} × ${dims.second}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        },
-                        trailingIcon = { if (mp == job.megapixels) Icon(Icons.Rounded.Check, contentDescription = null) },
-                        onClick = {
-                            expanded = false
-                            onSaveResolution(job, mp)
-                        }
-                    )
+    var waveformVisible by remember(job.id) { mutableStateOf(false) }
+    var metadataVisible by remember(job.id) { mutableStateOf(false) }
+    val waveform = preview.frame?.waveform
+    var stage by remember(job.id){mutableStateOf(RendererStage.TONEMAP)}
+    var pane by remember(job.id){mutableIntStateOf(1)}
+    val waveformShown = waveformVisible && pane != 2
+    LaunchedEffect(waveformShown) { onWaveform(waveformShown) }
+    var paneFraction by remember(job.id){mutableFloatStateOf(.45f)}
+    var sideFraction by remember(job.id){mutableFloatStateOf(.38f)}
+    val density=LocalDensity.current
+    var zoom by remember(job.id){mutableFloatStateOf(1f)}
+    var offset by remember(job.id){mutableStateOf(Offset.Zero)}
+    var canvasSize by remember(job.id){mutableStateOf(IntSize(1,1))}
+    var viewport by remember(job.id){mutableStateOf(IntSize(1,1))}
+    BackHandler(onBack = onBackToQueue)
+    LaunchedEffect(zoom, offset, viewport, canvasSize) {
+        onViewport(RendererViewport(zoom, offset.x, offset.y, viewport.width, viewport.height, canvasSize.width, canvasSize.height))
+    }
+    val selectedStage = stage
+    val view = RendererViewport(zoom, offset.x, offset.y, viewport.width, viewport.height, canvasSize.width, canvasSize.height)
+    Column(Modifier.fillMaxSize().testTag("renderer_editor")) {
+        RendererToolbar(pane, busy, waveformVisible, metadataVisible, onBackToQueue,
+            onFit = { zoom = 1f; offset = Offset.Zero },
+            onTogglePane = { pane = if (pane == 0) 1 else 0 }, onExport = onExport,
+            onWaveform = { waveformVisible = !waveformVisible },
+            onMetadata = { metadataVisible = !metadataVisible })
+        if (metadataVisible) metadata { metadataVisible = false }
+        if (job.error.isNotBlank()) Text(job.error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        RendererWorkspace(
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            pane = pane, paneFraction = paneFraction, sideFraction = sideFraction,
+            onSideResize = { sideFraction = it },
+            canvas = { modifier ->
+                RendererCanvas(modifier, job, preview, view, waveform.takeIf { waveformShown }, waveformShown,
+                    onZoomChange = { z, o -> zoom = z; offset = o },
+                    onViewportChange = { viewport = it }, onCanvasChange = { canvasSize = it })
+            },
+            controls = { modifier, height, landscape ->
+                val paneDrag = if (landscape) Modifier else Modifier.pointerInput(height) {
+                    detectVerticalDragGestures(onDragEnd = {
+                        pane = if (paneFraction < .2f) 0 else if (paneFraction > .58f) 2 else 1
+                        paneFraction = if (pane == 2) .72f else .45f
+                    }) { event, dy ->
+                        event.consume()
+                        paneFraction = (paneFraction - dy / with(density) { height.toPx() }).coerceIn(.1f, .85f)
+                    }
                 }
+                RendererControlPane(modifier, paneDrag, selectedStage, pane,
+                    onStage = { stage = it },
+                    onExpand = {
+                        pane = if (pane == 1) 2 else 1
+                        paneFraction = if (pane == 2) .72f else .45f
+                        sideFraction = if (pane == 2) .55f else .38f
+                    }) {
+                    RendererControls(selectedStage, values, dispatch, job, onSaveResolution, onImportLut)
+                }
+            })
+    }
+}
+
+/** Explicit sibling layout: toolbar, image, pane header, and scroll area have
+ * disjoint bounds. No native View or pointer handler spans these regions.
+ */
+@Composable
+private fun RendererWorkspace(
+    modifier: Modifier, pane: Int, paneFraction: Float, sideFraction: Float,
+    onSideResize: (Float) -> Unit,
+    canvas: @Composable (Modifier) -> Unit,
+    controls: @Composable (Modifier, androidx.compose.ui.unit.Dp, Boolean) -> Unit
+) {
+    val density = LocalDensity.current
+    val latestFraction by rememberUpdatedState(sideFraction)
+    val latestResize by rememberUpdatedState(onSideResize)
+    var workspaceSize by remember { mutableStateOf(IntSize.Zero) }
+    val landscape = workspaceSize.width > workspaceSize.height
+    val height = with(density) { workspaceSize.height.toDp() }
+    // Keep editor state in ordinary composition. Measurement only allocates sibling
+    // bounds; it never owns/subcomposes the tab header or the selected control page.
+    Layout(modifier = modifier.clipEditorViewport().onSizeChanged { workspaceSize = it }, content = {
+        canvas(Modifier.fillMaxSize())
+        if (pane > 0) {
+            Box(Modifier.fillMaxSize().pointerInput(workspaceSize.width) {
+                detectHorizontalDragGestures { event, dx ->
+                    event.consume()
+                    latestResize((latestFraction - dx / workspaceSize.width.coerceAtLeast(1)).coerceIn(.28f, .65f))
+                }
+            })
+            controls(Modifier.fillMaxSize(), height, landscape)
+        }
+    }) { measurables, constraints ->
+        val widthPx = constraints.maxWidth
+        val heightPx = constraints.maxHeight
+        val horizontal = widthPx > heightPx
+        val divider = if (pane > 0 && horizontal) 8.dp.roundToPx() else 0
+        val controlWidth = if (pane == 0) 0 else if (horizontal)
+            (widthPx * sideFraction).toInt().coerceAtMost(520.dp.roundToPx()) else widthPx
+        val controlHeight = if (pane == 0) 0 else if (horizontal) heightPx else (heightPx * paneFraction).toInt()
+        val previewWidth = if (horizontal) (widthPx - controlWidth - divider).coerceAtLeast(0) else widthPx
+        val previewHeight = if (horizontal) heightPx else heightPx - controlHeight
+        val image = measurables[0].measure(Constraints.fixed(previewWidth, previewHeight))
+        val separator = if (pane > 0) measurables[1].measure(Constraints.fixed(divider, if (horizontal) heightPx else 0)) else null
+        val editor = if (pane > 0) measurables[2].measure(Constraints.fixed(controlWidth, controlHeight)) else null
+        layout(widthPx, heightPx) {
+            image.placeRelative(0, 0)
+            separator?.placeRelative(previewWidth, 0)
+            editor?.placeRelative(if (horizontal) previewWidth + divider else 0, if (horizontal) 0 else previewHeight)
+        }
+    }
+}
+
+@Composable
+private fun RendererCanvas(
+    modifier: Modifier, job: RenderJob, preview: RendererPreviewState, view: RendererViewport,
+    waveform: android.graphics.Bitmap?, waveformShown: Boolean,
+    onZoomChange: (Float, Offset) -> Unit, onViewportChange: (IntSize) -> Unit, onCanvasChange: (IntSize) -> Unit
+) {
+    Box(modifier.clipEditorViewport()) {
+        RendererPreviewCard(job, preview.frame?.bitmap, preview.failed,
+            preview.frame?.tiles.orEmpty(), view.zoom, Offset(view.offsetX, view.offsetY),
+            onZoomChange, onViewportChange, onCanvasChange)
+        if (preview.activity.isNotBlank()) Text(preview.activity, style = EditorHeadingStyle,
+            color = CaptureColors.AccentSoft, maxLines = 1,
+            modifier = Modifier.align(Alignment.TopStart).padding(8.dp)
+                .background(CaptureColors.Background.copy(alpha = .8f), RoundedCornerShape(4.dp))
+                .padding(horizontal = 8.dp, vertical = 4.dp))
+        if (waveformShown) RendererWaveform(waveform, Modifier.align(Alignment.BottomEnd).padding(end = 10.dp, bottom = 10.dp))
+    }
+}
+
+@Composable
+private fun RendererToolbar(pane: Int, busy: Boolean, waveform: Boolean, metadata: Boolean,
+    onBack: () -> Unit, onFit: () -> Unit, onTogglePane: () -> Unit, onExport: () -> Unit,
+    onWaveform: () -> Unit, onMetadata: () -> Unit) {
+    Row(Modifier.fillMaxWidth().height(48.dp).background(CaptureColors.Background),
+        verticalAlignment = Alignment.CenterVertically) {
+        TextButton(onClick = onBack, contentPadding = PaddingValues(horizontal = 8.dp),
+            modifier = Modifier.weight(1f).testTag("renderer_editor_back")) { Text("BACK", style = EditorHeadingStyle) }
+        TextButton(onClick = onFit, contentPadding = PaddingValues(horizontal = 8.dp),
+            modifier = Modifier.weight(.8f).testTag("renderer_fit")) { Text("FIT", style = EditorHeadingStyle) }
+        EditorToolToggle("Waveform", waveform, onWaveform) {
+            Canvas(Modifier.size(20.dp)) {
+                val levels = floatArrayOf(.25f, .5f, .8f, .4f, .65f, .95f, .5f)
+                levels.forEachIndexed { i, level ->
+                    val x = size.width * (i + .5f) / levels.size
+                    drawLine(it, Offset(x, size.height * (1f - level)), Offset(x, size.height), 1.5.dp.toPx())
+                }
+            }
+        }
+        EditorToolToggle("Metadata", metadata, onMetadata) {
+            Icon(Icons.Rounded.Info, contentDescription = null, tint = it, modifier = Modifier.size(20.dp))
+        }
+        Spacer(Modifier.weight(.2f))
+        TextButton(onClick = onTogglePane, contentPadding = PaddingValues(horizontal = 8.dp),
+            modifier = Modifier.weight(1f).testTag("renderer_toggle_pane")) { Text(if (pane == 0) "EDIT" else "HIDE", style = EditorHeadingStyle) }
+        TextButton(enabled = !busy, onClick = onExport, contentPadding = PaddingValues(horizontal = 8.dp),
+            modifier = Modifier.weight(1.3f)) { Text(if (busy) "BUSY" else "EXPORT", style = EditorHeadingStyle) }
+    }
+}
+
+@Composable
+private fun RendererControlPane(modifier: Modifier, drag: Modifier, stage: RendererStage, pane: Int,
+    onStage: (RendererStage) -> Unit, onExpand: () -> Unit, content: @Composable () -> Unit) {
+    val pages = rememberSaveableStateHolder()
+    Column(modifier.clipEditorViewport().background(CaptureColors.Panel)) {
+        Box(Modifier.fillMaxWidth().height(20.dp).then(drag), contentAlignment = Alignment.Center) {
+            Box(Modifier.size(28.dp, 2.dp).background(CaptureColors.StrongLine, RoundedCornerShape(2.dp)))
+        }
+        Row(Modifier.fillMaxWidth().height(48.dp).selectableGroup(), verticalAlignment = Alignment.CenterVertically) {
+            RendererStage.entries.forEach { item ->
+                val selected = stage == item
+                Box(Modifier.weight(1f).fillMaxHeight().testTag("renderer_stage_${item.name}")
+                    .selectable(selected = selected, role = Role.Tab, onClick = { onStage(item) }),
+                    contentAlignment = Alignment.Center) {
+                    Text(item.name, style = EditorHeadingStyle,
+                        color = if (selected) CaptureColors.AccentSoft else Color.White.copy(alpha = .46f))
+                    if (selected) Box(Modifier.align(Alignment.BottomCenter).padding(horizontal = 12.dp)
+                        .fillMaxWidth().height(2.dp).background(CaptureColors.Accent))
+                }
+            }
+            Box(Modifier.width(36.dp).fillMaxHeight().testTag("renderer_expand_pane").clickable(onClick = onExpand), contentAlignment = Alignment.Center) {
+                Text(if (pane == 1) "+" else "−", style = EditorValueStyle, color = CaptureColors.AccentSoft)
+            }
+        }
+        HorizontalDivider(color = CaptureColors.Line)
+        // Saved state is retained outside the page identity. Replacing the entire
+        // clipped viewport prevents cross-stage LayoutNode/graphics-layer reuse;
+        // the tab highlight and page must never display different stages.
+        key(stage) {
+            Box(Modifier.weight(1f).fillMaxWidth().clipEditorViewport()) {
+                pages.SaveableStateProvider(stage) { content() }
             }
         }
     }
 }
 
 @Composable
-private fun RendererStagedBar(summary: String, busy: Boolean, onDiscard: () -> Unit, onApply: () -> Unit) {
-    Card(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).testTag("renderer_staged_bar"),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
-    ) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Text(
-                summary,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSecondaryContainer,
-                modifier = Modifier.weight(1f),
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-            OutlinedButton(onClick = onDiscard, modifier = Modifier.testTag("renderer_discard").height(32.dp)) { Text("Discard") }
-            FilledTonalButton(
-                enabled = !busy,
-                onClick = onApply,
-                modifier = Modifier.testTag("renderer_apply").height(32.dp)
-            ) { Text("Apply") }
-        }
-    }
-}
-
-@Composable
-private fun RendererExportBar(job: RenderJob, busy: Boolean, enabled: Boolean = true, onExport: () -> Unit) {
-    val (w, h) = RenderResolution.dimensions(job.width, job.height, job.megapixels)
-    val resolutionLabel = if (job.megapixels == 0.0) "Original · $w × $h" else "${job.megapixels} MP · $w × $h"
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-        if (!enabled) {
-            Text(
-                "Apply Develop changes to enable export",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(bottom = 4.dp)
-            )
-        }
-        androidx.compose.material3.Button(
-            enabled = !busy && enabled,
-            onClick = onExport,
-            modifier = Modifier.fillMaxWidth().height(52.dp).testTag("renderer_export")
-        ) {
-            Icon(Icons.Rounded.Download, contentDescription = null)
-            Spacer(Modifier.size(8.dp))
-            Text(
-                if (busy) "Rendering…" else "Export JPEG · $resolutionLabel",
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+private fun EditorToolToggle(label: String, active: Boolean, onClick: () -> Unit,
+    icon: @Composable (Color) -> Unit) {
+    // Small glyphs retain a full touch target and an accessible selected state.
+    Box(Modifier.size(48.dp).testTag("renderer_tool_${label.lowercase()}")
+        .semantics { contentDescription = label }
+        .selectable(active, role = Role.Checkbox, onClick = onClick), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(32.dp).background(
+            if (active) CaptureColors.Accent.copy(alpha = .18f) else Color.Transparent,
+            RoundedCornerShape(6.dp)), contentAlignment = Alignment.Center) {
+            icon(if (active) CaptureColors.AccentSoft else Color.White.copy(alpha = .55f))
         }
     }
 }

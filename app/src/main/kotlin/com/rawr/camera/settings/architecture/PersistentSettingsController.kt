@@ -73,7 +73,7 @@ class PersistentSettingsController(
             is SetGaloshYuvMode, is SetGaloshYuvStrengthY, is SetGaloshYuvStrengthC -> reduceDenoiseSettings(state, action)
 
             is SetDemosaicAlgorithm, is SetDualAutoContrast, is SetDualContrastPercent,
-            is SetQuadfixEnabled, is SetQuadfixFastMedian, is SetPhotoFccSteps,
+            is SetPhotoFccSteps,
             is SetVideoFccEnabled, is SetVideoEncoder,
             is SetPhotoDefringeEnabled, is SetPhotoDefringeStrength, is SetPhotoDefringeEdgeThreshold,
             is SetPhotoDefringeLumaFloor, is SetVideoDefringeEnabled, is SetVideoDefringeStrength,

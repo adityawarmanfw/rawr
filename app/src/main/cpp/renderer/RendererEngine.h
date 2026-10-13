@@ -6,15 +6,19 @@
 
 #include "DngSource.h"
 #include "develop/render/StillImageRenderer.h"
+namespace image_scopes { class ImageScopes; }
 namespace rawrcam::renderer {
 class RendererSurface;
 struct RenderOptions {
     develop::rendered::RenderedStillContext context;
     uint32_t width = 0, height = 0;
+    std::array<uint32_t, 4> region{}; // Sensor-space preview extent; zero width selects the active crop.
     float temperature = 0, tint = 0;
     bool overview = false;
+    bool quickProxy = false;
     bool bayerBin2x = false;
     bool surfacePreview = false;
+    bool waveform = false;
     bool shading = true;
     bool distortion = true;
     std::string demosaic = "Rcd";
@@ -35,6 +39,7 @@ class RendererEngine {
     std::vector<uint8_t> render(DngSource& source, const std::string& cachePath, const RenderOptions& options);
     void setSurface(ANativeWindow* window);
     bool hasSurface() const noexcept;
+    const std::vector<uint32_t>& waveform() const { return waveformPixels_; }
     // Last post-demosaic completion (GPU stage times, setup/gaps/readback).
     // Populated by render(); valid only when render() succeeded. Lets the
     // JPEG export path report the same TIMINGS stages as still captures.
@@ -53,9 +58,15 @@ class RendererEngine {
     double lastDemosaicMs() const { return lastDemosaicMs_; }
     std::atomic<bool> cancelled{false};
     std::atomic<int> progress{0};
+    // 0 idle, 1 proxy decode, 2 Bayer bin, 3 demosaic, 4 resize, 5 post/tonemap.
+    std::atomic<int> stage{0};
 
    private:
     void check();
+    void renderWaveform(uint32_t width, uint32_t height, uint32_t orientation, bool surfacePreview);
+    std::unique_ptr<image_scopes::ImageScopes> scopeEngine_;
+    vulkan::OwnedImage scopeImage_{};
+    std::vector<uint32_t> waveformPixels_;
     std::string filesDir_;
     vulkan::VulkanContext vulkan_;
     std::mutex& queueMutex_ = vulkan_.primaryQueue().mutex();
@@ -64,7 +75,10 @@ class RendererEngine {
     // Pristine linear overview. PostDemosaicProcessor writes its input, so
     // render() copies this image before handing it to the still pipeline.
     vulkan::OwnedImage overviewInput_{};
+    vulkan::OwnedImage overviewWorking_{};
+    std::string overviewWorkingKey_;
     std::string overviewInputKey_;
+    std::string linearResultKey_;
     develop::rendered::RenderedStillCompletion lastCompletion_{};
     std::vector<uint8_t> lastGainmap_;
     uint32_t lastGainmapWidth_ = 0;

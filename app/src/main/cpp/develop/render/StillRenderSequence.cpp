@@ -433,9 +433,15 @@ RenderedStillCompletion executeStillRender(RenderResources& resources, RenderCom
 
         commands.create(device);
         commands.begin();
-        recordPostDemosaic(resources, commands, rendered, sourceImage, sourceView, clipStateImage, clipStateView);
-
-        const bool galoshYuvSuccess = runGaloshYuv(resources, commands, device, rendered, emit);
+        bool galoshYuvSuccess = false;
+        if (!rendered.reuseLinearResult) {
+            recordPostDemosaic(resources, commands, rendered, sourceImage, sourceView, clipStateImage, clipStateView);
+            galoshYuvSuccess = runGaloshYuv(resources, commands, device, rendered, emit);
+        } else if (commands.timingPool()) {
+            // Skipped stages still own valid adjacent zero-duration timestamp pairs.
+            for (uint32_t i : {0u,1u,2u,3u,4u,5u,10u,11u,12u,13u,14u,15u,16u,17u})
+                vkCmdWriteTimestamp(commands.command(), VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, commands.timingPool(), i);
+        }
 
         VkImageMemoryBarrier dst{};
         dst.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -449,6 +455,7 @@ RenderedStillCompletion executeStillRender(RenderResources& resources, RenderCom
         vkCmdPipelineBarrier(commands.command(), VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &dst);
 
+        emit("STILL_RENDER_STAGE tone");
         const auto film = renderFilmOrTone(resources, commands, rendered, sourceView, filesDir, emit);
         done.filmRendered = film.rendered;
         done.filmFallbackMemory = film.memoryRejected;
@@ -457,6 +464,7 @@ RenderedStillCompletion executeStillRender(RenderResources& resources, RenderCom
 
         commands.submitAndRestart("tone");
 
+        emit("STILL_RENDER_STAGE gainmap");
         const auto gainmap =
             recordGainmapAndReadback(resources, commands, rendered, clipStateImage, clipStateView, filmUsedGlow, emit);
         const auto tSubmit = std::chrono::steady_clock::now();
