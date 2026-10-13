@@ -175,6 +175,12 @@ class FrameSubmitCoordinator final {
     }
     [[nodiscard]] bool cpuIngressActive() const noexcept { return cpuIngressActive_.load(std::memory_order_relaxed); }
     void setForceCpuIngress(bool enabled) noexcept { forceCpuIngress_.store(enabled, std::memory_order_relaxed); }
+    // Skips the R16 image import: readers without GPU image usage can only be
+    // read through the buffer import (GPU copy) or the CPU upload.
+    void latchRaw16BufferIngress() noexcept {
+        raw16ImageImportLatched_.store(true, std::memory_order_relaxed);
+        cpuOnlyReader_.store(true, std::memory_order_relaxed);
+    }
     // Frees CPU-upload resources. Caller must have the GPU idle.
     void releaseCpuUpload() noexcept { cpuUpload_.destroy(); }
 
@@ -276,6 +282,8 @@ class FrameSubmitCoordinator final {
     // Set when the RAW16 image import failed once; RAW16 then goes through the
     // GPU buffer copy (or, if that fails too, the CPU upload).
     std::atomic<bool> raw16ImageImportLatched_{false};
+    // Readers carry no GPU usage (demoted): a buffer-import failure is final.
+    std::atomic<bool> cpuOnlyReader_{false};
     bool raw16GpuCopyLogged_ = false;
     bool raw16GpuCopyDeferredLogged_ = false;
     bool raw10ParityEnabled_ = false;  // debug.rawr.raw10_parity

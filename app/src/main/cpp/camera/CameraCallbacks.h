@@ -13,6 +13,8 @@ class CameraEventSink {
     virtual void cameraSessionClosed(uint64_t generation, ACameraCaptureSession* session) = 0;
     virtual void cameraCaptureCompleted(uint64_t generation, const ACaptureRequest* request,
                                         const ACameraMetadata* result) = 0;
+    // Every failed capture or lost buffer, unthrottled. Runs on a camera thread.
+    virtual void cameraCaptureFailed(uint64_t /*generation*/) {}
 };
 using CameraEventLifetime = CameraCallbackLifetime<CameraEventSink>;
 struct CameraSessionCallbackContext {

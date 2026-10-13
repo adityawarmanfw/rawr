@@ -30,6 +30,7 @@
 #include "diagnostics/probes/RawIntegrityProbe.h"
 #include "geometry/DisplayToSensorMapper.h"
 #include "imaging/FrameIngressQueue.h"
+#include "imaging/RawReaderUsageLadder.h"
 #include "monitoring/MonitoringCoordinator.h"
 #include "pipeline/FrameSubmitCoordinator.h"
 #include "pipeline/PreviewLookController.h"
@@ -48,6 +49,9 @@ class SessionEngine {
     // Camera-domain surface used by the C-API forwards. All locking and
     // cross-domain sequencing stay inside the called methods.
     [[nodiscard]] rawrcam::camera::CameraControlSurface& cameraControls() noexcept { return cameraControls_; }
+    // Demotes a RAW reader that never delivered a frame to CPU-only usage and
+    // restarts the session. Call on the serial lane before tickSession().
+    void tickRawReaderUsage();
     bool setSurface(JNIEnv* env, jobject surfaceObj, int displayRotationDegrees);
     bool setVideoSurface(JNIEnv* env, jobject surfaceObj, uint32_t width, uint32_t height, uint32_t bitDepth);
     // Idle video-mode preview crop: recording output size (0 = full frame).
@@ -157,6 +161,7 @@ class SessionEngine {
     bool setPresentationSurface(JNIEnv* env, jobject surfaceObj, int displayRotationDegrees);
     uint64_t cameraSetupGeneration_ = 0;
     uint64_t cameraReaderGeneration_ = 0;
+    imaging::RawReaderUsageLadder rawReaderUsage_;  // guarded by mu_
     ANativeWindow* createRawInputWindow(uint64_t generation, uint32_t width, uint32_t height,
                                         rawrcam::geometry::RawPixelFormat format);
     void destroyRawInput();

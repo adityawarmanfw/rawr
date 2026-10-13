@@ -35,6 +35,8 @@ class RawFrameIngress final {
     ANativeWindow* create(uint64_t generation, uint32_t width, uint32_t height, geometry::RawPixelFormat format,
                           uint64_t ahbUsage);
     void destroy();
+    // AHardwareBuffer usage the live reader requested (0 when none).
+    [[nodiscard]] uint64_t requestedUsage() const noexcept { return reader_ ? usage_ : 0; }
 
    private:
     static void imageAvailableThunk(void* context, AImageReader* reader);
@@ -46,6 +48,7 @@ class RawFrameIngress final {
     Diagnostic pipelineAudit_;
     AImageReader* reader_ = nullptr;
     uint64_t generation_ = 0;
+    uint64_t usage_ = 0;
     bool imageDescriptionLogged_ = false;
     uint32_t auditImageCount_ = 0;
 };

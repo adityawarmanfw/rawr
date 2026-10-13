@@ -42,6 +42,8 @@ class CameraControlSurface final {
     void setSurfaceReady(bool ready);
     void setInitialConfigReady();
     void tickSession();
+    // Rebuilds the running camera session on a following tick.
+    void requestSessionRestart();
     void setZeroCopy(bool enabled);
     void rawFrameArrived(uint64_t generation);
     void setInternalTraceCaptureEnabled(bool enabled);

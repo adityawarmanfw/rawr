@@ -178,7 +178,25 @@ void cadenceTransitions() {
     assert(policy.previewFloor() == 30);
 }
 
+void explicitRestartRequest() {
+    Policy policy = started(0);
+    policy.requestRestart(1000);
+    assert(policy.advance(1399, 1000) == Action::None);
+    assert(policy.advance(1400, 1000) == Action::Restart);
+    // A still owns the session: the restart waits for its lease.
+    policy.requestRestart(2000);
+    policy.beginStill();
+    assert(policy.advance(2500, 2400) == Action::None);
+    policy.endStill();
+    assert(policy.advance(2600, 2500) == Action::Restart);
+    // Ignored when the camera is not running.
+    Policy idle;
+    idle.requestRestart(0);
+    assert(idle.advance(1000, 0) == Action::None);
+}
+
 int main() {
+    explicitRestartRequest();
     startupOrdering();
     settingsTimeout();
     coalescedRestart();

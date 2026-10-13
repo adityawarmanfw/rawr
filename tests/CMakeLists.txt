@@ -62,6 +62,8 @@ rawr_test(sensitivity_probe_startup_test
 
 rawr_test(camera_session_policy_test
   "${RAWR_ROOT}/tests/native/camera_session_policy_test.cpp")
+rawr_test(raw_reader_usage_ladder_test
+  "${RAWR_ROOT}/tests/native/raw_reader_usage_ladder_test.cpp")
 rawr_test(camera_video_facts_test
   "${RAWR_ROOT}/tests/native/camera_video_facts_test.cpp"
   "${RAWR_ROOT}/app/src/main/cpp/camera/CameraVideoFacts.cpp")
