@@ -43,6 +43,7 @@ class VulkanContext {
     // its submits no longer sit behind whole multiframe chunks in one FIFO.
     VkQueue multiframeQueue() const noexcept { return hasMultiframeQueue_ ? mfQueue_ : queue_; }
     bool hasMultiframeQueue() const noexcept { return hasMultiframeQueue_; }
+    bool conditionalRenderingEnabled() const noexcept { return conditionalRenderingEnabled_; }
     // Submit mutex for the multiframe queue, shared by every user of that
     // queue (merge worker, multiframe + single-frame still chains) so
     // vkQueueSubmit on it is externally synchronized. Mutable so const

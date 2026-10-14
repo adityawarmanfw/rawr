@@ -85,6 +85,9 @@ struct RawPreviewCreateInfo {
     // Validated production workgroup. Other sizes are intentionally rejected.
     uint32_t workgroupX = 8;
     uint32_t workgroupY = 8;
+    // VK_EXT_conditional_rendering enabled on the device: frames without a
+    // sensor-clipped sample skip the colour-propagation guide chain + apply.
+    bool conditionalRendering = false;
 };
 
 struct RawPreviewRecordInfo {
@@ -132,7 +135,11 @@ private:
     VkDescriptorSet descriptorSetFor(VkImageView inputView, VkImageView outputView, VkBuffer lscBuffer,
                                      VkBuffer importBuffer);
     VkDescriptorSet cfaStateDescriptorSetFor(VkImageView inputView, VkImageView outputView, VkImageView stateView,
-                                             VkBuffer lscBuffer, VkBuffer importBuffer);
+                                             VkBuffer lscBuffer, VkBuffer importBuffer, VkBuffer clipFlagBuffer);
+    // One uint per formed output: nonzero when the CFA-state pass saw a
+    // sensor-clipped sample this frame (conditional-rendering predicate).
+    struct ClipFlag { VkBuffer buffer=VK_NULL_HANDLE; VkDeviceMemory memory=VK_NULL_HANDLE; };
+    ClipFlag& clipFlagFor(VkImageView outputView);
     struct LscBuffer { VkBuffer buffer=VK_NULL_HANDLE; VkDeviceMemory memory=VK_NULL_HANDLE; void* mapped=nullptr; VkDeviceSize bytes=0; };
     LscBuffer& lscBufferFor(VkImageView outputView, size_t floatCount);
     void destroyLscBuffer(LscBuffer&) noexcept;
@@ -174,5 +181,8 @@ private:
     std::unordered_map<VkImageView,LscBuffer> lscBuffers_;
     std::unordered_map<VkImageView,HighlightResources> highlightResources_;
     std::unordered_map<ViewTriple,VkDescriptorSet,ViewTripleHash> cfaStateDescriptorCache_;
+    std::unordered_map<VkImageView,ClipFlag> clipFlags_;
+    PFN_vkCmdBeginConditionalRenderingEXT beginConditional_ = nullptr;
+    PFN_vkCmdEndConditionalRenderingEXT endConditional_ = nullptr;
 };
 }

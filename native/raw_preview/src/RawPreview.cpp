@@ -108,7 +108,14 @@ RawPreview::RawPreview(const RawPreviewCreateInfo& ci) : physicalDevice_(ci.phys
 
     createLayoutAndPipeline(4, 2, ci.shaderPath, dsl_, layout_, pipeline_);
     if (!ci.cfaStateShaderPath.empty())
-        createLayoutAndPipeline(5, 2, ci.cfaStateShaderPath, cfaStateDsl_, cfaStateLayout_, cfaStatePipeline_);
+        createLayoutAndPipeline(6, 3, ci.cfaStateShaderPath, cfaStateDsl_, cfaStateLayout_, cfaStatePipeline_);
+    if (ci.conditionalRendering) {
+        beginConditional_ = reinterpret_cast<PFN_vkCmdBeginConditionalRenderingEXT>(
+            vkGetDeviceProcAddr(device_, "vkCmdBeginConditionalRenderingEXT"));
+        endConditional_ = reinterpret_cast<PFN_vkCmdEndConditionalRenderingEXT>(
+            vkGetDeviceProcAddr(device_, "vkCmdEndConditionalRenderingEXT"));
+        if (!beginConditional_ || !endConditional_) beginConditional_ = nullptr, endConditional_ = nullptr;
+    }
 
     auto createTypedPipeline = [&](const std::vector<VkDescriptorType>& types, uint32_t pushBytes,
                                    const std::string& shaderPath, VkDescriptorSetLayout& descriptorSetLayout,
@@ -231,6 +238,10 @@ RawPreview::~RawPreview() {
     if (coloroppLayout_) vkDestroyPipelineLayout(device_, coloroppLayout_, nullptr);
     if (coloroppDsl_) vkDestroyDescriptorSetLayout(device_, coloroppDsl_, nullptr);
     for (auto& kv : lscBuffers_) destroyLscBuffer(kv.second);
+    for (auto& kv : clipFlags_) {
+        if (kv.second.buffer) vkDestroyBuffer(device_, kv.second.buffer, nullptr);
+        if (kv.second.memory) vkFreeMemory(device_, kv.second.memory, nullptr);
+    }
     if (pool_) vkDestroyDescriptorPool(device_, pool_, nullptr);
     if (highlightApplyPipeline_) vkDestroyPipeline(device_, highlightApplyPipeline_, nullptr);
     if (highlightApplyLayout_) vkDestroyPipelineLayout(device_, highlightApplyLayout_, nullptr);
@@ -343,7 +354,7 @@ VkDescriptorSet RawPreview::descriptorSetFor(VkImageView inputView, VkImageView 
 
 VkDescriptorSet RawPreview::cfaStateDescriptorSetFor(VkImageView inputView, VkImageView outputView,
                                                      VkImageView stateView, VkBuffer lscBuffer,
-                                                     VkBuffer importBuffer) {
+                                                     VkBuffer importBuffer, VkBuffer clipFlagBuffer) {
     ViewTriple key{inputView, outputView, stateView, importBuffer};
     auto it = cfaStateDescriptorCache_.find(key);
     if (it != cfaStateDescriptorCache_.end()) return it->second;
@@ -374,7 +385,8 @@ VkDescriptorSet RawPreview::cfaStateDescriptorSetFor(VkImageView inputView, VkIm
     }
     VkDescriptorBufferInfo lsc{lscBuffer, 0, VK_WHOLE_SIZE};
     VkDescriptorBufferInfo import{importBuffer != VK_NULL_HANDLE ? importBuffer : lscBuffer, 0, VK_WHOLE_SIZE};
-    VkWriteDescriptorSet all[5]{writes[0], writes[1], writes[2], {}, {}};
+    VkDescriptorBufferInfo clipFlag{clipFlagBuffer, 0, VK_WHOLE_SIZE};
+    VkWriteDescriptorSet all[6]{writes[0], writes[1], writes[2], {}, {}, {}};
     all[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     all[3].dstSet = set;
     all[3].dstBinding = 3;
@@ -387,9 +399,46 @@ VkDescriptorSet RawPreview::cfaStateDescriptorSetFor(VkImageView inputView, VkIm
     all[4].descriptorCount = 1;
     all[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     all[4].pBufferInfo = &import;
-    vkUpdateDescriptorSets(device_, 5, all, 0, nullptr);
+    all[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    all[5].dstSet = set;
+    all[5].dstBinding = 5;
+    all[5].descriptorCount = 1;
+    all[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    all[5].pBufferInfo = &clipFlag;
+    vkUpdateDescriptorSets(device_, 6, all, 0, nullptr);
     cfaStateDescriptorCache_.emplace(key, set);
     return set;
+}
+
+RawPreview::ClipFlag& RawPreview::clipFlagFor(VkImageView outputView) {
+    auto& f = clipFlags_[outputView];
+    if (f.buffer) return f;
+    VkBufferCreateInfo bi{};
+    bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bi.size = 16;
+    bi.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+               (beginConditional_ ? VK_BUFFER_USAGE_CONDITIONAL_RENDERING_BIT_EXT : 0u);
+    bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    checkVkResult(vkCreateBuffer(device_, &bi, nullptr, &f.buffer), "RawPreview clip flag vkCreateBuffer failed");
+    VkMemoryRequirements req{};
+    vkGetBufferMemoryRequirements(device_, f.buffer, &req);
+    VkPhysicalDeviceMemoryProperties mp{};
+    vkGetPhysicalDeviceMemoryProperties(physicalDevice_, &mp);
+    uint32_t type = UINT32_MAX;
+    for (uint32_t i = 0; i < mp.memoryTypeCount && type == UINT32_MAX; ++i)
+        if ((req.memoryTypeBits & (1u << i)) &&
+            (mp.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT))
+            type = i;
+    for (uint32_t i = 0; i < mp.memoryTypeCount && type == UINT32_MAX; ++i)
+        if (req.memoryTypeBits & (1u << i)) type = i;
+    if (type == UINT32_MAX) throw std::runtime_error("RawPreview clip flag no memory type");
+    VkMemoryAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    ai.allocationSize = req.size;
+    ai.memoryTypeIndex = type;
+    checkVkResult(vkAllocateMemory(device_, &ai, nullptr, &f.memory), "RawPreview clip flag vkAllocateMemory failed");
+    checkVkResult(vkBindBufferMemory(device_, f.buffer, f.memory, 0), "RawPreview clip flag bind failed");
+    return f;
 }
 
 void RawPreview::destroyLscBuffer(LscBuffer& b) noexcept {
@@ -491,11 +540,34 @@ RawPreviewRecordResult RawPreview::record(const RawPreviewRecordInfo& recordInfo
     }
     const bool useImportBuffer =
         recordInfo.inputRawImportBuffer != VK_NULL_HANDLE && recordInfo.inputRawStridePixels != 0u;
+    // Predicate for the colour-propagation chain: cleared here, set by the
+    // CFA-state pass on any sensor-clipped sample. The apply pass only touches
+    // clipped pixels, so skipping both reproduces the unclipped frame exactly.
+    const bool predicatedHighlight = usePropagatedHighlight && beginConditional_ != nullptr;
+    ClipFlag* clipFlag = writeCfaState ? &clipFlagFor(formedView) : nullptr;
+    if (clipFlag) {
+        // WAR on the previous frame's predicate read, then RAW for the shader.
+        vkCmdPipelineBarrier(recordInfo.commandBuffer,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                                 (beginConditional_ ? VK_PIPELINE_STAGE_CONDITIONAL_RENDERING_BIT_EXT : 0u),
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 0, nullptr);
+        vkCmdFillBuffer(recordInfo.commandBuffer, clipFlag->buffer, 0, VK_WHOLE_SIZE, 0u);
+        VkBufferMemoryBarrier cleared{};
+        cleared.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        cleared.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        cleared.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        cleared.srcQueueFamilyIndex = cleared.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        cleared.buffer = clipFlag->buffer;
+        cleared.size = VK_WHOLE_SIZE;
+        vkCmdPipelineBarrier(recordInfo.commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1, &cleared, 0, nullptr);
+    }
     VkDescriptorSet descriptorSet =
         writeCfaState
             ? cfaStateDescriptorSetFor(recordInfo.inputRawR16UintView, formedView,
                                        recordInfo.outputCfaStateR16UintView, lsc.buffer,
-                                       useImportBuffer ? recordInfo.inputRawImportBuffer : VK_NULL_HANDLE)
+                                       useImportBuffer ? recordInfo.inputRawImportBuffer : VK_NULL_HANDLE,
+                                       clipFlag->buffer)
             : descriptorSetFor(recordInfo.inputRawR16UintView, recordInfo.outputLinearRgba16fView, lsc.buffer,
                                useImportBuffer ? recordInfo.inputRawImportBuffer : VK_NULL_HANDLE);
 
@@ -552,9 +624,25 @@ RawPreviewRecordResult RawPreview::record(const RawPreviewRecordInfo& recordInfo
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &rgbReady, 0, nullptr, 0, nullptr);
     const float greenWb = 0.5f * (recordInfo.parameters.whiteBalance[1] + recordInfo.parameters.whiteBalance[2]);
     const float ceilings[3]{recordInfo.parameters.whiteBalance[0], greenWb, recordInfo.parameters.whiteBalance[3]};
+    VkConditionalRenderingBeginInfoEXT condBegin{};
+    condBegin.sType = VK_STRUCTURE_TYPE_CONDITIONAL_RENDERING_BEGIN_INFO_EXT;
+    condBegin.buffer = clipFlag->buffer;
+    const rawr::highlight::GuideChain::Conditional conditional{beginConditional_, endConditional_, &condBegin};
+    if (predicatedHighlight) {
+        VkBufferMemoryBarrier flagReady{};
+        flagReady.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        flagReady.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        flagReady.dstAccessMask = VK_ACCESS_CONDITIONAL_RENDERING_READ_BIT_EXT;
+        flagReady.srcQueueFamilyIndex = flagReady.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        flagReady.buffer = clipFlag->buffer;
+        flagReady.size = VK_WHOLE_SIZE;
+        vkCmdPipelineBarrier(recordInfo.commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_CONDITIONAL_RENDERING_BIT_EXT, 0, 0, nullptr, 1, &flagReady, 0,
+                             nullptr);
+    }
     VkImageView finalGuide = hr.chain->record(recordInfo.commandBuffer, recordInfo.outputLinearRgba16fView,
                                               recordInfo.outputCfaStateR16UintView, outputWidth, outputHeight,
-                                              ceilings);
+                                              ceilings, predicatedHighlight ? &conditional : nullptr);
     VkDescriptorImageInfo applyInfo[3]{{VK_NULL_HANDLE, recordInfo.outputLinearRgba16fView, VK_IMAGE_LAYOUT_GENERAL},
                                        {VK_NULL_HANDLE, recordInfo.outputCfaStateR16UintView, VK_IMAGE_LAYOUT_GENERAL},
                                        {VK_NULL_HANDLE, finalGuide, VK_IMAGE_LAYOUT_GENERAL}};
@@ -585,7 +673,9 @@ RawPreviewRecordResult RawPreview::record(const RawPreviewRecordInfo& recordInfo
                             &hr.applySet, 0, nullptr);
     vkCmdPushConstants(recordInfo.commandBuffer, highlightApplyLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ap),
                        &ap);
+    if (predicatedHighlight) beginConditional_(recordInfo.commandBuffer, &condBegin);
     vkCmdDispatch(recordInfo.commandBuffer, (outputWidth + 15u) / 16u, (outputHeight + 15u) / 16u, 1);
+    if (predicatedHighlight) endConditional_(recordInfo.commandBuffer);
     return {};
 }
 

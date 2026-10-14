@@ -15,6 +15,9 @@ layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D outImage;
 layout(set = 0, binding = 2, r16ui) uniform writeonly uimage2D cfaStateImage;
 // Byte-addressed view of the same camera AHB (see raw_preview.comp).
 layout(std430, set = 0, binding = 4) readonly buffer ImportedRawBuffer { uint words[]; } importedRaw;
+// Nonzero once any output cell has a sensor-clipped sample: the host skips the
+// colour-propagation chain (conditional rendering) when it stays zero.
+layout(std430, set = 0, binding = 5) buffer ClipFlag { uint anyClipped; } clipFlag;
 layout(push_constant) uniform PC {
     vec4 black;
     vec4 invRange;
@@ -125,6 +128,7 @@ void main() {
     float directGwb = 0.5 * (pc.wb.y + pc.wb.z);
     imageStore(outImage, o, vec4(max(packedDirect.rgb, vec3(0.0)) * vec3(pc.wb.x, directGwb, pc.wb.w), 1.0));
     imageStore(cfaStateImage, o, uvec4(directCfaState, 0u, 0u, 0u));
+    if ((directCfaState & 15u) != 0u) clipFlag.anyClipped = 1u;
     return;
 #else
     uint lid = gl_LocalInvocationIndex;
@@ -181,5 +185,6 @@ void main() {
 #endif
     imageStore(outImage, o, vec4(rgb, 1.0));
     imageStore(cfaStateImage, o, uvec4(centerCfaState, 0u, 0u, 0u));
+    if ((centerCfaState & 15u) != 0u) clipFlag.anyClipped = 1u;
 #endif
 }
