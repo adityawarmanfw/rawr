@@ -82,11 +82,11 @@ internal class RendererJobRepository(private val context: Context, private val s
         draftWrites[id] = scope.launch { delay(500); saveLane.withLock { save(current(id)) } }
     }
     fun cancelDraftWrite(id: String) { draftWrites.remove(id)?.cancel() }
-    fun checkImportSpace(bytes: Int) {
+    fun checkImportSpace(bytes: Long) {
         require(bytes >= 0) { "Invalid DNG size" }
         val storage = context.getSystemService(android.os.storage.StorageManager::class.java)
         val volume = storage.getUuidForPath(root)
-        val required = bytes.toLong() + 64L * 1024 * 1024
+        val required = bytes + 64L * 1024 * 1024
         check(storage.getAllocatableBytes(volume) >= required) { "Not enough storage to import DNG" }
         storage.allocateBytes(volume, required)
     }

@@ -74,18 +74,41 @@ internal class RendererStore private constructor(private val context: Context) {
         lane.withLock {
             val id = UUID.randomUUID().toString(); val d = repository.directory(id).apply { mkdirs() }
             try {
-                val name = context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
-                    if (it.moveToFirst()) it.getString(0) else "Imported DNG"
-                } ?: "Imported DNG"
+                val columns = arrayOf(android.provider.OpenableColumns.DISPLAY_NAME, android.provider.OpenableColumns.SIZE)
+                val (name, size) = context.contentResolver.query(uri, columns, null, null, null)?.use {
+                    if (it.moveToFirst()) (it.getString(0) ?: "Imported DNG") to (if (it.isNull(1)) -1L else it.getLong(1))
+                    else "Imported DNG" to -1L
+                } ?: ("Imported DNG" to -1L)
+                val started = android.os.SystemClock.elapsedRealtime()
+                // One storage reservation for the whole file: StorageManager
+                // calls per 1 MB chunk cost seconds on a 200 MP DNG. Unknown or
+                // overrunning sizes fall back to a check per 64 MB copied.
+                if (size > 0) repository.checkImportSpace(size)
                 val temp = File(d, "input.tmp")
+                var copied = 0L
+                var syncMs = 0L
                 context.contentResolver.openInputStream(uri)!!.use { input -> FileOutputStream(temp).use { out ->
                     val buffer = ByteArray(1024 * 1024)
+                    var unchecked = 0L
                     while (true) { val n = input.read(buffer); if (n < 0) break
-                        repository.checkImportSpace(n); out.write(buffer, 0, n)
-                    }; out.fd.sync()
+                        copied += n
+                        if (size <= 0 || copied > size) {
+                            unchecked += n
+                            if (unchecked >= IMPORT_CHECK_BYTES) { repository.checkImportSpace(unchecked); unchecked = 0L }
+                        }
+                        out.write(buffer, 0, n)
+                    }
+                    if (unchecked > 0) repository.checkImportSpace(unchecked)
+                    val syncStarted = android.os.SystemClock.elapsedRealtime()
+                    out.fd.sync()
+                    syncMs = android.os.SystemClock.elapsedRealtime() - syncStarted
                 } }
                 Files.move(temp.toPath(), File(d, "input.dng").toPath(), StandardCopyOption.ATOMIC_MOVE)
-                inspect(RenderJob(id, name), library).also(::save)
+                val copiedAt = android.os.SystemClock.elapsedRealtime()
+                inspect(RenderJob(id, name), library).also(::save).also {
+                    android.util.Log.i("RawrRenderer", "RENDERER_IMPORT bytes=$copied copyMs=${copiedAt - started} " +
+                        "syncMs=$syncMs inspectMs=${android.os.SystemClock.elapsedRealtime() - copiedAt}")
+                }
             } catch (error: Exception) {
                 native.closeFor(id)
                 d.deleteRecursively(); throw error
@@ -153,6 +176,7 @@ internal class RendererStore private constructor(private val context: Context) {
         repository.deleteJobFiles(job.id)
     }
     companion object {
+        private const val IMPORT_CHECK_BYTES = 64L * 1024 * 1024
         // get() constructs this process-lifetime store exclusively with applicationContext.
         @android.annotation.SuppressLint("StaticFieldLeak")
         @Volatile private var instance: RendererStore? = null
