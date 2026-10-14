@@ -14,7 +14,6 @@
 #include "vulkan/VulkanDispatch.h"
 
 namespace rawrcam::session {
-#include "vulkan/VulkanDispatch.h"
 namespace {
 int64_t steadyMillis() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
@@ -124,8 +123,6 @@ bool SessionEngine::setVideoSurface(JNIEnv* env, jobject surfaceObj, uint32_t wi
     std::lock_guard<std::mutex> lock(mu_);
     const auto restoreFilm = [this] { look_.suppressForVideo(false); };
     try {
-            // Backgrounding may end the process without a device teardown.
-            rawrcam::vulkan::dispatch::savePipelineCache(vulkanContext_.device());
         if (!surfaceObj) {
             videoSession_.stop();
             swapchainRenderer_.setVideoFrameSources({});
