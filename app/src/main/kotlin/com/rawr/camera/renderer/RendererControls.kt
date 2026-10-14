@@ -241,7 +241,8 @@ private fun EditorGroup(title: String, enabled: Boolean? = null, onEnabled: (Boo
 
 @Composable
 internal fun RendererControls(stage: RendererStage, v: SettingsValues, dispatch: SettingsDispatch,
-                              job: RenderJob, resolution: (Double)->Unit, importLut: (String?)->Unit) {
+                              job: RenderJob, resolution: (Double)->Unit, importLut: (String?)->Unit,
+                              shadowLift: (AutoKeyExposure)->Unit = {}) {
     fun send(a: SettingsAction)=dispatch.invoke(a)
     @Composable fun tone(p: ImageToneNumericParameter) {
         val s=p.reviewSpec();val t=v.activeImageTone()
@@ -310,6 +311,12 @@ internal fun RendererControls(stage: RendererStage, v: SettingsValues, dispatch:
                 }
             }
             RendererStage.TONEMAP -> {
+                // Same modes as the camera's shadow lift; it feeds every mode below (tone,
+                // AgX and film). Unknown older captures show "As captured" until changed.
+                val lift = RendererRecipe.adaptiveToneMode(job.draft)
+                EditorChoice("Shadow lift", lift?.label ?: "As captured", AutoKeyExposure.entries.map { it.label }) {
+                    shadowLift(AutoKeyExposure.entries[it])
+                }
                 val mode=if(v.filmSimEnabled)"Film Sim" else if(v.colorRenderProfile==ColorRenderProfile.AgX)"AgX" else "RAWR"
                 EditorChoice("Mode",mode,listOf("RAWR","AgX","Film Sim")){
                     send(SetFilmSimEnabled(it==2))

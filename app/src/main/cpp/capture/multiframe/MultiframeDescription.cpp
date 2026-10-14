@@ -4,6 +4,8 @@
 #include <iomanip>
 #include <sstream>
 
+#include "encoding/SoftwareName.h"
+
 namespace rawrcam::capture::multiframe {
 namespace {
 
@@ -19,18 +21,6 @@ std::string f3(float value) {
     return out.str();
 }
 
-std::string ev2(float value) {
-    std::ostringstream out;
-    out << std::showpos << std::fixed << std::setprecision(2) << value;
-    return out.str();
-}
-
-std::string ui1(float value) {
-    std::ostringstream out;
-    out << std::showpos << std::fixed << std::setprecision(1) << value;
-    return out.str();
-}
-
 std::string sci0(float value) {
     std::ostringstream out;
     out << std::scientific << std::setprecision(0) << value;
@@ -39,7 +29,7 @@ std::string sci0(float value) {
 
 }  // namespace
 
-std::string buildExifHeader() { return "Captured with Rawr\nMultiframe GPU merge\n"; }
+std::string buildExifHeader() { return std::string(rawrcam::encoding::kCapturedWith) + "\nMultiframe GPU merge\n"; }
 
 std::string buildParametersBlock(const MultiframeTuningView& tuning, const MultiframeOutputInfo& output,
                                  const TonemapUiValues& tonemap, const std::string& filmDescription, bool filmRendered,
@@ -92,37 +82,14 @@ std::string buildParametersBlock(const MultiframeTuningView& tuning, const Multi
     }
     out << "\nMultiframe Reconstruction inputs:\n"
         << "- Noise profile: " << output.noiseProfile << '\n'
-        << "- JPEG input: merged CFA\n"
-        << "\nJPEG output parameters:\n"
-        << "- Demosaic: " << output.demosaicLabel << '\n'
-        << "- Dual auto contrast: " << output.dualLabel << '\n'
-        << "- Chroma denoise: " << output.chromaDenoiseLabel << '\n'
-        << "- FCC steps: " << output.fccSteps << '\n'
-        << "- Vignette correction (LSC): " << (output.lscEnabled ? "on" : "off") << '\n'
-        << "- Highlight reconstruction: " << (output.highlightReconstructionEnabled ? "on" : "off") << '\n'
-        << "- JPEG quality: " << output.jpegQuality << ", " << output.subsampling << '\n'
-        << "- Color profile: " << output.colorProfile << '\n';
+        << "- JPEG input: merged CFA\n";
+    out << '\n' << encoding::formatOutputParameters(output) << '\n' << encoding::formatAdaptiveTone(tonemap);
     if (filmRendered && !filmDescription.empty()) {
         // Kotlin-curated film summary (stock/paper names live there); kept
         // verbatim so EXIF matches the app's film vocabulary.
         out << '\n' << filmDescription << '\n';
     } else {
-        out << "\nTonemap parameters:\n"
-            << "- Exposure: " << ev2(tonemap.exposureEV) << " EV\n"
-            << "- Blacks: " << ui1(tonemap.blacks) << '\n'
-            << "- Shadows: " << ui1(tonemap.shadows) << '\n'
-            << "- Midtones: " << ui1(tonemap.midtones) << '\n'
-            << "- Contrast: " << ui1(tonemap.contrast) << '\n'
-            << "- Whites: " << ui1(tonemap.whites) << '\n'
-            << "- Highlights: " << ui1(tonemap.highlights) << '\n'
-            << "- Saturation: " << ui1(tonemap.saturation) << '\n'
-            << "- Vibrance: " << ui1(tonemap.vibrance) << '\n';
-        {
-            std::ostringstream gain;
-            gain << std::fixed << std::setprecision(2) << tonemap.aePostGain;
-            out << "- AE post-gain: " << gain.str() << "x\n";
-        }
-        out << "- Shoulder anchor (internal): 2.0 EV\n";
+        out << '\n' << encoding::formatToneParameters(tonemap);
     }
     return out.str();
 }
@@ -143,14 +110,14 @@ std::string buildSharpnessSection(MultiframeBaseFrameMode mode, const std::vecto
     for (float score : scores) {
         if (std::isfinite(score) && score > maxScore) maxScore = score;
     }
+    // Per-frame scores stay in RZSL; the description keeps their mean,
+    // relative to the sharpest frame (the base).
+    double sum = 0.0;
+    for (float score : scores)
+        sum += maxScore > 0.0f && std::isfinite(score) ? double(score) / double(maxScore) : 0.0;
     out << "- Mode: sharpest\n"
-        << "- Reference: frame " << (referenceIndex + 1u) << " of " << frameCount << '\n';
-    for (std::uint32_t i = 0; i < frameCount; ++i) {
-        const float normalized = maxScore > 0.0f && std::isfinite(scores[i]) ? scores[i] / maxScore : 0.0f;
-        out << "- F" << (i + 1u) << ": " << f3(normalized);
-        if (i == referenceIndex) out << " (base)";
-        out << '\n';
-    }
+        << "- Reference: frame " << (referenceIndex + 1u) << " of " << frameCount << " (base)\n"
+        << "- Average sharpness: " << f3(float(sum / double(frameCount))) << " (relative to base)\n";
     return out.str();
 }
 
@@ -175,13 +142,6 @@ std::string formatMultiframeTimings(const MultiframeStageTimings& stages, Multif
         << "  - Robustness: " << ms1(stages.robustnessMs) << " ms\n"
         << "  - Accumulation: " << ms1(stages.accumMs) << " ms\n"
         << "  - Finalize: " << ms1(stages.finalizeMs) << " ms\n";
-    return out.str();
-}
-
-std::string formatOutputProjection(double baseReadMs, double projectMs) {
-    std::ostringstream out;
-    out << "- Base readback: " << ms1(baseReadMs) << " ms\n"
-        << "- CFA projection: " << ms1(projectMs) << " ms\n";
     return out.str();
 }
 

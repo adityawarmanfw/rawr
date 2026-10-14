@@ -44,7 +44,8 @@ import com.rawr.camera.storage.launchPicker
 @Composable
 internal fun RendererEditor(job: RenderJob, session: RendererEditorSession, previewSession: RendererPreviewSession,
     onSaveResolution: (RenderJob,Double)->Unit, onImportLut: (String?,Uri)->Unit,
-    busy: Boolean, onBackToQueue: ()->Unit, onExport: ()->Unit) {
+    busy: Boolean, onBackToQueue: ()->Unit, onExport: ()->Unit,
+    onShadowLift: (RenderJob, com.rawr.camera.settings.model.AutoKeyExposure)->Unit = { _, _ -> }) {
     val controller by session.controller.collectAsStateWithLifecycle()
     val settings by controller.state.collectAsStateWithLifecycle()
     val preview by previewSession.state.collectAsStateWithLifecycle()
@@ -55,7 +56,8 @@ internal fun RendererEditor(job: RenderJob, session: RendererEditorSession, prev
         busy, onBackToQueue, onExport, previewSession::updateViewport, previewSession::setWaveformEnabled,
         onSaveResolution = { onSaveResolution(job, it) },
         onImportLut = { lutTarget = it; importer.launchPicker(context, arrayOf("*/*")) },
-        metadata = { dismiss -> RendererMetadata(job, previewSession, dismiss) })
+        metadata = { dismiss -> RendererMetadata(job, previewSession, dismiss) },
+        onShadowLift = { if (!busy) onShadowLift(job, it) })
 }
 
 /** UI-only editor. Tests drive this exact layout without native rendering or job mutation. */
@@ -65,7 +67,8 @@ internal fun RendererEditorContent(
     preview: RendererPreviewState, busy: Boolean, onBackToQueue: () -> Unit, onExport: () -> Unit,
     onViewport: (RendererViewport) -> Unit, onWaveform: (Boolean) -> Unit,
     onSaveResolution: (Double) -> Unit, onImportLut: (String?) -> Unit,
-    metadata: @Composable (() -> Unit) -> Unit
+    metadata: @Composable (() -> Unit) -> Unit,
+    onShadowLift: (com.rawr.camera.settings.model.AutoKeyExposure) -> Unit = {}
 ) {
     var waveformVisible by remember(job.id) { mutableStateOf(false) }
     var metadataVisible by remember(job.id) { mutableStateOf(false) }
@@ -121,7 +124,7 @@ internal fun RendererEditorContent(
                         paneFraction = if (pane == 2) .72f else .45f
                         sideFraction = if (pane == 2) .55f else .38f
                     }) {
-                    RendererControls(selectedStage, values, dispatch, job, onSaveResolution, onImportLut)
+                    RendererControls(selectedStage, values, dispatch, job, onSaveResolution, onImportLut, onShadowLift)
                 }
             })
     }

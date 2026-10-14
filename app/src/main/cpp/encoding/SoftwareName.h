@@ -8,4 +8,7 @@
 
 namespace rawrcam::encoding {
 inline constexpr const char* kSoftwareName = "Rawr v" RAWR_VERSION_NAME;
+// First line of every ImageDescription; the Renderer swaps the verb.
+inline constexpr const char* kCapturedWith = "Captured with Rawr v" RAWR_VERSION_NAME;
+inline constexpr const char* kRenderedWith = "Rendered with Rawr v" RAWR_VERSION_NAME;
 }

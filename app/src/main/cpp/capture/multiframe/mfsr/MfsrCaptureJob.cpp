@@ -35,6 +35,8 @@
 #include "develop/render/StillImageRenderer.h"
 #include "diagnostics/logging/RuntimeTraceRecorder.h"
 #include "encoding/dng/DngCaptureWriter.h"
+#include "encoding/SoftwareName.h"
+#include "encoding/jpeg/JpegPublicDescription.h"
 #include "encoding/jpeg/JpegCaptureWriter.h"
 #include "encoding/jpeg/JpegTimingsFormat.h"
 #include "encoding/rzsl/RzslBundleSink.h"
@@ -143,23 +145,13 @@ void MfsrCaptureJob::run() {
     outputInfo.fccSteps = mergedJpeg.develop.fccSteps;
     outputInfo.lscEnabled = mergedJpeg.develop.lensShadingCorrectionEnabled;
     outputInfo.highlightReconstructionEnabled = mergedJpeg.develop.highlightReconstructionEnabled;
+    outputInfo.highlightMethodLabel =
+        rawrcam::encoding::highlightMethodLabel(mergedJpeg.develop.highlightReconstructionMethod);
     outputInfo.jpegQuality = mergedJpeg.output.quality;
-    outputInfo.subsampling =
-        mergedJpeg.output.subsampling == rawrcam::encoding::jpeg::ChromaSubsampling::Yuv444
-            ? "4:4:4"
-            : (mergedJpeg.output.subsampling == rawrcam::encoding::jpeg::ChromaSubsampling::Yuv422 ? "4:2:2" : "4:2:0");
+    outputInfo.subsampling = rawrcam::encoding::jpeg::subsamplingLabel(mergedJpeg.output.subsampling);
     outputInfo.colorProfile = mergedJpeg.output.rendererDisplayName;
-    TonemapUiValues toneUi{};
-    toneUi.exposureEV = frozenTonemap.exposureEV;
-    toneUi.blacks = frozenTonemap.blackPointEV;
-    toneUi.shadows = frozenTonemap.shadowLiftEV;
-    toneUi.midtones = frozenTonemap.midtoneLiftEV;
-    toneUi.contrast = frozenTonemap.contrast;
-    toneUi.whites = frozenTonemap.whitePointEV;
-    toneUi.highlights = frozenTonemap.highlightBiasEV;
-    toneUi.saturation = frozenTonemap.saturation;
-    toneUi.vibrance = frozenTonemap.vibrance;
-    toneUi.aePostGain = frozenTonemap.aePostGain;
+    const TonemapUiValues toneUi =
+        rawrcam::encoding::jpeg::toneParametersFrom(frozenTonemap, mergedJpeg.develop.colorRenderProfile);
     MultiframeStageTimings mfStages{};
     mfStages.sharpnessMs = sharpnessMs;
     using rawr::raw_multiframe_output::MultiframeOutputAdapter;
@@ -283,7 +275,7 @@ void MfsrCaptureJob::run() {
             outputAdapter.reset();
             outputAdapterReady = false;
             auto baseFrame = makeCaptured(std::move(basePacked));
-            baseDng.imageDescription = "Captured with Rawr (multiframe base frame)";
+            baseDng.imageDescription = std::string(rawrcam::encoding::kCapturedWith) + "\nMultiframe base frame\n";
             auto context = std::move(baseDng);
             baseDng.outputFd = -1;
             rawrcam::capture::persistence::attachFrameRecipes(context, *baseFrame);
@@ -413,7 +405,7 @@ void MfsrCaptureJob::run() {
                             dngSubtotalMs(baseReadMs, mfStages.multiframeTotalMs(), projectMs)) +
                         " ms\n" + formatMultiframeTimings(mfStages, baseFrameMode) +
                         formatOutputProjection(baseReadMs, projectMs) +
-                        "(Processing subtotal excludes capture, queue, burst save/load and output encoding/write.)\n" +
+                        "\n(Processing subtotal excludes capture, queue, burst save/load and output encoding/write.)\n" +
                         (work->acceptedAt != std::chrono::steady_clock::time_point{}
                              ? "Elapsed since capture accepted (before DNG encoding/write): " +
                                    rawrcam::encoding::jpeg::formatMs1(wallMs(work->acceptedAt)) + " ms\n"

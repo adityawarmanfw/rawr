@@ -181,6 +181,7 @@ rawrcam_module(renderer
   SOURCES
     renderer/LinearResample.cpp
     renderer/DngSource.cpp
+    renderer/SceneKeyMeter.cpp
     renderer/RendererEngine.cpp
     renderer/RendererSurface.cpp
 )

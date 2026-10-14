@@ -23,6 +23,63 @@ class RendererRecipeTest {
         assertEquals("photo", decoded.captureModeId)
     }
 
+    @Test fun rec709PhotoRecipeRetainsItsProfileAndTone() {
+        val values = SettingsCatalog.initialState().values.copy(
+            colorRenderProfile = ColorRenderProfile.Rec709,
+            rec709Tone = ProfileTone(contrast = 14f, shadows = 9f))
+        val library = SettingsCatalog.initialState().values
+        val decoded = RendererRecipe.decode(RendererRecipe.encode(values), library)
+        assertEquals(ColorRenderProfile.Rec709, decoded.colorRenderProfile)
+        assertEquals(values.rec709Tone, decoded.activeProfileTone())
+        val captured = RendererRecipe.decode(com.rawr.camera.integration.CaptureRecipe.encode(values), library)
+        assertEquals(ColorRenderProfile.Rec709, captured.colorRenderProfile)
+        assertEquals(values.rec709Tone, captured.activeProfileTone())
+    }
+
+    @Test fun rawrDngImportsReplayTheirRecipe() {
+        assertTrue(RendererRecipe.replaysRecipe(capture = "RAWR_20261014_153111_095", embeddedRecipe = null))
+        assertTrue(RendererRecipe.replaysRecipe(capture = "", embeddedRecipe = "{\"version\":1}"))
+        assertFalse(RendererRecipe.replaysRecipe(capture = "", embeddedRecipe = null))
+        assertFalse(RendererRecipe.replaysRecipe(capture = "", embeddedRecipe = ""))
+    }
+
+    @Test fun shadowLiftModeOverridesTheCaptureAndSurvivesSettingsEdits() {
+        val values = SettingsCatalog.initialState().values
+        val original = org.json.JSONObject(RendererRecipe.encode(values))
+            .put("capturedAutoKeyExposure", "Natural")
+            .put("adaptiveTone", org.json.JSONObject().put("liftEv", 0.55).put("keyEv", -3.69).put("highlightEv", -1.47))
+            .toString()
+        val captured = RendererRecipe.rebuiltDraft(values, previousDraft = "{}", original = original)
+        assertEquals(AutoKeyExposure.Natural, RendererRecipe.adaptiveToneMode(captured))
+        assertFalse(org.json.JSONObject(captured).has("adaptiveToneMode"))
+        val strong = RendererRecipe.withAdaptiveToneMode(captured, AutoKeyExposure.Strong)
+        assertEquals(AutoKeyExposure.Strong, RendererRecipe.adaptiveToneMode(strong))
+        // Another settings edit keeps the override; the captured tone stays the source's.
+        val edited = RendererRecipe.rebuiltDraft(values.copy(photoFccSteps = 4), strong, original)
+        assertEquals(AutoKeyExposure.Strong, RendererRecipe.adaptiveToneMode(edited))
+        assertEquals(0.55f, RendererRecipe.adaptiveLift(edited))
+        // Choosing the captured mode again clears the override: exact replay.
+        val back = RendererRecipe.withAdaptiveToneMode(edited, AutoKeyExposure.Natural)
+        assertFalse(org.json.JSONObject(back).has("adaptiveToneMode"))
+        assertEquals(AutoKeyExposure.Natural, RendererRecipe.adaptiveToneMode(back))
+    }
+
+    @Test fun shadowLiftModeForSourcesWithoutARecordedMode() {
+        val values = SettingsCatalog.initialState().values
+        // Other cameras and Off captures: no lift, shown as Off; any lift mode is an override.
+        val plain = RendererRecipe.encode(values)
+        assertEquals(AutoKeyExposure.Off, RendererRecipe.adaptiveToneMode(plain))
+        val medium = RendererRecipe.withAdaptiveToneMode(plain, AutoKeyExposure.Medium)
+        assertEquals("Medium", org.json.JSONObject(medium).getString("adaptiveToneMode"))
+        assertFalse(org.json.JSONObject(RendererRecipe.withAdaptiveToneMode(medium, AutoKeyExposure.Off)).has("adaptiveToneMode"))
+        // Older Rawr captures with a lift but no recorded mode read "as captured" until changed.
+        val legacy = org.json.JSONObject(plain).put("adaptiveTone",
+            org.json.JSONObject().put("liftEv", 0.4).put("keyEv", -3.0).put("highlightEv", -1.0)).toString()
+        assertNull(RendererRecipe.adaptiveToneMode(legacy))
+        assertEquals("Off", org.json.JSONObject(RendererRecipe.withAdaptiveToneMode(legacy, AutoKeyExposure.Off))
+            .getString("adaptiveToneMode"))
+    }
+
     @Test fun agxRecipeRetainsPresetControlsAndTone() {
         val values = SettingsCatalog.initialState().values.copy(
             colorRenderProfile = ColorRenderProfile.AgX,

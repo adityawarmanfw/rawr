@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <string_view>
 
 #include "tonemap/AdaptiveTone.h"
 
@@ -46,6 +47,15 @@ constexpr AutoKeyMode autoKeyModeFromId(int id) noexcept {
         case 3: return AutoKeyMode::Medium;
         default: return AutoKeyMode::Off;
     }
+}
+
+// App enum names (AutoKeyExposure in Kotlin), as recipes store them.
+inline std::optional<AutoKeyMode> autoKeyModeFromName(std::string_view name) noexcept {
+    if (name == "Off") return AutoKeyMode::Off;
+    if (name == "Natural") return AutoKeyMode::Natural;
+    if (name == "Medium") return AutoKeyMode::Medium;
+    if (name == "Strong") return AutoKeyMode::Strong;
+    return std::nullopt;
 }
 
 // Histogram layout shared with image_scopes::SceneExposureStatsData.

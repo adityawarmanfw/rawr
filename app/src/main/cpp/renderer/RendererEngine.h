@@ -4,6 +4,7 @@
 #include <memory>
 #include <vector>
 
+#include "develop/DevelopSettings.h"
 #include "DngSource.h"
 #include "develop/render/StillImageRenderer.h"
 namespace image_scopes { class ImageScopes; }
@@ -11,6 +12,13 @@ namespace rawrcam::renderer {
 class RendererSurface;
 struct RenderOptions {
     develop::rendered::RenderedStillContext context;
+    // Recipe develop settings, kept for the export's ImageDescription.
+    develop::DevelopSettings develop;
+    // Editor shadow-lift mode override ("Off".."Strong"); empty replays the
+    // captured adaptive tone. adaptiveToneMeasured: the stored key/highlight
+    // came from the camera meter (a lift mode was on at capture).
+    std::string adaptiveToneMode;
+    bool adaptiveToneMeasured = false;
     uint32_t width = 0, height = 0;
     std::array<uint32_t, 4> region{}; // Sensor-space preview extent; zero width selects the active crop.
     float temperature = 0, tint = 0;

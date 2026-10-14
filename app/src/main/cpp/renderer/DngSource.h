@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -19,6 +20,9 @@ class DngSource {
     const tinydng_image_info& info() const { return *image_; }
     std::vector<uint16_t> read(uint32_t x, uint32_t y, uint32_t w, uint32_t h);
     std::vector<float> normalized(uint32_t x, uint32_t y, uint32_t w, uint32_t h, bool shading);
+    // normalized() for one sensor sample, given its read() value: callers
+    // that sample sparse sites skip the full-band arithmetic.
+    float normalizedSample(uint16_t raw, uint32_t sx, uint32_t sy, bool shading) const;
     void prepareBinned(const std::string& path, bool shading, const std::function<void()>& check);
     std::vector<float> binnedNormalized(uint32_t x, uint32_t y, uint32_t w, uint32_t h, bool shading);
 #ifndef NDEBUG
@@ -60,6 +64,9 @@ class DngSource {
     std::string rawCachePath_;
     const uint16_t* rawCache_ = nullptr;
     size_t rawCacheBytes_ = 0;
+    // read() may run on several binning workers: guards the lazy raw-cache
+    // build and tinydng region decodes.
+    std::mutex decodeMutex_;
     void ensureRawCache();
 #ifndef NDEBUG
     std::vector<float> replayCfa_;
