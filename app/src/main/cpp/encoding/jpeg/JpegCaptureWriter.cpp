@@ -17,6 +17,7 @@
 #include <ctime>
 #include <limits>
 #include <sstream>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -601,11 +602,6 @@ bool JpegCaptureWriter::startUltraHdr(std::uint64_t requestId, const void* rgba8
                            tj3Set(baseHandle, TJPARAM_SUBSAMP, tjSubsampling(context.subsampling)) != 0 ||
                            tj3Set(baseHandle, TJPARAM_FASTDCT, 0) != 0) {
                     done.error = tj3GetErrorStr(baseHandle);
-                } else if (tj3Compress8(baseHandle, pixels, static_cast<int>(width), 0, static_cast<int>(height),
-                                        TJPF_RGBA, &baseBuf, &baseSize) != 0) {
-                    done.error = tj3GetErrorStr(baseHandle);
-                } else if (baseSize < 2 || baseBuf[0] != 0xFFu || baseBuf[1] != 0xD8u) {
-                    done.error = "libjpeg-turbo returned invalid base JPEG SOI";
                  } else if (tj3Set(mapHandle, TJPARAM_QUALITY, mapQuality) != 0 ||
                             // Gain map is multi-channel RGB: 4:4:4 keeps
                             // chroma full-res so subsample ringing can't
@@ -616,8 +612,28 @@ bool JpegCaptureWriter::startUltraHdr(std::uint64_t requestId, const void* rgba8
                            tj3Set(mapHandle, TJPARAM_FASTDCT, 0) != 0) {
                     done.error = tj3GetErrorStr(mapHandle);
                 } else {
-                     const auto baseDone = std::chrono::steady_clock::now();
-                     baseMs = std::chrono::duration<double, std::milli>(baseDone - t0).count();
+                     // The base encode runs beside the fit + map encode: both
+                     // only read `pixels`, so the file is byte-identical to
+                     // the serial order and the critical path drops by the
+                     // base encode.
+                     std::string baseError;
+                     std::thread baseWorker([&] {
+                         ::setpriority(PRIO_PROCESS, 0, 10);
+                         if (tj3Compress8(baseHandle, pixels, static_cast<int>(width), 0, static_cast<int>(height),
+                                          TJPF_RGBA, &baseBuf, &baseSize) != 0) {
+                             baseError = tj3GetErrorStr(baseHandle);
+                         } else if (baseSize < 2 || baseBuf[0] != 0xFFu || baseBuf[1] != 0xD8u) {
+                             baseError = "libjpeg-turbo returned invalid base JPEG SOI";
+                         }
+                         baseMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0)
+                                      .count();
+                     });
+                     struct JoinOnExit {
+                         std::thread& thread;
+                         ~JoinOnExit() {
+                             if (thread.joinable()) thread.join();
+                         }
+                     } joinBase{baseWorker};
                      std::string uhError;
                      // Single-pass adaptive ceiling: fit + shoulder + chroma
                      // knee on a worker-local copy (caller's readback stays
@@ -655,13 +671,22 @@ bool JpegCaptureWriter::startUltraHdr(std::uint64_t requestId, const void* rgba8
                         uhError = tj3GetErrorStr(mapHandle);
                     } else if (mapSize < 2 || mapBuf[0] != 0xFFu || mapBuf[1] != 0xD8u) {
                         uhError = "libjpeg-turbo returned invalid gain map JPEG SOI";
-                    } else {
-                        const auto mapDone = std::chrono::steady_clock::now();
-                        mapMs = std::chrono::duration<double, std::milli>(mapDone - baseDone).count();
-                        // Printed JPEG number covers both turbo encodes; the
-                        // mux below folds into done.encodeMs (logcat-exact)
-                        // and is excluded from the printed total by contract.
-                        context.imageDescription = appendProcessingTimes(context, baseMs + mapMs, mapMs, true);
+                    }
+                    mapMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - fitT0).count();
+                    baseWorker.join();
+                    const double bothMs =
+                        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+                    __android_log_print(ANDROID_LOG_INFO, "RawrCamNative",
+                                        "JPEG_UHDR_ENCODE requestId=%llu baseMs=%.1f mapPathMs=%.1f wallMs=%.1f",
+                                        (unsigned long long)requestId, baseMs, mapMs, bothMs);
+                    if (!baseError.empty()) {
+                        done.error = baseError;
+                    } else if (uhError.empty()) {
+                        // Printed JPEG number is the wall time of both turbo
+                        // encodes (they overlap); the mux below folds into
+                        // done.encodeMs (logcat-exact) and is excluded from
+                        // the printed total by contract.
+                        context.imageDescription = appendProcessingTimes(context, bothMs, mapMs, true);
                         const auto exif = buildExif(context, width, height);
                         if (exif.size() + 2u > 65535u) {
                             uhError = "metadata APP1 payload too large";
@@ -679,7 +704,7 @@ bool JpegCaptureWriter::startUltraHdr(std::uint64_t requestId, const void* rgba8
                             }
                         }
                     }
-                    if (!uhError.empty()) {
+                    if (baseError.empty() && !uhError.empty()) {
                         // Degrade to SDR instead of losing the shot: the base
                         // pixels are already encoded, so splice EXIF + XMP
                         // around them exactly like the legacy path.
