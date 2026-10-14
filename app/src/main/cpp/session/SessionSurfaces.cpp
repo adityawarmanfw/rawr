@@ -132,6 +132,25 @@ ANativeWindow* SessionEngine::createRawInputWindow(uint64_t generation, uint32_t
         // RAW16 whose image import this driver rejected goes through the GPU
         // buffer copy: request buffer access, plus CPU read for the fallback.
         if (realtime_.coordinator().raw16BufferIngressRequired() && realtime_.coordinator().diagnosticMode() == 0u) {
+            // Grallocs before 4.1 (SM8150 / Adreno 640) refuse GPU_DATA_BUFFER on
+            // non-BLOB formats: the reader configures, then every request fails.
+            constexpr uint32_t kHalPixelFormatRaw16 = 0x20;
+            constexpr uint64_t kCameraWrite = 1ull << 17;  // GRALLOC_USAGE_HW_CAMERA_WRITE
+            AHardwareBuffer_Desc desc{};
+            desc.width = width;
+            desc.height = height;
+            desc.layers = 1;
+            desc.format = kHalPixelFormatRaw16;
+            desc.usage = AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN | AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER | kCameraWrite;
+            if (AHardwareBuffer_isSupported(&desc) == 0) {
+                rawReaderUsage_.demote();
+                std::ostringstream out;
+                out << "RAW_READER_CPU_ONLY_USAGE format=RAW16 reason=buffer_usage_unallocatable usage=0x" << std::hex
+                    << desc.usage;
+                SESSION_LOGI("%s", out.str().c_str());
+                appendDiagnostic(out.str());
+                return rawFrameIngress_.create(generation, width, height, format, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN);
+            }
             const std::string line = "RAW_READER_GPU_BUFFER_INGRESS format=RAW16";
             SESSION_LOGI("%s", line.c_str());
             appendDiagnostic(line);
