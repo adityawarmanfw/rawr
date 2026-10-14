@@ -3,9 +3,11 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
+#include <thread>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -296,13 +298,17 @@ std::vector<uint16_t> DngSource::read(uint32_t x, uint32_t y, uint32_t w, uint32
     if (!w || !h || x >= image_->width || y >= image_->height || w > image_->width - x || h > image_->height - y)
         throw std::runtime_error("DNG region is out of bounds");
     if (rawCacheRequired_) {
-        ensureRawCache();
+        {
+            std::lock_guard<std::mutex> lock(decodeMutex_);
+            ensureRawCache();
+        }
         std::vector<uint16_t> result(size_t(w) * h);
         for (uint32_t row = 0; row < h; ++row)
             std::memcpy(result.data() + size_t(row) * w, rawCache_ + size_t(y + row) * image_->width + x,
                         size_t(w) * sizeof(uint16_t));
         return result;
     }
+    std::lock_guard<std::mutex> lock(decodeMutex_);
     tinydng_error error{};
     tinydng_pixels pixels{};
     tinydng_decode_options options{};
@@ -328,6 +334,29 @@ std::vector<uint16_t> DngSource::read(uint32_t x, uint32_t y, uint32_t w, uint32
     tinydng_pixels_free(context_, &pixels);
     return result;
 }
+float DngSource::normalizedSample(uint16_t raw, uint32_t sx, uint32_t sy, bool shading) const {
+    const uint32_t site = (sy % 2) * 2 + sx % 2;
+    const auto& r = image_->raw;
+    double v;
+#ifndef NDEBUG
+    if (!replayCfa_.empty()) {
+        v = replayCfa_[size_t(sy) * image_->width + sx];
+    } else {
+#endif
+    v = raw;
+    if (r.linearization_table_count)
+        v = r.linearization_table[std::min(size_t(v), r.linearization_table_count - 1)];
+    double white = r.white_level_present ? r.white_level[0] : ((1u << image_->bits_per_sample) - 1);
+    if (white <= black[site]) throw std::runtime_error("Invalid DNG black/white levels");
+    v = (v - black[site]) / (white - black[site]);
+#ifndef NDEBUG
+    }
+#endif
+    if (shading)
+        for (size_t k = 0; k < r.gainmap_count; ++k)
+            v *= gain(r.gainmaps[k], sx, sy, image_->width, image_->height);
+    return float(v * 255.0);
+}
 std::vector<float> DngSource::normalized(uint32_t x, uint32_t y, uint32_t w, uint32_t h, bool shading) {
 #ifndef NDEBUG
     auto pixels = replayCfa_.empty() ? read(x, y, w, h) : std::vector<uint16_t>{};
@@ -335,30 +364,10 @@ std::vector<float> DngSource::normalized(uint32_t x, uint32_t y, uint32_t w, uin
     auto pixels = read(x, y, w, h);
 #endif
     std::vector<float> result(size_t(w) * h);
-    const auto& r = image_->raw;
     for (uint32_t yy = 0; yy < h; ++yy)
         for (uint32_t xx = 0; xx < w; ++xx) {
-            uint32_t sx = x + xx, sy = y + yy, site = (sy % 2) * 2 + sx % 2;
-            size_t i = size_t(yy) * w + xx;
-            double v;
-#ifndef NDEBUG
-            if (!replayCfa_.empty()) {
-                v = replayCfa_[size_t(sy) * image_->width + sx];
-            } else {
-#endif
-            v = pixels[i];
-            if (r.linearization_table_count)
-                v = r.linearization_table[std::min(size_t(v), r.linearization_table_count - 1)];
-            double white = r.white_level_present ? r.white_level[0] : ((1u << image_->bits_per_sample) - 1);
-            if (white <= black[site]) throw std::runtime_error("Invalid DNG black/white levels");
-            v = (v - black[site]) / (white - black[site]);
-#ifndef NDEBUG
-            }
-#endif
-            if (shading)
-                for (size_t k = 0; k < r.gainmap_count; ++k)
-                    v *= gain(r.gainmaps[k], sx, sy, image_->width, image_->height);
-            result[i] = float(v * 255.0);
+            const size_t i = size_t(yy) * w + xx;
+            result[i] = normalizedSample(pixels.empty() ? 0 : pixels[i], x + xx, y + yy, shading);
         }
     return result;
 }
@@ -381,9 +390,9 @@ void DngSource::prepareBinned(const std::string& path, bool shading, const std::
                 if (image_->cfa.pattern[i] == 0) red = i;
             }
             const float floor = std::max(1e-20f, std::pow(0.25f * 255.f / float(std::max(1.0, whiteLevel)), 2.f));
-            NaturalBayerTile tile;
-            for (uint32_t y=0;y<oh;y+=32) {
-                check();
+            // Bands are independent (each reads its own 20-row halo), so a
+            // batch of them runs on workers and is written back in order.
+            auto binBand = [&](uint32_t y, NaturalBayerTile& tile) {
                 const uint32_t rows=std::min(32u,oh-y), top=y*2>=20?y*2-20:0;
                 const uint32_t bottom=std::min(sh,(y+rows)*2+20);
                 const auto band=normalized(0,top,sw,bottom-top,shading);
@@ -396,8 +405,28 @@ void DngSource::prepareBinned(const std::string& path, bool shading, const std::
                     else for(uint32_t yy=0;yy<rows;++yy)for(uint32_t xx=0;xx<cols;++xx)
                         out[size_t(yy)*ow+x+xx]=binSameColor2x(x+xx,y+yy,sw,sh,sample);
                 }
-                file.write(reinterpret_cast<const char*>(out.data()), std::streamsize(out.size()*sizeof(float)));
-                if (!file) throw std::runtime_error("Cannot write binned CFA cache");
+                return out;
+            };
+            const unsigned workers = std::clamp(std::thread::hardware_concurrency(), 1u, 6u);
+            std::vector<NaturalBayerTile> tiles(workers);
+            std::vector<std::vector<float>> outs(workers);
+            std::vector<std::exception_ptr> errors(workers);
+            for (uint32_t y0=0;y0<oh;y0+=32u*workers) {
+                check();
+                std::vector<std::thread> threads;
+                for (unsigned t=0;t<workers;++t) {
+                    const uint32_t y=y0+32u*t;
+                    if (y>=oh) break;
+                    threads.emplace_back([&,t,y] {
+                        try { outs[t]=binBand(y,tiles[t]); } catch (...) { errors[t]=std::current_exception(); }
+                    });
+                }
+                for (auto& thread : threads) thread.join();
+                for (unsigned t=0;t<threads.size();++t) {
+                    if (errors[t]) std::rethrow_exception(errors[t]);
+                    file.write(reinterpret_cast<const char*>(outs[t].data()), std::streamsize(outs[t].size()*sizeof(float)));
+                    if (!file) throw std::runtime_error("Cannot write binned CFA cache");
+                }
             }
             file.close();
             if (!file) throw std::runtime_error("Cannot finish binned CFA cache");
