@@ -47,17 +47,36 @@ inline bool fitAndRemapMap(const unsigned char* src, std::uint32_t w, std::uint3
     const std::size_t n = static_cast<std::size_t>(w) * h;
     const float wideMax = uh.gainMapMaxLog2;
     if (n == 0 || wideMax <= 0.0f || uh.gamma != 1.0f) return false;
+    unsigned workers = std::thread::hardware_concurrency();
+    if (workers < 1) workers = 1;
+    if (workers > 4) workers = 4;
+    if (n < 4096) workers = 1;
     // p99.9 of per-pixel channel-mean log-gain via a 2048-bin histogram
     // (~0.0023 EV bins at wide 4.7: exact enough, single pass, no 50MB sort).
+    // Per-worker row-band histograms; integer sums keep it order-independent.
     constexpr int kBins = 2048;
-    std::vector<std::uint32_t> hist(kBins, 0);
-    for (std::size_t i = 0; i < n; ++i) {
-        const float mean = (static_cast<float>(src[i * 4 + 0]) + static_cast<float>(src[i * 4 + 1]) +
-                            static_cast<float>(src[i * 4 + 2])) /
-                           765.0f * wideMax;
-        int b = static_cast<int>(mean / wideMax * kBins);
-        hist[std::clamp(b, 0, kBins - 1)]++;
+    std::vector<std::vector<std::uint32_t>> bands(workers, std::vector<std::uint32_t>(kBins, 0));
+    {
+        std::vector<std::thread> threads;
+        threads.reserve(workers);
+        for (unsigned t = 0; t < workers; ++t) {
+            threads.emplace_back([=, &src, &bands] {
+                auto& band = bands[t];
+                const std::size_t end = static_cast<std::size_t>(h * (t + 1) / workers) * w;
+                for (std::size_t i = static_cast<std::size_t>(h * t / workers) * w; i < end; ++i) {
+                    const float mean = (static_cast<float>(src[i * 4 + 0]) + static_cast<float>(src[i * 4 + 1]) +
+                                        static_cast<float>(src[i * 4 + 2])) /
+                                       765.0f * wideMax;
+                    int b = static_cast<int>(mean / wideMax * kBins);
+                    band[std::clamp(b, 0, kBins - 1)]++;
+                }
+            });
+        }
+        for (auto& th : threads) th.join();
     }
+    std::vector<std::uint64_t> hist(kBins, 0);
+    for (const auto& band : bands)
+        for (int b = 0; b < kBins; ++b) hist[b] += band[b];
     const std::uint64_t target = static_cast<std::uint64_t>(static_cast<double>(n) * 0.999);
     std::uint64_t acc = 0;
     float p999 = 0.0f;
@@ -90,10 +109,6 @@ inline bool fitAndRemapMap(const unsigned char* src, std::uint32_t w, std::uint3
     const float inv255 = 1.0f / 255.0f;
     (void)fastTanh(0.0f);  // force LUT init once, outside the threaded loop
     const std::uint32_t h32 = h;
-    unsigned workers = std::thread::hardware_concurrency();
-    if (workers < 1) workers = 1;
-    if (workers > 4) workers = 4;
-    if (n < 4096) workers = 1;
     std::vector<std::thread> threads;
     threads.reserve(workers);
     for (unsigned t = 0; t < workers; ++t) {

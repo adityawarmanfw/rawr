@@ -102,6 +102,8 @@ static void makeSyntheticLsc(uint32_t gw, uint32_t gh) {
             g_lsc[o + 3] = base * 1.12f;
         }
 }
+// --method: 0 colour propagation, 1 Inpaint Opposed.
+static uint32_t g_highlightMethod = 0;
 static void run(Ctx& c, const std::string& shader, const std::string& maskShader, uint32_t W, uint32_t H,
                 uint32_t frames, double fps, bool stress) {
     Slot s[3];
@@ -170,6 +172,7 @@ static void run(Ctx& c, const std::string& shader, const std::string& maskShader
     rp.clipThreshold = .995f;
     rp.edgeStrength = 8;
     rp.chromaBlend = .2f;
+    rp.highlightMethod = g_highlightMethod;
     const uint32_t warm = 60, total = warm + frames;
     std::vector<uint64_t> pf(3, UINT64_MAX);
     std::vector<double> ms;
@@ -302,6 +305,8 @@ int main(int argc, char** argv) {
             lscW = std::stoul(v.substr(0, x));
             lscH = std::stoul(v.substr(x + 1));
         }
+        else if (a == "--method" && i + 1 < argc)
+            g_highlightMethod = std::stoul(argv[++i]);
         else if (a == "--dump" && i + 1 < argc)
             g_dump = argv[++i];
         else if (a == "--frames" && i + 1 < argc)

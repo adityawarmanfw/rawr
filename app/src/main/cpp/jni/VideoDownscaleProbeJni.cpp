@@ -73,17 +73,18 @@ void destroyBuffer(VkDevice device, HostBuffer& buffer) {
 
 // Zone plate over the 1080p source crop: local frequency grows with radius
 // and reaches the RAW Nyquist (0.5 cycles/pixel) at the crop corners. Grey,
-// so every CFA site carries the same value.
-void fillZonePlate(uint16_t* raw, const std::array<float, 4>& wb) {
+// so every CFA site carries the same value. A gain above 1/0.9 clips the crests.
+void fillZonePlate(uint16_t* raw, const std::array<float, 4>& wb, double gain = 1.0) {
     const auto crop = rawrcam::video::videoSourceRect(kRawWidth, kRawHeight, kOutWidth, kOutHeight);
     const double cx = crop.width / 2.0, cy = crop.height / 2.0;
     const double k = 0.5 / (2.0 * std::sqrt(cx * cx + cy * cy));
     for (uint32_t y = 0; y < kRawHeight; ++y) {
         for (uint32_t x = 0; x < kRawWidth; ++x) {
             const double u = double(x) - crop.x + 0.5 - cx, v = double(y) - crop.y + 0.5 - cy;
-            const double zone = 0.5 + 0.4 * std::cos(2.0 * M_PI * k * (u * u + v * v));
+            const double zone = gain * (0.5 + 0.4 * std::cos(2.0 * M_PI * k * (u * u + v * v)));
             const int site = int(x & 1u) | int((y & 1u) << 1);  // RGGB
-            raw[size_t(y) * kRawWidth + x] = static_cast<uint16_t>(std::lround(zone * kWhite / wb[site]));
+            raw[size_t(y) * kRawWidth + x] =
+                static_cast<uint16_t>(std::lround(std::min(zone / wb[site], 1.0) * kWhite));
         }
     }
 }
@@ -96,7 +97,7 @@ extern "C" JNIEXPORT jstring JNICALL Java_com_rawr_camera_video_VideoDownscalePr
     env->ReleaseStringUTFChars(outDirJava, outChars);
     std::string report = "{";
     rawrcam::vulkan::VulkanContext context;
-    HostBuffer raw, readback;
+    HostBuffer raw, readback, clipReadback;
     VkCommandPool pool = VK_NULL_HANDLE;
     VkFence fence = VK_NULL_HANDLE;
     VkQueryPool queries = VK_NULL_HANDLE;
@@ -107,6 +108,8 @@ extern "C" JNIEXPORT jstring JNICALL Java_com_rawr_camera_video_VideoDownscalePr
         const VkDevice device = context.device();
         raw = makeBuffer(context, VkDeviceSize(kRawWidth) * kRawHeight * 2, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
         readback = makeBuffer(context, VkDeviceSize(kOutWidth) * kOutHeight * 8, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+        clipReadback = makeBuffer(context, VkDeviceSize(kOutWidth / 2) * (kOutHeight / 2) * 2,
+                                  VK_BUFFER_USAGE_TRANSFER_DST_BIT);
 
         VkCommandPoolCreateInfo poolInfo{};
         poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -178,6 +181,12 @@ extern "C" JNIEXPORT jstring JNICALL Java_com_rawr_camera_video_VideoDownscalePr
                 region.imageExtent = {kOutWidth, kOutHeight, 1};
                 vkCmdCopyImageToBuffer(command, stage.outputImage(slot), VK_IMAGE_LAYOUT_GENERAL, readback.buffer, 1,
                                        &region);
+                toCopy.image = stage.clipStateImage(slot);
+                vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                                     0, nullptr, 0, nullptr, 1, &toCopy);
+                region.imageExtent = {kOutWidth / 2, kOutHeight / 2, 1};
+                vkCmdCopyImageToBuffer(command, stage.clipStateImage(slot), VK_IMAGE_LAYOUT_GENERAL,
+                                       clipReadback.buffer, 1, &region);
             }
             check(vkEndCommandBuffer(command), "end");
             VkSubmitInfo submit{};
@@ -197,10 +206,13 @@ extern "C" JNIEXPORT jstring JNICALL Java_com_rawr_camera_video_VideoDownscalePr
         // Neutral white balance, then a strong cast: the zone plate stays grey
         // after white balance, so any chroma in the second scene is the
         // filter's fault.
-        const std::array<float, 4> balances[] = {{1, 1, 1, 1}, {1.9f, 1, 1, 1.5f}};
+        // The third scene clips the crests to exercise the clip-state map.
+        const std::array<float, 4> balances[] = {{1, 1, 1, 1}, {1.9f, 1, 1, 1.5f}, {1, 1, 1, 1}};
+        const double gains[] = {1.0, 1.0, 1.25};
+        const char* suffixes[] = {"", "_wb", "_clip"};
         bool first = true;
-        for (int scene = 0; scene < 2; ++scene) {
-            fillZonePlate(static_cast<uint16_t*>(raw.mapped), balances[scene]);
+        for (int scene = 0; scene < 3; ++scene) {
+            fillZonePlate(static_cast<uint16_t*>(raw.mapped), balances[scene], gains[scene]);
             frame.wb = balances[scene];
             // Warm the GPU clock up, then interleave the variants so they are
             // timed under the same clock instead of one after another.
@@ -211,11 +223,15 @@ extern "C" JNIEXPORT jstring JNICALL Java_com_rawr_camera_video_VideoDownscalePr
                     if (const double ms = runOnce(variants[v], false); ms > 0) times[v].push_back(ms);
             for (int v = 0; v < kVariants; ++v) {
                 (void)runOnce(variants[v], true);
-                const std::string name = std::string(variants[v].name) + (scene == 0 ? "" : "_wb");
-                if (!variants[v].uhd)
+                const std::string name = std::string(variants[v].name) + suffixes[scene];
+                if (!variants[v].uhd) {
                     std::ofstream(outDir + "/downscale_" + name + ".f16", std::ios::binary)
                         .write(static_cast<const char*>(readback.mapped),
                                std::streamsize(kOutWidth) * kOutHeight * 8);
+                    std::ofstream(outDir + "/downscale_" + name + ".clip", std::ios::binary)
+                        .write(static_cast<const char*>(clipReadback.mapped),
+                               std::streamsize(kOutWidth / 2) * (kOutHeight / 2) * 2);
+                }
                 std::sort(times[v].begin(), times[v].end());
                 const double median = times[v].empty() ? 0.0 : times[v][times[v].size() / 2];
                 report += std::string(first ? "" : ",") + "\"" + name + "\":{\"method\":\"" +
@@ -235,6 +251,7 @@ extern "C" JNIEXPORT jstring JNICALL Java_com_rawr_camera_video_VideoDownscalePr
         if (pool) vkDestroyCommandPool(context.device(), pool, nullptr);
         destroyBuffer(context.device(), raw);
         destroyBuffer(context.device(), readback);
+        destroyBuffer(context.device(), clipReadback);
     }
     return env->NewStringUTF(report.c_str());
 }

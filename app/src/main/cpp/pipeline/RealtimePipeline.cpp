@@ -1,3 +1,4 @@
+#include <sys/system_properties.h>
 #include "pipeline/RealtimePipeline.h"
 
 #include <android/hardware_buffer.h>
@@ -225,7 +226,16 @@ bool RealtimePipeline::configureGeometry(uint64_t generation, uint32_t width, ui
         rawCreate.coloroppToneShaderPath = filesDir_ + "/raw_preview_coloropp_tone.comp.spv";
         rawCreate.workgroupX = 8;
         rawCreate.workgroupY = 8;
+        rawCreate.conditionalRendering = vulkanContext_.conditionalRenderingEnabled();
+        {
+            char value[PROP_VALUE_MAX]{};
+            // A/B switch for the clip-predicated highlight chain.
+            if (__system_property_get("debug.rawr.hl_predicate", value) > 0 && value[0] == '0')
+                rawCreate.conditionalRendering = false;
+        }
         rawPreview_ = std::make_unique<raw_preview::RawPreview>(rawCreate);
+        SESSION_LOGI("RAW_PREVIEW_HIGHLIGHT_PREDICATE conditionalRendering=%d",
+                     rawCreate.conditionalRendering ? 1 : 0);
 
         look_.createTone();
         // Film engine follows the baked look stored via applyFilmSimState.
