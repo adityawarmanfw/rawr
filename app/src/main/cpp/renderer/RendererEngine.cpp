@@ -499,6 +499,19 @@ void RendererEngine::prepare(DngSource& source, const std::string& path, const R
                         raw_demosaic::embeddedDualShaders(), cfg);
                     // AMaZE primary: AsShotNeutral gains (green = 1), as in the Amaze branch.
                     if (cfg.primary == dual::Primary::Amaze) dualPipeline->setWhiteBalance(source.wb);
+                    // Dual runs the whole frame as one tile: one submission per
+                    // pass, like the capture path, so a 50 MP frame cannot trip
+                    // the GPU watchdog (VK_ERROR_DEVICE_LOST) in a single submit.
+                    const auto flush = [&commands, this] {
+                        commands.submit();
+                        check();
+                        commands.begin();
+                    };
+                    dualPipeline->setPassBoundary(flush);
+                    dualPipeline->setCommandBoundary([&commands, flush] {
+                        flush();
+                        return commands.command;
+                    });
                     dualPipeline->record(
                         commands.command,
                         dual::NormalizedBayerBufferView{{upload.buffer, 0, size_t(bayerBytes)}, tw, th, cfg.pattern},
@@ -565,7 +578,9 @@ void RendererEngine::prepareProxy(DngSource& source, const std::string& path, bo
         for (uint32_t top = 0; top < sh && y < h; top += bandHeight) {
             check();
             const uint32_t lines = std::min(bandHeight, sh - top);
-            auto band = source.normalized(0, top, sw, lines, shading);
+            // Raw codes only: normalizing every band pixel cost ~16x the
+            // ~6% of 2x2 cells the overview actually samples.
+            const auto band = source.read(0, top, sw, lines);
             for (; y < h; ++y) {
                 const uint32_t sy = std::min(sh - 2, uint32_t(uint64_t(y) * sh / h) & ~1u);
                 if (sy + 1 >= top + lines) break;
@@ -576,7 +591,9 @@ void RendererEngine::prepareProxy(DngSource& source, const std::string& path, bo
                     for (uint32_t yy = 0; yy < 2; ++yy)
                         for (uint32_t xx = 0; xx < 2; ++xx) {
                             auto c = source.info().cfa.pattern[yy * 2 + xx];
-                            rgb[c] += row[size_t(yy) * sw + sx + xx] / 255.0f * (c == 1 ? .5f : 1.0f);
+                            const float v =
+                                source.normalizedSample(row[size_t(yy) * sw + sx + xx], sx + xx, sy + yy, shading);
+                            rgb[c] += v / 255.0f * (c == 1 ? .5f : 1.0f);
                         }
                     for (int c = 0; c < 3; ++c) dst[(size_t(y) * w + x) * 4 + c] = _Float16(rgb[c]);
                     dst[(size_t(y) * w + x) * 4 + 3] = 1;
