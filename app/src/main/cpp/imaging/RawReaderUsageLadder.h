@@ -9,7 +9,10 @@ namespace rawrcam::imaging {
 // deliver a frame and report no error. A GPU-usage reader that stays silent
 // past the deadline drops, once per process, to CPU-read-only usage; the GPU
 // still reads those buffers through a buffer import. A reader that ever
-// delivered a frame proves the GPU usage works, so later stalls never demote.
+// delivered a frame proves its GPU usage bits work, so later readers asking
+// only for proven bits never demote. Proof is per bit: a sampled-image reader
+// that delivered says nothing about a later GPU_DATA_BUFFER reader (SM8150:
+// gralloc < 4.1 refuses that usage on RAW16 and every request fails).
 // Failed captures before the first frame (observed on MT6878: gralloc refuses
 // the RAW16 GPU-usage allocation, so every request fails) demote without
 // waiting out the deadline, and an allocation probe can demote up front.
@@ -19,10 +22,11 @@ class RawReaderUsageLadder final {
     static constexpr int64_t kFirstFrameDeadlineMs = 4000;
     static constexpr uint32_t kFailedCapturesToDemote = 3;
 
-    void readerCreated(uint64_t generation, bool requestsGpuUsage, int64_t nowMs) {
+    void readerCreated(uint64_t generation, uint64_t gpuUsage, int64_t nowMs) {
         generation_ = generation;
         createdAtMs_ = nowMs;
-        pending_ = requestsGpuUsage && !cpuOnly_ && !gpuDelivered_;
+        usage_ = gpuUsage;
+        pending_ = gpuUsage != 0 && !cpuOnly_ && (provenUsage_ & gpuUsage) != gpuUsage;
         failedCaptures_ = 0;
     }
     void readerDestroyed(uint64_t generation) {
@@ -30,7 +34,7 @@ class RawReaderUsageLadder final {
     }
     void rawArrived(uint64_t generation) {
         if (generation != generation_) return;
-        if (pending_) gpuDelivered_ = true;
+        if (pending_) provenUsage_ |= usage_;
         pending_ = false;
     }
     void captureFailed(uint64_t generation) {
@@ -53,8 +57,9 @@ class RawReaderUsageLadder final {
     uint64_t generation_ = 0;
     int64_t createdAtMs_ = 0;
     uint32_t failedCaptures_ = 0;
+    uint64_t usage_ = 0;
+    uint64_t provenUsage_ = 0;
     bool pending_ = false;
-    bool gpuDelivered_ = false;
     bool cpuOnly_ = false;
 };
 
