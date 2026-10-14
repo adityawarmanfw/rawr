@@ -92,10 +92,13 @@ BayerCell loadBayerCell(ivec2 cell) {
     uint cfaState = stateForSample(rawR, rr, 0) | stateForSample(rawG1, gg1, 1) | stateForSample(rawG2, gg2, 2) |
                     stateForSample(rawB, bb, 3);
 
-    rr *= lensShadingGain(qr, 0);
-    gg1 *= lensShadingGain(qg1, 1);
-    gg2 *= lensShadingGain(qg2, 1);
-    bb *= lensShadingGain(qb, 3);
+    // One lookup per cell at its centre; greens pick the map channel from
+    // their sensor-row parity, as lensShadingGain does.
+    vec4 shading = lensShadingGainsAt(vec2(min(min(qr, qg1), min(qg2, qb))) + vec2(0.5));
+    rr *= shading.x;
+    gg1 *= shading[1 + (qg1.y & 1)];
+    gg2 *= shading[1 + (qg2.y & 1)];
+    bb *= shading.w;
     // Form RGB first. Selecting only the unclipped green sample here would be
     // a second, pre-RGB recovery stage and would expose the G1/G2 clip contour.
     float g = 0.5 * (gg1 + gg2);

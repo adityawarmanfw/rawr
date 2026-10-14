@@ -51,3 +51,24 @@ float lensShadingGain(ivec2 sensorPixel, int colorChannel) {
     float g11 = lscGainVec[b11][channel];
     return mix(mix(g00, g10, f.x), mix(g01, g11, f.x), f.y);
 }
+
+// All four map channels [R, G_even, G_odd, B] at one (sub-pixel) sensor
+// position: one bilinear lookup for a whole 2x2 Bayer cell instead of one per
+// sample. The cell's samples sit within a pixel of its centre while a grid
+// step spans hundreds, so the gain differs from per-sample lookups by far
+// less than a code. Preview only; still/video keep per-sample gains.
+vec4 lensShadingGainsAt(vec2 sensorPosition) {
+    uvec2 grid = LSC_GRID_SIZE;
+    uvec2 sensor = LSC_SENSOR_SIZE;
+    if (!(LSC_ENABLED) || grid.x < 2u || grid.y < 2u) return vec4(1.0);
+    vec2 uv = sensorPosition / vec2(max(float(sensor.x - 1u), 1.0), max(float(sensor.y - 1u), 1.0));
+    vec2 gridPoint = clamp(uv, vec2(0.0), vec2(1.0)) * vec2(grid.x - 1u, grid.y - 1u);
+    uvec2 p0 = uvec2(floor(gridPoint));
+    uvec2 p1 = min(p0 + uvec2(1u), uvec2(grid.x - 1u, grid.y - 1u));
+    vec2 f = fract(gridPoint);
+    vec4 g00 = lscGainVec[p0.y * grid.x + p0.x];
+    vec4 g10 = lscGainVec[p0.y * grid.x + p1.x];
+    vec4 g01 = lscGainVec[p1.y * grid.x + p0.x];
+    vec4 g11 = lscGainVec[p1.y * grid.x + p1.x];
+    return mix(mix(g00, g10, f.x), mix(g01, g11, f.x), f.y);
+}
