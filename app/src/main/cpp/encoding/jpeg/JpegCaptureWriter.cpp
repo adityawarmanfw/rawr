@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "diagnostics/logging/RuntimeTraceRecorder.h"
+#include "encoding/jpeg/JpegTimingsDescription.h"
 #include "encoding/jpeg/JpegTimingsFormat.h"
 #include "encoding/jpeg/UltraHdrMapFit.h"
 
@@ -250,74 +251,6 @@ std::vector<unsigned char> buildXmp(const std::string& description) {
     payload.insert(payload.end(), kXmpId, kXmpId + sizeof(kXmpId));  // includes required NUL
     payload.insert(payload.end(), xml.begin(), xml.end());
     return payload;
-}
-
-// Sub-items of Demosaic / Render setup (already counted there): how much of
-// each was engine building (pipeline compile + allocation) vs GPU work.
-std::string setupBreakdown(const JpegCaptureContext& c) {
-    if (!(c.demosaicSetupMs > 0.0) && !(c.renderEngineBuildMs > 0.0)) return {};
-    std::ostringstream out;
-    out << "- Engine build (in stages above): demosaic " << formatMs1(c.demosaicSetupMs) << " ms, render "
-        << formatMs1(c.renderEngineBuildMs) << " ms\n";
-    return out.str();
-}
-
-std::string appendProcessingTimes(const JpegCaptureContext& c, double jpegEncodingMs, double gainmapEncodeMs = 0.0,
-                                  bool ultraHdr = false) {
-    std::ostringstream out;
-    out << c.imageDescription;
-    // Same rule as formatImageProcessing: the tail counts only when its line prints.
-    const double tailMs = c.highlightStage >= 0 && *postTailLabel(c.highlightStage, c.defringeEnabled)
-                              ? std::max(c.postTailMs, 0.0)
-                              : 0.0;
-    // UltraHDR mux runs after EXIF assembly, like file write + fsync: measured
-    // into done.encodeMs (logcat-exact) but excluded from the printed total.
-    const std::string note = ultraHdr ? " ms (sum of stages below; mux + final sync in device log)\n"
-                                      : " ms (sum of stages below; final sync in device log)\n";
-    if (!c.hasMultiframeTimings) {
-        // Single-frame: same unified accounting, no multiframe/output lines.
-        // Replaces the legacy "Processing Time" block so every file's total
-        // equals the sum of its printed stages.
-        const double imageTotal = imageProcessingTotalMs(
-            0.0, 0.0, c.demosaicMs, c.renderSetupMs, c.highlightReconstructionMs, c.refinementMs, c.colorProcessingMs,
-            c.tonemapMs, c.queueGapsMs, c.readbackMs, c.gainmapMs, c.denoiseMs, c.galoshYuvMs, tailMs);
-        const double total = overallTotalMs(0.0, imageTotal, jpegEncodingMs);
-        out << "\nTIMINGS: " << formatMs1(total) << note
-            << formatImageProcessing(0.0, 0.0, false, c.demosaicMs, 0.0, c.renderSetupMs, c.highlightReconstructionMs,
-                                     c.appliedLensShadingCorrection, c.appliedFccSteps, c.refinementMs,
-                                     c.colorProcessingMs, c.tonemapMs, c.filmRendered, c.queueGapsMs, c.readbackMs,
-                                     false, c.gainmapMs, c.denoiseMs, c.galoshYuvMs, c.highlightStage, c.postTailMs,
-                                     c.defringeEnabled)
-            << setupBreakdown(c) << formatJpegEncoding(jpegEncodingMs);
-        if (ultraHdr) {
-            out << "- UltraHDR gain map JPEG: " << formatMs1(gainmapEncodeMs) << " ms (included in JPEG encoding)\n";
-        }
-        return out.str();
-    }
-    {
-        // Multiframe path (unchanged): preformatted multiframe block plus the
-        // full image-processing section and top-level encode line.
-        // Unified TIMINGS section (multiframe path only): TOTAL is the exact
-        // sum of the printed stages. File write + fsync complete after EXIF
-        // assembly and stay logcat/trace-only.
-        const double demosaicOrPrep = c.mfDirectRgb ? c.mfRgbPrepMs : c.demosaicMs;
-        const double imageTotal =
-            imageProcessingTotalMs(c.mfBaseReadMs, c.mfProjectMs, demosaicOrPrep, c.renderSetupMs,
-                                   c.highlightReconstructionMs, c.refinementMs, c.colorProcessingMs, c.tonemapMs,
-                                   c.queueGapsMs, c.readbackMs, c.gainmapMs, c.denoiseMs, c.galoshYuvMs, tailMs);
-        const double total = overallTotalMs(c.multiframeTotalMs, imageTotal, jpegEncodingMs);
-        out << "\nTIMINGS: " << formatMs1(total) << note << c.multiframeTimingsBlock
-            << formatImageProcessing(c.mfBaseReadMs, c.mfProjectMs, c.mfDirectRgb, c.demosaicMs, c.mfRgbPrepMs,
-                                     c.renderSetupMs, c.highlightReconstructionMs, c.appliedLensShadingCorrection,
-                                     c.appliedFccSteps, c.refinementMs, c.colorProcessingMs, c.tonemapMs,
-                                     c.filmRendered, c.queueGapsMs, c.readbackMs, true, c.gainmapMs, c.denoiseMs,
-                                     c.galoshYuvMs, c.highlightStage, c.postTailMs, c.defringeEnabled)
-            << setupBreakdown(c) << formatJpegEncoding(jpegEncodingMs);
-        if (ultraHdr) {
-            out << "- UltraHDR gain map JPEG: " << formatMs1(gainmapEncodeMs) << " ms (included in JPEG encoding)\n";
-        }
-        return out.str();
-    }
 }
 
 int tjSubsampling(ChromaSubsampling s) {

@@ -7,6 +7,8 @@
 #include <vector>
 
 #include "capture/multiframe/MultiframeBaseFrame.h"
+#include "encoding/ProcessingParameters.h"
+#include "encoding/jpeg/JpegTimingsFormat.h"
 
 namespace rawrcam::capture::multiframe {
 
@@ -44,34 +46,16 @@ struct MultiframeTuningView {
 };
 
 // General-pipeline (non-multiframe) capture settings for the shared
-// PARAMETERS section. Filled in run() from the JPEG context; no native deps.
-struct MultiframeOutputInfo {
+// PARAMETERS section, plus the multiframe noise-profile input. Filled in
+// run() from the JPEG context; no native deps.
+struct MultiframeOutputInfo : encoding::OutputParameters {
+    MultiframeOutputInfo() { chromaDenoiseLabel = "off"; }
     std::string noiseProfile = "Default";
-    std::string demosaicLabel = "n/a";
-    std::string dualLabel = "n/a";
-    std::string chromaDenoiseLabel = "off";
-    std::uint32_t fccSteps = 1;
-    bool lscEnabled = false;
-    bool highlightReconstructionEnabled = true;
-    int jpegQuality = 98;
-    std::string subsampling = "4:2:2";
-    std::string colorProfile = "RAWR NTRL";
 };
 
 // Tonemap UI values, mapped from tonemap::TonemapParams in run() so this
 // module stays free of engine headers.
-struct TonemapUiValues {
-    float exposureEV = 0.0f;
-    float blacks = 0.0f;
-    float shadows = 0.0f;
-    float midtones = 0.0f;
-    float contrast = 0.0f;
-    float whites = 0.0f;
-    float highlights = 0.0f;
-    float saturation = 0.0f;
-    float vibrance = 0.0f;
-    float aePostGain = 1.0f;
-};
+using TonemapUiValues = encoding::ToneParameters;
 
 // Measured stage times (ms) feeding the TIMINGS sections.
 struct MultiframeStageTimings {
@@ -104,7 +88,7 @@ struct MultiframeStageTimings {
     return baseReadMs + multiframeTotalMs + projectMs;
 }
 
-// "Captured with Rawr\nMultiframe GPU merge\n" header.
+// "Captured with Rawr v<version>\nMultiframe GPU merge\n" header.
 std::string buildExifHeader();
 
 // Header + PARAMETERS (three subgroups) + Tonemap/Film section. Shared by
@@ -113,8 +97,9 @@ std::string buildParametersBlock(const MultiframeTuningView& tuning, const Multi
                                  const TonemapUiValues& tonemap, const std::string& filmDescription, bool filmRendered,
                                  std::uint32_t frameCount, std::uint32_t outWidth, std::uint32_t outHeight);
 
-// Base Frame Selection section. Scores are max-normalized in print; raw
-// values stay in RZSL. Empty scores (Middle mode) print the middle reference.
+// Base Frame Selection section: the base frame and the mean sharpness
+// relative to it (per-frame raw scores stay in RZSL). Empty scores (Middle
+// mode) print the middle reference.
 std::string buildSharpnessSection(MultiframeBaseFrameMode mode, const std::vector<float>& scores,
                                   std::uint32_t referenceIndex, std::uint32_t frameCount);
 
@@ -122,7 +107,8 @@ std::string buildSharpnessSection(MultiframeBaseFrameMode mode, const std::vecto
 // eight detail lines. Shared string for DNG and (via context) JPEG.
 std::string formatMultiframeTimings(const MultiframeStageTimings& stages, MultiframeBaseFrameMode mode);
 
-// The two output-projection lines (DNG horizon).
-std::string formatOutputProjection(double baseReadMs, double projectMs);
+// The output-projection section lives in encoding/jpeg/JpegTimingsFormat.h
+// (shared with the JPEG TIMINGS).
+using encoding::jpeg::formatOutputProjection;
 
 }  // namespace rawrcam::capture::multiframe

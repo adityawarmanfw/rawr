@@ -156,6 +156,11 @@ internal class RendererViewModel(application: Application) : AndroidViewModel(ap
         }
     }
 
+    fun setAdaptiveToneMode(job: RenderJob, mode: com.rawr.camera.settings.model.AutoKeyExposure) {
+        if (state.value.loading || store.busy.value) return
+        store.updateAdaptiveToneMode(job.id, mode)
+    }
+
     fun saveResolution(job: RenderJob, megapixels: Double) = operation {
         withContext(Dispatchers.IO) { store.save(store.current(job.id).copy(megapixels = megapixels)) }
     }

@@ -90,8 +90,9 @@ int main() {
     const std::vector<float> scores{0.5f, 2.0f, 1.0f, 1.5f};
     const std::string sharp = buildSharpnessSection(MultiframeBaseFrameMode::Sharpest, scores, 1, 4);
     assert(contains(sharp, "Mode: sharpest"));
-    assert(contains(sharp, "F2: 1.000 (base)"));
-    assert(contains(sharp, "F1: 0.250"));
+    assert(contains(sharp, "- Reference: frame 2 of 4 (base)\n"));
+    assert(contains(sharp, "- Average sharpness: 0.625 (relative to base)\n"));
+    assert(!contains(sharp, "F1:") && !contains(sharp, "F2:"));
     const std::string fallback = buildSharpnessSection(MultiframeBaseFrameMode::Sharpest, {}, 2, 4);
     assert(contains(fallback, "middle fallback"));
 
@@ -107,9 +108,9 @@ int main() {
     assert(contains(timingsMiddle, "skipped (middle)"));
 
     const std::string imageProc =
-        formatImageProcessing(24.8, 31.2, true, 0.0, 96.4, 6400.0, 210.7, false, 1, 88.3, 342.9, 906.8, false, 12.5,
+        formatImageProcessing(true, 0.0, 96.4, 6400.0, 210.7, false, 1, 88.3, 342.9, 906.8, false, 12.5,
                               85.2);
-    assert(contains(imageProc, "Image Processing: 8198.8 ms"));
+    assert(contains(imageProc, "Image Processing: 8142.8 ms"));
     assert(contains(imageProc, "Merged RGB prep: 96.4 ms"));
     assert(contains(imageProc, "Render setup: 6400.0 ms"));
     assert(contains(imageProc, "Submit/fence gaps: 12.5 ms"));
@@ -123,15 +124,15 @@ int main() {
     assert(imageProcessingTotalMs(0.0, 0.0, 1113.5, 3598.2, 2.6, 16.7, 10.8, 553.7, 5.1, 87.9, 3.2) ==
            1113.5 + 3598.2 + 2.6 + 16.7 + 10.8 + 553.7 + 3.2 + 5.1 + 87.9);
     const std::string uhdr =
-        formatImageProcessing(0.0, 0.0, false, 1113.5, 0.0, 3598.2, 2.6, false, 1, 16.7, 10.8, 553.7, false, 5.1,
+        formatImageProcessing(false, 1113.5, 0.0, 3598.2, 2.6, false, 1, 16.7, 10.8, 553.7, false, 5.1,
                               87.9, false, 3.2);
     assert(contains(uhdr, "Image Processing: 5391.7 ms"));
     assert(contains(uhdr, "- Gain map (GPU): 3.2 ms"));
-    const std::string remosaic = formatImageProcessing(24.8, 31.2, false, 400.0, 0.0, 35.0, 210.7, true, 2, 88.3,
+    const std::string remosaic = formatImageProcessing(false, 400.0, 0.0, 35.0, 210.7, true, 2, 88.3,
                                                        342.9, 906.8, false, 4.1, 60.3);
     // Single-frame: no base/projection lines, totals still exact.
     const std::string single =
-        formatImageProcessing(0.0, 0.0, false, 1113.5, 0.0, 3598.2, 2.6, false, 1, 16.7, 10.8, 553.7, true, 5.1,
+        formatImageProcessing(false, 1113.5, 0.0, 3598.2, 2.6, false, 1, 16.7, 10.8, 553.7, true, 5.1,
                               87.9, false);
     assert(!contains(single, "Base readback:"));
     assert(!contains(single, "CFA projection:"));
@@ -144,30 +145,32 @@ int main() {
 
     // Described highlight stage: off prints "off", Inpaint Opposed points at
     // colour processing, and defringe/tone time gets its own line in the total.
-    const std::string hlOff = formatImageProcessing(0.0, 0.0, false, 100.0, 0.0, 10.0, 0.4, true, 1, 20.0, 5.0,
+    const std::string hlOff = formatImageProcessing(false, 100.0, 0.0, 10.0, 0.4, true, 1, 20.0, 5.0,
                                                     30.0, false, 2.0, 8.0, false, 0.0, 0.0, 0.0, 0, 0.0, false);
     assert(contains(hlOff, "- HL reconstruction: off\n"));
     assert(!contains(hlOff, "Defringe"));
     assert(contains(hlOff, "Image Processing: 175.4 ms"));
-    const std::string io = formatImageProcessing(0.0, 0.0, false, 100.0, 0.0, 10.0, 0.1, true, 1, 20.0, 6.0,
+    const std::string io = formatImageProcessing(false, 100.0, 0.0, 10.0, 0.1, true, 1, 20.0, 6.0,
                                                  30.0, false, 2.0, 8.0, false, 0.0, 0.0, 0.0, 2, 3.5, true);
     assert(contains(io, "- HL reconstruction (Inpaint Opposed): in Color processing\n"));
     assert(contains(io, "- Color processing (WB + Inpaint Opposed): 6.0 ms"));
     assert(contains(io, "- Defringe + highlight tone: 3.5 ms"));
     assert(contains(io, "Image Processing: 179.6 ms"));
-    const std::string propagation = formatImageProcessing(0.0, 0.0, false, 100.0, 0.0, 10.0, 4.2, true, 1, 20.0,
+    const std::string propagation = formatImageProcessing(false, 100.0, 0.0, 10.0, 4.2, true, 1, 20.0,
                                                           5.0, 30.0, false, 2.0, 8.0, false, 0.0, 0.0, 0.0, 1,
                                                           1.5, true);
     assert(contains(propagation, "- HL reconstruction (color propagation): 4.2 ms"));
     assert(contains(propagation, "- Defringe: 1.5 ms"));
     assert(contains(propagation, "- Color processing: 5.0 ms"));
-    const std::string opposed = formatImageProcessing(0.0, 0.0, false, 100.0, 0.0, 10.0, 0.1, true, 1, 20.0, 6.0,
+    const std::string opposed = formatImageProcessing(false, 100.0, 0.0, 10.0, 0.1, true, 1, 20.0, 6.0,
                                                       30.0, false, 2.0, 8.0, false, 0.0, 0.0, 0.0, 2, 2.4, false);
     assert(contains(opposed, "- HL reconstruction (Inpaint Opposed): in Color processing"));
     assert(contains(opposed, "- Highlight tone (Inpaint Opposed): 2.4 ms"));
 
     assert(contains(formatOutputProjection(24.8, 31.2), "CFA projection: 31.2 ms"));
+    assert(contains(formatOutputProjection(24.8, 31.2), "\nOutput projection: 56.0 ms\n- Base readback: 24.8 ms\n"));
     assert(contains(buildExifHeader(), "Multiframe GPU merge"));
+    assert(buildExifHeader().rfind("Captured with Rawr v", 0) == 0);
 
     std::cout << "Multiframe EXIF description tests passed\n";
 }

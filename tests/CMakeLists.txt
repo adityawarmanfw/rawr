@@ -94,6 +94,9 @@ rawr_test(bracket_exposure_test
   "${RAWR_ROOT}/tests/native/bracket_exposure_test.cpp")
 rawr_test(film_scratch_estimate_test
   "${RAWR_ROOT}/tests/native/film_scratch_estimate_test.cpp")
+rawr_test(public_description_test
+  "${RAWR_ROOT}/tests/native/public_description_test.cpp"
+  "${RAWR_ROOT}/app/src/main/cpp/tonemap/ColorRenderProfile.cpp")
 rawr_test(multiframe_exif_test
   "${RAWR_ROOT}/tests/native/multiframe_exif_test.cpp"
   "${RAWR_ROOT}/app/src/main/cpp/capture/multiframe/MultiframeDescription.cpp")

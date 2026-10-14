@@ -114,10 +114,24 @@ develop::DevelopSettings readRendererDevelopSettings(Json& json) {
     if (json.text("colorRenderProfile") == "SRgb") {
         out.colorRenderProfile = rawrcam::tonemap_integration::ColorRenderProfile::SRgb;
         out.importedLutProfileId.clear();
+    } else if (json.text("colorRenderProfile") == "Rec709") {
+        out.colorRenderProfile = rawrcam::tonemap_integration::ColorRenderProfile::Rec709;
+        out.importedLutProfileId.clear();
     } else if (json.text("colorRenderProfile") == "AgX") {
         out.colorRenderProfile = rawrcam::tonemap_integration::ColorRenderProfile::AgX;
         out.importedLutProfileId.clear();
     }
+    // Demosaic and LSC run in the Renderer's own prepare step (RenderOptions);
+    // read them here too so the export describes what actually ran.
+    const std::string demosaic = json.text("demosaicAlgorithm");
+    out.demosaicAlgorithm = demosaic == "Amaze"           ? rawrcam::develop::DemosaicAlgorithm::Amaze
+                            : demosaic == "Vng4"          ? rawrcam::develop::DemosaicAlgorithm::Vng4
+                            : demosaic == "DualRcdVng4"   ? rawrcam::develop::DemosaicAlgorithm::DualRcdVng4
+                            : demosaic == "DualAmazeVng4" ? rawrcam::develop::DemosaicAlgorithm::DualAmazeVng4
+                                                          : rawrcam::develop::DemosaicAlgorithm::Rcd;
+    out.dualAutoContrast = json.flag("dualAutoContrast", true);
+    out.dualContrastPercent = std::clamp(float(json.number("dualContrastPercent", 20)), 0.0f, 100.0f);
+    out.lensShadingCorrectionEnabled = json.flag("lensShadingCorrectionEnabled", true);
     out.fccSteps = uint32_t(json.number("fccSteps", 2));
     out.fccEdgeSigma = 0;
     out.fccChromaBound = 0;

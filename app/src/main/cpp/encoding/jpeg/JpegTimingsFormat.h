@@ -8,8 +8,8 @@
 
 namespace rawrcam::encoding::jpeg {
 
-// Unified TIMINGS formatting shared by the JPEG writer (multiframe path
-// only; single-frame keeps the legacy block). Pure functions, unit-tested.
+// Unified TIMINGS formatting shared by every JPEG writer path. Pure
+// functions, unit-tested.
 // All stage times in ms. Totals must equal the sum of the printed lines;
 // file write + fsync complete after EXIF is assembled and are logcat-only.
 
@@ -41,11 +41,18 @@ inline const char* postTailLabel(int highlightStage, bool defringeEnabled) {
     return multiframeTotalMs + imageProcessingTotalMs + encodeMs;
 }
 
-inline std::string formatImageProcessing(double baseReadMs, double projectMs, bool directRgb, double demosaicMs,
+// Multiframe only: base readback and CFA projection, its own section in both
+// the merged DNG and the JPEG.
+inline std::string formatOutputProjection(double baseReadMs, double projectMs) {
+    return "\nOutput projection: " + formatMs1(baseReadMs + projectMs) + " ms\n- Base readback: " +
+           formatMs1(baseReadMs) + " ms\n- CFA projection: " + formatMs1(projectMs) + " ms\n";
+}
+
+inline std::string formatImageProcessing(bool directRgb, double demosaicMs,
                                          double rgbPrepMs, double setupMs, double hlMs, bool lscOn,
                                          std::uint32_t fccSteps, double fccMs, double colorMs, double toneMs,
                                          bool filmRendered, double gapsMs, double readbackMs,
-                                         bool showOutputLines = true, double gainmapMs = 0.0, double denoiseMs = 0.0,
+                                         bool multiframe = true, double gainmapMs = 0.0, double denoiseMs = 0.0,
                                          double galoshYuvMs = 0.0, int highlightStage = -1, double postTailMs = 0.0,
                                          bool defringeEnabled = false) {
     // highlightStage -1 keeps the legacy lines. Otherwise: 0 off, 1 colour
@@ -56,8 +63,6 @@ inline std::string formatImageProcessing(double baseReadMs, double projectMs, bo
     const char* tailLabel = described ? postTailLabel(highlightStage, defringeEnabled) : "";
     const double postTail = *tailLabel ? std::max(postTailMs, 0.0) : 0.0;
     const double demosaicOrPrep = directRgb ? rgbPrepMs : demosaicMs;
-    const double base = showOutputLines ? baseReadMs : 0.0;
-    const double project = showOutputLines ? projectMs : 0.0;
     // UltraHDR only: the GPU gain map dispatch is an image-processing stage.
     // Zero keeps legacy output byte-identical (no line printed, total w/o it).
     const double gainmap = gainmapMs > 0.0 ? gainmapMs : 0.0;
@@ -67,42 +72,41 @@ inline std::string formatImageProcessing(double baseReadMs, double projectMs, bo
     const double galoshYuv = galoshYuvMs > 0.0 ? galoshYuvMs : 0.0;
     std::ostringstream out;
     out << "\nImage Processing: "
-        << formatMs1(imageProcessingTotalMs(base, project, demosaicOrPrep, setupMs, hlMs, fccMs, colorMs, toneMs,
+        << formatMs1(imageProcessingTotalMs(0.0, 0.0, demosaicOrPrep, setupMs, hlMs, fccMs, colorMs, toneMs,
                                             gapsMs, readbackMs, gainmap, denoise, galoshYuv, postTail))
         << " ms\n";
-    if (showOutputLines) {
-        out << "- Base readback: " << formatMs1(baseReadMs) << " ms\n"
-            << "- CFA projection: " << formatMs1(projectMs) << " ms\n";
-    }
+    // Stages in execution order: demosaic, render setup, then the
+    // post-demosaic passes as recorded (wavelet denoise runs pre-WB; FCC
+    // follows defringe), tone or film, gain map, and the readback.
     if (directRgb) {
         out << "- Demosaic: n/a (merged_rgb input)\n"
             << "- Merged RGB prep: " << formatMs1(rgbPrepMs) << " ms\n";
     } else {
-        out << "- Demosaic: " << formatMs1(demosaicMs) << " ms\n"
-            << "- Merged RGB prep: n/a (remosaiced input)\n";
+        out << "- Demosaic: " << formatMs1(demosaicMs) << " ms\n";
+        // Merged-RGB prep only exists on the multiframe path.
+        if (multiframe) out << "- Merged RGB prep: n/a (remosaiced input)\n";
     }
-    out << "- Render setup: " << formatMs1(setupMs) << " ms\n";
+    out << "- Vignette correction (LSC): " << (lscOn ? "on (time in Demosaic)" : "off") << '\n'
+        << "- Render setup: " << formatMs1(setupMs) << " ms\n";
+    if (denoise > 0.0) out << "- Denoise (wavelet): " << formatMs1(denoise) << " ms\n";
+    out << "- Color processing" << (described && highlightStage == 2 ? " (WB + Inpaint Opposed)" : "") << ": "
+        << formatMs1(colorMs) << " ms\n";
     if (!described) {
         out << "- HL reconstruction: " << formatMs1(hlMs) << " ms\n";
     } else if (highlightStage == 0) {
         // Off still clamps to the common channel ceiling inside colour processing.
         out << "- HL reconstruction: off\n";
+    } else if (highlightStage == 1) {
+        out << "- HL reconstruction (color propagation): " << formatMs1(hlMs) << " ms\n";
     } else {
-        if (highlightStage == 1)
-            out << "- HL reconstruction (color propagation): " << formatMs1(hlMs) << " ms\n";
-        else
-            out << "- HL reconstruction (Inpaint Opposed): in Color processing\n";
+        out << "- HL reconstruction (Inpaint Opposed): in Color processing\n";
     }
-    out << "- Vignette correction (LSC): " << (lscOn ? "on (time in Demosaic)" : "off") << '\n'
-        << "- FCC (chroma cleanup, " << fccSteps << (fccSteps == 1u ? " step" : " steps") << "): " << formatMs1(fccMs)
-        << " ms\n"
-        << "- Color processing" << (described && highlightStage == 2 ? " (WB + Inpaint Opposed)" : "") << ": "
-        << formatMs1(colorMs) << " ms\n";
     if (*tailLabel) out << "- " << tailLabel << ": " << formatMs1(postTail) << " ms\n";
+    out << "- FCC (chroma cleanup, " << fccSteps << (fccSteps == 1u ? " step" : " steps") << "): " << formatMs1(fccMs)
+        << " ms\n";
+    if (galoshYuv > 0.0) out << "- Denoise (galosh-yuv): " << formatMs1(galoshYuv) << " ms\n";
     out << "- " << (filmRendered ? "Film record" : "Tonemap") << ": " << formatMs1(toneMs) << " ms\n";
     if (gainmap > 0.0) out << "- Gain map (GPU): " << formatMs1(gainmap) << " ms\n";
-    if (denoise > 0.0) out << "- Denoise (wavelet): " << formatMs1(denoise) << " ms\n";
-    if (galoshYuv > 0.0) out << "- Denoise (galosh-yuv): " << formatMs1(galoshYuv) << " ms\n";
     out << "- Submit/fence gaps: " << formatMs1(gapsMs) << " ms\n"
         << "- Readback: " << formatMs1(readbackMs) << " ms\n";
     return out.str();

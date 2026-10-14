@@ -268,6 +268,37 @@ inline AgxParams agxFromControls(const float* v) noexcept {
     return p;
 }
 
+// Inverse of agxFromControls: the kAgxControlCount controls of p.
+inline std::array<float, kAgxControlCount> agxToControls(const AgxParams& p) noexcept {
+    std::array<float, kAgxControlCount> v{};
+    v[0] = p.whiteEv;
+    v[1] = p.blackEv;
+    v[2] = p.contrast;
+    v[3] = p.shoulderPower;
+    v[4] = p.toePower;
+    v[5] = p.pivotEv;
+    v[6] = p.pivotOutput;
+    v[7] = p.shoulderLinear;
+    v[8] = p.toeLinear;
+    v[9] = p.targetWhite;
+    v[10] = p.targetBlack;
+    v[11] = p.gamma;
+    v[12] = p.lookSlope;
+    v[13] = p.lookLift;
+    v[14] = p.lookBrightness;
+    v[15] = p.lookSaturation;
+    v[16] = p.preserveHue;
+    for (int c = 0; c < 3; ++c) {
+        v[17 + 2 * c] = p.primaries.inset[c];
+        v[18 + 2 * c] = p.primaries.rotation[c];
+        v[25 + 2 * c] = p.primaries.outset[c];
+        v[26 + 2 * c] = p.primaries.unrotation[c];
+    }
+    v[23] = p.primaries.masterOutset;
+    v[24] = p.primaries.masterUnrotation;
+    return v;
+}
+
 inline AgxParams agxPreset(AgxPreset preset) {
     return agxFromControls(kAgxPresetControls[static_cast<uint32_t>(preset)]);
 }

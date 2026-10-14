@@ -81,7 +81,7 @@ void fillDngExif(TinyDngWriteParams& p, const rawrcam::imaging::RawSnapshot& fra
         p.lensModel = captureContext.deviceModel;
     }
     p.software = rawrcam::encoding::kSoftwareName;
-    p.description = tiffAsciiDescription(captureContext.imageDescription.empty() ? "Captured with Rawr"
+    p.description = tiffAsciiDescription(captureContext.imageDescription.empty() ? rawrcam::encoding::kCapturedWith
                                                                                  : captureContext.imageDescription);
     switch (rawrcam::geometry::presentationQuarterTurns(ctx.geometry.sensorOrientationDegrees,
                                                         captureContext.deviceRotationDegrees)) {

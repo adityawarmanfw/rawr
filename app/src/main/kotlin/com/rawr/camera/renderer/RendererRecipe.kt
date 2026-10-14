@@ -11,13 +11,62 @@ import org.json.JSONObject
 
 internal object RendererRecipe {
     /** Freeze defaults once. A captured job owns its recipe; a new DNG uses the user's current look. */
+    /**
+     * Whether the editor starts from the source's own recipe: resumed captures, and imported DNGs
+     * that carry a Rawr processing recipe, replay the pipeline they were captured with. Other DNGs
+     * start from the current settings.
+     */
+    fun replaysRecipe(capture: String, embeddedRecipe: String?): Boolean =
+        capture.isNotBlank() || !embeddedRecipe.isNullOrBlank()
+
+    /** Capture metadata every draft carries from its source, whatever the editor settings. */
+    private val sourceKeys = listOf("aePostGain", "adaptiveTone", "capturedAutoKeyExposure", "timestampNs", "resolvedFrame")
+
+    /** Capture-time adaptive shadow lift in a draft or source recipe; null when it carries none. */
+    fun adaptiveLift(recipe: String): Float? = runCatching {
+        JSONObject(recipe).optJSONObject("adaptiveTone")?.takeIf { it.has("liftEv") }?.getDouble("liftEv")?.toFloat()
+    }.getOrNull()
+
+    /** Shadow-lift mode a source was captured with; null for older captures and other cameras. */
+    fun capturedAutoKey(recipe: String): AutoKeyExposure? = runCatching {
+        JSONObject(recipe).optString("capturedAutoKeyExposure").let { name -> AutoKeyExposure.entries.firstOrNull { it.name == name } }
+    }.getOrNull()
+
+    /** The editor's shadow-lift mode: its override, else the captured mode; null = "as captured" (mode unknown). */
+    fun adaptiveToneMode(draft: String): AutoKeyExposure? = runCatching {
+        JSONObject(draft).optString("adaptiveToneMode").let { name -> AutoKeyExposure.entries.firstOrNull { it.name == name } }
+    }.getOrNull() ?: capturedAutoKey(draft) ?: AutoKeyExposure.Off.takeIf { (adaptiveLift(draft) ?: 0f) <= 0f }
+
+    /**
+     * [draft] with shadow-lift [mode]. Choosing what the source was captured with clears the
+     * override, so the captured adaptive tone replays exactly.
+     */
+    fun withAdaptiveToneMode(draft: String, mode: AutoKeyExposure): String {
+        val json = JSONObject(draft)
+        val captured = capturedAutoKey(draft)
+            ?: AutoKeyExposure.Off.takeIf { (adaptiveLift(draft) ?: 0f) <= 0f }
+        if (mode == captured) json.remove("adaptiveToneMode") else json.put("adaptiveToneMode", mode.name)
+        return json.toString()
+    }
+
+    /**
+     * Settings-driven draft rebuilt from [values]: capture metadata comes from [original]; the
+     * editor's shadow-lift override carries over from [previousDraft].
+     */
+    fun rebuiltDraft(values: SettingsValues, previousDraft: String, original: String): String {
+        val draft = JSONObject(encode(values))
+        val source = JSONObject(original)
+        sourceKeys.forEach { key -> if (source.has(key)) draft.put(key, source.get(key)) }
+        runCatching { JSONObject(previousDraft).optString("adaptiveToneMode") }.getOrNull()
+            ?.takeIf { it.isNotBlank() }?.let { draft.put("adaptiveToneMode", it) }
+        return draft.toString()
+    }
+
     fun startingDraft(source: String, library: SettingsValues, captured: Boolean): String {
         val snapshot = if (captured) decode(source, library) else library.copy(captureModeId = "photo")
         return JSONObject(encode(snapshot)).apply {
             val metadata = JSONObject(source)
-            listOf("aePostGain", "adaptiveTone", "timestampNs", "resolvedFrame").forEach { key ->
-                if (metadata.has(key)) put(key, metadata.get(key))
-            }
+            sourceKeys.forEach { key -> if (metadata.has(key)) put(key, metadata.get(key)) }
         }.toString()
     }
 
@@ -28,6 +77,7 @@ internal object RendererRecipe {
         put("editorTones", JSONObject().apply {
             put("rawr", LutProfileCodec.encodeTone(v.rawrBaseTone))
             put("srgb", LutProfileCodec.encodeTone(v.srgbTone))
+            put("rec709", LutProfileCodec.encodeTone(v.rec709Tone))
             put("agx", LutProfileCodec.encodeTone(v.agxTone))
         })
         put("editorAgx", JSONObject().apply { v.agxValues.forEach { (preset, values) ->
@@ -45,6 +95,8 @@ internal object RendererRecipe {
         val d = library.copy(captureModeId = "photo",
             rawrBaseTone = savedTones?.optString("rawr")?.let(LutProfileCodec::decodeTone) ?: library.rawrBaseTone,
             srgbTone = savedTones?.optString("srgb")?.let(LutProfileCodec::decodeTone) ?: library.srgbTone,
+            rec709Tone = savedTones?.optString("rec709")?.takeIf { it.isNotBlank() }?.let(LutProfileCodec::decodeTone)
+                ?: library.rec709Tone,
             agxTone = savedTones?.optString("agx")?.let(LutProfileCodec::decodeTone) ?: library.agxTone,
             agxValues = library.agxValues + AgxPreset.entries.mapNotNull { preset ->
                 j.optJSONObject("editorAgx")?.optJSONArray(preset.name)?.takeIf { it.length() == AgxParameter.entries.size }?.let { a ->
@@ -215,7 +267,7 @@ internal object RendererRecipe {
                 LutGamut.valueOf(p.getString("outputGamut")), LutTransfer.valueOf(p.getString("outputTransfer")),
                 AfterLutAction.valueOf(p.getString("afterLut")), profileTone)
         }
-        // AgX recipes carry their preset and the five controls (defaults fill gaps).
+        // AgX recipes carry their preset and every control (preset defaults fill gaps).
         val agx = j.optJSONObject("agx")?.let { a ->
             val preset = AgxPreset.entries.firstOrNull { it.name == a.optString("preset") } ?: AgxPreset.Default
             preset to AgxCatalog.sanitized(AgxCatalog.all.fold(preset.defaults) { acc, spec ->
@@ -224,6 +276,7 @@ internal object RendererRecipe {
         }
         val profile = when {
             j.optString("colorRenderProfile") == ColorRenderProfile.SRgb.name -> ColorRenderProfile.SRgb
+            j.optString("colorRenderProfile") == ColorRenderProfile.Rec709.name -> ColorRenderProfile.Rec709
             j.optString("colorRenderProfile") == ColorRenderProfile.AgX.name -> ColorRenderProfile.AgX
             selected != null -> ColorRenderProfile.UserLut
             else -> ColorRenderProfile.RawrBase
@@ -231,6 +284,7 @@ internal object RendererRecipe {
         return d.copy(imageTone = tone,
             colorRenderProfile = profile,
             srgbTone = if (profile == ColorRenderProfile.SRgb) profileTone else d.srgbTone,
+            rec709Tone = if (profile == ColorRenderProfile.Rec709) profileTone else d.rec709Tone,
             agxTone = if (profile == ColorRenderProfile.AgX) profileTone else d.agxTone,
             agxPreset = agx?.first ?: d.agxPreset,
             agxValues = agx?.let { d.agxValues + it } ?: d.agxValues,

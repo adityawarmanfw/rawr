@@ -1,6 +1,7 @@
 package com.rawr.camera.renderer
 
 import android.content.Context
+import com.rawr.camera.settings.model.AutoKeyExposure
 import com.rawr.camera.settings.model.SettingsValues
 import com.rawr.camera.storage.CaptureJournal
 import com.rawr.camera.storage.StillOutputStore
@@ -75,11 +76,17 @@ internal class RendererJobRepository(private val context: Context, private val s
     fun updateDraft(id: String, values: SettingsValues) {
         draftWrites.remove(id)?.cancel()
         val job = current(id)
-        val draft = JSONObject(RendererRecipe.encode(values)); val original = JSONObject(job.original)
-        listOf("aePostGain", "adaptiveTone", "timestampNs", "resolvedFrame").forEach { key -> if (original.has(key)) draft.put(key, original.get(key)) }
-        val updated = job.copy(draft = draft.toString(), status = "Editing", error = "")
-        mutableJobs.value = mutableJobs.value.map { if (it.id == id) updated else it }
-        draftWrites[id] = scope.launch { delay(500); saveLane.withLock { save(current(id)) } }
+        writeDraft(job.copy(draft = RendererRecipe.rebuiltDraft(values, job.draft, job.original)))
+    }
+    fun updateAdaptiveToneMode(id: String, mode: AutoKeyExposure) {
+        draftWrites.remove(id)?.cancel()
+        val job = current(id)
+        writeDraft(job.copy(draft = RendererRecipe.withAdaptiveToneMode(job.draft, mode)))
+    }
+    private fun writeDraft(job: RenderJob) {
+        val updated = job.copy(status = "Editing", error = "")
+        mutableJobs.value = mutableJobs.value.map { if (it.id == job.id) updated else it }
+        draftWrites[job.id] = scope.launch { delay(500); saveLane.withLock { save(current(job.id)) } }
     }
     fun cancelDraftWrite(id: String) { draftWrites.remove(id)?.cancel() }
     fun checkImportSpace(bytes: Long) {

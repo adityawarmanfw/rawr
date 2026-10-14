@@ -35,7 +35,7 @@ void SingleFrameCaptureOutputs::accept(encoding::dng::DngCaptureContext dng, Jpe
 }
 void SingleFrameCaptureOutputs::prepare(const imaging::RawSnapshot& captured, const tonemap::TonemapParams& tone,
                                         float gain, bool filmEnabled) {
-    std::string description = "Captured with Rawr";
+    std::string description = encoding::kCapturedWith;
     if (jpeg_) {
         if (captured.metadata.cameraContext) applySingleFrameCaptureMetadata(jpeg_->output, captured);
         auto frozen = tone;
@@ -47,10 +47,8 @@ void SingleFrameCaptureOutputs::prepare(const imaging::RawSnapshot& captured, co
                 ? settings.denoiseStrength
                 : 0.0f;
         description = encoding::jpeg::buildPublicDescription(
-            frozen, jpeg_->output.rendererDisplayName, filmEnabled, jpeg_->output.filmDescription, strength,
-            settings.denoiseDetail, a, b, settings.galoshYuvMode, settings.galoshYuvStrengthY,
-            settings.galoshYuvStrengthC, settings.galoshRawMode, settings.galoshStrength, settings.galoshLuma,
-            settings.galoshChroma);
+            settings, frozen, jpeg_->output.rendererDisplayName, jpeg_->output.quality, jpeg_->output.subsampling,
+            filmEnabled, jpeg_->output.filmDescription, strength, a, b);
         jpeg_->output.imageDescription = description;
     }
     if (dng_) {
@@ -95,12 +93,9 @@ bool SingleFrameCaptureOutputs::startJpeg(const SingleFrameDevelopResult& result
     if (result.context && result.context->filmEnabled && !jpeg_->output.filmDescription.empty() &&
         !completed.filmRendered) {
         jpeg_->output.imageDescription = encoding::jpeg::buildPublicDescription(
-            result.context->tonemapParams, jpeg_->output.rendererDisplayName,
-            /*filmRendered=*/false, jpeg_->output.filmDescription, result.context->denoiseStrength,
-            result.context->denoiseDetail, result.context->denoiseNoiseA, result.context->denoiseNoiseB,
-            jpeg_->develop.galoshYuvMode, jpeg_->develop.galoshYuvStrengthY, jpeg_->develop.galoshYuvStrengthC,
-            jpeg_->develop.galoshRawMode, jpeg_->develop.galoshStrength, jpeg_->develop.galoshLuma,
-            jpeg_->develop.galoshChroma);
+            jpeg_->develop, result.context->tonemapParams, jpeg_->output.rendererDisplayName, jpeg_->output.quality,
+            jpeg_->output.subsampling, /*filmRendered=*/false, jpeg_->output.filmDescription,
+            result.context->denoiseStrength, result.context->denoiseNoiseA, result.context->denoiseNoiseB);
         emit("JPEG_FILM_FALLBACK_DESCRIPTION requestId=" + std::to_string(completed.requestId));
     }
 

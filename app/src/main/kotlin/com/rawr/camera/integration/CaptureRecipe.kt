@@ -96,6 +96,9 @@ internal object CaptureRecipe {
             com.rawr.camera.settings.model.AgxCatalog.all.forEach { put(it.jsonKey, values.valueOf(it.parameter).toDouble()) }
         })
         put("multiframeBaseFrameMode", v.multiframeBaseFrameMode.name)
+        // Shadow-lift mode the adaptive tone was captured with; the Renderer
+        // offers the other modes from the stored (or its own) scene key.
+        put("autoKeyExposure", v.autoKeyExposure.name)
         put("tone", JSONObject().apply {
             val value = v.activeImageTone()
             TonemapCatalog.all.forEach { put(it.jsonKey, value.valueFor(it)) }

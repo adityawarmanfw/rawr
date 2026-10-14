@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <chrono>
@@ -13,12 +14,15 @@
 #include <fstream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <type_traits>
 #include <unordered_map>
 
 #include "capture/multiframe/mfsr/MfsrCaptureJob.h"
 #include "capture/persistence/CaptureJob.h"
+#include "color/AutoKeyExposure.h"
+#include "color/ColorMath.h"
 #include "color/FilmExposure.h"
 #include "develop/DevelopContextBuilder.h"
 #include "encoding/dng/DngCaptureWriter.h"
@@ -28,6 +32,7 @@
 #include "tonemap/ColorRenderProfile.h"
 #include "renderer/ExifTranspose.h"
 #include "renderer/RendererEngine.h"
+#include "renderer/SceneKeyMeter.h"
 #include "vulkan/VulkanDispatch.h"
 namespace {
 std::string str(JNIEnv* e, jstring s) {
@@ -43,6 +48,14 @@ void fail(JNIEnv* e, const std::exception& x) {
 using rawrcam::jni::Json;
 struct Session {
     rawrcam::renderer::DngSource source;
+    // Scene key measured from this DNG, per shading/white balance (editor
+    // shadow-lift modes on sources the camera did not meter).
+    struct MeasuredKey {
+        bool shading = false;
+        std::array<float, 3> whiteBalance{};
+        std::optional<rawrcam::renderer::SceneKey> key;
+    };
+    std::optional<MeasuredKey> measuredKey;
     std::unique_ptr<rawrcam::renderer::RendererEngine> engine;
     std::atomic<rawrcam::renderer::RendererEngine*> activeEngine{nullptr};
     std::string cache, files, lib;
@@ -59,6 +72,36 @@ std::shared_ptr<Session> get(jlong id) {
     if (it == handles.end()) throw std::runtime_error("Renderer session closed");
     return it->second;
 }
+// Editor shadow-lift mode: the camera's auto-key curve for that mode, from
+// the stored key when the camera metered, else from this DNG's own meter.
+// No override keeps the captured adaptive tone exactly.
+void resolveAdaptiveTone(Session& s, rawrcam::renderer::RenderOptions& o) {
+    if (o.adaptiveToneMode.empty()) return;
+    const auto mode = rawrcam::color::autoKeyModeFromName(o.adaptiveToneMode);
+    if (!mode) throw std::runtime_error("Unsupported shadow lift mode");
+    auto& tone = o.context.tonemapParams;
+    if (*mode == rawrcam::color::AutoKeyMode::Off) {
+        tone.adaptiveTone = {};
+        return;
+    }
+    const auto policy = rawrcam::color::autoKeyPolicy(*mode);
+    if (o.adaptiveToneMeasured) {
+        // Stored key and highlight already include the capture's HAL gain.
+        tone.adaptiveTone = rawrcam::color::autoKeyCurve(tone.adaptiveTone.keyEv, tone.adaptiveTone.highlightEv, 1.0f,
+                                                        policy);
+        return;
+    }
+    if (!s.measuredKey || s.measuredKey->shading != o.shading || s.measuredKey->whiteBalance != s.source.wb)
+        s.measuredKey = Session::MeasuredKey{
+            o.shading, s.source.wb,
+            rawrcam::renderer::measureSceneKey(s.source, o.shading, s.source.wb,
+                                               rawrcam::color::math::cameraToWorkingColumnMajor(s.source.cameraToSrgb))};
+    tone.adaptiveTone = s.measuredKey->key ? rawrcam::color::autoKeyCurve(s.measuredKey->key->keyEv,
+                                                                          s.measuredKey->key->highlightEv,
+                                                                          std::max(tone.aePostGain, 1.0e-6f), policy)
+                                           : tonemap::AdaptiveToneParams{};
+}
+
 rawrcam::renderer::RenderOptions options(JNIEnv* env, jstring recipe, int workingW, int workingH, int outputW,
                                          int outputH) {
     Json json(env, recipe), tone(env, json.child("tone")), film(env, json.child("film"));
@@ -73,6 +116,7 @@ rawrcam::renderer::RenderOptions options(JNIEnv* env, jstring recipe, int workin
     c.filmEnabled = json.flag("filmSimEnabled", false);
     c.timestampNs = uint64_t(json.number("timestampNs", 1000000000));
     const auto developSettings = rawrcam::jni::readRendererDevelopSettings(json);
+    o.develop = developSettings;
     rawrcam::develop::applyDevelopSettings(c, developSettings);
     c.denoiseStrength = developSettings.denoiseStrength;
     c.denoiseDetail = developSettings.denoiseDetail;
@@ -101,6 +145,12 @@ rawrcam::renderer::RenderOptions options(JNIEnv* env, jstring recipe, int workin
     t.adaptiveTone = {float(adaptive.number("liftEv", 0)), float(adaptive.number("keyEv", -4)),
                       float(adaptive.number("highlightEv", 0))};
     if (!tonemap::validAdaptiveTone(t.adaptiveTone)) throw std::runtime_error("Invalid adaptive tone recipe");
+    o.adaptiveToneMode = json.text("adaptiveToneMode");
+    if (o.adaptiveToneMode == "null") o.adaptiveToneMode.clear();
+    // Captures since the mode was recorded say whether the camera metered;
+    // older ones metered exactly when they stored a lift.
+    const std::string captured = json.text("capturedAutoKeyExposure");
+    o.adaptiveToneMeasured = !captured.empty() && captured != "null" ? captured != "Off" : t.adaptiveTone.liftEv > 0.0f;
     if (rawrcam::tonemap_integration::isAgxProfile(developSettings.colorRenderProfile)) {
         // Preset names match tonemap::AgxPreset; recipe keys (kAgxControlKeys)
         // override its control row, so older recipes fill in from the preset.
@@ -281,6 +331,7 @@ Java_com_rawr_camera_renderer_RendererNative_render(JNIEnv* e, jobject, jlong id
         array("whiteBalanceRggb", wb, 4);
         s->source.wb = {wb[0], (wb[1] + wb[2]) * .5f, wb[3]};
         array("cameraToLinearSrgbRowMajor", s->source.cameraToSrgb.data(), 9);
+        resolveAdaptiveTone(*s, o);
         const auto proxyPath = path + ".proxy";
         if (o.bayerBin2x) path += "-natural2x-f32-v1";
         // Calibration participates in both binning and demosaic cache identity.
@@ -417,8 +468,14 @@ Java_com_rawr_camera_renderer_RendererNative_render(JNIEnv* e, jobject, jlong id
             c.denoiseMs = completion.denoiseMs;
             c.galoshYuvMs = completion.galoshYuvMs;
             c.gainmapMs = completion.gainmapMs;
+            // Stage labels and the defringe/highlight-tone tail, as on still captures.
+            c.postTailMs = completion.postTailMs;
+            c.highlightStage = completion.highlightStage;
+            c.defringeEnabled = completion.defringeEnabled;
             c.filmRendered = completion.filmRendered;
+            c.filmFallbackMemory = completion.filmFallbackMemory;
             c.renderSetupMs = completion.renderSetupMs;
+            c.renderEngineBuildMs = completion.engineBuildMs;
             c.queueGapsMs = completion.queueGapsMs;
             c.readbackMs = completion.readbackMs;
             c.renderTotalMs = engine.lastDemosaicMs() + completion.totalMs;
@@ -449,12 +506,9 @@ Java_com_rawr_camera_renderer_RendererNative_render(JNIEnv* e, jobject, jlong id
             c.filmDescription = filmDescription;
             c.rendererDisplayName = rendererDisplayName;
             c.imageDescription = rawrcam::encoding::jpeg::buildPublicDescription(
-                o.context.tonemapParams, rendererDisplayName, c.filmRendered, filmDescription,
-                o.context.denoiseStrength, o.context.denoiseDetail, o.context.denoiseNoiseA, o.context.denoiseNoiseB,
-                o.context.galoshYuvMode, o.context.galoshYuvStrengthY, o.context.galoshYuvStrengthC);
-            // Shared builder speaks for captures; a Renderer export was rendered, not captured.
-            if (constexpr std::string_view captured = "Captured with Rawr"; c.imageDescription.compare(0, captured.size(), captured) == 0)
-                c.imageDescription.replace(0, captured.size(), "Rendered with Rawr");
+                o.develop, o.context.tonemapParams, rendererDisplayName, c.quality, c.subsampling, c.filmRendered,
+                filmDescription, o.context.denoiseStrength, o.context.denoiseNoiseA, o.context.denoiseNoiseB,
+                /*rendererExport=*/true);
             // Full parity with still captures: dual-encode + mux when the
             // GPU gain map ran, legacy SDR otherwise (same fallback contract
             // as SingleFrame/MFSR: missing map degrades, never fails).
