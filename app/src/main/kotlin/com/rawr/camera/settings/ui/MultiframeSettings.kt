@@ -13,6 +13,7 @@ internal fun MultiframeSettings(state: SettingsUiState, dispatch: SettingsDispat
     val tuning = state.values.multiframeTuning
     val spec = { parameter: MultiframeNumericParameter -> MultiframeSpecs.forParameter(parameter) }
     val hdrPlus = tuning.mergeAlgorithm != MultiframeMergeAlgorithm.Wronski
+    val bracketed = tuning.mergeAlgorithm == MultiframeMergeAlgorithm.HdrPlusBracketed
     SettingsPageContainer {
         SettingsGroup(
             description = "Multiframe still pipeline. Off leaves the existing single-frame capture path untouched."
@@ -74,16 +75,6 @@ internal fun MultiframeSettings(state: SettingsUiState, dispatch: SettingsDispat
                 MultiframeSlider(spec(MultiframeNumericParameter.HdrPlusStrength), tuning, enabled, dispatch)
                 SettingDivider()
                 MultiframeSlider(spec(MultiframeNumericParameter.HdrPlusTileSize), tuning, enabled, dispatch)
-                if (tuning.mergeAlgorithm == MultiframeMergeAlgorithm.HdrPlusBracketed) {
-                    SettingDivider()
-                    MultiframeSlider(spec(MultiframeNumericParameter.BracketEv), tuning, enabled, dispatch)
-                    SettingDivider()
-                    MultiframeSlider(spec(MultiframeNumericParameter.BracketFrames), tuning, enabled, dispatch)
-                    if (tuning.bracketFrames > 0) {
-                        SettingDivider()
-                        MultiframeSlider(spec(MultiframeNumericParameter.LongFrameEv), tuning, enabled, dispatch)
-                    }
-                }
             } else {
                 StandaloneNumericSliderRow(
                     identity = "mf_output_resolution",
@@ -117,8 +108,27 @@ internal fun MultiframeSettings(state: SettingsUiState, dispatch: SettingsDispat
                     )
                 }
             }
-            SettingDivider()
-            MultiframeSlider(spec(MultiframeNumericParameter.MaxFrames), tuning, enabled, dispatch)
+            // HDR+ Bracketed sets its own frame counts below.
+            if (!bracketed) {
+                SettingDivider()
+                MultiframeSlider(spec(MultiframeNumericParameter.MaxFrames), tuning, enabled, dispatch)
+            }
+        }
+        if (bracketed) {
+            SettingsGroup(
+                title = "HDR+ Bracketed",
+                description = "A darker ZSL burst from before the shutter protects highlights; brighter frames after it clean up shadows."
+            ) {
+                MultiframeSlider(spec(MultiframeNumericParameter.BracketEv), tuning, enabled, dispatch)
+                SettingDivider()
+                MultiframeSlider(
+                    spec(MultiframeNumericParameter.LongFrameEv), tuning, enabled && tuning.bracketFrames > 0, dispatch
+                )
+                SettingDivider()
+                MultiframeSlider(spec(MultiframeNumericParameter.BracketZslFrames), tuning, enabled, dispatch)
+                SettingDivider()
+                MultiframeSlider(spec(MultiframeNumericParameter.BracketFrames), tuning, enabled, dispatch)
+            }
         }
         if (!hdrPlus) {
             SettingsGroup(
@@ -214,6 +224,8 @@ private fun MultiframeSlider(
         valueFormatter =
             if (spec.parameter == MultiframeNumericParameter.HessianEpsilonExponent) {
                 { value -> "1e${value.roundToInt()}" }
+            } else if (spec.parameter == MultiframeNumericParameter.LongFrameEv) {
+                { value -> if (value <= 0f) "Auto" else String.format(java.util.Locale.US, "+%.1fEV", value) }
             } else {
                 null
             }

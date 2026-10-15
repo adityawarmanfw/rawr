@@ -622,12 +622,16 @@ class SettingsModelTest {
         assertEquals(listOf(3f, 18f, 16f, -2.5f, 3f, 1.5f), bracketed.nativeMergeValues().toList())
         assertEquals(MultiframeMergeAlgorithm.HdrPlusBracketed, persisted?.multiframeTuning?.mergeAlgorithm)
         assertEquals(-3f, MultiframeTuning().copy(bracketEv = -6f).sanitized().bracketEv)
-        assertEquals(2, MultiframeTuning().copy(bracketFrames = 9).sanitized().bracketFrames)
-        assertEquals(8, MultiframeTuning().copy(bracketFrames = 8).sanitized().bracketFrames)
+        assertEquals(2, MultiframeTuning().copy(bracketFrames = 17).sanitized().bracketFrames)
+        assertEquals(16, MultiframeTuning().copy(bracketFrames = 16).sanitized().bracketFrames)
+        assertEquals(14, MultiframeTuning().copy(bracketZslFrames = 31).sanitized().bracketZslFrames)
         assertEquals(0, MultiframeTuning().copy(bracketFrames = 0).sanitized().bracketFrames)
         assertEquals(0f, MultiframeTuning().copy(longFrameEv = 5f).sanitized().longFrameEv)
-        assertEquals(bracketed.maxFrames - 3, bracketed.zslFrames())
-        assertEquals(2, bracketed.copy(maxFrames = 3).zslFrames())
+        // Bracketed: its own ZSL count, trimmed so ZSL + after-shutter fit 30.
+        assertEquals(14, bracketed.zslFrames())
+        assertEquals(3, bracketed.postShutterFrames())
+        assertEquals(14, bracketed.copy(bracketZslFrames = 30, bracketFrames = 16).zslFrames())
+        assertEquals(16, bracketed.copy(bracketZslFrames = 30, bracketFrames = 16).postShutterFrames())
         assertEquals(16, MultiframeTuning().zslFrames())
     }
 

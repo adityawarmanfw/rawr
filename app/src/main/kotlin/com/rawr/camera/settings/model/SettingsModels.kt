@@ -391,7 +391,8 @@ enum class MultiframeNumericParameter {
     HdrPlusTileSize,
     BracketEv,
     BracketFrames,
-    LongFrameEv
+    LongFrameEv,
+    BracketZslFrames
 }
 
 data class MultiframeNumericSpec(
@@ -407,6 +408,9 @@ data class MultiframeNumericSpec(
 ) {
     fun accepts(value: Float): Boolean = value.isFinite() && value in minimum..maximum
 }
+
+/** Frames one multiframe capture may merge (native capture journal limit). */
+const val MAX_BURST_FRAMES = 30
 
 object MultiframeSpecs {
     val maxFrames =
@@ -680,11 +684,13 @@ object MultiframeSpecs {
             "px"
         )
 
+    // HDR+ Bracketed, shown in this order: Underexpose, Overexpose, ZSL
+    // Frames, After-Shutter Frames.
     val bracketEv =
         MultiframeNumericSpec(
             MultiframeNumericParameter.BracketEv,
-            "Max Underexposure",
-            "The burst is metered below auto exposure just enough to keep bright areas (sky, lamps) from clipping, and brightened back. This limits how far. Lower: recovers brighter highlights in harsh light, noisier shadows. Higher: cleaner shadows, recovers only mildly clipped areas. Auto exposure only.",
+            "Underexpose",
+            "How far below auto exposure the ZSL burst may go to keep bright areas (sky, lamps) from clipping; it is brightened back. Metered per scene, never darker than needed, and at most -1.5 EV in low light. Lower: recovers brighter highlights, noisier shadows. Higher: cleaner shadows. Auto exposure only.",
             -4f,
             -1f,
             -3f,
@@ -693,29 +699,41 @@ object MultiframeSpecs {
             "EV"
         )
 
-    val bracketFrames =
-        MultiframeNumericSpec(
-            MultiframeNumericParameter.BracketFrames,
-            "Long Frames",
-            "Longer frames taken right after the shutter to clean up shadows. Lower: shorter hold after the shutter (0: none). Higher: cleaner shadows, more chance of motion.",
-            0f,
-            8f,
-            2f,
-            1f,
-            0
-        )
-
     val longFrameEv =
         MultiframeNumericSpec(
             MultiframeNumericParameter.LongFrameEv,
-            "Long Frame Exposure",
-            "Exposure of the long frames over the burst (0: back to auto exposure, at least +1 EV). Lower: shorter shutter, less motion risk. Higher: cleaner deep shadows, longer shutter (up to 1/15 s, then more ISO).",
+            "Overexpose",
+            "How much brighter the after-shutter frames are than the ZSL burst, for cleaner shadows. Auto: back to auto exposure (at least +1 EV). A longer shutter first (up to 1/15 s), then more ISO. Lower: less motion blur. Higher: cleaner deep shadows.",
             0f,
             3f,
             0f,
             .5f,
             1,
             "EV"
+        )
+
+    val bracketZslFrames =
+        MultiframeNumericSpec(
+            MultiframeNumericParameter.BracketZslFrames,
+            "ZSL Frames",
+            "Underexposed frames from just before the shutter press; no wait. Lower: faster processing. Higher: cleaner, slower. With the after-shutter frames at most 30; this is trimmed to fit.",
+            2f,
+            30f,
+            14f,
+            1f,
+            0
+        )
+
+    val bracketFrames =
+        MultiframeNumericSpec(
+            MultiframeNumericParameter.BracketFrames,
+            "After-Shutter Frames",
+            "Overexposed frames taken right after the shutter press; hold still until the tick. 0: none. Lower: shorter hold. Higher: cleaner shadows, longer hold and more motion risk. When the scene is too dark for them to get brighter, they are taken as extra ZSL frames instead.",
+            0f,
+            16f,
+            2f,
+            1f,
+            0
         )
 
     val all =
@@ -746,7 +764,8 @@ object MultiframeSpecs {
             hdrPlusTileSize,
             bracketEv,
             bracketFrames,
-            longFrameEv
+            longFrameEv,
+            bracketZslFrames
         )
 
     fun forParameter(parameter: MultiframeNumericParameter): MultiframeNumericSpec =
@@ -761,6 +780,8 @@ data class MultiframeTuning(
     val bracketEv: Float = -3f,
     val bracketFrames: Int = 2,
     val longFrameEv: Float = 0f,
+    /** HDR+ Bracketed ZSL burst frames (Maximum Frames is not used there). */
+    val bracketZslFrames: Int = 14,
     val maxFrames: Int = 16,
     val lkIterations: Int = 5,
     val hessianEpsilonExponent: Int = -10,
@@ -812,6 +833,7 @@ data class MultiframeTuning(
         MultiframeNumericParameter.BracketEv -> bracketEv
         MultiframeNumericParameter.BracketFrames -> bracketFrames.toFloat()
         MultiframeNumericParameter.LongFrameEv -> longFrameEv
+        MultiframeNumericParameter.BracketZslFrames -> bracketZslFrames.toFloat()
     }
 
     fun withValue(parameter: MultiframeNumericParameter, value: Float): MultiframeTuning = when (parameter) {
@@ -842,6 +864,7 @@ data class MultiframeTuning(
         MultiframeNumericParameter.BracketEv -> copy(bracketEv = (value * 2f).roundToInt() / 2f)
         MultiframeNumericParameter.BracketFrames -> copy(bracketFrames = value.roundToInt())
         MultiframeNumericParameter.LongFrameEv -> copy(longFrameEv = (value * 2f).roundToInt() / 2f)
+        MultiframeNumericParameter.BracketZslFrames -> copy(bracketZslFrames = value.roundToInt())
     }
 
     fun sanitized(defaults: MultiframeTuning = MultiframeTuning()): MultiframeTuning {
@@ -885,14 +908,16 @@ data class MultiframeTuning(
         fallbackLuma
     )
 
-    /** ZSL frames to freeze at the shutter; HDR+ Bracketed leaves room for its post-shutter long frames. */
+    /** ZSL frames to freeze at the shutter; HDR+ Bracketed trims its burst so both fit the 30-frame limit. */
     fun zslFrames(): Int =
-        if (mergeAlgorithm == MultiframeMergeAlgorithm.HdrPlusBracketed) (maxFrames - bracketFrames).coerceAtLeast(2)
+        if (mergeAlgorithm == MultiframeMergeAlgorithm.HdrPlusBracketed)
+            bracketZslFrames.coerceAtMost(MAX_BURST_FRAMES - postShutterFrames()).coerceAtLeast(2)
         else maxFrames
 
     /** Long frames HDR+ Bracketed requests after the shutter (0 for other merges). */
     fun postShutterFrames(): Int =
-        if (mergeAlgorithm == MultiframeMergeAlgorithm.HdrPlusBracketed) maxFrames - zslFrames() else 0
+        if (mergeAlgorithm == MultiframeMergeAlgorithm.HdrPlusBracketed) bracketFrames.coerceIn(0, MAX_BURST_FRAMES - 2)
+        else 0
 
     // Appended after the multiframe chroma-denoise flag (native indices 23-28).
     fun nativeMergeValues(): FloatArray =

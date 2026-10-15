@@ -532,6 +532,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
                     bracketEv = p[Keys.multiframeBracketEv] ?: d.multiframeTuning.bracketEv,
                     bracketFrames = p[Keys.multiframeBracketFrames] ?: d.multiframeTuning.bracketFrames,
                     longFrameEv = p[Keys.multiframeLongFrameEv] ?: d.multiframeTuning.longFrameEv,
+                    bracketZslFrames = p[Keys.multiframeBracketZslFrames] ?: d.multiframeTuning.bracketZslFrames,
                     maxFrames = p[Keys.multiframeMaxFrames] ?: d.multiframeTuning.maxFrames,
                     lkIterations = p[Keys.multiframeLkIterations] ?: d.multiframeTuning.lkIterations,
                     hessianEpsilonExponent =
@@ -770,6 +771,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.multiframeBracketEv] = v.multiframeTuning.bracketEv
         p[Keys.multiframeBracketFrames] = v.multiframeTuning.bracketFrames
         p[Keys.multiframeLongFrameEv] = v.multiframeTuning.longFrameEv
+        p[Keys.multiframeBracketZslFrames] = v.multiframeTuning.bracketZslFrames
         p[Keys.multiframeMaxFrames] = v.multiframeTuning.maxFrames
         p[Keys.multiframeLkIterations] = v.multiframeTuning.lkIterations
         p[Keys.multiframeHessianExponent] = v.multiframeTuning.hessianEpsilonExponent
@@ -1043,6 +1045,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val multiframeBracketEv = floatPreferencesKey("multiframe_bracket_ev")
         val multiframeBracketFrames = intPreferencesKey("multiframe_bracket_frames")
         val multiframeLongFrameEv = floatPreferencesKey("multiframe_long_frame_ev")
+        val multiframeBracketZslFrames = intPreferencesKey("multiframe_bracket_zsl_frames")
         val multiframeMaxFrames = intPreferencesKey("multiframe_max_frames")
         val multiframeLkIterations = intPreferencesKey("multiframe_lk_iterations")
         val multiframeHessianExponent = intPreferencesKey("multiframe_hessian_exponent")

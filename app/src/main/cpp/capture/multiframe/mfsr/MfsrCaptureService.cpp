@@ -20,7 +20,8 @@ namespace {
 constexpr const char* kTag = "RawrCamNative";
 // Post-shutter bracket frames normally land within ~150 ms; past this the
 // burst merges without (the spool keeps the ZSL pins meanwhile).
-constexpr auto kBracketWait = std::chrono::milliseconds(1500);
+// 16 after-shutter frames at 1/15 s take ~1.1 s plus pipeline latency.
+constexpr auto kBracketWait = std::chrono::milliseconds(2500);
 constexpr std::size_t kMaxBurstFrames = 30u;  // capture journal limit
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, kTag, __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, kTag, __VA_ARGS__)
