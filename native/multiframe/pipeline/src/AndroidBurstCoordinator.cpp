@@ -4,6 +4,7 @@
 #include <rawr/raw_gpu_pipeline/MergeMath.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -14,6 +15,7 @@
 #include <utility>
 namespace rawr::raw_gpu_pipeline {
 namespace {
+constexpr std::uint32_t kTimestampQueryCapacity = 64u;
 void check(VkResult r, const char* what) {
     if (r != VK_SUCCESS) throw std::runtime_error(what);
 }
@@ -153,7 +155,7 @@ void AndroidBurstCoordinator::ensureExecutionInfra(VkPhysicalDevice physical, Vk
         VkQueryPoolCreateInfo qi{};
         qi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
         qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
-        qi.queryCount = 8u;
+        qi.queryCount = kTimestampQueryCapacity;
         check(vkCreateQueryPool(device, &qi, nullptr, &timestampPool_), "multiframe timestamp query pool");
     }
     executionReady_ = true;
@@ -277,6 +279,7 @@ AndroidBurstCoordinator::ChunkTiming AndroidBurstCoordinator::executeChunk(std::
                                                                           std::uint32_t frameIndex,
                                                                           std::uint32_t queryCount,
                                                                           const std::function<void()>& record) {
+    if (queryCount == 0u || queryCount > kTimestampQueryCapacity) throw std::invalid_argument("multiframe timestamp query count");
     using Clock = std::chrono::steady_clock;
     const auto begin = Clock::now();
     if (stageSink_) stageSink_(Stage::ChunkBegin, chunkCode, frameIndex);
@@ -331,7 +334,7 @@ AndroidBurstCoordinator::ChunkTiming AndroidBurstCoordinator::executeChunk(std::
     if (stageSink_) stageSink_(Stage::ChunkEnd, chunkCode, frameIndex);
     std::vector<double> gpuIntervals;
     if (timestampsSupported_ && queryCount > 1u) {
-        std::array<std::uint64_t, 8> values{};
+        std::array<std::uint64_t, kTimestampQueryCapacity> values{};
         check(vkGetQueryPoolResults(device_, timestampPool_, 0u, queryCount, queryCount * sizeof(values[0]),
                                     values.data(), sizeof(values[0]), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT),
               "multiframe timestamp results");
@@ -596,27 +599,53 @@ BurstRunResult AndroidBurstCoordinator::runHdrPlus(const std::vector<BurstFrame>
         if (i == ref) continue;
         if (frames[i].raw.ref.width != width_ || frames[i].raw.ref.height != height_)
             throw std::invalid_argument("multiframe burst: RAW geometry mismatch");
-        timings.companionPrepareMs += gpuOrWall(executeChunk(11u, i, 2u, [&] {
+        // Keep the expensive finest level in its own submission so preview
+        // can interleave. Preparation and the much smaller coarse levels share
+        // one submission instead of a fence round-trip for every level.
+        const bool profile = std::getenv("RAWR_HDRP_PROFILE") != nullptr;
+        const std::uint32_t coarseLevels = recorder.levelCount() - 1u;
+        const auto prepareTiming = executeChunk(11u, i, profile ? 2u + 3u * coarseLevels : 3u, [&] {
             recordTimestamp(0u);
             recorder.recordCompanionPrepare(command_, frames[i].raw.view, frames[i].parameters.normalization);
             recordTimestamp(1u);
-        }));
-        for (std::uint32_t level = recorder.levelCount(); level-- > 0;) {
-            const auto levelTiming = executeChunk(11u, i, 4u, [&] {
-                recordTimestamp(0u);
-                recorder.recordCompanionAlignLevel(command_, level, [&](std::uint32_t k) { recordTimestamp(k); });
-                recordTimestamp(3u);
-            });
-            double ms = levelTiming.first;
-            if (!levelTiming.second.empty()) {
-                ms = 0.0;
-                for (const double part : levelTiming.second) ms += part;
+            for (std::uint32_t level = recorder.levelCount(); --level > 0u;) {
+                const std::uint32_t start = 1u + 3u * (coarseLevels - level);
+                recorder.recordCompanionAlignLevel(command_, level, [&](std::uint32_t k) {
+                    if (profile) recordTimestamp(start + k);
+                });
+                if (profile) recordTimestamp(start + 3u);
             }
-            timings.alignmentMs += ms;
-            if (std::getenv("RAWR_HDRP_PROFILE") && levelTiming.second.size() == 3u)
-                std::fprintf(stderr, "hdrp_profile frame=%u level=%u ms=%.3f (correct=%.3f cost=%.3f best=%.3f)\n", i,
-                             level, ms, levelTiming.second[0], levelTiming.second[1], levelTiming.second[2]);
+            if (!profile) recordTimestamp(2u);
+        });
+        if (prepareTiming.second.empty()) {
+            timings.companionPrepareMs += prepareTiming.first;
+        } else {
+            timings.companionPrepareMs += prepareTiming.second.front();
+            for (std::size_t k = 1; k < prepareTiming.second.size(); ++k)
+                timings.alignmentMs += prepareTiming.second[k];
+            if (profile) {
+                for (std::uint32_t n = 0; n < coarseLevels; ++n) {
+                    const auto k = 1u + 3u * n;
+                    std::fprintf(stderr, "hdrp_profile frame=%u level=%u correct=%.3f cost=%.3f best=%.3f\n", i,
+                                 coarseLevels - n, prepareTiming.second[k], prepareTiming.second[k + 1u],
+                                 prepareTiming.second[k + 2u]);
+                }
+            }
         }
+        const auto levelTiming = executeChunk(11u, i, 4u, [&] {
+            recordTimestamp(0u);
+            recorder.recordCompanionAlignLevel(command_, 0u, [&](std::uint32_t k) { recordTimestamp(k); });
+            recordTimestamp(3u);
+        });
+        double alignmentMs = levelTiming.first;
+        if (!levelTiming.second.empty()) {
+            alignmentMs = 0.0;
+            for (const double ms : levelTiming.second) alignmentMs += ms;
+        }
+        timings.alignmentMs += alignmentMs;
+        if (profile && levelTiming.second.size() == 3u)
+            std::fprintf(stderr, "hdrp_profile frame=%u level=0 correct=%.3f cost=%.3f best=%.3f\n", i,
+                         levelTiming.second[0], levelTiming.second[1], levelTiming.second[2]);
         const auto mergeTiming = executeChunk(14u, i, 5u, [&] {
             recordTimestamp(0u);
             recorder.recordCompanionMerge(command_, frameCount, [&](std::uint32_t k) { recordTimestamp(k); });
@@ -650,7 +679,7 @@ BurstRunResult AndroidBurstCoordinator::runHdrPlus(const std::vector<BurstFrame>
                           out.extent,
                           arena_.physicalImageBytes(),
                           arena_.physicalBufferBytes(),
-                          2u + companions * (2u + recorder.levelCount()),
+                          2u + companions * 3u,
                           resourcesReused_,
                           pipelineCacheReused_,
                           timings};

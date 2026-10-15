@@ -427,6 +427,8 @@ struct TuneOpts {
     float scale = 1.f;
     int lkIterations = 3;
     bool dumpLinear = false;
+    bool dumpCfa = false;
+    int repeat = 1;
     float kDetail = -1.f;  // -1 = merge default
     float kDenoise = -1.f;
     float dThreshold = -1.f;
@@ -1040,7 +1042,46 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
                                ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusBracketed
                                                                    : rawr::raw_gpu_pipeline::MergeAlgorithm::Wronski,
                            tune.hdrplus);
-    const auto result = coordinator.run(runFrames, runRef);
+    auto result = coordinator.run(runFrames, runRef);
+    const auto reportRun = [&](int iteration) {
+        const auto& t = result.timings;
+        std::cerr << "benchmark iteration=" << iteration << " total_ms=" << t.totalMs
+                  << " merge_ms=" << t.mergeTotalMs() << " reference_ms=" << t.referencePrepareMs
+                  << " prepare_ms=" << t.companionPrepareMs << " alignment_ms=" << t.alignmentMs
+                  << " accumulation_ms=" << t.accumulationMs << " finalize_ms=" << t.finalizeMs
+                  << " submissions=" << result.submissionCount << '\n';
+    };
+    reportRun(0);
+    for (int iteration = 1; iteration < tune.repeat; ++iteration) {
+        result = coordinator.run(runFrames, runRef);
+        reportRun(iteration);
+    }
+    if (tune.dumpCfa) {
+        std::filesystem::create_directories(outputDir);
+        if (!result.cfaImage) throw std::invalid_argument("--dump-cfa requires an HDR+ merge");
+        const VkDeviceSize bytes = VkDeviceSize(width) * height * sizeof(float);
+        auto buf = vktest::mkBuf(context.pd, context.dev, bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        commands.submit(context.q, [&](VkCommandBuffer command) {
+            imageBarrier(command, result.cfaImage, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                         VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT);
+            VkBufferImageCopy copy{};
+            copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            copy.imageExtent = {width, height, 1};
+            vkCmdCopyImageToBuffer(command, result.cfaImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buf.b, 1, &copy);
+        });
+        void* mapped = nullptr;
+        vktest::ck(vkMapMemory(context.dev, buf.m, 0, bytes, 0, &mapped), "map CFA");
+        const auto dest = outputDir / (std::filesystem::path(path).stem().string() +
+            (tune.suffix.empty() ? "" : "." + tune.suffix) + ".cfa.f32");
+        std::ofstream file(dest, std::ios::binary);
+        file.write(static_cast<const char*>(mapped), static_cast<std::streamsize>(bytes));
+        if (!file) throw std::runtime_error("cannot write " + dest.string());
+        std::cerr << "cfa_hash=0x" << std::hex << fnv1a(mapped, static_cast<std::size_t>(bytes)) << std::dec << '\n';
+        vkUnmapMemory(context.dev, buf.m);
+        vktest::delBuf(context.dev, buf);
+    }
     if (merge.estimateNoiseFromBurst) {
         const auto& n = result.estimatedNoise;
         std::cerr << "noise_burst estimated=" << (result.noiseEstimated ? 1 : 0)
@@ -1210,7 +1251,7 @@ int main(int argc, char** argv) {
     const std::string usage =
         std::string("usage: ") + argv[0] +
         " --output-dir DIR [--k-detail F] [--k-denoise F]"
-        " [--scale F] [--lk-iterations I] [--dump-linear] [--noise-source recorded|camera2|legacy|calibrated|burst]"
+        " [--scale F] [--lk-iterations I] [--dump-linear] [--dump-cfa] [--repeat N] [--noise-source recorded|camera2|legacy|calibrated|burst]"
         " [--cal-profile FILE]"
         " [--d-threshold F] [--d-transition F] [--k-stretch F] [--k-shrink F]"
         " [--flat-sigma F] [--detail-floor F] [--scale-bandwidth-gain F]"
@@ -1245,6 +1286,8 @@ int main(int argc, char** argv) {
             else if (a == "--scale") tune.scale = std::stof(need(a.c_str()));
             else if (a == "--lk-iterations") tune.lkIterations = std::stoi(need(a.c_str()));
             else if (a == "--dump-linear") tune.dumpLinear = true;
+            else if (a == "--dump-cfa") tune.dumpCfa = true;
+            else if (a == "--repeat") tune.repeat = std::stoi(need(a.c_str()));
             else if (a == "--k-detail") tune.kDetail = std::stof(need(a.c_str()));
             else if (a == "--k-denoise") tune.kDenoise = std::stof(need(a.c_str()));
             else if (a == "--d-threshold") tune.dThreshold = std::stof(need(a.c_str()));
@@ -1299,6 +1342,7 @@ int main(int argc, char** argv) {
             throw std::invalid_argument("reference must be recorded, middle, sharpest, or darkest");
         if (!std::isfinite(tune.scale) || tune.scale < 1.f || tune.scale > 2.f)
             throw std::invalid_argument("scale must be finite and 1..2");
+        if (tune.repeat < 1 || tune.repeat > 100) throw std::invalid_argument("repeat must be 1..100");
         if (tune.lkIterations < 1 || tune.lkIterations > 30)
             throw std::invalid_argument("lk-iterations must be 1..30");
         if (tune.maxFrames != 0 && (tune.maxFrames < 4 || tune.maxFrames > 30))

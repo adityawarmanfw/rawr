@@ -60,6 +60,8 @@
 #include "mf_hdrq_region_mean_trace.h"
 #include "mf_hdrq_mismatch_norm_prod.h"
 #include "mf_hdrq_mismatch_norm_trace.h"
+#include "mf_hdrq_seed_dft_prod.h"
+#include "mf_hdrq_seed_dft_trace.h"
 #include "mf_hdrq_forward_dft_prod.h"
 #include "mf_hdrq_forward_dft_trace.h"
 #include "mf_hdrq_merge_prod.h"
@@ -500,7 +502,13 @@ const std::array<Spec, static_cast<size_t>(ShaderId::Count)> specs{{{"raw_normal
                                    mf_hdrq_normalize_prod_spv_size,
                                    mf_hdrq_normalize_trace_spv,
                                    mf_hdrq_normalize_trace_spv_size,
-                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}}}};
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                  {"hdrq_seed_dft",
+                                   mf_hdrq_seed_dft_prod_spv,
+                                   mf_hdrq_seed_dft_prod_spv_size,
+                                   mf_hdrq_seed_dft_trace_spv,
+                                   mf_hdrq_seed_dft_trace_spv_size,
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}}}};
 void ck(VkResult r, const char* w) {
     if (r != VK_SUCCESS) throw std::runtime_error(std::string(w) + " VkResult=" + std::to_string(r));
 }
@@ -527,7 +535,7 @@ void VulkanExecutor::initialize(VkDevice d, bool wantTrace) {
         "a11_finalize",       "noise_estimate",     "fallback_chroma",    "hot_pixel_conceal",
         "hdrp_prepare", "hdrp_hot_pixel", "hdrp_avg_pool", "hdrp_blur", "hdrp_upsample_align", "hdrp_correct_upsampling", "hdrp_tile_diff", "hdrp_best_tile", "hdrp_warp", "hdrp_color_diff", "hdrp_column_sum", "hdrp_mean", "hdrp_merge_weight", "hdrp_accumulate", "hdrp_finalize",
         "hdrq_to_rgba", "hdrq_warp_rgba", "hdrq_rms", "hdrq_mismatch", "hdrq_region_mean", "hdrq_mismatch_norm", "hdrq_forward_dft", "hdrq_merge", "hdrq_deconvolute", "hdrq_backward_dft", "hdrq_border", "hdrq_accumulate", "hdrq_shift_table",
-        "hdrq_highlights_norm", "hdrq_normalize",
+        "hdrq_highlights_norm", "hdrq_normalize", "hdrq_seed_dft",
     };
     static_assert(sizeof(kOrder) / sizeof(kOrder[0]) == static_cast<size_t>(ShaderId::Count),
                   "executor spec order table out of sync with ShaderId");

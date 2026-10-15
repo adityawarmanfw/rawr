@@ -531,10 +531,11 @@ void HdrPlusFrequencyRecorder::recordReference(VkCommandBuffer c, VkImageView ra
     executor_.record(c, ShaderId::HdrqRms, {{ib(0, rgba), ib(1, arena_.image("hdrq_rms"))}, {}}, &tp, sizeof(tp),
                      divUp(tx, 16), divUp(ty, 16));
     // The reference spectrum seeds both the reference and the running merge.
-    executor_.record(c, ShaderId::HdrqForwardDft, {{ib(0, rgba), ib(1, arena_.image("hdrq_ref_ft"))}, {}}, &tp,
-                     sizeof(tp), tx, ty);
-    executor_.record(c, ShaderId::HdrqForwardDft, {{ib(0, rgba), ib(1, arena_.image("hdrq_final_ft"))}, {}}, &tp,
-                     sizeof(tp), tx, ty);
+    // Each shifted pass has its own input/window; only the two identical
+    // transforms within this pass are shared.
+    executor_.record(c, ShaderId::HdrqSeedDft,
+                     {{ib(0, rgba), ib(1, arena_.image("hdrq_ref_ft")), ib(2, arena_.image("hdrq_final_ft"))}, {}},
+                     &tp, sizeof(tp), tx, ty);
     // Per-pass total mismatch starts at zero.
     VkMemoryBarrier toTransfer{VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
                                VK_ACCESS_TRANSFER_WRITE_BIT};

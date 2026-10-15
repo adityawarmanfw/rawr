@@ -1,0 +1,4 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#define RAWR_DFT_SEED
+#include "hdrq_forward_dft.glsl"

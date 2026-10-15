@@ -69,6 +69,7 @@ set(RAWR_MF_SHADER_SOURCES
   ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_mismatch.comp
   ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_region_mean.comp
   ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_mismatch_norm.comp
+  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_seed_dft.comp
   ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_forward_dft.comp
   ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_merge.comp
   ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_deconvolute.comp
@@ -87,6 +88,10 @@ foreach(RAWR_MF_SRC IN LISTS RAWR_MF_SHADER_SOURCES)
   set(RAWR_MF_TRACE_HDR ${RAWR_MF_SPV_DIR}/mf_${RAWR_MF_NAME}_trace.h)
   # Per-channel robustness veto (RAWR_MIN_GATE) ships in production
   # multiframe merges; trace keeps the upstream aggregate path for forensics.
+  set(RAWR_MF_INCLUDE_DEPS)
+  if(RAWR_MF_NAME MATCHES "^hdrq_(forward|seed)_dft$")
+    list(APPEND RAWR_MF_INCLUDE_DEPS ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_forward_dft.glsl)
+  endif()
   set(RAWR_MF_PROD_EXTRA)
   if(RAWR_MF_NAME STREQUAL "robust_photometric")
     set(RAWR_MF_PROD_EXTRA -DRAWR_MIN_GATE=1)
@@ -94,11 +99,11 @@ foreach(RAWR_MF_SRC IN LISTS RAWR_MF_SHADER_SOURCES)
   add_custom_command(OUTPUT ${RAWR_MF_PROD} ${RAWR_MF_PROD_HDR}
     COMMAND ${GLSLC} --target-env=vulkan1.1 -O ${RAWR_MF_PROD_EXTRA} ${RAWR_MF_SRC} -o ${RAWR_MF_PROD}
     COMMAND ${CMAKE_COMMAND} -DINPUT=${RAWR_MF_PROD} -DOUTPUT=${RAWR_MF_PROD_HDR} -DSYMBOL=mf_${RAWR_MF_NAME}_prod_spv -P ${RAWR_EMBED_BINARY_SCRIPT}
-    DEPENDS ${RAWR_MF_SRC} VERBATIM)
+    DEPENDS ${RAWR_MF_SRC} ${RAWR_MF_INCLUDE_DEPS} VERBATIM)
   add_custom_command(OUTPUT ${RAWR_MF_TRACE} ${RAWR_MF_TRACE_HDR}
     COMMAND ${GLSLC} --target-env=vulkan1.1 -O -DRAWR_PARITY_TRACE=1 ${RAWR_MF_SRC} -o ${RAWR_MF_TRACE}
     COMMAND ${CMAKE_COMMAND} -DINPUT=${RAWR_MF_TRACE} -DOUTPUT=${RAWR_MF_TRACE_HDR} -DSYMBOL=mf_${RAWR_MF_NAME}_trace_spv -P ${RAWR_EMBED_BINARY_SCRIPT}
-    DEPENDS ${RAWR_MF_SRC} VERBATIM)
+    DEPENDS ${RAWR_MF_SRC} ${RAWR_MF_INCLUDE_DEPS} VERBATIM)
   list(APPEND RAWR_MF_SPV_OUTPUTS ${RAWR_MF_PROD} ${RAWR_MF_TRACE} ${RAWR_MF_PROD_HDR} ${RAWR_MF_TRACE_HDR})
 endforeach()
 add_custom_target(raw_multiframe_gpu_shaders ALL DEPENDS ${RAWR_MF_SPV_OUTPUTS})
@@ -146,4 +151,8 @@ if(RAW_GPU_PIPELINE_BUILD_TESTS)
   target_include_directories(cfa_pattern_merge_vulkan_test PRIVATE ${RAWR_NATIVE_DIR}/vk_common/testing)
   target_link_libraries(cfa_pattern_merge_vulkan_test PRIVATE raw_gpu_pipeline)
   add_test(NAME cfa_pattern_merge_vulkan_test COMMAND cfa_pattern_merge_vulkan_test)
+  add_executable(hdrplus_dft_seed_vulkan_test tests/hdrplus_dft_seed_vulkan_test.cpp)
+  target_include_directories(hdrplus_dft_seed_vulkan_test PRIVATE ${RAWR_NATIVE_DIR}/vk_common/testing)
+  target_link_libraries(hdrplus_dft_seed_vulkan_test PRIVATE raw_gpu_pipeline)
+  add_test(NAME hdrplus_dft_seed_vulkan_test COMMAND hdrplus_dft_seed_vulkan_test)
 endif()
