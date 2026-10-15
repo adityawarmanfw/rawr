@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "capture/multiframe/BracketExposure.h"
 #include "color/AePostGainCurve.h"
 #include "camera/NativeCameraController.h"
 #include "color/AutoKeyExposure.h"
@@ -38,8 +39,34 @@ float SessionFrameCallbacks::postGainFor(const rawrcam::metadata::FrameMetadataS
     // only direct sRGB/Rec.709 clip, as for any capture.
     const float gain = rawrcam::color::effectiveAePostGain(metadata.postRawSensitivityBoost, engine_->maxAePostGain(),
                                                            engine_->postGainKneeWidthEv());
-    const float headroomEv = engine_->hdrHeadroomEvFor(metadata);
+    // HDR+ Bracketed with Camera2 AE: lift by reference / actual exposure so
+    // compensation steps and AE re-convergence never show (ExposureNormalizer).
+    constexpr int32_t kAeModeOff = 0, kAeStateConverged = 2, kAeStateLocked = 3, kAeStateFlashRequired = 4;
+    const bool tagged = metadata.optimizedStillRequestId && *metadata.optimizedStillRequestId != 0;
+    if (engine_->hdrHeadroomMaxEv() < 0.0f && metadata.aeMode != kAeModeOff && !tagged) {
+        const double exposure = rawrcam::capture::multiframe::linearExposure(metadata);
+        if (exposure > 0.0) {
+            const bool settled = metadata.aeState == kAeStateConverged || metadata.aeState == kAeStateLocked ||
+                                 metadata.aeState == kAeStateFlashRequired;
+            float lift;
+            {
+                std::lock_guard<std::mutex> lock(normalizerMutex_);
+                lift = normalizer_.update(metadata.timestampNs, exposure, engine_->reportedHeadroomEvFor(metadata),
+                                          settled);
+            }
+            return std::clamp(gain * std::exp2(lift), 1.0f / 16.0f, tonemap::kMaxAePostGain);
+        }
+    } else if (!tagged) {
+        std::lock_guard<std::mutex> lock(normalizerMutex_);
+        if (normalizer_.primed()) normalizer_.reset();
+    }
+    const float headroomEv = engine_->reportedHeadroomEvFor(metadata);
     return headroomEv < 0.0f ? std::min(tonemap::kMaxAePostGain, gain * std::exp2(-headroomEv)) : gain;
+}
+
+std::optional<float> SessionFrameCallbacks::normalizedLiftEv(std::uint64_t timestampNs) const {
+    std::lock_guard<std::mutex> lock(normalizerMutex_);
+    return normalizer_.liftFor(timestampNs);
 }
 
 void SessionFrameCallbacks::applyAutoKey(tonemap::TonemapParams& tone) { engine_->applyAutoKey(tone); }

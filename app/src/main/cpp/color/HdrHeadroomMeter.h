@@ -39,10 +39,10 @@ struct HdrHeadroomPolicy {
     float clippedStepEv = 1.0f;
     // Camera2 AE needs a few frames to settle after a compensation change.
     std::uint64_t lowerHoldNs = 600'000'000ull;
-    std::uint64_t raiseHoldNs = 2'000'000'000ull;
+    std::uint64_t raiseHoldNs = 1'000'000'000ull;
     // After clipping, stay this far below the level that clipped for a while.
     float clipMemoryMarginEv = 0.3f;
-    std::uint64_t clipMemoryNs = 6'000'000'000ull;
+    std::uint64_t clipMemoryNs = 3'000'000'000ull;
 };
 
 class HdrHeadroomMeter {

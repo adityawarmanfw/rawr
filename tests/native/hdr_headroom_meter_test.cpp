@@ -72,13 +72,13 @@ int main() {
         // Percentile ends between the channel margin and the cushion above it.
         assert(applied <= -2.4f - 0.6f + kBinEv && applied >= -2.4f - 0.6f - 0.7f - kBinEv);
     }
-    // Room to give back raises slowly (2 s hold) and keeps a cushion.
+    // Room to give back raises slowly (1 s hold) and keeps a cushion.
     {
         HdrHeadroomMeter meter;
         const auto bins = scene(-3.0f);  // room 2.4 EV at headroom -3
         const auto r = meter.update(bins.data(), 10000, 0.0f, -3.0f, kFloor, kSec);
         assert(r && near(*r, -3.0f + 2.4f - 0.3f, kBinEv + 1e-3f));
-        assert(!meter.update(bins.data(), 10000, 0.0f, *r, kFloor, 2 * kSec));
+        assert(!meter.update(bins.data(), 10000, 0.0f, *r, kFloor, kSec + kSec / 2));
     }
     // After clipping at -1 EV, it does not climb back above -1.3 EV for a while.
     {
@@ -87,7 +87,7 @@ int main() {
         const auto down = meter.update(clippedBins.data(), 10000, 0.0f, -1.0f, kFloor, kSec);
         assert(down);
         const auto roomy = scene(-3.0f);
-        const auto up = meter.update(roomy.data(), 10000, 0.0f, *down, kFloor, 4 * kSec);
+        const auto up = meter.update(roomy.data(), 10000, 0.0f, *down, kFloor, 3 * kSec);
         assert(up && *up <= -1.3f + 1e-4f);
     }
     // Empty statistics change nothing.

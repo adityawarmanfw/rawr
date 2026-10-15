@@ -110,8 +110,12 @@ class SessionEngine {
     // Also allows the DCG ISO calibration frame for the long frames.
     void setHdrPlusHeadroomMaxEv(float maxEv);
     [[nodiscard]] float hdrHeadroomMaxEv() const noexcept { return hdrHeadroomMaxEv_.load(std::memory_order_relaxed); }
-    // Headroom EV (<= 0) a delivered frame was exposed with; 0 when none.
+    // Headroom EV (<= 0) a delivered frame was exposed with, from its actual
+    // exposure against the normalizer's reference (ExposureNormalizer); its
+    // reported compensation when the frame was not normalized; 0 when none.
     [[nodiscard]] float hdrHeadroomEvFor(const metadata::FrameMetadataSnapshot& metadata) const;
+    // The compensation part only, as the frame's result reports it.
+    [[nodiscard]] float reportedHeadroomEvFor(const metadata::FrameMetadataSnapshot& metadata) const;
     void setPersistentEngineEnabled(bool enabled);
     uint32_t prepareExperimentalMultiframe(uint32_t maxFrames);
     uint64_t startPreparedMultiframeCapture(rawrcam::encoding::dng::DngCaptureContext baseDng,

@@ -761,14 +761,19 @@ struct NativeCameraController::Impl final : CameraEventSink {
         const bool video = control.videoMode || control.recordingFps > 0;
         const float ev = video ? 0.0f : pendingHdrHeadroomEv.load(std::memory_order_relaxed);
         const float step = evStepEvLocked();
-        const int32_t steps =
+        const int32_t target =
             step > 0.0f ? std::clamp(int32_t(std::lround(std::min(0.0f, ev) / step)),
                                      control.capabilities.evMinSteps - control.capabilities.evMaxSteps, 0)
                         : 0;
-        if (steps == control.hdrHeadroomSteps) return;
+        if (target == control.hdrHeadroomSteps) return;
+        // Glide at most 0.2 EV per tick (100 ms): each step re-converges AE a
+        // little instead of all at once; the viewfinder normalizes per frame.
+        const int32_t maxStep = step > 0.0f ? std::max(1, int32_t(std::lround(0.2f / step))) : 1;
+        const int32_t steps = control.hdrHeadroomSteps +
+                              std::clamp(target - control.hdrHeadroomSteps, -maxStep, maxStep);
         control.previousHdrHeadroomSteps = control.hdrHeadroomSteps;
         control.hdrHeadroomSteps = steps;
-        diag("CAMERA_CONTROL_REQUEST hdrHeadroomSteps=" + std::to_string(steps));
+        if (steps == target) diag("CAMERA_CONTROL_REQUEST hdrHeadroomSteps=" + std::to_string(steps));
         if (control.exposureMode == ExposureControlMode::Auto && deviceSession.request() && deviceSession.session())
             submitRepeatingLocked();
         else

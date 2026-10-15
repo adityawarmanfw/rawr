@@ -100,9 +100,13 @@ void SessionEngine::setLocalTone(float strength, float detail) {
     localToneDetail_.store(p.detail, std::memory_order_relaxed);
     LOGI("LOCAL_TONE strength=%.2f detail=%.2f", p.strength, p.detail);
 }
-float SessionEngine::hdrHeadroomEvFor(const metadata::FrameMetadataSnapshot& metadata) const {
+float SessionEngine::reportedHeadroomEvFor(const metadata::FrameMetadataSnapshot& metadata) const {
     const auto* controller = cameraControls_.controller();
     return controller ? controller->hdrHeadroomEvFor(metadata.aeMode, metadata.aeCompensationSteps) : 0.0f;
+}
+float SessionEngine::hdrHeadroomEvFor(const metadata::FrameMetadataSnapshot& metadata) const {
+    if (const auto lift = pipelineCallbacks_.normalizedLiftEv(metadata.timestampNs)) return -*lift;
+    return reportedHeadroomEvFor(metadata);
 }
 void SessionEngine::setPersistentEngineEnabled(bool enabled) {
     std::lock_guard<std::mutex> lock(mu_);
