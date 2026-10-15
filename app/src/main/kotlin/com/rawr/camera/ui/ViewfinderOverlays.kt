@@ -269,20 +269,14 @@ internal fun HdrBracketedNotice(active: Boolean, orientation: Orientation, modif
 private const val HDR_BRACKETED_NOTICE_MS = 4_000L
 
 /**
- * "Hold still" while HDR+ Bracketed's post-shutter frames are captured. Only
- * holds longer than BRACKET_HOLD_SHOW_MS show it (night, long frames); a
- * daylight hold ends before the text could be read. The end is felt as a tick.
+ * "Hold still" from the HDR+ Bracketed shutter press until the post-shutter
+ * frames are in; the end is also felt as a tick.
  */
 @Composable
 internal fun BracketHoldNotice(active: Boolean, orientation: Orientation, modifier: Modifier = Modifier) {
-    var visible by remember { mutableStateOf(false) }
-    LaunchedEffect(active) {
-        if (active) kotlinx.coroutines.delay(BRACKET_HOLD_SHOW_MS)
-        visible = active
-    }
     AnimatedVisibility(
-        visible = visible,
-        enter = fadeIn(tween(150)),
+        visible = active,
+        enter = fadeIn(tween(80)),
         exit = fadeOut(tween(250)),
         modifier = modifier
     ) {
@@ -300,6 +294,4 @@ internal fun BracketHoldNotice(active: Boolean, orientation: Orientation, modifi
         )
     }
 }
-
-private const val BRACKET_HOLD_SHOW_MS = 300L
 

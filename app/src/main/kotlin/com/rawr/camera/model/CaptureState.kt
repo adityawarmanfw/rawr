@@ -202,11 +202,13 @@ data class CaptureUiState(
     val hdrPlusBracketedSelected: Boolean = false,
     /** HDR+ Bracketed post-shutter frames: brackets armed / finished, from native. */
     val bracketHoldOpened: Long = 0L,
-    val bracketHoldDone: Long = 0L
+    val bracketHoldDone: Long = 0L,
+    /** HDR+ Bracketed shutter presses native has not armed yet (hold starts at the press). */
+    val bracketHoldPresses: Int = 0
 ) {
-    /** Post-shutter frames are still being captured: the user should hold still. */
+    /** From the shutter press until the post-shutter frames are in: the user should hold still. */
     val bracketHoldActive: Boolean
-        get() = bracketHoldOpened != bracketHoldDone
+        get() = bracketHoldPresses > 0 || bracketHoldOpened != bracketHoldDone
 
     /** HDR+ Bracketed runs: multiframe on, Photo mode. */
     val hdrPlusBracketedActive: Boolean

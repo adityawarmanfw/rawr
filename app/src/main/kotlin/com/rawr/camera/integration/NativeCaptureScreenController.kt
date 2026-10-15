@@ -70,8 +70,9 @@ class NativeCaptureScreenController(
                 updateFaces(NativeCameraUiSnapshot.parseFaces(coordinator.faceDetectionsSnapshot()))
                 captureQueue.poll { capturePresentation.completed(pollStillCompletion()) }
                 // Applied exposure is display telemetry, not part of the AE loop.
-                // 10 Hz is responsive enough and avoids unnecessary JNI/JSON/UI churn.
-                delay(100)
+                // 10 Hz is responsive enough and avoids unnecessary JNI/JSON/UI churn;
+                // a bracket hold polls faster so its end is shown promptly.
+                delay(if (state.value.bracketHoldActive) 33 else 100)
             }
         }
     }
@@ -421,10 +422,13 @@ class NativeCaptureScreenController(
 
     private fun enqueueStillCapture() {
         val format = CaptureOutputFormat.from(state.value.dngEnabled, state.value.jpegEnabled)
+        // HDR+ Bracketed: "hold still" starts at the press, not when native arms the bracket.
+        if (state.value.hdrPlusBracketedActive) update { it.copy(bracketHoldPresses = it.bracketHoldPresses + 1) }
         try {
             captureQueue.enqueue(format)
         } catch (error: RuntimeException) {
             android.util.Log.e("RawrCamCapture", "Could not start photo processing", error)
+            if (state.value.bracketHoldPresses > 0) update { it.copy(bracketHoldPresses = it.bracketHoldPresses - 1) }
             capturePresentation.rejected(format.jpeg)
         }
     }
@@ -435,6 +439,8 @@ class NativeCaptureScreenController(
         } catch (error: RuntimeException) {
             android.util.Log.e("RawrCamCapture", "Capture preparation failed", error)
             0L
+        } finally {
+            settleBracketHoldPress()
         }
         if (nativeRequestId == 0L) {
             capturePresentation.rejected(format.jpeg)
@@ -443,12 +449,29 @@ class NativeCaptureScreenController(
         capturePresentation.accepted(nativeRequestId, format)
     }
 
-    private fun applyNativeSnapshot(snapshot: NativeCameraUiSnapshot) {
-        // Capture progress, independent of lens/mode reconciliation below.
+    // Native has armed (or skipped) this press's bracket: hand the hold over to
+    // its counters in the same update, so the notice never blinks off between.
+    private fun settleBracketHoldPress() {
+        val snapshot = runCatching { NativeCameraUiSnapshot.parse(coordinator.cameraControlSnapshot()) }.getOrNull()
         update { current ->
-            if (current.bracketHoldOpened == snapshot.bracketHoldOpened &&
-                current.bracketHoldDone == snapshot.bracketHoldDone) current
-            else current.copy(bracketHoldOpened = snapshot.bracketHoldOpened, bracketHoldDone = snapshot.bracketHoldDone)
+            if (current.bracketHoldPresses == 0) current
+            else current.copy(
+                bracketHoldPresses = current.bracketHoldPresses - 1,
+                bracketHoldOpened = snapshot?.bracketHoldOpened ?: current.bracketHoldOpened,
+                bracketHoldDone = snapshot?.bracketHoldDone ?: current.bracketHoldDone
+            )
+        }
+    }
+
+    private fun applyNativeSnapshot(snapshot: NativeCameraUiSnapshot) {
+        // Capture progress, independent of lens/mode reconciliation below. The
+        // counters only grow; a snapshot read before settleBracketHoldPress must
+        // not roll them back.
+        update { current ->
+            val opened = maxOf(current.bracketHoldOpened, snapshot.bracketHoldOpened)
+            val done = maxOf(current.bracketHoldDone, snapshot.bracketHoldDone)
+            if (current.bracketHoldOpened == opened && current.bracketHoldDone == done) current
+            else current.copy(bracketHoldOpened = opened, bracketHoldDone = done)
         }
         val prepared = snapshotPresentation.prepare(state.value, snapshot) ?: return
         update { current ->
