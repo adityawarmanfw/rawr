@@ -135,15 +135,21 @@ class SessionEngine {
         return rawrcam::color::autoKeyModeFromId(autoKeyMode_.load(std::memory_order_relaxed));
     }
     // Snapshot the adaptive curve independently of HAL gain; LOG always bypasses it.
+    // HDR+ Bracketed lifts its headroom through the adaptive curve even with
+    // AutoKey Off (bracketToneSplit); LOG stays scene-referred.
+    [[nodiscard]] bool bracketToneActive() const noexcept {
+        return hdrHeadroomMaxEv() < 0.0f && !sceneReferredRender_.load(std::memory_order_relaxed);
+    }
     [[nodiscard]] float appliedAutoKeyEv() const noexcept {
-        if (autoKeyMode() == rawrcam::color::AutoKeyMode::Off || sceneReferredRender_.load(std::memory_order_relaxed))
+        if ((autoKeyMode() == rawrcam::color::AutoKeyMode::Off && !bracketToneActive()) ||
+            sceneReferredRender_.load(std::memory_order_relaxed))
             return 0.0f;
         std::lock_guard<std::mutex> lock(autoKeyMutex_);
         return autoKeyCurve_.liftEv;
     }
     void applyAutoKey(tonemap::TonemapParams& tone) const {
         std::lock_guard<std::mutex> lock(autoKeyMutex_);
-        tone.adaptiveTone = autoKeyMode() == rawrcam::color::AutoKeyMode::Off ||
+        tone.adaptiveTone = (autoKeyMode() == rawrcam::color::AutoKeyMode::Off && !bracketToneActive()) ||
                                     sceneReferredRender_.load(std::memory_order_relaxed) ||
                                     tone.renderTransform == tonemap::RenderTransform::Log
                                 ? tonemap::AdaptiveToneParams{}
@@ -272,6 +278,9 @@ class SessionEngine {
     tonemap::AdaptiveToneParams autoKeyCurve_{};
     // HDR+ Bracketed headroom floor (EV < 0) or 0 when the meter is off.
     std::atomic<float> hdrHeadroomMaxEv_{0.0f};
+    // Part of the headroom lift the adaptive curve carries (EV >= 0); the
+    // rest stays in the AE post-gain. Written at slot retire.
+    std::atomic<float> bracketCurveShareEv_{0.0f};
     // LOG profiles stay scene-referred: no auto key lift.
     std::atomic<bool> sceneReferredRender_{false};
 };

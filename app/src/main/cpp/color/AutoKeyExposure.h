@@ -119,6 +119,60 @@ inline tonemap::AdaptiveToneParams autoKeyCurve(float keyEv, float highEv, float
     return p;
 }
 
+// HDR+ Bracketed tone split. The burst is underexposed by headroomLiftEv
+// (>= 0) to keep highlights; lifting it back linearly would push them over
+// display white again. Instead the adaptive curve (identity at and above the
+// protected highlights) carries as much of the lift as its contrast limit
+// allows, and only the remainder stays a linear gain. AutoKey's own lift for
+// the Camera2-AE-exposed scene (policy; null when AutoKey is Off) rides on the
+// curve after the headroom.
+struct BracketToneSplit {
+    float linearEv = 0.0f;  // part of headroomLiftEv applied as linear gain
+    tonemap::AdaptiveToneParams curve{};  // in render coordinates (after base gain x 2^linearEv)
+};
+
+inline BracketToneSplit bracketToneSplit(float keyEv, float highEv, float baseGain, float headroomLiftEv,
+                                         const AutoKeyPolicy* policy) noexcept {
+    BracketToneSplit out;
+    if (!std::isfinite(keyEv) || !std::isfinite(highEv) || !(baseGain > 0.0f) || !std::isfinite(headroomLiftEv))
+        return out;
+    const float headroom = std::clamp(headroomLiftEv, 0.0f, 8.0f);
+    const float autoLift = policy ? autoKeyTargetEv(keyEv, baseGain * std::exp2(headroom), *policy) : 0.0f;
+    const float total = headroom + autoLift;
+    const auto curveAt = [&](float linearEv) {
+        tonemap::AdaptiveToneParams p;
+        const float gainEv = std::log2(baseGain) + linearEv;
+        p.keyEv = keyEv + gainEv;
+        p.highlightEv = std::clamp(highEv + gainEv, std::log2(0.36f), 0.0f);
+        return p;
+    };
+    // The curve's capacity shrinks once a linear lift pushes the highlights
+    // to display white; fixed-point steps settle the split (the error
+    // shrinks by kAdaptiveMaxLiftPerEv per step).
+    float linearEv = 0.0f;
+    for (int i = 0; i < 12; ++i) {
+        const float capacity = std::min(tonemap::adaptiveToneMaxLift(curveAt(linearEv)), 3.0f);
+        linearEv = std::clamp(total - capacity, 0.0f, headroom);
+    }
+    out.linearEv = linearEv;
+    out.curve = curveAt(linearEv);
+    out.curve.liftEv = std::clamp(total - linearEv, 0.0f, std::min(tonemap::adaptiveToneMaxLift(out.curve), 3.0f));
+    return out;
+}
+
+// Editor shadow-lift override on an HDR+ Bracketed capture: keep the
+// captured anchors (render coordinates) and the headroom share the curve
+// carried (headroomEv), adding the chosen AutoKey lift for the scene at
+// Camera2 AE brightness (null policy = Off).
+inline tonemap::AdaptiveToneParams bracketOverrideCurve(const tonemap::AdaptiveToneParams& captured,
+                                                        float headroomEv, const AutoKeyPolicy* policy) noexcept {
+    tonemap::AdaptiveToneParams p = captured;
+    const float headroom = std::max(0.0f, headroomEv);
+    const float autoLift = policy ? autoKeyTargetEv(captured.keyEv + headroom, 1.0f, *policy) : 0.0f;
+    p.liftEv = std::clamp(headroom + autoLift, 0.0f, std::min(tonemap::adaptiveToneMaxLift(p), 3.0f));
+    return p;
+}
+
 // Exponential smoothing in the EV domain with a deadband so the lift does
 // not shimmer on small key changes. The first update after reset() lands
 // directly on the target so a fresh session does not fade in.

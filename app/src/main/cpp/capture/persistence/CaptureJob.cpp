@@ -239,8 +239,11 @@ struct Reader {
         constexpr uint32_t kBeforeLongFrameBytes = kBeforeBracketBytes + sizeof(float) + sizeof(uint32_t);
         static_assert(offsetof(multiframe::MultiframeTuning, longFrameEv) == kBeforeLongFrameBytes,
                       "MultiframeTuning journal long-frame layout");
+        constexpr uint32_t kBeforeCurveShareBytes = kBeforeLongFrameBytes + 2u * sizeof(float) + sizeof(uint32_t);
+        static_assert(offsetof(multiframe::MultiframeTuning, bracketCurveEv) == kBeforeCurveShareBytes,
+                      "MultiframeTuning journal curve-share layout");
         if (n != sizeof(v) && n != kPrefixBytes && n != kBeforeTileBytes && n != kBeforeBracketBytes &&
-            n != kBeforeLongFrameBytes)
+            n != kBeforeLongFrameBytes && n != kBeforeCurveShareBytes)
             throw std::runtime_error("capture_job_tuning_schema_mismatch");
         v = {};
         bytes(&v, n);

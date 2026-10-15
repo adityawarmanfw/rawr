@@ -31,12 +31,18 @@ float SessionFrameCallbacks::postGainFor(const rawrcam::metadata::FrameMetadataS
     // Camera2 boost (100 == 1x) shaped by the user cap + HighlightProtection
     // knee width. Both live on SessionEngine so preview/stills share one
     // choke point.
-    // HDR+ Bracketed headroom is lifted back here, so the viewfinder, AutoKey
-    // and frozen still gains all see the scene at Camera2 AE brightness.
+    // HDR+ Bracketed headroom is lifted back here, except the share the
+    // adaptive curve carries (bracketToneSplit), so the viewfinder and the
+    // frozen still gains see the scene at Camera2 AE brightness.
     const float gain = rawrcam::color::effectiveAePostGain(metadata.postRawSensitivityBoost, engine_->maxAePostGain(),
                                                            engine_->postGainKneeWidthEv());
-    const float headroomEv = engine_->hdrHeadroomEvFor(metadata);
-    return headroomEv < 0.0f ? std::min(tonemap::kMaxAePostGain, gain * std::exp2(-headroomEv)) : gain;
+    const float liftEv = -engine_->hdrHeadroomEvFor(metadata);
+    if (!(liftEv > 0.0f)) return gain;
+    const float curveEv = engine_->bracketToneActive()
+                              ? engine_->bracketCurveShareEv_.load(std::memory_order_relaxed)
+                              : 0.0f;
+    const float linearEv = std::max(0.0f, liftEv - curveEv);
+    return std::min(tonemap::kMaxAePostGain, gain * std::exp2(linearEv));
 }
 
 void SessionFrameCallbacks::applyAutoKey(tonemap::TonemapParams& tone) { engine_->applyAutoKey(tone); }
@@ -78,10 +84,12 @@ std::optional<rawrcam::pipeline::FrameDiagnosticsPort::SceneKeyFeedback> Session
     updateHdrHeadroom(stats ? &*stats : nullptr, engine_->monitoringCoordinator_.scopes().sceneClipLuma(slotIndex),
                       metadata, timestampNs);
     const auto mode = engine_->autoKeyMode();
-    if (mode == rawrcam::color::AutoKeyMode::Off || !sceneKeyMeteringEnabled()) {
+    const bool bracketTone = engine_->bracketToneActive();
+    if ((mode == rawrcam::color::AutoKeyMode::Off && !bracketTone) || !sceneKeyMeteringEnabled()) {
         autoKeySmoother_.reset();
         keySmoother_.reset();
         highlightSmoother_.reset();
+        engine_->bracketCurveShareEv_.store(0.0f, std::memory_order_relaxed);
         std::lock_guard<std::mutex> lock(engine_->autoKeyMutex_);
         engine_->autoKeyCurve_ = {};
         return std::nullopt;
@@ -90,15 +98,35 @@ std::optional<rawrcam::pipeline::FrameDiagnosticsPort::SceneKeyFeedback> Session
     if (!stats || (metadata.optimizedStillRequestId && *metadata.optimizedStillRequestId != 0)) return std::nullopt;
     const auto keyEv = rawrcam::color::sceneKeyEv(stats->weightedBins);
     if (!keyEv) return std::nullopt;
-    // Includes the HDR+ headroom lift, like the render gain it predicts.
-    const float halGain = postGainFor(metadata);
-    const auto highEv = rawrcam::color::scenePercentileEv(stats->weightedBins, 0.95f);
-    if (!highEv) return std::nullopt;
-    auto curve = rawrcam::color::autoKeyCurve(*keyEv, *highEv, halGain, rawrcam::color::autoKeyPolicy(mode));
+    const auto policy = rawrcam::color::autoKeyPolicy(mode);
+    tonemap::AdaptiveToneParams curve;
+    float headroomLiftEv = 0.0f;
+    if (bracketTone) {
+        // HDR+ Bracketed: protect the recovered highlights (upper 2%, where a
+        // sky sits) and carry the headroom lift on the curve where it fits.
+        const auto highEv = rawrcam::color::scenePercentileEv(stats->weightedBins, 0.98f);
+        if (!highEv) return std::nullopt;
+        headroomLiftEv = -engine_->hdrHeadroomEvFor(metadata);
+        const float baseGain = rawrcam::color::effectiveAePostGain(
+            metadata.postRawSensitivityBoost, engine_->maxAePostGain(), engine_->postGainKneeWidthEv());
+        curve = rawrcam::color::bracketToneSplit(*keyEv, *highEv, baseGain, headroomLiftEv,
+                                                 mode == rawrcam::color::AutoKeyMode::Off ? nullptr : &policy)
+                    .curve;
+    } else {
+        // Includes the HDR+ headroom lift, like the render gain it predicts.
+        const float halGain = postGainFor(metadata);
+        const auto highEv = rawrcam::color::scenePercentileEv(stats->weightedBins, 0.95f);
+        if (!highEv) return std::nullopt;
+        curve = rawrcam::color::autoKeyCurve(*keyEv, *highEv, halGain, policy);
+    }
     curve.liftEv = autoKeySmoother_.update(curve.liftEv, timestampNs, recording);
     curve.keyEv = keySmoother_.update(curve.keyEv, timestampNs, recording);
     curve.highlightEv = highlightSmoother_.update(curve.highlightEv, timestampNs, recording);
     curve.liftEv = std::min(curve.liftEv, tonemap::adaptiveToneMaxLift(curve));
+    // The curve carries the headroom first; the post-gain keeps the rest, so
+    // the total headroom lift stays exact while the curve eases in.
+    engine_->bracketCurveShareEv_.store(bracketTone ? std::min(headroomLiftEv, curve.liftEv) : 0.0f,
+                                        std::memory_order_relaxed);
     {
         std::lock_guard<std::mutex> lock(engine_->autoKeyMutex_);
         engine_->autoKeyCurve_ = curve;

@@ -1087,8 +1087,12 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
                         std::size_t(width) * 2u);
         for (auto& black : refMeta.blackLevelPhysicalRggb) black *= projection.codeScale;
         refMeta.effectiveWhiteLevel *= projection.codeScale;
-        // Bracketed bursts: lift to the brightest frame, as MfsrCaptureJob does.
-        const float liftEv = rawrcam::capture::multiframe::bracketLiftEv(metadata, metaRef);
+        // Bracketed bursts, as MfsrCaptureJob: underexposed-ZSL captures lift
+        // to their recorded Camera2 AE exposure, older ones to the brightest frame.
+        const auto aeText = tsv(bundle.frames.front().metadata, "rawrAeLinearExposure");
+        const float liftEv = !aeText.empty()
+                                 ? rawrcam::capture::multiframe::headroomLiftEv(std::stof(aeText), metadata[metaRef])
+                                 : rawrcam::capture::multiframe::bracketLiftEv(metadata, metaRef);
         std::filesystem::path file = tune.exportMergedDng;
         if (file.has_parent_path()) std::filesystem::create_directories(file.parent_path());
         writeFrameDng(file, bundle.cfa, width, height, bundle.frames[metaRef].metadata, refMeta, codes.data(),

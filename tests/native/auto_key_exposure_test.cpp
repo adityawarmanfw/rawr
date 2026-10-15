@@ -184,5 +184,34 @@ int main() {
             }
         }
     }
+    // HDR+ Bracketed split: a 2 EV headroom on a scene with key -6 EV and
+    // highlights just under clip fits the curve (capacity 0.25 x 6.5 EV).
+    {
+        const auto split = bracketToneSplit(-6.0f, -0.2f, 1.0f, 1.5f, nullptr);
+        assert(split.linearEv == 0.0f);
+        assert(near(split.curve.liftEv, 1.5f, 1e-4f));
+        assert(near(split.curve.highlightEv, -0.2f, 1e-4f));
+        // A larger headroom overflows the curve: the remainder stays linear.
+        const auto big = bracketToneSplit(-6.0f, -0.2f, 1.0f, 3.0f, nullptr);
+        assert(big.linearEv > 0.0f && big.linearEv < 3.0f);
+        assert(near(big.linearEv + big.curve.liftEv, 3.0f, 1e-3f));
+        assert(big.curve.liftEv <= tonemap::adaptiveToneMaxLift(big.curve) + 1e-5f);
+        // No headroom and AutoKey off: identity.
+        const auto none = bracketToneSplit(-6.0f, -0.2f, 1.0f, 0.0f, nullptr);
+        assert(none.linearEv == 0.0f && none.curve.liftEv == 0.0f);
+        // AutoKey adds its own lift for the Camera2-AE scene after the headroom.
+        const auto policy = autoKeyPolicy(AutoKeyMode::Natural);
+        const auto keyed = bracketToneSplit(-9.0f, -0.2f, 1.0f, 1.0f, &policy);
+        assert(keyed.linearEv + keyed.curve.liftEv > 1.0f);
+    }
+    // Editor override on a Bracketed capture keeps the curve's headroom share.
+    {
+        const auto captured = bracketToneSplit(-6.0f, -0.2f, 1.0f, 1.5f, nullptr).curve;
+        const auto off = bracketOverrideCurve(captured, 1.5f, nullptr);
+        assert(near(off.liftEv, 1.5f, 1e-4f) && off.keyEv == captured.keyEv);
+        const auto strong = autoKeyPolicy(AutoKeyMode::Strong);
+        const auto lifted = bracketOverrideCurve(captured, 1.5f, &strong);
+        assert(lifted.liftEv >= off.liftEv && lifted.liftEv <= tonemap::adaptiveToneMaxLift(lifted) + 1e-5f);
+    }
     return 0;
 }

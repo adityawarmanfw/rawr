@@ -24,6 +24,7 @@
 #include "capture/multiframe/mfsr/MergeProcessor.h"
 #include "capture/persistence/CaptureJob.h"
 #include "capture/persistence/FrameRecipe.h"
+#include "capture/persistence/ProcessingRecipe.h"
 #include "color/ColorMath.h"
 #include "color/FilmExposure.h"
 #include "color/WhiteBalance.h"
@@ -130,6 +131,14 @@ void MfsrCaptureJob::runStages(Published& published) {
     const float liftEv = headroomCapture ? 0.0f : dngLiftEv;
     auto frozenTonemap = work->frozenTonemap;
     frozenTonemap.exposureEV += liftEv;
+    if (liftEv > 0.0f) {
+        // Older dark-frame captures lift the render through exposureEV, which
+        // DNG re-renders do not read: fold it into the recipe's post-gain.
+        const float liftedGain = std::min(tonemap::kMaxAePostGain, frozenTonemap.aePostGain * std::exp2(liftEv));
+        mergedDng.resolvedRecipe =
+            persistence::resolvedRecipe(work->frozenTonemap, liftedGain, work->filmEnabled, work->filmLook);
+        baseDng.resolvedRecipe = mergedDng.resolvedRecipe;
+    }
     if (dngLiftEv > 0.0f) {
         mergedDng.baselineExposureEV = mergedDng.baselineExposureEV.value_or(0.0f) + dngLiftEv;
         baseDng.baselineExposureEV = baseDng.baselineExposureEV.value_or(0.0f) + dngLiftEv;  // base = dark reference
@@ -283,6 +292,10 @@ void MfsrCaptureJob::runStages(Published& published) {
     std::ostringstream replayMetadata;
     replayMetadata << rawr::raw_gpu_pipeline::serializeReplayNoise(resolvedNoise) << "rawrReferenceIndex\t"
                    << job->referenceIndex << '\n';
+    // HDR+ Bracketed: the Camera2 AE exposure the burst was underexposed from,
+    // so offline replays lift the merged DNG like the app.
+    if (tuning.bracketCapture == 1u && tuning.aeLinearExposure > 0.0f)
+        replayMetadata << std::setprecision(9) << "rawrAeLinearExposure\t" << tuning.aeLinearExposure << '\n';
     auto dumpRzsl = [&]() {
         if (!dumpRzslRequested || rzslDumpAttempted) return;
         rzslDumpAttempted = true;
