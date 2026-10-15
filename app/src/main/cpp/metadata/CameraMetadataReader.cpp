@@ -270,6 +270,8 @@ std::optional<FrameMetadataSnapshot> readFrameMetadataSnapshot(const ACameraMeta
         boost && boost->data.i32 && boost->count >= 1) {
         out.postRawSensitivityBoost = std::max(100, boost->data.i32[0]);
     }
+    if (const auto ev = entry(result, ACAMERA_CONTROL_AE_EXPOSURE_COMPENSATION); ev && ev->data.i32 && ev->count >= 1)
+        out.aeCompensationSteps = ev->data.i32[0];
 
     if (const auto dynamicBlack = entry(result, ACAMERA_SENSOR_DYNAMIC_BLACK_LEVEL);
         dynamicBlack && dynamicBlack->data.f && dynamicBlack->count >= 4) {

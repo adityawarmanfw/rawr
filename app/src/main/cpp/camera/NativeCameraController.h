@@ -49,8 +49,9 @@ class NativeCameraController {
     bool setExposureMode(ExposureControlMode mode);
     void setManualExposureTimeNs(int64_t exposureTimeNs);
     void setManualSensitivity(int32_t sensitivity);
-    // HDR+ bracketed: submits one AE-off frame per evOffsets entry (each <= 0)
-    // relative to a delivered frame's CaptureResult exposure/sensitivity,
+    // HDR+ bracketed: submits one AE-off frame per evOffsets entry (> 0: a
+    // long frame, shutter first up to 1/15 s; <= 0: a dark frame, gain
+    // first) relative to a delivered frame's CaptureResult exposure/sensitivity,
     // tagged with requestId. The repeating request is untouched. False when
     // nothing was submitted (no session, no manual exposure support, unknown
     // sensitivity coordinate).
@@ -61,6 +62,14 @@ class NativeCameraController {
     // Off unless HDR+ Bracketed is selected; never probes during video.
     void setSensitivityCalibrationWanted(bool wanted);
     void setExposureCompensationSteps(int32_t steps);
+    // HDR+ Bracketed highlight headroom (EV <= 0), rounded to compensation
+    // steps and added to the user's EV in Auto exposure. Lock-free: any
+    // thread may call it; the camera lane applies it on its next tick.
+    void setHdrHeadroomEv(float ev);
+    // Headroom EV (<= 0) a delivered frame was exposed with: its applied
+    // compensation minus the user's, bounded by the current/previous headroom
+    // request. 0 for manual exposure or unknown compensation.
+    float hdrHeadroomEvFor(int32_t aeMode, std::optional<int32_t> appliedSteps) const;
     // White balance. setWhiteBalanceMode returns false when the requested
     // preset/manual mode is not advertised (caller keeps previous UI state;
     // the snapshot confirms accepted values). setWhiteBalanceTempTint clamps

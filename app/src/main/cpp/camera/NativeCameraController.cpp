@@ -250,14 +250,29 @@ struct NativeCameraController::Impl final : CameraEventSink {
         const int64_t timeMin = caps.exposureTimeMinNs;
         // Never longer than the preview frame (motion blur, capture time).
         const int64_t timeMax = std::max(timeMin, std::min(baseExposureTimeNs, caps.exposureTimeMaxNs));
+        // Long frames may exceed it, up to a handheld limit (OIS keeps 1/15 s sharp).
+        constexpr int64_t kLongFrameMaxNs = 66'666'667;
+        const int64_t longTimeMax = std::max(timeMax, std::min(kLongFrameMaxNs, caps.exposureTimeMaxNs));
         std::vector<CameraRequestPipeline::BracketExposure> exposures;
         for (const float ev : evOffsets) {
+            if (ev > 0.0f) {
+                // Longer shutter first at the reference gain (more light, not
+                // more gain), then gain for what the handheld limit leaves.
+                const double target = double(baseExposureTimeNs) * double(sensitivity) * std::exp2(ev);
+                const int32_t baseIso = std::clamp(sensitivity, isoMin, isoMax);
+                const int64_t time =
+                    std::clamp<int64_t>(std::llround(target / double(baseIso)), timeMin, longTimeMax);
+                const auto iso = static_cast<int32_t>(
+                    std::clamp<double>(std::round(target / double(time)), double(isoMin), double(isoMax)));
+                exposures.push_back({time, iso});
+                continue;
+            }
             // Lower gain first, down to base ISO: at high ISO highlights clip
             // in the gain stage, so the same shutter at lower gain keeps all
             // the light and only adds headroom. A shorter shutter takes the
             // rest. The preview ISO may exceed the manual maximum (AE digital
             // gain), so the product, not the ISO, is matched.
-            const double target = double(baseExposureTimeNs) * double(sensitivity) * std::exp2(std::min(0.0f, ev));
+            const double target = double(baseExposureTimeNs) * double(sensitivity) * std::exp2(ev);
             const auto iso = static_cast<int32_t>(std::clamp<double>(
                 std::round(target / double(timeMax)), double(isoMin), double(isoMax)));
             const int64_t time = std::clamp<int64_t>(std::llround(target / double(iso)), timeMin, timeMax);
@@ -306,6 +321,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
     }
 
     bool submitRepeatingLocked() {
+        publishHeadroomLocked();
         return requests.submit(deviceSession.session(), deviceSession.request(), deviceSession.callbackContext(),
                                control, meteringRequestLocked());
     }
@@ -732,6 +748,51 @@ struct NativeCameraController::Impl final : CameraEventSink {
         diag("CAMERA_CONTROL_REQUEST evSteps=" + std::to_string(control.requestedEvSteps));
         submitRepeatingLocked();
     }
+    float evStepEvLocked() const {
+        const auto& caps = control.capabilities;
+        return caps.evStepDenominator > 0 && caps.evStepNumerator > 0
+                   ? float(caps.evStepNumerator) / float(caps.evStepDenominator)
+                   : 0.0f;
+    }
+    // Frame-lane requests land here; the camera lane applies them on its tick.
+    std::atomic<float> pendingHdrHeadroomEv{0.0f};
+    void applyHdrHeadroomLocked() {
+        // Stills only: video keeps Camera2 AE exposure.
+        const bool video = control.videoMode || control.recordingFps > 0;
+        const float ev = video ? 0.0f : pendingHdrHeadroomEv.load(std::memory_order_relaxed);
+        const float step = evStepEvLocked();
+        const int32_t steps =
+            step > 0.0f ? std::clamp(int32_t(std::lround(std::min(0.0f, ev) / step)),
+                                     control.capabilities.evMinSteps - control.capabilities.evMaxSteps, 0)
+                        : 0;
+        if (steps == control.hdrHeadroomSteps) return;
+        control.previousHdrHeadroomSteps = control.hdrHeadroomSteps;
+        control.hdrHeadroomSteps = steps;
+        diag("CAMERA_CONTROL_REQUEST hdrHeadroomSteps=" + std::to_string(steps));
+        if (control.exposureMode == ExposureControlMode::Auto && deviceSession.request() && deviceSession.session())
+            submitRepeatingLocked();
+        else
+            publishHeadroomLocked();
+    }
+    // Lock-free mirror for the per-frame lift (the frame lane must not wait
+    // on camera calls holding mutex). Published whenever these inputs change.
+    std::atomic<int32_t> publishedUserEvSteps{0};
+    std::atomic<int32_t> publishedHeadroomFloorSteps{0};
+    std::atomic<float> publishedEvStepEv{0.0f};
+    void publishHeadroomLocked() {
+        publishedUserEvSteps.store(
+            std::clamp(control.requestedEvSteps, control.capabilities.evMinSteps, control.capabilities.evMaxSteps),
+            std::memory_order_relaxed);
+        publishedHeadroomFloorSteps.store(std::min(control.hdrHeadroomSteps, control.previousHdrHeadroomSteps),
+                                          std::memory_order_relaxed);
+        publishedEvStepEv.store(evStepEvLocked(), std::memory_order_relaxed);
+    }
+    float hdrHeadroomEvFor(int32_t aeMode, std::optional<int32_t> appliedSteps) const {
+        const int32_t floor = publishedHeadroomFloorSteps.load(std::memory_order_relaxed);
+        if (floor >= 0 || !appliedSteps || aeMode == ACAMERA_CONTROL_AE_MODE_OFF) return 0.0f;
+        const int32_t user = publishedUserEvSteps.load(std::memory_order_relaxed);
+        return float(std::clamp(*appliedSteps - user, floor, 0)) * publishedEvStepEv.load(std::memory_order_relaxed);
+    }
     bool setWhiteBalanceModeValue(WhiteBalanceControlMode mode, int64_t requestId) {
         std::lock_guard<std::mutex> lock(mutex);
         const bool accepted = requestWhiteBalanceMode(control, mode, requestId);
@@ -910,6 +971,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
     }
     void tickControls(int64_t nowMs) {
         std::lock_guard<std::mutex> lock(mutex);
+        applyHdrHeadroomLocked();
         if (focusControls.expireTap(control, nowMs) && deviceSession.request() && deviceSession.session()) {
             diag("CAMERA_CONTROL_REQUEST tapAfCleared reason=explicit_clear");
             submitRepeatingLocked();
@@ -1002,6 +1064,12 @@ void NativeCameraController::setSensitivityCalibrationWanted(bool wanted) {
     if (changed && wanted) impl_->restartForSensitivityCalibrationLocked(lock);
 }
 void NativeCameraController::setExposureCompensationSteps(int32_t value) { impl_->setEvSteps(value); }
+void NativeCameraController::setHdrHeadroomEv(float ev) {
+    impl_->pendingHdrHeadroomEv.store(std::isfinite(ev) ? std::min(0.0f, ev) : 0.0f, std::memory_order_relaxed);
+}
+float NativeCameraController::hdrHeadroomEvFor(int32_t aeMode, std::optional<int32_t> appliedSteps) const {
+    return impl_->hdrHeadroomEvFor(aeMode, appliedSteps);
+}
 bool NativeCameraController::setWhiteBalanceMode(WhiteBalanceControlMode mode, int64_t requestId) {
     return impl_->setWhiteBalanceModeValue(mode, requestId);
 }

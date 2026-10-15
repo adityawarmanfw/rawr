@@ -153,8 +153,8 @@ CameraControlApplyResult applyCameraControlState(ACaptureRequest* request, const
         const uint8_t aeLock = ACAMERA_CONTROL_AE_LOCK_OFF;
         (void)ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AE_LOCK, 1, &aeLock);
 
-        const int32_t ev =
-            std::clamp(state.requestedEvSteps, state.capabilities.evMinSteps, state.capabilities.evMaxSteps);
+        const int32_t ev = std::clamp(state.requestedEvSteps + std::min(0, state.hdrHeadroomSteps),
+                                      state.capabilities.evMinSteps, state.capabilities.evMaxSteps);
         (void)ACaptureRequest_setEntry_i32(request, ACAMERA_CONTROL_AE_EXPOSURE_COMPENSATION, 1, &ev);
     }
 

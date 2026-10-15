@@ -63,6 +63,10 @@ struct FrameMetadataSnapshot {
     int32_t aeState = -1;
     int32_t awbState = -1;
     int32_t postRawSensitivityBoost = 100;  // Camera2 value; 100 == 1x.
+    // CONTROL_AE_EXPOSURE_COMPENSATION result, in compensation steps. Live
+    // routing only (HDR+ headroom lift); deliberately omitted from capture
+    // journals, which persist the capture's headroom in MultiframeTuning.
+    std::optional<int32_t> aeCompensationSteps;
 
     RectI scalerCropRegion{};
     RectI rawCropRegion{};
