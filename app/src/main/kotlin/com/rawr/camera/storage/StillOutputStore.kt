@@ -365,6 +365,13 @@ class StillOutputStore(
                 true
             } catch (error: Exception) { claimed.remove(name); throw error }
         }
+        /** Durable: the editor has its own copy; hide the capture card until recovery publishes it. */
+        fun markRendererEdited(filesDir: File, name: String) {
+            require(name.isNotBlank() && '/' !in name && ".." !in name)
+            java.io.FileOutputStream(File(filesDir, "still_jobs/$name$RENDERER_EDITED")).use { it.write(1); it.fd.sync() }
+        }
+        fun rendererEdited(filesDir: File, name: String) = File(filesDir, "still_jobs/$name$RENDERER_EDITED").exists()
+        const val RENDERER_EDITED = ".renderer-edited"
         fun rendererRelease(filesDir: File, name: String) {
             File(filesDir, "still_jobs/$name.renderer-owner").delete()
             claimed.remove(name)

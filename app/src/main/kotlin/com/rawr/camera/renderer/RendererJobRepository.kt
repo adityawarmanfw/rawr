@@ -41,7 +41,8 @@ internal class RendererJobRepository(private val context: Context, private val s
     }
     @Synchronized fun refresh() {
         val saved = root.listFiles().orEmpty().mapNotNull { d -> runCatching { read(File(d, "job.json")) }.getOrNull() }
-        val queued = journal.readAll().filter { !it.complete && journal.hasInput(it) && saved.none { s -> s.capture == it.name } }
+        val queued = journal.readAll().filter { !it.complete && journal.hasInput(it) && saved.none { s -> s.capture == it.name } &&
+            !StillOutputStore.rendererEdited(context.filesDir, it.name) }
             .map { RenderJob("capture-${it.name}", it.name, capture = it.name, original = it.recipe,
                 status = if (StillOutputStore.isClaimed(it.name)) "Processing capture" else "Unfinished capture", error = it.lastError) }
         mutableJobs.value = saved.map { disk -> if (draftWrites[disk.id]?.isActive == true) mutableJobs.value.firstOrNull { it.id == disk.id } ?: disk else disk } + queued

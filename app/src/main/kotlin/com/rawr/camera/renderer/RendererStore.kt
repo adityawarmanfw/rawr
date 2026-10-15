@@ -151,12 +151,16 @@ internal class RendererStore private constructor(private val context: Context) {
                 ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_CREATE or ParcelFileDescriptor.MODE_READ_WRITE or ParcelFileDescriptor.MODE_TRUNCATE).use { fd ->
                     native.materialize(job.capture, fd.fd)
                 }
-                inspect(job, library).also(::save)
+                inspect(job, library).also(::save).also {
+                    // The editor now edits its own copy. Hand the capture back so camera
+                    // recovery publishes its capture-time outputs under their own names.
+                    StillOutputStore.markRendererEdited(context.filesDir, job.capture)
+                    StillOutputStore.rendererRelease(context.filesDir, job.capture)
+                }
             } catch (error: Exception) {
                 runCatching { save(job.copy(status = "Failed", error = error.message.orEmpty())) }
-                // Release unless a saved job now owns the capture; never let this check strand the claim.
-                val saved = runCatching { File(repository.directory(job.id), "job.json").exists() }.getOrDefault(false)
-                if (!saved) StillOutputStore.rendererRelease(context.filesDir, job.capture)
+                // The editor holds the capture only while preparing its copy.
+                StillOutputStore.rendererRelease(context.filesDir, job.capture)
                 throw error
             }
         }
@@ -164,7 +168,11 @@ internal class RendererStore private constructor(private val context: Context) {
     suspend fun remove(job: RenderJob) = withContext(Dispatchers.IO) { lane.withLock { check(!busy.value); removeUnlocked(job) } }
     private fun removeUnlocked(job: RenderJob) {
         native.closeFor(job.id)
-        if (job.capture.isNotEmpty()) {
+        // Editor jobs never own their capture: camera recovery publishes its capture-time
+        // outputs. Only removing the unopened capture card itself discards the capture.
+        val unopenedCapture = job.capture.isNotEmpty() &&
+            runCatching { !File(repository.directory(job.id), "job.json").exists() }.getOrDefault(false)
+        if (unopenedCapture) {
             check(File(context.filesDir, "still_jobs/${job.capture}.renderer-owner").exists() || StillOutputStore.claimForRenderer(context.filesDir, job.capture)) { "Capture is still processing" }
             repository.captureEntry(job.capture)?.let { entry ->
                 entry.targets.filterNot { it.published }.forEach { target -> runCatching {
