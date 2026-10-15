@@ -2,7 +2,6 @@
 #include "capture/single/SingleFrameCaptureContextBuilder.h"
 #include "encoding/dng/DngCaptureWriter.h"
 #include "encoding/jpeg/JpegCaptureWriter.h"
-#include "support/UniqueFd.h"
 namespace rawrcam::capture {
 class SingleFrameCaptureOutputs final {
    public:
@@ -34,9 +33,9 @@ class SingleFrameCaptureOutputs final {
     }
     std::string filesDir_;
     CaptureDiagnostic diagnostic_;
-    support::UniqueFd dngFd_, jpegFd_;
     encoding::dng::DngCaptureWriter dngWriter_;
     encoding::jpeg::JpegCaptureWriter jpegWriter_;
+    // Pending contexts own their output descriptors until a writer takes them.
     std::optional<encoding::dng::DngCaptureContext> dng_;
     std::optional<JpegCaptureRequest> jpeg_;
     std::optional<encoding::dng::DngWriteCompletion> dngCompletion_;

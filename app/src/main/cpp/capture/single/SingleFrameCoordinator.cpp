@@ -68,7 +68,8 @@ class SingleFrameCoordinator::Impl {
         std::string preparationError;
         std::string recoveryPath;
         bool recoverMultiframe = false;
-        int recoveryDng = -1, recoveryMerged = -1, recoveryJpeg = -1;
+        // Held until a recovery job takes them; still held here means not yet handed off.
+        encoding::OutputFd recoveryDng, recoveryMerged, recoveryJpeg;
         std::chrono::steady_clock::time_point accepted = std::chrono::steady_clock::now();
         ~Entry() {
             if (preparation.joinable()) preparation.join();
@@ -139,16 +140,14 @@ class SingleFrameCoordinator::Impl {
         // accepted job. A rejected request still closes the transferred descriptors.
         auto reservation = persistence::reserve(filesDir_, uint64_t(width_) * height_ * 2, true);
         if (disabled_ || stopped_ || !reservation) {
-            if (dng.outputFd >= 0) close(dng.outputFd);
-            if (jpeg.output.outputFd >= 0) close(jpeg.output.outputFd);
             if (diagnostic_)
                 diagnostic_(
                     "RAW_STILL_CAPTURE_REQUEST_REJECTED reason=acquisition_memory_or_storage_budget_or_disabled");
             return 0;
         }
         auto entry = std::make_shared<Entry>();
-        entry->jpegRequested = jpeg.output.outputFd >= 0;
-        entry->dngRequested = dng.outputFd >= 0;
+        entry->jpegRequested = jpeg.output.outputFd.valid();
+        entry->dngRequested = dng.outputFd.valid();
         entry->dngName = dng.displayName;
         entry->jpegName = jpeg.output.displayName;
         entry->shot = std::make_unique<SingleFrameCaptureJob>(vulkan_, submitMutex_, filesDir_, diagnostic_);
@@ -168,6 +167,7 @@ class SingleFrameCoordinator::Impl {
         return entry->id;
     }
     uint64_t recover(const std::string& name, bool multiframe, int dngFd, int mergedFd, int jpegFd) {
+        encoding::OutputFd dng(dngFd), merged(mergedFd), jpeg(jpegFd);
         auto entry = std::make_shared<Entry>();
         entry->id = nextId_++;
         entry->jpegRequested = jpegFd >= 0;
@@ -175,9 +175,9 @@ class SingleFrameCoordinator::Impl {
         entry->dngName = name;
         entry->recoveryPath = persistence::jobPath(filesDir_, name);
         entry->recoverMultiframe = multiframe;
-        entry->recoveryDng = dngFd;
-        entry->recoveryMerged = mergedFd;
-        entry->recoveryJpeg = jpegFd;
+        entry->recoveryDng = std::move(dng);
+        entry->recoveryMerged = std::move(merged);
+        entry->recoveryJpeg = std::move(jpeg);
         entry->prepared = true;
         entry->handedOff = true;
         {
@@ -331,9 +331,9 @@ class SingleFrameCoordinator::Impl {
                         auto work = persistence::loadBurst(entry->recoveryPath, vulkan_, submitMutex_);
                         work->requestId = entry->id;
                         work->jpegRequested = entry->jpegRequested;
-                        work->baseDng.outputFd = entry->recoveryDng;
-                        work->mergedDng.outputFd = entry->recoveryMerged;
-                        work->mergedJpeg.output.outputFd = entry->recoveryJpeg;
+                        work->baseDng.outputFd = std::move(entry->recoveryDng);
+                        work->mergedDng.outputFd = std::move(entry->recoveryMerged);
+                        work->mergedJpeg.output.outputFd = std::move(entry->recoveryJpeg);
                         const auto geometry = work->capture->referenceMetadata.cameraContext;
                         rawr::raw_gpu_pipeline::AndroidBurstCoordinator coordinator;
                         // Crash-recovery path: function-local processor, cold
@@ -353,7 +353,6 @@ class SingleFrameCoordinator::Impl {
                             dngBox_,
                             jpegBox_,
                             assetManager_};
-                        entry->recoveryDng = entry->recoveryMerged = entry->recoveryJpeg = -1;
                         multiframe::MfsrCaptureJob(context, std::move(work)).run();
                         std::lock_guard<std::mutex> lock(mutex_);
                         popFrontLocked();
@@ -362,18 +361,18 @@ class SingleFrameCoordinator::Impl {
                     auto saved = persistence::load(entry->recoveryPath);
                     entry->shot = std::make_unique<SingleFrameCaptureJob>(vulkan_, submitMutex_, filesDir_, diagnostic_);
                     auto& shot = *entry->shot;
-                    const int recoveryDng = std::exchange(entry->recoveryDng, -1);
-                    const int recoveryJpeg = std::exchange(entry->recoveryJpeg, -1);
-                    shot.recover(std::move(saved), entry->recoveryPath, entry->id, recoveryDng, recoveryJpeg,
+                    shot.recover(std::move(saved), entry->recoveryPath, entry->id, std::move(entry->recoveryDng),
+                                 std::move(entry->recoveryJpeg),
                                  entry->jpegRequested, assetManager_);
                 } catch (const std::exception& e) {
-                    for (int fd : {entry->recoveryDng, entry->recoveryMerged, entry->recoveryJpeg})
-                        if (fd >= 0) close(fd);
-                    if (entry->recoveryDng >= 0)
+                    if (entry->recoveryDng.valid())
                         dngBox_.push(std::to_string(entry->id) + "\t0\t" + entry->dngName + "\t" + e.what());
-                    if (entry->recoveryMerged >= 0)
+                    if (entry->recoveryMerged.valid())
                         dngBox_.push(std::to_string(entry->id) + "\t0\tmerged\t" + e.what());
                     if (entry->jpegRequested) jpegBox_.push(std::to_string(entry->id) + "\t0\t\t" + e.what() + "\t0");
+                    entry->recoveryDng.reset();
+                    entry->recoveryMerged.reset();
+                    entry->recoveryJpeg.reset();
                     std::lock_guard<std::mutex> lock(mutex_);
                     popFrontLocked();
                     continue;

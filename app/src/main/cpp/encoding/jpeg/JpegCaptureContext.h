@@ -5,6 +5,7 @@
 #include <string>
 
 #include "color/UltraHdrParams.h"
+#include "encoding/OutputFd.h"
 
 namespace rawrcam::encoding::jpeg {
 
@@ -23,7 +24,8 @@ enum class ChromaSubsampling : std::uint8_t {
 // drift apart field-by-field.
 
 struct JpegCaptureContext {
-    int outputFd = -1;
+    // Owned destination; moves to JpegCaptureWriter, which closes it on every outcome.
+    OutputFd outputFd;
     int deviceRotationDegrees = 0;
     std::int64_t wallClockUnixMillis = 0;
     std::int16_t utcOffsetMinutes = 0;

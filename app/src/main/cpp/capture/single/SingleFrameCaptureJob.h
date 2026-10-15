@@ -40,7 +40,8 @@ class SingleFrameCaptureJob final {
     bool hasDngCompletion() const noexcept { return outputs_.hasDngCompletion(); }
     bool expectsTimestamp(uint64_t timestamp) const { return acquisition_.expectsTimestamp(timestamp); }
     void cancelAcquisition(const std::string& reason);
-    void recover(persistence::CaptureJob, const std::string&, uint64_t, int, int, bool, AAssetManager*);
+    void recover(persistence::CaptureJob, const std::string&, uint64_t, encoding::OutputFd dng, encoding::OutputFd jpeg,
+                 bool, AAssetManager*);
 
    private:
     void consumeAcquisition();

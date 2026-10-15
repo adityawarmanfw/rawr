@@ -109,7 +109,7 @@ rawrcam_module(develop
 
 rawrcam_module(encoding
   DIRECTORY encoding
-  DEPENDS color develop diagnostics_logging geometry imaging metadata tonemap
+  DEPENDS color develop diagnostics_logging geometry imaging metadata support tonemap
   SOURCES
     encoding/jpeg/JpegCaptureWriter.cpp
     encoding/rzsl/RzslBundleSink.cpp

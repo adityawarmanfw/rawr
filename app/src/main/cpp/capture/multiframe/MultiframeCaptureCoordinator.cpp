@@ -190,18 +190,10 @@ uint64_t MultiframeCaptureCoordinator::startPreparedMultiframeCapture(
     rawrcam::capture::multiframe::MultiframeTuning tuning,
     rawrcam::capture::multiframe::MultiframeBaseFrameMode baseFrameMode, const tonemap::TonemapParams& tone,
     bool filmEnabled, const spektrafilm_native::FilmLook& filmLook, std::optional<BracketPlan>* bracketPlan) noexcept {
-    const bool jpegRequested = mergedJpeg.output.outputFd >= 0;
-    const int baseFd = baseDng.outputFd;
-    const int mergedFd = mergedDng.outputFd;
-    const int jpegFd = mergedJpeg.output.outputFd;
-    auto closeOutputs = [&]() noexcept {
-        if (baseFd >= 0) close(baseFd);
-        if (mergedFd >= 0) close(mergedFd);
-        if (jpegFd >= 0) close(jpegFd);
-    };
-    if (!pendingMultiframeCapture_ || (baseFd < 0 && mergedFd < 0 && jpegFd < 0) ||
+    // A rejected request closes its destinations as the contexts go out of scope.
+    const bool jpegRequested = mergedJpeg.output.outputFd.valid();
+    if (!pendingMultiframeCapture_ || (!baseDng.outputFd.valid() && !mergedDng.outputFd.valid() && !jpegRequested) ||
         (jpegRequested && (mergedJpeg.output.quality < 95 || mergedJpeg.output.quality > 100))) {
-        closeOutputs();
         pendingMultiframeCapture_.reset();
         return 0u;
     }
@@ -243,7 +235,7 @@ uint64_t MultiframeCaptureCoordinator::startPreparedMultiframeCapture(
         mfsrService_->start(std::move(capture), std::move(baseDng), std::move(mergedDng), std::move(mergedJpeg),
                             dumpRzslRequested, frozenTonemap, tuning, baseFrameMode, captureFilmEnabled, captureFilm);
     if (requestId == 0u) {
-        // Service closed the output FDs on rejection; nothing pending remains.
+        // The service owned and closed the outputs on rejection; nothing pending remains.
         if (collector) abandonBracket(collector->requestId());
         if (bracketPlan) bracketPlan->reset();
         return 0u;

@@ -339,18 +339,16 @@ bool JpegCaptureWriter::busy() const noexcept {
 
 bool JpegCaptureWriter::start(std::uint64_t requestId, const void* rgba8, std::size_t rgbaBytes, std::uint32_t width,
                               std::uint32_t height, JpegCaptureContext context) {
-    if (requestId == 0 || !rgba8 || width == 0 || height == 0 || context.outputFd < 0 || context.quality < 95 ||
+    if (requestId == 0 || !rgba8 || width == 0 || height == 0 || !context.outputFd.valid() || context.quality < 95 ||
         context.quality > 100) {
         __android_log_print(ANDROID_LOG_WARN, "RawrCamNative", "JPEG_WRITER_REJECTED requestId=%llu invalid_args",
                             (unsigned long long)requestId);
-        if (context.outputFd >= 0) ::close(context.outputFd);
         return false;
     }
     const std::uint64_t required = static_cast<std::uint64_t>(width) * height * 4u;
     if (required > std::numeric_limits<std::size_t>::max() || rgbaBytes != static_cast<std::size_t>(required)) {
         __android_log_print(ANDROID_LOG_WARN, "RawrCamNative", "JPEG_WRITER_REJECTED requestId=%llu size_mismatch",
                             (unsigned long long)requestId);
-        ::close(context.outputFd);
         return false;
     }
     {
@@ -358,14 +356,12 @@ bool JpegCaptureWriter::start(std::uint64_t requestId, const void* rgba8, std::s
         if (busy_ || completion_) {
             __android_log_print(ANDROID_LOG_WARN, "RawrCamNative", "JPEG_WRITER_REJECTED requestId=%llu busy=%d",
                                 (unsigned long long)requestId, busy_ ? 1 : 0);
-            ::close(context.outputFd);
             return false;
         }
         busy_ = true;
     }
     joinWorker();
     const auto* pixels = static_cast<const unsigned char*>(rgba8);
-    const int ownedFd = context.outputFd;
     try {
         worker_ = std::thread([this, requestId, pixels, width, height, context = std::move(context)]() mutable {
             // Background priority: file encoding must never preempt camera or
@@ -375,7 +371,7 @@ bool JpegCaptureWriter::start(std::uint64_t requestId, const void* rgba8, std::s
             done.requestId = requestId;
             done.displayName = context.displayName;
             done.filmFallbackMemory = context.filmFallbackMemory;
-            const int fd = context.outputFd;
+            const int fd = context.outputFd.get();
             diagnostics::RuntimeTraceRecorder::instance().record(diagnostics::RuntimeTraceStage::JpegEncodeBegin, 0,
                                                                  requestId);
             const auto t0 = std::chrono::steady_clock::now();
@@ -441,7 +437,8 @@ bool JpegCaptureWriter::start(std::uint64_t requestId, const void* rgba8, std::s
             struct stat st{};
             if (done.error.empty() && ::fstat(fd, &st) == 0 && st.st_size >= 0)
                 done.fileBytes = static_cast<std::uint64_t>(st.st_size);
-            if (::close(fd) != 0 && done.error.empty())
+            // Closed explicitly: a failed close can mean lost data on some file systems.
+            if (::close(context.outputFd.release()) != 0 && done.error.empty())
                 done.error = "close failed: " + std::string(std::strerror(errno));
             done.success = done.error.empty();
             if (done.success) {
@@ -460,7 +457,7 @@ bool JpegCaptureWriter::start(std::uint64_t requestId, const void* rgba8, std::s
             busy_ = false;
         });
     } catch (...) {
-        ::close(ownedFd);
+        // The unstarted closure, which owns the destination, has already closed it.
         std::lock_guard<std::mutex> lock(mutex_);
         busy_ = false;
         return false;
@@ -476,10 +473,9 @@ bool JpegCaptureWriter::startUltraHdr(std::uint64_t requestId, const void* rgba8
         return start(requestId, rgba8, rgbaBytes, width, height, std::move(context));
     }
     if (requestId == 0 || !rgba8 || width == 0 || height == 0 || !mapRgba8 || mapWidth == 0 || mapHeight == 0 ||
-        context.outputFd < 0 || context.quality < 95 || context.quality > 100) {
+        !context.outputFd.valid() || context.quality < 95 || context.quality > 100) {
         __android_log_print(ANDROID_LOG_WARN, "RawrCamNative", "JPEG_UHDR_REJECTED requestId=%llu invalid_args",
                             (unsigned long long)requestId);
-        if (context.outputFd >= 0) ::close(context.outputFd);
         return false;
     }
     const std::uint64_t required = static_cast<std::uint64_t>(width) * height * 4u;
@@ -489,7 +485,6 @@ bool JpegCaptureWriter::startUltraHdr(std::uint64_t requestId, const void* rgba8
         (mapBytes != static_cast<std::size_t>(mapRequired) && mapBytes != static_cast<std::size_t>(mapRequired * 2u))) {
         __android_log_print(ANDROID_LOG_WARN, "RawrCamNative", "JPEG_UHDR_REJECTED requestId=%llu size_mismatch",
                             (unsigned long long)requestId);
-        ::close(context.outputFd);
         return false;
     }
     {
@@ -497,7 +492,6 @@ bool JpegCaptureWriter::startUltraHdr(std::uint64_t requestId, const void* rgba8
         if (busy_ || completion_) {
             __android_log_print(ANDROID_LOG_WARN, "RawrCamNative", "JPEG_UHDR_REJECTED requestId=%llu busy=%d",
                                 (unsigned long long)requestId, busy_ ? 1 : 0);
-            ::close(context.outputFd);
             return false;
         }
         busy_ = true;
@@ -505,7 +499,6 @@ bool JpegCaptureWriter::startUltraHdr(std::uint64_t requestId, const void* rgba8
     joinWorker();
     const auto* pixels = static_cast<const unsigned char*>(rgba8);
     const auto* mapPixels = static_cast<const unsigned char*>(mapRgba8);
-    const int ownedFd = context.outputFd;
     const bool hasCaptureColor = mapBytes == mapRequired * 2u;
     const int mapQuality = hasCaptureColor ? 95 : std::clamp(context.ultraHdr.gainmapQuality, 1, 100);
     try {
@@ -516,7 +509,7 @@ bool JpegCaptureWriter::startUltraHdr(std::uint64_t requestId, const void* rgba8
             done.requestId = requestId;
             done.displayName = context.displayName;
             done.filmFallbackMemory = context.filmFallbackMemory;
-            const int fd = context.outputFd;
+            const int fd = context.outputFd.get();
             diagnostics::RuntimeTraceRecorder::instance().record(diagnostics::RuntimeTraceStage::JpegEncodeBegin, 0,
                                                                  requestId);
             const auto t0 = std::chrono::steady_clock::now();
@@ -668,7 +661,8 @@ bool JpegCaptureWriter::startUltraHdr(std::uint64_t requestId, const void* rgba8
             struct stat st{};
             if (done.error.empty() && ::fstat(fd, &st) == 0 && st.st_size >= 0)
                 done.fileBytes = static_cast<std::uint64_t>(st.st_size);
-            if (::close(fd) != 0 && done.error.empty())
+            // Closed explicitly: a failed close can mean lost data on some file systems.
+            if (::close(context.outputFd.release()) != 0 && done.error.empty())
                 done.error = "close failed: " + std::string(std::strerror(errno));
             done.success = done.error.empty();
             if (done.success) {
@@ -687,7 +681,7 @@ bool JpegCaptureWriter::startUltraHdr(std::uint64_t requestId, const void* rgba8
             busy_ = false;
         });
     } catch (...) {
-        ::close(ownedFd);
+        // The unstarted closure, which owns the destination, has already closed it.
         std::lock_guard<std::mutex> lock(mutex_);
         busy_ = false;
         return false;

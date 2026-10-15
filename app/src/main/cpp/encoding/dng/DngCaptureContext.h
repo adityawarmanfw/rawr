@@ -4,6 +4,8 @@
 #include <optional>
 #include <string>
 
+#include "encoding/OutputFd.h"
+
 namespace tonemap {
 struct TonemapParams;
 }
@@ -18,7 +20,8 @@ enum class DngCompression : std::uint8_t {
 };
 
 struct DngCaptureContext {
-    int outputFd = -1;                // ownership transfers to DngCaptureWriter on accepted request
+    // Owned destination; moves to DngCaptureWriter, which closes it on every outcome.
+    OutputFd outputFd;
     int deviceRotationDegrees = 0;    // physical device rotation: 0/90/180/270
     int64_t wallClockUnixMillis = 0;  // shutter-request wall clock
     int16_t utcOffsetMinutes = 0;

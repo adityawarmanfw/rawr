@@ -431,7 +431,7 @@ Java_com_rawr_camera_renderer_RendererNative_render(JNIEnv* e, jobject, jlong id
         if (fd >= 0) {
             Json json(e, recipe), tone(e, json.child("tone")), exportJson(e, json.child("export"));
             rawrcam::encoding::jpeg::JpegCaptureContext c;
-            c.outputFd = dup(fd);
+            c.outputFd = rawrcam::encoding::OutputFd(dup(fd));
             c.quality = int(tone.number("jpegQuality", 98));
             auto subsampling = tone.text("jpegChromaSubsamplingId");
             c.subsampling = subsampling == "jpeg.444"   ? rawrcam::encoding::jpeg::ChromaSubsampling::Yuv444
@@ -637,10 +637,10 @@ extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_renderer_RendererNative_m
         auto job = capture::persistence::load(str(e, path), [](auto&, size_t, const auto&) {});
         if (!job.multiframe) {
             job = capture::persistence::load(str(e, path));
-            job.dng.outputFd = dup(fd);
+            job.dng.outputFd = encoding::OutputFd(dup(fd));
             job.frame.requestId = 1;
             encoding::dng::DngCaptureWriter writer;
-            if (!writer.start(std::make_shared<imaging::RawSnapshot>(std::move(job.frame)), job.dng))
+            if (!writer.start(std::make_shared<imaging::RawSnapshot>(std::move(job.frame)), std::move(job.dng)))
                 throw std::runtime_error("Cannot prepare queued RAW");
             std::optional<encoding::dng::DngWriteCompletion> done;
             while (!(done = writer.pollCompletion())) std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -654,9 +654,9 @@ extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_renderer_RendererNative_m
             auto work = capture::persistence::loadBurst(str(e, path), vk, mutex);
             work->requestId = 1;
             work->jpegRequested = false;
-            work->baseDng.outputFd = -1;
-            work->mergedDng.outputFd = dup(fd);
-            work->mergedJpeg.output.outputFd = -1;
+            work->baseDng.outputFd.reset();
+            work->mergedDng.outputFd = encoding::OutputFd(dup(fd));
+            work->mergedJpeg.output.outputFd.reset();
             rawr::raw_gpu_pipeline::AndroidBurstCoordinator coordinator;
             develop::rendered::StillImageRenderer processor(str(e, files));
             capture::multiframe::StringMailbox dngBox, jpegBox;

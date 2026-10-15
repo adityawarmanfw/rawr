@@ -12,13 +12,10 @@ void SingleFrameCaptureJournal::setAdmission(persistence::CaptureReservation res
 }
 void SingleFrameCaptureJournal::freeze(const encoding::dng::DngCaptureContext& dng, const JpegCaptureRequest* jpeg) {
     frozen_ = {};
+    // Copies never carry the output descriptors (encoding::OutputFd).
     frozen_.dng = dng;
-    frozen_.dng.outputFd = -1;
     frozen_.jpegRequested = jpeg != nullptr;
-    if (jpeg) {
-        frozen_.jpeg = *jpeg;
-        frozen_.jpeg.output.outputFd = -1;
-    }
+    if (jpeg) frozen_.jpeg = *jpeg;
 }
 void SingleFrameCaptureJournal::commit(SingleFrameSnapshot& deferred) {
     if (frozen_.dng.captureTone) {
