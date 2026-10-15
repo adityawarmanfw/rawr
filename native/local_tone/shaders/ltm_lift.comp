@@ -1,0 +1,16 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// Edge-aware base = mean(a) * I + mean(b); writes (lift EV, base EV).
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0, rg32f) uniform readonly image2D coeffMeans;
+layout(binding = 1, rg32f) uniform readonly image2D luma;
+layout(binding = 2, rg16f) uniform writeonly image2D dst;
+#include "ltm_common.glsl"
+
+void main() {
+    ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    if (q.x >= int(pc.size.z) || q.y >= int(pc.size.w)) return;
+    vec2 ab = imageLoad(coeffMeans, q).rg;
+    float base = ab.x * imageLoad(luma, q).r + ab.y;
+    imageStore(dst, q, vec4(rawrLtmLift(base), base, 0.0, 0.0));
+}

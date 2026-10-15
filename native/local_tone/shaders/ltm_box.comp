@@ -1,0 +1,18 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// Separable box mean of two channels on the low-res grid (edge-clamped).
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0, rg32f) uniform readonly image2D src;
+layout(binding = 1, rg32f) uniform writeonly image2D dst;
+#include "ltm_common.glsl"
+
+void main() {
+    ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = ivec2(pc.size.zw);
+    if (q.x >= size.x || q.y >= size.y) return;
+    ivec2 step = pc.vertical != 0u ? ivec2(0, 1) : ivec2(1, 0);
+    vec2 sum = vec2(0.0);
+    for (int k = -pc.radius; k <= pc.radius; ++k)
+        sum += imageLoad(src, clamp(q + step * k, ivec2(0), size - 1)).rg;
+    imageStore(dst, q, vec4(sum / float(2 * pc.radius + 1), 0.0, 0.0));
+}

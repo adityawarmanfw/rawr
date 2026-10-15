@@ -1,0 +1,16 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// Guided filter coefficients from the box means of (I, I^2): a, b.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0, rg32f) uniform readonly image2D means;
+layout(binding = 1, rg32f) uniform writeonly image2D dst;
+#include "ltm_common.glsl"
+
+void main() {
+    ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    if (q.x >= int(pc.size.z) || q.y >= int(pc.size.w)) return;
+    vec2 m = imageLoad(means, q).rg;
+    float variance = max(m.y - m.x * m.x, 0.0);
+    float a = variance / (variance + pc.eps);
+    imageStore(dst, q, vec4(a, m.x - a * m.x, 0.0, 0.0));
+}

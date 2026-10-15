@@ -1,0 +1,20 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// Full-res in-place gain: bilinear regional lift plus local contrast
+// (detail - 1) x (log Y - base), faded out near black. A pure RGB gain, so
+// colour ratios are kept.
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(binding = 0) uniform sampler2D liftMap;
+layout(binding = 1, rgba16f) uniform image2D target;
+#include "ltm_common.glsl"
+
+void main() {
+    ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    if (q.x >= int(pc.size.x) || q.y >= int(pc.size.y)) return;
+    vec2 uv = (vec2(q) + 0.5) / (float(pc.block) * vec2(pc.size.zw));
+    vec2 m = texture(liftMap, uv).rg;
+    vec4 pixel = imageLoad(target, q);
+    float ly = rawrLtmLogLuma(pixel.rgb);
+    float ev = m.x + clamp((pc.detail - 1.0) * (ly - m.y), -1.0, 1.0) * clamp((ly + 12.0) / 3.0, 0.0, 1.0);
+    imageStore(target, q, vec4(pixel.rgb * exp2(ev), pixel.a));
+}
