@@ -100,6 +100,51 @@ private fun HighlightMethodOptions(
     }
 }
 
+private fun shadowLiftSummary(v: SettingsValues): String {
+    val photo = if (v.photoToneMapping == PhotoToneMapping.Local)
+        "Local +${"%.1f".format(java.util.Locale.US, v.localToneShadowsEv)} EV" else "Adaptive ${v.autoKeyExposure.label}"
+    return "Photo $photo · Video Adaptive ${v.autoKeyExposure.label}"
+}
+
+/** Image > Shadow Lift: photo tone mapping (local or adaptive) and the adaptive strength. */
+@Composable
+internal fun ShadowLiftSettings(state: SettingsUiState, dispatch: SettingsDispatch) {
+    val v = state.values
+    SettingsPageContainer(testTag = SettingsTestTags.sectionRoot("ShadowLift")) {
+        SettingsGroup(
+            title = "Tone Mapping",
+            description = "Brightens shadows in high-contrast scenes; highlights keep their brightness. JPEG and viewfinder only; not applied to LOG. Video always uses Adaptive."
+        ) {
+            ChoiceLabel("Photo")
+            CompactChoiceRow(PhotoToneMapping.entries, v.photoToneMapping, { it.label }) {
+                dispatch.invoke(SetLocalTone(mode = it))
+            }
+            ChoiceSummary(v.photoToneMapping.summary)
+            if (v.photoToneMapping == PhotoToneMapping.Local) {
+                SettingDivider()
+                StandaloneNumericSliderRow(
+                    identity = "local_tone_shadows",
+                    label = "Local Shadows",
+                    supportingText = "How far dark regions may be brightened. Lowered automatically at high ISO, where it would show noise. Lower: closer to the plain capture. Higher: brighter shadows, flatter overall.",
+                    minimum = LocalToneLimits.MIN_SHADOWS_EV,
+                    maximum = LocalToneLimits.MAX_SHADOWS_EV,
+                    step = .5f,
+                    decimals = 1,
+                    unit = "EV",
+                    value = v.localToneShadowsEv,
+                    defaultValue = LocalToneLimits.DEFAULT_SHADOWS_EV
+                ) { dispatch.invoke(SetLocalTone(shadowsEv = it)) }
+            }
+            SettingDivider()
+            ChoiceLabel("Adaptive Strength")
+            CompactChoiceRow(AutoKeyExposure.entries, v.autoKeyExposure, { it.label }) {
+                dispatch.invoke(SetAutoKeyExposure(it))
+            }
+            ChoiceSummary(v.autoKeyExposure.summary)
+        }
+    }
+}
+
 @Composable
 private fun ChoiceLabel(text: String) {
     Text(
@@ -136,6 +181,13 @@ internal fun ImageSettings(state: SettingsUiState, dispatch: SettingsDispatch) {
                 }
             )
             SettingDivider()
+            SettingsRow(
+                "Shadow Lift",
+                shadowLiftSummary(v),
+                testTag = SettingsTestTags.row("Image", "shadow_lift"),
+                onClick = { dispatch.invoke(OpenSection(SettingsSection.ShadowLift)) }
+            )
+            SettingDivider()
             ToggleSubmenuRow(
                 title = "Film Simulation",
                 checked = v.filmSimEnabled,
@@ -143,37 +195,6 @@ internal fun ImageSettings(state: SettingsUiState, dispatch: SettingsDispatch) {
                 onOpen = { dispatch.invoke(OpenSection(SettingsSection.FilmSim)) },
                 onCheckedChange = { dispatch.invoke(SetFilmSimEnabled(it)) }
             )
-        }
-        SettingsGroup(
-            title = "Shadow Lift",
-            description = "Brightens shadows in high-contrast scenes; highlights keep their brightness. JPEG and viewfinder only; not applied to LOG. Video always uses Adaptive."
-        ) {
-            ChoiceLabel("Photo")
-            CompactChoiceRow(PhotoToneMapping.entries, v.photoToneMapping, { it.label }) {
-                dispatch.invoke(SetLocalTone(mode = it))
-            }
-            ChoiceSummary(v.photoToneMapping.summary)
-            if (v.photoToneMapping == PhotoToneMapping.Local) {
-                SettingDivider()
-                StandaloneNumericSliderRow(
-                    identity = "local_tone_shadows",
-                    label = "Local Shadows",
-                    supportingText = "How far dark regions may be brightened. Lowered automatically at high ISO, where it would show noise. Lower: closer to the plain capture. Higher: brighter shadows, flatter overall.",
-                    minimum = LocalToneLimits.MIN_SHADOWS_EV,
-                    maximum = LocalToneLimits.MAX_SHADOWS_EV,
-                    step = .5f,
-                    decimals = 1,
-                    unit = "EV",
-                    value = v.localToneShadowsEv,
-                    defaultValue = LocalToneLimits.DEFAULT_SHADOWS_EV
-                ) { dispatch.invoke(SetLocalTone(shadowsEv = it)) }
-            }
-            SettingDivider()
-            ChoiceLabel("Adaptive Strength")
-            CompactChoiceRow(AutoKeyExposure.entries, v.autoKeyExposure, { it.label }) {
-                dispatch.invoke(SetAutoKeyExposure(it))
-            }
-            ChoiceSummary(v.autoKeyExposure.summary)
         }
         SettingsGroup(title = "Enhancement") {
             SettingsRow(

@@ -23,6 +23,7 @@ enum class SettingsSection(val title: String) {
     Ois("OIS"),
     Image("Image"),
     ImageTone("Tone & Color"),
+    ShadowLift("Shadow Lift"),
     LutProfile("LUT Profile"),
     Demosaic("Demosaic"),
     Defringe("Defringe"),
