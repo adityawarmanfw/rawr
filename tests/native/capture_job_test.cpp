@@ -57,7 +57,7 @@ int main(int argc, char** argv) {
     j.tone.adaptiveTone = {1.25f, -5.0f, -0.5f};
     j.tone.renderTransform = tonemap::RenderTransform::Rec709;
     j.tone.agx.whiteEv = 9.25f;
-    j.tone.localTone = {0.5f, 1.1f};
+    j.tone.localTone = {2.5f, 1.5f};
     j.filmEnabled = true;
     j.film.film = 14;
     j.film.paper = 5;
@@ -107,7 +107,7 @@ int main(int argc, char** argv) {
                (oldSize >= offsetof(tonemap::TonemapParams, agx) ? j.tone.adaptiveTone.liftEv : 0.0f));
         assert(old.tone.agx.whiteEv ==
                (oldSize == offsetof(tonemap::TonemapParams, localTone) ? j.tone.agx.whiteEv : tonemap::AgxParams{}.whiteEv));
-        assert(old.tone.localTone.strength == 0.0f && old.tone.localTone.detail == 1.0f);
+        assert(old.tone.localTone.shadowsEv == 0.0f && old.tone.localTone.highlightsEv == 2.0f);
         std::filesystem::remove(oldPath);
     }
 
@@ -134,7 +134,7 @@ int main(int argc, char** argv) {
     assert(restored.jpeg.output.filmDescription == "Frozen C200" && restored.jpeg.output.quality == 99);
     assert(restored.film.film == 14 && restored.film.filmExposureEv == .75f && restored.tone.exposureEV == -1.5f);
     assert(restored.tone.renderTransform == tonemap::RenderTransform::Rec709 && restored.tone.agx.whiteEv == 9.25f);
-    assert(restored.tone.localTone.strength == 0.5f && restored.tone.localTone.detail == 1.1f);
+    assert(restored.tone.localTone.shadowsEv == 2.5f && restored.tone.localTone.highlightsEv == 1.5f);
     assert(restored.tone.adaptiveTone.liftEv == 1.25f && restored.tone.adaptiveTone.keyEv == -5.0f &&
            restored.tone.adaptiveTone.highlightEv == -0.5f);
     assert(restored.sharpnessScores.empty());
@@ -143,7 +143,7 @@ int main(int argc, char** argv) {
     assert(restored.dng.resolvedRecipe.find("\"aePostGain\":1.25") != std::string::npos);
     assert(restored.dng.resolvedRecipe.find("\"autoKeyEv\":1.25") != std::string::npos);
     assert(resolvedRecipe(j.tone, 2.5f, j.filmEnabled, j.film).find("\"autoKeyEv\":1.25") != std::string::npos);
-    assert(restored.dng.resolvedRecipe.find("\"localTone\":{\"version\":1,\"strength\":0.5,\"detail\":1.1") != std::string::npos);
+    assert(restored.dng.resolvedRecipe.find("\"localTone\":{\"version\":2,\"method\":\"exposureFusion\",\"shadowsEv\":2.5,\"highlightsEv\":1.5") != std::string::npos);
     assert(restored.jpeg.develop.defringeStrength == .37f && restored.jpeg.develop.fccEdgeSigma == .12f);
     assert(restored.jpeg.output.ultraHdr.enabled && restored.jpeg.output.ultraHdr.mapBlurSigma == 1.5f);
     assert(restored.jpeg.develop.highlightReconstructionMethod == 1 && restored.jpeg.develop.highlightThreshold == .9f);

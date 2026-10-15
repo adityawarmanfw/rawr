@@ -1,0 +1,25 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// Next coarser Gaussian level of the lightnesses and weights (2x2 mean,
+// edge-clamped: the demo's bilinear half-size copy).
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0, rgba16f) uniform readonly image2D lightnessIn;
+layout(binding = 1, rgba16f) uniform readonly image2D weightsIn;
+layout(binding = 2, rgba16f) uniform writeonly image2D lightnessOut;
+layout(binding = 3, rgba16f) uniform writeonly image2D weightsOut;
+#include "fus_common.glsl"
+
+void main() {
+    ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    if (q.x >= int(pc.level.z) || q.y >= int(pc.level.w)) return;
+    ivec2 last = ivec2(pc.level.xy) - 1;
+    vec4 l = vec4(0.0), w = vec4(0.0);
+    for (int dy = 0; dy < 2; ++dy)
+        for (int dx = 0; dx < 2; ++dx) {
+            ivec2 p = min(q * 2 + ivec2(dx, dy), last);
+            l += imageLoad(lightnessIn, p);
+            w += imageLoad(weightsIn, p);
+        }
+    imageStore(lightnessOut, q, l * 0.25);
+    imageStore(weightsOut, q, w * 0.25);
+}

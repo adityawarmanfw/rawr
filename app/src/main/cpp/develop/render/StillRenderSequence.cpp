@@ -171,7 +171,7 @@ bool runGaloshYuv(RenderResources& resources, RenderCommandSession& commands, co
 
     return galoshYuvSuccess;
 }
-// Local tone mapping (HDR+ Bracketed): an edge-aware regional gain applied in
+// Local tone mapping (exposure fusion): a regional gain applied in
 // place to the scene-linear images every later stage reads (tone/film read
 // the SDR image, the gain map's HDR tap the post-demosaic output), measured
 // as rendered (AE post-gain x render exposure). Inside the non-reuse block:
@@ -179,8 +179,7 @@ bool runGaloshYuv(RenderResources& resources, RenderCommandSession& commands, co
 void recordLocalTone(RenderResources& resources, RenderCommandSession& commands, const RenderedStillContext& rendered,
                      const RenderResources::Diagnostic& emit) {
     const auto& lt = rendered.tonemapParams.localTone;
-    rawr::local_tone::Params params{lt.strength, lt.detail};
-    if (!rawr::local_tone::active(params)) return;
+    if (!rawr::local_tone::fusionActive(lt.shadowsEv)) return;
     resources.ensureLocalTone();
     // Earlier stages (post-demosaic, GALOSH) wrote these images in place.
     VkMemoryBarrier written{};
@@ -189,7 +188,7 @@ void recordLocalTone(RenderResources& resources, RenderCommandSession& commands,
     written.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
     vkCmdPipelineBarrier(commands.command(), VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
                          1, &written, 0, nullptr, 0, nullptr);
-    rawr::local_tone::RecordInfo info{};
+    rawr::local_tone::FusionRecordInfo info{};
     info.commandBuffer = commands.command();
     info.width = rendered.width;
     info.height = rendered.height;
@@ -203,10 +202,10 @@ void recordLocalTone(RenderResources& resources, RenderCommandSession& commands,
     }
     info.cameraToWorking = rendered.cameraToWorkingColumnMajor;
     info.renderGain = rendered.tonemapParams.aePostGain * std::exp2(rendered.tonemapParams.exposureEV);
-    info.params = params;
+    info.params = rawr::local_tone::fusionParams(lt.shadowsEv, lt.highlightsEv);
     const bool recorded = resources.localTone().record(info);
-    emit("LOCAL_TONE requestId=" + std::to_string(rendered.requestId) + " strength=" + std::to_string(lt.strength) +
-         " detail=" + std::to_string(lt.detail) + " targets=" + std::to_string(info.targetCount) +
+    emit("LOCAL_TONE requestId=" + std::to_string(rendered.requestId) + " shadowsEv=" + std::to_string(lt.shadowsEv) +
+         " highlightsEv=" + std::to_string(lt.highlightsEv) + " targets=" + std::to_string(info.targetCount) +
          " recorded=" + (recorded ? "1" : "0"));
 }
 

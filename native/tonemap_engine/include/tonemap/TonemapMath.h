@@ -22,12 +22,14 @@ inline constexpr float kMaxAePostGain = 64.0f;
 // instead of the RAWR NTRL LUT; see Agx.h.
 enum class RenderTransform : unsigned { Existing = 0, SRgb = 1, Rec709 = 2, Log = 3, AgX = 4 };
 
-// Local tone mapping (native/local_tone), applied to the scene-linear image
-// before this tonemap; carried here so captures, recipes and the editor
-// replay it with the rest of the tone. strength 0 = off.
+// Local tone mapping (native/local_tone exposure fusion), applied to the
+// scene-linear image before this tonemap; carried here so captures, recipes
+// and the editor replay it with the rest of the tone. shadowsEv 0 = off
+// (the adaptive curve applies instead). Same size as the earlier
+// strength/detail pair, so pending capture journals keep their layout.
 struct LocalToneParams {
-    float strength = 0.0f;  // 0..1
-    float detail = 1.0f;    // 0.8..1.3, local contrast
+    float shadowsEv = 0.0f;     // brighter synthetic exposure (EV), already noise-limited
+    float highlightsEv = 2.0f;  // darker synthetic exposure (EV)
 };
 
 struct TonemapParams {

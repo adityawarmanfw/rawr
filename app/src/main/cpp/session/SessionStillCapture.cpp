@@ -3,7 +3,7 @@
 
 #include "capture/CaptureRequest.h"
 #include "capture/multiframe/BracketExposure.h"
-#include "local_tone/LocalTone.h"
+#include "local_tone/ExposureFusion.h"
 // Still + multiframe capture routing.
 #include "camera/NativeCameraController.h"
 #include "diagnostics/logging/NativeLog.h"
@@ -47,7 +47,13 @@ uint64_t SessionEngine::requestRawStillCapture(rawrcam::encoding::dng::DngCaptur
     dngContext.autoKeyEv = appliedAutoKeyEv();
     if (dngContext.captureTone) {
         auto capturedTone = std::make_shared<tonemap::TonemapParams>(*dngContext.captureTone);
-        applyAutoKey(*capturedTone, true);
+        // The frame is picked later; noise-limit by the current repeating exposure.
+        const auto state = camera->controlState();
+        const float iso = state.appliedSensitivity
+                              ? float(*state.appliedSensitivity) *
+                                    float(std::max(100, state.appliedPostRawSensitivityBoost.value_or(100))) / 100.0f
+                              : 0.0f;
+        applyAutoKey(*capturedTone, iso);
         dngContext.captureTone = std::move(capturedTone);
     }
     const uint64_t requestId = capture_.requestSingle(std::move(dngContext), std::move(jpegContext), [this] {
@@ -91,14 +97,12 @@ void SessionEngine::setHdrPlusHeadroomMaxEv(float maxEv) {
     if (!(floor < 0.0f)) cameraControls_.controller()->setHdrHeadroomEv(0.0f);
     LOGI("HDRPLUS_BRACKET headroomMaxEv=%.1f", floor);
 }
-void SessionEngine::setLocalTone(float strength, float detail) {
-    const rawr::local_tone::Params p{std::isfinite(strength) ? std::clamp(strength, 0.0f, 1.0f) : 0.0f,
-                                     std::isfinite(detail) ? std::clamp(detail, rawr::local_tone::kMinDetail,
-                                                                        rawr::local_tone::kMaxDetail)
-                                                           : 1.0f};
-    localToneStrength_.store(p.strength, std::memory_order_relaxed);
-    localToneDetail_.store(p.detail, std::memory_order_relaxed);
-    LOGI("LOCAL_TONE strength=%.2f detail=%.2f", p.strength, p.detail);
+void SessionEngine::setLocalTone(float shadowsEv) {
+    const float ev = std::isfinite(shadowsEv) && shadowsEv > 0.0f
+                         ? std::clamp(shadowsEv, rawr::local_tone::kMinShadowsEv, rawr::local_tone::kMaxShadowsEv)
+                         : 0.0f;
+    localToneShadowsEv_.store(ev, std::memory_order_relaxed);
+    LOGI("LOCAL_TONE shadowsEv=%.2f", ev);
 }
 float SessionEngine::reportedHeadroomEvFor(const metadata::FrameMetadataSnapshot& metadata) const {
     const auto* controller = cameraControls_.controller();
@@ -148,16 +152,27 @@ uint64_t SessionEngine::startPreparedMultiframeCapture(
                 tuning.aeLinearExposure = float(exposure * std::exp2(-double(hdrHeadroomEvFor(*reference))));
             }
         }
+        // Noise limit for the merge: the reference frame's gain over the
+        // frames merged (burst plus any post-shutter frames).
+        float iso = 0.0f;
+        if (const auto reference = capture_.multiframe().preparedReferenceMetadata()) {
+            const std::uint32_t frames =
+                capture_.multiframe().preparedFrameCount() +
+                (tuning.mergeAlgorithm == rawrcam::capture::multiframe::kMergeAlgorithmHdrPlusBracketed
+                     ? tuning.bracketFrames
+                     : 0u);
+            iso = equivalentIso(*reference, pipelineCallbacks_.postGainFor(*reference), frames);
+        }
         auto tone = look_.toneParams();
-        applyAutoKey(tone);
+        applyAutoKey(tone, iso);
         if (baseDng.captureTone) {
             auto capturedTone = std::make_shared<tonemap::TonemapParams>(*baseDng.captureTone);
-            applyAutoKey(*capturedTone);
+            applyAutoKey(*capturedTone, iso);
             baseDng.captureTone = std::move(capturedTone);
         }
         if (mergedDng.captureTone) {
             auto capturedTone = std::make_shared<tonemap::TonemapParams>(*mergedDng.captureTone);
-            applyAutoKey(*capturedTone);
+            applyAutoKey(*capturedTone, iso);
             mergedDng.captureTone = std::move(capturedTone);
         }
         baseDng.autoKeyEv = tone.adaptiveTone.liftEv;

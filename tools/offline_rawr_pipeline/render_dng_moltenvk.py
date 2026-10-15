@@ -65,7 +65,9 @@ def main():
     parser.add_argument("--post-gain", type=float,
                         help="override the recipe's AE post gain for an exposure diagnostic")
     parser.add_argument("--adaptive-tone", help="override the captured AutoKey curve: LIFT,KEY,HIGHLIGHT (lift 0 = off)")
-    parser.add_argument("--local-tone", help="override the captured local tone mapping: STRENGTH,DETAIL (0 = off)")
+    parser.add_argument("--local-tone", help="override the captured local tone mapping: SHADOWS_EV[,HIGHLIGHTS_EV] (0 = off)")
+    parser.add_argument("--agx", help="AgX render transform preset: default|base|punchy|sigmoid|smooth")
+    parser.add_argument("--fusion", help="exposure-fusion local tone mapping instead: EXPOSURE,SHADOWS,HIGHLIGHTS,SIGMA[,MIP[,BOOST]]")
     parser.add_argument("--any-demosaic", action="store_true",
                         help="render other demosaics with DualRcdVng4 (tone comparisons only)")
     parser.add_argument("--sdr-only", action="store_true", help="skip the UltraHDR gain map")
@@ -168,8 +170,16 @@ def main():
         str(captured.get(k, d)) for k, d in (("liftEv", 0), ("keyEv", -4), ("highlightEv", 0)))
     command += ["--adaptive-tone", adaptive]
     captured_local = resolved.get("tonemap", {}).get("localTone", {})
-    local = args.local_tone or f'{captured_local.get("strength", 0)},{captured_local.get("detail", 1)}'
+    if captured_local.get("version", 1) >= 2:
+        captured_value = f'{captured_local.get("shadowsEv", 0)},{captured_local.get("highlightsEv", 2)}'
+    else:  # earlier guided-filter lift: replayed as fusion at the defaults
+        captured_value = "2.5,2" if captured_local.get("strength", 0) > 0 else "0"
+    local = args.local_tone or captured_value
     command += ["--local-tone", local]
+    if args.fusion:
+        command += ["--fusion", args.fusion]
+    if args.agx:
+        command += ["--agx", args.agx]
     if recovery_mode == "preserve":
         command.append("--preserve-reconstructed")
     if args.app_coloropp:

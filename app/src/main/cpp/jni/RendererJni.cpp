@@ -18,7 +18,7 @@
 #include <type_traits>
 #include <unordered_map>
 
-#include "local_tone/LocalTone.h"
+#include "local_tone/ExposureFusion.h"
 #include "capture/multiframe/mfsr/MfsrCaptureJob.h"
 #include "capture/persistence/CaptureJob.h"
 #include "color/AutoKeyExposure.h"
@@ -145,10 +145,21 @@ rawrcam::renderer::RenderOptions options(JNIEnv* env, jstring recipe, int workin
     t.adaptiveTone = {float(adaptive.number("liftEv", 0)), float(adaptive.number("keyEv", -4)),
                       float(adaptive.number("highlightEv", 0))};
     if (!tonemap::validAdaptiveTone(t.adaptiveTone)) throw std::runtime_error("Invalid adaptive tone recipe");
-    // HDR+ Bracketed captures carry their local tone mapping; absent = off.
+    // Captures carry their local tone mapping; absent = off. Version 1 was
+    // the earlier guided-filter lift (strength/detail): replayed as exposure
+    // fusion at the defaults when it was on.
     Json localTone(env, json.child("localTone"));
-    t.localTone = {float(localTone.number("strength", 0)), float(localTone.number("detail", 1))};
-    if (!rawr::local_tone::validParams({t.localTone.strength, t.localTone.detail}))
+    if (localTone.number("version", 1) >= 2) {
+        t.localTone = {float(localTone.number("shadowsEv", 0)),
+                       float(localTone.number("highlightsEv", rawr::local_tone::kDefaultHighlightsEv))};
+    } else {
+        t.localTone = localTone.number("strength", 0) > 0
+                          ? tonemap::LocalToneParams{rawr::local_tone::kDefaultShadowsEv,
+                                                     rawr::local_tone::kDefaultHighlightsEv}
+                          : tonemap::LocalToneParams{};
+    }
+    if (rawr::local_tone::fusionActive(t.localTone.shadowsEv) &&
+        !rawr::local_tone::validParams(rawr::local_tone::fusionParams(t.localTone.shadowsEv, t.localTone.highlightsEv)))
         throw std::runtime_error("Invalid local tone recipe");
     o.adaptiveToneMode = json.text("adaptiveToneMode");
     if (o.adaptiveToneMode == "null") o.adaptiveToneMode.clear();

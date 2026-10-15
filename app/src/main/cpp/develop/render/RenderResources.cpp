@@ -224,7 +224,7 @@ void RenderResources::ensureLocalTone() {
     if (localTone_ && localToneDevice_ == device_) return;
     // A device change means the old one is gone; the caller has no work in flight.
     localTone_.reset();
-    localTone_ = std::make_unique<rawr::local_tone::LocalToneProcessor>(
+    localTone_ = std::make_unique<rawr::local_tone::ExposureFusionProcessor>(
         rawr::vk::GpuContext{physicalDevice_, device_, queueFamily_}, 1u);
     localToneDevice_ = device_;
 }

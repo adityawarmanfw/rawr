@@ -1,0 +1,22 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// One finer level: the coarser blend, bilinearly upsampled, plus this
+// level's Laplacians blended by this level's weights (demo BlendLaplacianShader).
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0, rgba16f) uniform readonly image2D lightnessFine;
+layout(binding = 1, rgba16f) uniform readonly image2D weightsFine;
+layout(binding = 2, rgba16f) uniform writeonly image2D assembled;
+layout(binding = 4) uniform sampler2D lightnessCoarse;
+layout(binding = 5) uniform sampler2D assembledCoarse;
+#include "fus_common.glsl"
+
+void main() {
+    ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    if (q.x >= int(pc.level.z) || q.y >= int(pc.level.w)) return;
+    vec2 uv = (vec2(q) + 0.5) / vec2(pc.level.zw);
+    float accum = texture(assembledCoarse, uv).r;
+    vec3 laplacians = imageLoad(lightnessFine, q).rgb - texture(lightnessCoarse, uv).rgb;
+    vec3 w = imageLoad(weightsFine, q).rgb * (pc.boost != 0u ? abs(laplacians) + 0.00001 : vec3(1.0));
+    w /= dot(w, vec3(1.0)) + 0.00001;
+    imageStore(assembled, q, vec4(accum + dot(laplacians * w, vec3(1.0)), 0.0, 0.0, 1.0));
+}

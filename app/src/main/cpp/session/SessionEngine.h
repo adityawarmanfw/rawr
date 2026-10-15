@@ -38,6 +38,7 @@
 #include "presentation/PresentationSurface.h"
 #include "presentation/SwapchainRenderer.h"
 #include "session/SessionFrameCallbacks.h"
+#include "local_tone/ExposureFusion.h"
 #include "video/VideoSession.h"
 #include "vulkan/VulkanContext.h"
 
@@ -150,19 +151,38 @@ class SessionEngine {
         std::lock_guard<std::mutex> lock(autoKeyMutex_);
         return autoKeyCurve_.liftEv;
     }
-    // HDR+ Bracketed: local tone mapping replaces the global shadow-lift
-    // curve (its merged shadows take a regional lift); LOG stays scene-referred.
-    void setLocalTone(float strength, float detail);
-    [[nodiscard]] tonemap::LocalToneParams bracketLocalTone(const tonemap::TonemapParams& tone) const noexcept {
-        if (!(hdrHeadroomMaxEv() < 0.0f) || sceneReferredRender_.load(std::memory_order_relaxed) ||
+    // Photo tone mapping: local (exposure fusion, shadows EV > 0) replaces the
+    // adaptive shadow-lift curve; 0 keeps the curve. The app sends 0 in video.
+    // LOG stays scene-referred.
+    void setLocalTone(float shadowsEv);
+    // Frames the next photo merges (1 = single frame): the viewfinder's
+    // noise limit then matches the still's.
+    void setExpectedMergeFrames(std::uint32_t frames) noexcept {
+        expectedMergeFrames_.store(std::max<std::uint32_t>(1u, frames), std::memory_order_relaxed);
+    }
+    [[nodiscard]] std::uint32_t expectedMergeFrames() const noexcept {
+        return expectedMergeFrames_.load(std::memory_order_relaxed);
+    }
+    // Noise of a rendered frame as an ISO: sensor gain x post-RAW boost x the
+    // render gain, over the frames merged into it.
+    [[nodiscard]] static float equivalentIso(const metadata::FrameMetadataSnapshot& m, float aePostGain,
+                                             std::uint32_t frames) noexcept {
+        if (m.sensitivity <= 0) return 0.0f;
+        return float(m.sensitivity) * float(std::max(100, m.postRawSensitivityBoost)) / 100.0f *
+               std::max(aePostGain, 1.0f) / float(std::max<std::uint32_t>(1u, frames));
+    }
+    [[nodiscard]] tonemap::LocalToneParams localToneFor(const tonemap::TonemapParams& tone,
+                                                        float equivalentIso) const noexcept {
+        const float shadows = localToneShadowsEv_.load(std::memory_order_relaxed);
+        if (!(shadows > 0.0f) || sceneReferredRender_.load(std::memory_order_relaxed) ||
             tone.renderTransform == tonemap::RenderTransform::Log)
             return {};
-        return {localToneStrength_.load(std::memory_order_relaxed), localToneDetail_.load(std::memory_order_relaxed)};
+        return {rawr::local_tone::noiseLimitedShadowsEv(shadows, equivalentIso), rawr::local_tone::kDefaultHighlightsEv};
     }
-    // singleFrame: a one-frame capture (no merged shadows) keeps the curve.
-    void applyAutoKey(tonemap::TonemapParams& tone, bool singleFrame = false) const {
-        tone.localTone = singleFrame ? tonemap::LocalToneParams{} : bracketLocalTone(tone);
-        const bool local = tone.localTone.strength > 0.0f;
+    // equivalentIso 0 = unknown (no noise limit).
+    void applyAutoKey(tonemap::TonemapParams& tone, float equivalentIso = 0.0f) const {
+        tone.localTone = localToneFor(tone, equivalentIso);
+        const bool local = tone.localTone.shadowsEv > 0.0f;
         std::lock_guard<std::mutex> lock(autoKeyMutex_);
         tone.adaptiveTone = local || autoKeyMode() == rawrcam::color::AutoKeyMode::Off ||
                                     sceneReferredRender_.load(std::memory_order_relaxed) ||
@@ -296,9 +316,9 @@ class SessionEngine {
     // The prepared HDR+ Bracketed capture froze its long-frame slots as burst
     // frames (long frames would be skipped). Guarded by mu_.
     bool bracketSkippedForPending_ = false;
-    // Image > Shadow Lift local tone settings (applied in HDR+ Bracketed).
-    std::atomic<float> localToneStrength_{0.5f};
-    std::atomic<float> localToneDetail_{1.0f};
+    // Image > Shadow Lift: photo local tone mapping shadows EV (0 = adaptive curve).
+    std::atomic<float> localToneShadowsEv_{0.0f};
+    std::atomic<std::uint32_t> expectedMergeFrames_{1u};
     // LOG profiles stay scene-referred: no auto key lift.
     std::atomic<bool> sceneReferredRender_{false};
 };

@@ -1,0 +1,17 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// Coarsest level: weighted mean of the three lightnesses (demo BlendShader).
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0, rgba16f) uniform readonly image2D lightnessIn;
+layout(binding = 1, rgba16f) uniform readonly image2D weightsIn;
+layout(binding = 2, rgba16f) uniform writeonly image2D assembled;
+#include "fus_common.glsl"
+
+void main() {
+    ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    if (q.x >= int(pc.level.z) || q.y >= int(pc.level.w)) return;
+    vec3 w = imageLoad(weightsIn, q).rgb;
+    w /= dot(w, vec3(1.0)) + 0.0001;
+    float v = dot(imageLoad(lightnessIn, q).rgb * w, vec3(1.0));
+    imageStore(assembled, q, vec4(v, 0.0, 0.0, 1.0));
+}

@@ -100,6 +100,25 @@ private fun HighlightMethodOptions(
     }
 }
 
+@Composable
+private fun ChoiceLabel(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.bodyLarge,
+        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp)
+    )
+}
+
+@Composable
+private fun ChoiceSummary(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+    )
+}
+
 private fun highlightMethodLabel(method: Int): String =
     if (method == 1) "Inpaint Opposed" else "Color propagation"
 
@@ -127,45 +146,34 @@ internal fun ImageSettings(state: SettingsUiState, dispatch: SettingsDispatch) {
         }
         SettingsGroup(
             title = "Shadow Lift",
-            description = "Brightens shadows in high-contrast scenes; highlights keep their brightness. HDR+ Bracketed uses the local lift below instead. Not applied to LOG."
+            description = "Brightens shadows in high-contrast scenes; highlights keep their brightness. JPEG and viewfinder only; not applied to LOG. Video always uses Adaptive."
         ) {
-            CompactChoiceRow(AutoKeyExposure.entries, state.values.autoKeyExposure, {
-                it.label
-            }) { dispatch.invoke(SetAutoKeyExposure(it)) }
-            Text(
-                state.values.autoKeyExposure.summary,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-            )
+            ChoiceLabel("Photo")
+            CompactChoiceRow(PhotoToneMapping.entries, v.photoToneMapping, { it.label }) {
+                dispatch.invoke(SetLocalTone(mode = it))
+            }
+            ChoiceSummary(v.photoToneMapping.summary)
+            if (v.photoToneMapping == PhotoToneMapping.Local) {
+                SettingDivider()
+                StandaloneNumericSliderRow(
+                    identity = "local_tone_shadows",
+                    label = "Local Shadows",
+                    supportingText = "How far dark regions may be brightened. Lowered automatically at high ISO, where it would show noise. Lower: closer to the plain capture. Higher: brighter shadows, flatter overall.",
+                    minimum = LocalToneLimits.MIN_SHADOWS_EV,
+                    maximum = LocalToneLimits.MAX_SHADOWS_EV,
+                    step = .5f,
+                    decimals = 1,
+                    unit = "EV",
+                    value = v.localToneShadowsEv,
+                    defaultValue = LocalToneLimits.DEFAULT_SHADOWS_EV
+                ) { dispatch.invoke(SetLocalTone(shadowsEv = it)) }
+            }
             SettingDivider()
-            // HDR+ Bracketed replaces the curve above with a regional lift:
-            // its merged shadows are clean enough. Render only (JPEG and
-            // viewfinder); the DNG is unchanged.
-            StandaloneNumericSliderRow(
-                identity = "local_tone_strength",
-                label = "HDR+ Bracketed Local Lift",
-                supportingText = "Brightens dark areas region by region; highlights and blacks keep their level. Lower: closer to the plain capture. Higher: brighter shadows, flatter overall. 0 turns it off.",
-                minimum = 0f,
-                maximum = 1f,
-                step = .05f,
-                decimals = 2,
-                value = state.values.localToneStrength,
-                defaultValue = LocalToneLimits.DEFAULT_STRENGTH
-            ) { dispatch.invoke(SetLocalTone(strength = it)) }
-            SettingDivider()
-            StandaloneNumericSliderRow(
-                identity = "local_tone_detail",
-                label = "HDR+ Bracketed Local Contrast",
-                supportingText = "Contrast of fine detail inside each region. Lower: softer, more natural. Higher: crisper, more processed.",
-                minimum = LocalToneLimits.MIN_DETAIL,
-                maximum = LocalToneLimits.MAX_DETAIL,
-                step = .05f,
-                decimals = 2,
-                value = state.values.localToneDetail,
-                enabled = state.values.localToneStrength > 0f,
-                defaultValue = LocalToneLimits.DEFAULT_DETAIL
-            ) { dispatch.invoke(SetLocalTone(detail = it)) }
+            ChoiceLabel("Adaptive Strength")
+            CompactChoiceRow(AutoKeyExposure.entries, v.autoKeyExposure, { it.label }) {
+                dispatch.invoke(SetAutoKeyExposure(it))
+            }
+            ChoiceSummary(v.autoKeyExposure.summary)
         }
         SettingsGroup(title = "Enhancement") {
             SettingsRow(

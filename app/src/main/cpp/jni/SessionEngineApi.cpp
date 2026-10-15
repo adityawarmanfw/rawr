@@ -127,8 +127,11 @@ void setMaxAePostGain(EngineHandle h, float gain) noexcept {
 void setPostGainKneeWidthEv(EngineHandle h, float widthEv) noexcept {
     if (h) engine(h)->setPostGainKneeWidthEv(widthEv);
 }
-void setLocalTone(EngineHandle h, float strength, float detail) noexcept {
-    if (h) engine(h)->setLocalTone(strength, detail);
+void setLocalTone(EngineHandle h, float shadowsEv) noexcept {
+    if (h) engine(h)->setLocalTone(shadowsEv);
+}
+void setExpectedMergeFrames(EngineHandle h, uint32_t frames) noexcept {
+    if (h) engine(h)->setExpectedMergeFrames(frames);
 }
 void setAutoKeyMode(EngineHandle h, int mode) noexcept {
     if (h) engine(h)->setAutoKeyMode(mode);

@@ -262,7 +262,9 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
         postNative { native.setPostGainKneeWidthEv(nativeHandle, widthEv) }
 
     fun setAutoKeyMode(mode: Int) = postNative { native.setAutoKeyMode(nativeHandle, mode) }
-    fun setLocalTone(strength: Float, detail: Float) = postNative { native.setLocalTone(nativeHandle, strength, detail) }
+    /** Photo local tone mapping shadows EV; 0 = adaptive curve (always 0 in video). */
+    fun setLocalTone(shadowsEv: Float) = postNative { native.setLocalTone(nativeHandle, shadowsEv) }
+    fun setExpectedMergeFrames(frames: Int) = postNative { native.setExpectedMergeFrames(nativeHandle, frames.coerceIn(1, 30)) }
 
     fun setAutoMinFps(fps: Int) = postNative { native.setAutoMinFps(nativeHandle, fps) }
     fun setAePriorityDisabled(disabled: Boolean) = postNative { native.setAePriorityDisabled(nativeHandle, disabled) }

@@ -39,6 +39,9 @@ class MultiframeCaptureCoordinator final {
                                             std::optional<BracketPlan>* bracketPlan = nullptr) noexcept;
     void cancelPreparedMultiframeCapture() noexcept;
     // Reference of the burst frozen by prepareExperimentalMultiframeOnShutter.
+    std::uint32_t preparedFrameCount() const {
+        return pendingMultiframeCapture_ ? static_cast<std::uint32_t>(pendingMultiframeCapture_->frames.size()) : 0u;
+    }
     std::optional<metadata::FrameMetadataSnapshot> preparedReferenceMetadata() const {
         if (!pendingMultiframeCapture_) return std::nullopt;
         return pendingMultiframeCapture_->referenceMetadata;

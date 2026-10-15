@@ -202,15 +202,19 @@ enum class HighlightProtection(val label: String, val kneeSummary: String) {
 }
 
 /** Shadow lift (adaptive scene-key curve) after the brightness boost; native AutoKeyMode ids. */
-/** Ranges shared by the settings UI and the native session (local_tone/LocalTone.h). */
+/** Photo tone mapping (JPEG and viewfinder; video always uses Adaptive). */
+enum class PhotoToneMapping(val label: String, val summary: String) {
+    Adaptive("Adaptive", "One curve for the whole image, set by Adaptive Strength below"),
+    Local("Local", "Exposure fusion: brightens shadows region by region and keeps local contrast")
+}
+
+/** Local tone mapping shadows range, shared with native local_tone/ExposureFusion.h. */
 object LocalToneLimits {
-    const val DEFAULT_STRENGTH = 0.5f
-    const val DEFAULT_DETAIL = 1.0f
-    const val MIN_DETAIL = 0.8f
-    const val MAX_DETAIL = 1.3f
-    fun strength(value: Float): Float = if (value.isFinite()) (value.coerceIn(0f, 1f) * 20f).roundToInt() / 20f else DEFAULT_STRENGTH
-    fun detail(value: Float): Float =
-        if (value.isFinite()) (value.coerceIn(MIN_DETAIL, MAX_DETAIL) * 20f).roundToInt() / 20f else DEFAULT_DETAIL
+    const val DEFAULT_SHADOWS_EV = 2.5f
+    const val MIN_SHADOWS_EV = 1.0f
+    const val MAX_SHADOWS_EV = 4.0f
+    fun shadowsEv(value: Float): Float =
+        if (value.isFinite()) (value.coerceIn(MIN_SHADOWS_EV, MAX_SHADOWS_EV) * 2f).roundToInt() / 2f else DEFAULT_SHADOWS_EV
 }
 
 enum class AutoKeyExposure(val label: String, val summary: String, val nativeId: Int) {
@@ -947,10 +951,10 @@ data class SettingsValues(
     val exposureStep: ExposureStep = ExposureStep.Third,
     val highlightProtection: HighlightProtection = HighlightProtection.High,
     val autoKeyExposure: AutoKeyExposure = AutoKeyExposure.Natural,
-    /** HDR+ Bracketed local tone mapping (JPEG/viewfinder only): 0 = off .. 1. */
-    val localToneStrength: Float = LocalToneLimits.DEFAULT_STRENGTH,
-    /** Local contrast of the local tone mapping, 1 = unchanged. */
-    val localToneDetail: Float = LocalToneLimits.DEFAULT_DETAIL,
+    /** Photo tone mapping (JPEG/viewfinder only; video always Adaptive). */
+    val photoToneMapping: PhotoToneMapping = PhotoToneMapping.Local,
+    /** Local tone mapping: how far shadows may be brightened (EV), noise-limited natively. */
+    val localToneShadowsEv: Float = LocalToneLimits.DEFAULT_SHADOWS_EV,
     val maxPostGainId: String = "gain.200",
     val autoMinFpsId: String = "fps.12",
     val controlSurfaceStyle: ControlSurfaceStyle = ControlSurfaceStyle.Basic,

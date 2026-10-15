@@ -44,9 +44,17 @@ internal class CaptureSettingsSync(
             previewCoordinator.setPostGainKneeWidthEv(com.rawr.camera.settings.model.postGainKneeWidthEvFor(it))
         }
         syncSetting({ it.autoKeyExposure }) { previewCoordinator.setAutoKeyMode(it.nativeId) }
-        syncSetting({ it.localToneStrength to it.localToneDetail }) { (strength, detail) ->
-            previewCoordinator.setLocalTone(strength, detail)
-        }
+        // Photo local tone mapping; video always takes the adaptive curve.
+        syncSetting({
+            if (!it.isVideo && it.photoToneMapping == PhotoToneMapping.Local) it.localToneShadowsEv else 0f
+        }) { previewCoordinator.setLocalTone(it) }
+        // The next photo's merged frame count: the viewfinder's noise limit
+        // on the local tone lift matches the still's.
+        syncSetting({
+            if (!it.isVideo && it.experimentalMultiframeEnabled)
+                (it.multiframeTuning.zslFrames() + it.multiframeTuning.postShutterFrames()).coerceIn(1, 30)
+            else 1
+        }) { previewCoordinator.setExpectedMergeFrames(it) }
         syncSetting({ it.maxPostGainId }) {
             previewCoordinator.setMaxAePostGain(com.rawr.camera.settings.model.maxPostGainForId(it))
         }

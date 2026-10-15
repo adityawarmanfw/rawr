@@ -1,0 +1,29 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// Base level (quarter resolution for a still): per full-res pixel the three
+// synthetic-exposure lightnesses and their weights, box-averaged over each
+// block (the demo computes both at full resolution and mips them down).
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0, rgba16f) uniform readonly image2D source;
+layout(binding = 1, rgba16f) uniform writeonly image2D lightnessOut;
+layout(binding = 2, rgba16f) uniform writeonly image2D weightsOut;
+#include "fus_common.glsl"
+
+void main() {
+    ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    if (q.x >= int(pc.size.z) || q.y >= int(pc.size.w)) return;
+    ivec2 origin = q * int(pc.block);
+    ivec2 limit = min(origin + ivec2(int(pc.block)), ivec2(pc.size.xy));
+    vec3 lightness = vec3(0.0), weights = vec3(0.0);
+    float count = 0.0;
+    for (int y = origin.y; y < limit.y; ++y)
+        for (int x = origin.x; x < limit.x; ++x) {
+            vec3 l = rawrFusLightness(rawrFus709(imageLoad(source, ivec2(x, y)).rgb));
+            lightness += l;
+            weights += rawrFusWeights(l);
+            count += 1.0;
+        }
+    count = max(count, 1.0);
+    imageStore(lightnessOut, q, vec4(lightness / count, 1.0));
+    imageStore(weightsOut, q, vec4(weights / count, 1.0));
+}

@@ -381,8 +381,12 @@ extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreview
     rawrcam::session::setAutoKeyMode(handle(h), v);
 }
 extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreviewEngine_setLocalTone(
-    JNIEnv*, jobject, jlong h, jfloat strength, jfloat detail) {
-    rawrcam::session::setLocalTone(handle(h), strength, detail);
+    JNIEnv*, jobject, jlong h, jfloat shadowsEv) {
+    rawrcam::session::setLocalTone(handle(h), shadowsEv);
+}
+extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreviewEngine_setExpectedMergeFrames(
+    JNIEnv*, jobject, jlong h, jint frames) {
+    rawrcam::session::setExpectedMergeFrames(handle(h), static_cast<uint32_t>(std::clamp(frames, 1, 30)));
 }
 extern "C" JNIEXPORT void JNICALL
 Java_com_rawr_camera_integration_NativePreviewEngine_setExperimentalZeroCopy(JNIEnv*, jobject, jlong h, jboolean v) {

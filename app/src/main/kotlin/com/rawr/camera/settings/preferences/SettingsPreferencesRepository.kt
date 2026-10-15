@@ -444,8 +444,8 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
             exposureStep = enumOrDefault(p[Keys.exposureStep], d.exposureStep),
             highlightProtection = enumOrDefault(p[Keys.highlightProtection], d.highlightProtection),
             autoKeyExposure = enumOrDefault(p[Keys.autoKeyExposure], d.autoKeyExposure),
-            localToneStrength = LocalToneLimits.strength(p[Keys.localToneStrength] ?: d.localToneStrength),
-            localToneDetail = LocalToneLimits.detail(p[Keys.localToneDetail] ?: d.localToneDetail),
+            photoToneMapping = enumOrDefault(p[Keys.photoToneMapping], d.photoToneMapping),
+            localToneShadowsEv = LocalToneLimits.shadowsEv(p[Keys.localToneShadowsEv] ?: d.localToneShadowsEv),
             maxPostGainId = p[Keys.maxPostGainId] ?: d.maxPostGainId,
             autoMinFpsId = p[Keys.autoMinFpsId] ?: d.autoMinFpsId,
             controlSurfaceStyle = enumOrDefault(p[Keys.controlSurfaceStyle], d.controlSurfaceStyle),
@@ -673,8 +673,8 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.exposureStep] = v.exposureStep.name
         p[Keys.highlightProtection] = v.highlightProtection.name
         p[Keys.autoKeyExposure] = v.autoKeyExposure.name
-        p[Keys.localToneStrength] = v.localToneStrength
-        p[Keys.localToneDetail] = v.localToneDetail
+        p[Keys.photoToneMapping] = v.photoToneMapping.name
+        p[Keys.localToneShadowsEv] = v.localToneShadowsEv
         p[Keys.maxPostGainId] = v.maxPostGainId
         p[Keys.autoMinFpsId] = v.autoMinFpsId
         p[Keys.controlSurfaceStyle] = v.controlSurfaceStyle.name
@@ -961,8 +961,8 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val exposureStep = stringPreferencesKey("exposure_step")
         val highlightProtection = stringPreferencesKey("highlight_protection")
         val autoKeyExposure = stringPreferencesKey("auto_key_exposure")
-        val localToneStrength = floatPreferencesKey("local_tone_strength")
-        val localToneDetail = floatPreferencesKey("local_tone_detail")
+        val photoToneMapping = stringPreferencesKey("photo_tone_mapping")
+        val localToneShadowsEv = floatPreferencesKey("local_tone_shadows_ev")
         val maxPostGainId = stringPreferencesKey("max_post_gain_id")
         val autoMinFpsId = stringPreferencesKey("auto_min_fps_id")
         val controlSurfaceStyle = stringPreferencesKey("control_surface_style")

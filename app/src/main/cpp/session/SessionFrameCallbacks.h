@@ -23,7 +23,7 @@ class SessionFrameCallbacks final : public pipeline::FrameLifecyclePort,
     float postGainFor(const rawrcam::metadata::FrameMetadataSnapshot& metadata) override;
     // HDR+ Bracketed: the lift (EV) the viewfinder showed this frame with.
     std::optional<float> normalizedLiftEv(std::uint64_t timestampNs) const;
-    void applyAutoKey(tonemap::TonemapParams& tone) override;
+    void applyAutoKey(tonemap::TonemapParams& tone, const rawrcam::metadata::FrameMetadataSnapshot& metadata) override;
     void advanceStill() override;
     bool isStillCaptureRequested() override;
     bool deferSubmittedFrame(const rawrcam::metadata::FrameMetadataSnapshot& metadata,

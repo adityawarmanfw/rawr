@@ -236,7 +236,7 @@ bool RealtimePipeline::configureGeometry(uint64_t generation, uint32_t width, ui
         }
         rawPreview_ = std::make_unique<raw_preview::RawPreview>(rawCreate);
         try {
-            localTone_ = std::make_unique<rawr::local_tone::LocalToneProcessor>(
+            localTone_ = std::make_unique<rawr::local_tone::ExposureFusionProcessor>(
                 rawr::vk::GpuContext{vulkanContext_.physicalDevice(), vulkanContext_.device(),
                                      vulkanContext_.queueFamily()},
                 imaging::kRealtimeFramesInFlight);

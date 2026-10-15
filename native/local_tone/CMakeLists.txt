@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.22)
 project(local_tone LANGUAGES CXX)
 
-# Local tone mapping: an edge-aware regional gain applied in place to a
-# scene-linear image before the tone curve (see include/local_tone/LocalTone.h).
+# Local tone mapping: exposure fusion as a regional gain applied in place to a
+# scene-linear image before the tone curve (see include/local_tone/ExposureFusion.h).
 if(ANDROID)
   find_library(VULKAN_LIB vulkan REQUIRED)
 else()
@@ -23,12 +23,12 @@ set(LTM_GEN ${CMAKE_CURRENT_BINARY_DIR}/generated)
 file(MAKE_DIRECTORY ${LTM_GEN})
 set(LTM_SHADERS ${CMAKE_CURRENT_LIST_DIR}/shaders)
 set(LTM_HEADERS)
-foreach(NAME ltm_luma ltm_box ltm_coeff ltm_lift ltm_apply)
+foreach(NAME fus_base fus_down fus_blend fus_lap fus_apply)
   embed_spirv(${NAME} ${LTM_SHADERS}/${NAME}.comp ${NAME}_spv OUTPUT_DIR ${LTM_GEN} HEADERS_VAR LTM_HEADERS
-    FLAGS --target-env=vulkan1.1 -O -I${LTM_SHADERS} DEPENDS ${LTM_SHADERS}/ltm_common.glsl)
+    FLAGS --target-env=vulkan1.1 -O -I${LTM_SHADERS} DEPENDS ${LTM_SHADERS}/fus_common.glsl)
 endforeach()
 
-add_library(local_tone STATIC src/LocalTone.cpp ${LTM_HEADERS})
+add_library(local_tone STATIC src/ExposureFusion.cpp ${LTM_HEADERS})
 add_library(rawr::local_tone ALIAS local_tone)
 target_include_directories(local_tone PUBLIC include PRIVATE ${LTM_GEN})
 target_link_libraries(local_tone PUBLIC rawr::vk_common ${VULKAN_LIB})
@@ -39,7 +39,7 @@ endif()
 
 option(LOCAL_TONE_BUILD_TESTS "Build the host Vulkan validation test" OFF)
 if(LOCAL_TONE_BUILD_TESTS)
-  add_executable(local_tone_vulkan_test tests/local_tone_vulkan_test.cpp)
+  add_executable(local_tone_vulkan_test tests/exposure_fusion_vulkan_test.cpp)
   target_include_directories(local_tone_vulkan_test PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../vk_common/testing)
   target_link_libraries(local_tone_vulkan_test PRIVATE rawr::local_tone)
 endif()

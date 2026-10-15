@@ -74,7 +74,7 @@ RawDevelopRecorder::RawDevelopRecorder(raw_preview::RawPreview& rawPreview, tone
                                        rawrcam::monitoring::ImageScopesProcessor& imageScopes,
                                        rawrcam::presentation::SwapchainRenderer& presentation,
                                        rawrcam::diagnostics::GpuTimingTracker& performance, Audit audit,
-                                       rawr::local_tone::LocalToneProcessor* localTone)
+                                       rawr::local_tone::ExposureFusionProcessor* localTone)
     : rawPreview_(rawPreview),
       tonemap_(tonemap),
       acquireFilm_(std::move(acquireFilm)),
@@ -411,19 +411,19 @@ RawDevelopRecordResult RawDevelopRecorder::record(const RawDevelopRecordInput& i
                             in.sensorToLinearSrgb, in.whiteBalance);
     }
 
-    // HDR+ Bracketed local tone mapping: after the scene meter read the
+    // Local tone mapping (exposure fusion): after the scene meter read the
     // unlifted linear image, before film/tonemap; in place on the display
     // input and the linear image (stills apply it to both copies too).
     const auto& localTone = in.tonemapParams.localTone;
     if (localTone_ && in.diagnosticMode == 0u &&
-        rawr::local_tone::active({localTone.strength, localTone.detail})) {
+        rawr::local_tone::fusionActive(localTone.shadowsEv)) {
         VkMemoryBarrier readDone{};
         readDone.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
         readDone.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
         readDone.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
         vkCmdPipelineBarrier(slot.command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
                              1, &readDone, 0, nullptr, 0, nullptr);
-        rawr::local_tone::RecordInfo lt{};
+        rawr::local_tone::FusionRecordInfo lt{};
         lt.commandBuffer = slot.command;
         lt.width = in.previewWidth;
         lt.height = in.previewHeight;
@@ -436,7 +436,7 @@ RawDevelopRecordResult RawDevelopRecorder::record(const RawDevelopRecordInput& i
         }
         lt.cameraToWorking = composeCameraToAp1(in.sensorToLinearSrgb);
         lt.renderGain = in.tonemapParams.aePostGain * std::exp2(in.tonemapParams.exposureEV);
-        lt.params = {localTone.strength, localTone.detail};
+        lt.params = rawr::local_tone::fusionParams(localTone.shadowsEv, localTone.highlightsEv);
         lt.slot = in.slotIndex;
         localTone_->record(lt);
     }

@@ -47,8 +47,8 @@ internal fun reduceCaptureSettings(
     is SetLocalTone -> {
         state.withValues(
             state.values.copy(
-                localToneStrength = action.strength?.let(LocalToneLimits::strength) ?: state.values.localToneStrength,
-                localToneDetail = action.detail?.let(LocalToneLimits::detail) ?: state.values.localToneDetail
+                photoToneMapping = action.mode ?: state.values.photoToneMapping,
+                localToneShadowsEv = action.shadowsEv?.let(LocalToneLimits::shadowsEv) ?: state.values.localToneShadowsEv
             )
         )
     }
