@@ -1,9 +1,15 @@
 #version 450
 // Projects the normalized merge back to integer CFA codes for the merged DNG.
-// codeScale (an integer) widens the sensor's code range toward 16 bits so
-// the merge's sub-code precision survives quantization; the DNG writer scales
-// the BlackLevel/WhiteLevel tags by the same factor. RAWR_SOURCE_R32F reads a
+// codeScale widens the sensor's code range to 16 bits so the merge's sub-code
+// precision survives quantization; the DNG writer scales the
+// BlackLevel/WhiteLevel tags by the same factor. RAWR_SOURCE_R32F reads a
 // full-precision normalized CFA plane instead of the RGBA16F merge output.
+//
+// Values below black are kept (codes under BlackLevel are legal DNG): clamping
+// at black turns zero-mean shadow noise into a one-sided floor of exact-black
+// codes that raw developers show as crushed, speckled blacks once lifted.
+// A 1-LSB TPDF dither keeps quantization unbiased where the merged noise is
+// below one code, so lifted shadows do not posterize.
 
 layout(local_size_x = 16, local_size_y = 16) in;
 #ifdef RAWR_SOURCE_R32F
@@ -33,18 +39,31 @@ uint channelForSite(ivec2 q) {
     return p.cfa == 0u ? rggb[phase] : p.cfa == 1u ? grbg[phase] : p.cfa == 2u ? gbrg[phase] : bggr[phase];
 }
 
+// PCG hash (Jarzynski & Olano 2020), two independent uniforms per site.
+uint pcg(uint v) {
+    uint state = v * 747796405u + 2891336453u;
+    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
+float tpdf(ivec2 q) {
+    uint h0 = pcg(uint(q.x) + pcg(uint(q.y)));
+    uint h1 = pcg(h0);
+    return float(h0 >> 8) * (1.0 / 16777216.0) + float(h1 >> 8) * (1.0 / 16777216.0) - 1.0;
+}
+
 void main() {
     ivec2 q = ivec2(gl_GlobalInvocationID.xy);
     if (q.x >= int(p.width) || q.y >= int(p.height)) return;
     uint phase = uint((q.y & 1) * 2 + (q.x & 1));
 #ifdef RAWR_SOURCE_R32F
-    float normalized = max(0.0, imageLoad(mergedCfa, q).r);
+    float normalized = imageLoad(mergedCfa, q).r;
 #else
     vec3 rgb = imageLoad(mergedRgb, q).rgb;
-    float normalized = max(0.0, rgb[channelForSite(q)]);
+    float normalized = rgb[channelForSite(q)];
 #endif
     float range = max(1.0, p.whiteLevel - p.blackByPhase[phase]);
     precise float code = fma(normalized, range, p.blackByPhase[phase]) * p.codeScale;
-    uint packed = uint(roundEven(clamp(code, 0.0, 65535.0)));
+    uint packed = uint(roundEven(clamp(code + tpdf(q), 0.0, 65535.0)));
     imageStore(projectedCfa, q, uvec4(packed, 0u, 0u, 0u));
 }

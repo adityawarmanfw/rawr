@@ -392,8 +392,8 @@ void MfsrCaptureJob::runStages(Published& published) {
                     rawrcam::geometry::reorderRggbByCode(job->referenceMetadata.blackLevelPhysicalRggb, ctx.cfa);
                 projection.whiteLevel = job->referenceMetadata.effectiveWhiteLevel;
                 projection.cfa = ctx.cfa;
-                // 16-bit merged DNG: widen codes by an integer factor so the merge's
-                // sub-code precision survives; HDR+ also projects from its
+                // 16-bit merged DNG: widen codes so white maps to 65535 and the
+                // merge's sub-code precision survives; HDR+ also projects from its
                 // full-precision R32F CFA plane instead of the RGBA16F output.
                 projection.codeScale =
                     rawr::raw_multiframe_output::sixteenBitCodeScale(projection.whiteLevel);
@@ -408,7 +408,7 @@ void MfsrCaptureJob::runStages(Published& published) {
                 // DNG BlackLevel/WhiteLevel follow the widened code range.
                 for (auto& black : mergedFrame->metadata.blackLevelPhysicalRggb) black *= projection.codeScale;
                 mergedFrame->metadata.effectiveWhiteLevel *= projection.codeScale;
-                LOGI("MULTIFRAME_DNG_16BIT scale=%.0f white=%.0f source=%s", projection.codeScale,
+                LOGI("MULTIFRAME_DNG_16BIT scale=%.3f white=%.0f source=%s", projection.codeScale,
                      mergedFrame->metadata.effectiveWhiteLevel, projection.sourceIsCfaR32f ? "r32f" : "rgba16f");
                 mergedDng.reconstructedGeometry = tuning.outputScale > 1.0001f;
                 {

@@ -15,19 +15,20 @@ struct CfaProjectionParameters {
     std::array<float, 4> blackByPhase{{0.0f, 0.0f, 0.0f, 0.0f}};
     float whiteLevel = 1.0f;
     std::uint32_t cfa = 0;
-    // Output codes = sensor codes * codeScale (an integer widening the range
-    // toward 16 bits). The DNG's black/white tags must use the same scale.
+    // Output codes = sensor codes * codeScale (widening the range to 16 bits).
+    // The DNG's black/white tags must use the same scale.
     float codeScale = 1.0f;
     // Source is a normalized single-channel R32F CFA plane (full precision)
     // instead of the RGBA16F merge output.
     bool sourceIsCfaR32f = false;
 };
-// Largest integer scale that keeps whiteLevel * scale within 16 bits, so
-// black stays an integer code (14-bit white 16383 -> 4, a reduced-range mode
-// with white 8712 -> 7, RAW10 white 1023 -> 64, 16-bit sensors -> 1).
+// Scale that maps whiteLevel to 65535, filling the 16-bit range (a
+// reduced-range mode with white 8712 -> 7.52 rather than 7). Black scales by
+// the same factor and is written as an exact RATIONAL, so it need not be an
+// integer code; the codes below it stay available for sub-black noise.
 inline float sixteenBitCodeScale(float whiteLevel) {
     if (!(whiteLevel >= 1.0f)) return 1.0f;
-    const float scale = std::floor(65535.0f / whiteLevel);
+    const float scale = 65535.0f / whiteLevel;
     return scale >= 1.0f ? scale : 1.0f;
 }
 
