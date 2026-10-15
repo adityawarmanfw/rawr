@@ -1,13 +1,18 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cassert>
+#include <chrono>
+#include <stdexcept>
+#include <thread>
 #include <iostream>
 #include <type_traits>
 
 #include "camera/CameraCallbackLifetime.h"
 #include "imaging/FrameIngressQueue.h"
 #include "imaging/FramePairer.h"
+#include "support/JoinGuard.h"
 #include "vulkan/DeviceObjects.h"
 
 #include <string>
@@ -219,5 +224,23 @@ int main() {
         assert(late.owner == nullptr && lifetime->inFlight == 1);
     }
     assert(lifetime->inFlight == 0);
+    // A throw after some workers started (a failed later thread start) joins them instead of std::terminate.
+    {
+        std::atomic<int> finished{0};
+        bool caught = false;
+        try {
+            std::vector<std::thread> threads;
+            support::JoinGuard joinAll(threads);
+            for (int i = 0; i < 2; ++i)
+                threads.emplace_back([&finished] {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                    ++finished;
+                });
+            throw std::runtime_error("thread start failed");
+        } catch (const std::runtime_error&) {
+            caught = true;
+        }
+        assert(caught && finished == 2);
+    }
     std::cout << "NATIVE_OWNERSHIP_PASS\n";
 }

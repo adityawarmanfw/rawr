@@ -178,7 +178,7 @@ rawrcam_module(video
 
 rawrcam_module(renderer
   DIRECTORY renderer
-  DEPENDS color develop imaging presentation vulkan
+  DEPENDS color develop imaging presentation support vulkan
   SOURCES
     renderer/LinearResample.cpp
     renderer/DngSource.cpp

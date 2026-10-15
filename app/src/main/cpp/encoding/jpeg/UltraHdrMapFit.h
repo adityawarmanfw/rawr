@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "color/UltraHdrParams.h"
+#include "support/JoinGuard.h"
 
 namespace rawrcam::encoding::jpeg {
 
@@ -58,6 +59,7 @@ inline bool fitAndRemapMap(const unsigned char* src, std::uint32_t w, std::uint3
     std::vector<std::vector<std::uint32_t>> bands(workers, std::vector<std::uint32_t>(kBins, 0));
     {
         std::vector<std::thread> threads;
+        rawrcam::support::JoinGuard joinAll(threads);
         threads.reserve(workers);
         for (unsigned t = 0; t < workers; ++t) {
             threads.emplace_back([=, &src, &bands] {
@@ -110,6 +112,7 @@ inline bool fitAndRemapMap(const unsigned char* src, std::uint32_t w, std::uint3
     (void)fastTanh(0.0f);  // force LUT init once, outside the threaded loop
     const std::uint32_t h32 = h;
     std::vector<std::thread> threads;
+    rawrcam::support::JoinGuard joinAll(threads);
     threads.reserve(workers);
     for (unsigned t = 0; t < workers; ++t) {
         const std::uint32_t y0 = h32 * t / workers;
@@ -221,6 +224,7 @@ inline bool restoreHighlightColor(std::vector<unsigned char>& map, const unsigne
     const unsigned workers = n < 4096 ? 1u : std::clamp(std::thread::hardware_concurrency(), 1u, 4u);
     std::vector<float> low(workers, 0), high(workers, fittedMax);
     std::vector<std::thread> threads;
+    rawrcam::support::JoinGuard joinAll(threads);
     for (unsigned worker = 0; worker < workers; ++worker) {
         threads.emplace_back([&, worker] {
             for (uint32_t y = h * worker / workers; y < h * (worker + 1) / workers; ++y)
