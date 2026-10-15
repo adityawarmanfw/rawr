@@ -43,7 +43,9 @@ internal class CaptureSettingsSync(
         syncSetting({ it.highlightProtection }) {
             previewCoordinator.setPostGainKneeWidthEv(com.rawr.camera.settings.model.postGainKneeWidthEvFor(it))
         }
-        syncSetting({ it.autoKeyExposure }) { previewCoordinator.setAutoKeyMode(it.nativeId) }
+        syncSetting({ if (it.isVideo) it.videoAutoKeyExposure else it.autoKeyExposure }) {
+            previewCoordinator.setAutoKeyMode(it.nativeId)
+        }
         // Photo local tone mapping; video always takes the adaptive curve.
         syncSetting({
             if (!it.isVideo && it.photoToneMapping == PhotoToneMapping.Local) it.localToneShadowsEv else 0f

@@ -951,7 +951,10 @@ data class SettingsValues(
     val antiFlicker: AntiFlicker = AntiFlicker.Auto,
     val exposureStep: ExposureStep = ExposureStep.Third,
     val highlightProtection: HighlightProtection = HighlightProtection.High,
+    /** Adaptive shadow-lift strength for photos (when Photo tone mapping is Adaptive). */
     val autoKeyExposure: AutoKeyExposure = AutoKeyExposure.Natural,
+    /** Adaptive shadow-lift strength for video (always adaptive). */
+    val videoAutoKeyExposure: AutoKeyExposure = AutoKeyExposure.Natural,
     /** Photo tone mapping (JPEG/viewfinder only; video always Adaptive). */
     val photoToneMapping: PhotoToneMapping = PhotoToneMapping.Local,
     /** Local tone mapping: how far shadows may be brightened (EV), noise-limited natively. */

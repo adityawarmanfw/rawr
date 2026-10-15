@@ -444,6 +444,8 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
             exposureStep = enumOrDefault(p[Keys.exposureStep], d.exposureStep),
             highlightProtection = enumOrDefault(p[Keys.highlightProtection], d.highlightProtection),
             autoKeyExposure = enumOrDefault(p[Keys.autoKeyExposure], d.autoKeyExposure),
+            // Until set, video keeps the strength it shared with photos.
+            videoAutoKeyExposure = enumOrDefault(p[Keys.videoAutoKeyExposure] ?: p[Keys.autoKeyExposure], d.videoAutoKeyExposure),
             photoToneMapping = enumOrDefault(p[Keys.photoToneMapping], d.photoToneMapping),
             localToneShadowsEv = LocalToneLimits.shadowsEv(p[Keys.localToneShadowsEv] ?: d.localToneShadowsEv),
             maxPostGainId = p[Keys.maxPostGainId] ?: d.maxPostGainId,
@@ -673,6 +675,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.exposureStep] = v.exposureStep.name
         p[Keys.highlightProtection] = v.highlightProtection.name
         p[Keys.autoKeyExposure] = v.autoKeyExposure.name
+        p[Keys.videoAutoKeyExposure] = v.videoAutoKeyExposure.name
         p[Keys.photoToneMapping] = v.photoToneMapping.name
         p[Keys.localToneShadowsEv] = v.localToneShadowsEv
         p[Keys.maxPostGainId] = v.maxPostGainId
@@ -961,6 +964,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val exposureStep = stringPreferencesKey("exposure_step")
         val highlightProtection = stringPreferencesKey("highlight_protection")
         val autoKeyExposure = stringPreferencesKey("auto_key_exposure")
+        val videoAutoKeyExposure = stringPreferencesKey("video_auto_key_exposure")
         val photoToneMapping = stringPreferencesKey("photo_tone_mapping")
         val localToneShadowsEv = floatPreferencesKey("local_tone_shadows_ev")
         val maxPostGainId = stringPreferencesKey("max_post_gain_id")

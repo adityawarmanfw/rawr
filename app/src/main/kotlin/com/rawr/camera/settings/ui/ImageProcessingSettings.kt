@@ -103,7 +103,7 @@ private fun HighlightMethodOptions(
 private fun shadowLiftSummary(v: SettingsValues): String {
     val photo = if (v.photoToneMapping == PhotoToneMapping.Local)
         "Local +${"%.1f".format(java.util.Locale.US, v.localToneShadowsEv)} EV" else "Adaptive ${v.autoKeyExposure.label}"
-    return "Photo $photo · Video Adaptive ${v.autoKeyExposure.label}"
+    return "Photo $photo · Video Adaptive ${v.videoAutoKeyExposure.label}"
 }
 
 /** Image > Shadow Lift: photo tone mapping (local or adaptive) and the adaptive strength. */
@@ -112,16 +112,15 @@ internal fun ShadowLiftSettings(state: SettingsUiState, dispatch: SettingsDispat
     val v = state.values
     SettingsPageContainer(testTag = SettingsTestTags.sectionRoot("ShadowLift")) {
         SettingsGroup(
-            title = "Tone Mapping",
-            description = "Brightens shadows in high-contrast scenes; highlights keep their brightness. JPEG and viewfinder only; not applied to LOG. Video always uses Adaptive."
+            title = "Photo",
+            description = "Brightens shadows in high-contrast scenes; highlights keep their brightness. JPEG and viewfinder only; not applied to LOG."
         ) {
-            ChoiceLabel("Photo")
             CompactChoiceRow(PhotoToneMapping.entries, v.photoToneMapping, { it.label }) {
                 dispatch.invoke(SetLocalTone(mode = it))
             }
             ChoiceSummary(v.photoToneMapping.summary)
+            SettingDivider()
             if (v.photoToneMapping == PhotoToneMapping.Local) {
-                SettingDivider()
                 StandaloneNumericSliderRow(
                     identity = "local_tone_shadows",
                     label = "Local Shadows",
@@ -134,13 +133,23 @@ internal fun ShadowLiftSettings(state: SettingsUiState, dispatch: SettingsDispat
                     value = v.localToneShadowsEv,
                     defaultValue = LocalToneLimits.DEFAULT_SHADOWS_EV
                 ) { dispatch.invoke(SetLocalTone(shadowsEv = it)) }
+            } else {
+                ChoiceLabel("Adaptive Strength")
+                CompactChoiceRow(AutoKeyExposure.entries, v.autoKeyExposure, { it.label }) {
+                    dispatch.invoke(SetAutoKeyExposure(it))
+                }
+                ChoiceSummary(v.autoKeyExposure.summary)
             }
-            SettingDivider()
+        }
+        SettingsGroup(
+            title = "Video",
+            description = "Video always uses the adaptive curve. Not applied to LOG."
+        ) {
             ChoiceLabel("Adaptive Strength")
-            CompactChoiceRow(AutoKeyExposure.entries, v.autoKeyExposure, { it.label }) {
-                dispatch.invoke(SetAutoKeyExposure(it))
+            CompactChoiceRow(AutoKeyExposure.entries, v.videoAutoKeyExposure, { it.label }) {
+                dispatch.invoke(SetAutoKeyExposure(it, video = true))
             }
-            ChoiceSummary(v.autoKeyExposure.summary)
+            ChoiceSummary(v.videoAutoKeyExposure.summary)
         }
     }
 }

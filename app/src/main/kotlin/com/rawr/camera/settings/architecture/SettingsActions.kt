@@ -55,7 +55,7 @@ data class SetExposureStep(val value: ExposureStep) : SettingsApplicationAction
 
 data class SetHighlightProtection(val value: HighlightProtection) : SettingsApplicationAction
 
-data class SetAutoKeyExposure(val value: AutoKeyExposure) : SettingsApplicationAction
+data class SetAutoKeyExposure(val value: AutoKeyExposure, val video: Boolean = false) : SettingsApplicationAction
 
 /** HDR+ Bracketed local tone mapping; null keeps the current value. */
 data class SetLocalTone(val mode: PhotoToneMapping? = null, val shadowsEv: Float? = null) : SettingsApplicationAction

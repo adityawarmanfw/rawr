@@ -41,7 +41,10 @@ internal fun reduceCaptureSettings(
     }
 
     is SetAutoKeyExposure -> {
-        state.withValues(state.values.copy(autoKeyExposure = action.value))
+        state.withValues(
+            if (action.video) state.values.copy(videoAutoKeyExposure = action.value)
+            else state.values.copy(autoKeyExposure = action.value)
+        )
     }
 
     is SetLocalTone -> {
