@@ -411,6 +411,14 @@ void MfsrCaptureJob::runStages(Published& published) {
                 LOGI("MULTIFRAME_DNG_16BIT scale=%.3f white=%.0f source=%s", projection.codeScale,
                      mergedFrame->metadata.effectiveWhiteLevel, projection.sourceIsCfaR32f ? "r32f" : "rgba16f");
                 mergedDng.reconstructedGeometry = tuning.outputScale > 1.0001f;
+                // HDR+ merges are an exposure-weighted mean on the raw grid;
+                // Wronski's kernel merge has no closed-form noise, keep the
+                // reference profile there.
+                if (tuning.mergeAlgorithm != 0u && job->metadata.size() == job->frames.size()) {
+                    mergedDng.noiseVarianceScale = mergedNoiseVarianceScale(job->metadata, job->referenceIndex);
+                    LOGI("MULTIFRAME_DNG_NOISE shot=%.4f read=%.4f", (*mergedDng.noiseVarianceScale)[0],
+                         (*mergedDng.noiseVarianceScale)[1]);
+                }
                 {
                     // Core merge/alignment stages were populated right after
                     // coordinator.run() (shared by both horizons); only the

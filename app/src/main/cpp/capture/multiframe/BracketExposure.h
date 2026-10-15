@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -77,6 +78,37 @@ inline float bracketLiftEv(const std::vector<metadata::FrameMetadataSnapshot>& m
     for (const auto& m : metadata) brightest = std::max(brightest, linearExposure(m));
     if (ref <= 0.0 || brightest <= ref) return 0.0f;
     return float(std::log2(brightest / ref));
+}
+
+// Variance scale of an HDR+ merge relative to its reference frame, for the
+// merged DNG's NoiseProfile (variance = S*x + O in the reference's normalized
+// units): {shot scale for S, read scale for O}. Frame i is scaled by
+// 1/ef_i to the reference and weighted by ef_i (exposure-weighted mean), and
+// its noise follows the reference profile at its own gain g_i (S ~ g, O ~ g^2):
+//   shot = sum(ef_i g_i) / sum(ef_i)^2,  read = sum(g_i^2) / sum(ef_i)^2.
+// A uniform burst of N frames gives {1/N, 1/N}. This is the static-scene
+// ideal; rejected (moving) regions keep more noise.
+inline std::array<double, 2> mergedNoiseVarianceScale(const std::vector<metadata::FrameMetadataSnapshot>& metadata,
+                                                      std::uint32_t referenceIndex) noexcept {
+    if (referenceIndex >= metadata.size()) return {1.0, 1.0};
+    const auto& refMeta = metadata[referenceIndex];
+    const double ref = linearExposure(refMeta);
+    const std::int32_t refIso = refMeta.sensitivity > 0 ? refMeta.sensitivity : refMeta.requestedSensitivity.value_or(0);
+    if (ref <= 0.0 || refIso <= 0) return {1.0, 1.0};
+    double sumEf = 0.0, sumShot = 0.0, sumRead = 0.0;
+    for (const auto& m : metadata) {
+        const double e = linearExposure(m);
+        const std::int32_t iso = m.sensitivity > 0 ? m.sensitivity : m.requestedSensitivity.value_or(0);
+        if (e <= 0.0 || iso <= 0) continue;
+        const double ef = e / ref;
+        const double g = double(iso) / double(refIso);
+        sumEf += ef;
+        sumShot += ef * g;
+        sumRead += g * g;
+    }
+    if (!(sumEf > 0.0)) return {1.0, 1.0};
+    const double norm = 1.0 / (sumEf * sumEf);
+    return {std::min(1.0, sumShot * norm), std::min(1.0, sumRead * norm)};
 }
 
 }  // namespace rawrcam::capture::multiframe

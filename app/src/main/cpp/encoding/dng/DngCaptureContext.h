@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -42,6 +43,10 @@ struct DngCaptureContext {
     std::string frameRecipe;
     std::string imageDescription;             // frozen human-readable capture/render settings
     std::optional<float> baselineExposureEV;  // DNG render hint; RAW samples are unchanged.
+    // Merged DNGs: {shot, read} variance scale applied to the reference
+    // frame's NoiseProfile (S, O), so raw developers see the merge's noise
+    // rather than a single frame's.
+    std::optional<std::array<double, 2>> noiseVarianceScale;
     bool reconstructedGeometry = false;       // merged CFA is a synthesized output grid, not sensor-pixel geometry
     // The app's own lens-shading decision for this capture (develop setting
     // lensShadingCorrectionEnabled). The stored CFA never has shading baked

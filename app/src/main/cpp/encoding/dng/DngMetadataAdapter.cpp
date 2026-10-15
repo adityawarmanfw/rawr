@@ -319,6 +319,12 @@ std::optional<TinyDngWriteParams> makeTinyDngWriteParams(const rawrcam::imaging:
             default:
                 break;
         }
+        if (captureContext.noiseVarianceScale) {
+            for (auto& site : physical) {
+                site[0] *= (*captureContext.noiseVarianceScale)[0];
+                site[1] *= (*captureContext.noiseVarianceScale)[1];
+            }
+        }
         raw.noise_profile[0] = physical[0][0];
         raw.noise_profile[1] = physical[0][1];
         raw.noise_profile[2] = (physical[1][0] + physical[2][0]) * 0.5;
