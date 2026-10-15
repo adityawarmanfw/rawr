@@ -61,6 +61,8 @@ class NativeCameraController {
     // Enabling it on an uncalibrated live session restarts that session.
     // Off unless HDR+ Bracketed is selected; never probes during video.
     void setSensitivityCalibrationWanted(bool wanted);
+    // File keeping measured calibrations across launches (once per camera).
+    void setSensitivityCalibrationStore(const std::string& path);
     void setExposureCompensationSteps(int32_t steps);
     // HDR+ Bracketed highlight headroom (EV <= 0), rounded to compensation
     // steps and added to the user's EV in Auto exposure. Lock-free: any

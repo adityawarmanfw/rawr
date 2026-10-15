@@ -8,6 +8,9 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <fstream>
+#include <iomanip>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -295,12 +298,36 @@ struct NativeCameraController::Impl final : CameraEventSink {
         if (!context || !deviceSession.sensorModeOverridden()) return {};
         return context->cameraId + "/" + context->lensId + "/" + profile.id;
     }
+    // Saved across launches so the probe runs once per camera, ever.
+    std::string sensitivityStorePath;
+    void loadSensitivityStoreLocked() {
+        std::ifstream in(sensitivityStorePath);
+        std::string key;
+        double ratio = 0.0;
+        while (in >> std::quoted(key) >> ratio)
+            if (std::isfinite(ratio) && ratio > 0.0) sensitivityRatioCache[key] = ratio;
+    }
+    void saveSensitivityStoreLocked() const {
+        if (sensitivityStorePath.empty()) return;
+        const std::string temp = sensitivityStorePath + ".tmp";
+        {
+            std::ofstream out(temp, std::ios::trunc);
+            out.precision(9);
+            for (const auto& [key, ratio] : sensitivityRatioCache) out << std::quoted(key) << ' ' << ratio << '\n';
+            if (!out) return;
+        }
+        std::rename(temp.c_str(), sensitivityStorePath.c_str());
+    }
     // Seeds this session from the cache, or records a fresh measurement.
     void syncSensitivityCacheLocked() {
         const std::string key = sensitivityCacheKeyLocked();
         if (key.empty()) return;
         if (const auto measured = results.sensitivityReportedPerRequest()) {
-            sensitivityRatioCache[key] = *measured;
+            auto& cached = sensitivityRatioCache[key];
+            if (std::abs(cached - *measured) > 1e-6) {
+                cached = *measured;
+                saveSensitivityStoreLocked();
+            }
         } else if (const auto it = sensitivityRatioCache.find(key); it != sensitivityRatioCache.end()) {
             results.seedSensitivityRatio(it->second);
             diag("CAMERA_SENSITIVITY_RATIO_CACHED ratio=" + std::to_string(it->second));
@@ -1084,6 +1111,11 @@ void NativeCameraController::setManualSensitivity(int32_t value) { impl_->setMan
 bool NativeCameraController::captureExposureBracket(uint64_t requestId, int64_t baseExposureTimeNs,
                                                     int32_t baseReportedSensitivity, const std::vector<float>& evOffsets) {
     return impl_->captureExposureBracket(requestId, baseExposureTimeNs, baseReportedSensitivity, evOffsets);
+}
+void NativeCameraController::setSensitivityCalibrationStore(const std::string& path) {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    impl_->sensitivityStorePath = path;
+    impl_->loadSensitivityStoreLocked();
 }
 void NativeCameraController::setSensitivityCalibrationWanted(bool wanted) {
     std::unique_lock<std::mutex> lock(impl_->mutex);

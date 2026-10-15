@@ -88,6 +88,7 @@ SessionEngine::SessionEngine(std::string filesDir) : filesDir_(std::move(filesDi
     };
     callbacks.diagnostic = [this](const std::string& line) { recordDiagnosticLine(line); };
     auto controller = std::make_unique<rawrcam::camera::NativeCameraController>(std::move(callbacks));
+    controller->setSensitivityCalibrationStore(filesDir_ + "/rawrcam_iso_calibration.txt");
     cameraControls_.attach(std::move(controller));
     look_.start();
     videoSession_.startPrewarm();
