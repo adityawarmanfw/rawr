@@ -25,6 +25,7 @@ set(FCC_BUILD_VALIDATION OFF CACHE BOOL "" FORCE)
 add_subdirectory("${RAWR_ROOT}/native/false_color_correction" "${CMAKE_CURRENT_BINARY_DIR}/false_color_correction")
 # Post-demosaic stages and their embedded SPIR-V, built exactly as in the app.
 add_subdirectory("${RAWR_ROOT}/native/post_demosaic" "${CMAKE_CURRENT_BINARY_DIR}/post_demosaic")
+add_subdirectory("${RAWR_ROOT}/native/local_tone" "${CMAKE_CURRENT_BINARY_DIR}/local_tone")
 
 set(TONEMAP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(TONEMAP_BUILD_VULKAN ON CACHE BOOL "" FORCE)
@@ -171,6 +172,7 @@ target_compile_definitions(rawr_offline_pipeline PRIVATE
   RAWR_OFFLINE_SHADER_DIR="${GEN}")
 target_link_libraries(rawr_offline_pipeline PRIVATE
   rawr::post_demosaic
+  rawr::local_tone
   rawr::vk_common
   raw_highlight::raw_highlight
   rawr::shader_common

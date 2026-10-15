@@ -65,6 +65,7 @@ def main():
     parser.add_argument("--post-gain", type=float,
                         help="override the recipe's AE post gain for an exposure diagnostic")
     parser.add_argument("--adaptive-tone", help="override the captured AutoKey curve: LIFT,KEY,HIGHLIGHT (lift 0 = off)")
+    parser.add_argument("--local-tone", help="override the captured local tone mapping: STRENGTH,DETAIL (0 = off)")
     parser.add_argument("--any-demosaic", action="store_true",
                         help="render other demosaics with DualRcdVng4 (tone comparisons only)")
     parser.add_argument("--sdr-only", action="store_true", help="skip the UltraHDR gain map")
@@ -166,6 +167,9 @@ def main():
     adaptive = args.adaptive_tone or ",".join(
         str(captured.get(k, d)) for k, d in (("liftEv", 0), ("keyEv", -4), ("highlightEv", 0)))
     command += ["--adaptive-tone", adaptive]
+    captured_local = resolved.get("tonemap", {}).get("localTone", {})
+    local = args.local_tone or f'{captured_local.get("strength", 0)},{captured_local.get("detail", 1)}'
+    command += ["--local-tone", local]
     if recovery_mode == "preserve":
         command.append("--preserve-reconstructed")
     if args.app_coloropp:

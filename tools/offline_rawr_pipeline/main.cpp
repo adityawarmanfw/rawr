@@ -6,6 +6,7 @@
 #include <quadfix/Pipeline.hpp>
 #include <gainmap/GainmapCompute.h>
 #include <spektrafilm/SpektraFilm.h>
+#include <local_tone/LocalTone.h>
 #include <tonemap/TonemapEngine.h>
 
 #include <cstdio>
@@ -74,6 +75,8 @@ struct Arguments {
     float postGain = 1.0f;
     // Captured AutoKey curve (lift, key, highlight EV); lift 0 = off.
     tonemap::AdaptiveToneParams adaptiveTone{};
+    // HDR+ Bracketed local tone mapping (strength, detail); strength 0 = off.
+    rawr::local_tone::Params localTone{};
     float highlightBias = 0.0f;
     float rtHighlightCompression = 0.0f;
     bool appColoropp = false;
@@ -226,6 +229,10 @@ Arguments parseArguments(int argc, char** argv) {
             args.hasExposureEV = true;
         } else if (value == "--post-gain" && i + 1 < argc) {
             args.postGain = std::stof(argv[++i]);
+        } else if (value == "--local-tone" && i + 1 < argc) {
+            if (std::sscanf(argv[++i], "%f,%f", &args.localTone.strength, &args.localTone.detail) != 2 ||
+                !rawr::local_tone::validParams(args.localTone))
+                throw std::invalid_argument("--local-tone needs STRENGTH,DETAIL");
         } else if (value == "--adaptive-tone" && i + 1 < argc) {
             float v[3]{};
             if (std::sscanf(argv[++i], "%f,%f,%f", &v[0], &v[1], &v[2]) != 3)
@@ -628,6 +635,7 @@ int main(int argc, char** argv) {
         // (RenderedStillProcessor: full-res, 1 frame in flight, conditional
         // effect scratch).
         std::unique_ptr<spektrafilm_native::SpektraFilm> film;
+        std::unique_ptr<rawr::local_tone::LocalToneProcessor> localTone;
         spektrafilm_native::FilmLook filmBaseLook{};
         std::vector<std::vector<uint32_t>> filmSpvStorage;
         std::vector<uint8_t> filmHanatosBytes;
@@ -971,6 +979,31 @@ int main(int argc, char** argv) {
                     }
                     film->record(fri);
                 } else {
+                // HDR+ Bracketed local tone mapping, as StillRenderSequence.
+                if (args.localTone.strength > 0.0f) {
+                    VkMemoryBarrier written{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+                    written.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+                    written.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+                    vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &written, 0, nullptr, 0, nullptr);
+                    if (!localTone)
+                        localTone = std::make_unique<rawr::local_tone::LocalToneProcessor>(
+                            rawr::vk::GpuContext{context.pd, context.dev, context.qf}, 1u);
+                    rawr::local_tone::RecordInfo lt{};
+                    lt.commandBuffer = command;
+                    lt.width = config.width;
+                    lt.height = config.height;
+                    lt.measure = {post.outputImage(), post.outputView()};
+                    lt.targets[0] = lt.measure;
+                    if (post.sdrOutputImage() != post.outputImage()) {
+                        lt.targets[1] = {post.sdrOutputImage(), post.sdrOutputView()};
+                        lt.targetCount = 2;
+                    }
+                    std::copy(config.cameraToWorking.begin(), config.cameraToWorking.end(), lt.cameraToWorking.begin());
+                    lt.renderGain = args.postGain * std::exp2(config.exposureEV);
+                    lt.params = args.localTone;
+                    if (!localTone->record(lt)) throw std::invalid_argument("invalid --local-tone");
+                }
                 VkImageView toneInputView = post.sdrOutputView();
                 if (args.rtHighlightCompression > 0.0f) {
                     toneImage = vktest::mkImg(context.pd, context.dev, config.width, config.height,
