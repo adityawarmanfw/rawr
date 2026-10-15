@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cmath>
+
 #include "camera/CameraControlResult.h"
 #include "camera/CameraRequestProvenance.h"
 #include "metadata/FrameMetadataSnapshot.h"
@@ -33,6 +35,10 @@ class CameraResultState {
    public:
     void reset();
     std::optional<double> sensitivityReportedPerRequest() const { return sensitivityRatio_; }
+    // A ratio measured earlier for the same camera and sensor mode.
+    void seedSensitivityRatio(double ratio) {
+        if (!sensitivityRatio_ && std::isfinite(ratio) && ratio > 0.0) sensitivityRatio_ = ratio;
+    }
     std::optional<CameraPriorityAudit> observe(CameraControlState& state, const metadata::FrameMetadataSnapshot& frame,
                                                CameraControlResult result, const CameraRequestProvenance* provenance,
                                                uint64_t latestSubmittedSerial, bool forcedSensorMode);

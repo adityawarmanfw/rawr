@@ -8,6 +8,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -285,6 +286,26 @@ struct NativeCameraController::Impl final : CameraEventSink {
     // Calibration is part of lens startup, before any preview is published.
     SensitivityProbeStartup sensitivityStartup;
     bool sensitivityCalibrationWanted = false;
+    // Reported/requested ISO ratios already measured, per camera, lens and
+    // profile (its sensor mode keys). A device constant: later sessions on
+    // the same camera skip the probe and show the viewfinder at once.
+    std::map<std::string, double> sensitivityRatioCache;
+    std::string sensitivityCacheKeyLocked() const {
+        const auto& context = deviceSession.cameraContext();
+        if (!context || !deviceSession.sensorModeOverridden()) return {};
+        return context->cameraId + "/" + context->lensId + "/" + profile.id;
+    }
+    // Seeds this session from the cache, or records a fresh measurement.
+    void syncSensitivityCacheLocked() {
+        const std::string key = sensitivityCacheKeyLocked();
+        if (key.empty()) return;
+        if (const auto measured = results.sensitivityReportedPerRequest()) {
+            sensitivityRatioCache[key] = *measured;
+        } else if (const auto it = sensitivityRatioCache.find(key); it != sensitivityRatioCache.end()) {
+            results.seedSensitivityRatio(it->second);
+            diag("CAMERA_SENSITIVITY_RATIO_CACHED ratio=" + std::to_string(it->second));
+        }
+    }
     bool sensitivityProbeEligibleLocked() const {
         return sensitivityCalibrationWanted && deviceSession.sensorModeOverridden() &&
                control.capabilities.manualExposureSupported && !control.videoMode && control.recordingFps <= 0;
@@ -307,6 +328,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
     }
 
     void restartForSensitivityCalibrationLocked(std::unique_lock<std::mutex>& lock) {
+        syncSensitivityCacheLocked();
         if (!active || starting || !sensitivityStartup.finished() || !sensitivityProbeEligibleLocked() ||
             results.sensitivityReportedPerRequest()) return;
         // Enabling bracket mode after preview appeared must use a new startup,
@@ -629,6 +651,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
              frame.aeState == ACAMERA_CONTROL_AE_STATE_LOCKED ||
              frame.aeState == ACAMERA_CONTROL_AE_STATE_FLASH_REQUIRED || frame.aeState < 0);
         const bool wasReady = sensitivityStartup.finished();
+        syncSensitivityCacheLocked();
         const auto decision = sensitivityStartup.observe(frame, sensitivityProbeEligibleLocked(),
             results.sensitivityReportedPerRequest().has_value(), autoSettled, SensitivityProbeStartup::Clock::now());
         actions.frame->suppressPreview = decision.suppressPreview;
