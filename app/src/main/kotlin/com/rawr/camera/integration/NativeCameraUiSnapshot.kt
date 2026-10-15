@@ -67,7 +67,10 @@ internal data class NativeCameraUiSnapshot(
     /** Lenses of the native camera profile as (lensId, focal label); empty before the first snapshot. */
     val profileLenses: List<Pair<String, String>> = emptyList(),
     /** RAW frames reach the GPU through the slower CPU-copy path on this device/stream. */
-    val rawCpuIngress: Boolean = false
+    val rawCpuIngress: Boolean = false,
+    /** HDR+ Bracketed post-shutter brackets armed / finished (monotonic counters). */
+    val bracketHoldOpened: Long = 0L,
+    val bracketHoldDone: Long = 0L
 ) {
     companion object {
         fun parse(text: String): NativeCameraUiSnapshot? = runCatching {
@@ -153,6 +156,8 @@ internal data class NativeCameraUiSnapshot(
                 autoWbEstimateCalibrated = j.optBoolean("autoWbEstimateCalibrated", false),
                 whiteBalanceRequestId = j.optLong("whiteBalanceRequestId", 0L),
                 rawCpuIngress = j.optBoolean("rawCpuIngress", false),
+                bracketHoldOpened = j.optLong("bracketHoldOpened", 0L),
+                bracketHoldDone = j.optLong("bracketHoldDone", 0L),
                 profileLenses = buildList {
                     val lenses = j.optJSONArray("profileLenses") ?: return@buildList
                     for (index in 0 until lenses.length()) {

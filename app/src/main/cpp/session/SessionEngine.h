@@ -94,6 +94,9 @@ class SessionEngine {
     // overlay, as a JSON array [[x,y,w,h,score],...]. Empty array when none.
     std::string faceDetectionsDisplaySnapshot();
     [[nodiscard]] bool rawCpuIngressActive() const noexcept { return realtime_.coordinator().cpuIngressActive(); }
+    [[nodiscard]] capture::multiframe::MultiframeCaptureCoordinator::BracketHold bracketHold() const noexcept {
+        return capture_.multiframe().bracketHold();
+    }
     void setSpotAeDisplay(bool active, float x, float y);
     void setColorMode(const std::string& mode);
     void setCpuRawCopyProbeFrames(uint32_t frames);

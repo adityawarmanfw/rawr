@@ -218,7 +218,10 @@ uint64_t MultiframeCaptureCoordinator::startPreparedMultiframeCapture(
             const auto frames =
                 static_cast<std::uint32_t>(std::min<std::size_t>(tuning.bracketFrames, capacity > used ? capacity - used : 0u));
             if (frames > 0u && reference.exposureTimeNs > 0 && reference.sensitivity > 0) {
-                collector = std::make_shared<BracketCollector>(nextBracketRequestId_++, frames);
+                bracketHold_->opened.fetch_add(1, std::memory_order_acq_rel);
+                collector = std::make_shared<BracketCollector>(
+                    nextBracketRequestId_++, frames,
+                    [hold = bracketHold_] { hold->done.fetch_add(1, std::memory_order_acq_rel); });
                 BracketPlan plan{};
                 plan.requestId = collector->requestId();
                 plan.baseExposureTimeNs = reference.exposureTimeNs;

@@ -178,6 +178,11 @@ internal fun CaptureViewfinder(
                 orientation = state.orientation,
                 modifier = Modifier.align(Alignment.TopCenter).padding(top = 16.dp)
             )
+            BracketHoldNotice(
+                active = state.bracketHoldActive,
+                orientation = state.orientation,
+                modifier = Modifier.align(Alignment.Center)
+            )
         }
         state.selfTimerRemainingMs?.let { remaining ->
             SelfTimerCountdownOverlay(

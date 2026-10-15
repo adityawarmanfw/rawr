@@ -194,10 +194,13 @@ std::string runHighlightReplay(EngineHandle h, const std::string& inputPath) {
 std::string cameraControlSnapshot(EngineHandle h) {
     if (!h) return "{}";
     auto json = engine(h)->cameraControls().cameraControlSnapshot();
-    // Ingress lives in the pipeline, not the camera controller; append it here.
+    // Ingress and the bracket hold live in the pipeline, not the camera controller; append them here.
     if (json.size() > 2 && json.back() == '}') {
         json.pop_back();
-        json += std::string(",\"rawCpuIngress\":") + (engine(h)->rawCpuIngressActive() ? "true" : "false") + "}";
+        const auto hold = engine(h)->bracketHold();
+        json += std::string(",\"rawCpuIngress\":") + (engine(h)->rawCpuIngressActive() ? "true" : "false") +
+                ",\"bracketHoldOpened\":" + std::to_string(hold.opened) +
+                ",\"bracketHoldDone\":" + std::to_string(hold.done) + "}";
     }
     return json;
 }

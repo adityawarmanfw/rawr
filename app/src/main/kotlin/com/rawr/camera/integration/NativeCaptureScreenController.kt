@@ -444,6 +444,12 @@ class NativeCaptureScreenController(
     }
 
     private fun applyNativeSnapshot(snapshot: NativeCameraUiSnapshot) {
+        // Capture progress, independent of lens/mode reconciliation below.
+        update { current ->
+            if (current.bracketHoldOpened == snapshot.bracketHoldOpened &&
+                current.bracketHoldDone == snapshot.bracketHoldDone) current
+            else current.copy(bracketHoldOpened = snapshot.bracketHoldOpened, bracketHoldDone = snapshot.bracketHoldDone)
+        }
         val prepared = snapshotPresentation.prepare(state.value, snapshot) ?: return
         update { current ->
             prepared.project(current, focusRequestIds.get(), whiteBalanceRequestIds.get())
