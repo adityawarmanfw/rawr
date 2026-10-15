@@ -231,6 +231,33 @@ struct NativeCameraController::Impl final : CameraEventSink {
         return route;
     }
 
+    // Long frames are capped by the handheld shutter limit and the manual
+    // gain range; Camera2 AE's own frames may go further with digital gain.
+    static constexpr int64_t kLongFrameMaxNs = 66'666'667;  // OIS keeps 1/15 s sharp
+    static constexpr double kMinLongFrameGainEv = 0.5;
+    // Most a long frame can gain over a frame at (exposure, reported ISO),
+    // in EV; nullopt when unknown (no session, unknown ISO coordinate).
+    std::optional<double> longFrameRoomEvLocked(int64_t exposureTimeNs, int32_t reportedSensitivity) const {
+        if (!deviceSession.hasSession() || !control.capabilities.manualExposureSupported || exposureTimeNs <= 0 ||
+            reportedSensitivity <= 0)
+            return std::nullopt;
+        double sensitivity = reportedSensitivity;
+        if (const auto ratio = results.sensitivityReportedPerRequest(); ratio && *ratio > 0.0)
+            sensitivity /= *ratio;
+        else if (deviceSession.sensorModeOverridden())
+            return std::nullopt;
+        const auto& caps = control.capabilities;
+        const int64_t timeMax = std::max(caps.exposureTimeMinNs, std::min(exposureTimeNs, caps.exposureTimeMaxNs));
+        const int64_t longTimeMax = std::max(timeMax, std::min(kLongFrameMaxNs, caps.exposureTimeMaxNs));
+        const double isoMax = std::max(caps.sensitivityMin, caps.sensitivityMax);
+        return std::log2(double(longTimeMax) * isoMax / (double(exposureTimeNs) * sensitivity));
+    }
+    std::optional<double> longFrameRoomEv() const {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (!control.appliedExposureTimeNs || !control.appliedSensitivity) return std::nullopt;
+        return longFrameRoomEvLocked(*control.appliedExposureTimeNs, *control.appliedSensitivity);
+    }
+
     bool captureExposureBracket(uint64_t requestId, int64_t baseExposureTimeNs, int32_t baseReportedSensitivity,
                                 const std::vector<float>& evOffsets) {
         std::lock_guard<std::mutex> lock(mutex);
@@ -254,14 +281,13 @@ struct NativeCameraController::Impl final : CameraEventSink {
         const int64_t timeMin = caps.exposureTimeMinNs;
         // Never longer than the preview frame (motion blur, capture time).
         const int64_t timeMax = std::max(timeMin, std::min(baseExposureTimeNs, caps.exposureTimeMaxNs));
-        // Long frames may exceed it, up to a handheld limit (OIS keeps 1/15 s sharp).
-        constexpr int64_t kLongFrameMaxNs = 66'666'667;
+        // Long frames may exceed it, up to a handheld limit.
         const int64_t longTimeMax = std::max(timeMax, std::min(kLongFrameMaxNs, caps.exposureTimeMaxNs));
         std::vector<CameraRequestPipeline::BracketExposure> exposures;
         // Long frames the shutter/gain limits leave nearly as dark as the
         // burst add little shadow signal but still cost the user a 15 fps
-        // hold: skip them (the merge stays a uniform burst merge).
-        constexpr double kMinLongFrameGainEv = 0.5;
+        // hold: skip them (the merge stays a uniform burst merge). The shutter
+        // usually checks first (longFrameRoomEv) and freezes a longer burst.
         double bestLongEv = 0.0;
         bool anyLong = false;
         for (const float ev : evOffsets) {
@@ -1113,6 +1139,11 @@ void NativeCameraController::setAccessRoute(const std::string& route) {
     impl_->accessRoute = route.empty() ? "direct" : route;
 }
 CameraControlState NativeCameraController::controlState() const { return impl_->getControlState(); }
+std::optional<double> NativeCameraController::longFrameRoomEv() const { return impl_->longFrameRoomEv(); }
+bool NativeCameraController::longFramesWorthwhile() const {
+    const auto room = impl_->longFrameRoomEv();
+    return !room || *room >= Impl::kMinLongFrameGainEv;
+}
 int NativeCameraController::videoRotationDegrees(int deviceRotationDegrees) const {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     if (!impl_->deviceSession.cameraContext() || impl_->deviceSession.cameraContext()->lensFacing < 0) return -1;

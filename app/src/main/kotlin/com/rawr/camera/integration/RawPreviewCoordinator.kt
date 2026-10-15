@@ -237,8 +237,9 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
 
 
 
-    fun prepareExperimentalMultiframe(maxFrames: Int): Int =
-        native.prepareExperimentalMultiframe(nativeHandle, maxFrames.coerceIn(2, 30))
+    /** Frames frozen; more than maxFrames when native folded the long frames into the burst. */
+    fun prepareExperimentalMultiframe(maxFrames: Int, longFrames: Int = 0): Int =
+        native.prepareExperimentalMultiframe(nativeHandle, maxFrames.coerceIn(2, 30), longFrames.coerceIn(0, 28))
 
     fun cancelPreparedMultiframeCapture() = native.cancelPreparedMultiframeCapture(nativeHandle)
 

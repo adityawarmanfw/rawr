@@ -120,7 +120,9 @@ class SessionEngine {
     // The compensation part only, as the frame's result reports it.
     [[nodiscard]] float reportedHeadroomEvFor(const metadata::FrameMetadataSnapshot& metadata) const;
     void setPersistentEngineEnabled(bool enabled);
-    uint32_t prepareExperimentalMultiframe(uint32_t maxFrames);
+    // longFrames: HDR+ Bracketed post-shutter frames planned after these
+    // maxFrames burst frames; frozen as burst frames when they would be skipped.
+    uint32_t prepareExperimentalMultiframe(uint32_t maxFrames, uint32_t longFrames = 0u);
     uint64_t startPreparedMultiframeCapture(rawrcam::encoding::dng::DngCaptureContext baseDng,
                                             rawrcam::encoding::dng::DngCaptureContext mergedDng,
                                             rawrcam::capture::JpegCaptureRequest mergedJpeg, bool dumpRzslRequested,
@@ -291,6 +293,9 @@ class SessionEngine {
     tonemap::AdaptiveToneParams autoKeyCurve_{};
     // HDR+ Bracketed headroom floor (EV < 0) or 0 when the meter is off.
     std::atomic<float> hdrHeadroomMaxEv_{0.0f};
+    // The prepared HDR+ Bracketed capture froze its long-frame slots as burst
+    // frames (long frames would be skipped). Guarded by mu_.
+    bool bracketSkippedForPending_ = false;
     // Image > Shadow Lift local tone settings (applied in HDR+ Bracketed).
     std::atomic<float> localToneStrength_{0.5f};
     std::atomic<float> localToneDetail_{1.0f};

@@ -113,9 +113,20 @@ void SessionEngine::setPersistentEngineEnabled(bool enabled) {
     capture_.multiframe().setPersistentEngineEnabled(enabled);
     LOGI("PERSISTENT_ENGINE enabled=%s", enabled ? "true" : "false");
 }
-uint32_t SessionEngine::prepareExperimentalMultiframe(uint32_t maxFrames) {
+uint32_t SessionEngine::prepareExperimentalMultiframe(uint32_t maxFrames, uint32_t longFrames) {
+    // HDR+ Bracketed: when the shutter/gain limits would leave the long
+    // frames too dark to help (they would be skipped), freeze their slots as
+    // burst frames instead. Checked outside mu_ like other camera calls.
+    bool skipLong = false;
+    if (longFrames > 0u) {
+        const auto* controller = cameraControls_.controller();
+        skipLong = controller && !controller->longFramesWorthwhile();
+        if (skipLong) LOGI("MULTIFRAME_BRACKET_PRESKIP burst=%u long=%u", maxFrames + longFrames, longFrames);
+    }
     std::lock_guard<std::mutex> lock(mu_);
-    return capture_.multiframe().prepareExperimentalMultiframeOnShutter(maxFrames);
+    bracketSkippedForPending_ = skipLong;
+    return capture_.multiframe().prepareExperimentalMultiframeOnShutter(
+        std::min<uint32_t>(skipLong ? maxFrames + longFrames : maxFrames, 30u));
 }
 uint64_t SessionEngine::startPreparedMultiframeCapture(
     rawrcam::encoding::dng::DngCaptureContext baseDng, rawrcam::encoding::dng::DngCaptureContext mergedDng,
@@ -130,6 +141,8 @@ uint64_t SessionEngine::startPreparedMultiframeCapture(
         // burst is lifted back to (unchanged reference exposure in manual).
         if (tuning.mergeAlgorithm == rawrcam::capture::multiframe::kMergeAlgorithmHdrPlusBracketed) {
             tuning.bracketCapture = 1u;
+            // Their slots were frozen as burst frames at the shutter.
+            if (bracketSkippedForPending_) tuning.bracketFrames = 0u;
             if (const auto reference = capture_.multiframe().preparedReferenceMetadata()) {
                 const double exposure = rawrcam::capture::multiframe::linearExposure(*reference);
                 tuning.aeLinearExposure = float(exposure * std::exp2(-double(hdrHeadroomEvFor(*reference))));
@@ -170,6 +183,7 @@ uint64_t SessionEngine::startPreparedMultiframeCapture(
 }
 void SessionEngine::cancelPreparedMultiframeCapture() {
     std::lock_guard<std::mutex> lock(mu_);
+    bracketSkippedForPending_ = false;
     capture_.multiframe().cancelPreparedMultiframeCapture();
 }
 

@@ -39,7 +39,7 @@ void setPreferredColorMode(EngineHandle handle, const std::string& mode) noexcep
 void setPipelineDiagnostic(EngineHandle handle, uint32_t mode) noexcept;
 void setPersistentDiagnosticsEnabled(EngineHandle handle, bool enabled) noexcept;
 void setPersistZslRingEnabled(EngineHandle handle, bool enabled) noexcept;
-uint32_t prepareExperimentalMultiframe(EngineHandle handle, uint32_t maxFrames) noexcept;
+uint32_t prepareExperimentalMultiframe(EngineHandle handle, uint32_t maxFrames, uint32_t longFrames) noexcept;
 uint64_t startPreparedMultiframeCapture(EngineHandle handle, rawrcam::encoding::dng::DngCaptureContext baseDng,
                                         rawrcam::encoding::dng::DngCaptureContext mergedDng,
                                         rawrcam::capture::JpegCaptureRequest mergedJpeg, bool dumpRzslRequested,

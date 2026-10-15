@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -57,6 +58,12 @@ class NativeCameraController {
     // sensitivity coordinate).
     bool captureExposureBracket(uint64_t requestId, int64_t baseExposureTimeNs, int32_t baseReportedSensitivity,
                                 const std::vector<float>& evOffsets);
+    // Most a positive-EV long frame can gain over the current repeating
+    // exposure (EV); nullopt when unknown.
+    std::optional<double> longFrameRoomEv() const;
+    // False when the shutter/gain limits would leave long frames under
+    // 0.5 EV brighter (they are skipped); true when unknown.
+    bool longFramesWorthwhile() const;
     // Runs DCG ISO calibration during startup, before exposing the viewfinder.
     // Enabling it on an uncalibrated live session restarts that session.
     // Off unless HDR+ Bracketed is selected; never probes during video.

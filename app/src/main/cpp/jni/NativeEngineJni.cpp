@@ -337,9 +337,9 @@ Java_com_rawr_camera_integration_NativePreviewEngine_setPersistZslRingEnabled(JN
     rawrcam::session::setPersistZslRingEnabled(handle(h), v == JNI_TRUE);
 }
 extern "C" JNIEXPORT jint JNICALL Java_com_rawr_camera_integration_NativePreviewEngine_prepareExperimentalMultiframe(
-    JNIEnv*, jobject, jlong h, jint maxFrames) {
+    JNIEnv*, jobject, jlong h, jint maxFrames, jint longFrames) {
     return static_cast<jint>(rawrcam::session::prepareExperimentalMultiframe(
-        handle(h), static_cast<uint32_t>(std::clamp(maxFrames, 2, 30))));
+        handle(h), static_cast<uint32_t>(std::clamp(maxFrames, 2, 30)), static_cast<uint32_t>(std::clamp(longFrames, 0, 28))));
 }
 extern "C" JNIEXPORT void JNICALL
 Java_com_rawr_camera_integration_NativePreviewEngine_cancelPreparedMultiframeCapture(JNIEnv*, jobject, jlong h) {
