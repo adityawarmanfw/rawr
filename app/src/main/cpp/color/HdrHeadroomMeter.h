@@ -58,6 +58,13 @@ class HdrHeadroomMeter {
             return std::nullopt;
         const auto high = scenePercentileEv(weightedBins, policy.highlightPercentile);
         if (!high) return std::nullopt;
+        // The floor rose above the applied headroom (light fell): follow it.
+        if (appliedEv < floorEv - 0.05f) {
+            primed_ = true;
+            target_ = floorEv;
+            lastChangeNs_ = timestampNs;
+            return target_;
+        }
         // Room between the highlight percentile and the effective clip; <= 0
         // when it is clipped (clipped samples sit in the clipLuma bin).
         const float room = (clipLumaEv - policy.channelMarginEv) - *high;

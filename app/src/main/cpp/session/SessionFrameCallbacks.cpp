@@ -92,16 +92,25 @@ void SessionFrameCallbacks::updateHdrHeadroom(const image_scopes::SceneExposureS
     if (!stats || !(clipLuma > 0.0f) || metadata.aeMode == kAeModeOff || metadata.aeState == kAeStateSearching ||
         !metadata.aeCompensationSteps || (metadata.optimizedStillRequestId && *metadata.optimizedStillRequestId != 0))
         return;
-    // Low light: once Camera2 AE runs a long shutter it is adding gain, and
-    // every EV of headroom is an EV of shadow noise; lights at night are not
-    // worth it. Cap the underexposure there.
-    constexpr std::int64_t kLowLightShutterNs = 25'000'000;  // 1/40 s
+    // Low light: once Camera2 AE is adding gain, every EV of headroom is an
+    // EV of shadow noise; lights at night are not worth it. Judge the light
+    // by the exposure Camera2 AE would use without headroom (this frame's
+    // shutter is already shortened by it), and ease the floor from the full
+    // underexposure up to kLowLightFloorEv over two stops, so a scene near
+    // the threshold does not flip between limits.
+    constexpr double kLowLightBegin = 20e6 * 1600.0;  // 1/50 s at ISO 1600, in ns x ISO
     constexpr float kLowLightFloorEv = -1.5f;
-    const float meterFloorEv =
-        metadata.exposureTimeNs >= kLowLightShutterNs ? std::max(floorEv, kLowLightFloorEv) : floorEv;
+    const float appliedEv = engine_->hdrHeadroomEvFor(metadata);
+    float meterFloorEv = floorEv;
+    if (metadata.exposureTimeNs > 0 && metadata.sensitivity > 0 && floorEv < kLowLightFloorEv) {
+        const double normal = double(metadata.exposureTimeNs) * double(metadata.sensitivity) *
+                              std::exp2(-double(appliedEv));
+        const float t = std::clamp(float(std::log2(normal / kLowLightBegin)) * 0.5f, 0.0f, 1.0f);
+        meterFloorEv = floorEv + (kLowLightFloorEv - floorEv) * t;
+    }
     const auto target =
-        headroomMeter_.update(stats->weightedBins, stats->totalWeight, std::log2(clipLuma),
-                              engine_->hdrHeadroomEvFor(metadata), meterFloorEv, timestampNs);
+        headroomMeter_.update(stats->weightedBins, stats->totalWeight, std::log2(clipLuma), appliedEv,
+                              meterFloorEv, timestampNs);
     if (target) controller->setHdrHeadroomEv(*target);
 }
 

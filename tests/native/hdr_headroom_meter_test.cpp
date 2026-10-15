@@ -90,6 +90,15 @@ int main() {
         const auto up = meter.update(roomy.data(), 10000, 0.0f, *down, kFloor, 3 * kSec);
         assert(up && *up <= -1.3f + 1e-4f);
     }
+    // The floor rises above the applied headroom (light fell): follow it
+    // even when the highlights sit in the deadband.
+    {
+        HdrHeadroomMeter meter;
+        const auto bins = scene(-1.0f);
+        const auto r = meter.update(bins.data(), 10000, 0.0f, -3.0f, -1.5f, kSec);
+        assert(r && near(*r, -1.5f, 1e-4f));
+        assert(!meter.update(bins.data(), 10000, 0.0f, -1.5f, -1.5f, kSec + kSec / 10));
+    }
     // Empty statistics change nothing.
     {
         HdrHeadroomMeter meter;
