@@ -117,7 +117,7 @@ internal fun MultiframeSettings(state: SettingsUiState, dispatch: SettingsDispat
         if (bracketed) {
             SettingsGroup(
                 title = "HDR+ Bracketed",
-                description = "A darker ZSL burst from before the shutter protects highlights; brighter frames after it clean up shadows."
+                description = "Exposures are relative to auto exposure (AE). The ZSL burst from before the shutter goes darker to protect highlights; the frames after it are brighter to clean up shadows."
             ) {
                 MultiframeSlider(spec(MultiframeNumericParameter.BracketEv), tuning, enabled, dispatch)
                 SettingDivider()
@@ -225,7 +225,9 @@ private fun MultiframeSlider(
             if (spec.parameter == MultiframeNumericParameter.HessianEpsilonExponent) {
                 { value -> "1e${value.roundToInt()}" }
             } else if (spec.parameter == MultiframeNumericParameter.LongFrameEv) {
-                { value -> if (value <= 0f) "Auto" else String.format(java.util.Locale.US, "+%.1fEV", value) }
+                { value -> if (value <= 0f) "Auto exposure" else String.format(java.util.Locale.US, "AE +%.1fEV", value) }
+            } else if (spec.parameter == MultiframeNumericParameter.BracketEv) {
+                { value -> String.format(java.util.Locale.US, "up to AE %.1fEV", value) }
             } else {
                 null
             }

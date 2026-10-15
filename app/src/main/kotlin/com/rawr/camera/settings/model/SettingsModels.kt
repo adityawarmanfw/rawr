@@ -689,8 +689,8 @@ object MultiframeSpecs {
     val bracketEv =
         MultiframeNumericSpec(
             MultiframeNumericParameter.BracketEv,
-            "Underexpose",
-            "How far below auto exposure the ZSL burst may go to keep bright areas (sky, lamps) from clipping; it is brightened back. Metered per scene, never darker than needed, and at most -1.5 EV in low light. Lower: recovers brighter highlights, noisier shadows. Higher: cleaner shadows. Auto exposure only.",
+            "ZSL Underexposure (max)",
+            "The furthest below auto exposure the ZSL burst (and the live viewfinder stream, brightened back) may go to keep bright areas (sky, lamps) from clipping. Metered per scene: it goes only as dark as needed, often 0, and at most -1.5 EV in low light. Lower: recovers brighter highlights, noisier shadows. Higher: cleaner shadows. Auto exposure only.",
             -4f,
             -1f,
             -3f,
@@ -702,8 +702,8 @@ object MultiframeSpecs {
     val longFrameEv =
         MultiframeNumericSpec(
             MultiframeNumericParameter.LongFrameEv,
-            "Overexpose",
-            "How much brighter the after-shutter frames are than the ZSL burst, for cleaner shadows. Auto: back to auto exposure (at least +1 EV). A longer shutter first (up to 1/15 s), then more ISO. Lower: less motion blur. Higher: cleaner deep shadows.",
+            "After-Shutter Exposure",
+            "Exposure of the after-shutter frames relative to auto exposure (your exposure in manual), whatever the ZSL burst used. 0: at auto exposure. Always at least 1 EV brighter than the burst. A longer shutter first (up to 1/15 s), then more ISO; limited by both. Lower: less motion blur. Higher: cleaner deep shadows, highlights clip in these frames (the burst keeps them).",
             0f,
             3f,
             0f,

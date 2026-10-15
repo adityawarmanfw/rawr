@@ -226,13 +226,14 @@ uint64_t MultiframeCaptureCoordinator::startPreparedMultiframeCapture(
                 plan.requestId = collector->requestId();
                 plan.baseExposureTimeNs = reference.exposureTimeNs;
                 plan.baseSensitivity = reference.sensitivity;
-                // Long frames: the setting, or back to Camera2 AE (the burst's
-                // headroom); at least +1 EV so they add shadow signal.
+                // Long frames: the setting is EV over Camera2 AE (the user's
+                // exposure in manual), so over the burst it adds the burst's
+                // headroom; at least +1 EV over the burst so they add shadow signal.
                 const double reference = linearExposure(pendingMultiframeCapture_->referenceMetadata);
                 const float liftEv = tuning.aeLinearExposure > 0.0f && reference > 0.0
-                                         ? float(std::log2(double(tuning.aeLinearExposure) / reference))
+                                         ? std::max(0.0f, float(std::log2(double(tuning.aeLinearExposure) / reference)))
                                          : 0.0f;
-                const float longEv = std::clamp(tuning.longFrameEv > 0.0f ? tuning.longFrameEv : liftEv, 1.0f, 3.0f);
+                const float longEv = std::clamp(liftEv + std::max(0.0f, tuning.longFrameEv), 1.0f, 6.0f);
                 plan.evOffsets.assign(frames, longEv);
                 LOGI("MULTIFRAME_BRACKET_PLAN frames=%u longEv=%.2f headroomLift=%.2f baseExposureNs=%lld baseIso=%d",
                      frames, longEv, liftEv, static_cast<long long>(plan.baseExposureTimeNs), plan.baseSensitivity);

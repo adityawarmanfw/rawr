@@ -44,8 +44,8 @@ struct MultiframeTuning {
     float bracketEv = -2.0f;
     std::uint32_t bracketFrames = 2;
     // Appended (journal prefix-compatible), mergeAlgorithm 3 only. Long-frame
-    // exposure over the ZSL reference in EV; 0 = the capture's headroom, i.e.
-    // back to Camera2 AE (always at least +1 EV).
+    // exposure over Camera2 AE (the user's exposure in manual) in EV; 0 = at
+    // Camera2 AE. Always at least +1 EV over the ZSL reference.
     float longFrameEv = 0.0f;
     // Set at the shutter, not from settings. 1 = underexposed ZSL burst plus
     // post-shutter long frames; 0 = older journals' dark post-shutter frames.

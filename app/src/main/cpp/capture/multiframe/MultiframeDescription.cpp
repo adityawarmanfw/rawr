@@ -55,7 +55,7 @@ std::string buildParametersBlock(const MultiframeTuningView& tuning, const Multi
             out << "- Highlight headroom: up to " << f3(tuning.bracketEv) << " EV, lifted "
                 << (tuning.bracketLiftEv > 0.0f ? f3(tuning.bracketLiftEv) + " EV" : std::string("none")) << '\n'
                 << "- Long frames: " << tuning.bracketFrames << " x "
-                << (tuning.longFrameEv > 0.0f ? "+" + f3(tuning.longFrameEv) + " EV" : std::string("Camera2 AE"))
+                << (tuning.longFrameEv > 0.0f ? "AE +" + f3(tuning.longFrameEv) + " EV" : std::string("AE"))
                 << '\n';
         } else if (tuning.mergeAlgorithm == 3u) {
             out << "- Bracket: " << tuning.bracketFrames << " x " << f3(tuning.bracketEv) << " EV\n"
