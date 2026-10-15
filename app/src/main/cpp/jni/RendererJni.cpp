@@ -1,6 +1,5 @@
 #include <android/asset_manager_jni.h>
 #include <android/log.h>
-#include <android/native_window_jni.h>
 #include <jni.h>
 #include <unistd.h>
 
@@ -285,7 +284,6 @@ Java_com_rawr_camera_renderer_RendererNative_render(JNIEnv* e, jobject, jlong id
             throw std::runtime_error("Invalid render dimensions");
         auto o = options(e, recipe, w, h, w, h);
         o.overview = fd < 0 && !crop;
-        o.surfacePreview = fd == -2;
         const auto croppedPixels = uint64_t(s->source.crop[2]) * s->source.crop[3];
         const bool highResolutionSource = croppedPixels >= 180000000u && croppedPixels <= 220000000u;
         if (highResolutionSource && ((s->source.crop[0] | s->source.crop[1] | s->source.crop[2] | s->source.crop[3]) & 1u))
@@ -401,7 +399,7 @@ Java_com_rawr_camera_renderer_RendererNative_render(JNIEnv* e, jobject, jlong id
         // UltraHDR gain map is export-only: previews (overview and detail)
         // never allocate map resources, matching the still-capture contract.
         if (!isExport) o.context.ultraHdrEnabled = false;
-        if (!o.overview && !isExport && !o.surfacePreview && !o.waveform && std::filesystem::exists(renderedPath) &&
+        if (!o.overview && !isExport && !o.waveform && std::filesystem::exists(renderedPath) &&
             std::filesystem::file_size(renderedPath) == uint64_t(o.width) * o.height * 4) {
             std::ifstream k(keyPath);
             std::string previous((std::istreambuf_iterator<char>(k)), {});
@@ -414,7 +412,7 @@ Java_com_rawr_camera_renderer_RendererNative_render(JNIEnv* e, jobject, jlong id
         }
         if (!cached) {
             pixels = engine.render(s->source, path, o);
-            if (!o.overview && !isExport && !o.surfacePreview) {
+            if (!o.overview && !isExport) {
                 std::ofstream out(renderedPath + ".tmp", std::ios::binary);
                 out.write(reinterpret_cast<const char*>(pixels.data()), std::streamsize(pixels.size()));
                 out.close();
@@ -427,7 +425,6 @@ Java_com_rawr_camera_renderer_RendererNative_render(JNIEnv* e, jobject, jlong id
                 std::filesystem::rename(keyPath + ".tmp", keyPath);
             }
         }
-        if (o.surfacePreview) return nullptr;
         if (fd >= 0) {
             Json json(e, recipe), tone(e, json.child("tone")), exportJson(e, json.child("export"));
             rawrcam::encoding::jpeg::JpegCaptureContext c;
@@ -572,20 +569,6 @@ Java_com_rawr_camera_renderer_RendererNative_render(JNIEnv* e, jobject, jlong id
     } catch (const std::exception& x) {
         fail(e, x);
         return nullptr;
-    }
-}
-extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_renderer_RendererNative_setSurface(JNIEnv* e, jobject, jlong id,
-                                                                                          jobject surface) {
-    try {
-        auto s = get(id);
-        if (!s->engine)
-            s->engine = std::make_unique<rawrcam::renderer::RendererEngine>(s->files, s->lib,
-                                                                            AAssetManager_fromJava(e, s->assets));
-        ANativeWindow* window = surface ? ANativeWindow_fromSurface(e, surface) : nullptr;
-        if (surface && !window) throw std::runtime_error("Cannot open renderer display surface");
-        s->engine->setSurface(window);
-    } catch (const std::exception& x) {
-        fail(e, x);
     }
 }
 // These UI-facing operations borrow the engine only while holding the registry

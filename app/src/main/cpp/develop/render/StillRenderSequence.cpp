@@ -333,18 +333,15 @@ GainmapRecording recordGainmapAndReadback(RenderResources& resources, RenderComm
     // Film path's last writer is the upscale blit (transfer); tonemap
     // path's is the shader. Cover both.
     copyBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
-    copyBarrier.dstAccessMask = rendered.surfacePreview ? VK_ACCESS_SHADER_READ_BIT : VK_ACCESS_TRANSFER_READ_BIT;
+    copyBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
     copyBarrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-    copyBarrier.newLayout =
-        rendered.surfacePreview ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    copyBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     copyBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     copyBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     copyBarrier.image = resources.output().image;
     copyBarrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdPipelineBarrier(
-        commands.command(), VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
-        rendered.surfacePreview ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT : VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr,
-        0, nullptr, 1, &copyBarrier);
+    vkCmdPipelineBarrier(commands.command(), VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &copyBarrier);
     // Development inputs ride along so a black still can be told apart from black RAW in device logs.
     const auto& cam = rendered.cameraToWorkingColumnMajor;
     __android_log_print(ANDROID_LOG_INFO, "RawrCamNative",
@@ -356,13 +353,11 @@ GainmapRecording recordGainmapAndReadback(RenderResources& resources, RenderComm
                         rendered.whiteBalanceRgb[1], rendered.whiteBalanceRgb[2], rendered.tonemapParams.exposureEV,
                         rendered.tonemapParams.aePostGain, cam[0], cam[1], cam[2], cam[3], cam[4], cam[5], cam[6],
                         cam[7], cam[8]);
-    if (!rendered.surfacePreview) {
-        VkBufferImageCopy bic{};
-        bic.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        bic.imageExtent = {rendered.width, rendered.height, 1};
-        vkCmdCopyImageToBuffer(commands.command(), resources.output().image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                               resources.readbackBuffer(), 1, &bic);
-    }
+    VkBufferImageCopy bic{};
+    bic.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    bic.imageExtent = {rendered.width, rendered.height, 1};
+    vkCmdCopyImageToBuffer(commands.command(), resources.output().image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           resources.readbackBuffer(), 1, &bic);
     if (rendered.ultraHdrEnabled) {
         VkImageMemoryBarrier mapCopy{};
         mapCopy.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;

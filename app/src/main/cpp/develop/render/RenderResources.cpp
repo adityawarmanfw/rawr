@@ -68,24 +68,22 @@ void RenderResources::createPixels(const RenderedStillContext& rendered) {
                                                 VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                                                     VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
     const uint64_t bytes64 = static_cast<uint64_t>(rendered.width) * rendered.height * 4u;
-    if (!rendered.surfacePreview) {
-        readbackBytes_ = static_cast<VkDeviceSize>(bytes64);
-        VkBufferCreateInfo bi{};
-        bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        bi.size = readbackBytes_;
-        bi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-        bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        vkCheck(vkCreateBuffer(device_, &bi, nullptr, &readback_), "rendered create readback buffer");
-        VkMemoryRequirements req{};
-        vkGetBufferMemoryRequirements(device_, readback_, &req);
-        VkMemoryAllocateInfo ai{};
-        ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        ai.allocationSize = req.size;
-        ai.memoryTypeIndex = vulkan::findCoherentHostMemoryType(physicalDevice_, req.memoryTypeBits);
-        vkCheck(vkAllocateMemory(device_, &ai, nullptr, &readbackMemory_), "rendered allocate readback memory");
-        vkCheck(vkBindBufferMemory(device_, readback_, readbackMemory_, 0), "rendered bind readback memory");
-        vkCheck(vkMapMemory(device_, readbackMemory_, 0, readbackBytes_, 0, &mapped_), "rendered map readback memory");
-    }
+    readbackBytes_ = static_cast<VkDeviceSize>(bytes64);
+    VkBufferCreateInfo bi{};
+    bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bi.size = readbackBytes_;
+    bi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    vkCheck(vkCreateBuffer(device_, &bi, nullptr, &readback_), "rendered create readback buffer");
+    VkMemoryRequirements req{};
+    vkGetBufferMemoryRequirements(device_, readback_, &req);
+    VkMemoryAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    ai.allocationSize = req.size;
+    ai.memoryTypeIndex = vulkan::findCoherentHostMemoryType(physicalDevice_, req.memoryTypeBits);
+    vkCheck(vkAllocateMemory(device_, &ai, nullptr, &readbackMemory_), "rendered allocate readback memory");
+    vkCheck(vkBindBufferMemory(device_, readback_, readbackMemory_, 0), "rendered bind readback memory");
+    vkCheck(vkMapMemory(device_, readbackMemory_, 0, readbackBytes_, 0, &mapped_), "rendered map readback memory");
     if (rendered.ultraHdrEnabled) {
         const char* paramReason = nullptr;
         if (!gainmap::GainmapCompute::validateParams(rendered.gainmapParams, &paramReason))
