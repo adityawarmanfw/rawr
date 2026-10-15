@@ -223,8 +223,9 @@ class NativeVideoRecorder(private val context: Context, private val preview: Raw
         var failure: Throwable? = null
         try {
             val detached = preview.setVideoSurface(null)
-            val result = JSONObject(engine.nativeStop(active))
+            // nativeStop frees the recorder whatever happens next: never hand this handle out again.
             handle = 0L
+            val result = JSONObject(engine.nativeStop(active))
             append(JSONObject().put("event", "stop").put("result", result))
             check(detached) { "Could not detach video surface" }
             check(result.optBoolean("ok")) { "Native recording failed: ${result.optJSONObject("stats")?.optString("failure")}" }
