@@ -55,6 +55,7 @@ void RenderCommandSession::begin() {
     begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkCheck(vkBeginCommandBuffer(command_, &begin), "rendered begin command");
+    recording_ = true;
     if (timingPool_) vkCmdResetQueryPool(command_, timingPool_, 0, timingQueryCount);
 }
 void RenderCommandSession::submitAndRestart(const std::string& stage) {
@@ -62,6 +63,7 @@ void RenderCommandSession::submitAndRestart(const std::string& stage) {
     begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     const auto chunkBegin = std::chrono::steady_clock::now();
+    recording_ = false;
     vkCheck(vkEndCommandBuffer(command_), (stage + " end command").c_str());
     VkSubmitInfo submit{};
     submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -76,6 +78,7 @@ void RenderCommandSession::submitAndRestart(const std::string& stage) {
     vkCheck(vkResetFences(context_.device, 1, &fence_), (stage + " reset fence").c_str());
     vkCheck(vkResetCommandBuffer(command_, 0), (stage + " reset command").c_str());
     vkCheck(vkBeginCommandBuffer(command_, &begin), (stage + " begin command").c_str());
+    recording_ = true;
     VkMemoryBarrier previousChunk{};
     previousChunk.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     previousChunk.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -85,6 +88,7 @@ void RenderCommandSession::submitAndRestart(const std::string& stage) {
                          nullptr, 0, nullptr);
 }
 void RenderCommandSession::finish(uint64_t requestId) {
+    recording_ = false;
     vkCheck(vkEndCommandBuffer(command_), "rendered end command");
     VkSubmitInfo submit{};
     submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -129,6 +133,7 @@ void RenderCommandSession::reset() noexcept {
     timestampPeriodNs_ = 0.0f;
     timestampValidBits_ = 0;
     chunkWaitMs_ = 0.0;
+    recording_ = false;
     context_ = {};
 }
 }  // namespace rawrcam::develop::rendered
