@@ -614,6 +614,9 @@ void GainmapCompute::record(const GainmapRecordInfo& ri) {
     push.adaptiveTone[0] = ri.params.adaptiveTone[0];
     push.adaptiveTone[1] = ri.params.adaptiveTone[1] - toneShift;
     push.adaptiveTone[2] = ri.params.adaptiveTone[2] - toneShift;
+    // The block is full: the contrast limit rides in flags bits 16-31 (x1000).
+    const float perEv = std::clamp(ri.params.adaptiveToneLiftPerEv, 0.0f, 0.4f);
+    push.flags = (push.flags & 0xFFFFu) | (uint32_t(std::lround(perEv * 1000.0f)) << 16u);
     const float* m = ri.hdrToLinearSrgbRowMajor3x3 != nullptr ? ri.hdrToLinearSrgbRowMajor3x3
                                                               : ri.params.hdrToLinearSrgbRowMajor;
     std::memcpy(push.hdrToLinearSrgb, m, sizeof(push.hdrToLinearSrgb));

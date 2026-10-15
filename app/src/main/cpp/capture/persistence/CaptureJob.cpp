@@ -11,10 +11,12 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
 #include <type_traits>
+#include <vector>
 
 #include "capture/CaptureRequest.h"
 
@@ -188,14 +190,28 @@ struct Reader {
     }
     // Render profiles appended three words to TonemapParams without changing the
     // journal version. Adaptive tone appends another three words, then AgX its
-    // parameters. Accept known layouts; never read a short POD into
+    // parameters, then the adaptive curve a fourth word (its contrast limit)
+    // before AgX. Accept known layouts; never read a short POD into
     // the current struct or discard newly saved profile selection.
     void one(tonemap::TonemapParams& v) {
+        constexpr std::size_t kAdaptiveAt = offsetof(tonemap::TonemapParams, adaptiveTone);
+        constexpr std::size_t kAdaptiveV1Bytes = 3u * sizeof(float);  // lift, key, highlight
+        static_assert(offsetof(tonemap::AdaptiveToneParams, maxLiftPerEv) == kAdaptiveV1Bytes);
+        static_assert(offsetof(tonemap::TonemapParams, agx) == kAdaptiveAt + sizeof(tonemap::AdaptiveToneParams));
+        static_assert(sizeof(tonemap::TonemapParams) ==
+                      offsetof(tonemap::TonemapParams, agx) + sizeof(tonemap::AgxParams));
         uint32_t n = 0;
         bytes(&n, sizeof(n));
         if (n == sizeof(v)) {
             bytes(&v, sizeof(v));
-        } else if (n == offsetof(tonemap::TonemapParams, agx)) {
+        } else if (n == kAdaptiveAt + kAdaptiveV1Bytes + sizeof(tonemap::AgxParams)) {
+            // Before the curve's contrast limit: it keeps its default.
+            std::vector<std::uint8_t> old(n);
+            bytes(old.data(), n);
+            v = {};
+            std::memcpy(&v, old.data(), kAdaptiveAt + kAdaptiveV1Bytes);
+            std::memcpy(&v.agx, old.data() + kAdaptiveAt + kAdaptiveV1Bytes, sizeof(tonemap::AgxParams));
+        } else if (n == kAdaptiveAt + kAdaptiveV1Bytes) {
             v = {};
             bytes(&v, n);  // Pre-AgX layout; AgX keeps its defaults.
         } else if (n == offsetof(tonemap::TonemapParams, adaptiveTone)) {

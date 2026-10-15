@@ -15,7 +15,8 @@ namespace tonemap {
 // 16x linear gain is +4 EV (log2(16) = 4). Applications integrating an
 // exposure controller must configure its maximum post gain at or below this
 // value; TonemapEngine rejects larger values and never silently clamps them.
-inline constexpr float kMaxAePostGain = 16.0f;
+// 64 = the 4x HAL post-gain cap times HDR+ Bracketed's 4 EV headroom lift.
+inline constexpr float kMaxAePostGain = 64.0f;
 
 // AgX writes outputSpace.transfer (sRGB or Rec.709) from a parametric curve
 // instead of the RAWR NTRL LUT; see Agx.h.

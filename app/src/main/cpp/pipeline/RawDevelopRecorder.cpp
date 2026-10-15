@@ -439,6 +439,7 @@ RawDevelopRecordResult RawDevelopRecorder::record(const RawDevelopRecordInput& i
         filmRecord.look.filmExposureEv = rawrcam::color::filmExposureEv(in.filmLook, in.tonemapParams.aePostGain);
         filmRecord.adaptiveTone = {in.tonemapParams.adaptiveTone.liftEv, in.tonemapParams.adaptiveTone.keyEv,
                                    in.tonemapParams.adaptiveTone.highlightEv, in.tonemapParams.aePostGain};
+        filmRecord.adaptiveToneLiftPerEv = tonemap::adaptiveToneLiftPerEv(in.tonemapParams.adaptiveTone);
         // The film input buffer holds sensor-native linear; the film model
         // declares LinearRec709 input, so convert on load (same matrix the
         // tonemap path uses in-shader).

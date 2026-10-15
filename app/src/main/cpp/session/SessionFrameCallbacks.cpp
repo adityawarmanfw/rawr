@@ -97,7 +97,13 @@ std::optional<rawrcam::pipeline::FrameDiagnosticsPort::SceneKeyFeedback> Session
     const float halGain = postGainFor(metadata);
     const auto highEv = rawrcam::color::scenePercentileEv(stats->weightedBins, 0.95f);
     if (!highEv) return std::nullopt;
-    auto curve = rawrcam::color::autoKeyCurve(*keyEv, *highEv, halGain, rawrcam::color::autoKeyPolicy(mode));
+    // HDR+ Bracketed: the merged shadows are clean enough for a stronger
+    // lift, scaled by the headroom this frame was underexposed by.
+    auto lift = rawrcam::color::BracketShadowLift{rawrcam::color::autoKeyPolicy(mode),
+                                                  tonemap::kAdaptiveMaxLiftPerEv};
+    if (engine_->hdrHeadroomMaxEv() < 0.0f)
+        lift = rawrcam::color::bracketShadowLift(lift.policy, -engine_->hdrHeadroomEvFor(metadata));
+    auto curve = rawrcam::color::autoKeyCurve(*keyEv, *highEv, halGain, lift.policy, lift.maxLiftPerEv);
     curve.liftEv = autoKeySmoother_.update(curve.liftEv, timestampNs, recording);
     curve.keyEv = keySmoother_.update(curve.keyEv, timestampNs, recording);
     curve.highlightEv = highlightSmoother_.update(curve.highlightEv, timestampNs, recording);

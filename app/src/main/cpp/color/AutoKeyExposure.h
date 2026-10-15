@@ -108,15 +108,42 @@ inline float autoKeyTargetEv(float keyEv, float halGain, const AutoKeyPolicy& po
 // Protect the upper scene (P95), bounded to diffuse white / upper midtones.
 // The floor avoids pinning an entirely dark scene at its dark P95; the ceiling
 // ensures HDR/specular values never push the protected range beyond 1.0.
-inline tonemap::AdaptiveToneParams autoKeyCurve(float keyEv, float highEv, float halGain,
-                                                const AutoKeyPolicy& policy) noexcept {
+inline tonemap::AdaptiveToneParams autoKeyCurve(float keyEv, float highEv, float halGain, const AutoKeyPolicy& policy,
+                                                float maxLiftPerEv = tonemap::kAdaptiveMaxLiftPerEv) noexcept {
     if (!std::isfinite(keyEv) || !std::isfinite(highEv) || !std::isfinite(halGain) || !(halGain > 0.0f)) return {};
     const float gainEv = std::log2(halGain);
     tonemap::AdaptiveToneParams p;
+    p.maxLiftPerEv = maxLiftPerEv;
     p.keyEv = keyEv + gainEv;
     p.highlightEv = std::clamp(highEv + gainEv, std::log2(0.36f), 0.0f);
     p.liftEv = std::min(autoKeyTargetEv(keyEv, halGain, policy), tonemap::adaptiveToneMaxLift(p));
     return p;
+}
+
+// HDR+ Bracketed shadow lift: the merge's shadows are far cleaner than one
+// frame's, so they take a stronger lift, relative to the user's mode and
+// scaling with the highlight headroom the scene needed (0 EV: the normal
+// policy; 3+ EV: 1.5x the mode's max lift, capped at 3 EV, and a contrast
+// limit of 0.4 instead of 0.25 lift per EV of shoulder). Off stays off.
+struct BracketShadowLift {
+    AutoKeyPolicy policy;
+    float maxLiftPerEv;
+};
+
+inline BracketShadowLift bracketShadowLift(const AutoKeyPolicy& base, float headroomLiftEv) noexcept {
+    const float s = std::isfinite(headroomLiftEv) ? std::clamp(headroomLiftEv / 3.0f, 0.0f, 1.0f) : 0.0f;
+    AutoKeyPolicy policy = base;
+    policy.maxLiftEv = std::min(3.0f, base.maxLiftEv * (1.0f + 0.5f * s));
+    return {policy, tonemap::kAdaptiveMaxLiftPerEv + 0.15f * s};
+}
+
+// The same boost recovered from a captured curve's contrast limit (editor
+// shadow-lift overrides): the limit encodes the headroom share.
+inline BracketShadowLift bracketShadowLiftForLimit(const AutoKeyPolicy& base, float maxLiftPerEv) noexcept {
+    const float s = std::isfinite(maxLiftPerEv)
+                        ? std::clamp((maxLiftPerEv - tonemap::kAdaptiveMaxLiftPerEv) / 0.15f, 0.0f, 1.0f)
+                        : 0.0f;
+    return bracketShadowLift(base, 3.0f * s);
 }
 
 // Exponential smoothing in the EV domain with a deadband so the lift does

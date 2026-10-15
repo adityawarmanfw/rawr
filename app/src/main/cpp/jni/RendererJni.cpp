@@ -83,11 +83,15 @@ void resolveAdaptiveTone(Session& s, rawrcam::renderer::RenderOptions& o) {
         tone.adaptiveTone = {};
         return;
     }
-    const auto policy = rawrcam::color::autoKeyPolicy(*mode);
+    // HDR+ Bracketed captures stored a stronger contrast limit; the chosen
+    // mode gets the same boost (bracketShadowLift).
+    const auto boosted =
+        rawrcam::color::bracketShadowLiftForLimit(rawrcam::color::autoKeyPolicy(*mode), tone.adaptiveTone.maxLiftPerEv);
+    const auto& policy = boosted.policy;
     if (o.adaptiveToneMeasured) {
         // Stored key and highlight already include the capture's HAL gain.
         tone.adaptiveTone = rawrcam::color::autoKeyCurve(tone.adaptiveTone.keyEv, tone.adaptiveTone.highlightEv, 1.0f,
-                                                        policy);
+                                                        policy, boosted.maxLiftPerEv);
         return;
     }
     if (!s.measuredKey || s.measuredKey->shading != o.shading || s.measuredKey->whiteBalance != s.source.wb)
@@ -97,7 +101,8 @@ void resolveAdaptiveTone(Session& s, rawrcam::renderer::RenderOptions& o) {
                                                rawrcam::color::math::cameraToWorkingColumnMajor(s.source.cameraToSrgb))};
     tone.adaptiveTone = s.measuredKey->key ? rawrcam::color::autoKeyCurve(s.measuredKey->key->keyEv,
                                                                           s.measuredKey->key->highlightEv,
-                                                                          std::max(tone.aePostGain, 1.0e-6f), policy)
+                                                                          std::max(tone.aePostGain, 1.0e-6f), policy,
+                                                                          boosted.maxLiftPerEv)
                                            : tonemap::AdaptiveToneParams{};
 }
 
@@ -142,7 +147,8 @@ rawrcam::renderer::RenderOptions options(JNIEnv* env, jstring recipe, int workin
     t.aePostGain = json.number("aePostGain", 1);
     Json adaptive(env, json.child("adaptiveTone"));
     t.adaptiveTone = {float(adaptive.number("liftEv", 0)), float(adaptive.number("keyEv", -4)),
-                      float(adaptive.number("highlightEv", 0))};
+                      float(adaptive.number("highlightEv", 0)),
+                      float(adaptive.number("maxLiftPerEv", tonemap::kAdaptiveMaxLiftPerEv))};
     if (!tonemap::validAdaptiveTone(t.adaptiveTone)) throw std::runtime_error("Invalid adaptive tone recipe");
     o.adaptiveToneMode = json.text("adaptiveToneMode");
     if (o.adaptiveToneMode == "null") o.adaptiveToneMode.clear();

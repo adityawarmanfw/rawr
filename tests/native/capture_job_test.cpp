@@ -83,8 +83,8 @@ int main(int argc, char** argv) {
     // Profile-aware jobs written before adaptive tone, and before AgX, used
     // the same POD prefix. Recreate those on-disk layouts and ensure the newer
     // fields keep their defaults.
-    for (const uint32_t oldSize : {uint32_t(offsetof(tonemap::TonemapParams, adaptiveTone)),
-                                   uint32_t(offsetof(tonemap::TonemapParams, agx))}) {
+    constexpr uint32_t kPreAgx = uint32_t(offsetof(tonemap::TonemapParams, adaptiveTone) + 3u * sizeof(float));
+    for (const uint32_t oldSize : {uint32_t(offsetof(tonemap::TonemapParams, adaptiveTone)), kPreAgx}) {
         std::ifstream in(path, std::ios::binary);
         std::string bytes((std::istreambuf_iterator<char>(in)), {});
         uint32_t fullSize = sizeof(j.tone);
@@ -102,8 +102,35 @@ int main(int argc, char** argv) {
         const auto old = load(oldPath);
         assert(old.tone.renderTransform == j.tone.renderTransform && old.tone.exposureEV == j.tone.exposureEV);
         assert(old.tone.adaptiveTone.liftEv ==
-               (oldSize == offsetof(tonemap::TonemapParams, agx) ? j.tone.adaptiveTone.liftEv : 0.0f));
+               (oldSize == kPreAgx ? j.tone.adaptiveTone.liftEv : 0.0f));
+        assert(old.tone.adaptiveTone.maxLiftPerEv == tonemap::kAdaptiveMaxLiftPerEv);
         assert(old.tone.agx.whiteEv == tonemap::AgxParams{}.whiteEv);
+        std::filesystem::remove(oldPath);
+    }
+    // Jobs written before the adaptive curve's contrast limit: AgX follows
+    // the three curve words directly.
+    {
+        std::ifstream in(path, std::ios::binary);
+        std::string bytes((std::istreambuf_iterator<char>(in)), {});
+        uint32_t fullSize = sizeof(j.tone);
+        std::string record(reinterpret_cast<const char*>(&fullSize), sizeof(fullSize));
+        record.append(reinterpret_cast<const char*>(&j.tone), sizeof(j.tone));
+        const auto pos = bytes.find(record);
+        assert(pos != std::string::npos);
+        const std::size_t limitAt = offsetof(tonemap::TonemapParams, adaptiveTone) + 3u * sizeof(float);
+        bytes.erase(pos + sizeof(fullSize) + limitAt, sizeof(float));
+        const uint32_t oldSize = fullSize - uint32_t(sizeof(float));
+        std::memcpy(bytes.data() + pos, &oldSize, sizeof(oldSize));
+        const auto oldPath = root + "/old-limit.job";
+        {
+            std::ofstream out(oldPath, std::ios::binary);
+            out.write(bytes.data(), bytes.size());
+        }
+        const auto old = load(oldPath);
+        assert(old.tone.adaptiveTone.liftEv == j.tone.adaptiveTone.liftEv &&
+               old.tone.adaptiveTone.highlightEv == j.tone.adaptiveTone.highlightEv);
+        assert(old.tone.adaptiveTone.maxLiftPerEv == tonemap::kAdaptiveMaxLiftPerEv);
+        assert(old.tone.agx.whiteEv == j.tone.agx.whiteEv);
         std::filesystem::remove(oldPath);
     }
 

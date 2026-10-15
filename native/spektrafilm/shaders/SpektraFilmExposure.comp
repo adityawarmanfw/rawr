@@ -67,6 +67,7 @@ layout(push_constant) uniform CoreParams {
   uint activeWidth;
   uint activeHeight;
   float adaptiveTone[4];
+  float adaptiveToneLiftPerEv;
 } params;
 
 vec4 loadSourcePixel(uint index) {
@@ -261,7 +262,7 @@ void main() {
                       0.047380, 0.013452, 0.869815);
     float y = dot(vec3(0.2722287168, 0.6740817658, 0.0536895174), toAp1 * srgb);
     decoded *= rawrAdaptiveToneGain(y * params.adaptiveTone[3],
-        vec3(params.adaptiveTone[0], params.adaptiveTone[1], params.adaptiveTone[2]));
+        vec4(params.adaptiveTone[0], params.adaptiveTone[1], params.adaptiveTone[2], params.adaptiveToneLiftPerEv));
   }
   const vec3 linearSrgb = multiplyInputToSrgb(decoded, colorSpace);
   const vec3 referenceXyz = multiplyInputToReferenceXyz(decoded, colorSpace);

@@ -26,6 +26,7 @@
 #include "pipeline/RawDevelopRecorder.h"
 #include "presentation/SwapchainRenderer.h"
 #include "raw_preview/RawPreview.hpp"
+#include "tonemap/TonemapMath.h"
 #include "video/VideoSession.h"
 #include "vulkan/RawAhbImporter.h"
 #include "vulkan/Synchronization.h"
@@ -962,8 +963,8 @@ float FrameSubmitCoordinator::previewPostGain(const rawrcam::metadata::FrameMeta
     // Interior-ISO calibration probes and HDR+ long frames can also be
     // brighter than preview. Match the repeating frames' rendered brightness
     // (their gain includes any HDR+ headroom lift) without changing the
-    // repeating seed. Same 16x ceiling the tonemap engine enforces.
-    return std::min(16.0f, lastRepeatingGain_ * float(lastRepeatingExposure_ / exposure));
+    // repeating seed. Same ceiling the tonemap engine enforces.
+    return std::min(tonemap::kMaxAePostGain, lastRepeatingGain_ * float(lastRepeatingExposure_ / exposure));
 }
 
 bool FrameSubmitCoordinator::submitAhb(uint64_t timestampNs, rawrcam::imaging::RawFrameLease& lease,

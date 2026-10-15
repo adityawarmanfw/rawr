@@ -21,7 +21,7 @@
 namespace spektrafilm_native {
 namespace {
 
-constexpr uint32_t kCorePushBytes = 120;
+constexpr uint32_t kCorePushBytes = 124;
 constexpr uint32_t kIoPushBytes = 64;
 
 struct CorePush {
@@ -52,6 +52,7 @@ struct CorePush {
     uint32_t activeWidth = 0;
     uint32_t activeHeight = 0;
     float adaptiveTone[4] = {0.0f, -4.0f, 0.0f, 1.0f};
+    float adaptiveToneLiftPerEv = 0.25f;  // curve contrast limit (AdaptiveTone.h)
 };
 static_assert(sizeof(CorePush) == kCorePushBytes, "core push layout");
 
@@ -2983,6 +2984,7 @@ void SpektraFilm::Impl::recordBoostMilestone(const SpektraFilmRecordInfo& ri) {
     CorePush push{};
     push.filmExposureEv = ri.look.filmExposureEv;
     std::copy(ri.adaptiveTone.begin(), ri.adaptiveTone.end(), push.adaptiveTone);
+    push.adaptiveToneLiftPerEv = ri.adaptiveToneLiftPerEv;
     push.filmGamma = tables::effectiveFilmGamma(ri.look.filmPushPullMode,
                                                 ri.look.filmGamma,
                                                 ri.look.filmPushPullStops);
@@ -3273,6 +3275,7 @@ void SpektraFilm::Impl::recordTiledMemory(const SpektraFilmRecordInfo& ri,
     CorePush push{};
     push.filmExposureEv = ri.look.filmExposureEv;
     std::copy(ri.adaptiveTone.begin(), ri.adaptiveTone.end(), push.adaptiveTone);
+    push.adaptiveToneLiftPerEv = ri.adaptiveToneLiftPerEv;
     push.filmGamma = tables::effectiveFilmGamma(ri.look.filmPushPullMode,
                                                 ri.look.filmGamma,
                                                 ri.look.filmPushPullStops);
@@ -4127,6 +4130,7 @@ void SpektraFilm::record(const SpektraFilmRecordInfo& ri) {
     push.height = h;
     push.filmExposureEv = ri.look.filmExposureEv;
     std::copy(ri.adaptiveTone.begin(), ri.adaptiveTone.end(), push.adaptiveTone);
+    push.adaptiveToneLiftPerEv = ri.adaptiveToneLiftPerEv;
     push.filmGamma = tables::effectiveFilmGamma(ri.look.filmPushPullMode,
                                                 ri.look.filmGamma,
                                                 ri.look.filmPushPullStops);
