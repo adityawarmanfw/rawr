@@ -624,24 +624,15 @@ class SettingsModelTest {
         assertEquals(-3f, MultiframeTuning().copy(bracketEv = -6f).sanitized().bracketEv)
         assertEquals(2, MultiframeTuning().copy(bracketFrames = 17).sanitized().bracketFrames)
         assertEquals(16, MultiframeTuning().copy(bracketFrames = 16).sanitized().bracketFrames)
-        assertEquals(14, MultiframeTuning().copy(bracketZslFrames = 31).sanitized().bracketZslFrames)
         assertEquals(0, MultiframeTuning().copy(bracketFrames = 0).sanitized().bracketFrames)
         assertEquals(0f, MultiframeTuning().copy(longFrameEv = 5f).sanitized().longFrameEv)
-        // The two counts push each other to stay within 30.
-        controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.BracketZslFrames, 30f))
-        assertEquals(30, controller.state.value.values.multiframeTuning.bracketZslFrames)
-        assertEquals(0, controller.state.value.values.multiframeTuning.bracketFrames)
-        controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.BracketFrames, 16f))
-        assertEquals(14, controller.state.value.values.multiframeTuning.bracketZslFrames)
-        assertEquals(16, controller.state.value.values.multiframeTuning.bracketFrames)
-        assertEquals(14, MultiframeTuning().copy(bracketZslFrames = 30, bracketFrames = 16).sanitized().bracketZslFrames)
-        controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.BracketFrames, 3f))
-        controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.BracketZslFrames, 14f))
-        // Bracketed: its own ZSL count, trimmed so ZSL + after-shutter fit 30.
-        assertEquals(14, bracketed.zslFrames())
+        // Bracketed: Maximum Frames is the total, after-shutter frames its split.
+        assertEquals(bracketed.maxFrames - 3, bracketed.zslFrames())
         assertEquals(3, bracketed.postShutterFrames())
-        assertEquals(14, bracketed.copy(bracketZslFrames = 30, bracketFrames = 16).zslFrames())
-        assertEquals(16, bracketed.copy(bracketZslFrames = 30, bracketFrames = 16).postShutterFrames())
+        assertEquals(14, bracketed.copy(maxFrames = 30, bracketFrames = 16).zslFrames())
+        assertEquals(16, bracketed.copy(maxFrames = 30, bracketFrames = 16).postShutterFrames())
+        assertEquals(2, bracketed.copy(maxFrames = 4, bracketFrames = 16).postShutterFrames())
+        assertEquals(2, bracketed.copy(maxFrames = 4, bracketFrames = 16).zslFrames())
         assertEquals(16, MultiframeTuning().zslFrames())
     }
 

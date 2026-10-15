@@ -247,7 +247,6 @@ internal object CaptureRecipe {
                 put("bracketEv", value.bracketEv)
                 put("bracketFrames", value.bracketFrames)
                 put("longFrameEv", value.longFrameEv)
-                put("bracketZslFrames", value.bracketZslFrames)
             }
             put("maxFrames", value.maxFrames)
             put("lkIterations", value.lkIterations)

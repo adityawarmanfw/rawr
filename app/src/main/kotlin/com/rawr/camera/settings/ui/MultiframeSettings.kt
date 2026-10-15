@@ -1,8 +1,12 @@
 package com.rawr.camera.settings.ui
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import com.rawr.camera.settings.architecture.*
 import com.rawr.camera.settings.model.*
 import kotlin.math.roundToInt
@@ -125,9 +129,20 @@ internal fun MultiframeSettings(state: SettingsUiState, dispatch: SettingsDispat
                     spec(MultiframeNumericParameter.LongFrameEv), tuning, enabled && tuning.bracketFrames > 0, dispatch
                 )
                 SettingDivider()
-                MultiframeSlider(spec(MultiframeNumericParameter.BracketZslFrames), tuning, enabled, dispatch)
+                MultiframeSlider(spec(MultiframeNumericParameter.MaxFrames), tuning, enabled, dispatch)
                 SettingDivider()
-                MultiframeSlider(spec(MultiframeNumericParameter.BracketFrames), tuning, enabled, dispatch)
+                // Its range follows Maximum Frames (a 2-frame burst stays before the press).
+                val afterMax = tuning.maxPostShutterFrames()
+                MultiframeSlider(
+                    spec(MultiframeNumericParameter.BracketFrames), tuning, enabled && afterMax > 0, dispatch,
+                    maximum = afterMax.coerceAtLeast(1).toFloat(), value = tuning.postShutterFrames().toFloat()
+                )
+                Text(
+                    "Uses ${tuning.zslFrames()} frames from before the shutter + ${tuning.postShutterFrames()} after",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
             }
         }
         if (!hdrPlus) {
@@ -207,17 +222,19 @@ private fun MultiframeSlider(
     spec: MultiframeNumericSpec,
     tuning: MultiframeTuning,
     enabled: Boolean,
-    dispatch: SettingsDispatch
+    dispatch: SettingsDispatch,
+    maximum: Float = spec.maximum,
+    value: Float = tuning.value(spec.parameter)
 ) {
     StandaloneNumericSliderRow(
         identity = "mf_${spec.parameter.name}",
         label = spec.label,
         supportingText = spec.supportingText,
         minimum = spec.minimum,
-        maximum = spec.maximum,
+        maximum = maximum,
         step = spec.step,
         decimals = spec.decimals,
-        value = tuning.value(spec.parameter),
+        value = value.coerceIn(spec.minimum, maximum),
         enabled = enabled,
         defaultValue = spec.defaultValue,
         unit = spec.unit,

@@ -23,7 +23,6 @@ internal fun reduceMultiframeSettings(
             state.withValues(
                 values.copy(
                     multiframeTuning = values.multiframeTuning.withValue(action.parameter, action.value)
-                        .withBracketFramesFitting(action.parameter)
                 )
             )
         }

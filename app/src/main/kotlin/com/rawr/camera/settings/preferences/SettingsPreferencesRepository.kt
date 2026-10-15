@@ -5,6 +5,7 @@ import com.rawr.camera.settings.model.AgxParameter
 import com.rawr.camera.settings.model.AgxPreset
 import com.rawr.camera.settings.model.AgxValues
 import com.rawr.camera.settings.model.LocalToneLimits
+import com.rawr.camera.settings.model.MAX_BURST_FRAMES
 import com.rawr.camera.settings.model.ProfileTone
 import com.rawr.camera.settings.model.VideoLogProfile
 
@@ -534,8 +535,12 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
                     bracketEv = p[Keys.multiframeBracketEv] ?: d.multiframeTuning.bracketEv,
                     bracketFrames = p[Keys.multiframeBracketFrames] ?: d.multiframeTuning.bracketFrames,
                     longFrameEv = p[Keys.multiframeLongFrameEv] ?: d.multiframeTuning.longFrameEv,
-                    bracketZslFrames = p[Keys.multiframeBracketZslFrames] ?: d.multiframeTuning.bracketZslFrames,
-                    maxFrames = p[Keys.multiframeMaxFrames] ?: d.multiframeTuning.maxFrames,
+                    // A separate ZSL count existed briefly (2026-10-15): fold it into the total once.
+                    maxFrames = (p[Keys.multiframeMaxFrames] ?: d.multiframeTuning.maxFrames).let { total ->
+                        p[Keys.legacyBracketZslFrames]?.let { zsl ->
+                            maxOf(total, zsl + (p[Keys.multiframeBracketFrames] ?: 0)).coerceAtMost(MAX_BURST_FRAMES)
+                        } ?: total
+                    },
                     lkIterations = p[Keys.multiframeLkIterations] ?: d.multiframeTuning.lkIterations,
                     hessianEpsilonExponent =
                         p[Keys.multiframeHessianExponent] ?: d.multiframeTuning.hessianEpsilonExponent,
@@ -774,8 +779,8 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.multiframeBracketEv] = v.multiframeTuning.bracketEv
         p[Keys.multiframeBracketFrames] = v.multiframeTuning.bracketFrames
         p[Keys.multiframeLongFrameEv] = v.multiframeTuning.longFrameEv
-        p[Keys.multiframeBracketZslFrames] = v.multiframeTuning.bracketZslFrames
         p[Keys.multiframeMaxFrames] = v.multiframeTuning.maxFrames
+        p.remove(Keys.legacyBracketZslFrames)
         p[Keys.multiframeLkIterations] = v.multiframeTuning.lkIterations
         p[Keys.multiframeHessianExponent] = v.multiframeTuning.hessianEpsilonExponent
         p[Keys.multiframeKDetail] = v.multiframeTuning.kDetail
@@ -1049,7 +1054,8 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val multiframeBracketEv = floatPreferencesKey("multiframe_bracket_ev")
         val multiframeBracketFrames = intPreferencesKey("multiframe_bracket_frames")
         val multiframeLongFrameEv = floatPreferencesKey("multiframe_long_frame_ev")
-        val multiframeBracketZslFrames = intPreferencesKey("multiframe_bracket_zsl_frames")
+        // Read once for migration, then removed on the next save.
+        val legacyBracketZslFrames = intPreferencesKey("multiframe_bracket_zsl_frames")
         val multiframeMaxFrames = intPreferencesKey("multiframe_max_frames")
         val multiframeLkIterations = intPreferencesKey("multiframe_lk_iterations")
         val multiframeHessianExponent = intPreferencesKey("multiframe_hessian_exponent")
