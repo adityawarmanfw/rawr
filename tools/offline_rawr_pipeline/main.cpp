@@ -8,6 +8,8 @@
 #include <spektrafilm/SpektraFilm.h>
 #include <tonemap/TonemapEngine.h>
 
+#include <cstdio>
+
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -70,6 +72,8 @@ struct Arguments {
     bool quadfixFastMedian = false;
     float exposureEV = 0.0f;
     float postGain = 1.0f;
+    // Captured AutoKey curve (lift, key, highlight EV); lift 0 = off.
+    tonemap::AdaptiveToneParams adaptiveTone{};
     float highlightBias = 0.0f;
     float rtHighlightCompression = 0.0f;
     bool appColoropp = false;
@@ -222,6 +226,12 @@ Arguments parseArguments(int argc, char** argv) {
             args.hasExposureEV = true;
         } else if (value == "--post-gain" && i + 1 < argc) {
             args.postGain = std::stof(argv[++i]);
+        } else if (value == "--adaptive-tone" && i + 1 < argc) {
+            float v[3]{};
+            if (std::sscanf(argv[++i], "%f,%f,%f", &v[0], &v[1], &v[2]) != 3)
+                throw std::invalid_argument("--adaptive-tone needs LIFT,KEY,HIGHLIGHT");
+            args.adaptiveTone = {v[0], v[1], v[2]};
+            if (!tonemap::validAdaptiveTone(args.adaptiveTone)) throw std::invalid_argument("invalid --adaptive-tone");
         } else if (value == "--highlight-bias" && i + 1 < argc) {
             args.highlightBias = std::stof(argv[++i]);
         } else if (value == "--rt-highlight-compression" && i + 1 < argc) {
@@ -1028,6 +1038,7 @@ int main(int argc, char** argv) {
                 params.exposureEV = config.exposureEV;
                 params.highlightBiasEV = highlights;
                 params.aePostGain = args.postGain;
+                params.adaptiveTone = args.adaptiveTone;
                 tonemap::TonemapRecordInfo tone{};
                 tone.commandBuffer = command;
                 tone.input = {toneInputView, VK_FORMAT_R16G16B16A16_SFLOAT,
