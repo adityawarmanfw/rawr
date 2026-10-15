@@ -76,7 +76,7 @@ internal fun RendererEditorContent(
     var waveformVisible by remember(job.id) { mutableStateOf(false) }
     var metadataVisible by remember(job.id) { mutableStateOf(false) }
     val waveform = preview.frame?.waveform
-    var stage by remember(job.id){mutableStateOf(RendererStage.TONEMAP)}
+    var stage by remember(job.id){mutableStateOf(RendererStage.RENDER)}
     var pane by remember(job.id){mutableIntStateOf(1)}
     val waveformShown = waveformVisible && pane != 2
     LaunchedEffect(waveformShown) { onWaveform(waveformShown) }

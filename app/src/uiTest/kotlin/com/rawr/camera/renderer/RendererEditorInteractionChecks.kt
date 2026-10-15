@@ -57,7 +57,7 @@ abstract class RendererEditorInteractionChecks {
             tab("OUTPUT")
             compose.onNodeWithTag("renderer_controls_RAW").assertDoesNotExist()
             tab("LINEAR")
-            tab("TONEMAP")
+            tab("RENDER")
         }
         assertEquals(0, dispatched)
     }
@@ -177,6 +177,6 @@ abstract class RendererEditorInteractionChecks {
         compose.onNodeWithTag("renderer_stage_OUTPUT").assertIsSelected()
         compose.onNodeWithTag("renderer_expand_pane").performTouchInput { click() }
         compose.onNodeWithTag("renderer_controls_OUTPUT").assertIsDisplayed()
-        tab("RAW"); tab("TONEMAP")
+        tab("RAW"); tab("RENDER")
     }
 }

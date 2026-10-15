@@ -100,56 +100,90 @@ private fun HighlightMethodOptions(
     }
 }
 
-private fun shadowLiftSummary(v: SettingsValues): String {
-    val photo = if (v.photoToneMapping == PhotoToneMapping.Local)
-        "Local +${"%.1f".format(java.util.Locale.US, v.localToneShadowsEv)} EV" else "Adaptive ${v.autoKeyExposure.label}"
-    return "Photo $photo · Video Adaptive ${v.videoAutoKeyExposure.label}"
+private fun dynamicRangeSummary(v: SettingsValues): String {
+    val photo = when (v.photoDynamicRange()) {
+        DynamicRangeMethod.Local -> "Local +${"%.1f".format(java.util.Locale.US, v.localToneShadowsEv)} EV"
+        DynamicRangeMethod.Global -> "Global ${v.autoKeyExposure.label}"
+        DynamicRangeMethod.Off -> "Off"
+    }
+    val video = if (v.videoDynamicRange() == DynamicRangeMethod.Off) "Off" else "Global ${v.videoAutoKeyExposure.label}"
+    return "Photo $photo · Video $video"
 }
 
-/** Image > Shadow Lift: photo tone mapping (local or adaptive) and the adaptive strength. */
+/** Image > Rendering > Dynamic Range: fitting the scene's range before Tone Mapping. */
 @Composable
-internal fun ShadowLiftSettings(state: SettingsUiState, dispatch: SettingsDispatch) {
+internal fun DynamicRangeSettings(state: SettingsUiState, dispatch: SettingsDispatch) {
     val v = state.values
-    SettingsPageContainer(testTag = SettingsTestTags.sectionRoot("ShadowLift")) {
+    SettingsPageContainer(testTag = SettingsTestTags.sectionRoot("DynamicRange")) {
         SettingsGroup(
             title = "Photo",
-            description = "Brightens shadows in high-contrast scenes; highlights keep their brightness. JPEG and viewfinder only; not applied to LOG."
+            description = "Fits a high-contrast scene into the picture by brightening shadows; highlights keep their brightness. Runs before Tone Mapping. JPEG and viewfinder only; not applied to LOG."
         ) {
-            CompactChoiceRow(PhotoToneMapping.entries, v.photoToneMapping, { it.label }) {
-                dispatch.invoke(SetLocalTone(mode = it))
-            }
-            ChoiceSummary(v.photoToneMapping.summary)
-            SettingDivider()
-            if (v.photoToneMapping == PhotoToneMapping.Local) {
-                StandaloneNumericSliderRow(
-                    identity = "local_tone_shadows",
-                    label = "Local Shadows",
-                    supportingText = "How far dark regions may be brightened. Lowered automatically at high ISO, where it would show noise. Lower: closer to the plain capture. Higher: brighter shadows, flatter overall.",
-                    minimum = LocalToneLimits.MIN_SHADOWS_EV,
-                    maximum = LocalToneLimits.MAX_SHADOWS_EV,
-                    step = .5f,
-                    decimals = 1,
-                    unit = "EV",
-                    value = v.localToneShadowsEv,
-                    defaultValue = LocalToneLimits.DEFAULT_SHADOWS_EV
-                ) { dispatch.invoke(SetLocalTone(shadowsEv = it)) }
-            } else {
-                ChoiceLabel("Adaptive Strength")
-                CompactChoiceRow(AutoKeyExposure.entries, v.autoKeyExposure, { it.label }) {
-                    dispatch.invoke(SetAutoKeyExposure(it))
+            val method = v.photoDynamicRange()
+            CompactChoiceRow(DynamicRangeMethod.entries, method, { it.label }) {
+                when (it) {
+                    DynamicRangeMethod.Off -> {
+                        dispatch.invoke(SetLocalTone(mode = PhotoToneMapping.Adaptive))
+                        dispatch.invoke(SetAutoKeyExposure(AutoKeyExposure.Off))
+                    }
+                    DynamicRangeMethod.Global -> {
+                        dispatch.invoke(SetLocalTone(mode = PhotoToneMapping.Adaptive))
+                        if (v.autoKeyExposure == AutoKeyExposure.Off) dispatch.invoke(SetAutoKeyExposure(AutoKeyExposure.Natural))
+                    }
+                    DynamicRangeMethod.Local -> dispatch.invoke(SetLocalTone(mode = PhotoToneMapping.Local))
                 }
-                ChoiceSummary(v.autoKeyExposure.summary)
+            }
+            ChoiceSummary(method.summary)
+            when (method) {
+                DynamicRangeMethod.Local -> {
+                    SettingDivider()
+                    StandaloneNumericSliderRow(
+                        identity = "local_tone_shadows",
+                        label = "Strength",
+                        supportingText = "How far dark regions may be brightened. Lowered automatically when the frame is too noisy for it. Lower: closer to the plain capture. Higher: brighter shadows, flatter overall.",
+                        minimum = LocalToneLimits.MIN_SHADOWS_EV,
+                        maximum = LocalToneLimits.MAX_SHADOWS_EV,
+                        step = .5f,
+                        decimals = 1,
+                        unit = "EV",
+                        value = v.localToneShadowsEv,
+                        defaultValue = LocalToneLimits.DEFAULT_SHADOWS_EV
+                    ) { dispatch.invoke(SetLocalTone(shadowsEv = it)) }
+                }
+                DynamicRangeMethod.Global -> {
+                    SettingDivider()
+                    ChoiceLabel("Strength")
+                    CompactChoiceRow(globalDynamicRangeStrengths, v.autoKeyExposure, { it.label }) {
+                        dispatch.invoke(SetAutoKeyExposure(it))
+                    }
+                    ChoiceSummary(v.autoKeyExposure.summary)
+                }
+                DynamicRangeMethod.Off -> Unit
             }
         }
         SettingsGroup(
             title = "Video",
-            description = "Video always uses the adaptive curve. Not applied to LOG."
+            description = "Video uses the global curve. Not applied to LOG."
         ) {
-            ChoiceLabel("Adaptive Strength")
-            CompactChoiceRow(AutoKeyExposure.entries, v.videoAutoKeyExposure, { it.label }) {
-                dispatch.invoke(SetAutoKeyExposure(it, video = true))
+            val method = v.videoDynamicRange()
+            CompactChoiceRow(listOf(DynamicRangeMethod.Off, DynamicRangeMethod.Global), method, { it.label }) {
+                dispatch.invoke(
+                    SetAutoKeyExposure(
+                        if (it == DynamicRangeMethod.Off) AutoKeyExposure.Off
+                        else v.videoAutoKeyExposure.takeIf { s -> s != AutoKeyExposure.Off } ?: AutoKeyExposure.Natural,
+                        video = true
+                    )
+                )
             }
-            ChoiceSummary(v.videoAutoKeyExposure.summary)
+            ChoiceSummary(method.summary)
+            if (method == DynamicRangeMethod.Global) {
+                SettingDivider()
+                ChoiceLabel("Strength")
+                CompactChoiceRow(globalDynamicRangeStrengths, v.videoAutoKeyExposure, { it.label }) {
+                    dispatch.invoke(SetAutoKeyExposure(it, video = true))
+                }
+                ChoiceSummary(v.videoAutoKeyExposure.summary)
+            }
         }
     }
 }
@@ -180,21 +214,21 @@ private fun highlightMethodLabel(method: Int): String =
 internal fun ImageSettings(state: SettingsUiState, dispatch: SettingsDispatch) {
     val v = state.values
     SettingsPageContainer(testTag = SettingsTestTags.sectionRoot("Image")) {
-        SettingsGroup(title = "Tonemap") {
+        SettingsGroup(title = "Rendering") {
+            SettingsRow(
+                "Dynamic Range",
+                dynamicRangeSummary(v),
+                testTag = SettingsTestTags.row("Image", "dynamic_range"),
+                onClick = { dispatch.invoke(OpenSection(SettingsSection.DynamicRange)) }
+            )
+            SettingDivider()
             SettingsRow(
                 "Tone & Color",
-                "Realtime rendering controls",
+                "Tone mapping, look and tone controls",
                 testTag = SettingsTestTags.row("Image", "tone_color"),
                 onClick = {
                     dispatch.invoke(OpenSection(SettingsSection.ImageTone))
                 }
-            )
-            SettingDivider()
-            SettingsRow(
-                "Shadow Lift",
-                shadowLiftSummary(v),
-                testTag = SettingsTestTags.row("Image", "shadow_lift"),
-                onClick = { dispatch.invoke(OpenSection(SettingsSection.ShadowLift)) }
             )
             SettingDivider()
             ToggleSubmenuRow(

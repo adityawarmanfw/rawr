@@ -23,7 +23,7 @@ enum class SettingsSection(val title: String) {
     Ois("OIS"),
     Image("Image"),
     ImageTone("Tone & Color"),
-    ShadowLift("Shadow Lift"),
+    DynamicRange("Dynamic Range"),
     LutProfile("LUT Profile"),
     Demosaic("Demosaic"),
     Defringe("Defringe"),
@@ -203,11 +203,31 @@ enum class HighlightProtection(val label: String, val kneeSummary: String) {
 }
 
 /** Shadow lift (adaptive scene-key curve) after the brightness boost; native AutoKeyMode ids. */
-/** Photo tone mapping (JPEG and viewfinder; video always uses Adaptive). */
-enum class PhotoToneMapping(val label: String, val summary: String) {
-    Adaptive("Adaptive", "One curve for the whole image, set by Adaptive Strength below"),
-    Local("Local", "Exposure fusion: brightens shadows region by region and keeps local contrast")
+/** Photo dynamic range method as stored: Adaptive = the global curve (strength in autoKeyExposure). */
+enum class PhotoToneMapping { Adaptive, Local }
+
+/**
+ * Dynamic Range as the UI presents it (Image > Rendering > Dynamic Range,
+ * Renderer > Render): fitting the scene's range before Tone Mapping.
+ * Off and Global are the adaptive curve's strength (Off / the rest).
+ */
+enum class DynamicRangeMethod(val label: String, val summary: String) {
+    Off("Off", "No shadow brightening: the image as exposed"),
+    Global("Global", "One curve for the whole image"),
+    Local("Local", "Region by region (exposure fusion): keeps local contrast")
 }
+
+fun SettingsValues.photoDynamicRange(): DynamicRangeMethod = when {
+    photoToneMapping == PhotoToneMapping.Local -> DynamicRangeMethod.Local
+    autoKeyExposure == AutoKeyExposure.Off -> DynamicRangeMethod.Off
+    else -> DynamicRangeMethod.Global
+}
+
+fun SettingsValues.videoDynamicRange(): DynamicRangeMethod =
+    if (videoAutoKeyExposure == AutoKeyExposure.Off) DynamicRangeMethod.Off else DynamicRangeMethod.Global
+
+/** Global strengths (the adaptive curve without Off). */
+val globalDynamicRangeStrengths: List<AutoKeyExposure> = AutoKeyExposure.entries.filter { it != AutoKeyExposure.Off }
 
 /** Local tone mapping shadows range, shared with native local_tone/ExposureFusion.h. */
 object LocalToneLimits {

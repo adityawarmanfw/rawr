@@ -73,7 +73,10 @@ enum class AgxPreset(val label: String, val nativeId: Int, val defaults: AgxValu
         2.98f, 3.02f, 1.61f, 0.0f, 0.18f, 0.0f, 0.0f, 1.0f, 0.0f, 2.2f,
         1.0f, 0.0f, 1.0f, 1.0f, 0.0f,
         0.1f, 0.034906585f, 0.1f, -0.017453292f, 0.15f, -0.05235988f,
-        0.0f, 1.0f, 0.1f, 0.034906585f, 0.1f, -0.017453292f, 0.15f, -0.05235988f))
+        0.0f, 1.0f, 0.1f, 0.034906585f, 0.1f, -0.017453292f, 0.15f, -0.05235988f));
+
+    /** The preset as an AgX look (Tone & Color > Look, Renderer > Look). */
+    val lookLabel: String get() = if (this == Default) "Default" else label.removePrefix("AgX ")
 }
 
 data class AgxSpec(

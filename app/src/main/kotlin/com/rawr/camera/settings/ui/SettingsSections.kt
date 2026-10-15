@@ -115,8 +115,8 @@ internal fun SettingsSectionContent(
             FilmSimSettings(state, dispatch)
         }
 
-        SettingsSection.ShadowLift -> {
-            ShadowLiftSettings(state, dispatch)
+        SettingsSection.DynamicRange -> {
+            DynamicRangeSettings(state, dispatch)
         }
 
         SettingsSection.Debug -> {
