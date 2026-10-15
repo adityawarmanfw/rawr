@@ -1602,13 +1602,13 @@ struct SpektraFilm::Impl {
 
         std::array<VkDescriptorPoolSize, 2> poolSizes{};
         poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        // 42 core + 3 IO (input, output) + 1 glow-ratio per slot, plus 44
-        // core for the tile-memory bundle. Buffer/image counts stay loose
-        // over-estimates, as before.
+        // 42 core + 2 IO (input, output) + 2 glow-ratio per slot, plus 44
+        // core for the tile-memory bundle. The IO and glow-ratio sets hold
+        // one storage image each; buffer counts stay a loose over-estimate.
         const uint32_t setsPerSlot = tileMemorySaving ? 90u : 46u;
         poolSizes[0].descriptorCount = slotCount * (setsPerSlot * 31u + 2u);
         poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        poolSizes[1].descriptorCount = slotCount * 3u;
+        poolSizes[1].descriptorCount = slotCount * 4u;
         VkDescriptorPoolCreateInfo poolInfo{};
         poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         poolInfo.maxSets = slotCount * setsPerSlot;
