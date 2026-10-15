@@ -682,7 +682,10 @@ void ImageScopes::recordDisplayWaveform(const DisplayWaveformRecordInfo& i) {
     impl_->pendingWaveMeasurement[i.frameSlot] = true;
     impl_->pendingWaveCommandBuffer[i.frameSlot] = i.commandBuffer;
     auto& b = impl_->wave[i.frameSlot];
-    vkCmdFillBuffer(i.commandBuffer, b.b, static_cast<VkDeviceSize>(detail::kWaveRgbElements) * 4u, 16u, 0u);
+    // Small tail fills left stale maxima on the tested Adreno driver. Embed an explicit
+    // 16-byte reset in the command buffer; the transfer barrier below makes it visible.
+    const std::uint32_t zero[4]{};
+    vkCmdUpdateBuffer(i.commandBuffer, b.b, static_cast<VkDeviceSize>(detail::kWaveRgbElements) * 4u, 16u, zero);
     Impl::transferBarrier(i.commandBuffer, b.b, b.size);
     auto waveMeasureSet = impl_->bindMeasure(i.frameSlot, WaveMeasure, i.input.view, i.input.layout, b);
     WaveMeasurePush p{i.input.width,
@@ -736,7 +739,10 @@ void ImageScopes::recordVectorscope(const VectorscopeRecordInfo& i) {
     vkCmdFillBuffer(i.commandBuffer, scratch.b, detail::kVectorPresentationOffsetBytes,
                     detail::kVectorPresentationBytes, 0u);
     Impl::transferBarrier(i.commandBuffer, scratch.b, scratch.size);
-    vkCmdFillBuffer(i.commandBuffer, out.b, static_cast<VkDeviceSize>(detail::kVectorElements) * 4u, 16u, 0u);
+    // Small tail fills left stale maxima on the tested Adreno driver. Embed an explicit
+    // 16-byte reset in the command buffer; the transfer barrier below makes it visible.
+    const std::uint32_t zero[4]{};
+    vkCmdUpdateBuffer(i.commandBuffer, out.b, static_cast<VkDeviceSize>(detail::kVectorElements) * 4u, 16u, zero);
     Impl::transferBarrier(i.commandBuffer, out.b, out.size);
     auto vecMeasureSet = impl_->bindMeasure(i.frameSlot, VecMeasure, i.input.view, i.input.layout, scratch);
     VecMeasurePush p{i.input.width,

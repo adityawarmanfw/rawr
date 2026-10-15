@@ -96,6 +96,7 @@ if(IMAGE_SCOPES_BUILD_VULKAN)
           include reference tests src)
       target_link_libraries(image_scopes_production_geometry_validation PRIVATE image_scopes image_scopes_reference ${IMAGE_SCOPES_VULKAN_LIB})
       image_scopes_warnings(image_scopes_production_geometry_validation)
+      add_test(NAME image_scopes_production_geometry_validation COMMAND image_scopes_production_geometry_validation)
 
       add_executable(image_scopes_vulkan_artifacts
           tests/vulkan_test_context.cpp tests/vulkan_artifacts.cpp)
