@@ -746,14 +746,31 @@ BurstRunResult AndroidBurstCoordinator::runHdrPlusFrequency(const std::vector<Bu
                     recorder.recordSubstitutionSource(command_);
                     recordTimestamp(1u);
                 }));
-            // One submission: prepare + all alignment levels (+ shift store) when
-            // this pass aligns, otherwise only the padded frame.
+            // Aligning passes: prepare + coarse levels, then the finest level
+            // (+ shift store) as its own submission. One submission held the
+            // GPU ~70 ms per companion on Adreno and dropped preview frames.
+            // Other passes: only the padded frame.
             const bool aligns = recorder.alignsThisPass();
-            const double alignMs = gpuOrWall(executeChunk(11u, i, 2u, [&] {
-                recordTimestamp(0u);
-                recorder.recordCompanionAlign(command_, frames[i].raw.view, frames[i].parameters.normalization, i);
-                recordTimestamp(1u);
-            }));
+            double alignMs = 0.0;
+            if (aligns) {
+                alignMs += gpuOrWall(executeChunk(11u, i, 2u, [&] {
+                    recordTimestamp(0u);
+                    recorder.recordCompanionAlignCoarse(command_, frames[i].raw.view,
+                                                        frames[i].parameters.normalization, i);
+                    recordTimestamp(1u);
+                }));
+                alignMs += gpuOrWall(executeChunk(11u, i, 2u, [&] {
+                    recordTimestamp(0u);
+                    recorder.recordCompanionAlignFinest(command_, i);
+                    recordTimestamp(1u);
+                }));
+            } else {
+                alignMs = gpuOrWall(executeChunk(11u, i, 2u, [&] {
+                    recordTimestamp(0u);
+                    recorder.recordCompanionAlign(command_, frames[i].raw.view, frames[i].parameters.normalization, i);
+                    recordTimestamp(1u);
+                }));
+            }
             (aligns ? timings.alignmentMs : timings.companionPrepareMs) += alignMs;
             const bool profile = std::getenv("RAWR_HDRP_PROFILE") != nullptr;
             // Query order: 0 start, 1 warp, [2 mismatch when profiling], then fft, norm, merge.

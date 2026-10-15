@@ -112,6 +112,12 @@ class HdrPlusFrequencyRecorder final {
     // when alignsThisPass() (storing the shifts in slot), else the padded frame.
     void recordCompanionAlign(VkCommandBuffer command, VkImageView rawU16, const RawNormalization& frame,
                               std::uint32_t slot);
+    // The same as two submissions, so preview work can interleave: padded
+    // frame, pyramid and the coarse levels; then the finest level (most of
+    // the cost) and the shift store. Only when alignsThisPass().
+    void recordCompanionAlignCoarse(VkCommandBuffer command, VkImageView rawU16, const RawNormalization& frame,
+                                    std::uint32_t slot);
+    void recordCompanionAlignFinest(VkCommandBuffer command, std::uint32_t slot);
     // mark(k), when set, is called after warp (1), mismatch+spectrum (2) and
     // mismatch normalization (3) for sub-stage GPU timestamps.
     void recordCompanionMerge(VkCommandBuffer command, std::uint32_t frameCount, std::uint32_t slot,

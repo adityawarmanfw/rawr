@@ -474,9 +474,21 @@ VkDeviceSize HdrPlusFrequencyRecorder::alignSlotBytes() const noexcept {
 
 void HdrPlusFrequencyRecorder::recordCompanionAlign(VkCommandBuffer c, VkImageView rawU16, const RawNormalization& frame,
                                                     std::uint32_t slot) {
+    if (!alignsThisPass()) {
+        align_.setCompanionGain(1.0f / frameExposure(slot));
+        align_.recordCompanionPadded(c, rawU16, frame);
+        return;
+    }
+    recordCompanionAlignCoarse(c, rawU16, frame, slot);
+    recordCompanionAlignFinest(c, slot);
+}
+
+void HdrPlusFrequencyRecorder::recordCompanionAlignCoarse(VkCommandBuffer c, VkImageView rawU16,
+                                                          const RawNormalization& frame, std::uint32_t slot) {
+    if (!alignsThisPass()) throw std::logic_error("hdrplus frequency: coarse alignment outside an aligning pass");
     const float gain = 1.0f / frameExposure(slot);
     align_.setCompanionGain(gain);
-    if (alignsThisPass() && brighterCompanion(slot) && !pyramidClamped_) {
+    if (brighterCompanion(slot) && !pyramidClamped_) {
         // Brighter companions (merged after the dark ones) align against a
         // reference pyramid clamped just below their clip point; theirs gets
         // the same clamp. Assumes they share one exposure (the ZSL frames).
@@ -488,12 +500,12 @@ void HdrPlusFrequencyRecorder::recordCompanionAlign(VkCommandBuffer c, VkImageVi
         align_.recordClampedReferencePyramid(c, refBlack + 0.9f * (frame.whiteLevel - black) * gain);
         pyramidClamped_ = true;
     }
-    if (!alignsThisPass()) {
-        align_.recordCompanionPadded(c, rawU16, frame);
-        return;
-    }
     align_.recordCompanionPrepare(c, rawU16, frame);
-    for (std::uint32_t level = align_.levelCount(); level-- > 0;) align_.recordCompanionAlignLevel(c, level);
+    for (std::uint32_t level = align_.levelCount(); --level > 0u;) align_.recordCompanionAlignLevel(c, level);
+}
+
+void HdrPlusFrequencyRecorder::recordCompanionAlignFinest(VkCommandBuffer c, std::uint32_t slot) {
+    align_.recordCompanionAlignLevel(c, 0u);
     if (!config_.frequencyAlignOnce) return;
     if (slot >= hp::kMaxFrequencyFrames) throw std::invalid_argument("hdrplus frequency: too many frames");
     const auto& level0 = geometry_.align.levels.front();
