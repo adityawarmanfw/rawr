@@ -107,7 +107,7 @@ layout(std140, binding = 2) uniform TonemapGpuParams {
     mat4 userInputGamut;
     mat4 userOutputGamut;
     uvec4 directRender; // transform, output gamut, output transfer, reserved
-    vec4 adaptiveTone; // lift EV, key EV, protected highlight EV, lift per EV of shoulder
+    vec4 adaptiveTone; // lift EV, key EV, protected highlight EV
     mat4 agxAp1ToBase;       // AgX (directRender.x == 4) only, see agx.glsl
     mat4 agxBaseToRendering;
     mat4 agxRenderingToSrgb;
@@ -431,7 +431,7 @@ void main() {
 
     if (P.directRender.x != 3u && P.adaptiveTone.x > 0.0) {
         float baselineY = dot(vec3(0.2722287168, 0.6740817658, 0.0536895174), work) * exp2(P.renderConfig.y);
-        work *= rawrAdaptiveToneGain(baselineY, P.adaptiveTone);
+        work *= rawrAdaptiveToneGain(baselineY, P.adaptiveTone.xyz);
     }
     vec3 encoded;
     if (P.directRender.x == 3u) {

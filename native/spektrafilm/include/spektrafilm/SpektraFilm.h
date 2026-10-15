@@ -448,8 +448,6 @@ struct SpektraFilmRecordInfo {
     // Render-side adaptive luminance curve: lift/key/highlight EV, baseline HAL gain.
     // Independent of the film look and its creative exposure; zero lift is identity.
     std::array<float, 4> adaptiveTone{0.0f, -4.0f, 0.0f, 1.0f};
-    // Adaptive curve contrast limit (lift per EV of shoulder width).
-    float adaptiveToneLiftPerEv = 0.25f;
     VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
     LinearRgbImageView input{};
     SrgbImageView output{};

@@ -72,8 +72,7 @@ layout(push_constant) uniform Push {
     float glowStrength;
     float glowMax;
     float hdrToLinearSrgb[9];
-    uint flags;  // bit 0 full-res map, bit 1 write HDR chromaticity plane, bit 2 AgX tap, bit 3 grade tap,
-                 // bits 16-31 adaptive curve lift per EV x 1000 (0 = default)
+    uint flags;  // bit 0 full-res map, bit 1 write HDR chromaticity plane, bit 2 AgX tap, bit 3 grade tap
     // SDR adaptive tone curve (lift, key, highlight EV), pre-shifted into the
     // exposed HDR tap's log2 AP1 luminance. Keeps the block at 128 bytes.
     float adaptiveTone[3];
@@ -213,8 +212,7 @@ void main() {
             pc.hdrToLinearSrgb[6] * hdrWork.x + pc.hdrToLinearSrgb[7] * hdrWork.y + pc.hdrToLinearSrgb[8] * hdrWork.z);
         // AP1 luminance of linear sRGB, the same Y as tonemap.comp.
         float y = dot(vec3(0.21532597, 0.71600819, 0.06866589), lin);
-        hdrWork *= rawrAdaptiveToneGain(y, vec4(pc.adaptiveTone[0], pc.adaptiveTone[1], pc.adaptiveTone[2],
-                                                float(pc.flags >> 16u) * 0.001));
+        hdrWork *= rawrAdaptiveToneGain(y, vec3(pc.adaptiveTone[0], pc.adaptiveTone[1], pc.adaptiveTone[2]));
     }
 
     // The SDR base also carries the Grade sliders (tonemap.comp applyGrade).

@@ -29,8 +29,7 @@ inline std::string resolvedRecipe(const tonemap::TonemapParams& tone, float gain
     RAWR_TONE_FIELD(saturation)
     RAWR_TONE_FIELD(vibrance)
     out << ",\"adaptiveTone\":{\"version\":1,\"liftEv\":" << tone.adaptiveTone.liftEv
-        << ",\"keyEv\":" << tone.adaptiveTone.keyEv << ",\"highlightEv\":" << tone.adaptiveTone.highlightEv
-        << ",\"maxLiftPerEv\":" << tone.adaptiveTone.maxLiftPerEv << "}";
+        << ",\"keyEv\":" << tone.adaptiveTone.keyEv << ",\"highlightEv\":" << tone.adaptiveTone.highlightEv << "}";
 #undef RAWR_TONE_FIELD
     out << "},\"film\":{\"version\":1";
 #define RAWR_FILM_FIELD(type, name) out << ",\"" #name "\":" << film.name;

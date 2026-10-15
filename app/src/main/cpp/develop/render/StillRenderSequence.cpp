@@ -272,7 +272,6 @@ GainmapRecording recordGainmapAndReadback(RenderResources& resources, RenderComm
             gri.params.adaptiveTone[0] = adaptive.liftEv;
             gri.params.adaptiveTone[1] = adaptive.keyEv;
             gri.params.adaptiveTone[2] = adaptive.highlightEv;
-            gri.params.adaptiveToneLiftPerEv = tonemap::adaptiveToneLiftPerEv(adaptive);
             gri.params.adaptiveToneLumaScale = rendered.tonemapParams.aePostGain / gri.params.hdrExposure;
         }
         // The SDR base also carries the Grade sliders (before the render);

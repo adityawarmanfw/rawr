@@ -184,26 +184,5 @@ int main() {
             }
         }
     }
-    // HDR+ Bracketed boost: none without headroom, up to 1.5x max lift and a
-    // 0.4 contrast limit at 3 EV, recoverable from the stored limit.
-    {
-        const auto strong = autoKeyPolicy(AutoKeyMode::Strong);
-        const auto natural = autoKeyPolicy(AutoKeyMode::Natural);
-        const auto none = bracketShadowLift(natural, 0.0f);
-        assert(none.policy.maxLiftEv == natural.maxLiftEv && none.maxLiftPerEv == tonemap::kAdaptiveMaxLiftPerEv);
-        const auto full = bracketShadowLift(natural, 3.0f);
-        assert(near(full.policy.maxLiftEv, 1.5f, 1e-6f) && near(full.maxLiftPerEv, 0.4f, 1e-6f));
-        assert(bracketShadowLift(strong, 5.0f).policy.maxLiftEv == 3.0f);
-        const auto back = bracketShadowLiftForLimit(natural, full.maxLiftPerEv);
-        assert(near(back.policy.maxLiftEv, 1.5f, 1e-5f));
-        assert(bracketShadowLift(autoKeyPolicy(AutoKeyMode::Off), 3.0f).policy.maxLiftEv == 0.0f);
-        // The 16:49 capture: key -5.1, highlight -1.1, Strong. Default limit
-        // gives ~1.4 EV; the boosted limit lifts ~2.2 EV.
-        const auto before = autoKeyCurve(-5.1f, -1.1f, 1.0f, strong);
-        const auto boosted = bracketShadowLift(strong, 3.0f);
-        const auto after = autoKeyCurve(-5.1f, -1.1f, 1.0f, boosted.policy, boosted.maxLiftPerEv);
-        assert(before.liftEv < 1.5f && after.liftEv > 2.0f);
-        assert(tonemap::validAdaptiveTone(after));
-    }
     return 0;
 }

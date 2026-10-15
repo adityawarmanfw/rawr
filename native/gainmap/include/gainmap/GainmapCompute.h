@@ -91,8 +91,6 @@ struct GainmapParams {
     // adaptiveToneLumaScale maps the exposed HDR tap's AP1 luminance into the
     // curve's coordinates (aePostGain / hdrExposure). liftEv 0 = off.
     float adaptiveTone[3] = {0.0f, -4.0f, 0.0f};
-    // Adaptive curve contrast limit (lift per EV of shoulder width).
-    float adaptiveToneLiftPerEv = 0.25f;
     float adaptiveToneLumaScale = 1.0f;
     // Row-major 3x3 HDR-input -> linear-sRGB. The HDR input is white-balanced
     // camera RGB, so this must be the calibrated camera->linear-sRGB matrix,

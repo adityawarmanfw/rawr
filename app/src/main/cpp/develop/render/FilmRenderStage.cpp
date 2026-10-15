@@ -109,7 +109,6 @@ FilmRenderOutcome renderFilmOrTone(RenderResources& resources, RenderCommandSess
         fri.look.filmExposureEv = rawrcam::color::filmExposureEv(rendered.filmLook, rendered.tonemapParams.aePostGain);
         fri.adaptiveTone = {rendered.tonemapParams.adaptiveTone.liftEv, rendered.tonemapParams.adaptiveTone.keyEv,
                             rendered.tonemapParams.adaptiveTone.highlightEv, rendered.tonemapParams.aePostGain};
-        fri.adaptiveToneLiftPerEv = tonemap::adaptiveToneLiftPerEv(rendered.tonemapParams.adaptiveTone);
         __android_log_print(ANDROID_LOG_INFO, "RawrCamNative", "STILL_FILM_EXPOSURE mode=fold gain=%.3f finalEv=%.2f",
                             rendered.tonemapParams.aePostGain, fri.look.filmExposureEv);
         fri.timeSec = static_cast<double>(rendered.timestampNs) / 1e9;
