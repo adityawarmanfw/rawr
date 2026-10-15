@@ -623,6 +623,7 @@ class SettingsModelTest {
         assertEquals(MultiframeMergeAlgorithm.HdrPlusBracketed, persisted?.multiframeTuning?.mergeAlgorithm)
         assertEquals(-3f, MultiframeTuning().copy(bracketEv = -6f).sanitized().bracketEv)
         assertEquals(2, MultiframeTuning().copy(bracketFrames = 9).sanitized().bracketFrames)
+        assertEquals(8, MultiframeTuning().copy(bracketFrames = 8).sanitized().bracketFrames)
         assertEquals(0, MultiframeTuning().copy(bracketFrames = 0).sanitized().bracketFrames)
         assertEquals(0f, MultiframeTuning().copy(longFrameEv = 5f).sanitized().longFrameEv)
         assertEquals(bracketed.maxFrames - 3, bracketed.zslFrames())

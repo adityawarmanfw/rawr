@@ -69,7 +69,7 @@ void SessionFrameCallbacks::updateHdrHeadroom(const image_scopes::SceneExposureS
         !metadata.aeCompensationSteps || (metadata.optimizedStillRequestId && *metadata.optimizedStillRequestId != 0))
         return;
     const auto target =
-        headroomMeter_.update(stats->weightedBins, stats->totalWeight, stats->clippedWeight, std::log2(clipLuma),
+        headroomMeter_.update(stats->weightedBins, stats->totalWeight, std::log2(clipLuma),
                               engine_->hdrHeadroomEvFor(metadata), floorEv, timestampNs);
     if (target) controller->setHdrHeadroomEv(*target);
 }

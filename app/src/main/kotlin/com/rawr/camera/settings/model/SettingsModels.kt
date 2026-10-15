@@ -688,7 +688,7 @@ object MultiframeSpecs {
             "Long Frames",
             "Longer frames taken right after the shutter to clean up shadows. Lower: shorter hold after the shutter (0: none). Higher: cleaner shadows, more chance of motion.",
             0f,
-            4f,
+            8f,
             2f,
             1f,
             0
