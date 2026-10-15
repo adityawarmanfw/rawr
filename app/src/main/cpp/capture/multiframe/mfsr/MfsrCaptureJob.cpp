@@ -65,7 +65,35 @@ void vkCheck(VkResult r, const char* what) {
 
 }  // namespace
 
-void MfsrCaptureJob::run() {
+void MfsrCaptureJob::run() noexcept {
+    const std::uint64_t requestId = work_->requestId;
+    const std::string baseName = work_->baseDng.displayName, mergedName = work_->mergedDng.displayName,
+                      jpegName = work_->mergedJpeg.output.displayName;
+    const bool wantBase = work_->baseDng.outputFd.valid(), wantMerged = work_->mergedDng.outputFd.valid(),
+               wantJpeg = work_->jpegRequested;
+    Published published;
+    std::string error;
+    try {
+        runStages(published);
+        return;
+    } catch (const std::exception& e) {
+        error = std::string("multiframe_job_failed: ") + e.what();
+    } catch (...) {
+        error = "multiframe_job_failed";
+    }
+    LOGE("MULTIFRAME_JOB_FAIL requestId=%llu %s", static_cast<unsigned long long>(requestId), error.c_str());
+    // Unwinding closed every output descriptor the stages still held.
+    const std::string prefix = std::to_string(requestId) + "\t0\t";
+    try {
+        if (wantBase && !published.base) context_.dngBox.push(prefix + baseName + "\t" + error);
+        if (wantMerged && !published.merged) context_.dngBox.push(prefix + mergedName + "\t" + error);
+        if (wantJpeg && !published.jpeg) context_.jpegBox.push(prefix + jpegName + "\t" + error + "\t0");
+    } catch (...) {
+        LOGE("MULTIFRAME_JOB_FAIL completions not published requestId=%llu", static_cast<unsigned long long>(requestId));
+    }
+}
+
+void MfsrCaptureJob::runStages(Published& published) {
     auto& ctx = context_;
     auto& work = work_;
     const std::uint64_t requestId = work->requestId;
@@ -175,6 +203,8 @@ void MfsrCaptureJob::run() {
         std::ostringstream out;
         out << done.requestId << '\t' << (done.success ? 1 : 0) << '\t' << done.displayName << '\t' << done.error;
         ctx.dngBox.push(out.str());
+        if (done.displayName == baseDisplayName) published.base = true;
+        if (done.displayName == mergedDisplayName) published.merged = true;
     };
     const bool wantBase = baseDng.outputFd.valid(), wantMerged = mergedDng.outputFd.valid();
     auto failDng = [&](const std::string& displayName, const std::string& error) {
@@ -190,6 +220,7 @@ void MfsrCaptureJob::run() {
         out << done.requestId << '\t' << (done.success ? 1 : 0) << '\t' << done.displayName << '\t' << done.error
             << '\t' << (done.filmFallbackMemory ? 1 : 0);
         ctx.jpegBox.push(out.str());
+        published.jpeg = true;
     };
     auto failJpeg = [&](const std::string& error) {
         JpegWriteCompletion done{};
