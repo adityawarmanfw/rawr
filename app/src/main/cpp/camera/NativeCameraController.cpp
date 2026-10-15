@@ -258,6 +258,12 @@ struct NativeCameraController::Impl final : CameraEventSink {
         constexpr int64_t kLongFrameMaxNs = 66'666'667;
         const int64_t longTimeMax = std::max(timeMax, std::min(kLongFrameMaxNs, caps.exposureTimeMaxNs));
         std::vector<CameraRequestPipeline::BracketExposure> exposures;
+        // Long frames the shutter/gain limits leave nearly as dark as the
+        // burst add little shadow signal but still cost the user a 15 fps
+        // hold: skip them (the merge stays a uniform burst merge).
+        constexpr double kMinLongFrameGainEv = 0.5;
+        double bestLongEv = 0.0;
+        bool anyLong = false;
         for (const float ev : evOffsets) {
             if (ev > 0.0f) {
                 // Longer shutter first at the reference gain (more light, not
@@ -269,6 +275,9 @@ struct NativeCameraController::Impl final : CameraEventSink {
                 const auto iso = static_cast<int32_t>(
                     std::clamp<double>(std::round(target / double(time)), double(isoMin), double(isoMax)));
                 exposures.push_back({time, iso});
+                anyLong = true;
+                bestLongEv = std::max(bestLongEv, std::log2(double(time) * double(iso) /
+                                                            (double(baseExposureTimeNs) * double(sensitivity))));
                 continue;
             }
             // Lower gain first, down to base ISO: at high ISO highlights clip
@@ -281,6 +290,12 @@ struct NativeCameraController::Impl final : CameraEventSink {
                 std::round(target / double(timeMax)), double(isoMin), double(isoMax)));
             const int64_t time = std::clamp<int64_t>(std::llround(target / double(iso)), timeMin, timeMax);
             exposures.push_back({time, iso});
+        }
+        if (anyLong && bestLongEv < kMinLongFrameGainEv) {
+            char gain[16];
+            std::snprintf(gain, sizeof(gain), "%.2f", bestLongEv);
+            diag(std::string("CAMERA_BRACKET_SKIPPED longEv=") + gain + " limit=exposure");
+            return false;
         }
         return requests.captureBracket(deviceSession.session(), deviceSession.request(), deviceSession.callbackContext(),
                                        control, exposures, requestId);
