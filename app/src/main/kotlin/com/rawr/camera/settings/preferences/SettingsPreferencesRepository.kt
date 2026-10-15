@@ -4,6 +4,7 @@ import com.rawr.camera.settings.model.AgxCatalog
 import com.rawr.camera.settings.model.AgxParameter
 import com.rawr.camera.settings.model.AgxPreset
 import com.rawr.camera.settings.model.AgxValues
+import com.rawr.camera.settings.model.LocalToneLimits
 import com.rawr.camera.settings.model.ProfileTone
 import com.rawr.camera.settings.model.VideoLogProfile
 
@@ -443,6 +444,8 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
             exposureStep = enumOrDefault(p[Keys.exposureStep], d.exposureStep),
             highlightProtection = enumOrDefault(p[Keys.highlightProtection], d.highlightProtection),
             autoKeyExposure = enumOrDefault(p[Keys.autoKeyExposure], d.autoKeyExposure),
+            localToneStrength = LocalToneLimits.strength(p[Keys.localToneStrength] ?: d.localToneStrength),
+            localToneDetail = LocalToneLimits.detail(p[Keys.localToneDetail] ?: d.localToneDetail),
             maxPostGainId = p[Keys.maxPostGainId] ?: d.maxPostGainId,
             autoMinFpsId = p[Keys.autoMinFpsId] ?: d.autoMinFpsId,
             controlSurfaceStyle = enumOrDefault(p[Keys.controlSurfaceStyle], d.controlSurfaceStyle),
@@ -669,6 +672,8 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.exposureStep] = v.exposureStep.name
         p[Keys.highlightProtection] = v.highlightProtection.name
         p[Keys.autoKeyExposure] = v.autoKeyExposure.name
+        p[Keys.localToneStrength] = v.localToneStrength
+        p[Keys.localToneDetail] = v.localToneDetail
         p[Keys.maxPostGainId] = v.maxPostGainId
         p[Keys.autoMinFpsId] = v.autoMinFpsId
         p[Keys.controlSurfaceStyle] = v.controlSurfaceStyle.name
@@ -954,6 +959,8 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val exposureStep = stringPreferencesKey("exposure_step")
         val highlightProtection = stringPreferencesKey("highlight_protection")
         val autoKeyExposure = stringPreferencesKey("auto_key_exposure")
+        val localToneStrength = floatPreferencesKey("local_tone_strength")
+        val localToneDetail = floatPreferencesKey("local_tone_detail")
         val maxPostGainId = stringPreferencesKey("max_post_gain_id")
         val autoMinFpsId = stringPreferencesKey("auto_min_fps_id")
         val controlSurfaceStyle = stringPreferencesKey("control_surface_style")

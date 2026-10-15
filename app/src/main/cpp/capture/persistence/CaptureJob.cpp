@@ -195,6 +195,9 @@ struct Reader {
         bytes(&n, sizeof(n));
         if (n == sizeof(v)) {
             bytes(&v, sizeof(v));
+        } else if (n == offsetof(tonemap::TonemapParams, localTone)) {
+            v = {};
+            bytes(&v, n);  // Before local tone mapping; it stays off.
         } else if (n == offsetof(tonemap::TonemapParams, agx)) {
             v = {};
             bytes(&v, n);  // Pre-AgX layout; AgX keeps its defaults.

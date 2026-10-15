@@ -261,6 +261,7 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
         postNative { native.setPostGainKneeWidthEv(nativeHandle, widthEv) }
 
     fun setAutoKeyMode(mode: Int) = postNative { native.setAutoKeyMode(nativeHandle, mode) }
+    fun setLocalTone(strength: Float, detail: Float) = postNative { native.setLocalTone(nativeHandle, strength, detail) }
 
     fun setAutoMinFps(fps: Int) = postNative { native.setAutoMinFps(nativeHandle, fps) }
     fun setAePriorityDisabled(disabled: Boolean) = postNative { native.setAePriorityDisabled(nativeHandle, disabled) }

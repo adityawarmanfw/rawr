@@ -18,6 +18,7 @@
 #include <type_traits>
 #include <unordered_map>
 
+#include "local_tone/LocalTone.h"
 #include "capture/multiframe/mfsr/MfsrCaptureJob.h"
 #include "capture/persistence/CaptureJob.h"
 #include "color/AutoKeyExposure.h"
@@ -144,6 +145,11 @@ rawrcam::renderer::RenderOptions options(JNIEnv* env, jstring recipe, int workin
     t.adaptiveTone = {float(adaptive.number("liftEv", 0)), float(adaptive.number("keyEv", -4)),
                       float(adaptive.number("highlightEv", 0))};
     if (!tonemap::validAdaptiveTone(t.adaptiveTone)) throw std::runtime_error("Invalid adaptive tone recipe");
+    // HDR+ Bracketed captures carry their local tone mapping; absent = off.
+    Json localTone(env, json.child("localTone"));
+    t.localTone = {float(localTone.number("strength", 0)), float(localTone.number("detail", 1))};
+    if (!rawr::local_tone::validParams({t.localTone.strength, t.localTone.detail}))
+        throw std::runtime_error("Invalid local tone recipe");
     o.adaptiveToneMode = json.text("adaptiveToneMode");
     if (o.adaptiveToneMode == "null") o.adaptiveToneMode.clear();
     // Captures since the mode was recorded say whether the camera metered;

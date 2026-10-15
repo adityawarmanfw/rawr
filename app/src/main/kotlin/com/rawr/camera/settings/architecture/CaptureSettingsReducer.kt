@@ -44,6 +44,15 @@ internal fun reduceCaptureSettings(
         state.withValues(state.values.copy(autoKeyExposure = action.value))
     }
 
+    is SetLocalTone -> {
+        state.withValues(
+            state.values.copy(
+                localToneStrength = action.strength?.let(LocalToneLimits::strength) ?: state.values.localToneStrength,
+                localToneDetail = action.detail?.let(LocalToneLimits::detail) ?: state.values.localToneDetail
+            )
+        )
+    }
+
     is SetControlSurfaceStyle -> {
         state.withValues(state.values.copy(controlSurfaceStyle = action.style))
     }

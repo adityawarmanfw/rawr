@@ -44,6 +44,9 @@ internal class CaptureSettingsSync(
             previewCoordinator.setPostGainKneeWidthEv(com.rawr.camera.settings.model.postGainKneeWidthEvFor(it))
         }
         syncSetting({ it.autoKeyExposure }) { previewCoordinator.setAutoKeyMode(it.nativeId) }
+        syncSetting({ it.localToneStrength to it.localToneDetail }) { (strength, detail) ->
+            previewCoordinator.setLocalTone(strength, detail)
+        }
         syncSetting({ it.maxPostGainId }) {
             previewCoordinator.setMaxAePostGain(com.rawr.camera.settings.model.maxPostGainForId(it))
         }
@@ -70,7 +73,7 @@ internal class CaptureSettingsSync(
         syncSetting({ it.experimentalZeroCopyEnabled }) { previewCoordinator.setExperimentalZeroCopy(it) }
         syncSetting({ it.experimentalMultiframeEnabled }) { previewCoordinator.setExperimentalMultiframeEnabled(it) }
         syncSetting({
-            if (it.experimentalMultiframeEnabled &&
+            if (!it.isVideo && it.experimentalMultiframeEnabled &&
                 it.multiframeTuning.mergeAlgorithm == MultiframeMergeAlgorithm.HdrPlusBracketed
             ) it.multiframeTuning.bracketEv else 0f
         }) { previewCoordinator.setHdrPlusHeadroomMaxEv(it) }

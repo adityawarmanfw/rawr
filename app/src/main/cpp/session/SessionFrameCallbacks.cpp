@@ -119,7 +119,7 @@ bool SessionFrameCallbacks::deferSubmittedFrame(const rawrcam::metadata::FrameMe
     // shutter was accepted. Do not let queue delay turn one into the photo.
     if (!engine_->capture_.acceptsStillTimestamp(metadata.timestampNs)) return false;
     auto tone = tonemapParams;
-    engine_->applyAutoKey(tone);
+    engine_->applyAutoKey(tone, true);
     return engine_->capture_.single().deferSubmittedFrame(metadata, colorState, tone, aePostGain, filmEnabled,
                                                           filmLook);
 }

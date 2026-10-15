@@ -141,9 +141,21 @@ class SessionEngine {
         std::lock_guard<std::mutex> lock(autoKeyMutex_);
         return autoKeyCurve_.liftEv;
     }
-    void applyAutoKey(tonemap::TonemapParams& tone) const {
+    // HDR+ Bracketed: local tone mapping replaces the global shadow-lift
+    // curve (its merged shadows take a regional lift); LOG stays scene-referred.
+    void setLocalTone(float strength, float detail);
+    [[nodiscard]] tonemap::LocalToneParams bracketLocalTone(const tonemap::TonemapParams& tone) const noexcept {
+        if (!(hdrHeadroomMaxEv() < 0.0f) || sceneReferredRender_.load(std::memory_order_relaxed) ||
+            tone.renderTransform == tonemap::RenderTransform::Log)
+            return {};
+        return {localToneStrength_.load(std::memory_order_relaxed), localToneDetail_.load(std::memory_order_relaxed)};
+    }
+    // singleFrame: a one-frame capture (no merged shadows) keeps the curve.
+    void applyAutoKey(tonemap::TonemapParams& tone, bool singleFrame = false) const {
+        tone.localTone = singleFrame ? tonemap::LocalToneParams{} : bracketLocalTone(tone);
+        const bool local = tone.localTone.strength > 0.0f;
         std::lock_guard<std::mutex> lock(autoKeyMutex_);
-        tone.adaptiveTone = autoKeyMode() == rawrcam::color::AutoKeyMode::Off ||
+        tone.adaptiveTone = local || autoKeyMode() == rawrcam::color::AutoKeyMode::Off ||
                                     sceneReferredRender_.load(std::memory_order_relaxed) ||
                                     tone.renderTransform == tonemap::RenderTransform::Log
                                 ? tonemap::AdaptiveToneParams{}
@@ -272,6 +284,9 @@ class SessionEngine {
     tonemap::AdaptiveToneParams autoKeyCurve_{};
     // HDR+ Bracketed headroom floor (EV < 0) or 0 when the meter is off.
     std::atomic<float> hdrHeadroomMaxEv_{0.0f};
+    // Image > Shadow Lift local tone settings (applied in HDR+ Bracketed).
+    std::atomic<float> localToneStrength_{0.5f};
+    std::atomic<float> localToneDetail_{1.0f};
     // LOG profiles stay scene-referred: no auto key lift.
     std::atomic<bool> sceneReferredRender_{false};
 };

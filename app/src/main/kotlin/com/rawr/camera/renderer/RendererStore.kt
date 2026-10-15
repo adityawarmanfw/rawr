@@ -130,6 +130,7 @@ internal class RendererStore private constructor(private val context: Context) {
         val frozen = JSONObject(original).apply {
             put("aePostGain", resolved?.optDouble("aePostGain", 1.0) ?: 1.0)
             resolved?.optJSONObject("tonemap")?.optJSONObject("adaptiveTone")?.let { put("adaptiveTone", it) }
+            resolved?.optJSONObject("tonemap")?.optJSONObject("localTone")?.let { put("localTone", it) }
             put("timestampNs", frame?.optLong("timestampNs", 1_000_000_000) ?: 1_000_000_000)
             if (frame != null) put("resolvedFrame", frame)
             // The recipe's mode is the capture's; drafts re-encode autoKeyExposure from the editor settings.

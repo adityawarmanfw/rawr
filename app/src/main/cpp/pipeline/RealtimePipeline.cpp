@@ -153,7 +153,8 @@ void RealtimePipeline::createFrameProcessor() {
         monitoring_.overlay(), monitoring_.scopes(), swapchainRenderer_, performanceTracker_,
         [this](const std::string& line) {
             if (audit_) audit_(line);
-        });
+        },
+        localTone_.get());
 }
 bool RealtimePipeline::setColorRenderProfile(tonemap_integration::ColorRenderProfile profile,
                                              std::string importedProfileId) {
@@ -234,6 +235,15 @@ bool RealtimePipeline::configureGeometry(uint64_t generation, uint32_t width, ui
                 rawCreate.conditionalRendering = false;
         }
         rawPreview_ = std::make_unique<raw_preview::RawPreview>(rawCreate);
+        try {
+            localTone_ = std::make_unique<rawr::local_tone::LocalToneProcessor>(
+                rawr::vk::GpuContext{vulkanContext_.physicalDevice(), vulkanContext_.device(),
+                                     vulkanContext_.queueFamily()},
+                imaging::kRealtimeFramesInFlight);
+        } catch (const std::exception& e) {
+            localTone_.reset();  // The viewfinder runs without local tone mapping.
+            SESSION_LOGI("LOCAL_TONE_PREVIEW_UNAVAILABLE %s", e.what());
+        }
         SESSION_LOGI("RAW_PREVIEW_HIGHLIGHT_PREDICATE conditionalRendering=%d",
                      rawCreate.conditionalRendering ? 1 : 0);
 
@@ -385,6 +395,7 @@ void RealtimePipeline::destroyCameraResources(bool preserveHqStill, bool teardow
         capturePort_.resetStillProcessing();
     }
     frameProcessor_.reset();
+    localTone_.reset();
     swapchainRenderer_.clearFrameSources();
     rawIntegrityProbe_.reset();
     pipelineDiagnostics_.reset();

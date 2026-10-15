@@ -73,7 +73,8 @@ RawDevelopRecorder::RawDevelopRecorder(raw_preview::RawPreview& rawPreview, tone
                                        rawrcam::monitoring::MonitoringOverlayProcessor& monitoringOverlay,
                                        rawrcam::monitoring::ImageScopesProcessor& imageScopes,
                                        rawrcam::presentation::SwapchainRenderer& presentation,
-                                       rawrcam::diagnostics::GpuTimingTracker& performance, Audit audit)
+                                       rawrcam::diagnostics::GpuTimingTracker& performance, Audit audit,
+                                       rawr::local_tone::LocalToneProcessor* localTone)
     : rawPreview_(rawPreview),
       tonemap_(tonemap),
       acquireFilm_(std::move(acquireFilm)),
@@ -81,7 +82,8 @@ RawDevelopRecorder::RawDevelopRecorder(raw_preview::RawPreview& rawPreview, tone
       integrityProbe_(integrityProbe),
       monitor_(monitoringOverlay, imageScopes, presentation, performance),
       performance_(performance),
-      audit_(std::move(audit)) {}
+      audit_(std::move(audit)),
+      localTone_(localTone) {}
 
 RawDevelopRecordResult RawDevelopRecorder::record(const RawDevelopRecordInput& in, uint32_t auditSubmitCount) const {
     auto& slot = in.slot;
@@ -407,6 +409,36 @@ RawDevelopRecordResult RawDevelopRecorder::record(const RawDevelopRecordInput& i
     if (in.sceneExposureEnabled && in.diagnosticMode == 0u) {
         recordSceneExposure(slot.command, in.slotIndex, slot.linear.view, in.previewWidth, in.previewHeight,
                             in.sensorToLinearSrgb, in.whiteBalance);
+    }
+
+    // HDR+ Bracketed local tone mapping: after the scene meter read the
+    // unlifted linear image, before film/tonemap; in place on the display
+    // input and the linear image (stills apply it to both copies too).
+    const auto& localTone = in.tonemapParams.localTone;
+    if (localTone_ && in.diagnosticMode == 0u &&
+        rawr::local_tone::active({localTone.strength, localTone.detail})) {
+        VkMemoryBarrier readDone{};
+        readDone.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        readDone.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        readDone.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        vkCmdPipelineBarrier(slot.command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
+                             1, &readDone, 0, nullptr, 0, nullptr);
+        rawr::local_tone::RecordInfo lt{};
+        lt.commandBuffer = slot.command;
+        lt.width = in.previewWidth;
+        lt.height = in.previewHeight;
+        lt.measure = {slot.linear.image, slot.linear.view};
+        lt.targets[0] = lt.measure;
+        lt.targetCount = 1;
+        if (displayImage != slot.linear.image) {
+            lt.targets[1] = {displayImage, displayView};
+            lt.targetCount = 2;
+        }
+        lt.cameraToWorking = composeCameraToAp1(in.sensorToLinearSrgb);
+        lt.renderGain = in.tonemapParams.aePostGain * std::exp2(in.tonemapParams.exposureEV);
+        lt.params = {localTone.strength, localTone.detail};
+        lt.slot = in.slotIndex;
+        localTone_->record(lt);
     }
 
     performance_.markTonemapInputReady(slot.command, in.slotIndex);

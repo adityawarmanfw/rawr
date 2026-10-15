@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 
+#include "local_tone/LocalTone.h"
 #include "diagnostics/timing/GpuTimingTracker.h"
 #include "metadata/FrameMetadataSnapshot.h"
 #include "pipeline/FrameSlotPool.h"
@@ -116,7 +117,8 @@ class RawDevelopRecorder final {
                        rawrcam::monitoring::MonitoringOverlayProcessor& monitoringOverlay,
                        rawrcam::monitoring::ImageScopesProcessor& imageScopes,
                        rawrcam::presentation::SwapchainRenderer& presentation,
-                       rawrcam::diagnostics::GpuTimingTracker& performance, Audit audit);
+                       rawrcam::diagnostics::GpuTimingTracker& performance, Audit audit,
+                       rawr::local_tone::LocalToneProcessor* localTone = nullptr);
 
     RawDevelopRecordResult record(const RawDevelopRecordInput& input, uint32_t auditSubmitCount) const;
     void recordSceneExposure(VkCommandBuffer command, uint32_t frameSlot, VkImageView view, uint32_t width,
@@ -142,6 +144,8 @@ class RawDevelopRecorder final {
     MonitorRecorder monitor_;
     rawrcam::diagnostics::GpuTimingTracker& performance_;
     Audit audit_;
+    // Owned by RealtimePipeline (one low-res set per frame slot); null = off.
+    rawr::local_tone::LocalToneProcessor* localTone_ = nullptr;
 };
 
 }  // namespace rawrcam::pipeline

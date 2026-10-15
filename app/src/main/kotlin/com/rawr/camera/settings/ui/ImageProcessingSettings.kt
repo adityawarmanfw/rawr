@@ -127,7 +127,7 @@ internal fun ImageSettings(state: SettingsUiState, dispatch: SettingsDispatch) {
         }
         SettingsGroup(
             title = "Shadow Lift",
-            description = "Brightens shadows in high-contrast scenes; highlights keep their brightness. Not applied to LOG."
+            description = "Brightens shadows in high-contrast scenes; highlights keep their brightness. HDR+ Bracketed uses the local lift below instead. Not applied to LOG."
         ) {
             CompactChoiceRow(AutoKeyExposure.entries, state.values.autoKeyExposure, {
                 it.label
@@ -138,6 +138,34 @@ internal fun ImageSettings(state: SettingsUiState, dispatch: SettingsDispatch) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
             )
+            SettingDivider()
+            // HDR+ Bracketed replaces the curve above with a regional lift:
+            // its merged shadows are clean enough. Render only (JPEG and
+            // viewfinder); the DNG is unchanged.
+            StandaloneNumericSliderRow(
+                identity = "local_tone_strength",
+                label = "HDR+ Bracketed Local Lift",
+                supportingText = "Brightens dark areas region by region; highlights and blacks keep their level. Lower: closer to the plain capture. Higher: brighter shadows, flatter overall. 0 turns it off.",
+                minimum = 0f,
+                maximum = 1f,
+                step = .05f,
+                decimals = 2,
+                value = state.values.localToneStrength,
+                defaultValue = LocalToneLimits.DEFAULT_STRENGTH
+            ) { dispatch.invoke(SetLocalTone(strength = it)) }
+            SettingDivider()
+            StandaloneNumericSliderRow(
+                identity = "local_tone_detail",
+                label = "HDR+ Bracketed Local Contrast",
+                supportingText = "Contrast of fine detail inside each region. Lower: softer, more natural. Higher: crisper, more processed.",
+                minimum = LocalToneLimits.MIN_DETAIL,
+                maximum = LocalToneLimits.MAX_DETAIL,
+                step = .05f,
+                decimals = 2,
+                value = state.values.localToneDetail,
+                enabled = state.values.localToneStrength > 0f,
+                defaultValue = LocalToneLimits.DEFAULT_DETAIL
+            ) { dispatch.invoke(SetLocalTone(detail = it)) }
         }
         SettingsGroup(title = "Enhancement") {
             SettingsRow(

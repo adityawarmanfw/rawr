@@ -202,6 +202,17 @@ enum class HighlightProtection(val label: String, val kneeSummary: String) {
 }
 
 /** Shadow lift (adaptive scene-key curve) after the brightness boost; native AutoKeyMode ids. */
+/** Ranges shared by the settings UI and the native session (local_tone/LocalTone.h). */
+object LocalToneLimits {
+    const val DEFAULT_STRENGTH = 0.5f
+    const val DEFAULT_DETAIL = 1.0f
+    const val MIN_DETAIL = 0.8f
+    const val MAX_DETAIL = 1.3f
+    fun strength(value: Float): Float = if (value.isFinite()) (value.coerceIn(0f, 1f) * 20f).roundToInt() / 20f else DEFAULT_STRENGTH
+    fun detail(value: Float): Float =
+        if (value.isFinite()) (value.coerceIn(MIN_DETAIL, MAX_DETAIL) * 20f).roundToInt() / 20f else DEFAULT_DETAIL
+}
+
 enum class AutoKeyExposure(val label: String, val summary: String, val nativeId: Int) {
     Off("Off", "No lift · renders the boosted exposure as is", 0),
     Natural("Natural", "Lifts shadows up to 1 EV", 1),
@@ -911,6 +922,10 @@ data class SettingsValues(
     val exposureStep: ExposureStep = ExposureStep.Third,
     val highlightProtection: HighlightProtection = HighlightProtection.High,
     val autoKeyExposure: AutoKeyExposure = AutoKeyExposure.Natural,
+    /** HDR+ Bracketed local tone mapping (JPEG/viewfinder only): 0 = off .. 1. */
+    val localToneStrength: Float = LocalToneLimits.DEFAULT_STRENGTH,
+    /** Local contrast of the local tone mapping, 1 = unchanged. */
+    val localToneDetail: Float = LocalToneLimits.DEFAULT_DETAIL,
     val maxPostGainId: String = "gain.200",
     val autoMinFpsId: String = "fps.12",
     val controlSurfaceStyle: ControlSurfaceStyle = ControlSurfaceStyle.Basic,

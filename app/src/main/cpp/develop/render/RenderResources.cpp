@@ -220,6 +220,14 @@ void RenderResources::ensureGaloshYuv() {
         std::make_unique<::galosh::GaloshYuvPipeline>(physicalDevice_, device_, queueFamily_, galosh::yuvShaderMap());
     galoshYuvDevice_ = device_;
 }
+void RenderResources::ensureLocalTone() {
+    if (localTone_ && localToneDevice_ == device_) return;
+    // A device change means the old one is gone; the caller has no work in flight.
+    localTone_.reset();
+    localTone_ = std::make_unique<rawr::local_tone::LocalToneProcessor>(
+        rawr::vk::GpuContext{physicalDevice_, device_, queueFamily_}, 1u);
+    localToneDevice_ = device_;
+}
 void RenderResources::closeFilmAssets() noexcept {
     if (filmAssets_.hanatos) {
         AAsset_close(filmAssets_.hanatos);
@@ -443,6 +451,8 @@ void RenderResources::releasePixels() noexcept {
         // epoch reallocates per geometry inside process().
         galoshYuv_.reset();
         galoshYuvDevice_ = VK_NULL_HANDLE;
+        localTone_.reset();
+        localToneDevice_ = VK_NULL_HANDLE;
     } else if (galoshYuv_ && galoshYuvDevice_ != device_) {
         // Device changed under persistence (surface recreation): the pipeline
         // holds command pool/fence/descriptors on the old VkDevice.
@@ -496,6 +506,8 @@ void RenderResources::reset() noexcept {
     // Destroy GALOSH while device_ is still valid: the pipeline destructor
     // issues vkDestroy* on its stored VkDevice. Must precede the nulling
     // below (destroyResources keeps it alive under persistence).
+    localTone_.reset();
+    localToneDevice_ = VK_NULL_HANDLE;
     galoshYuv_.reset();
     galoshYuvDevice_ = VK_NULL_HANDLE;
     releasePixels();

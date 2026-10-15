@@ -171,6 +171,45 @@ bool runGaloshYuv(RenderResources& resources, RenderCommandSession& commands, co
 
     return galoshYuvSuccess;
 }
+// Local tone mapping (HDR+ Bracketed): an edge-aware regional gain applied in
+// place to the scene-linear images every later stage reads (tone/film read
+// the SDR image, the gain map's HDR tap the post-demosaic output), measured
+// as rendered (AE post-gain x render exposure). Inside the non-reuse block:
+// a reused linear result already carries it.
+void recordLocalTone(RenderResources& resources, RenderCommandSession& commands, const RenderedStillContext& rendered,
+                     const RenderResources::Diagnostic& emit) {
+    const auto& lt = rendered.tonemapParams.localTone;
+    rawr::local_tone::Params params{lt.strength, lt.detail};
+    if (!rawr::local_tone::active(params)) return;
+    resources.ensureLocalTone();
+    // Earlier stages (post-demosaic, GALOSH) wrote these images in place.
+    VkMemoryBarrier written{};
+    written.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    written.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    written.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(commands.command(), VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
+                         1, &written, 0, nullptr, 0, nullptr);
+    rawr::local_tone::RecordInfo info{};
+    info.commandBuffer = commands.command();
+    info.width = rendered.width;
+    info.height = rendered.height;
+    const VkImage hdr = resources.postDemosaic().outputImage(), sdr = resources.postDemosaic().sdrOutputImage();
+    info.measure = {hdr, resources.postDemosaic().outputView()};
+    info.targets[0] = info.measure;
+    info.targetCount = 1;
+    if (sdr != VK_NULL_HANDLE && sdr != hdr) {
+        info.targets[1] = {sdr, resources.postDemosaic().sdrOutputView()};
+        info.targetCount = 2;
+    }
+    info.cameraToWorking = rendered.cameraToWorkingColumnMajor;
+    info.renderGain = rendered.tonemapParams.aePostGain * std::exp2(rendered.tonemapParams.exposureEV);
+    info.params = params;
+    const bool recorded = resources.localTone().record(info);
+    emit("LOCAL_TONE requestId=" + std::to_string(rendered.requestId) + " strength=" + std::to_string(lt.strength) +
+         " detail=" + std::to_string(lt.detail) + " targets=" + std::to_string(info.targetCount) +
+         " recorded=" + (recorded ? "1" : "0"));
+}
+
 struct GainmapRecording {
     bool clipUsed;
     float clipBoost;
@@ -432,6 +471,7 @@ RenderedStillCompletion executeStillRender(RenderResources& resources, RenderCom
         if (!rendered.reuseLinearResult) {
             recordPostDemosaic(resources, commands, rendered, sourceImage, sourceView, clipStateImage, clipStateView);
             galoshYuvSuccess = runGaloshYuv(resources, commands, device, rendered, emit);
+            recordLocalTone(resources, commands, rendered, emit);
         } else if (commands.timingPool()) {
             // Skipped stages still own valid adjacent zero-duration timestamp pairs.
             for (uint32_t i : {0u,1u,2u,3u,4u,5u,10u,11u,12u,13u,14u,15u,16u,17u})

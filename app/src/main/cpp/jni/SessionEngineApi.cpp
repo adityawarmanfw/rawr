@@ -127,6 +127,9 @@ void setMaxAePostGain(EngineHandle h, float gain) noexcept {
 void setPostGainKneeWidthEv(EngineHandle h, float widthEv) noexcept {
     if (h) engine(h)->setPostGainKneeWidthEv(widthEv);
 }
+void setLocalTone(EngineHandle h, float strength, float detail) noexcept {
+    if (h) engine(h)->setLocalTone(strength, detail);
+}
 void setAutoKeyMode(EngineHandle h, int mode) noexcept {
     if (h) engine(h)->setAutoKeyMode(mode);
 }

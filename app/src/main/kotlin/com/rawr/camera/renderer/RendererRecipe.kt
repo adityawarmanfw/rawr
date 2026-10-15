@@ -20,7 +20,8 @@ internal object RendererRecipe {
         capture.isNotBlank() || !embeddedRecipe.isNullOrBlank()
 
     /** Capture metadata every draft carries from its source, whatever the editor settings. */
-    private val sourceKeys = listOf("aePostGain", "adaptiveTone", "capturedAutoKeyExposure", "timestampNs", "resolvedFrame")
+    private val sourceKeys =
+        listOf("aePostGain", "adaptiveTone", "localTone", "capturedAutoKeyExposure", "timestampNs", "resolvedFrame")
 
     /** Capture-time adaptive shadow lift in a draft or source recipe; null when it carries none. */
     fun adaptiveLift(recipe: String): Float? = runCatching {

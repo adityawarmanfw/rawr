@@ -3,6 +3,7 @@
 
 #include "capture/CaptureRequest.h"
 #include "capture/multiframe/BracketExposure.h"
+#include "local_tone/LocalTone.h"
 // Still + multiframe capture routing.
 #include "camera/NativeCameraController.h"
 #include "diagnostics/logging/NativeLog.h"
@@ -46,7 +47,7 @@ uint64_t SessionEngine::requestRawStillCapture(rawrcam::encoding::dng::DngCaptur
     dngContext.autoKeyEv = appliedAutoKeyEv();
     if (dngContext.captureTone) {
         auto capturedTone = std::make_shared<tonemap::TonemapParams>(*dngContext.captureTone);
-        applyAutoKey(*capturedTone);
+        applyAutoKey(*capturedTone, true);
         dngContext.captureTone = std::move(capturedTone);
     }
     const uint64_t requestId = capture_.requestSingle(std::move(dngContext), std::move(jpegContext), [this] {
@@ -89,6 +90,15 @@ void SessionEngine::setHdrPlusHeadroomMaxEv(float maxEv) {
     // Off: drop the headroom now; on: the meter sets it from the next frames.
     if (!(floor < 0.0f)) cameraControls_.controller()->setHdrHeadroomEv(0.0f);
     LOGI("HDRPLUS_BRACKET headroomMaxEv=%.1f", floor);
+}
+void SessionEngine::setLocalTone(float strength, float detail) {
+    const rawr::local_tone::Params p{std::isfinite(strength) ? std::clamp(strength, 0.0f, 1.0f) : 0.0f,
+                                     std::isfinite(detail) ? std::clamp(detail, rawr::local_tone::kMinDetail,
+                                                                        rawr::local_tone::kMaxDetail)
+                                                           : 1.0f};
+    localToneStrength_.store(p.strength, std::memory_order_relaxed);
+    localToneDetail_.store(p.detail, std::memory_order_relaxed);
+    LOGI("LOCAL_TONE strength=%.2f detail=%.2f", p.strength, p.detail);
 }
 float SessionEngine::hdrHeadroomEvFor(const metadata::FrameMetadataSnapshot& metadata) const {
     const auto* controller = cameraControls_.controller();

@@ -36,6 +36,9 @@ class RendererDngReplayActivity : Activity() {
                     resolved.optJSONObject("tonemap")?.optJSONObject("adaptiveTone")?.let {
                         original.put("adaptiveTone", it)
                     }
+                    resolved.optJSONObject("tonemap")?.optJSONObject("localTone")?.let {
+                        original.put("localTone", it)
+                    }
                     original.put("aePostGain", resolved.getDouble("aePostGain"))
                         .put("timestampNs", frame.getLong("timestampNs"))
                         .put("resolvedFrame", frame)

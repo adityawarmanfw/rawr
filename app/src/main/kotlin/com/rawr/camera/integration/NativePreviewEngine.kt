@@ -89,6 +89,7 @@ class NativePreviewEngine {
     external fun setPostGainKneeWidthEv(handle: Long, widthEv: Float)
 
     external fun setAutoKeyMode(handle: Long, mode: Int)
+    external fun setLocalTone(handle: Long, strength: Float, detail: Float)
 
     external fun setAutoMinFps(handle: Long, fps: Int)
     external fun setAePriorityDisabled(handle: Long, disabled: Boolean)

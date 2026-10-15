@@ -35,7 +35,8 @@ inline bool validParams(const Params& p) noexcept {
     return std::isfinite(p.strength) && p.strength >= 0.0f && p.strength <= 1.0f && std::isfinite(p.detail) &&
            p.detail >= kMinDetail && p.detail <= kMaxDetail;
 }
-inline bool active(const Params& p) noexcept { return validParams(p) && (p.strength > 0.0f || p.detail != 1.0f); }
+// Strength 0 is off whatever the detail setting.
+inline bool active(const Params& p) noexcept { return validParams(p) && p.strength > 0.0f; }
 
 // Full-res pixels per low-res texel for an image.
 inline std::uint32_t blockSize(std::uint32_t width, std::uint32_t height) noexcept {
