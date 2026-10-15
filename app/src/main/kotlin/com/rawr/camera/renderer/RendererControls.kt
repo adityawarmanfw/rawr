@@ -242,7 +242,7 @@ private fun EditorGroup(title: String, enabled: Boolean? = null, onEnabled: (Boo
 @Composable
 internal fun RendererControls(stage: RendererStage, v: SettingsValues, dispatch: SettingsDispatch,
                               job: RenderJob, resolution: (Double)->Unit, importLut: (String?)->Unit,
-                              shadowLift: (AutoKeyExposure)->Unit = {}) {
+                              shadowLift: (AutoKeyExposure)->Unit = {}, localTone: (Float)->Unit = {}) {
     fun send(a: SettingsAction)=dispatch.invoke(a)
     @Composable fun tone(p: ImageToneNumericParameter) {
         val s=p.reviewSpec();val t=v.activeImageTone()
@@ -311,11 +311,21 @@ internal fun RendererControls(stage: RendererStage, v: SettingsValues, dispatch:
                 }
             }
             RendererStage.TONEMAP -> {
-                // Same modes as the camera's shadow lift; it feeds every mode below (tone,
-                // AgX and film). Unknown older captures show "As captured" until changed.
-                val lift = RendererRecipe.adaptiveToneMode(job.draft)
-                EditorChoice("Shadow lift", lift?.label ?: "As captured", AutoKeyExposure.entries.map { it.label }) {
-                    shadowLift(AutoKeyExposure.entries[it])
+                // Same as the camera's Shadow Lift: local tone mapping (exposure fusion)
+                // or the adaptive curve. It feeds every mode below (tone, AgX and film).
+                val shadows = RendererRecipe.localToneShadows(job.draft)
+                EditorChoice("Tone mapping", if (shadows > 0f) "Local" else "Adaptive", listOf("Adaptive", "Local")) {
+                    localTone(if (it == 1) LocalToneLimits.DEFAULT_SHADOWS_EV else 0f)
+                }
+                if (shadows > 0f) EditorNested {
+                    EditorNumber("Local shadows", shadows, LocalToneLimits.MIN_SHADOWS_EV, LocalToneLimits.MAX_SHADOWS_EV,
+                        .5f, LocalToneLimits.DEFAULT_SHADOWS_EV) { localTone(it) }
+                } else EditorNested {
+                    // Unknown older captures show "As captured" until changed.
+                    val lift = RendererRecipe.adaptiveToneMode(job.draft)
+                    EditorChoice("Shadow lift", lift?.label ?: "As captured", AutoKeyExposure.entries.map { it.label }) {
+                        shadowLift(AutoKeyExposure.entries[it])
+                    }
                 }
                 val mode=if(v.filmSimEnabled)"Film Sim" else if(v.colorRenderProfile==ColorRenderProfile.AgX)"AgX" else "RAWR"
                 EditorChoice("Mode",mode,listOf("RAWR","AgX","Film Sim")){

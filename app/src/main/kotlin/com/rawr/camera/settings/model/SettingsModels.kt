@@ -721,7 +721,7 @@ object MultiframeSpecs {
         MultiframeNumericSpec(
             MultiframeNumericParameter.BracketZslFrames,
             "ZSL Frames",
-            "Underexposed frames from just before the shutter press; no wait. Lower: faster processing. Higher: cleaner, slower. With the after-shutter frames at most 30; this is trimmed to fit.",
+            "Underexposed frames from just before the shutter press; no wait. Lower: faster processing. Higher: cleaner, slower. Together with the after-shutter frames at most 30: raising one lowers the other.",
             2f,
             30f,
             14f,
@@ -733,7 +733,7 @@ object MultiframeSpecs {
         MultiframeNumericSpec(
             MultiframeNumericParameter.BracketFrames,
             "After-Shutter Frames",
-            "Overexposed frames taken right after the shutter press; hold still until the tick. 0: none. Lower: shorter hold. Higher: cleaner shadows, longer hold and more motion risk. When the scene is too dark for them to get brighter, they are taken as extra ZSL frames instead.",
+            "Brighter frames taken right after the shutter press; hold still until the tick. 0: none. Lower: shorter hold. Higher: cleaner shadows, longer hold and more motion risk. Together with the ZSL frames at most 30. When the scene is too dark for them to get brighter, they are taken as extra ZSL frames instead.",
             0f,
             16f,
             2f,
@@ -885,7 +885,8 @@ data class MultiframeTuning(
                     if (spec.accepts(candidate)) candidate else defaults.value(spec.parameter)
                 )
         }
-        return clean
+        // Saved before the two counts limited each other: keep the after-shutter frames.
+        return clean.withBracketFramesFitting(MultiframeNumericParameter.BracketFrames)
     }
 
     fun nativeValues(): FloatArray = floatArrayOf(
@@ -912,6 +913,18 @@ data class MultiframeTuning(
         fallbackChroma,
         fallbackLuma
     )
+
+    /**
+     * HDR+ Bracketed ZSL and after-shutter frames share the 30-frame limit:
+     * raising one lowers the other ([changed] is the one the user moved).
+     */
+    fun withBracketFramesFitting(changed: MultiframeNumericParameter): MultiframeTuning = when (changed) {
+        MultiframeNumericParameter.BracketZslFrames ->
+            copy(bracketFrames = bracketFrames.coerceAtMost(MAX_BURST_FRAMES - bracketZslFrames))
+        MultiframeNumericParameter.BracketFrames ->
+            copy(bracketZslFrames = bracketZslFrames.coerceAtMost(MAX_BURST_FRAMES - bracketFrames).coerceAtLeast(2))
+        else -> this
+    }
 
     /** ZSL frames to freeze at the shutter; HDR+ Bracketed trims its burst so both fit the 30-frame limit. */
     fun zslFrames(): Int =

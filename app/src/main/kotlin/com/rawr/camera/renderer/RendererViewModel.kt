@@ -161,6 +161,11 @@ internal class RendererViewModel(application: Application) : AndroidViewModel(ap
         store.updateAdaptiveToneMode(job.id, mode)
     }
 
+    fun setLocalTone(job: RenderJob, shadowsEv: Float) {
+        if (state.value.loading || store.busy.value) return
+        store.updateLocalTone(job.id, shadowsEv)
+    }
+
     fun saveResolution(job: RenderJob, megapixels: Double) = operation {
         withContext(Dispatchers.IO) { store.save(store.current(job.id).copy(megapixels = megapixels)) }
     }

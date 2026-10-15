@@ -627,6 +627,16 @@ class SettingsModelTest {
         assertEquals(14, MultiframeTuning().copy(bracketZslFrames = 31).sanitized().bracketZslFrames)
         assertEquals(0, MultiframeTuning().copy(bracketFrames = 0).sanitized().bracketFrames)
         assertEquals(0f, MultiframeTuning().copy(longFrameEv = 5f).sanitized().longFrameEv)
+        // The two counts push each other to stay within 30.
+        controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.BracketZslFrames, 30f))
+        assertEquals(30, controller.state.value.values.multiframeTuning.bracketZslFrames)
+        assertEquals(0, controller.state.value.values.multiframeTuning.bracketFrames)
+        controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.BracketFrames, 16f))
+        assertEquals(14, controller.state.value.values.multiframeTuning.bracketZslFrames)
+        assertEquals(16, controller.state.value.values.multiframeTuning.bracketFrames)
+        assertEquals(14, MultiframeTuning().copy(bracketZslFrames = 30, bracketFrames = 16).sanitized().bracketZslFrames)
+        controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.BracketFrames, 3f))
+        controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.BracketZslFrames, 14f))
         // Bracketed: its own ZSL count, trimmed so ZSL + after-shutter fit 30.
         assertEquals(14, bracketed.zslFrames())
         assertEquals(3, bracketed.postShutterFrames())

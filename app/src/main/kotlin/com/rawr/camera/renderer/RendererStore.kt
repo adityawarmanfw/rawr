@@ -42,6 +42,7 @@ internal class RendererStore private constructor(private val context: Context) {
     fun updateDraft(id: String, values: SettingsValues) = repository.updateDraft(id, values)
     fun updateAdaptiveToneMode(id: String, mode: com.rawr.camera.settings.model.AutoKeyExposure) =
         repository.updateAdaptiveToneMode(id, mode)
+    fun updateLocalTone(id: String, shadowsEv: Float) = repository.updateLocalTone(id, shadowsEv)
     suspend fun metadata(job: RenderJob): String = withContext(Dispatchers.IO) {
         lane.withLock { native.metadata(job) }
     }

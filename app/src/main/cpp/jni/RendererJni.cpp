@@ -76,6 +76,11 @@ std::shared_ptr<Session> get(jlong id) {
 // the stored key when the camera metered, else from this DNG's own meter.
 // No override keeps the captured adaptive tone exactly.
 void resolveAdaptiveTone(Session& s, rawrcam::renderer::RenderOptions& o) {
+    // Local tone mapping replaces the adaptive curve, as at capture.
+    if (rawr::local_tone::fusionActive(o.context.tonemapParams.localTone.shadowsEv)) {
+        o.context.tonemapParams.adaptiveTone = {};
+        return;
+    }
     if (o.adaptiveToneMode.empty()) return;
     const auto mode = rawrcam::color::autoKeyModeFromName(o.adaptiveToneMode);
     if (!mode) throw std::runtime_error("Unsupported shadow lift mode");
@@ -158,6 +163,10 @@ rawrcam::renderer::RenderOptions options(JNIEnv* env, jstring recipe, int workin
                                                      rawr::local_tone::kDefaultHighlightsEv}
                           : tonemap::LocalToneParams{};
     }
+    // Editor override (Tone mapping / Local shadows); 0 = adaptive curve.
+    if (const double shadows = json.number("localToneShadowsEv", -1); shadows >= 0)
+        t.localTone = shadows > 0 ? tonemap::LocalToneParams{float(shadows), rawr::local_tone::kDefaultHighlightsEv}
+                                  : tonemap::LocalToneParams{};
     if (rawr::local_tone::fusionActive(t.localTone.shadowsEv) &&
         !rawr::local_tone::validParams(rawr::local_tone::fusionParams(t.localTone.shadowsEv, t.localTone.highlightsEv)))
         throw std::runtime_error("Invalid local tone recipe");

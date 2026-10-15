@@ -38,6 +38,32 @@ internal object RendererRecipe {
         JSONObject(draft).optString("adaptiveToneMode").let { name -> AutoKeyExposure.entries.firstOrNull { it.name == name } }
     }.getOrNull() ?: capturedAutoKey(draft) ?: AutoKeyExposure.Off.takeIf { (adaptiveLift(draft) ?: 0f) <= 0f }
 
+    /** Local tone mapping shadows EV the capture rendered with; 0 = adaptive curve. */
+    fun capturedLocalTone(recipe: String): Float = runCatching {
+        val lt = JSONObject(recipe).optJSONObject("localTone") ?: return@runCatching 0f
+        if (lt.optInt("version", 1) >= 2) lt.optDouble("shadowsEv", 0.0).toFloat()
+        else if (lt.optDouble("strength", 0.0) > 0.0) LocalToneLimits.DEFAULT_SHADOWS_EV else 0f
+    }.getOrDefault(0f)
+
+    /** The editor's local tone shadows EV: its override, else the capture's; 0 = adaptive curve. */
+    fun localToneShadows(draft: String): Float = runCatching {
+        JSONObject(draft).takeIf { it.has("localToneShadowsEv") }?.getDouble("localToneShadowsEv")?.toFloat()
+    }.getOrNull() ?: capturedLocalTone(draft)
+
+    /**
+     * [draft] with local tone [shadowsEv] (0 = adaptive curve). The capture's value clears the
+     * override. Leaving local tone mapping re-meters the adaptive curve (a local capture
+     * stored none), keeping the chosen strength.
+     */
+    fun withLocalTone(draft: String, shadowsEv: Float): String {
+        val json = JSONObject(draft)
+        val value = if (shadowsEv > 0f) LocalToneLimits.shadowsEv(shadowsEv) else 0f
+        if (value == capturedLocalTone(draft)) json.remove("localToneShadowsEv") else json.put("localToneShadowsEv", value.toDouble())
+        if (value == 0f && capturedLocalTone(draft) > 0f && !json.has("adaptiveToneMode"))
+            json.put("adaptiveToneMode", (capturedAutoKey(draft) ?: AutoKeyExposure.Natural).name)
+        return json.toString()
+    }
+
     /**
      * [draft] with shadow-lift [mode]. Choosing what the source was captured with clears the
      * override, so the captured adaptive tone replays exactly.
@@ -60,6 +86,8 @@ internal object RendererRecipe {
         sourceKeys.forEach { key -> if (source.has(key)) draft.put(key, source.get(key)) }
         runCatching { JSONObject(previousDraft).optString("adaptiveToneMode") }.getOrNull()
             ?.takeIf { it.isNotBlank() }?.let { draft.put("adaptiveToneMode", it) }
+        runCatching { JSONObject(previousDraft).takeIf { it.has("localToneShadowsEv") }?.getDouble("localToneShadowsEv") }
+            .getOrNull()?.let { draft.put("localToneShadowsEv", it) }
         return draft.toString()
     }
 
