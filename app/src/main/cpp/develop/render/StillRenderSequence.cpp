@@ -487,6 +487,14 @@ RenderedStillCompletion executeStillRender(RenderResources& resources, RenderCom
         done.error = e.what();
         __android_log_print(ANDROID_LOG_ERROR, "RawrCamNative", "STILL_RENDER_FAIL requestId=%llu error=%s",
                             (unsigned long long)rendered.requestId, done.error.c_str());
+        // A failed or timed-out wait can leave this render's submissions (chunks,
+        // film tiles, GALOSH) running. Callers free the command pool, engines and
+        // images next, so the queue must drain first. Device loss also returns here.
+        std::lock_guard<std::mutex> queueLock(*device.queueSubmitMutex);
+        const VkResult idle = vkQueueWaitIdle(device.queue);
+        if (idle != VK_SUCCESS)
+            __android_log_print(ANDROID_LOG_ERROR, "RawrCamNative", "STILL_RENDER_DRAIN requestId=%llu result=%d",
+                                (unsigned long long)rendered.requestId, static_cast<int>(idle));
     }
     done.totalMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     return done;
