@@ -44,7 +44,7 @@ target_include_directories(rawr_multiframe_moltenvk_replay PRIVATE
   "${RAWR_ROOT}/app/src/main/cpp"
   "${RAWR_ROOT}/native/vk_common/testing"
   "${RAWR_ROOT}/native/zsl_container/include")
-target_link_libraries(rawr_multiframe_moltenvk_replay PRIVATE raw_gpu_pipeline raw_sharpness::reference rawr_tinydng Vulkan::Vulkan)
+target_link_libraries(rawr_multiframe_moltenvk_replay PRIVATE raw_gpu_pipeline raw_multiframe_output raw_sharpness::reference rawr_tinydng Vulkan::Vulkan)
 if(CMAKE_CXX_COMPILER_ID MATCHES "AppleClang|Clang|GNU")
   target_compile_options(rawr_multiframe_moltenvk_replay PRIVATE -O3 -Wall -Wextra -Wpedantic)
 endif()

@@ -1,5 +1,6 @@
 #include <rawr/raw_gpu_pipeline/AndroidBurstCoordinator.h>
 #include <rawr/raw_gpu_pipeline/ReplayMetadata.h>
+#include <rawr/raw_multiframe_output/MultiframeOutputAdapter.h>
 #include <rawr/zsl_codec/ZslDecoder.h>
 #include <rawr/zsl_container/ZslContainer.h>
 #include <raw_sharpness/raw_sharpness_types.hpp>
@@ -8,6 +9,7 @@
 #include "capture/multiframe/BracketExposure.h"
 #include "color/ColorCalibration.h"
 #include "color/ColorMath.h"
+#include "geometry/CfaPattern.h"
 #include "renderer/DngSource.h"
 #include "vk_test_common.hpp"
 #include "SyntheticBurst.h"
@@ -314,7 +316,7 @@ void imageBarrier(VkCommandBuffer command, VkImage image, VkImageLayout oldLayou
 // RZSL bursts. Tags come from the frame's own RZSL metadata.
 void writeFrameDng(const std::filesystem::path& file, std::uint32_t cfa, std::uint32_t width, std::uint32_t height,
                    const std::string& rawMetadata, const rawrcam::metadata::FrameMetadataSnapshot& metadata,
-                   const std::uint16_t* raw16) {
+                   const std::uint16_t* raw16, float baselineExposureEv = 0.0f) {
     static const std::array<std::array<std::uint8_t, 4>, 4> kCfaBytes{{
         {0, 1, 1, 2}, {1, 0, 2, 1}, {1, 2, 0, 1}, {2, 1, 1, 0}}};  // RGGB GRBG GBRG BGGR
     tinydng_cfa cfaInfo{};
@@ -378,6 +380,10 @@ void writeFrameDng(const std::filesystem::path& file, std::uint32_t cfa, std::ui
     if (metadata.hasNeutralColorPoint) {
         for (int i = 0; i < 3; ++i) raw.as_shot_neutral[i] = metadata.neutralColorPoint[std::size_t(i)];
         raw.has_as_shot_neutral = 1;
+    }
+    if (baselineExposureEv != 0.0f) {
+        raw.baseline_exposure = baselineExposureEv;
+        raw.has_baseline_exposure = 1;
     }
 
     tinydng_exif exif{};
@@ -455,6 +461,7 @@ struct TuneOpts {
     bool dumpRaw16 = false;
     // Write every decoded frame as frame_NN.dng (+ ref.txt) into this dir.
     std::string exportDng;
+    std::string exportMergedDng;
     bool duplicateMiddle = false;  // diagnostic: every frame = the middle frame (perfect alignment)
     float affineDeadzone = -1.f;
     float affineSoftness = -1.f;
@@ -1056,6 +1063,39 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
         result = coordinator.run(runFrames, runRef);
         reportRun(iteration);
     }
+    if (!tune.exportMergedDng.empty()) {
+        // The app's merged-DNG path: project_cfa_u16 from the R32F CFA plane
+        // with the 16-bit code scale, black/white tags scaled to match.
+        if (!result.cfaImage) throw std::invalid_argument("--export-merged-dng requires an HDR+ merge");
+        rawr::raw_multiframe_output::MultiframeOutputAdapter adapter;
+        adapter.initialize(context.pd, context.dev, context.qf,
+                           [&](const VkSubmitInfo& info, VkFence fence) {
+                               vktest::ck(vkQueueSubmit(context.q, 1, &info, fence), "projection submit");
+                           },
+                           width, height);
+        rawr::raw_multiframe_output::CfaProjectionParameters projection{};
+        auto refMeta = metadata[metaRef];
+        projection.blackByPhase = rawrcam::geometry::reorderRggbByCode(refMeta.blackLevelPhysicalRggb, bundle.cfa);
+        projection.whiteLevel = refMeta.effectiveWhiteLevel;
+        projection.cfa = bundle.cfa;
+        projection.codeScale = rawr::raw_multiframe_output::sixteenBitCodeScale(projection.whiteLevel);
+        projection.sourceIsCfaR32f = true;
+        const auto packed = adapter.projectMerged(result.cfaImage, result.cfaView, projection);
+        std::vector<std::uint16_t> codes(std::size_t(width) * height);
+        for (std::uint32_t y = 0; y < height; ++y)
+            std::memcpy(codes.data() + std::size_t(y) * width, packed.pixels.data() + std::size_t(y) * packed.rowStrideBytes,
+                        std::size_t(width) * 2u);
+        for (auto& black : refMeta.blackLevelPhysicalRggb) black *= projection.codeScale;
+        refMeta.effectiveWhiteLevel *= projection.codeScale;
+        // Bracketed bursts: lift to the brightest frame, as MfsrCaptureJob does.
+        const float liftEv = rawrcam::capture::multiframe::bracketLiftEv(metadata, metaRef);
+        std::filesystem::path file = tune.exportMergedDng;
+        if (file.has_parent_path()) std::filesystem::create_directories(file.parent_path());
+        writeFrameDng(file, bundle.cfa, width, height, bundle.frames[metaRef].metadata, refMeta, codes.data(),
+                      liftEv);
+        std::cerr << "merged_dng=" << file.string() << " scale=" << projection.codeScale << " lift_ev=" << liftEv
+                  << '\n';
+    }
     if (tune.dumpCfa) {
         std::filesystem::create_directories(outputDir);
         if (!result.cfaImage) throw std::invalid_argument("--dump-cfa requires an HDR+ merge");
@@ -1257,7 +1297,7 @@ int main(int argc, char** argv) {
         " [--flat-sigma F] [--detail-floor F] [--scale-bandwidth-gain F]"
         " [--coverage-neff-lo F] [--coverage-neff-hi F] [--coverage-mass-lo F] [--coverage-mass-hi F]"
         " [--robustness-t F] [--robustness-s1 F] [--robustness-s2 F]"
-         " [--max-frames I] [--suffix STR] [--dump-base] [--dump-all-singles] [--dump-raw16] [--export-dng DIR] [--merge wronski|hdrplus|hdrplus-freq|hdrplus-bracket] [--hdrplus-strength F] [--hdrplus-tile 16|32] [--hdrplus-search 32|64|128] [--hdrplus-faithful] [--affine-deadzone F] [--affine-softness F] [--affine-isotropic] [--fallback-chroma GAIN] [--fallback-luma GAIN] [--fallback-max-sigma PX] [--no-hot-pixels] [--hot-pixel-list FILE]"
+         " [--max-frames I] [--suffix STR] [--dump-base] [--dump-all-singles] [--dump-raw16] [--export-dng DIR] [--export-merged-dng FILE] [--merge wronski|hdrplus|hdrplus-freq|hdrplus-bracket] [--hdrplus-strength F] [--hdrplus-tile 16|32] [--hdrplus-search 32|64|128] [--hdrplus-faithful] [--affine-deadzone F] [--affine-softness F] [--affine-isotropic] [--fallback-chroma GAIN] [--fallback-luma GAIN] [--fallback-max-sigma PX] [--no-hot-pixels] [--hot-pixel-list FILE]"
          " [--reference recorded|middle|sharpest|darkest] INPUT [INPUT2 ...]\n"
          "  INPUT: FILE.rzsl | DNG_DIR or dng:DNG_DIR (every *.dng, name-sorted, is one burst)"
          " | rawburst:DIR | synthetic:...";
@@ -1318,6 +1358,7 @@ int main(int argc, char** argv) {
             else if (a == "--affine-softness") tune.affineSoftness = std::stof(need(a.c_str()));
             else if (a == "--duplicate-middle") tune.duplicateMiddle = true;
             else if (a == "--dump-raw16") tune.dumpAllSingles = tune.dumpRaw16 = true;
+            else if (a == "--export-merged-dng") tune.exportMergedDng = need(a.c_str());
             else if (a == "--export-dng") { tune.exportDng = need(a.c_str()); tune.dumpAllSingles = true; }
             else if (a == "--reference") tune.reference = need(a.c_str());
             else if (a == "--merge") tune.mergeAlgorithm = need(a.c_str());
