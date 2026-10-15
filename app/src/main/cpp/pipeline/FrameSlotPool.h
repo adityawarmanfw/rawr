@@ -10,7 +10,6 @@
 #include "imaging/FrameLimits.h"
 #include "imaging/RawFrameLease.h"
 #include "metadata/FrameMetadataSnapshot.h"
-#include "support/UniqueFd.h"
 #include "vulkan/CommandResources.h"
 #include "vulkan/ImageResources.h"
 
@@ -27,11 +26,6 @@ struct FrameSlot {
     VkSemaphore imageAvailable = VK_NULL_HANDLE;
     VkSemaphore renderFinished = VK_NULL_HANDLE;
     VkSemaphore cameraAcquire = VK_NULL_HANDLE;
-    // Exportable; the frame's final submission signals it when async image
-    // release is on, and its sync fd becomes imageReleaseFence.
-    VkSemaphore imageRelease = VK_NULL_HANDLE;
-    rawrcam::support::UniqueFd imageReleaseFence{-1};
-    bool imageReleaseExported = false;
     rawrcam::vulkan::OwnedImage rawCopy;
     rawrcam::vulkan::OwnedImage linear;
     rawrcam::vulkan::OwnedImage tonemapped;

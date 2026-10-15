@@ -47,15 +47,6 @@ template <typename Handle>
 Handle fakeHandle(uintptr_t id) {
     return reinterpret_cast<Handle>(id);
 }
-int asyncDeleted = 0, lastReleaseFence = -1;
-extern "C" void AImage_deleteAsync(AImage* image, int releaseFenceFd) {
-    if (image) {
-        ++asyncDeleted;
-        delete image;
-    }
-    lastReleaseFence = releaseFenceFd;
-    if (releaseFenceFd >= 0) close(releaseFenceFd);
-}
 using namespace rawrcam;
 
 int newFd() {
@@ -154,17 +145,6 @@ int main() {
         assert(closed(matchedFd) && imagesDeleted == 9 && !closed(pending));
     }
     assert(imagesDeleted == 10);
-    // Async release hands the image and release fence to the camera; the acquire fence still closes.
-    {
-        int acquire = newFd(), release = newFd();
-        imaging::RawFrameLease lease(frame(11, acquire, 800, 10));
-        lease.resetAsync(release);
-        assert(asyncDeleted == 1 && lastReleaseFence == release && closed(release) && closed(acquire));
-        assert(!lease && imagesDeleted == 10);
-        int orphan = newFd();
-        lease.resetAsync(orphan);
-        assert(asyncDeleted == 1 && closed(orphan));
-    }
     // Device objects: reverse creation order; appended and moved objects are destroyed once.
     {
         const auto device = fakeHandle<VkDevice>(99);

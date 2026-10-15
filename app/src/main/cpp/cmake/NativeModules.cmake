@@ -212,7 +212,7 @@ rawrcam_module(capture
 
 rawrcam_module(pipeline
   DIRECTORY pipeline
-  DEPENDS color develop diagnostics_logging diagnostics_probes diagnostics_timing geometry imaging metadata monitoring presentation support tonemap video vulkan
+  DEPENDS color develop diagnostics_logging diagnostics_probes diagnostics_timing geometry imaging metadata monitoring presentation tonemap video vulkan
   SOURCES
     pipeline/FrameSubmitCoordinator.cpp
     pipeline/RawCpuUploadPool.cpp

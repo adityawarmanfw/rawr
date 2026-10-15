@@ -96,13 +96,6 @@ void FrameSubmitCoordinator::configure(const FrameSubmitConfiguration& config) {
         if (__system_property_get("debug.rawr.raw16_buffer_ingress", value) > 0 && value[0] == '1')
             raw16ImageImportLatched_.store(true, std::memory_order_relaxed);
         raw10ParityEnabled_ = __system_property_get("debug.rawr.raw10_parity", value) > 0 && value[0] == '1';
-        asyncImageRelease_ = __system_property_get("debug.rawr.async_image_release", value) > 0 && value[0] == '1';
-    }
-    {
-        const std::string line =
-            std::string("ASYNC_IMAGE_RELEASE enabled=") + (signalsImageRelease() ? "true" : "false");
-        LOGI("%s", line.c_str());
-        lifecyclePort_.postDiagnostic(line);
     }
     cpuUpload_.configure(config_.rawWidth, config_.rawHeight);
     cpuIngressActive_.store(false, std::memory_order_relaxed);
@@ -262,9 +255,8 @@ bool FrameSubmitCoordinator::submitMatchedFrame(rawrcam::imaging::MatchedFrame& 
     const bool accepted = submitAhb(timestampNs, image, meta.snapshot.blackLevelPhysicalRggb,
                                     meta.snapshot.effectiveWhiteLevel, meta.colorState.baselineWbRggb,
                                     meta.colorState.cameraToLinearSrgbRowMajor, meta.snapshot, meta.colorState);
-    bool claimed = false;
     if (capturePort_.isStillCaptureRequested()) {
-        claimed =
+        const bool claimed =
             capturePort_.deferSubmittedFrame(meta.snapshot, meta.colorState, tonemapParams_,
                                              lifecyclePort_.postGainFor(meta.snapshot), filmSimEnabled_, filmLook_);
         if (claimed && !accepted &&
@@ -275,8 +267,6 @@ bool FrameSubmitCoordinator::submitMatchedFrame(rawrcam::imaging::MatchedFrame& 
         }
         lifecyclePort_.finalizeDetachedStill();
     }
-    // A still can claim a frame only here, so an unclaimed frame's image can go back now.
-    if (accepted) releaseSubmittedImage(timestampNs, claimed);
     if (pipelineAuditSubmitCount_ < 6) {
         ++pipelineAuditSubmitCount_;
         lifecyclePort_.postAudit(std::string("PIPELINE_GPU_SUBMIT_RESULT generation=") +
@@ -537,12 +527,10 @@ void FrameSubmitCoordinator::submitSplitVideoAndMonitor(const SubmitParams& para
     waits[waitCount] = videoOutput_->available(slotIndex);
     stages[waitCount++] = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
 
-    const bool signalRelease = signalsImageRelease();
     // Each frame goes to the queue in three parts (demosaic, post, tonemap).
     VkCommandBuffer current = slot->videoCommand;
     uint32_t partsSubmitted = 0;
-    const auto submitPart = [&](VkCommandBuffer command, const VkSemaphore* signals, uint32_t signalCount,
-                                VkFence fence) {
+    const auto submitPart = [&](VkCommandBuffer command, const VkSemaphore* signal, VkFence fence) {
         VkSubmitInfo part{};
         part.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         if (partsSubmitted == 0) {
@@ -552,15 +540,15 @@ void FrameSubmitCoordinator::submitSplitVideoAndMonitor(const SubmitParams& para
         }
         part.commandBufferCount = command ? 1u : 0u;
         part.pCommandBuffers = &command;
-        part.signalSemaphoreCount = signalCount;
-        part.pSignalSemaphores = signals;
+        part.signalSemaphoreCount = signal ? 1u : 0u;
+        part.pSignalSemaphores = signal;
         std::lock_guard<std::mutex> queueLock(queueSubmitMutex_);
         vkCheck(vkQueueSubmit(vulkanContext_.queue(), 1, &part, fence), "video queue submit");
         ++partsSubmitted;
     };
     const auto splitSubmit = [&](VkCommandBuffer command) -> VkCommandBuffer {
         vkCheck(vkEndCommandBuffer(command), "video end partial command");
-        submitPart(command, nullptr, 0, VK_NULL_HANDLE);
+        submitPart(command, nullptr, VK_NULL_HANDLE);
         current = slot->videoStageCommands.at(partsSubmitted - 1);
         vkCheck(vkResetCommandBuffer(current, 0), "video reset partial command");
         vkCheck(vkBeginCommandBuffer(current, &begin), "video begin partial command");
@@ -590,14 +578,14 @@ void FrameSubmitCoordinator::submitSplitVideoAndMonitor(const SubmitParams& para
         performanceTracker_.markPresentationDone(current, slotIndex);
         performanceTracker_.markFrameDone(current, slotIndex);
         vkCheck(vkEndCommandBuffer(current), "video end command");
-        const std::array<VkSemaphore, 2> finalSignals{videoOutput_->rendered(slotIndex), slot->imageRelease};
-        submitPart(current, finalSignals.data(), signalRelease ? 2u : 1u, slot->fence);
+        const VkSemaphore rendered = videoOutput_->rendered(slotIndex);
+        submitPart(current, &rendered, slot->fence);
     } catch (...) {
         // Earlier parts are already queued: retire the slot fence behind them
         // so the slot is not reused while they run.
         // The camera image stays leased to the slot until then.
         if (partsSubmitted > 0) {
-            submitPart(VK_NULL_HANDLE, nullptr, 0, slot->fence);
+            submitPart(VK_NULL_HANDLE, nullptr, slot->fence);
             submitted = true;
             slot->submitted = true;
             slot->imageLease = params.lease->takeImage();
@@ -609,7 +597,6 @@ void FrameSubmitCoordinator::submitSplitVideoAndMonitor(const SubmitParams& para
     slot->submitted = true;
     slot->imageLease = params.lease->takeImage();
     slot->timestampNs = params.timestampNs;
-    if (signalRelease) exportImageRelease(*slot);
     slot->metadataSnapshot = metadata;
     slot->colorStateSnapshot = *params.colorState;
     performanceTracker_.recordSubmitted();
@@ -844,12 +831,10 @@ void FrameSubmitCoordinator::submitAndPresent(const SubmitParams& params, const 
     si.pWaitDstStageMask = stages.data();
     si.commandBufferCount = 1;
     si.pCommandBuffers = &slot->command;
-    std::array<VkSemaphore, 3> signals{};
+    std::array<VkSemaphore, 2> signals{};
     uint32_t signalCount = 0;
     if (acquired.swapIndex) signals[signalCount++] = slot->renderFinished;
     if (acquired.videoIndex && videoOutput_) signals[signalCount++] = videoOutput_->rendered(slotIndex);
-    const bool signalRelease = signalsImageRelease();
-    if (signalRelease) signals[signalCount++] = slot->imageRelease;
     si.signalSemaphoreCount = signalCount;
     si.pSignalSemaphores = signals.data();
     trace.record(rawrcam::diagnostics::RuntimeTraceStage::QueueSubmitBegin, params.timestampNs, metadata.frameOrdinal,
@@ -873,7 +858,6 @@ void FrameSubmitCoordinator::submitAndPresent(const SubmitParams& params, const 
     slot->submitted = true;
     slot->imageLease = params.lease->takeImage();
     slot->timestampNs = params.timestampNs;
-    if (signalRelease) exportImageRelease(*slot);
     capturePort_.commitMultiframeFrame(params.timestampNs);
 
     slot->metadataSnapshot = metadata;
@@ -1109,50 +1093,6 @@ void FrameSubmitCoordinator::reportAuditFrame(const pipeline::FrameSlot& slot) {
     diagnosticsPort_.recordAuditFrame(*slot.metadataSnapshot, *slot.colorStateSnapshot);
 }
 
-bool FrameSubmitCoordinator::signalsImageRelease() const noexcept {
-    // Diagnostic modes keep camera images until retirement for their probes.
-    return asyncImageRelease_ && !asyncImageReleaseFailed_ && config_.diagnosticMode == 0u &&
-           vulkanContext_.getSemaphoreFd() != nullptr;
-}
-
-void FrameSubmitCoordinator::exportImageRelease(pipeline::FrameSlot& slot) noexcept {
-    VkSemaphoreGetFdInfoKHR info{};
-    info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR;
-    info.semaphore = slot.imageRelease;
-    info.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
-    int fd = -1;
-    const VkResult result = vulkanContext_.getSemaphoreFd()(vulkanContext_.device(), &info, &fd);
-    if (result != VK_SUCCESS) {
-        asyncImageReleaseFailed_ = true;
-        const std::string line = "ASYNC_IMAGE_RELEASE disabled reason=export_failed result=" + std::to_string(result);
-        LOGE("%s", line.c_str());
-        lifecyclePort_.postDiagnostic(line);
-        return;
-    }
-    // -1 means the work already completed: the image can be released unfenced.
-    slot.imageReleaseFence.reset(fd);
-    slot.imageReleaseExported = true;
-}
-
-void FrameSubmitCoordinator::releaseSubmittedImage(uint64_t timestampNs, bool claimedByStill) noexcept {
-    for (auto& slot : frameSlots_) {
-        if (!slot.imageReleaseExported || slot.timestampNs != timestampNs) continue;
-        slot.imageReleaseExported = false;
-        if (claimedByStill) {
-            // Retirement hands this image to the still capture's CPU copy.
-            slot.imageReleaseFence.reset();
-            ++asyncKeptForStill_;
-        } else {
-            slot.imageLease.resetAsync(slot.imageReleaseFence.release());
-            if (++asyncReleased_ % 300u == 0u)
-                LOGI("ASYNC_IMAGE_RELEASE released=%llu keptForStill=%llu",
-                     static_cast<unsigned long long>(asyncReleased_),
-                     static_cast<unsigned long long>(asyncKeptForStill_));
-        }
-        return;
-    }
-}
-
 void FrameSubmitCoordinator::retireSlot(uint32_t slotIndex, pipeline::FrameSlot& slot) {
     auto& trace = rawrcam::diagnostics::RuntimeTraceRecorder::instance();
     const auto frameOrdinal = slot.metadataSnapshot ? slot.metadataSnapshot->frameOrdinal : 0;
@@ -1184,8 +1124,6 @@ void FrameSubmitCoordinator::retireSlot(uint32_t slotIndex, pipeline::FrameSlot&
                      static_cast<int32_t>(slotIndex));
         slot.imageLease.reset();
     }
-    slot.imageReleaseFence.reset();
-    slot.imageReleaseExported = false;
     slot.metadataSnapshot.reset();
     slot.colorStateSnapshot.reset();
     slot.submitted = false;

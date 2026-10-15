@@ -34,15 +34,6 @@ class RawFrameLease final {
         return frame;
     }
     void reset() noexcept { *this = RawFrameLease(AcquiredRawFrame{}); }
-    // Returns the image to the camera now; the camera writes it again only
-    // after releaseFenceFd signals. Takes ownership of releaseFenceFd.
-    void resetAsync(int releaseFenceFd) noexcept {
-        if (frame_.image)
-            AImage_deleteAsync(std::exchange(frame_.image, nullptr), releaseFenceFd);
-        else if (releaseFenceFd >= 0)
-            ::close(releaseFenceFd);
-        reset();
-    }
     // Closes the held fence (if different) and adopts fd.
     void resetFence(int fd = -1) noexcept {
         fence_.reset(fd);
