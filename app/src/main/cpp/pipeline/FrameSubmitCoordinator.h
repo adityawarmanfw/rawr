@@ -234,6 +234,13 @@ class FrameSubmitCoordinator final {
     // failure still leaves the slot submitted (recovered by fence retire).
     void submitAndPresent(const SubmitParams& params, const AcquiredSubmit& acquired, const RecordedSubmit& recorded,
                           bool& submitted);
+    // Async image release (debug.rawr.async_image_release=1): a frame's final
+    // submission also signals slot.imageRelease, exported here as a sync fd.
+    // Once no still capture has claimed the frame, its camera image goes back
+    // to the reader gated by that fence instead of waiting for retirement.
+    [[nodiscard]] bool signalsImageRelease() const noexcept;
+    void exportImageRelease(pipeline::FrameSlot& slot) noexcept;
+    void releaseSubmittedImage(std::uint64_t timestampNs, bool claimedByStill) noexcept;
     void recoverFailedSubmit(std::uint32_t slotIndex, bool slotSelected, bool queueSubmitted,
                              bool swapchainImageAcquired, const char* error);
     // On acceptance the slot owns lease's image; lease keeps the fence.
@@ -289,6 +296,12 @@ class FrameSubmitCoordinator final {
     bool raw16GpuCopyDeferredLogged_ = false;
     bool raw10ParityEnabled_ = false;  // debug.rawr.raw10_parity
     uint32_t raw10ParityFrame_ = 0;
+    bool asyncImageRelease_ = false;  // debug.rawr.async_image_release
+    // Set when a sync fd export fails: the semaphore may stay signaled, so it
+    // is never signaled again and images return to retirement-time release.
+    bool asyncImageReleaseFailed_ = false;
+    uint64_t asyncReleased_ = 0;
+    uint64_t asyncKeptForStill_ = 0;
     rawrcam::vulkan::ImportedRaw& ingestRaw(const SubmitParams& params, uint32_t slotIndex);
     VideoDropReasons videoDropReasons_{};
     std::string lastVideoSubmitFailure_;

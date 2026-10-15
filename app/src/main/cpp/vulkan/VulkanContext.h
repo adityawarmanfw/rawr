@@ -69,6 +69,8 @@ class VulkanContext {
     const std::string& driverInfo() const noexcept { return driverInfo_; }
     PFN_vkGetAndroidHardwareBufferPropertiesANDROID getAhbProperties() const noexcept { return getAhbProps_; }
     PFN_vkImportSemaphoreFdKHR importSemaphoreFd() const noexcept { return importSemaphoreFd_; }
+    // Null when the driver lacks it; callers then keep camera images until fence retirement.
+    PFN_vkGetSemaphoreFdKHR getSemaphoreFd() const noexcept { return getSemaphoreFd_; }
     // Diagnostic-only: external-memory features reported for the
     // ANDROID_HARDWARE_BUFFER handle type on buffers (0 if unqueried).
     // Used to gate a byte-addressed buffer-view read path that bypasses
@@ -112,6 +114,7 @@ class VulkanContext {
     std::string driverInfo_;
     PFN_vkGetAndroidHardwareBufferPropertiesANDROID getAhbProps_ = nullptr;
     PFN_vkImportSemaphoreFdKHR importSemaphoreFd_ = nullptr;
+    PFN_vkGetSemaphoreFdKHR getSemaphoreFd_ = nullptr;
     uint32_t ahbExternalBufferFeatures_ = 0;
     bool drmFormatModifierEnabled_ = false;
     bool samplerYcbcrConversionEnabled_ = false;

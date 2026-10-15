@@ -38,6 +38,8 @@ void FrameSlotPool::initialize(VkPhysicalDevice physical, VkDevice device, uint3
         exportInfo.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
         semaphoreInfo.pNext = &exportInfo;
         vkCheck(vkCreateSemaphore(device_, &semaphoreInfo, nullptr, &slot.cameraAcquire), "vkCreateSemaphore camera");
+        vkCheck(vkCreateSemaphore(device_, &semaphoreInfo, nullptr, &slot.imageRelease),
+                "vkCreateSemaphore image release");
     }
 }
 
@@ -277,6 +279,7 @@ void FrameSlotPool::destroy() {
     if (device_ != VK_NULL_HANDLE) {
         for (auto& slot : slots_) {
             slot.imageLease.reset();
+            if (slot.imageRelease) vkDestroySemaphore(device_, slot.imageRelease, nullptr);
             if (slot.cameraAcquire) vkDestroySemaphore(device_, slot.cameraAcquire, nullptr);
             if (slot.renderFinished) vkDestroySemaphore(device_, slot.renderFinished, nullptr);
             if (slot.imageAvailable) vkDestroySemaphore(device_, slot.imageAvailable, nullptr);

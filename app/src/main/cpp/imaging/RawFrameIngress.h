@@ -5,6 +5,7 @@
 #include <media/NdkImage.h>
 #include <media/NdkImageReader.h>
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -42,7 +43,16 @@ class RawFrameIngress final {
     static void imageAvailableThunk(void* context, AImageReader* reader);
     void onImageAvailable(AImageReader* reader);
     void logImageDescription(AImage* image);
+    // Logs RAW_READER_STATS every 120 frames: reader starvation and sensor drops.
+    void recordReaderStats(uint64_t timestampNs);
 
+    struct ReaderStats {
+        std::array<uint64_t, 120> intervalsNs{};
+        uint32_t count = 0;
+        uint32_t maxImagesHits = 0;
+        uint64_t lastTimestampNs = 0;
+    };
+    ReaderStats readerStats_;
     FrameCallback frameCallback_;
     Diagnostic diagnostic_;
     Diagnostic pipelineAudit_;

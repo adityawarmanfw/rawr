@@ -219,6 +219,7 @@ void VulkanContext::createDeviceForSurface(VkSurfaceKHR surface) {
         vkGetDeviceProcAddr(device_, "vkGetAndroidHardwareBufferPropertiesANDROID"));
     importSemaphoreFd_ =
         reinterpret_cast<PFN_vkImportSemaphoreFdKHR>(vkGetDeviceProcAddr(device_, "vkImportSemaphoreFdKHR"));
+    getSemaphoreFd_ = reinterpret_cast<PFN_vkGetSemaphoreFdKHR>(vkGetDeviceProcAddr(device_, "vkGetSemaphoreFdKHR"));
     if (!getAhbProps_ || !importSemaphoreFd_) {
         throw std::runtime_error("Required Vulkan extension functions unavailable");
     }
@@ -289,6 +290,7 @@ void VulkanContext::destroyDevice() {
     driverInfo_.clear();
     getAhbProps_ = nullptr;
     importSemaphoreFd_ = nullptr;
+    getSemaphoreFd_ = nullptr;
     drmFormatModifierEnabled_ = false;
     samplerYcbcrConversionEnabled_ = false;
     conditionalRenderingEnabled_ = false;
