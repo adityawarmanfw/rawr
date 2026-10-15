@@ -14,6 +14,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.DpSize
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.rawr.camera.architecture.ActivateSpotAe
 import com.rawr.camera.architecture.CancelSelfTimer
@@ -171,6 +172,13 @@ internal fun CaptureViewfinder(
             }
         }
         if (state.captureFlash) Box(Modifier.matchParentSize().background(Color.White.copy(alpha = .12f)))
+        Box(controlFrameModifier.zIndex(3f)) {
+            HdrBracketedNotice(
+                active = state.hdrPlusBracketedActive,
+                orientation = state.orientation,
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = 16.dp)
+            )
+        }
         state.selfTimerRemainingMs?.let { remaining ->
             SelfTimerCountdownOverlay(
                 remainingMs = remaining,

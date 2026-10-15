@@ -14,6 +14,8 @@ data class RestoreCapturePreferences(
     val waveformMode: WaveformMode,
     val filmSimEnabled: Boolean,
     val experimentalMultiframeEnabled: Boolean = false,
+    /** Multiframe merge is HDR+ Bracketed (active when multiframe is on in Photo). */
+    val hdrPlusBracketedSelected: Boolean = false,
     val captureLayout: CaptureControlLayout = CaptureControlLayout.Compact,
     val captureMode: CaptureMode = CaptureMode.Photo,
     val videoResolution: com.rawr.camera.video.VideoResolutionMode =
