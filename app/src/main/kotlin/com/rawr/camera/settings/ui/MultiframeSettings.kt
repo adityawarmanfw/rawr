@@ -31,7 +31,7 @@ internal fun MultiframeSettings(state: SettingsUiState, dispatch: SettingsDispat
         }
         SettingsGroup(
             title = "Merge Algorithm",
-            description = "Super-resolution: kernel-regression merge, smoother with optional upscaling. HDR+: tile-aligned robust average on the RAW mosaic; keeps natural single-frame grain at higher SNR and avoids blotches in low light. HDR+ Quality: per-frequency merge, cleaner with mild sharpening and blends motion more, slower. HDR+ Bracketed: HDR+ Quality plus a few darker frames taken right after the shutter, so bright areas (sky, lamps) keep detail instead of clipping; hold still a moment longer (all HDR+ modes: native resolution only)."
+            description = "Super-resolution: kernel-regression merge, smoother with optional upscaling. HDR+: tile-aligned robust average on the RAW mosaic; keeps natural single-frame grain at higher SNR and avoids blotches in low light. HDR+ Quality: per-frequency merge, cleaner with mild sharpening and blends motion more, slower. HDR+ Bracketed: HDR+ Quality on a burst metered darker to keep bright areas (sky, lamps) from clipping, brightened back, plus a few longer frames right after the shutter for cleaner shadows; hold still a moment longer (all HDR+ modes: native resolution only)."
         ) {
             MultiframeMergeAlgorithm.entries.forEachIndexed { index, candidate ->
                 if (index > 0) SettingDivider()
@@ -79,6 +79,10 @@ internal fun MultiframeSettings(state: SettingsUiState, dispatch: SettingsDispat
                     MultiframeSlider(spec(MultiframeNumericParameter.BracketEv), tuning, enabled, dispatch)
                     SettingDivider()
                     MultiframeSlider(spec(MultiframeNumericParameter.BracketFrames), tuning, enabled, dispatch)
+                    if (tuning.bracketFrames > 0) {
+                        SettingDivider()
+                        MultiframeSlider(spec(MultiframeNumericParameter.LongFrameEv), tuning, enabled, dispatch)
+                    }
                 }
             } else {
                 StandaloneNumericSliderRow(

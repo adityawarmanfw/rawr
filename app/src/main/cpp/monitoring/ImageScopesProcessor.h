@@ -48,6 +48,10 @@ class ImageScopesProcessor final {
     void recordSceneExposure(VkCommandBuffer command, uint32_t frameSlot, VkImageView linearView, uint32_t width,
                              uint32_t height, const std::array<float, 3>& lumaWeights, float clipLuma);
     [[nodiscard]] std::optional<SceneExposureStats> consumeSceneExposure(uint32_t frameSlot);
+    // Clip luma the slot's scene statistics were binned with (0 if none).
+    [[nodiscard]] float sceneClipLuma(uint32_t frameSlot) const noexcept {
+        return frameSlot < sceneClipLuma_.size() ? sceneClipLuma_[frameSlot] : 0.0f;
+    }
     void retireFrameSlot(uint32_t frameSlot);
     [[nodiscard]] std::optional<RenderedExposureFeedback> consumeExposureFeedback(uint32_t frameSlot);
     void discardFrameSlot(uint32_t frameSlot) noexcept;
@@ -89,6 +93,7 @@ class ImageScopesProcessor final {
     VkPhysicalDevice physicalDevice_ = VK_NULL_HANDLE;
     std::array<ExposureStatsReadback, rawrcam::imaging::kRealtimeFramesInFlight> exposureStatsReadback_{};
     std::array<ExposureStatsReadback, rawrcam::imaging::kRealtimeFramesInFlight> sceneStatsReadback_{};
+    std::array<float, rawrcam::imaging::kRealtimeFramesInFlight> sceneClipLuma_{};
     void createReadback(ExposureStatsReadback& rb, VkDeviceSize bytes);
     void destroyReadback(ExposureStatsReadback& rb) noexcept;
     bool readReadback(ExposureStatsReadback& rb, void* out, size_t bytes);

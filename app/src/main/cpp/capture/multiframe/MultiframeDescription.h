@@ -41,7 +41,11 @@ struct MultiframeTuningView {
     std::uint32_t hdrplusTileSize = 32;
     float bracketEv = -2.0f;
     std::uint32_t bracketFrames = 2;
-    float bracketLiftEv = 0.0f;  // measured: 0 = no dark frames merged
+    float bracketLiftEv = 0.0f;  // measured: 0 = no dark frames merged / no headroom
+    // 1 = underexposed ZSL burst + long frames (bracketEv = headroom limit,
+    // bracketFrames = long frames requested); 0 = older dark-frame captures.
+    std::uint32_t bracketCapture = 0;
+    float longFrameEv = 0.0f;  // 0 = back to Camera2 AE
     MultiframeBaseFrameMode baseFrameMode = MultiframeBaseFrameMode::Sharpest;
 };
 

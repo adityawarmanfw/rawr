@@ -264,6 +264,7 @@ void ImageScopesProcessor::recordSceneExposure(VkCommandBuffer command, uint32_t
     if (!backend_ || frameSlot >= rawrcam::imaging::kRealtimeFramesInFlight || linearView == VK_NULL_HANDLE) return;
     auto& rb = sceneStatsReadback_[frameSlot];
     rb.recorded = false;
+    sceneClipLuma_[frameSlot] = clipLuma;
     image_scopes::SceneExposureStatsRecordInfo info{};
     info.commandBuffer = command;
     info.input = {linearView, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_LAYOUT_GENERAL, width, height};

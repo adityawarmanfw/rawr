@@ -1,5 +1,7 @@
 #pragma once
 #include "color/AutoKeyExposure.h"
+#include "color/HdrHeadroomMeter.h"
+#include "image_scopes/types.h"
 #include "pipeline/FrameCapturePort.h"
 #include "pipeline/FrameDiagnosticsPort.h"
 #include "pipeline/FrameLifecyclePort.h"
@@ -58,6 +60,9 @@ class SessionFrameCallbacks final : public pipeline::FrameLifecyclePort,
     // Frame-thread only (slot retire).
     rawrcam::color::AutoKeySmoother autoKeySmoother_;
     rawrcam::color::AutoKeySmoother keySmoother_, highlightSmoother_;
+    rawrcam::color::HdrHeadroomMeter headroomMeter_;
+    void updateHdrHeadroom(const image_scopes::SceneExposureStatsData* stats, float clipLuma,
+                           const rawrcam::metadata::FrameMetadataSnapshot& metadata, std::uint64_t timestampNs);
 };
 
 }  // namespace rawrcam::session

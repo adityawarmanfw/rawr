@@ -1,4 +1,8 @@
+#include <algorithm>
+#include <cmath>
+
 #include "capture/CaptureRequest.h"
+#include "capture/multiframe/BracketExposure.h"
 // Still + multiframe capture routing.
 #include "camera/NativeCameraController.h"
 #include "diagnostics/logging/NativeLog.h"
@@ -77,10 +81,18 @@ void SessionEngine::setExperimentalMultiframeEnabled(bool enabled) {
     if (enabled) realtime_.ensureMultiframeBridge();
     LOGI("MULTIFRAME_EXPERIMENTAL enabled=%s", enabled ? "true" : "false");
 }
-void SessionEngine::setHdrPlusBracketEnabled(bool enabled) {
+void SessionEngine::setHdrPlusHeadroomMaxEv(float maxEv) {
+    const float floor = std::isfinite(maxEv) ? std::clamp(maxEv, -4.0f, 0.0f) : 0.0f;
+    hdrHeadroomMaxEv_.store(floor, std::memory_order_relaxed);
     if (!cameraControls_.controller()) return;
-    cameraControls_.controller()->setSensitivityCalibrationWanted(enabled);
-    LOGI("HDRPLUS_BRACKET enabled=%s", enabled ? "true" : "false");
+    cameraControls_.controller()->setSensitivityCalibrationWanted(floor < 0.0f);
+    // Off: drop the headroom now; on: the meter sets it from the next frames.
+    if (!(floor < 0.0f)) cameraControls_.controller()->setHdrHeadroomEv(0.0f);
+    LOGI("HDRPLUS_BRACKET headroomMaxEv=%.1f", floor);
+}
+float SessionEngine::hdrHeadroomEvFor(const metadata::FrameMetadataSnapshot& metadata) const {
+    const auto* controller = cameraControls_.controller();
+    return controller ? controller->hdrHeadroomEvFor(metadata.aeMode, metadata.aeCompensationSteps) : 0.0f;
 }
 void SessionEngine::setPersistentEngineEnabled(bool enabled) {
     std::lock_guard<std::mutex> lock(mu_);
@@ -100,6 +112,15 @@ uint64_t SessionEngine::startPreparedMultiframeCapture(
     uint64_t requestId = 0;
     {
         std::lock_guard<std::mutex> lock(mu_);
+        // HDR+ Bracketed: record the Camera2 AE exposure the underexposed ZSL
+        // burst is lifted back to (unchanged reference exposure in manual).
+        if (tuning.mergeAlgorithm == rawrcam::capture::multiframe::kMergeAlgorithmHdrPlusBracketed) {
+            tuning.bracketCapture = 1u;
+            if (const auto reference = capture_.multiframe().preparedReferenceMetadata()) {
+                const double exposure = rawrcam::capture::multiframe::linearExposure(*reference);
+                tuning.aeLinearExposure = float(exposure * std::exp2(-double(hdrHeadroomEvFor(*reference))));
+            }
+        }
         auto tone = look_.toneParams();
         applyAutoKey(tone);
         if (baseDng.captureTone) {

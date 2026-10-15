@@ -8,9 +8,11 @@
 
 #include "metadata/FrameMetadataSnapshot.h"
 
-// Exposure bookkeeping for HDR+ bracketed bursts (merge algorithm 3): ZSL
-// frames at the preview exposure plus darker post-shutter frames. Only ratios
-// between frames of one burst are used, so the unit is arbitrary.
+// Exposure bookkeeping for HDR+ bracketed bursts (merge algorithm 3): a ZSL
+// burst underexposed below Camera2 AE for highlight headroom plus brighter
+// post-shutter long frames (older captures: ZSL frames at the preview
+// exposure plus darker post-shutter frames). Only ratios between exposures
+// of one capture are used, so the unit is arbitrary.
 namespace rawrcam::capture::multiframe {
 
 inline constexpr std::uint32_t kMergeAlgorithmHdrPlusBracketed = 3u;
@@ -70,6 +72,7 @@ inline std::uint32_t bracketReference(const std::vector<metadata::FrameMetadataS
 
 // EV between the brightest frame (the preview exposure) and the reference,
 // i.e. how much the merged result must be lifted to match the viewfinder.
+// Older dark-frame captures only; see headroomLiftEv.
 inline float bracketLiftEv(const std::vector<metadata::FrameMetadataSnapshot>& metadata,
                            std::uint32_t referenceIndex) noexcept {
     if (referenceIndex >= metadata.size()) return 0.0f;
@@ -78,6 +81,15 @@ inline float bracketLiftEv(const std::vector<metadata::FrameMetadataSnapshot>& m
     for (const auto& m : metadata) brightest = std::max(brightest, linearExposure(m));
     if (ref <= 0.0 || brightest <= ref) return 0.0f;
     return float(std::log2(brightest / ref));
+}
+
+// EV the reference must be lifted by to reach the Camera2 AE exposure the
+// underexposed burst was taken below (MultiframeTuning::aeLinearExposure);
+// 0 when unknown or not underexposed.
+inline float headroomLiftEv(float aeLinearExposure, const metadata::FrameMetadataSnapshot& reference) noexcept {
+    const double exposure = linearExposure(reference);
+    if (!(aeLinearExposure > 0.0f) || !(exposure > 0.0)) return 0.0f;
+    return std::max(0.0f, float(std::log2(double(aeLinearExposure) / exposure)));
 }
 
 // Variance scale of an HDR+ merge relative to its reference frame, for the

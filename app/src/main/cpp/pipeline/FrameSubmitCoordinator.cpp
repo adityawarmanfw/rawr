@@ -955,13 +955,15 @@ float FrameSubmitCoordinator::previewPostGain(const rawrcam::metadata::FrameMeta
     if (!(exposure > 0.0)) return gain;
     if (!metadata.optimizedStillRequestId || *metadata.optimizedStillRequestId == 0) {
         lastRepeatingExposure_ = exposure;
+        lastRepeatingGain_ = gain;
         return gain;
     }
     if (lastRepeatingExposure_ <= 0.0) return gain;
-    // Interior-ISO calibration probes can also be brighter than preview.
-    // Compensate in both directions without changing the repeating seed.
-    // Same 16x ceiling the tonemap engine enforces.
-    return std::min(16.0f, gain * float(lastRepeatingExposure_ / exposure));
+    // Interior-ISO calibration probes and HDR+ long frames can also be
+    // brighter than preview. Match the repeating frames' rendered brightness
+    // (their gain includes any HDR+ headroom lift) without changing the
+    // repeating seed. Same 16x ceiling the tonemap engine enforces.
+    return std::min(16.0f, lastRepeatingGain_ * float(lastRepeatingExposure_ / exposure));
 }
 
 bool FrameSubmitCoordinator::submitAhb(uint64_t timestampNs, rawrcam::imaging::RawFrameLease& lease,

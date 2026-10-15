@@ -81,6 +81,11 @@ int main() {
     assert(contains(bracketParams, "Bracket lift: 2.500 EV"));
     bracketed.bracketLiftEv = 0.0f;
     assert(contains(buildParametersBlock(bracketed, output, tone, "", false, 16, 4096, 3072), "none (no dark frames)"));
+    bracketed.bracketCapture = 1;
+    bracketed.bracketLiftEv = 1.5f;
+    const std::string headroomParams = buildParametersBlock(bracketed, output, tone, "", false, 19, 4096, 3072);
+    assert(contains(headroomParams, "Highlight headroom: up to -2.500 EV, lifted 1.500 EV"));
+    assert(contains(headroomParams, "Long frames: 3 x Camera2 AE"));
     assert(contains(defaultParams, "Coverage Neff:"));
     assert(!contains(defaultParams, "Low support rescue"));
 

@@ -297,13 +297,14 @@ void MfsrCaptureService::spoolLoop() {
             // its single read-back pass. Middle mode skips this with zero cost.
             // Any failure keeps the frozen middle reference.
             auto& burst = *pending->work->capture;
-            // HDR+ bracketed: append the post-shutter dark frames (whatever
-            // arrived by the deadline; none = plain HDR+ Quality merge).
+            // HDR+ bracketed: append the post-shutter long frames (whatever
+            // arrived by the deadline; none = a uniform merge of the
+            // underexposed burst, still lifted back).
             if (auto collector = std::move(burst.pendingBracket)) {
                 const auto begin = std::chrono::steady_clock::now();
-                auto dark = collector->take(begin + kBracketWait);
+                auto taken = collector->take(begin + kBracketWait);
                 std::size_t appended = 0;
-                for (auto& f : dark) {
+                for (auto& f : taken) {
                     if (burst.frames.size() >= kMaxBurstFrames || f.frames.size() != 1u || f.refs.size() != 1u ||
                         f.metadata.size() != 1u || f.colors.size() != 1u || !f.snapshot ||
                         f.frames.front().raw.ref.width != burst.frames.front().raw.ref.width ||
@@ -388,7 +389,8 @@ void MfsrCaptureService::spoolLoop() {
                 }
             }
             // Bracketed bursts merge onto the darkest frame (sharpest among
-            // those when scored), whatever the base frame mode.
+            // those when scored), whatever the base frame mode: the
+            // underexposed ZSL burst, not the long frames.
             if (pending->work->tuning.mergeAlgorithm == kMergeAlgorithmHdrPlusBracketed &&
                 burst.metadata.size() == burst.frames.size() && burst.colors.size() == burst.frames.size() &&
                 isExposureBracketed(burst.metadata)) {

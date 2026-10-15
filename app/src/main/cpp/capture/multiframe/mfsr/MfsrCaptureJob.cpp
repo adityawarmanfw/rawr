@@ -115,18 +115,26 @@ void MfsrCaptureJob::runStages(Published& published) {
         if (t.mergeAlgorithm != 0u) t.outputScale = 1.0f;
         return t;
     }();
-    // Bracketed bursts merge onto their darkest frame; lift the render (and
-    // the merged DNG's BaselineExposure) back to the preview exposure.
-    const float liftEv = tuning.mergeAlgorithm == kMergeAlgorithmHdrPlusBracketed && job &&
-                                 job->metadata.size() == job->frames.size() && isExposureBracketed(job->metadata)
-                             ? bracketLiftEv(job->metadata, job->referenceIndex)
-                             : 0.0f;
+    // Bracketed bursts merge onto their darkest frame and are lifted back.
+    // Underexposed-ZSL captures (bracketCapture 1) carry the lift in the
+    // frozen AE post-gain already, like the viewfinder; only the DNGs need it
+    // as BaselineExposure. Older dark-frame captures lift the render too.
+    const bool bracketed = tuning.mergeAlgorithm == kMergeAlgorithmHdrPlusBracketed && job &&
+                           job->metadata.size() == job->frames.size() && job->referenceIndex < job->metadata.size();
+    const bool headroomCapture = bracketed && tuning.bracketCapture == 1u;
+    const float dngLiftEv = !bracketed ? 0.0f
+                            : headroomCapture
+                                ? headroomLiftEv(tuning.aeLinearExposure, job->metadata[job->referenceIndex])
+                            : isExposureBracketed(job->metadata) ? bracketLiftEv(job->metadata, job->referenceIndex)
+                                                                 : 0.0f;
+    const float liftEv = headroomCapture ? 0.0f : dngLiftEv;
     auto frozenTonemap = work->frozenTonemap;
     frozenTonemap.exposureEV += liftEv;
-    if (liftEv > 0.0f) {
-        mergedDng.baselineExposureEV = mergedDng.baselineExposureEV.value_or(0.0f) + liftEv;
-        baseDng.baselineExposureEV = baseDng.baselineExposureEV.value_or(0.0f) + liftEv;  // base = dark reference
-        LOGI("MULTIFRAME_BRACKET lift=%.2fEV reference=%u", liftEv, job->referenceIndex);
+    if (dngLiftEv > 0.0f) {
+        mergedDng.baselineExposureEV = mergedDng.baselineExposureEV.value_or(0.0f) + dngLiftEv;
+        baseDng.baselineExposureEV = baseDng.baselineExposureEV.value_or(0.0f) + dngLiftEv;  // base = dark reference
+        LOGI("MULTIFRAME_BRACKET lift=%.2fEV render=%.2fEV reference=%u capture=%u", dngLiftEv, liftEv,
+             job->referenceIndex, tuning.bracketCapture);
     }
     const auto baseFrameMode = work->baseFrameMode;
     const auto sharpnessScores = work->sharpnessScores;
@@ -164,7 +172,9 @@ void MfsrCaptureJob::runStages(Published& published) {
     tuningView.hdrplusTileSize = tuning.hdrplusTileSize;
     tuningView.bracketEv = tuning.bracketEv;
     tuningView.bracketFrames = tuning.bracketFrames;
-    tuningView.bracketLiftEv = liftEv;
+    tuningView.bracketLiftEv = dngLiftEv;
+    tuningView.bracketCapture = tuning.bracketCapture;
+    tuningView.longFrameEv = tuning.longFrameEv;
     tuningView.baseFrameMode = baseFrameMode;
     MultiframeOutputInfo outputInfo{};
     outputInfo.noiseProfile = "Burst (fitted per capture)";

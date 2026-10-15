@@ -36,6 +36,11 @@ class MultiframeCaptureCoordinator final {
                                             const spektrafilm_native::FilmLook& filmLook,
                                             std::optional<BracketPlan>* bracketPlan = nullptr) noexcept;
     void cancelPreparedMultiframeCapture() noexcept;
+    // Reference of the burst frozen by prepareExperimentalMultiframeOnShutter.
+    std::optional<metadata::FrameMetadataSnapshot> preparedReferenceMetadata() const {
+        if (!pendingMultiframeCapture_) return std::nullopt;
+        return pendingMultiframeCapture_->referenceMetadata;
+    }
     // The camera rejected the bracket requests: stop waiting for them.
     void abandonBracket(std::uint64_t bracketRequestId) noexcept;
     std::string pollMultiframeDngCompletion();

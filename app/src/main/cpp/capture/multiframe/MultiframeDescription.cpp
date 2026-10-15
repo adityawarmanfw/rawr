@@ -51,7 +51,13 @@ std::string buildParametersBlock(const MultiframeTuningView& tuning, const Multi
                                               : "- Merge: HDR+ spatial (tile alignment + robust average)\n")
             << "- HDR+ strength: " << f3(tuning.hdrplusStrength) << '\n'
             << "- HDR+ tile size: " << tuning.hdrplusTileSize << '\n';
-        if (tuning.mergeAlgorithm == 3u) {
+        if (tuning.mergeAlgorithm == 3u && tuning.bracketCapture == 1u) {
+            out << "- Highlight headroom: up to " << f3(tuning.bracketEv) << " EV, lifted "
+                << (tuning.bracketLiftEv > 0.0f ? f3(tuning.bracketLiftEv) + " EV" : std::string("none")) << '\n'
+                << "- Long frames: " << tuning.bracketFrames << " x "
+                << (tuning.longFrameEv > 0.0f ? "+" + f3(tuning.longFrameEv) + " EV" : std::string("Camera2 AE"))
+                << '\n';
+        } else if (tuning.mergeAlgorithm == 3u) {
             out << "- Bracket: " << tuning.bracketFrames << " x " << f3(tuning.bracketEv) << " EV\n"
                 << "- Bracket lift: "
                 << (tuning.bracketLiftEv > 0.0f ? f3(tuning.bracketLiftEv) + " EV" : std::string("none (no dark frames)"))

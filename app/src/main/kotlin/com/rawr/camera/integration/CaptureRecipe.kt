@@ -246,6 +246,7 @@ internal object CaptureRecipe {
             if (value.mergeAlgorithm == MultiframeMergeAlgorithm.HdrPlusBracketed) {
                 put("bracketEv", value.bracketEv)
                 put("bracketFrames", value.bracketFrames)
+                put("longFrameEv", value.longFrameEv)
             }
             put("maxFrames", value.maxFrames)
             put("lkIterations", value.lkIterations)

@@ -70,9 +70,10 @@ internal class CaptureSettingsSync(
         syncSetting({ it.experimentalZeroCopyEnabled }) { previewCoordinator.setExperimentalZeroCopy(it) }
         syncSetting({ it.experimentalMultiframeEnabled }) { previewCoordinator.setExperimentalMultiframeEnabled(it) }
         syncSetting({
-            it.experimentalMultiframeEnabled &&
+            if (it.experimentalMultiframeEnabled &&
                 it.multiframeTuning.mergeAlgorithm == MultiframeMergeAlgorithm.HdrPlusBracketed
-        }) { previewCoordinator.setHdrPlusBracketEnabled(it) }
+            ) it.multiframeTuning.bracketEv else 0f
+        }) { previewCoordinator.setHdrPlusHeadroomMaxEv(it) }
         syncSetting({ it.persistentEngineEnabled }) { previewCoordinator.setPersistentEngineEnabled(it) }
         syncSetting({ it.internalTraceRetainedRows }) {
             com.rawr.camera.integration.InternalTraceNative.setRetainedRows(it)

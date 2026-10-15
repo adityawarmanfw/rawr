@@ -105,8 +105,13 @@ class SessionEngine {
     std::string pollJpegWriteCompletion();
     void setPersistZslRingEnabled(bool enabled);
     void setExperimentalMultiframeEnabled(bool enabled);
-    // HDR+ Bracketed selected (with multiframe on): allows the DCG ISO calibration frame.
-    void setHdrPlusBracketEnabled(bool enabled);
+    // HDR+ Bracketed selected (with multiframe on): maxEv < 0 is the most
+    // highlight headroom the meter may take (ZSL underexposure); 0 = off.
+    // Also allows the DCG ISO calibration frame for the long frames.
+    void setHdrPlusHeadroomMaxEv(float maxEv);
+    [[nodiscard]] float hdrHeadroomMaxEv() const noexcept { return hdrHeadroomMaxEv_.load(std::memory_order_relaxed); }
+    // Headroom EV (<= 0) a delivered frame was exposed with; 0 when none.
+    [[nodiscard]] float hdrHeadroomEvFor(const metadata::FrameMetadataSnapshot& metadata) const;
     void setPersistentEngineEnabled(bool enabled);
     uint32_t prepareExperimentalMultiframe(uint32_t maxFrames);
     uint64_t startPreparedMultiframeCapture(rawrcam::encoding::dng::DngCaptureContext baseDng,
@@ -265,6 +270,8 @@ class SessionEngine {
     std::atomic<int> autoKeyMode_{0};
     mutable std::mutex autoKeyMutex_;
     tonemap::AdaptiveToneParams autoKeyCurve_{};
+    // HDR+ Bracketed headroom floor (EV < 0) or 0 when the meter is off.
+    std::atomic<float> hdrHeadroomMaxEv_{0.0f};
     // LOG profiles stay scene-referred: no auto key lift.
     std::atomic<bool> sceneReferredRender_{false};
 };

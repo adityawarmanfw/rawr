@@ -4,6 +4,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 
 #include "capture/CaptureRequest.h"
@@ -204,13 +205,13 @@ uint64_t MultiframeCaptureCoordinator::startPreparedMultiframeCapture(
     try {
         auto frozenTonemap = baseDng.captureTone ? *baseDng.captureTone : tone;
         frozenTonemap.aePostGain = postGainFor_(pendingMultiframeCapture_->referenceMetadata);
-        // HDR+ bracketed: arm a collector for the post-shutter dark frames. The
+        // HDR+ bracketed: arm a collector for the post-shutter long frames. The
         // caller submits the camera requests (outside the session lock); the
         // spool worker waits for the frames before the burst becomes durable.
         abandonActiveBracket();
         if (bracketPlan && tuning.mergeAlgorithm == kMergeAlgorithmHdrPlusBracketed && tuning.bracketFrames > 0u) {
             const auto& reference = pendingMultiframeCapture_->referenceMetadata;
-            // Frozen frames stay pinned; the dark frames need free ring slots
+            // Frozen frames stay pinned; the long frames need free ring slots
             // beyond the preview frames in flight.
             const std::size_t capacity = multiframeRingFrames(config_.rawWidth, config_.rawHeight);
             const std::size_t used = pendingMultiframeCapture_->frames.size() + rawrcam::imaging::kRealtimeFramesInFlight;
@@ -222,7 +223,14 @@ uint64_t MultiframeCaptureCoordinator::startPreparedMultiframeCapture(
                 plan.requestId = collector->requestId();
                 plan.baseExposureTimeNs = reference.exposureTimeNs;
                 plan.baseSensitivity = reference.sensitivity;
-                plan.evOffsets.assign(frames, std::min(0.0f, tuning.bracketEv));
+                // Long frames: the setting, or back to Camera2 AE (the burst's
+                // headroom); at least +1 EV so they add shadow signal.
+                const double reference = linearExposure(pendingMultiframeCapture_->referenceMetadata);
+                const float liftEv = tuning.aeLinearExposure > 0.0f && reference > 0.0
+                                         ? float(std::log2(double(tuning.aeLinearExposure) / reference))
+                                         : 0.0f;
+                const float longEv = std::clamp(tuning.longFrameEv > 0.0f ? tuning.longFrameEv : liftEv, 1.0f, 3.0f);
+                plan.evOffsets.assign(frames, longEv);
                 *bracketPlan = plan;
                 pendingMultiframeCapture_->pendingBracket = collector;
                 activeBracket_ = collector;

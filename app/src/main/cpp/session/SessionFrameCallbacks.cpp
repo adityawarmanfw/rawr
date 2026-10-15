@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "color/AePostGainCurve.h"
+#include "camera/NativeCameraController.h"
 #include "color/AutoKeyExposure.h"
 #include "image_scopes/types.h"
 #include "session/SessionEngine.h"
@@ -30,15 +31,41 @@ float SessionFrameCallbacks::postGainFor(const rawrcam::metadata::FrameMetadataS
     // Camera2 boost (100 == 1x) shaped by the user cap + HighlightProtection
     // knee width. Both live on SessionEngine so preview/stills share one
     // choke point.
-    return rawrcam::color::effectiveAePostGain(metadata.postRawSensitivityBoost, engine_->maxAePostGain(),
-                                               engine_->postGainKneeWidthEv());
+    // HDR+ Bracketed headroom is lifted back here, so the viewfinder, AutoKey
+    // and frozen still gains all see the scene at Camera2 AE brightness.
+    const float gain = rawrcam::color::effectiveAePostGain(metadata.postRawSensitivityBoost, engine_->maxAePostGain(),
+                                                           engine_->postGainKneeWidthEv());
+    const float headroomEv = engine_->hdrHeadroomEvFor(metadata);
+    return headroomEv < 0.0f ? std::min(tonemap::kMaxAePostGain, gain * std::exp2(-headroomEv)) : gain;
 }
 
 void SessionFrameCallbacks::applyAutoKey(tonemap::TonemapParams& tone) { engine_->applyAutoKey(tone); }
 
 bool SessionFrameCallbacks::sceneKeyMeteringEnabled() {
-    return engine_->autoKeyMode() != rawrcam::color::AutoKeyMode::Off &&
-           !engine_->sceneReferredRender_.load(std::memory_order_relaxed);
+    return engine_->hdrHeadroomMaxEv() < 0.0f || (engine_->autoKeyMode() != rawrcam::color::AutoKeyMode::Off &&
+                                                   !engine_->sceneReferredRender_.load(std::memory_order_relaxed));
+}
+
+void SessionFrameCallbacks::updateHdrHeadroom(const image_scopes::SceneExposureStatsData* stats, float clipLuma,
+                                              const rawrcam::metadata::FrameMetadataSnapshot& metadata,
+                                              std::uint64_t timestampNs) {
+    auto* controller = engine_->cameraControls_.controller();
+    const float floorEv = engine_->hdrHeadroomMaxEv();
+    if (!controller) return;
+    if (!(floorEv < 0.0f)) {
+        headroomMeter_.reset();
+        return;
+    }
+    // Manual exposure keeps the user's shutter/ISO; one-shot frames and AE
+    // transitions say nothing about the repeating exposure.
+    constexpr int32_t kAeModeOff = 0, kAeStateSearching = 1;
+    if (!stats || !(clipLuma > 0.0f) || metadata.aeMode == kAeModeOff || metadata.aeState == kAeStateSearching ||
+        !metadata.aeCompensationSteps || (metadata.optimizedStillRequestId && *metadata.optimizedStillRequestId != 0))
+        return;
+    const auto target =
+        headroomMeter_.update(stats->weightedBins, stats->totalWeight, stats->clippedWeight, std::log2(clipLuma),
+                              engine_->hdrHeadroomEvFor(metadata), floorEv, timestampNs);
+    if (target) controller->setHdrHeadroomEv(*target);
 }
 
 std::optional<rawrcam::pipeline::FrameDiagnosticsPort::SceneKeyFeedback> SessionFrameCallbacks::updateSceneKey(
@@ -48,6 +75,8 @@ std::optional<rawrcam::pipeline::FrameDiagnosticsPort::SceneKeyFeedback> Session
     static_assert(image_scopes::kSceneExposureMinEv == rawrcam::color::kSceneKeyMinEv);
     static_assert(image_scopes::kSceneExposureMaxEv == rawrcam::color::kSceneKeyMaxEv);
     const auto stats = engine_->monitoringCoordinator_.scopes().consumeSceneExposure(slotIndex);
+    updateHdrHeadroom(stats ? &*stats : nullptr, engine_->monitoringCoordinator_.scopes().sceneClipLuma(slotIndex),
+                      metadata, timestampNs);
     const auto mode = engine_->autoKeyMode();
     if (mode == rawrcam::color::AutoKeyMode::Off || !sceneKeyMeteringEnabled()) {
         autoKeySmoother_.reset();
@@ -61,8 +90,8 @@ std::optional<rawrcam::pipeline::FrameDiagnosticsPort::SceneKeyFeedback> Session
     if (!stats || (metadata.optimizedStillRequestId && *metadata.optimizedStillRequestId != 0)) return std::nullopt;
     const auto keyEv = rawrcam::color::sceneKeyEv(stats->weightedBins);
     if (!keyEv) return std::nullopt;
-    const float halGain = rawrcam::color::effectiveAePostGain(
-        metadata.postRawSensitivityBoost, engine_->maxAePostGain(), engine_->postGainKneeWidthEv());
+    // Includes the HDR+ headroom lift, like the render gain it predicts.
+    const float halGain = postGainFor(metadata);
     const auto highEv = rawrcam::color::scenePercentileEv(stats->weightedBins, 0.95f);
     if (!highEv) return std::nullopt;
     auto curve = rawrcam::color::autoKeyCurve(*keyEv, *highEv, halGain, rawrcam::color::autoKeyPolicy(mode));

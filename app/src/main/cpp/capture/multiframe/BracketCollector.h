@@ -11,10 +11,11 @@
 
 namespace rawrcam::capture::multiframe {
 
-// Post-shutter dark frames for an HDR+ bracketed capture: what to request
-// from the camera. Exposure/sensitivity are the reference ZSL frame's
+// Post-shutter frames for an HDR+ bracketed capture: what to request from
+// the camera. Exposure/sensitivity are the reference ZSL frame's
 // CaptureResult values; the camera owner converts them to its request
-// coordinate and applies evOffsets (all <= 0) per frame.
+// coordinate and applies evOffsets per frame (> 0: long frames over the
+// underexposed burst; <= 0: older dark-frame captures).
 struct BracketPlan {
     std::uint64_t requestId = 0;  // tags the one-shot requests (optimizedStillRequestId)
     std::int64_t baseExposureTimeNs = 0;
@@ -22,7 +23,7 @@ struct BracketPlan {
     std::vector<float> evOffsets;
 };
 
-// Hands tagged dark frames from the frame lane (as single-frame frozen
+// Hands tagged frames from the frame lane (as single-frame frozen
 // bursts, pinned in the ZSL ring) to the spool worker, which waits for them
 // with a deadline before the burst is made durable. Thread-safe.
 class BracketCollector final {

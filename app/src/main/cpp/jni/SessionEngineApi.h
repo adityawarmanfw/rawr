@@ -49,7 +49,8 @@ void cancelPreparedMultiframeCapture(EngineHandle handle) noexcept;
 void setInternalTraceCaptureEnabled(EngineHandle handle, bool enabled) noexcept;
 void setExperimentalZeroCopy(EngineHandle handle, bool enabled) noexcept;
 void setExperimentalMultiframeEnabled(EngineHandle handle, bool enabled) noexcept;
-void setHdrPlusBracketEnabled(EngineHandle handle, bool enabled) noexcept;
+// HDR+ Bracketed: most ZSL highlight headroom in EV (< 0), or 0 when off.
+void setHdrPlusHeadroomMaxEv(EngineHandle handle, float maxEv) noexcept;
 void setPersistentEngineEnabled(EngineHandle handle, bool enabled) noexcept;
 void setLensShadingCorrectionEnabled(EngineHandle handle, bool enabled) noexcept;
 void setHighlightReconstructionEnabled(EngineHandle handle, bool enabled) noexcept;
