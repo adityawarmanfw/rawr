@@ -279,6 +279,26 @@ int main(int argc, char** argv) {
     spektra_test::check(vkAllocateCommandBuffers(ctx.device, &cai, &cmd),
                         "alloc cmd");
 
+    // Outlives every record that may call ri.passBoundary.
+    struct PassFlush {
+        const spektra_test::Ctx* ctx;
+        VkCommandBuffer cmd;
+    } passFlush{&ctx, cmd};
+    void (*const flushPass)(void*) = [](void* user) {
+        const auto& f = *static_cast<const PassFlush*>(user);
+        spektra_test::check(vkEndCommandBuffer(f.cmd), "pass end");
+        VkSubmitInfo submit{};
+        submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submit.commandBufferCount = 1;
+        submit.pCommandBuffers = &f.cmd;
+        spektra_test::check(vkQueueSubmit(f.ctx->queue, 1, &submit, VK_NULL_HANDLE), "pass submit");
+        spektra_test::check(vkQueueWaitIdle(f.ctx->queue), "pass wait idle");
+        spektra_test::check(vkResetCommandBuffer(f.cmd, 0), "pass reset");
+        VkCommandBufferBeginInfo begin{};
+        begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        spektra_test::check(vkBeginCommandBuffer(f.cmd, &begin), "pass begin");
+    };
     spektrafilm_native::SpektraFilmRecordInfo ri{};
     ri.commandBuffer = cmd;
     ri.input.view = input.view;
@@ -1653,6 +1673,16 @@ int main(int argc, char** argv) {
             ri.hasBoostInfo = false;
         }
 
+        // Tiled records rewrite descriptor sets between passes, so like the
+        // app's still renderer they must submit and wait at each pass
+        // boundary before the next pass is recorded.
+        if (c.tiled) {
+            ri.passBoundaryUserData = &passFlush;
+            ri.passBoundary = flushPass;
+        } else {
+            ri.passBoundary = nullptr;
+            ri.passBoundaryUserData = nullptr;
+        }
         const auto runOnce = [&]() {
             // Chunked submits partition the tile grid into contiguous
             // row-major ranges, each submitted+waited separately.
@@ -2565,6 +2595,8 @@ int main(int argc, char** argv) {
         tri.tileWidth = 128u;
         tri.tileHeight = 96u;
         tri.glowGainOutput.view = outputHalf.view;
+        tri.passBoundary = flushPass;
+        tri.passBoundaryUserData = &passFlush;
         {
             VkCommandBufferBeginInfo begin{};
             begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -2638,6 +2670,8 @@ int main(int argc, char** argv) {
     spektra_test::destroyImage(ctx, input);
     spektra_test::destroyImage(ctx, output);
     spektra_test::destroyImage(ctx, outputHalf);
+    spektra_test::destroyImage(ctx, inputAlt);
+    vkDestroyCommandPool(ctx.device, pool, nullptr);
     spektra_test::destroyCtx(ctx);
     return 0;
 }
