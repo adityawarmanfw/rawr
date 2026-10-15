@@ -1624,8 +1624,11 @@ struct SpektraFilm::Impl {
             static_cast<VkDeviceSize>(maxWidth) * maxHeight * 16u;
         const VkDeviceSize filteredBytes =
             static_cast<VkDeviceSize>(tables.wavelengthCount) * 8u * sizeof(float);
+        // The tile-memory path fills the chunk buffer and copies rows
+        // between full-frame and tile buffers with transfer commands.
         const VkBufferUsageFlags pixelUsage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-            (diagnosticTransfers ? VK_BUFFER_USAGE_TRANSFER_SRC_BIT : 0);
+            (diagnosticTransfers ? VK_BUFFER_USAGE_TRANSFER_SRC_BIT : 0) |
+            (tileMemorySaving ? VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT : 0);
         // Conditional scratch (still engines): skip effect buffers whose
         // enable flags are off in the baked look. record() only runs an
         // effect when its buffers exist, and the caller recreates when the
