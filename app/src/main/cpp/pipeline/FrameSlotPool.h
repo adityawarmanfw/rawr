@@ -8,6 +8,7 @@
 
 #include "color/FrameColorTransform.h"
 #include "imaging/FrameLimits.h"
+#include "imaging/RawFrameLease.h"
 #include "metadata/FrameMetadataSnapshot.h"
 #include "vulkan/CommandResources.h"
 #include "vulkan/ImageResources.h"
@@ -32,7 +33,8 @@ struct FrameSlot {
     // rest; the film stage is the only consumer.
     rawrcam::vulkan::OwnedImage lookScaledLinear;
     rawrcam::vulkan::OwnedImage lookScaledOut;
-    AImage* imageLease = nullptr;
+    // Camera image held until the slot fence retires; the fence is not kept.
+    rawrcam::imaging::RawFrameLease imageLease{rawrcam::imaging::AcquiredRawFrame{}};
     uint64_t timestampNs = 0;
     std::optional<rawrcam::metadata::FrameMetadataSnapshot> metadataSnapshot;
     std::optional<rawrcam::color::FrameColorTransform> colorStateSnapshot;

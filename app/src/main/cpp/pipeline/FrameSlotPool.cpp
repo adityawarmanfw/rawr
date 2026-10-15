@@ -276,10 +276,7 @@ void FrameSlotPool::destroy() {
     destroyImages();
     if (device_ != VK_NULL_HANDLE) {
         for (auto& slot : slots_) {
-            if (slot.imageLease) {
-                AImage_delete(slot.imageLease);
-                slot.imageLease = nullptr;
-            }
+            slot.imageLease.reset();
             if (slot.cameraAcquire) vkDestroySemaphore(device_, slot.cameraAcquire, nullptr);
             if (slot.renderFinished) vkDestroySemaphore(device_, slot.renderFinished, nullptr);
             if (slot.imageAvailable) vkDestroySemaphore(device_, slot.imageAvailable, nullptr);

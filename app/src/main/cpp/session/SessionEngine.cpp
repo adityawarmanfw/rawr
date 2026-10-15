@@ -277,7 +277,7 @@ void SessionEngine::consumeIngress(imaging::FrameIngressQueue::Event event, imag
         LOGI("INGRESS_QUEUE_PRESSURE rawDropped=%llu metadataDropped=%llu",
              static_cast<unsigned long long>(drops.images), static_cast<unsigned long long>(drops.metadata));
     if (raw)
-        realtime_.coordinator().onRawFrame(std::get<imaging::RawFrameLease>(event.payload).release());
+        realtime_.coordinator().onRawFrame(std::move(std::get<imaging::RawFrameLease>(event.payload)));
     else if (const auto* metadata = std::get_if<metadata::FrameMetadataSnapshot>(&event.payload))
         (void)realtime_.coordinator().submitMetadata(*metadata);
     else {
