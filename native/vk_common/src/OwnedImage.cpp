@@ -35,21 +35,26 @@ OwnedImage createOwnedImage(VkPhysicalDevice p, VkDevice d, uint32_t w, uint32_t
     ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     check(vkCreateImage(d, &ci, nullptr, &o.image), "create image");
-    VkMemoryRequirements mr{};
-    vkGetImageMemoryRequirements(d, o.image, &mr);
-    VkMemoryAllocateInfo ma{};
-    ma.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    ma.allocationSize = mr.size;
-    ma.memoryTypeIndex = findMemoryType(p, mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    check(vkAllocateMemory(d, &ma, nullptr, &o.memory), "alloc image");
-    check(vkBindImageMemory(d, o.image, o.memory, 0), "bind image");
-    VkImageViewCreateInfo vi{};
-    vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    vi.image = o.image;
-    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    vi.format = f;
-    vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    check(vkCreateImageView(d, &vi, nullptr, &o.view), "image view");
+    try {
+        VkMemoryRequirements mr{};
+        vkGetImageMemoryRequirements(d, o.image, &mr);
+        VkMemoryAllocateInfo ma{};
+        ma.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        ma.allocationSize = mr.size;
+        ma.memoryTypeIndex = findMemoryType(p, mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        check(vkAllocateMemory(d, &ma, nullptr, &o.memory), "alloc image");
+        check(vkBindImageMemory(d, o.image, o.memory, 0), "bind image");
+        VkImageViewCreateInfo vi{};
+        vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vi.image = o.image;
+        vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vi.format = f;
+        vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        check(vkCreateImageView(d, &vi, nullptr, &o.view), "image view");
+    } catch (...) {
+        destroyOwnedImage(d, o);
+        throw;
+    }
     return o;
 }
 void destroyOwnedImage(VkDevice d, OwnedImage& o) noexcept {

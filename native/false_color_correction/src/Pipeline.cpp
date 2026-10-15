@@ -92,22 +92,27 @@ struct FalseColorCorrectionPipeline::Impl {
         ci.usage = VK_IMAGE_USAGE_STORAGE_BIT;
         ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         check(vkCreateImage(ctx.device, &ci, ctx.allocator, &o.image), "fcc vkCreateImage");
-        VkMemoryRequirements mr{};
-        vkGetImageMemoryRequirements(ctx.device, o.image, &mr);
-        VkMemoryAllocateInfo ai{};
-        ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        ai.allocationSize = mr.size;
-        ai.memoryTypeIndex = memoryType(ctx.physicalDevice, mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-        check(vkAllocateMemory(ctx.device, &ai, ctx.allocator, &o.memory), "fcc vkAllocateMemory");
-        check(vkBindImageMemory(ctx.device, o.image, o.memory, 0), "fcc vkBindImageMemory");
-        VkImageViewCreateInfo vi{};
-        vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        vi.image = o.image;
-        vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        vi.format = format;
-        vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        check(vkCreateImageView(ctx.device, &vi, ctx.allocator, &o.view), "fcc vkCreateImageView");
-        o.bytes = mr.size;
+        try {
+            VkMemoryRequirements mr{};
+            vkGetImageMemoryRequirements(ctx.device, o.image, &mr);
+            VkMemoryAllocateInfo ai{};
+            ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            ai.allocationSize = mr.size;
+            ai.memoryTypeIndex = memoryType(ctx.physicalDevice, mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+            check(vkAllocateMemory(ctx.device, &ai, ctx.allocator, &o.memory), "fcc vkAllocateMemory");
+            check(vkBindImageMemory(ctx.device, o.image, o.memory, 0), "fcc vkBindImageMemory");
+            VkImageViewCreateInfo vi{};
+            vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            vi.image = o.image;
+            vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            vi.format = format;
+            vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            check(vkCreateImageView(ctx.device, &vi, ctx.allocator, &o.view), "fcc vkCreateImageView");
+            o.bytes = mr.size;
+        } catch (...) {
+            destroyImage(o);  // bytes is still 0, so liveBytes is untouched
+            throw;
+        }
         liveBytes += o.bytes;
         peakBytes = std::max(peakBytes, liveBytes);
         return o;
