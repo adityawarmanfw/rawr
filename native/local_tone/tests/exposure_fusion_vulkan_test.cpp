@@ -202,10 +202,14 @@ std::vector<float> reference(const std::vector<float>& rgba, int w, int h, const
 }  // namespace
 
 int main() {
-    assert(noiseLimitedShadowsEv(2.5f, 400.0f) == 2.5f);
-    assert(std::abs(noiseLimitedShadowsEv(2.5f, 6400.0f) - 1.0f) < 1e-5f);
-    assert(noiseLimitedShadowsEv(2.5f, 1e6f) == kMinShadowsEv);
-    assert(noiseLimitedShadowsEv(0.0f, 6400.0f) == 0.0f);
+    // Noise models from V2562 DNGs (S, O at ISO 2100 / 6400).
+    assert(noiseLimitedShadowsEv(2.5f, {0.00789f, 0.000144f, 1.0f, 1}) == 2.5f);
+    const float iso6400 = noiseLimitedShadowsEv(2.5f, {0.024f, 0.00134f, 1.0f, 1});
+    assert(iso6400 > 1.6f && iso6400 < 2.0f);
+    assert(noiseLimitedShadowsEv(2.5f, {0.024f, 0.00134f, 1.0f, 16}) == 2.5f);  // merged
+    assert(noiseLimitedShadowsEv(2.5f, {0.024f, 0.00134f, 8.0f, 1}) == kMinShadowsEv);  // big digital gain
+    assert(noiseLimitedShadowsEv(2.5f, {}) == 2.5f);   // unknown model
+    assert(noiseLimitedShadowsEv(0.0f, {0.024f, 0.00134f, 1.0f, 1}) == 0.0f);
 
     auto c = vktest::ctx();
     const int w = 1024, h = 768;

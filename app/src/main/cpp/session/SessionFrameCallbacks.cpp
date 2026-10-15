@@ -73,7 +73,10 @@ void SessionFrameCallbacks::applyAutoKey(tonemap::TonemapParams& tone,
                                          const rawrcam::metadata::FrameMetadataSnapshot& metadata) {
     // The noise limit assumes the next photo's merge, so the viewfinder shows
     // the lift the photo will get.
-    engine_->applyAutoKey(tone, SessionEngine::equivalentIso(metadata, tone.aePostGain, engine_->expectedMergeFrames()));
+    const auto noise = SessionEngine::liftNoiseFor(metadata, tone.aePostGain * std::exp2(tone.exposureEV),
+                                                   engine_->expectedMergeFrames());
+    engine_->noteLiftNoise(noise);
+    engine_->applyAutoKey(tone, noise);
 }
 
 bool SessionFrameCallbacks::sceneKeyMeteringEnabled() {
@@ -167,7 +170,7 @@ bool SessionFrameCallbacks::deferSubmittedFrame(const rawrcam::metadata::FrameMe
     // shutter was accepted. Do not let queue delay turn one into the photo.
     if (!engine_->capture_.acceptsStillTimestamp(metadata.timestampNs)) return false;
     auto tone = tonemapParams;
-    engine_->applyAutoKey(tone, SessionEngine::equivalentIso(metadata, aePostGain, 1u));
+    engine_->applyAutoKey(tone, SessionEngine::liftNoiseFor(metadata, aePostGain * std::exp2(tone.exposureEV), 1u));
     return engine_->capture_.single().deferSubmittedFrame(metadata, colorState, tone, aePostGain, filmEnabled,
                                                           filmLook);
 }

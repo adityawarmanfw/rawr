@@ -34,14 +34,30 @@ inline constexpr float kDefaultShadowsEv = 2.5f;
 inline constexpr float kDefaultHighlightsEv = 2.0f;
 inline constexpr float kMinShadowsEv = 1.0f, kMaxShadowsEv = 4.0f;
 
-// The lift amplifies noise, so it shrinks with the noise of the frame: half
-// an EV less per stop of equivalent ISO above kNoiseFreeIso (equivalent ISO
-// = analog x digital gain over the merged frame count), down to kMinShadowsEv.
-inline constexpr float kNoiseFreeIso = 800.0f;
-inline float noiseLimitedShadowsEv(float shadowsEv, float equivalentIso) noexcept {
-    if (!(shadowsEv > 0.0f) || !(equivalentIso > kNoiseFreeIso)) return shadowsEv;
-    const float limited = shadowsEv - 0.5f * std::log2(equivalentIso / kNoiseFreeIso);
-    return std::max(std::min(shadowsEv, kMinShadowsEv), limited);
+// The lift brings dark regions toward mid grey, where their noise shows. It
+// is limited so that the darkest region lifted to mid grey keeps a per-pixel
+// SNR of at least kMinLiftedSnr, from the frame's sensor noise model
+// (variance = S x + O, x = signal / white) over the merged frame count,
+// at the render gain (sensor signal -> rendered linear). Never below
+// kMinShadowsEv; an unknown noise model leaves the lift as set.
+inline constexpr float kMinLiftedSnr = 1.0f;
+inline constexpr float kMidGrey = 0.18f;
+struct LiftNoise {
+    float shot = 0.0f, read = 0.0f;  // S, O (normalized to white)
+    float renderGain = 1.0f;
+    std::uint32_t frames = 1;
+};
+inline float noiseLimitedShadowsEv(float shadowsEv, const LiftNoise& n) noexcept {
+    if (!(shadowsEv > 0.0f) || !(n.shot >= 0.0f) || !(n.read >= 0.0f) || !(n.shot + n.read > 0.0f) ||
+        !(n.renderGain > 0.0f) || !std::isfinite(n.shot + n.read + n.renderGain))
+        return shadowsEv;
+    const float t2 = kMinLiftedSnr * kMinLiftedSnr;
+    const float frames = float(std::max<std::uint32_t>(1u, n.frames));
+    // Smallest signal with x / sqrt((S x + O) / frames) >= kMinLiftedSnr.
+    const float a = t2 * n.shot / frames;
+    const float x = 0.5f * (a + std::sqrt(a * a + 4.0f * t2 * n.read / frames));
+    const float maxLift = std::log2(kMidGrey / (n.renderGain * x));
+    return std::clamp(maxLift, std::min(shadowsEv, kMinShadowsEv), shadowsEv);
 }
 
 // App tone parameters (tonemap::LocalToneParams) as fusion parameters; the

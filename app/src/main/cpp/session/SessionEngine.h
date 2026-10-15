@@ -163,25 +163,31 @@ class SessionEngine {
     [[nodiscard]] std::uint32_t expectedMergeFrames() const noexcept {
         return expectedMergeFrames_.load(std::memory_order_relaxed);
     }
-    // Noise of a rendered frame as an ISO: sensor gain x post-RAW boost x the
-    // render gain, over the frames merged into it.
-    [[nodiscard]] static float equivalentIso(const metadata::FrameMetadataSnapshot& m, float aePostGain,
-                                             std::uint32_t frames) noexcept {
-        if (m.sensitivity <= 0) return 0.0f;
-        return float(m.sensitivity) * float(std::max(100, m.postRawSensitivityBoost)) / 100.0f *
-               std::max(aePostGain, 1.0f) / float(std::max<std::uint32_t>(1u, frames));
+    // Noise of a rendered frame for the local tone lift limit: the frame's
+    // sensor noise model, its render gain and the frames merged into it.
+    [[nodiscard]] static rawr::local_tone::LiftNoise liftNoiseFor(const metadata::FrameMetadataSnapshot& m,
+                                                                  float renderGain, std::uint32_t frames) noexcept;
+    // The latest viewfinder frame's noise model (for a still whose frame is
+    // picked later).
+    [[nodiscard]] rawr::local_tone::LiftNoise latestLiftNoise(float renderGain) const noexcept {
+        return {latestNoiseShot_.load(std::memory_order_relaxed), latestNoiseRead_.load(std::memory_order_relaxed),
+                renderGain, 1u};
+    }
+    void noteLiftNoise(const rawr::local_tone::LiftNoise& n) noexcept {
+        latestNoiseShot_.store(n.shot, std::memory_order_relaxed);
+        latestNoiseRead_.store(n.read, std::memory_order_relaxed);
     }
     [[nodiscard]] tonemap::LocalToneParams localToneFor(const tonemap::TonemapParams& tone,
-                                                        float equivalentIso) const noexcept {
+                                                        const rawr::local_tone::LiftNoise& noise) const noexcept {
         const float shadows = localToneShadowsEv_.load(std::memory_order_relaxed);
         if (!(shadows > 0.0f) || sceneReferredRender_.load(std::memory_order_relaxed) ||
             tone.renderTransform == tonemap::RenderTransform::Log)
             return {};
-        return {rawr::local_tone::noiseLimitedShadowsEv(shadows, equivalentIso), rawr::local_tone::kDefaultHighlightsEv};
+        return {rawr::local_tone::noiseLimitedShadowsEv(shadows, noise), rawr::local_tone::kDefaultHighlightsEv};
     }
-    // equivalentIso 0 = unknown (no noise limit).
-    void applyAutoKey(tonemap::TonemapParams& tone, float equivalentIso = 0.0f) const {
-        tone.localTone = localToneFor(tone, equivalentIso);
+    // A default noise (unknown model) applies no limit.
+    void applyAutoKey(tonemap::TonemapParams& tone, const rawr::local_tone::LiftNoise& noise = {}) const {
+        tone.localTone = localToneFor(tone, noise);
         const bool local = tone.localTone.shadowsEv > 0.0f;
         std::lock_guard<std::mutex> lock(autoKeyMutex_);
         tone.adaptiveTone = local || autoKeyMode() == rawrcam::color::AutoKeyMode::Off ||
@@ -319,6 +325,7 @@ class SessionEngine {
     // Image > Shadow Lift: photo local tone mapping shadows EV (0 = adaptive curve).
     std::atomic<float> localToneShadowsEv_{0.0f};
     std::atomic<std::uint32_t> expectedMergeFrames_{1u};
+    std::atomic<float> latestNoiseShot_{0.0f}, latestNoiseRead_{0.0f};
     // LOG profiles stay scene-referred: no auto key lift.
     std::atomic<bool> sceneReferredRender_{false};
 };
