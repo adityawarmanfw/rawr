@@ -54,9 +54,7 @@ struct MultiframeTuning {
     // ns x ISO of the prepared reference, times 2^-headroom); 0 = unknown.
     // The merged DNGs lift their reference back to it.
     float aeLinearExposure = 0.0f;
-    // Part of that lift the frozen adaptive curve carries (bracketToneSplit);
-    // the frozen AE post-gain carries the rest. Recorded in the DNG recipe so
-    // editor shadow-lift overrides keep it.
+    // Unused (a reverted tone split); kept so the journal layout is stable.
     float bracketCurveEv = 0.0f;
 };
 

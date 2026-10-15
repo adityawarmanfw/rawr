@@ -79,14 +79,6 @@ void resolveAdaptiveTone(Session& s, rawrcam::renderer::RenderOptions& o) {
     const auto mode = rawrcam::color::autoKeyModeFromName(o.adaptiveToneMode);
     if (!mode) throw std::runtime_error("Unsupported shadow lift mode");
     auto& tone = o.context.tonemapParams;
-    if (o.bracketHeadroomEv > 0.0f) {
-        // HDR+ Bracketed: the curve also carries part of the burst's headroom
-        // lift; overrides change only the AutoKey part on top of it.
-        const auto policy = rawrcam::color::autoKeyPolicy(*mode);
-        tone.adaptiveTone = rawrcam::color::bracketOverrideCurve(
-            tone.adaptiveTone, o.bracketHeadroomEv, *mode == rawrcam::color::AutoKeyMode::Off ? nullptr : &policy);
-        return;
-    }
     if (*mode == rawrcam::color::AutoKeyMode::Off) {
         tone.adaptiveTone = {};
         return;
@@ -152,7 +144,6 @@ rawrcam::renderer::RenderOptions options(JNIEnv* env, jstring recipe, int workin
     t.adaptiveTone = {float(adaptive.number("liftEv", 0)), float(adaptive.number("keyEv", -4)),
                       float(adaptive.number("highlightEv", 0))};
     if (!tonemap::validAdaptiveTone(t.adaptiveTone)) throw std::runtime_error("Invalid adaptive tone recipe");
-    o.bracketHeadroomEv = std::clamp(float(adaptive.number("headroomEv", 0)), 0.0f, 3.0f);
     o.adaptiveToneMode = json.text("adaptiveToneMode");
     if (o.adaptiveToneMode == "null") o.adaptiveToneMode.clear();
     // Captures since the mode was recorded say whether the camera metered;

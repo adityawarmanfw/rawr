@@ -18,8 +18,6 @@ struct RenderOptions {
     // came from the camera meter (a lift mode was on at capture).
     std::string adaptiveToneMode;
     bool adaptiveToneMeasured = false;
-    // HDR+ Bracketed: headroom lift the captured curve carries (EV, 0 = none).
-    float bracketHeadroomEv = 0.0f;
     uint32_t width = 0, height = 0;
     std::array<uint32_t, 4> region{}; // Sensor-space preview extent; zero width selects the active crop.
     float temperature = 0, tint = 0;

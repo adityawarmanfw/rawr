@@ -172,9 +172,8 @@ void saveBurst(const std::string& path, multiframe::MultiframeWorkItem& work, co
     job.frame.metadata = burst.referenceMetadata;
     job.frame.colorState = burst.referenceColor;
     job.frame.requestId = work.requestId;
-    work.baseDng.resolvedRecipe =
-        resolvedRecipe(work.frozenTonemap, work.frozenTonemap.aePostGain, work.filmEnabled, work.filmLook,
-                       work.tuning.bracketCapture == 1u ? work.tuning.bracketCurveEv : 0.0f);
+    work.baseDng.resolvedRecipe = resolvedRecipe(work.frozenTonemap, work.frozenTonemap.aePostGain,
+                                                work.filmEnabled, work.filmLook);
     work.mergedDng.resolvedRecipe = work.baseDng.resolvedRecipe;
     job.dng = work.baseDng;
     job.mergedDng = work.mergedDng;

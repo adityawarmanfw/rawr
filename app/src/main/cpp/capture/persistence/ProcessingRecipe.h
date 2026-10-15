@@ -11,10 +11,8 @@ namespace rawrcam::capture::persistence {
 // The adaptive curve is serialized independently of the baseline HAL gain.
 // tonemap version 2: Grade sliders run before the render (version 1 ran them
 // on the display image); older recipes re-render with the version 2 math.
-// adaptiveTone.headroomEv (HDR+ Bracketed only): the part of the burst's
-// headroom lift the curve carries, so a shadow-lift override keeps it.
 inline std::string resolvedRecipe(const tonemap::TonemapParams& tone, float gain, bool filmEnabled,
-                                  const spektrafilm_native::FilmLook& film, float bracketHeadroomEv = 0.0f) {
+                                  const spektrafilm_native::FilmLook& film) {
     std::ostringstream out;
     out.imbue(std::locale::classic());
     out << std::boolalpha << std::setprecision(9) << "{\"version\":1,\"aePostGain\":" << gain
@@ -31,9 +29,7 @@ inline std::string resolvedRecipe(const tonemap::TonemapParams& tone, float gain
     RAWR_TONE_FIELD(saturation)
     RAWR_TONE_FIELD(vibrance)
     out << ",\"adaptiveTone\":{\"version\":1,\"liftEv\":" << tone.adaptiveTone.liftEv
-        << ",\"keyEv\":" << tone.adaptiveTone.keyEv << ",\"highlightEv\":" << tone.adaptiveTone.highlightEv;
-    if (bracketHeadroomEv > 0.0f) out << ",\"headroomEv\":" << bracketHeadroomEv;
-    out << "}";
+        << ",\"keyEv\":" << tone.adaptiveTone.keyEv << ",\"highlightEv\":" << tone.adaptiveTone.highlightEv << "}";
 #undef RAWR_TONE_FIELD
     out << "},\"film\":{\"version\":1";
 #define RAWR_FILM_FIELD(type, name) out << ",\"" #name "\":" << film.name;

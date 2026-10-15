@@ -116,7 +116,6 @@ uint64_t SessionEngine::startPreparedMultiframeCapture(
         // burst is lifted back to (unchanged reference exposure in manual).
         if (tuning.mergeAlgorithm == rawrcam::capture::multiframe::kMergeAlgorithmHdrPlusBracketed) {
             tuning.bracketCapture = 1u;
-            if (bracketToneActive()) tuning.bracketCurveEv = bracketCurveShareEv_.load(std::memory_order_relaxed);
             if (const auto reference = capture_.multiframe().preparedReferenceMetadata()) {
                 const double exposure = rawrcam::capture::multiframe::linearExposure(*reference);
                 tuning.aeLinearExposure = float(exposure * std::exp2(-double(hdrHeadroomEvFor(*reference))));
