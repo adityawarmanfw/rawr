@@ -28,7 +28,8 @@ internal class RendererJobRepository(private val context: Context, private val s
     private val root = File(context.filesDir, "renderer_jobs").apply { mkdirs() }
     private val journal = CaptureJournal(File(context.filesDir, "still_jobs"))
     private val saveLane = Mutex()
-    fun directory(id: String) = File(root, id).also { require(id.matches(Regex("[A-Za-z0-9.-]+"))) }
+    // Capture job ids carry the capture name (RAWR_<date>_<time>), hence "_".
+    fun directory(id: String) = File(root, id).also { require(id.matches(Regex("[A-Za-z0-9._-]+")) && ".." !in id) }
     private fun read(file: File): RenderJob {
         val j = JSONObject(file.readText())
         return RenderJob(j.getString("id"), j.getString("name"), j.optString("capture"),

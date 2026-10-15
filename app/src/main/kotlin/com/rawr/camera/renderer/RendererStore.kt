@@ -154,7 +154,9 @@ internal class RendererStore private constructor(private val context: Context) {
                 inspect(job, library).also(::save)
             } catch (error: Exception) {
                 runCatching { save(job.copy(status = "Failed", error = error.message.orEmpty())) }
-                if (!File(repository.directory(job.id), "job.json").exists()) StillOutputStore.rendererRelease(context.filesDir, job.capture)
+                // Release unless a saved job now owns the capture; never let this check strand the claim.
+                val saved = runCatching { File(repository.directory(job.id), "job.json").exists() }.getOrDefault(false)
+                if (!saved) StillOutputStore.rendererRelease(context.filesDir, job.capture)
                 throw error
             }
         }
