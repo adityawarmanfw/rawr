@@ -84,6 +84,7 @@ rawrcam_module(diagnostics_probes
     diagnostics/probes/RawIntegrityProbe.cpp
     diagnostics/probes/Raw16SourceParityProbe.cpp
     diagnostics/probes/PipelineDiagnostics.cpp
+    diagnostics/probes/ZeroCopyImportProbe.cpp
 )
 
 rawrcam_module(develop

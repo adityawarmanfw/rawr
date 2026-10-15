@@ -8,6 +8,10 @@
 #include "camera/CameraCallbackLifetime.h"
 #include "imaging/FrameIngressQueue.h"
 #include "imaging/FramePairer.h"
+#include "vulkan/DeviceObjects.h"
+
+#include <string>
+#include <vector>
 #include "support/UniqueFd.h"
 
 struct AImage {
@@ -21,6 +25,27 @@ extern "C" void AImage_delete(AImage* image) {
         ++imagesDeleted;
         delete image;
     }
+}
+namespace {
+std::vector<std::string> destroyed;
+}
+extern "C" {
+VKAPI_ATTR void VKAPI_CALL vkDestroyImage(VkDevice, VkImage h, const VkAllocationCallbacks*) {
+    destroyed.push_back("image" + std::to_string(reinterpret_cast<uintptr_t>(h)));
+}
+VKAPI_ATTR void VKAPI_CALL vkDestroyImageView(VkDevice, VkImageView h, const VkAllocationCallbacks*) {
+    destroyed.push_back("view" + std::to_string(reinterpret_cast<uintptr_t>(h)));
+}
+VKAPI_ATTR void VKAPI_CALL vkDestroyBuffer(VkDevice, VkBuffer h, const VkAllocationCallbacks*) {
+    destroyed.push_back("buffer" + std::to_string(reinterpret_cast<uintptr_t>(h)));
+}
+VKAPI_ATTR void VKAPI_CALL vkFreeMemory(VkDevice, VkDeviceMemory h, const VkAllocationCallbacks*) {
+    destroyed.push_back("memory" + std::to_string(reinterpret_cast<uintptr_t>(h)));
+}
+}
+template <typename Handle>
+Handle fakeHandle(uintptr_t id) {
+    return reinterpret_cast<Handle>(id);
 }
 using namespace rawrcam;
 
@@ -120,6 +145,27 @@ int main() {
         assert(closed(matchedFd) && imagesDeleted == 9 && !closed(pending));
     }
     assert(imagesDeleted == 10);
+    // Device objects: reverse creation order; appended and moved objects are destroyed once.
+    {
+        const auto device = fakeHandle<VkDevice>(99);
+        vulkan::DeviceObjects entry(device);
+        entry.adoptImage(fakeHandle<VkImage>(1));
+        entry.adoptMemory(fakeHandle<VkDeviceMemory>(2));
+        entry.adoptView(VK_NULL_HANDLE);
+        {
+            vulkan::DeviceObjects failed(device);
+            failed.adoptImage(fakeHandle<VkImage>(3));
+        }
+        assert((destroyed == std::vector<std::string>{"image3"}));
+        vulkan::DeviceObjects candidate(device);
+        candidate.adoptBuffer(fakeHandle<VkBuffer>(4));
+        candidate.adoptView(fakeHandle<VkImageView>(5));
+        entry.append(std::move(candidate));
+        vulkan::DeviceObjects moved(std::move(entry));
+        entry.reset();
+        assert(destroyed.size() == 1);
+    }
+    assert((destroyed == std::vector<std::string>{"image3", "view5", "buffer4", "memory2", "image1"}));
     // Revocation blocks late callbacks while retaining an already admitted callback.
     struct Owner {
     } owner;

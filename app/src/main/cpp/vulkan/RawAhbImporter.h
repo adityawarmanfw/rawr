@@ -8,11 +8,14 @@
 #include <string>
 #include <unordered_map>
 
+#include "vulkan/DeviceObjects.h"
 #include "vulkan/RawImportOptions.h"
 namespace rawr::raw_ingress {
 class Raw10Unpacker;
 }
 namespace rawrcam::vulkan {
+// Borrowed view of one imported camera AHB. The importer's cache entry owns
+// every handle here (and any the diagnostic hooks add) until clear().
 struct ImportedRaw {
     AHardwareBuffer* ahb = nullptr;
     VkImage image = VK_NULL_HANDLE;
@@ -21,21 +24,18 @@ struct ImportedRaw {
     // Diagnostic-only TRANSFER_SRC alias used when the primary zero-copy
     // candidate is STORAGE-only. Both images reference the same camera AHB.
     VkImage referenceTransferImage = VK_NULL_HANDLE;
-    VkDeviceMemory referenceTransferMemory = VK_NULL_HANDLE;
     VkImageView referenceTransferView = VK_NULL_HANDLE;
     bool referenceTransferAvailable = false;
     // Diagnostic-only second import of the same camera AHB as a LINEAR image.
     // This is never used by production preview; it exists solely to test whether
     // legal linear-tiled addressing can provide full-frame zero-copy RAW16.
     VkImage linearImage = VK_NULL_HANDLE;
-    VkDeviceMemory linearMemory = VK_NULL_HANDLE;
     VkImageView linearView = VK_NULL_HANDLE;
     bool linearCandidateAvailable = false;
     // fix54 diagnostic-only Android external-format import. The VkImage remains
     // bound to the SAME camera AHB; the conversion/view/sampler are owned by the
     // diagnostics layer so production import ownership stays unchanged.
     VkImage externalFormatImage = VK_NULL_HANDLE;
-    VkDeviceMemory externalFormatMemory = VK_NULL_HANDLE;
     bool externalFormatCandidateAvailable = false;
     uint64_t externalFormat = 0;
     VkFormatFeatureFlags externalFormatFeatures = 0;
@@ -49,7 +49,6 @@ struct ImportedRaw {
     // populated when a genuinely non-linear modifier survives the format/external
     // memory intersection query and bind succeeds.
     VkImage drmImage = VK_NULL_HANDLE;
-    VkDeviceMemory drmMemory = VK_NULL_HANDLE;
     VkImageView drmView = VK_NULL_HANDLE;
     VkImageUsageFlags drmUsage = 0;
     bool drmCandidateAvailable = false;
@@ -57,7 +56,6 @@ struct ImportedRaw {
     // fix54 diagnostic-only transfer destination. This is deliberately app-owned
     // memory: it measures vkCmdCopyImageToBuffer as a fallback, not zero-copy.
     VkBuffer copyBuffer = VK_NULL_HANDLE;
-    VkDeviceMemory copyBufferMemory = VK_NULL_HANDLE;
     bool copyBufferAvailable = false;
     // Buffer-view zero-copy candidate (diagnostic mode 16): second dedicated
     // import of the SAME camera AHB bound to a VkBuffer. Shader-side byte
@@ -66,11 +64,9 @@ struct ImportedRaw {
     // rows are 8160B, but sampled lines walk at 64B granularity). Lazily
     // populated by ensureBufferImport(); never throws.
     VkBuffer importBuffer = VK_NULL_HANDLE;
-    VkDeviceMemory importBufferMemory = VK_NULL_HANDLE;
     uint32_t importBufferStridePixels = 0;
     bool importBufferAvailable = false;
     bool importBufferAttempted = false;
-    bool importBufferOwnsAcquire = false;
     // App-owned CPU upload (pipeline/RawCpuUploadPool): image/view and
     // importBuffer are not camera memory and must not use foreign barriers.
     bool cpuUploaded = false;
@@ -118,6 +114,28 @@ class RawAhbImporter {
     size_t size() const noexcept { return imported_.size(); }
 
    private:
+    // One AHardwareBuffer_acquire reference, released on destruction.
+    class AhbReference final {
+       public:
+        explicit AhbReference(AHardwareBuffer* ahb = nullptr) noexcept;
+        ~AhbReference();
+        AhbReference(AhbReference&& other) noexcept;
+        AhbReference& operator=(AhbReference&& other) noexcept;
+        AhbReference(const AhbReference&) = delete;
+        AhbReference& operator=(const AhbReference&) = delete;
+
+       private:
+        AHardwareBuffer* ahb_;
+    };
+    // Members release in reverse order: Vulkan objects before the AHB references.
+    struct Entry {
+        AhbReference reference;  // Held by every entry.
+        AhbReference bufferReference;  // Held while importBuffer is bound.
+        DeviceObjects objects;
+        ImportedRaw raw;
+    };
+    // Validates a new cache entry for ahb; the caller fills and inserts it.
+    Entry newEntry(AHardwareBuffer* ahb, uint32_t expectedWidth, uint32_t expectedHeight) const;
     // Cache entry for a buffer-only import (no image), created on first use.
     ImportedRaw& bufferEntry(AHardwareBuffer* ahb, uint32_t expectedWidth, uint32_t expectedHeight);
     VkPhysicalDevice physical_;
@@ -125,6 +143,6 @@ class RawAhbImporter {
     uint32_t queueFamily_;
     PFN_vkGetAndroidHardwareBufferPropertiesANDROID getProperties_;
     Diagnostic diagnostic_;
-    std::unordered_map<uintptr_t, ImportedRaw> imported_;
+    std::unordered_map<uintptr_t, Entry> imported_;
 };
 }  // namespace rawrcam::vulkan
