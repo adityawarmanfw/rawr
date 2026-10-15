@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "rawr/vk/DeviceObjects.h"
 #include "rawr/vk/OwnedImage.h"
 
 namespace rawr::highlight {
@@ -138,17 +139,17 @@ private:
                                              VkBuffer lscBuffer, VkBuffer importBuffer, VkBuffer clipFlagBuffer);
     // One uint per formed output: nonzero when the CFA-state pass saw a
     // sensor-clipped sample this frame (conditional-rendering predicate).
-    struct ClipFlag { VkBuffer buffer=VK_NULL_HANDLE; VkDeviceMemory memory=VK_NULL_HANDLE; };
+    struct ClipFlag { rawr::vk::DeviceObjects objects; VkBuffer buffer=VK_NULL_HANDLE; };
     ClipFlag& clipFlagFor(VkImageView outputView);
-    struct LscBuffer { VkBuffer buffer=VK_NULL_HANDLE; VkDeviceMemory memory=VK_NULL_HANDLE; void* mapped=nullptr; VkDeviceSize bytes=0; };
+    struct LscBuffer { rawr::vk::DeviceObjects objects; VkBuffer buffer=VK_NULL_HANDLE; void* mapped=nullptr; VkDeviceSize bytes=0; };
     LscBuffer& lscBufferFor(VkImageView outputView, size_t floatCount);
-    void destroyLscBuffer(LscBuffer&) noexcept;
     struct HighlightResources {
         std::unique_ptr<rawr::highlight::GuideChain> chain;
         VkDescriptorSet applySet=VK_NULL_HANDLE;
     };
     HighlightResources& highlightResourcesFor(VkImageView outputView, uint32_t width, uint32_t height);
     struct ColoroppResources {
+        rawr::vk::DeviceObjects objects;           // owns both images
         rawr::vk::OwnedImage demosaiced{}, sdr{};  // cfa_state output, SDR tone output
         bool initialized=false;
         VkDescriptorSet coloroppSet=VK_NULL_HANDLE;
@@ -159,6 +160,9 @@ private:
                         bool lscValid);
     VkPhysicalDevice physicalDevice_{};
     VkDevice device_{};
+    // Owns the pipelines, layouts and descriptor pool below; destroyed after
+    // the per-view caches declared later.
+    rawr::vk::DeviceObjects objects_;
     VkDescriptorSetLayout dsl_{};
     VkPipelineLayout layout_{};
     VkPipeline pipeline_{};

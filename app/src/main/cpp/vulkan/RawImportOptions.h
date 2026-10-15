@@ -6,9 +6,12 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+namespace rawr::vk {
+class DeviceObjects;
+}  // namespace rawr::vk
 namespace rawrcam::vulkan {
 struct ImportedRaw;
-class DeviceObjects;
+using rawr::vk::DeviceObjects;
 // What the importer learned about one camera AHB, for diagnostic probes.
 struct RawImportFacts {
     VkPhysicalDevice physical = VK_NULL_HANDLE;

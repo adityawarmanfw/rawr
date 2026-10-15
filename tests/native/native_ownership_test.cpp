@@ -42,6 +42,25 @@ VKAPI_ATTR void VKAPI_CALL vkDestroyBuffer(VkDevice, VkBuffer h, const VkAllocat
 VKAPI_ATTR void VKAPI_CALL vkFreeMemory(VkDevice, VkDeviceMemory h, const VkAllocationCallbacks*) {
     destroyed.push_back("memory" + std::to_string(reinterpret_cast<uintptr_t>(h)));
 }
+VKAPI_ATTR void VKAPI_CALL vkDestroyPipeline(VkDevice, VkPipeline h, const VkAllocationCallbacks*) {
+    destroyed.push_back("pipeline" + std::to_string(reinterpret_cast<uintptr_t>(h)));
+}
+VKAPI_ATTR void VKAPI_CALL vkDestroyPipelineLayout(VkDevice, VkPipelineLayout h, const VkAllocationCallbacks*) {
+    destroyed.push_back("layout" + std::to_string(reinterpret_cast<uintptr_t>(h)));
+}
+VKAPI_ATTR void VKAPI_CALL vkDestroyDescriptorSetLayout(VkDevice, VkDescriptorSetLayout h,
+                                                        const VkAllocationCallbacks*) {
+    destroyed.push_back("setLayout" + std::to_string(reinterpret_cast<uintptr_t>(h)));
+}
+VKAPI_ATTR void VKAPI_CALL vkDestroyDescriptorPool(VkDevice, VkDescriptorPool h, const VkAllocationCallbacks*) {
+    destroyed.push_back("pool" + std::to_string(reinterpret_cast<uintptr_t>(h)));
+}
+VKAPI_ATTR void VKAPI_CALL vkDestroyShaderModule(VkDevice, VkShaderModule h, const VkAllocationCallbacks*) {
+    destroyed.push_back("module" + std::to_string(reinterpret_cast<uintptr_t>(h)));
+}
+VKAPI_ATTR void VKAPI_CALL vkDestroySampler(VkDevice, VkSampler h, const VkAllocationCallbacks*) {
+    destroyed.push_back("sampler" + std::to_string(reinterpret_cast<uintptr_t>(h)));
+}
 }
 template <typename Handle>
 Handle fakeHandle(uintptr_t id) {
@@ -166,6 +185,24 @@ int main() {
         assert(destroyed.size() == 1);
     }
     assert((destroyed == std::vector<std::string>{"image3", "view5", "buffer4", "memory2", "image1"}));
+    // Every object kind reaches its own destroy call; an OwnedImage releases view, image, then memory.
+    destroyed.clear();
+    {
+        vulkan::DeviceObjects all(fakeHandle<VkDevice>(99));
+        all.adoptDescriptorSetLayout(fakeHandle<VkDescriptorSetLayout>(1));
+        all.adoptPipelineLayout(fakeHandle<VkPipelineLayout>(2));
+        all.adoptPipeline(fakeHandle<VkPipeline>(3));
+        all.adoptDescriptorPool(fakeHandle<VkDescriptorPool>(4));
+        all.adoptShaderModule(fakeHandle<VkShaderModule>(5));
+        all.adoptSampler(fakeHandle<VkSampler>(6));
+        rawr::vk::OwnedImage owned{};
+        owned.memory = fakeHandle<VkDeviceMemory>(7);
+        owned.image = fakeHandle<VkImage>(8);
+        owned.view = fakeHandle<VkImageView>(9);
+        all.adoptOwnedImage(owned);
+    }
+    assert((destroyed == std::vector<std::string>{"view9", "image8", "memory7", "sampler6", "module5", "pool4",
+                                                  "pipeline3", "layout2", "setLayout1"}));
     // Revocation blocks late callbacks while retaining an already admitted callback.
     struct Owner {
     } owner;
