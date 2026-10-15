@@ -92,9 +92,16 @@ void SessionFrameCallbacks::updateHdrHeadroom(const image_scopes::SceneExposureS
     if (!stats || !(clipLuma > 0.0f) || metadata.aeMode == kAeModeOff || metadata.aeState == kAeStateSearching ||
         !metadata.aeCompensationSteps || (metadata.optimizedStillRequestId && *metadata.optimizedStillRequestId != 0))
         return;
+    // Low light: once Camera2 AE runs a long shutter it is adding gain, and
+    // every EV of headroom is an EV of shadow noise; lights at night are not
+    // worth it. Cap the underexposure there.
+    constexpr std::int64_t kLowLightShutterNs = 25'000'000;  // 1/40 s
+    constexpr float kLowLightFloorEv = -1.5f;
+    const float meterFloorEv =
+        metadata.exposureTimeNs >= kLowLightShutterNs ? std::max(floorEv, kLowLightFloorEv) : floorEv;
     const auto target =
         headroomMeter_.update(stats->weightedBins, stats->totalWeight, std::log2(clipLuma),
-                              engine_->hdrHeadroomEvFor(metadata), floorEv, timestampNs);
+                              engine_->hdrHeadroomEvFor(metadata), meterFloorEv, timestampNs);
     if (target) controller->setHdrHeadroomEv(*target);
 }
 

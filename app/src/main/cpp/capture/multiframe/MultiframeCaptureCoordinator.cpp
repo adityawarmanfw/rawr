@@ -231,6 +231,8 @@ uint64_t MultiframeCaptureCoordinator::startPreparedMultiframeCapture(
                                          : 0.0f;
                 const float longEv = std::clamp(tuning.longFrameEv > 0.0f ? tuning.longFrameEv : liftEv, 1.0f, 3.0f);
                 plan.evOffsets.assign(frames, longEv);
+                LOGI("MULTIFRAME_BRACKET_PLAN frames=%u longEv=%.2f headroomLift=%.2f baseExposureNs=%lld baseIso=%d",
+                     frames, longEv, liftEv, static_cast<long long>(plan.baseExposureTimeNs), plan.baseSensitivity);
                 *bracketPlan = plan;
                 pendingMultiframeCapture_->pendingBracket = collector;
                 activeBracket_ = collector;
