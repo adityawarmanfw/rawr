@@ -36,9 +36,11 @@ internal fun MultiframeSettings(state: SettingsUiState, dispatch: SettingsDispat
         }
         SettingsGroup(
             title = "Merge Algorithm",
-            description = "Super-resolution: kernel-regression merge, smoother with optional upscaling. HDR+: tile-aligned robust average on the RAW mosaic; keeps natural single-frame grain at higher SNR and avoids blotches in low light. HDR+ Quality: per-frequency merge, cleaner with mild sharpening and blends motion more, slower. HDR+ Bracketed: HDR+ Quality on a burst metered darker to keep bright areas (sky, lamps) from clipping, brightened back, plus a few longer frames right after the shutter for cleaner shadows; hold still a moment longer (all HDR+ modes: native resolution only)."
+            description = "Super-resolution: kernel-regression merge, smoother with optional upscaling. HDR+: tile-aligned robust average on the RAW mosaic; keeps natural single-frame grain at higher SNR and avoids blotches in low light. HDR+ Quality: per-frequency merge, cleaner with mild sharpening and blends motion more, slower. " +
+                (if (MultiframeMergeAlgorithm.HdrPlusBracketed.available) "HDR+ Bracketed: HDR+ Quality on a burst metered darker to keep bright areas (sky, lamps) from clipping, brightened back, plus a few longer frames right after the shutter for cleaner shadows; hold still a moment longer. " else "") +
+                "(All HDR+ modes: native resolution only.)"
         ) {
-            MultiframeMergeAlgorithm.entries.forEachIndexed { index, candidate ->
+            MultiframeMergeAlgorithm.entries.filter { it.available }.forEachIndexed { index, candidate ->
                 if (index > 0) SettingDivider()
                 SettingsSelectionRow(
                     title = candidate.label,

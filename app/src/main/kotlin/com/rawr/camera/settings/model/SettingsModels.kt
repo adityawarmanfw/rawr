@@ -401,7 +401,11 @@ enum class MultiframeMergeAlgorithm(val nativeId: Int, val label: String) {
     Wronski(0, "Super-resolution"),
     HdrPlus(1, "HDR+"),
     HdrPlusQuality(2, "HDR+ Quality"),
-    HdrPlusBracketed(3, "HDR+ Bracketed")
+    HdrPlusBracketed(3, "HDR+ Bracketed");
+
+    /** False when this build hides the algorithm (see [FeatureFlags]). */
+    val available: Boolean
+        get() = this != HdrPlusBracketed || FeatureFlags.hdrPlusBracketed
 }
 
 enum class MultiframeBaseFrameMode(val nativeId: Int, val label: String) {

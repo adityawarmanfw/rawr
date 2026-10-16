@@ -549,7 +549,8 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
                             d.multiframeTuning.outputResolution
                         ),
                     mergeAlgorithm =
-                        enumOrDefault(p[Keys.multiframeMergeAlgorithm], d.multiframeTuning.mergeAlgorithm),
+                        enumOrDefault(p[Keys.multiframeMergeAlgorithm], d.multiframeTuning.mergeAlgorithm)
+                            .takeIf { it.available } ?: d.multiframeTuning.mergeAlgorithm,
                     hdrPlusStrength = p[Keys.multiframeHdrPlusStrength] ?: d.multiframeTuning.hdrPlusStrength,
                     hdrPlusTileSize = p[Keys.multiframeHdrPlusTileSize] ?: d.multiframeTuning.hdrPlusTileSize,
                     bracketEv = p[Keys.multiframeBracketEv] ?: d.multiframeTuning.bracketEv,
