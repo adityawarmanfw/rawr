@@ -143,7 +143,12 @@ inline Solution solve(const SolveRequest& r) noexcept {
     s.iso = std::int32_t(std::lround(std::clamp(iso, isoMin, isoAnalog)));
     const double got = double(s.shutterNs) * double(s.iso);
     const double shortEv = std::log2(e / got);
-    s.digitalGainEv = float(std::clamp(shortEv, 0.0, double(std::max(0.0f, l.maxDigitalGainEv))));
+    // I: digital gain only stands in for the user's ISO past analog; a dark
+    // scene at the longest shutter stays dark (the user's ISO choice shows).
+    double digitalCap = std::max(0.0f, l.maxDigitalGainEv);
+    if (r.mode == Mode::IsoPriority)
+        digitalCap = std::min(digitalCap, std::max(0.0, std::log2(std::max<double>(r.lockedIso, isoMin) / isoAnalog)));
+    s.digitalGainEv = float(std::clamp(shortEv, 0.0, digitalCap));
     s.underexposed = shortEv - double(s.digitalGainEv) > 1.0 / 16.0;
     s.overexposed = shortEv < -1.0 / 16.0;
     return s;

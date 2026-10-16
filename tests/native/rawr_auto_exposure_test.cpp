@@ -177,6 +177,20 @@ int main() {
         assert(s.iso == 1600 && near(double(s.shutterNs), 10e6, 1e3) && near(s.digitalGainEv, 2.0, 1e-3));
         assert(!s.underexposed);
     }
+    // Solver: I in a dark scene at the longest shutter adds no digital gain
+    // within analog, so the user's ISO choice changes the exposure.
+    {
+        SolveRequest r;
+        r.limits = Limits{50, 1600, 1600, 20'000, 66'666'667, 33'333'333, 2.0f};
+        r.mode = Mode::IsoPriority;
+        r.exposure = 66'666'667.0 * 800;  // needs ISO 800 at the longest shutter
+        r.lockedIso = 50;
+        const auto low = solve(r);
+        r.lockedIso = 126;
+        const auto high = solve(r);
+        assert(low.digitalGainEv == 0.0f && high.digitalGainEv == 0.0f && low.underexposed);
+        assert(near(high.logExposure() - low.logExposure(), std::log2(126.0 / 50.0), 0.02));
+    }
     // Speed presets scale the time constants only.
     {
         const auto slow = filterPolicyForSpeed(0), normal = filterPolicyForSpeed(1), fast = filterPolicyForSpeed(2);
