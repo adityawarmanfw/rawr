@@ -1,6 +1,5 @@
 #pragma once
 
-#include <aaudio/AAudio.h>
 #include <android/native_window.h>
 #include <media/NdkMediaCodec.h>
 #include <media/NdkMediaMuxer.h>
@@ -8,17 +7,19 @@
 #include <atomic>
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
 
 #include "diagnostics/timing/RecentPeak.h"
+#include "video/AudioInput.h"
 #include "video/HevcFrameType.h"
 
 namespace rawrcam::video {
 
-// Owns the microphone, both hardware encoders, their drain threads, and the
+// Shares the video-mode microphone (AudioInput), owns both hardware encoders, their drain threads, and the
 // muxer. The UI hands over one MediaStore fd and the resulting encoder Surface.
 class NativeAvRecorder final {
 public:
@@ -75,7 +76,8 @@ private:
     void configureVideo();
     void configureAudio();
     void drainVideo() noexcept;
-    void captureAudio() noexcept;
+    void onAudioBlock(const AudioInput::Block& block);
+    void finishAudio() noexcept;
     void drainAudio(bool untilEos);
     void setFormat(Track track, AMediaFormat* format);
     void writeSample(Track track, const uint8_t* data, size_t capacity,
@@ -97,10 +99,11 @@ private:
     std::string videoCodecName_;
     AMediaCodec* audioCodec_ = nullptr;
     ANativeWindow* inputWindow_ = nullptr;
-    AAudioStream* audioStream_ = nullptr;
+    std::shared_ptr<AudioInput> audioInput_;
+    // Next audio PTS after the last queued block; the AAC EOS timestamp.
+    int64_t audioEndUs_ = 0;
     AMediaMuxer* muxer_ = nullptr;
     std::thread videoThread_;
-    std::thread audioThread_;
     std::atomic<bool> audioRunning_{false};
     std::atomic<bool> stopRequested_{false};
     bool started_ = false;

@@ -84,6 +84,12 @@ internal fun PhysicalCaptureLayout(
                     filmQuick = filmQuick,
                     onFilmEvent = onFilmEvent
                 )
+                if (isVideo) {
+                    AudioMeter(
+                        Modifier.align(Alignment.TopStart)
+                            .padding(start = CaptureDimens.ViewfinderHorizontalPadding, top = 8.dp)
+                    )
+                }
                 if (isVideo && videoControls.recording) {
                     VideoRecordTimer(
                         status = videoControls.status,

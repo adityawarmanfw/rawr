@@ -12,6 +12,7 @@ object CaptureTestTags {
     const val SHUTTER = "capture_shutter"
     const val VIDEO_RECORD = "capture_video_record"
     const val VIDEO_RECORD_TIMER = "capture_video_record_timer"
+    const val VIDEO_AUDIO_METER = "capture_video_audio_meter"
     const val VIDEO_RECORD_DROPS = "capture_video_record_drops"
     const val VIDEO_FPS = "capture_video_fps"
     const val VIDEO_RESOLUTION = "capture_video_resolution"

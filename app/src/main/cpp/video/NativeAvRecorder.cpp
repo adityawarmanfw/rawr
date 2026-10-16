@@ -21,16 +21,12 @@ constexpr int kSurfaceColorFormat = 2130708361;  // MediaCodecInfo.COLOR_FormatS
 constexpr int kMainProfile = 1;                  // HEVCProfileMain.
 constexpr int kMain10Profile = 2;                // HEVCProfileMain10.
 constexpr int kAacLcProfile = 2;
-constexpr int kSampleRate = 48'000;
+constexpr int kSampleRate = AudioInput::kSampleRate;
 constexpr int kMaxAudioChannels = 2;
 constexpr int kMonoFallbackBitrate = 128'000;
-constexpr int kAudioReadFrames = 1024;
 
 void requireMedia(media_status_t status, const char* operation) {
     if (status != AMEDIA_OK) throw std::runtime_error(std::string(operation) + " status=" + std::to_string(status));
-}
-void requireAudio(aaudio_result_t status, const char* operation) {
-    if (status != AAUDIO_OK) throw std::runtime_error(std::string(operation) + " status=" + std::to_string(status));
 }
 int64_t clockNs(clockid_t which) noexcept {
     timespec ts{};
@@ -109,42 +105,9 @@ void NativeAvRecorder::configureVideo() {
 
 void NativeAvRecorder::configureAudio() {
     const int requestedChannels = settings_.audioChannels;
-    int openedChannels = 0;
-    // Stereo-first with single mono fallback. Never fails the recording for topology.
-    for (int attempt = 0; attempt < 2; ++attempt) {
-        const int tryChannels = (attempt == 0) ? requestedChannels : 1;
-        if (attempt == 1 && requestedChannels == 1) break;
-        AAudioStreamBuilder* builder = nullptr;
-        requireAudio(AAudio_createStreamBuilder(&builder), "create microphone builder");
-        if (!builder) throw std::runtime_error("microphone builder is null");
-        AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_INPUT);
-        AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_I16);
-        AAudioStreamBuilder_setSampleRate(builder, kSampleRate);
-        AAudioStreamBuilder_setChannelCount(builder, tryChannels);
-        AAudioStreamBuilder_setInputPreset(builder, AAUDIO_INPUT_PRESET_CAMCORDER);
-        AAudioStream* stream = nullptr;
-        const aaudio_result_t opened = AAudioStreamBuilder_openStream(builder, &stream);
-        AAudioStreamBuilder_delete(builder);
-        if (opened != AAUDIO_OK || !stream) {
-            if (stream) AAudioStream_close(stream);
-            if (attempt == 0 && requestedChannels != 1) continue;
-            requireAudio(opened, "open microphone");
-            throw std::runtime_error("microphone open failed");
-        }
-        const bool matches = AAudioStream_getSampleRate(stream) == kSampleRate &&
-                             AAudioStream_getChannelCount(stream) == tryChannels &&
-                             AAudioStream_getFormat(stream) == AAUDIO_FORMAT_PCM_I16;
-        if (!matches) {
-            AAudioStream_close(stream);
-            if (attempt == 0 && requestedChannels != 1) continue;
-            throw std::runtime_error("microphone did not provide 48 kHz PCM16 at requested channels");
-        }
-        audioStream_ = stream;
-        openedChannels = tryChannels;
-        break;
-    }
-    if (!audioStream_ || openedChannels <= 0) throw std::runtime_error("microphone unavailable at requested channels");
-    actualAudioChannels_ = openedChannels;
+    // Reuses the meter's running stream; a stereo stream is downmixed for a mono request.
+    audioInput_ = AudioInput::acquire(requestedChannels);
+    actualAudioChannels_ = std::min(requestedChannels, audioInput_->channels());
     audioFallback_ = (actualAudioChannels_ != requestedChannels);
     // Agreed policy: mono fallback steps down to 128k even if stereo asked for 192k.
     actualAudioBitrate_ =
@@ -159,13 +122,12 @@ void NativeAvRecorder::configureAudio() {
     AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_CHANNEL_COUNT, actualAudioChannels_);
     AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_AAC_PROFILE, kAacLcProfile);
     AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_BIT_RATE, actualAudioBitrate_);
-    AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_MAX_INPUT_SIZE, kAudioReadFrames * actualAudioChannels_ * 2);
+    AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_MAX_INPUT_SIZE, AudioInput::kReadFrames * actualAudioChannels_ * 2);
     const media_status_t configured =
         AMediaCodec_configure(audioCodec_, format, nullptr, nullptr, AMEDIACODEC_CONFIGURE_FLAG_ENCODE);
     AMediaFormat_delete(format);
     requireMedia(configured, "configure AAC");
     requireMedia(AMediaCodec_start(audioCodec_), "start AAC");
-    requireAudio(AAudioStream_requestStart(audioStream_), "start microphone");
 }
 
 void NativeAvRecorder::start() {
@@ -182,11 +144,12 @@ void NativeAvRecorder::start() {
         started_ = true;
         audioRunning_.store(true);
         videoThread_ = std::thread([this] { drainVideo(); });
-        audioThread_ = std::thread([this] { captureAudio(); });
+        audioInput_->setSink({[this](const AudioInput::Block& block) { onAudioBlock(block); },
+                              [this](const std::string& error) { setFailure(error); }});
     } catch (...) {
         audioRunning_.store(false);
         stopRequested_.store(true);
-        if (audioStream_) (void)AAudioStream_requestStop(audioStream_);
+        if (audioInput_) audioInput_->setSink({});
         if (videoThread_.joinable() && videoCodec_) (void)AMediaCodec_signalEndOfInputStream(videoCodec_);
         cleanup();
         throw;
@@ -414,73 +377,74 @@ void NativeAvRecorder::drainAudio(bool untilEos) {
     throw std::runtime_error("AAC EOS timeout");
 }
 
-void NativeAvRecorder::captureAudio() noexcept {
+void NativeAvRecorder::onAudioBlock(const AudioInput::Block& block) {
+    if (!audioRunning_.load()) return;
     try {
-        const int channels = actualAudioChannels_ > 0 ? actualAudioChannels_ : settings_.audioChannels;
-        std::array<int16_t, kAudioReadFrames * kMaxAudioChannels> pcm{};
-        int64_t totalFrames = 0;
-        int64_t anchorNs = 0;
-        while (audioRunning_.load()) {
-            const aaudio_result_t count = AAudioStream_read(audioStream_, pcm.data(), kAudioReadFrames, 50'000'000);
-            if (count < 0) throw std::runtime_error("microphone read failed: " + std::to_string(count));
-            if (count == 0) {
+        const int inputChannels = audioInput_->channels();
+        const int channels = actualAudioChannels_;
+        std::array<int16_t, AudioInput::kReadFrames * kMaxAudioChannels> mixed{};
+        const int16_t* pcm = block.pcm;
+        if (inputChannels != channels) {
+            for (int frame = 0; frame < block.frames; ++frame)
+                mixed[static_cast<size_t>(frame)] = static_cast<int16_t>(
+                    (static_cast<int32_t>(block.pcm[frame * 2]) + block.pcm[frame * 2 + 1]) / 2);
+            pcm = mixed.data();
+        }
+        long double squares = 0;
+        int32_t peak = 0;
+        const int64_t totalSamples = static_cast<int64_t>(block.frames) * channels;
+        for (int64_t i = 0; i < totalSamples; ++i) {
+            const int32_t value = pcm[static_cast<size_t>(i)];
+            squares += static_cast<long double>(value) * value;
+            peak = std::max(peak, std::abs(value));
+        }
+        {
+            std::lock_guard<std::mutex> lock(statsMutex_);
+            audioSamples_ += static_cast<uint64_t>(totalSamples);
+            audioSumSquares_ += squares;
+            audioPeak_ = static_cast<int16_t>(std::min<int32_t>(32'767, std::max<int32_t>(audioPeak_, peak)));
+            audioXruns_ = audioInput_->xruns();
+        }
+        int consumed = 0;
+        while (consumed < block.frames && audioRunning_.load()) {
+            const ssize_t index = AMediaCodec_dequeueInputBuffer(audioCodec_, 10'000);
+            if (index == AMEDIACODEC_INFO_TRY_AGAIN_LATER) {
                 drainAudio(false);
                 continue;
             }
-            int64_t timestampFrame = 0, timestampNs = 0;
-            int64_t measuredFirstNs = bootNs() - static_cast<int64_t>(count) * 1'000'000'000LL / kSampleRate;
-            if (AAudioStream_getTimestamp(audioStream_, CLOCK_BOOTTIME, &timestampFrame, &timestampNs) == AAUDIO_OK)
-                measuredFirstNs = timestampNs + (totalFrames - timestampFrame) * 1'000'000'000LL / kSampleRate;
-            const int64_t measuredAnchor = measuredFirstNs - totalFrames * 1'000'000'000LL / kSampleRate;
-            anchorNs = anchorNs == 0 ? measuredAnchor
-                                     : anchorNs + std::clamp<int64_t>(measuredAnchor - anchorNs, -1'000'000, 1'000'000);
-            long double squares = 0;
-            int32_t peak = 0;
-            const int64_t totalSamples = static_cast<int64_t>(count) * channels;
-            for (int64_t i = 0; i < totalSamples; ++i) {
-                const int32_t value = pcm[static_cast<size_t>(i)];
-                squares += static_cast<long double>(value) * value;
-                peak = std::max(peak, std::abs(value));
-            }
-            {
-                std::lock_guard<std::mutex> lock(statsMutex_);
-                audioSamples_ += static_cast<uint64_t>(totalSamples);
-                audioSumSquares_ += squares;
-                audioPeak_ = static_cast<int16_t>(std::min<int32_t>(32'767, std::max<int32_t>(audioPeak_, peak)));
-                audioXruns_ = AAudioStream_getXRunCount(audioStream_);
-            }
-            int consumed = 0;
-            while (consumed < count && audioRunning_.load()) {
-                const ssize_t index = AMediaCodec_dequeueInputBuffer(audioCodec_, 10'000);
-                if (index == AMEDIACODEC_INFO_TRY_AGAIN_LATER) {
-                    drainAudio(false);
-                    continue;
-                }
-                if (index < 0) throw std::runtime_error("AAC input dequeue failed: " + std::to_string(index));
-                size_t capacity = 0;
-                uint8_t* input = AMediaCodec_getInputBuffer(audioCodec_, static_cast<size_t>(index), &capacity);
-                const int part = std::min<int>(
-                    count - consumed, static_cast<int>(capacity / (sizeof(int16_t) * static_cast<size_t>(channels))));
-                if (!input || part <= 0) throw std::runtime_error("AAC input buffer unavailable");
-                std::memcpy(input, pcm.data() + static_cast<size_t>(consumed) * static_cast<size_t>(channels),
-                            static_cast<size_t>(part) * static_cast<size_t>(channels) * sizeof(int16_t));
-                const int64_t ptsUs = (anchorNs + (totalFrames + consumed) * 1'000'000'000LL / kSampleRate) / 1'000;
-                requireMedia(AMediaCodec_queueInputBuffer(
-                                 audioCodec_, static_cast<size_t>(index), 0,
-                                 static_cast<size_t>(part) * static_cast<size_t>(channels) * sizeof(int16_t),
-                                 static_cast<uint64_t>(std::max<int64_t>(0, ptsUs)), 0),
-                             "queue AAC PCM");
-                consumed += part;
-                drainAudio(false);
-            }
-            totalFrames += count;
+            if (index < 0) throw std::runtime_error("AAC input dequeue failed: " + std::to_string(index));
+            size_t capacity = 0;
+            uint8_t* input = AMediaCodec_getInputBuffer(audioCodec_, static_cast<size_t>(index), &capacity);
+            const int part = std::min<int>(
+                block.frames - consumed, static_cast<int>(capacity / (sizeof(int16_t) * static_cast<size_t>(channels))));
+            if (!input || part <= 0) throw std::runtime_error("AAC input buffer unavailable");
+            std::memcpy(input, pcm + static_cast<size_t>(consumed) * static_cast<size_t>(channels),
+                        static_cast<size_t>(part) * static_cast<size_t>(channels) * sizeof(int16_t));
+            const int64_t ptsUs = (block.firstFrameBootNs + consumed * 1'000'000'000LL / kSampleRate) / 1'000;
+            requireMedia(AMediaCodec_queueInputBuffer(
+                             audioCodec_, static_cast<size_t>(index), 0,
+                             static_cast<size_t>(part) * static_cast<size_t>(channels) * sizeof(int16_t),
+                             static_cast<uint64_t>(std::max<int64_t>(0, ptsUs)), 0),
+                         "queue AAC PCM");
+            consumed += part;
+            audioEndUs_ = (block.firstFrameBootNs + consumed * 1'000'000'000LL / kSampleRate) / 1'000;
+            drainAudio(false);
         }
-        const int64_t endUs = (anchorNs + totalFrames * 1'000'000'000LL / kSampleRate) / 1'000;
+    } catch (const std::exception& error) {
+        audioRunning_.store(false);
+        setFailure(error.what());
+    }
+}
+
+// Runs on the stopping thread after the sink is detached, so no block is in flight.
+void NativeAvRecorder::finishAudio() noexcept {
+    if (!audioCodec_) return;
+    try {
         for (;;) {
             const ssize_t index = AMediaCodec_dequeueInputBuffer(audioCodec_, 10'000);
             if (index >= 0) {
                 requireMedia(AMediaCodec_queueInputBuffer(audioCodec_, static_cast<size_t>(index), 0, 0,
-                                                          static_cast<uint64_t>(std::max<int64_t>(0, endUs)),
+                                                          static_cast<uint64_t>(std::max<int64_t>(0, audioEndUs_)),
                                                           AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM),
                              "queue AAC EOS");
                 break;
@@ -501,9 +465,9 @@ bool NativeAvRecorder::stop() noexcept {
         return false;
     }
     started_ = false;
+    if (audioInput_) audioInput_->setSink({});
     audioRunning_.store(false);
-    if (audioStream_) (void)AAudioStream_requestStop(audioStream_);
-    if (audioThread_.joinable()) audioThread_.join();
+    finishAudio();
     stopRequested_.store(true);
     if (videoCodec_) {
         const media_status_t status = AMediaCodec_signalEndOfInputStream(videoCodec_);
@@ -544,13 +508,11 @@ bool NativeAvRecorder::stop() noexcept {
 
 void NativeAvRecorder::cleanup() noexcept {
     audioRunning_.store(false);
-    if (audioStream_) (void)AAudioStream_requestStop(audioStream_);
-    if (audioThread_.joinable()) audioThread_.join();
-    if (videoThread_.joinable()) videoThread_.join();
-    if (audioStream_) {
-        (void)AAudioStream_close(audioStream_);
-        audioStream_ = nullptr;
+    if (audioInput_) {
+        audioInput_->setSink({});
+        audioInput_.reset();
     }
+    if (videoThread_.joinable()) videoThread_.join();
     if (audioCodec_) {
         (void)AMediaCodec_stop(audioCodec_);
         (void)AMediaCodec_delete(audioCodec_);
