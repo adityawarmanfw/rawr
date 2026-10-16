@@ -77,7 +77,7 @@ internal fun RendererRoute(viewModel: RendererViewModel, onExit: () -> Unit) {
                     Column {
                         Text("Renderer")
                         Text(
-                            if (job != null) job.name else "${jobs.size} pending",
+                            if (job != null) job.name else if (jobs.isEmpty()) "DNG library" else "${jobs.size} unfinished",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
@@ -120,11 +120,12 @@ internal fun RendererRoute(viewModel: RendererViewModel, onExit: () -> Unit) {
                     }
                 )
             } else {
-                RendererQueue(
+                RendererLibrary(
                     jobs = jobs,
                     busy = busy,
                     loading = loading,
                     onImport = { importer.launchPicker(context, arrayOf("image/x-adobe-dng", "image/dng", "application/octet-stream")) },
+                    onOpen = { entry -> viewModel.import(entry.uri) },
                     onEdit = viewModel::edit,
                     onRenderOriginal = { item ->
                         notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
