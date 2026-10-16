@@ -86,6 +86,12 @@ internal object NativeExposurePresentation {
             exposureApplied = applied,
             spotAe = if (snapshot.semanticExposureMode != 0) current.spotAe.copy(active = false) else current.spotAe,
             sensitivityBoost = snapshot.appliedPostRawSensitivityBoost,
+            longExposure = LongExposureUiState(
+                deferredNs = snapshot.deferredCaptureExposureNs,
+                activeNs = snapshot.longExposureNs,
+                startMs = snapshot.longExposureStartMs,
+                lastHonored = snapshot.lastLongExposureHonored
+            ),
             rawFps = snapshot.appliedRawFps,
             viewfinderFps = snapshot.measuredViewfinderFps,
             exposureControl = current.exposureControl.copy(

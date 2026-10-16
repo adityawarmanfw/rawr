@@ -1,4 +1,5 @@
 #pragma once
+#include <chrono>
 #include <android/hardware_buffer.h>
 #include <media/NdkImage.h>
 #include <tonemap/TonemapEngine.h>
@@ -56,7 +57,8 @@ class SingleFrameCoordinator final {
     uint64_t requestRawStillCapture(encoding::dng::DngCaptureContext dngContext,
                                     rawrcam::capture::JpegCaptureRequest jpegContext);
     uint64_t recover(const std::string& name, bool multiframe, int dng, int merged, int jpeg);
-    void expectOptimizedFrame(uint64_t requestId);
+    // The capture waits for the tagged one-shot frame (extraWait: its exposure).
+    void expectOptimizedFrame(uint64_t requestId, std::chrono::milliseconds extraWait = {});
 
     // Processes only the still-capture branch of an already timestamp-paired RAW
     // frame. The caller remains responsible for the AImage lease and for replacing

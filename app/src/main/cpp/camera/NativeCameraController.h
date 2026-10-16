@@ -58,6 +58,18 @@ class NativeCameraController {
     // sensitivity coordinate).
     bool captureExposureBracket(uint64_t requestId, int64_t baseExposureTimeNs, int32_t baseReportedSensitivity,
                                 const std::vector<float>& evOffsets);
+    // Long exposure: the (shutter, ISO) a capture needs when M or rawr S asks
+    // for a shutter past the viewfinder cap (ViewfinderExposure.h); nullopt
+    // when the viewfinder frames are the capture.
+    struct LongExposure {
+        int64_t exposureTimeNs = 0;
+        int32_t sensitivity = 0;
+    };
+    std::optional<LongExposure> deferredCaptureExposure() const;
+    // Submits that exposure as one AE-off one-shot request tagged with
+    // requestId; the viewfinder stalls until it returns. False when not
+    // needed or not submitted.
+    bool captureLongExposure(uint64_t requestId, LongExposure* submitted);
     // Most a positive-EV long frame can gain over the current repeating
     // exposure (EV); nullopt when unknown.
     std::optional<double> longFrameRoomEv() const;
@@ -107,6 +119,10 @@ class NativeCameraController {
         // CaptureResult ISO / request ISO; 0 when unknown (taken as 1 without
         // sensor-mode keys; with them rawr AE waits for the probe).
         double reportedPerRequest = 0.0;
+        // M's requested (capture) pair; the viewfinder may run a shorter one.
+        bool manualActive = false;
+        int64_t manualExposureNs = 0;
+        int32_t manualIso = 0;
         // Video mode or recording: shutter bound to the frame, slower filter.
         bool video = false;
         // Spot AE target (source-normalized centre) rawr meters instead of the frame.

@@ -49,6 +49,9 @@ import com.rawr.camera.settings.architecture.NavigateBack
 import com.rawr.camera.settings.architecture.SetLensProfiles
 import com.rawr.camera.settings.architecture.SettingsDispatch
 import com.rawr.camera.settings.model.LENS_NAME_MAX_LENGTH
+import com.rawr.camera.settings.model.EXTENDED_ISO_MAX
+import com.rawr.camera.settings.model.EXTENDED_SHUTTER_MAX_NS
+import com.rawr.camera.settings.model.LensExposure
 import com.rawr.camera.settings.model.LensLevels
 import com.rawr.camera.settings.model.LensProfile
 import com.rawr.camera.settings.model.RawStreamChoice
@@ -127,6 +130,7 @@ internal fun LensEditorScreen(state: SettingsUiState, lensName: String?, dispatc
             levels = draft.levels,
             camera = camera
         ) { draft = draft.copy(levels = it) }
+        ExtendedExposureGroup(draft.exposure) { draft = draft.copy(exposure = it) }
         VendorKeysGroup(
             title = "Vendor keys",
             description = "Session keys are set when each capture session starts; request keys on every request " +
@@ -347,6 +351,34 @@ private fun LevelField(label: String, value: Float, modifier: Modifier, onValue:
 
 private fun formatLevel(value: Float): String =
     if (value == Math.round(value).toFloat()) Math.round(value).toString() else value.toString()
+
+@Composable
+private fun ExtendedExposureGroup(exposure: LensExposure, onChange: (LensExposure) -> Unit) {
+    SettingsGroup(
+        title = "Exposure range",
+        description = "Allow ISO and shutter requests beyond what the camera advertises. Some lenses honor them; " +
+            "others clamp silently (a long exposure the camera shortened is flagged after capture). " +
+            "Shutters longer than 1/5 s run only when you press the shutter. 0 keeps the camera's limit."
+    ) {
+        SettingsSwitchRow(title = "Allow requests outside range", checked = exposure.extended) {
+            onChange(exposure.copy(extended = it))
+        }
+        if (exposure.extended) {
+            LevelField(
+                "Highest ISO",
+                exposure.isoMax.toFloat(),
+                Modifier.fillMaxWidth().padding(horizontal = SettingsRowHorizontalPadding, vertical = 4.dp)
+            ) { v -> onChange(exposure.copy(isoMax = v.toInt().coerceIn(0, EXTENDED_ISO_MAX))) }
+            LevelField(
+                "Longest shutter (s, up to 25)",
+                exposure.shutterMaxNs / 1e9f,
+                Modifier.fillMaxWidth().padding(horizontal = SettingsRowHorizontalPadding, vertical = 4.dp)
+            ) { v ->
+                onChange(exposure.copy(shutterMaxNs = (v.toDouble() * 1e9).toLong().coerceIn(0L, EXTENDED_SHUTTER_MAX_NS)))
+            }
+        }
+    }
+}
 
 @Composable
 private fun VendorKeysGroup(

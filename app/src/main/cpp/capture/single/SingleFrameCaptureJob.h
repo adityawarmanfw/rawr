@@ -1,4 +1,5 @@
 #pragma once
+#include <chrono>
 #include "capture/single/SingleFrameCaptureAcquisition.h"
 #include "capture/single/SingleFrameCaptureDevelop.h"
 #include "capture/single/SingleFrameCaptureOutputs.h"
@@ -14,7 +15,9 @@ class SingleFrameCaptureJob final {
     bool captureRequested() const noexcept { return acquisition_.captureRequested(); }
     bool deferredSnapshotBusy() const noexcept { return acquisition_.busy(); }
     uint64_t requestRawStillCapture(encoding::dng::DngCaptureContext, JpegCaptureRequest);
-    void expectOptimizedFrame(uint64_t id) { acquisition_.expectOptimizedFrame(id); }
+    void expectOptimizedFrame(uint64_t id, std::chrono::milliseconds extraWait) {
+        acquisition_.expectOptimizedFrame(id, extraWait);
+    }
     bool deferSubmittedFrame(const metadata::FrameMetadataSnapshot&, const color::FrameColorTransform&,
                              const tonemap::TonemapParams&, float, bool, const spektrafilm_native::FilmLook&);
     bool beginDeferredSnapshot(AImage*, AHardwareBuffer*, uint64_t, int);

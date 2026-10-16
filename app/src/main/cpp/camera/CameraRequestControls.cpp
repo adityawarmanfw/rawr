@@ -10,6 +10,7 @@
 #include "camera/Camera2PriorityCompat.h"
 #include "camera/CameraAePriority.h"
 #include "camera/CameraRequestCadence.h"
+#include "camera/ViewfinderExposure.h"
 #include "camera/WhiteBalanceMath.h"
 
 namespace rawrcam::camera {
@@ -111,10 +112,17 @@ CameraControlApplyResult applyCameraControlState(ACaptureRequest* request, const
     const int64_t exposureMaximum = framePeriodNs > 0
         ? std::min(state.capabilities.exposureTimeMaxNs, framePeriodNs)
         : state.capabilities.exposureTimeMaxNs;
-    const int64_t exposure = std::clamp(rawrAe ? state.rawrAeExposureTimeNs : state.requestedExposureTimeNs,
+    // M: shutters past the viewfinder cap run only on capture (ViewfinderExposure.h).
+    const auto manualPair = viewfinderManualPair(state);
+    const bool manualMode = state.exposureMode == ExposureControlMode::Manual;
+    const int64_t exposure = std::clamp(rawrAe       ? state.rawrAeExposureTimeNs
+                                        : manualMode ? manualPair.exposureTimeNs
+                                                     : state.requestedExposureTimeNs,
                                         state.capabilities.exposureTimeMinNs,
                                         std::max(state.capabilities.exposureTimeMinNs, exposureMaximum));
-    const int32_t sensitivity = std::clamp(rawrAe ? state.rawrAeSensitivity : state.requestedSensitivity,
+    const int32_t sensitivity = std::clamp(rawrAe       ? state.rawrAeSensitivity
+                                           : manualMode ? manualPair.sensitivity
+                                                        : state.requestedSensitivity,
                                            state.capabilities.sensitivityMin, state.capabilities.sensitivityMax);
 
     // The repeating ACaptureRequest is reused. Normalize SENSOR_* ownership on

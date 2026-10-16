@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 
 #include "capture/CaptureRequest.h"
@@ -52,9 +53,21 @@ uint64_t SessionEngine::requestRawStillCapture(rawrcam::encoding::dng::DngCaptur
         applyAutoKey(*capturedTone, latestLiftNoise(capturedTone->aePostGain * std::exp2(capturedTone->exposureEV)));
         dngContext.captureTone = std::move(capturedTone);
     }
+    // Long exposure: the viewfinder runs a shorter shutter, so the capture is
+    // its own one-shot frame; wait for it instead of the next viewfinder frame.
+    const auto longExposure = camera->deferredCaptureExposure();
     const uint64_t requestId = capture_.requestSingle(std::move(dngContext), std::move(jpegContext), [this] {
         return ingressQueue_.latestTimestamp(realtime_.generation());
     });
+    if (requestId != 0 && longExposure) {
+        const auto waitMs = std::chrono::milliseconds(longExposure->exposureTimeNs / 1'000'000 + 1000);
+        capture_.single().expectOptimizedFrame(requestId, waitMs);
+        if (!camera->captureLongExposure(requestId, nullptr)) {
+            // Nothing submitted: fall back to the viewfinder frame promptly.
+            capture_.single().expectOptimizedFrame(requestId);
+            appendDiagnostic("RAW_STILL_LONG_EXPOSURE_SUBMIT_FAILED requestId=" + std::to_string(requestId));
+        }
+    }
     finalizeDeferredSurfaceDetach();
     return requestId;
 }
@@ -133,6 +146,12 @@ uint32_t SessionEngine::prepareExperimentalMultiframe(uint32_t maxFrames, uint32
     // HDR+ Bracketed: when the shutter/gain limits would leave the long
     // frames too dark to help (they would be skipped), freeze their slots as
     // burst frames instead. Checked outside mu_ like other camera calls.
+    // Long exposure (shutter past the viewfinder cap): one frame, captured
+    // single-shot as its own exposure (the ZSL ring holds only viewfinder frames).
+    if (const auto* controller = cameraControls_.controller(); controller && controller->deferredCaptureExposure()) {
+        LOGI("MULTIFRAME_LONG_EXPOSURE_SINGLE burst=%u", maxFrames + longFrames);
+        return 0u;
+    }
     bool skipLong = false;
     if (longFrames > 0u) {
         const auto* controller = cameraControls_.controller();

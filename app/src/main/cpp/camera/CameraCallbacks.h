@@ -13,6 +13,8 @@ class CameraEventSink {
     virtual void cameraSessionClosed(uint64_t generation, ACameraCaptureSession* session) = 0;
     virtual void cameraCaptureCompleted(uint64_t generation, const ACaptureRequest* request,
                                         const ACameraMetadata* result) = 0;
+    // The sensor started exposing a request. Runs on a camera thread.
+    virtual void cameraCaptureStarted(uint64_t /*generation*/, const ACaptureRequest* /*request*/) {}
     // Every failed capture or lost buffer, unthrottled. Runs on a camera thread.
     virtual void cameraCaptureFailed(uint64_t /*generation*/) {}
 };
@@ -49,6 +51,7 @@ class CameraCallbacks final {
     static void onClosed(void*, ACameraCaptureSession*);
     static void onReady(void*, ACameraCaptureSession*) {}
     static void onActive(void*, ACameraCaptureSession*) {}
+    static void onStarted(void*, ACameraCaptureSession*, const ACaptureRequest*, int64_t);
     static void onCompleted(void*, ACameraCaptureSession*, ACaptureRequest*, const ACameraMetadata*);
     static void onLogicalCompleted(void*, ACameraCaptureSession*, ACaptureRequest*, const ACameraMetadata*, size_t,
                                    const char**, const ACameraMetadata**);

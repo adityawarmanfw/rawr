@@ -60,6 +60,13 @@ internal data class NativeCameraUiSnapshot(
     val focusRequestId: Long = 0L,
     val videoMode: Boolean = false,
     val videoPreviewFps: Int = 30,
+    /** Capture shutter when longer than the viewfinder runs (one-shot on press); 0 = none. */
+    val deferredCaptureExposureNs: Long = 0L,
+    /** Long exposure in flight: length, and CLOCK_MONOTONIC (uptime) ms it started; 0 submitted, -1 none. */
+    val longExposureNs: Long = 0L,
+    val longExposureStartMs: Long = -1L,
+    /** Last long exposure: -1 none yet, 0 the camera shortened it, 1 honored. */
+    val lastLongExposureHonored: Int = -1,
     val requestedShutterAngleDegrees: Double? = null,
     val shutterAngleChoices: List<NativeShutterAngleChoice> = emptyList(),
     val autoWbEstimateCalibrated: Boolean = false,
@@ -142,6 +149,10 @@ internal data class NativeCameraUiSnapshot(
                 focusRequestId = j.optLong("focusRequestId", 0L),
                 videoMode = j.optBoolean("videoMode", false),
                 videoPreviewFps = j.optInt("videoPreviewFps", 30),
+                deferredCaptureExposureNs = j.optLong("deferredCaptureExposureNs", 0L),
+                longExposureNs = j.optLong("longExposureNs", 0L),
+                longExposureStartMs = j.optLong("longExposureStartMs", -1L),
+                lastLongExposureHonored = j.optInt("lastLongExposureHonored", -1),
                 requestedShutterAngleDegrees = j.nullableDouble("requestedShutterAngleDegrees"),
                 shutterAngleChoices = buildList {
                     val choices = j.optJSONArray("shutterAngleChoices") ?: return@buildList

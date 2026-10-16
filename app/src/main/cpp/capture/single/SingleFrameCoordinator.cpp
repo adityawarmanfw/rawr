@@ -61,6 +61,7 @@ class SingleFrameCoordinator::Impl {
         bool preparing = false;
         bool optimized = false;
         bool optimizedApplied = false;
+        std::chrono::milliseconds optimizedWait{};
         uint64_t id = 0;
         bool jpegRequested = false;
         bool dngRequested = false;
@@ -189,9 +190,12 @@ class SingleFrameCoordinator::Impl {
         changed_.notify_one();
         return entry->id;
     }
-    void expectOptimizedFrame(uint64_t id) {
+    void expectOptimizedFrame(uint64_t id, std::chrono::milliseconds extraWait) {
         for (const auto& entry : entries())
-            if (entry->id == id) entry->optimized = true;
+            if (entry->id == id) {
+                entry->optimized = true;
+                entry->optimizedWait = extraWait;
+            }
     }
     void handOff(const std::shared_ptr<Entry>& entry) {
         entry->handedOff.store(true);
@@ -202,14 +206,14 @@ class SingleFrameCoordinator::Impl {
             if (entry->handedOff.load() || !entry->prepared.load()) continue;
             auto& shot = *entry->shot;
             if (!entry->preparationError.empty() ||
-                std::chrono::steady_clock::now() - entry->accepted > std::chrono::seconds(10)) {
+                std::chrono::steady_clock::now() - entry->accepted > std::chrono::seconds(10) + entry->optimizedWait) {
                 // No copy worker exists before handoff, so cancelling a missing frame
                 // cannot race an AHB read. Every accepted request receives failure events.
                 shot.cancelAcquisition(entry->preparationError.empty() ? "raw_acquisition_timeout"
                                                                        : entry->preparationError);
                 handOff(entry);
             } else if (entry->optimized && !entry->optimizedApplied) {
-                shot.expectOptimizedFrame(entry->id);
+                shot.expectOptimizedFrame(entry->id, entry->optimizedWait);
                 entry->optimizedApplied = true;
             }
         }
@@ -452,7 +456,9 @@ uint64_t SingleFrameCoordinator::requestRawStillCapture(encoding::dng::DngCaptur
     return impl_->requestRawStillCapture(std::move(dngContext), std::move(jpegContext));
 }
 
-void SingleFrameCoordinator::expectOptimizedFrame(uint64_t requestId) { impl_->expectOptimizedFrame(requestId); }
+void SingleFrameCoordinator::expectOptimizedFrame(uint64_t requestId, std::chrono::milliseconds extraWait) {
+    impl_->expectOptimizedFrame(requestId, extraWait);
+}
 SingleMatchedFrameResult SingleFrameCoordinator::processMatchedFrame(
     AImage* image, AHardwareBuffer* ahb, int acquireFenceFd, const metadata::FrameMetadataSnapshot& metadata,
     const color::FrameColorTransform& colorState, const tonemap::TonemapParams& tonemapParams, float aePostGain) {

@@ -229,7 +229,7 @@ enum class RawrMaxShutter(val label: String, val ns: Long) {
     S30("1/30", 33_333_333L),
     S15("1/15", 66_666_667L),
     S8("1/8", 125_000_000L),
-    S4("1/4", 250_000_000L)
+    S5("1/5", 200_000_000L)
 }
 
 /** Auto shutter/ISO trade (EV): faster shutters raise ISO; lower ISO lets the shutter run longer first. */

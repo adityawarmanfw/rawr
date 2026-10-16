@@ -1,4 +1,5 @@
 #pragma once
+#include <chrono>
 #include <mutex>
 #include <thread>
 
@@ -19,7 +20,9 @@ class SingleFrameCaptureAcquisition final {
         waitFrames_ = 0;
         return slot_.requestCapture(id);
     }
-    void expectOptimizedFrame(uint64_t id) { slot_.expectOptimizedFrame(id); }
+    void expectOptimizedFrame(uint64_t id, std::chrono::milliseconds extraWait) {
+        slot_.expectOptimizedFrame(id, extraWait);
+    }
     bool busy() const noexcept;
     bool metadataTimedOut() const noexcept { return waitFrames_ >= 8; }
     bool expectsTimestamp(uint64_t timestamp) const;

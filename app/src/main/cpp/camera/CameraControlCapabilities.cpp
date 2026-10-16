@@ -81,6 +81,17 @@ CameraControlState readInitialCameraControlState(const ACameraMetadata* characte
         e && e->data.i64 && e->count >= 1) {
         state.capabilities.maxFrameDurationNs = e->data.i64[0];
     }
+    auto& caps = state.capabilities;
+    caps.advertisedSensitivityMax = caps.sensitivityMax;
+    caps.advertisedExposureTimeMaxNs = caps.exposureTimeMaxNs;
+    // Lens profile opt-in: request past the advertised bounds.
+    if (route.exposure.extended && caps.sensitivityMax > 0 && caps.exposureTimeMaxNs > 0) {
+        caps.extendedExposure = true;
+        caps.sensitivityMax = std::max(caps.sensitivityMax, std::min(route.exposure.isoMax, kExtendedIsoMax));
+        caps.exposureTimeMaxNs =
+            std::max(caps.exposureTimeMaxNs, std::min(route.exposure.shutterMaxNs, kExtendedShutterMaxNs));
+        caps.maxFrameDurationNs = std::max(caps.maxFrameDurationNs, caps.exposureTimeMaxNs);
+    }
 
     // Pick the broadest advertised normal-AE FPS range for Camera2 priority
     // modes. TEMPLATE_PREVIEW commonly defaults to 30/30; that silently caps

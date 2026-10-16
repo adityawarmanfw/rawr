@@ -78,6 +78,11 @@ struct CameraControlCapabilities {
     int64_t exposureTimeMinNs = 0;
     int64_t exposureTimeMaxNs = 0;
     int64_t maxFrameDurationNs = 0;
+    // What the camera advertises; the bounds above may be widened by the
+    // lens profile's extended exposure (extendedExposure).
+    int32_t advertisedSensitivityMax = 0;
+    int64_t advertisedExposureTimeMaxNs = 0;
+    bool extendedExposure = false;
     int32_t priorityAeTargetFpsMin = 0;
     int32_t priorityAeTargetFpsMax = 0;
     std::vector<std::array<int32_t, 2>> aeTargetFpsRanges;
@@ -142,6 +147,14 @@ struct CameraControlState {
     // controller mutex alongside requested/applied camera state.
     bool videoMode = false;
     int videoPreviewFps = 30;
+    // Long exposure (ViewfinderExposure.h): the capture's shutter when it is
+    // longer than the viewfinder runs (0 = none); the one in flight and when
+    // the sensor started it (CLOCK_MONOTONIC ms; 0 submitted, -1 none); and
+    // whether the last one was honored (-1 none yet, 0 shortened, 1 honored).
+    int64_t deferredCaptureExposureNs = 0;
+    int64_t longExposureNs = 0;
+    int64_t longExposureStartMs = -1;
+    int lastLongExposureHonored = -1;
     std::optional<double> requestedShutterAngleDegrees;
     std::vector<ShutterAngleChoice> shutterAngleChoices;
     WhiteBalanceControlMode whiteBalanceMode = WhiteBalanceControlMode::Auto;

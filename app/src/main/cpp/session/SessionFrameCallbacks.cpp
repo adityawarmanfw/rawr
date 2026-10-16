@@ -128,6 +128,18 @@ float SessionFrameCallbacks::postGainFor(const rawrcam::metadata::FrameMetadataS
     // only direct sRGB/Rec.709 clip, as for any capture.
     const float gain = rawrcam::color::effectiveAePostGain(metadata.postRawSensitivityBoost, engine_->maxAePostGain(),
                                                            engine_->postGainKneeWidthEv());
+    // M with a shutter past the viewfinder cap: the viewfinder runs the cap at
+    // raised ISO; where ISO ran out, show the rest as gain (capture = preview).
+    if (const auto* controller = engine_->cameraControls_.controller();
+        controller && metadata.aeMode == 0 && !(metadata.optimizedStillRequestId && *metadata.optimizedStillRequestId != 0)) {
+        const auto context = controller->rawrAeContext();
+        const auto exposure = rawrFrameExposure(metadata, context.reportedPerRequest);
+        if (context.manualActive && exposure && context.manualExposureNs > 0 && context.manualIso > 0) {
+            const double deficit = double(context.manualExposureNs) * double(context.manualIso) /
+                                   (exposure->shutterNs * exposure->iso);
+            if (deficit > 1.01) return std::clamp(gain * float(deficit), 1.0f / 16.0f, tonemap::kMaxAePostGain);
+        }
+    }
     // HDR+ Bracketed with Camera2 AE: lift by reference / actual exposure so
     // compensation steps and AE re-convergence never show (ExposureNormalizer).
     constexpr int32_t kAeModeOff = 0, kAeStateConverged = 2, kAeStateLocked = 3, kAeStateFlashRequired = 4;

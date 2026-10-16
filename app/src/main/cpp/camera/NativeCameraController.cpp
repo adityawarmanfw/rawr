@@ -27,6 +27,7 @@
 #include "camera/CameraRequestPipeline.h"
 #include "camera/CameraResultProcessor.h"
 #include "camera/SensitivityProbeStartup.h"
+#include "camera/ViewfinderExposure.h"
 #include "camera/CameraWhiteBalanceControls.h"
 #include "geometry/OrientationTransform.h"
 #include "metadata/MetadataDiagnostics.h"
@@ -261,6 +262,65 @@ struct NativeCameraController::Impl final : CameraEventSink {
         const double isoMax = std::max(caps.sensitivityMin, caps.sensitivityMax);
         return std::log2(double(longTimeMax) * isoMax / (double(exposureTimeNs) * sensitivity));
     }
+    // Long exposure in flight: tag, length, CLOCK_MONOTONIC ms the sensor
+    // started it (0 = submitted, not started; -1 = none).
+    std::atomic<uint64_t> longExposureTag{0};
+    std::atomic<int64_t> longExposureNs{0};
+    std::atomic<int64_t> longExposureStartMs{-1};
+    std::atomic<int> lastLongExposureHonored{-1};  // -1 none yet, 0 shortened, 1 honored
+    std::chrono::steady_clock::time_point longExposureSubmitted{};
+    static int64_t monotonicMs() {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+                   std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    }
+    std::optional<NativeCameraController::LongExposure> deferredCaptureExposureLocked() const {
+        if (!deviceSession.session() || !control.capabilities.manualExposureSupported) return std::nullopt;
+        const auto& caps = control.capabilities;
+        const int64_t shutter = std::clamp(control.requestedExposureTimeNs, caps.exposureTimeMinNs,
+                                           std::max(caps.exposureTimeMinNs, caps.exposureTimeMaxNs));
+        if (!deferredLongExposure(shutter)) return std::nullopt;
+        const int32_t isoMin = std::max(1, caps.sensitivityMin);
+        const int32_t isoMax = std::max(isoMin, caps.sensitivityMax);
+        if (control.exposureMode == ExposureControlMode::Manual)
+            return NativeCameraController::LongExposure{shutter,
+                                                        std::clamp(control.requestedSensitivity, isoMin, isoMax)};
+        // rawr S: the viewfinder runs the capped shutter at the solved
+        // exposure; the capture keeps that exposure at the user's shutter.
+        if (control.exposureMode == ExposureControlMode::ShutterPriority && control.rawrAeActive &&
+            control.rawrAeExposureTimeNs > 0 && control.rawrAeSensitivity > 0) {
+            const double product = double(control.rawrAeExposureTimeNs) * double(control.rawrAeSensitivity);
+            const auto iso = int32_t(std::clamp<double>(std::llround(product / double(shutter)), isoMin, isoMax));
+            return NativeCameraController::LongExposure{shutter, iso};
+        }
+        return std::nullopt;
+    }
+    std::optional<NativeCameraController::LongExposure> deferredCaptureExposure() const {
+        std::lock_guard<std::mutex> lock(mutex);
+        return deferredCaptureExposureLocked();
+    }
+    bool captureLongExposure(uint64_t requestId, NativeCameraController::LongExposure* submitted) {
+        std::lock_guard<std::mutex> lock(mutex);
+        const auto pair = deferredCaptureExposureLocked();
+        if (!pair || requestId == 0 || !deviceSession.request()) return false;
+        longExposureTag.store(requestId, std::memory_order_relaxed);
+        longExposureNs.store(pair->exposureTimeNs, std::memory_order_relaxed);
+        longExposureStartMs.store(0, std::memory_order_relaxed);
+        longExposureSubmitted = std::chrono::steady_clock::now();
+        const bool sent = requests.captureBracket(deviceSession.session(), deviceSession.request(),
+                                                  deviceSession.callbackContext(), control,
+                                                  {{pair->exposureTimeNs, pair->sensitivity}}, requestId);
+        diag("CAMERA_LONG_EXPOSURE_SUBMIT sent=" + std::to_string(sent ? 1 : 0) + " tag=" + std::to_string(requestId) +
+             " exposureNs=" + std::to_string(pair->exposureTimeNs) + " iso=" + std::to_string(pair->sensitivity) +
+             " advertisedMaxNs=" + std::to_string(control.capabilities.advertisedExposureTimeMaxNs));
+        if (!sent) {
+            longExposureTag.store(0, std::memory_order_relaxed);
+            longExposureStartMs.store(-1, std::memory_order_relaxed);
+            return false;
+        }
+        if (submitted) *submitted = *pair;
+        return true;
+    }
     std::optional<double> longFrameRoomEv() const {
         std::lock_guard<std::mutex> lock(mutex);
         if (!control.appliedExposureTimeNs || !control.appliedSensitivity) return std::nullopt;
@@ -408,7 +468,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         const auto& caps = control.capabilities;
         // Geometric midpoint avoids the manual endpoints that can be clamped.
         const int32_t probeIso = static_cast<int32_t>(std::llround(
-            std::sqrt(double(std::max(1, caps.sensitivityMin)) * double(std::max(1, caps.sensitivityMax)))));
+            std::sqrt(double(std::max(1, caps.sensitivityMin)) * double(std::max(1, caps.advertisedSensitivityMax)))));
         const bool sent = requests.captureBracket(deviceSession.session(), deviceSession.request(),
                                                   deviceSession.callbackContext(), control,
                                                   {{exposure, probeIso}}, metadata::kSensitivityProbeRequestId);
@@ -710,6 +770,16 @@ struct NativeCameraController::Impl final : CameraEventSink {
         std::lock_guard<std::mutex> lock(mutex);
         if (callbackGeneration == deviceSession.generation()) diag(message);
     }
+    void cameraCaptureStarted(uint64_t callbackGeneration, const ACaptureRequest* requestCopy) override {
+        // Camera thread, no mutex: the countdown starts with the exposure.
+        const uint64_t tag = longExposureTag.load(std::memory_order_relaxed);
+        (void)callbackGeneration;  // tags are unique; no session state is read
+        if (tag == 0) return;
+        void* userContext = nullptr;
+        if (ACaptureRequest_getUserContext(requestCopy, &userContext) != ACAMERA_OK || !userContext) return;
+        if (static_cast<const CameraRequestProvenance*>(userContext)->optimizedStillRequestId == tag)
+            longExposureStartMs.store(monotonicMs(), std::memory_order_relaxed);
+    }
     void cameraCaptureFailed(uint64_t callbackGeneration) override {
         // Set once at construction; the receiver checks the generation.
         if (callbacks.captureFailed) callbacks.captureFailed(callbackGeneration);
@@ -731,6 +801,24 @@ struct NativeCameraController::Impl final : CameraEventSink {
                                        deviceSession.staticLevels(), deviceSession.sensorModeOverridden(),
                                        requests.latestSubmittedSerial());
         if (!actions.frame) return;
+        if (const uint64_t tag = longExposureTag.load(std::memory_order_relaxed);
+            tag != 0 && actions.frame->optimizedStillRequestId == tag) {
+            // Honored when the sensor reports the shutter and the frame took
+            // about that long; a HAL that clamps returns early.
+            const auto requested = longExposureNs.load(std::memory_order_relaxed);
+            const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                       std::chrono::steady_clock::now() - longExposureSubmitted)
+                                       .count();
+            const bool honored = actions.frame->exposureTimeNs >= requested * 9 / 10 &&
+                                 elapsedMs * 1'000'000LL >= requested * 8 / 10;
+            diag("CAMERA_LONG_EXPOSURE_RESULT tag=" + std::to_string(tag) + " requestedNs=" + std::to_string(requested) +
+                 " reportedNs=" + std::to_string(actions.frame->exposureTimeNs) +
+                 " iso=" + std::to_string(actions.frame->sensitivity) + " elapsedMs=" + std::to_string(elapsedMs) +
+                 " honored=" + std::to_string(honored ? 1 : 0));
+            lastLongExposureHonored.store(honored ? 1 : 0, std::memory_order_relaxed);
+            longExposureTag.store(0, std::memory_order_relaxed);
+            longExposureStartMs.store(-1, std::memory_order_relaxed);
+        }
         if (actions.fallbackToAuto) {
             control.exposureMode = ExposureControlMode::Auto;
             submitRepeatingLocked();
@@ -774,6 +862,10 @@ struct NativeCameraController::Impl final : CameraEventSink {
         CameraControlState snapshot = control;
         snapshot.videoMode = cadencePolicy.videoMode();
         snapshot.videoPreviewFps = cadencePolicy.videoFps();
+        if (const auto deferred = deferredCaptureExposureLocked()) snapshot.deferredCaptureExposureNs = deferred->exposureTimeNs;
+        snapshot.longExposureNs = longExposureNs.load(std::memory_order_relaxed);
+        snapshot.longExposureStartMs = longExposureStartMs.load(std::memory_order_relaxed);
+        snapshot.lastLongExposureHonored = lastLongExposureHonored.load(std::memory_order_relaxed);
         snapshot.requestedShutterAngleDegrees = cadencePolicy.shutterAngle();
         snapshot.shutterAngleChoices = cadencePolicy.shutterChoices(control.capabilities.exposureTimeMinNs,
                                                                     control.capabilities.exposureTimeMaxNs);
@@ -1125,7 +1217,9 @@ struct NativeCameraController::Impl final : CameraEventSink {
         const int32_t sensorIsoMin = std::max(1, caps.sensitivityMin);
         const int32_t sensorIsoMax = std::max(sensorIsoMin, caps.sensitivityMax);
         const auto& context = deviceSession.cameraContext();
-        const int32_t analog = context && context->maxAnalogSensitivity > 0
+        // Extended ISO (lens profile opt-in) is the sensor's real gain by assertion.
+        const int32_t analog = caps.sensitivityMax > caps.advertisedSensitivityMax ? sensorIsoMax
+                               : context && context->maxAnalogSensitivity > 0
                                    ? std::clamp(context->maxAnalogSensitivity, sensorIsoMin, sensorIsoMax)
                                    : sensorIsoMax;
         c.isoMin = rawrAeConfig.isoMin > 0 ? std::clamp(rawrAeConfig.isoMin, sensorIsoMin, sensorIsoMax) : sensorIsoMin;
@@ -1138,6 +1232,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
         const int64_t framePeriodNs = c.video && videoFps > 0 ? 1'000'000'000LL / videoFps : 0;
         int64_t sensorShutterMax = std::max(c.shutterMinNs, caps.exposureTimeMaxNs);
         if (framePeriodNs > 0) sensorShutterMax = std::clamp(framePeriodNs, c.shutterMinNs, sensorShutterMax);
+        // Longer S shutters run only on capture (ViewfinderExposure.h).
+        sensorShutterMax = std::clamp(kViewfinderShutterMaxNs, c.shutterMinNs, sensorShutterMax);
         c.sensorShutterMaxNs = sensorShutterMax;
         int64_t ceiling = rawrAeConfig.shutterMaxNs;
         if (framePeriodNs > 0) {
@@ -1162,6 +1258,9 @@ struct NativeCameraController::Impl final : CameraEventSink {
         c.flickerPeriodNs = mains == 1 ? 10'000'000 : mains == 2 ? 8'333'333 : 0;
         c.userEv = float(std::clamp(control.requestedEvSteps, caps.evMinSteps, caps.evMaxSteps)) * evStepEvLocked();
         c.reportedPerRequest = results.sensitivityReportedPerRequest().value_or(0.0);
+        c.manualActive = control.exposureMode == ExposureControlMode::Manual;
+        c.manualExposureNs = control.requestedExposureTimeNs;
+        c.manualIso = control.requestedSensitivity;
         c.spotActive = control.spotAeActive && control.exposureMode == ExposureControlMode::Auto;
         c.spotX = spotMetering.point().x;
         c.spotY = spotMetering.point().y;
@@ -1294,6 +1393,12 @@ void NativeCameraController::setAccessRoute(const std::string& route) {
 }
 CameraControlState NativeCameraController::controlState() const { return impl_->getControlState(); }
 std::optional<double> NativeCameraController::longFrameRoomEv() const { return impl_->longFrameRoomEv(); }
+std::optional<NativeCameraController::LongExposure> NativeCameraController::deferredCaptureExposure() const {
+    return impl_->deferredCaptureExposure();
+}
+bool NativeCameraController::captureLongExposure(uint64_t requestId, LongExposure* submitted) {
+    return impl_->captureLongExposure(requestId, submitted);
+}
 bool NativeCameraController::longFramesWorthwhile() const {
     const auto room = impl_->longFrameRoomEv();
     return !room || *room >= Impl::kMinLongFrameGainEv;

@@ -56,6 +56,20 @@ data class LensLevels(
     val white: Float = 0f
 )
 
+/**
+ * Opt-in requests past the camera's advertised ISO / shutter ranges (some
+ * HALs accept them). Zero keeps the advertised bound. Shutters past the 1/5 s
+ * viewfinder run only when the shutter is pressed.
+ */
+data class LensExposure(
+    val extended: Boolean = false,
+    val isoMax: Int = 0,
+    val shutterMaxNs: Long = 0L
+)
+
+const val EXTENDED_SHUTTER_MAX_NS = 25_000_000_000L
+const val EXTENDED_ISO_MAX = 409_600
+
 /** Preferred RAW stream; a zero size means the largest size of the format. */
 data class RawStreamChoice(
     val format: RawStreamFormat = RawStreamFormat.Raw16,
@@ -74,6 +88,7 @@ data class LensProfile(
     val physicalCameraId: String = "",
     val stream: RawStreamChoice = RawStreamChoice(),
     val levels: LensLevels = LensLevels(),
+    val exposure: LensExposure = LensExposure(),
     val vendorKeys: List<VendorKey> = emptyList()
 )
 
