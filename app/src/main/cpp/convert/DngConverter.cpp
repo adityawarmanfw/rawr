@@ -65,13 +65,19 @@ struct Source {
     }
 
     // Image EXIF, or the document's when the RAW lives in a SubIFD.
-    tinydng_exif exif() const {
+    tinydng_exif exif(const ConvertOptions& options) const {
         tinydng_exif out = info->exif;
         const tinydng_exif* root = tinydng_document_exif(doc);
         if (root && !out.make && !out.model && !out.datetime_original) out = *root;
         if (!out.orientation && root && root->orientation >= 1 && root->orientation <= 8)
             out.orientation = root->orientation;
         if (!out.orientation) out.orientation = 1;
+        if (!options.offsetTime.empty() && out.datetime_original && !out.offset_time_original) {
+            char* offset = const_cast<char*>(options.offsetTime.c_str());
+            out.offset_time_original = offset;
+            if (!out.offset_time) out.offset_time = offset;
+            if (out.datetime_digitized && !out.offset_time_digitized) out.offset_time_digitized = offset;
+        }
         return out;
     }
 
@@ -474,7 +480,8 @@ bool BinnedRaw::build(const tinydng_raw_info& source, const tinydng_cfa& cfa, ui
 }
 
 ConvertResult recompressDng(const std::string& sourcePath, const std::string& destination,
-                            const ConvertProgress& progress, const ConvertCancelled& cancelled) {
+                            const ConvertProgress& progress, const ConvertCancelled& cancelled,
+                            const ConvertOptions& options) {
     ConvertResult result;
     Source source;
     if (!source.open(sourcePath, &result.error)) return result;
@@ -483,7 +490,7 @@ ConvertResult recompressDng(const std::string& sourcePath, const std::string& de
     double black[4];
     if (!blackByPhase(raw, black, &result.error)) return result;
     if (raw.black_level_present) ensureExactBlack(raw, black);
-    tinydng_exif exif = source.exif();
+    tinydng_exif exif = source.exif(options);
     tinydng_write_image image{};
     image.width = w;
     image.height = h;
@@ -563,7 +570,8 @@ bool calibrationOf(const tinydng_raw_info& raw, const tinydng_cfa& cfa, BinCalib
 }  // namespace
 
 ConvertResult downscaleDng(const std::string& sourcePath, const std::string& destination, DngDownscale scale,
-                           const ConvertProgress& progress, const ConvertCancelled& cancelled) {
+                           const ConvertProgress& progress, const ConvertCancelled& cancelled,
+                           const ConvertOptions& options) {
     ConvertResult result;
     Source source;
     if (!source.open(sourcePath, &result.error)) return result;
@@ -614,7 +622,7 @@ ConvertResult downscaleDng(const std::string& sourcePath, const std::string& des
     }
 
     const uint32_t ow = stage->width, oh = stage->height;
-    tinydng_exif exif = source.exif();
+    tinydng_exif exif = source.exif(options);
     tinydng_write_image image{};
     image.width = ow;
     image.height = oh;

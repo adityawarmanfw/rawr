@@ -24,6 +24,13 @@ struct ConvertResult {
     uint32_t width = 0, height = 0;
 };
 
+struct ConvertOptions {
+    // EXIF offset ("+07:00") written when the source has no OffsetTimeOriginal.
+    // Android's media scanner only trusts DateTimeOriginal with an offset once
+    // the file's modification time no longer matches the capture.
+    std::string offsetTime;
+};
+
 // Output size as a fraction of the source pixel count.
 enum class DngDownscale {
     Quarter,    // 2x per side (200MP -> 50MP): one natural bin
@@ -33,12 +40,14 @@ enum class DngDownscale {
 
 // Full-resolution lossless JPEG re-encode (pixels bit-exact).
 ConvertResult recompressDng(const std::string& source, const std::string& destination,
-                            const ConvertProgress& progress = {}, const ConvertCancelled& cancelled = {});
+                            const ConvertProgress& progress = {}, const ConvertCancelled& cancelled = {},
+                            const ConvertOptions& options = {});
 
 // Downscaled lossless JPEG DNG. 10-bit sources keep the precision binning
 // gains as a 4x code scale (WhiteLevel and BlackLevel scale with it).
 ConvertResult downscaleDng(const std::string& source, const std::string& destination, DngDownscale scale,
-                           const ConvertProgress& progress = {}, const ConvertCancelled& cancelled = {});
+                           const ConvertProgress& progress = {}, const ConvertCancelled& cancelled = {},
+                           const ConvertOptions& options = {});
 
 // Raw metadata of a downscaled image. Owns the rewritten opcode parameters.
 class BinnedRaw {

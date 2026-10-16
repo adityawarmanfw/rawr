@@ -65,6 +65,9 @@ endforeach()
 add_subdirectory("${adrenotools_src_SOURCE_DIR}" "${adrenotools_src_BINARY_DIR}")
 
 add_subdirectory(../../../../native/tinydng ${CMAKE_CURRENT_BINARY_DIR}/tinydng)
+# LJPEG decode/encode loops stay optimized in debug builds (library scans and
+# conversions run on whole 200MP files).
+target_compile_options(rawr_tinydng PRIVATE -O3)
 
 # Rawr-owned targets remain strict; do not impose -Werror on the pinned third-party code.
 set(CMAKE_COMPILE_WARNING_AS_ERROR ON)
@@ -373,17 +376,18 @@ target_include_directories(rawrcam_dng_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DI
 target_link_libraries(rawrcam_dng_capture PRIVATE rawr_tinydng)
 target_compile_options(rawrcam_dng_capture PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
-# DNG-to-DNG conversion (lossless re-encode, 2x natural binning) for the
-# renderer's DNG library.
-add_library(rawrcam_dng_convert STATIC convert/DngConverter.cpp)
+# DNG-to-DNG conversion (lossless re-encode, Bayer downscales), probe and RAW
+# thumbnails for the renderer's DNG library.
+add_library(rawrcam_dng_convert STATIC convert/DngConverter.cpp convert/DngProbe.cpp)
 target_compile_features(rawrcam_dng_convert PRIVATE cxx_std_20)
 target_include_directories(rawrcam_dng_convert PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ../../../../native/tinydng)
 target_link_libraries(rawrcam_dng_convert PRIVATE rawr_tinydng)
-target_compile_options(rawrcam_dng_convert PRIVATE -Wall -Wextra -Wpedantic -Werror)
+# Pixel loops stay optimized in debug builds used for device validation.
+target_compile_options(rawrcam_dng_convert PRIVATE -Wall -Wextra -Wpedantic -Werror -O3)
 
 add_library(rawrcam_backend_options INTERFACE)
 target_include_directories(rawrcam_backend_options INTERFACE ${GEN} ${CMAKE_CURRENT_SOURCE_DIR} ../../../../native/libjpeg-turbo/src ../../../../native/raw_preview/include ../../../../native/tonemap_engine/include ../../../../native/gainmap/include ../../../../native/spektrafilm/include ../../../../native/raw_denoise/include ../../../../native/galosh/include ../../../../native/image_scopes/include ../../../../native/monitoring_overlays/include ../../../../native/false_color_correction/include ../../../../native/zsl_codec/include ../../../../native/zsl_ring/include ../../../../native/zsl_container/include)
-target_link_libraries(rawrcam_backend_options INTERFACE raw_demosaic::embedded_shaders rawr::post_demosaic rawr::local_tone rawr::video_pipeline rawr::raw_ingress rawr::vk_common rawr::shader_common raw_highlight::raw_highlight rawr_tinydng rawrcam_dng_convert adrenotools raw_preview::raw_preview amaze::amaze rcd::rcd vng4::vng4 dual::dual_demosaic quadfix::quadfix fcc::false_color_correction TonemapEngine::Vulkan Gainmap::Compute spektrafilm::spektrafilm raw_sharpness::raw_sharpness raw_denoise::raw_denoise galosh::galosh image_scopes::image_scopes monitoring_overlays::vulkan rawr::zsl_codec rawr::zsl_ring rawr::zsl_container raw_gpu_pipeline raw_multiframe_output  rawrcam_turbojpeg ${VULKAN_LIB} ${ANDROID_LIB} ${LOG_LIB} ${MEDIA_LIB} ${AAUDIO_LIB} ${CAMERA2NDK_LIB} ${CMAKE_DL_LIBS})
+target_link_libraries(rawrcam_backend_options INTERFACE raw_demosaic::embedded_shaders rawr::post_demosaic rawr::local_tone rawr::video_pipeline rawr::raw_ingress rawr::vk_common rawr::shader_common raw_highlight::raw_highlight rawr_tinydng adrenotools raw_preview::raw_preview amaze::amaze rcd::rcd vng4::vng4 dual::dual_demosaic quadfix::quadfix fcc::false_color_correction TonemapEngine::Vulkan Gainmap::Compute spektrafilm::spektrafilm raw_sharpness::raw_sharpness raw_denoise::raw_denoise galosh::galosh image_scopes::image_scopes monitoring_overlays::vulkan rawr::zsl_codec rawr::zsl_ring rawr::zsl_container raw_gpu_pipeline raw_multiframe_output  rawrcam_turbojpeg ${VULKAN_LIB} ${ANDROID_LIB} ${LOG_LIB} ${MEDIA_LIB} ${AAUDIO_LIB} ${CAMERA2NDK_LIB} ${CMAKE_DL_LIBS})
 add_custom_target(rawrcam_shader_headers DEPENDS ${raw_preview_HDR} ${raw_preview_cfa_state_HDR} ${raw_preview_highlight_guide_seed_HDR} ${raw_preview_highlight_guide_propagate_HDR} ${raw_preview_highlight_guide_smooth_HDR} ${raw_preview_highlight_apply_HDR} ${raw_preview_coloropp_HDR} ${raw_preview_coloropp_tone_HDR} ${raw_zsl_codec_analyze_HDR} ${raw_zsl_codec_pack_HDR} ${raw_zsl_codec_verify_HDR} ${raw_zsl_codec_decode_HDR} ${monitor_raw_state_HDR} ${monitor_focus_HDR} ${monitor_false_color_HDR} ${monitor_tonemap_shadow_HDR} ${monitor_combined_HDR} ${tonemap_HDR} ${tonemap_video_linear_HDR} ${tonemap_video_rgba8_HDR} ${tonemap_video_rgb10a2_HDR} ${tonemap_video_linear_texture_HDR} ${tonemap_video_rgba8_texture_HDR} ${tonemap_video_rgb10a2_texture_HDR} ${video_demosaic_HDR} ${film_input_HDR} ${film_exposure_HDR} ${film_develop_HDR} ${film_grain_HDR} ${film_dir_HDR} ${film_halation_HDR} ${film_diffusion_HDR} ${film_scanner_HDR} ${film_printscan_HDR} ${film_output_HDR} ${film_output_half_HDR} ${film_boost_milestone_HDR} ${film_glow_ratio_HDR} ${sensor_clip_pack_HDR} ${replay_tagged_decode_HDR} ${present_vert_HDR} ${present_frag_HDR} ${encoder_ab_pattern_HDR} ${raw_integrity_probe_HDR} ${raw_zero_copy_full_compare_HDR} ${raw_zero_copy_paths_HDR} ${raw_zero_copy_external_compare_HDR} ${raw_zero_copy_buffer_preview_HDR} ${raw_zero_copy_buffer_import_HDR} ${diagnostic_linear_pattern_HDR} ${diagnostic_tone_pattern_HDR} ${diagnostic_raw_copy_HDR} ${diagnostic_raw_storage_viz_HDR} ${diagnostic_raw_sampled_viz_HDR} ${GALOSH_RAW_GENERATED_HEADERS} ${gainmap_HDR} ${gainmap_blur_HDR})
 
 function(rawrcam_module name)
@@ -413,6 +417,7 @@ target_link_libraries(rawrcam_encoding PUBLIC rawrcam_dng_capture)
 
 add_library(rawrcam_native SHARED
   jni/RendererJni.cpp
+  jni/ConvertJni.cpp
   jni/SessionEngineApi.cpp
   jni/NativeEngineJni.cpp
   jni/DevelopSettingsReader.cpp
@@ -421,7 +426,7 @@ add_library(rawrcam_native SHARED
   jni/VideoDownscaleProbeJni.cpp
   jni/NativeAvRecorderJni.cpp
 )
-target_link_libraries(rawrcam_native PRIVATE rawrcam_backend_options rawrcam_camera rawrcam_capture rawrcam_color rawrcam_develop rawrcam_diagnostics_logging rawrcam_encoding rawrcam_monitoring rawrcam_renderer rawrcam_session rawrcam_tonemap rawrcam_video rawrcam_vulkan)
+target_link_libraries(rawrcam_native PRIVATE rawrcam_backend_options rawrcam_dng_convert rawrcam_camera rawrcam_capture rawrcam_color rawrcam_develop rawrcam_diagnostics_logging rawrcam_encoding rawrcam_monitoring rawrcam_renderer rawrcam_session rawrcam_tonemap rawrcam_video rawrcam_vulkan)
 add_dependencies(rawrcam_native rawrcam_shader_headers)
 # libadrenotools owns its runtime hook targets. Do not name those private
 # implementation targets here: their availability differs by upstream build
