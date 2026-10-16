@@ -59,6 +59,16 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         dataStore.edit { prefs -> encode(prefs, values) }
     }
 
+    /** The exact key set [save] would persist for [values], for backups. */
+    fun encodeForBackup(values: SettingsValues): Preferences =
+        androidx.datastore.preferences.core.mutablePreferencesOf().also { encode(it, values) }
+
+    /** Decodes backed-up keys through the same migrations as stored settings; null if from a newer schema. */
+    fun decodeBackup(p: Preferences): SettingsValues? {
+        val version = p[Keys.schemaVersion] ?: LEGACY_SCHEMA_VERSION
+        return if (version > CURRENT_SCHEMA_VERSION) null else decode(p)
+    }
+
     private fun decode(p: Preferences): SettingsValues {
         val storedVersion = p[Keys.schemaVersion] ?: LEGACY_SCHEMA_VERSION
         if (storedVersion > CURRENT_SCHEMA_VERSION || storedVersion < LEGACY_SCHEMA_VERSION) return defaults

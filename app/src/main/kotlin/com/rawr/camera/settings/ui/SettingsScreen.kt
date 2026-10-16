@@ -28,6 +28,8 @@ fun SettingsRoute(
     onDumpInternalTrace: () -> Unit = {},
     onClearInternalTrace: () -> Unit = {},
     onExportDiagnosticsBundle: () -> Unit = {},
+    onExportBackup: () -> Unit = {},
+    onImportBackup: () -> Unit = {},
     onRequestSaveNotificationPermission: () -> Unit = {},
     lensHardware: LensHardware = LensHardware.None
 ) {
@@ -44,6 +46,8 @@ fun SettingsRoute(
             onDumpInternalTrace = onDumpInternalTrace,
             onClearInternalTrace = onClearInternalTrace,
             onExportDiagnosticsBundle = onExportDiagnosticsBundle,
+            onExportBackup = onExportBackup,
+            onImportBackup = onImportBackup,
             onRequestSaveNotificationPermission = onRequestSaveNotificationPermission
         )
     }
@@ -64,6 +68,8 @@ fun SettingsScreen(
     onDumpInternalTrace: () -> Unit = {},
     onClearInternalTrace: () -> Unit = {},
     onExportDiagnosticsBundle: () -> Unit = {},
+    onExportBackup: () -> Unit = {},
+    onImportBackup: () -> Unit = {},
     onRequestSaveNotificationPermission: () -> Unit = {}
 ) {
     val navigateUp = {
@@ -128,6 +134,8 @@ fun SettingsScreen(
                         onDumpInternalTrace,
                         onClearInternalTrace,
                         onExportDiagnosticsBundle,
+                        onExportBackup,
+                        onImportBackup,
                         onRequestSaveNotificationPermission
                     )
                 }
