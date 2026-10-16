@@ -68,6 +68,7 @@ internal class CaptureRecordingBackend(
                     width = frameSize.width, height = frameSize.height, mode = selectedMode.label,
                     deviceRotationDegrees = deviceRotationDegrees, bitrateMode = bitrateMode,
                     maxBFrames = maxBFrames, audioChannels = audioChannels, audioBitrate = audioBitrate,
+                    audio = VideoAudioInput.of(encoder),
                     bitDepth = bitDepth,
                     renderProfile = imageSettings.activeProfileLabel(),
                     logProfile = imageSettings.videoLogProfile.takeIf { log },

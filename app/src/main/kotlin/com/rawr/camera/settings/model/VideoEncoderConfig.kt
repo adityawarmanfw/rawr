@@ -13,6 +13,33 @@ enum class VideoBitrateMode(val wireValue: Int, val label: String) {
     }
 }
 
+/** Microphone processing preset, with its AAudio input-preset wire value. */
+enum class VideoAudioSource(val wireValue: Int, val label: String) {
+    /** Device-tuned for video: usually stereo, with AGC and noise suppression. */
+    Camcorder(5, "Camcorder"),
+    /** No AGC, noise suppression or EQ; only on devices that advertise it. */
+    Unprocessed(9, "Raw"),
+    /** Tuned for speech; often mono, light processing. */
+    Voice(6, "Voice"),
+    /** The device default microphone path. */
+    Mic(1, "Mic");
+
+    companion object {
+        fun of(wireValue: Int): VideoAudioSource = entries.firstOrNull { it.wireValue == wireValue } ?: Camcorder
+    }
+}
+
+/** Which microphone to record from. Auto follows Android routing, which picks an attached USB or wired mic. */
+enum class VideoAudioRoute(val wireValue: Int, val label: String) {
+    Auto(0, "Auto"),
+    BuiltIn(1, "Built-in"),
+    External(2, "External");
+
+    companion object {
+        fun of(wireValue: Int): VideoAudioRoute = entries.firstOrNull { it.wireValue == wireValue } ?: Auto
+    }
+}
+
 /**
  * I-frame interval as a multiple of the recording frame rate, so it means the same
  * at 24 and 30 fps. [wireValue] is the interval in half-seconds; 0 = all-intra.
@@ -49,7 +76,13 @@ data class VideoEncoderConfig(
     val maxBFrames: Int = -1,
     /** 1 = mono, 2 = stereo. */
     val audioChannels: Int = 2,
-    val audioBitrateKbps: Int = 192
+    val audioBitrateKbps: Int = 192,
+    val audioSource: VideoAudioSource = VideoAudioSource.Camcorder,
+    val audioRoute: VideoAudioRoute = VideoAudioRoute.Auto,
+    /** Digital gain after capture; Android exposes no analog mic gain. */
+    val audioGainDb: Int = 0,
+    /** High-pass corner in Hz; 0 = off. */
+    val audioLowCutHz: Int = 0
 ) {
     fun sanitized(): VideoEncoderConfig = copy(
         bitDepth = if (bitDepth == 8) 8 else 10,
@@ -58,7 +91,9 @@ data class VideoEncoderConfig(
         bitrateOpenGateMbps = bitrateOpenGateMbps.coerceIn(MIN_BITRATE_MBPS, MAX_BITRATE_MBPS),
         maxBFrames = maxBFrames.coerceIn(-1, 2),
         audioChannels = if (audioChannels == 1) 1 else 2,
-        audioBitrateKbps = AUDIO_BITRATES_KBPS.minBy { kotlin.math.abs(it - audioBitrateKbps) }
+        audioBitrateKbps = AUDIO_BITRATES_KBPS.minBy { kotlin.math.abs(it - audioBitrateKbps) },
+        audioGainDb = audioGainDb.coerceIn(MIN_AUDIO_GAIN_DB, MAX_AUDIO_GAIN_DB),
+        audioLowCutHz = AUDIO_LOW_CUT_HZ.minBy { kotlin.math.abs(it - audioLowCutHz) }
     )
 
     fun bitrateMbps(mode: VideoResolutionMode): Int = when (mode) {
@@ -78,6 +113,9 @@ data class VideoEncoderConfig(
         const val MAX_BITRATE_MBPS = com.rawr.camera.video.VideoEncoderLimits.MAX_BITRATE_MBPS
         val AUDIO_BITRATES_KBPS = listOf(128, 192, 256, 320)
         val MAX_B_FRAME_CHOICES = listOf(-1, 0, 1, 2)
+        const val MIN_AUDIO_GAIN_DB = -12
+        const val MAX_AUDIO_GAIN_DB = 24
+        val AUDIO_LOW_CUT_HZ = listOf(0, 80, 120)
 
         /** Requested GOP in display order, e.g. "I B B P B B P … (30)"; all-intra is "I I I …". */
         fun gopPattern(frames: Int, maxBFrames: Int): String {

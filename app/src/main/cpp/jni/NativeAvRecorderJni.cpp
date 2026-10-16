@@ -32,7 +32,8 @@ void throwJava(JNIEnv* env, const char* message) {
 
 extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_video_NativeAvEngine_nativeStart(
     JNIEnv* env, jobject, jint fd, jint width, jint height, jint fps, jint bitrate, jint intraFrames,
-    jint rotationDegrees, jint bitrateMode, jint maxBFrames, jint audioChannels, jint audioBitrate, jint bitDepth,
+    jint rotationDegrees, jint bitrateMode, jint maxBFrames, jint audioChannels, jint audioBitrate, jint audioPreset,
+    jint audioDeviceId, jfloat audioGainDb, jint audioLowCutHz, jint bitDepth,
     jint timestampPolicy, jstring deviceMake, jstring deviceModel, jstring software, jstring renderProfile, jstring gamut, jstring transfer, jboolean log) {
     bool ownsFd = false;
     try {
@@ -47,6 +48,10 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_video_NativeAvEngine_nat
         settings.maxBFrames = maxBFrames;
         settings.audioChannels = audioChannels;
         settings.audioBitrate = audioBitrate;
+        settings.audioPreset = audioPreset;
+        settings.audioDeviceId = audioDeviceId;
+        settings.audioGainDb = audioGainDb;
+        settings.audioLowCutHz = audioLowCutHz;
         settings.bitDepth = bitDepth;
         settings.deviceMake = javaString(env, deviceMake);
         settings.deviceModel = javaString(env, deviceModel);

@@ -86,6 +86,8 @@ class NativeVideoRecorder(private val context: Context, private val preview: Raw
                         val audioChannels: Int = 2,
                         /** AAC bitrate. Stereo default 192k; mono fallback steps down to 128k. */
                         val audioBitrate: Int = 192_000,
+                        /** Source, route, gain and low-cut; [audioChannels] above wins for channels. */
+                        val audio: VideoAudioInput = VideoAudioInput(),
                         /** 8 = HEVC Main, 10 = HEVC Main10 (default). */
                         val bitDepth: Int = 10,
                         val renderProfile: String = "RAWR NTRL",
@@ -144,7 +146,8 @@ class NativeVideoRecorder(private val context: Context, private val preview: Raw
                 .use { it.detachFd() }
             handle = engine.nativeStart(fd, request.width, request.height, request.fps,
                 request.bitrate, request.intraFrames, rotation, request.bitrateMode, request.maxBFrames,
-                request.audioChannels, request.audioBitrate, request.bitDepth,
+                request.audioChannels, request.audioBitrate, request.audio.preset, request.audio.deviceId(context),
+                request.audio.gainDb.toFloat(), request.audio.lowCutHz, request.bitDepth,
                 request.timestampPolicy.nativeId, Build.MANUFACTURER.orEmpty(), Build.MODEL.orEmpty(),
                 "RAWR ${BuildConfig.VERSION_NAME}", request.renderProfile,
                 request.logProfile?.gamut?.label ?: "Rec.709 / sRGB",
@@ -164,6 +167,8 @@ class NativeVideoRecorder(private val context: Context, private val preview: Raw
                 .put("intraFrames", request.intraFrames).put("rotationDegrees", rotation)
                 .put("bitrateMode", request.bitrateMode).put("maxBFrames", request.maxBFrames)
                 .put("audioChannels", request.audioChannels).put("audioBitrate", request.audioBitrate)
+                .put("audioPreset", request.audio.preset).put("audioRoute", request.audio.route.name)
+                .put("audioGainDb", request.audio.gainDb).put("audioLowCutHz", request.audio.lowCutHz)
                 .put("bitDepth", request.bitDepth)
                 .put("renderProfile", request.renderProfile).put("renderProfileId", request.renderProfileId)
                 .put("logProfile", request.logProfile?.name)

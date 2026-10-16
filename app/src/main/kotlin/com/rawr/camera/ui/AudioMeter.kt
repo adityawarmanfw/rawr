@@ -28,6 +28,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.rawr.camera.video.AudioLevelMonitor
+import com.rawr.camera.video.VideoAudioInput
 import kotlin.math.log10
 import kotlin.math.max
 
@@ -57,17 +58,19 @@ private class ChannelBallistics {
 
 /**
  * Live L/R level meter for the video monitor strip, before and during recording. Holds the
- * shared microphone while the screen is resumed; the clip lamp latches until tapped.
+ * shared microphone while the screen is resumed. The clip lamp latches until tapped
+ * and clears at each record start.
  */
 @Composable
-internal fun AudioMeter(modifier: Modifier = Modifier) {
+internal fun AudioMeter(input: VideoAudioInput, recording: Boolean, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     var monitor by remember { mutableStateOf<AudioLevelMonitor?>(null) }
     // Resume, not start: the permission dialog only pauses, so a grant opens the meter on return.
-    LifecycleResumeEffect(Unit) {
+    // Source, route and channels need a new stream; gain and low-cut apply live below.
+    LifecycleResumeEffect(input.channels, input.preset, input.route) {
         if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
             @Suppress("MissingPermission")
-            monitor = AudioLevelMonitor.open()
+            monitor = AudioLevelMonitor.open(context, input)
         }
         onPauseOrDispose {
             monitor?.close()
@@ -75,22 +78,26 @@ internal fun AudioMeter(modifier: Modifier = Modifier) {
         }
     }
     val active = monitor ?: return
+    LaunchedEffect(active, input.gainDb, input.lowCutHz) { active.setProcessing(input.gainDb, input.lowCutHz) }
     val channels = remember { arrayOf(ChannelBallistics(), ChannelBallistics()) }
     var frame by remember { mutableLongStateOf(0L) }
     var channelCount by remember { mutableStateOf(2) }
     var seenClips by remember { mutableLongStateOf(-1L) }
     var clipLatched by remember { mutableStateOf(false) }
+    // Each take starts with a clear lamp; it then reports clipping within that take.
+    LaunchedEffect(recording) { if (recording) clipLatched = false }
     LaunchedEffect(active) {
         var lastNs = 0L
         while (true) {
             withFrameNanos { now ->
-                val levels = active.read()
+                val levels = active.read() ?: return@withFrameNanos
                 val dt = if (lastNs == 0L) 0f else (now - lastNs) / 1e9f
                 lastNs = now
                 channelCount = levels.channels.coerceIn(1, 2)
                 for (c in 0 until channelCount) channels[c].update(levels.peak[c], now, dt)
-                if (seenClips >= 0 && levels.clips > seenClips) clipLatched = true
-                seenClips = levels.clips
+                val clips = levels.inputClips + levels.outputClips
+                if (seenClips >= 0 && clips > seenClips) clipLatched = true
+                seenClips = clips
                 frame = now
             }
         }

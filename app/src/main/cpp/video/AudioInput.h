@@ -21,6 +21,13 @@ public:
     static constexpr int kMaxChannels = 2;
     static constexpr int kReadFrames = 1024;
 
+    struct Config {
+        int channels = 2;
+        // AAUDIO_INPUT_PRESET_*; CAMCORDER applies the device's AGC/NS, UNPROCESSED none.
+        int preset = AAUDIO_INPUT_PRESET_CAMCORDER;
+        // AudioDeviceInfo id; 0 lets Android route (USB/wired mics win when attached).
+        int deviceId = 0;
+    };
     struct Block {
         const int16_t* pcm = nullptr;  // Interleaved, channels() wide.
         int frames = 0;
@@ -36,20 +43,26 @@ public:
         int channels = 0;
         float peak[kMaxChannels] = {};
         float rms[kMaxChannels] = {};
-        // Monotonic counts of blocks with a full-scale sample; readers latch on change.
-        uint32_t clips = 0;
+        // Monotonic counts of blocks that clipped; readers latch on change. Input clips
+        // are full-scale samples from the mic itself (gain cannot fix them); output
+        // clips are samples pushed past full scale by gain.
+        uint32_t inputClips = 0;
+        uint32_t outputClips = 0;
         bool failed = false;
     };
 
     // Reuses the open stream when there is one, otherwise opens one with
-    // `channels` (stereo falls back to mono). Throws if the mic cannot open.
-    static std::shared_ptr<AudioInput> acquire(int channels);
+    // `config` (stereo falls back to mono). Throws if the mic cannot open.
+    static std::shared_ptr<AudioInput> acquire(const Config& config);
 
     ~AudioInput();
     AudioInput(const AudioInput&) = delete;
     AudioInput& operator=(const AudioInput&) = delete;
 
     [[nodiscard]] int channels() const noexcept { return channels_; }
+    [[nodiscard]] const Config& config() const noexcept { return config_; }
+    // Digital gain and high-pass corner, applied live to the meter and the recording.
+    void setProcessing(float gainDb, int lowCutHz) noexcept;
     [[nodiscard]] int32_t xruns() const noexcept { return xruns_.load(); }
     // Replaces the consumer. Returns only after any in-flight onBlock call finishes.
     void setSink(Sink sink);
@@ -57,9 +70,10 @@ public:
     [[nodiscard]] Levels takeLevels() noexcept;
 
 private:
-    explicit AudioInput(int channels);
+    explicit AudioInput(const Config& config);
     void run() noexcept;
 
+    Config config_;
     AAudioStream* stream_ = nullptr;
     int channels_ = 0;
     std::thread thread_;
@@ -68,7 +82,10 @@ private:
     Sink sink_;
     std::atomic<float> peak_[kMaxChannels];
     std::atomic<float> rms_[kMaxChannels];
-    std::atomic<uint32_t> clips_{0};
+    std::atomic<uint32_t> inputClips_{0};
+    std::atomic<uint32_t> outputClips_{0};
+    std::atomic<float> gainDb_{0.0f};
+    std::atomic<int> lowCutHz_{0};
     std::atomic<int32_t> xruns_{0};
     std::atomic<bool> failed_{false};
 };

@@ -42,6 +42,11 @@ public:
         int maxBFrames = -1;
         int audioChannels = 2;
         int audioBitrate = 192'000;
+        // AAUDIO_INPUT_PRESET_*, AudioDeviceInfo id (0 = system routing), digital gain, high-pass corner (0 = off).
+        int audioPreset = AAUDIO_INPUT_PRESET_CAMCORDER;
+        int audioDeviceId = 0;
+        float audioGainDb = 0.0f;
+        int audioLowCutHz = 0;
         // 8 = HEVC Main, 10 = HEVC Main10.
         int bitDepth = 10;
         // Written into the finished MP4 (moov/udta and mdta keys).
@@ -92,6 +97,7 @@ private:
     Settings settings_{};
     int actualAudioChannels_ = 0;
     int actualAudioBitrate_ = 0;
+    int actualAudioPreset_ = -1;
     bool audioFallback_ = false;
     int64_t originBootUs_ = 0;
     int64_t monotonicToBootUs_ = 0;

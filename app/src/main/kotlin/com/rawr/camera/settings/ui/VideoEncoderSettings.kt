@@ -6,6 +6,8 @@ import com.rawr.camera.settings.architecture.SetVideoEncoder
 import com.rawr.camera.settings.architecture.SettingsDispatch
 import com.rawr.camera.settings.model.KeyframeInterval
 import com.rawr.camera.settings.model.SettingsUiState
+import com.rawr.camera.settings.model.VideoAudioRoute
+import com.rawr.camera.settings.model.VideoAudioSource
 import com.rawr.camera.settings.model.VideoBitrateMode
 import com.rawr.camera.settings.model.VideoEncoderConfig
 import com.rawr.camera.video.VideoEncoderCapabilities
@@ -17,6 +19,8 @@ internal fun VideoEncoderSettings(state: SettingsUiState, dispatch: SettingsDisp
     val set: (VideoEncoderConfig) -> Unit = { dispatch.invoke(SetVideoEncoder(it)) }
     val supportedModes = remember { VideoEncoderCapabilities.supportedBitrateModes }
     val maxBitrateMbps = remember { VideoEncoderCapabilities.maxBitrateMbps }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val unprocessedSupported = remember { com.rawr.camera.video.VideoAudioInput.supportsUnprocessed(context) }
     SettingsPageContainer(testTag = SettingsTestTags.sectionRoot("VideoEncoder")) {
         SettingsGroup(
             title = "Video",
@@ -73,7 +77,42 @@ internal fun VideoEncoderSettings(state: SettingsUiState, dispatch: SettingsDisp
             SettingDivider()
             SettingsRow("GOP at 30 fps", value = VideoEncoderConfig.gopPattern(frames, encoder.maxBFrames))
         }
-        SettingsGroup(title = "Audio", description = "AAC-LC, 48 kHz. Stereo falls back to mono at 128 kbps if the microphone can't do stereo.") {
+        SettingsGroup(
+            title = "Audio",
+            description = "AAC-LC, 48 kHz. Stereo falls back to mono at 128 kbps if the microphone can't do stereo. " +
+                "Gain is digital: Android has no analog mic gain. Watch the MIC meter; the lamp turns red on clipping."
+        ) {
+            SettingsRow("Source", value = encoder.audioSource.label)
+            CompactChoiceRow(
+                VideoAudioSource.entries.filter {
+                    it != VideoAudioSource.Unprocessed || unprocessedSupported || it == encoder.audioSource
+                },
+                encoder.audioSource,
+                { it.label }
+            ) { set(encoder.copy(audioSource = it)) }
+            SettingDivider()
+            SettingsRow("Input", value = encoder.audioRoute.label)
+            CompactChoiceRow(VideoAudioRoute.entries, encoder.audioRoute, { it.label }) {
+                set(encoder.copy(audioRoute = it))
+            }
+            SettingDivider()
+            StandaloneNumericSliderRow(
+                identity = "video_audio_gain",
+                label = "Gain",
+                minimum = VideoEncoderConfig.MIN_AUDIO_GAIN_DB.toFloat(),
+                maximum = VideoEncoderConfig.MAX_AUDIO_GAIN_DB.toFloat(),
+                step = 1f,
+                decimals = 0,
+                value = encoder.audioGainDb.toFloat(),
+                defaultValue = 0f,
+                valueFormatter = { if (it.toInt() == 0) "0 dB" else "%+d dB".format(it.toInt()) }
+            ) { set(encoder.copy(audioGainDb = it.toInt())) }
+            SettingDivider()
+            SettingsRow("Low cut", value = if (encoder.audioLowCutHz == 0) "Off" else "${encoder.audioLowCutHz} Hz")
+            CompactChoiceRow(VideoEncoderConfig.AUDIO_LOW_CUT_HZ, encoder.audioLowCutHz, { if (it == 0) "Off" else "$it Hz" }) {
+                set(encoder.copy(audioLowCutHz = it))
+            }
+            SettingDivider()
             SettingsRow("Channels", value = if (encoder.audioChannels == 1) "Mono" else "Stereo")
             CompactChoiceRow(listOf(2, 1), encoder.audioChannels, { if (it == 1) "Mono" else "Stereo" }) {
                 set(encoder.copy(audioChannels = it))

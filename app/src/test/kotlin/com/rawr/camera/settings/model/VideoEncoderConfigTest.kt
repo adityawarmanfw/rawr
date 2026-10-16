@@ -55,6 +55,20 @@ class VideoEncoderConfigTest {
         assertEquals("I P P P P P P … (30) · B-frames auto", VideoEncoderConfig.gopPattern(30, -1))
     }
 
+    @Test fun audioGainAndLowCutClampToSupportedValues() {
+        val s = VideoEncoderConfig(audioGainDb = 40, audioLowCutHz = 100).sanitized()
+        assertEquals(24, s.audioGainDb)
+        assertEquals(80, s.audioLowCutHz)
+        assertEquals(-12, VideoEncoderConfig(audioGainDb = -50).sanitized().audioGainDb)
+    }
+
+    @Test fun audioSourceWireValuesMatchAAudioPresets() {
+        assertEquals(5, VideoAudioSource.Camcorder.wireValue)
+        assertEquals(9, VideoAudioSource.Unprocessed.wireValue)
+        assertEquals(VideoAudioSource.Camcorder, VideoAudioSource.of(42))
+        assertEquals(VideoAudioRoute.Auto, VideoAudioRoute.of(42))
+    }
+
     @Test fun bitrateModeWireValuesMatchMediaCodec() {
         assertEquals(VideoBitrateMode.Cq, VideoBitrateMode.of(0))
         assertEquals(VideoBitrateMode.Vbr, VideoBitrateMode.of(1))

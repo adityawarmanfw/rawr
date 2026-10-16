@@ -45,6 +45,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -62,6 +63,12 @@ class CaptureViewModel(application: Application) : AndroidViewModel(application)
     private val latestSettings: SettingsValues get() = settingsEditor.state.value
     fun videoImageSettings(): com.rawr.camera.video.VideoImageSettings = latestSettings.toVideoImageSettings()
     fun videoEncoderConfig(): com.rawr.camera.settings.model.VideoEncoderConfig = latestSettings.videoEncoder.sanitized()
+    /** Microphone setup for the video-mode meter; follows Settings edits. */
+    val videoAudioInput: StateFlow<com.rawr.camera.video.VideoAudioInput> = settingsEditor.state
+        .map { com.rawr.camera.video.VideoAudioInput.of(it.videoEncoder.sanitized()) }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly,
+            com.rawr.camera.video.VideoAudioInput.of(latestSettings.videoEncoder.sanitized()))
     /** Startup diagnostics use the same optimistic owner, including when preferences are still loading. */
     fun applyStartupVideoOverrides(resolution: VideoResolutionMode?, fps: Int?) {
         if (resolution == null && fps == null) return

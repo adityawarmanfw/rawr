@@ -7,7 +7,8 @@ data class VideoControlState(
     val recording: Boolean = false,
     val busy: Boolean = false,
     val status: String = "REC",
-    val timing: VideoTimingState? = null
+    val timing: VideoTimingState? = null,
+    val audio: com.rawr.camera.video.VideoAudioInput = com.rawr.camera.video.VideoAudioInput()
 )
 
 data class VideoTimingState(

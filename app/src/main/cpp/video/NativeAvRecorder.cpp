@@ -106,7 +106,14 @@ void NativeAvRecorder::configureVideo() {
 void NativeAvRecorder::configureAudio() {
     const int requestedChannels = settings_.audioChannels;
     // Reuses the meter's running stream; a stereo stream is downmixed for a mono request.
-    audioInput_ = AudioInput::acquire(requestedChannels);
+    AudioInput::Config config;
+    config.channels = requestedChannels;
+    config.preset = settings_.audioPreset;
+    config.deviceId = settings_.audioDeviceId;
+    audioInput_ = AudioInput::acquire(config);
+    audioInput_->setProcessing(settings_.audioGainDb, settings_.audioLowCutHz);
+    // A stream already open for the meter keeps its preset; report what was recorded.
+    actualAudioPreset_ = audioInput_->config().preset;
     actualAudioChannels_ = std::min(requestedChannels, audioInput_->channels());
     audioFallback_ = (actualAudioChannels_ != requestedChannels);
     // Agreed policy: mono fallback steps down to 128k even if stereo asked for 192k.
@@ -577,6 +584,11 @@ std::string NativeAvRecorder::statsJson() const {
            std::to_string(actualAudioChannels_ > 0 ? actualAudioChannels_ : settings_.audioChannels) +
            ",\"audioBitrateRequested\":" + std::to_string(settings_.audioBitrate) + ",\"audioBitrateActual\":" +
            std::to_string(actualAudioBitrate_ > 0 ? actualAudioBitrate_ : settings_.audioBitrate) +
+           ",\"audioPreset\":" + std::to_string(settings_.audioPreset) +
+           ",\"audioPresetActual\":" + std::to_string(actualAudioPreset_) +
+           ",\"audioDeviceId\":" + std::to_string(settings_.audioDeviceId) +
+           ",\"audioGainDb\":" + std::to_string(settings_.audioGainDb) +
+           ",\"audioLowCutHz\":" + std::to_string(settings_.audioLowCutHz) +
            ",\"audioFallback\":" + (audioFallback_ ? "true" : "false") + ",\"timestampPolicy\":\"" + policyName +
            "\",\"videoTimestampSource\":\"encoder_surface_grid_snapped\"" +
            ",\"encodedFrames\":" + std::to_string(encodedFrames_) +

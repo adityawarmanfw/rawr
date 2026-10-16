@@ -179,6 +179,7 @@ class MainActivity : ComponentActivity() {
             }
             val selectedVideo by videoSelection.collectAsStateWithLifecycle(initialVideoSelection)
             val recording by captureViewModel.recording.state.collectAsStateWithLifecycle()
+            val videoAudioInput by captureViewModel.videoAudioInput.collectAsStateWithLifecycle()
             androidx.compose.runtime.LaunchedEffect(Unit) {
                 captureViewModel.recording.errors.collect { message ->
                     Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
@@ -218,7 +219,8 @@ class MainActivity : ComponentActivity() {
                         recording = recording.recording,
                         busy = recording.busy,
                         status = recording.status,
-                        timing = recording.timing
+                        timing = recording.timing,
+                        audio = videoAudioInput
                     ),
                     onToggleVideoRecording = ::toggleVideoRecording
                 )

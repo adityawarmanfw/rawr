@@ -24,7 +24,7 @@ internal fun VideoTimingMonitor(state: VideoControlState) {
         horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        AudioMeter()
+        AudioMeter(state.audio, recording = state.recording)
         MonitorMetric("FPS", timing?.let { "${state.fps}/${"%.1f".format(it.actualFps)}" } ?: "${state.fps}/—")
         MonitorMetric("DROP", timing?.let { t -> t.dropReason?.let { "${t.dropped}·$it" } ?: "${t.dropped}" } ?: "—",
             valueColor = if (timing != null && timing.dropped > 0) CaptureColors.Danger else Color.White)
