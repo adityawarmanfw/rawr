@@ -4,6 +4,26 @@ import com.rawr.camera.settings.model.*
 import kotlin.test.*
 
 class RendererRecipeTest {
+    @Test fun localTuningSurvivesCaptureEditingAndLegacyDefaults() {
+        val library = SettingsCatalog.initialState().values
+        val tuned = library.copy(localToneTuning = LocalToneTuning(1.2f, 3.7f, 8, true))
+        val original = RendererRecipe.encode(tuned)
+        assertEquals(tuned.localToneTuning, RendererRecipe.decode(original, library).localToneTuning)
+        val edited = RendererRecipe.rebuiltDraft(tuned.copy(photoFccSteps = 4), original, original)
+        assertEquals(tuned.localToneTuning, RendererRecipe.decode(edited, library).localToneTuning)
+        val legacy = org.json.JSONObject(original).apply { remove("localToneTuning") }.toString()
+        assertEquals(LocalToneTuning(), RendererRecipe.decode(legacy, tuned).localToneTuning)
+        val resolved = org.json.JSONObject(legacy).put("localTone", org.json.JSONObject()
+            .put("version", 3).put("shadowsEv", 2).put("highlightsEv", 1).put("sigma", 4)
+            .put("coarsestMip", 7).put("boostLocalContrast", true)).toString()
+        assertEquals(LocalToneTuning(1f, 4f, 7, true), RendererRecipe.decode(resolved, library).localToneTuning)
+    }
+
+    @Test fun localTuningBoundsRejectNonFiniteAndOutOfRangeSettings() {
+        assertEquals(LocalToneTuning(2f, 5f, 6, false), LocalToneTuning(Float.NaN, Float.POSITIVE_INFINITY, -1).sanitized())
+        assertEquals(LocalToneTuning(.5f, 5f, 8, true), LocalToneTuning(-4f, 100f, 99, true).sanitized())
+    }
+
     @Test fun legacyRecipeRetainsUserDefaultsForInactiveAgxPresets() {
         val library = SettingsCatalog.initialState().values.copy(
             agxValues = mapOf(AgxPreset.Smooth to AgxPreset.Smooth.defaults.with(AgxParameter.WhiteEv, 8f)))

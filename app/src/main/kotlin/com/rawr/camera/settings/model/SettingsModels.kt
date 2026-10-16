@@ -217,6 +217,12 @@ enum class DynamicRangeMethod(val label: String, val summary: String) {
     Local("Local", "Region by region (exposure fusion): keeps local contrast")
 }
 
+// Keep the experimental implementation and recipe support, but hide its controls.
+const val LOCAL_TONE_CONTROLS_VISIBLE = false
+val visibleDynamicRangeMethods: List<DynamicRangeMethod> = DynamicRangeMethod.entries.filter {
+    LOCAL_TONE_CONTROLS_VISIBLE || it != DynamicRangeMethod.Local
+}
+
 fun SettingsValues.photoDynamicRange(): DynamicRangeMethod = when {
     photoToneMapping == PhotoToneMapping.Local -> DynamicRangeMethod.Local
     autoKeyExposure == AutoKeyExposure.Off -> DynamicRangeMethod.Off
@@ -229,13 +235,27 @@ fun SettingsValues.videoDynamicRange(): DynamicRangeMethod =
 /** Global strengths (the adaptive curve without Off). */
 val globalDynamicRangeStrengths: List<AutoKeyExposure> = AutoKeyExposure.entries.filter { it != AutoKeyExposure.Off }
 
+/** Conservative UI ranges; image quality still depends on scene content. */
+data class LocalToneTuning(
+    val highlightsEv: Float = 2f,
+    val sigma: Float = 5f,
+    val coarsestMip: Int = 6,
+    val boostLocalContrast: Boolean = false
+) {
+    fun sanitized() = copy(
+        highlightsEv = if (highlightsEv.isFinite()) (highlightsEv.coerceIn(.5f, 2f) * 10f).roundToInt() / 10f else 2f,
+        sigma = if (sigma.isFinite()) (sigma.coerceIn(3f, 5f) * 10f).roundToInt() / 10f else 5f,
+        coarsestMip = coarsestMip.coerceIn(6, 8)
+    )
+}
+
 /** Local tone mapping shadows range, shared with native local_tone/ExposureFusion.h. */
 object LocalToneLimits {
-    const val DEFAULT_SHADOWS_EV = 2.5f
+    const val DEFAULT_SHADOWS_EV = 2.0f
     const val MIN_SHADOWS_EV = 1.0f
-    const val MAX_SHADOWS_EV = 4.0f
+    const val MAX_SHADOWS_EV = 3.0f
     fun shadowsEv(value: Float): Float =
-        if (value.isFinite()) (value.coerceIn(MIN_SHADOWS_EV, MAX_SHADOWS_EV) * 2f).roundToInt() / 2f else DEFAULT_SHADOWS_EV
+        if (value.isFinite()) (value.coerceIn(MIN_SHADOWS_EV, MAX_SHADOWS_EV) * 10f).roundToInt() / 10f else DEFAULT_SHADOWS_EV
 }
 
 enum class AutoKeyExposure(val label: String, val summary: String, val nativeId: Int) {
@@ -960,9 +980,10 @@ data class SettingsValues(
     /** Adaptive shadow-lift strength for video (always adaptive). */
     val videoAutoKeyExposure: AutoKeyExposure = AutoKeyExposure.Natural,
     /** Photo tone mapping (JPEG/viewfinder only; video always Adaptive). */
-    val photoToneMapping: PhotoToneMapping = PhotoToneMapping.Local,
+    val photoToneMapping: PhotoToneMapping = PhotoToneMapping.Adaptive,
     /** Local tone mapping: how far shadows may be brightened (EV), noise-limited natively. */
     val localToneShadowsEv: Float = LocalToneLimits.DEFAULT_SHADOWS_EV,
+    val localToneTuning: LocalToneTuning = LocalToneTuning(),
     val maxPostGainId: String = "gain.200",
     val autoMinFpsId: String = "fps.12",
     val controlSurfaceStyle: ControlSurfaceStyle = ControlSurfaceStyle.Basic,

@@ -436,7 +436,7 @@ RawDevelopRecordResult RawDevelopRecorder::record(const RawDevelopRecordInput& i
         }
         lt.cameraToWorking = composeCameraToAp1(in.sensorToLinearSrgb);
         lt.renderGain = in.tonemapParams.aePostGain * std::exp2(in.tonemapParams.exposureEV);
-        lt.params = rawr::local_tone::fusionParams(localTone.shadowsEv, localTone.highlightsEv);
+        lt.params = rawr::local_tone::fusionParams(localTone.shadowsEv, localTone.highlightsEv, localTone.sigma, localTone.coarsestMip, localTone.boostLocalContrast != 0);
         lt.slot = in.slotIndex;
         localTone_->record(lt);
     }

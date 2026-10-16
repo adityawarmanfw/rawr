@@ -29,10 +29,10 @@ struct ImageRef {
     VkImageView view = VK_NULL_HANDLE;  // RGBA16F, GENERAL layout, storage usage
 };
 
-// App defaults (tuned on device captures with AgX: shadows +2.5 EV).
-inline constexpr float kDefaultShadowsEv = 2.5f;
+// App defaults: natural shadow lift, with stronger adjustments capped at 3 EV.
+inline constexpr float kDefaultShadowsEv = 2.0f;
 inline constexpr float kDefaultHighlightsEv = 2.0f;
-inline constexpr float kMinShadowsEv = 1.0f, kMaxShadowsEv = 4.0f;
+inline constexpr float kMinShadowsEv = 1.0f, kMaxShadowsEv = 3.0f;
 
 // The lift brings dark regions toward mid grey, where their noise shows. It
 // is limited so that the darkest region lifted to mid grey keeps a per-pixel
@@ -78,10 +78,14 @@ struct FusionParams {
     bool boostLocalContrast = false;      // weight Laplacians by their magnitude
 };
 
-inline FusionParams fusionParams(float shadowsEv, float highlightsEv) noexcept {
+inline FusionParams fusionParams(float shadowsEv, float highlightsEv, float sigma = 5.0f,
+                                 std::uint32_t coarsestMip = 6, bool boostLocalContrast = false) noexcept {
     FusionParams p{};
     p.shadowsEv = shadowsEv;
     p.highlightsEv = highlightsEv;
+    p.sigma = sigma;
+    p.coarsestMip = coarsestMip;
+    p.boostLocalContrast = boostLocalContrast;
     return p;
 }
 
@@ -96,7 +100,7 @@ struct FusionRecordInfo {
     VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
     std::uint32_t width = 0, height = 0;
     ImageRef measure;  // same content as targets[0]
-    std::array<ImageRef, 2> targets{};
+    std::array<ImageRef, 2> targets{};  // distinct images; both receive the gain derived from targets[0]
     std::uint32_t targetCount = 1;
     std::array<float, 9> cameraToWorking{1, 0, 0, 0, 1, 0, 0, 0, 1};  // camera RGB -> AP1, column-major
     float renderGain = 1.0f;  // linear render gain (AE post-gain)

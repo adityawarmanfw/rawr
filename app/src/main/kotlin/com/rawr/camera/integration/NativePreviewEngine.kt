@@ -89,7 +89,7 @@ class NativePreviewEngine {
     external fun setPostGainKneeWidthEv(handle: Long, widthEv: Float)
 
     external fun setAutoKeyMode(handle: Long, mode: Int)
-    external fun setLocalTone(handle: Long, shadowsEv: Float)
+    external fun setLocalTone(handle: Long, shadowsEv: Float, highlightsEv: Float, sigma: Float, coarsestMip: Int, boostLocalContrast: Boolean)
 
     external fun setExpectedMergeFrames(handle: Long, frames: Int)
 

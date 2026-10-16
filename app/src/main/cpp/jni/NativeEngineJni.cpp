@@ -381,8 +381,8 @@ extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreview
     rawrcam::session::setAutoKeyMode(handle(h), v);
 }
 extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreviewEngine_setLocalTone(
-    JNIEnv*, jobject, jlong h, jfloat shadowsEv) {
-    rawrcam::session::setLocalTone(handle(h), shadowsEv);
+    JNIEnv*, jobject, jlong h, jfloat shadowsEv, jfloat highlightsEv, jfloat sigma, jint coarsestMip, jboolean boostLocalContrast) {
+    rawrcam::session::setLocalTone(handle(h), shadowsEv, highlightsEv, sigma, static_cast<unsigned>(coarsestMip), boostLocalContrast == JNI_TRUE);
 }
 extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreviewEngine_setExpectedMergeFrames(
     JNIEnv*, jobject, jlong h, jint frames) {

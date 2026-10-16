@@ -263,7 +263,9 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
 
     fun setAutoKeyMode(mode: Int) = postNative { native.setAutoKeyMode(nativeHandle, mode) }
     /** Photo local tone mapping shadows EV; 0 = adaptive curve (always 0 in video). */
-    fun setLocalTone(shadowsEv: Float) = postNative { native.setLocalTone(nativeHandle, shadowsEv) }
+    fun setLocalTone(shadowsEv: Float, tuning: com.rawr.camera.settings.model.LocalToneTuning) = postNative {
+        native.setLocalTone(nativeHandle, shadowsEv, tuning.highlightsEv, tuning.sigma, tuning.coarsestMip, tuning.boostLocalContrast)
+    }
     fun setExpectedMergeFrames(frames: Int) = postNative { native.setExpectedMergeFrames(nativeHandle, frames.coerceIn(1, 30)) }
 
     fun setAutoMinFps(fps: Int) = postNative { native.setAutoMinFps(nativeHandle, fps) }

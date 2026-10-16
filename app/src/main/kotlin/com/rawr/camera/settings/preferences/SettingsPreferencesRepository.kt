@@ -4,6 +4,9 @@ import com.rawr.camera.settings.model.AgxCatalog
 import com.rawr.camera.settings.model.AgxParameter
 import com.rawr.camera.settings.model.AgxPreset
 import com.rawr.camera.settings.model.AgxValues
+import com.rawr.camera.settings.model.LocalToneTuning
+import com.rawr.camera.settings.model.LOCAL_TONE_CONTROLS_VISIBLE
+import com.rawr.camera.settings.model.PhotoToneMapping
 import com.rawr.camera.settings.model.LocalToneLimits
 import com.rawr.camera.settings.model.MAX_BURST_FRAMES
 import com.rawr.camera.settings.model.ProfileTone
@@ -447,8 +450,15 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
             autoKeyExposure = enumOrDefault(p[Keys.autoKeyExposure], d.autoKeyExposure),
             // Until set, video keeps the strength it shared with photos.
             videoAutoKeyExposure = enumOrDefault(p[Keys.videoAutoKeyExposure] ?: p[Keys.autoKeyExposure], d.videoAutoKeyExposure),
-            photoToneMapping = enumOrDefault(p[Keys.photoToneMapping], d.photoToneMapping),
+            // Do not leave hidden local processing enabled in camera preferences.
+            // Saved renderer recipes are independent and remain replayable.
+            photoToneMapping = if (LOCAL_TONE_CONTROLS_VISIBLE)
+                enumOrDefault(p[Keys.photoToneMapping], d.photoToneMapping) else PhotoToneMapping.Adaptive,
             localToneShadowsEv = LocalToneLimits.shadowsEv(p[Keys.localToneShadowsEv] ?: d.localToneShadowsEv),
+            localToneTuning = LocalToneTuning(
+                p[Keys.localToneHighlightsEv] ?: 2f, p[Keys.localToneSigma] ?: 5f,
+                p[Keys.localToneMip] ?: 6, p[Keys.localToneBoost] ?: false
+            ).sanitized(),
             maxPostGainId = p[Keys.maxPostGainId] ?: d.maxPostGainId,
             autoMinFpsId = p[Keys.autoMinFpsId] ?: d.autoMinFpsId,
             controlSurfaceStyle = enumOrDefault(p[Keys.controlSurfaceStyle], d.controlSurfaceStyle),
@@ -683,6 +693,10 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.videoAutoKeyExposure] = v.videoAutoKeyExposure.name
         p[Keys.photoToneMapping] = v.photoToneMapping.name
         p[Keys.localToneShadowsEv] = v.localToneShadowsEv
+        p[Keys.localToneHighlightsEv] = v.localToneTuning.highlightsEv
+        p[Keys.localToneSigma] = v.localToneTuning.sigma
+        p[Keys.localToneMip] = v.localToneTuning.coarsestMip
+        p[Keys.localToneBoost] = v.localToneTuning.boostLocalContrast
         p[Keys.maxPostGainId] = v.maxPostGainId
         p[Keys.autoMinFpsId] = v.autoMinFpsId
         p[Keys.controlSurfaceStyle] = v.controlSurfaceStyle.name
@@ -972,6 +986,10 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val videoAutoKeyExposure = stringPreferencesKey("video_auto_key_exposure")
         val photoToneMapping = stringPreferencesKey("photo_tone_mapping")
         val localToneShadowsEv = floatPreferencesKey("local_tone_shadows_ev")
+        val localToneHighlightsEv = floatPreferencesKey("local_tone_highlights_ev")
+        val localToneSigma = floatPreferencesKey("local_tone_sigma")
+        val localToneMip = intPreferencesKey("local_tone_mip")
+        val localToneBoost = booleanPreferencesKey("local_tone_boost")
         val maxPostGainId = stringPreferencesKey("max_post_gain_id")
         val autoMinFpsId = stringPreferencesKey("auto_min_fps_id")
         val controlSurfaceStyle = stringPreferencesKey("control_surface_style")

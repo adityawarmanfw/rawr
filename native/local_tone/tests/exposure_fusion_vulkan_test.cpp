@@ -192,7 +192,7 @@ std::vector<float> reference(const std::vector<float>& rgba, int w, int h, const
             mXY /= ws;
             const float a = (mXY - mX * mY) / (std::max(mX2 - mX * mX, 0.f) + 0.00001f), b = mY - a * mX;
             const V3 t = aces(pixel(x, y));
-            const float lum = 0.1f * std::sqrt(t.r) + 0.7f * std::sqrt(t.g) + 0.2f * std::sqrt(t.b) + 0.00001f;
+            const float lum = std::sqrt(lumaOf(t)) + 0.00001f;
             float mult = std::max(a * lum + b, 0.f) / lum;
             if (lum <= 0.007f) mult = 1.f + (mult - 1.f) * (lum / 0.007f) * (lum / 0.007f);
             for (int c = 0; c < 3; ++c) out[(std::size_t(y) * w + x) * 4 + c] *= mult;
@@ -201,7 +201,9 @@ std::vector<float> reference(const std::vector<float>& rgba, int w, int h, const
 }
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    const bool singleTarget = argc > 1 && std::strcmp(argv[1], "--single") == 0;
+    const bool strong = argc > 2 && std::strcmp(argv[2], "--strong") == 0;
     // Noise models from V2562 DNGs (S, O at ISO 2100 / 6400).
     assert(noiseLimitedShadowsEv(2.5f, {0.00789f, 0.000144f, 1.0f, 1}) == 2.5f);
     const float iso6400 = noiseLimitedShadowsEv(2.5f, {0.024f, 0.00134f, 1.0f, 1});
@@ -234,12 +236,26 @@ int main() {
         quantized[k] = vktest::halfToFloat(halfs[k]);
     }
     const VkDeviceSize bytes = halfs.size() * 2;
-    auto staging = vktest::mkBuf(c.pd, c.dev, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+    const float gain = 4.0f;
+    // The app has an HDR measurement and a separately compressed SDR target.
+    // Their ratio must survive local tone mapping at every pixel, including
+    // sky edges. A regression evaluated against SDR instead of HDR fails this.
+    std::vector<std::uint16_t> sdrHalf(halfs.size());
+    for (std::size_t k = 0; k < halfs.size(); k += 4) {
+        const float level = quantized[k + 1] * gain;
+        const float compression = std::log1p(100.0f * level) / (100.0f * level);
+        for (int ch = 0; ch < 3; ++ch) sdrHalf[k + ch] = toHalf(quantized[k + ch] * compression);
+        sdrHalf[k + 3] = toHalf(1.0f);
+    }
+    auto staging = vktest::mkBuf(c.pd, c.dev, bytes * 2, VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     void* mapped = nullptr;
-    vktest::ck(vkMapMemory(c.dev, staging.m, 0, bytes, 0, &mapped), "map");
+    vktest::ck(vkMapMemory(c.dev, staging.m, 0, bytes * 2, 0, &mapped), "map");
     std::memcpy(mapped, halfs.data(), bytes);
+    std::memcpy(static_cast<char*>(mapped) + bytes, sdrHalf.data(), bytes);
     auto image = vktest::mkImg(c.pd, c.dev, w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
+                               VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+    auto sdrImage = vktest::mkImg(c.pd, c.dev, w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
                                VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
 
     VkCommandPoolCreateInfo pi{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
@@ -253,9 +269,8 @@ int main() {
     vktest::ck(vkAllocateCommandBuffers(c.dev, &ai, &cmd), "cmd");
 
     FusionParams params{};
-    params.shadowsEv = kDefaultShadowsEv;
+    params.shadowsEv = strong ? kMaxShadowsEv : kDefaultShadowsEv;
     params.coarsestMip = 6;
-    const float gain = 4.0f;
     {
         ExposureFusionProcessor processor({c.pd, c.dev, c.qf}, 1);
         VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
@@ -269,14 +284,24 @@ int main() {
         toDst.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
                              nullptr, 1, &toDst);
+        toDst.image = sdrImage.i;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                             nullptr, 1, &toDst);
+        toDst.image = image.i;
         VkBufferImageCopy copy{};
         copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         copy.imageExtent = {std::uint32_t(w), std::uint32_t(h), 1};
         vkCmdCopyBufferToImage(cmd, staging.b, image.i, VK_IMAGE_LAYOUT_GENERAL, 1, &copy);
+        copy.bufferOffset = bytes;
+        vkCmdCopyBufferToImage(cmd, staging.b, sdrImage.i, VK_IMAGE_LAYOUT_GENERAL, 1, &copy);
+        copy.bufferOffset = 0;
         VkImageMemoryBarrier ready = toDst;
         ready.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         ready.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
         ready.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0,
+                             nullptr, 1, &ready);
+        ready.image = sdrImage.i;
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0,
                              nullptr, 1, &ready);
         FusionRecordInfo info{};
@@ -285,14 +310,22 @@ int main() {
         info.height = h;
         info.measure = {image.i, image.v};
         info.targets[0] = {image.i, image.v};
+        info.targets[1] = {sdrImage.i, sdrImage.v};
+        info.targetCount = singleTarget ? 1 : 2;
         info.cameraToWorking = inverseAp1To709ColumnMajor();
         info.renderGain = gain;
         info.params = params;
         FusionRecordInfo bad = info;
         bad.params.coarsestMip = kFusionBaseMip;  // nothing to blend
         assert(!processor.record(bad));
+        bad = info;
+        bad.targetCount = 2;
+        bad.targets[1] = bad.targets[0];
+        assert(!processor.record(bad));  // would apply the gain twice
         assert(processor.record(info));
         vkCmdCopyImageToBuffer(cmd, image.i, VK_IMAGE_LAYOUT_GENERAL, staging.b, 1, &copy);
+        copy.bufferOffset = bytes;
+        vkCmdCopyImageToBuffer(cmd, sdrImage.i, VK_IMAGE_LAYOUT_GENERAL, staging.b, 1, &copy);
         vkEndCommandBuffer(cmd);
         VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
         si.commandBufferCount = 1;
@@ -302,6 +335,16 @@ int main() {
     }
     std::vector<std::uint16_t> outHalf(halfs.size());
     std::memcpy(outHalf.data(), mapped, bytes);
+    const auto* sdrOut = reinterpret_cast<const std::uint16_t*>(static_cast<const char*>(mapped) + bytes);
+    double maxGainDifference = 0;
+    for (std::size_t k = 0; k < halfs.size(); k += 4)
+        for (int ch = 0; ch < 3; ++ch) {
+            const float hdrGain = singleTarget ? 1.0f : vktest::halfToFloat(outHalf[k + ch]) / quantized[k + ch];
+            const float sdrGain = vktest::halfToFloat(sdrOut[k + ch]) / vktest::halfToFloat(sdrHalf[k + ch]);
+            maxGainDifference = std::max(maxGainDifference, double(std::abs(std::log2(hdrGain / sdrGain))));
+        }
+    std::printf("HDR/SDR gain agreement: max |dEV| %.5f\n", maxGainDifference);
+    assert(maxGainDifference < 0.004);
     const auto expected = reference(quantized, w, h, params, gain);
     double maxErr = 0, sumErr = 0;
     for (std::size_t k = 0; k < scene.size(); k += 4)
@@ -324,6 +367,7 @@ int main() {
     assert(brightLift < darkLift - 1.0); // far more than the sky
     vkDestroyCommandPool(c.dev, pool, nullptr);
     vktest::delImg(c.dev, image);
+    vktest::delImg(c.dev, sdrImage);
     vktest::delBuf(c.dev, staging);
     vktest::delCtx(c);
     std::puts("local_tone_vulkan_test OK");

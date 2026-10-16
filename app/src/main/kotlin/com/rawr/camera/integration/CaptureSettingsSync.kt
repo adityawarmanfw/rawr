@@ -48,8 +48,8 @@ internal class CaptureSettingsSync(
         }
         // Photo local tone mapping; video always takes the adaptive curve.
         syncSetting({
-            if (!it.isVideo && it.photoToneMapping == PhotoToneMapping.Local) it.localToneShadowsEv else 0f
-        }) { previewCoordinator.setLocalTone(it) }
+            (if (!it.isVideo && it.photoToneMapping == PhotoToneMapping.Local) it.localToneShadowsEv else 0f) to it.localToneTuning
+        }) { (shadows, tuning) -> previewCoordinator.setLocalTone(shadows, tuning) }
         // The next photo's merged frame count: the viewfinder's noise limit
         // on the local tone lift matches the still's.
         syncSetting({

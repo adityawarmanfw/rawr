@@ -173,11 +173,17 @@ def main():
     if captured_local.get("version", 1) >= 2:
         captured_value = f'{captured_local.get("shadowsEv", 0)},{captured_local.get("highlightsEv", 2)}'
     else:  # earlier guided-filter lift: replayed as fusion at the defaults
-        captured_value = "2.5,2" if captured_local.get("strength", 0) > 0 else "0"
+        captured_value = "2,2" if captured_local.get("strength", 0) > 0 else "0"
     local = args.local_tone or captured_value
     command += ["--local-tone", local]
     if args.fusion:
         command += ["--fusion", args.fusion]
+    elif float(local.split(",")[0]) > 0:
+        exposures = local.split(",")
+        highlights = exposures[1] if len(exposures) > 1 else "2"
+        command += ["--fusion", ",".join(map(str, (
+            1, exposures[0], highlights, captured_local.get("sigma", 5),
+            captured_local.get("coarsestMip", 6), int(captured_local.get("boostLocalContrast", False))))) ]
     if args.agx:
         command += ["--agx", args.agx]
     if recovery_mode == "preserve":

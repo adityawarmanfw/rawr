@@ -156,7 +156,9 @@ rawrcam::renderer::RenderOptions options(JNIEnv* env, jstring recipe, int workin
     Json localTone(env, json.child("localTone"));
     if (localTone.number("version", 1) >= 2) {
         t.localTone = {float(localTone.number("shadowsEv", 0)),
-                       float(localTone.number("highlightsEv", rawr::local_tone::kDefaultHighlightsEv))};
+                       float(localTone.number("highlightsEv", rawr::local_tone::kDefaultHighlightsEv)),
+                       float(localTone.number("sigma", 5)), unsigned(localTone.number("coarsestMip", 6)),
+                       unsigned(localTone.flag("boostLocalContrast", false))};
     } else {
         t.localTone = localTone.number("strength", 0) > 0
                           ? tonemap::LocalToneParams{rawr::local_tone::kDefaultShadowsEv,
@@ -165,10 +167,14 @@ rawrcam::renderer::RenderOptions options(JNIEnv* env, jstring recipe, int workin
     }
     // Editor override (Tone mapping / Local shadows); 0 = adaptive curve.
     if (const double shadows = json.number("localToneShadowsEv", -1); shadows >= 0)
-        t.localTone = shadows > 0 ? tonemap::LocalToneParams{float(shadows), rawr::local_tone::kDefaultHighlightsEv}
-                                  : tonemap::LocalToneParams{};
+        t.localTone.shadowsEv = float(shadows);
+    Json tuning(env, json.child("localToneTuning"));
+    t.localTone.highlightsEv = float(tuning.number("highlightsEv", t.localTone.highlightsEv));
+    t.localTone.sigma = float(tuning.number("sigma", t.localTone.sigma));
+    t.localTone.coarsestMip = unsigned(tuning.number("coarsestMip", t.localTone.coarsestMip));
+    t.localTone.boostLocalContrast = unsigned(tuning.flag("boostLocalContrast", t.localTone.boostLocalContrast != 0));
     if (rawr::local_tone::fusionActive(t.localTone.shadowsEv) &&
-        !rawr::local_tone::validParams(rawr::local_tone::fusionParams(t.localTone.shadowsEv, t.localTone.highlightsEv)))
+        !rawr::local_tone::validParams(rawr::local_tone::fusionParams(t.localTone.shadowsEv, t.localTone.highlightsEv, t.localTone.sigma, t.localTone.coarsestMip, t.localTone.boostLocalContrast != 0)))
         throw std::runtime_error("Invalid local tone recipe");
     o.adaptiveToneMode = json.text("adaptiveToneMode");
     if (o.adaptiveToneMode == "null") o.adaptiveToneMode.clear();

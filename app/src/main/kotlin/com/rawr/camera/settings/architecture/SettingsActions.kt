@@ -58,7 +58,7 @@ data class SetHighlightProtection(val value: HighlightProtection) : SettingsAppl
 data class SetAutoKeyExposure(val value: AutoKeyExposure, val video: Boolean = false) : SettingsApplicationAction
 
 /** HDR+ Bracketed local tone mapping; null keeps the current value. */
-data class SetLocalTone(val mode: PhotoToneMapping? = null, val shadowsEv: Float? = null) : SettingsApplicationAction
+data class SetLocalTone(val mode: PhotoToneMapping? = null, val shadowsEv: Float? = null, val tuning: LocalToneTuning? = null) : SettingsApplicationAction
 
 data class SetControlSurfaceStyle(val style: ControlSurfaceStyle) : SettingsApplicationAction
 

@@ -1,0 +1,158 @@
+--- a/native/local_tone/include/local_tone/ExposureFusion.h
++++ b/native/local_tone/include/local_tone/ExposureFusion.h
+@@ -76,6 +76,9 @@
+     float sigma = 5.0f;         // exposure preference sharpness around lightness 0.5
+     std::uint32_t coarsestMip = 6;        // coarsest pyramid level, mips below full resolution (demo "mip")
+     bool boostLocalContrast = false;      // weight Laplacians by their magnitude
++    std::uint32_t baseMip = 2;  // diagnostic: 0 full resolution, 1 half, 2 quarter
++    std::uint32_t transfer = 0; // diagnostic: 0 ratio; 1 invert proxy; 2 dump target lightness
++    bool direct = false;       // diagnostic: no guided upsampling (full resolution only)
+ };
+ 
+ inline FusionParams fusionParams(float shadowsEv, float highlightsEv, float sigma = 5.0f,
+@@ -92,7 +95,7 @@
+ inline bool validParams(const FusionParams& p) noexcept {
+     return std::isfinite(p.exposure) && p.exposure > 0.0f && std::isfinite(p.shadowsEv) && p.shadowsEv >= 0.0f &&
+            p.shadowsEv <= 6.0f && std::isfinite(p.highlightsEv) && p.highlightsEv >= 0.0f && p.highlightsEv <= 6.0f &&
+-           std::isfinite(p.sigma) && p.sigma > 0.0f && p.coarsestMip > kFusionBaseMip &&
++           std::isfinite(p.sigma) && p.sigma > 0.0f && p.baseMip <= 2 && p.coarsestMip > p.baseMip && p.coarsestMip - p.baseMip <= kFusionMaxDownLevels &&
+            p.coarsestMip <= kFusionBaseMip + kFusionMaxDownLevels;
+ }
+ 
+--- a/native/local_tone/src/ExposureFusion.cpp
++++ b/native/local_tone/src/ExposureFusion.cpp
+@@ -29,7 +29,7 @@
+     std::uint32_t block;
+     std::uint32_t boost;
+     std::uint32_t targetCount;
+-    std::uint32_t pad[2];
++    std::uint32_t transfer, direct;
+ };
+ static_assert(sizeof(Push) == 112, "exposure fusion push layout");
+ 
+@@ -65,7 +65,7 @@
+     };
+     struct Slot {
+         rawr::vk::DeviceObjects images;
+-        std::uint32_t fullW = 0, fullH = 0, downLevels = 0;
++        std::uint32_t fullW = 0, fullH = 0, downLevels = 0, baseMip = 2;
+         Level levels[kLevels];
+         VkDescriptorSet sets[kSetsPerSlot]{};
+         bool initialized = false;
+@@ -157,13 +157,13 @@
+         return objects.adoptPipeline(out);
+     }
+ 
+-    void ensureImages(Slot& slot, std::uint32_t fullW, std::uint32_t fullH, std::uint32_t downLevels) {
+-        if (slot.fullW == fullW && slot.fullH == fullH && slot.downLevels == downLevels) return;
++    void ensureImages(Slot& slot, std::uint32_t fullW, std::uint32_t fullH, std::uint32_t downLevels, std::uint32_t baseMip) {
++        if (slot.fullW == fullW && slot.fullH == fullH && slot.downLevels == downLevels && slot.baseMip == baseMip) return;
+         // A size change replaces the slot's images; the caller only reuses a
+         // slot once its previous command buffer has completed.
+         rawr::vk::DeviceObjects fresh(gpu.device);
+         const VkImageUsageFlags usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+-        const std::uint32_t block = 1u << kFusionBaseMip;
++        const std::uint32_t block = 1u << baseMip;
+         std::uint32_t w = (fullW + block - 1) / block, h = (fullH + block - 1) / block;
+         for (std::uint32_t i = 0; i <= downLevels; ++i) {
+             if (i > 0) {
+@@ -185,6 +185,7 @@
+         slot.fullW = fullW;
+         slot.fullH = fullH;
+         slot.downLevels = downLevels;
++        slot.baseMip = baseMip;
+         slot.initialized = false;
+     }
+ 
+@@ -224,8 +225,8 @@
+     if (info.targetCount == 2 && info.targets[0].image == info.targets[1].image) return false;
+     auto& d = *impl_;
+     auto& slot = d.slots[std::min<std::size_t>(info.slot, d.slots.size() - 1)];
+-    const std::uint32_t downLevels = info.params.coarsestMip - kFusionBaseMip;
+-    d.ensureImages(slot, info.width, info.height, downLevels);
++    const std::uint32_t downLevels = info.params.coarsestMip - info.params.baseMip;
++    d.ensureImages(slot, info.width, info.height, downLevels, info.params.baseMip);
+     const VkCommandBuffer cmd = info.commandBuffer;
+     const auto& L = slot.levels;
+ 
+@@ -283,9 +284,11 @@
+     push.shadows = std::exp2(info.params.shadowsEv);
+     push.highlights = std::exp2(-info.params.highlightsEv);
+     push.sigmaSq = info.params.sigma * info.params.sigma;
+-    push.block = 1u << kFusionBaseMip;
++    push.block = 1u << info.params.baseMip;
+     push.boost = info.params.boostLocalContrast ? 1u : 0u;
+     push.targetCount = info.targetCount;
++    push.transfer = info.params.transfer;
++    push.direct = info.params.direct;
+ 
+     const auto memory = [&] {
+         VkMemoryBarrier b{};
+--- a/native/local_tone/shaders/fus_common.glsl
++++ b/native/local_tone/shaders/fus_common.glsl
+@@ -12,7 +12,7 @@
+     float sigmaSq;
+     uint block;        // full-res pixels per base-level texel (square)
+     uint boost;        // weight Laplacians by magnitude
+-    uint targetCount, pad1, pad2;
++    uint targetCount, transfer, direct;
+ } pc;
+ 
+ // three.js r138 ACESFilmicToneMapping (toneMappingExposure 1), Rec.709 in.
+--- a/native/local_tone/shaders/fus_apply.comp
++++ b/native/local_tone/shaders/fus_apply.comp
+@@ -40,10 +40,28 @@
+     // guide. A compressed SDR target is not a valid substitute for the HDR
+     // measurement: extrapolating with it produces outlines around edges.
+     float luminance = rawrFusLightness(rawrFus709(pixel.rgb)).g + 0.00001;
+-    float multiplier = max(a * luminance + b, 0.0) / luminance;
++    float desired = pc.direct != 0u ? texelFetch(fused, q, 0).r : max(a * luminance + b, 0.0);
++    float multiplier = max(desired, 0.0) / luminance;
++    if (pc.transfer == 1u) {
++        // Invert the SAME ACES lightness function used to construct exposures.
++        // Search log exposure along this pixel's RGB ray, keeping chromaticity.
++        vec3 rgb = rawrFus709(pixel.rgb);
++        float lo = -8.0, hi = 8.0;
++        for (int i = 0; i < 24; ++i) {
++            float mid = 0.5 * (lo + hi);
++            float l = sqrt(dot(rawrFusAces(rgb * exp2(mid)), RAWR_FUS_Y));
++            if (l < desired) lo = mid; else hi = mid;
++        }
++        multiplier = exp2(0.5 * (lo + hi));
++    }
++    if (pc.transfer == 2u) {
++        // Dump [desired, input lightness, guide variance, alpha] for CPU validation.
++        imageStore(target, q, vec4(desired, luminance, max(mX2 - mX * mX, 0.0), 1.0));
++        return;
++    }
+     // Demo: keep near-black pixels from being boosted by a lot.
+     const float threshold = 0.007;
+-    if (luminance <= threshold) multiplier = mix(1.0, multiplier, (luminance / threshold) * (luminance / threshold));
++    if (pc.transfer == 0u && luminance <= threshold) multiplier = mix(1.0, multiplier, (luminance / threshold) * (luminance / threshold));
+     imageStore(target, q, vec4(pixel.rgb * multiplier, pixel.a));
+     if (pc.targetCount == 2u) {
+         vec4 second = imageLoad(secondTarget, q);
+--- a/tools/offline_rawr_pipeline/main.cpp
++++ b/tools/offline_rawr_pipeline/main.cpp
+@@ -247,6 +247,12 @@
+             for (int p = 0; p < 5; ++p)
+                 if (name == names[p]) args.agxPreset = p;
+             if (args.agxPreset < 0) throw std::invalid_argument("--agx needs default|base|punchy|sigmoid|smooth");
++         } else if (value == "--reference-base" && i + 1 < argc) {
++            args.fusionParams.baseMip = std::stoul(argv[++i]);
++        } else if (value == "--reference-transfer" && i + 1 < argc) {
++            args.fusionParams.transfer = std::stoul(argv[++i]);
++        } else if (value == "--reference-direct") {
++            args.fusionParams.direct = true;
+         } else if (value == "--fusion" && i + 1 < argc) {
+             unsigned mip = args.fusionParams.coarsestMip, boost = 0;
+             auto& f = args.fusionParams;
+@@ -1095,7 +1101,7 @@
+                 params.exposureEV = config.exposureEV;
+                 params.highlightBiasEV = highlights;
+                 params.aePostGain = args.postGain;
+-                params.adaptiveTone = args.adaptiveTone;
++                params.adaptiveTone = args.fusion ? tonemap::AdaptiveToneParams{} : args.adaptiveTone;
+                 if (args.agxPreset >= 0) {
+                     params.renderTransform = tonemap::RenderTransform::AgX;
+                     params.agx = tonemap::agxPreset(static_cast<tonemap::AgxPreset>(args.agxPreset));

@@ -195,6 +195,9 @@ struct Reader {
         bytes(&n, sizeof(n));
         if (n == sizeof(v)) {
             bytes(&v, sizeof(v));
+        } else if (n == offsetof(tonemap::TonemapParams, localTone) + offsetof(tonemap::LocalToneParams, sigma)) {
+            v = {};
+            bytes(&v, n);  // Two-field local tone recipe; new controls keep their defaults.
         } else if (n == offsetof(tonemap::TonemapParams, localTone)) {
             v = {};
             bytes(&v, n);  // Before local tone mapping; it stays off.

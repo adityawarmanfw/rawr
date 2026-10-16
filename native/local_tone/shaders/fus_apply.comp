@@ -6,6 +6,7 @@
 // its ACES; here the real tone curve follows).
 layout(local_size_x = 16, local_size_y = 16) in;
 layout(binding = 0, rgba16f) uniform image2D target;
+layout(binding = 1, rgba16f) uniform image2D secondTarget;
 layout(binding = 4) uniform sampler2D guide;
 layout(binding = 5) uniform sampler2D fused;
 #include "fus_common.glsl"
@@ -35,11 +36,17 @@ void main() {
     float a = (mXY - mX * mY) / (max(mX2 - mX * mX, 0.0) + 0.00001);
     float b = mY - a * mX;
     vec4 pixel = imageLoad(target, q);
-    vec3 original = sqrt(max(rawrFusAces(rawrFus709(pixel.rgb)), vec3(0.0)));
-    float luminance = dot(original, RAWR_FUS_Y) + 0.00001;
+    // Evaluate the regression in exactly the same lightness space as its
+    // guide. A compressed SDR target is not a valid substitute for the HDR
+    // measurement: extrapolating with it produces outlines around edges.
+    float luminance = rawrFusLightness(rawrFus709(pixel.rgb)).g + 0.00001;
     float multiplier = max(a * luminance + b, 0.0) / luminance;
     // Demo: keep near-black pixels from being boosted by a lot.
     const float threshold = 0.007;
     if (luminance <= threshold) multiplier = mix(1.0, multiplier, (luminance / threshold) * (luminance / threshold));
     imageStore(target, q, vec4(pixel.rgb * multiplier, pixel.a));
+    if (pc.targetCount == 2u) {
+        vec4 second = imageLoad(secondTarget, q);
+        imageStore(secondTarget, q, vec4(second.rgb * multiplier, second.a));
+    }
 }

@@ -320,8 +320,11 @@ internal fun RendererControls(stage: RendererStage, v: SettingsValues, dispatch:
                     lift == AutoKeyExposure.Off -> DynamicRangeMethod.Off
                     else -> DynamicRangeMethod.Global
                 }
-                EditorChoice("Dynamic Range", method.label, DynamicRangeMethod.entries.map { it.label }) {
-                    when (DynamicRangeMethod.entries[it]) {
+                // Preserve historical local recipes without exposing experimental controls.
+                val methodLabel = if (method == DynamicRangeMethod.Local && !LOCAL_TONE_CONTROLS_VISIBLE)
+                    "As captured" else method.label
+                EditorChoice("Dynamic Range", methodLabel, visibleDynamicRangeMethods.map { it.label }) {
+                    when (visibleDynamicRangeMethods[it]) {
                         DynamicRangeMethod.Local -> localTone(LocalToneLimits.DEFAULT_SHADOWS_EV)
                         DynamicRangeMethod.Global -> {
                             localTone(0f)
@@ -334,9 +337,26 @@ internal fun RendererControls(stage: RendererStage, v: SettingsValues, dispatch:
                     }
                 }
                 when (method) {
-                    DynamicRangeMethod.Local -> EditorNested {
+                    DynamicRangeMethod.Local -> if (LOCAL_TONE_CONTROLS_VISIBLE) EditorNested {
                         EditorNumber("Strength", shadows, LocalToneLimits.MIN_SHADOWS_EV, LocalToneLimits.MAX_SHADOWS_EV,
-                            .5f, LocalToneLimits.DEFAULT_SHADOWS_EV) { localTone(it) }
+                            .1f, LocalToneLimits.DEFAULT_SHADOWS_EV) { localTone(it) }
+                        val tuning = v.localToneTuning
+                        EditorNumber("Highlight protection (EV)", tuning.highlightsEv, .5f, 2f, .1f, 2f) {
+                            send(SetLocalTone(tuning = tuning.copy(highlightsEv = it)))
+                        }
+                        EditorNumber("Exposure selectivity", tuning.sigma, 3f, 5f, .1f, 5f) {
+                            send(SetLocalTone(tuning = tuning.copy(sigma = it)))
+                        }
+                        EditorNumber("Blend scale", (tuning.coarsestMip - 5).toFloat(), 1f, 3f, 1f, 1f) {
+                            send(SetLocalTone(tuning = tuning.copy(coarsestMip = it.toInt() + 5)))
+                        }
+                        EditorToggle("Local contrast boost", tuning.boostLocalContrast) {
+                            send(SetLocalTone(tuning = tuning.copy(boostLocalContrast = it)))
+                        }
+                        TextButton(onClick = {
+                            localTone(LocalToneLimits.DEFAULT_SHADOWS_EV)
+                            send(SetLocalTone(tuning = LocalToneTuning()))
+                        }) { Text("Reset local tone") }
                     }
                     DynamicRangeMethod.Global -> EditorNested {
                         EditorChoice("Strength", lift?.label ?: "As captured", globalDynamicRangeStrengths.map { it.label }) {

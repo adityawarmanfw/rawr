@@ -310,7 +310,11 @@ internal object RendererRecipe {
             selected != null -> ColorRenderProfile.UserLut
             else -> ColorRenderProfile.RawrBase
         }
-        return d.copy(imageTone = tone,
+        val local = j.optJSONObject("localToneTuning") ?: j.optJSONObject("localTone") ?: JSONObject()
+        val tuning = LocalToneTuning(local.optDouble("highlightsEv", 2.0).toFloat(),
+            local.optDouble("sigma", 5.0).toFloat(), local.optInt("coarsestMip", 6),
+            local.optBoolean("boostLocalContrast", false)).sanitized()
+        return d.copy(imageTone = tone, localToneTuning = tuning,
             colorRenderProfile = profile,
             srgbTone = if (profile == ColorRenderProfile.SRgb) profileTone else d.srgbTone,
             rec709Tone = if (profile == ColorRenderProfile.Rec709) profileTone else d.rec709Tone,

@@ -25,11 +25,14 @@ enum class RenderTransform : unsigned { Existing = 0, SRgb = 1, Rec709 = 2, Log 
 // Local tone mapping (native/local_tone exposure fusion), applied to the
 // scene-linear image before this tonemap; carried here so captures, recipes
 // and the editor replay it with the rest of the tone. shadowsEv 0 = off
-// (the adaptive curve applies instead). Same size as the earlier
-// strength/detail pair, so pending capture journals keep their layout.
+// (the adaptive curve applies instead). New fields append to the historical
+// two-float prefix; CaptureJob accepts both journal layouts.
 struct LocalToneParams {
     float shadowsEv = 0.0f;     // brighter synthetic exposure (EV), already noise-limited
     float highlightsEv = 2.0f;  // darker synthetic exposure (EV)
+    float sigma = 5.0f;
+    unsigned coarsestMip = 6;
+    unsigned boostLocalContrast = 0;
 };
 
 struct TonemapParams {

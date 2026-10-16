@@ -154,7 +154,7 @@ class SessionEngine {
     // Photo tone mapping: local (exposure fusion, shadows EV > 0) replaces the
     // adaptive shadow-lift curve; 0 keeps the curve. The app sends 0 in video.
     // LOG stays scene-referred.
-    void setLocalTone(float shadowsEv);
+    void setLocalTone(float shadowsEv, float highlightsEv, float sigma, unsigned coarsestMip, bool boostLocalContrast);
     // Frames the next photo merges (1 = single frame): the viewfinder's
     // noise limit then matches the still's.
     void setExpectedMergeFrames(std::uint32_t frames) noexcept {
@@ -183,7 +183,9 @@ class SessionEngine {
         if (!(shadows > 0.0f) || sceneReferredRender_.load(std::memory_order_relaxed) ||
             tone.renderTransform == tonemap::RenderTransform::Log)
             return {};
-        return {rawr::local_tone::noiseLimitedShadowsEv(shadows, noise), rawr::local_tone::kDefaultHighlightsEv};
+        return {rawr::local_tone::noiseLimitedShadowsEv(shadows, noise),
+                localToneHighlightsEv_.load(std::memory_order_relaxed), localToneSigma_.load(std::memory_order_relaxed),
+                localToneMip_.load(std::memory_order_relaxed), unsigned(localToneBoost_.load(std::memory_order_relaxed))};
     }
     // A default noise (unknown model) applies no limit.
     void applyAutoKey(tonemap::TonemapParams& tone, const rawr::local_tone::LiftNoise& noise = {}) const {
@@ -324,6 +326,9 @@ class SessionEngine {
     bool bracketSkippedForPending_ = false;
     // Image > Shadow Lift: photo local tone mapping shadows EV (0 = adaptive curve).
     std::atomic<float> localToneShadowsEv_{0.0f};
+    std::atomic<float> localToneHighlightsEv_{2.0f}, localToneSigma_{5.0f};
+    std::atomic<unsigned> localToneMip_{6};
+    std::atomic<bool> localToneBoost_{false};
     std::atomic<std::uint32_t> expectedMergeFrames_{1u};
     std::atomic<float> latestNoiseShot_{0.0f}, latestNoiseRead_{0.0f};
     // LOG profiles stay scene-referred: no auto key lift.

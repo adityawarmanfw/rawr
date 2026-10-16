@@ -202,7 +202,7 @@ void recordLocalTone(RenderResources& resources, RenderCommandSession& commands,
     }
     info.cameraToWorking = rendered.cameraToWorkingColumnMajor;
     info.renderGain = rendered.tonemapParams.aePostGain * std::exp2(rendered.tonemapParams.exposureEV);
-    info.params = rawr::local_tone::fusionParams(lt.shadowsEv, lt.highlightsEv);
+    info.params = rawr::local_tone::fusionParams(lt.shadowsEv, lt.highlightsEv, lt.sigma, lt.coarsestMip, lt.boostLocalContrast != 0);
     const bool recorded = resources.localTone().record(info);
     emit("LOCAL_TONE requestId=" + std::to_string(rendered.requestId) + " shadowsEv=" + std::to_string(lt.shadowsEv) +
          " highlightsEv=" + std::to_string(lt.highlightsEv) + " targets=" + std::to_string(info.targetCount) +

@@ -28,7 +28,8 @@ struct Push {
     float sigmaSq;
     std::uint32_t block;
     std::uint32_t boost;
-    std::uint32_t pad[3];
+    std::uint32_t targetCount;
+    std::uint32_t pad[2];
 };
 static_assert(sizeof(Push) == 112, "exposure fusion push layout");
 
@@ -220,6 +221,7 @@ bool ExposureFusionProcessor::record(const FusionRecordInfo& info) {
         return false;
     for (std::uint32_t t = 0; t < info.targetCount; ++t)
         if (!info.targets[t].image || !info.targets[t].view) return false;
+    if (info.targetCount == 2 && info.targets[0].image == info.targets[1].image) return false;
     auto& d = *impl_;
     auto& slot = d.slots[std::min<std::size_t>(info.slot, d.slots.size() - 1)];
     const std::uint32_t downLevels = info.params.coarsestMip - kFusionBaseMip;
@@ -242,9 +244,9 @@ bool ExposureFusionProcessor::record(const FusionRecordInfo& info) {
                                                  {2, L[i - 1].assembled.view},
                                                  {4, L[i].lightness.view},
                                                  {5, L[i].assembled.view}});
-    for (std::uint32_t t = 0; t < info.targetCount; ++t)
-        d.write(slot.sets[2 * n + 2 + t],
-                {{0, info.targets[t].view}, {4, L[0].lightness.view}, {5, L[0].assembled.view}});
+    d.write(slot.sets[2 * n + 2],
+            {{0, info.targets[0].view}, {1, info.targets[info.targetCount - 1].view},
+             {4, L[0].lightness.view}, {5, L[0].assembled.view}});
 
     {
         std::vector<VkImageMemoryBarrier> barriers;
@@ -283,6 +285,7 @@ bool ExposureFusionProcessor::record(const FusionRecordInfo& info) {
     push.sigmaSq = info.params.sigma * info.params.sigma;
     push.block = 1u << kFusionBaseMip;
     push.boost = info.params.boostLocalContrast ? 1u : 0u;
+    push.targetCount = info.targetCount;
 
     const auto memory = [&] {
         VkMemoryBarrier b{};
@@ -321,8 +324,9 @@ bool ExposureFusionProcessor::record(const FusionRecordInfo& info) {
         dispatch(d.lap, slot.sets[n + 1 + (n - i + 1)], L[i - 1].w, L[i - 1].h, 8);
         memory();
     }
-    for (std::uint32_t t = 0; t < info.targetCount; ++t)
-        dispatch(d.apply, slot.sets[2 * n + 2 + t], info.width, info.height, 16);
+    // Derive one gain from the unmodified measurement and apply it to both
+    // targets in the same invocation, before either can become a new guide.
+    dispatch(d.apply, slot.sets[2 * n + 2], info.width, info.height, 16);
 
     VkImageMemoryBarrier done[2]{};
     for (std::uint32_t t = 0; t < info.targetCount; ++t) {

@@ -105,10 +105,14 @@ rawr::local_tone::LiftNoise SessionEngine::liftNoiseFor(const metadata::FrameMet
     }
     return n;
 }
-void SessionEngine::setLocalTone(float shadowsEv) {
+void SessionEngine::setLocalTone(float shadowsEv, float highlightsEv, float sigma, unsigned coarsestMip, bool boostLocalContrast) {
     const float ev = std::isfinite(shadowsEv) && shadowsEv > 0.0f
                          ? std::clamp(shadowsEv, rawr::local_tone::kMinShadowsEv, rawr::local_tone::kMaxShadowsEv)
                          : 0.0f;
+    localToneHighlightsEv_.store(std::isfinite(highlightsEv) ? std::clamp(highlightsEv, 0.5f, 2.0f) : 2.0f, std::memory_order_relaxed);
+    localToneSigma_.store(std::isfinite(sigma) ? std::clamp(sigma, 3.0f, 5.0f) : 5.0f, std::memory_order_relaxed);
+    localToneMip_.store(std::clamp(coarsestMip, 6u, 8u), std::memory_order_relaxed);
+    localToneBoost_.store(boostLocalContrast, std::memory_order_relaxed);
     localToneShadowsEv_.store(ev, std::memory_order_relaxed);
     LOGI("LOCAL_TONE shadowsEv=%.2f", ev);
 }
