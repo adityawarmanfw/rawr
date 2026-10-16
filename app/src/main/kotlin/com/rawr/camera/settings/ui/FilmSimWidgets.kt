@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
@@ -31,7 +32,7 @@ internal fun FilmOptionLabel(text: String) {
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.primary,
         fontWeight = FontWeight.SemiBold,
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = SettingsSliderVerticalPadding)
     )
 }
 
@@ -44,18 +45,7 @@ internal fun FilmSegmentedRow(
     onSelect: (Int) -> Unit
 ) {
     FilmOptionLabel(title)
-    SingleChoiceSegmentedButtonRow(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
-    ) {
-        options.forEachIndexed { index, label ->
-            SegmentedButton(
-                selected = index == selected,
-                onClick = { onSelect(index) },
-                shape = SegmentedButtonDefaults.itemShape(index = index, count = options.size),
-                label = { Text(label, maxLines = 1) }
-            )
-        }
-    }
+    CompactSegments(options, { it == selected }, onSelect)
 }
 
 /** Short names (papers, formats, preset chips). Wraps or scrolls by caller choice. */
@@ -67,14 +57,15 @@ internal fun FilmChipFlowRow(
     onSelect: (Int) -> Unit
 ) {
     FlowRow(
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = SettingsSliderVerticalPadding)
     ) {
         options.forEachIndexed { index, name ->
-            FilterChip(
+            CompactFilterChip(
                 selected = index == selected,
                 onClick = { onSelect(index) },
-                label = { Text(name) }
+                label = name
             )
         }
     }
@@ -104,17 +95,20 @@ private fun FilmStockGridPart(
 ) {
     if (indices.isEmpty()) return
     FilmOptionLabel(header)
-    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+    Column(
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = SettingsSliderVerticalPadding),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
         indices.chunked(2).forEach { pair ->
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 pair.forEach { index ->
-                    FilterChip(
+                    CompactFilterChip(
                         selected = index == selected,
                         onClick = { onSelect(index) },
-                        label = { Text(options[index], maxLines = 1) },
+                        label = options[index],
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -135,37 +129,50 @@ internal fun FilmSimPresetChips(
     selectedId: String?,
     onSelect: (String) -> Unit
 ) {
-    Column(modifier = Modifier.padding(vertical = 8.dp)) {
+    Column {
         FilmOptionLabel("Factory")
         FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = SettingsSliderVerticalPadding)
         ) {
             factory.forEach { preset ->
-                FilterChip(
+                CompactFilterChip(
                     selected = selectedId == preset.id,
                     onClick = { onSelect(preset.id) },
-                    label = { Text(preset.name, maxLines = 1) }
+                    label = preset.name
                 )
             }
         }
         if (user.isNotEmpty()) {
             FilmOptionLabel("Yours")
             FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = SettingsSliderVerticalPadding)
             ) {
                 user.forEach { preset ->
-                    FilterChip(
+                    CompactFilterChip(
                         selected = selectedId == preset.id,
                         onClick = { onSelect(preset.id) },
-                        label = { Text(preset.name, maxLines = 1) }
+                        label = preset.name
                     )
                 }
             }
         }
     }
 }
+/** Chip groups use the same 28dp boxed pill as the segment bars. */
+@Composable
+private fun CompactFilterChip(
+    selected: Boolean,
+    onClick: () -> Unit,
+    label: String,
+    modifier: Modifier = Modifier
+) {
+    CompactPill(label, selected, modifier, onClick)
+}
+
 /** Collapsible card for advanced slider groups. State survives rotation. */
 @Composable
 internal fun CollapsibleSettingsCard(

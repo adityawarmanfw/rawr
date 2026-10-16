@@ -233,7 +233,7 @@ private fun ChoiceSummary(text: String) {
         text,
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+        modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp)
     )
 }
 
@@ -299,7 +299,7 @@ internal fun ImageSettings(state: SettingsUiState, dispatch: SettingsDispatch) {
             SettingDivider()
             SettingsRow(
                 title = "Denoise",
-                value = photoVideoSummary(v.photoDenoise != DenoiseConfig.Off, v.videoDenoiseEnabled),
+                value = photoVideoSummary(v.photoDenoise is DenoiseConfig.Wavelet, v.videoDenoiseEnabled),
                 testTag = SettingsTestTags.row("Image", "denoise"),
                 onClick = { dispatch.invoke(OpenSection(SettingsSection.Denoise)) }
             )

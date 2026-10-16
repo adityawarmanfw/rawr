@@ -218,7 +218,7 @@ private fun ResetConfirmation(target: ResetTarget, dispatch: SettingsDispatch) {
     AlertDialog(
         onDismissRequest = { dispatch.invoke(DismissReset) },
         title = { Text(resetTitle(target)) },
-        text = { Text("Restore the selected Image / Tone controls to their defaults?") },
+        text = { Text("Reset to defaults?") },
         confirmButton = { TextButton(onClick = { dispatch.invoke(ConfirmReset(target)) }) { Text("Reset") } },
         dismissButton = { TextButton(onClick = { dispatch.invoke(DismissReset) }) { Text("Cancel") } }
     )

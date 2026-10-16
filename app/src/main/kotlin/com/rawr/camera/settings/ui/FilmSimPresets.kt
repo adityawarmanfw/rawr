@@ -292,7 +292,7 @@ internal fun FilmSimPresetGroup(state: SettingsUiState, dispatch: SettingsDispat
                 title = preset.name,
                 onClick = { dispatch.invoke(SelectFilmPreset(preset.id)) },
                 trailing = {
-                    androidx.compose.material3.RadioButton(selected = isSelected, onClick = null)
+                    SelectedCheck(isSelected)
                 }
             )
         }
@@ -323,7 +323,7 @@ internal fun FilmSimPresetGroup(state: SettingsUiState, dispatch: SettingsDispat
                                 },
                                 "Delete" to { deleteTarget = preset }
                             ))
-                            androidx.compose.material3.RadioButton(selected = isSelected, onClick = null)
+                            SelectedCheck(isSelected)
                         }
                     }
                 )

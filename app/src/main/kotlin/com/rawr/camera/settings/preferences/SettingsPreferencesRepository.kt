@@ -662,8 +662,6 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
             rawrAe = RawrAeSettings(
                 enabled = p[Keys.rawrAeEnabled] ?: d.rawrAe.enabled,
                 nightLook = enumOrDefault(p[Keys.rawrAeNightLook], d.rawrAe.nightLook),
-                isoMin = enumOrDefault(p[Keys.rawrAeIsoMin], d.rawrAe.isoMin),
-                isoMax = enumOrDefault(p[Keys.rawrAeIsoMax], d.rawrAe.isoMax),
                 minShutter = enumOrDefault(p[Keys.rawrAeMinShutter], d.rawrAe.minShutter),
                 // 1/4 became 1/5 (the viewfinder's shutter cap); keep that choice.
                 maxShutter = enumOrDefault(p[Keys.rawrAeMaxShutter]?.let { if (it == "S4") "S5" else it }, d.rawrAe.maxShutter),
@@ -897,8 +895,6 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.aePriorityDisabled] = v.aePriorityDisabled
         p[Keys.rawrAeEnabled] = v.rawrAe.enabled
         p[Keys.rawrAeNightLook] = v.rawrAe.nightLook.name
-        p[Keys.rawrAeIsoMin] = v.rawrAe.isoMin.name
-        p[Keys.rawrAeIsoMax] = v.rawrAe.isoMax.name
         p[Keys.rawrAeMinShutter] = v.rawrAe.minShutter.name
         p[Keys.rawrAeMaxShutter] = v.rawrAe.maxShutter.name
         p[Keys.rawrAeBalance] = v.rawrAe.balance.name
@@ -1185,8 +1181,6 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val aePriorityDisabled = booleanPreferencesKey("capture_ae_priority_disabled")
         val rawrAeEnabled = booleanPreferencesKey("capture_rawr_ae_enabled")
         val rawrAeNightLook = stringPreferencesKey("capture_rawr_ae_night_look")
-        val rawrAeIsoMin = stringPreferencesKey("capture_rawr_ae_iso_min")
-        val rawrAeIsoMax = stringPreferencesKey("capture_rawr_ae_iso_max")
         val rawrAeMinShutter = stringPreferencesKey("capture_rawr_ae_min_shutter")
         val rawrAeMaxShutter = stringPreferencesKey("capture_rawr_ae_max_shutter")
         val rawrAeBalance = stringPreferencesKey("capture_rawr_ae_balance")

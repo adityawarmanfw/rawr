@@ -197,30 +197,12 @@ enum class RawrNightLook(val label: String, val nativeId: Int) {
     Off("Off", 0)
 }
 
-/** Lowest ISO rawr AE uses; 0 = the sensor's base ISO. */
-enum class RawrIsoMin(val label: String, val iso: Int) {
-    Auto("Base", 0),
-    Iso100("100", 100),
-    Iso200("200", 200),
-    Iso400("400", 400)
-}
-
-/** Highest real (analog) ISO; past the sensor's analog maximum gain is always digital. 0 = sensor maximum. */
-enum class RawrIsoMax(val label: String, val iso: Int) {
-    Auto("Sensor", 0),
-    Iso800("800", 800),
-    Iso1600("1600", 1600),
-    Iso3200("3200", 3200),
-    Iso6400("6400", 6400)
-}
-
 /** Shutter at which ISO starts rising (Auto: 1/30 s). */
 enum class RawrMinShutter(val label: String, val ns: Long) {
     Auto("1/30", 0L),
+    S15("1/15", 66_666_667L),
     S60("1/60", 16_666_667L),
-    S125("1/125", 8_000_000L),
-    S250("1/250", 4_000_000L),
-    S500("1/500", 2_000_000L)
+    S125("1/125", 8_000_000L)
 }
 
 /** Longest shutter in low light (Auto: 1/15 s handheld, within the Auto minimum FPS). */
@@ -264,11 +246,10 @@ enum class RawrMetering(val label: String, val nativeId: Int) {
 }
 
 /** rawr auto exposure: Auto/S/I solved in the app with Camera2 AE off. Opt-in. */
+/** ISO always spans base to the sensor's analog maximum; no user range. */
 data class RawrAeSettings(
     val enabled: Boolean = false,
     val nightLook: RawrNightLook = RawrNightLook.Natural,
-    val isoMin: RawrIsoMin = RawrIsoMin.Auto,
-    val isoMax: RawrIsoMax = RawrIsoMax.Auto,
     val minShutter: RawrMinShutter = RawrMinShutter.Auto,
     val maxShutter: RawrMaxShutter = RawrMaxShutter.Auto,
     val balance: RawrBalance = RawrBalance.Balanced,
@@ -1151,7 +1132,7 @@ data class SettingsValues(
     val videoDefringeStrength: Float = 1f,
     // Photo-pipeline denoise, single source of truth (see DenoiseConfig).
     // Off by default; Wavelet is profiled (sensor noise model).
-    val photoDenoise: DenoiseConfig = DenoiseConfig.Off,
+    val photoDenoise: DenoiseConfig = DenoiseConfig.Off(),
     // Video denoise has its own wavelet primitives.
     val videoDenoiseEnabled: Boolean = false,
     val videoDenoiseStrength: Float = 1f,

@@ -294,7 +294,7 @@ internal fun RendererControls(stage: RendererStage, v: SettingsValues, dispatch:
                 }
                 EditorSection("Noise reduction") {
                 val denoise=v.photoDenoise
-                EditorToggle("Denoise",denoise!=DenoiseConfig.Off){send(SetPhotoDenoiseEnabled(it))}
+                EditorToggle("Denoise",denoise is DenoiseConfig.Wavelet){send(SetPhotoDenoiseEnabled(it))}
                 if(denoise is DenoiseConfig.Wavelet) EditorNested {
                     EditorNumber("Strength",denoise.config.strength,0f,8f,.05f,1f){send(SetPhotoDenoiseStrength(it))}
                     EditorNumber("Detail",denoise.config.detail,0f,1.8f,.05f,1f){send(SetPhotoDenoiseDetail(it))}

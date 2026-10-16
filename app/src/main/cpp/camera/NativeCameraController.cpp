@@ -1247,10 +1247,9 @@ struct NativeCameraController::Impl final : CameraEventSink {
         if (framePeriodNs > 0) {
             ceiling = ceiling > 0 ? std::min(ceiling, framePeriodNs) : framePeriodNs;
         } else if (ceiling <= 0) {
-            // Handheld ceiling (OIS keeps 1/15 s sharp), never below the Auto FPS floor's frame.
+            // Handheld ceiling (OIS keeps 1/15 s sharp). Auto Minimum FPS is the
+            // camera AE's ceiling only; rawr AE's is Longest Shutter.
             ceiling = kLongFrameMaxNs;
-            if (autoMinFpsPreference >= 5 && autoMinFpsPreference < 30)
-                ceiling = std::min<int64_t>(ceiling, 1'000'000'000LL / autoMinFpsPreference);
         }
         c.shutterMaxNs = std::clamp(ceiling, c.shutterMinNs, sensorShutterMax);
         const int64_t start = framePeriodNs > 0                ? framePeriodNs / 2

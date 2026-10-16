@@ -262,7 +262,7 @@ private fun LensNameField(name: String, onChange: (String) -> Unit) {
         modifier =
             Modifier
                 .fillMaxWidth()
-                .padding(horizontal = SettingsRowHorizontalPadding, vertical = 8.dp)
+                .padding(horizontal = SettingsRowHorizontalPadding, vertical = 12.dp)
                 .testTag(SettingsTestTags.row("LensEditor", "name"))
     )
 }
@@ -396,7 +396,7 @@ private fun VendorKeysGroup(
                 value = "${key.scope.label} · ${key.type.label} · ${formatVendorKeyValues(key.values, key.type)}",
                 onClick = { onEdit(index) },
                 trailing = {
-                    Switch(
+                    CompactSwitch(
                         checked = key.enabled,
                         onCheckedChange = { on -> onChange(keys.mapIndexed { i, k -> if (i == index) k.copy(enabled = on) else k }) }
                     )
@@ -532,7 +532,7 @@ private fun KeyPickerDialog(catalog: CameraKeyCatalog?, onDismiss: () -> Unit, o
             onValueChange = { query = it },
             label = { Text("Search") },
             singleLine = true,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)
         )
         when {
             catalog == null -> PickerLoading()
@@ -682,8 +682,8 @@ private fun PickerRow(title: String, detail: String?, selected: Boolean, enabled
         Modifier
             .fillMaxWidth()
             .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier)
-            .heightIn(min = 56.dp)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .heightIn(min = SettingsRowMinHeight)
+            .padding(horizontal = SettingsRowHorizontalPadding, vertical = SettingsRowVerticalPadding),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {

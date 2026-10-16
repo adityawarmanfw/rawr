@@ -564,6 +564,26 @@ class SettingsModelTest {
         assertEquals(5, resolved.toModesArray()[1])
     }
 
+    @Test fun photoDenoiseOffParksValuesAndReEnableRestoresThem() {
+        val controller = PersistentSettingsController()
+        controller.dispatch(SetPhotoDenoiseEnabled(true))
+        controller.dispatch(SetPhotoDenoiseStrength(3.5f))
+        controller.dispatch(SetPhotoDenoiseScales(4))
+        controller.dispatch(SetPhotoDenoiseEnabled(false))
+        val off = controller.state.value.values.photoDenoise
+        assertTrue(off is DenoiseConfig.Off)
+        assertEquals(0f, off.resolve(StillPath.SINGLE).waveletStrength)
+        assertEquals(3.5f, off.config.strength)
+        val legacy = off.toLegacy()
+        assertFalse(legacy.enabled)
+        assertEquals(3.5f, legacy.waveletStrength)
+        assertEquals(off, DenoiseConfig.fromLegacy(false, 3.5f, 1f, 0.25f, 4))
+        controller.dispatch(SetPhotoDenoiseEnabled(true))
+        val on = controller.state.value.values.photoDenoise as DenoiseConfig.Wavelet
+        assertEquals(3.5f, on.config.strength)
+        assertEquals(4, on.config.scales)
+    }
+
     @Test fun multiframeBaseFrameModeDefaultsToSharpestAndIsPersistable() {
         var persisted: SettingsValues? = null
         val controller = PersistentSettingsController(onValuesChanged = { persisted = it })
