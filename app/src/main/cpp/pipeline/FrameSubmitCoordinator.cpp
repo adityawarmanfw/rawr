@@ -317,7 +317,7 @@ std::optional<FrameSubmitCoordinator::AcquiredSubmit> FrameSubmitCoordinator::ac
         else if (preview != VK_NOT_READY)
             vkCheck(preview, "video preview fence status");
     }
-    if (!presentationPaused_ && swapchainRenderer_.ready() && !slot->previewSubmitted) {
+    if (!presentationPaused_ && !metadata.hidePreview && swapchainRenderer_.ready() && !slot->previewSubmitted) {
         uint32_t index = 0;
         const VkResult acquire = swapchainRenderer_.acquireNextImage(slot->imageAvailable, &index);
         trace.record(rawrcam::diagnostics::RuntimeTraceStage::SwapAcquire, params.timestampNs, metadata.frameOrdinal,

@@ -802,8 +802,11 @@ struct NativeCameraController::Impl final : CameraEventSink {
                                        deviceSession.staticLevels(), deviceSession.sensorModeOverridden(),
                                        requests.latestSubmittedSerial());
         if (!actions.frame) return;
-        if (const uint64_t tag = longExposureTag.load(std::memory_order_relaxed);
-            tag != 0 && actions.frame->optimizedStillRequestId == tag) {
+        const uint64_t longTag = longExposureTag.load(std::memory_order_relaxed);
+        // Freeze the viewfinder on the press until the long frame is in, and
+        // never show the long frame itself.
+        if (longTag != 0) actions.frame->hidePreview = true;
+        if (const uint64_t tag = longTag; tag != 0 && actions.frame->optimizedStillRequestId == tag) {
             // Honored when the sensor reports the shutter and the frame took
             // about that long; a HAL that clamps returns early.
             const auto requested = longExposureNs.load(std::memory_order_relaxed);
