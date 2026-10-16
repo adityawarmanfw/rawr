@@ -25,6 +25,16 @@ struct NoiseEstimatePc {
     float referenceWhite, neighbourWhite;
     std::int32_t width, height, blocksX;
 };
+// Uniform HDR+ merges: gain that scales frame i to the reference exposure
+// (AE may still be settling across the ZSL ring). Upstream compensates any
+// exposure-time x ISO difference; unequal frames merged as equal leave a
+// half-tile grid in the frequency merge. 1 when unknown or within 0.1%.
+float exposureGain(const std::vector<BurstFrame>& frames, std::uint32_t ref, std::uint32_t i) {
+    const float r = frames[ref].exposure, e = frames[i].exposure;
+    if (!(r > 0.0f) || !(e > 0.0f)) return 1.0f;
+    const float gain = r / e;
+    return std::fabs(gain - 1.0f) > 1.0e-3f ? gain : 1.0f;
+}
 }  // namespace
 void AndroidBurstCoordinator::ensureHostBuffer(HostBuffer& hb, VkDeviceSize bytes) {
     if (hb.buffer && hb.bytes >= bytes) return;
@@ -604,6 +614,7 @@ BurstRunResult AndroidBurstCoordinator::runHdrPlus(const std::vector<BurstFrame>
         // one submission instead of a fence round-trip for every level.
         const bool profile = std::getenv("RAWR_HDRP_PROFILE") != nullptr;
         const std::uint32_t coarseLevels = recorder.levelCount() - 1u;
+        recorder.setCompanionGain(exposureGain(frames, ref, i));
         const auto prepareTiming = executeChunk(11u, i, profile ? 2u + 3u * coarseLevels : 3u, [&] {
             recordTimestamp(0u);
             recorder.recordCompanionPrepare(command_, frames[i].raw.view, frames[i].parameters.normalization);
@@ -709,6 +720,10 @@ BurstRunResult AndroidBurstCoordinator::runHdrPlusFrequency(const std::vector<Bu
             whites[i] = frames[i].parameters.normalization.whiteLevel;
         }
         recorder.setExposure(std::move(factors), std::move(whites));
+    } else {
+        std::vector<float> gains(frames.size(), 1.0f);
+        for (std::uint32_t i = 0; i < frames.size(); ++i) gains[i] = exposureGain(frames, ref, i);
+        recorder.setExposureNormalization(std::move(gains));
     }
     const std::size_t pairs = std::min<std::size_t>(merge_.hotPixels.size() / 2u, 1u << 20);
     if (pairs > 0u) {

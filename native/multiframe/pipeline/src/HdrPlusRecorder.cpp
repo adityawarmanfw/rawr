@@ -475,7 +475,7 @@ VkDeviceSize HdrPlusFrequencyRecorder::alignSlotBytes() const noexcept {
 void HdrPlusFrequencyRecorder::recordCompanionAlign(VkCommandBuffer c, VkImageView rawU16, const RawNormalization& frame,
                                                     std::uint32_t slot) {
     if (!alignsThisPass()) {
-        align_.setCompanionGain(1.0f / frameExposure(slot));
+        align_.setCompanionGain(frameGain(slot));
         align_.recordCompanionPadded(c, rawU16, frame);
         return;
     }
@@ -486,7 +486,7 @@ void HdrPlusFrequencyRecorder::recordCompanionAlign(VkCommandBuffer c, VkImageVi
 void HdrPlusFrequencyRecorder::recordCompanionAlignCoarse(VkCommandBuffer c, VkImageView rawU16,
                                                           const RawNormalization& frame, std::uint32_t slot) {
     if (!alignsThisPass()) throw std::logic_error("hdrplus frequency: coarse alignment outside an aligning pass");
-    const float gain = 1.0f / frameExposure(slot);
+    const float gain = frameGain(slot);
     align_.setCompanionGain(gain);
     if (brighterCompanion(slot) && !pyramidClamped_) {
         // Brighter companions (merged after the dark ones) align against a
