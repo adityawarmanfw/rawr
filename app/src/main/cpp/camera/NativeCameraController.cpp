@@ -282,7 +282,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         if (const auto ratio = results.sensitivityReportedPerRequest(); ratio && *ratio > 0.0) {
             sensitivity = static_cast<int32_t>(std::llround(baseReportedSensitivity / *ratio));
         } else if (deviceSession.sensorModeOverridden()) {
-            diag("CAMERA_BRACKET_REJECTED reportedPerRequest=unavailable dcg=on");
+            diag("CAMERA_BRACKET_REJECTED reportedPerRequest=unavailable sensorModeKeys=on");
             return false;
         }
         const auto& caps = control.capabilities;
@@ -812,7 +812,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
                 } else {
                     diag("CAMERA_SENSITIVITY_COORDINATE_SEED retainedRequest=" +
                          std::to_string(control.requestedSensitivity) + " reported=" +
-                         std::to_string(*control.appliedSensitivity) + " reportedPerRequest=unavailable dcg=on");
+                         std::to_string(*control.appliedSensitivity) + " reportedPerRequest=unavailable sensorModeKeys=on");
                 }
             }
         }

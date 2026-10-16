@@ -166,7 +166,7 @@ std::string describeCameraPriorityAudit(const CameraPriorityAudit& audit) {
            " reasons=" + (audit.priorityMismatch ? std::string("priority,") : std::string()) +
            (audit.ownedAxisMismatch ? std::string("owned_axis,") : std::string()) +
            (audit.fpsMismatch ? std::string("fps,") : std::string()) +
-           " dcg=" + (audit.forcedSensorMode ? std::string("on") : std::string("off"));
+           " sensorModeKeys=" + (audit.forcedSensorMode ? std::string("on") : std::string("off"));
 }
 
 }  // namespace rawrcam::camera
