@@ -32,6 +32,8 @@ endfunction()
 
 rawr_test(renderer_bayer_bin_test
   "${RAWR_ROOT}/tests/native/renderer_bayer_bin_test.cpp")
+rawr_test(convert_natural_bin_test
+  "${RAWR_ROOT}/tests/native/convert_natural_bin_test.cpp")
 rawr_test(renderer_resample_test
   "${RAWR_ROOT}/tests/native/renderer_resample_test.cpp"
   "${APP}/renderer/LinearResample.cpp")
