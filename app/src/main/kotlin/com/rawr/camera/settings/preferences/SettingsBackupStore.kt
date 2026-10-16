@@ -58,7 +58,7 @@ class BackupContents internal constructor(
  *
  * Import decodes the keys through the normal settings migrations, so a backup from an older
  * version imports like an upgrade, then applies only the sections the user picks. Device-local
- * state (save folder grant, last lens, GPU driver) is never taken from a backup.
+ * state (save folder grant, last lens, GPU driver) is neither exported nor taken from a backup.
  */
 class SettingsBackupStore(context: Context, private val defaults: SettingsValues) {
     private val app = context.applicationContext
@@ -81,7 +81,9 @@ class SettingsBackupStore(context: Context, private val defaults: SettingsValues
             zip.closeEntry()
             zip.putNextEntry(ZipEntry(SETTINGS))
             val prefs = repository.encodeForBackup(values)
-            zip.write(encodePreferences(prefs) { it == SCHEMA_KEY || BackupSection.sectionOf(it) in sections }.toString(2).toByteArray())
+            zip.write(encodePreferences(prefs) {
+                it == SCHEMA_KEY || (it !in DEVICE_LOCAL_KEYS && BackupSection.sectionOf(it) in sections)
+            }.toString(2).toByteArray())
             zip.closeEntry()
             if (BackupSection.Luts !in sections) return@use
             values.userLutProfiles
@@ -244,6 +246,14 @@ class SettingsBackupStore(context: Context, private val defaults: SettingsValues
         const val MANIFEST = "manifest.json"
         const val SETTINGS = "settings.json"
         const val SCHEMA_KEY = "settings_schema_version"
+        /** Only meaningful on this phone (folder grant, lens, installed driver); never exported. */
+        val DEVICE_LOCAL_KEYS =
+            setOf(
+                "save_location_id",
+                "last_lens_id",
+                "debug_custom_gpu_driver_enabled",
+                "debug_custom_gpu_driver_name"
+            )
         const val LUT_DIR = "luts/"
         const val LUT_FILES_PATH = "lut_profiles/files"
         const val MAX_LUT_BYTES = 512L * 1024L * 1024L
