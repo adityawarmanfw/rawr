@@ -52,7 +52,7 @@ class BackupContents internal constructor(
 /**
  * Backs up global settings, lens profiles and (opt-in) LUT profiles as a plain zip:
  *
- *   manifest.json   app version, device model, creation time, included sections
+ *   manifest.json   app version, device identity (no serials), creation time, included sections
  *   settings.json   each persisted key of the included sections as {"type": ..., "value": ...}
  *   luts/<name>     every .cube file a LUT profile references (LUT section only)
  *
@@ -72,7 +72,16 @@ class SettingsBackupStore(context: Context, private val defaults: SettingsValues
                 JSONObject()
                     .put("format", FORMAT_VERSION)
                     .put("appVersion", BuildConfig.VERSION_NAME)
+                    .put("manufacturer", Build.MANUFACTURER)
+                    .put("brand", Build.BRAND)
                     .put("model", Build.MODEL)
+                    .put("device", Build.DEVICE)
+                    .put("product", Build.PRODUCT)
+                    .put("androidVersion", Build.VERSION.RELEASE)
+                    .put("sdk", Build.VERSION.SDK_INT)
+                    .put("buildId", Build.ID)
+                    .put("fingerprint", Build.FINGERPRINT)
+                    .apply { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) put("socModel", Build.SOC_MODEL) }
                     .put("createdAtMs", System.currentTimeMillis())
                     .put("sections", JSONArray(sections.map { it.id }))
                     .toString(2)
