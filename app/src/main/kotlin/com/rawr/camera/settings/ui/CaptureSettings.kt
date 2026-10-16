@@ -141,7 +141,13 @@ internal fun ExposureSettings(state: SettingsUiState, dispatch: SettingsDispatch
         }
         SettingsGroup(
             title = "Brightness Boost",
-            description = "Digital gain the camera adds in low light, applied evenly to the whole image."
+            description =
+                if (ae.enabled) {
+                    "Not used while rawr Auto Exposure runs (it adds its own Digital Gain above). " +
+                        "Applies in Manual, and in Auto until rawr takes over."
+                } else {
+                    "Digital gain the camera adds in low light, applied evenly to the whole image."
+                }
         ) {
             SettingsRow(
                 "Boost Limit",
@@ -173,7 +179,15 @@ internal fun ExposureSettings(state: SettingsUiState, dispatch: SettingsDispatch
                 { it.label }
             ) { dispatch.invoke(SetAntiFlicker(it)) }
         }
-        SettingsGroup {
+        SettingsGroup(
+            description =
+                if (ae.enabled) {
+                    "With rawr Auto Exposure, caps its longest shutter when Longest Shutter is Auto " +
+                        "(1/15 s, or 1/FPS when that is shorter)."
+                } else {
+                    null
+                }
+        ) {
             SettingsRow(
                 "Auto Minimum FPS",
                 autoMinFps,
