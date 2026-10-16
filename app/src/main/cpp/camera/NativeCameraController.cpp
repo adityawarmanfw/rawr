@@ -121,6 +121,15 @@ struct NativeCameraController::Impl final : CameraEventSink {
     bool halShutterPriority = false;
     bool halIsoPriority = false;
     uint8_t antibandingPreference = ACAMERA_CONTROL_AE_ANTIBANDING_MODE_AUTO;
+    bool rawrAePreference = false;
+    // Frame lane -> camera lane: latest solved pair packed as
+    // exposureNs << 24 | ISO, so a tick never reads a torn pair (0 = none).
+    std::atomic<uint64_t> rawrAePending{0};
+    // Last mains flicker Camera2 detected (1 = 50 Hz, 2 = 60 Hz); sticky,
+    // AE OFF frames may stop reporting it.
+    std::atomic<int32_t> lastSceneFlicker{0};
+    mutable std::mutex rawrAeContextMutex;  // never held across camera calls
+    NativeCameraController::RawrAeContext rawrAePublished;
     int autoMinFpsPreference = 15;
     int recordingFpsPreference = 0;
     // Ingress toggle, mirrored from SessionEngine for diagnostics. The bridge
@@ -451,6 +460,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         requests.retire();
         results.reset();
         sensitivityStartup.reset();
+        rawrAePending.store(0, std::memory_order_relaxed);
         focusControls.reset(control);
         starting = true;
         const std::optional<LensRoute> selected =
@@ -714,6 +724,9 @@ struct NativeCameraController::Impl final : CameraEventSink {
         }
         if (!actions.optimizedStill) steerAfToFacesLocked();
         const auto& frame = *actions.frame;
+        if (frame.sceneFlicker == ACAMERA_STATISTICS_SCENE_FLICKER_50HZ ||
+            frame.sceneFlicker == ACAMERA_STATISTICS_SCENE_FLICKER_60HZ)
+            lastSceneFlicker.store(frame.sceneFlicker, std::memory_order_relaxed);
         const bool autoSettled = frame.aeMode > ACAMERA_CONTROL_AE_MODE_OFF &&
             (frame.aeState == ACAMERA_CONTROL_AE_STATE_CONVERGED ||
              frame.aeState == ACAMERA_CONTROL_AE_STATE_LOCKED ||
@@ -1065,8 +1078,79 @@ struct NativeCameraController::Impl final : CameraEventSink {
             submitRepeatingLocked();
         }
     }
+    bool rawrAeEligibleLocked() const {
+        const bool coordinateKnown =
+            results.sensitivityReportedPerRequest().has_value() || !deviceSession.sensorModeOverridden();
+        return rawrAePreference && control.exposureMode == ExposureControlMode::Auto &&
+               control.capabilities.manualExposureSupported && control.capabilities.sensitivityMax > 0 &&
+               !control.videoMode && control.recordingFps <= 0 && !control.spotAeActive && coordinateKnown &&
+               deviceSession.request() && deviceSession.session();
+    }
+    void publishRawrAeContextLocked(bool engaged) {
+        NativeCameraController::RawrAeContext c;
+        c.engaged = engaged;
+        const auto& caps = control.capabilities;
+        c.isoMin = std::max(1, caps.sensitivityMin);
+        c.isoMax = std::max(c.isoMin, caps.sensitivityMax);
+        const auto& context = deviceSession.cameraContext();
+        c.isoAnalogMax = context && context->maxAnalogSensitivity > 0
+                             ? std::clamp(context->maxAnalogSensitivity, c.isoMin, c.isoMax)
+                             : c.isoMax;
+        c.shutterMinNs = std::max<int64_t>(1, caps.exposureTimeMinNs);
+        // Handheld ceiling (OIS keeps 1/15 s sharp), never below the Auto FPS floor's frame.
+        int64_t ceiling = kLongFrameMaxNs;
+        if (autoMinFpsPreference >= 5 && autoMinFpsPreference < 30)
+            ceiling = std::min<int64_t>(ceiling, 1'000'000'000LL / autoMinFpsPreference);
+        c.shutterMaxNs = std::clamp(ceiling, c.shutterMinNs, std::max(c.shutterMinNs, caps.exposureTimeMaxNs));
+        c.shutterStartNs = std::clamp<int64_t>(33'333'333, c.shutterMinNs, c.shutterMaxNs);
+        const uint8_t banding = antibandingPreference;
+        const int32_t mains = banding == ACAMERA_CONTROL_AE_ANTIBANDING_MODE_50HZ   ? 1
+                              : banding == ACAMERA_CONTROL_AE_ANTIBANDING_MODE_60HZ ? 2
+                              : banding == ACAMERA_CONTROL_AE_ANTIBANDING_MODE_AUTO
+                                  ? lastSceneFlicker.load(std::memory_order_relaxed)
+                                  : 0;
+        c.flickerPeriodNs = mains == 1 ? 10'000'000 : mains == 2 ? 8'333'333 : 0;
+        c.userEv = float(std::clamp(control.requestedEvSteps, caps.evMinSteps, caps.evMaxSteps)) * evStepEvLocked();
+        c.reportedPerRequest = results.sensitivityReportedPerRequest().value_or(0.0);
+        std::lock_guard<std::mutex> published(rawrAeContextMutex);
+        rawrAePublished = c;
+    }
+    void applyRawrAeLocked() {
+        const bool eligible = rawrAeEligibleLocked();
+        publishRawrAeContextLocked(eligible);
+        const uint64_t pending = rawrAePending.load(std::memory_order_relaxed);
+        const auto exposure = static_cast<int64_t>(pending >> 24);
+        const auto sensitivity = static_cast<int32_t>(pending & 0xFFFFFFu);
+        const bool want = eligible && exposure > 0 && sensitivity > 0;
+        // A pair solved before eligibility was lost is stale when it returns.
+        if (!eligible) rawrAePending.store(0, std::memory_order_relaxed);
+        if (!want) {
+            if (control.rawrAeActive) {
+                control.rawrAeActive = false;
+                diag("CAMERA_RAWR_AE active=false");
+                if (deviceSession.request() && deviceSession.session()) submitRepeatingLocked();
+            }
+            return;
+        }
+        if (control.rawrAeActive && control.rawrAeExposureTimeNs == exposure && control.rawrAeSensitivity == sensitivity)
+            return;
+        if (!control.rawrAeActive) diag("CAMERA_RAWR_AE active=true");
+        control.rawrAeActive = true;
+        control.rawrAeExposureTimeNs = exposure;
+        control.rawrAeSensitivity = sensitivity;
+        submitRepeatingLocked();
+    }
+    void setRawrAeEnabledValue(bool enabled) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (rawrAePreference == enabled) return;
+        rawrAePreference = enabled;
+        if (!enabled) rawrAePending.store(0, std::memory_order_relaxed);
+        diag(std::string("CAMERA_RAWR_AE_PREFERENCE enabled=") + (enabled ? "true" : "false"));
+        applyRawrAeLocked();
+    }
     void tickControls(int64_t nowMs) {
         std::lock_guard<std::mutex> lock(mutex);
+        applyRawrAeLocked();
         applyHdrHeadroomLocked();
         if (focusControls.expireTap(control, nowMs) && deviceSession.request() && deviceSession.session()) {
             diag("CAMERA_CONTROL_REQUEST tapAfCleared reason=explicit_clear");
@@ -1170,6 +1254,16 @@ void NativeCameraController::setSensitivityCalibrationWanted(bool wanted) {
     if (changed && wanted) impl_->restartForSensitivityCalibrationLocked(lock);
 }
 void NativeCameraController::setExposureCompensationSteps(int32_t value) { impl_->setEvSteps(value); }
+void NativeCameraController::setRawrAeEnabled(bool enabled) { impl_->setRawrAeEnabledValue(enabled); }
+NativeCameraController::RawrAeContext NativeCameraController::rawrAeContext() const {
+    std::lock_guard<std::mutex> lock(impl_->rawrAeContextMutex);
+    return impl_->rawrAePublished;
+}
+void NativeCameraController::setRawrAeRequest(int64_t exposureTimeNs, int32_t sensitivity) {
+    if (exposureTimeNs <= 0 || exposureTimeNs >= (int64_t(1) << 40) || sensitivity <= 0 || sensitivity > 0xFFFFFF)
+        return;
+    impl_->rawrAePending.store(uint64_t(exposureTimeNs) << 24 | uint64_t(sensitivity), std::memory_order_relaxed);
+}
 void NativeCameraController::setHdrHeadroomEv(float ev) {
     impl_->pendingHdrHeadroomEv.store(std::isfinite(ev) ? std::min(0.0f, ev) : 0.0f, std::memory_order_relaxed);
 }

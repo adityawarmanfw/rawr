@@ -50,6 +50,9 @@ void setOisEnabled(EngineHandle h, bool v) noexcept {
 void setAntibandingMode(EngineHandle h, uint8_t mode) noexcept {
     if (h) engine(h)->cameraControls().setAntibandingMode(mode);
 }
+void setRawrAutoExposure(EngineHandle h, bool enabled, int nightLook) noexcept {
+    if (h) engine(h)->setRawrAutoExposure(enabled, nightLook);
+}
 void selectLens(EngineHandle h, const std::string& v) noexcept {
     if (h) engine(h)->cameraControls().selectLens(v);
 }

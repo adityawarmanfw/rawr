@@ -75,6 +75,42 @@ internal fun ExposureSettings(state: SettingsUiState, dispatch: SettingsDispatch
     val boostLimited = state.values.maxPostGainId != "gain.100"
     SettingsPageContainer {
         SettingsGroup(
+            title = "Auto Exposure",
+            description =
+                if (state.values.rawrAeEnabled) {
+                    "rawr sets shutter and ISO itself in Auto: smooth changes, no flicker banding, " +
+                        "real ISO only (extra gain is added cleanly afterwards). Video and tap-to-meter use the camera's AE."
+                } else {
+                    "Auto uses the camera's own exposure."
+                }
+        ) {
+            SettingsSwitchRow(
+                title = "rawr Auto Exposure",
+                checked = state.values.rawrAeEnabled
+            ) { dispatch.invoke(SetRawrAeEnabled(it)) }
+            if (state.values.rawrAeEnabled) {
+                SettingDivider()
+                Text(
+                    "Night Look",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp)
+                )
+                CompactChoiceRow(RawrNightLook.entries, state.values.rawrAeNightLook, {
+                    it.label
+                }) { dispatch.invoke(SetRawrAeNightLook(it)) }
+                Text(
+                    when (state.values.rawrAeNightLook) {
+                        RawrNightLook.Natural -> "Dim scenes stay dark, like they look"
+                        RawrNightLook.Bright -> "Dim scenes a little darker than day"
+                        RawrNightLook.Off -> "Every scene at day brightness"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+            }
+        }
+        SettingsGroup(
             title = "Brightness Boost",
             description = "Digital gain the camera adds in low light, applied evenly to the whole image."
         ) {

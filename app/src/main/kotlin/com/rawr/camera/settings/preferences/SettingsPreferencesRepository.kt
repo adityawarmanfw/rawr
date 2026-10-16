@@ -657,7 +657,9 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
             videoHighlightThreshold = (p[Keys.videoHighlightThreshold] ?: p[Keys.highlightThreshold] ?: d.videoHighlightThreshold).coerceIn(0.5f, 2f),
             videoHighlightCompression = (p[Keys.videoHighlightCompression] ?: p[Keys.highlightCompression] ?: d.videoHighlightCompression).coerceIn(0f, 300f),
             ultraHdrEnabled = p[Keys.ultraHdr] ?: d.ultraHdrEnabled,
-            aePriorityDisabled = p[Keys.aePriorityDisabled] ?: d.aePriorityDisabled
+            aePriorityDisabled = p[Keys.aePriorityDisabled] ?: d.aePriorityDisabled,
+            rawrAeEnabled = p[Keys.rawrAeEnabled] ?: d.rawrAeEnabled,
+            rawrAeNightLook = enumOrDefault(p[Keys.rawrAeNightLook], d.rawrAeNightLook)
         )
     }
 
@@ -881,6 +883,8 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.videoHighlightCompression] = v.videoHighlightCompression
         p[Keys.ultraHdr] = v.ultraHdrEnabled
         p[Keys.aePriorityDisabled] = v.aePriorityDisabled
+        p[Keys.rawrAeEnabled] = v.rawrAeEnabled
+        p[Keys.rawrAeNightLook] = v.rawrAeNightLook.name
         // Drop pre-v30 shared keys once the split values are written.
         p.remove(Keys.fccSteps)
         p.remove(Keys.defringeEnabled)
@@ -1159,6 +1163,8 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val highlightCompression = floatPreferencesKey("capture_highlight_compression")
         val ultraHdr = booleanPreferencesKey("capture_ultra_hdr_enabled")
         val aePriorityDisabled = booleanPreferencesKey("capture_ae_priority_disabled")
+        val rawrAeEnabled = booleanPreferencesKey("capture_rawr_ae_enabled")
+        val rawrAeNightLook = stringPreferencesKey("capture_rawr_ae_night_look")
     }
 }
 

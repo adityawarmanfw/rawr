@@ -185,6 +185,12 @@ struct CameraControlState {
     // from before a change are still arriving.
     int32_t hdrHeadroomSteps = 0;
     int32_t previousHdrHeadroomSteps = 0;
+    // rawr auto exposure (opt-in): in Auto mode the app solves shutter + ISO
+    // (color/RawrAutoExposure.h) and the repeating request runs AE OFF with
+    // this pair, in the request ISO coordinate.
+    bool rawrAeActive = false;
+    int64_t rawrAeExposureTimeNs = 0;
+    int32_t rawrAeSensitivity = 0;
     // Requested AE antibanding mode (NDK values OFF=0, 50HZ=1, 60HZ=2, AUTO=3).
     uint8_t requestedAntibandingMode = 3;
     float requestedManualFocusNormalized = 1.0f;

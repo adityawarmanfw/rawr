@@ -67,6 +67,9 @@ struct FrameMetadataSnapshot {
     // routing only (HDR+ headroom lift); deliberately omitted from capture
     // journals, which persist the capture's headroom in MultiframeTuning.
     std::optional<int32_t> aeCompensationSteps;
+    // STATISTICS_SCENE_FLICKER (NONE=0, 50HZ=1, 60HZ=2), -1 = unreported.
+    // Live routing only (rawr AE flicker period); not journaled.
+    int32_t sceneFlicker = -1;
 
     RectI scalerCropRegion{};
     RectI rawCropRegion{};

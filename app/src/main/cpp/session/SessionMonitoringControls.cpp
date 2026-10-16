@@ -82,6 +82,11 @@ void SessionEngine::setPostGainKneeWidthEv(float widthEv) {
     appendDiagnostic("AE_POSTGAIN_KNEE widthEv=" + std::to_string(widthEv));
 }
 
+void SessionEngine::setRawrAutoExposure(bool enabled, int nightLook) {
+    rawrAeNightLook_.store(static_cast<int>(rawrcam::color::rawr_ae::nightLookFromId(nightLook)),
+                           std::memory_order_relaxed);
+    cameraControls_.setRawrAeEnabled(enabled);
+}
 void SessionEngine::setAutoKeyMode(int mode) {
     const auto parsed = rawrcam::color::autoKeyModeFromId(mode);
     autoKeyMode_.store(static_cast<int>(parsed), std::memory_order_relaxed);

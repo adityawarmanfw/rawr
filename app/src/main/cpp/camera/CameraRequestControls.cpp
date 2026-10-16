@@ -63,7 +63,10 @@ CameraControlApplyResult applyCameraControlState(ACaptureRequest* request, const
     const uint8_t controlMode = ACAMERA_CONTROL_MODE_AUTO;
     (void)ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_MODE, 1, &controlMode);
 
-    const bool manual = state.exposureMode == ExposureControlMode::Manual;
+    const bool rawrAe = state.exposureMode == ExposureControlMode::Auto && state.rawrAeActive &&
+                        state.rawrAeExposureTimeNs > 0 && state.rawrAeSensitivity > 0;
+    // rawr AE is AE OFF with the app-solved pair: the same sensor ownership as M.
+    const bool manual = state.exposureMode == ExposureControlMode::Manual || rawrAe;
     const uint8_t ae = manual ? ACAMERA_CONTROL_AE_MODE_OFF : ACAMERA_CONTROL_AE_MODE_ON;
     (void)ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AE_MODE, 1, &ae);
 
@@ -99,10 +102,11 @@ CameraControlApplyResult applyCameraControlState(ACaptureRequest* request, const
     const int64_t exposureMaximum = framePeriodNs > 0
         ? std::min(state.capabilities.exposureTimeMaxNs, framePeriodNs)
         : state.capabilities.exposureTimeMaxNs;
-    const int64_t exposure = std::clamp(state.requestedExposureTimeNs, state.capabilities.exposureTimeMinNs,
+    const int64_t exposure = std::clamp(rawrAe ? state.rawrAeExposureTimeNs : state.requestedExposureTimeNs,
+                                        state.capabilities.exposureTimeMinNs,
                                         std::max(state.capabilities.exposureTimeMinNs, exposureMaximum));
-    const int32_t sensitivity =
-        std::clamp(state.requestedSensitivity, state.capabilities.sensitivityMin, state.capabilities.sensitivityMax);
+    const int32_t sensitivity = std::clamp(rawrAe ? state.rawrAeSensitivity : state.requestedSensitivity,
+                                           state.capabilities.sensitivityMin, state.capabilities.sensitivityMax);
 
     // The repeating ACaptureRequest is reused. Normalize SENSOR_* ownership on
     // every mode so stale values from M/S/I cannot leak into a different AE mode.

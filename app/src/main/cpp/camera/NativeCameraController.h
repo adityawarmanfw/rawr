@@ -79,6 +79,25 @@ class NativeCameraController {
     // compensation minus the user's, bounded by the current/previous headroom
     // request. 0 for manual exposure or unknown compensation.
     float hdrHeadroomEvFor(int32_t aeMode, std::optional<int32_t> appliedSteps) const;
+    // rawr auto exposure (opt-in, color/RawrAutoExposure.h). When enabled
+    // and eligible (Auto mode, manual sensor control, stills, no spot AE,
+    // known ISO coordinate) the repeating request runs AE OFF with the pair
+    // the frame lane solves. Lock-free for the frame lane: rawrAeContext and
+    // setRawrAeRequest never wait on camera calls; the camera lane applies
+    // requests on its tick.
+    struct RawrAeContext {
+        bool engaged = false;
+        // Solver limits, request ISO coordinate.
+        int32_t isoMin = 0, isoMax = 0, isoAnalogMax = 0;
+        int64_t shutterMinNs = 0, shutterMaxNs = 0, shutterStartNs = 0;
+        int64_t flickerPeriodNs = 0;
+        float userEv = 0.0f;
+        // CaptureResult ISO / request ISO; 0 when unknown (then 1 unless DCG).
+        double reportedPerRequest = 0.0;
+    };
+    void setRawrAeEnabled(bool enabled);
+    [[nodiscard]] RawrAeContext rawrAeContext() const;
+    void setRawrAeRequest(int64_t exposureTimeNs, int32_t sensitivity);
     // White balance. setWhiteBalanceMode returns false when the requested
     // preset/manual mode is not advertised (caller keeps previous UI state;
     // the snapshot confirms accepted values). setWhiteBalanceTempTint clamps

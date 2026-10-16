@@ -190,6 +190,13 @@ enum class AntiFlicker(val label: String) {
     Off("Off")
 }
 
+/** rawr auto exposure: how far dim scenes are placed below day brightness; native NightLook ids. */
+enum class RawrNightLook(val label: String, val nativeId: Int) {
+    Natural("Natural", 1),
+    Bright("Bright", 2),
+    Off("Off", 0)
+}
+
 enum class ExposureStep(val label: String) {
     Third("1/3 EV"),
     Half("1/2 EV")
@@ -1092,6 +1099,10 @@ data class SettingsValues(
     // Ignore Camera2 shutter/ISO priority modes: locking SS or ISO always enters
     // full Manual. Off by default.
     val aePriorityDisabled: Boolean = false,
+    // rawr auto exposure: Auto mode solves shutter + ISO in the app (Camera2
+    // AE off) instead of Camera2 AE. Opt-in.
+    val rawrAeEnabled: Boolean = false,
+    val rawrAeNightLook: RawrNightLook = RawrNightLook.Natural,
     // Photo/Video capture mode + video recording selectors. Plain primitives
     // keep the DataStore schema stable; validated through the helpers below.
     val captureModeId: String = "photo",

@@ -48,6 +48,8 @@ rawr_test(ae_post_gain_curve_test
   "${RAWR_ROOT}/tests/native/ae_post_gain_curve_test.cpp")
 rawr_test(auto_key_exposure_test
   "${RAWR_ROOT}/tests/native/auto_key_exposure_test.cpp")
+rawr_test(rawr_auto_exposure_test
+  "${RAWR_ROOT}/tests/native/rawr_auto_exposure_test.cpp")
 rawr_test(camera_focus_controls_test
   "${RAWR_ROOT}/tests/native/camera_focus_controls_test.cpp"
   "${RAWR_ROOT}/app/src/main/cpp/camera/CameraFocusControls.cpp"

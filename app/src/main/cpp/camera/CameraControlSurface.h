@@ -49,6 +49,7 @@ class CameraControlSurface final {
     void setInternalTraceCaptureEnabled(bool enabled);
     void setOisEnabled(bool enabled);
     void setAntibandingMode(uint8_t mode);
+    void setRawrAeEnabled(bool enabled);
     void setAutoMinFps(int fps);
     void setAePriorityDisabled(bool disabled);
     void setVideoMode(bool video, int fps);

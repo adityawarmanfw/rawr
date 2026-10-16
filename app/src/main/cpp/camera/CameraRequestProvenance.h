@@ -24,6 +24,14 @@ struct CameraRequestProvenance {
         result.exposureMode = state.exposureMode;
         result.requestedExposureTimeNs = state.requestedExposureTimeNs;
         result.requestedSensitivity = state.requestedSensitivity;
+        // rawr AE owns both axes like M (AE OFF): its frames calibrate the
+        // sensitivity coordinate too.
+        if (state.exposureMode == ExposureControlMode::Auto && state.rawrAeActive && state.rawrAeExposureTimeNs > 0 &&
+            state.rawrAeSensitivity > 0) {
+            result.exposureMode = ExposureControlMode::Manual;
+            result.requestedExposureTimeNs = state.rawrAeExposureTimeNs;
+            result.requestedSensitivity = state.rawrAeSensitivity;
+        }
         const bool priority = state.exposureMode == ExposureControlMode::ShutterPriority ||
                               state.exposureMode == ExposureControlMode::IsoPriority;
         if (const auto fps = cameraTargetFpsRange(state, priority)) {

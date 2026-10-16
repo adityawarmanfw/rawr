@@ -97,6 +97,7 @@ class NativePreviewEngine {
 
     external fun setAutoMinFps(handle: Long, fps: Int)
     external fun setAePriorityDisabled(handle: Long, disabled: Boolean)
+    external fun setRawrAutoExposure(handle: Long, enabled: Boolean, nightLook: Int)
 
     external fun setPersistentDiagnosticsEnabled(handle: Long, enabled: Boolean)
 
