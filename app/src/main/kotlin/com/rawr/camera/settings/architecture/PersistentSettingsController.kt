@@ -56,11 +56,13 @@ class PersistentSettingsController(
                 com.rawr.camera.model.RenderProfileSelection.Agx(action.preset)))
             is SetAgxValue -> state.withValues(state.values.withAgxValue(action.parameter, action.value))
             is ResetAgxValue -> state.withValues(state.values.withAgxDefault(action.parameter))
+            is SaveAgxLook, is ApplyAgxLook, is RenameAgxLook, is DeleteAgxLook,
+            is UpdateAgxLook, is ImportAgxLook -> reduceAgxLooks(state, action)
 
             is SetFilmSimEnabled, is SetFilmSimNumericValue,
             is SetFilmSimDiscreteValue, is SetFilmSimFlag, is SelectFilmPreset,
             is SaveFilmPreset, is RenameFilmPreset, is DeleteFilmPreset,
-            is RevertFilmPreset, is UpdateFilmPreset -> reduceFilmSettings(state, action)
+            is RevertFilmPreset, is UpdateFilmPreset, is ImportFilmPreset -> reduceFilmSettings(state, action)
 
             is SetMultiframeChromaDenoise, is SetMultiframeBaseFrameMode, is SetMultiframeNumericValue,
             is SetMultiframeOutputResolution, is SetMultiframeMergeAlgorithm -> reduceMultiframeSettings(state, action)

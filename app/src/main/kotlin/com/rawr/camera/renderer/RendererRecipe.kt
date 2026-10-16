@@ -6,7 +6,6 @@ import com.rawr.camera.model.valueFor
 import com.rawr.camera.model.withValue
 import com.rawr.camera.settings.model.*
 import com.rawr.camera.settings.preferences.LutProfileCodec
-import com.rawr.camera.settings.preferences.FilmSimCodec
 import org.json.JSONObject
 
 internal object RendererRecipe {
@@ -100,7 +99,6 @@ internal object RendererRecipe {
     }
 
     fun encode(v: SettingsValues): String = JSONObject(CaptureRecipe.encode(v)).apply {
-        put("editorFilmPresets", FilmSimCodec.encodePresets(v.filmPresets))
         put("editorFilmPresetId", v.selectedFilmPresetId)
         put("editorProfiles", LutProfileCodec.encode(v.userLutProfiles))
         put("editorTones", JSONObject().apply {
@@ -323,7 +321,9 @@ internal object RendererRecipe {
             agxValues = agx?.let { d.agxValues + it } ?: d.agxValues,
             rawrBaseTone = if (profile == ColorRenderProfile.RawrBase) profileTone else d.rawrBaseTone,
             filmSimEnabled = j.optBoolean("filmSimEnabled"), filmSimLook = film,
-            filmPresets = if (j.has("editorFilmPresets")) FilmSimCodec.decodePresets(j.getString("editorFilmPresets")) else library.filmPresets,
+            // The preset library is shared with Settings: a draft's frozen copy
+            // would resurrect presets deleted since, and the editor syncs back.
+            filmPresets = library.filmPresets,
             selectedFilmPresetId = j.optString("editorFilmPresetId").takeIf { it.isNotBlank() && it != "null" },
             selectedUserLutProfileId = selected.takeIf { profile == ColorRenderProfile.UserLut },
             userLutProfiles = (profiles.filterNot { it.id == embedded?.id } + listOfNotNull(embedded)).map {
@@ -352,7 +352,7 @@ internal object RendererRecipe {
             ))
     }
     fun neutral(library: SettingsValues): SettingsValues = SettingsCatalog.initialState().values.copy(
-        userLutProfiles = library.userLutProfiles, filmPresets = library.filmPresets,
+        userLutProfiles = library.userLutProfiles, filmPresets = library.filmPresets, agxLooks = library.agxLooks,
         selectedUserLutProfileId = null, filmSimEnabled = false, rawrBaseTone = ProfileTone.Neutral,
         photoLensShadingEnabled = true, distortionCorrectionEnabled = true,
         saveLocationId = library.saveLocationId)

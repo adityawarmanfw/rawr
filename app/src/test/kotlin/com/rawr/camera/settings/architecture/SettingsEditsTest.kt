@@ -70,3 +70,28 @@ class SettingsEditsTest {
         assertSame(initial, initial.withFilmPreset("missing"))
     }
 }
+
+class AgxLookReducerTest {
+    private val state = SettingsCatalog.initialState().let {
+        it.copy(values = it.values.copy(colorRenderProfile = ColorRenderProfile.AgX, agxPreset = AgxPreset.Smooth))
+    }
+
+    @Test fun savedLookReappliesItsBaseAndValues() {
+        val edited = state.withValues(state.values.withAgxValue(AgxParameter.Contrast, 2f))
+        val saved = reduceAgxLooks(edited, SaveAgxLook(" Mine "))
+        val look = saved.values.agxLooks.single()
+        assertEquals("Mine", look.name)
+        assertEquals(look, saved.values.matchingAgxLook())
+        val elsewhere = saved.withValues(saved.values.copy(agxPreset = AgxPreset.Default,
+            agxValues = emptyMap()))
+        val applied = reduceAgxLooks(elsewhere, ApplyAgxLook(look.id))
+        assertEquals(AgxPreset.Smooth, applied.values.agxPreset)
+        assertEquals(2f, applied.values.activeAgxValues().valueOf(AgxParameter.Contrast))
+    }
+
+    @Test fun importsGetDistinctIds() {
+        val a = reduceAgxLooks(state, ImportAgxLook("A", AgxPreset.Default, AgxPreset.Default.defaults))
+        val b = reduceAgxLooks(a, ImportAgxLook("B", AgxPreset.Default, AgxPreset.Default.defaults))
+        assertEquals(2, b.values.agxLooks.map { it.id }.distinct().size)
+    }
+}

@@ -134,6 +134,22 @@ data object RevertFilmPreset : SettingsApplicationAction
 
 data class UpdateFilmPreset(val id: String) : SettingsApplicationAction
 
+/** Adds an exported film preset under a fresh id. */
+data class ImportFilmPreset(val name: String, val look: FilmSimLook) : SettingsApplicationAction
+
+data class SaveAgxLook(val name: String) : SettingsApplicationAction
+
+data class ApplyAgxLook(val id: String) : SettingsApplicationAction
+
+data class RenameAgxLook(val id: String, val name: String) : SettingsApplicationAction
+
+data class DeleteAgxLook(val id: String) : SettingsApplicationAction
+
+data class UpdateAgxLook(val id: String) : SettingsApplicationAction
+
+/** Adds an exported AgX look under a fresh id. */
+data class ImportAgxLook(val name: String, val base: AgxPreset, val values: AgxValues) : SettingsApplicationAction
+
 // Maps film actions onto FilmSimLook. Ranges mirror the native validate
 // contract; out-of-range values are clamped, never rejected silently.
 internal fun FilmSimLook.withNumeric(action: SetFilmSimNumericValue): FilmSimLook {

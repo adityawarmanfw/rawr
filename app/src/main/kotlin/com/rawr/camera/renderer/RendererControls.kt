@@ -375,6 +375,7 @@ internal fun RendererControls(stage: RendererStage, v: SettingsValues, dispatch:
                     EditorChoice("Preset", presetLabel, presets.map { it.name }) {
                         send(SelectFilmPreset(presets[it].id))
                     }
+                    RendererFilmPresetActions(v, dispatch)
                     FilmSimCatalog.sections.forEach { section -> RendererFilmGroup(section.section, v.filmSimLook, dispatch) {
                         section.subsections.forEach { sub -> EditorGroup(sub.title) {
                             sub.controls.forEach { control -> when(control) {
@@ -388,6 +389,7 @@ internal fun RendererControls(stage: RendererStage, v: SettingsValues, dispatch:
                     } }
                 } else if(v.colorRenderProfile==ColorRenderProfile.AgX) {
                     EditorChoice("Look",v.agxPreset.lookLabel,AgxPreset.entries.map{it.lookLabel}){send(SetAgxPreset(AgxPreset.entries[it]))}
+                    RendererAgxLookControls(v, dispatch)
                     tone(ImageToneNumericParameter.RenderExposure)
                     AgxSection.entries.forEach { section ->
                         val groups = AgxGroup.entries.filter { it.section == section }

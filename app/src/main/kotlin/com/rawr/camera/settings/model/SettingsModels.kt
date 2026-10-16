@@ -1022,6 +1022,8 @@ data class SettingsValues(
     val videoAgxPreset: AgxPreset = AgxPreset.Default,
     /** Edited AgX controls per preset; a missing preset uses its defaults. */
     val agxValues: Map<AgxPreset, AgxValues> = emptyMap(),
+    /** User-saved AgX looks; applying one writes its values into its base look. */
+    val agxLooks: List<AgxLook> = emptyList(),
     val videoColorRenderProfile: ColorRenderProfile = ColorRenderProfile.RawrBase,
     val videoUserLutProfileId: String? = null,
     val videoLogEnabled: Boolean = false,

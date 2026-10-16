@@ -18,17 +18,19 @@ internal fun reduceFilmSettings(
 
     is SelectFilmPreset -> state.withValues(state.values.withFilmPreset(action.id))
 
-    is SaveFilmPreset -> {
-        val trimmed = action.name.trim().take(48)
+    is SaveFilmPreset, is ImportFilmPreset -> {
+        val name = if (action is SaveFilmPreset) action.name else (action as ImportFilmPreset).name
+        val look = if (action is ImportFilmPreset) action.look else state.values.filmSimLook
+        val trimmed = name.trim().take(48)
         if (trimmed.isEmpty()) {
             state
         } else {
-            val id = "user-" + System.currentTimeMillis().toString(36)
-            val preset = FilmPreset(id, trimmed, state.values.filmSimLook)
+            val id = newPresetId(state.values.filmPresets.map { it.id })
+            val preset = FilmPreset(id, trimmed, look)
             state.withValues(
                 state.values.copy(
                     filmPresets = state.values.filmPresets + preset,
-                    selectedFilmPresetId = id
+                    selectedFilmPresetId = if (action is SaveFilmPreset) id else state.values.selectedFilmPresetId
                 )
             )
         }
@@ -84,4 +86,47 @@ internal fun reduceFilmSettings(
         }
     }
     else -> error("Unsupported film settings action: $action")
+}
+
+/** Unique among [taken]: imports can land within the same millisecond. */
+internal fun newPresetId(taken: List<String>): String {
+    var stamp = System.currentTimeMillis()
+    while ("user-" + stamp.toString(36) in taken) stamp++
+    return "user-" + stamp.toString(36)
+}
+
+/** Saved AgX looks: a look is applied by selecting its base and writing its values there. */
+internal fun reduceAgxLooks(state: SettingsUiState, action: SettingsApplicationAction): SettingsUiState {
+    val v = state.values
+    fun rename(name: String) = name.trim().take(48)
+    return when (action) {
+        is SaveAgxLook -> {
+            val name = rename(action.name)
+            if (name.isEmpty() || !v.isAgxActive()) state
+            else state.withValues(v.copy(agxLooks = v.agxLooks +
+                AgxLook(newPresetId(v.agxLooks.map { it.id }), name, v.regularAgxPreset(), v.activeAgxValues())))
+        }
+        is ImportAgxLook -> {
+            val name = rename(action.name)
+            if (name.isEmpty()) state
+            else state.withValues(v.copy(agxLooks = v.agxLooks + AgxLook(newPresetId(v.agxLooks.map { it.id }), name,
+                action.base, AgxCatalog.sanitized(action.values, action.base.defaults))))
+        }
+        is ApplyAgxLook -> {
+            val look = v.agxLooks.firstOrNull { it.id == action.id } ?: return state
+            val selected = v.withRenderProfile(com.rawr.camera.model.RenderProfileSelection.Agx(look.base))
+            if (!selected.isAgxActive()) state
+            else state.withValues(selected.copy(agxValues = selected.agxValues + (look.base to look.values)))
+        }
+        is RenameAgxLook -> {
+            val name = rename(action.name)
+            if (name.isEmpty()) state
+            else state.withValues(v.copy(agxLooks = v.agxLooks.map { if (it.id == action.id) it.copy(name = name) else it }))
+        }
+        is DeleteAgxLook -> state.withValues(v.copy(agxLooks = v.agxLooks.filterNot { it.id == action.id }))
+        is UpdateAgxLook -> if (!v.isAgxActive()) state else state.withValues(v.copy(agxLooks = v.agxLooks.map {
+            if (it.id == action.id) it.copy(base = v.regularAgxPreset(), values = v.activeAgxValues()) else it
+        }))
+        else -> error("Unsupported AgX look action: $action")
+    }
 }

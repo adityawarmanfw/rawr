@@ -237,6 +237,7 @@ internal fun FilmSimPresetGroup(state: SettingsUiState, dispatch: SettingsDispat
     val base = state.values.selectedFilmPreset()
     val modified = state.values.isFilmPresetModified()
     val baseIsUser = base != null && state.values.isUserFilmPreset(base.id)
+    val files = rememberLookFiles(dispatch)
 
     SettingsGroup(title = "Current") {
         SettingsRow(
@@ -270,6 +271,17 @@ internal fun FilmSimPresetGroup(state: SettingsUiState, dispatch: SettingsDispat
                 saving = true
             }
         )
+        SettingDivider()
+        SettingsRow(
+            title = "Export current look",
+            onClick = {
+                files.export(base?.name ?: "Film look",
+                    com.rawr.camera.settings.preferences.LookFileCodec.exportFilm(
+                        FilmPreset("", base?.name ?: "Film look", state.values.filmSimLook)))
+            }
+        )
+        SettingDivider()
+        SettingsRow(title = "Import look file", onClick = { files.import() })
     }
 
     SettingsGroup(title = "Factory") {
@@ -303,13 +315,14 @@ internal fun FilmSimPresetGroup(state: SettingsUiState, dispatch: SettingsDispat
                         androidx.compose.foundation.layout.Row(
                             verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
                         ) {
-                            androidx.compose.material3.TextButton(onClick = {
-                                renameName = preset.name
-                                renameTarget = preset
-                            }) { androidx.compose.material3.Text("Rename") }
-                            androidx.compose.material3.TextButton(onClick = {
-                                deleteTarget = preset
-                            }) { androidx.compose.material3.Text("Delete") }
+                            LookActionsMenu("Edit", listOf(
+                                "Rename" to { renameName = preset.name; renameTarget = preset },
+                                "Export" to {
+                                    files.export(preset.name,
+                                        com.rawr.camera.settings.preferences.LookFileCodec.exportFilm(preset))
+                                },
+                                "Delete" to { deleteTarget = preset }
+                            ))
                             androidx.compose.material3.RadioButton(selected = isSelected, onClick = null)
                         }
                     }

@@ -510,6 +510,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
             agxPreset = enumOrDefault(p[Keys.agxPreset], d.agxPreset),
             videoAgxPreset = enumOrDefault(p[Keys.videoAgxPreset], d.videoAgxPreset),
             agxValues = decodeAgxValues(p[Keys.agxValues]),
+            agxLooks = LookFileCodec.decodeAgxLooks(p[Keys.agxLooks]),
             srgbTone = ProfileTone(
                 renderExposure = p[Keys.srgbToneRenderExposure] ?: 0f,
                 blacks = p[Keys.srgbToneBlacks] ?: 0f,
@@ -737,6 +738,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.agxPreset] = v.agxPreset.name
         p[Keys.videoAgxPreset] = v.videoAgxPreset.name
         p[Keys.agxValues] = encodeAgxValues(v.agxValues)
+        p[Keys.agxLooks] = LookFileCodec.encodeAgxLooks(v.agxLooks)
         p[Keys.srgbToneRenderExposure] = v.srgbTone.renderExposure
         p[Keys.srgbToneBlacks] = v.srgbTone.blacks
         p[Keys.srgbToneShadows] = v.srgbTone.shadows
@@ -1053,6 +1055,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val filmSimLook = stringPreferencesKey("film_sim_look")
         val selectedFilmPresetId = stringPreferencesKey("selected_film_preset_id")
         val filmPresets = stringPreferencesKey("film_presets")
+        val agxLooks = stringPreferencesKey("agx_looks")
         val multiframeBaseFrameMode = stringPreferencesKey("multiframe_base_frame_mode")
         val multiframeChromaDenoise = booleanPreferencesKey("multiframe_chroma_denoise")
         val camera2NoiseModelEnabled = booleanPreferencesKey("camera2_noise_model_enabled")

@@ -101,6 +101,9 @@ internal fun ImageToneSettings(
             }
         }
         if (state.values.isAgxActive()) {
+            item(key = "agx_saved_looks") { AgxSavedLooksGroup(state.values, dispatch) }
+        }
+        if (state.values.isAgxActive()) {
             val preset = state.values.regularAgxPreset()
             val values = state.values.activeAgxValues()
             AgxGroup.entries.forEach { group ->

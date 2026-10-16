@@ -186,3 +186,18 @@ object AgxCatalog {
         .with(AgxParameter.MasterOutset, five[3])
         .with(AgxParameter.PreserveHue, five[4])
 }
+
+/** A named AgX look the user saved: a built-in base look plus its edited controls. */
+data class AgxLook(
+    val id: String,
+    val name: String,
+    val base: AgxPreset,
+    val values: AgxValues
+)
+
+/** The saved look matching the active AgX base and controls, if any. */
+fun SettingsValues.matchingAgxLook(): AgxLook? {
+    val base = regularAgxPreset()
+    val values = activeAgxValues()
+    return agxLooks.firstOrNull { it.base == base && it.values == values }
+}
