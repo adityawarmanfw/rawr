@@ -326,8 +326,9 @@ private fun LibraryRow(
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
-    val thumbnail by produceState<Bitmap?>(null, entry.id, entry.modified, entry.orientation, entry.width) {
-        value = if (entry.width > 0 && entry.error.isBlank()) library.thumbnail(entry) else null
+    // Starts as soon as the row is visible; the thumbnail reads its own orientation.
+    val thumbnail by produceState<Bitmap?>(null, entry.id, entry.modified, entry.error.isBlank()) {
+        value = if (entry.error.isBlank()) library.thumbnail(entry) else null
     }
     Surface(
         shape = RoundedCornerShape(12.dp),

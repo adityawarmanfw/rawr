@@ -16,6 +16,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -80,8 +83,8 @@ enum class DngConversion(val nativeMode: Int, val label: String, val pixelFracti
 class DngLibrary private constructor(private val context: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val scanLock = Mutex()
-    // RAW thumbnails decode whole tile rows; two at a time bounds memory.
-    private val thumbnailSlots = Semaphore(2)
+    // RAW thumbnails decode whole tile rows; four at a time bounds memory.
+    private val thumbnailSlots = Semaphore(4)
     private val indexFile = File(context.filesDir, "dng_library/index.json")
     private val thumbDir = File(context.cacheDir, "dng_thumbs")
     private val probes = ConcurrentHashMap<Long, JSONObject>()
@@ -125,15 +128,24 @@ class DngLibrary private constructor(private val context: Context) {
             val rows = query()
             // Publish the list immediately, then fill in probes as they finish.
             mutableEntries.value = withOutputs(rows.map { it.withProbe(probes[it.id], it) })
-            var changed = false
-            for (row in rows) {
+            // Probe new or changed files four at a time, republishing the list at
+            // most every 300 ms rather than once per file.
+            val stale = rows.filter { row ->
                 val cached = probes[row.id]
-                if (cached != null && cached.optLong("size") == row.size && cached.optLong("modified") == row.modified &&
-                    cached.optInt("version") == PROBE_VERSION) continue
-                probes[row.id] = probe(row)
-                changed = true
-                mutableEntries.value = withOutputs(rows.map { it.withProbe(probes[it.id], it) })
+                cached == null || cached.optLong("size") != row.size || cached.optLong("modified") != row.modified ||
+                    cached.optInt("version") != PROBE_VERSION
             }
+            var changed = stale.isNotEmpty()
+            var published = android.os.SystemClock.elapsedRealtime()
+            stale.chunked(4).forEach { batch ->
+                coroutineScope { batch.map { row -> async { probes[row.id] = probe(row) } }.awaitAll() }
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (now - published >= 300) {
+                    mutableEntries.value = withOutputs(rows.map { it.withProbe(probes[it.id], it) })
+                    published = now
+                }
+            }
+            if (changed) mutableEntries.value = withOutputs(rows.map { it.withProbe(probes[it.id], it) })
             val live = rows.map { it.id }.toSet()
             if (probes.keys.retainAll(live)) changed = true
             if (changed) saveIndex()
@@ -151,26 +163,22 @@ class DngLibrary private constructor(private val context: Context) {
 
     /** Uncached RAW thumbnail of any DNG URI, rotated for display (capture screen). */
     suspend fun thumbnail(uri: Uri, maxSide: Int = 256): Bitmap? = withContext(Dispatchers.IO) {
-        thumbnailSlots.withPermit {
-            runCatching {
-                context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
-                    val path = "/proc/self/fd/${pfd.fd}"
-                    val orientation = ConvertNative.probe(path).split('\n').let { if (it.firstOrNull() == "ok") it.getOrNull(5)?.toIntOrNull() else null } ?: 1
-                    val pixels = ConvertNative.thumbnail(path, maxSide) ?: return@use null
-                    orient(Bitmap.createBitmap(pixels, 2, pixels[0], pixels[0], pixels[1], Bitmap.Config.ARGB_8888), orientation)
-                }
-            }.getOrNull()
-        }
+        thumbnailSlots.withPermit { rawThumbnail(uri, maxSide) }
     }
 
+    /** RAW thumbnail rotated by the file's own orientation, so it need not wait for the scan's probe. */
+    private fun rawThumbnail(uri: Uri, maxSide: Int): Bitmap? = runCatching {
+        context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+            val path = "/proc/self/fd/${pfd.fd}"
+            val orientation = ConvertNative.probe(path).split('\n')
+                .let { if (it.firstOrNull() == "ok") it.getOrNull(5)?.toIntOrNull() else null } ?: 1
+            val pixels = ConvertNative.thumbnail(path, maxSide) ?: return@use null
+            orient(Bitmap.createBitmap(pixels, 2, pixels[0], pixels[0], pixels[1], Bitmap.Config.ARGB_8888), orientation)
+        }
+    }.getOrNull()
+
     private fun render(entry: DngEntry, maxSide: Int, file: File): Bitmap? {
-        val pixels = runCatching {
-            context.contentResolver.openFileDescriptor(entry.uri, "r")?.use { pfd ->
-                ConvertNative.thumbnail("/proc/self/fd/${pfd.fd}", maxSide)
-            }
-        }.getOrNull() ?: return null
-        val bitmap = Bitmap.createBitmap(pixels, 2, pixels[0], pixels[0], pixels[1], Bitmap.Config.ARGB_8888)
-        val rotated = orient(bitmap, entry.orientation)
+        val rotated = rawThumbnail(entry.uri, maxSide) ?: return null
         runCatching {
             thumbDir.mkdirs()
             val temp = File(thumbDir, file.name + ".tmp")
