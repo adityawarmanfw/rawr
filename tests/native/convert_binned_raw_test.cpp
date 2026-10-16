@@ -60,7 +60,7 @@ int main() {
 
     BinnedRaw binned;
     std::string error;
-    CHECK(binned.build(raw, cfa, 16324, 12292, 4, &error));
+    CHECK(binned.build(raw, cfa, 16324, 12292, 8162, 6146, 4, &error));
     const auto& out = binned.raw();
     CHECK(out.active_area[0] == 1 && out.active_area[1] == 1 && out.active_area[2] == 6145 && out.active_area[3] == 8161);
     CHECK(out.white_level[0] == 4092);
@@ -81,17 +81,17 @@ int main() {
     // Refused: odd ActiveArea, LinearizationTable, value-domain opcodes.
     auto odd = raw;
     odd.active_area[0] = 1;
-    CHECK(!binned.build(odd, cfa, 16324, 12292, 4, &error));
+    CHECK(!binned.build(odd, cfa, 16324, 12292, 8162, 6146, 4, &error));
     auto linear = raw;
     uint16_t table[2] = {0, 1};
     linear.linearization_table = table;
     linear.linearization_table_count = 2;
-    CHECK(!binned.build(linear, cfa, 16324, 12292, 4, &error));
+    CHECK(!binned.build(linear, cfa, 16324, 12292, 8162, 6146, 4, &error));
     auto mapped = raw;
     tinydng_opcode map{2, 7, 0, 0, params[0].data(), params[0].size()};
     mapped.opcodes = &map;
     mapped.opcode_count = 1;
-    CHECK(!binned.build(mapped, cfa, 16324, 12292, 4, &error));
+    CHECK(!binned.build(mapped, cfa, 16324, 12292, 8162, 6146, 4, &error));
     std::puts("convert_binned_raw_test ok");
     return 0;
 }

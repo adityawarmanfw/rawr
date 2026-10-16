@@ -1,5 +1,6 @@
 #include "convert/DngConverter.h"
 
+#include "convert/BayerResample.h"
 #include "convert/NaturalBin.h"
 
 #include <algorithm>
@@ -7,6 +8,7 @@
 #include <cstdio>
 #include <cstring>
 #include <exception>
+#include <cmath>
 #include <memory>
 #include <thread>
 
@@ -14,7 +16,7 @@ namespace rawrcam::convert {
 namespace {
 
 constexpr uint32_t kRecompressTile = 1024;  // even, Bayer-safe
-constexpr uint32_t kBinTile = 512;          // output rows decoded per source band
+constexpr uint32_t kDownscaleTile = 256;    // output rows produced per pass through the stages
 
 struct Cancelled {};
 
@@ -90,8 +92,8 @@ void writeBe32(uint8_t* p, uint32_t value) {
     p[3] = uint8_t(value);
 }
 
-// Black levels expanded to the 2x2 buffer phase (index 2*(y&1)+(x&1)),
-// valid while the ActiveArea origin is even.
+// Black levels expanded to a 2x2 pattern anchored at the ActiveArea origin
+// (DNG's own anchoring), index 2*row+col.
 bool blackByPhase(const tinydng_raw_info& raw, double out[4], std::string* error) {
     uint32_t rows = 1, cols = 1;
     if (raw.has_black_level_repeat) {
@@ -241,31 +243,170 @@ ConvertResult finished(ConvertResult result, const std::string& destination) {
     return result;
 }
 
+
+// Moves a 2x2 pattern anchored at the ActiveArea origin (top, left) to the
+// 2x2 buffer phase (index 2*(y&1)+(x&1)), or back with the same call.
+template <class T>
+void reanchor(const T in[4], T out[4], uint32_t top, uint32_t left) {
+    for (uint32_t r = 0; r < 2; ++r)
+        for (uint32_t c = 0; c < 2; ++c) out[r * 2 + c] = in[((r + top) & 1u) * 2 + ((c + left) & 1u)];
+}
+
+// Pull-based row producers: each stage returns full-width rows of its own
+// output, asking its input for just the rows it needs.
+class Stage {
+   public:
+    virtual ~Stage() = default;
+    uint32_t width = 0, height = 0;
+    virtual void rows(uint32_t y0, uint32_t y1, std::vector<uint16_t>* out) = 0;
+};
+
+struct StageError {
+    std::string message;
+};
+
+class SourceStage final : public Stage {
+   public:
+    explicit SourceStage(const Source& source) : source_(source) {
+        width = source.info->width;
+        height = source.info->height;
+    }
+    void rows(uint32_t y0, uint32_t y1, std::vector<uint16_t>* out) override {
+        std::string error;
+        if (!decode(source_, 0, y0, width, y1 - y0, out, &error)) throw StageError{error};
+    }
+
+   private:
+    const Source& source_;
+};
+
+template <class Check>
+void parallelRows(uint32_t rows, uint32_t step, Check& check, const std::function<void(uint32_t, uint32_t)>& body) {
+    const unsigned workers = std::clamp(std::thread::hardware_concurrency(), 1u, 6u);
+    std::vector<std::exception_ptr> errors(workers);
+    std::atomic<bool> failed{false};
+    std::vector<std::thread> threads;
+    for (unsigned t = 0; t < workers; ++t)
+        threads.emplace_back([&, t] {
+            try {
+                for (uint32_t y = t * step; y < rows && !failed; y += workers * step) {
+                    check();
+                    body(t, y);
+                }
+            } catch (...) {
+                failed = true;
+                errors[t] = std::current_exception();
+            }
+        });
+    for (auto& thread : threads) thread.join();
+    for (auto& e : errors)
+        if (e) std::rethrow_exception(e);
+}
+
+class BinStage final : public Stage {
+   public:
+    BinStage(std::unique_ptr<Stage> input, const BinCalibration& calibration, BinQuantize quantize,
+             std::function<void()> check)
+        : input_(std::move(input)), check_(std::move(check)) {
+        std::string error;
+        if (!probe_.configure(calibration, quantize, input_->width, input_->height, &error)) throw StageError{error};
+        for (unsigned i = 0; i < 6; ++i) {
+            bins_.push_back(std::make_unique<NaturalBin2x>());
+            bins_.back()->configure(calibration, quantize, input_->width, input_->height, nullptr);
+        }
+        width = probe_.outputWidth();
+        height = probe_.outputHeight();
+    }
+    void rows(uint32_t y0, uint32_t y1, std::vector<uint16_t>* out) override {
+        uint32_t top, bottom;
+        probe_.sourceRows(y0, y1 - y0, &top, &bottom);
+        input_->rows(top, bottom, &in_);
+        out->resize(size_t(width) * (y1 - y0));
+        const uint32_t iw = input_->width;
+        parallelRows(y1 - y0, NaturalBin2x::kBandRows, check_, [&](uint32_t t, uint32_t y) {
+            const uint32_t n = std::min(NaturalBin2x::kBandRows, y1 - y0 - y);
+            bins_[t]->band(y0 + y, n, [&](uint32_t x, uint32_t sy) { return in_[size_t(sy - top) * iw + x]; },
+                           check_, out->data() + size_t(y) * width, width);
+        });
+    }
+
+   private:
+    std::unique_ptr<Stage> input_;
+    std::function<void()> check_;
+    NaturalBin2x probe_;
+    std::vector<std::unique_ptr<NaturalBin2x>> bins_;
+    std::vector<uint16_t> in_;
+};
+
+class ResampleStage final : public Stage {
+   public:
+    ResampleStage(std::unique_ptr<Stage> input, uint32_t outWidth, uint32_t outHeight, uint16_t maxCode,
+                  std::function<void()> check)
+        : input_(std::move(input)), check_(std::move(check)) {
+        if (!resample_.configure(input_->width, input_->height, outWidth, outHeight, maxCode))
+            throw StageError{"Cannot resample to the requested size"};
+        width = outWidth;
+        height = outHeight;
+    }
+    void rows(uint32_t y0, uint32_t y1, std::vector<uint16_t>* out) override {
+        uint32_t top, bottom;
+        resample_.sourceRows(y0, y1 - y0, &top, &bottom);
+        input_->rows(top, bottom, &in_);
+        out->resize(size_t(width) * (y1 - y0));
+        const uint32_t iw = input_->width;
+        parallelRows(y1 - y0, 8, check_, [&](uint32_t, uint32_t y) {
+            const uint32_t n = std::min(8u, y1 - y0 - y);
+            resample_.band(y0 + y, n, [&](uint32_t x, uint32_t sy) { return double(in_[size_t(sy - top) * iw + x]); },
+                           out->data() + size_t(y) * width, width);
+        });
+    }
+
+   private:
+    std::unique_ptr<Stage> input_;
+    std::function<void()> check_;
+    BayerResample resample_;
+    std::vector<uint16_t> in_;
+};
+
 }  // namespace
 
 bool BinnedRaw::build(const tinydng_raw_info& source, const tinydng_cfa& cfa, uint32_t sourceWidth,
-                      uint32_t sourceHeight, uint16_t gain, std::string* error) {
+                      uint32_t sourceHeight, uint32_t outputWidth, uint32_t outputHeight, uint16_t gain,
+                      std::string* error) {
     auto fail = [&](const char* message) {
         if (error) *error = message;
         return false;
     };
-    if (source.linearization_table_count) return fail("DNGs with a LinearizationTable cannot be binned");
+    if (source.linearization_table_count) return fail("DNGs with a LinearizationTable cannot be downscaled");
+    if (!source.white_level_present) return fail("Downscaling needs a WhiteLevel");
+    const bool half = outputWidth * 2 == sourceWidth && outputHeight * 2 == sourceHeight;
+    const double fx = double(outputWidth) / sourceWidth, fy = double(outputHeight) / sourceHeight;
     raw_ = source;
     cfa_ = cfa;
     uint32_t active[4] = {0, 0, sourceHeight, sourceWidth};
     if (source.has_active_area) std::copy(source.active_area, source.active_area + 4, active);
-    if (active[0] >= active[2] || active[1] >= active[3] || active[2] > sourceHeight || active[3] > sourceWidth ||
-        (active[0] | active[1] | active[2] | active[3]) & 1u)
+    if (active[0] >= active[2] || active[1] >= active[3] || active[2] > sourceHeight || active[3] > sourceWidth)
+        return fail("Invalid ActiveArea");
+    if (half && ((active[0] | active[1] | active[2] | active[3]) & 1u))
         return fail("Binning needs an ActiveArea with even coordinates");
-    // CFA and black levels are anchored to the ActiveArea origin. Halving an
-    // even origin can make it odd, which moves the anchored 2x2 phase.
-    const uint32_t shiftY = (active[0] / 2) & 1u, shiftX = (active[1] / 2) & 1u;
-    if (raw_.has_active_area)
-        for (int i = 0; i < 4; ++i) raw_.active_area[i] = active[i] / 2;
+    // Pixel boundaries scale with the image; exact for 2x, nearest otherwise.
+    uint32_t scaled[4];
+    for (int i = 0; i < 4; ++i)
+        scaled[i] = uint32_t(std::lround(active[i] * (i % 2 ? fx : fy)));
+    scaled[2] = std::min(scaled[2], outputHeight);
+    scaled[3] = std::min(scaled[3], outputWidth);
+    if (scaled[0] >= scaled[2] || scaled[1] >= scaled[3]) return fail("ActiveArea vanishes when downscaled");
+    if (raw_.has_active_area) std::copy(scaled, scaled + 4, raw_.active_area);
     if (raw_.has_crop) {
-        for (double& v : raw_.crop_origin) v /= 2.0;
-        for (double& v : raw_.crop_size) v /= 2.0;
+        raw_.crop_origin[0] *= fx;
+        raw_.crop_origin[1] *= fy;
+        raw_.crop_size[0] *= fx;
+        raw_.crop_size[1] *= fy;
     }
+    // CFA, black levels and GainMap phases are anchored to the ActiveArea
+    // origin; the buffer phase is preserved, so a change in origin parity
+    // moves the anchored 2x2 patterns.
+    const uint32_t shiftY = (active[0] ^ scaled[0]) & 1u, shiftX = (active[1] ^ scaled[1]) & 1u;
     double black[4];
     if (!blackByPhase(source, black, error)) return false;
     double anchored[4];
@@ -275,15 +416,15 @@ bool BinnedRaw::build(const tinydng_raw_info& source, const tinydng_cfa& cfa, ui
             cfa_.pattern[r * 2 + c] = cfa.pattern[((r + shiftY) & 1u) * 2 + ((c + shiftX) & 1u)];
         }
     ensureExactBlack(raw_, anchored);
-    if (!source.white_level_present) return fail("Binning needs a WhiteLevel");
     raw_.white_level[0] = source.white_level[0] * gain;
-    // NoiseProfile describes the source pixels, not the edge-adaptive binned
-    // output; readers estimate noise when it is absent.
+    // NoiseProfile describes the source pixels, not the edge-adaptive output;
+    // readers estimate noise when it is absent.
     raw_.noise_profile_count = 0;
 
-    // Opcodes: four-phase GainMaps are rescaled to the half-size grid;
-    // normalized lens corrections stay valid; anything else is refused.
+    // Opcodes: four-phase GainMaps cover the new active area; normalized
+    // lens corrections stay valid; anything else is refused.
     const uint32_t activeH = active[2] - active[0], activeW = active[3] - active[1];
+    const uint32_t newH = scaled[2] - scaled[0], newW = scaled[3] - scaled[1];
     opcodes_.clear();
     params_.clear();
     opcodes_.reserve(source.opcode_count);
@@ -303,17 +444,17 @@ bool BinnedRaw::build(const tinydng_raw_info& source, const tinydng_cfa& cfa, ui
             const uint32_t rowPitch = readBe32(&p[24]), colPitch = readBe32(&p[28]);
             if (in.list != 2u || top > 1 || left > 1 || bottom != activeH || right != activeW || plane != 0 ||
                 planes != 1 || rowPitch != 2 || colPitch != 2)
-                return fail("This DNG's lens shading map cannot be binned");
+                return fail("This DNG's lens shading map cannot be downscaled");
             const uint32_t phase = top * 2 + left;
             if (gainPhase[phase]) return fail("Duplicate GainMap phase");
             gainPhase[phase] = true;
             ++gainMaps;
             writeBe32(&p[0], top ^ shiftY);
             writeBe32(&p[4], left ^ shiftX);
-            writeBe32(&p[8], activeH / 2);
-            writeBe32(&p[12], activeW / 2);
+            writeBe32(&p[8], newH);
+            writeBe32(&p[12], newW);
         } else if (in.id != 1u && in.id != 2u && in.id != 3u) {
-            return fail("This DNG has a correction that cannot be binned");
+            return fail("This DNG has a correction that cannot be downscaled");
         }
         tinydng_opcode out = in;
         out.params = p.empty() ? nullptr : p.data();
@@ -387,47 +528,92 @@ ConvertResult recompressDng(const std::string& sourcePath, const std::string& de
     return result;
 }
 
-ConvertResult binDng2x(const std::string& sourcePath, const std::string& destination, const ConvertProgress& progress,
-                       const ConvertCancelled& cancelled) {
+
+namespace {
+
+// Natural-bin calibration of an image described by raw/cfa (buffer phase).
+bool calibrationOf(const tinydng_raw_info& raw, const tinydng_cfa& cfa, BinCalibration* out, std::string* error) {
+    double anchoredBlack[4], black[4];
+    uint8_t anchoredColors[4], colors[4];
+    if (!blackByPhase(raw, anchoredBlack, error)) return false;
+    if (!bayerColors(cfa, anchoredColors)) {
+        if (error) *error = "Downscaling needs an RGB Bayer pattern";
+        return false;
+    }
+    const uint32_t top = raw.has_active_area ? raw.active_area[0] : 0, left = raw.has_active_area ? raw.active_area[1] : 0;
+    reanchor(anchoredBlack, black, top, left);
+    reanchor(anchoredColors, colors, top, left);
+    const int32_t white = raw.white_level_present ? raw.white_level[0] : 0;
+    if (white <= 0 || white > 65535) {
+        if (error) *error = "Invalid WhiteLevel";
+        return false;
+    }
+    out->white = uint16_t(white);
+    double neutral[3] = {1, 1, 1};
+    if (raw.has_as_shot_neutral)
+        for (int c = 0; c < 3; ++c) neutral[c] = raw.as_shot_neutral[c];
+    for (int i = 0; i < 4; ++i) {
+        out->black[i] = float(black[i]);
+        out->cfa[i] = colors[i];
+        out->wbGains[i] = neutral[colors[i]] > 0 ? float(neutral[1] / neutral[colors[i]]) : 0.f;
+    }
+    return true;
+}
+
+}  // namespace
+
+ConvertResult downscaleDng(const std::string& sourcePath, const std::string& destination, DngDownscale scale,
+                           const ConvertProgress& progress, const ConvertCancelled& cancelled) {
     ConvertResult result;
     Source source;
     if (!source.open(sourcePath, &result.error)) return result;
     const auto* info = source.info;
-    const uint32_t sw = info->width, sh = info->height;
-    if (!info->raw.white_level_present) {
-        result.error = "Binning needs a WhiteLevel";
+    std::atomic<bool> stop{false};
+    std::function<void()> check = [&] {
+        if (stop.load(std::memory_order_relaxed) || (cancelled && cancelled())) {
+            stop = true;
+            throw Cancelled{};
+        }
+    };
+
+    // Stage chain and the matching metadata chain.
+    std::unique_ptr<Stage> stage;
+    std::vector<std::unique_ptr<BinnedRaw>> metadata;
+    try {
+        stage = std::make_unique<SourceStage>(source);
+        const tinydng_raw_info* raw = &info->raw;
+        const tinydng_cfa* cfa = &info->cfa;
+        auto bin = [&] {
+            BinCalibration calibration;
+            if (!calibrationOf(*raw, *cfa, &calibration, &result.error)) throw StageError{result.error};
+            const BinQuantize quantize = BinQuantize::forWhiteLevel(calibration.white);
+            const uint32_t iw = stage->width, ih = stage->height;
+            stage = std::make_unique<BinStage>(std::move(stage), calibration, quantize, check);
+            metadata.push_back(std::make_unique<BinnedRaw>());
+            if (!metadata.back()->build(*raw, *cfa, iw, ih, stage->width, stage->height, quantize.gain, &result.error))
+                throw StageError{result.error};
+            raw = &metadata.back()->raw();
+            cfa = &metadata.back()->cfa();
+        };
+        bin();
+        if (scale == DngDownscale::Sixteenth) bin();
+        if (scale == DngDownscale::Eighth) {
+            // Half the 2x-binned pixel count: sqrt(2) per side, even dimensions.
+            const uint32_t iw = stage->width, ih = stage->height;
+            const uint32_t ow = uint32_t(iw / std::sqrt(2.0)) & ~1u, oh = uint32_t(ih / std::sqrt(2.0)) & ~1u;
+            const uint16_t maxCode = uint16_t(raw->white_level[0]);
+            stage = std::make_unique<ResampleStage>(std::move(stage), ow, oh, maxCode, check);
+            metadata.push_back(std::make_unique<BinnedRaw>());
+            if (!metadata.back()->build(*raw, *cfa, iw, ih, ow, oh, 1, &result.error)) throw StageError{result.error};
+            raw = &metadata.back()->raw();
+            cfa = &metadata.back()->cfa();
+        }
+    } catch (const StageError& e) {
+        result.error = e.message;
         return result;
     }
 
-    BinCalibration calibration;
-    double black[4];
-    uint8_t colors[4];
-    if (!blackByPhase(info->raw, black, &result.error)) return result;
-    if (!bayerColors(info->cfa, colors)) {
-        result.error = "Binning needs an RGB Bayer pattern";
-        return result;
-    }
-    const uint32_t white = uint32_t(std::max(0, info->raw.white_level[0]));
-    if (white == 0 || white > 65535) {
-        result.error = "Invalid WhiteLevel";
-        return result;
-    }
-    calibration.white = uint16_t(white);
-    double neutral[3] = {1, 1, 1};
-    if (info->raw.has_as_shot_neutral)
-        for (int c = 0; c < 3; ++c) neutral[c] = info->raw.as_shot_neutral[c];
-    for (int i = 0; i < 4; ++i) {
-        calibration.black[i] = float(black[i]);
-        calibration.cfa[i] = colors[i];
-        calibration.wbGains[i] = neutral[colors[i]] > 0 ? float(neutral[1] / neutral[colors[i]]) : 0.f;
-    }
-    const BinQuantize quantize = BinQuantize::forWhiteLevel(white);
-    NaturalBin2x probe;
-    if (!probe.configure(calibration, quantize, sw, sh, &result.error)) return result;
-    BinnedRaw metadata;
-    if (!metadata.build(info->raw, info->cfa, sw, sh, quantize.gain, &result.error)) return result;
-
-    const uint32_t ow = sw / 2, oh = sh / 2;
+    const uint32_t ow = stage->width, oh = stage->height;
     tinydng_exif exif = source.exif();
     tinydng_write_image image{};
     image.width = ow;
@@ -435,81 +621,47 @@ ConvertResult binDng2x(const std::string& sourcePath, const std::string& destina
     image.samples_per_pixel = 1;
     image.bits_per_sample = 16;
     image.sample_format = 1;
-    image.cfa = &metadata.cfa();
-    image.raw = &metadata.raw();
+    image.cfa = &metadata.back()->cfa();
+    image.raw = &metadata.back()->raw();
     image.exif = &exif;
 
-    const uint32_t across = (ow + kBinTile - 1) / kBinTile;
-    const uint32_t down = (oh + kBinTile - 1) / kBinTile;
-    const unsigned workers = std::clamp(std::thread::hardware_concurrency(), 1u, 6u);
-    std::vector<std::unique_ptr<NaturalBin2x>> bins;
-    for (unsigned i = 0; i < workers; ++i) {
-        bins.push_back(std::make_unique<NaturalBin2x>());
-        bins.back()->configure(calibration, quantize, sw, sh, nullptr);
-    }
-    std::vector<uint16_t> band, out(size_t(ow) * kBinTile), tile(size_t(kBinTile) * kBinTile);
-    std::atomic<bool> stop{false};
-    auto check = [&] {
-        if (stop.load(std::memory_order_relaxed)) throw Cancelled{};
-        if (cancelled && cancelled()) {
-            stop = true;
-            throw Cancelled{};
-        }
-    };
+    const uint32_t across = (ow + kDownscaleTile - 1) / kDownscaleTile;
+    const uint32_t down = (oh + kDownscaleTile - 1) / kDownscaleTile;
+    std::vector<uint16_t> out, tile(size_t(kDownscaleTile) * kDownscaleTile);
     Writer writer;
-    uint8_t predictor = 1;
-    for (uint32_t ty = 0; ty < down; ++ty) {
-        const uint32_t oy = ty * kBinTile, rows = std::min(kBinTile, oh - oy);
-        uint32_t top, bottom;
-        probe.sourceRows(oy, rows, &top, &bottom);
-        if (!decode(source, 0, top, sw, bottom - top, &band, &result.error)) return finished(result, destination);
-        std::vector<std::exception_ptr> errors(workers);
-        std::vector<std::thread> threads;
-        for (unsigned t = 0; t < workers; ++t)
-            threads.emplace_back([&, t] {
-                try {
-                    for (uint32_t y = t * NaturalBin2x::kBandRows; y < rows; y += workers * NaturalBin2x::kBandRows) {
-                        const uint32_t n = std::min(NaturalBin2x::kBandRows, rows - y);
-                        bins[t]->band(oy + y, n,
-                                      [&](uint32_t x, uint32_t sy) { return band[size_t(sy - top) * sw + x]; },
-                                      check, out.data() + size_t(y) * ow, ow);
-                    }
-                } catch (...) {
-                    stop = true;
-                    errors[t] = std::current_exception();
-                }
-            });
-        for (auto& thread : threads) thread.join();
-        for (auto& e : errors) {
-            if (!e) continue;
-            try {
-                std::rethrow_exception(e);
-            } catch (const Cancelled&) {
-                result.cancelled = true;
-                result.error = "Cancelled";
-            } catch (const std::exception& error) {
-                result.error = error.what();
+    try {
+        for (uint32_t ty = 0; ty < down; ++ty) {
+            const uint32_t oy = ty * kDownscaleTile, rows = std::min(kDownscaleTile, oh - oy);
+            stage->rows(oy, oy + rows, &out);
+            if (ty == 0) {
+                // Pick the predictor on the first band's centre, then open the output.
+                const uint32_t pw = std::min(kDownscaleTile, ow) & ~1u, ph = rows & ~1u, px = ((ow - pw) / 2) & ~1u;
+                std::vector<uint16_t> sample(size_t(pw) * ph);
+                for (uint32_t r = 0; r < ph; ++r)
+                    std::memcpy(&sample[size_t(r) * pw], &out[size_t(r) * ow + px], size_t(pw) * 2);
+                const uint8_t predictor = choosePredictor(source.ctx, sample.data(), pw, ph);
+                if (!writer.create(source.ctx, destination, image, predictor, kDownscaleTile, &result.error))
+                    return finished(result, destination);
             }
-            return finished(result, destination);
+            for (uint32_t tx = 0; tx < across; ++tx) {
+                const uint32_t x = tx * kDownscaleTile, tw = std::min(kDownscaleTile, ow - x);
+                // Edge tiles are passed packed at their clipped size.
+                for (uint32_t r = 0; r < rows; ++r)
+                    std::memcpy(&tile[size_t(r) * tw], &out[size_t(r) * ow + x], size_t(tw) * 2);
+                if (!writer.tile(ty * across + tx, tile.data(), &result.error)) return finished(result, destination);
+            }
+            if (progress) progress(ty + 1, down);
         }
-        if (ty == 0) {
-            // Pick the predictor on the first band's centre, then open the output.
-            const uint32_t pw = std::min(kBinTile, ow) & ~1u, ph = rows & ~1u, px = ((ow - pw) / 2) & ~1u;
-            std::vector<uint16_t> sample(size_t(pw) * ph);
-            for (uint32_t r = 0; r < ph; ++r)
-                std::memcpy(&sample[size_t(r) * pw], &out[size_t(r) * ow + px], size_t(pw) * 2);
-            predictor = choosePredictor(source.ctx, sample.data(), pw, ph);
-            if (!writer.create(source.ctx, destination, image, predictor, kBinTile, &result.error))
-                return finished(result, destination);
-        }
-        for (uint32_t tx = 0; tx < across; ++tx) {
-            const uint32_t x = tx * kBinTile, tw = std::min(kBinTile, ow - x);
-            // Edge tiles are passed packed at their clipped size.
-            for (uint32_t r = 0; r < rows; ++r)
-                std::memcpy(&tile[size_t(r) * tw], &out[size_t(r) * ow + x], size_t(tw) * 2);
-            if (!writer.tile(ty * across + tx, tile.data(), &result.error)) return finished(result, destination);
-        }
-        if (progress) progress(ty + 1, down);
+    } catch (const Cancelled&) {
+        result.cancelled = true;
+        result.error = "Cancelled";
+        return finished(result, destination);
+    } catch (const StageError& e) {
+        result.error = e.message;
+        return finished(result, destination);
+    } catch (const std::exception& e) {
+        result.error = e.what();
+        return finished(result, destination);
     }
     if (!writer.finish(&result.error)) return finished(result, destination);
     result.ok = true;

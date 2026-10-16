@@ -1,7 +1,8 @@
 #pragma once
 // DNG-to-DNG conversion for the renderer's DNG library: lossless re-encode
-// at full resolution and 2x natural Bayer binning (200MP -> 50MP). Both keep
-// the source metadata; binning rewrites the resolution-dependent parts.
+// at full resolution, and Bayer downscales that keep a CFA DNG (natural 2x
+// binning, chained for 4x, plus a per-site resample for the 2.83x step).
+// Source metadata is carried; the resolution-dependent parts are rewritten.
 #include <tinydng.h>
 
 #include <cstdint>
@@ -23,20 +24,29 @@ struct ConvertResult {
     uint32_t width = 0, height = 0;
 };
 
+// Output size as a fraction of the source pixel count.
+enum class DngDownscale {
+    Quarter,    // 2x per side (200MP -> 50MP): one natural bin
+    Eighth,     // 2.83x per side (200MP -> 25MP): natural bin, then per-site resample
+    Sixteenth,  // 4x per side (200MP -> 12.5MP): two natural bins
+};
+
 // Full-resolution lossless JPEG re-encode (pixels bit-exact).
 ConvertResult recompressDng(const std::string& source, const std::string& destination,
                             const ConvertProgress& progress = {}, const ConvertCancelled& cancelled = {});
 
-// 2x natural binning to a lossless JPEG DNG (10-bit sources keep a 4x code scale).
-ConvertResult binDng2x(const std::string& source, const std::string& destination,
-                       const ConvertProgress& progress = {}, const ConvertCancelled& cancelled = {});
+// Downscaled lossless JPEG DNG. 10-bit sources keep the precision binning
+// gains as a 4x code scale (WhiteLevel and BlackLevel scale with it).
+ConvertResult downscaleDng(const std::string& source, const std::string& destination, DngDownscale scale,
+                           const ConvertProgress& progress = {}, const ConvertCancelled& cancelled = {});
 
-// Raw metadata of a 2x binned image. Owns the rewritten opcode parameters.
+// Raw metadata of a downscaled image. Owns the rewritten opcode parameters.
 class BinnedRaw {
    public:
-    // gain: output code scale (WhiteLevel and BlackLevel scale with it).
+    // Source (sw x sh) -> output (ow x oh); gain is the output code scale.
     bool build(const tinydng_raw_info& source, const tinydng_cfa& cfa, uint32_t sourceWidth,
-               uint32_t sourceHeight, uint16_t gain, std::string* error);
+               uint32_t sourceHeight, uint32_t outputWidth, uint32_t outputHeight, uint16_t gain,
+               std::string* error);
     const tinydng_raw_info& raw() const { return raw_; }
     const tinydng_cfa& cfa() const { return cfa_; }
 
