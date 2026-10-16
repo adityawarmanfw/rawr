@@ -28,7 +28,9 @@ data class DngConvertState(
     /** Current file progress, 0..1000. */
     val permille: Int = 0,
     val done: Int = 0,
-    val failed: List<Pair<DngConvertTask, String>> = emptyList()
+    val failed: List<Pair<DngConvertTask, String>> = emptyList(),
+    /** Tasks that finished, for "Delete originals". */
+    val succeeded: List<DngConvertTask> = emptyList()
 ) {
     val running: Boolean get() = current != null
     val total: Int get() = done + failed.size + pending.size + (if (current != null) 1 else 0)
@@ -52,8 +54,8 @@ class DngConvertQueue private constructor(private val context: Context) {
         mutableState.update { state ->
             val known = (state.pending.map { it.key } + listOfNotNull(state.current?.key)).toSet()
             val fresh = tasks.filter { it.key !in known && it.conversion.outputMegapixels(it.entry) !in it.entry.converted }
-            state.copy(pending = state.pending + fresh, failed = if (state.running) state.failed else emptyList(),
-                done = if (state.running) state.done else 0)
+            if (state.running) state.copy(pending = state.pending + fresh)
+            else DngConvertState(pending = fresh)
         }
         persist()
         start()
@@ -68,6 +70,17 @@ class DngConvertQueue private constructor(private val context: Context) {
 
     fun dismissResults() {
         if (!state.value.running) mutableState.update { DngConvertState(pending = it.pending) }
+    }
+
+    /**
+     * Sources whose every conversion in this batch succeeded (converter
+     * outputs excluded): the files "Delete originals" offers to remove.
+     */
+    fun deletableOriginals(): List<DngEntry> {
+        val state = state.value
+        val failedIds = state.failed.map { it.first.entry.id }.toSet()
+        return state.succeeded.map { it.entry }.distinctBy { it.id }
+            .filter { it.id !in failedIds && !it.conversionOutput }
     }
 
     /** Re-queues tasks left by a previous process. */
@@ -115,7 +128,7 @@ class DngConvertQueue private constructor(private val context: Context) {
         }
         try {
             publisher.convert(task.entry, task.conversion, handle)
-            mutableState.update { it.copy(done = it.done + 1) }
+            mutableState.update { it.copy(done = it.done + 1, succeeded = it.succeeded + task) }
         } catch (e: CancellationException) {
             // Cancelled by the user: not a failure.
         } catch (e: Exception) {

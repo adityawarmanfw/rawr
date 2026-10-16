@@ -86,7 +86,8 @@ class CaptureViewModel(application: Application) : AndroidViewModel(application)
             application = application,
             preview = previewCoordinator,
             settings = { latestSettings },
-            onJpegPublished = ::onJpegPublished
+            onJpegPublished = ::onJpegPublished,
+            onDngPublished = ::refreshLatestGalleryImage
         )
     val controller: CaptureScreenController =
         NativeCaptureScreenController(
@@ -181,7 +182,7 @@ class CaptureViewModel(application: Application) : AndroidViewModel(application)
     fun refreshLatestGalleryImage() {
         val generation = galleryRefreshGeneration.incrementAndGet()
         viewModelScope.launch {
-            val latest = withContext(Dispatchers.IO) { galleryMediaStore.findLatestRawrJpeg() }
+            val latest = withContext(Dispatchers.IO) { galleryMediaStore.findLatestRawrImage() }
             if (galleryRefreshGeneration.get() == generation) mutableLatestGalleryImage.value = latest
         }
     }

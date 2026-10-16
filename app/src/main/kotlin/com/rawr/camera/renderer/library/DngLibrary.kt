@@ -149,6 +149,20 @@ class DngLibrary private constructor(private val context: Context) {
         thumbnailSlots.withPermit { BitmapFactory.decodeFile(file.path) ?: render(entry, maxSide, file) }
     }
 
+    /** Uncached RAW thumbnail of any DNG URI, rotated for display (capture screen). */
+    suspend fun thumbnail(uri: Uri, maxSide: Int = 256): Bitmap? = withContext(Dispatchers.IO) {
+        thumbnailSlots.withPermit {
+            runCatching {
+                context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                    val path = "/proc/self/fd/${pfd.fd}"
+                    val orientation = ConvertNative.probe(path).split('\n').let { if (it.firstOrNull() == "ok") it.getOrNull(5)?.toIntOrNull() else null } ?: 1
+                    val pixels = ConvertNative.thumbnail(path, maxSide) ?: return@use null
+                    orient(Bitmap.createBitmap(pixels, 2, pixels[0], pixels[0], pixels[1], Bitmap.Config.ARGB_8888), orientation)
+                }
+            }.getOrNull()
+        }
+    }
+
     private fun render(entry: DngEntry, maxSide: Int, file: File): Bitmap? {
         val pixels = runCatching {
             context.contentResolver.openFileDescriptor(entry.uri, "r")?.use { pfd ->

@@ -45,6 +45,7 @@ internal fun RendererRoute(viewModel: RendererViewModel, onExit: () -> Unit) {
     val snackbar = remember { SnackbarHostState() }
     val jobs by store.jobs.collectAsStateWithLifecycle()
     val busy by store.busy.collectAsStateWithLifecycle()
+    val bulk by store.bulk.collectAsStateWithLifecycle()
     val progress by store.progress.collectAsStateWithLifecycle()
     val state by viewModel.state.collectAsStateWithLifecycle()
     val session by viewModel.editor.collectAsStateWithLifecycle()
@@ -126,6 +127,13 @@ internal fun RendererRoute(viewModel: RendererViewModel, onExit: () -> Unit) {
                     loading = loading,
                     onImport = { importer.launchPicker(context, arrayOf("image/x-adobe-dng", "image/dng", "application/octet-stream")) },
                     onOpen = { entry -> viewModel.import(entry.uri) },
+                    onRenderAll = { entries ->
+                        notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        viewModel.renderAll(entries.map { it.uri to it.name })
+                    },
+                    bulk = bulk,
+                    onCancelBulk = store::cancelBulk,
+                    onDismissBulk = store::dismissBulk,
                     onEdit = viewModel::edit,
                     onRenderOriginal = { item ->
                         notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)

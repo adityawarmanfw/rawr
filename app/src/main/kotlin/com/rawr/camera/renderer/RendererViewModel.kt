@@ -120,6 +120,9 @@ internal class RendererViewModel(application: Application) : AndroidViewModel(ap
         val ready = store.edit(job, settings.values.first())
         store.export(ready.id, original = true)
     }
+    fun renderAll(items: List<Pair<Uri, String>>) {
+        store.renderAll(items) { settings.values.first() }
+    }
     fun export(id: String) {
         if (state.value.loading || store.busy.value) return
         runCatching { store.export(id) }.onFailure { report(it.message) }

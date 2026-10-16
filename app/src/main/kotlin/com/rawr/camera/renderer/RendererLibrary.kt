@@ -64,8 +64,20 @@ import com.rawr.camera.renderer.library.DngEntry
 import com.rawr.camera.renderer.library.DngLibrary
 import com.rawr.camera.ui.icons.Icons
 import com.rawr.camera.ui.icons.rounded.Check
+import com.rawr.camera.ui.icons.rounded.ArrowDropDown
 import com.rawr.camera.ui.icons.rounded.DeleteOutline
+import com.rawr.camera.ui.icons.rounded.Download
+import com.rawr.camera.ui.icons.rounded.Edit
 import com.rawr.camera.ui.icons.rounded.Image
+
+/** Library order; persisted per install. */
+internal enum class LibrarySort(val label: String, val comparator: Comparator<DngEntry>) {
+    Newest("Newest first", compareByDescending<DngEntry> { it.taken }.thenByDescending { it.id }),
+    Oldest("Oldest first", compareBy<DngEntry> { it.taken }.thenBy { it.id }),
+    Name("Name", compareBy(String.CASE_INSENSITIVE_ORDER) { it.name }),
+    Largest("Largest file", compareByDescending<DngEntry> { it.size }),
+    Resolution("Most megapixels", compareByDescending<DngEntry> { it.width.toLong() * it.height }.thenByDescending { it.taken })
+}
 
 /** Library tabs; each is a filter over the same scan. */
 internal enum class LibraryTab(val label: String) {
@@ -98,6 +110,10 @@ internal fun RendererLibrary(
     loading: Boolean,
     onImport: () -> Unit,
     onOpen: (DngEntry) -> Unit,
+    onRenderAll: (List<DngEntry>) -> Unit,
+    bulk: BulkRenderState,
+    onCancelBulk: () -> Unit,
+    onDismissBulk: () -> Unit,
     onEdit: (RenderJob) -> Unit,
     onRenderOriginal: (RenderJob) -> Unit,
     onRemove: (RenderJob) -> Unit
@@ -109,6 +125,16 @@ internal fun RendererLibrary(
     val scanning by library.scanning.collectAsStateWithLifecycle()
     val convert by queue.state.collectAsStateWithLifecycle()
     var tab by rememberSaveable { mutableStateOf(LibraryTab.All) }
+    val prefs = remember { context.getSharedPreferences("dng_library_ui", android.content.Context.MODE_PRIVATE) }
+    var sort by remember {
+        mutableStateOf(runCatching { LibrarySort.valueOf(prefs.getString("sort", null).orEmpty()) }.getOrDefault(LibrarySort.Newest))
+    }
+    val deleteOriginals = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            queue.dismissResults()
+            library.requestScan()
+        }
+    }
     var selected by remember { mutableStateOf(emptySet<Long>()) }
     var access by remember { mutableStateOf(mediaAccess(context)) }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
@@ -121,7 +147,7 @@ internal fun RendererLibrary(
             queue.resume()
         }
     }
-    val visible = entries.filter(tab::accepts)
+    val visible = entries.filter(tab::accepts).sortedWith(sort.comparator)
     val selection = entries.filter { it.id in selected }
 
     Column(Modifier.fillMaxSize().testTag("renderer_library")) {
@@ -139,7 +165,21 @@ internal fun RendererLibrary(
             }
         }
         if (scanning) LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp))
-        ConvertStatus(convert, onCancel = queue::cancelAll, onDismiss = queue::dismissResults)
+        ConvertStatus(
+            convert,
+            deletable = if (convert.running) 0 else queue.deletableOriginals().size,
+            onCancel = queue::cancelAll,
+            onDismiss = queue::dismissResults,
+            onDeleteOriginals = {
+                val uris = queue.deletableOriginals().map { it.uri }
+                if (uris.isNotEmpty()) deleteOriginals.launch(
+                    androidx.activity.result.IntentSenderRequest.Builder(
+                        android.provider.MediaStore.createDeleteRequest(context.contentResolver, uris).intentSender
+                    ).build()
+                )
+            }
+        )
+        BulkRenderStatus(bulk, onCancel = onCancelBulk, onDismiss = onDismissBulk)
         Box(Modifier.weight(1f)) {
             LazyColumn(
                 Modifier.fillMaxSize(),
@@ -155,9 +195,14 @@ internal fun RendererLibrary(
                     JobRow(job = job, enabled = !busy && !loading && job.status != "Processing capture",
                         onEdit = { onEdit(job) }, onRenderOriginal = { onRenderOriginal(job) }, onRemove = { onRemove(job) })
                 }
-                if (tab == LibraryTab.HighRes && visible.isNotEmpty()) item(key = "select_unconverted") {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        TextButton(onClick = {
+                item(key = "toolbar") {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        SortMenu(sort) {
+                            sort = it
+                            prefs.edit().putString("sort", it.name).apply()
+                        }
+                        Spacer(Modifier.weight(1f))
+                        if (tab == LibraryTab.HighRes && visible.isNotEmpty()) TextButton(onClick = {
                             selected = visible.filter { it.convertible && it.converted.isEmpty() }.map { it.id }.toSet()
                         }) { Text("Select unconverted") }
                     }
@@ -184,6 +229,11 @@ internal fun RendererLibrary(
         }
         if (selection.isNotEmpty()) ConvertBar(
             selection = selection,
+            renderEnabled = !busy && !loading && !bulk.running,
+            onRender = {
+                onRenderAll(selection.filter { it.error.isBlank() })
+                selected = emptySet()
+            },
             onClear = { selected = emptySet() },
             onConvert = { conversion ->
                 queue.enqueue(selection.filter { it.convertible }.map { DngConvertTask(it, conversion) })
@@ -247,8 +297,12 @@ private fun JobRow(job: RenderJob, enabled: Boolean, onEdit: () -> Unit, onRende
                     maxLines = 1, overflow = TextOverflow.Ellipsis
                 )
             }
-            TextButton(enabled = enabled, onClick = onRenderOriginal) { Text("Render") }
-            TextButton(enabled = enabled, onClick = onEdit) { Text("Edit") }
+            androidx.compose.material3.IconButton(enabled = enabled, onClick = onRenderOriginal) {
+                Icon(Icons.Rounded.Download, contentDescription = "Render ${job.name}")
+            }
+            androidx.compose.material3.IconButton(enabled = enabled, onClick = onEdit) {
+                Icon(Icons.Rounded.Edit, contentDescription = "Edit ${job.name}")
+            }
             androidx.compose.material3.IconButton(enabled = enabled, onClick = onRemove) {
                 Icon(Icons.Rounded.DeleteOutline, contentDescription = "Remove ${job.name}")
             }
@@ -349,7 +403,13 @@ private fun EmptyLibrary(tab: LibraryTab, scanning: Boolean, onImport: () -> Uni
 }
 
 @Composable
-private fun ConvertStatus(state: DngConvertState, onCancel: () -> Unit, onDismiss: () -> Unit) {
+private fun ConvertStatus(
+    state: DngConvertState,
+    deletable: Int,
+    onCancel: () -> Unit,
+    onDismiss: () -> Unit,
+    onDeleteOriginals: () -> Unit
+) {
     if (!state.running && state.done == 0 && state.failed.isEmpty()) return
     Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)) {
@@ -379,6 +439,9 @@ private fun ConvertStatus(state: DngConvertState, onCancel: () -> Unit, onDismis
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.weight(1f)
                     )
+                    if (deletable > 0) TextButton(onClick = onDeleteOriginals) {
+                        Text(if (deletable == 1) "Delete original" else "Delete $deletable originals")
+                    }
                     TextButton(onClick = onDismiss) { Text("OK") }
                 }
                 state.failed.forEach { (task, reason) ->
@@ -390,7 +453,13 @@ private fun ConvertStatus(state: DngConvertState, onCancel: () -> Unit, onDismis
 }
 
 @Composable
-private fun ConvertBar(selection: List<DngEntry>, onClear: () -> Unit, onConvert: (DngConversion) -> Unit) {
+private fun ConvertBar(
+    selection: List<DngEntry>,
+    renderEnabled: Boolean,
+    onRender: () -> Unit,
+    onClear: () -> Unit,
+    onConvert: (DngConversion) -> Unit
+) {
     val reference = selection.maxByOrNull { it.megapixels }
     val convertible = selection.count { it.convertible }
     Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, tonalElevation = 3.dp) {
@@ -401,8 +470,16 @@ private fun ConvertBar(selection: List<DngEntry>, onClear: () -> Unit, onConvert
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.weight(1f)
                 )
+                FilledTonalButton(enabled = renderEnabled, onClick = onRender, contentPadding = PaddingValues(horizontal = 12.dp),
+                    modifier = Modifier.height(36.dp)) {
+                    Icon(Icons.Rounded.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Render JPEG")
+                }
                 TextButton(onClick = onClear) { Text("Clear") }
             }
+            Text("Convert to DNG", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp, bottom = 4.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 DngConversion.entries.forEach { conversion ->
                     FilledTonalButton(
@@ -418,6 +495,61 @@ private fun ConvertBar(selection: List<DngEntry>, onClear: () -> Unit, onConvert
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SortMenu(sort: LibrarySort, onSort: (LibrarySort) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        TextButton(onClick = { open = true }) {
+            Text(sort.label)
+            Icon(Icons.Rounded.ArrowDropDown, contentDescription = "Sort order")
+        }
+        androidx.compose.material3.DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            LibrarySort.entries.forEach { option ->
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { Text(option.label) },
+                    trailingIcon = { if (option == sort) Icon(Icons.Rounded.Check, contentDescription = null) },
+                    onClick = {
+                        open = false
+                        onSort(option)
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun BulkRenderStatus(state: BulkRenderState, onCancel: () -> Unit, onDismiss: () -> Unit) {
+    if (state.total == 0) return
+    Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        if (state.running) "Rendering ${(state.done + state.failed.size + 1).coerceAtMost(state.total)} of ${state.total}"
+                        else buildString {
+                            append("Rendered ${state.done} JPEG")
+                            if (state.done != 1) append("s")
+                            if (state.failed.isNotEmpty()) append(", ${state.failed.size} failed")
+                        },
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    state.current?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+                if (state.running) OutlinedButton(onClick = onCancel) { Text("Cancel") }
+                else TextButton(onClick = onDismiss) { Text("OK") }
+            }
+            state.failed.forEach {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             }
         }
     }
