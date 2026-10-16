@@ -107,7 +107,8 @@ class NativePreviewEngine {
         shutterMaxNs: Long,
         balanceEv: Float,
         maxDigitalGainEv: Float,
-        speed: Int
+        speed: Int,
+        metering: Int
     )
 
     external fun setPersistentDiagnosticsEnabled(handle: Long, enabled: Boolean)

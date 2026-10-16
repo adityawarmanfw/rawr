@@ -92,6 +92,12 @@ internal fun ExposureSettings(state: SettingsUiState, dispatch: SettingsDispatch
                 checked = ae.enabled
             ) { setAe(ae.copy(enabled = it)) }
             if (ae.enabled) {
+                RawrAeChoice("Metering", RawrMetering.entries, ae.metering, { it.label }, when (ae.metering) {
+                    RawrMetering.Matrix -> "Whole frame, centre counts more, highlights protected"
+                    RawrMetering.CenterWeighted -> "Centre subject first; edges barely count"
+                    RawrMetering.Average -> "Every part of the frame counts the same"
+                    RawrMetering.Highlight -> "Brightest areas just below white; shadows fall where they fall"
+                } + ". Tap to meter a spot.") { setAe(ae.copy(metering = it)) }
                 RawrAeChoice("Night Look", RawrNightLook.entries, ae.nightLook, { it.label }, when (ae.nightLook) {
                     RawrNightLook.Natural -> "Dim scenes stay dark, like they look"
                     RawrNightLook.Bright -> "Dim scenes a little darker than day"

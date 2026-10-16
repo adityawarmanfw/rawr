@@ -6,7 +6,10 @@
 // log2(luma) over [-20, +4) EV. Centre samples weigh 3, edges 1; clipped
 // samples go to the top bin. Measured before any render gain. A spot
 // (p0 = 8-bit x0,y0,x1,y1 of the input, nonzero) replaces the centre
-// weighting: only samples inside it count.
+// weighting: only samples inside it count. sampleBlockSize carries the
+// weighting above its low byte: 0 matrix (centre half x3), 1 centre-weighted
+// (1 + 31 exp(-4.5 r^2), r = distance from the centre in half the short
+// side), 2 average.
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 layout(binding = 0, rgba16f) uniform readonly image2D src;
 layout(std430, binding = 1) buffer Partial { uint data[]; }
@@ -44,7 +47,9 @@ void main() {
     if (li < COUNTERS) counters[li] = 0u;
     barrier();
 
-    uint block = pc.sampleBlockSize;
+    uint block = pc.sampleBlockSize & 255u;
+    uint weighting = pc.sampleBlockSize >> 8;
+    float shortSide = float(min(pc.width, pc.height));
     uint blocksX = (pc.width + block - 1u) / block;
     uint blocksY = (pc.height + block - 1u) / block;
     uint part = gl_WorkGroupID.x;
@@ -73,6 +78,11 @@ void main() {
                 bool inside = sx >= (pc.spot & 255u) && sx < ((pc.spot >> 16) & 255u) &&
                               sy >= ((pc.spot >> 8) & 255u) && sy < (pc.spot >> 24);
                 if (!inside) continue;
+                w = 1u;
+            } else if (weighting == 1u) {
+                vec2 d = (vec2(x, y) - 0.5 * vec2(pc.width, pc.height)) / (0.5 * shortSide);
+                w = 1u + uint(31.0 * exp(-4.5 * dot(d, d)));
+            } else if (weighting == 2u) {
                 w = 1u;
             } else {
                 bool centre = 4u * x >= pc.width && 4u * x < 3u * pc.width && 4u * y >= pc.height &&

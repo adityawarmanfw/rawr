@@ -96,7 +96,9 @@ void SessionFrameCallbacks::updateRawrAe(const image_scopes::SceneExposureStatsD
                                  context.config.maxDigitalGainEv};
     ae::FrameObservation f{stats->weightedBins, std::log2(clipLuma), exposure->logExposure(), exposure->shutterNs,
                            exposure->iso, metadata.aperture.value_or(0.0f), timestampNs};
-    if (const auto step = rawrAe_.update(f, settings, context.userEv, {}, ae::filterPolicyForSpeed(context.video ? 0 : context.config.speed)))
+    // A tapped spot meters with the default highlight handling.
+    const auto meterPolicy = context.spotActive ? ae::MeterPolicy{} : ae::meterPolicyFor(context.config.metering);
+    if (const auto step = rawrAe_.update(f, settings, context.userEv, meterPolicy, ae::filterPolicyForSpeed(context.video ? 0 : context.config.speed)))
         controller->setRawrAeRequest(step->request.shutterNs, step->request.iso);
 }
 
@@ -194,6 +196,16 @@ std::array<float, 4> SessionFrameCallbacks::sceneMeteringSpot() {
     const float cx = std::clamp(context.spotX, kHalf, 1.0f - kHalf);
     const float cy = std::clamp(context.spotY, kHalf, 1.0f - kHalf);
     return {cx - kHalf, cy - kHalf, cx + kHalf, cy + kHalf};
+}
+
+uint32_t SessionFrameCallbacks::sceneMeteringWeighting() {
+    const auto* controller = engine_->cameraControls_.controller();
+    if (!controller) return 0;
+    const auto context = controller->rawrAeContext();
+    if (!context.engaged) return 0;
+    // Highlight-weighted keeps matrix weighting; it changes the policy only.
+    const int m = context.config.metering;
+    return m == 1 || m == 2 ? uint32_t(m) : 0u;
 }
 
 bool SessionFrameCallbacks::sceneKeyMeteringEnabled() {

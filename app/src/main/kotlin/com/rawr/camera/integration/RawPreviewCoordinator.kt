@@ -274,7 +274,7 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
     fun setRawrAutoExposure(s: com.rawr.camera.settings.model.RawrAeSettings) = postNative {
         native.setRawrAutoExposure(
             nativeHandle, s.enabled, s.nightLook.nativeId, s.isoMin.iso, s.isoMax.iso, s.minShutter.ns,
-            s.maxShutter.ns, s.balance.ev, s.digitalGain.ev, s.speed.nativeId
+            s.maxShutter.ns, s.balance.ev, s.digitalGain.ev, s.speed.nativeId, s.metering.nativeId
         )
     }
 

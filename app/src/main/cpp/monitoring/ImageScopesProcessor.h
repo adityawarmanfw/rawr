@@ -48,7 +48,7 @@ class ImageScopesProcessor final {
     // spot (normalized x0,y0,x1,y1 of the image; empty = none) meters only inside it.
     void recordSceneExposure(VkCommandBuffer command, uint32_t frameSlot, VkImageView linearView, uint32_t width,
                              uint32_t height, const std::array<float, 3>& lumaWeights, float clipLuma,
-                             const std::array<float, 4>& spot = {});
+                             const std::array<float, 4>& spot = {}, uint32_t weighting = 0);
     [[nodiscard]] std::optional<SceneExposureStats> consumeSceneExposure(uint32_t frameSlot);
     // Clip luma the slot's scene statistics were binned with (0 if none).
     [[nodiscard]] float sceneClipLuma(uint32_t frameSlot) const noexcept {

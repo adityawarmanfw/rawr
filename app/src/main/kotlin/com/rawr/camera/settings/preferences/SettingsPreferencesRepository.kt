@@ -669,7 +669,8 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
                 maxShutter = enumOrDefault(p[Keys.rawrAeMaxShutter]?.let { if (it == "S4") "S5" else it }, d.rawrAe.maxShutter),
                 balance = enumOrDefault(p[Keys.rawrAeBalance], d.rawrAe.balance),
                 digitalGain = enumOrDefault(p[Keys.rawrAeDigitalGain], d.rawrAe.digitalGain),
-                speed = enumOrDefault(p[Keys.rawrAeSpeed], d.rawrAe.speed)
+                speed = enumOrDefault(p[Keys.rawrAeSpeed], d.rawrAe.speed),
+                metering = enumOrDefault(p[Keys.rawrAeMetering], d.rawrAe.metering)
             )
         )
     }
@@ -903,6 +904,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.rawrAeBalance] = v.rawrAe.balance.name
         p[Keys.rawrAeDigitalGain] = v.rawrAe.digitalGain.name
         p[Keys.rawrAeSpeed] = v.rawrAe.speed.name
+        p[Keys.rawrAeMetering] = v.rawrAe.metering.name
         // Drop pre-v30 shared keys once the split values are written.
         p.remove(Keys.fccSteps)
         p.remove(Keys.defringeEnabled)
@@ -1190,6 +1192,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val rawrAeBalance = stringPreferencesKey("capture_rawr_ae_balance")
         val rawrAeDigitalGain = stringPreferencesKey("capture_rawr_ae_digital_gain")
         val rawrAeSpeed = stringPreferencesKey("capture_rawr_ae_speed")
+        val rawrAeMetering = stringPreferencesKey("capture_rawr_ae_metering")
     }
 }
 

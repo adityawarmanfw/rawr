@@ -54,7 +54,8 @@ void setAntibandingMode(EngineHandle h, uint8_t mode) noexcept {
     if (h) engine(h)->cameraControls().setAntibandingMode(mode);
 }
 void setRawrAutoExposure(EngineHandle h, bool enabled, int nightLook, int isoMin, int isoMax, int64_t shutterStartNs,
-                         int64_t shutterMaxNs, float balanceEv, float maxDigitalGainEv, int speed) noexcept {
+                         int64_t shutterMaxNs, float balanceEv, float maxDigitalGainEv, int speed,
+                         int metering) noexcept {
     if (!h) return;
     rawrcam::camera::RawrAeConfig c;
     c.enabled = enabled;
@@ -66,6 +67,7 @@ void setRawrAutoExposure(EngineHandle h, bool enabled, int nightLook, int isoMin
     c.balanceEv = std::isfinite(balanceEv) ? std::clamp(balanceEv, -2.0f, 2.0f) : 0.0f;
     c.maxDigitalGainEv = std::isfinite(maxDigitalGainEv) ? std::clamp(maxDigitalGainEv, 0.0f, 4.0f) : 2.0f;
     c.speed = std::clamp(speed, 0, 2);
+    c.metering = std::clamp(metering, 0, 3);
     engine(h)->cameraControls().setRawrAeConfig(c);
 }
 void selectLens(EngineHandle h, const std::string& v) noexcept {

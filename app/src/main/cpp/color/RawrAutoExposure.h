@@ -167,6 +167,10 @@ struct MeterPolicy {
     float channelMarginEv = 0.6f;
     // The highlight guard may darken the key at most this far.
     float maxGuardEv = 1.5f;
+    // Highlight-weighted: the percentile sits at the clip (less the margin)
+    // whatever the key, within keyRangeEv below / highlightLiftEv above it.
+    bool highlightPriority = false;
+    float highlightLiftEv = 1.0f;
     // A clipped percentile does not say by how much; assume this far over.
     float clippedOverEv = 0.5f;
     // Night: below dayEv100 the key target lowers smoothly, reaching
@@ -212,6 +216,27 @@ struct Metered {
 };
 
 // Exposure the scene wants, independent of the frame's own exposure.
+// Metering modes (Settings). The sample weighting itself (matrix, centre,
+// average, spot) is the GPU meter's; these set the highlight handling.
+enum class Metering : int { Matrix = 0, CenterWeighted = 1, Average = 2, Highlight = 3 };
+inline MeterPolicy meterPolicyFor(int metering) noexcept {
+    MeterPolicy p;
+    switch (Metering(metering)) {
+        case Metering::CenterWeighted:
+            p.maxGuardEv = 0.75f;  // the subject at the centre wins over edge highlights
+            break;
+        case Metering::Highlight:
+            p.highlightPriority = true;
+            p.highlightPercentile = 0.995f;
+            p.channelMarginEv = 0.3f;
+            p.maxGuardEv = 5.0f;
+            break;
+        default:
+            break;
+    }
+    return p;
+}
+
 inline std::optional<Metered> meter(const FrameObservation& f, NightLook look, float userEv,
                                     const MeterPolicy& p = {}) noexcept {
     if (!f.weightedBins || !std::isfinite(f.logExposure) || !std::isfinite(f.clipLumaEv)) return std::nullopt;
@@ -228,7 +253,9 @@ inline std::optional<Metered> meter(const FrameObservation& f, NightLook look, f
     const double keyTarget = std::log2(double(p.targetKey)) + double(m.nightOffsetEv) + double(userEv);
     const double byKey = keyTarget - keyScene;
     const double byHighlight = double(f.clipLumaEv - p.channelMarginEv) - highScene;
-    const double guarded = std::max(std::min(byKey, byHighlight), byKey - double(p.maxGuardEv));
+    const double guarded = p.highlightPriority
+                               ? std::clamp(byHighlight, byKey - double(p.maxGuardEv), byKey + double(p.highlightLiftEv))
+                               : std::max(std::min(byKey, byHighlight), byKey - double(p.maxGuardEv));
     m.guardEv = float(guarded - byKey);
     m.desiredLogExposure = guarded;
     return m;

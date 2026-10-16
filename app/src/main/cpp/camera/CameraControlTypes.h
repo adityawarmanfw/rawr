@@ -61,6 +61,7 @@ struct RawrAeConfig {
     float balanceEv = 0.0f;
     float maxDigitalGainEv = 2.0f;
     int speed = 1;  // 0 slow, 1 normal, 2 fast
+    int metering = 0;  // rawr_ae::Metering id
 };
 
 struct CameraControlCapabilities {

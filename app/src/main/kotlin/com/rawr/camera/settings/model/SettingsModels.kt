@@ -255,6 +255,14 @@ enum class RawrAeSpeed(val label: String, val nativeId: Int) {
     Fast("Fast", 2)
 }
 
+/** rawr metering mode; a tap-to-meter spot overrides it while set. */
+enum class RawrMetering(val label: String, val nativeId: Int) {
+    Matrix("Matrix", 0),
+    CenterWeighted("Centre", 1),
+    Average("Average", 2),
+    Highlight("Highlight", 3)
+}
+
 /** rawr auto exposure: Auto/S/I solved in the app with Camera2 AE off. Opt-in. */
 data class RawrAeSettings(
     val enabled: Boolean = false,
@@ -265,7 +273,8 @@ data class RawrAeSettings(
     val maxShutter: RawrMaxShutter = RawrMaxShutter.Auto,
     val balance: RawrBalance = RawrBalance.Balanced,
     val digitalGain: RawrDigitalGain = RawrDigitalGain.Ev2,
-    val speed: RawrAeSpeed = RawrAeSpeed.Normal
+    val speed: RawrAeSpeed = RawrAeSpeed.Normal,
+    val metering: RawrMetering = RawrMetering.Matrix
 )
 
 enum class ExposureStep(val label: String) {

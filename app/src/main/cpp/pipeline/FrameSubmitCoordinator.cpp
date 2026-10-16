@@ -578,7 +578,8 @@ void FrameSubmitCoordinator::submitSplitVideoAndMonitor(const SubmitParams& para
                                      if (!(spot[2] > spot[0] && spot[3] > spot[1])) spot = {};
                                  }
                                  resources_.recorder()->recordSceneExposure(cmd, slotIndex, view, width, height,
-                                                                            params.sensorToSrgb, params.wb, spot);
+                                                                            params.sensorToSrgb, params.wb, spot,
+                                                                            diagnosticsPort_.sceneMeteringWeighting());
                              });
         if (!directBuffer && !bridgeCopy) {
             releaseRawInputImage(current, *acquired.raw, vulkanContext_.queueFamily(),
@@ -757,7 +758,10 @@ FrameSubmitCoordinator::RecordedSubmit FrameSubmitCoordinator::recordSubmitComma
     recordInput.highlightThreshold = highlightThreshold_;
     recordInput.highlightCompression = highlightCompression_;
     recordInput.sceneExposureEnabled = diagnosticsPort_.sceneKeyMeteringEnabled();
-    if (recordInput.sceneExposureEnabled) recordInput.sceneSpot = diagnosticsPort_.sceneMeteringSpot();
+    if (recordInput.sceneExposureEnabled) {
+        recordInput.sceneSpot = diagnosticsPort_.sceneMeteringSpot();
+        recordInput.sceneWeighting = diagnosticsPort_.sceneMeteringWeighting();
+    }
     if (acquired.videoIndex && videoOutput_) {
         const auto cameraToAp1 = RawDevelopRecorder::composeCameraToAp1(params.sensorToSrgb);
         rawrcam::video::VideoDemosaic::Frame videoFrame{};

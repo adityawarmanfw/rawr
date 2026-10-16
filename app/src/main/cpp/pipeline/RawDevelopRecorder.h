@@ -102,6 +102,7 @@ struct RawDevelopRecordInput {
     bool sceneExposureEnabled = false;
     // Spot meter rectangle on the preview (normalized x0,y0,x1,y1; empty = none).
     std::array<float, 4> sceneSpot{};
+    uint32_t sceneWeighting = 0;  // image_scopes::SceneWeighting
 };
 
 struct RawDevelopRecordResult {
@@ -125,7 +126,8 @@ class RawDevelopRecorder final {
     RawDevelopRecordResult record(const RawDevelopRecordInput& input, uint32_t auditSubmitCount) const;
     void recordSceneExposure(VkCommandBuffer command, uint32_t frameSlot, VkImageView view, uint32_t width,
                              uint32_t height, const std::array<float, 9>& sensorToSrgb,
-                             const std::array<float, 4>& wb, const std::array<float, 4>& spot = {}) const;
+                             const std::array<float, 4>& wb, const std::array<float, 4>& spot = {},
+                             uint32_t weighting = 0) const;
     void recordVideoScopes(VkCommandBuffer command, uint32_t frameSlot, VkImageView monitorView, VkImage monitorImage,
                            uint32_t width, uint32_t height, int sensorOrientationDegrees,
                            int deviceRotationDegrees) const;
