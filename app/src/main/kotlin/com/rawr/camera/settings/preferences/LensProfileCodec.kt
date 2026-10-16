@@ -111,7 +111,7 @@ internal object LensProfileCodec {
                 val o = array.getJSONObject(i)
                 val values = o.optJSONArray("values")
                 VendorKey(
-                    tag = o.getString("tag"),
+                    tag = o.getString("tag").trim(),
                     scope = VendorKeyScope.fromWire(o.optString("scope")),
                     type = VendorKeyType.fromWire(o.optString("type")) ?: VendorKeyType.Int32,
                     values = if (values == null) emptyList() else (0 until values.length()).map { values.getDouble(it) },

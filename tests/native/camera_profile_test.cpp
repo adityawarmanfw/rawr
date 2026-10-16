@@ -226,6 +226,11 @@ void testProfileJson() {
     // The escaped name survives a second round trip.
     assert(parseCameraProfile(serializeCameraProfile(*parsed))->lenses[0].lensId == "W\"1");
 
+    const auto trimmed = parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","keys":[{"tag":" \tvendor.mode\n","values":[7]}]}]})");
+    assert(trimmed && trimmed->lenses[0].keys[0].tag == "vendor.mode");
+    assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","keys":[{"tag":"vendor.mode\nInt32\n7","values":[7]}]}]})", &error));
+    assert(error == "Key name cannot contain whitespace; enter type and value in their separate fields");
+
     // Rejected: malformed JSON, no lenses, duplicate ids, unknown key type, static levels without white.
     assert(!parseCameraProfile("{\"lenses\":[", &error) && !error.empty());
     assert(!parseCameraProfile(R"({"lenses":[]})"));

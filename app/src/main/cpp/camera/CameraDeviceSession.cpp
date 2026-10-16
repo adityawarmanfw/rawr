@@ -17,7 +17,7 @@
 #include "camera/CameraKeyInjection.h"
 #include "diagnostics/logging/RuntimeTraceRecorder.h"
 #include "metadata/CameraMetadataReader.h"
-#include "vivo/VivoVendorTags.h"
+#include "camera/CameraMetadataTags.h"
 
 namespace rawrcam::camera {
 namespace {
@@ -167,7 +167,7 @@ std::optional<LensRoute> CameraDeviceSession::select(const LensRoute& requested,
     cameraContext_ = std::make_shared<const metadata::CameraContextMetadata>(std::move(*parsed));
     characteristics_ = chars;
     diag(std::string("CAMERA_ZSL_PROBE enableZslInSessionKeys=") +
-         (vivo::containsI32Tag(chars, ACAMERA_REQUEST_AVAILABLE_SESSION_KEYS, ACAMERA_CONTROL_ENABLE_ZSL) ? "true"
+         (containsI32Tag(chars, ACAMERA_REQUEST_AVAILABLE_SESSION_KEYS, ACAMERA_CONTROL_ENABLE_ZSL) ? "true"
                                                                                                           : "false") +
          " repeatingIntent=PREVIEW enableZslRequest=false");
 
@@ -344,7 +344,7 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
     if (selected) {
         // The user configured these keys; a lens that can't get them (e.g. a
         // crop-readout mode) would produce wrong frames, so fail loudly.
-        const auto lensKeys = applyCameraKeySettings(sessionParameters_, characteristics_, selected->keys,
+        const auto lensKeys = applyCameraKeySettings(sessionParameters_, characteristics_, selected->keys, selected->cameraId.c_str(),
                                                      CameraKeySetting::Scope::Session, "lens", diag);
         if (!lensKeys.failures.empty())
             return fail("lens_session_keys", "lensId=" + selected->lensId + " failed=" + joined(lensKeys.failures));
@@ -393,7 +393,7 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
     // Stills, multiframe bursts and video all come from this repeating RAW
     // request, so request-scope keys only need to be set here.
     if (selected) {
-        const auto lensKeys = applyCameraKeySettings(request_, characteristics_, selected->keys,
+        const auto lensKeys = applyCameraKeySettings(request_, characteristics_, selected->keys, selected->cameraId.c_str(),
                                                      CameraKeySetting::Scope::Request, "lens", diag);
         if (!lensKeys.failures.empty())
             return fail("lens_request_keys", "lensId=" + selected->lensId + " failed=" + joined(lensKeys.failures));

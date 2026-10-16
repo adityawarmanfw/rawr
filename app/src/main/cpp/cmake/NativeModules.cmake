@@ -125,7 +125,7 @@ rawrcam_module(camera
     camera/CameraCallbacks.cpp
     camera/CameraRequestPipeline.cpp
     camera/CameraResultProcessor.cpp
-    camera/vivo/VivoVendorTags.cpp
+    camera/CameraMetadataTags.cpp
     camera/CameraRouting.cpp
     camera/CameraProfileJson.cpp
     camera/CameraProbe.cpp

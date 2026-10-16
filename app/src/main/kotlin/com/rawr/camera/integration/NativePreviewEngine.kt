@@ -16,6 +16,8 @@ class NativePreviewEngine {
         }
     }
 
+    external fun installCameraTagResolver(resolver: CameraTagResolver)
+
     external fun create(filesDir: String, nativeLibraryDir: String, customDriverPath: String): Long
 
     external fun destroy(handle: Long)

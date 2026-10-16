@@ -44,7 +44,7 @@ cpp/
 │   ├── CameraCadencePolicy.h
 │   ├── TapFocusPolicy.h
 │   ├── Camera*Controls/Capabilities/Result* files
-│   └── vivo/                         # Vendor-specific Camera2 tags
+│   └── CameraMetadataTags.{h,cpp}    # Shared Camera2 tag lookup and compatibility
 ├── imaging/
 │   ├── FrameLimits.h                 # Shared reader/queue/pairer/slot capacity budget
 │   ├── RawFrameIngress.{h,cpp}        # AImageReader acquisition

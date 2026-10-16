@@ -108,6 +108,8 @@ fun validateLevels(levels: LensLevels): String? {
 
 fun validateVendorKey(key: VendorKey): String? {
     if (key.tag.isBlank()) return "Key name is required"
+    if (key.tag.trim().any { it.isWhitespace() })
+        return "Key name cannot contain whitespace; enter type and value in their separate fields"
     if (key.values.isEmpty()) return "${key.tag}: enter at least one value"
     val range: ClosedFloatingPointRange<Double>? =
         when (key.type) {

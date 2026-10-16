@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "camera/CameraProbe.h"
+#include "camera/CameraMetadataTags.h"
 #include "camera/CameraProfileJson.h"
 #include "camera/CameraVideoCapabilities.h"
 #include "camera/NativeCameraController.h"
@@ -932,4 +933,9 @@ extern "C" JNIEXPORT jstring JNICALL Java_com_rawr_camera_integration_SystemProp
     char value[PROP_VALUE_MAX]{};
     __system_property_get(jString(env, key).c_str(), value);
     return env->NewStringUTF(value);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_rawr_camera_integration_NativePreviewEngine_installCameraTagResolver(JNIEnv* env, jobject, jobject resolver) {
+    rawrcam::camera::installCameraTagResolver(env, resolver);
 }

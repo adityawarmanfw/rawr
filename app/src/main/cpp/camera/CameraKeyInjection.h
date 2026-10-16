@@ -22,7 +22,7 @@ struct CameraKeyInjectionResult {
 // be advertised in REQUEST_AVAILABLE_SESSION_KEYS. Every key is logged; the
 // caller decides whether a failure rejects the session.
 CameraKeyInjectionResult applyCameraKeySettings(ACaptureRequest* request, const ACameraMetadata* characteristics,
-                                                const std::vector<CameraKeySetting>& keys,
+                                                const std::vector<CameraKeySetting>& keys, const char* cameraId,
                                                 CameraKeySetting::Scope scope, const char* origin,
                                                 const std::function<void(const std::string&)>& diag);
 

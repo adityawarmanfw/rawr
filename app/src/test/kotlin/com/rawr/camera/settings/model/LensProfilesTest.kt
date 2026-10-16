@@ -46,6 +46,17 @@ class LensProfilesTest {
     }
 
     @Test
+    fun vendorKeyNamesTrimEdgesButRejectPastedTypeAndValue() {
+        assertNull(validateVendorKey(VendorKey(" \tvendor.mode\n", values = listOf(7.0))))
+        for (name in listOf("vendor.mode\nInt32\n7", "vendor. mode", "vendor.\tmode")) {
+            assertEquals(
+                "Key name cannot contain whitespace; enter type and value in their separate fields",
+                validateVendorKey(VendorKey(name, values = listOf(7.0)))
+            )
+        }
+    }
+
+    @Test
     fun listNeedsAnEnabledLens() {
         val problems = validateLensProfiles(listOf(lens.copy(enabled = false)))
         assertTrue("At least one lens must be enabled" in problems)
