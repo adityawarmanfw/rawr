@@ -39,10 +39,14 @@ internal fun extractIncomingDngUri(intent: Intent?, resolveType: (Uri) -> String
             else -> return null
         } ?: return null
     if (uri.scheme != "content" && uri.scheme != "file") return null
-    val mime = intent.type ?: runCatching { resolveType(uri) }.getOrNull()
-    when (mime?.substringBefore(';')?.trim()?.lowercase(java.util.Locale.ROOT)) {
-        "image/x-adobe-dng", "image/dng", "image/x-dng" -> Unit
-        else -> return null
-    }
-    return uri
+    // Galleries often send a generic type (image/*) for a DNG, so ask the provider when the
+    // intent's own type is not a DNG one.
+    if (isDngMime(intent.type) || isDngMime(runCatching { resolveType(uri) }.getOrNull())) return uri
+    return null
 }
+
+private fun isDngMime(mime: String?): Boolean =
+    when (mime?.substringBefore(';')?.trim()?.lowercase(java.util.Locale.ROOT)) {
+        "image/x-adobe-dng", "image/dng", "image/x-dng" -> true
+        else -> false
+    }
