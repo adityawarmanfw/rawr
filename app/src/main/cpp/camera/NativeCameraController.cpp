@@ -384,7 +384,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
         }
     }
     bool sensitivityProbeEligibleLocked() const {
-        return sensitivityCalibrationWanted && deviceSession.sensorModeOverridden() &&
+        // rawr AE needs the coordinate too: it refuses to run without it.
+        return (sensitivityCalibrationWanted || rawrAeConfig.enabled) && deviceSession.sensorModeOverridden() &&
                control.capabilities.manualExposureSupported && !control.videoMode && control.recordingFps <= 0;
     }
     bool probeSensitivityCoordinateLocked() {
@@ -1162,7 +1163,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         submitRepeatingLocked();
     }
     void setRawrAeConfigValue(const NativeCameraController::RawrAeConfig& config) {
-        std::lock_guard<std::mutex> lock(mutex);
+        std::unique_lock<std::mutex> lock(mutex);
         const bool toggled = rawrAeConfig.enabled != config.enabled;
         rawrAeConfig = config;
         if (!config.enabled) rawrAePending.store(0, std::memory_order_relaxed);
@@ -1178,6 +1179,9 @@ struct NativeCameraController::Impl final : CameraEventSink {
             if (priorityMode && !supported) control.exposureMode = ExposureControlMode::Auto;
         }
         applyRawrAeLocked();
+        // Uncalibrated DCG sensor: measure the ISO coordinate once (cached
+        // per camera across launches), as HDR+ Bracketed does.
+        if (toggled && config.enabled) restartForSensitivityCalibrationLocked(lock);
     }
     void tickControls(int64_t nowMs) {
         std::lock_guard<std::mutex> lock(mutex);
