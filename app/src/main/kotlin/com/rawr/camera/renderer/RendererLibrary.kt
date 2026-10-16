@@ -164,7 +164,11 @@ internal fun RendererLibrary(
                     })
             }
         }
-        if (scanning) LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp))
+        // Fixed slot: rescans run after every published conversion, and an
+        // indicator that came and went would nudge the cards below it.
+        Box(Modifier.fillMaxWidth().height(2.dp)) {
+            if (scanning) LinearProgressIndicator(Modifier.fillMaxSize())
+        }
         ConvertStatus(
             convert,
             deletable = if (convert.running) 0 else queue.deletableOriginals().size,
