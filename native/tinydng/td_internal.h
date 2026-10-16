@@ -257,7 +257,9 @@ size_t td_reals_from_buf(const uint8_t* p, uint16_t type, int big_endian,
 #define TD_TAG_CFA_PLANE_COLOR 50710u
 #define TD_TAG_CFA_LAYOUT 50711u
 #define TD_TAG_LINEARIZATION_TABLE 50712u
-#define TD_TAG_DEFAULT_BLACK_RENDER 50713u
+/* 50713 is BlackLevelRepeatDim; DefaultBlackRender is 51110. */
+#define TD_TAG_BLACK_LEVEL_REPEAT_DIM 50713u
+#define TD_TAG_DEFAULT_BLACK_RENDER 51110u
 #define TD_TAG_BLACK_LEVEL 50714u
 #define TD_TAG_WHITE_LEVEL 50717u
 #define TD_TAG_COLOR_MATRIX1 50721u
@@ -280,6 +282,40 @@ size_t td_reals_from_buf(const uint8_t* p, uint16_t type, int big_endian,
 #define TD_TAG_OPCODE_LIST3 51022u
 #define TD_TAG_NOISE_PROFILE 51041u
 #define TD_TAG_SEMANTIC_NAME 52526u
+/* Converter carry: EXIF/identity tags parsed for passthrough. */
+#define TD_TAG_XMP 700u
+#define TD_TAG_FNUMBER 33437u
+#define TD_TAG_TIFF_EP_STANDARD_ID 37398u
+#define TD_TAG_EXIF_VERSION 36864u
+#define TD_TAG_DATETIME_ORIGINAL 36867u
+#define TD_TAG_DATETIME_DIGITIZED 36868u
+#define TD_TAG_OFFSET_TIME 36880u
+#define TD_TAG_OFFSET_TIME_ORIGINAL 36881u
+#define TD_TAG_OFFSET_TIME_DIGITIZED 36882u
+#define TD_TAG_EXPOSURE_COMPENSATION 37380u
+#define TD_TAG_MAX_APERTURE_VALUE 37381u
+#define TD_TAG_SUBJECT_DISTANCE 37382u
+#define TD_TAG_LIGHT_SOURCE 37384u
+#define TD_TAG_FLASH 37385u
+#define TD_TAG_FOCAL_LENGTH 37386u
+#define TD_TAG_MAKER_NOTE 37500u
+#define TD_TAG_SUBSEC_TIME 37520u
+#define TD_TAG_SUBSEC_TIME_ORIGINAL 37521u
+#define TD_TAG_SUBSEC_TIME_DIGITIZED 37522u
+#define TD_TAG_SENSING_METHOD 41495u
+#define TD_TAG_EXPOSURE_MODE 41986u
+#define TD_TAG_WHITE_BALANCE 41987u
+#define TD_TAG_DIGITAL_ZOOM_RATIO 41988u
+#define TD_TAG_FOCAL_LENGTH_35MM 41989u
+#define TD_TAG_SHARPNESS 41994u
+#define TD_TAG_BODY_SERIAL 42033u
+#define TD_TAG_LENS_SPEC 42034u
+#define TD_TAG_LENS_MAKE 42035u
+#define TD_TAG_LENS_MODEL 42036u
+#define TD_TAG_LENS_SERIAL 42037u
+#define TD_TAG_UNIQUE_CAMERA_MODEL 50708u
+#define TD_TAG_BASELINE_EXPOSURE 50730u
+#define TD_BLOB_MAX_BYTES (2u * 1024u * 1024u)
 
 /* ------------------------------------------------------------------ */
 /* IFD build scratch (populated while parsing one IFD)                */

@@ -45,6 +45,14 @@
 #define TD_WTAG_FNUMBER 33437u
 #define TD_WTAG_PHOTO_SENSITIVITY 34855u
 #define TD_WTAG_EXIF_VERSION 36864u
+#define TD_WTAG_LINEARIZATION_TABLE 50712u
+#define TD_WTAG_PROFILE_NAME 50936u
+#define TD_WTAG_PROFILE_EMBED_POLICY 50941u
+#define TD_WTAG_TIFF_EP_STANDARD_ID 37398u
+#define TD_WTAG_XMP 700u
+#define TD_WTAG_EXPOSURE_COMPENSATION 37380u
+#define TD_WTAG_SHARPNESS 41994u
+#define TD_WTAG_MAKER_NOTE 37500u
 #define TD_WTAG_DATETIME_ORIGINAL 36867u
 #define TD_WTAG_DATETIME_DIGITIZED 36868u
 #define TD_WTAG_OFFSET_TIME 36880u
@@ -1509,6 +1517,11 @@ tinydng_status tinydng_writer_create(tinydng_context *ctx,
   w->w.big_endian = be;
   w->w.bigtiff = w->bigtiff;
   w->w.extras_cap = w->bigtiff ? (4u * 1024u * 1024u) : TD_WMAX_EXTRAS;
+  if (meta->raw) {
+    /* Passthrough blobs can exceed the fixed metadata budget. */
+    if (meta->raw->xmp_packet.present) w->w.extras_cap += meta->raw->xmp_packet.size + 16u;
+    if (meta->raw->linearization_table) w->w.extras_cap += meta->raw->linearization_table_count * 2u + 16u;
+  }
   w->w.extras = (uint8_t *)td_ctx_alloc(ctx, w->w.extras_cap, err);
   if (!w->w.extras) {
     td_ctx_free(ctx, w->segs);
@@ -1533,7 +1546,10 @@ tinydng_status tinydng_writer_create(tinydng_context *ctx,
   }
   td_add_short(&w->w, TD_TAG_COMPRESSION, comp);
   if (comp == TINYDNG_COMPRESSION_NEW_JPEG) {
-    td_add_short(&w->w, TD_TAG_PREDICTOR, w->ljpeg_predictor);
+    /* The LJPEG predictor lives in the JPEG stream. TIFF Predictor values > 1
+       mean horizontal differencing / floating point to readers, so the tag
+       is always 1 here. */
+    td_add_short(&w->w, TD_TAG_PREDICTOR, 1u);
   }
   td_add_short(&w->w, TD_TAG_PHOTOMETRIC, photo);
   td_add_short(&w->w, TD_TAG_SAMPLES_PER_PIXEL, spp);
@@ -1750,7 +1766,7 @@ tinydng_status tinydng_writer_create(tinydng_context *ctx,
                (const uint8_t *)raw->rawr_private_data,
                raw->rawr_private_size);
       }
-      if (raw->has_default_black_render) {
+      if (raw->has_default_black_render && raw->default_black_render <= 1u) {
         td_add_long(&w->w, TD_WTAG_DEFAULT_BLACK_RENDER, raw->default_black_render);
       }
       if (raw->noise_profile_count) {
@@ -1813,6 +1829,26 @@ tinydng_status tinydng_writer_create(tinydng_context *ctx,
           free(buf);
         }
       }
+      /* Converter carry: tags a DNG-to-DNG rewrite must keep. */
+      if (raw->linearization_table && raw->linearization_table_count &&
+          raw->linearization_table_count <= 65536u) {
+        td_add_shorts(&w->w, TD_WTAG_LINEARIZATION_TABLE, raw->linearization_table,
+                      (uint32_t)raw->linearization_table_count);
+      }
+      if (raw->profile_name) {
+        td_add_ascii(&w->w, TD_WTAG_PROFILE_NAME, raw->profile_name);
+      }
+      if (raw->has_profile_embed_policy) {
+        td_add_long(&w->w, TD_WTAG_PROFILE_EMBED_POLICY, (uint32_t)raw->profile_embed_policy);
+      }
+      if (raw->has_tiff_ep_standard_id) {
+        td_add(&w->w, TD_WTAG_TIFF_EP_STANDARD_ID, TD_TYPE_BYTE, 4,
+               raw->tiff_ep_standard_id, 4);
+      }
+      if (raw->xmp_packet.present && raw->xmp_packet.data && raw->xmp_packet.size) {
+        td_add(&w->w, TD_WTAG_XMP, raw->xmp_packet.type, raw->xmp_packet.count,
+               raw->xmp_packet.data, raw->xmp_packet.size);
+      }
       /* IFD0 descriptive tags from EXIF sidecar. */
     }
     {
@@ -1843,7 +1879,8 @@ tinydng_status tinydng_writer_create(tinydng_context *ctx,
             e->ctx = ctx;
             e->big_endian = be;
             e->bigtiff = w->bigtiff;
-            e->extras_cap = 64u * 1024u;
+            e->extras_cap = 64u * 1024u +
+                            (ex->maker_note.present ? ex->maker_note.size + 16u : 0u);
             e->extras = (uint8_t *)td_ctx_alloc(ctx, e->extras_cap, err);
             if (!e->extras) {
               td_ctx_free(ctx, w->w.extras);
@@ -1945,6 +1982,18 @@ tinydng_status tinydng_writer_create(tinydng_context *ctx,
           if (ex->has_focal_length_35mm) {
             td_add_short(e, TD_WTAG_FOCAL_LENGTH_35MM, ex->focal_length_35mm);
           }
+          if (ex->has_exposure_compensation) {
+            td_add_srational_pairs(e, TD_WTAG_EXPOSURE_COMPENSATION,
+                                   &ex->exposure_compensation[0],
+                                   &ex->exposure_compensation[1], 1);
+          }
+          if (ex->has_sharpness) {
+            td_add_short(e, TD_WTAG_SHARPNESS, ex->sharpness);
+          }
+          if (ex->maker_note.present && ex->maker_note.data && ex->maker_note.size) {
+            td_add(e, TD_WTAG_MAKER_NOTE, ex->maker_note.type, ex->maker_note.count,
+                   ex->maker_note.data, ex->maker_note.size);
+          }
           if (ex->body_serial) {
             td_add_ascii(e, TD_WTAG_BODY_SERIAL_NUMBER, ex->body_serial);
           } else if (raw && raw->body_serial) {
@@ -1970,7 +2019,8 @@ tinydng_status tinydng_writer_create(tinydng_context *ctx,
           }
           if (e->entry_count && !e->failed) {
             uint8_t ever[4] = {'0', '2', '3', '0'};
-            td_add(e, TD_WTAG_EXIF_VERSION, TD_TYPE_UNDEFINED, 4, ever, 4);
+            td_add(e, TD_WTAG_EXIF_VERSION, TD_TYPE_UNDEFINED, 4,
+                   ex->has_exif_version ? ex->exif_version : ever, 4);
           }
           if (e->failed) {
             w->w.failed = 1;
