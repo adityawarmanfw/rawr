@@ -737,11 +737,14 @@ BurstRunResult AndroidBurstCoordinator::runHdrPlusFrequency(const std::vector<Bu
             throw std::invalid_argument("multiframe burst: RAW geometry mismatch");
     // Bracketed bursts merge the companions as dark as the reference first:
     // their running merge is the substitute for brighter frames' clipped cells.
+    // Brighter ones follow by exposure, so each shares one pyramid clamp.
     std::vector<std::uint32_t> order;
     for (std::uint32_t i = 0; i < frameCount; ++i)
         if (i != ref) order.push_back(i);
     std::stable_sort(order.begin(), order.end(), [&](std::uint32_t a, std::uint32_t b) {
-        return !recorder.brighterCompanion(a) && recorder.brighterCompanion(b);
+        const float ka = recorder.brighterCompanion(a) ? recorder.exposureFactor(a) : 0.0f;
+        const float kb = recorder.brighterCompanion(b) ? recorder.exposureFactor(b) : 0.0f;
+        return ka < kb;
     });
     std::uint32_t companions = 0;
     for (std::uint32_t pass = 0; pass < 4u; ++pass) {

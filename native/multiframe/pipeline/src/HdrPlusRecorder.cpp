@@ -488,17 +488,21 @@ void HdrPlusFrequencyRecorder::recordCompanionAlignCoarse(VkCommandBuffer c, VkI
     if (!alignsThisPass()) throw std::logic_error("hdrplus frequency: coarse alignment outside an aligning pass");
     const float gain = frameGain(slot);
     align_.setCompanionGain(gain);
-    if (brighterCompanion(slot) && !pyramidClamped_) {
-        // Brighter companions (merged after the dark ones) align against a
-        // reference pyramid clamped just below their clip point; theirs gets
-        // the same clamp. Assumes they share one exposure (the ZSL frames).
+    if (brighterCompanion(slot)) {
+        // Brighter companions (merged after the dark ones, by exposure) align
+        // against a reference pyramid clamped just below their own clip
+        // point; theirs gets the same clamp. Rebuilt whenever that point
+        // moves, so each exposure gets its own clamp.
         float refBlack = 0.0f, black = 0.0f;
         for (int i = 0; i < 4; ++i) {
             refBlack += 0.25f * align_.referenceBlack()[std::size_t(i)];
             black += 0.25f * frame.blackByPhase[std::size_t(i)];
         }
-        align_.recordClampedReferencePyramid(c, refBlack + 0.9f * (frame.whiteLevel - black) * gain);
-        pyramidClamped_ = true;
+        const float clampTo = refBlack + 0.9f * (frame.whiteLevel - black) * gain;
+        if (std::fabs(clampTo - pyramidClamp_) > 0.005f * clampTo) {
+            align_.recordClampedReferencePyramid(c, clampTo);
+            pyramidClamp_ = clampTo;
+        }
     }
     align_.recordCompanionPrepare(c, rawU16, frame);
     for (std::uint32_t level = align_.levelCount(); --level > 0u;) align_.recordCompanionAlignLevel(c, level);
@@ -523,7 +527,7 @@ void HdrPlusFrequencyRecorder::recordCompanionAlignFinest(VkCommandBuffer c, std
 
 void HdrPlusFrequencyRecorder::recordReference(VkCommandBuffer c, VkImageView rawU16, const RawNormalization& frame) {
     substitutionReady_ = false;
-    pyramidClamped_ = false;
+    pyramidClamp_ = 0.0f;
     if (pass_ == 0u) {
         executor_.record(c, ShaderId::HdrqShiftTable, {{}, {bb(0, arena_.buffer("hdrq_shift_table"))}}, nullptr, 0u,
                          divUp(49u * 64u, 64u), 1);

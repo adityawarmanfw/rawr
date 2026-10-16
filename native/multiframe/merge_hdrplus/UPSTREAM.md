@@ -64,6 +64,9 @@ equivalents near highlights, these reach ~80-115):
 - Brighter companions align against a reference pyramid whose finest-level
   input is clamped just below their clip point (their own pyramid gets the
   same clamp): otherwise clipped plateaus, where the noisy dark reference
-  still has detail, misalign whole tiles next to highlights.
+  still has detail, misalign whole tiles next to highlights. The clamp is
+  rebuilt per exposure (brighter companions merge in exposure order): ZSL
+  frames a little brighter than the reference while AE settles and the long
+  frames clip at very different points.
 - The highlights norm ramp starts at 0.90 of white (upstream 0.50), since
   clipped cells are already substituted.

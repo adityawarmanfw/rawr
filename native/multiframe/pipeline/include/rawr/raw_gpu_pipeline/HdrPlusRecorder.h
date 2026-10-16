@@ -136,6 +136,8 @@ class HdrPlusFrequencyRecorder final {
     [[nodiscard]] bool brighterCompanion(std::uint32_t slot) const noexcept {
         return !uniformExposure_ && frameExposure(slot) > 1.001f;
     }
+    // Bracketed bursts: frame exposure / reference exposure (1 otherwise).
+    [[nodiscard]] float exposureFactor(std::uint32_t slot) const noexcept { return frameExposure(slot); }
     void recordSubstitutionSource(VkCommandBuffer command);
     [[nodiscard]] bool needsSubstitutionSource(std::uint32_t slot) const noexcept {
         return brighterCompanion(slot) && !substitutionReady_;
@@ -153,7 +155,7 @@ class HdrPlusFrequencyRecorder final {
     std::vector<float> normalizationGains_{};
     bool uniformExposure_ = true;
     bool substitutionReady_ = false;  // this pass's hdrq_out_rgba holds the dark-frame estimate
-    bool pyramidClamped_ = false;     // reference pyramid rebuilt for brighter companions this pass
+    float pyramidClamp_ = 0.0f;       // reference pyramid clamp this pass (raw units), 0 = none
     float frameExposure(std::uint32_t slot) const noexcept {
         return slot < exposureFactors_.size() ? exposureFactors_[slot] : 1.0f;
     }
