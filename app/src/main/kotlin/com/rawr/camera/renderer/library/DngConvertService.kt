@@ -42,7 +42,9 @@ class DngConvertService : Service() {
         scope.coroutineContext[kotlinx.coroutines.Job]?.children?.forEach { it.cancel() }
         scope.launch {
             val manager = getSystemService(NotificationManager::class.java)
-            DngConvertQueue.get(this@DngConvertService).state.collect { manager.notify(NOTIFICATION, notification(it)) }
+            // Only while running: an update posted after the queue finishes would
+            // outlive the foreground service as a stuck ongoing notification.
+            DngConvertQueue.get(this@DngConvertService).state.collect { if (it.running) manager.notify(NOTIFICATION, notification(it)) }
         }
         return START_NOT_STICKY
     }
@@ -54,12 +56,13 @@ class DngConvertService : Service() {
 
     override fun onDestroy() {
         scope.cancel()
+        getSystemService(NotificationManager::class.java).cancel(NOTIFICATION)
         wakeLock?.let { if (it.isHeld) it.release() }
         super.onDestroy()
     }
 
     private fun notification(state: DngConvertState): Notification {
-        val position = state.done + state.failed.size + 1
+        val position = (state.done + state.failed.size + 1).coerceAtMost(state.total.coerceAtLeast(1))
         val cancel = PendingIntent.getService(this, 0, Intent(this, DngConvertService::class.java).setAction(ACTION_CANCEL),
             PendingIntent.FLAG_IMMUTABLE)
         return NotificationCompat.Builder(this, CHANNEL)

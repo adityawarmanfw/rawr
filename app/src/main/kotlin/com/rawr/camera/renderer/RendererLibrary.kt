@@ -355,7 +355,7 @@ private fun ConvertStatus(state: DngConvertState, onCancel: () -> Unit, onDismis
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             if (state.running) {
-                val position = state.done + state.failed.size + 1
+                val position = (state.done + state.failed.size + 1).coerceAtMost(state.total)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("Converting $position of ${state.total} · ${state.current?.conversion?.let { c ->
