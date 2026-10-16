@@ -78,8 +78,7 @@ std::string serializeCameraControlState(const CameraControlState& st) {
        << ",\"videoMode\":" << (st.videoMode ? "true" : "false")
        << ",\"videoPreviewFps\":" << st.videoPreviewFps
        << ",\"deferredCaptureExposureNs\":" << st.deferredCaptureExposureNs
-       << ",\"deferredCaptureSensitivity\":" << st.deferredCaptureSensitivity
-       << ",\"sensitivityReportedPerRequest\":" << st.sensitivityReportedPerRequest
+       << ",\"deferredCaptureReportedSensitivity\":" << st.deferredCaptureReportedSensitivity
        << ",\"longExposureNs\":" << st.longExposureNs << ",\"longExposureStartMs\":" << st.longExposureStartMs
        << ",\"lastLongExposureHonored\":" << st.lastLongExposureHonored
        << ",\"advertisedExposureTimeMaxNs\":" << c.advertisedExposureTimeMaxNs

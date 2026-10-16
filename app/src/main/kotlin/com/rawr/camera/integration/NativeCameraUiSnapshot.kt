@@ -62,10 +62,8 @@ internal data class NativeCameraUiSnapshot(
     val videoPreviewFps: Int = 30,
     /** Capture shutter when longer than the viewfinder runs (one-shot on press); 0 = none. */
     val deferredCaptureExposureNs: Long = 0L,
-    /** Its ISO (request scale, as the user picks it). */
-    val deferredCaptureSensitivity: Int = 0,
-    /** CaptureResult ISO per requested ISO (vendor sensor modes, e.g. 8); 0 when unknown. */
-    val sensitivityReportedPerRequest: Double = 0.0,
+    /** Its ISO on the reported scale (as appliedSensitivity). */
+    val deferredCaptureReportedSensitivity: Int = 0,
     /** Long exposure in flight: length, and CLOCK_MONOTONIC (uptime) ms it started; 0 submitted, -1 none. */
     val longExposureNs: Long = 0L,
     val longExposureStartMs: Long = -1L,
@@ -154,8 +152,7 @@ internal data class NativeCameraUiSnapshot(
                 videoMode = j.optBoolean("videoMode", false),
                 videoPreviewFps = j.optInt("videoPreviewFps", 30),
                 deferredCaptureExposureNs = j.optLong("deferredCaptureExposureNs", 0L),
-                deferredCaptureSensitivity = j.optInt("deferredCaptureSensitivity", 0),
-                sensitivityReportedPerRequest = j.optDouble("sensitivityReportedPerRequest", 0.0),
+                deferredCaptureReportedSensitivity = j.optInt("deferredCaptureReportedSensitivity", 0),
                 longExposureNs = j.optLong("longExposureNs", 0L),
                 longExposureStartMs = j.optLong("longExposureStartMs", -1L),
                 lastLongExposureHonored = j.optInt("lastLongExposureHonored", -1),

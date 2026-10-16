@@ -18,12 +18,9 @@ internal object NativeExposurePresentation {
         // show what the capture will use instead.
         val deferred = snapshot.deferredCaptureExposureNs > 0L
         val shownExposureNs = if (deferred) snapshot.deferredCaptureExposureNs else snapshot.appliedExposureTimeNs
-        // ISO on the scale the user picks: vendor sensor modes report a
-        // multiple of the requested ISO (the calibrated ratio).
-        val ratio = snapshot.sensitivityReportedPerRequest
         val shownSensitivity =
-            if (deferred && snapshot.deferredCaptureSensitivity > 0) snapshot.deferredCaptureSensitivity
-            else snapshot.appliedSensitivity?.let { if (ratio > 0.0) kotlin.math.round(it / ratio).toInt() else it }
+            if (deferred && snapshot.deferredCaptureReportedSensitivity > 0) snapshot.deferredCaptureReportedSensitivity
+            else snapshot.appliedSensitivity
         val applied =
             ExposureAppliedState(
                 shutter =

@@ -152,10 +152,8 @@ struct CameraControlState {
     // the sensor started it (CLOCK_MONOTONIC ms; 0 submitted, -1 none); and
     // whether the last one was honored (-1 none yet, 0 shortened, 1 honored).
     int64_t deferredCaptureExposureNs = 0;
-    int32_t deferredCaptureSensitivity = 0;  // request coordinate
-    // CaptureResult ISO per request ISO (vendor sensor modes report a
-    // different scale); 0 when unknown.
-    double sensitivityReportedPerRequest = 0.0;
+    // Its ISO on the CaptureResult (reported) scale, like the applied readout.
+    int32_t deferredCaptureReportedSensitivity = 0;
     int64_t longExposureNs = 0;
     int64_t longExposureStartMs = -1;
     int lastLongExposureHonored = -1;

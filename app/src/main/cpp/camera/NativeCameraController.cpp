@@ -868,9 +868,9 @@ struct NativeCameraController::Impl final : CameraEventSink {
         snapshot.videoPreviewFps = cadencePolicy.videoFps();
         if (const auto deferred = deferredCaptureExposureLocked()) {
             snapshot.deferredCaptureExposureNs = deferred->exposureTimeNs;
-            snapshot.deferredCaptureSensitivity = deferred->sensitivity;
+            const double ratio = results.sensitivityReportedPerRequest().value_or(1.0);
+            snapshot.deferredCaptureReportedSensitivity = int32_t(std::llround(deferred->sensitivity * ratio));
         }
-        snapshot.sensitivityReportedPerRequest = results.sensitivityReportedPerRequest().value_or(0.0);
         snapshot.longExposureNs = longExposureNs.load(std::memory_order_relaxed);
         snapshot.longExposureStartMs = longExposureStartMs.load(std::memory_order_relaxed);
         snapshot.lastLongExposureHonored = lastLongExposureHonored.load(std::memory_order_relaxed);
