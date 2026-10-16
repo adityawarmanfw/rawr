@@ -903,6 +903,10 @@ struct tinydng_writer {
   td_writer_seg *segs;
   td_writer w;
   uint64_t data_pos;
+  /* Metadata (extras, EXIF sub-IFD, main IFD) is reserved right after the
+     header so readers that only scan the first part of a file (Android's
+     media scanner on 200MP DNGs) find it; pixel data follows. */
+  uint64_t meta_end;
   int finished;
   /* Rawr: staged EXIF sub-IFD (entries + extras built at create, file
      offsets resolved at finish). Has its own extras buffer. */
@@ -1375,6 +1379,14 @@ static tinydng_status td_writer_put_header(tinydng_write_io *sink, int be,
     }
   }
   return TINYDNG_OK;
+}
+
+static tinydng_status td_relayout_extras(tinydng_context *ctx, td_writer *tw,
+                                         tinydng_error *err);
+
+static size_t td_ifd_size(const td_writer *w) {
+  return w->bigtiff ? (8u + w->entry_count * 20u + 8u)
+                    : (2u + w->entry_count * 12u + 4u);
 }
 
 static uint32_t td_wceil(uint32_t a, uint32_t b) {
@@ -2130,7 +2142,33 @@ tinydng_status tinydng_writer_create(tinydng_context *ctx,
       return TINYDNG_E_OOM;
     }
   }
-  w->data_pos = w->bigtiff ? 16u : 8u;
+  {
+    /* Reserve the metadata block. Its size is final here: finish only fills
+       segment offsets/counts into already sized arrays. */
+    uint64_t end = w->bigtiff ? 16u : 8u;
+    st = td_relayout_extras(ctx, &w->w, err);
+    if (st == TINYDNG_OK && w->has_exif) st = td_relayout_extras(ctx, &w->exif, err);
+    if (st != TINYDNG_OK) {
+      td_ctx_free(ctx, w->lzw_tbl.keys);
+      td_ctx_free(ctx, w->lzw_tbl.codes);
+      td_ctx_free(ctx, w->exif.extras);
+      td_ctx_free(ctx, w->w.extras);
+      td_ctx_free(ctx, w->segs);
+      td_ctx_free(ctx, w);
+      return st;
+    }
+    end += w->w.extras_len;
+    if (w->has_exif) {
+      end += w->exif.extras_len;
+      end += end & 1u;
+      end += td_ifd_size(&w->exif);
+    }
+    end += end & 1u;
+    end += td_ifd_size(&w->w);
+    end += end & 1u;
+    w->meta_end = end;
+    w->data_pos = end;
+  }
   *out = w;
   return TINYDNG_OK;
 }
@@ -2381,7 +2419,7 @@ tinydng_status tinydng_writer_finish(tinydng_writer *w, tinydng_error *err) {
     goto cleanup;
   }
 
-  extras_base = w->data_pos; /* already even-aligned */
+  extras_base = w->bigtiff ? 16u : 8u; /* reserved block after the header */
   if (w->w.extras_len > 0u) {
     if (w->sink.write(&w->sink, extras_base, w->w.extras, w->w.extras_len) !=
         w->w.extras_len) {
@@ -2465,10 +2503,13 @@ tinydng_status tinydng_writer_finish(tinydng_writer *w, tinydng_error *err) {
       ifd_off = main_ifd_off;
     }
   }
-  if (!w->bigtiff && ifd_off > (uint64_t)UINT32_MAX) {
-    td_set_error(err, TINYDNG_E_BOUNDS, TINYDNG_STAGE_WRITE, 0, 0, ifd_off,
-                 "classic TIFF offset limit exceeded");
-    st = TINYDNG_E_BOUNDS;
+  if (ifd_off & 1u) {
+    ifd_off++;
+  }
+  if (ifd_off + td_ifd_size(&w->w) > w->meta_end) {
+    td_set_error(err, TINYDNG_E_INTERNAL, TINYDNG_STAGE_WRITE, 0, 0, ifd_off,
+                 "metadata outgrew its reserved block");
+    st = TINYDNG_E_INTERNAL;
     goto cleanup;
   }
   st = td_writer_emit_ifd(&w->w, &w->sink, ifd_off, extras_base, err);

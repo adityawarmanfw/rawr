@@ -48,3 +48,13 @@ emit an invalid value 2. It is now 51110 and only 0/1 are written.
 Local fix: the TIFF Predictor tag is always 1 for lossless JPEG; the Annex H
 selector lives in the JPEG stream and values > 1 mean differencing/floating
 point to TIFF readers.
+
+Local layout: the streaming writer reserves the metadata block (main extras,
+EXIF sub-IFD, main IFD) right after the TIFF header at create and streams
+pixel data after it; finish fills the block in place. Android's media scanner
+does not reach an IFD written after ~150MB of 200MP pixel data, which left
+gallery rows without dimensions or orientation.
+
+Local fix: RATIONAL/SRATIONAL values use the smallest exact power-of-two or
+power-of-ten denominator when one exists (matrices are typically n/128), and
+the 1e6 fallback rounds instead of truncating.
