@@ -111,7 +111,7 @@ class SessionEngine {
     void setExperimentalMultiframeEnabled(bool enabled);
     // HDR+ Bracketed selected (with multiframe on): maxEv < 0 is the most
     // highlight headroom the meter may take (ZSL underexposure); 0 = off.
-    // Also allows the DCG ISO calibration frame for the long frames.
+    // Also allows the ISO calibration probe frame for the long frames.
     void setHdrPlusHeadroomMaxEv(float maxEv);
     [[nodiscard]] float hdrHeadroomMaxEv() const noexcept { return hdrHeadroomMaxEv_.load(std::memory_order_relaxed); }
     // Headroom EV (<= 0) a delivered frame was exposed with, from its actual

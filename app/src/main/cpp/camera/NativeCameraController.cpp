@@ -276,8 +276,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
                  " manual=" + std::to_string(control.capabilities.manualExposureSupported ? 1 : 0));
             return false;
         }
-        // CaptureResult ISO -> request coordinate (forced DCG modes report a
-        // different scale; same conversion as the M/I mode seed).
+        // CaptureResult ISO -> request coordinate (a vendor sensor mode may
+        // report a different scale, e.g. DCG; same conversion as the M/I seed).
         int32_t sensitivity = baseReportedSensitivity;
         if (const auto ratio = results.sensitivityReportedPerRequest(); ratio && *ratio > 0.0) {
             sensitivity = static_cast<int32_t>(std::llround(baseReportedSensitivity / *ratio));
@@ -339,14 +339,26 @@ struct NativeCameraController::Impl final : CameraEventSink {
     // Calibration is part of lens startup, before any preview is published.
     SensitivityProbeStartup sensitivityStartup;
     bool sensitivityCalibrationWanted = false;
-    // Reported/requested ISO ratios already measured, per camera, lens and
-    // profile (its sensor mode keys). A device constant: later sessions on
-    // the same camera skip the probe and show the viewfinder at once.
+    // Reported/requested ISO ratios already measured, per camera, lens,
+    // profile and the exact session keys applied: the ratio belongs to the
+    // sensor mode those keys select, so editing a key value re-probes. A
+    // device constant otherwise: later sessions skip the probe.
     std::map<std::string, double> sensitivityRatioCache;
     std::string sensitivityCacheKeyLocked() const {
         const auto& context = deviceSession.cameraContext();
         if (!context || !deviceSession.sensorModeOverridden()) return {};
-        return context->cameraId + "/" + context->lensId + "/" + profile.id;
+        std::string key = context->cameraId + "/" + context->lensId + "/" + profile.id;
+        if (const auto route = selectedRouteLocked()) {
+            std::ostringstream keys;
+            keys.precision(17);
+            for (const auto& setting : route->keys) {
+                if (!setting.enabled || setting.scope != CameraKeySetting::Scope::Session) continue;
+                keys << '|' << setting.tag << '=';
+                for (std::size_t i = 0; i < setting.values.size(); ++i) keys << (i ? "," : "") << setting.values[i];
+            }
+            key += keys.str();
+        }
+        return key;
     }
     // Saved across launches so the probe runs once per camera, ever.
     std::string sensitivityStorePath;
@@ -472,7 +484,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
             return;
         }
         const LensRoute& route = *selected;
-        // Session recreation (notably DCG ON/OFF) must not erase the user's
+        // Session recreation (notably sensor-mode key changes) must not erase the user's
         // semantic exposure intent. Preserve request-side controls only when
         // reopening the same physical camera; a lens/camera change gets a fresh
         // control state because its legal ranges and capabilities may differ.
@@ -504,7 +516,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
             control.requestedEvSteps = std::clamp(previousControl.requestedEvSteps, control.capabilities.evMinSteps,
                                                   control.capabilities.evMaxSteps);
             // Preserve white-balance intent across same-camera restarts (e.g.
-            // DCG ON/OFF). A lens/camera change gets fresh WB state because
+            // sensor-mode key changes). A lens/camera change gets fresh WB state because
             // the newly read capabilities/seed may differ.
             const auto wbMode = previousControl.whiteBalanceMode;
             const bool wbSupported =
@@ -786,8 +798,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
         const auto sensitivityReportedPerRequest = results.sensitivityReportedPerRequest();
         if (mode != ExposureControlMode::Auto && control.exposureMode != mode) {
             // Seed application-owned axes from the most recently applied exposure.
-            // Shutter is already in one coordinate. Sensitivity is not: forced DCG
-            // can report roughly 8x the request coordinate, so convert it through the
+            // Shutter is already in one coordinate. Sensitivity may not be: a
+            // vendor sensor mode (e.g. DCG) can report roughly 8x the request coordinate, so convert it through the
             // provenance-learned ratio instead of copying CaptureResult ISO verbatim.
             if (control.appliedExposureTimeNs) {
                 control.requestedExposureTimeNs =
@@ -1180,8 +1192,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
             if (priorityMode && !supported) control.exposureMode = ExposureControlMode::Auto;
         }
         applyRawrAeLocked();
-        // Uncalibrated DCG sensor: measure the ISO coordinate once (cached
-        // per camera across launches), as HDR+ Bracketed does.
+        // Sensor-mode keys with an unmeasured ISO coordinate: probe once (cached
+        // per camera and key values across launches), as HDR+ Bracketed does.
         if (toggled && config.enabled) restartForSensitivityCalibrationLocked(lock);
     }
     void tickControls(int64_t nowMs) {

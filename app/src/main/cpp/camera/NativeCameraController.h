@@ -64,7 +64,9 @@ class NativeCameraController {
     // False when the shutter/gain limits would leave long frames under
     // 0.5 EV brighter (they are skipped); true when unknown.
     bool longFramesWorthwhile() const;
-    // Runs DCG ISO calibration during startup, before exposing the viewfinder.
+    // Measures the reported/requested ISO ratio during startup when lens
+    // session keys change the sensor mode (a ratio of 1 is a valid result;
+    // keys do not imply DCG), before exposing the viewfinder.
     // Enabling it on an uncalibrated live session restarts that session.
     // Off unless HDR+ Bracketed is selected; never probes during video.
     void setSensitivityCalibrationWanted(bool wanted);
@@ -102,7 +104,8 @@ class NativeCameraController {
         int64_t sensorShutterMaxNs = 0;
         int64_t flickerPeriodNs = 0;
         float userEv = 0.0f;
-        // CaptureResult ISO / request ISO; 0 when unknown (then 1 unless DCG).
+        // CaptureResult ISO / request ISO; 0 when unknown (taken as 1 without
+        // sensor-mode keys; with them rawr AE waits for the probe).
         double reportedPerRequest = 0.0;
     };
     void setRawrAeConfig(const RawrAeConfig& config);

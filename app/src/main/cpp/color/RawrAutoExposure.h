@@ -15,7 +15,7 @@ namespace rawrcam::color::rawr_ae {
 // solves shutter + ISO itself, on any device with MANUAL_SENSOR.
 //
 // Exposures are linear products shutter(ns) x ISO in the *request*
-// coordinate (forced DCG modes report a different ISO scale; callers
+// coordinate (a vendor sensor mode may report a different ISO scale; callers
 // convert). logE = log2 of that product.
 //
 // Loop (per delivered frame):

@@ -99,7 +99,7 @@ std::optional<CameraPriorityAudit> CameraResultState::observe(CameraControlState
                 sensitivityTolerance = 1;
                 ownedAxisMismatch = std::abs(frame.sensitivity - provenance->requestedSensitivity) > 1;
             }
-            // In forced-DCG mode, a missing learned mapping is not evidence of
+            // With sensor-mode keys, a missing learned mapping is not evidence of
             // failure. Priority tag/fps checks still apply, but do not compare
             // incompatible request/result ISO coordinates and falsely snap back.
         } else {
