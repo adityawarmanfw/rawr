@@ -14,10 +14,17 @@ internal object NativeExposurePresentation {
         // mode, including Video: the monitor mirrors the actual exposure.
         // The shutter control resolves through the candidate labels, so
         // it shows degrees in Video (see CompactExposureButton).
+        // Long exposure pending: the viewfinder runs 1/5 s at raised ISO;
+        // show what the capture will use instead.
+        val deferred = snapshot.deferredCaptureExposureNs > 0L
+        val shownExposureNs = if (deferred) snapshot.deferredCaptureExposureNs else snapshot.appliedExposureTimeNs
+        val shownSensitivity =
+            if (deferred && snapshot.deferredCaptureReportedSensitivity > 0) snapshot.deferredCaptureReportedSensitivity
+            else snapshot.appliedSensitivity
         val applied =
             ExposureAppliedState(
                 shutter =
-                    snapshot.appliedExposureTimeNs?.let {
+                    shownExposureNs?.let {
                         AppliedExposureReadout(
                             ExposureFormat.formatShutterNs(it),
                             projection.shutterValuesNs
@@ -27,7 +34,7 @@ internal object NativeExposurePresentation {
                         )
                     },
                 iso =
-                    snapshot.appliedSensitivity?.let {
+                    shownSensitivity?.let {
                         AppliedExposureReadout(
                             it.toString(),
                             projection.isoValues
