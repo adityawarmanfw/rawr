@@ -1115,6 +1115,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         c.isoAnalogMax = std::clamp(analog, c.isoMin, c.isoMax);
         c.shutterMinNs = std::max<int64_t>(1, caps.exposureTimeMinNs);
         const int64_t sensorShutterMax = std::max(c.shutterMinNs, caps.exposureTimeMaxNs);
+        c.sensorShutterMaxNs = sensorShutterMax;
         int64_t ceiling = rawrAeConfig.shutterMaxNs;
         if (ceiling <= 0) {
             // Handheld ceiling (OIS keeps 1/15 s sharp), never below the Auto FPS floor's frame.

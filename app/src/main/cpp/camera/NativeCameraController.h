@@ -97,6 +97,9 @@ class NativeCameraController {
         // Effective solver limits, request ISO coordinate.
         int32_t isoMin = 0, isoMax = 0, isoAnalogMax = 0;
         int64_t shutterMinNs = 0, shutterMaxNs = 0, shutterStartNs = 0;
+        // Sensor's longest exposure: bounds a user-locked S shutter, which the
+        // handheld shutterMaxNs (Auto/I only) must not shorten.
+        int64_t sensorShutterMaxNs = 0;
         int64_t flickerPeriodNs = 0;
         float userEv = 0.0f;
         // CaptureResult ISO / request ISO; 0 when unknown (then 1 unless DCG).

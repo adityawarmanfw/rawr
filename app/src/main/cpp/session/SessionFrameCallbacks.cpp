@@ -83,8 +83,12 @@ void SessionFrameCallbacks::updateRawrAe(const image_scopes::SceneExposureStatsD
     settings.lockedShutterNs = context.lockedShutterNs;
     settings.lockedIso = context.lockedIso;
     settings.flickerPeriodNs = context.flickerPeriodNs;
-    settings.limits = ae::Limits{context.isoMin,       context.isoMax,       context.isoAnalogMax,
-                                 context.shutterMinNs, context.shutterMaxNs, context.shutterStartNs,
+    // S: the user's shutter, up to what the sensor can do (not the handheld cap).
+    const int64_t shutterMax =
+        settings.mode == ae::Mode::ShutterPriority ? std::max(context.shutterMaxNs, context.sensorShutterMaxNs)
+                                                   : context.shutterMaxNs;
+    settings.limits = ae::Limits{context.isoMin,       context.isoMax, context.isoAnalogMax,
+                                 context.shutterMinNs, shutterMax,     std::min(context.shutterStartNs, shutterMax),
                                  context.config.maxDigitalGainEv};
     ae::FrameObservation f{stats->weightedBins, std::log2(clipLuma), exposure->logExposure(), exposure->shutterNs,
                            exposure->iso, metadata.aperture.value_or(0.0f), timestampNs};
