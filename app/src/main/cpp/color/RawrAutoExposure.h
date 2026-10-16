@@ -171,6 +171,11 @@ struct MeterPolicy {
     // whatever the key, within keyRangeEv below / highlightLiftEv above it.
     bool highlightPriority = false;
     float highlightLiftEv = 1.0f;
+    // Classic centre-weighted / average meter: the weighted mean of linear
+    // luma (bright areas pull it, as on a camera) at linearMeanTarget, and
+    // no highlight guard.
+    bool linearMean = false;
+    float linearMeanTarget = 0.18f;
     // A clipped percentile does not say by how much; assume this far over.
     float clippedOverEv = 0.5f;
     // Night: below dayEv100 the key target lowers smoothly, reaching
@@ -216,6 +221,22 @@ struct Metered {
 };
 
 // Exposure the scene wants, independent of the frame's own exposure.
+// Weighted mean of linear luma over the scene histogram (log2). Top-bin
+// (clipped) samples count at the bin's floor, a lower bound.
+inline std::optional<float> sceneLinearMeanEv(const std::uint32_t* bins) noexcept {
+    if (!bins) return std::nullopt;
+    const double width = double(kSceneKeyMaxEv - kSceneKeyMinEv) / double(kSceneKeyBins);
+    double total = 0.0, sum = 0.0;
+    for (std::size_t b = 0; b < kSceneKeyBins; ++b) {
+        if (!bins[b]) continue;
+        const double ev = kSceneKeyMinEv + (double(b) + (b + 1 == kSceneKeyBins ? 0.0 : 0.5)) * width;
+        total += bins[b];
+        sum += bins[b] * std::exp2(ev);
+    }
+    if (!(total > 0.0) || !(sum > 0.0)) return std::nullopt;
+    return float(std::log2(sum / total));
+}
+
 // Metering modes (Settings). The sample weighting itself (matrix, centre,
 // average, spot) is the GPU meter's; these set the highlight handling.
 enum class Metering : int { Matrix = 0, CenterWeighted = 1, Average = 2, Highlight = 3 };
@@ -223,12 +244,13 @@ inline MeterPolicy meterPolicyFor(int metering) noexcept {
     MeterPolicy p;
     switch (Metering(metering)) {
         case Metering::CenterWeighted:
-            p.maxGuardEv = 0.75f;  // the subject at the centre wins over edge highlights
+        case Metering::Average:
+            p.linearMean = true;
+            p.maxGuardEv = 0.0f;
             break;
         case Metering::Highlight:
             p.highlightPriority = true;
             p.highlightPercentile = 0.995f;
-            p.channelMarginEv = 0.3f;
             p.maxGuardEv = 5.0f;
             break;
         default:
@@ -250,8 +272,14 @@ inline std::optional<Metered> meter(const FrameObservation& f, NightLook look, f
     const double keyScene = double(*key) - f.logExposure;
     const bool clipped = *high >= f.clipLumaEv - 0.05f;
     const double highScene = (clipped ? double(f.clipLumaEv + p.clippedOverEv) : double(*high)) - f.logExposure;
-    const double keyTarget = std::log2(double(p.targetKey)) + double(m.nightOffsetEv) + double(userEv);
-    const double byKey = keyTarget - keyScene;
+    double keyTarget = std::log2(double(p.targetKey)) + double(m.nightOffsetEv) + double(userEv);
+    double byKey = keyTarget - keyScene;
+    if (p.linearMean) {
+        if (const auto mean = sceneLinearMeanEv(f.weightedBins)) {
+            keyTarget = std::log2(double(p.linearMeanTarget)) + double(m.nightOffsetEv) + double(userEv);
+            byKey = keyTarget - (double(*mean) - f.logExposure);
+        }
+    }
     const double byHighlight = double(f.clipLumaEv - p.channelMarginEv) - highScene;
     const double guarded = p.highlightPriority
                                ? std::clamp(byHighlight, byKey - double(p.maxGuardEv), byKey + double(p.highlightLiftEv))

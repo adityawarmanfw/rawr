@@ -191,6 +191,25 @@ int main() {
         assert(low.digitalGainEv == 0.0f && high.digitalGainEv == 0.0f && low.underexposed);
         assert(near(high.logExposure() - low.logExposure(), std::log2(126.0 / 50.0), 0.02));
     }
+    // Metering: the classic average has no highlight guard; matrix darkens
+    // for a clipping highlight, highlight-weighted the most.
+    {
+        std::array<std::uint32_t, rawrcam::color::kSceneKeyBins> bins{};
+        const auto binOf = [](float ev) {
+            return std::size_t((ev - rawrcam::color::kSceneKeyMinEv) /
+                               (rawrcam::color::kSceneKeyMaxEv - rawrcam::color::kSceneKeyMinEv) *
+                               float(rawrcam::color::kSceneKeyBins));
+        };
+        bins[binOf(-3.3f)] = 900;  // mid tones
+        bins[rawrcam::color::kSceneKeyBins - 1] = 100;  // 10% clipped highlights
+        FrameObservation f{bins.data(), -0.15f, std::log2(33e6 * 100.0), 33e6, 100.0, 1.8f, 1};
+        const auto matrix = meter(f, NightLook::Off, 0.0f, meterPolicyFor(0));
+        const auto average = meter(f, NightLook::Off, 0.0f, meterPolicyFor(2));
+        const auto highlight = meter(f, NightLook::Off, 0.0f, meterPolicyFor(3));
+        assert(matrix && average && highlight);
+        assert(average->guardEv == 0.0f && matrix->guardEv < -0.5f);
+        assert(highlight->desiredLogExposure <= matrix->desiredLogExposure + 1e-6);
+    }
     // Speed presets scale the time constants only.
     {
         const auto slow = filterPolicyForSpeed(0), normal = filterPolicyForSpeed(1), fast = filterPolicyForSpeed(2);
