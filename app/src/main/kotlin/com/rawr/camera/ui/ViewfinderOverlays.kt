@@ -316,10 +316,9 @@ internal fun LongExposureNotice(state: LongExposureUiState, orientation: Orienta
         }
     }
     val text = when {
-        active && state.startMs == 0L -> "Starting exposure…"
         active -> {
             val remainingMs = (state.activeNs / 1_000_000L - (now - state.startMs)).coerceAtLeast(0L)
-            if (remainingMs > 0L) "%.1f s".format(remainingMs / 1000.0) else "Reading out…"
+            if (remainingMs > 0L) "%.1f s".format(remainingMs / 1000.0) else "Saving…"
         }
         state.deferredNs > 0L -> buildString {
             append("Long exposure · ")
@@ -337,7 +336,6 @@ internal fun LongExposureNotice(state: LongExposureUiState, orientation: Orienta
             textAlign = TextAlign.Center,
             style = ViewfinderTextStyle,
             modifier = Modifier
-                .uprightInLandscape(orientation)
                 .background(Color.Black.copy(alpha = .45f), RoundedCornerShape(12.dp))
                 .padding(horizontal = 16.dp, vertical = 8.dp)
         )

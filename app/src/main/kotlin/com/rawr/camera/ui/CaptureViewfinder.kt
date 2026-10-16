@@ -188,7 +188,7 @@ internal fun CaptureViewfinder(
                 state = state.longExposure,
                 orientation = state.orientation,
                 modifier = if (longExposureActive) Modifier.align(Alignment.Center)
-                else Modifier.align(Alignment.BottomCenter).padding(bottom = 16.dp)
+                else Modifier.align(Alignment.TopCenter).padding(top = 56.dp)
             )
         }
         state.selfTimerRemainingMs?.let { remaining ->

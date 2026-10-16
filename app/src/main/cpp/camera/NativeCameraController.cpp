@@ -305,7 +305,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
         if (!pair || requestId == 0 || !deviceSession.request()) return false;
         longExposureTag.store(requestId, std::memory_order_relaxed);
         longExposureNs.store(pair->exposureTimeNs, std::memory_order_relaxed);
-        longExposureStartMs.store(0, std::memory_order_relaxed);
+        // Submit time until the sensor reports the exposure started.
+        longExposureStartMs.store(monotonicMs(), std::memory_order_relaxed);
         longExposureSubmitted = std::chrono::steady_clock::now();
         const bool sent = requests.captureBracket(deviceSession.session(), deviceSession.request(),
                                                   deviceSession.callbackContext(), control,
