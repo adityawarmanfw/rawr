@@ -665,7 +665,8 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
                 isoMin = enumOrDefault(p[Keys.rawrAeIsoMin], d.rawrAe.isoMin),
                 isoMax = enumOrDefault(p[Keys.rawrAeIsoMax], d.rawrAe.isoMax),
                 minShutter = enumOrDefault(p[Keys.rawrAeMinShutter], d.rawrAe.minShutter),
-                maxShutter = enumOrDefault(p[Keys.rawrAeMaxShutter], d.rawrAe.maxShutter),
+                // 1/4 became 1/5 (the viewfinder's shutter cap); keep that choice.
+                maxShutter = enumOrDefault(p[Keys.rawrAeMaxShutter]?.let { if (it == "S4") "S5" else it }, d.rawrAe.maxShutter),
                 balance = enumOrDefault(p[Keys.rawrAeBalance], d.rawrAe.balance),
                 digitalGain = enumOrDefault(p[Keys.rawrAeDigitalGain], d.rawrAe.digitalGain),
                 speed = enumOrDefault(p[Keys.rawrAeSpeed], d.rawrAe.speed)
