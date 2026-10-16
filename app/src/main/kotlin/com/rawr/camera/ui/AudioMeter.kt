@@ -3,13 +3,11 @@ package com.rawr.camera.ui
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -44,14 +42,12 @@ private fun dbfs(linear: Float): Float = if (linear <= 0f) FLOOR_DB else max(FLO
 /** Per-channel meter ballistics: instant attack, 20 dB/s release, 1.5 s peak hold. */
 private class ChannelBallistics {
     var barDb = FLOOR_DB
-    var rmsDb = FLOOR_DB
     var holdDb = FLOOR_DB
     var holdUntilNs = 0L
 
-    fun update(peak: Float, rms: Float, nowNs: Long, dtS: Float) {
+    fun update(peak: Float, nowNs: Long, dtS: Float) {
         val peakDb = dbfs(peak)
         barDb = max(peakDb, barDb - RELEASE_DB_PER_S * dtS)
-        rmsDb = dbfs(rms)
         if (peakDb >= holdDb || nowNs > holdUntilNs) {
             holdDb = peakDb
             holdUntilNs = nowNs + PEAK_HOLD_NS
@@ -60,7 +56,7 @@ private class ChannelBallistics {
 }
 
 /**
- * Live L/R level meter for video mode, before and during recording. Holds the
+ * Live L/R level meter for the video monitor strip, before and during recording. Holds the
  * shared microphone while the screen is resumed; the clip lamp latches until tapped.
  */
 @Composable
@@ -92,7 +88,7 @@ internal fun AudioMeter(modifier: Modifier = Modifier) {
                 val dt = if (lastNs == 0L) 0f else (now - lastNs) / 1e9f
                 lastNs = now
                 channelCount = levels.channels.coerceIn(1, 2)
-                for (c in 0 until channelCount) channels[c].update(levels.peak[c], levels.rms[c], now, dt)
+                for (c in 0 until channelCount) channels[c].update(levels.peak[c], now, dt)
                 if (seenClips >= 0 && levels.clips > seenClips) clipLatched = true
                 seenClips = levels.clips
                 frame = now
@@ -103,14 +99,13 @@ internal fun AudioMeter(modifier: Modifier = Modifier) {
         modifier
             .testTag(CaptureTestTags.VIDEO_AUDIO_METER)
             .semantics { contentDescription = if (clipLatched) "Audio level meter, clipped" else "Audio level meter" }
-            .background(CaptureColors.ViewfinderPanel, RoundedCornerShape(4.dp))
-            .clickable { clipLatched = false }
-            .padding(horizontal = 6.dp, vertical = 5.dp),
+            .clickable { clipLatched = false },
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Canvas(Modifier.width(112.dp).height(if (channelCount == 2) 12.dp else 6.dp)) {
+        MonitorLabel("MIC")
+        Canvas(Modifier.padding(start = 3.dp).width(64.dp).height(if (channelCount == 2) 7.dp else 3.dp)) {
             frame // Redraw on every polled frame.
-            val gap = 2.dp.toPx()
+            val gap = 1.dp.toPx()
             val bar = (size.height - gap * (channelCount - 1)) / channelCount
             fun x(db: Float) = size.width * (db - FLOOR_DB) / -FLOOR_DB
             val amberX = x(-18f)
@@ -123,14 +118,12 @@ internal fun AudioMeter(modifier: Modifier = Modifier) {
                 drawRect(CaptureColors.Success, Offset(0f, top), Size(minOf(end, amberX), bar))
                 if (end > amberX) drawRect(Amber, Offset(amberX, top), Size(minOf(end, redX) - amberX, bar))
                 if (end > redX) drawRect(CaptureColors.Danger, Offset(redX, top), Size(end - redX, bar))
-                // RMS as a thin white line inside the peak bar; hold as a tick.
-                drawRect(Color.White.copy(alpha = .55f), Offset(0f, top + bar * .4f), Size(x(meter.rmsDb), bar * .2f))
                 if (meter.holdDb > FLOOR_DB)
                     drawRect(Color.White, Offset(x(meter.holdDb) - 1f, top), Size(2f, bar))
             }
-            for (tick in TICKS_DB) drawRect(Color.Black.copy(alpha = .6f), Offset(x(tick), 0f), Size(1f, size.height))
+            for (tick in TICKS_DB) drawRect(CaptureColors.Surface, Offset(x(tick), 0f), Size(1f, size.height))
         }
-        Canvas(Modifier.padding(start = 5.dp).width(6.dp).height(6.dp)) {
+        Canvas(Modifier.padding(start = 3.dp).width(5.dp).height(5.dp)) {
             drawCircle(if (clipLatched) CaptureColors.Danger else Color.White.copy(alpha = .18f))
         }
     }
