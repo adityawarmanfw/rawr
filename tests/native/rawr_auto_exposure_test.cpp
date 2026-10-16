@@ -151,6 +151,38 @@ int main() {
         s = solve(r);
         assert(s.iso == 400 && near(double(s.shutterNs), 33e6 * 200 / 400, 1e3));
     }
+    // Balance: faster shortens the shutter, lower ISO lets it run longer first.
+    {
+        SolveRequest r;
+        r.limits = Limits{100, 6400, 1600, 20'000, 66'666'667, 16'666'667, 2.0f};
+        r.exposure = 33e6 * 100;
+        const auto balanced = solve(r);
+        r.balanceEv = 1.0f;
+        const auto faster = solve(r);
+        r.balanceEv = -1.0f;
+        const auto lowIso = solve(r);
+        assert(faster.shutterNs < balanced.shutterNs && faster.iso > balanced.iso);
+        assert(lowIso.iso < balanced.iso && lowIso.shutterNs > balanced.shutterNs);
+        assert(near(lowIso.logExposure(), faster.logExposure(), 0.02));
+    }
+    // Solver: I above analog keeps analog ISO, the rest is digital, and the
+    // shutter is the one the user's ISO implies.
+    {
+        SolveRequest r;
+        r.limits = Limits{100, 6400, 1600, 20'000, 66'666'667, 33'333'333, 2.0f};
+        r.mode = Mode::IsoPriority;
+        r.lockedIso = 6400;
+        r.exposure = 10e6 * 6400;
+        const auto s = solve(r);
+        assert(s.iso == 1600 && near(double(s.shutterNs), 10e6, 1e3) && near(s.digitalGainEv, 2.0, 1e-3));
+        assert(!s.underexposed);
+    }
+    // Speed presets scale the time constants only.
+    {
+        const auto slow = filterPolicyForSpeed(0), normal = filterPolicyForSpeed(1), fast = filterPolicyForSpeed(2);
+        assert(slow.tauSec > normal.tauSec && normal.tauSec > fast.tauSec);
+        assert(slow.startEv == normal.startEv && fast.sceneChangeEv == normal.sceneChangeEv);
+    }
     // Night look: darker scenes are placed lower, smoothly; day untouched.
     {
         assert(nightKeyOffsetEv(10.0f, NightLook::Natural) == 0.0f);
@@ -249,6 +281,26 @@ int main() {
         for (std::size_t i = at; i < sim.applied.size(); ++i)
             if (sim.applied[i].shutterNs >= 10'000'000) assert(sim.applied[i].shutterNs % 10'000'000 == 0);
         assert(maxAbsDelta(sim.preview, at, sim.preview.size()) < 0.03);
+    }
+    // S in the loop: the shutter never moves, ISO follows the scene smoothly.
+    {
+        Sim sim;
+        sim.settings.mode = Mode::ShutterPriority;
+        sim.settings.lockedShutterNs = 8'000'000;
+        sim.run({kDayKey - 2.0, kDayKey + 1.0}, 2.0);
+        const double before = sim.preview.back();
+        const std::size_t at = sim.preview.size();
+        sim.run({kDayKey - 3.0, kDayKey}, 3.0);
+        for (std::size_t i = at + 4; i < sim.applied.size(); ++i) assert(sim.applied[i].shutterNs == 8'000'000);
+        assert(near(sim.preview.back(), before, 0.06));
+    }
+    // I in the loop: the ISO never moves.
+    {
+        Sim sim;
+        sim.settings.mode = Mode::IsoPriority;
+        sim.settings.lockedIso = 400;
+        sim.run({kDayKey - 3.0, kDayKey}, 3.0);
+        for (std::size_t i = 10; i < sim.applied.size(); ++i) assert(sim.applied[i].iso == 400);
     }
     std::puts("rawr_auto_exposure_test ok");
     return 0;

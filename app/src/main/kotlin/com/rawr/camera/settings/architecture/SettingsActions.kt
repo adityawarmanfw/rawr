@@ -111,9 +111,7 @@ data class SetUltraHdrEnabled(val enabled: Boolean) : SettingsApplicationAction
 
 data class SetAePriorityDisabled(val disabled: Boolean) : SettingsApplicationAction
 
-data class SetRawrAeEnabled(val enabled: Boolean) : SettingsApplicationAction
-
-data class SetRawrAeNightLook(val value: RawrNightLook) : SettingsApplicationAction
+data class SetRawrAeSettings(val value: RawrAeSettings) : SettingsApplicationAction
 
 data class SetPersistentEngineEnabled(val enabled: Boolean) : SettingsApplicationAction
 

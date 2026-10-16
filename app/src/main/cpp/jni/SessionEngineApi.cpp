@@ -1,4 +1,7 @@
 #include "capture/CaptureRequest.h"
+
+#include <algorithm>
+#include <cmath>
 // SessionEngine C-API forwards (SessionEngineApi.h).
 // Split from SessionEngine.cpp; pure code motion.
 #include "diagnostics/logging/NativeLog.h"
@@ -50,8 +53,20 @@ void setOisEnabled(EngineHandle h, bool v) noexcept {
 void setAntibandingMode(EngineHandle h, uint8_t mode) noexcept {
     if (h) engine(h)->cameraControls().setAntibandingMode(mode);
 }
-void setRawrAutoExposure(EngineHandle h, bool enabled, int nightLook) noexcept {
-    if (h) engine(h)->setRawrAutoExposure(enabled, nightLook);
+void setRawrAutoExposure(EngineHandle h, bool enabled, int nightLook, int isoMin, int isoMax, int64_t shutterStartNs,
+                         int64_t shutterMaxNs, float balanceEv, float maxDigitalGainEv, int speed) noexcept {
+    if (!h) return;
+    rawrcam::camera::RawrAeConfig c;
+    c.enabled = enabled;
+    c.nightLook = std::clamp(nightLook, 0, 2);
+    c.isoMin = std::max(0, isoMin);
+    c.isoMax = std::max(0, isoMax);
+    c.shutterStartNs = std::max<int64_t>(0, shutterStartNs);
+    c.shutterMaxNs = std::max<int64_t>(0, shutterMaxNs);
+    c.balanceEv = std::isfinite(balanceEv) ? std::clamp(balanceEv, -2.0f, 2.0f) : 0.0f;
+    c.maxDigitalGainEv = std::isfinite(maxDigitalGainEv) ? std::clamp(maxDigitalGainEv, 0.0f, 4.0f) : 2.0f;
+    c.speed = std::clamp(speed, 0, 2);
+    engine(h)->cameraControls().setRawrAeConfig(c);
 }
 void selectLens(EngineHandle h, const std::string& v) noexcept {
     if (h) engine(h)->cameraControls().selectLens(v);

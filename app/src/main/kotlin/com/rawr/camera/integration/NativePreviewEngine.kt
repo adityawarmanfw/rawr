@@ -97,7 +97,18 @@ class NativePreviewEngine {
 
     external fun setAutoMinFps(handle: Long, fps: Int)
     external fun setAePriorityDisabled(handle: Long, disabled: Boolean)
-    external fun setRawrAutoExposure(handle: Long, enabled: Boolean, nightLook: Int)
+    external fun setRawrAutoExposure(
+        handle: Long,
+        enabled: Boolean,
+        nightLook: Int,
+        isoMin: Int,
+        isoMax: Int,
+        shutterStartNs: Long,
+        shutterMaxNs: Long,
+        balanceEv: Float,
+        maxDigitalGainEv: Float,
+        speed: Int
+    )
 
     external fun setPersistentDiagnosticsEnabled(handle: Long, enabled: Boolean)
 

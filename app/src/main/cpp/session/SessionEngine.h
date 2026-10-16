@@ -21,7 +21,6 @@
 #include "camera/CameraControlSurface.h"
 #include "camera/CameraControlTypes.h"
 #include "color/AutoKeyExposure.h"
-#include "color/RawrAutoExposure.h"
 #include "capture/CaptureCoordinator.h"
 #include "capture/CaptureRequest.h"
 #include "diagnostics/logging/DiagnosticSink.h"
@@ -142,12 +141,6 @@ class SessionEngine {
         return postGainKneeWidthEv_.load(std::memory_order_relaxed);
     }
     void setAutoKeyMode(int mode);
-    // rawr auto exposure (color/RawrAutoExposure.h): the camera lane owns
-    // eligibility; the frame lane meters and smooths (SessionFrameCallbacks).
-    void setRawrAutoExposure(bool enabled, int nightLook);
-    [[nodiscard]] rawrcam::color::rawr_ae::NightLook rawrAeNightLook() const noexcept {
-        return rawrcam::color::rawr_ae::nightLookFromId(rawrAeNightLook_.load(std::memory_order_relaxed));
-    }
     [[nodiscard]] rawrcam::color::AutoKeyMode autoKeyMode() const noexcept {
         return rawrcam::color::autoKeyModeFromId(autoKeyMode_.load(std::memory_order_relaxed));
     }
@@ -324,7 +317,6 @@ class SessionEngine {
     // Kotlin sync; the smoothed lift by SessionFrameCallbacks at slot retire;
     // curve snapshots are protected separately from the session mutex.
     std::atomic<int> autoKeyMode_{0};
-    std::atomic<int> rawrAeNightLook_{1};
     mutable std::mutex autoKeyMutex_;
     tonemap::AdaptiveToneParams autoKeyCurve_{};
     // HDR+ Bracketed headroom floor (EV < 0) or 0 when the meter is off.

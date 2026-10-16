@@ -29,8 +29,7 @@ bool CameraRequestPipeline::submit(ACameraCaptureSession* session, ACaptureReque
                                    const CameraMeteringRequest& metering) {
     if (!session || !request || !context) return false;
     const auto applyResult = applyCameraControlState(request, control, metering);
-    const bool priorityMode = control.exposureMode == ExposureControlMode::ShutterPriority ||
-                              control.exposureMode == ExposureControlMode::IsoPriority;
+    const bool priorityMode = applyResult.halPriorityMode;
     if (priorityMode && (!applyResult.aePriorityRequested || applyResult.aePriorityStatus != ACAMERA_OK)) {
         diag("CAMERA_AE_PRIORITY_REQUEST_FAIL mode=" + std::to_string(static_cast<int>(control.exposureMode)) +
              " status=" + statusText(applyResult.aePriorityStatus));

@@ -121,7 +121,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
     bool halShutterPriority = false;
     bool halIsoPriority = false;
     uint8_t antibandingPreference = ACAMERA_CONTROL_AE_ANTIBANDING_MODE_AUTO;
-    bool rawrAePreference = false;
+    NativeCameraController::RawrAeConfig rawrAeConfig;
     // Frame lane -> camera lane: latest solved pair packed as
     // exposureNs << 24 | ISO, so a tick never reads a torn pair (0 = none).
     std::atomic<uint64_t> rawrAePending{0};
@@ -927,8 +927,12 @@ struct NativeCameraController::Impl final : CameraEventSink {
         if (accepted) submitRepeatingLocked();
     }
     void applyAePriorityPreferenceLocked() {
-        control.capabilities.shutterPrioritySupported = halShutterPriority && !aePriorityDisabledPreference;
-        control.capabilities.isoPrioritySupported = halIsoPriority && !aePriorityDisabledPreference;
+        // rawr AE solves S/I itself wherever the sensor takes manual exposure.
+        const bool rawrPriority = rawrAeConfig.enabled && control.capabilities.manualExposureSupported;
+        control.capabilities.shutterPrioritySupported = (halShutterPriority || rawrPriority) && !aePriorityDisabledPreference;
+        control.capabilities.isoPrioritySupported = (halIsoPriority || rawrPriority) && !aePriorityDisabledPreference;
+        control.capabilities.halShutterPrioritySupported = halShutterPriority && !aePriorityDisabledPreference;
+        control.capabilities.halIsoPrioritySupported = halIsoPriority && !aePriorityDisabledPreference;
     }
     void setAePriorityDisabledValue(bool disabled) {
         std::lock_guard<std::mutex> lock(mutex);
@@ -1081,7 +1085,10 @@ struct NativeCameraController::Impl final : CameraEventSink {
     bool rawrAeEligibleLocked() const {
         const bool coordinateKnown =
             results.sensitivityReportedPerRequest().has_value() || !deviceSession.sensorModeOverridden();
-        return rawrAePreference && control.exposureMode == ExposureControlMode::Auto &&
+        const bool rawrMode = control.exposureMode == ExposureControlMode::Auto ||
+                              control.exposureMode == ExposureControlMode::ShutterPriority ||
+                              control.exposureMode == ExposureControlMode::IsoPriority;
+        return rawrAeConfig.enabled && rawrMode &&
                control.capabilities.manualExposureSupported && control.capabilities.sensitivityMax > 0 &&
                !control.videoMode && control.recordingFps <= 0 && !control.spotAeActive && coordinateKnown &&
                deviceSession.request() && deviceSession.session();
@@ -1089,20 +1096,34 @@ struct NativeCameraController::Impl final : CameraEventSink {
     void publishRawrAeContextLocked(bool engaged) {
         NativeCameraController::RawrAeContext c;
         c.engaged = engaged;
+        c.config = rawrAeConfig;
+        c.mode = control.exposureMode == ExposureControlMode::ShutterPriority ? 1
+                 : control.exposureMode == ExposureControlMode::IsoPriority   ? 2
+                                                                              : 0;
+        c.lockedShutterNs = control.requestedExposureTimeNs;
+        c.lockedIso = control.requestedSensitivity;
         const auto& caps = control.capabilities;
-        c.isoMin = std::max(1, caps.sensitivityMin);
-        c.isoMax = std::max(c.isoMin, caps.sensitivityMax);
+        const int32_t sensorIsoMin = std::max(1, caps.sensitivityMin);
+        const int32_t sensorIsoMax = std::max(sensorIsoMin, caps.sensitivityMax);
         const auto& context = deviceSession.cameraContext();
-        c.isoAnalogMax = context && context->maxAnalogSensitivity > 0
-                             ? std::clamp(context->maxAnalogSensitivity, c.isoMin, c.isoMax)
-                             : c.isoMax;
+        const int32_t analog = context && context->maxAnalogSensitivity > 0
+                                   ? std::clamp(context->maxAnalogSensitivity, sensorIsoMin, sensorIsoMax)
+                                   : sensorIsoMax;
+        c.isoMin = rawrAeConfig.isoMin > 0 ? std::clamp(rawrAeConfig.isoMin, sensorIsoMin, sensorIsoMax) : sensorIsoMin;
+        c.isoMax = rawrAeConfig.isoMax > 0 ? std::clamp(rawrAeConfig.isoMax, c.isoMin, sensorIsoMax) : sensorIsoMax;
+        c.isoAnalogMax = std::clamp(analog, c.isoMin, c.isoMax);
         c.shutterMinNs = std::max<int64_t>(1, caps.exposureTimeMinNs);
-        // Handheld ceiling (OIS keeps 1/15 s sharp), never below the Auto FPS floor's frame.
-        int64_t ceiling = kLongFrameMaxNs;
-        if (autoMinFpsPreference >= 5 && autoMinFpsPreference < 30)
-            ceiling = std::min<int64_t>(ceiling, 1'000'000'000LL / autoMinFpsPreference);
-        c.shutterMaxNs = std::clamp(ceiling, c.shutterMinNs, std::max(c.shutterMinNs, caps.exposureTimeMaxNs));
-        c.shutterStartNs = std::clamp<int64_t>(33'333'333, c.shutterMinNs, c.shutterMaxNs);
+        const int64_t sensorShutterMax = std::max(c.shutterMinNs, caps.exposureTimeMaxNs);
+        int64_t ceiling = rawrAeConfig.shutterMaxNs;
+        if (ceiling <= 0) {
+            // Handheld ceiling (OIS keeps 1/15 s sharp), never below the Auto FPS floor's frame.
+            ceiling = kLongFrameMaxNs;
+            if (autoMinFpsPreference >= 5 && autoMinFpsPreference < 30)
+                ceiling = std::min<int64_t>(ceiling, 1'000'000'000LL / autoMinFpsPreference);
+        }
+        c.shutterMaxNs = std::clamp(ceiling, c.shutterMinNs, sensorShutterMax);
+        c.shutterStartNs = std::clamp<int64_t>(rawrAeConfig.shutterStartNs > 0 ? rawrAeConfig.shutterStartNs : 33'333'333,
+                                               c.shutterMinNs, c.shutterMaxNs);
         const uint8_t banding = antibandingPreference;
         const int32_t mains = banding == ACAMERA_CONTROL_AE_ANTIBANDING_MODE_50HZ   ? 1
                               : banding == ACAMERA_CONTROL_AE_ANTIBANDING_MODE_60HZ ? 2
@@ -1140,12 +1161,22 @@ struct NativeCameraController::Impl final : CameraEventSink {
         control.rawrAeSensitivity = sensitivity;
         submitRepeatingLocked();
     }
-    void setRawrAeEnabledValue(bool enabled) {
+    void setRawrAeConfigValue(const NativeCameraController::RawrAeConfig& config) {
         std::lock_guard<std::mutex> lock(mutex);
-        if (rawrAePreference == enabled) return;
-        rawrAePreference = enabled;
-        if (!enabled) rawrAePending.store(0, std::memory_order_relaxed);
-        diag(std::string("CAMERA_RAWR_AE_PREFERENCE enabled=") + (enabled ? "true" : "false"));
+        const bool toggled = rawrAeConfig.enabled != config.enabled;
+        rawrAeConfig = config;
+        if (!config.enabled) rawrAePending.store(0, std::memory_order_relaxed);
+        if (toggled) {
+            diag(std::string("CAMERA_RAWR_AE_PREFERENCE enabled=") + (config.enabled ? "true" : "false"));
+            // rawr owns S/I on cameras without HAL priority: the UI's modes change.
+            applyAePriorityPreferenceLocked();
+            const bool priorityMode = control.exposureMode == ExposureControlMode::ShutterPriority ||
+                                      control.exposureMode == ExposureControlMode::IsoPriority;
+            const bool supported = control.exposureMode == ExposureControlMode::ShutterPriority
+                                       ? control.capabilities.shutterPrioritySupported
+                                       : control.capabilities.isoPrioritySupported;
+            if (priorityMode && !supported) control.exposureMode = ExposureControlMode::Auto;
+        }
         applyRawrAeLocked();
     }
     void tickControls(int64_t nowMs) {
@@ -1254,7 +1285,7 @@ void NativeCameraController::setSensitivityCalibrationWanted(bool wanted) {
     if (changed && wanted) impl_->restartForSensitivityCalibrationLocked(lock);
 }
 void NativeCameraController::setExposureCompensationSteps(int32_t value) { impl_->setEvSteps(value); }
-void NativeCameraController::setRawrAeEnabled(bool enabled) { impl_->setRawrAeEnabledValue(enabled); }
+void NativeCameraController::setRawrAeConfig(const RawrAeConfig& config) { impl_->setRawrAeConfigValue(config); }
 NativeCameraController::RawrAeContext NativeCameraController::rawrAeContext() const {
     std::lock_guard<std::mutex> lock(impl_->rawrAeContextMutex);
     return impl_->rawrAePublished;

@@ -271,8 +271,12 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
 
     fun setAutoMinFps(fps: Int) = postNative { native.setAutoMinFps(nativeHandle, fps) }
     fun setAePriorityDisabled(disabled: Boolean) = postNative { native.setAePriorityDisabled(nativeHandle, disabled) }
-    fun setRawrAutoExposure(enabled: Boolean, nightLook: Int) =
-        postNative { native.setRawrAutoExposure(nativeHandle, enabled, nightLook) }
+    fun setRawrAutoExposure(s: com.rawr.camera.settings.model.RawrAeSettings) = postNative {
+        native.setRawrAutoExposure(
+            nativeHandle, s.enabled, s.nightLook.nativeId, s.isoMin.iso, s.isoMax.iso, s.minShutter.ns,
+            s.maxShutter.ns, s.balance.ev, s.digitalGain.ev, s.speed.nativeId
+        )
+    }
 
     fun setVideoMode(isVideo: Boolean, fps: Int) =
         postNative { native.setVideoMode(nativeHandle, isVideo, fps) }

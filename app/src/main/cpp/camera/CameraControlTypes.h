@@ -50,6 +50,19 @@ enum class WhiteBalanceControlMode : uint8_t {
     ManualTempTint = 9,
 };
 
+// rawr auto exposure preferences (NativeCameraController::setRawrAeConfig).
+struct RawrAeConfig {
+    bool enabled = false;
+    int nightLook = 1;  // rawr_ae::NightLook id
+    // User limits; 0 = automatic (sensor range / handheld policy).
+    int32_t isoMin = 0, isoMax = 0;
+    int64_t shutterStartNs = 0;  // ISO rises once the shutter would be slower
+    int64_t shutterMaxNs = 0;
+    float balanceEv = 0.0f;
+    float maxDigitalGainEv = 2.0f;
+    int speed = 1;  // 0 slow, 1 normal, 2 fast
+};
+
 struct CameraControlCapabilities {
     uint64_t generation = 0;
     std::string cameraId;
@@ -77,6 +90,9 @@ struct CameraControlCapabilities {
     bool manualExposureSupported = false;
     bool shutterPrioritySupported = false;
     bool isoPrioritySupported = false;
+    // The HAL's own priority modes (the two above may also be rawr AE's).
+    bool halShutterPrioritySupported = false;
+    bool halIsoPrioritySupported = false;
     // The HAL advertises any AE priority mode. Requests then always write the
     // priority tag (OFF when unused) so a reused request never keeps a stale
     // S/I value after priority is hidden by preference or debug override.

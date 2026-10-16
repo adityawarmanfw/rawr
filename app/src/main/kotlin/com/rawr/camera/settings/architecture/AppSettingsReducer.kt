@@ -32,12 +32,8 @@ internal fun reduceAppSettings(
         state.withValues(state.values.copy(aePriorityDisabled = action.disabled))
     }
 
-    is SetRawrAeEnabled -> {
-        state.withValues(state.values.copy(rawrAeEnabled = action.enabled))
-    }
-
-    is SetRawrAeNightLook -> {
-        state.withValues(state.values.copy(rawrAeNightLook = action.value))
+    is SetRawrAeSettings -> {
+        state.withValues(state.values.copy(rawrAe = action.value))
     }
 
     is SetPersistentEngineEnabled -> {

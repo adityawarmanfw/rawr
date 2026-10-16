@@ -63,7 +63,7 @@ CameraControlApplyResult applyCameraControlState(ACaptureRequest* request, const
     const uint8_t controlMode = ACAMERA_CONTROL_MODE_AUTO;
     (void)ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_MODE, 1, &controlMode);
 
-    const bool rawrAe = state.exposureMode == ExposureControlMode::Auto && state.rawrAeActive &&
+    const bool rawrAe = state.exposureMode != ExposureControlMode::Manual && state.rawrAeActive &&
                         state.rawrAeExposureTimeNs > 0 && state.rawrAeSensitivity > 0;
     // rawr AE is AE OFF with the app-solved pair: the same sensor ownership as M.
     const bool manual = state.exposureMode == ExposureControlMode::Manual || rawrAe;
@@ -73,11 +73,16 @@ CameraControlApplyResult applyCameraControlState(ACaptureRequest* request, const
     // AE priority is a distinct Camera2 mode (API 36). Explicitly write OFF for
     // ordinary Auto/Manual requests because this ACaptureRequest object is reused.
     uint8_t aePriority = camera2_priority::kOff;
-    if (state.exposureMode == ExposureControlMode::ShutterPriority && state.capabilities.shutterPrioritySupported) {
+    // rawr AE owns S/I itself (AE OFF); otherwise only the HAL's own modes.
+    // S/I with neither owner (rawr ineligible, e.g. video) runs as Auto.
+    if (!rawrAe && state.exposureMode == ExposureControlMode::ShutterPriority &&
+        state.capabilities.halShutterPrioritySupported) {
         aePriority = camera2_priority::kSensorExposureTimePriority;
-    } else if (state.exposureMode == ExposureControlMode::IsoPriority && state.capabilities.isoPrioritySupported) {
+    } else if (!rawrAe && state.exposureMode == ExposureControlMode::IsoPriority &&
+               state.capabilities.halIsoPrioritySupported) {
         aePriority = camera2_priority::kSensorSensitivityPriority;
     }
+    result.halPriorityMode = aePriority != camera2_priority::kOff;
     if (state.capabilities.aePriorityTagAvailable) {
         result.aePriorityRequested = true;
         result.aePriorityStatus =

@@ -77,13 +77,18 @@ void SessionFrameCallbacks::updateRawrAe(const image_scopes::SceneExposureStatsD
     if (!exposure) return;
     ae::Settings settings;
     settings.enabled = true;
-    settings.night = engine_->rawrAeNightLook();
+    settings.mode = ae::Mode(std::clamp(context.mode, 0, 2));
+    settings.night = ae::nightLookFromId(context.config.nightLook);
+    settings.balanceEv = context.config.balanceEv;
+    settings.lockedShutterNs = context.lockedShutterNs;
+    settings.lockedIso = context.lockedIso;
     settings.flickerPeriodNs = context.flickerPeriodNs;
     settings.limits = ae::Limits{context.isoMin,       context.isoMax,       context.isoAnalogMax,
-                                 context.shutterMinNs, context.shutterMaxNs, context.shutterStartNs, 2.0f};
+                                 context.shutterMinNs, context.shutterMaxNs, context.shutterStartNs,
+                                 context.config.maxDigitalGainEv};
     ae::FrameObservation f{stats->weightedBins, std::log2(clipLuma), exposure->logExposure(), exposure->shutterNs,
                            exposure->iso, metadata.aperture.value_or(0.0f), timestampNs};
-    if (const auto step = rawrAe_.update(f, settings, context.userEv))
+    if (const auto step = rawrAe_.update(f, settings, context.userEv, {}, ae::filterPolicyForSpeed(context.config.speed)))
         controller->setRawrAeRequest(step->request.shutterNs, step->request.iso);
 }
 

@@ -57,7 +57,8 @@ struct Limits {
 struct SolveRequest {
     double exposure = 0.0;  // desired shutter(ns) x ISO, request coordinate
     Mode mode = Mode::Auto;
-    // Auto only: > 0 favours a faster shutter (more ISO), < 0 lower ISO.
+    // Auto only: > 0 favours a faster shutter (more ISO); < 0 lower ISO
+    // (the shutter runs that much slower before ISO rises, up to the max).
     float balanceEv = 0.0f;
     std::int32_t lockedIso = 0;          // IsoPriority
     std::int64_t lockedShutterNs = 0;    // ShutterPriority
@@ -105,12 +106,15 @@ inline Solution solve(const SolveRequest& r) noexcept {
             shutter = double(std::clamp(r.lockedShutterNs > 0 ? r.lockedShutterNs : l.shutterStartNs, tMin, tMax));
             break;
         case Mode::IsoPriority: {
-            const double iso = std::clamp<double>(r.lockedIso > 0 ? r.lockedIso : isoMin, isoMin, isoAnalog);
+            // The user's ISO sets the shutter; past analog it is digital gain.
+            const double iso = std::clamp<double>(r.lockedIso > 0 ? r.lockedIso : isoMin, isoMin,
+                                                  std::max<double>(isoMin, l.isoMax));
             shutter = double(snapToFlicker(e / iso, r.flickerPeriodNs, tMin, tMax));
             break;
         }
         case Mode::Auto: {
-            const auto start = std::clamp(l.shutterStartNs, tMin, tMax);
+            const double lowIsoEv = std::max(0.0, -double(r.balanceEv));
+            const auto start = std::clamp<std::int64_t>(std::llround(double(l.shutterStartNs) * std::exp2(lowIsoEv)), tMin, tMax);
             double cap = double(start);
             const double atStart = double(start) * isoMin;
             if (e > atStart && tMax > start) {
@@ -118,8 +122,8 @@ inline Solution solve(const SolveRequest& r) noexcept {
                 cap = double(start) * std::pow(double(tMax) / double(start), ramp);
             }
             shutter = std::clamp(e / isoMin, double(tMin), cap);
-            // Balance trades within the cap only; the cap stays the handheld limit.
-            shutter = std::clamp(shutter * std::exp2(-double(r.balanceEv)), double(tMin), cap);
+            // A faster balance trades within the cap; the cap stays the handheld limit.
+            shutter = std::clamp(shutter * std::exp2(-std::max(0.0, double(r.balanceEv))), double(tMin), cap);
             // Never longer than the light needs at minimum ISO.
             shutter = std::min(shutter, std::max(double(tMin), e / isoMin));
             shutter = double(snapToFlicker(shutter, r.flickerPeriodNs, tMin, std::int64_t(cap)));
@@ -128,9 +132,8 @@ inline Solution solve(const SolveRequest& r) noexcept {
     }
     Solution s;
     s.shutterNs = std::clamp<std::int64_t>(std::llround(shutter), tMin, tMax);
-    double iso = r.mode == Mode::IsoPriority
-                     ? std::clamp<double>(r.lockedIso > 0 ? r.lockedIso : isoMin, isoMin, isoAnalog)
-                     : e / double(s.shutterNs);
+    double iso = r.mode == Mode::IsoPriority ? std::min<double>(r.lockedIso > 0 ? r.lockedIso : isoMin, isoAnalog)
+                                             : e / double(s.shutterNs);
     if (r.mode != Mode::IsoPriority && iso < isoMin && r.mode == Mode::Auto) {
         // Bright: shorten the shutter before ISO runs out (flicker allows it:
         // shutters this short are below one period anyway).
@@ -243,6 +246,18 @@ struct FilterPolicy {
     float sceneChangeEv = 1.5f;
     float sceneChangeTauSec = 0.12f;
 };
+
+// Adaptation speed setting (0 slow, 1 normal, 2 fast): scales the time
+// constants; hysteresis and the scene-change threshold stay.
+inline FilterPolicy filterPolicyForSpeed(int speed) noexcept {
+    FilterPolicy p;
+    const float k = speed <= 0 ? 1.6f : speed >= 2 ? 0.6f : 1.0f;
+    p.measureTauSec *= k;
+    p.tauSec *= k;
+    p.darkenTauSec *= k;
+    p.sceneChangeTauSec *= k;
+    return p;
+}
 
 class ExposureFilter {
    public:

@@ -294,8 +294,10 @@ extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreview
     rawrcam::session::setAntibandingMode(handle(h), static_cast<uint8_t>(std::clamp(v, 0, 3)));
 }
 extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreviewEngine_setRawrAutoExposure(
-    JNIEnv*, jobject, jlong h, jboolean enabled, jint nightLook) {
-    rawrcam::session::setRawrAutoExposure(handle(h), enabled == JNI_TRUE, static_cast<int>(nightLook));
+    JNIEnv*, jobject, jlong h, jboolean enabled, jint nightLook, jint isoMin, jint isoMax, jlong shutterStartNs,
+    jlong shutterMaxNs, jfloat balanceEv, jfloat maxDigitalGainEv, jint speed) {
+    rawrcam::session::setRawrAutoExposure(handle(h), enabled == JNI_TRUE, nightLook, isoMin, isoMax, shutterStartNs,
+                                          shutterMaxNs, balanceEv, maxDigitalGainEv, speed);
 }
 extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreviewEngine_selectLens(JNIEnv* env, jobject,
                                                                                                   jlong h, jstring v) {
