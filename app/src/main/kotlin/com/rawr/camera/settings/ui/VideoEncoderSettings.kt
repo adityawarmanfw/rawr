@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import com.rawr.camera.settings.architecture.SetVideoEncoder
 import com.rawr.camera.settings.architecture.SettingsDispatch
+import com.rawr.camera.settings.model.KeyframeInterval
 import com.rawr.camera.settings.model.SettingsUiState
 import com.rawr.camera.settings.model.VideoBitrateMode
 import com.rawr.camera.settings.model.VideoEncoderConfig
@@ -19,7 +20,7 @@ internal fun VideoEncoderSettings(state: SettingsUiState, dispatch: SettingsDisp
     SettingsPageContainer(testTag = SettingsTestTags.sectionRoot("VideoEncoder")) {
         SettingsGroup(
             title = "Video",
-            description = "HEVC settings apply to the next recording."
+            description = "HEVC settings apply to the next recording. Some encoders ignore B-frame limits; the recording monitor shows the actual GOP."
         ) {
             SettingsRow(
                 "Bit depth"
@@ -49,39 +50,28 @@ internal fun VideoEncoderSettings(state: SettingsUiState, dispatch: SettingsDisp
                 ) { set(encoder.withBitrateMbps(mode, it.toInt())) }
             }
             SettingDivider()
-            val frames = encoder.keyframeFrames
-            StandaloneNumericSliderRow(
-                identity = "video_keyframe_frames",
-                label = "I-frame interval",
-                supportingText = when {
-                    frames <= 1 -> "All-intra: every frame is an I-frame. Largest files, easiest to edit."
-                    frames < VideoEncoderConfig.SHORT_GOP_FRAMES ->
-                        "Very short GOP: file size and bitrate demand rise sharply."
-                    else -> "%.2f s at 24 fps · %.2f s at 30 fps".format(frames / 24f, frames / 30f)
-                },
-                minimum = VideoEncoderConfig.MIN_KEYFRAME_FRAMES.toFloat(),
-                maximum = VideoEncoderConfig.MAX_KEYFRAME_FRAMES.toFloat(),
-                step = 1f,
-                decimals = 0,
-                value = frames.toFloat(),
-                defaultValue = VideoEncoderConfig().keyframeFrames.toFloat(),
-                valueFormatter = { if (it.toInt() <= 1) "All-I" else "${it.toInt()} frames" }
-            ) { set(encoder.copy(keyframeFrames = it.toInt())) }
+            val interval = encoder.keyframeInterval
+            val frames = interval.frames(30)
+            SettingsRow(
+                "I-frame interval",
+                value = if (frames <= 1) "Every frame"
+                else "${if (interval.wireValue == 1) "0.5" else "${interval.wireValue / 2}"} s · ${interval.frames(24)} / $frames frames"
+            )
+            CompactChoiceRow(KeyframeInterval.entries, interval, { it.label }) {
+                set(encoder.copy(keyframeInterval = it))
+            }
             SettingDivider()
-            if (frames <= 1) SettingsRow("Max B-frames", value = "Off (all-intra)")
+            if (frames <= 1) SettingsRow("Max B-frames", value = "Off with All-I")
             else {
-                SettingsRow("Max B-frames")
+                SettingsRow("Max B-frames", value = if (encoder.maxBFrames < 0) "Auto" else "${encoder.maxBFrames}")
                 CompactChoiceRow(
                     VideoEncoderConfig.MAX_B_FRAME_CHOICES,
                     encoder.maxBFrames,
                     { if (it < 0) "Auto" else "$it" }
                 ) { set(encoder.copy(maxBFrames = it)) }
             }
-            SettingsRow(
-                "GOP",
-                supportingText = VideoEncoderConfig.gopPattern(frames, encoder.maxBFrames) +
-                    "\nRequested structure; some encoders ignore B-frame limits."
-            )
+            SettingDivider()
+            SettingsRow("GOP at 30 fps", value = VideoEncoderConfig.gopPattern(frames, encoder.maxBFrames))
         }
         SettingsGroup(title = "Audio", description = "AAC-LC, 48 kHz. Stereo falls back to mono at 128 kbps if the microphone can't do stereo.") {
             SettingsRow("Channels", value = if (encoder.audioChannels == 1) "Mono" else "Stereo")

@@ -14,6 +14,25 @@ enum class VideoBitrateMode(val wireValue: Int, val label: String) {
 }
 
 /**
+ * I-frame interval as a multiple of the recording frame rate, so it means the same
+ * at 24 and 30 fps. [wireValue] is the interval in half-seconds; 0 = all-intra.
+ */
+enum class KeyframeInterval(val wireValue: Int, val label: String) {
+    AllIntra(0, "All-I"),
+    Half(1, "½ × FPS"),
+    One(2, "1 × FPS"),
+    Two(4, "2 × FPS");
+
+    /** Frames between I-frames at [fps]; 1 means every frame is an I-frame. */
+    fun frames(fps: Int): Int = if (this == AllIntra) 1 else maxOf(1, fps * wireValue / 2)
+
+    companion object {
+        fun of(wireValue: Int): KeyframeInterval =
+            entries.minBy { kotlin.math.abs(it.wireValue - wireValue) }
+    }
+}
+
+/**
  * Video encoder settings, applied when a recording starts. The factory
  * clamps every field to what NativeAvRecorder accepts, so a stale or
  * hand-edited preference can never fail recording start.
@@ -25,8 +44,7 @@ data class VideoEncoderConfig(
     val bitrate4kMbps: Int = 40,
     val bitrateOpenGateMbps: Int = 60,
     val bitrateMode: VideoBitrateMode = VideoBitrateMode.Cbr,
-    /** Frames between I-frames; 1 = all-intra. */
-    val keyframeFrames: Int = 30,
+    val keyframeInterval: KeyframeInterval = KeyframeInterval.One,
     /** -1 lets the codec choose; 0 disables B-frames. */
     val maxBFrames: Int = -1,
     /** 1 = mono, 2 = stereo. */
@@ -38,7 +56,6 @@ data class VideoEncoderConfig(
         bitrate1080pMbps = bitrate1080pMbps.coerceIn(MIN_BITRATE_MBPS, MAX_BITRATE_MBPS),
         bitrate4kMbps = bitrate4kMbps.coerceIn(MIN_BITRATE_MBPS, MAX_BITRATE_MBPS),
         bitrateOpenGateMbps = bitrateOpenGateMbps.coerceIn(MIN_BITRATE_MBPS, MAX_BITRATE_MBPS),
-        keyframeFrames = keyframeFrames.coerceIn(MIN_KEYFRAME_FRAMES, MAX_KEYFRAME_FRAMES),
         maxBFrames = maxBFrames.coerceIn(-1, 2),
         audioChannels = if (audioChannels == 1) 1 else 2,
         audioBitrateKbps = AUDIO_BITRATES_KBPS.minBy { kotlin.math.abs(it - audioBitrateKbps) }
@@ -61,10 +78,6 @@ data class VideoEncoderConfig(
         const val MAX_BITRATE_MBPS = com.rawr.camera.video.VideoEncoderLimits.MAX_BITRATE_MBPS
         val AUDIO_BITRATES_KBPS = listOf(128, 192, 256, 320)
         val MAX_B_FRAME_CHOICES = listOf(-1, 0, 1, 2)
-        const val MIN_KEYFRAME_FRAMES = 1
-        const val MAX_KEYFRAME_FRAMES = 60
-        /** Below this, every few frames is an I-frame and file size climbs steeply. */
-        const val SHORT_GOP_FRAMES = 5
 
         /** Requested GOP in display order, e.g. "I B B P B B P … (30)"; all-intra is "I I I …". */
         fun gopPattern(frames: Int, maxBFrames: Int): String {

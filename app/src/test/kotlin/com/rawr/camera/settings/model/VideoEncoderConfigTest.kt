@@ -15,7 +15,7 @@ class VideoEncoderConfigTest {
         assertEquals(40, d.bitrateMbps(VideoResolutionMode.UHD4K))
         assertEquals(60, d.bitrateMbps(VideoResolutionMode.OPEN_GATE))
         assertEquals(2, d.bitrateMode.wireValue)
-        assertEquals(30, d.keyframeFrames)
+        assertEquals(KeyframeInterval.One, d.keyframeInterval)
         assertEquals(-1, d.maxBFrames)
         assertEquals(2, d.audioChannels)
         assertEquals(192, d.audioBitrateKbps)
@@ -25,20 +25,27 @@ class VideoEncoderConfigTest {
     @Test fun sanitizedClampsToWhatTheNativeRecorderAccepts() {
         val s = VideoEncoderConfig(
             bitDepth = 12, bitrate1080pMbps = 0, bitrate4kMbps = 500, bitrateOpenGateMbps = -3,
-            keyframeFrames = 99, maxBFrames = 7, audioChannels = 6, audioBitrateKbps = 200
+            maxBFrames = 7, audioChannels = 6, audioBitrateKbps = 200
         ).sanitized()
         assertEquals(10, s.bitDepth)
         assertEquals(1, s.bitrate1080pMbps)
         assertEquals(400, s.bitrate4kMbps)
         assertEquals(1, s.bitrateOpenGateMbps)
-        assertEquals(60, s.keyframeFrames)
         assertEquals(2, s.maxBFrames)
         assertEquals(2, s.audioChannels)
         assertEquals(192, s.audioBitrateKbps)
     }
 
-    @Test fun keyframeIntervalClampsToOneFrameMinimum() {
-        assertEquals(1, VideoEncoderConfig(keyframeFrames = 0).sanitized().keyframeFrames)
+    @Test fun keyframeIntervalScalesWithFrameRate() {
+        assertEquals(listOf(1, 12, 24, 48), KeyframeInterval.entries.map { it.frames(24) })
+        assertEquals(listOf(1, 15, 30, 60), KeyframeInterval.entries.map { it.frames(30) })
+    }
+
+    @Test fun keyframeWireValuesMapToNearestChoice() {
+        assertEquals(KeyframeInterval.AllIntra, KeyframeInterval.of(0))
+        assertEquals(KeyframeInterval.One, KeyframeInterval.of(2))
+        // Legacy whole seconds x 2: 1 s -> 1x, 10 s -> 2x.
+        assertEquals(KeyframeInterval.Two, KeyframeInterval.of(20))
     }
 
     @Test fun gopPatternDescribesRequestedStructure() {
