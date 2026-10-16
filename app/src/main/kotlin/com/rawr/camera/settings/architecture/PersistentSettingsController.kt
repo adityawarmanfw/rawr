@@ -66,11 +66,9 @@ class PersistentSettingsController(
             is SetMultiframeOutputResolution, is SetMultiframeMergeAlgorithm -> reduceMultiframeSettings(state, action)
 
             is SetPhotoDenoiseEnabled, is SetPhotoDenoiseStrength, is SetPhotoDenoiseDetail,
-            is SetPhotoDenoiseLuma, is SetPhotoDenoiseScales, is SetPhotoDenoiseMethod,
+            is SetPhotoDenoiseLuma, is SetPhotoDenoiseScales,
             is SetVideoDenoiseEnabled, is SetVideoDenoiseStrength, is SetVideoDenoiseDetail,
-            is SetVideoDenoiseLuma, is SetVideoDenoiseScales, is SetGaloshRawMode,
-            is SetGaloshStrength, is SetGaloshLuma, is SetGaloshChroma,
-            is SetGaloshYuvMode, is SetGaloshYuvStrengthY, is SetGaloshYuvStrengthC -> reduceDenoiseSettings(state, action)
+            is SetVideoDenoiseLuma, is SetVideoDenoiseScales -> reduceDenoiseSettings(state, action)
 
             is SetDemosaicAlgorithm, is SetDualAutoContrast, is SetDualContrastPercent,
             is SetPhotoFccSteps,

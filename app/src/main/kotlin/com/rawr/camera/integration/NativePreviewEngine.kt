@@ -141,9 +141,8 @@ class NativePreviewEngine {
         defringeEdgeThreshold: Float,
         defringeLumaFloor: Float,
         // Collapsed denoise spec (see DenoiseConfig.toModesArray /
-        // toStrengthsArray): modes[master, method, rawMode, yuvMode],
-        // strengths[waveletStrength, waveletDetail, rawStrength, rawLuma,
-        // rawChroma, yuvStrengthY, yuvStrengthC].
+        // toStrengthsArray): modes[master, waveletScales],
+        // strengths[waveletStrength, waveletDetail, waveletLuma].
         denoiseModes: IntArray,
         denoiseStrengths: FloatArray,
         captureRecipe: String = "",
@@ -204,9 +203,8 @@ class NativePreviewEngine {
         defringeEdgeThreshold: Float,
         defringeLumaFloor: Float,
         // Collapsed denoise spec (see DenoiseConfig.toModesArray /
-        // toStrengthsArray): modes[master, method, rawMode, yuvMode],
-        // strengths[waveletStrength, waveletDetail, rawStrength, rawLuma,
-        // rawChroma, yuvStrengthY, yuvStrengthC].
+        // toStrengthsArray): modes[master, waveletScales],
+        // strengths[waveletStrength, waveletDetail, waveletLuma].
         denoiseModes: IntArray,
         denoiseStrengths: FloatArray,
         captureRecipe: String = "",

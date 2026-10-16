@@ -106,7 +106,6 @@ cpp/
 │   │   ├── FilmRenderStage.{h,cpp}    # Film/tone recording and typed fallback outcome
 │   │   └── RenderReadback.{h,cpp}     # GPU download, timing/checksum/stats/diagnostics
 │   ├── highlight/                     # Highlight contracts and snapshots
-│   └── galosh/                        # Denoiser shader adapter
 ├── encoding/
 │   ├── dng/                           # DNG writer and TinyDNG adapter
 │   ├── jpeg/                          # JPEG output options, writer, EXIF

@@ -18,11 +18,10 @@ still a native library, not app code.
 |---|---|---|---|---|---|
 | Clip classification + CFA pack | `raw_preview` (cfa_state) | `raw_demosaic/common` (sensor_clip_pack) | `multiframe/output` (prepare_rgb) | `raw_ingress` | GPU camera ingress: RAW10 (MIPI packed) to R16 unpack from the imported camera buffer. |
 | `video_pipeline` | CPU normalize (`RendererEngine`) |
-| Pre-demosaic denoise | — | `galosh` (RAW) | — | — | — |
 | Demosaic | `raw_preview` (2×2 cell) | `raw_demosaic` (RCD / VNG4 / Dual) | `multiframe/merge_wronski` (merge outputs RGB) | `video_pipeline` (MHC 5×5) | `raw_demosaic` (+ quadfix) |
 | Post-demosaic denoise | — | `raw_denoise` | — | `raw_denoise` | `raw_denoise` |
 | WB, highlight, FCC, defringe | `raw_preview` + `raw_highlight` | `post_demosaic` + `raw_highlight` + `false_color_correction` | same as single | same as single | same as single |
-| Tone / look | `tonemap_engine` or `spektrafilm` | same, then `galosh` (YUV), `gainmap` | same | `tonemap_engine` | same as still |
+| Tone / look | `tonemap_engine` or `spektrafilm` | same, then `gainmap` | same | `tonemap_engine` | same as still |
 
 Highlight reconstruction has two methods, colour propagation and Inpaint
 Opposed, and every pipeline runs the selected one; see
@@ -40,7 +39,6 @@ Opposed, and every pipeline runs the selected one; see
 | `video_pipeline` | Recording-resolution RAW stage: fused MHC demosaic, crop / 2× reduction, LSC, clip state. |
 | `post_demosaic` | Post-demosaic still/video stages (`rawr::post::PostDemosaicProcessor`). |
 | `raw_denoise` | Profiled wavelet denoise (darktable denoiseprofile port). |
-| `galosh` | Blind GALOSH denoise: RAW pre-demosaic and YUV post-tonemap engines. |
 | `false_color_correction` | RawTherapee false-colour suppression. |
 | `multiframe` | Multiframe burst: `alignment`, `merge_wronski`, `pipeline` (executor, recorder, burst coordinator), `output` (CFA projection, JPEG-path RGB), `sharpness` (reference-frame scoring). |
 | `tonemap_engine` | Scene-linear to display rendering, LUTs, colour transforms. |

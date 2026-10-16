@@ -293,7 +293,6 @@ data class SetMultiframeBaseFrameMode(val value: MultiframeBaseFrameMode) : Sett
 
 data class SetMultiframeChromaDenoise(val enabled: Boolean) : SettingsApplicationAction
 
-
 data class SetMultiframeNumericValue(val parameter: MultiframeNumericParameter, val value: Float) :
     SettingsApplicationAction
 
@@ -337,8 +336,6 @@ data class SetDualContrastPercent(val value: Float) : SettingsApplicationAction
 
     data class SetVideoDefringeStrength(val value: Float) : SettingsApplicationAction
 
-
-
     data class SetPhotoDenoiseEnabled(val enabled: Boolean) : SettingsApplicationAction
 
     data class SetPhotoDenoiseStrength(val value: Float) : SettingsApplicationAction
@@ -349,8 +346,6 @@ data class SetDualContrastPercent(val value: Float) : SettingsApplicationAction
 
     data class SetPhotoDenoiseScales(val value: Int) : SettingsApplicationAction
 
-    data class SetPhotoDenoiseMethod(val method: Int) : SettingsApplicationAction
-
     data class SetVideoDenoiseEnabled(val enabled: Boolean) : SettingsApplicationAction
 
     data class SetVideoDenoiseStrength(val value: Float) : SettingsApplicationAction
@@ -360,20 +355,6 @@ data class SetDualContrastPercent(val value: Float) : SettingsApplicationAction
     data class SetVideoDenoiseLuma(val value: Float) : SettingsApplicationAction
 
     data class SetVideoDenoiseScales(val value: Int) : SettingsApplicationAction
-
-    data class SetGaloshRawMode(val mode: Int) : SettingsApplicationAction
-
-    data class SetGaloshStrength(val value: Float) : SettingsApplicationAction
-
-    data class SetGaloshLuma(val value: Float) : SettingsApplicationAction
-
-    data class SetGaloshChroma(val value: Float) : SettingsApplicationAction
-
-    data class SetGaloshYuvMode(val mode: Int) : SettingsApplicationAction
-
-    data class SetGaloshYuvStrengthY(val value: Float) : SettingsApplicationAction
-
-    data class SetGaloshYuvStrengthC(val value: Float) : SettingsApplicationAction
 
 data class SetPhotoLensShadingEnabled(val enabled: Boolean) : SettingsApplicationAction
 

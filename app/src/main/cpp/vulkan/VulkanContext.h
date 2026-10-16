@@ -76,8 +76,7 @@ class VulkanContext {
     uint32_t ahbExternalBufferFeatures() const noexcept { return ahbExternalBufferFeatures_; }
     // Optional: f16 SSBO storage + float16 arithmetic (core Vulkan 1.2, or
     // KHR_shader_float16_int8 on 1.1 drivers). Enabled only when the driver
-    // exposes both; required by the GALOSH compute stages, which stay off
-    // otherwise (profiled wavelet serves as fallback).
+    // exposes both.
     bool float16ComputeEnabled() const noexcept { return float16ComputeEnabled_; }
     // Storage images in formats such as rgb10_a2 (the packed 10-bit encoder Surface).
     bool storageImageExtendedFormats() const noexcept { return storageImageExtendedFormats_; }

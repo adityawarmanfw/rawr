@@ -44,8 +44,8 @@ void RenderCommandSession::create(const RenderDeviceContext& context) {
         VkQueryPoolCreateInfo qi{};
         qi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
         qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
-        // 0-7 WB/HL/FCC/tonemap, 8-9 gainmap, 10-11 denoise,
-        // 14-15 galosh-yuv (12-13 spare).
+        // 0-7 WB/HL/FCC/tonemap, 8-9 gainmap, 10-11 denoise
+        // (12-15 spare).
         qi.queryCount = timingQueryCount;
         vkCheck(vkCreateQueryPool(context_.device, &qi, nullptr, &timingPool_), "rendered create timing query pool");
     }

@@ -40,8 +40,7 @@ class DualStillProcessor final {
     // raw holds the packed RAW16 bytes to demosaic (possibly shared with the
     // DNG writer); it is released as soon as the GPU upload is recorded.
     bool start(const rawrcam::imaging::RawSnapshot& frame, std::shared_ptr<const std::vector<uint8_t>> raw,
-               bool lensShadingCorrectionEnabled = false, bool highlightReconstructionEnabled = true,
-               const ::galosh::GaloshRawParams& galosh = ::galosh::GaloshRawParams{});
+               bool lensShadingCorrectionEnabled = false, bool highlightReconstructionEnabled = true);
     // External packed CFA input (configure with externalPackedInput): the
     // caller owns a (width/2 x height/2) RGBA16F packed image in GENERAL
     // layout, already written and fence-waited (e.g. the multiframe merge

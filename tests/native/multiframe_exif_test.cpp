@@ -151,24 +151,24 @@ int main() {
     // Described highlight stage: off prints "off", Inpaint Opposed points at
     // colour processing, and defringe/tone time gets its own line in the total.
     const std::string hlOff = formatImageProcessing(false, 100.0, 0.0, 10.0, 0.4, true, 1, 20.0, 5.0,
-                                                    30.0, false, 2.0, 8.0, false, 0.0, 0.0, 0.0, 0, 0.0, false);
+                                                    30.0, false, 2.0, 8.0, false, 0.0, 0.0, 0, 0.0, false);
     assert(contains(hlOff, "- HL reconstruction: off\n"));
     assert(!contains(hlOff, "Defringe"));
     assert(contains(hlOff, "Image Processing: 175.4 ms"));
     const std::string io = formatImageProcessing(false, 100.0, 0.0, 10.0, 0.1, true, 1, 20.0, 6.0,
-                                                 30.0, false, 2.0, 8.0, false, 0.0, 0.0, 0.0, 2, 3.5, true);
+                                                 30.0, false, 2.0, 8.0, false, 0.0, 0.0, 2, 3.5, true);
     assert(contains(io, "- HL reconstruction (Inpaint Opposed): in Color processing\n"));
     assert(contains(io, "- Color processing (WB + Inpaint Opposed): 6.0 ms"));
     assert(contains(io, "- Defringe + highlight tone: 3.5 ms"));
     assert(contains(io, "Image Processing: 179.6 ms"));
     const std::string propagation = formatImageProcessing(false, 100.0, 0.0, 10.0, 4.2, true, 1, 20.0,
-                                                          5.0, 30.0, false, 2.0, 8.0, false, 0.0, 0.0, 0.0, 1,
+                                                          5.0, 30.0, false, 2.0, 8.0, false, 0.0, 0.0, 1,
                                                           1.5, true);
     assert(contains(propagation, "- HL reconstruction (color propagation): 4.2 ms"));
     assert(contains(propagation, "- Defringe: 1.5 ms"));
     assert(contains(propagation, "- Color processing: 5.0 ms"));
     const std::string opposed = formatImageProcessing(false, 100.0, 0.0, 10.0, 0.1, true, 1, 20.0, 6.0,
-                                                      30.0, false, 2.0, 8.0, false, 0.0, 0.0, 0.0, 2, 2.4, false);
+                                                      30.0, false, 2.0, 8.0, false, 0.0, 0.0, 2, 2.4, false);
     assert(contains(opposed, "- HL reconstruction (Inpaint Opposed): in Color processing"));
     assert(contains(opposed, "- Highlight tone (Inpaint Opposed): 2.4 ms"));
 

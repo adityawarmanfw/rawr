@@ -9,7 +9,6 @@
 #include <vector>
 
 #include "develop/highlight/LensShadingMapSnapshot.h"
-#include "galosh/GaloshRawPipeline.hpp"
 #include "vulkan/ImageResources.h"
 #include "vulkan/VulkanContext.h"
 
@@ -72,11 +71,7 @@ class SharedHighlightRuntime final {
     VkCommandBuffer beginFrame(const std::vector<uint8_t>& rawCopy, const std::array<float, 4>& blackPhysical,
                                float whiteLevel, const std::array<float, 4>& whiteBalanceRggb,
                                const rawrcam::develop::highlight::LensShadingMapSnapshot& lensShading = {},
-                               bool highlightReconstructionEnabled = true,
-                               // GALOSH-RAW Bayer denoise (P1a): runs on
-                               // input_ in place right after upload, before
-                               // highlight packing. Off = legacy path untouched.
-                               const ::galosh::GaloshRawParams& galosh = ::galosh::GaloshRawParams{});
+                               bool highlightReconstructionEnabled = true);
     // Submits what is recorded so far, waits for it, and re-begins the same
     // command buffer. Splitting a full-resolution still into several bounded
     // submissions lets the preview queue run in between: queues of equal
@@ -124,11 +119,6 @@ class SharedHighlightRuntime final {
     uint32_t rawPreviewCfa_ = 0;
     bool sharedHighlightPacked_ = false;
     bool externalInput_ = false;
-    // GALOSH f16 gate (VulkanContext::float16ComputeEnabled, latched at
-    // configure): without f16 SSBO/arithmetic the vendored shaders cannot
-    // legally execute, so the tap stays off and Wavelet serves.
-    bool float16Compute_ = false;
-
     rawrcam::vulkan::OwnedImage input_{};
     rawrcam::vulkan::OwnedImage packed_{};
     rawrcam::vulkan::OwnedImage clipState_{};
@@ -163,13 +153,6 @@ class SharedHighlightRuntime final {
     VkDescriptorPool replayPool_ = VK_NULL_HANDLE;
     VkDescriptorSet replaySet_ = VK_NULL_HANDLE;
 
-    // Lazy GALOSH-RAW stage (owns its transient graph; geometry epochs
-    // reallocate inside process()). Null until first enabled shot.
-    std::unique_ptr<::galosh::GaloshRawPipeline> galosh_;
-    // Device the galosh pipeline was built on (see StillImageRenderer:
-    // rebuild on device change instead of submitting to a dead VkDevice).
-    VkDevice galoshDevice_ = VK_NULL_HANDLE;
-    void ensureGalosh();
 };
 
 }  // namespace rawrcam::develop

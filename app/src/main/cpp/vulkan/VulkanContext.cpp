@@ -96,7 +96,7 @@ void VulkanContext::createDeviceForSurface(VkSurfaceKHR surface) {
     conditionalRenderingEnabled_ = hasExtension(extensions, VK_EXT_CONDITIONAL_RENDERING_EXTENSION_NAME);
     displayTimingEnabled_ = hasExtension(extensions, VK_GOOGLE_DISPLAY_TIMING_EXTENSION_NAME);
 
-    // GALOSH f16 probe (spec: querying structs from unsupported extensions
+    // f16 probe (spec: querying structs from unsupported extensions
     // returns zero, so this is safe on 1.1-only drivers).
     VkPhysicalDevice16BitStorageFeatures storage16Query{};
     storage16Query.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES;

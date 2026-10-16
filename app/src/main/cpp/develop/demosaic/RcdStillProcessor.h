@@ -72,10 +72,7 @@ class RcdStillProcessor final {
     // until the upload is recorded; the rawrcam::imaging::RawSnapshot itself may be released
     // immediately after start() succeeds.
     bool start(const rawrcam::imaging::RawSnapshot& frame, std::shared_ptr<const std::vector<uint8_t>> raw,
-               bool lensShadingCorrectionEnabled = false, bool highlightReconstructionEnabled = true,
-               // GALOSH-RAW Bayer denoise (P1a): forwarded per-shot into the
-               // shared highlight runtime. Off = legacy path untouched.
-               const ::galosh::GaloshRawParams& galosh = ::galosh::GaloshRawParams{});
+               bool lensShadingCorrectionEnabled = false, bool highlightReconstructionEnabled = true);
     // Demosaics a caller-owned packed CFA (SharedHighlightPacked contract),
     // e.g. the multiframe merge output. Requires externalPackedInput.
     bool startExternalPacked(VkImage packedImage, VkImageView packedView, uint64_t requestId, uint64_t timestampNs = 0);

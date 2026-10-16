@@ -127,9 +127,6 @@ rawrcam::renderer::RenderOptions options(JNIEnv* env, jstring recipe, int workin
     c.denoiseDetail = developSettings.denoiseDetail;
     c.denoiseForceY = developSettings.denoiseForceY;
     c.denoiseMaxScale = developSettings.denoiseMaxScale;
-    c.galoshYuvMode = developSettings.galoshYuvMode;
-    c.galoshYuvStrengthY = developSettings.galoshYuvStrengthY;
-    c.galoshYuvStrengthC = developSettings.galoshYuvStrengthC;
 #ifndef NDEBUG
     // The headless DNG replay uses the same render path and requests the
     // existing production stage dumps only in debug builds.
@@ -495,7 +492,6 @@ Java_com_rawr_camera_renderer_RendererNative_render(JNIEnv* e, jobject, jlong id
             c.refinementMs = completion.refinementMs;
             c.tonemapMs = completion.tonemapMs;
             c.denoiseMs = completion.denoiseMs;
-            c.galoshYuvMs = completion.galoshYuvMs;
             c.gainmapMs = completion.gainmapMs;
             // Stage labels and the defringe/highlight-tone tail, as on still captures.
             c.postTailMs = completion.postTailMs;

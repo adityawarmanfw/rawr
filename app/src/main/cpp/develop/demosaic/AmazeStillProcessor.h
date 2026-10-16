@@ -59,8 +59,7 @@ class AmazeStillProcessor final {
     [[nodiscard]] uint64_t peakAllocatedBytes() const noexcept;
 
     bool start(const rawrcam::imaging::RawSnapshot& frame, std::shared_ptr<const std::vector<uint8_t>> raw,
-               bool lensShadingCorrectionEnabled = false, bool highlightReconstructionEnabled = true,
-               const ::galosh::GaloshRawParams& galosh = ::galosh::GaloshRawParams{});
+               bool lensShadingCorrectionEnabled = false, bool highlightReconstructionEnabled = true);
     // Demosaics a caller-owned packed CFA (same contract as the shared
     // highlight packing), e.g. the multiframe merge output. Requires
     // externalPackedInput; whiteBalanceRggb is the shot's baseline WB.

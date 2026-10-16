@@ -37,8 +37,7 @@ class VngStillProcessor final {
     // raw holds the packed RAW16 bytes to demosaic (possibly shared with the
     // DNG writer); it is released as soon as the GPU upload is recorded.
     bool start(const rawrcam::imaging::RawSnapshot& frame, std::shared_ptr<const std::vector<uint8_t>> raw,
-               bool lensShadingCorrectionEnabled = false, bool highlightReconstructionEnabled = true,
-               const ::galosh::GaloshRawParams& galosh = ::galosh::GaloshRawParams{});
+               bool lensShadingCorrectionEnabled = false, bool highlightReconstructionEnabled = true);
     std::optional<StillCompletion> pollCompletion();
     void releaseWorkspaceKeepOutput() noexcept;
     void releaseOutput() noexcept;

@@ -28,7 +28,6 @@
 #include <utility>
 
 #include "color/FilmExposure.h"
-#include "develop/galosh/GaloshShaderTable.h"
 #include "develop/render/FilmScratchEstimate.h"
 #include "tonemap/ImportedLutProfileStore.h"
 #include "vulkan/HostMemory.h"
@@ -205,20 +204,6 @@ double RenderResources::prepareEngines(const RenderedStillContext& rendered) {
          " postDemosaic=" + (postDemosaicMatch ? "reused" : "rebuilt"));
 
     return engineBuildMs;
-}
-void RenderResources::ensureGaloshYuv() {
-    if (galoshYuv_) {
-        if (galoshYuvDevice_ == device_) return;
-        // Device changed (teardown/recreation): destroy on the old device
-        // before rebuilding. Caller guarantees no galosh work in flight
-        // (worker thread, queue idle via fence).
-        galoshYuv_.reset();
-        galoshYuvDevice_ = VK_NULL_HANDLE;
-    }
-    if (!queueSubmitMutex_) throw std::logic_error("rendered galosh without queue mutex");
-    galoshYuv_ =
-        std::make_unique<::galosh::GaloshYuvPipeline>(physicalDevice_, device_, queueFamily_, galosh::yuvShaderMap());
-    galoshYuvDevice_ = device_;
 }
 void RenderResources::ensureLocalTone() {
     if (localTone_ && localToneDevice_ == device_) return;
@@ -446,18 +431,8 @@ void RenderResources::releasePixels() noexcept {
     if (!enginePersistenceEnabled_.load(std::memory_order_relaxed)) {
         tonemap_.reset();
         postDemosaic_.reset();
-        // GALOSH-YUV owns hundreds of MB of transient graph memory: free
-        // with the engines when persistence is off. With persistence on the
-        // epoch reallocates per geometry inside process().
-        galoshYuv_.reset();
-        galoshYuvDevice_ = VK_NULL_HANDLE;
         localTone_.reset();
         localToneDevice_ = VK_NULL_HANDLE;
-    } else if (galoshYuv_ && galoshYuvDevice_ != device_) {
-        // Device changed under persistence (surface recreation): the pipeline
-        // holds command pool/fence/descriptors on the old VkDevice.
-        galoshYuv_.reset();
-        galoshYuvDevice_ = VK_NULL_HANDLE;
     }
     if (device_) {
         if (mapped_ && readbackMemory_) vkUnmapMemory(device_, readbackMemory_);
@@ -490,7 +465,6 @@ void RenderResources::bind(const RenderDeviceContext& context) noexcept {
     queue_ = context.queue;
     queueFamily_ = context.queueFamily;
     queueSubmitMutex_ = context.queueSubmitMutex;
-    float16Compute_ = context.float16Compute;
 }
 RenderOutputView RenderResources::outputView() const noexcept {
     return {mapped_,    static_cast<size_t>(readbackBytes_),    output_.view,
@@ -503,13 +477,11 @@ VkImageView RenderResources::prepareGlow(uint32_t width, uint32_t height) {
     return glowGain_.view;
 }
 void RenderResources::reset() noexcept {
-    // Destroy GALOSH while device_ is still valid: the pipeline destructor
+    // Destroy local tone while device_ is still valid: its destructor
     // issues vkDestroy* on its stored VkDevice. Must precede the nulling
     // below (destroyResources keeps it alive under persistence).
     localTone_.reset();
     localToneDevice_ = VK_NULL_HANDLE;
-    galoshYuv_.reset();
-    galoshYuvDevice_ = VK_NULL_HANDLE;
     releasePixels();
     tonemap_.reset();
     postDemosaic_.reset();

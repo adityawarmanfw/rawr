@@ -614,26 +614,15 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
             photoDefringeLumaFloor = (p[Keys.photoDefringeLumaFloor] ?: p[Keys.defringeLumaFloor] ?: d.photoDefringeLumaFloor).coerceIn(0f, 0.5f),
             videoDefringeEnabled = p[Keys.videoDefringeEnabled] ?: d.videoDefringeEnabled,
             videoDefringeStrength = (p[Keys.videoDefringeStrength] ?: p[Keys.defringeStrength] ?: d.videoDefringeStrength).coerceIn(0f, 1f),
-            // Photo denoise keeps the stable eleven-key schema; video
-            // denoise is three new wavelet-only keys (no Galosh on video).
+            // Photo and video denoise keep separate wavelet keys.
             photoDenoise = run {
                 val fallback = d.photoDenoise.toLegacy()
                 DenoiseConfig.fromLegacy(
                     enabled = p[Keys.denoiseEnabled] ?: fallback.enabled,
-                    method = p[Keys.denoiseMethod] ?: if ((p[Keys.galoshRawMode] ?: 0) != 0 ||
-                        (p[Keys.galoshYuvMode] ?: 0) != 0
-                    ) 1 else fallback.method,
                     waveletStrength = (p[Keys.denoiseStrength] ?: fallback.waveletStrength).coerceIn(0f, 8f),
                     waveletDetail = (p[Keys.denoiseDetail] ?: fallback.waveletDetail).coerceIn(0f, 1.8f),
                     waveletLuma = (p[Keys.denoiseLuma] ?: fallback.waveletLuma).coerceIn(0f, 1f),
-                    waveletScales = (p[Keys.denoiseScales] ?: fallback.waveletScales).coerceIn(1, 7),
-                    rawMode = (p[Keys.galoshRawMode] ?: fallback.rawMode).coerceIn(0, 2),
-                    rawStrength = (p[Keys.galoshStrength] ?: fallback.rawStrength).coerceIn(0f, 8f),
-                    rawLuma = (p[Keys.galoshLuma] ?: fallback.rawLuma).coerceIn(0f, 8f),
-                    rawChroma = (p[Keys.galoshChroma] ?: fallback.rawChroma).coerceIn(0f, 8f),
-                    yuvMode = (p[Keys.galoshYuvMode] ?: fallback.yuvMode).coerceIn(0, 2),
-                    yuvStrengthY = (p[Keys.galoshYuvStrengthY] ?: fallback.yuvStrengthY).coerceIn(0f, 8f),
-                    yuvStrengthC = (p[Keys.galoshYuvStrengthC] ?: fallback.yuvStrengthC).coerceIn(0f, 8f)
+                    waveletScales = (p[Keys.denoiseScales] ?: fallback.waveletScales).coerceIn(1, 7)
                 )
             },
             videoDenoiseEnabled = p[Keys.videoDenoiseEnabled] ?: d.videoDenoiseEnabled,
@@ -859,14 +848,6 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.denoiseDetail] = legacyDenoise.waveletDetail.coerceIn(0f, 1.8f)
         p[Keys.denoiseLuma] = legacyDenoise.waveletLuma.coerceIn(0f, 1f)
         p[Keys.denoiseScales] = legacyDenoise.waveletScales.coerceIn(1, 7)
-        p[Keys.denoiseMethod] = legacyDenoise.method.coerceIn(0, 1)
-        p[Keys.galoshRawMode] = legacyDenoise.rawMode.coerceIn(0, 2)
-        p[Keys.galoshStrength] = legacyDenoise.rawStrength.coerceIn(0f, 8f)
-        p[Keys.galoshLuma] = legacyDenoise.rawLuma.coerceIn(0f, 8f)
-        p[Keys.galoshChroma] = legacyDenoise.rawChroma.coerceIn(0f, 8f)
-        p[Keys.galoshYuvMode] = legacyDenoise.yuvMode.coerceIn(0, 2)
-        p[Keys.galoshYuvStrengthY] = legacyDenoise.yuvStrengthY.coerceIn(0f, 8f)
-        p[Keys.galoshYuvStrengthC] = legacyDenoise.yuvStrengthC.coerceIn(0f, 8f)
         p[Keys.videoDenoiseEnabled] = v.videoDenoiseEnabled
         p[Keys.videoDenoiseStrength] = v.videoDenoiseStrength.coerceIn(0f, 8f)
         p[Keys.videoDenoiseDetail] = v.videoDenoiseDetail.coerceIn(0f, 1.8f)
@@ -1139,14 +1120,6 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val denoiseDetail = floatPreferencesKey("denoise_detail")
         val denoiseLuma = floatPreferencesKey("denoise_luma")
         val denoiseScales = intPreferencesKey("denoise_scales")
-        val denoiseMethod = intPreferencesKey("denoise_method")
-        val galoshRawMode = intPreferencesKey("galosh_raw_mode")
-        val galoshStrength = floatPreferencesKey("galosh_strength")
-        val galoshLuma = floatPreferencesKey("galosh_luma")
-        val galoshChroma = floatPreferencesKey("galosh_chroma")
-        val galoshYuvMode = intPreferencesKey("galosh_yuv_mode")
-        val galoshYuvStrengthY = floatPreferencesKey("galosh_yuv_strength_y")
-        val galoshYuvStrengthC = floatPreferencesKey("galosh_yuv_strength_c")
         val videoDenoiseEnabled = booleanPreferencesKey("video_denoise_enabled")
         val videoDenoiseStrength = floatPreferencesKey("video_denoise_strength")
         val videoDenoiseDetail = floatPreferencesKey("video_denoise_detail")

@@ -4,18 +4,10 @@
 namespace rawrcam::jni {
 struct DenoiseIntent {
     bool master = false;
-    int method = 0;
     float waveletStrength = 0.0f;
     float waveletDetail = 1.0f;
     float waveletForceY = 0.25f;
     int waveletMaxScale = 7;
-    int rawMode = 0;
-    float rawStrength = 1.0f;
-    float rawLuma = 1.0f;
-    float rawChroma = 1.0f;
-    int yuvMode = 0;
-    float yuvStrengthY = 1.0f;
-    float yuvStrengthC = 1.0f;
 };
 DenoiseIntent parseDenoiseSpec(JNIEnv* env, jintArray modes, jfloatArray strengths);
 struct CaptureDevelopInput {

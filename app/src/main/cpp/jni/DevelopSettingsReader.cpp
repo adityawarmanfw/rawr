@@ -10,59 +10,31 @@ void applyDenoise(develop::DevelopSettings& out, const DenoiseIntent& denoise) {
     out.denoiseDetail = denoise.waveletDetail;
     out.denoiseForceY = denoise.waveletForceY;
     out.denoiseMaxScale = denoise.waveletMaxScale;
-    // Method switch (P1c): method 0 = profiled wavelet, 1 = galosh lanes.
-    // The master toggle parks everything; wavelet runs iff master on and
-    // method is wavelet; lanes run iff master on and method is galosh.
-    // Lane ints are validated in parseDenoiseSpec; the intent arrives
-    // pre-arbitrated from DenoiseConfig.resolve(), this stays as backstop.
-    const int method = denoise.method;
-    const bool master = denoise.master;
-    out.denoiseStrength = (master && method == 0) ? denoise.waveletStrength : 0.0f;
-    // GALOSH blind denoisers: modes mirror galosh::GaloshRawMode /
-    // galosh::GaloshYuvMode (0 off, 1 full, 2 chroma-only).
-    const int rawMode = (master && method == 1) ? denoise.rawMode : 0;
-    out.galoshRawMode = (rawMode == 1 || rawMode == 2) ? rawMode : 0;
-    out.galoshStrength = denoise.rawStrength;
-    out.galoshLuma = denoise.rawLuma;
-    out.galoshChroma = denoise.rawChroma;
-    const int yuvMode = (master && method == 1) ? denoise.yuvMode : 0;
-    out.galoshYuvMode = (yuvMode == 1 || yuvMode == 2) ? yuvMode : 0;
-    out.galoshYuvStrengthY = denoise.yuvStrengthY;
-    out.galoshYuvStrengthC = denoise.yuvStrengthC;
-    __android_log_print(ANDROID_LOG_INFO, "RawrCamNative",
-                        "GALOSH_JNI_MAP master=%d method=%d raw=%d yuv=%d wavelet=%.2f", master ? 1 : 0, method,
-                        out.galoshRawMode, out.galoshYuvMode, out.denoiseStrength);
+    // The intent arrives pre-arbitrated from DenoiseConfig.resolve(); the
+    // master toggle stays as backstop.
+    out.denoiseStrength = denoise.master ? denoise.waveletStrength : 0.0f;
 }
 }  // namespace
 DenoiseIntent parseDenoiseSpec(JNIEnv* env, jintArray modes, jfloatArray strengths) {
     DenoiseIntent out{};
     const jsize modeLen = modes ? env->GetArrayLength(modes) : 0;
     const jsize strengthLen = strengths ? env->GetArrayLength(strengths) : 0;
-    if (!((modeLen == 4 && strengthLen == 7) || (modeLen == 5 && strengthLen == 8))) {
+    if (modeLen != 2 || strengthLen != 3) {
         __android_log_print(ANDROID_LOG_ERROR, "RawrCamNative",
-                            "DENOISE_SPEC_INVALID modes=%d strengths=%d (want 4/7 or 5/8); denoise off",
+                            "DENOISE_SPEC_INVALID modes=%d strengths=%d (want 2/3); denoise off",
                             static_cast<int>(modeLen), static_cast<int>(strengthLen));
         return out;
     }
-    jint m[5]{};
-    jfloat s[8]{};
+    jint m[2]{};
+    jfloat s[3]{};
     env->GetIntArrayRegion(modes, 0, modeLen, m);
     env->GetFloatArrayRegion(strengths, 0, strengthLen, s);
     out.master = m[0] != 0;
-    out.method = std::clamp(static_cast<int>(m[1]), 0, 1);
-    out.rawMode = (m[2] == 1 || m[2] == 2) ? static_cast<int>(m[2]) : 0;
-    out.yuvMode = (m[3] == 1 || m[3] == 2) ? static_cast<int>(m[3]) : 0;
-    out.waveletMaxScale = (modeLen == 5) ? std::clamp(static_cast<int>(m[4]), 1, 7) : 7;
+    out.waveletMaxScale = std::clamp(static_cast<int>(m[1]), 1, 7);
     out.waveletStrength = std::clamp(static_cast<float>(s[0]), 0.0f, 8.0f);
     out.waveletDetail = std::clamp(static_cast<float>(s[1]), 0.0f, 1.8f);
-    out.waveletForceY = (strengthLen == 8 && std::isfinite(static_cast<float>(s[7])))
-                            ? std::clamp(static_cast<float>(s[7]), 0.0f, 1.0f)
-                            : 0.25f;
-    out.rawStrength = std::clamp(static_cast<float>(s[2]), 0.0f, 8.0f);
-    out.rawLuma = std::clamp(static_cast<float>(s[3]), 0.0f, 8.0f);
-    out.rawChroma = std::clamp(static_cast<float>(s[4]), 0.0f, 8.0f);
-    out.yuvStrengthY = std::clamp(static_cast<float>(s[5]), 0.0f, 8.0f);
-    out.yuvStrengthC = std::clamp(static_cast<float>(s[6]), 0.0f, 8.0f);
+    out.waveletForceY = std::isfinite(static_cast<float>(s[2])) ? std::clamp(static_cast<float>(s[2]), 0.0f, 1.0f)
+                                                                 : 0.25f;
     return out;
 }
 
@@ -145,14 +117,10 @@ develop::DevelopSettings readRendererDevelopSettings(Json& json) {
     out.denoiseMaxScale = std::clamp(static_cast<int>(json.number("denoiseScales", 7)), 1, 7);
     DenoiseIntent denoise{};
     denoise.master = json.flag("denoiseEnabled", false);
-    denoise.method = std::clamp(static_cast<int>(json.number("denoiseMethod", 0)), 0, 1);
     denoise.waveletStrength = out.denoiseStrength;
     denoise.waveletDetail = out.denoiseDetail;
     denoise.waveletForceY = out.denoiseForceY;
     denoise.waveletMaxScale = out.denoiseMaxScale;
-    denoise.yuvMode = static_cast<int>(json.number("galoshYuvMode", 0));
-    denoise.yuvStrengthY = std::clamp(float(json.number("galoshYuvStrengthY", 1)), 0.f, 8.f);
-    denoise.yuvStrengthC = std::clamp(float(json.number("galoshYuvStrengthC", 1)), 0.f, 8.f);
     applyDenoise(out, denoise);
     out.highlightReconstructionEnabled = json.flag("highlightReconstructionEnabled", true);
     out.highlightReconstructionMethod = std::clamp(uint32_t(json.number("highlightReconstructionMethod", 0)), 0u, 1u);

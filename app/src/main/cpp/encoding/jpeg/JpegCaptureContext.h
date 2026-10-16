@@ -58,8 +58,6 @@ struct JpegCaptureContext {
     double refinementMs = 0.0;
     double tonemapMs = 0.0;
     double denoiseMs = 0.0;
-    // GALOSH-YUV blind denoise (P1c); 0 when off.
-    double galoshYuvMs = 0.0;
     double gainmapMs = 0.0;
     // Filled after rendering (not persisted): defringe + Inpaint Opposed tone
     // time, the effective highlight stage (-1 unknown, 0 off, 1 colour

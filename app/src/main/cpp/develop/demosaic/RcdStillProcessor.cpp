@@ -123,7 +123,7 @@ bool RcdStillProcessor::busy() const noexcept { return worker_.busy(); }
 
 bool RcdStillProcessor::start(const rawrcam::imaging::RawSnapshot& frame,
                               std::shared_ptr<const std::vector<uint8_t>> raw, bool lensShadingCorrectionEnabled,
-                              bool highlightReconstructionEnabled, const ::galosh::GaloshRawParams& galosh) {
+                              bool highlightReconstructionEnabled) {
     if (!configured()) return false;
 
     const uint64_t expectedBytes = static_cast<uint64_t>(width_) * height_ * sizeof(uint16_t);
@@ -158,7 +158,7 @@ bool RcdStillProcessor::start(const rawrcam::imaging::RawSnapshot& frame,
         rawrcam::develop::highlight::LensShadingMapSnapshot::fromMetadata(frame.metadata, lensShadingCorrectionEnabled);
 
     worker_.spawn([this, requestId, timestampNs, blackPhysical, whiteLevel, whiteBalanceRggb, parityBlack, lensShading,
-                   highlightReconstructionEnabled, galosh, raw = std::move(raw)]() mutable {
+                   highlightReconstructionEnabled, raw = std::move(raw)]() mutable {
         StillCompletion done{};
         done.requestId = requestId;
         done.timestampNs = timestampNs;
@@ -166,7 +166,7 @@ bool RcdStillProcessor::start(const rawrcam::imaging::RawSnapshot& frame,
         try {
             ensureRuntimeResources();
             VkCommandBuffer command = runtime_.beginFrame(*raw, blackPhysical, whiteLevel, whiteBalanceRggb,
-                                                          lensShading, highlightReconstructionEnabled, galosh);
+                                                          lensShading, highlightReconstructionEnabled);
             raw.reset();
             done.persistentBytes = currentAllocatedBytes();
             // Bounded submissions (upload/highlight, then each demosaic pass) so the

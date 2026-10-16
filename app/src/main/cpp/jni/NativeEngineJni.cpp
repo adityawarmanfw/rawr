@@ -130,12 +130,9 @@ rawrcam::encoding::dng::DngCaptureContext makeDngContext(jint fd, jint rotation,
     return out;
 }
 // Collapsed denoise intent at the JNI boundary (see DenoiseConfig
-// toModesArray/toStrengthsArray): modes[master, method, rawMode, yuvMode,
-// waveletMaxScale], strengths[waveletStrength, waveletDetail, rawStrength,
-// rawLuma, rawChroma, yuvStrengthY, yuvStrengthC, waveletForceY]. One
-// IntArray + one FloatArray instead of thirteen positional params. The
-// trailing waveletForceY / waveletMaxScale are optional: (4/7) arrays load
-// with shipped-tuning defaults (0.25/7).
+// toModesArray/toStrengthsArray): modes[master, waveletMaxScale],
+// strengths[waveletStrength, waveletDetail, waveletForceY]. One IntArray +
+// one FloatArray instead of positional params.
 using rawrcam::jni::DenoiseIntent;
 using rawrcam::jni::parseDenoiseSpec;
 void fillJpegContext(JNIEnv* env, rawrcam::capture::JpegCaptureRequest& jpeg, jint fd, jint rotation,

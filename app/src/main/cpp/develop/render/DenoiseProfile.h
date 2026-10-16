@@ -21,15 +21,4 @@ inline bool resolveDenoiseNoise(const metadata::FrameMetadataSnapshot& metadata,
                                                metadata.effectiveWhiteLevel, a, b);
 }
 
-// Resolves the R16U <-> [0,1] bridge levels for GALOSH-RAW from a frame
-// snapshot: green-black mean + effective white, the same normalization the
-// demosaicers and the wavelet path use. Returns false when invalid —
-// callers keep GALOSH off instead of running on a wrong domain.
-inline bool resolveGaloshRawLevels(const metadata::FrameMetadataSnapshot& metadata, float& black, float& white) {
-    white = metadata.effectiveWhiteLevel;
-    black = (metadata.blackLevelPhysicalRggb[1] + metadata.blackLevelPhysicalRggb[2]) * 0.5f;
-    if (!metadata.cameraContext) return false;
-    return white > black && black >= 0.0f && std::isfinite(white) && std::isfinite(black);
-}
-
 }  // namespace rawrcam::develop::rendered

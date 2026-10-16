@@ -6,10 +6,6 @@ variance-stabilizing transform driven by the Camera2 `SENSOR_NOISE_PROFILE`,
 RGBA16F, for single-frame stills, video, and the DNG renderer
 (`PostDemosaicProcessor`, `RendererEngine`). Multiframe stills skip it.
 
-The other denoiser, `native/galosh`, is blind (no noise profile) and runs
-either on the Bayer data before demosaic or on SDR after tonemap. The two are
-mutually exclusive per capture (`DenoiseConfig.resolve()`).
-
 ## Pipeline
 
 `DenoisePipeline` tiles the image (1536 px tiles plus a halo of

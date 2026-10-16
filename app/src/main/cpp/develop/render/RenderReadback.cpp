@@ -129,7 +129,7 @@ bool dumpRenderImage(const RenderDeviceContext& context, VkImage image, uint32_t
 
 void completeReadback(RenderResources& resources, RenderCommandSession& commands, const RenderedStillContext& rendered,
                       VkImage sourceImage, const std::string& filesDir, bool preWbOk, const char* clipEvidence,
-                      bool galoshYuvSuccess, bool gainmapClipUsed, float gainmapClipBoost,
+                      bool gainmapClipUsed, float gainmapClipBoost,
                       std::chrono::steady_clock::time_point tFence, RenderedStillCompletion& done,
                       const RenderResources::Diagnostic& emit) {
     if (rendered.diagnosticsEnabled) {
@@ -212,17 +212,12 @@ void completeReadback(RenderResources& resources, RenderCommandSession& commands
             done.refinementMs = ms(4, 5);
             done.tonemapMs = ms(6, 7);
             done.denoiseMs = rendered.denoiseStrength > 0.0f ? ms(10, 11) : 0.0;
-            // Gate on tap success: dummy 14/15 are written in the
-            // main CB, then process() overwrites 14->15 with real
-            // stamps. A throw between the two writes would otherwise
-            // span a real and a dummy timestamp (wrap to huge).
-            done.galoshYuvMs = galoshYuvSuccess ? ms(14, 15) : 0.0;
             done.gainmapMs = rendered.ultraHdrEnabled ? ms(8, 9) : 0.0;
             emit("STILL_GPU_TIMING requestId=" + std::to_string(rendered.requestId) +
                  " wbMs=" + std::to_string(done.colorProcessingMs) + " rtHighlightMs=" +
                  std::to_string(done.highlightReconstructionMs) + " fccMs=" + std::to_string(done.refinementMs) +
                  " tonemapMs=" + std::to_string(done.tonemapMs) + " denoiseMs=" + std::to_string(done.denoiseMs) +
-                 " galoshYuvMs=" + std::to_string(done.galoshYuvMs) + " gainmapMs=" + std::to_string(done.gainmapMs) +
+                 " gainmapMs=" + std::to_string(done.gainmapMs) +
                  " gainmapClip=" + std::to_string(gainmapClipUsed ? 1 : 0) +
                  " gainmapBoost=" + std::to_string(gainmapClipBoost) + " colorRender=" +
                  std::string(rawrcam::tonemap_integration::colorRenderProfileName(rendered.colorRenderProfile)) +
@@ -236,7 +231,7 @@ void completeReadback(RenderResources& resources, RenderCommandSession& commands
     // lands here, keeping the EXIF parts exact in both cases.
     done.queueGapsMs = std::max(0.0, done.queueGapsMs - (done.colorProcessingMs + done.highlightReconstructionMs +
                                                          done.refinementMs + done.tonemapMs + done.denoiseMs +
-                                                         done.galoshYuvMs + done.gainmapMs + done.postTailMs));
+                                                         done.gainmapMs + done.postTailMs));
 
     // Keep the canonical TonemapEngine RGBA8 byte order. Step 3 has no
     // Android Bitmap/JPEG consumer yet, so no platform-specific channel swap belongs here.

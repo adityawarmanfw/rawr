@@ -296,42 +296,12 @@ set(RAW_DENOISE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(RAW_DENOISE_BUILD_VULKAN ON CACHE BOOL "" FORCE)
 add_subdirectory(../../../../native/raw_denoise ${CMAKE_CURRENT_BINARY_DIR}/raw_denoise)
 
-# galosh owns the GALOSH-RAW Bayer denoise (blind, training-free, P1a).
-# Tests stay package-side (parity harness + MoltenVK smoke runner).
-set(GALOSH_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-add_subdirectory(../../../../native/galosh ${CMAKE_CURRENT_BINARY_DIR}/galosh)
-
 # Post-demosaic stages (stills, video, renderer) and the video RAW stage.
 add_subdirectory(../../../../native/post_demosaic ${CMAKE_CURRENT_BINARY_DIR}/post_demosaic)
 # Local tone mapping (HDR+ Bracketed stills and viewfinder).
 add_subdirectory(../../../../native/local_tone ${CMAKE_CURRENT_BINARY_DIR}/local_tone)
 add_subdirectory(../../../../native/video_pipeline ${CMAKE_CURRENT_BINARY_DIR}/video_pipeline)
 add_subdirectory(../../../../native/raw_ingress ${CMAKE_CURRENT_BINARY_DIR}/raw_ingress)
-set(GALOSH_SHADER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../native/galosh/shaders)
-# Single source of truth: native/galosh/shaders/SHADER_LIST. RAW set =
-# o32_* + app-authored galosh_bridge_*; YUV set = yuv_* +
-# app-authored galosh_yuv_bridge_* (P1b linear entry; the sRGB-wrap
-# yuv_srgb2ycc/yuv_ycc2srgb are superseded by the bridges and excluded).
-# Also excluded: upstream kernels the port marks optional and never
-# dispatches (GaloshRawPipeline.cpp kKernels).
-set(GALOSH_UNUSED_KERNELS o32_pad_2d_edge o32_inverse_wht_dark_gat o32_sigma_per_cfa)
-file(STRINGS ${GALOSH_SHADER_DIR}/SHADER_LIST GALOSH_SHADER_LINES)
-set(GALOSH_RAW_KERNELS "")
-foreach(LINE IN LISTS GALOSH_SHADER_LINES)
-  if(LINE IN_LIST GALOSH_UNUSED_KERNELS)
-    continue()
-  endif()
-  if(LINE MATCHES "^(o32_|yuv_|galosh_)" AND NOT LINE MATCHES "srgb")
-    list(APPEND GALOSH_RAW_KERNELS ${LINE})
-  endif()
-endforeach()
-set(GALOSH_RAW_GENERATED_HEADERS "")
-foreach(K IN LISTS GALOSH_RAW_KERNELS)
-  set(EMBED_FLAGS_galosh_${K} -O --target-env=vulkan1.2)
-  embed_shader(galosh_${K} ${GALOSH_SHADER_DIR}/${K}.comp galosh_${K}_spv)
-  set(HDRVAR galosh_${K}_HDR)
-  list(APPEND GALOSH_RAW_GENERATED_HEADERS ${${HDRVAR}})
-endforeach()
 
 set(ZSL_CODEC_GENERATED_HEADERS ${raw_zsl_codec_analyze_HDR} ${raw_zsl_codec_pack_HDR} ${raw_zsl_codec_verify_HDR} ${raw_zsl_codec_decode_HDR})
 set(ZSL_CODEC_GENERATED_INCLUDE_DIR ${GEN})
@@ -386,9 +356,9 @@ target_link_libraries(rawrcam_dng_convert PRIVATE rawr_tinydng)
 target_compile_options(rawrcam_dng_convert PRIVATE -Wall -Wextra -Wpedantic -Werror -O3)
 
 add_library(rawrcam_backend_options INTERFACE)
-target_include_directories(rawrcam_backend_options INTERFACE ${GEN} ${CMAKE_CURRENT_SOURCE_DIR} ../../../../native/libjpeg-turbo/src ../../../../native/raw_preview/include ../../../../native/tonemap_engine/include ../../../../native/gainmap/include ../../../../native/spektrafilm/include ../../../../native/raw_denoise/include ../../../../native/galosh/include ../../../../native/image_scopes/include ../../../../native/monitoring_overlays/include ../../../../native/false_color_correction/include ../../../../native/zsl_codec/include ../../../../native/zsl_ring/include ../../../../native/zsl_container/include)
-target_link_libraries(rawrcam_backend_options INTERFACE raw_demosaic::embedded_shaders rawr::post_demosaic rawr::local_tone rawr::video_pipeline rawr::raw_ingress rawr::vk_common rawr::shader_common raw_highlight::raw_highlight rawr_tinydng adrenotools raw_preview::raw_preview amaze::amaze rcd::rcd vng4::vng4 dual::dual_demosaic quadfix::quadfix fcc::false_color_correction TonemapEngine::Vulkan Gainmap::Compute spektrafilm::spektrafilm raw_sharpness::raw_sharpness raw_denoise::raw_denoise galosh::galosh image_scopes::image_scopes monitoring_overlays::vulkan rawr::zsl_codec rawr::zsl_ring rawr::zsl_container raw_gpu_pipeline raw_multiframe_output  rawrcam_turbojpeg ${VULKAN_LIB} ${ANDROID_LIB} ${LOG_LIB} ${MEDIA_LIB} ${AAUDIO_LIB} ${CAMERA2NDK_LIB} ${CMAKE_DL_LIBS})
-add_custom_target(rawrcam_shader_headers DEPENDS ${raw_preview_HDR} ${raw_preview_cfa_state_HDR} ${raw_preview_highlight_guide_seed_HDR} ${raw_preview_highlight_guide_propagate_HDR} ${raw_preview_highlight_guide_smooth_HDR} ${raw_preview_highlight_apply_HDR} ${raw_preview_coloropp_HDR} ${raw_preview_coloropp_tone_HDR} ${raw_zsl_codec_analyze_HDR} ${raw_zsl_codec_pack_HDR} ${raw_zsl_codec_verify_HDR} ${raw_zsl_codec_decode_HDR} ${monitor_raw_state_HDR} ${monitor_focus_HDR} ${monitor_false_color_HDR} ${monitor_tonemap_shadow_HDR} ${monitor_combined_HDR} ${tonemap_HDR} ${tonemap_video_linear_HDR} ${tonemap_video_rgba8_HDR} ${tonemap_video_rgb10a2_HDR} ${tonemap_video_linear_texture_HDR} ${tonemap_video_rgba8_texture_HDR} ${tonemap_video_rgb10a2_texture_HDR} ${video_demosaic_HDR} ${film_input_HDR} ${film_exposure_HDR} ${film_develop_HDR} ${film_grain_HDR} ${film_dir_HDR} ${film_halation_HDR} ${film_diffusion_HDR} ${film_scanner_HDR} ${film_printscan_HDR} ${film_output_HDR} ${film_output_half_HDR} ${film_boost_milestone_HDR} ${film_glow_ratio_HDR} ${sensor_clip_pack_HDR} ${replay_tagged_decode_HDR} ${present_vert_HDR} ${present_frag_HDR} ${encoder_ab_pattern_HDR} ${raw_integrity_probe_HDR} ${raw_zero_copy_full_compare_HDR} ${raw_zero_copy_paths_HDR} ${raw_zero_copy_external_compare_HDR} ${raw_zero_copy_buffer_preview_HDR} ${raw_zero_copy_buffer_import_HDR} ${diagnostic_linear_pattern_HDR} ${diagnostic_tone_pattern_HDR} ${diagnostic_raw_copy_HDR} ${diagnostic_raw_storage_viz_HDR} ${diagnostic_raw_sampled_viz_HDR} ${GALOSH_RAW_GENERATED_HEADERS} ${gainmap_HDR} ${gainmap_blur_HDR})
+target_include_directories(rawrcam_backend_options INTERFACE ${GEN} ${CMAKE_CURRENT_SOURCE_DIR} ../../../../native/libjpeg-turbo/src ../../../../native/raw_preview/include ../../../../native/tonemap_engine/include ../../../../native/gainmap/include ../../../../native/spektrafilm/include ../../../../native/raw_denoise/include ../../../../native/image_scopes/include ../../../../native/monitoring_overlays/include ../../../../native/false_color_correction/include ../../../../native/zsl_codec/include ../../../../native/zsl_ring/include ../../../../native/zsl_container/include)
+target_link_libraries(rawrcam_backend_options INTERFACE raw_demosaic::embedded_shaders rawr::post_demosaic rawr::local_tone rawr::video_pipeline rawr::raw_ingress rawr::vk_common rawr::shader_common raw_highlight::raw_highlight rawr_tinydng adrenotools raw_preview::raw_preview amaze::amaze rcd::rcd vng4::vng4 dual::dual_demosaic quadfix::quadfix fcc::false_color_correction TonemapEngine::Vulkan Gainmap::Compute spektrafilm::spektrafilm raw_sharpness::raw_sharpness raw_denoise::raw_denoise image_scopes::image_scopes monitoring_overlays::vulkan rawr::zsl_codec rawr::zsl_ring rawr::zsl_container raw_gpu_pipeline raw_multiframe_output  rawrcam_turbojpeg ${VULKAN_LIB} ${ANDROID_LIB} ${LOG_LIB} ${MEDIA_LIB} ${AAUDIO_LIB} ${CAMERA2NDK_LIB} ${CMAKE_DL_LIBS})
+add_custom_target(rawrcam_shader_headers DEPENDS ${raw_preview_HDR} ${raw_preview_cfa_state_HDR} ${raw_preview_highlight_guide_seed_HDR} ${raw_preview_highlight_guide_propagate_HDR} ${raw_preview_highlight_guide_smooth_HDR} ${raw_preview_highlight_apply_HDR} ${raw_preview_coloropp_HDR} ${raw_preview_coloropp_tone_HDR} ${raw_zsl_codec_analyze_HDR} ${raw_zsl_codec_pack_HDR} ${raw_zsl_codec_verify_HDR} ${raw_zsl_codec_decode_HDR} ${monitor_raw_state_HDR} ${monitor_focus_HDR} ${monitor_false_color_HDR} ${monitor_tonemap_shadow_HDR} ${monitor_combined_HDR} ${tonemap_HDR} ${tonemap_video_linear_HDR} ${tonemap_video_rgba8_HDR} ${tonemap_video_rgb10a2_HDR} ${tonemap_video_linear_texture_HDR} ${tonemap_video_rgba8_texture_HDR} ${tonemap_video_rgb10a2_texture_HDR} ${video_demosaic_HDR} ${film_input_HDR} ${film_exposure_HDR} ${film_develop_HDR} ${film_grain_HDR} ${film_dir_HDR} ${film_halation_HDR} ${film_diffusion_HDR} ${film_scanner_HDR} ${film_printscan_HDR} ${film_output_HDR} ${film_output_half_HDR} ${film_boost_milestone_HDR} ${film_glow_ratio_HDR} ${sensor_clip_pack_HDR} ${replay_tagged_decode_HDR} ${present_vert_HDR} ${present_frag_HDR} ${encoder_ab_pattern_HDR} ${raw_integrity_probe_HDR} ${raw_zero_copy_full_compare_HDR} ${raw_zero_copy_paths_HDR} ${raw_zero_copy_external_compare_HDR} ${raw_zero_copy_buffer_preview_HDR} ${raw_zero_copy_buffer_import_HDR} ${diagnostic_linear_pattern_HDR} ${diagnostic_tone_pattern_HDR} ${diagnostic_raw_copy_HDR} ${diagnostic_raw_storage_viz_HDR} ${diagnostic_raw_sampled_viz_HDR} ${gainmap_HDR} ${gainmap_blur_HDR})
 
 function(rawrcam_module name)
   cmake_parse_arguments(MODULE "" "DIRECTORY" "DEPENDS;SOURCES" ${ARGN})

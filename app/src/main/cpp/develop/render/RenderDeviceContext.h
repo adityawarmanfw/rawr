@@ -10,7 +10,6 @@ struct RenderDeviceContext {
     VkQueue queue = VK_NULL_HANDLE;
     uint32_t queueFamily = 0;
     std::mutex* queueSubmitMutex = nullptr;
-    bool float16Compute = false;
 };
 struct RenderImageView {
     VkImage image;

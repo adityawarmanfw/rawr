@@ -59,13 +59,6 @@ struct RenderedStillContext {
     // PostDemosaicProcessor. Out-of-range values clamp at record time.
     float denoiseForceY = 0.25f;
     int denoiseMaxScale = 7;
-    // GALOSH-YUV blind denoise on the post-demosaic linear SDR buffer,
-    // in place (needs no sensor profile, so it also serves the merged
-    // path). 0 = off (legacy bit-identical); 1 = full; 2 = chroma-only.
-    // Mirrors galosh::GaloshYuvMode; forwarded from JpegCaptureContext.
-    int galoshYuvMode = 0;
-    float galoshYuvStrengthY = 1.0f;
-    float galoshYuvStrengthC = 1.0f;
     // Normalized-domain noise model (green): variance = a*x + b, resolved
     // from the frame SENSOR_NOISE_PROFILE with the demosaic normalization.
     float denoiseNoiseA = 0.0f;
@@ -138,8 +131,6 @@ struct RenderedStillCompletion {
     double tonemapMs = 0.0;
     // Profiled wavelet denoise dispatch (timestamps 10->11) when enabled.
     double denoiseMs = 0.0;
-    // GALOSH-YUV blind denoise (timestamps 14->15) when enabled.
-    double galoshYuvMs = 0.0;
     // GPU gain map dispatch (timestamps 8->9) when ultraHdrEnabled.
     double gainmapMs = 0.0;
     // Defringe plus the Inpaint Opposed tone tap (timestamps 16->17).

@@ -1061,10 +1061,9 @@ data class SettingsValues(
     val videoDefringeEnabled: Boolean = false,
     val videoDefringeStrength: Float = 1f,
     // Photo-pipeline denoise, single source of truth (see DenoiseConfig).
-    // Off by default; Wavelet is profiled (sensor noise model), Galosh
-    // carries the blind RAW and/or YUV lanes (stills only).
+    // Off by default; Wavelet is profiled (sensor noise model).
     val photoDenoise: DenoiseConfig = DenoiseConfig.Off,
-    // Video denoise is wavelet-only primitives (no Galosh on video).
+    // Video denoise has its own wavelet primitives.
     val videoDenoiseEnabled: Boolean = false,
     val videoDenoiseStrength: Float = 1f,
     val videoDenoiseDetail: Float = 1f,

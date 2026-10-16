@@ -345,18 +345,10 @@ internal object RendererRecipe {
             photoDefringeStrength = j.optDouble("defringeStrength", 1.0).toFloat(),
             photoDenoise = DenoiseConfig.fromLegacy(
                 enabled = j.optBoolean("denoiseEnabled", false),
-                method = j.optInt("denoiseMethod", 0),
                 waveletStrength = j.optDouble("denoiseStrength", 1.0).toFloat(),
                 waveletDetail = j.optDouble("denoiseDetail", 1.0).toFloat(),
                 waveletLuma = j.optDouble("denoiseLuma", 0.25).toFloat(),
-                waveletScales = j.optInt("denoiseScales", 7),
-                rawMode = j.optInt("galoshRawMode", 0),
-                rawStrength = j.optDouble("galoshStrength", 1.0).toFloat(),
-                rawLuma = j.optDouble("galoshLuma", 1.0).toFloat(),
-                rawChroma = j.optDouble("galoshChroma", 1.0).toFloat(),
-                yuvMode = j.optInt("galoshYuvMode", 0),
-                yuvStrengthY = j.optDouble("galoshYuvStrengthY", 1.0).toFloat(),
-                yuvStrengthC = j.optDouble("galoshYuvStrengthC", 1.0).toFloat()
+                waveletScales = j.optInt("denoiseScales", 7)
             ))
     }
     fun neutral(library: SettingsValues): SettingsValues = SettingsCatalog.initialState().values.copy(
