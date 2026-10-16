@@ -100,6 +100,8 @@ struct RawDevelopRecordInput {
     uint32_t videoCropOutHeight = 0;
     // Auto key exposure: meter the scene-linear preview before render gain.
     bool sceneExposureEnabled = false;
+    // Spot meter rectangle on the preview (normalized x0,y0,x1,y1; empty = none).
+    std::array<float, 4> sceneSpot{};
 };
 
 struct RawDevelopRecordResult {
@@ -123,7 +125,7 @@ class RawDevelopRecorder final {
     RawDevelopRecordResult record(const RawDevelopRecordInput& input, uint32_t auditSubmitCount) const;
     void recordSceneExposure(VkCommandBuffer command, uint32_t frameSlot, VkImageView view, uint32_t width,
                              uint32_t height, const std::array<float, 9>& sensorToSrgb,
-                             const std::array<float, 4>& wb) const;
+                             const std::array<float, 4>& wb, const std::array<float, 4>& spot = {}) const;
     void recordVideoScopes(VkCommandBuffer command, uint32_t frameSlot, VkImageView monitorView, VkImage monitorImage,
                            uint32_t width, uint32_t height, int sensorOrientationDegrees,
                            int deviceRotationDegrees) const;

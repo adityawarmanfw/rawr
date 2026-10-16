@@ -97,8 +97,8 @@ void MonitorRecorder::transitionImageForCompute(VkCommandBuffer command, VkImage
 VkImageView MonitorRecorder::rawStateView(uint32_t slot) const { return monitoringOverlay_.rawStateView(slot); }
 void MonitorRecorder::recordSceneExposure(VkCommandBuffer command, uint32_t slotIndex, VkImageView linearView,
                                           uint32_t width, uint32_t height, const std::array<float, 3>& lumaWeights,
-                                          float clipLuma) const {
-    imageScopes_.recordSceneExposure(command, slotIndex, linearView, width, height, lumaWeights, clipLuma);
+                                          float clipLuma, const std::array<float, 4>& spot) const {
+    imageScopes_.recordSceneExposure(command, slotIndex, linearView, width, height, lumaWeights, clipLuma, spot);
 }
 void MonitorRecorder::recordOverlays(const MonitorFrame& in) const {
     if (in.diagnosticMode == 0u) {

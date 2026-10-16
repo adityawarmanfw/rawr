@@ -4,7 +4,9 @@
 
 // Scene-linear key meter. One deterministic sample per NxN block, binned as
 // log2(luma) over [-20, +4) EV. Centre samples weigh 3, edges 1; clipped
-// samples go to the top bin. Measured before any render gain.
+// samples go to the top bin. Measured before any render gain. A spot
+// (p0 = 8-bit x0,y0,x1,y1 of the input, nonzero) replaces the centre
+// weighting: only samples inside it count.
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 layout(binding = 0, rgba16f) uniform readonly image2D src;
 layout(std430, binding = 1) buffer Partial { uint data[]; }
@@ -26,7 +28,7 @@ layout(push_constant) uniform PC {
     float lumaG;
     float lumaB;
     float clipLuma;
-    uint p0;
+    uint spot;
 }
 pc;
 
@@ -64,9 +66,19 @@ void main() {
             vec3 c = max(imageLoad(src, ivec2(x, y)).rgb, vec3(0.0));
             float luma = dot(lumaRow, c);
             if (isnan(luma)) luma = 0.0;
-            bool centre = 4u * x >= pc.width && 4u * x < 3u * pc.width && 4u * y >= pc.height &&
-                          4u * y < 3u * pc.height;
-            uint w = centre ? 3u : 1u;
+            uint w;
+            if (pc.spot != 0u) {
+                // 255 * x / width against the packed bounds, in integers.
+                uint sx = (255u * x) / pc.width, sy = (255u * y) / pc.height;
+                bool inside = sx >= (pc.spot & 255u) && sx < ((pc.spot >> 16) & 255u) &&
+                              sy >= ((pc.spot >> 8) & 255u) && sy < (pc.spot >> 24);
+                if (!inside) continue;
+                w = 1u;
+            } else {
+                bool centre = 4u * x >= pc.width && 4u * x < 3u * pc.width && 4u * y >= pc.height &&
+                              4u * y < 3u * pc.height;
+                w = centre ? 3u : 1u;
+            }
             bool clipped = pc.clipLuma > 0.0 && luma >= pc.clipLuma;
             atomicAdd(bins[clipped ? BIN_COUNT - 1u : sceneBin(luma)], w);
             atomicAdd(counters[0], w);

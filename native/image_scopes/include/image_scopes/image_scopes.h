@@ -34,6 +34,9 @@ struct SceneExposureStatsRecordInfo {
     float lumaWeights[3] = {0.0f, 0.0f, 0.0f};
     // Samples at or above this luma land in the top bin. <= 0 disables.
     float clipLuma = 0.0f;
+    // Spot meter: when spotX1 > spotX0 and spotY1 > spotY0, only samples inside
+    // this normalized [0,1] input rectangle count (1/255 resolution).
+    float spotX0 = 0.0f, spotY0 = 0.0f, spotX1 = 0.0f, spotY1 = 0.0f;
 };
 
 struct DisplayWaveformRecordInfo {

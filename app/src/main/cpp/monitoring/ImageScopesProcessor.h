@@ -45,8 +45,10 @@ class ImageScopesProcessor final {
                 image_scopes::SamplingMode sampling = image_scopes::SamplingMode::FullReference);
     // Scene key meter on the scene-linear rgba16f image (before render gain).
     // lumaWeights maps its RGB to luma; samples at/above clipLuma are clipped.
+    // spot (normalized x0,y0,x1,y1 of the image; empty = none) meters only inside it.
     void recordSceneExposure(VkCommandBuffer command, uint32_t frameSlot, VkImageView linearView, uint32_t width,
-                             uint32_t height, const std::array<float, 3>& lumaWeights, float clipLuma);
+                             uint32_t height, const std::array<float, 3>& lumaWeights, float clipLuma,
+                             const std::array<float, 4>& spot = {});
     [[nodiscard]] std::optional<SceneExposureStats> consumeSceneExposure(uint32_t frameSlot);
     // Clip luma the slot's scene statistics were binned with (0 if none).
     [[nodiscard]] float sceneClipLuma(uint32_t frameSlot) const noexcept {

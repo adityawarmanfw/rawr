@@ -33,7 +33,8 @@ class MonitorRecorder final {
     VkImageView rawStateView(uint32_t slot) const;
     void recordOverlays(const MonitorFrame& frame) const;
     void recordSceneExposure(VkCommandBuffer command, uint32_t slotIndex, VkImageView linearView, uint32_t width,
-                             uint32_t height, const std::array<float, 3>& lumaWeights, float clipLuma) const;
+                             uint32_t height, const std::array<float, 3>& lumaWeights, float clipLuma,
+                             const std::array<float, 4>& spot = {}) const;
     void present(const MonitorFrame& frame, uint32_t cropX = 0, uint32_t cropY = 0, uint32_t cropW = 0,
                  uint32_t cropH = 0) const;
     void recordVideoScopes(VkCommandBuffer command, uint32_t frameSlot, VkImageView monitorView, VkImage monitorImage,

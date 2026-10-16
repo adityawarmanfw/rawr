@@ -4,6 +4,7 @@
 #include <media/NdkImage.h>
 #include <tonemap/TonemapEngine.h>
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -44,6 +45,9 @@ class FrameDiagnosticsPort {
     virtual std::optional<RenderedFeedback> consumeExposureFeedback(std::uint32_t slotIndex) = 0;
     // True when frames should record the scene key meter.
     virtual bool sceneKeyMeteringEnabled() = 0;
+    // Spot meter rectangle on the full source frame (normalized x0,y0,x1,y1;
+    // all zero = whole-frame metering).
+    virtual std::array<float, 4> sceneMeteringSpot() = 0;
     // Consumes the slot's scene measurement and advances the auto key lift.
     virtual std::optional<SceneKeyFeedback> updateSceneKey(std::uint32_t slotIndex,
                                                            const rawrcam::metadata::FrameMetadataSnapshot& metadata,

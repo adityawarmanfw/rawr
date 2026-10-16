@@ -940,8 +940,12 @@ struct NativeCameraController::Impl final : CameraEventSink {
         if (accepted) submitRepeatingLocked();
     }
     void applyAePriorityPreferenceLocked() {
-        // rawr AE solves S/I itself wherever the sensor takes manual exposure.
-        const bool rawrPriority = rawrAeConfig.enabled && control.capabilities.manualExposureSupported;
+        // rawr AE solves S/I itself wherever the sensor takes manual exposure,
+        // once the request ISO coordinate is known (calibrated when keys apply).
+        const bool coordinateKnown =
+            results.sensitivityReportedPerRequest().has_value() || !deviceSession.sensorModeOverridden();
+        const bool rawrPriority =
+            rawrAeConfig.enabled && control.capabilities.manualExposureSupported && coordinateKnown;
         control.capabilities.shutterPrioritySupported = (halShutterPriority || rawrPriority) && !aePriorityDisabledPreference;
         control.capabilities.isoPrioritySupported = (halIsoPriority || rawrPriority) && !aePriorityDisabledPreference;
         control.capabilities.halShutterPrioritySupported = halShutterPriority && !aePriorityDisabledPreference;
@@ -1007,6 +1011,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
         if (cadencePolicy.videoMode() == video && cadencePolicy.videoFps() == sanitizedFps) return;
         const bool enteringVideo = video && !cadencePolicy.videoMode();
         cadencePolicy.setVideoMode(video, fps);
+        control.videoMode = cadencePolicy.videoMode();
+        control.videoPreviewFps = cadencePolicy.videoFps();
         if (enteringVideo)
             cadencePolicy.bindShutter(control.requestedExposureTimeNs, control.capabilities.exposureTimeMinNs,
                                       control.capabilities.exposureTimeMaxNs);
@@ -1103,7 +1109,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
                               control.exposureMode == ExposureControlMode::IsoPriority;
         return rawrAeConfig.enabled && rawrMode &&
                control.capabilities.manualExposureSupported && control.capabilities.sensitivityMax > 0 &&
-               !control.videoMode && control.recordingFps <= 0 && !control.spotAeActive && coordinateKnown &&
+               coordinateKnown &&
                deviceSession.request() && deviceSession.session();
     }
     void publishRawrAeContextLocked(bool engaged) {
@@ -1126,18 +1132,27 @@ struct NativeCameraController::Impl final : CameraEventSink {
         c.isoMax = rawrAeConfig.isoMax > 0 ? std::clamp(rawrAeConfig.isoMax, c.isoMin, sensorIsoMax) : sensorIsoMax;
         c.isoAnalogMax = std::clamp(analog, c.isoMin, c.isoMax);
         c.shutterMinNs = std::max<int64_t>(1, caps.exposureTimeMinNs);
-        const int64_t sensorShutterMax = std::max(c.shutterMinNs, caps.exposureTimeMaxNs);
+        // Video: never longer than the frame, starting from a 180 degree shutter.
+        c.video = cadencePolicy.videoMode() || control.recordingFps > 0;
+        const int videoFps = control.recordingFps > 0 ? control.recordingFps : cadencePolicy.videoFps();
+        const int64_t framePeriodNs = c.video && videoFps > 0 ? 1'000'000'000LL / videoFps : 0;
+        int64_t sensorShutterMax = std::max(c.shutterMinNs, caps.exposureTimeMaxNs);
+        if (framePeriodNs > 0) sensorShutterMax = std::clamp(framePeriodNs, c.shutterMinNs, sensorShutterMax);
         c.sensorShutterMaxNs = sensorShutterMax;
         int64_t ceiling = rawrAeConfig.shutterMaxNs;
-        if (ceiling <= 0) {
+        if (framePeriodNs > 0) {
+            ceiling = ceiling > 0 ? std::min(ceiling, framePeriodNs) : framePeriodNs;
+        } else if (ceiling <= 0) {
             // Handheld ceiling (OIS keeps 1/15 s sharp), never below the Auto FPS floor's frame.
             ceiling = kLongFrameMaxNs;
             if (autoMinFpsPreference >= 5 && autoMinFpsPreference < 30)
                 ceiling = std::min<int64_t>(ceiling, 1'000'000'000LL / autoMinFpsPreference);
         }
         c.shutterMaxNs = std::clamp(ceiling, c.shutterMinNs, sensorShutterMax);
-        c.shutterStartNs = std::clamp<int64_t>(rawrAeConfig.shutterStartNs > 0 ? rawrAeConfig.shutterStartNs : 33'333'333,
-                                               c.shutterMinNs, c.shutterMaxNs);
+        const int64_t start = framePeriodNs > 0                ? framePeriodNs / 2
+                              : rawrAeConfig.shutterStartNs > 0 ? rawrAeConfig.shutterStartNs
+                                                                : 33'333'333;
+        c.shutterStartNs = std::clamp<int64_t>(start, c.shutterMinNs, c.shutterMaxNs);
         const uint8_t banding = antibandingPreference;
         const int32_t mains = banding == ACAMERA_CONTROL_AE_ANTIBANDING_MODE_50HZ   ? 1
                               : banding == ACAMERA_CONTROL_AE_ANTIBANDING_MODE_60HZ ? 2
@@ -1147,10 +1162,17 @@ struct NativeCameraController::Impl final : CameraEventSink {
         c.flickerPeriodNs = mains == 1 ? 10'000'000 : mains == 2 ? 8'333'333 : 0;
         c.userEv = float(std::clamp(control.requestedEvSteps, caps.evMinSteps, caps.evMaxSteps)) * evStepEvLocked();
         c.reportedPerRequest = results.sensitivityReportedPerRequest().value_or(0.0);
+        c.spotActive = control.spotAeActive && control.exposureMode == ExposureControlMode::Auto;
+        c.spotX = spotMetering.point().x;
+        c.spotY = spotMetering.point().y;
         std::lock_guard<std::mutex> published(rawrAeContextMutex);
         rawrAePublished = c;
     }
     void applyRawrAeLocked() {
+        // rawr S/I appear once the session's ISO coordinate is known.
+        applyAePriorityPreferenceLocked();
+        control.videoMode = cadencePolicy.videoMode();
+        control.videoPreviewFps = cadencePolicy.videoFps();
         const bool eligible = rawrAeEligibleLocked();
         publishRawrAeContextLocked(eligible);
         const uint64_t pending = rawrAePending.load(std::memory_order_relaxed);

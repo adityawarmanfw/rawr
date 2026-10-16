@@ -103,7 +103,11 @@ CameraControlApplyResult applyCameraControlState(ACaptureRequest* request, const
         (void)ACaptureRequest_setEntry_i32(request, ACAMERA_CONTROL_AE_TARGET_FPS_RANGE, 0, nullptr);
     }
 
-    const int64_t framePeriodNs = state.recordingFps > 0 ? 1'000'000'000LL / state.recordingFps : 0;
+    // rawr AE in video mode holds the video preview cadence, as recording does.
+    const int64_t framePeriodNs = state.recordingFps > 0 ? 1'000'000'000LL / state.recordingFps
+                                  : rawrAe && state.videoMode && state.videoPreviewFps > 0
+                                      ? 1'000'000'000LL / state.videoPreviewFps
+                                      : 0;
     const int64_t exposureMaximum = framePeriodNs > 0
         ? std::min(state.capabilities.exposureTimeMaxNs, framePeriodNs)
         : state.capabilities.exposureTimeMaxNs;

@@ -107,6 +107,11 @@ class NativeCameraController {
         // CaptureResult ISO / request ISO; 0 when unknown (taken as 1 without
         // sensor-mode keys; with them rawr AE waits for the probe).
         double reportedPerRequest = 0.0;
+        // Video mode or recording: shutter bound to the frame, slower filter.
+        bool video = false;
+        // Spot AE target (source-normalized centre) rawr meters instead of the frame.
+        bool spotActive = false;
+        float spotX = 0.5f, spotY = 0.5f;
     };
     void setRawrAeConfig(const RawrAeConfig& config);
     [[nodiscard]] RawrAeContext rawrAeContext() const;

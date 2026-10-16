@@ -260,7 +260,8 @@ void ImageScopesProcessor::record(VkCommandBuffer command, uint32_t frameSlot, V
 
 void ImageScopesProcessor::recordSceneExposure(VkCommandBuffer command, uint32_t frameSlot, VkImageView linearView,
                                                uint32_t width, uint32_t height,
-                                               const std::array<float, 3>& lumaWeights, float clipLuma) {
+                                               const std::array<float, 3>& lumaWeights, float clipLuma,
+                                               const std::array<float, 4>& spot) {
     if (!backend_ || frameSlot >= rawrcam::imaging::kRealtimeFramesInFlight || linearView == VK_NULL_HANDLE) return;
     auto& rb = sceneStatsReadback_[frameSlot];
     rb.recorded = false;
@@ -274,6 +275,10 @@ void ImageScopesProcessor::recordSceneExposure(VkCommandBuffer command, uint32_t
     info.lumaWeights[1] = lumaWeights[1];
     info.lumaWeights[2] = lumaWeights[2];
     info.clipLuma = clipLuma;
+    info.spotX0 = spot[0];
+    info.spotY0 = spot[1];
+    info.spotX1 = spot[2];
+    info.spotY1 = spot[3];
     backend_->recordSceneExposureStats(info);
     backend_->recordCopySceneExposureStats(command, frameSlot, rb.buffer, 0);
     VkBufferMemoryBarrier host{};

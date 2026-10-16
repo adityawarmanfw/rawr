@@ -92,7 +92,7 @@ void SessionFrameCallbacks::updateRawrAe(const image_scopes::SceneExposureStatsD
                                  context.config.maxDigitalGainEv};
     ae::FrameObservation f{stats->weightedBins, std::log2(clipLuma), exposure->logExposure(), exposure->shutterNs,
                            exposure->iso, metadata.aperture.value_or(0.0f), timestampNs};
-    if (const auto step = rawrAe_.update(f, settings, context.userEv, {}, ae::filterPolicyForSpeed(context.config.speed)))
+    if (const auto step = rawrAe_.update(f, settings, context.userEv, {}, ae::filterPolicyForSpeed(context.video ? 0 : context.config.speed)))
         controller->setRawrAeRequest(step->request.shutterNs, step->request.iso);
 }
 
@@ -166,6 +166,18 @@ void SessionFrameCallbacks::applyAutoKey(tonemap::TonemapParams& tone,
                                                    engine_->expectedMergeFrames());
     engine_->noteLiftNoise(noise);
     engine_->applyAutoKey(tone, noise);
+}
+
+std::array<float, 4> SessionFrameCallbacks::sceneMeteringSpot() {
+    const auto* controller = engine_->cameraControls_.controller();
+    if (!controller) return {};
+    const auto context = controller->rawrAeContext();
+    if (!context.engaged || !context.spotActive) return {};
+    // The Camera2 spot region's footprint: 1/8 of each dimension.
+    constexpr float kHalf = 1.0f / 16.0f;
+    const float cx = std::clamp(context.spotX, kHalf, 1.0f - kHalf);
+    const float cy = std::clamp(context.spotY, kHalf, 1.0f - kHalf);
+    return {cx - kHalf, cy - kHalf, cx + kHalf, cy + kHalf};
 }
 
 bool SessionFrameCallbacks::sceneKeyMeteringEnabled() {
