@@ -80,9 +80,7 @@ internal fun ExposureSettings(state: SettingsUiState, dispatch: SettingsDispatch
             title = "Auto Exposure",
             description =
                 if (ae.enabled) {
-                    "rawr sets shutter and ISO itself in Auto, S and I: smooth changes, no flicker banding, " +
-                        "real ISO only (extra gain is added cleanly afterwards). Tap-to-meter and video included; " +
-                        "video keeps the shutter within one frame."
+                    "rawr sets shutter and ISO in Auto, S and I, for photo and video."
                 } else {
                     "Auto uses the camera's own exposure."
                 }
