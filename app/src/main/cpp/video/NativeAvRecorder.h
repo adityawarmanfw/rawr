@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "diagnostics/timing/RecentPeak.h"
+#include "video/HevcFrameType.h"
 
 namespace rawrcam::video {
 
@@ -33,7 +34,8 @@ public:
         int height = 1080;
         int fps = 30;
         int bitrate = 12'000'000;
-        int intraSeconds = 1;
+        // Frames between I-frames; 1 = all-intra.
+        int intraFrames = 30;
         int rotationDegrees = 0;
         int bitrateMode = 2;
         int maxBFrames = -1;
@@ -126,6 +128,12 @@ private:
     std::deque<int64_t> recentVideoPtsUs_;
     mutable uint64_t cumulativeTargetDeficit_ = 0;
     uint64_t encodedFrameGaps_ = 0;
+    // Encoded frame structure, from slice headers: index 0 = I, 1 = P, 2 = B.
+    HevcFrameTypeParser frameTypes_;
+    uint64_t frameTypeCount_[3] = {};
+    uint64_t frameTypeBytes_[3] = {};
+    uint64_t framesSinceI_ = 0;
+    uint64_t lastGopFrames_ = 0;
     uint64_t audioSamples_ = 0;
     long double audioSumSquares_ = 0;
     int16_t audioPeak_ = 0;

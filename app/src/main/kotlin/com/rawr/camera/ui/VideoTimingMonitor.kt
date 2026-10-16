@@ -31,5 +31,7 @@ internal fun VideoTimingMonitor(state: VideoControlState) {
         // Average/recent peak: a drop comes from one slow frame, which the average hides.
         MonitorMetric("GPU", timing?.let { "%.0f/%.0fms".format(it.gpuMs, it.gpuPeakMs) } ?: "—")
         MonitorMetric("LAT", timing?.let { "%.0f/%.0fms".format(it.encoderMs, it.encoderPeakMs) } ?: "—")
+        // What the encoder produced, which can differ from the requested interval and B-frames.
+        MonitorMetric("GOP", timing?.gopSummary ?: "—")
     }
 }

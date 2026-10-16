@@ -31,7 +31,7 @@ void throwJava(JNIEnv* env, const char* message) {
 }  // namespace
 
 extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_video_NativeAvEngine_nativeStart(
-    JNIEnv* env, jobject, jint fd, jint width, jint height, jint fps, jint bitrate, jint intraSeconds,
+    JNIEnv* env, jobject, jint fd, jint width, jint height, jint fps, jint bitrate, jint intraFrames,
     jint rotationDegrees, jint bitrateMode, jint maxBFrames, jint audioChannels, jint audioBitrate, jint bitDepth,
     jint timestampPolicy, jstring deviceMake, jstring deviceModel, jstring software, jstring renderProfile, jstring gamut, jstring transfer, jboolean log) {
     bool ownsFd = false;
@@ -41,7 +41,7 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_video_NativeAvEngine_nat
         settings.height = height;
         settings.fps = fps;
         settings.bitrate = bitrate;
-        settings.intraSeconds = intraSeconds;
+        settings.intraFrames = intraFrames;
         settings.rotationDegrees = rotationDegrees;
         settings.bitrateMode = bitrateMode;
         settings.maxBFrames = maxBFrames;

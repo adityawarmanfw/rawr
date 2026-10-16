@@ -49,7 +49,7 @@ bool NativeAvRecorder::supportsTimestampPolicy(TimestampPolicy policy) noexcept 
 NativeAvRecorder::NativeAvRecorder(int outputFd, Settings settings) : outputFd_(outputFd), settings_(settings) {
     if (outputFd_ < 0 || settings_.width <= 0 || settings_.height <= 0 || (settings_.width & 1) != 0 ||
         (settings_.height & 1) != 0 || (settings_.fps != 24 && settings_.fps != 30) || settings_.bitrate < 1'000'000 ||
-        settings_.bitrate > 400'000'000 || settings_.intraSeconds < 1 || settings_.intraSeconds > 10 ||
+        settings_.bitrate > 400'000'000 || settings_.intraFrames < 1 || settings_.intraFrames > 60 ||
         settings_.rotationDegrees % 90 != 0 || settings_.bitrateMode < -1 || settings_.bitrateMode > 2 ||
         settings_.maxBFrames < -1 || settings_.maxBFrames > 4 ||
         (settings_.audioChannels != 1 && settings_.audioChannels != 2) || settings_.audioBitrate < 64'000 ||
@@ -80,11 +80,15 @@ void NativeAvRecorder::configureVideo() {
     AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_PROFILE, settings_.bitDepth == 8 ? kMainProfile : kMain10Profile);
     AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_BIT_RATE, settings_.bitrate);
     AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_FRAME_RATE, settings_.fps);
-    AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_I_FRAME_INTERVAL, settings_.intraSeconds);
+    // i-frame-interval is in seconds and accepts a float; 0 asks for every frame to be a sync frame.
+    AMediaFormat_setFloat(format, AMEDIAFORMAT_KEY_I_FRAME_INTERVAL,
+                          settings_.intraFrames <= 1 ? 0.0f
+                                                     : static_cast<float>(settings_.intraFrames) / settings_.fps);
     if (settings_.bitrateMode >= 0) AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_BITRATE_MODE, settings_.bitrateMode);
     // Optional codec key. A codec may reject the request during configure;
     // omit it when left at the automatic default.
-    if (settings_.maxBFrames >= 0) AMediaFormat_setInt32(format, "max-bframes", settings_.maxBFrames);
+    const int maxBFrames = settings_.intraFrames <= 1 ? 0 : settings_.maxBFrames;
+    if (maxBFrames >= 0) AMediaFormat_setInt32(format, "max-bframes", maxBFrames);
     // Preserve the encoder's BT.709 RGB-to-YCbCr conversion. LOG signalling
     // is rewritten after encoding, without changing the encoded samples.
     AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_COLOR_STANDARD, 1);
@@ -210,6 +214,12 @@ void NativeAvRecorder::setFormat(Track track, AMediaFormat* format) {
         const auto patched = logHevcAccessUnit(static_cast<const uint8_t*>(csd), size, true);
         AMediaFormat_setBuffer(format, "csd-0", patched.data(), patched.size());
     }
+    if (track == Track::Video) {
+        void* csd = nullptr;
+        size_t size = 0;
+        if (AMediaFormat_getBuffer(format, "csd-0", &csd, &size))
+            frameTypes_.setCodecConfig(static_cast<const uint8_t*>(csd), size);
+    }
     std::lock_guard<std::mutex> lock(muxerMutex_);
     bool& ready = track == Track::Video ? videoFormatReady_ : audioFormatReady_;
     int& index = track == Track::Video ? videoTrack_ : audioTrack_;
@@ -314,7 +324,20 @@ void NativeAvRecorder::drainVideo() noexcept {
                             snappedPtsUs = lastSnappedVideoPtsUs_ + frameDurUs;
                     }
                     writeSample(Track::Video, data, capacity, info, snappedPtsUs);
+                    const auto frameType = frameTypes_.classify(data + info.offset, static_cast<size_t>(info.size));
                     std::lock_guard<std::mutex> lock(statsMutex_);
+                    if (frameType != HevcFrameTypeParser::Type::Unknown) {
+                        const int slot = frameType == HevcFrameTypeParser::Type::I   ? 0
+                                         : frameType == HevcFrameTypeParser::Type::P ? 1
+                                                                                     : 2;
+                        ++frameTypeCount_[slot];
+                        frameTypeBytes_[slot] += static_cast<uint64_t>(info.size);
+                        if (slot == 0) {
+                            if (frameTypeCount_[0] > 1) lastGopFrames_ = framesSinceI_;
+                            framesSinceI_ = 0;
+                        }
+                    }
+                    ++framesSinceI_;
                     if (lastVideoPtsUs_ >= 0 && bootPtsUs > lastVideoPtsUs_) {
                         const int64_t deltaUs = bootPtsUs - lastVideoPtsUs_;
                         const int64_t missed = static_cast<int64_t>(std::llround(static_cast<double>(deltaUs) *
@@ -577,11 +600,14 @@ std::string NativeAvRecorder::statsJson() const {
                                        : 0;
     cumulativeTargetDeficit_ = std::max(cumulativeTargetDeficit_, targetDeficit);
     const double rms = audioSamples_ == 0 ? 0.0 : std::sqrt(static_cast<double>(audioSumSquares_ / audioSamples_));
+    const auto avgKb = [this](int slot) {
+        return frameTypeCount_[slot] == 0 ? 0.0 : frameTypeBytes_[slot] / 1024.0 / frameTypeCount_[slot];
+    };
     const double audioRmsDbfs = rms <= 0.0 ? -120.0 : 20.0 * std::log10(rms / 32768.0);
     return std::string("{\"videoCodec\":\"") + escaped(videoCodecName_) +
            "\",\"width\":" + std::to_string(settings_.width) + ",\"height\":" + std::to_string(settings_.height) +
            ",\"requestedFps\":" + std::to_string(settings_.fps) + ",\"bitrate\":" + std::to_string(settings_.bitrate) +
-           ",\"intraSeconds\":" + std::to_string(settings_.intraSeconds) +
+           ",\"intraFrames\":" + std::to_string(settings_.intraFrames) +
            ",\"bitrateMode\":" + std::to_string(settings_.bitrateMode) +
            ",\"maxBFrames\":" + std::to_string(settings_.maxBFrames) +
            ",\"bitDepth\":" + std::to_string(settings_.bitDepth) +
@@ -596,6 +622,10 @@ std::string NativeAvRecorder::statsJson() const {
            ",\"currentFps\":" + std::to_string(currentFps) +
            ",\"targetFrameShortfall\":" + std::to_string(cumulativeTargetDeficit_) +
            ",\"encodedFrameGaps\":" + std::to_string(encodedFrameGaps_) +
+           ",\"iFrames\":" + std::to_string(frameTypeCount_[0]) + ",\"pFrames\":" + std::to_string(frameTypeCount_[1]) +
+           ",\"bFrames\":" + std::to_string(frameTypeCount_[2]) + ",\"avgIKb\":" + std::to_string(avgKb(0)) +
+           ",\"avgPKb\":" + std::to_string(avgKb(1)) + ",\"avgBKb\":" + std::to_string(avgKb(2)) +
+           ",\"actualGop\":" + std::to_string(lastGopFrames_) +
            ",\"encoderLatencyMs\":" + std::to_string(encoderLatencyMs_) +
            ",\"encoderLatencyPeakMs\":" + std::to_string(encoderLatencyPeak_.peak(bootNs())) +
            ",\"encoderLatencyMaxMs\":" + std::to_string(encoderLatencyPeak_.max()) +

@@ -25,7 +25,8 @@ data class VideoEncoderConfig(
     val bitrate4kMbps: Int = 40,
     val bitrateOpenGateMbps: Int = 60,
     val bitrateMode: VideoBitrateMode = VideoBitrateMode.Cbr,
-    val keyframeSeconds: Int = 1,
+    /** Frames between I-frames; 1 = all-intra. */
+    val keyframeFrames: Int = 30,
     /** -1 lets the codec choose; 0 disables B-frames. */
     val maxBFrames: Int = -1,
     /** 1 = mono, 2 = stereo. */
@@ -37,7 +38,7 @@ data class VideoEncoderConfig(
         bitrate1080pMbps = bitrate1080pMbps.coerceIn(MIN_BITRATE_MBPS, MAX_BITRATE_MBPS),
         bitrate4kMbps = bitrate4kMbps.coerceIn(MIN_BITRATE_MBPS, MAX_BITRATE_MBPS),
         bitrateOpenGateMbps = bitrateOpenGateMbps.coerceIn(MIN_BITRATE_MBPS, MAX_BITRATE_MBPS),
-        keyframeSeconds = keyframeSeconds.coerceIn(1, 10),
+        keyframeFrames = keyframeFrames.coerceIn(MIN_KEYFRAME_FRAMES, MAX_KEYFRAME_FRAMES),
         maxBFrames = maxBFrames.coerceIn(-1, 2),
         audioChannels = if (audioChannels == 1) 1 else 2,
         audioBitrateKbps = AUDIO_BITRATES_KBPS.minBy { kotlin.math.abs(it - audioBitrateKbps) }
@@ -60,5 +61,20 @@ data class VideoEncoderConfig(
         const val MAX_BITRATE_MBPS = com.rawr.camera.video.VideoEncoderLimits.MAX_BITRATE_MBPS
         val AUDIO_BITRATES_KBPS = listOf(128, 192, 256, 320)
         val MAX_B_FRAME_CHOICES = listOf(-1, 0, 1, 2)
+        const val MIN_KEYFRAME_FRAMES = 1
+        const val MAX_KEYFRAME_FRAMES = 60
+        /** Below this, every few frames is an I-frame and file size climbs steeply. */
+        const val SHORT_GOP_FRAMES = 5
+
+        /** Requested GOP in display order, e.g. "I B B P B B P … (30)"; all-intra is "I I I …". */
+        fun gopPattern(frames: Int, maxBFrames: Int): String {
+            if (frames <= 1) return "I I I … (all-intra)"
+            val shown = minOf(frames - 1, 6)
+            val run = List(maxBFrames.coerceAtLeast(0)) { "B" } + "P"
+            val tail = generateSequence { run }.flatten().take(shown).toList()
+            val more = if (frames - 1 > shown) " …" else ""
+            val auto = if (maxBFrames < 0) " · B-frames auto" else ""
+            return (listOf("I") + tail).joinToString(" ") + "$more ($frames)$auto"
+        }
     }
 }

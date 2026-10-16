@@ -641,7 +641,8 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
                 bitrate4kMbps = p[Keys.videoBitrate4kMbps] ?: d.videoEncoder.bitrate4kMbps,
                 bitrateOpenGateMbps = p[Keys.videoBitrateOpenGateMbps] ?: d.videoEncoder.bitrateOpenGateMbps,
                 bitrateMode = p[Keys.videoBitrateMode]?.let(VideoBitrateMode::of) ?: d.videoEncoder.bitrateMode,
-                keyframeSeconds = p[Keys.videoKeyframeSeconds] ?: d.videoEncoder.keyframeSeconds,
+                keyframeFrames = p[Keys.videoKeyframeFrames]
+                    ?: p[Keys.videoKeyframeSeconds]?.let { it * 30 } ?: d.videoEncoder.keyframeFrames,
                 maxBFrames = p[Keys.videoMaxBFrames] ?: d.videoEncoder.maxBFrames,
                 audioChannels = p[Keys.videoAudioChannels] ?: d.videoEncoder.audioChannels,
                 audioBitrateKbps = p[Keys.videoAudioBitrateKbps] ?: d.videoEncoder.audioBitrateKbps
@@ -876,7 +877,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.videoBitrate4kMbps] = encoder.bitrate4kMbps
         p[Keys.videoBitrateOpenGateMbps] = encoder.bitrateOpenGateMbps
         p[Keys.videoBitrateMode] = encoder.bitrateMode.wireValue
-        p[Keys.videoKeyframeSeconds] = encoder.keyframeSeconds
+        p[Keys.videoKeyframeFrames] = encoder.keyframeFrames
         p[Keys.videoMaxBFrames] = encoder.maxBFrames
         p[Keys.videoAudioChannels] = encoder.audioChannels
         p[Keys.videoAudioBitrateKbps] = encoder.audioBitrateKbps
@@ -1156,7 +1157,9 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val videoBitrate4kMbps = intPreferencesKey("video_bitrate_4k_mbps")
         val videoBitrateOpenGateMbps = intPreferencesKey("video_bitrate_open_gate_mbps")
         val videoBitrateMode = intPreferencesKey("video_bitrate_mode")
+        /** Legacy seconds value; read once to migrate into [videoKeyframeFrames]. */
         val videoKeyframeSeconds = intPreferencesKey("video_keyframe_seconds")
+        val videoKeyframeFrames = intPreferencesKey("video_keyframe_frames")
         val videoMaxBFrames = intPreferencesKey("video_max_b_frames")
         val videoAudioChannels = intPreferencesKey("video_audio_channels")
         val videoAudioBitrateKbps = intPreferencesKey("video_audio_bitrate_kbps")

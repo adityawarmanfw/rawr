@@ -49,24 +49,39 @@ internal fun VideoEncoderSettings(state: SettingsUiState, dispatch: SettingsDisp
                 ) { set(encoder.withBitrateMbps(mode, it.toInt())) }
             }
             SettingDivider()
+            val frames = encoder.keyframeFrames
             StandaloneNumericSliderRow(
-                identity = "video_keyframe_seconds",
-                label = "Keyframe interval",
-                minimum = 1f,
-                maximum = 10f,
+                identity = "video_keyframe_frames",
+                label = "I-frame interval",
+                supportingText = when {
+                    frames <= 1 -> "All-intra: every frame is an I-frame. Largest files, easiest to edit."
+                    frames < VideoEncoderConfig.SHORT_GOP_FRAMES ->
+                        "Very short GOP: file size and bitrate demand rise sharply."
+                    else -> "%.2f s at 24 fps · %.2f s at 30 fps".format(frames / 24f, frames / 30f)
+                },
+                minimum = VideoEncoderConfig.MIN_KEYFRAME_FRAMES.toFloat(),
+                maximum = VideoEncoderConfig.MAX_KEYFRAME_FRAMES.toFloat(),
                 step = 1f,
                 decimals = 0,
-                value = encoder.keyframeSeconds.toFloat(),
-                defaultValue = 1f,
-                unit = " s"
-            ) { set(encoder.copy(keyframeSeconds = it.toInt())) }
+                value = frames.toFloat(),
+                defaultValue = VideoEncoderConfig().keyframeFrames.toFloat(),
+                valueFormatter = { if (it.toInt() <= 1) "All-I" else "${it.toInt()} frames" }
+            ) { set(encoder.copy(keyframeFrames = it.toInt())) }
             SettingDivider()
-            SettingsRow("Max B-frames")
-            CompactChoiceRow(
-                VideoEncoderConfig.MAX_B_FRAME_CHOICES,
-                encoder.maxBFrames,
-                { if (it < 0) "Auto" else "$it" }
-            ) { set(encoder.copy(maxBFrames = it)) }
+            if (frames <= 1) SettingsRow("Max B-frames", value = "Off (all-intra)")
+            else {
+                SettingsRow("Max B-frames")
+                CompactChoiceRow(
+                    VideoEncoderConfig.MAX_B_FRAME_CHOICES,
+                    encoder.maxBFrames,
+                    { if (it < 0) "Auto" else "$it" }
+                ) { set(encoder.copy(maxBFrames = it)) }
+            }
+            SettingsRow(
+                "GOP",
+                supportingText = VideoEncoderConfig.gopPattern(frames, encoder.maxBFrames) +
+                    "\nRequested structure; some encoders ignore B-frame limits."
+            )
         }
         SettingsGroup(title = "Audio", description = "AAC-LC, 48 kHz. Stereo falls back to mono at 128 kbps if the microphone can't do stereo.") {
             SettingsRow("Channels", value = if (encoder.audioChannels == 1) "Mono" else "Stereo")

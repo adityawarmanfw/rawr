@@ -53,7 +53,7 @@ internal class CaptureRecordingBackend(
                 // Never ask for more than the encoder advertises.
                 val bitrate = extra("raw_video_bitrate", minOf(encoder.bitrateMbps(selectedMode),
                     com.rawr.camera.video.VideoEncoderCapabilities.maxBitrateMbps) * 1_000_000)
-                val intraSeconds = extra("raw_video_intra_seconds", encoder.keyframeSeconds)
+                val intraFrames = extra("raw_video_intra_frames", encoder.keyframeFrames)
                 val bitrateMode = extra("raw_video_bitrate_mode", encoder.bitrateMode.wireValue)
                 val maxBFrames = extra("raw_video_max_b_frames", encoder.maxBFrames)
                 val audioChannels = extra("raw_video_audio_channels", encoder.audioChannels)
@@ -64,7 +64,7 @@ internal class CaptureRecordingBackend(
                 }
                 recorder.start(NativeVideoRecorder.Settings(
                     saveLocationId = imageSettings.saveLocationId,
-                    fps = selectedFps, bitrate = bitrate, intraSeconds = intraSeconds,
+                    fps = selectedFps, bitrate = bitrate, intraFrames = intraFrames,
                     width = frameSize.width, height = frameSize.height, mode = selectedMode.label,
                     deviceRotationDegrees = deviceRotationDegrees, bitrateMode = bitrateMode,
                     maxBFrames = maxBFrames, audioChannels = audioChannels, audioBitrate = audioBitrate,

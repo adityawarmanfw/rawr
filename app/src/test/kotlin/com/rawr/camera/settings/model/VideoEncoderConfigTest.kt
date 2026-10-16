@@ -15,7 +15,7 @@ class VideoEncoderConfigTest {
         assertEquals(40, d.bitrateMbps(VideoResolutionMode.UHD4K))
         assertEquals(60, d.bitrateMbps(VideoResolutionMode.OPEN_GATE))
         assertEquals(2, d.bitrateMode.wireValue)
-        assertEquals(1, d.keyframeSeconds)
+        assertEquals(30, d.keyframeFrames)
         assertEquals(-1, d.maxBFrames)
         assertEquals(2, d.audioChannels)
         assertEquals(192, d.audioBitrateKbps)
@@ -25,16 +25,27 @@ class VideoEncoderConfigTest {
     @Test fun sanitizedClampsToWhatTheNativeRecorderAccepts() {
         val s = VideoEncoderConfig(
             bitDepth = 12, bitrate1080pMbps = 0, bitrate4kMbps = 500, bitrateOpenGateMbps = -3,
-            keyframeSeconds = 99, maxBFrames = 7, audioChannels = 6, audioBitrateKbps = 200
+            keyframeFrames = 99, maxBFrames = 7, audioChannels = 6, audioBitrateKbps = 200
         ).sanitized()
         assertEquals(10, s.bitDepth)
         assertEquals(1, s.bitrate1080pMbps)
         assertEquals(400, s.bitrate4kMbps)
         assertEquals(1, s.bitrateOpenGateMbps)
-        assertEquals(10, s.keyframeSeconds)
+        assertEquals(60, s.keyframeFrames)
         assertEquals(2, s.maxBFrames)
         assertEquals(2, s.audioChannels)
         assertEquals(192, s.audioBitrateKbps)
+    }
+
+    @Test fun keyframeIntervalClampsToOneFrameMinimum() {
+        assertEquals(1, VideoEncoderConfig(keyframeFrames = 0).sanitized().keyframeFrames)
+    }
+
+    @Test fun gopPatternDescribesRequestedStructure() {
+        assertEquals("I I I … (all-intra)", VideoEncoderConfig.gopPattern(1, 2))
+        assertEquals("I B B P B B P … (30)", VideoEncoderConfig.gopPattern(30, 2))
+        assertEquals("I P P P (4)", VideoEncoderConfig.gopPattern(4, 0))
+        assertEquals("I P P P P P P … (30) · B-frames auto", VideoEncoderConfig.gopPattern(30, -1))
     }
 
     @Test fun bitrateModeWireValuesMatchMediaCodec() {

@@ -75,7 +75,7 @@ class NativeVideoRecorder(private val context: Context, private val preview: Raw
         }
     }
 
-    data class Settings(val fps: Int = 30, val bitrate: Int = 12_000_000, val intraSeconds: Int = 1,
+    data class Settings(val fps: Int = 30, val bitrate: Int = 12_000_000, val intraFrames: Int = 30,
                         val width: Int = 1920, val height: Int = 1080, val mode: String = "1080p",
                         val deviceRotationDegrees: Int = 0,
                         /** -1 lets the codec choose; 0=CQ, 1=VBR, 2=CBR (default). */
@@ -116,7 +116,7 @@ class NativeVideoRecorder(private val context: Context, private val preview: Raw
         require(request.fps == 24 || request.fps == 30)
         require(request.bitrate in VideoEncoderLimits.MIN_BITRATE_MBPS * 1_000_000..
             VideoEncoderLimits.MAX_BITRATE_MBPS * 1_000_000)
-        require(request.intraSeconds in 1..10)
+        require(request.intraFrames in 1..60)
         require(request.bitrateMode in -1..2)
         require(request.maxBFrames in -1..4)
         require(request.audioChannels == 1 || request.audioChannels == 2)
@@ -143,7 +143,7 @@ class NativeVideoRecorder(private val context: Context, private val preview: Raw
             val fd = requireNotNull(context.contentResolver.openFileDescriptor(requireNotNull(uri), "rw"))
                 .use { it.detachFd() }
             handle = engine.nativeStart(fd, request.width, request.height, request.fps,
-                request.bitrate, request.intraSeconds, rotation, request.bitrateMode, request.maxBFrames,
+                request.bitrate, request.intraFrames, rotation, request.bitrateMode, request.maxBFrames,
                 request.audioChannels, request.audioBitrate, request.bitDepth,
                 request.timestampPolicy.nativeId, Build.MANUFACTURER.orEmpty(), Build.MODEL.orEmpty(),
                 "RAWR ${BuildConfig.VERSION_NAME}", request.renderProfile,
@@ -161,7 +161,7 @@ class NativeVideoRecorder(private val context: Context, private val preview: Raw
                 .put("bootNs", SystemClock.elapsedRealtimeNanos()).put("camera", preview.cameraControlSnapshot())
                 .put("fps", request.fps).put("bitrate", request.bitrate)
                 .put("mode", request.mode).put("width", request.width).put("height", request.height)
-                .put("intraSeconds", request.intraSeconds).put("rotationDegrees", rotation)
+                .put("intraFrames", request.intraFrames).put("rotationDegrees", rotation)
                 .put("bitrateMode", request.bitrateMode).put("maxBFrames", request.maxBFrames)
                 .put("audioChannels", request.audioChannels).put("audioBitrate", request.audioBitrate)
                 .put("bitDepth", request.bitDepth)

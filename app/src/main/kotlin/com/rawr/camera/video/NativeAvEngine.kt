@@ -9,7 +9,7 @@ internal class NativeAvEngine {
     }
 
     external fun nativeStart(fd: Int, width: Int, height: Int, fps: Int, bitrate: Int,
-                             intraSeconds: Int, rotationDegrees: Int, bitrateMode: Int,
+                             intraFrames: Int, rotationDegrees: Int, bitrateMode: Int,
                              maxBFrames: Int, audioChannels: Int, audioBitrate: Int,
                              bitDepth: Int, timestampPolicy: Int, deviceMake: String,
                              deviceModel: String, software: String, renderProfile: String,
