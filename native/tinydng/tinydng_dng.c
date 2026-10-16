@@ -777,13 +777,19 @@ int td_dng_handle_tag(tinydng_context *ctx, const td_reader *r,
       }
       break;
     case TD_TAG_COLOR_MATRIX2:
-      (void)td_read_reals(r, type, data_off, count, img->raw.color_matrix2, 9);
+      if (td_read_reals(r, type, data_off, count, img->raw.color_matrix2, 9) == 9) {
+        img->raw.has_color_matrix2 = 1;
+      }
       break;
     case TD_TAG_FORWARD_MATRIX1:
-      (void)td_read_reals(r, type, data_off, count, img->raw.forward_matrix1, 9);
+      if (td_read_reals(r, type, data_off, count, img->raw.forward_matrix1, 9) == 9) {
+        img->raw.has_forward_matrix1 = 1;
+      }
       break;
     case TD_TAG_FORWARD_MATRIX2:
-      (void)td_read_reals(r, type, data_off, count, img->raw.forward_matrix2, 9);
+      if (td_read_reals(r, type, data_off, count, img->raw.forward_matrix2, 9) == 9) {
+        img->raw.has_forward_matrix2 = 1;
+      }
       break;
     case TD_TAG_CAMERA_CALIBRATION1:
       if (td_read_reals(r, type, data_off, count, img->raw.camera_calibration1,
@@ -792,8 +798,9 @@ int td_dng_handle_tag(tinydng_context *ctx, const td_reader *r,
       }
       break;
     case TD_TAG_CAMERA_CALIBRATION2:
-      (void)td_read_reals(r, type, data_off, count,
-                          img->raw.camera_calibration2, 9);
+      if (td_read_reals(r, type, data_off, count, img->raw.camera_calibration2, 9) == 9) {
+        img->raw.has_camera_calibration2 = 1;
+      }
       break;
     case TD_TAG_ANALOG_BALANCE:
       if (td_read_reals(r, type, data_off, count, img->raw.analog_balance, 3)) {
