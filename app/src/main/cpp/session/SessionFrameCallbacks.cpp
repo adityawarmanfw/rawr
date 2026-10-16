@@ -41,9 +41,13 @@ std::optional<RawrFrameExposure> rawrFrameExposure(const rawrcam::metadata::Fram
     constexpr int32_t kAeModeOff = 0;
     RawrFrameExposure e;
     e.shutterNs = double(m.exposureTimeNs > 0 ? m.exposureTimeNs : m.requestedExposureTimeNs.value_or(0));
-    if (m.aeMode == kAeModeOff && m.requestedSensitivity && *m.requestedSensitivity > 0)
+    if (m.aeMode == kAeModeOff && m.requestedSensitivity && *m.requestedSensitivity > 0) {
         e.iso = *m.requestedSensitivity;
-    else if (m.sensitivity > 0)
+        // The HAL may deliver less than asked (past the sensor mode's real
+        // range); its report, in the request coordinate, says so.
+        if (m.sensitivity > 0 && reportedPerRequest > 0.0)
+            e.iso = std::min(e.iso, double(m.sensitivity) / reportedPerRequest * 1.02);
+    } else if (m.sensitivity > 0)
         e.iso = double(m.sensitivity) / (reportedPerRequest > 0.0 ? reportedPerRequest : 1.0);
     if (!(e.shutterNs > 0.0) || !(e.iso > 0.0)) return std::nullopt;
     return e;
