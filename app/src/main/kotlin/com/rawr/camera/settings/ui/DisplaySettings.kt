@@ -69,7 +69,7 @@ internal fun ControlStyleSettings(state: SettingsUiState, dispatch: SettingsDisp
     SettingsPageContainer {
         SettingsGroup(
             title = "Capture Layout",
-            description = "Classic keeps SS/ISO/EV sliders in the viewfinder. Compact moves WB/SS/ISO/EV to scrubbable buttons by the shutter, with multiframe and film sim pills."
+            description = "Classic keeps SS/ISO/EV sliders in the viewfinder. Compact moves WB/SS/ISO/EV to scrubbable buttons by the shutter, with multiframe and film sim pills. Pro is Gcam style: one row of live value tiles, a big ruler you flick to change the selected value, and dedicated FILTERS and PARAMS buttons by the shutter."
         ) {
             SettingsSelectionRow(
                 title = "Classic",
@@ -86,6 +86,15 @@ internal fun ControlStyleSettings(state: SettingsUiState, dispatch: SettingsDisp
                 onClick = {
                     haptics.detent()
                     dispatch.invoke(SetCaptureControlLayout(CaptureControlLayout.Compact))
+                }
+            )
+            SettingDivider()
+            SettingsSelectionRow(
+                title = "Pro (Gcam style)",
+                selected = state.values.captureControlLayout == CaptureControlLayout.Pro,
+                onClick = {
+                    haptics.detent()
+                    dispatch.invoke(SetCaptureControlLayout(CaptureControlLayout.Pro))
                 }
             )
         }
