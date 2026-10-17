@@ -622,12 +622,15 @@ struct NativeCameraController::Impl final : CameraEventSink {
         diag(metadata::describe(*deviceSession.cameraContext()));
         // Verified models stream RAW alone. Elsewhere a small YUV stream rides
         // along: some HALs (MediaTek) accept a RAW-only session but never
-        // deliver a RAW buffer. `debug.rawr.companion_stream 0|1` overrides.
+        // deliver a RAW buffer. Vendor full-size modes (unlisted streams) are
+        // always RAW-only: the HAL can't scale an 8160-wide readout down to the
+        // companion size and fails every request (X300 Ultra CN, Android 17).
+        // `debug.rawr.companion_stream 0|1` overrides.
         const std::string companionOverride = systemProperty("debug.rawr.companion_stream");
         const std::string companionRouteKey = route.cameraId + '/' + route.physicalCameraId;
         const bool companionStream =
             companionOverride == "1" || (companionOverride != "0" && !builtInMatch.verified &&
-                                         !rawOnlyRoutes.count(companionRouteKey));
+                                         !route.unlistedStream && !rawOnlyRoutes.count(companionRouteKey));
         std::ostringstream selection;
         selection << "CAMERA_NDK_SELECTION profile=" << profile.id << " model=" << deviceModel
                   << " lensId=" << route.lensId << " cameraId=" << route.cameraId
