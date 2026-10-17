@@ -7,8 +7,8 @@ import android.util.Log
 import androidx.annotation.Keep
 
 /**
- * Vendor state a lens route needs while its camera is open (profile lens field `vendorGate`). Native code
- * calls [acquire] right before the device opens and [release] once it has closed (on any thread).
+ * Vendor state a lens route needs while its streams are configured (profile lens field `vendorGate`). Native
+ * code calls [acquire] before the device opens and [release] as soon as the session is configured (on any thread).
  */
 @Keep
 class VendorCameraGate internal constructor(private val gates: Map<String, Gate>) {
@@ -45,8 +45,8 @@ class VendorCameraGate internal constructor(private val gates: Map<String, Gate>
 }
 
 /**
- * vivo's full-size RAW permission: VivoCameraManager key 40 ("useVivoCamera") = 1 while the camera is open.
- * cameraserver (Camera3Device::setUseVivoCamera) reads it at every open and then classifies the client as vivo's
+ * vivo's full-size RAW permission: VivoCameraManager key 40 ("useVivoCamera") = 1 while the streams are configured.
+ * cameraserver (Camera3Device::setUseVivoCamera) reads it when it configures streams and then classifies the client as vivo's
  * own camera (AppType 1), whose sensor-mode branch holds the 50 / 200 MP modes; without it they fail to
  * configure ("Function not implemented"). Key 33 (VCFAppType) is rewritten by cameraserver at open, so it is
  * left alone. The value is system-wide: the one found is saved before the change and given back on release;

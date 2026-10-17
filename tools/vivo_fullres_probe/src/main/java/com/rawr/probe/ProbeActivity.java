@@ -533,6 +533,13 @@ public final class ProbeActivity extends Activity {
             }, handler);
             synchronized (lock) { if (device[0] == null && error[0] == null) lock.wait(5000); }
             if (device[0] == null) throw new IllegalStateException("open failed: " + error[0]);
+            // --es early open|configured: give key 40 back right after the device opens / the session is
+            // configured, to test whether cameraserver reads it only then
+            if ("open".equals(getIntent().getStringExtra("early")) && p != null) {
+                p.set(SDK_KEY, oldSdk);
+                SystemClock.sleep(100);
+                meta.println("key 40 restored early (after open): now " + p.get(SDK_KEY));
+            }
 
             CaptureRequest.Builder b = device[0].createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
             b.addTarget(reader.getSurface());
@@ -587,6 +594,13 @@ public final class ProbeActivity extends Activity {
             device[0].createCaptureSession(config);
             synchronized (lock) { if (session[0] == null && error[0] == null) lock.wait(8000); }
             if (session[0] == null) throw new IllegalStateException("session failed: " + error[0]);
+            // --es early open|configured: give key 40 back right after the device opens / the session is
+            // configured, to test whether cameraserver reads it only then
+            if ("configured".equals(getIntent().getStringExtra("early")) && p != null) {
+                p.set(SDK_KEY, oldSdk);
+                SystemClock.sleep(100);
+                meta.println("key 40 restored early (after session configured): now " + p.get(SDK_KEY));
+            }
 
             final int[] results = new int[1];
             final CameraCaptureSession.CaptureCallback callback = new CameraCaptureSession.CaptureCallback() {

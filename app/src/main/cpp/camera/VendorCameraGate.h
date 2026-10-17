@@ -6,11 +6,12 @@
 
 namespace rawrcam::camera {
 
-// Vendor state some lens routes need while their camera device is open (for
+// Vendor state some lens routes need while their streams are configured (for
 // example vivo's full-size RAW permission, LensRoute::vendorGate). The app
-// owns the state: it saves the values it finds before changing them and
-// restores them on release, also after a crash. Acquire runs right before the
-// device opens; release runs once the device has closed.
+// owns the state: it saves the value it finds before changing it and restores
+// it on release, also after a crash. Acquire runs before the device opens (and
+// before any later session on it); release runs as soon as the session has
+// been configured, or when the device closes if configuration never happened.
 void installVendorCameraGate(JNIEnv* env, jobject gate);
 
 // False when no gate is installed, the gate is unknown, or the app could not
