@@ -175,11 +175,16 @@ struct MeterPolicy {
     float maxGuardEv = 1.5f;
     float guardReleasedEv = 0.5f;
     float guardGiveUpEv = 4.0f;
-    // A clipped highlight does not show how far over it is, so it darkens at
-    // most this far. One just over then shows unclipped and gets the full
-    // guard; a window stays clipped and the scene keeps its exposure. (Going
-    // further to find out, then backing off, would pump.)
+    // A clipped highlight does not show how far over it is, so indoors it
+    // darkens at most clippedGuardMaxEv: one just over then shows unclipped
+    // and gets the full guard; a window from a dark room stays clipped and
+    // the room keeps its exposure. (Going further to find out, then backing
+    // off, would pump.) Outdoors (scene EV100 from outdoorEv100Low to
+    // outdoorEv100High) a clipped highlight is usually sky worth saving: the
+    // cap eases up to the full maxGuardEv.
     float clippedGuardMaxEv = 0.75f;
+    float outdoorEv100Low = 8.0f;
+    float outdoorEv100High = 11.0f;
     // Highlight-weighted: the percentile sits at the clip (less the margin)
     // whatever the key, within keyRangeEv below / highlightLiftEv above it.
     bool highlightPriority = false;
@@ -329,6 +334,15 @@ inline double guardDarkeningEv(double need, const MeterPolicy& p) noexcept {
     return cap + (std::min(double(p.guardReleasedEv), cap) - cap) * eased;
 }
 
+inline double clippedGuardCapEv(float ev100, const MeterPolicy& p) noexcept {
+    const float span = p.outdoorEv100High - p.outdoorEv100Low;
+    const float x = span > 0.0f && std::isfinite(ev100) ? std::clamp((ev100 - p.outdoorEv100Low) / span, 0.0f, 1.0f)
+                                                        : 0.0f;
+    const float s = x * x * (3.0f - 2.0f * x);
+    const float indoor = std::min(p.clippedGuardMaxEv, p.maxGuardEv);
+    return double(indoor + (p.maxGuardEv - indoor) * s);
+}
+
 // The user's EV applies after the highlight handling, as on a camera: the
 // guard protects the metered exposure, not the user's choice.
 inline std::optional<Metered> meter(const FrameObservation& f, NightLook look, float userEv,
@@ -350,7 +364,7 @@ inline std::optional<Metered> meter(const FrameObservation& f, NightLook look, f
     }
     const double byHighlight = high->targetEv - high->sceneEv;
     double darkening = guardDarkeningEv(byKey - byHighlight, p);
-    if (high->clipped) darkening = std::min(darkening, double(p.clippedGuardMaxEv));
+    if (high->clipped) darkening = std::min(darkening, clippedGuardCapEv(m.sceneEv100, p));
     const double guarded = p.highlightPriority
                                ? std::clamp(byHighlight, byKey - double(p.maxGuardEv), byKey + double(p.highlightLiftEv))
                                : byKey - darkening;

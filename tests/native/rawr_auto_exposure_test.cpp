@@ -345,9 +345,11 @@ int main() {
     for (const bool channel : {false, true}) {
         Sim sim;
         sim.channel = channel;
-        sim.run({kDayKey, kDayKey + 1.5}, 2.0);
+        constexpr double kRoom = kDayKey - 5.0;  // EV100 ~5
+        sim.settings.night = NightLook::Off;  // the guard alone
+        sim.run({kRoom, kRoom + 1.5}, 2.0);
         const double room = sim.preview.back();
-        const Scene window{kDayKey, kDayKey + 3.32 + 7.0, 0.0, 0.0, 0.15};
+        const Scene window{kRoom, kRoom + 3.32 + 7.0, 0.0, 0.0, 0.15};
         const std::size_t enter = sim.preview.size();
         sim.run(window, 4.0);
         assert(near(sim.ae.last()->metered.guardEv, -0.75, 0.01));
@@ -358,8 +360,25 @@ int main() {
         const std::size_t at = sim.preview.size();
         sim.run(window, 2.0);
         assert(maxAbsDelta(sim.preview, at, sim.preview.size()) < 0.02);
-        sim.run({kDayKey, kDayKey + 3.32 + kClipEv + 0.5}, 4.0);
+        sim.run({kRoom, kRoom + 3.32 + kClipEv + 0.5}, 4.0);
         assert(sim.ae.last()->metered.guardEv < -0.6f);
+    }
+    // Outdoors (EV100 ~13) a clipped sky needing more than the indoor cap
+    // is saved in full, smoothly.
+    for (const bool channel : {false, true}) {
+        Sim sim;
+        sim.channel = channel;
+        constexpr double kSun = kDayKey + 3.0;
+        sim.run({kSun, kSun + 1.5}, 2.0);
+        const std::size_t at = sim.preview.size();
+        sim.run({kSun, kSun + 3.32 + kClipEv + 0.8, 1.0}, 5.0);
+        const auto& last = sim.ae.last();
+        assert(last->metered.sceneEv100 > 11.0f);
+        // Luma needs more than the indoor cap (0.75) and gets it.
+        assert(last->metered.guardEv < (channel ? -0.6f : -1.0f) && last->metered.guardEv >= -1.5f);
+        double low = sim.preview.back();
+        for (std::size_t i = at; i < sim.preview.size(); ++i) low = std::min(low, sim.preview[i]);
+        assert(sim.preview.back() - low < 0.12);
     }
     // The guard's darkening: all of it up to the cap, easing to the release
     // level by the give-up point, never jumping.
