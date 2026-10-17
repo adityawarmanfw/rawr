@@ -4,16 +4,20 @@ import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.rawr.camera.architecture.CaptureQuickEvent
 import com.rawr.camera.architecture.CaptureScreenController
 import com.rawr.camera.architecture.SyncToneControls
 import com.rawr.camera.integration.NativeCaptureScreenController
 import com.rawr.camera.integration.RawPreviewCoordinator
 import com.rawr.camera.integration.StillCaptureCoordinator
 import com.rawr.camera.model.FilmSimQuickState
+import com.rawr.camera.model.HighlightQuickMode
 import com.rawr.camera.model.RenderProfileQuickState
 import com.rawr.camera.model.ToneParameter
+import com.rawr.camera.model.ViewfinderQuickState
 import com.rawr.camera.model.toFilmSimQuickState
 import com.rawr.camera.model.toRenderProfileQuickState
+import com.rawr.camera.model.toViewfinderQuickState
 import com.rawr.camera.model.withToneParameter
 import com.rawr.camera.settings.architecture.SetFilmSimDiscreteValue
 import com.rawr.camera.settings.architecture.SetFilmSimFlag
@@ -84,6 +88,11 @@ class CaptureViewModel(application: Application) : AndroidViewModel(application)
     val renderProfiles: StateFlow<RenderProfileQuickState> = mutableRenderProfiles.asStateFlow()
     private val mutableFilmSimQuick = MutableStateFlow(settingsDefaults.toFilmSimQuickState())
     val filmSimQuick: StateFlow<FilmSimQuickState> = mutableFilmSimQuick.asStateFlow()
+    val viewfinderQuick: StateFlow<ViewfinderQuickState> = settingsEditor.state
+        .map { it.toViewfinderQuickState() }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly,
+            latestSettings.toViewfinderQuickState())
     private val galleryMediaStore = GalleryMediaStore(application)
     private val mutableLatestGalleryImage = MutableStateFlow<Uri?>(null)
     val latestGalleryImage: StateFlow<Uri?> = mutableLatestGalleryImage.asStateFlow()
@@ -232,6 +241,34 @@ class CaptureViewModel(application: Application) : AndroidViewModel(application)
         }
         mutableFilmSimQuick.value = next.toFilmSimQuickState()
         previewCoordinator.setFilmSimLook(next.filmSimLook.toFloatArray(), next.filmSimLook.toIntArray())
+    }
+
+    /** Rail edits go through settings; CaptureSettingsSync projects them onto the preview and stills. */
+    fun onQuickEvent(event: CaptureQuickEvent) {
+        if (latestSettings.isVideo && videoSelectionLocked()) return
+        settingsEditor.update { c ->
+            val video = c.isVideo
+            when (event) {
+                CaptureQuickEvent.ToggleRawrAe -> c.copy(rawrAe = c.rawrAe.copy(enabled = !c.rawrAe.enabled))
+                is CaptureQuickEvent.SetMetering -> c.copy(rawrAe = c.rawrAe.copy(metering = event.metering))
+                is CaptureQuickEvent.SetHighlightMode -> {
+                    val enabled = event.mode != HighlightQuickMode.Off
+                    val method = when (event.mode) {
+                        HighlightQuickMode.Off -> if (video) c.videoHighlightMethod else c.photoHighlightMethod
+                        HighlightQuickMode.Propagation -> 0
+                        HighlightQuickMode.Opposed -> 1
+                    }
+                    if (video) c.copy(videoHighlightEnabled = enabled, videoHighlightMethod = method)
+                    else c.copy(photoHighlightEnabled = enabled, photoHighlightMethod = method)
+                }
+                is CaptureQuickEvent.SetHighlightThreshold -> event.value.coerceIn(0.5f, 2f).let {
+                    if (video) c.copy(videoHighlightThreshold = it) else c.copy(photoHighlightThreshold = it)
+                }
+                is CaptureQuickEvent.SetHighlightCompression -> event.value.coerceIn(0f, 300f).let {
+                    if (video) c.copy(videoHighlightCompression = it) else c.copy(photoHighlightCompression = it)
+                }
+            }
+        }
     }
 
     private fun persistQuickTone(parameter: ToneParameter, value: Int) {

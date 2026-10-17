@@ -171,6 +171,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             val renderProfiles by captureViewModel.renderProfiles.collectAsStateWithLifecycle()
             val filmSimQuick by captureViewModel.filmSimQuick.collectAsStateWithLifecycle()
+            val viewfinderQuick by captureViewModel.viewfinderQuick.collectAsStateWithLifecycle()
             val latestGalleryImage by captureViewModel.latestGalleryImage.collectAsStateWithLifecycle()
             val videoSelection = androidx.compose.runtime.remember(captureViewModel) {
                 captureViewModel.controller.state.map { it.videoResolution to it.videoFps }.distinctUntilChanged()
@@ -214,6 +215,8 @@ class MainActivity : ComponentActivity() {
                     onOpenRenderer = { startActivity(Intent(this@MainActivity, com.rawr.camera.renderer.RendererActivity::class.java)) },
                     filmQuick = filmSimQuick,
                     onFilmEvent = captureViewModel::onFilmEvent,
+                    quick = viewfinderQuick,
+                    onQuickEvent = captureViewModel::onQuickEvent,
                     videoControls = VideoControlState(
                         resolution = selectedVideo.first.label,
                         fps = selectedVideo.second,

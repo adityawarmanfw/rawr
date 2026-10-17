@@ -8,6 +8,8 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import com.rawr.camera.architecture.CaptureDispatch
 import com.rawr.camera.architecture.CaptureFilmEvent
+import com.rawr.camera.architecture.CaptureQuickEvent
+import com.rawr.camera.model.ViewfinderQuickState
 import com.rawr.camera.model.CaptureUiState
 import com.rawr.camera.model.FilmSimQuickState
 import com.rawr.camera.model.RenderProfileQuickState
@@ -30,6 +32,8 @@ fun CaptureScreen(
     onOpenMultiframeSettings: () -> Unit = {},
     filmQuick: FilmSimQuickState? = null,
     onFilmEvent: (CaptureFilmEvent) -> Unit = {},
+    quick: ViewfinderQuickState = ViewfinderQuickState(),
+    onQuickEvent: (CaptureQuickEvent) -> Unit = {},
     videoControls: VideoControlState = VideoControlState(),
     onToggleVideoRecording: () -> Unit = {}
 ) {
@@ -55,6 +59,8 @@ fun CaptureScreen(
                 onOpenMultiframeSettings = onOpenMultiframeSettings,
                 filmQuick = filmQuick,
                 onFilmEvent = onFilmEvent,
+                quick = quick,
+                onQuickEvent = onQuickEvent,
                 videoControls = videoControls,
                 onToggleVideoRecording = onToggleVideoRecording,
                 modifier =
