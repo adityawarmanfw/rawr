@@ -183,6 +183,10 @@ struct MeterPolicy {
     // outdoorEv100High) a clipped highlight is usually sky worth saving: the
     // cap eases up to the full maxGuardEv.
     float clippedGuardMaxEv = 0.75f;
+    // The sensor runs this far under the shown exposure (the viewfinder and
+    // photo gain carry it back; the render rolls off what lands above
+    // white): highlights may sit this much higher before they clip.
+    float sensorHeadroomEv = 0.0f;
     float outdoorEv100Low = 8.0f;
     float outdoorEv100High = 11.0f;
     // Highlight-weighted: the percentile sits at the clip (less the margin)
@@ -374,7 +378,7 @@ inline std::optional<Metered> meter(const FrameObservation& f, NightLook look, f
         if (const auto mean = sceneLinearMeanEv(f.weightedBins, f.clipLumaEv, p.clippedOverEv))
             byKey = std::log2(double(p.linearMeanTarget)) + double(m.nightOffsetEv) - (double(*mean) - f.logExposure);
     }
-    const double byHighlight = high->targetEv - high->sceneEv;
+    const double byHighlight = high->targetEv - high->sceneEv + double(p.sensorHeadroomEv);
     double darkening = guardDarkeningEv(byKey - byHighlight, p);
     if (high->clipped) darkening = std::min(darkening, clippedGuardCapEv(m.sceneEv100, p));
     const double guarded = p.highlightPriority
@@ -480,12 +484,25 @@ struct Settings {
     // 0: no snapping; else the mains period.
     std::int64_t flickerPeriodNs = 0;
     Limits limits{};
+    // Highlight headroom: the sensor is exposed this far under the shown
+    // exposure in good light (as Camera2 AE does with its post-RAW boost),
+    // fading to none in dim scenes where noise matters more (see
+    // headroomForEv100).
+    float headroomEv = 1.0f;
 };
+
+// Headroom in effect at a scene EV100: full at 7 and up, none at 4 and down.
+inline float headroomForEv100(float headroomEv, float ev100) noexcept {
+    if (!std::isfinite(ev100)) return 0.0f;
+    const float x = std::clamp((ev100 - 4.0f) / 3.0f, 0.0f, 1.0f);
+    return std::max(0.0f, headroomEv) * x * x * (3.0f - 2.0f * x);
+}
 
 struct Step {
     Solution request;           // what to put on the repeating request
     double targetLogExposure;   // smoothed target the viewfinder shows
     Metered metered;
+    float headroomEv = 0.0f;    // request = target - headroomEv
 };
 
 // Frame-lane state: meter -> clamp to reachable -> filter -> solve.
@@ -496,13 +513,18 @@ class Controller {
    public:
     std::optional<Step> update(const FrameObservation& f, const Settings& s, float userEv,
                                const MeterPolicy& mp = {}, const FilterPolicy& fp = {}) noexcept {
-        const auto m = meter(f, s.night, userEv, mp);
+        // Headroom follows the light of the last metered frame.
+        const float headroom =
+            last_ ? headroomForEv100(s.headroomEv, last_->metered.sceneEv100) : 0.0f;
+        MeterPolicy policy = mp;
+        policy.sensorHeadroomEv = headroom;
+        const auto m = meter(f, s.night, userEv, policy);
         if (!m) return std::nullopt;
         // Clamp the desire to what the sensor (+ digital cap) can deliver, so
         // the viewfinder never has to show an exposure the photo cannot get.
-        const auto reachable = solve(requestFor(m->desiredLogExposure, s)).logExposure();
+        const auto reachable = solve(requestFor(m->desiredLogExposure - headroom, s)).logExposure() + headroom;
         const double target = filter_.update(reachable, f.timestampNs, fp);
-        Step step{solve(requestFor(target, s)), target, *m};
+        Step step{solve(requestFor(target - headroom, s)), target, *m, headroom};
         // Requests only change by a visible-to-the-sensor amount; the
         // residual gain covers the rest exactly (no stream of tiny
         // re-submissions while the filter's tail settles).

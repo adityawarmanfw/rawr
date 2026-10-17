@@ -86,6 +86,7 @@ struct Sim {
     Sim() {
         settings.enabled = true;
         settings.limits = Limits{100, 6400, 1600, 20'000, 66'666'667, 33'333'333, 2.0f};
+        settings.headroomEv = 0.0f;  // the headroom tests turn it on
         sensor = {10'000'000, 100, 0.0f};
         pending = sensor;
         for (int i = 0; i < latencyFrames; ++i) inFlight.push_back(sensor);
@@ -519,6 +520,31 @@ int main() {
         assert(near(desired(subject.data(), 0.5f) - base, 1.5, 0.05));
         Bins none{};
         assert(near(desired(none.data(), 0.4f), base, 1e-9));
+    }
+    // Headroom: in daylight the sensor runs 1 EV under the shown exposure and
+    // the viewfinder shows the same as without it; a highlight up to ~1 EV
+    // over the shown white is kept in the RAW without darkening the scene.
+    // In dim light the headroom fades out (noise first).
+    {
+        const auto settle = [](float headroomEv, double keyEv, double highlightEv) {
+            Sim sim;
+            sim.settings.headroomEv = headroomEv;
+            sim.run({keyEv, highlightEv}, 4.0);
+            return sim;
+        };
+        const auto plain = settle(0.0f, kDayKey, kDayKey + 1.5);
+        const auto spare = settle(1.0f, kDayKey, kDayKey + 1.5);
+        assert(near(spare.preview.back(), plain.preview.back(), 0.03));
+        assert(near(spare.ae.last()->headroomEv, 1.0, 0.01));
+        assert(near(plain.applied.back().logExposure() - spare.applied.back().logExposure(), 1.0, 0.05));
+        // 0.5 EV over the shown clip: guarded without headroom, not with it.
+        const double over = kDayKey + 3.32 + kClipEv + 0.5;
+        assert(settle(0.0f, kDayKey, over).ae.last()->metered.guardEv < -0.6f);
+        assert(settle(1.0f, kDayKey, over).ae.last()->metered.guardEv > -0.15f);
+        // Dim room (EV100 ~3): no headroom.
+        const auto dim = settle(1.0f, kDayKey - 7.0, kDayKey - 5.5);
+        assert(dim.ae.last()->headroomEv < 0.01f);
+        assert(near(headroomForEv100(1.0f, 7.0f), 1.0, 1e-6) && headroomForEv100(1.0f, 4.0f) == 0.0f);
     }
     // Spot: the night look follows the whole frame, not the tapped area.
     // A dark subject in a bright room is exposed as tapped.
