@@ -52,7 +52,6 @@ class RealtimePipeline final : public RealtimeResources {
     uint32_t previewHeight() const noexcept { return previewHeight_; }
     int sensorOrientationDegrees() const noexcept { return sensorOrientationDegrees_; }
     int displayRotationDegrees() const noexcept { return displayRotationDegrees_; }
-    int scopeDeviceRotationDegrees() const noexcept { return scopeDeviceRotationDegrees_; }
     void setDisplayRotationDegrees(int value) {
         displayRotationDegrees_ = value;
         realtime_.setDisplayRotationDegrees(value);

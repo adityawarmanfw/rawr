@@ -15,15 +15,12 @@ layout(std430, binding = 1) buffer Out {
     uint focusSamples;
     uint reserved2;
     uint focusBins[256];
-    uint zones[144];  // zoneLogSum[48], zoneSamples[48], zoneClipped[48]
 }
 outb;
 const uint PARTITIONS = 16u;
 const uint BIN_COUNT = 256u;
 const uint COUNTERS = 8u;
-const uint ZONE_VALUES = 144u;
-const uint ZONE_BASE = 3u * BIN_COUNT + COUNTERS;
-const uint STRIDE = ZONE_BASE + ZONE_VALUES;
+const uint STRIDE = 3u * BIN_COUNT + COUNTERS;
 
 void main() {
     uint i = gl_LocalInvocationIndex;
@@ -36,11 +33,6 @@ void main() {
     outb.weightedBins[i] = sum;
     outb.channelBins[i] = channel;
     outb.focusBins[i] = focus;
-    if (i < ZONE_VALUES) {
-        uint z = 0u;
-        for (uint p = 0u; p < PARTITIONS; ++p) z += partial.data[p * STRIDE + ZONE_BASE + i];
-        outb.zones[i] = z;
-    }
     if (i < COUNTERS) {
         uint c = 0u;
         for (uint p = 0u; p < PARTITIONS; ++p) c += partial.data[p * STRIDE + 3u * BIN_COUNT + i];

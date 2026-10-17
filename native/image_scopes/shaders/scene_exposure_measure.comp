@@ -14,8 +14,6 @@
 // Every sample, spot or not, adds its quantised log2 luma to a whole-frame
 // sum (the spot's night look judges the scene). Samples inside the focus
 // rectangle (packed like the spot, nonzero) also fill focus luma bins.
-// Every sample also adds to its zone of an 8x6 grid (log sum, count,
-// clipped count), unweighted.
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 layout(binding = 0, rgba16f) uniform readonly image2D src;
 layout(std430, binding = 1) buffer Partial { uint data[]; }
@@ -28,11 +26,7 @@ const uint BIN_COUNT = 256u;
 const uint COUNTERS = 8u;
 const uint CHANNEL = BIN_COUNT;
 const uint FOCUS = 2u * BIN_COUNT;
-const uint ZONE_COLS = 8u;
-const uint ZONE_ROWS = 6u;
-const uint ZONES = ZONE_COLS * ZONE_ROWS;
-const uint ZONE_BASE = 3u * BIN_COUNT + COUNTERS;
-const uint STRIDE = ZONE_BASE + 3u * ZONES;
+const uint STRIDE = 3u * BIN_COUNT + COUNTERS;
 const float CHANNEL_CLIP = 0.95;
 const float FRAME_LOG_MIN = -24.0;
 const float FRAME_LOG_SCALE = 16.0;
@@ -41,7 +35,6 @@ const float MIN_EV = -20.0;
 const float BINS_PER_EV = 256.0 / 24.0;
 shared uint bins[3u * BIN_COUNT];
 shared uint counters[COUNTERS];
-shared uint zones[3u * ZONES];  // log sums, samples, clipped
 layout(push_constant) uniform PC {
     uint width;
     uint height;
@@ -76,7 +69,6 @@ void main() {
     bins[CHANNEL + li] = 0u;
     bins[FOCUS + li] = 0u;
     if (li < COUNTERS) counters[li] = 0u;
-    if (li < 3u * ZONES) zones[li] = 0u;
     barrier();
 
     uint block = pc.sampleBlockSize & 255u;
@@ -108,14 +100,8 @@ void main() {
             bool clipped = pc.clipLuma > 0.0 && luma >= pc.clipLuma;
             float frameLuma = clipped ? pc.clipLuma : luma;
             float frameLog = frameLuma > 0.0 ? (log2(frameLuma) - FRAME_LOG_MIN) * FRAME_LOG_SCALE : 0.0;
-            uint frameLogQ = uint(clamp(frameLog + 0.5, 0.0, FRAME_LOG_MAX));
-            atomicAdd(counters[4], frameLogQ);
+            atomicAdd(counters[4], uint(clamp(frameLog + 0.5, 0.0, FRAME_LOG_MAX)));
             atomicAdd(counters[5], 1u);
-            uint zone = min((y * ZONE_ROWS) / pc.height, ZONE_ROWS - 1u) * ZONE_COLS +
-                        min((x * ZONE_COLS) / pc.width, ZONE_COLS - 1u);
-            atomicAdd(zones[zone], frameLogQ);
-            atomicAdd(zones[ZONES + zone], 1u);
-            if (clipped) atomicAdd(zones[2u * ZONES + zone], 1u);
             if (pc.focus != 0u && insideRect(pc.focus, x, y)) {
                 atomicAdd(bins[FOCUS + (clipped ? BIN_COUNT - 1u : sceneBin(luma))], 1u);
                 atomicAdd(counters[6], 1u);
@@ -152,5 +138,4 @@ void main() {
     partial.data[base + CHANNEL + li] = bins[CHANNEL + li];
     partial.data[base + FOCUS + li] = bins[FOCUS + li];
     if (li < COUNTERS) partial.data[base + 3u * BIN_COUNT + li] = counters[li];
-    if (li < 3u * ZONES) partial.data[base + ZONE_BASE + li] = zones[li];
 }

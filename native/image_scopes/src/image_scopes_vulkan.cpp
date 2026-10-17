@@ -31,7 +31,7 @@ enum SetKind : std::uint32_t {
     SceneReduce
 };
 constexpr VkDeviceSize kExposureScratchBytes = 16ull * 260ull * 4ull;
-constexpr VkDeviceSize kSceneScratchBytes = 16ull * (3ull * kSceneExposureBins + 8ull + 3ull * kSceneZoneCount) * 4ull;
+constexpr VkDeviceSize kSceneScratchBytes = 16ull * (3ull * kSceneExposureBins + 8ull) * 4ull;
 constexpr VkDeviceSize kVecScratchBytes = static_cast<VkDeviceSize>(detail::kVectorScratchBytes);
 constexpr std::uint32_t kMaxDisplayWidth = (std::numeric_limits<std::uint32_t>::max() - 511u) / 512u;
 constexpr std::uint32_t kMaxDisplayHeight = std::numeric_limits<std::uint32_t>::max() / 64u;
