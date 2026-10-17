@@ -126,3 +126,28 @@ with tempfile.TemporaryDirectory(prefix="mov-", dir=build) as directory:
         run(patch, out)
         assert run(ffmpeg, '-v', 'error', '-i', out, '-map', '0:a', '-c', 'copy', '-f', f's{bits}le', '-') == pcm
         print(f'pcm{bits} ok', len(blocks), 'blocks')
+
+    # Interrupted recordings: recover from the sample index, for AAC/MP4 and PCM/MOV.
+    for bits, crash_at in ((0, 120), (24, 100)):
+        out = root/f'crash{bits}.{"mov" if bits else "mp4"}'
+        if bits:
+            pcm = (root/f'pcm{bits}.raw').read_bytes()
+            frame = 2 * bits // 8
+            audio_samples = [(i * 1024 / 48000, 1, True, i * 1024 * 1_000_000 // 48000, pcm[i * 1024 * frame:(i + 1) * 1024 * frame])
+                             for i in range((len(pcm) + 1024 * frame - 1) // (1024 * frame))]
+        else:
+            audio_samples = [(i * 1024 / 48000, 1, True, i * 1024 * 1_000_000 // 48000, f) for i, f in enumerate(frames)]
+        samples = [(float(p['dts_time']), 0, 'K' in p['flags'], int(float(p['pts_time']) * 1e6) + 260_000, u)
+                   for p, u in zip(packets, units)] + audio_samples
+        blob = b''.join(struct.pack('<BBqI', track, sync, pts, len(data)) + data
+                        for _, track, sync, pts, data in sorted(samples, key=lambda s: (s[0], s[1])))
+        (root/'samples').write_bytes(blob)
+        run(helper, out, root/'csd', root/'asc', root/'samples', 160, 96, fps, 48000, 2, rotation, bits, root/'index', crash_at)
+        info = probe(out, '-show_streams')
+        video = next(s for s in info['streams'] if s['codec_type'] == 'video')
+        audio = next(s for s in info['streams'] if s['codec_type'] == 'audio')
+        recovered = int(video['nb_frames'])
+        assert 0 < recovered < len(units), recovered
+        assert audio['codec_name'] == (f'pcm_s{bits}le' if bits else 'aac'), audio['codec_name']
+        run(ffmpeg, '-v', 'error', '-xerror', '-i', out, '-f', 'null', '-')
+        print(f'crash{bits} ok: recovered {recovered}/{len(units)} frames, audio {float(audio["duration"]):.2f} s')

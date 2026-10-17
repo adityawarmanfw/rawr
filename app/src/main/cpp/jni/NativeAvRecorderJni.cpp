@@ -1,5 +1,6 @@
 #include <android/native_window_jni.h>
 #include <jni.h>
+#include <fcntl.h>
 #include <unistd.h>
 
 #include <cstdint>
@@ -7,6 +8,8 @@
 #include <memory>
 #include <string>
 
+#include "video/MovMuxer.h"
+#include "video/Mp4MetadataPatcher.h"
 #include "video/NativeAvRecorder.h"
 
 namespace {
@@ -34,7 +37,7 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_video_NativeAvEngine_nat
     JNIEnv* env, jobject, jint fd, jint width, jint height, jint fps, jint bitrate, jint intraFrames,
     jint rotationDegrees, jint bitrateMode, jint maxBFrames, jint audioChannels, jint audioBitrate, jint audioPreset,
     jint audioDeviceId, jfloat audioGainDb, jint audioLowCutHz, jint audioPcmBits, jint bitDepth,
-    jint timestampPolicy, jstring deviceMake, jstring deviceModel, jstring software, jstring renderProfile, jstring gamut, jstring transfer, jboolean log) {
+    jint timestampPolicy, jstring deviceMake, jstring deviceModel, jstring software, jstring renderProfile, jstring gamut, jstring transfer, jboolean log, jstring indexPath) {
     bool ownsFd = false;
     try {
         NativeAvRecorder::Settings settings{};
@@ -61,6 +64,7 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_video_NativeAvEngine_nat
         settings.gamut = javaString(env, gamut);
         settings.transfer = javaString(env, transfer);
         settings.log = log;
+        settings.indexPath = javaString(env, indexPath);
         settings.timestampPolicy = static_cast<NativeAvRecorder::TimestampPolicy>(timestampPolicy);
         auto instance = std::make_unique<NativeAvRecorder>(fd, settings);
         ownsFd = true;
@@ -118,4 +122,27 @@ extern "C" JNIEXPORT jstring JNICALL Java_com_rawr_camera_video_NativeAvEngine_n
     const std::string result =
         std::string("{\"ok\":") + (ok ? "true" : "false") + ",\"stats\":" + instance->statsJson() + "}";
     return env->NewStringUTF(result.c_str());
+}
+
+// Finishes a recording interrupted before stop(): rebuilds moov from its sample
+// index, then writes device/LOG metadata as stop() would. Takes ownership of fd.
+extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_video_NativeAvEngine_nativeRecover(
+    JNIEnv* env, jobject, jint fd, jstring indexPath, jstring deviceMake, jstring deviceModel, jstring software,
+    jstring renderProfile, jstring gamut, jstring transfer, jint bitDepth, jboolean log) {
+    const int indexFd = open(javaString(env, indexPath).c_str(), O_RDONLY | O_CLOEXEC);
+    try {
+        if (indexFd < 0) throw std::runtime_error("sample index unavailable");
+        rawrcam::video::MovMuxer::recover(fd, indexFd);
+        std::string error;
+        const bool patched = rawrcam::video::patchMp4DeviceMetadata(
+            fd, {javaString(env, deviceMake), javaString(env, deviceModel), javaString(env, software),
+                 javaString(env, renderProfile), javaString(env, gamut), javaString(env, transfer),
+                 std::to_string(bitDepth), log != JNI_FALSE}, &error);
+        if (!patched && log) throw std::runtime_error("LOG metadata finalization failed: " + error);
+        (void)fsync(fd);
+    } catch (const std::exception& error) {
+        throwJava(env, error.what());
+    }
+    if (indexFd >= 0) close(indexFd);
+    close(fd);
 }

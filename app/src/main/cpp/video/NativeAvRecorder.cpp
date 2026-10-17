@@ -4,6 +4,7 @@
 #include <android/log.h>
 #include <media/NdkMediaFormat.h>
 #include <time.h>
+#include <fcntl.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -155,8 +156,12 @@ void NativeAvRecorder::start() {
     originBootUs_ = bootNs() / 1'000;
     monotonicToBootUs_ = (bootNs() - clockNs(CLOCK_MONOTONIC)) / 1'000;
     try {
+        // Best effort: without an index the recording still works, it just cannot be recovered.
+        const int indexFd = settings_.indexPath.empty()
+                                ? -1
+                                : open(settings_.indexPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_APPEND | O_CLOEXEC, 0600);
         muxer_ = std::make_unique<MovMuxer>(
-            outputFd_, settings_.audioPcmBits > 0 ? MovMuxer::Brand::QuickTime : MovMuxer::Brand::Mp4);
+            outputFd_, settings_.audioPcmBits > 0 ? MovMuxer::Brand::QuickTime : MovMuxer::Brand::Mp4, indexFd);
         configureVideo();
         configureAudio();
         started_ = true;

@@ -3,8 +3,10 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cerrno>
 #include <cstring>
+#include <memory>
 #include <stdexcept>
 
 namespace rawrcam::video {
@@ -346,7 +348,33 @@ Bytes co64(const std::vector<uint64_t>& offsets) {
 }
 }  // namespace
 
-MovMuxer::MovMuxer(int fd, Brand brand) : fd_(fd), brand_(brand) {
+// Sample index: "RMX1" then records [u8 type][u32 length][payload], little-endian.
+namespace {
+constexpr uint8_t kIndexHeader = 0, kIndexVideo = 1, kIndexAudio = 2, kIndexVideoSample = 3, kIndexAudioSample = 4;
+
+void le(Bytes& out, uint64_t v, int bytes) {
+    for (int i = 0; i < bytes; ++i) out.push_back(static_cast<uint8_t>(v >> (8 * i)));
+}
+uint64_t readLe(const uint8_t* p, int bytes) {
+    uint64_t v = 0;
+    for (int i = bytes - 1; i >= 0; --i) v = (v << 8) | p[i];
+    return v;
+}
+void writeAll(int fd, const uint8_t* data, size_t size, std::string& error) {
+    size_t done = 0;
+    while (done < size) {
+        const ssize_t n = ::write(fd, data + done, size - done);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) {
+            error = "MOV write failed errno=" + std::to_string(errno);
+            return;
+        }
+        done += static_cast<size_t>(n);
+    }
+}
+}  // namespace
+
+MovMuxer::MovMuxer(int fd, Brand brand, int indexFd) : fd_(fd), brand_(brand), indexFd_(indexFd) {
     if (fd_ < 0) throw std::invalid_argument("MovMuxer needs a writable fd");
     buffer_.reserve(kFlushBytes + (1 << 16));
     writer_ = std::thread([this] { writerLoop(); });
@@ -368,6 +396,25 @@ MovMuxer::MovMuxer(int fd, Brand brand) : fd_(fd), brand_(brand) {
     putType(mdat, "mdat");
     put64(mdat, 0);
     write(mdat.data(), mdat.size());
+    if (indexFd_ >= 0) {
+        const uint8_t magic[4] = {'R', 'M', 'X', '1'};
+        indexBuffer_.insert(indexBuffer_.end(), magic, magic + 4);
+        Bytes payload;
+        le(payload, brand_ == Brand::QuickTime ? 1 : 0, 1);
+        le(payload, mdatStart_, 8);
+        indexRecord(kIndexHeader, payload);
+    }
+}
+
+MovMuxer::MovMuxer(int fd, Brand brand, Recovering) : fd_(fd), brand_(brand), replaying_(true) {
+    writer_ = std::thread([this] { writerLoop(); });
+}
+
+void MovMuxer::indexRecord(uint8_t type, const Bytes& payload) {
+    if (indexFd_ < 0 || replaying_) return;
+    indexBuffer_.push_back(type);
+    le(indexBuffer_, payload.size(), 4);
+    append(indexBuffer_, payload);
 }
 
 void MovMuxer::setVideo(const Video& video) {
@@ -377,6 +424,13 @@ void MovMuxer::setVideo(const Video& video) {
     videoConfig_ = video;
     video_.present = true;
     video_.timescale = static_cast<uint32_t>(video.fps) * 1000;
+    Bytes payload;
+    for (int v : {video.width, video.height, video.fps, video.rotationDegrees, video.colorStandard,
+                  video.colorTransfer, video.colorRange})
+        le(payload, static_cast<uint32_t>(v), 4);
+    le(payload, video.annexBConfig.size(), 4);
+    append(payload, video.annexBConfig);
+    indexRecord(kIndexVideo, payload);
 }
 
 void MovMuxer::setAudio(const Audio& audio) {
@@ -389,12 +443,27 @@ void MovMuxer::setAudio(const Audio& audio) {
     audioConfig_ = audio;
     audio_.present = true;
     audio_.timescale = static_cast<uint32_t>(audio.sampleRate);
+    Bytes payload;
+    for (int v : {audio.codec == Audio::Codec::Pcm ? 1 : 0, audio.sampleRate, audio.channels, audio.bitsPerSample,
+                  audio.floatSamples ? 1 : 0, audio.bitrate})
+        le(payload, static_cast<uint32_t>(v), 4);
+    le(payload, audio.aacConfig.size(), 4);
+    append(payload, audio.aacConfig);
+    indexRecord(kIndexAudio, payload);
 }
 
 void MovMuxer::write(const uint8_t* data, size_t size) {
     buffer_.insert(buffer_.end(), data, data + size);
     position_ += size;
-    if (buffer_.size() >= kFlushBytes) flush();
+}
+
+void MovMuxer::flushIfDue(bool sync) {
+    const int64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (buffer_.size() >= kFlushBytes || sync || now - lastFlushNs_ >= 500'000'000) {
+        flush();
+        lastFlushNs_ = now;
+    }
 }
 
 MovMuxer::~MovMuxer() {
@@ -404,17 +473,19 @@ MovMuxer::~MovMuxer() {
     }
     queueChanged_.notify_all();
     if (writer_.joinable()) writer_.join();
+    if (indexFd_ >= 0) ::close(indexFd_);
 }
 
 void MovMuxer::flush() {
-    if (buffer_.empty()) return;
-    std::vector<uint8_t> next;
-    next.reserve(kFlushBytes + (1 << 16));
-    next.swap(buffer_);
+    if (buffer_.empty() && indexBuffer_.empty()) return;
+    Pending next;
+    next.data.reserve(kFlushBytes + (1 << 16));
+    next.data.swap(buffer_);
+    next.index.swap(indexBuffer_);
     std::unique_lock<std::mutex> lock(queueMutex_);
     queueChanged_.wait(lock, [this] { return queuedBytes_ < kMaxQueuedBytes || !writeError_.empty(); });
     if (!writeError_.empty()) throw std::runtime_error(writeError_);
-    queuedBytes_ += next.size();
+    queuedBytes_ += next.data.size();
     queue_.push_back(std::move(next));
     lock.unlock();
     queueChanged_.notify_all();
@@ -425,22 +496,18 @@ void MovMuxer::writerLoop() noexcept {
     for (;;) {
         queueChanged_.wait(lock, [this] { return !queue_.empty() || stopWriter_; });
         if (queue_.empty()) return;
-        std::vector<uint8_t> chunk = std::move(queue_.front());
+        Pending chunk = std::move(queue_.front());
         queue_.pop_front();
         lock.unlock();
         std::string error;
-        size_t done = 0;
-        while (done < chunk.size()) {
-            const ssize_t n = ::write(fd_, chunk.data() + done, chunk.size() - done);
-            if (n < 0 && errno == EINTR) continue;
-            if (n <= 0) {
-                error = "MOV write failed errno=" + std::to_string(errno);
-                break;
-            }
-            done += static_cast<size_t>(n);
+        writeAll(fd_, chunk.data.data(), chunk.data.size(), error);
+        // Index after data: every indexed sample is already in the file. Index loss is non-fatal.
+        if (error.empty() && indexFd_ >= 0 && !chunk.index.empty()) {
+            std::string indexError;
+            writeAll(indexFd_, chunk.index.data(), chunk.index.size(), indexError);
         }
         lock.lock();
-        queuedBytes_ -= chunk.size();
+        queuedBytes_ -= chunk.data.size();
         if (!error.empty() && writeError_.empty()) writeError_ = error;
         queueChanged_.notify_all();
     }
@@ -464,31 +531,131 @@ void MovMuxer::writeVideo(const uint8_t* data, size_t size, int64_t ptsUs, bool 
         written += static_cast<uint32_t>(4 + length);
     }
     if (written == 0) return;
-    video_.chunks.push_back({offset, 1});
-    video_.sizes.push_back(written);
-    video_.ptsTicks.push_back(ticks(ptsUs, video_.timescale));
-    if (sync) video_.syncSamples.push_back(static_cast<uint32_t>(video_.sizes.size()));
+    noteVideo(offset, written, ptsUs, sync);
+    flushIfDue(sync);
 }
 
 void MovMuxer::writeAudio(const uint8_t* data, size_t size, int64_t ptsUs) {
     if (!audio_.present || finished_) throw std::logic_error("audio track not writable");
     if (size == 0) return;
     throwIfWriteFailed();
-    const uint64_t offset = position_;
     if (audioConfig_.codec == Audio::Codec::Pcm) {
         const size_t frameBytes = static_cast<size_t>(audioConfig_.channels * audioConfig_.bitsPerSample / 8);
         if (size % frameBytes != 0) throw std::invalid_argument("partial PCM frame");
-        write(data, size);
-        const auto frames = static_cast<uint32_t>(size / frameBytes);
-        audio_.chunks.push_back({offset, frames});
-        audio_.ptsTicks.push_back(ticks(ptsUs, audio_.timescale));
-        audio_.pcmFrames += frames;
-        return;
     }
+    const uint64_t offset = position_;
     write(data, size);
-    audio_.chunks.push_back({offset, 1});
-    audio_.sizes.push_back(static_cast<uint32_t>(size));
+    noteAudio(offset, static_cast<uint32_t>(size), ptsUs);
+    flushIfDue(false);
+}
+
+void MovMuxer::noteVideo(uint64_t offset, uint32_t size, int64_t ptsUs, bool sync) {
+    video_.chunks.push_back({offset, 1});
+    video_.sizes.push_back(size);
+    video_.ptsTicks.push_back(ticks(ptsUs, video_.timescale));
+    if (sync) video_.syncSamples.push_back(static_cast<uint32_t>(video_.sizes.size()));
+    Bytes payload;
+    le(payload, offset, 8);
+    le(payload, size, 4);
+    le(payload, static_cast<uint64_t>(ptsUs), 8);
+    le(payload, sync ? 1 : 0, 1);
+    indexRecord(kIndexVideoSample, payload);
+}
+
+void MovMuxer::noteAudio(uint64_t offset, uint32_t size, int64_t ptsUs) {
+    if (audioConfig_.codec == Audio::Codec::Pcm) {
+        const auto frames = static_cast<uint32_t>(size / (audioConfig_.channels * audioConfig_.bitsPerSample / 8));
+        audio_.chunks.push_back({offset, frames});
+        audio_.pcmFrames += frames;
+    } else {
+        audio_.chunks.push_back({offset, 1});
+        audio_.sizes.push_back(size);
+    }
     audio_.ptsTicks.push_back(ticks(ptsUs, audio_.timescale));
+    Bytes payload;
+    le(payload, offset, 8);
+    le(payload, size, 4);
+    le(payload, static_cast<uint64_t>(ptsUs), 8);
+    indexRecord(kIndexAudioSample, payload);
+}
+
+void MovMuxer::recover(int fd, int indexFd) {
+    Bytes index;
+    uint8_t chunk[1 << 16];
+    for (;;) {
+        const ssize_t n = ::read(indexFd, chunk, sizeof(chunk));
+        if (n < 0 && errno == EINTR) continue;
+        if (n < 0) throw std::runtime_error("read sample index failed errno=" + std::to_string(errno));
+        if (n == 0) break;
+        index.insert(index.end(), chunk, chunk + n);
+    }
+    if (index.size() < 4 || std::memcmp(index.data(), "RMX1", 4) != 0) throw std::runtime_error("not a sample index");
+    std::unique_ptr<MovMuxer> muxer;
+    uint64_t end = 0;
+    size_t pos = 4;
+    // A crash can leave the last record partial; stop at the first incomplete one.
+    while (pos + 5 <= index.size()) {
+        const uint8_t type = index[pos];
+        const auto length = static_cast<size_t>(readLe(index.data() + pos + 1, 4));
+        if (pos + 5 + length > index.size()) break;
+        const uint8_t* p = index.data() + pos + 5;
+        pos += 5 + length;
+        if (type == kIndexHeader && length >= 9 && !muxer) {
+            muxer.reset(new MovMuxer(fd, p[0] ? Brand::QuickTime : Brand::Mp4, Recovering{}));
+            muxer->mdatStart_ = readLe(p + 1, 8);
+            continue;
+        }
+        if (!muxer) throw std::runtime_error("sample index missing header");
+        if ((type == kIndexVideo && length >= 32) || (type == kIndexAudio && length >= 28)) {
+            const auto field = [p](int i) { return static_cast<int>(static_cast<int32_t>(readLe(p + 4 * i, 4))); };
+            if (type == kIndexVideo) {
+                Video video;
+                video.width = field(0);
+                video.height = field(1);
+                video.fps = field(2);
+                video.rotationDegrees = field(3);
+                video.colorStandard = field(4);
+                video.colorTransfer = field(5);
+                video.colorRange = field(6);
+                const auto size = static_cast<size_t>(readLe(p + 28, 4));
+                if (32 + size > length) throw std::runtime_error("truncated video config");
+                video.annexBConfig.assign(p + 32, p + 32 + size);
+                muxer->setVideo(video);
+            } else {
+                Audio audio;
+                audio.codec = field(0) ? Audio::Codec::Pcm : Audio::Codec::Aac;
+                audio.sampleRate = field(1);
+                audio.channels = field(2);
+                audio.bitsPerSample = field(3);
+                audio.floatSamples = field(4) != 0;
+                audio.bitrate = field(5);
+                const auto size = static_cast<size_t>(readLe(p + 24, 4));
+                if (28 + size > length) throw std::runtime_error("truncated audio config");
+                audio.aacConfig.assign(p + 28, p + 28 + size);
+                muxer->setAudio(audio);
+            }
+        } else if ((type == kIndexVideoSample && length >= 21) || (type == kIndexAudioSample && length >= 20)) {
+            const uint64_t offset = readLe(p, 8);
+            const auto size = static_cast<uint32_t>(readLe(p + 8, 4));
+            const auto ptsUs = static_cast<int64_t>(readLe(p + 12, 8));
+            if (type == kIndexVideoSample) {
+                if (!muxer->video_.present) throw std::runtime_error("video sample before config");
+                muxer->noteVideo(offset, size, ptsUs, p[20] != 0);
+            } else {
+                if (!muxer->audio_.present) throw std::runtime_error("audio sample before config");
+                muxer->noteAudio(offset, size, ptsUs);
+            }
+            end = std::max(end, offset + size);
+        }
+    }
+    if (!muxer) throw std::runtime_error("sample index missing header");
+    if (end <= muxer->mdatStart_) throw std::runtime_error("sample index has no samples");
+    // Drop any unindexed tail, then append moov exactly where the indexed media ends.
+    if (::ftruncate(fd, static_cast<off_t>(end)) != 0 || ::lseek(fd, static_cast<off_t>(end), SEEK_SET) < 0)
+        throw std::runtime_error("truncate interrupted recording failed errno=" + std::to_string(errno));
+    muxer->position_ = end;
+    muxer->replaying_ = false;  // indexFd_ is -1, so finish() writes no index.
+    muxer->finish();
 }
 
 std::vector<uint8_t> MovMuxer::videoTrak(uint32_t movieTimescale) const {

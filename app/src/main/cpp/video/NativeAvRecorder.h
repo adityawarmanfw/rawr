@@ -58,6 +58,8 @@ public:
         std::string renderProfile;
         std::string gamut;
         std::string transfer;
+        // Sample index for recovering an interrupted recording; empty = none.
+        std::string indexPath;
         bool log = false;
         TimestampPolicy timestampPolicy = TimestampPolicy::PreserveRealtime;
     };

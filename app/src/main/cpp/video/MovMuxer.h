@@ -46,8 +46,15 @@ public:
         bool floatSamples = false;
     };
 
-    MovMuxer(int fd, Brand brand);
+    // indexFd (optional, owned): append-only sample index, written only after the
+    // samples it describes reach fd, so recover() can finish an interrupted file.
+    MovMuxer(int fd, Brand brand, int indexFd = -1);
     ~MovMuxer();
+
+    // Rebuilds moov for a file whose recording stopped without finish(), from its
+    // sample index. Truncates anything past the last indexed sample. Throws if the
+    // index has no complete video and audio track.
+    static void recover(int fd, int indexFd);
     MovMuxer(const MovMuxer&) = delete;
     MovMuxer& operator=(const MovMuxer&) = delete;
 
@@ -78,9 +85,22 @@ private:
         uint64_t pcmFrames = 0;
     };
 
+    struct Pending {
+        std::vector<uint8_t> data;
+        std::vector<uint8_t> index;
+    };
+    struct Recovering {};
+    MovMuxer(int fd, Brand brand, Recovering);
+
     void write(const uint8_t* data, size_t size);
-    // Hands the staging buffer to the writer thread.
+    void indexRecord(uint8_t type, const std::vector<uint8_t>& payload);
+    void noteVideo(uint64_t offset, uint32_t size, int64_t ptsUs, bool sync);
+    void noteAudio(uint64_t offset, uint32_t size, int64_t ptsUs);
+    // Hands staged data and its index records to the writer thread at a sample boundary.
     void flush();
+    // Flushes when the staging buffer is full, at video sync samples, or 0.5 s after the
+    // last flush, which bounds what an interrupted recording can lose.
+    void flushIfDue(bool sync);
     void writerLoop() noexcept;
     void throwIfWriteFailed();
     std::vector<uint8_t> moov() const;
@@ -96,10 +116,14 @@ private:
     uint64_t mdatStart_ = 0;
     uint64_t position_ = 0;
     std::vector<uint8_t> buffer_;
+    std::vector<uint8_t> indexBuffer_;
+    int indexFd_ = -1;
+    int64_t lastFlushNs_ = 0;
+    bool replaying_ = false;
     bool finished_ = false;
     std::mutex queueMutex_;
     std::condition_variable queueChanged_;
-    std::deque<std::vector<uint8_t>> queue_;
+    std::deque<Pending> queue_;
     size_t queuedBytes_ = 0;
     bool stopWriter_ = false;
     std::string writeError_;

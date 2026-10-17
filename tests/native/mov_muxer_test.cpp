@@ -1,6 +1,8 @@
 // Muxes recorded samples with MovMuxer, as NativeAvRecorder does.
 // usage: mov_muxer_helper out hevc_csd.bin aac_asc.bin samples.bin width height fps rate channels rotation pcm_bits
 // pcm_bits 0 = AAC in MP4; 16/24 = PCM in QuickTime MOV (audio records then hold raw PCM).
+// Optional: index_path crash_after — keep a sample index; when crash_after > 0, stop after that
+// many samples without finish() (as if the app died) and then run MovMuxer::recover().
 // samples.bin: repeated [u8 track (0 video, 1 audio)][u8 sync][i64 ptsUs][u32 size][bytes], little-endian.
 // tests/mov_muxer.py builds the inputs from ffmpeg output and checks the result with ffprobe.
 #include <fcntl.h>
@@ -11,6 +13,7 @@
 #include <exception>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -24,7 +27,7 @@ static std::vector<uint8_t> slurp(const char* path) {
 }
 
 int main(int argc, char** argv) {
-    if (argc != 12) {
+    if (argc != 12 && argc != 14) {
         std::fprintf(stderr, "usage: %s out csd asc samples width height fps rate channels rotation pcm_bits\n", argv[0]);
         return 2;
     }
@@ -32,7 +35,12 @@ int main(int argc, char** argv) {
     if (fd < 0) return 2;
     try {
         const int pcmBits = std::stoi(argv[11]);
-        MovMuxer muxer(fd, pcmBits > 0 ? MovMuxer::Brand::QuickTime : MovMuxer::Brand::Mp4);
+        const char* indexPath = argc == 14 ? argv[12] : nullptr;
+        const long crashAfter = argc == 14 ? std::stol(argv[13]) : 0;
+        const int indexFd = indexPath ? open(indexPath, O_WRONLY | O_CREAT | O_TRUNC | O_APPEND, 0644) : -1;
+        auto owned = std::make_unique<MovMuxer>(fd, pcmBits > 0 ? MovMuxer::Brand::QuickTime : MovMuxer::Brand::Mp4,
+                                                indexFd);
+        MovMuxer& muxer = *owned;
         MovMuxer::Video video;
         video.annexBConfig = slurp(argv[2]);
         video.width = std::stoi(argv[5]);
@@ -56,7 +64,16 @@ int main(int argc, char** argv) {
         muxer.setVideo(video);
         const auto samples = slurp(argv[4]);
         size_t pos = 0;
+        long written = 0;
         while (pos + 14 <= samples.size()) {
+            if (crashAfter > 0 && written++ == crashAfter) {
+                owned.reset();  // No finish(): unflushed staging data is lost, as in a crash.
+                const int indexRead = open(indexPath, O_RDONLY);
+                MovMuxer::recover(fd, indexRead);
+                close(indexRead);
+                close(fd);
+                return 0;
+            }
             const uint8_t track = samples[pos], sync = samples[pos + 1];
             int64_t pts = 0;
             uint32_t size = 0;
