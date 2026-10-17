@@ -31,6 +31,10 @@ void setScopeDeviceRotationDegrees(EngineHandle handle, int rotation) noexcept;
 void setCameraActive(EngineHandle handle, bool active) noexcept;
 void setOisEnabled(EngineHandle handle, bool enabled) noexcept;
 void setAntibandingMode(EngineHandle handle, uint8_t mode) noexcept;
+// rawr auto exposure: opt-in app-owned AE (NativeCameraController::RawrAeConfig).
+void setRawrAutoExposure(EngineHandle handle, bool enabled, int nightLook, int isoMin, int isoMax,
+                         int64_t shutterStartNs, int64_t shutterMaxNs, float balanceEv, float maxDigitalGainEv,
+                         int speed, int metering) noexcept;
 void selectLens(EngineHandle handle, const std::string& lensId) noexcept;
 bool setCameraProfile(EngineHandle handle, const std::string& json) noexcept;
 void setPreferredCameraId(EngineHandle handle, const std::string& cameraId) noexcept;

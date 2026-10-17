@@ -408,7 +408,7 @@ RawDevelopRecordResult RawDevelopRecorder::record(const RawDevelopRecordInput& i
 
     if (in.sceneExposureEnabled && in.diagnosticMode == 0u) {
         recordSceneExposure(slot.command, in.slotIndex, slot.linear.view, in.previewWidth, in.previewHeight,
-                            in.sensorToLinearSrgb, in.whiteBalance);
+                            in.sensorToLinearSrgb, in.whiteBalance, in.sceneSpot, in.sceneWeighting);
     }
 
     // Local tone mapping (exposure fusion): after the scene meter read the
@@ -633,7 +633,8 @@ std::array<float, 9> RawDevelopRecorder::composeCameraToAp1(const std::array<flo
 
 void RawDevelopRecorder::recordSceneExposure(VkCommandBuffer command, uint32_t frameSlot, VkImageView view,
                                              uint32_t width, uint32_t height, const std::array<float, 9>& sensorToSrgb,
-                                             const std::array<float, 4>& wb) const {
+                                             const std::array<float, 4>& wb,
+                                             const std::array<float, 4>& spot, uint32_t weighting) const {
     // Luma row = AP1 luma . camera->AP1 (column-major), the same working
     // space the render applies its gain in. White is the WB ceiling.
     constexpr std::array<float, 3> ap1Luma{0.2722287168f, 0.6740817658f, 0.0536895174f};
@@ -644,7 +645,7 @@ void RawDevelopRecorder::recordSceneExposure(VkCommandBuffer command, uint32_t f
     const std::array<float, 3> ceilings{wb[0], 0.5f * (wb[1] + wb[2]), wb[3]};
     float whiteLuma = 0.0f;
     for (size_t c = 0; c < 3; ++c) whiteLuma += lumaRow[c] * ceilings[c];
-    monitor_.recordSceneExposure(command, frameSlot, view, width, height, lumaRow, 0.9f * whiteLuma);
+    monitor_.recordSceneExposure(command, frameSlot, view, width, height, lumaRow, 0.9f * whiteLuma, spot, weighting);
 }
 
 void RawDevelopRecorder::recordVideoScopes(VkCommandBuffer command, uint32_t slot, VkImageView view, VkImage image,

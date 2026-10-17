@@ -50,6 +50,20 @@ enum class WhiteBalanceControlMode : uint8_t {
     ManualTempTint = 9,
 };
 
+// rawr auto exposure preferences (NativeCameraController::setRawrAeConfig).
+struct RawrAeConfig {
+    bool enabled = false;
+    int nightLook = 1;  // rawr_ae::NightLook id
+    // User limits; 0 = automatic (sensor range / handheld policy).
+    int32_t isoMin = 0, isoMax = 0;
+    int64_t shutterStartNs = 0;  // ISO rises once the shutter would be slower
+    int64_t shutterMaxNs = 0;
+    float balanceEv = 0.0f;
+    float maxDigitalGainEv = 2.0f;
+    int speed = 1;  // 0 slow, 1 normal, 2 fast
+    int metering = 0;  // rawr_ae::Metering id
+};
+
 struct CameraControlCapabilities {
     uint64_t generation = 0;
     std::string cameraId;
@@ -65,6 +79,11 @@ struct CameraControlCapabilities {
     int64_t exposureTimeMinNs = 0;
     int64_t exposureTimeMaxNs = 0;
     int64_t maxFrameDurationNs = 0;
+    // What the camera advertises; the bounds above may be widened by the
+    // lens profile's extended exposure (extendedExposure).
+    int32_t advertisedSensitivityMax = 0;
+    int64_t advertisedExposureTimeMaxNs = 0;
+    bool extendedExposure = false;
     int32_t priorityAeTargetFpsMin = 0;
     int32_t priorityAeTargetFpsMax = 0;
     std::vector<std::array<int32_t, 2>> aeTargetFpsRanges;
@@ -77,6 +96,9 @@ struct CameraControlCapabilities {
     bool manualExposureSupported = false;
     bool shutterPrioritySupported = false;
     bool isoPrioritySupported = false;
+    // The HAL's own priority modes (the two above may also be rawr AE's).
+    bool halShutterPrioritySupported = false;
+    bool halIsoPrioritySupported = false;
     // The HAL advertises any AE priority mode. Requests then always write the
     // priority tag (OFF when unused) so a reused request never keeps a stale
     // S/I value after priority is hidden by preference or debug override.
@@ -126,6 +148,16 @@ struct CameraControlState {
     // controller mutex alongside requested/applied camera state.
     bool videoMode = false;
     int videoPreviewFps = 30;
+    // Long exposure (ViewfinderExposure.h): the capture's shutter when it is
+    // longer than the viewfinder runs (0 = none); the one in flight and when
+    // the sensor started it (CLOCK_MONOTONIC ms; 0 submitted, -1 none); and
+    // whether the last one was honored (-1 none yet, 0 shortened, 1 honored).
+    int64_t deferredCaptureExposureNs = 0;
+    // Its ISO on the CaptureResult (reported) scale, like the applied readout.
+    int32_t deferredCaptureReportedSensitivity = 0;
+    int64_t longExposureNs = 0;
+    int64_t longExposureStartMs = -1;
+    int lastLongExposureHonored = -1;
     std::optional<double> requestedShutterAngleDegrees;
     std::vector<ShutterAngleChoice> shutterAngleChoices;
     WhiteBalanceControlMode whiteBalanceMode = WhiteBalanceControlMode::Auto;
@@ -185,6 +217,12 @@ struct CameraControlState {
     // from before a change are still arriving.
     int32_t hdrHeadroomSteps = 0;
     int32_t previousHdrHeadroomSteps = 0;
+    // rawr auto exposure (opt-in): in Auto mode the app solves shutter + ISO
+    // (color/RawrAutoExposure.h) and the repeating request runs AE OFF with
+    // this pair, in the request ISO coordinate.
+    bool rawrAeActive = false;
+    int64_t rawrAeExposureTimeNs = 0;
+    int32_t rawrAeSensitivity = 0;
     // Requested AE antibanding mode (NDK values OFF=0, 50HZ=1, 60HZ=2, AUTO=3).
     uint8_t requestedAntibandingMode = 3;
     float requestedManualFocusNormalized = 1.0f;

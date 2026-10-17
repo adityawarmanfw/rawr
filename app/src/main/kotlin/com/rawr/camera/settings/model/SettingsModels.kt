@@ -190,6 +190,74 @@ enum class AntiFlicker(val label: String) {
     Off("Off")
 }
 
+/** rawr auto exposure: how far dim scenes are placed below day brightness; native NightLook ids. */
+enum class RawrNightLook(val label: String, val nativeId: Int) {
+    Natural("Natural", 1),
+    Bright("Bright", 2),
+    Off("Off", 0)
+}
+
+/** Shutter at which ISO starts rising (Auto: 1/30 s). */
+enum class RawrMinShutter(val label: String, val ns: Long) {
+    Auto("1/30", 0L),
+    S15("1/15", 66_666_667L),
+    S60("1/60", 16_666_667L),
+    S125("1/125", 8_000_000L)
+}
+
+/** Longest shutter in low light (Auto: 1/15 s handheld, within the Auto minimum FPS). */
+enum class RawrMaxShutter(val label: String, val ns: Long) {
+    Auto("Auto", 0L),
+    S30("1/30", 33_333_333L),
+    S15("1/15", 66_666_667L),
+    S8("1/8", 125_000_000L),
+    S5("1/5", 200_000_000L)
+}
+
+/** Auto shutter/ISO trade (EV): faster shutters raise ISO; lower ISO lets the shutter run longer first. */
+enum class RawrBalance(val label: String, val ev: Float) {
+    LowIso("Low ISO", -1f),
+    Balanced("Balanced", 0f),
+    Faster("Faster", 1f),
+    Fastest("Fastest", 2f)
+}
+
+/** Digital gain allowed past the highest real ISO, applied cleanly after RAW (EV). */
+enum class RawrDigitalGain(val label: String, val ev: Float) {
+    Off("Off", 0f),
+    Ev1("+1 EV", 1f),
+    Ev2("+2 EV", 2f),
+    Ev3("+3 EV", 3f)
+}
+
+/** How quickly rawr AE follows the scene; native speed ids. */
+enum class RawrAeSpeed(val label: String, val nativeId: Int) {
+    Slow("Slow", 0),
+    Normal("Normal", 1),
+    Fast("Fast", 2)
+}
+
+/** rawr metering mode; a tap-to-meter spot overrides it while set. */
+enum class RawrMetering(val label: String, val nativeId: Int) {
+    Matrix("Matrix", 0),
+    CenterWeighted("Centre", 1),
+    Average("Average", 2),
+    Highlight("Highlight", 3)
+}
+
+/** rawr auto exposure: Auto/S/I solved in the app with Camera2 AE off. Opt-in. */
+/** ISO always spans base to the sensor's analog maximum; no user range. */
+data class RawrAeSettings(
+    val enabled: Boolean = false,
+    val nightLook: RawrNightLook = RawrNightLook.Natural,
+    val minShutter: RawrMinShutter = RawrMinShutter.Auto,
+    val maxShutter: RawrMaxShutter = RawrMaxShutter.Auto,
+    val balance: RawrBalance = RawrBalance.Balanced,
+    val digitalGain: RawrDigitalGain = RawrDigitalGain.Ev2,
+    val speed: RawrAeSpeed = RawrAeSpeed.Normal,
+    val metering: RawrMetering = RawrMetering.Matrix
+)
+
 enum class ExposureStep(val label: String) {
     Third("1/3 EV"),
     Half("1/2 EV")
@@ -1064,7 +1132,7 @@ data class SettingsValues(
     val videoDefringeStrength: Float = 1f,
     // Photo-pipeline denoise, single source of truth (see DenoiseConfig).
     // Off by default; Wavelet is profiled (sensor noise model).
-    val photoDenoise: DenoiseConfig = DenoiseConfig.Off,
+    val photoDenoise: DenoiseConfig = DenoiseConfig.Off(),
     // Video denoise has its own wavelet primitives.
     val videoDenoiseEnabled: Boolean = false,
     val videoDenoiseStrength: Float = 1f,
@@ -1092,6 +1160,7 @@ data class SettingsValues(
     // Ignore Camera2 shutter/ISO priority modes: locking SS or ISO always enters
     // full Manual. Off by default.
     val aePriorityDisabled: Boolean = false,
+    val rawrAe: RawrAeSettings = RawrAeSettings(),
     // Photo/Video capture mode + video recording selectors. Plain primitives
     // keep the DataStore schema stable; validated through the helpers below.
     val captureModeId: String = "photo",

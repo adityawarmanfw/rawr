@@ -31,6 +31,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -71,6 +72,7 @@ import com.rawr.camera.model.CaptureControlLayout
 import com.rawr.camera.model.CaptureMode
 import com.rawr.camera.model.CaptureSavePhase
 import com.rawr.camera.model.CaptureUiState
+import com.rawr.camera.model.LongExposureUiState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -136,7 +138,8 @@ internal fun CaptureControls(
                     Shutter(
                         dispatch = dispatch,
                         modifier = Modifier,
-                        countingDown = state.selfTimerRemainingMs != null
+                        countingDown = state.selfTimerRemainingMs != null,
+                        longExposure = state.longExposure
                     )
                 }
                 Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
@@ -163,7 +166,8 @@ internal fun CaptureControls(
         Shutter(
             dispatch = dispatch,
             modifier = Modifier.align(Alignment.TopCenter).padding(top = 39.dp),
-            countingDown = state.selfTimerRemainingMs != null
+            countingDown = state.selfTimerRemainingMs != null,
+            longExposure = state.longExposure
         )
         ModeSelectorStrip(
             state = state,
@@ -359,8 +363,26 @@ internal fun ModeSelectorStrip(
 }
 
 @Composable
-internal fun Shutter(dispatch: CaptureDispatch, modifier: Modifier, countingDown: Boolean = false) {
+internal fun Shutter(
+    dispatch: CaptureDispatch,
+    modifier: Modifier,
+    countingDown: Boolean = false,
+    longExposure: LongExposureUiState = LongExposureUiState()
+) {
     val haptics = LocalCaptureHaptics.current
+    // Long exposure: the ring fills clockwise as the sensor exposes.
+    val exposing = longExposure.startMs > 0L && longExposure.activeNs > 0L
+    var exposureProgress by remember { mutableStateOf(0f) }
+    if (exposing) {
+        LaunchedEffect(longExposure.startMs) {
+            val durationMs = (longExposure.activeNs / 1_000_000L).coerceAtLeast(1L)
+            while (true) {
+                val elapsed = android.os.SystemClock.uptimeMillis() - longExposure.startMs
+                exposureProgress = (elapsed.toFloat() / durationMs).coerceIn(0f, 1f)
+                withFrameMillis { }
+            }
+        }
+    }
     var pressed by remember { mutableStateOf(false) }
     val pressScale by animateFloatAsState(
         targetValue = if (pressed) .94f else 1f,
@@ -404,7 +426,24 @@ internal fun Shutter(dispatch: CaptureDispatch, modifier: Modifier, countingDown
             },
         contentAlignment = Alignment.Center
     ) {
-        Box(Modifier.size(CaptureDimens.ShutterInner).background(Color(0xFFF5F5F5), CircleShape))
+        Box(
+            Modifier.size(CaptureDimens.ShutterInner)
+                .background(Color(0xFFF5F5F5).copy(alpha = if (exposing) .35f else 1f), CircleShape)
+        )
+        if (exposing) {
+            androidx.compose.foundation.Canvas(Modifier.matchParentSize()) {
+                val stroke = 4.dp.toPx()
+                drawArc(
+                    color = Color.White,
+                    startAngle = -90f,
+                    sweepAngle = 360f * exposureProgress,
+                    useCenter = false,
+                    topLeft = androidx.compose.ui.geometry.Offset(stroke / 2f, stroke / 2f),
+                    size = androidx.compose.ui.geometry.Size(size.width - stroke, size.height - stroke),
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = stroke)
+                )
+            }
+        }
     }
 }
 

@@ -183,6 +183,13 @@ internal fun CaptureViewfinder(
                 orientation = state.orientation,
                 modifier = Modifier.align(Alignment.Center)
             )
+            val longExposureActive = state.longExposure.startMs >= 0L && state.longExposure.activeNs > 0L
+            LongExposureNotice(
+                state = state.longExposure,
+                orientation = state.orientation,
+                modifier = if (longExposureActive) Modifier.align(Alignment.Center)
+                else Modifier.align(Alignment.TopCenter).padding(top = 56.dp)
+            )
         }
         state.selfTimerRemainingMs?.let { remaining ->
             SelfTimerCountdownOverlay(

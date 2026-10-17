@@ -8,7 +8,8 @@
 
 namespace rawrcam::camera {
 
-// Startup ISO calibration probe for forced (DCG) sensor modes. The viewfinder
+// Startup ISO calibration probe for sensor modes forced by lens session keys
+// (some, like DCG, change the reported ISO scale; others measure 1:1). The viewfinder
 // shows from the first frame; only frames that would look wrong are held back
 // (the viewfinder keeps its last image): the probe frame itself, and frames
 // after it whose exposure jumped away from the pre-probe exposure while AE

@@ -649,8 +649,21 @@ void ImageScopes::recordSceneExposureStats(const SceneExposureStatsRecordInfo& i
     Impl::computeReuseBarrier(i.commandBuffer, scratch.b, scratch.size);
     Impl::computeReuseBarrier(i.commandBuffer, out.b, out.size);
     auto ms = impl_->bindMeasure(i.frameSlot, SceneMeasure, i.input.view, i.input.layout, scratch);
-    SceneMeasurePush mp{i.input.width,    i.input.height,   i.sampleBlockSize, i.lumaWeights[0],
-                        i.lumaWeights[1], i.lumaWeights[2], i.clipLuma,        0};
+    const float spot[4]{i.spotX0, i.spotY0, i.spotX1, i.spotY1};
+    for (float v : spot)
+        if (!std::isfinite(v)) throw std::invalid_argument("image_scopes: scene spot must be finite");
+    // Packed 8-bit x0,y0,x1,y1 (floor/ceil so the spot never shrinks to nothing).
+    std::uint32_t spotPacked = 0;
+    if (i.spotX1 > i.spotX0 && i.spotY1 > i.spotY0) {
+        const auto lo = [](float v) { return std::uint32_t(std::clamp(std::floor(v * 255.0f), 0.0f, 254.0f)); };
+        const auto hi = [](float v) { return std::uint32_t(std::clamp(std::ceil(v * 255.0f), 1.0f, 255.0f)); };
+        spotPacked = lo(i.spotX0) | (lo(i.spotY0) << 8) | (hi(i.spotX1) << 16) | (hi(i.spotY1) << 24);
+    }
+    const auto weighting = static_cast<std::uint32_t>(i.weighting);
+    if (weighting > 2u) throw std::invalid_argument("image_scopes: scene weighting must be 0..2");
+    // Block size in the low byte, weighting above it.
+    SceneMeasurePush mp{i.input.width,    i.input.height,   i.sampleBlockSize | (weighting << 8), i.lumaWeights[0],
+                        i.lumaWeights[1], i.lumaWeights[2], i.clipLuma,        spotPacked};
     vkCmdBindPipeline(i.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, impl_->sceneMeasure);
     vkCmdBindDescriptorSets(i.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, impl_->measurePl, 0, 1, &ms, 0, nullptr);
     vkCmdPushConstants(i.commandBuffer, impl_->measurePl, VK_SHADER_STAGE_COMPUTE_BIT, 0, 32, &mp);

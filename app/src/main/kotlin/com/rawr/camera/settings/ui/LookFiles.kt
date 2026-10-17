@@ -76,7 +76,7 @@ private fun write(context: Context, uri: Uri, text: String) {
 private fun read(context: Context, uri: Uri): ImportedLook? = runCatching {
     val text = requireNotNull(context.contentResolver.openInputStream(uri)) { "Unable to open file" }
         .use { it.readBytes(MAX_LOOK_FILE_BYTES + 1) }
-    require(text.size <= MAX_LOOK_FILE_BYTES) { "Not a rawr look file" }
+    require(text.size <= MAX_LOOK_FILE_BYTES) { "Not a Rawr look file" }
     LookFileCodec.import(String(text))
 }.onFailure { toast(context, it.message ?: "Unable to import look") }.getOrNull()
 

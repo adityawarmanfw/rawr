@@ -35,6 +35,9 @@ inline const char* effectiveWhiteLevelSourceName(EffectiveWhiteLevelSource sourc
 struct FrameMetadataSnapshot {
     // Transient startup routing only; deliberately omitted from capture journals.
     bool suppressPreview = false;
+    // Developed (stills, scopes) but not presented: the viewfinder holds its
+    // last image, e.g. during and for a long exposure.
+    bool hidePreview = false;
     CameraContextMetadataPtr cameraContext;
     uint64_t frameOrdinal = 0;
     uint64_t timestampNs = 0;  // SENSOR_TIMESTAMP; AImage/CaptureResult pairing key.
@@ -67,6 +70,9 @@ struct FrameMetadataSnapshot {
     // routing only (HDR+ headroom lift); deliberately omitted from capture
     // journals, which persist the capture's headroom in MultiframeTuning.
     std::optional<int32_t> aeCompensationSteps;
+    // STATISTICS_SCENE_FLICKER (NONE=0, 50HZ=1, 60HZ=2), -1 = unreported.
+    // Live routing only (rawr AE flicker period); not journaled.
+    int32_t sceneFlicker = -1;
 
     RectI scalerCropRegion{};
     RectI rawCropRegion{};

@@ -28,7 +28,102 @@ void SessionFrameCallbacks::finalizeDetachedStill() {
     }
 }
 
+namespace {
+// Realized exposure (shutter ns x request-coordinate ISO) of a delivered frame.
+// AE OFF frames carry the exact request; Camera2 AE frames convert the
+// reported ISO through the learned coordinate ratio.
+struct RawrFrameExposure {
+    double shutterNs = 0.0, iso = 0.0;
+    [[nodiscard]] double logExposure() const { return std::log2(shutterNs * iso); }
+};
+std::optional<RawrFrameExposure> rawrFrameExposure(const rawrcam::metadata::FrameMetadataSnapshot& m,
+                                                   double reportedPerRequest) {
+    constexpr int32_t kAeModeOff = 0;
+    RawrFrameExposure e;
+    e.shutterNs = double(m.exposureTimeNs > 0 ? m.exposureTimeNs : m.requestedExposureTimeNs.value_or(0));
+    if (m.aeMode == kAeModeOff && m.requestedSensitivity && *m.requestedSensitivity > 0) {
+        e.iso = *m.requestedSensitivity;
+        // The HAL may deliver less than asked (past the sensor mode's real
+        // range); its report, in the request coordinate, says so.
+        if (m.sensitivity > 0 && reportedPerRequest > 0.0)
+            e.iso = std::min(e.iso, double(m.sensitivity) / reportedPerRequest * 1.02);
+    } else if (m.sensitivity > 0)
+        e.iso = double(m.sensitivity) / (reportedPerRequest > 0.0 ? reportedPerRequest : 1.0);
+    if (!(e.shutterNs > 0.0) || !(e.iso > 0.0)) return std::nullopt;
+    return e;
+}
+}  // namespace
+
+bool SessionFrameCallbacks::rawrAeEngaged() const {
+    const auto* controller = engine_->cameraControls_.controller();
+    return controller && controller->rawrAeContext().engaged;
+}
+
+void SessionFrameCallbacks::updateRawrAe(const image_scopes::SceneExposureStatsData* stats, float clipLuma,
+                                         const rawrcam::metadata::FrameMetadataSnapshot& metadata,
+                                         std::uint64_t timestampNs) {
+    namespace ae = rawrcam::color::rawr_ae;
+    auto* controller = engine_->cameraControls_.controller();
+    if (!controller) return;
+    const auto context = controller->rawrAeContext();
+    std::lock_guard<std::mutex> lock(rawrAeMutex_);
+    // A different camera (lens switch, session rebuild) starts over from its first frame.
+    const std::uint64_t generation = metadata.cameraContext ? metadata.cameraContext->cameraContextGeneration : 0;
+    if (!context.engaged || generation != rawrAeCameraGeneration_) {
+        if (rawrAe_.primed()) rawrAe_.reset();
+        rawrAeCameraGeneration_ = generation;
+        if (!context.engaged) return;
+    }
+    // One-shot bracket/probe exposures say nothing about the repeating scene.
+    if (!stats || !(clipLuma > 0.0f) || (metadata.optimizedStillRequestId && *metadata.optimizedStillRequestId != 0))
+        return;
+    const auto exposure = rawrFrameExposure(metadata, context.reportedPerRequest);
+    if (!exposure) return;
+    ae::Settings settings;
+    settings.enabled = true;
+    settings.mode = ae::Mode(std::clamp(context.mode, 0, 2));
+    settings.night = ae::nightLookFromId(context.config.nightLook);
+    settings.balanceEv = context.config.balanceEv;
+    settings.lockedShutterNs = context.lockedShutterNs;
+    settings.lockedIso = context.lockedIso;
+    settings.flickerPeriodNs = context.flickerPeriodNs;
+    // S: the user's shutter, up to what the sensor can do (not the handheld cap).
+    const int64_t shutterMax =
+        settings.mode == ae::Mode::ShutterPriority ? std::max(context.shutterMaxNs, context.sensorShutterMaxNs)
+                                                   : context.shutterMaxNs;
+    settings.limits = ae::Limits{context.isoMin,       context.isoMax, context.isoAnalogMax,
+                                 context.shutterMinNs, shutterMax,     std::min(context.shutterStartNs, shutterMax),
+                                 context.config.maxDigitalGainEv};
+    ae::FrameObservation f{stats->weightedBins, std::log2(clipLuma), exposure->logExposure(), exposure->shutterNs,
+                           exposure->iso, metadata.aperture.value_or(0.0f), timestampNs};
+    // A tapped spot meters with the default highlight handling.
+    const auto meterPolicy = context.spotActive ? ae::MeterPolicy{} : ae::meterPolicyFor(context.config.metering);
+    if (const auto step = rawrAe_.update(f, settings, context.userEv, meterPolicy, ae::filterPolicyForSpeed(context.video ? 0 : context.config.speed)))
+        controller->setRawrAeRequest(step->request.shutterNs, step->request.iso);
+}
+
 float SessionFrameCallbacks::postGainFor(const rawrcam::metadata::FrameMetadataSnapshot& metadata) {
+    // rawr AE: the frame is shown at the smoothed target, whatever exposure
+    // the sensor actually delivered (latency, integer ISO, flicker steps,
+    // digital gain past the analog maximum). Camera2's post-RAW boost is not
+    // used: AE OFF frames carry none, and the target already includes it.
+    // A tagged one-shot still at the repeating exposure gets the same gain
+    // (photo = viewfinder, digital gain included); bracket frames keep their
+    // own exposure for the merge.
+    if (rawrAeEngaged()) {
+        const auto* controller = engine_->cameraControls_.controller();
+        const auto exposure = rawrFrameExposure(metadata, controller->rawrAeContext().reportedPerRequest);
+        const bool tagged = metadata.optimizedStillRequestId && *metadata.optimizedStillRequestId != 0;
+        std::lock_guard<std::mutex> lock(rawrAeMutex_);
+        const auto& last = rawrAe_.last();
+        const bool atRepeating = !tagged || (exposure && last &&
+                                             std::abs(exposure->logExposure() - std::log2(double(last->request.shutterNs) *
+                                                                                         double(last->request.iso))) < 0.15);
+        if (exposure && atRepeating) {
+            if (const auto residual = rawrAe_.residualEvFor(metadata.timestampNs, exposure->logExposure()))
+                return std::clamp(std::exp2(*residual), 1.0f / 16.0f, tonemap::kMaxAePostGain);
+        }
+    }
     // Camera2 boost (100 == 1x) shaped by the user cap + HighlightProtection
     // knee width. Both live on SessionEngine so preview/stills share one
     // choke point.
@@ -39,6 +134,18 @@ float SessionFrameCallbacks::postGainFor(const rawrcam::metadata::FrameMetadataS
     // only direct sRGB/Rec.709 clip, as for any capture.
     const float gain = rawrcam::color::effectiveAePostGain(metadata.postRawSensitivityBoost, engine_->maxAePostGain(),
                                                            engine_->postGainKneeWidthEv());
+    // M with a shutter past the viewfinder cap: the viewfinder runs the cap at
+    // raised ISO; where ISO ran out, show the rest as gain (capture = preview).
+    if (const auto* controller = engine_->cameraControls_.controller();
+        controller && metadata.aeMode == 0 && !(metadata.optimizedStillRequestId && *metadata.optimizedStillRequestId != 0)) {
+        const auto context = controller->rawrAeContext();
+        const auto exposure = rawrFrameExposure(metadata, context.reportedPerRequest);
+        if (context.manualActive && exposure && context.manualExposureNs > 0 && context.manualIso > 0) {
+            const double deficit = double(context.manualExposureNs) * double(context.manualIso) /
+                                   (exposure->shutterNs * exposure->iso);
+            if (deficit > 1.01) return std::clamp(gain * float(deficit), 1.0f / 16.0f, tonemap::kMaxAePostGain);
+        }
+    }
     // HDR+ Bracketed with Camera2 AE: lift by reference / actual exposure so
     // compensation steps and AE re-convergence never show (ExposureNormalizer).
     constexpr int32_t kAeModeOff = 0, kAeStateConverged = 2, kAeStateLocked = 3, kAeStateFlashRequired = 4;
@@ -79,8 +186,30 @@ void SessionFrameCallbacks::applyAutoKey(tonemap::TonemapParams& tone,
     engine_->applyAutoKey(tone, noise);
 }
 
+std::array<float, 4> SessionFrameCallbacks::sceneMeteringSpot() {
+    const auto* controller = engine_->cameraControls_.controller();
+    if (!controller) return {};
+    const auto context = controller->rawrAeContext();
+    if (!context.engaged || !context.spotActive) return {};
+    // The Camera2 spot region's footprint: 1/8 of each dimension.
+    constexpr float kHalf = 1.0f / 16.0f;
+    const float cx = std::clamp(context.spotX, kHalf, 1.0f - kHalf);
+    const float cy = std::clamp(context.spotY, kHalf, 1.0f - kHalf);
+    return {cx - kHalf, cy - kHalf, cx + kHalf, cy + kHalf};
+}
+
+uint32_t SessionFrameCallbacks::sceneMeteringWeighting() {
+    const auto* controller = engine_->cameraControls_.controller();
+    if (!controller) return 0;
+    const auto context = controller->rawrAeContext();
+    if (!context.engaged) return 0;
+    // Highlight-weighted keeps matrix weighting; it changes the policy only.
+    const int m = context.config.metering;
+    return m == 1 || m == 2 ? uint32_t(m) : 0u;
+}
+
 bool SessionFrameCallbacks::sceneKeyMeteringEnabled() {
-    return engine_->hdrHeadroomMaxEv() < 0.0f || (engine_->autoKeyMode() != rawrcam::color::AutoKeyMode::Off &&
+    return engine_->hdrHeadroomMaxEv() < 0.0f || rawrAeEngaged() || (engine_->autoKeyMode() != rawrcam::color::AutoKeyMode::Off &&
                                                    !engine_->sceneReferredRender_.load(std::memory_order_relaxed));
 }
 
@@ -129,6 +258,8 @@ std::optional<rawrcam::pipeline::FrameDiagnosticsPort::SceneKeyFeedback> Session
     static_assert(image_scopes::kSceneExposureMinEv == rawrcam::color::kSceneKeyMinEv);
     static_assert(image_scopes::kSceneExposureMaxEv == rawrcam::color::kSceneKeyMaxEv);
     const auto stats = engine_->monitoringCoordinator_.scopes().consumeSceneExposure(slotIndex);
+    updateRawrAe(stats ? &*stats : nullptr, engine_->monitoringCoordinator_.scopes().sceneClipLuma(slotIndex), metadata,
+                 timestampNs);
     updateHdrHeadroom(stats ? &*stats : nullptr, engine_->monitoringCoordinator_.scopes().sceneClipLuma(slotIndex),
                       metadata, timestampNs);
     const auto mode = engine_->autoKeyMode();
@@ -149,6 +280,13 @@ std::optional<rawrcam::pipeline::FrameDiagnosticsPort::SceneKeyFeedback> Session
     const auto highEv = rawrcam::color::scenePercentileEv(stats->weightedBins, 0.95f);
     if (!highEv) return std::nullopt;
     auto curve = rawrcam::color::autoKeyCurve(*keyEv, *highEv, halGain, rawrcam::color::autoKeyPolicy(mode));
+    // rawr AE placed a dim scene deliberately low (night look): AutoKey's
+    // lift gives that offset back first, so it never lifts the night away.
+    {
+        std::lock_guard<std::mutex> lock(rawrAeMutex_);
+        if (rawrAe_.primed() && rawrAe_.last())
+            curve.liftEv = std::max(0.0f, curve.liftEv + rawrAe_.last()->metered.nightOffsetEv);
+    }
     curve.liftEv = autoKeySmoother_.update(curve.liftEv, timestampNs, recording);
     curve.keyEv = keySmoother_.update(curve.keyEv, timestampNs, recording);
     curve.highlightEv = highlightSmoother_.update(curve.highlightEv, timestampNs, recording);

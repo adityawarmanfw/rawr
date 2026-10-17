@@ -143,7 +143,7 @@ internal fun MultiframeSettings(state: SettingsUiState, dispatch: SettingsDispat
                     "Uses ${tuning.zslFrames()} frames from before the shutter + ${tuning.postShutterFrames()} after",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp)
                 )
             }
         }

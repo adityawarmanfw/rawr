@@ -164,11 +164,7 @@ private fun FilmSubPageDiffusion(look: FilmSimLook, dispatch: SettingsDispatch) 
 private fun FilmSubPageOutput(state: SettingsUiState, dispatch: SettingsDispatch) {
     val look = state.values.filmSimLook
     SettingsGroup(title = "Output") {
-        SettingsRow(
-            title = "Output color space",
-            value = FilmStocks.colorSpaces.getOrElse(look.outputColorSpace) { "?" },
-            onClick = { dispatch.invoke(OpenSelector(ChoiceSelectorKind.FilmOutputSpace)) }
-        )
+        SelectorDropdownRow(state, ChoiceSelectorKind.FilmOutputSpace, dispatch, title = "Output color space")
     }
 }
 
@@ -401,7 +397,6 @@ internal fun FilmSimSlider(spec: FilmSimNumericSpec, value: Float, onValueChange
         value = value,
         defaultValue = spec.defaultValue,
         valueFormatter = { formatFilmSimValue(spec, it) },
-        supportingTextBelowSlider = true,
         onValueChange = onValueChange
     )
 }

@@ -45,19 +45,13 @@ internal fun DisplayControlsSettings(state: SettingsUiState, dispatch: SettingsD
 
 @Composable
 internal fun MonitoringSettings(state: SettingsUiState, dispatch: SettingsDispatch) {
-    val peaking =
-        state.capabilities.peakingSensitivityChoices.firstOrNull {
-            it.id == state.values.peakingSensitivityId
-        }
     SettingsPageContainer(testTag = SettingsTestTags.sectionRoot("Monitoring")) {
         SettingsGroup(description = "Monitoring overlays are activated from the Capture Screen.") {
-            SettingsRow(
-                "Focus Peaking Sensitivity",
-                peaking?.label ?: "Unavailable",
-                testTag = SettingsTestTags.row("Monitoring", "peaking_sensitivity"),
-                onClick = {
-                    dispatch.invoke(OpenSelector(ChoiceSelectorKind.PeakingSensitivity))
-                }
+            SelectorDropdownRow(
+                state,
+                ChoiceSelectorKind.PeakingSensitivity,
+                dispatch,
+                testTag = SettingsTestTags.row("Monitoring", "peaking_sensitivity")
             )
         }
     }

@@ -112,12 +112,14 @@ bool SingleShotSlot::requestCapture(uint64_t requestId) {
     return true;
 }
 
-void SingleShotSlot::expectOptimizedFrame(uint64_t requestId) {
+void SingleShotSlot::expectOptimizedFrame(uint64_t requestId, std::chrono::milliseconds extraWait) {
     if (!pendingRequestId_ || *pendingRequestId_ != requestId) return;
     expectedOptimizedRequestId_ = requestId;
     optimizedWaitFrames_ = 0;
-    optimizedDeadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-    emit("RAW_STILL_CAPTURE_EXPECT_OPTIMIZED requestId=" + std::to_string(requestId));
+    optimizedLong_ = extraWait.count() > 0;
+    optimizedDeadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(2) + extraWait;
+    emit("RAW_STILL_CAPTURE_EXPECT_OPTIMIZED requestId=" + std::to_string(requestId) +
+         " extraWaitMs=" + std::to_string(extraWait.count()));
 }
 
 void SingleShotSlot::cancelPendingCapture(const std::string& reason) {
@@ -138,7 +140,7 @@ bool SingleShotSlot::captureMatchedFrame(AImage* image, AHardwareBuffer* ahb, in
     if (expectedOptimizedRequestId_ &&
         (!metadata.optimizedStillRequestId || *metadata.optimizedStillRequestId != *expectedOptimizedRequestId_)) {
         ++optimizedWaitFrames_;
-        if (optimizedWaitFrames_ < 8 && std::chrono::steady_clock::now() < optimizedDeadline_) return false;
+        if ((optimizedLong_ || optimizedWaitFrames_ < 8) && std::chrono::steady_clock::now() < optimizedDeadline_) return false;
         emit("RAW_STILL_CAPTURE_OPTIMIZED_TIMEOUT requestId=" + std::to_string(requestId) +
              " action=fallback_to_camera2_frame");
         expectedOptimizedRequestId_.reset();
@@ -262,7 +264,7 @@ std::shared_ptr<rawrcam::imaging::RawSnapshot> SingleShotSlot::claimMatchedFrame
     if (expectedOptimizedRequestId_ &&
         (!metadata.optimizedStillRequestId || *metadata.optimizedStillRequestId != *expectedOptimizedRequestId_)) {
         ++optimizedWaitFrames_;
-        if (optimizedWaitFrames_ < 8 && std::chrono::steady_clock::now() < optimizedDeadline_) return {};
+        if ((optimizedLong_ || optimizedWaitFrames_ < 8) && std::chrono::steady_clock::now() < optimizedDeadline_) return {};
         emit("RAW_STILL_CAPTURE_OPTIMIZED_TIMEOUT requestId=" + std::to_string(requestId) +
              " action=fallback_to_camera2_frame");
         expectedOptimizedRequestId_.reset();

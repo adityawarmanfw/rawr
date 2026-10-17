@@ -10,6 +10,7 @@
 #include "camera/Camera2PriorityCompat.h"
 #include "camera/CameraAePriority.h"
 #include "camera/CameraRequestCadence.h"
+#include "camera/ViewfinderExposure.h"
 #include "camera/WhiteBalanceMath.h"
 
 namespace rawrcam::camera {
@@ -63,18 +64,26 @@ CameraControlApplyResult applyCameraControlState(ACaptureRequest* request, const
     const uint8_t controlMode = ACAMERA_CONTROL_MODE_AUTO;
     (void)ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_MODE, 1, &controlMode);
 
-    const bool manual = state.exposureMode == ExposureControlMode::Manual;
+    const bool rawrAe = state.exposureMode != ExposureControlMode::Manual && state.rawrAeActive &&
+                        state.rawrAeExposureTimeNs > 0 && state.rawrAeSensitivity > 0;
+    // rawr AE is AE OFF with the app-solved pair: the same sensor ownership as M.
+    const bool manual = state.exposureMode == ExposureControlMode::Manual || rawrAe;
     const uint8_t ae = manual ? ACAMERA_CONTROL_AE_MODE_OFF : ACAMERA_CONTROL_AE_MODE_ON;
     (void)ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AE_MODE, 1, &ae);
 
     // AE priority is a distinct Camera2 mode (API 36). Explicitly write OFF for
     // ordinary Auto/Manual requests because this ACaptureRequest object is reused.
     uint8_t aePriority = camera2_priority::kOff;
-    if (state.exposureMode == ExposureControlMode::ShutterPriority && state.capabilities.shutterPrioritySupported) {
+    // rawr AE owns S/I itself (AE OFF); otherwise only the HAL's own modes.
+    // S/I with neither owner (rawr ineligible, e.g. video) runs as Auto.
+    if (!rawrAe && state.exposureMode == ExposureControlMode::ShutterPriority &&
+        state.capabilities.halShutterPrioritySupported) {
         aePriority = camera2_priority::kSensorExposureTimePriority;
-    } else if (state.exposureMode == ExposureControlMode::IsoPriority && state.capabilities.isoPrioritySupported) {
+    } else if (!rawrAe && state.exposureMode == ExposureControlMode::IsoPriority &&
+               state.capabilities.halIsoPrioritySupported) {
         aePriority = camera2_priority::kSensorSensitivityPriority;
     }
+    result.halPriorityMode = aePriority != camera2_priority::kOff;
     if (state.capabilities.aePriorityTagAvailable) {
         result.aePriorityRequested = true;
         result.aePriorityStatus =
@@ -95,14 +104,26 @@ CameraControlApplyResult applyCameraControlState(ACaptureRequest* request, const
         (void)ACaptureRequest_setEntry_i32(request, ACAMERA_CONTROL_AE_TARGET_FPS_RANGE, 0, nullptr);
     }
 
-    const int64_t framePeriodNs = state.recordingFps > 0 ? 1'000'000'000LL / state.recordingFps : 0;
+    // rawr AE in video mode holds the video preview cadence, as recording does.
+    const int64_t framePeriodNs = state.recordingFps > 0 ? 1'000'000'000LL / state.recordingFps
+                                  : rawrAe && state.videoMode && state.videoPreviewFps > 0
+                                      ? 1'000'000'000LL / state.videoPreviewFps
+                                      : 0;
     const int64_t exposureMaximum = framePeriodNs > 0
         ? std::min(state.capabilities.exposureTimeMaxNs, framePeriodNs)
         : state.capabilities.exposureTimeMaxNs;
-    const int64_t exposure = std::clamp(state.requestedExposureTimeNs, state.capabilities.exposureTimeMinNs,
+    // M: shutters past the viewfinder cap run only on capture (ViewfinderExposure.h).
+    const auto manualPair = viewfinderManualPair(state);
+    const bool manualMode = state.exposureMode == ExposureControlMode::Manual;
+    const int64_t exposure = std::clamp(rawrAe       ? state.rawrAeExposureTimeNs
+                                        : manualMode ? manualPair.exposureTimeNs
+                                                     : state.requestedExposureTimeNs,
+                                        state.capabilities.exposureTimeMinNs,
                                         std::max(state.capabilities.exposureTimeMinNs, exposureMaximum));
-    const int32_t sensitivity =
-        std::clamp(state.requestedSensitivity, state.capabilities.sensitivityMin, state.capabilities.sensitivityMax);
+    const int32_t sensitivity = std::clamp(rawrAe       ? state.rawrAeSensitivity
+                                           : manualMode ? manualPair.sensitivity
+                                                        : state.requestedSensitivity,
+                                           state.capabilities.sensitivityMin, state.capabilities.sensitivityMax);
 
     // The repeating ACaptureRequest is reused. Normalize SENSOR_* ownership on
     // every mode so stale values from M/S/I cannot leak into a different AE mode.

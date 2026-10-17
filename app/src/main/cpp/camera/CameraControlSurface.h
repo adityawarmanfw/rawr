@@ -5,6 +5,7 @@
 #include <mutex>
 #include <string>
 
+#include "camera/CameraControlTypes.h"
 #include "camera/CameraSessionPolicy.h"
 
 namespace rawrcam::camera {
@@ -49,6 +50,7 @@ class CameraControlSurface final {
     void setInternalTraceCaptureEnabled(bool enabled);
     void setOisEnabled(bool enabled);
     void setAntibandingMode(uint8_t mode);
+    void setRawrAeConfig(const RawrAeConfig& config);
     void setAutoMinFps(int fps);
     void setAePriorityDisabled(bool disabled);
     void setVideoMode(bool video, int fps);

@@ -1,5 +1,8 @@
 package com.rawr.camera.settings.preferences
 
+import com.rawr.camera.settings.model.EXTENDED_ISO_MAX
+import com.rawr.camera.settings.model.EXTENDED_SHUTTER_MAX_NS
+import com.rawr.camera.settings.model.LensExposure
 import com.rawr.camera.settings.model.LensLevels
 import com.rawr.camera.settings.model.LensProfile
 import com.rawr.camera.settings.model.RawStreamChoice
@@ -45,6 +48,13 @@ internal object LensProfileCodec {
                 .put("height", lens.stream.height.coerceAtLeast(0))
         )
         .put("levels", encodeLevels(lens.levels))
+        .put(
+            "exposure",
+            JSONObject()
+                .put("extended", lens.exposure.extended)
+                .put("isoMax", lens.exposure.isoMax)
+                .put("shutterMaxNs", lens.exposure.shutterMaxNs)
+        )
         .put("keys", encodeKeys(lens.vendorKeys))
 
     private fun decodeLens(o: JSONObject): LensProfile {
@@ -65,6 +75,13 @@ internal object LensProfileCodec {
                     width = stream?.optInt("width") ?: 0,
                     height = stream?.optInt("height") ?: 0
                 ),
+            exposure = o.optJSONObject("exposure").let { e ->
+                LensExposure(
+                    extended = e?.optBoolean("extended") ?: false,
+                    isoMax = (e?.optInt("isoMax") ?: 0).coerceIn(0, EXTENDED_ISO_MAX),
+                    shutterMaxNs = (e?.optLong("shutterMaxNs") ?: 0L).coerceIn(0L, EXTENDED_SHUTTER_MAX_NS)
+                )
+            },
             levels = if (!levels.isStatic && legacyLevels?.isStatic == true) legacyLevels else levels,
             vendorKeys = decodeKeys(o.optJSONArray("keys")) + decodeKeys(legacyDcg?.optJSONArray("keys"))
         )

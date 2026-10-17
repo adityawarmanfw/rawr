@@ -65,7 +65,8 @@ bool CameraSpotMeteringControls::requestTarget(CameraControlState& state, bool a
 
 std::optional<CameraMeteringRegion> CameraSpotMeteringControls::region(const CameraControlState& state,
                                                                        const metadata::SensorGeometry* geometry) const {
-    if (!geometry || !state.spotAeActive || state.exposureMode != ExposureControlMode::Auto ||
+    // rawr AE meters the spot itself (AE is off on its requests).
+    if (!geometry || !state.spotAeActive || state.exposureMode != ExposureControlMode::Auto || state.rawrAeActive ||
         state.capabilities.maxAeRegions <= 0)
         return std::nullopt;
     // Same 1/8 footprint as the RAW spot reference.

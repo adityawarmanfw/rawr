@@ -91,6 +91,7 @@ class PersistentSettingsController(
 
             is SetSaveLocationTree, is SetPipelineDiagnosticsEnabled, is SetExperimentalZeroCopyEnabled,
             is SetSaveBaseDng, is SetExperimentalMultiframeEnabled, is SetUltraHdrEnabled, is SetAePriorityDisabled,
+            is SetRawrAeSettings,
             is SetPersistentEngineEnabled, is SetCustomGpuDriverEnabled, is SetCustomGpuDriverInstalled,
             is SetPersistentDiagnosticsEnabled, is SetPersistZslRingEnabled, is SetPersistZslRingOnShutterEnabled,
             is SetInternalTraceCaptureEnabled, is SetInternalTraceRetainedRows -> reduceAppSettings(state, action)

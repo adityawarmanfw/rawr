@@ -52,7 +52,7 @@ internal object LookFileCodec {
 
     fun import(text: String): ImportedLook {
         val j = runCatching { JSONObject(text) }.getOrNull()
-        require(j != null && j.optString("format") == FORMAT) { "Not a rawr look file" }
+        require(j != null && j.optString("format") == FORMAT) { "Not a Rawr look file" }
         require(j.optInt("version") in 1..VERSION) { "Look file is from a newer version" }
         val name = j.optString("name").trim().ifEmpty { "Imported look" }
         return when (j.optString("kind")) {

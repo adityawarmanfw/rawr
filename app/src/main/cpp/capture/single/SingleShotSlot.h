@@ -37,7 +37,9 @@ class SingleShotSlot final {
     // Returns false if another capture is pending or an unconsumed completed
     // snapshot occupies the bounded slot.
     bool requestCapture(uint64_t requestId);
-    void expectOptimizedFrame(uint64_t requestId);
+    // Waits for the tagged one-shot frame; extraWait covers a long exposure
+    // (frames that arrive meanwhile do not end the wait).
+    void expectOptimizedFrame(uint64_t requestId, std::chrono::milliseconds extraWait = {});
     void cancelPendingCapture(const std::string& reason);
 
     // Called only for an already timestamp-paired RAW + CaptureResult snapshot.
@@ -75,6 +77,7 @@ class SingleShotSlot final {
     std::uint32_t stagingWaitFrames_ = 0;
     std::optional<uint64_t> expectedOptimizedRequestId_;
     std::uint32_t optimizedWaitFrames_ = 0;
+    bool optimizedLong_ = false;
     std::chrono::steady_clock::time_point optimizedDeadline_{};
     uint64_t configuredCameraGeneration_ = 0;
     bool disabled_ = false;

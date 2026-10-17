@@ -54,6 +54,7 @@ ACameraCaptureSession_stateCallbacks CameraCallbacks::sessionState(CameraSession
 ACameraCaptureSession_captureCallbacks CameraCallbacks::captures(CameraSessionCallbackContext* context) {
     ACameraCaptureSession_captureCallbacks captures{};
     captures.context = context;
+    captures.onCaptureStarted = onStarted;
     captures.onCaptureCompleted = onCompleted;
     captures.onCaptureFailed = onFailed;
     captures.onCaptureBufferLost = onBufferLost;
@@ -63,6 +64,7 @@ ACameraCaptureSession_logicalCamera_captureCallbacks CameraCallbacks::logicalCap
     CameraSessionCallbackContext* context) {
     ACameraCaptureSession_logicalCamera_captureCallbacks captures{};
     captures.context = context;
+    captures.onCaptureStarted = onStarted;
     captures.onLogicalCameraCaptureCompleted = onLogicalCompleted;
     captures.onLogicalCameraCaptureFailed = onLogicalFailed;
     captures.onCaptureBufferLost = onBufferLost;
@@ -84,6 +86,11 @@ void CameraCallbacks::onClosed(void* context, ACameraCaptureSession* session) {
     CameraCallbackGuard<CameraEventSink> guard(callback->lifetime);
     if (guard.owner) guard.owner->cameraSessionClosed(callback->generation, session);
     delete callback;
+}
+void CameraCallbacks::onStarted(void* context, ACameraCaptureSession*, const ACaptureRequest* request, int64_t) {
+    auto* callback = static_cast<CameraSessionCallbackContext*>(context);
+    CameraCallbackGuard<CameraEventSink> guard(callback->lifetime);
+    if (guard.owner) guard.owner->cameraCaptureStarted(callback->generation, request);
 }
 void CameraCallbacks::onCompleted(void* context, ACameraCaptureSession*, ACaptureRequest* request,
                                   const ACameraMetadata* result) {

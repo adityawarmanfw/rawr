@@ -10,6 +10,7 @@ import com.rawr.camera.settings.model.PhotoToneMapping
 import com.rawr.camera.settings.model.LocalToneLimits
 import com.rawr.camera.settings.model.MAX_BURST_FRAMES
 import com.rawr.camera.settings.model.ProfileTone
+import com.rawr.camera.settings.model.RawrAeSettings
 import com.rawr.camera.settings.model.VideoLogProfile
 
 import android.content.Context
@@ -657,7 +658,18 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
             videoHighlightThreshold = (p[Keys.videoHighlightThreshold] ?: p[Keys.highlightThreshold] ?: d.videoHighlightThreshold).coerceIn(0.5f, 2f),
             videoHighlightCompression = (p[Keys.videoHighlightCompression] ?: p[Keys.highlightCompression] ?: d.videoHighlightCompression).coerceIn(0f, 300f),
             ultraHdrEnabled = p[Keys.ultraHdr] ?: d.ultraHdrEnabled,
-            aePriorityDisabled = p[Keys.aePriorityDisabled] ?: d.aePriorityDisabled
+            aePriorityDisabled = p[Keys.aePriorityDisabled] ?: d.aePriorityDisabled,
+            rawrAe = RawrAeSettings(
+                enabled = p[Keys.rawrAeEnabled] ?: d.rawrAe.enabled,
+                nightLook = enumOrDefault(p[Keys.rawrAeNightLook], d.rawrAe.nightLook),
+                minShutter = enumOrDefault(p[Keys.rawrAeMinShutter], d.rawrAe.minShutter),
+                // 1/4 became 1/5 (the viewfinder's shutter cap); keep that choice.
+                maxShutter = enumOrDefault(p[Keys.rawrAeMaxShutter]?.let { if (it == "S4") "S5" else it }, d.rawrAe.maxShutter),
+                balance = enumOrDefault(p[Keys.rawrAeBalance], d.rawrAe.balance),
+                digitalGain = enumOrDefault(p[Keys.rawrAeDigitalGain], d.rawrAe.digitalGain),
+                speed = enumOrDefault(p[Keys.rawrAeSpeed], d.rawrAe.speed),
+                metering = enumOrDefault(p[Keys.rawrAeMetering], d.rawrAe.metering)
+            )
         )
     }
 
@@ -881,6 +893,14 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.videoHighlightCompression] = v.videoHighlightCompression
         p[Keys.ultraHdr] = v.ultraHdrEnabled
         p[Keys.aePriorityDisabled] = v.aePriorityDisabled
+        p[Keys.rawrAeEnabled] = v.rawrAe.enabled
+        p[Keys.rawrAeNightLook] = v.rawrAe.nightLook.name
+        p[Keys.rawrAeMinShutter] = v.rawrAe.minShutter.name
+        p[Keys.rawrAeMaxShutter] = v.rawrAe.maxShutter.name
+        p[Keys.rawrAeBalance] = v.rawrAe.balance.name
+        p[Keys.rawrAeDigitalGain] = v.rawrAe.digitalGain.name
+        p[Keys.rawrAeSpeed] = v.rawrAe.speed.name
+        p[Keys.rawrAeMetering] = v.rawrAe.metering.name
         // Drop pre-v30 shared keys once the split values are written.
         p.remove(Keys.fccSteps)
         p.remove(Keys.defringeEnabled)
@@ -1159,6 +1179,14 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val highlightCompression = floatPreferencesKey("capture_highlight_compression")
         val ultraHdr = booleanPreferencesKey("capture_ultra_hdr_enabled")
         val aePriorityDisabled = booleanPreferencesKey("capture_ae_priority_disabled")
+        val rawrAeEnabled = booleanPreferencesKey("capture_rawr_ae_enabled")
+        val rawrAeNightLook = stringPreferencesKey("capture_rawr_ae_night_look")
+        val rawrAeMinShutter = stringPreferencesKey("capture_rawr_ae_min_shutter")
+        val rawrAeMaxShutter = stringPreferencesKey("capture_rawr_ae_max_shutter")
+        val rawrAeBalance = stringPreferencesKey("capture_rawr_ae_balance")
+        val rawrAeDigitalGain = stringPreferencesKey("capture_rawr_ae_digital_gain")
+        val rawrAeSpeed = stringPreferencesKey("capture_rawr_ae_speed")
+        val rawrAeMetering = stringPreferencesKey("capture_rawr_ae_metering")
     }
 }
 

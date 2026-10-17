@@ -58,13 +58,27 @@ class NativeCameraController {
     // sensitivity coordinate).
     bool captureExposureBracket(uint64_t requestId, int64_t baseExposureTimeNs, int32_t baseReportedSensitivity,
                                 const std::vector<float>& evOffsets);
+    // Long exposure: the (shutter, ISO) a capture needs when M or rawr S asks
+    // for a shutter past the viewfinder cap (ViewfinderExposure.h); nullopt
+    // when the viewfinder frames are the capture.
+    struct LongExposure {
+        int64_t exposureTimeNs = 0;
+        int32_t sensitivity = 0;
+    };
+    std::optional<LongExposure> deferredCaptureExposure() const;
+    // Submits that exposure as one AE-off one-shot request tagged with
+    // requestId; the viewfinder stalls until it returns. False when not
+    // needed or not submitted.
+    bool captureLongExposure(uint64_t requestId, LongExposure* submitted);
     // Most a positive-EV long frame can gain over the current repeating
     // exposure (EV); nullopt when unknown.
     std::optional<double> longFrameRoomEv() const;
     // False when the shutter/gain limits would leave long frames under
     // 0.5 EV brighter (they are skipped); true when unknown.
     bool longFramesWorthwhile() const;
-    // Runs DCG ISO calibration during startup, before exposing the viewfinder.
+    // Measures the reported/requested ISO ratio during startup when lens
+    // session keys change the sensor mode (a ratio of 1 is a valid result;
+    // keys do not imply DCG), before exposing the viewfinder.
     // Enabling it on an uncalibrated live session restarts that session.
     // Off unless HDR+ Bracketed is selected; never probes during video.
     void setSensitivityCalibrationWanted(bool wanted);
@@ -79,6 +93,45 @@ class NativeCameraController {
     // compensation minus the user's, bounded by the current/previous headroom
     // request. 0 for manual exposure or unknown compensation.
     float hdrHeadroomEvFor(int32_t aeMode, std::optional<int32_t> appliedSteps) const;
+    // rawr auto exposure (opt-in, color/RawrAutoExposure.h). When enabled
+    // and eligible (A/S/I mode, manual sensor control, stills, no spot AE,
+    // known ISO coordinate) the repeating request runs AE OFF with the pair
+    // the frame lane solves; S and I are then available on any camera with
+    // manual sensor control. Lock-free for the frame lane: rawrAeContext and
+    // setRawrAeRequest never wait on camera calls; the camera lane applies
+    // requests on its tick.
+    using RawrAeConfig = camera::RawrAeConfig;
+    struct RawrAeContext {
+        bool engaged = false;
+        RawrAeConfig config;
+        // 0 Auto, 1 shutter priority, 2 ISO priority (rawr_ae::Mode).
+        int mode = 0;
+        int64_t lockedShutterNs = 0;
+        int32_t lockedIso = 0;
+        // Effective solver limits, request ISO coordinate.
+        int32_t isoMin = 0, isoMax = 0, isoAnalogMax = 0;
+        int64_t shutterMinNs = 0, shutterMaxNs = 0, shutterStartNs = 0;
+        // Sensor's longest exposure: bounds a user-locked S shutter, which the
+        // handheld shutterMaxNs (Auto/I only) must not shorten.
+        int64_t sensorShutterMaxNs = 0;
+        int64_t flickerPeriodNs = 0;
+        float userEv = 0.0f;
+        // CaptureResult ISO / request ISO; 0 when unknown (taken as 1 without
+        // sensor-mode keys; with them rawr AE waits for the probe).
+        double reportedPerRequest = 0.0;
+        // M's requested (capture) pair; the viewfinder may run a shorter one.
+        bool manualActive = false;
+        int64_t manualExposureNs = 0;
+        int32_t manualIso = 0;
+        // Video mode or recording: shutter bound to the frame, slower filter.
+        bool video = false;
+        // Spot AE target (source-normalized centre) rawr meters instead of the frame.
+        bool spotActive = false;
+        float spotX = 0.5f, spotY = 0.5f;
+    };
+    void setRawrAeConfig(const RawrAeConfig& config);
+    [[nodiscard]] RawrAeContext rawrAeContext() const;
+    void setRawrAeRequest(int64_t exposureTimeNs, int32_t sensitivity);
     // White balance. setWhiteBalanceMode returns false when the requested
     // preset/manual mode is not advertised (caller keeps previous UI state;
     // the snapshot confirms accepted values). setWhiteBalanceTempTint clamps

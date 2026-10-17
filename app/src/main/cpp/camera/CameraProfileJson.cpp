@@ -325,6 +325,19 @@ bool readLevels(const Json* j, LevelOverride& out) {
     return !out.isStatic || out.white > 0.0f;
 }
 
+void appendExposure(std::string& out, const ExposureOverride& e) {
+    out += "{\"extended\":";
+    out += e.extended ? "true" : "false";
+    out += ",\"isoMax\":" + std::to_string(e.isoMax) + ",\"shutterMaxNs\":" + std::to_string(e.shutterMaxNs) + '}';
+}
+
+void readExposure(const Json* j, ExposureOverride& out) {
+    if (!j || j->kind != Json::Kind::Object) return;
+    out.extended = j->flag("extended", false);
+    out.isoMax = int32_t(std::clamp(j->num("isoMax"), 0.0, double(kExtendedIsoMax)));
+    out.shutterMaxNs = int64_t(std::clamp(j->num("shutterMaxNs"), 0.0, double(kExtendedShutterMaxNs)));
+}
+
 bool readKeys(const std::vector<Json>& list, std::vector<CameraKeySetting>& out, std::string* error) {
     for (const auto& k : list) {
         CameraKeySetting key;
@@ -404,6 +417,8 @@ std::string serializeCameraProfile(const CameraProfile& profile) {
         out += "\",\"width\":" + std::to_string(r.preferredStream.width) +
                ",\"height\":" + std::to_string(r.preferredStream.height) + "},\"levels\":";
         appendLevels(out, r.levels);
+        out += ",\"exposure\":";
+        appendExposure(out, r.exposure);
         out += ",\"keys\":";
         appendKeys(out, r.keys);
         out += '}';
@@ -447,6 +462,7 @@ std::optional<CameraProfile> readProfile(const Json& root, std::string* error) {
             if (error) *error = "invalid levels for lens " + r.lensId;
             return std::nullopt;
         }
+        readExposure(l.get("exposure"), r.exposure);
         if (!readKeys(l.array("keys"), r.keys, error)) return std::nullopt;
         profile.lenses.push_back(std::move(r));
     }

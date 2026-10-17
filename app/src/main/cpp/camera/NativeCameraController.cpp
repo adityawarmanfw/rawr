@@ -27,6 +27,7 @@
 #include "camera/CameraRequestPipeline.h"
 #include "camera/CameraResultProcessor.h"
 #include "camera/SensitivityProbeStartup.h"
+#include "camera/ViewfinderExposure.h"
 #include "camera/CameraWhiteBalanceControls.h"
 #include "geometry/OrientationTransform.h"
 #include "metadata/MetadataDiagnostics.h"
@@ -121,6 +122,15 @@ struct NativeCameraController::Impl final : CameraEventSink {
     bool halShutterPriority = false;
     bool halIsoPriority = false;
     uint8_t antibandingPreference = ACAMERA_CONTROL_AE_ANTIBANDING_MODE_AUTO;
+    NativeCameraController::RawrAeConfig rawrAeConfig;
+    // Frame lane -> camera lane: latest solved pair packed as
+    // exposureNs << 24 | ISO, so a tick never reads a torn pair (0 = none).
+    std::atomic<uint64_t> rawrAePending{0};
+    // Last mains flicker Camera2 detected (1 = 50 Hz, 2 = 60 Hz); sticky,
+    // AE OFF frames may stop reporting it.
+    std::atomic<int32_t> lastSceneFlicker{0};
+    mutable std::mutex rawrAeContextMutex;  // never held across camera calls
+    NativeCameraController::RawrAeContext rawrAePublished;
     int autoMinFpsPreference = 15;
     int recordingFpsPreference = 0;
     // Ingress toggle, mirrored from SessionEngine for diagnostics. The bridge
@@ -252,6 +262,66 @@ struct NativeCameraController::Impl final : CameraEventSink {
         const double isoMax = std::max(caps.sensitivityMin, caps.sensitivityMax);
         return std::log2(double(longTimeMax) * isoMax / (double(exposureTimeNs) * sensitivity));
     }
+    // Long exposure in flight: tag, length, CLOCK_MONOTONIC ms the sensor
+    // started it (0 = submitted, not started; -1 = none).
+    std::atomic<uint64_t> longExposureTag{0};
+    std::atomic<int64_t> longExposureNs{0};
+    std::atomic<int64_t> longExposureStartMs{-1};
+    std::atomic<int> lastLongExposureHonored{-1};  // -1 none yet, 0 shortened, 1 honored
+    std::chrono::steady_clock::time_point longExposureSubmitted{};
+    static int64_t monotonicMs() {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+                   std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    }
+    std::optional<NativeCameraController::LongExposure> deferredCaptureExposureLocked() const {
+        if (!deviceSession.session() || !control.capabilities.manualExposureSupported) return std::nullopt;
+        const auto& caps = control.capabilities;
+        const int64_t shutter = std::clamp(control.requestedExposureTimeNs, caps.exposureTimeMinNs,
+                                           std::max(caps.exposureTimeMinNs, caps.exposureTimeMaxNs));
+        if (!deferredLongExposure(shutter)) return std::nullopt;
+        const int32_t isoMin = std::max(1, caps.sensitivityMin);
+        const int32_t isoMax = std::max(isoMin, caps.sensitivityMax);
+        if (control.exposureMode == ExposureControlMode::Manual)
+            return NativeCameraController::LongExposure{shutter,
+                                                        std::clamp(control.requestedSensitivity, isoMin, isoMax)};
+        // rawr S: the viewfinder runs the capped shutter at the solved
+        // exposure; the capture keeps that exposure at the user's shutter.
+        if (control.exposureMode == ExposureControlMode::ShutterPriority && control.rawrAeActive &&
+            control.rawrAeExposureTimeNs > 0 && control.rawrAeSensitivity > 0) {
+            const double product = double(control.rawrAeExposureTimeNs) * double(control.rawrAeSensitivity);
+            const auto iso = int32_t(std::clamp<double>(std::llround(product / double(shutter)), isoMin, isoMax));
+            return NativeCameraController::LongExposure{shutter, iso};
+        }
+        return std::nullopt;
+    }
+    std::optional<NativeCameraController::LongExposure> deferredCaptureExposure() const {
+        std::lock_guard<std::mutex> lock(mutex);
+        return deferredCaptureExposureLocked();
+    }
+    bool captureLongExposure(uint64_t requestId, NativeCameraController::LongExposure* submitted) {
+        std::lock_guard<std::mutex> lock(mutex);
+        const auto pair = deferredCaptureExposureLocked();
+        if (!pair || requestId == 0 || !deviceSession.request()) return false;
+        longExposureTag.store(requestId, std::memory_order_relaxed);
+        longExposureNs.store(pair->exposureTimeNs, std::memory_order_relaxed);
+        // Submit time until the sensor reports the exposure started.
+        longExposureStartMs.store(monotonicMs(), std::memory_order_relaxed);
+        longExposureSubmitted = std::chrono::steady_clock::now();
+        const bool sent = requests.captureBracket(deviceSession.session(), deviceSession.request(),
+                                                  deviceSession.callbackContext(), control,
+                                                  {{pair->exposureTimeNs, pair->sensitivity}}, requestId);
+        diag("CAMERA_LONG_EXPOSURE_SUBMIT sent=" + std::to_string(sent ? 1 : 0) + " tag=" + std::to_string(requestId) +
+             " exposureNs=" + std::to_string(pair->exposureTimeNs) + " iso=" + std::to_string(pair->sensitivity) +
+             " advertisedMaxNs=" + std::to_string(control.capabilities.advertisedExposureTimeMaxNs));
+        if (!sent) {
+            longExposureTag.store(0, std::memory_order_relaxed);
+            longExposureStartMs.store(-1, std::memory_order_relaxed);
+            return false;
+        }
+        if (submitted) *submitted = *pair;
+        return true;
+    }
     std::optional<double> longFrameRoomEv() const {
         std::lock_guard<std::mutex> lock(mutex);
         if (!control.appliedExposureTimeNs || !control.appliedSensitivity) return std::nullopt;
@@ -267,13 +337,13 @@ struct NativeCameraController::Impl final : CameraEventSink {
                  " manual=" + std::to_string(control.capabilities.manualExposureSupported ? 1 : 0));
             return false;
         }
-        // CaptureResult ISO -> request coordinate (forced DCG modes report a
-        // different scale; same conversion as the M/I mode seed).
+        // CaptureResult ISO -> request coordinate (a vendor sensor mode may
+        // report a different scale, e.g. DCG; same conversion as the M/I seed).
         int32_t sensitivity = baseReportedSensitivity;
         if (const auto ratio = results.sensitivityReportedPerRequest(); ratio && *ratio > 0.0) {
             sensitivity = static_cast<int32_t>(std::llround(baseReportedSensitivity / *ratio));
         } else if (deviceSession.sensorModeOverridden()) {
-            diag("CAMERA_BRACKET_REJECTED reportedPerRequest=unavailable dcg=on");
+            diag("CAMERA_BRACKET_REJECTED reportedPerRequest=unavailable sensorModeKeys=on");
             return false;
         }
         const auto& caps = control.capabilities;
@@ -330,14 +400,26 @@ struct NativeCameraController::Impl final : CameraEventSink {
     // Calibration is part of lens startup, before any preview is published.
     SensitivityProbeStartup sensitivityStartup;
     bool sensitivityCalibrationWanted = false;
-    // Reported/requested ISO ratios already measured, per camera, lens and
-    // profile (its sensor mode keys). A device constant: later sessions on
-    // the same camera skip the probe and show the viewfinder at once.
+    // Reported/requested ISO ratios already measured, per camera, lens,
+    // profile and the exact session keys applied: the ratio belongs to the
+    // sensor mode those keys select, so editing a key value re-probes. A
+    // device constant otherwise: later sessions skip the probe.
     std::map<std::string, double> sensitivityRatioCache;
     std::string sensitivityCacheKeyLocked() const {
         const auto& context = deviceSession.cameraContext();
         if (!context || !deviceSession.sensorModeOverridden()) return {};
-        return context->cameraId + "/" + context->lensId + "/" + profile.id;
+        std::string key = context->cameraId + "/" + context->lensId + "/" + profile.id;
+        if (const auto route = selectedRouteLocked()) {
+            std::ostringstream keys;
+            keys.precision(17);
+            for (const auto& setting : route->keys) {
+                if (!setting.enabled || setting.scope != CameraKeySetting::Scope::Session) continue;
+                keys << '|' << setting.tag << '=';
+                for (std::size_t i = 0; i < setting.values.size(); ++i) keys << (i ? "," : "") << setting.values[i];
+            }
+            key += keys.str();
+        }
+        return key;
     }
     // Saved across launches so the probe runs once per camera, ever.
     std::string sensitivityStorePath;
@@ -375,7 +457,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
         }
     }
     bool sensitivityProbeEligibleLocked() const {
-        return sensitivityCalibrationWanted && deviceSession.sensorModeOverridden() &&
+        // rawr AE needs the coordinate too: it refuses to run without it.
+        return (sensitivityCalibrationWanted || rawrAeConfig.enabled) && deviceSession.sensorModeOverridden() &&
                control.capabilities.manualExposureSupported && !control.videoMode && control.recordingFps <= 0;
     }
     bool probeSensitivityCoordinateLocked() {
@@ -386,7 +469,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         const auto& caps = control.capabilities;
         // Geometric midpoint avoids the manual endpoints that can be clamped.
         const int32_t probeIso = static_cast<int32_t>(std::llround(
-            std::sqrt(double(std::max(1, caps.sensitivityMin)) * double(std::max(1, caps.sensitivityMax)))));
+            std::sqrt(double(std::max(1, caps.sensitivityMin)) * double(std::max(1, caps.advertisedSensitivityMax)))));
         const bool sent = requests.captureBracket(deviceSession.session(), deviceSession.request(),
                                                   deviceSession.callbackContext(), control,
                                                   {{exposure, probeIso}}, metadata::kSensitivityProbeRequestId);
@@ -451,6 +534,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         requests.retire();
         results.reset();
         sensitivityStartup.reset();
+        rawrAePending.store(0, std::memory_order_relaxed);
         focusControls.reset(control);
         starting = true;
         const std::optional<LensRoute> selected =
@@ -461,7 +545,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
             return;
         }
         const LensRoute& route = *selected;
-        // Session recreation (notably DCG ON/OFF) must not erase the user's
+        // Session recreation (notably sensor-mode key changes) must not erase the user's
         // semantic exposure intent. Preserve request-side controls only when
         // reopening the same physical camera; a lens/camera change gets a fresh
         // control state because its legal ranges and capabilities may differ.
@@ -493,7 +577,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
             control.requestedEvSteps = std::clamp(previousControl.requestedEvSteps, control.capabilities.evMinSteps,
                                                   control.capabilities.evMaxSteps);
             // Preserve white-balance intent across same-camera restarts (e.g.
-            // DCG ON/OFF). A lens/camera change gets fresh WB state because
+            // sensor-mode key changes). A lens/camera change gets fresh WB state because
             // the newly read capabilities/seed may differ.
             const auto wbMode = previousControl.whiteBalanceMode;
             const bool wbSupported =
@@ -687,6 +771,16 @@ struct NativeCameraController::Impl final : CameraEventSink {
         std::lock_guard<std::mutex> lock(mutex);
         if (callbackGeneration == deviceSession.generation()) diag(message);
     }
+    void cameraCaptureStarted(uint64_t callbackGeneration, const ACaptureRequest* requestCopy) override {
+        // Camera thread, no mutex: the countdown starts with the exposure.
+        const uint64_t tag = longExposureTag.load(std::memory_order_relaxed);
+        (void)callbackGeneration;  // tags are unique; no session state is read
+        if (tag == 0) return;
+        void* userContext = nullptr;
+        if (ACaptureRequest_getUserContext(requestCopy, &userContext) != ACAMERA_OK || !userContext) return;
+        if (static_cast<const CameraRequestProvenance*>(userContext)->optimizedStillRequestId == tag)
+            longExposureStartMs.store(monotonicMs(), std::memory_order_relaxed);
+    }
     void cameraCaptureFailed(uint64_t callbackGeneration) override {
         // Set once at construction; the receiver checks the generation.
         if (callbacks.captureFailed) callbacks.captureFailed(callbackGeneration);
@@ -708,12 +802,36 @@ struct NativeCameraController::Impl final : CameraEventSink {
                                        deviceSession.staticLevels(), deviceSession.sensorModeOverridden(),
                                        requests.latestSubmittedSerial());
         if (!actions.frame) return;
+        const uint64_t longTag = longExposureTag.load(std::memory_order_relaxed);
+        // Freeze the viewfinder on the press until the long frame is in, and
+        // never show the long frame itself.
+        if (longTag != 0) actions.frame->hidePreview = true;
+        if (const uint64_t tag = longTag; tag != 0 && actions.frame->optimizedStillRequestId == tag) {
+            // Honored when the sensor reports the shutter and the frame took
+            // about that long; a HAL that clamps returns early.
+            const auto requested = longExposureNs.load(std::memory_order_relaxed);
+            const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                       std::chrono::steady_clock::now() - longExposureSubmitted)
+                                       .count();
+            const bool honored = actions.frame->exposureTimeNs >= requested * 9 / 10 &&
+                                 elapsedMs * 1'000'000LL >= requested * 8 / 10;
+            diag("CAMERA_LONG_EXPOSURE_RESULT tag=" + std::to_string(tag) + " requestedNs=" + std::to_string(requested) +
+                 " reportedNs=" + std::to_string(actions.frame->exposureTimeNs) +
+                 " iso=" + std::to_string(actions.frame->sensitivity) + " elapsedMs=" + std::to_string(elapsedMs) +
+                 " honored=" + std::to_string(honored ? 1 : 0));
+            lastLongExposureHonored.store(honored ? 1 : 0, std::memory_order_relaxed);
+            longExposureTag.store(0, std::memory_order_relaxed);
+            longExposureStartMs.store(-1, std::memory_order_relaxed);
+        }
         if (actions.fallbackToAuto) {
             control.exposureMode = ExposureControlMode::Auto;
             submitRepeatingLocked();
         }
         if (!actions.optimizedStill) steerAfToFacesLocked();
         const auto& frame = *actions.frame;
+        if (frame.sceneFlicker == ACAMERA_STATISTICS_SCENE_FLICKER_50HZ ||
+            frame.sceneFlicker == ACAMERA_STATISTICS_SCENE_FLICKER_60HZ)
+            lastSceneFlicker.store(frame.sceneFlicker, std::memory_order_relaxed);
         const bool autoSettled = frame.aeMode > ACAMERA_CONTROL_AE_MODE_OFF &&
             (frame.aeState == ACAMERA_CONTROL_AE_STATE_CONVERGED ||
              frame.aeState == ACAMERA_CONTROL_AE_STATE_LOCKED ||
@@ -748,6 +866,14 @@ struct NativeCameraController::Impl final : CameraEventSink {
         CameraControlState snapshot = control;
         snapshot.videoMode = cadencePolicy.videoMode();
         snapshot.videoPreviewFps = cadencePolicy.videoFps();
+        if (const auto deferred = deferredCaptureExposureLocked()) {
+            snapshot.deferredCaptureExposureNs = deferred->exposureTimeNs;
+            const double ratio = results.sensitivityReportedPerRequest().value_or(1.0);
+            snapshot.deferredCaptureReportedSensitivity = int32_t(std::llround(deferred->sensitivity * ratio));
+        }
+        snapshot.longExposureNs = longExposureNs.load(std::memory_order_relaxed);
+        snapshot.longExposureStartMs = longExposureStartMs.load(std::memory_order_relaxed);
+        snapshot.lastLongExposureHonored = lastLongExposureHonored.load(std::memory_order_relaxed);
         snapshot.requestedShutterAngleDegrees = cadencePolicy.shutterAngle();
         snapshot.shutterAngleChoices = cadencePolicy.shutterChoices(control.capabilities.exposureTimeMinNs,
                                                                     control.capabilities.exposureTimeMaxNs);
@@ -772,8 +898,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
         const auto sensitivityReportedPerRequest = results.sensitivityReportedPerRequest();
         if (mode != ExposureControlMode::Auto && control.exposureMode != mode) {
             // Seed application-owned axes from the most recently applied exposure.
-            // Shutter is already in one coordinate. Sensitivity is not: forced DCG
-            // can report roughly 8x the request coordinate, so convert it through the
+            // Shutter is already in one coordinate. Sensitivity may not be: a
+            // vendor sensor mode (e.g. DCG) can report roughly 8x the request coordinate, so convert it through the
             // provenance-learned ratio instead of copying CaptureResult ISO verbatim.
             if (control.appliedExposureTimeNs) {
                 control.requestedExposureTimeNs =
@@ -798,7 +924,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
                 } else {
                     diag("CAMERA_SENSITIVITY_COORDINATE_SEED retainedRequest=" +
                          std::to_string(control.requestedSensitivity) + " reported=" +
-                         std::to_string(*control.appliedSensitivity) + " reportedPerRequest=unavailable dcg=on");
+                         std::to_string(*control.appliedSensitivity) + " reportedPerRequest=unavailable sensorModeKeys=on");
                 }
             }
         }
@@ -914,8 +1040,16 @@ struct NativeCameraController::Impl final : CameraEventSink {
         if (accepted) submitRepeatingLocked();
     }
     void applyAePriorityPreferenceLocked() {
-        control.capabilities.shutterPrioritySupported = halShutterPriority && !aePriorityDisabledPreference;
-        control.capabilities.isoPrioritySupported = halIsoPriority && !aePriorityDisabledPreference;
+        // rawr AE solves S/I itself wherever the sensor takes manual exposure,
+        // once the request ISO coordinate is known (calibrated when keys apply).
+        const bool coordinateKnown =
+            results.sensitivityReportedPerRequest().has_value() || !deviceSession.sensorModeOverridden();
+        const bool rawrPriority =
+            rawrAeConfig.enabled && control.capabilities.manualExposureSupported && coordinateKnown;
+        control.capabilities.shutterPrioritySupported = (halShutterPriority || rawrPriority) && !aePriorityDisabledPreference;
+        control.capabilities.isoPrioritySupported = (halIsoPriority || rawrPriority) && !aePriorityDisabledPreference;
+        control.capabilities.halShutterPrioritySupported = halShutterPriority && !aePriorityDisabledPreference;
+        control.capabilities.halIsoPrioritySupported = halIsoPriority && !aePriorityDisabledPreference;
     }
     void setAePriorityDisabledValue(bool disabled) {
         std::lock_guard<std::mutex> lock(mutex);
@@ -977,6 +1111,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
         if (cadencePolicy.videoMode() == video && cadencePolicy.videoFps() == sanitizedFps) return;
         const bool enteringVideo = video && !cadencePolicy.videoMode();
         cadencePolicy.setVideoMode(video, fps);
+        control.videoMode = cadencePolicy.videoMode();
+        control.videoPreviewFps = cadencePolicy.videoFps();
         if (enteringVideo)
             cadencePolicy.bindShutter(control.requestedExposureTimeNs, control.capabilities.exposureTimeMinNs,
                                       control.capabilities.exposureTimeMaxNs);
@@ -1065,8 +1201,132 @@ struct NativeCameraController::Impl final : CameraEventSink {
             submitRepeatingLocked();
         }
     }
+    bool rawrAeEligibleLocked() const {
+        const bool coordinateKnown =
+            results.sensitivityReportedPerRequest().has_value() || !deviceSession.sensorModeOverridden();
+        const bool rawrMode = control.exposureMode == ExposureControlMode::Auto ||
+                              control.exposureMode == ExposureControlMode::ShutterPriority ||
+                              control.exposureMode == ExposureControlMode::IsoPriority;
+        return rawrAeConfig.enabled && rawrMode &&
+               control.capabilities.manualExposureSupported && control.capabilities.sensitivityMax > 0 &&
+               coordinateKnown &&
+               deviceSession.request() && deviceSession.session();
+    }
+    void publishRawrAeContextLocked(bool engaged) {
+        NativeCameraController::RawrAeContext c;
+        c.engaged = engaged;
+        c.config = rawrAeConfig;
+        c.mode = control.exposureMode == ExposureControlMode::ShutterPriority ? 1
+                 : control.exposureMode == ExposureControlMode::IsoPriority   ? 2
+                                                                              : 0;
+        c.lockedShutterNs = control.requestedExposureTimeNs;
+        c.lockedIso = control.requestedSensitivity;
+        const auto& caps = control.capabilities;
+        const int32_t sensorIsoMin = std::max(1, caps.sensitivityMin);
+        const int32_t sensorIsoMax = std::max(sensorIsoMin, caps.sensitivityMax);
+        const auto& context = deviceSession.cameraContext();
+        // Extended ISO (lens profile opt-in) is the sensor's real gain by assertion.
+        const int32_t analog = caps.sensitivityMax > caps.advertisedSensitivityMax ? sensorIsoMax
+                               : context && context->maxAnalogSensitivity > 0
+                                   ? std::clamp(context->maxAnalogSensitivity, sensorIsoMin, sensorIsoMax)
+                                   : sensorIsoMax;
+        c.isoMin = rawrAeConfig.isoMin > 0 ? std::clamp(rawrAeConfig.isoMin, sensorIsoMin, sensorIsoMax) : sensorIsoMin;
+        c.isoMax = rawrAeConfig.isoMax > 0 ? std::clamp(rawrAeConfig.isoMax, c.isoMin, sensorIsoMax) : sensorIsoMax;
+        c.isoAnalogMax = std::clamp(analog, c.isoMin, c.isoMax);
+        c.shutterMinNs = std::max<int64_t>(1, caps.exposureTimeMinNs);
+        // Video: never longer than the frame, starting from a 180 degree shutter.
+        c.video = cadencePolicy.videoMode() || control.recordingFps > 0;
+        const int videoFps = control.recordingFps > 0 ? control.recordingFps : cadencePolicy.videoFps();
+        const int64_t framePeriodNs = c.video && videoFps > 0 ? 1'000'000'000LL / videoFps : 0;
+        int64_t sensorShutterMax = std::max(c.shutterMinNs, caps.exposureTimeMaxNs);
+        if (framePeriodNs > 0) sensorShutterMax = std::clamp(framePeriodNs, c.shutterMinNs, sensorShutterMax);
+        // Longer S shutters run only on capture (ViewfinderExposure.h).
+        sensorShutterMax = std::clamp(kViewfinderShutterMaxNs, c.shutterMinNs, sensorShutterMax);
+        c.sensorShutterMaxNs = sensorShutterMax;
+        int64_t ceiling = rawrAeConfig.shutterMaxNs;
+        if (framePeriodNs > 0) {
+            ceiling = ceiling > 0 ? std::min(ceiling, framePeriodNs) : framePeriodNs;
+        } else if (ceiling <= 0) {
+            // Handheld ceiling (OIS keeps 1/15 s sharp). Auto Minimum FPS is the
+            // camera AE's ceiling only; rawr AE's is Longest Shutter.
+            ceiling = kLongFrameMaxNs;
+        }
+        c.shutterMaxNs = std::clamp(ceiling, c.shutterMinNs, sensorShutterMax);
+        const int64_t start = framePeriodNs > 0                ? framePeriodNs / 2
+                              : rawrAeConfig.shutterStartNs > 0 ? rawrAeConfig.shutterStartNs
+                                                                : 33'333'333;
+        c.shutterStartNs = std::clamp<int64_t>(start, c.shutterMinNs, c.shutterMaxNs);
+        const uint8_t banding = antibandingPreference;
+        const int32_t mains = banding == ACAMERA_CONTROL_AE_ANTIBANDING_MODE_50HZ   ? 1
+                              : banding == ACAMERA_CONTROL_AE_ANTIBANDING_MODE_60HZ ? 2
+                              : banding == ACAMERA_CONTROL_AE_ANTIBANDING_MODE_AUTO
+                                  ? lastSceneFlicker.load(std::memory_order_relaxed)
+                                  : 0;
+        c.flickerPeriodNs = mains == 1 ? 10'000'000 : mains == 2 ? 8'333'333 : 0;
+        c.userEv = float(std::clamp(control.requestedEvSteps, caps.evMinSteps, caps.evMaxSteps)) * evStepEvLocked();
+        c.reportedPerRequest = results.sensitivityReportedPerRequest().value_or(0.0);
+        c.manualActive = control.exposureMode == ExposureControlMode::Manual;
+        c.manualExposureNs = control.requestedExposureTimeNs;
+        c.manualIso = control.requestedSensitivity;
+        c.spotActive = control.spotAeActive && control.exposureMode == ExposureControlMode::Auto;
+        c.spotX = spotMetering.point().x;
+        c.spotY = spotMetering.point().y;
+        std::lock_guard<std::mutex> published(rawrAeContextMutex);
+        rawrAePublished = c;
+    }
+    void applyRawrAeLocked() {
+        // rawr S/I appear once the session's ISO coordinate is known.
+        applyAePriorityPreferenceLocked();
+        control.videoMode = cadencePolicy.videoMode();
+        control.videoPreviewFps = cadencePolicy.videoFps();
+        const bool eligible = rawrAeEligibleLocked();
+        publishRawrAeContextLocked(eligible);
+        const uint64_t pending = rawrAePending.load(std::memory_order_relaxed);
+        const auto exposure = static_cast<int64_t>(pending >> 24);
+        const auto sensitivity = static_cast<int32_t>(pending & 0xFFFFFFu);
+        const bool want = eligible && exposure > 0 && sensitivity > 0;
+        // A pair solved before eligibility was lost is stale when it returns.
+        if (!eligible) rawrAePending.store(0, std::memory_order_relaxed);
+        if (!want) {
+            if (control.rawrAeActive) {
+                control.rawrAeActive = false;
+                diag("CAMERA_RAWR_AE active=false");
+                if (deviceSession.request() && deviceSession.session()) submitRepeatingLocked();
+            }
+            return;
+        }
+        if (control.rawrAeActive && control.rawrAeExposureTimeNs == exposure && control.rawrAeSensitivity == sensitivity)
+            return;
+        if (!control.rawrAeActive) diag("CAMERA_RAWR_AE active=true");
+        control.rawrAeActive = true;
+        control.rawrAeExposureTimeNs = exposure;
+        control.rawrAeSensitivity = sensitivity;
+        submitRepeatingLocked();
+    }
+    void setRawrAeConfigValue(const NativeCameraController::RawrAeConfig& config) {
+        std::unique_lock<std::mutex> lock(mutex);
+        const bool toggled = rawrAeConfig.enabled != config.enabled;
+        rawrAeConfig = config;
+        if (!config.enabled) rawrAePending.store(0, std::memory_order_relaxed);
+        if (toggled) {
+            diag(std::string("CAMERA_RAWR_AE_PREFERENCE enabled=") + (config.enabled ? "true" : "false"));
+            // rawr owns S/I on cameras without HAL priority: the UI's modes change.
+            applyAePriorityPreferenceLocked();
+            const bool priorityMode = control.exposureMode == ExposureControlMode::ShutterPriority ||
+                                      control.exposureMode == ExposureControlMode::IsoPriority;
+            const bool supported = control.exposureMode == ExposureControlMode::ShutterPriority
+                                       ? control.capabilities.shutterPrioritySupported
+                                       : control.capabilities.isoPrioritySupported;
+            if (priorityMode && !supported) control.exposureMode = ExposureControlMode::Auto;
+        }
+        applyRawrAeLocked();
+        // Sensor-mode keys with an unmeasured ISO coordinate: probe once (cached
+        // per camera and key values across launches), as HDR+ Bracketed does.
+        if (toggled && config.enabled) restartForSensitivityCalibrationLocked(lock);
+    }
     void tickControls(int64_t nowMs) {
         std::lock_guard<std::mutex> lock(mutex);
+        applyRawrAeLocked();
         applyHdrHeadroomLocked();
         if (focusControls.expireTap(control, nowMs) && deviceSession.request() && deviceSession.session()) {
             diag("CAMERA_CONTROL_REQUEST tapAfCleared reason=explicit_clear");
@@ -1140,6 +1400,12 @@ void NativeCameraController::setAccessRoute(const std::string& route) {
 }
 CameraControlState NativeCameraController::controlState() const { return impl_->getControlState(); }
 std::optional<double> NativeCameraController::longFrameRoomEv() const { return impl_->longFrameRoomEv(); }
+std::optional<NativeCameraController::LongExposure> NativeCameraController::deferredCaptureExposure() const {
+    return impl_->deferredCaptureExposure();
+}
+bool NativeCameraController::captureLongExposure(uint64_t requestId, LongExposure* submitted) {
+    return impl_->captureLongExposure(requestId, submitted);
+}
 bool NativeCameraController::longFramesWorthwhile() const {
     const auto room = impl_->longFrameRoomEv();
     return !room || *room >= Impl::kMinLongFrameGainEv;
@@ -1170,6 +1436,16 @@ void NativeCameraController::setSensitivityCalibrationWanted(bool wanted) {
     if (changed && wanted) impl_->restartForSensitivityCalibrationLocked(lock);
 }
 void NativeCameraController::setExposureCompensationSteps(int32_t value) { impl_->setEvSteps(value); }
+void NativeCameraController::setRawrAeConfig(const RawrAeConfig& config) { impl_->setRawrAeConfigValue(config); }
+NativeCameraController::RawrAeContext NativeCameraController::rawrAeContext() const {
+    std::lock_guard<std::mutex> lock(impl_->rawrAeContextMutex);
+    return impl_->rawrAePublished;
+}
+void NativeCameraController::setRawrAeRequest(int64_t exposureTimeNs, int32_t sensitivity) {
+    if (exposureTimeNs <= 0 || exposureTimeNs >= (int64_t(1) << 40) || sensitivity <= 0 || sensitivity > 0xFFFFFF)
+        return;
+    impl_->rawrAePending.store(uint64_t(exposureTimeNs) << 24 | uint64_t(sensitivity), std::memory_order_relaxed);
+}
 void NativeCameraController::setHdrHeadroomEv(float ev) {
     impl_->pendingHdrHeadroomEv.store(std::isfinite(ev) ? std::min(0.0f, ev) : 0.0f, std::memory_order_relaxed);
 }

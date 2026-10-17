@@ -16,6 +16,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -32,7 +33,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.rawr.camera.model.ExposureFormat
 import com.rawr.camera.model.GridMode
+import com.rawr.camera.model.LongExposureUiState
 import com.rawr.camera.model.Orientation
 import com.rawr.camera.model.OverlayMode
 
@@ -295,3 +298,46 @@ internal fun BracketHoldNotice(active: Boolean, orientation: Orientation, modifi
     }
 }
 
+
+/**
+ * Long exposure: before the press, what the capture will be (one frame); while
+ * the sensor exposes, a countdown over the frozen viewfinder.
+ */
+@Composable
+internal fun LongExposureNotice(state: LongExposureUiState, orientation: Orientation, modifier: Modifier = Modifier) {
+    val active = state.startMs >= 0L && state.activeNs > 0L
+    var now by remember { mutableLongStateOf(android.os.SystemClock.uptimeMillis()) }
+    if (active) {
+        LaunchedEffect(state.startMs) {
+            while (true) {
+                now = android.os.SystemClock.uptimeMillis()
+                kotlinx.coroutines.delay(100)
+            }
+        }
+    }
+    val text = when {
+        active -> {
+            val remainingMs = (state.activeNs / 1_000_000L - (now - state.startMs)).coerceAtLeast(0L)
+            if (remainingMs > 0L) "%.1f s".format(remainingMs / 1000.0) else "Saving…"
+        }
+        state.deferredNs > 0L -> buildString {
+            append("Long exposure · ")
+            append(ExposureFormat.formatShutterNs(state.deferredNs))
+            append(" · 1 frame")
+            if (state.lastHonored == 0) append("\nCamera shortened the last one")
+        }
+        else -> null
+    }
+    AnimatedVisibility(visible = text != null, enter = fadeIn(tween(80)), exit = fadeOut(tween(250)), modifier = modifier) {
+        Text(
+            text ?: "",
+            color = Color.White,
+            fontSize = if (active) 28.sp else 13.sp,
+            textAlign = TextAlign.Center,
+            style = ViewfinderTextStyle,
+            modifier = Modifier
+                .background(Color.Black.copy(alpha = .45f), RoundedCornerShape(12.dp))
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+        )
+    }
+}

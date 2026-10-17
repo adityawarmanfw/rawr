@@ -146,6 +146,8 @@ data class CaptureUiState(
     val exposureApplied: ExposureAppliedState = ExposureAppliedState.initial(capabilities),
     /** Camera2 POST_RAW_SENSITIVITY_BOOST result (100 == 1x); null before first result. */
     val sensitivityBoost: Int? = null,
+    /** Long exposure (shutter past the 1/5 s viewfinder): see NativeCameraUiSnapshot. */
+    val longExposure: LongExposureUiState = LongExposureUiState(),
     /** Sensor-reported frame rate; null when the HAL hasn't echoed it yet. */
     val rawFps: Double? = null,
     /** Measured viewfinder rate (timestamp-delta EMA); null until settled. */
@@ -214,3 +216,12 @@ data class CaptureUiState(
     val hdrPlusBracketedActive: Boolean
         get() = hdrPlusBracketedSelected && experimentalMultiframeEnabled && captureMode == CaptureMode.Photo
 }
+
+/** Shutter past the viewfinder cap: captured as its own one-shot exposure, one frame. */
+data class LongExposureUiState(
+    val deferredNs: Long = 0L,
+    val activeNs: Long = 0L,
+    /** CLOCK_MONOTONIC (SystemClock.uptimeMillis) ms the sensor started; 0 submitted, -1 none. */
+    val startMs: Long = -1L,
+    val lastHonored: Int = -1,
+)

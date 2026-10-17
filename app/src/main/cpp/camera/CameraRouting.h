@@ -36,6 +36,17 @@ struct LevelOverride {
     float white = 0.0f;
 };
 
+// Opt-in requests beyond the advertised ISO / exposure-time ranges (some HALs
+// accept them). Zero keeps the advertised bound. The shutter is capped at
+// kExtendedShutterMaxNs; longer than the viewfinder cap it runs only on capture.
+struct ExposureOverride {
+    bool extended = false;
+    int32_t isoMax = 0;
+    int64_t shutterMaxNs = 0;
+};
+inline constexpr int64_t kExtendedShutterMaxNs = 25'000'000'000LL;
+inline constexpr int32_t kExtendedIsoMax = 409'600;
+
 // How one UI lens maps onto the device. A camera profile is the full set of
 // these for a device: either a built-in default or the user's configuration.
 struct LensRoute {
@@ -48,6 +59,7 @@ struct LensRoute {
     geometry::RawStreamOption stream;
     std::vector<CameraKeySetting> keys;
     LevelOverride levels;
+    ExposureOverride exposure;
 };
 
 struct CameraProfile {

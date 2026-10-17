@@ -205,7 +205,7 @@ private fun ProfileSelectionRow(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
+            Text(title, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
             if (value != null) {
                 Text(
                     value,
@@ -216,7 +216,7 @@ private fun ProfileSelectionRow(
                 )
             }
         }
-        RadioButton(selected = selected, onClick = onSelect)
+        SelectedCheck(selected)
         IconButton(onClick = onEdit) {
             Icon(Icons.Rounded.Edit, contentDescription = "Edit $title")
         }

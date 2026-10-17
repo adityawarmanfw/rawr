@@ -10,9 +10,7 @@ import com.rawr.camera.settings.model.*
 internal fun DenoiseSettings(state: SettingsUiState, dispatch: SettingsDispatch) {
     SettingsPageContainer {
         DenoiseTargetSelector(state, dispatch)
-        if (state.values.photoDenoise is DenoiseConfig.Wavelet) {
-            PhotoWaveletGroup(state, dispatch)
-        }
+        PhotoWaveletGroup(state, dispatch)
         VideoDenoiseGroup(state, dispatch)
     }
 }
@@ -20,9 +18,7 @@ internal fun DenoiseSettings(state: SettingsUiState, dispatch: SettingsDispatch)
 @Composable
 internal fun DenoiseGroup(state: SettingsUiState, dispatch: SettingsDispatch) {
     DenoiseTargetSelector(state, dispatch)
-    if (state.values.photoDenoise is DenoiseConfig.Wavelet) {
-        PhotoWaveletGroup(state, dispatch)
-    }
+    PhotoWaveletGroup(state, dispatch)
     VideoDenoiseGroup(state, dispatch)
 }
 
@@ -33,7 +29,7 @@ private fun DenoiseTargetSelector(state: SettingsUiState, dispatch: SettingsDisp
         description = "Photo denoise runs on single-frame stills only; multiframe merges denoise themselves. Video denoise is wavelets only, with its own strength."
     ) {
         PhotoVideoTargetSelector(
-            photoOn = v.photoDenoise != DenoiseConfig.Off,
+            photoOn = v.photoDenoise is DenoiseConfig.Wavelet,
             videoOn = v.videoDenoiseEnabled,
             onPhotoChange = { dispatch.invoke(SetPhotoDenoiseEnabled(it)) },
             onVideoChange = { dispatch.invoke(SetVideoDenoiseEnabled(it)) }
@@ -43,7 +39,9 @@ private fun DenoiseTargetSelector(state: SettingsUiState, dispatch: SettingsDisp
 
 @Composable
 private fun PhotoWaveletGroup(state: SettingsUiState, dispatch: SettingsDispatch) {
-    val wavelet = (state.values.photoDenoise as? DenoiseConfig.Wavelet)?.config ?: return
+    // Off parks the last values; show them greyed out, like video.
+    val on = state.values.photoDenoise is DenoiseConfig.Wavelet
+    val wavelet = state.values.photoDenoise.config
     SettingsGroup(title = "Photo · Wavelet") {
         StandaloneNumericSliderRow(
             identity = "denoise_strength_photo",
@@ -53,7 +51,7 @@ private fun PhotoWaveletGroup(state: SettingsUiState, dispatch: SettingsDispatch
             step = 0.1f,
             decimals = 1,
             value = wavelet.strength,
-            enabled = true
+            enabled = on
         ) { dispatch.invoke(SetPhotoDenoiseStrength(it)) }
         SettingDivider()
         StandaloneNumericSliderRow(
@@ -64,7 +62,7 @@ private fun PhotoWaveletGroup(state: SettingsUiState, dispatch: SettingsDispatch
             step = 0.05f,
             decimals = 2,
             value = wavelet.detail,
-            enabled = true
+            enabled = on
         ) { dispatch.invoke(SetPhotoDenoiseDetail(it)) }
         SettingDivider()
         StandaloneNumericSliderRow(
@@ -75,7 +73,7 @@ private fun PhotoWaveletGroup(state: SettingsUiState, dispatch: SettingsDispatch
             step = 0.05f,
             decimals = 2,
             value = wavelet.luma,
-            enabled = true
+            enabled = on
         ) { dispatch.invoke(SetPhotoDenoiseLuma(it)) }
         SettingDivider()
         StandaloneNumericSliderRow(
@@ -86,7 +84,7 @@ private fun PhotoWaveletGroup(state: SettingsUiState, dispatch: SettingsDispatch
             step = 1f,
             decimals = 0,
             value = wavelet.scales.toFloat(),
-            enabled = true
+            enabled = on
         ) { dispatch.invoke(SetPhotoDenoiseScales(it.toInt())) }
     }
 }

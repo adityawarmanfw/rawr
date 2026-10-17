@@ -117,6 +117,9 @@ void CameraControlSurface::setOisEnabled(bool enabled) {
 void CameraControlSurface::setAntibandingMode(uint8_t mode) {
     if (cameraController_) cameraController_->setAntibandingMode(mode);
 }
+void CameraControlSurface::setRawrAeConfig(const RawrAeConfig& config) {
+    if (cameraController_) cameraController_->setRawrAeConfig(config);
+}
 void CameraControlSurface::setAutoMinFps(int fps) {
     if (cameraController_) cameraController_->setAutoMinFps(fps);
 }

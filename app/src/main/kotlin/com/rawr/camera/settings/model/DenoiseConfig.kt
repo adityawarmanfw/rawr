@@ -21,14 +21,18 @@ data class WaveletDenoise(
 )
 
 sealed interface DenoiseConfig {
-    data object Off : DenoiseConfig
+    /** Wavelet values in effect when on; parked (kept, not run) when off. */
+    val config: WaveletDenoise
 
-    data class Wavelet(val config: WaveletDenoise = WaveletDenoise()) : DenoiseConfig
+    /** Off keeps the last wavelet values so re-enabling restores them. */
+    data class Off(override val config: WaveletDenoise = WaveletDenoise()) : DenoiseConfig
+
+    data class Wavelet(override val config: WaveletDenoise = WaveletDenoise()) : DenoiseConfig
 
     companion object {
         /**
          * Repairs legacy fields into a valid config. Master off parks
-         * everything; anything else is wavelet. Out-of-range ints and
+         * the wavelet values; on runs them. Out-of-range ints and
          * non-finite floats are clamped, never thrown.
          */
         fun fromLegacy(
@@ -38,56 +42,38 @@ sealed interface DenoiseConfig {
             waveletLuma: Float = 0.25f,
             waveletScales: Int = 7
         ): DenoiseConfig {
-            if (!enabled) return Off
-            return Wavelet(
-                WaveletDenoise(
-                    strength = waveletStrength.coerceIn(0f, 8f),
-                    detail = waveletDetail.coerceIn(0f, 1.8f),
-                    luma = waveletLuma.coerceIn(0f, 1f),
-                    scales = waveletScales.coerceIn(1, 7)
-                )
+            val config = WaveletDenoise(
+                strength = waveletStrength.coerceIn(0f, 8f),
+                detail = waveletDetail.coerceIn(0f, 1.8f),
+                luma = waveletLuma.coerceIn(0f, 1f),
+                scales = waveletScales.coerceIn(1, 7)
             )
+            return if (enabled) Wavelet(config) else Off(config)
         }
     }
 }
 
-/** Master-switch transition. ON keeps the current config; Off enables as wavelet. */
+/** Master-switch transition; the wavelet values carry across both ways. */
 fun DenoiseConfig.withMaster(enabled: Boolean): DenoiseConfig =
-    if (enabled) {
-        if (this is DenoiseConfig.Off) DenoiseConfig.Wavelet() else this
-    } else {
-        DenoiseConfig.Off
-    }
+    if (enabled) DenoiseConfig.Wavelet(config) else DenoiseConfig.Off(config)
 
-/** Strength sliders only exist while wavelet is on; otherwise no-op
- * (the UI disables them, so this is unreachable in practice). */
+private fun DenoiseConfig.withConfig(next: WaveletDenoise): DenoiseConfig = when (this) {
+    is DenoiseConfig.Off -> copy(config = next)
+    is DenoiseConfig.Wavelet -> copy(config = next)
+}
+
+/** Slider edits update the values whether running or parked. */
 fun DenoiseConfig.withWaveletStrength(value: Float): DenoiseConfig =
-    if (this is DenoiseConfig.Wavelet) {
-        copy(config = config.copy(strength = value.coerceIn(0f, 8f)))
-    } else {
-        this
-    }
+    withConfig(config.copy(strength = value.coerceIn(0f, 8f)))
 
 fun DenoiseConfig.withWaveletDetail(value: Float): DenoiseConfig =
-    if (this is DenoiseConfig.Wavelet) {
-        copy(config = config.copy(detail = value.coerceIn(0f, 1.8f)))
-    } else {
-        this
-    }
+    withConfig(config.copy(detail = value.coerceIn(0f, 1.8f)))
 
 fun DenoiseConfig.withWaveletLuma(value: Float): DenoiseConfig =
-    if (this is DenoiseConfig.Wavelet) {
-        copy(config = config.copy(luma = value.coerceIn(0f, 1f)))
-    } else {
-        this
-    }
+    withConfig(config.copy(luma = value.coerceIn(0f, 1f)))
 
 fun DenoiseConfig.withWaveletScales(value: Int): DenoiseConfig =
-    if (this is DenoiseConfig.Wavelet) {
-        copy(config = config.copy(scales = value.coerceIn(1, 7)))
-    } else {
-        this
-    }
+    withConfig(config.copy(scales = value.coerceIn(1, 7)))
 
 /** Capture path capabilities the resolver decides on. Device gates (float16
  * compute, geometry size) stay native with SKIP emits; this covers the
@@ -158,11 +144,8 @@ data class LegacyDenoise(
 )
 
 fun DenoiseConfig.toLegacy(): LegacyDenoise = when (this) {
-    is DenoiseConfig.Off -> LegacyDenoise(
-        enabled = false, waveletStrength = 1f, waveletDetail = 1f, waveletLuma = 0.25f, waveletScales = 7
-    )
-    is DenoiseConfig.Wavelet -> LegacyDenoise(
-        enabled = true, waveletStrength = config.strength, waveletDetail = config.detail,
+    is DenoiseConfig.Off, is DenoiseConfig.Wavelet -> LegacyDenoise(
+        enabled = this is DenoiseConfig.Wavelet, waveletStrength = config.strength, waveletDetail = config.detail,
         waveletLuma = config.luma, waveletScales = config.scales
     )
 }

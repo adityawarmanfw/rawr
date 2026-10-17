@@ -2,6 +2,7 @@
 #include "color/AutoKeyExposure.h"
 #include "color/ExposureNormalizer.h"
 #include "color/HdrHeadroomMeter.h"
+#include "color/RawrAutoExposure.h"
 
 #include <mutex>
 #include <optional>
@@ -36,6 +37,8 @@ class SessionFrameCallbacks final : public pipeline::FrameLifecyclePort,
     void retireScopesSlot(std::uint32_t slotIndex) override;
     std::optional<RenderedFeedback> consumeExposureFeedback(std::uint32_t slotIndex) override;
     bool sceneKeyMeteringEnabled() override;
+    std::array<float, 4> sceneMeteringSpot() override;
+    uint32_t sceneMeteringWeighting() override;
     std::optional<SceneKeyFeedback> updateSceneKey(std::uint32_t slotIndex,
                                                    const rawrcam::metadata::FrameMetadataSnapshot& metadata,
                                                    std::uint64_t timestampNs, bool recording) override;
@@ -70,6 +73,13 @@ class SessionFrameCallbacks final : public pipeline::FrameLifecyclePort,
     // Frame lane and still admission both ask for lifts.
     mutable std::mutex normalizerMutex_;
     rawrcam::color::ExposureNormalizer normalizer_;
+    // rawr auto exposure: metered at slot retire, read by postGainFor.
+    mutable std::mutex rawrAeMutex_;
+    rawrcam::color::rawr_ae::Controller rawrAe_;
+    std::uint64_t rawrAeCameraGeneration_ = 0;
+    bool rawrAeEngaged() const;
+    void updateRawrAe(const image_scopes::SceneExposureStatsData* stats, float clipLuma,
+                      const rawrcam::metadata::FrameMetadataSnapshot& metadata, std::uint64_t timestampNs);
     void updateHdrHeadroom(const image_scopes::SceneExposureStatsData* stats, float clipLuma,
                            const rawrcam::metadata::FrameMetadataSnapshot& metadata, std::uint64_t timestampNs);
 };

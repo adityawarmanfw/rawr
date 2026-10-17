@@ -1,6 +1,7 @@
 package com.rawr.camera.settings.ui
 
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.platform.testTag
 import com.rawr.camera.settings.architecture.SetChoice
 import com.rawr.camera.settings.architecture.SettingsDispatch
 import com.rawr.camera.settings.model.ChoiceCandidate
@@ -13,14 +14,14 @@ import com.rawr.camera.settings.model.SettingsUiState
 internal fun selectorTitle(kind: ChoiceSelectorKind): String = when (kind) {
     ChoiceSelectorKind.SaveLocation -> "Save Location"
     ChoiceSelectorKind.FalseColorPreset -> "False Color Preset"
-    ChoiceSelectorKind.PeakingSensitivity -> "Focus Peaking Sensitivity"
+    ChoiceSelectorKind.PeakingSensitivity -> "Peaking Sensitivity"
     ChoiceSelectorKind.OutputColorSpace -> "Output Color Space"
     ChoiceSelectorKind.TransferFunction -> "Transfer Function"
     ChoiceSelectorKind.JpegChromaSubsampling -> "Chroma Subsampling"
     ChoiceSelectorKind.DngCompression -> "DNG Compression"
     ChoiceSelectorKind.MaxPostGain -> "Boost Limit"
     ChoiceSelectorKind.AutoMinFps -> "Auto Minimum FPS"
-    ChoiceSelectorKind.FilmOutputSpace -> "Film Output Color Space"
+    ChoiceSelectorKind.FilmOutputSpace -> "Film Output Space"
 }
 
 @Composable
@@ -38,6 +39,36 @@ internal fun ChoiceSelectorScreen(state: SettingsUiState, kind: ChoiceSelectorKi
                 if (index != selector.choices.lastIndex) SettingDivider()
             }
         }
+    }
+}
+
+/** In-place dropdown over the same choices the selector page lists. */
+@Composable
+internal fun SelectorDropdownRow(
+    state: SettingsUiState,
+    kind: ChoiceSelectorKind,
+    dispatch: SettingsDispatch,
+    title: String = selectorTitle(kind),
+    testTag: String? = null,
+    enabled: Boolean = true
+) {
+    val selector = selectorModel(state, kind)
+    if (selector.choices.isEmpty()) {
+        SettingsRow(title, "Unavailable", enabled = false, testTag = testTag)
+        return
+    }
+    val current = selector.choices.firstOrNull { it.id == selector.selectedId } ?: selector.choices.first()
+    androidx.compose.foundation.layout.Box(
+        if (testTag != null) androidx.compose.ui.Modifier.testTag(testTag) else androidx.compose.ui.Modifier
+    ) {
+        DropdownChoiceRow(
+            title = title,
+            selected = current,
+            values = selector.choices,
+            label = { it.label },
+            enabled = enabled,
+            optionText = { it.supportingText }
+        ) { dispatch.invoke(SetChoice(kind, it.id)) }
     }
 }
 

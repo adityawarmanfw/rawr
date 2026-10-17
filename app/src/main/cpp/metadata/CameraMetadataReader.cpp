@@ -272,6 +272,7 @@ std::optional<FrameMetadataSnapshot> readFrameMetadataSnapshot(const ACameraMeta
     }
     if (const auto ev = entry(result, ACAMERA_CONTROL_AE_EXPOSURE_COMPENSATION); ev && ev->data.i32 && ev->count >= 1)
         out.aeCompensationSteps = ev->data.i32[0];
+    out.sceneFlicker = firstU8(result, ACAMERA_STATISTICS_SCENE_FLICKER, -1);
 
     if (const auto dynamicBlack = entry(result, ACAMERA_SENSOR_DYNAMIC_BLACK_LEVEL);
         dynamicBlack && dynamicBlack->data.f && dynamicBlack->count >= 4) {

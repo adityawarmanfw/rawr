@@ -40,7 +40,7 @@ internal fun AgxSavedLooksGroup(values: SettingsValues, dispatch: SettingsDispat
                             "Export" to { files.export(look.name, LookFileCodec.exportAgx(look)) },
                             "Delete" to { deleting = look }
                         ))
-                        RadioButton(selected = look.id == current?.id, onClick = null)
+                        SelectedCheck(look.id == current?.id)
                     }
                 }
             )

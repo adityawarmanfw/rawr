@@ -22,6 +22,8 @@ struct DisplayExposureStatsRecordInfo {
     std::uint32_t sampleBlockSize = 4;  // supported: 2 or 4
 };
 
+enum class SceneWeighting : std::uint32_t { Matrix = 0, CenterWeighted = 1, Average = 2 };
+
 struct SceneExposureStatsRecordInfo {
     VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
     // Scene-linear R16G16B16A16_SFLOAT input in GENERAL layout, measured
@@ -34,6 +36,12 @@ struct SceneExposureStatsRecordInfo {
     float lumaWeights[3] = {0.0f, 0.0f, 0.0f};
     // Samples at or above this luma land in the top bin. <= 0 disables.
     float clipLuma = 0.0f;
+    // Sample weighting outside a spot: matrix (centre half x3), centre-weighted
+    // (smooth falloff from the centre), or average (all equal).
+    SceneWeighting weighting = SceneWeighting::Matrix;
+    // Spot meter: when spotX1 > spotX0 and spotY1 > spotY0, only samples inside
+    // this normalized [0,1] input rectangle count (1/255 resolution).
+    float spotX0 = 0.0f, spotY0 = 0.0f, spotX1 = 0.0f, spotY1 = 0.0f;
 };
 
 struct DisplayWaveformRecordInfo {

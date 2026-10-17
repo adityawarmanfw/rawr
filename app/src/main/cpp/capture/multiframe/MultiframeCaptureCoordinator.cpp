@@ -205,6 +205,16 @@ uint64_t MultiframeCaptureCoordinator::startPreparedMultiframeCapture(
     try {
         auto frozenTonemap = baseDng.captureTone ? *baseDng.captureTone : tone;
         frozenTonemap.aePostGain = postGainFor_(pendingMultiframeCapture_->referenceMetadata);
+        // AE OFF bursts (rawr auto exposure; Manual's gain is 1x): the frozen
+        // gain is the app's digital gain past analog ISO plus the smoothed
+        // target residual. RAW samples stay unscaled; DNGs carry it.
+        if (pendingMultiframeCapture_->referenceMetadata.aeMode == 0 && frozenTonemap.aePostGain > 0.0f) {
+            const float gainEv = std::log2(frozenTonemap.aePostGain);
+            if (std::abs(gainEv) > 1.0e-3f) {
+                mergedDng.baselineExposureEV = mergedDng.baselineExposureEV.value_or(0.0f) + gainEv;
+                baseDng.baselineExposureEV = baseDng.baselineExposureEV.value_or(0.0f) + gainEv;
+            }
+        }
         // HDR+ bracketed: arm a collector for the post-shutter long frames. The
         // caller submits the camera requests (outside the session lock); the
         // spool worker waits for the frames before the burst becomes durable.
