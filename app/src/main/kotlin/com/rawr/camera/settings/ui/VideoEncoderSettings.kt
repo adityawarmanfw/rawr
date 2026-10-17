@@ -22,6 +22,7 @@ internal fun VideoEncoderSettings(state: SettingsUiState, dispatch: SettingsDisp
     val maxBitrateMbps = remember { VideoEncoderCapabilities.maxBitrateMbps }
     val context = androidx.compose.ui.platform.LocalContext.current
     val unprocessedSupported = remember { com.rawr.camera.video.VideoAudioInput.supportsUnprocessed(context) }
+    val bFramesProduced = remember { com.rawr.camera.video.EncoderObservations.bFramesProduced(context) }
     SettingsPageContainer(testTag = SettingsTestTags.sectionRoot("VideoEncoder")) {
         SettingsGroup(
             title = "Video",
@@ -68,7 +69,12 @@ internal fun VideoEncoderSettings(state: SettingsUiState, dispatch: SettingsDisp
             SettingDivider()
             if (frames <= 1) SettingsRow("Max B-frames", value = "Off with All-I")
             else {
-                SettingsRow("Max B-frames", value = if (encoder.maxBFrames < 0) "Auto" else "${encoder.maxBFrames}")
+                SettingsRow(
+                    "Max B-frames",
+                    value = if (encoder.maxBFrames < 0) "Auto" else "${encoder.maxBFrames}",
+                    supportingText = if (bFramesProduced == false && encoder.maxBFrames != 0)
+                        "This phone's encoder made no B-frames in your last recording; it records I and P frames only." else null
+                )
                 CompactChoiceRow(
                     VideoEncoderConfig.MAX_B_FRAME_CHOICES,
                     encoder.maxBFrames,

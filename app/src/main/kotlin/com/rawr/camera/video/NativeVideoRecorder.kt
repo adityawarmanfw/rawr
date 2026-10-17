@@ -267,6 +267,9 @@ class NativeVideoRecorder(private val context: Context, private val preview: Raw
             handle = 0L
             val result = JSONObject(engine.nativeStop(active))
             append(JSONObject().put("event", "stop").put("result", result))
+            result.optJSONObject("stats")?.let {
+                runCatching { EncoderObservations.record(context, settings.maxBFrames, settings.intraFrames, it) }
+            }
             check(detached) { "Could not detach video surface" }
             check(result.optBoolean("ok")) { "Native recording failed: ${result.optJSONObject("stats")?.optString("failure")}" }
             uri?.let(outputStore::publish)
