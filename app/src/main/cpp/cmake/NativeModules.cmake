@@ -125,6 +125,7 @@ rawrcam_module(camera
     camera/CameraRequestPipeline.cpp
     camera/CameraResultProcessor.cpp
     camera/CameraMetadataTags.cpp
+    camera/VendorCameraGate.cpp
     camera/CameraRouting.cpp
     camera/CameraProfileJson.cpp
     camera/CameraProbe.cpp

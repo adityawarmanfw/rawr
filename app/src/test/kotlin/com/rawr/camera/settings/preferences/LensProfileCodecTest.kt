@@ -39,6 +39,29 @@ class LensProfileCodecTest {
         )
 
     @Test
+    fun keepsFullSizeLensFieldsThroughARoundTrip() {
+        val full =
+            LensProfile(
+                name = "F85",
+                cameraId = "5",
+                stream = RawStreamChoice(RawStreamFormat.Raw16, 8160, 6144, unlisted = true),
+                levels = LensLevels(true, List(4) { 64f }, 1023f),
+                vendorKeys = listOf(force.copy(values = listOf(14.0)), force.copy(scope = VendorKeyScope.Request, values = listOf(14.0))),
+                readerUsage = "gpuDataBuffer",
+                vendorGate = "vivoFullSize"
+            )
+        val decoded = requireNotNull(LensProfileCodec.decode(LensProfileCodec.encode(listOf(full)))).single()
+        assertEquals(full, decoded)
+        // Absent fields stay off, so binned lenses keep the app's reader choice and no gate.
+        val plain = requireNotNull(LensProfileCodec.decode("""{"lenses":[{"id":"L","cameraId":"3"}]}""")).single()
+        assertEquals(false, plain.stream.unlisted)
+        assertNull(plain.readerUsage)
+        assertEquals("", plain.vendorGate)
+        val json = JSONObject(LensProfileCodec.encode(listOf(plain))).getJSONArray("lenses").getJSONObject(0)
+        assertEquals(false, json.has("readerUsage") || json.has("vendorGate") || json.getJSONObject("stream").has("unlisted"))
+    }
+
+    @Test
     fun trimsLoadedKeyNamesWithoutDiscardingMalformedEntries() {
         val json = """{"lenses":[{"id":"DCG","cameraId":"0","keys":[
             {"tag":" \tvendor.mode\n","values":[7]},

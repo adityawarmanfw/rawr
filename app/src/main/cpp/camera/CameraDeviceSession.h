@@ -69,6 +69,8 @@ class CameraDeviceSession final {
     // Adds the companion YUV output and request target; false leaves the session RAW-only.
     bool addCompanionStream(const std::string& physicalCameraId, const Diagnostic&);
     void closeDeviceDetached(std::function<void()> afterClose);
+    // Releases a vendor gate taken for a device that never opened or is already gone.
+    void releaseHeldGate() noexcept;
     ACameraManager* manager_ = nullptr;
     ACameraDevice* device_ = nullptr;
     ACameraCaptureSession* session_ = nullptr;
@@ -90,6 +92,7 @@ class CameraDeviceSession final {
     bool sessionKeysApplied_ = false;
     uint64_t generation_ = 0, readerGeneration_ = 0, closeGeneration_ = 0;
     bool closePending_ = false, forcedRetire_ = false;
+    std::string heldGate_;  // LensRoute::vendorGate held for the open device.
     std::condition_variable closed_;
 };
 }  // namespace rawrcam::camera

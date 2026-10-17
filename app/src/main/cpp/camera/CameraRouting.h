@@ -45,6 +45,9 @@ struct ExposureOverride {
     int64_t shutterMaxNs = 0;
 };
 inline constexpr int64_t kExtendedShutterMaxNs = 25'000'000'000LL;
+// AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER, the only usage bit the vivo full-size
+// RAW modes accept besides none (profile "readerUsage": "gpuDataBuffer").
+inline constexpr uint64_t kReaderUsageGpuDataBuffer = 1ull << 24;
 inline constexpr int32_t kExtendedIsoMax = 409'600;
 
 // How one UI lens maps onto the device. A camera profile is the full set of
@@ -60,6 +63,14 @@ struct LensRoute {
     std::vector<CameraKeySetting> keys;
     LevelOverride levels;
     ExposureOverride exposure;
+    // Full-size vendor modes stream a size the camera doesn't advertise: use
+    // preferredStream as is instead of negotiating it against the RAW outputs.
+    bool unlistedStream = false;
+    // AHB usage for the RAW reader instead of the ingress ladder's choice; the
+    // vivo full-size modes configure only without CPU-read / sampled-image bits.
+    std::optional<uint64_t> readerUsage;
+    // Vendor state the app holds while the device is open (see VendorCameraGate).
+    std::string vendorGate;
 };
 
 struct CameraProfile {

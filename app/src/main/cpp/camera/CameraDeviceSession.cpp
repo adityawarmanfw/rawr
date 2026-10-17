@@ -1,4 +1,5 @@
 #include "camera/CameraDeviceSession.h"
+#include "camera/VendorCameraGate.h"
 
 #include <camera/NdkCameraMetadataTags.h>
 
@@ -41,6 +42,7 @@ CameraDeviceSession::CameraDeviceSession() {
     if (!manager_) throw std::runtime_error("ACameraManager_create failed");
 }
 CameraDeviceSession::~CameraDeviceSession() {
+    releaseHeldGate();
     releaseCharacteristics();
     if (manager_) ACameraManager_delete(manager_);
 }
@@ -81,6 +83,11 @@ void CameraDeviceSession::releaseRequestOutputs(bool orphan) noexcept {
 void CameraDeviceSession::releaseCharacteristics() noexcept {
     if (characteristics_) ACameraMetadata_free(characteristics_);
     characteristics_ = nullptr;
+}
+void CameraDeviceSession::releaseHeldGate() noexcept {
+    if (heldGate_.empty()) return;
+    releaseVendorCameraGate(heldGate_);
+    heldGate_.clear();
 }
 void CameraDeviceSession::closeDeviceDetached(std::function<void()> afterClose) {
     ACameraDevice* closing = std::exchange(device_, nullptr);
@@ -131,7 +138,13 @@ std::optional<LensRoute> CameraDeviceSession::select(const LensRoute& requested,
         sensorChars = nullptr;
     };
 
-    const auto negotiated = geometry::negotiateRawStream(rawOutputStreams(sensorChars), requested.preferredStream);
+    // An unlisted (vendor full-size) stream is configured as the profile says; the HAL decides at configure time.
+    const auto negotiated =
+        requested.unlistedStream && requested.preferredStream.width && requested.preferredStream.height
+            ? std::optional<geometry::RawStreamOption>(geometry::RawStreamOption{requested.preferredStream.format,
+                                                                                requested.preferredStream.width,
+                                                                                requested.preferredStream.height})
+            : geometry::negotiateRawStream(rawOutputStreams(sensorChars), requested.preferredStream);
     if (!negotiated) {
         releaseSensorChars();
         ACameraMetadata_free(chars);
@@ -163,6 +176,7 @@ std::optional<LensRoute> CameraDeviceSession::select(const LensRoute& requested,
         return std::nullopt;
     }
     parsed->rawFormat = route.stream.format;
+    parsed->rawReaderUsage = route.readerUsage;
 
     cameraContext_ = std::make_shared<const metadata::CameraContextMetadata>(std::move(*parsed));
     characteristics_ = chars;
@@ -195,6 +209,19 @@ bool CameraDeviceSession::open(const LensRoute& route, CameraCallbacks& callback
         }
     }
 
+    // Vendor state the route needs while open; released when the device has closed.
+    if (!route.vendorGate.empty() && heldGate_ != route.vendorGate) {
+        releaseHeldGate();
+        std::string gateError;
+        if (!acquireVendorCameraGate(route.vendorGate, &gateError)) {
+            diag("CAMERA_NDK_VENDOR_GATE_REFUSED gate=" + route.vendorGate + " cameraId=" + route.cameraId +
+                 " reason=" + gateError);
+            return false;
+        }
+        heldGate_ = route.vendorGate;
+        diag("CAMERA_NDK_VENDOR_GATE_ACQUIRED gate=" + route.vendorGate + " cameraId=" + route.cameraId);
+    }
+
     auto backoff = kOpenRetryInitial;
     for (int attempt = 1;; ++attempt) {
         if (!stillCurrent()) return false;
@@ -216,7 +243,10 @@ bool CameraDeviceSession::open(const LensRoute& route, CameraCallbacks& callback
 
         // The HAL can keep reporting the previous camera as in use for a moment after its close returns.
         const bool busy = os == ACAMERA_ERROR_MAX_CAMERA_IN_USE || os == ACAMERA_ERROR_CAMERA_IN_USE;
-        if (!busy || std::chrono::steady_clock::now() + backoff >= deadline) return false;
+        if (!busy || std::chrono::steady_clock::now() + backoff >= deadline) {
+            releaseHeldGate();
+            return false;
+        }
         controllerLock.unlock();
         std::this_thread::sleep_for(backoff);
         controllerLock.lock();
@@ -487,10 +517,18 @@ CameraReaderRetirement CameraDeviceSession::release(const Diagnostic& diag) {
         CameraDeviceCallbackContext* const closingContext = deviceContext_;
         deviceContext_ = nullptr;
         diag("CAMERA_NDK_DEVICE_CLOSE_DETACHED generation=" + std::to_string(generation_));
-        closeDeviceDetached([closingContext] { delete closingContext; });
-    } else if (deviceContext_) {
-        delete deviceContext_;
-        deviceContext_ = nullptr;
+        // The vendor gate goes back only after ACameraDevice_close has returned.
+        std::string gate = std::exchange(heldGate_, std::string());
+        closeDeviceDetached([closingContext, gate] {
+            delete closingContext;
+            if (!gate.empty()) releaseVendorCameraGate(gate);
+        });
+    } else {
+        if (deviceContext_) {
+            delete deviceContext_;
+            deviceContext_ = nullptr;
+        }
+        releaseHeldGate();
     }
     releaseCharacteristics();
     cameraContext_.reset();
