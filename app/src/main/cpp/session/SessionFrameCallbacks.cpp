@@ -5,11 +5,13 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <limits>
 
 #include "capture/multiframe/BracketExposure.h"
 #include "color/AePostGainCurve.h"
 #include "camera/NativeCameraController.h"
 #include "color/AutoKeyExposure.h"
+#include "geometry/OrientationTransform.h"
 #include "image_scopes/types.h"
 #include "session/SessionEngine.h"
 #include "tonemap/TonemapMath.h"
@@ -116,6 +118,18 @@ void SessionFrameCallbacks::updateRawrAe(const image_scopes::SceneExposureStatsD
     f.channelBins = stats->channelBins;
     // A spot's bins cover the tapped area only; the night look judges the frame.
     if (context.spotActive) f.frameLogMeanEv = image_scopes::sceneFrameLogMeanEv(*stats);
+    // Zones, upright by the sensor mount and the phone's posture (as the scopes).
+    static_assert(image_scopes::kSceneZoneCols == ae::kZoneCols && image_scopes::kSceneZoneRows == ae::kZoneRows);
+    std::array<float, ae::kZoneCount> zoneEv{}, zoneClipped{};
+    for (std::uint32_t z = 0; z < ae::kZoneCount; ++z) {
+        const auto mean = image_scopes::sceneZoneLogMeanEv(*stats, z);
+        zoneEv[z] = mean ? *mean : std::numeric_limits<float>::quiet_NaN();
+        zoneClipped[z] = stats->zoneSamples[z] ? float(stats->zoneClipped[z]) / float(stats->zoneSamples[z]) : 0.0f;
+    }
+    f.zoneLogMeanEv = zoneEv.data();
+    f.zoneClippedShare = zoneClipped.data();
+    f.zoneQuarterTurns = rawrcam::geometry::presentationQuarterTurns(engine_->realtime_.sensorOrientationDegrees(),
+                                                                     engine_->realtime_.scopeDeviceRotationDegrees());
     // Matrix leans its key toward the focus area (empty bins when there is none).
     if (!context.spotActive && context.config.metering == 0) {
         f.focusBins = stats->focusBins;

@@ -143,8 +143,14 @@ SceneExposureStatsData measureSceneExposure(RgbaF32ImageView im, const float lum
             const float frameLuma = clipped ? clipLuma : luma;
             const float frameLog =
                 frameLuma > 0.0f ? (std::log2(frameLuma) - kSceneFrameLogMinEv) * kSceneFrameLogScale : 0.0f;
-            out.frameLogSum += std::uint32_t(std::clamp(frameLog + 0.5f, 0.0f, float(kSceneFrameLogMax)));
+            const auto frameLogQ = std::uint32_t(std::clamp(frameLog + 0.5f, 0.0f, float(kSceneFrameLogMax)));
+            out.frameLogSum += frameLogQ;
             ++out.frameSamples;
+            const std::uint32_t zone = std::min(y * kSceneZoneRows / im.height, kSceneZoneRows - 1u) * kSceneZoneCols +
+                                       std::min(x * kSceneZoneCols / im.width, kSceneZoneCols - 1u);
+            out.zoneLogSum[zone] += frameLogQ;
+            ++out.zoneSamples[zone];
+            if (clipped) ++out.zoneClipped[zone];
             if (focusOn) {
                 const std::uint32_t sx = 255u * x / im.width, sy = 255u * y / im.height;
                 if (sx >= fx0 && sx < fx1 && sy >= fy0 && sy < fy1) {

@@ -68,6 +68,9 @@ inline constexpr float kSceneChannelClip = 0.95f;
 inline constexpr float kSceneFrameLogMinEv = -24.0f;
 inline constexpr float kSceneFrameLogScale = 16.0f;
 inline constexpr std::uint32_t kSceneFrameLogMax = 28u * 16u;
+inline constexpr std::uint32_t kSceneZoneCols = 8;
+inline constexpr std::uint32_t kSceneZoneRows = 6;
+inline constexpr std::uint32_t kSceneZoneCount = kSceneZoneCols * kSceneZoneRows;
 
 struct SceneExposureStatsData {
     std::uint32_t weightedBins[kSceneExposureBins]{};
@@ -83,8 +86,21 @@ struct SceneExposureStatsData {
     // Luma bins of the samples inside the focus rectangle only (weight 1,
     // spot or not): the meter blends them in at a chosen share.
     std::uint32_t focusBins[kSceneExposureBins]{};
+    // Zone grid over the input as stored (sensor orientation), row-major,
+    // every sample unweighted, spot or not: the log luma sum (frameLogSum
+    // quantisation), sample count and clipped count of each zone.
+    std::uint32_t zoneLogSum[kSceneZoneCount]{};
+    std::uint32_t zoneSamples[kSceneZoneCount]{};
+    std::uint32_t zoneClipped[kSceneZoneCount]{};
 };
-static_assert(sizeof(SceneExposureStatsData) == (3u * kSceneExposureBins + 8u) * 4u);
+static_assert(sizeof(SceneExposureStatsData) == (3u * kSceneExposureBins + 8u + 3u * kSceneZoneCount) * 4u);
+
+// Mean log2 luma of one zone (clipped samples at the clip).
+inline std::optional<float> sceneZoneLogMeanEv(const SceneExposureStatsData& s, std::uint32_t zone) noexcept {
+    if (zone >= kSceneZoneCount || s.zoneSamples[zone] == 0) return std::nullopt;
+    return float(double(s.zoneLogSum[zone]) / double(s.zoneSamples[zone]) / double(kSceneFrameLogScale)) +
+           kSceneFrameLogMinEv;
+}
 
 // Mean log2 luma of the whole frame.
 inline std::optional<float> sceneFrameLogMeanEv(const SceneExposureStatsData& s) noexcept {

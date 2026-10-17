@@ -185,6 +185,23 @@ struct MeterPolicy {
     float clippedGuardMaxEv = 0.75f;
     float outdoorEv100Low = 8.0f;
     float outdoorEv100High = 11.0f;
+    // Zones (Matrix): read the 8x6 grid, upright.
+    // - Sky: zones in the top third keyEv + skyAboveKeyEv or brighter are
+    //   left out of the key (the land underneath is not darkened), at most
+    //   skyMaxShiftEv.
+    // - Backlight: centre zones darker than the rest by backlightLowEv..
+    //   backlightHighEv pull the key backlightGain of the way down to them,
+    //   at most backlightMaxEv (skipped with a focus area: it does this).
+    // - Indoors/outdoors for clipped highlights: the EV100 of the zones not
+    //   mostly clipped (a window cannot lift it), not of the whole key.
+    bool zones = false;
+    float skyAboveKeyEv = 2.0f;
+    float skyMaxShiftEv = 1.0f;
+    float backlightLowEv = 1.5f;
+    float backlightHighEv = 3.0f;
+    float backlightGain = 0.35f;
+    float backlightMaxEv = 1.5f;
+    float brightZoneClipped = 0.5f;
     // Highlight-weighted: the percentile sits at the clip (less the margin)
     // whatever the key, within keyRangeEv below / highlightLiftEv above it.
     bool highlightPriority = false;
@@ -250,10 +267,105 @@ struct FrameObservation {
     // ignores a minority and jumps once the focus area is half the weight.)
     const std::uint32_t* focusBins = nullptr;
     float focusShare = 0.0f;
+    // Zone grid (kZoneCols x kZoneRows, sensor orientation, row-major): mean
+    // log2 luma per zone (NaN: no samples) and clipped share; null: none.
+    // zoneQuarterTurns: clockwise quarter turns from sensor to upright.
+    const float* zoneLogMeanEv = nullptr;
+    const float* zoneClippedShare = nullptr;
+    std::uint32_t zoneQuarterTurns = 0;
 };
+
+inline constexpr std::size_t kZoneCols = 8, kZoneRows = 6, kZoneCount = kZoneCols * kZoneRows;
+
+struct ZoneReading {
+    double keyShiftEv = 0.0;  // <= 0: lowers the key (brighter exposure)
+    double skyShiftEv = 0.0, backlightShiftEv = 0.0;
+    std::optional<float> restEv100;  // EV100 of the zones not mostly clipped
+};
+
+inline float medianOf(float* values, std::size_t count) noexcept {
+    std::nth_element(values, values + count / 2, values + count);
+    const float upper = values[count / 2];
+    if (count % 2) return upper;
+    return 0.5f * (upper + *std::max_element(values, values + count / 2));
+}
+
+// keyEv: the frame's key (frame units); subjectHandled: a focus area
+// already leans the key to the subject.
+inline std::optional<ZoneReading> readZones(const FrameObservation& f, float keyEv, bool subjectHandled,
+                                            const MeterPolicy& p) noexcept {
+    if (!f.zoneLogMeanEv || !f.zoneClippedShare) return std::nullopt;
+    struct Zone {
+        float ev, clipped, x, y;
+    };
+    std::array<Zone, kZoneCount> zones{};
+    std::size_t n = 0;
+    for (std::size_t i = 0; i < kZoneCount; ++i) {
+        if (!std::isfinite(f.zoneLogMeanEv[i])) continue;
+        // Zone centre, then clockwise quarter turns: (x, y) -> (1 - y, x).
+        float x = (float(i % kZoneCols) + 0.5f) / float(kZoneCols);
+        float y = (float(i / kZoneCols) + 0.5f) / float(kZoneRows);
+        for (std::uint32_t t = 0; t < (f.zoneQuarterTurns & 3u); ++t) {
+            const float nx = 1.0f - y;
+            y = x;
+            x = nx;
+        }
+        zones[n++] = {f.zoneLogMeanEv[i], f.zoneClippedShare[i], x, y};
+    }
+    if (n < kZoneCount / 2) return std::nullopt;
+    std::array<float, kZoneCount> a{}, b{};
+    const auto collect = [&](auto pick, std::array<float, kZoneCount>& out) {
+        std::size_t k = 0;
+        for (std::size_t i = 0; i < n; ++i)
+            if (pick(zones[i])) out[k++] = zones[i].ev;
+        return k;
+    };
+    ZoneReading z;
+    // Sky: bright zones in the top third. They are the brightest part of the
+    // histogram, so the land's key is the key percentile of what is left
+    // with the sky's weight share taken off the top (the matrix weights
+    // centre-half samples 3x).
+    const auto isSky = [&](const Zone& zone) { return zone.y < 1.0f / 3.0f && zone.ev >= keyEv + p.skyAboveKeyEv; };
+    double skyWeight = 0.0, totalWeight = 0.0;
+    for (std::size_t i = 0; i < n; ++i) {
+        const auto& zone = zones[i];
+        const bool centre = std::abs(zone.x - 0.5f) < 0.25f && std::abs(zone.y - 0.5f) < 0.25f;
+        totalWeight += centre ? 3.0 : 1.0;
+        if (isSky(zone)) skyWeight += centre ? 3.0 : 1.0;
+    }
+    const double skyShare = totalWeight > 0.0 ? skyWeight / totalWeight : 0.0;
+    if (skyShare > 0.0 && skyShare <= 0.5) {
+        const float keyPercentile = kSceneKeyTrimLow + 0.5f * (1.0f - kSceneKeyTrimHigh - kSceneKeyTrimLow);
+        if (const auto landKey = scenePercentileEv(f.weightedBins, keyPercentile * float(1.0 - skyShare)))
+            z.skyShiftEv = std::clamp(double(*landKey - keyEv), -double(p.skyMaxShiftEv), 0.0);
+    }
+    // Backlight: a dark centre against a brighter surround.
+    if (!subjectHandled) {
+        const auto isCentre = [](const Zone& zone) {
+            return std::abs(zone.x - 0.5f) < 0.25f && std::abs(zone.y - 0.5f) < 0.25f;
+        };
+        const auto centre = collect(isCentre, a);
+        const auto surround = collect([&](const Zone& zone) { return !isCentre(zone); }, b);
+        if (centre > 0 && surround > 0) {
+            const float subject = medianOf(a.data(), centre);
+            const float contrast = medianOf(b.data(), surround) - subject;
+            const float span = p.backlightHighEv - p.backlightLowEv;
+            const float x = span > 0.0f ? std::clamp((contrast - p.backlightLowEv) / span, 0.0f, 1.0f) : 0.0f;
+            const double ramp = x * x * (3.0f - 2.0f * x);
+            z.backlightShiftEv =
+                ramp * std::clamp(double(p.backlightGain) * double(subject - keyEv), -double(p.backlightMaxEv), 0.0);
+        }
+    }
+    z.keyShiftEv = z.skyShiftEv + z.backlightShiftEv;
+    // Light level of what is not a clipped light source.
+    const auto rest = collect([&](const Zone& zone) { return zone.clipped < p.brightZoneClipped; }, a);
+    if (rest > 0) z.restEv100 = sceneEv100(medianOf(a.data(), rest), f.shutterNs, f.iso, f.aperture, p.midGray);
+    return z;
+}
 
 struct Metered {
     double desiredLogExposure = 0.0;
+    double zoneShiftEv = 0.0;  // key shift from the zones (<= 0)
     float sceneEv100 = 0.0f;
     float nightOffsetEv = 0.0f;
     float guardEv = 0.0f;  // <= 0
@@ -318,6 +430,9 @@ inline MeterPolicy meterPolicyFor(int metering) noexcept {
             p.linearMean = true;
             p.maxGuardEv = 0.0f;
             break;
+        case Metering::Matrix:
+            p.zones = true;
+            break;
         case Metering::Highlight:
             p.highlightPriority = true;
             p.highlightPercentile = 0.995f;
@@ -357,9 +472,12 @@ inline std::optional<Metered> meter(const FrameObservation& f, NightLook look, f
     if (!f.weightedBins || !std::isfinite(f.logExposure) || !std::isfinite(f.clipLumaEv)) return std::nullopt;
     // Highlights stay whole-frame; only the key leans to the focus area.
     auto key = sceneKeyEv(f.weightedBins);
+    bool focused = false;
     if (key && f.focusShare > 0.0f && binsPopulated(f.focusBins)) {
-        if (const auto focusKey = sceneKeyEv(f.focusBins))
+        if (const auto focusKey = sceneKeyEv(f.focusBins)) {
             key = *key + std::clamp(f.focusShare, 0.0f, 1.0f) * (*focusKey - *key);
+            focused = true;
+        }
     }
     const auto high = readHighlight(f, p);
     if (!key || !high) return std::nullopt;
@@ -367,8 +485,10 @@ inline std::optional<Metered> meter(const FrameObservation& f, NightLook look, f
     const float nightKey = f.frameLogMeanEv && std::isfinite(*f.frameLogMeanEv) ? *f.frameLogMeanEv : *key;
     m.sceneEv100 = sceneEv100(nightKey, f.shutterNs, f.iso, f.aperture, p.midGray);
     m.nightOffsetEv = nightKeyOffsetEv(m.sceneEv100, look, p);
+    const auto zones = p.zones ? readZones(f, *key, focused, p) : std::nullopt;
+    if (zones) m.zoneShiftEv = zones->keyShiftEv;
     // Scene-referred (exposure removed) key and highlight.
-    const double keyScene = double(*key) - f.logExposure;
+    const double keyScene = double(*key) + m.zoneShiftEv - f.logExposure;
     double byKey = std::log2(double(p.targetKey)) + double(m.nightOffsetEv) - keyScene;
     if (p.linearMean) {
         if (const auto mean = sceneLinearMeanEv(f.weightedBins, f.clipLumaEv, p.clippedOverEv))
@@ -376,7 +496,8 @@ inline std::optional<Metered> meter(const FrameObservation& f, NightLook look, f
     }
     const double byHighlight = high->targetEv - high->sceneEv;
     double darkening = guardDarkeningEv(byKey - byHighlight, p);
-    if (high->clipped) darkening = std::min(darkening, clippedGuardCapEv(m.sceneEv100, p));
+    if (high->clipped)
+        darkening = std::min(darkening, clippedGuardCapEv(zones && zones->restEv100 ? *zones->restEv100 : m.sceneEv100, p));
     const double guarded = p.highlightPriority
                                ? std::clamp(byHighlight, byKey - double(p.maxGuardEv), byKey + double(p.highlightLiftEv))
                                : byKey - darkening;

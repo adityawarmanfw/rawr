@@ -138,6 +138,23 @@ int main() {
                 focusSum += gpu.focusBins[b];
             }
             require(focusSum == gpu.focusSamples, "focus bins do not sum to focus samples");
+            std::uint32_t zoneSamples = 0;
+            for (std::uint32_t z = 0; z < kSceneZoneCount; ++z) {
+                require(gpu.zoneSamples[z] == cpu.zoneSamples[z] && gpu.zoneClipped[z] == cpu.zoneClipped[z],
+                        "zone counts mismatch");
+                require(std::abs(double(gpu.zoneLogSum[z]) - double(cpu.zoneLogSum[z])) <=
+                            double(gpu.zoneSamples[z]) * 0.01 + 1.0,
+                        "zone log sum differs from CPU reference");
+                zoneSamples += gpu.zoneSamples[z];
+            }
+            require(zoneSamples == gpu.frameSamples, "zones must cover the frame");
+            // The sky band (top fifth) clips the top-left zone; the dark
+            // bottom-left zone (left end of the ramp) does not clip.
+            const std::uint32_t bottomLeft = kSceneZoneCount - kSceneZoneCols;
+            require(gpu.zoneClipped[0] == gpu.zoneSamples[0] && gpu.zoneClipped[bottomLeft] == 0,
+                    "zone clipping misplaced");
+            require(*sceneZoneLogMeanEv(gpu, 0) > *sceneZoneLogMeanEv(gpu, bottomLeft) + 8.0f,
+                    "zone means misplaced");
             require(focusDiff * 200u <= focusSum + 200u, "focus histogram differs from CPU reference");
             std::uint64_t diff = 0, sum = 0;
             for (std::uint32_t b = 0; b < kSceneExposureBins; ++b) {
