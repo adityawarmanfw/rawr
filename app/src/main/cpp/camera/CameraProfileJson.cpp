@@ -415,12 +415,21 @@ std::string serializeCameraProfile(const CameraProfile& profile) {
         out += ",\"stream\":{\"format\":\"";
         out += geometry::rawPixelFormatName(r.preferredStream.format);
         out += "\",\"width\":" + std::to_string(r.preferredStream.width) +
-               ",\"height\":" + std::to_string(r.preferredStream.height) + "},\"levels\":";
+               ",\"height\":" + std::to_string(r.preferredStream.height);
+        if (r.unlistedStream) out += ",\"unlisted\":true";
+        out += "},\"levels\":";
         appendLevels(out, r.levels);
         out += ",\"exposure\":";
         appendExposure(out, r.exposure);
         out += ",\"keys\":";
         appendKeys(out, r.keys);
+        if (r.readerUsage)
+            out += *r.readerUsage == kReaderUsageGpuDataBuffer ? ",\"readerUsage\":\"gpuDataBuffer\""
+                                                                : ",\"readerUsage\":\"none\"";
+        if (!r.vendorGate.empty()) {
+            out += ",\"vendorGate\":";
+            appendJsonString(out, r.vendorGate);
+        }
         out += '}';
     }
     out += "]}";
@@ -457,7 +466,18 @@ std::optional<CameraProfile> readProfile(const Json& root, std::string* error) {
                 s->str("format") == "RAW10" ? geometry::RawPixelFormat::Raw10 : geometry::RawPixelFormat::Raw16;
             r.preferredStream.width = uint32_t(std::max(0.0, s->num("width")));
             r.preferredStream.height = uint32_t(std::max(0.0, s->num("height")));
+            r.unlistedStream = s->flag("unlisted", false);
         }
+        if (const Json* u = l.get("readerUsage"); u && u->kind == Json::Kind::String) {
+            // Named, not numeric: the JSON number type can't carry 64-bit usage bits exactly.
+            if (u->text == "gpuDataBuffer") r.readerUsage = kReaderUsageGpuDataBuffer;
+            else if (u->text == "none") r.readerUsage = 0;
+            else {
+                if (error) *error = "unknown readerUsage " + u->text + " for lens " + r.lensId;
+                return std::nullopt;
+            }
+        }
+        r.vendorGate = l.str("vendorGate");
         if (!readLevels(l.get("levels"), r.levels)) {
             if (error) *error = "invalid levels for lens " + r.lensId;
             return std::nullopt;

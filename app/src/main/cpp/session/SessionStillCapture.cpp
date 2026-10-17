@@ -142,6 +142,11 @@ void SessionEngine::setPersistentEngineEnabled(bool enabled) {
     capture_.multiframe().setPersistentEngineEnabled(enabled);
     LOGI("PERSISTENT_ENGINE enabled=%s", enabled ? "true" : "false");
 }
+namespace {
+constexpr uint64_t kFullSizeRawPixels = 25'000'000;  // Above any binned 12-16 MP stream.
+constexpr uint32_t kFullSizeMaxFrames = 6;
+}  // namespace
+
 uint32_t SessionEngine::prepareExperimentalMultiframe(uint32_t maxFrames, uint32_t longFrames) {
     // HDR+ Bracketed: when the shutter/gain limits would leave the long
     // frames too dark to help (they would be skipped), freeze their slots as
@@ -160,8 +165,15 @@ uint32_t SessionEngine::prepareExperimentalMultiframe(uint32_t maxFrames, uint32
     }
     std::lock_guard<std::mutex> lock(mu_);
     bracketSkippedForPending_ = skipLong;
-    return capture_.multiframe().prepareExperimentalMultiframeOnShutter(
-        std::min<uint32_t>(skipLong ? maxFrames + longFrames : maxFrames, 30u));
+    uint32_t burst = std::min<uint32_t>(skipLong ? maxFrames + longFrames : maxFrames, 30u);
+    // Full-size (50 MP) frames are 4x a 12 MP frame: more than a few exhaust
+    // memory during the merge and stall the viewfinder.
+    if (uint64_t(realtime_.rawWidth()) * realtime_.rawHeight() > kFullSizeRawPixels && burst > kFullSizeMaxFrames) {
+        LOGI("MULTIFRAME_FULL_SIZE_CAP raw=%ux%u requested=%u capped=%u", realtime_.rawWidth(), realtime_.rawHeight(),
+             burst, kFullSizeMaxFrames);
+        burst = kFullSizeMaxFrames;
+    }
+    return capture_.multiframe().prepareExperimentalMultiframeOnShutter(burst);
 }
 uint64_t SessionEngine::startPreparedMultiframeCapture(
     rawrcam::encoding::dng::DngCaptureContext baseDng, rawrcam::encoding::dng::DngCaptureContext mergedDng,

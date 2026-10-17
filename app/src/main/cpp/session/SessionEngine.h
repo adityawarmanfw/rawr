@@ -216,6 +216,8 @@ class SessionEngine {
     uint64_t cameraSetupGeneration_ = 0;
     uint64_t cameraReaderGeneration_ = 0;
     imaging::RawReaderUsageLadder rawReaderUsage_;  // guarded by mu_
+    // LensRoute::readerUsage of the configured camera; overrides the ladder. Guarded by mu_.
+    std::optional<uint64_t> profileReaderUsage_;
     ANativeWindow* createRawInputWindow(uint64_t generation, uint32_t width, uint32_t height,
                                         rawrcam::geometry::RawPixelFormat format);
     void destroyRawInput();

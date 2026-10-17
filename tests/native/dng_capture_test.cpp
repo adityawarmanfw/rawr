@@ -345,6 +345,36 @@ int main() {
         std::cout << "DNG_CAPTURE_TILED_LJPEG_PASS " << dims.first << "x" << dims.second << " bytes=" << outSize << "\n";
     }
 
+    // Vendor full-size mode (vivo 50 MP): the stored RAW is 2x the advertised
+    // binned pixel array; the active area scales with it.
+    {
+        auto full = makeFrame(true);
+        auto ctx = std::make_shared<rawrcam::metadata::CameraContextMetadata>(*full.metadata.cameraContext);
+        ctx->geometry.pixelArrayWidth = 4;
+        ctx->geometry.pixelArrayHeight = 3;
+        ctx->geometry.preCorrectionActiveArray = {0, 0, 4, 3, true};
+        full.metadata.cameraContext = ctx;
+        error.clear();
+        auto params = rawrcam::encoding::dng::makeTinyDngWriteParams(full, capture, &error);
+        if (!params || !params->raw.has_active_area || params->raw.active_area[0] != 0 ||
+            params->raw.active_area[1] != 0 || params->raw.active_area[2] != 6 || params->raw.active_area[3] != 8) {
+            std::cerr << "full-size geometry: " << error << "\n";
+            return 10;
+        }
+        // A non-integer ratio stays unresolved.
+        auto odd = makeFrame(true);
+        auto oddCtx = std::make_shared<rawrcam::metadata::CameraContextMetadata>(*odd.metadata.cameraContext);
+        oddCtx->geometry.pixelArrayWidth = 3;
+        oddCtx->geometry.pixelArrayHeight = 2;
+        oddCtx->geometry.preCorrectionActiveArray = {0, 0, 3, 2, true};
+        odd.metadata.cameraContext = oddCtx;
+        error.clear();
+        if (rawrcam::encoding::dng::makeTinyDngWriteParams(odd, capture, &error) ||
+            error.find("unresolved stored RAW geometry") == std::string::npos)
+            return 11;
+        std::cout << "DNG_CAPTURE_FULL_SIZE_GEOMETRY_PASS\n";
+    }
+
     auto bad = makeFrame(false);
     error.clear();
     if (rawrcam::encoding::dng::makeTinyDngWriteParams(bad, capture, &error) ||

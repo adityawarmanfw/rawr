@@ -46,6 +46,7 @@ internal object LensProfileCodec {
                 .put("format", lens.stream.format.wireName)
                 .put("width", lens.stream.width.coerceAtLeast(0))
                 .put("height", lens.stream.height.coerceAtLeast(0))
+                .apply { if (lens.stream.unlisted) put("unlisted", true) }
         )
         .put("levels", encodeLevels(lens.levels))
         .put(
@@ -56,6 +57,10 @@ internal object LensProfileCodec {
                 .put("shutterMaxNs", lens.exposure.shutterMaxNs)
         )
         .put("keys", encodeKeys(lens.vendorKeys))
+        .apply {
+            lens.readerUsage?.let { put("readerUsage", it) }
+            if (lens.vendorGate.isNotEmpty()) put("vendorGate", lens.vendorGate)
+        }
 
     private fun decodeLens(o: JSONObject): LensProfile {
         val stream = o.optJSONObject("stream")
@@ -73,7 +78,8 @@ internal object LensProfileCodec {
                 RawStreamChoice(
                     format = RawStreamFormat.fromWire(stream?.optString("format")),
                     width = stream?.optInt("width") ?: 0,
-                    height = stream?.optInt("height") ?: 0
+                    height = stream?.optInt("height") ?: 0,
+                    unlisted = stream?.optBoolean("unlisted") ?: false
                 ),
             exposure = o.optJSONObject("exposure").let { e ->
                 LensExposure(
@@ -83,7 +89,9 @@ internal object LensProfileCodec {
                 )
             },
             levels = if (!levels.isStatic && legacyLevels?.isStatic == true) legacyLevels else levels,
-            vendorKeys = decodeKeys(o.optJSONArray("keys")) + decodeKeys(legacyDcg?.optJSONArray("keys"))
+            vendorKeys = decodeKeys(o.optJSONArray("keys")) + decodeKeys(legacyDcg?.optJSONArray("keys")),
+            readerUsage = o.optString("readerUsage").ifEmpty { null },
+            vendorGate = o.optString("vendorGate")
         )
     }
 

@@ -18,6 +18,9 @@ class NativePreviewEngine {
 
     external fun installCameraTagResolver(resolver: CameraTagResolver)
 
+    /** Installed once per process, before any camera opens. */
+    external fun installVendorCameraGate(gate: VendorCameraGate)
+
     external fun create(filesDir: String, nativeLibraryDir: String, customDriverPath: String): Long
 
     external fun destroy(handle: Long)

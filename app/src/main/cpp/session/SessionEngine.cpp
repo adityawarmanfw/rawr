@@ -48,6 +48,7 @@ SessionEngine::SessionEngine(std::string filesDir) : filesDir_(std::move(filesDi
         if (generation < cameraSetupGeneration_) return false;
         cameraSetupGeneration_ = generation;
         const bool configured = realtime_.configureCamera(generation, metadata);
+        profileReaderUsage_ = metadata.rawReaderUsage;
         // The RAW size may have changed (or become known): rebuild the prewarm.
         if (configured) {
             cameraCapabilities_ = capabilities;

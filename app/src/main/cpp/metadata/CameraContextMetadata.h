@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -32,6 +33,8 @@ struct CameraContextMetadata {
     // Layout of the configured RAW stream; downstream consumers always see
     // unpacked RAW16 after ingress, but CPU readers must decode RAW10 groups.
     geometry::RawPixelFormat rawFormat = geometry::RawPixelFormat::Raw16;
+    // The lens profile's RAW reader usage (LensRoute::readerUsage), if any.
+    std::optional<uint64_t> rawReaderUsage;
     uint32_t rawPreviewCfa = 0;  // RGGB=0, GRBG=1, GBRG=2, BGGR=3.
     int32_t camera2Cfa = -1;
     int32_t lensFacing = -1;

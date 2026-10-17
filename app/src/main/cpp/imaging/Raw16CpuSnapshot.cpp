@@ -21,6 +21,9 @@ double elapsedMs(Clock::time_point begin, Clock::time_point end) {
 // lockFenceFd goes to AHardwareBuffer_lock; before the lock it is returned
 // untouched in gpuAcquireFenceFd, after a successful unlock that field holds
 // the CPU release fence (-2 when the unlock failed).
+// HAL_PIXEL_FORMAT_RAW16, the AHB format of a RAW_SENSOR camera buffer.
+constexpr uint32_t kHalPixelFormatRaw16 = 0x20;
+
 Raw16CpuSnapshotResult copyToPacked(AImage* image, AHardwareBuffer* ahb, int lockFenceFd, uint32_t width,
                                     uint32_t height, std::vector<uint8_t>& destination) noexcept {
     Raw16CpuSnapshotResult out{};
@@ -58,6 +61,15 @@ Raw16CpuSnapshotResult copyToPacked(AImage* image, AHardwareBuffer* ahb, int loc
         if (layoutOk) {
             format = *imageFormat;
             sourceRowBytes = static_cast<uint64_t>(out.sourceRowStrideBytes);
+        } else if (imageFormat == RawPixelFormat::Raw16 && desc.width == width && desc.height == height &&
+                   desc.format == kHalPixelFormatRaw16 && desc.stride >= width &&
+                   (desc.usage & AHARDWAREBUFFER_USAGE_CPU_READ_MASK) == 0) {
+            // A reader without CPU usage (vivo full-size modes accept only
+            // GPU_DATA_BUFFER): the NDK refuses the AImage plane queries, but the
+            // buffer itself describes its RAW16 layout and locks for reading.
+            layoutOk = true;
+            out.sourceRowStrideBytes = static_cast<int32_t>(sourceRowBytes);
+            out.sourcePixelStrideBytes = static_cast<int32_t>(sizeof(uint16_t));
         }
     } else {
         out.sourceRowStrideBytes = static_cast<int32_t>(

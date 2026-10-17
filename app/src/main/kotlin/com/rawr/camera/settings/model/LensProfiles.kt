@@ -70,11 +70,15 @@ data class LensExposure(
 const val EXTENDED_SHUTTER_MAX_NS = 25_000_000_000L
 const val EXTENDED_ISO_MAX = 409_600
 
-/** Preferred RAW stream; a zero size means the largest size of the format. */
+/**
+ * Preferred RAW stream; a zero size means the largest size of the format. [unlisted]: a vendor full-size mode
+ * the camera doesn't advertise, configured at exactly this size.
+ */
 data class RawStreamChoice(
     val format: RawStreamFormat = RawStreamFormat.Raw16,
     val width: Int = 0,
-    val height: Int = 0
+    val height: Int = 0,
+    val unlisted: Boolean = false
 ) {
     val isLargest: Boolean get() = width <= 0 || height <= 0
     val label: String get() = if (isLargest) "${format.label} (largest)" else "${format.label} ${width}×$height"
@@ -89,7 +93,11 @@ data class LensProfile(
     val stream: RawStreamChoice = RawStreamChoice(),
     val levels: LensLevels = LensLevels(),
     val exposure: LensExposure = LensExposure(),
-    val vendorKeys: List<VendorKey> = emptyList()
+    val vendorKeys: List<VendorKey> = emptyList(),
+    /** RAW reader usage the mode needs ("gpuDataBuffer", "none"); null for the app's own choice. */
+    val readerUsage: String? = null,
+    /** Vendor state held while the camera is open ("vivoFullSize"); empty for none. */
+    val vendorGate: String = ""
 )
 
 /** Problems with one lens, in display order; empty when the lens is valid. */

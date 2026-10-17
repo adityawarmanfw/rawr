@@ -67,6 +67,17 @@ std::optional<GeometryMap> mapGeometry(const rawrcam::imaging::RawSnapshot& fram
         }
         return GeometryMap{0, 0, a->top, a->left, a->bottom, a->right, "full_pixel_array"};
     }
+    // Vendor full-size modes (vivo 50 MP) stream the whole sensor at an integer
+    // multiple of the advertised (binned) pixel array: the active area scales.
+    for (const uint32_t k : {2u, 4u}) {
+        if (g.pixelArrayWidth * k != frame.width || g.pixelArrayHeight * k != frame.height) continue;
+        const auto scaled = [k](int32_t v) { return static_cast<uint32_t>(std::max<int32_t>(v, 0)) * k; };
+        const RectU32 a{scaled(g.preCorrectionActiveArray.top), scaled(g.preCorrectionActiveArray.left),
+                        std::min(frame.height, scaled(g.preCorrectionActiveArray.bottom)),
+                        std::min(frame.width, scaled(g.preCorrectionActiveArray.right))};
+        if (a.right <= a.left || a.bottom <= a.top) break;
+        return GeometryMap{0, 0, a.top, a.left, a.bottom, a.right, "scaled_full_pixel_array"};
+    }
     if (rectWidth(g.preCorrectionActiveArray) == frame.width &&
         rectHeight(g.preCorrectionActiveArray) == frame.height) {
         return GeometryMap{static_cast<uint32_t>(g.preCorrectionActiveArray.left),

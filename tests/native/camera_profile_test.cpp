@@ -2,6 +2,7 @@
 #include <iostream>
 #include <map>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "camera/CameraProfileJson.h"
@@ -166,7 +167,9 @@ void testProfiles() {
         {"Z170", "5", RawPixelFormat::Raw10, 4080, 3072, 31, true, 64, 1023},
         {"Z340", "5", RawPixelFormat::Raw10, 4080, 3072, 6, true, 64, 1023},
     };
-    assert(dev.lenses.size() == std::size(table));
+    // The binned lenses, then the full-size F35 / F85 (checked in testProfileJson).
+    assert(dev.lenses.size() == std::size(table) + 2);
+    assert(dev.lenses[std::size(table)].lensId == "F35" && dev.lenses[std::size(table) + 1].lensId == "F85");
     for (size_t i = 0; i < std::size(table); ++i) {
         const auto& e = table[i];
         const auto& r = dev.lenses[i];  // Profile order is the capture-screen order.
@@ -230,6 +233,40 @@ void testProfileJson() {
     assert(trimmed && trimmed->lenses[0].keys[0].tag == "vendor.mode");
     assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","keys":[{"tag":"vendor.mode\nInt32\n7","values":[7]}]}]})", &error));
     assert(error == "Key name cannot contain whitespace; enter type and value in their separate fields");
+
+    // vivo full-size lenses: unlisted stream, GPU-buffer reader, vendor gate, forced mode on session and request.
+    {
+        const auto& x300 = builtInCameraProfile("vivo_x300_ultra");
+        for (const auto& [lensId, cameraId, w, h, mode] :
+             {std::tuple{"F35", "3", 8160u, 6128u, 2.0}, std::tuple{"F85", "5", 8160u, 6144u, 14.0}}) {
+            const auto f = routeForLens(x300, lensId);
+            assert(f && f->cameraId == cameraId);
+            assert(f->unlistedStream && f->preferredStream.width == w && f->preferredStream.height == h);
+            assert(f->preferredStream.format == RawPixelFormat::Raw16);
+            assert(f->readerUsage && *f->readerUsage == kReaderUsageGpuDataBuffer);
+            assert(f->vendorGate == "vivoFullSize");
+            assert(f->levels.isStatic && f->levels.white == 1023 && f->levels.blackRggb[0] == 64);
+            bool session = false, request = false;
+            for (const auto& k : f->keys) {
+                assert(k.tag == "vivo.control.forceSensorMode" && k.values.size() == 1 && k.values[0] == mode);
+                session |= k.scope == CameraKeySetting::Scope::Session;
+                request |= k.scope == CameraKeySetting::Scope::Request;
+            }
+            assert(session && request);
+        }
+        // Binned lenses keep the ladder's reader usage and no gate.
+        const auto l35 = routeForLens(x300, "L35");
+        assert(l35 && !l35->unlistedStream && !l35->readerUsage && l35->vendorGate.empty());
+
+        const auto custom = parseCameraProfile(R"({"lenses":[{"id":"X","cameraId":"5",
+            "stream":{"format":"RAW16","width":8160,"height":6144,"unlisted":true},
+            "readerUsage":"none","vendorGate":"vivoFullSize"}]})", &error);
+        assert(custom && custom->lenses[0].unlistedStream && custom->lenses[0].readerUsage == 0u);
+        const auto again = parseCameraProfile(serializeCameraProfile(*custom));
+        assert(again && again->lenses[0].readerUsage == 0u && again->lenses[0].vendorGate == "vivoFullSize");
+        assert(!parseCameraProfile(R"({"lenses":[{"id":"X","cameraId":"5","readerUsage":"cpu"}]})", &error));
+        assert(error == "unknown readerUsage cpu for lens X");
+    }
 
     // Rejected: malformed JSON, no lenses, duplicate ids, unknown key type, static levels without white.
     assert(!parseCameraProfile("{\"lenses\":[", &error) && !error.empty());

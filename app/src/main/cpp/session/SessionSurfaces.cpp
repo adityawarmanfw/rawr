@@ -98,6 +98,19 @@ ANativeWindow* SessionEngine::createRawInputWindow(uint64_t generation, uint32_t
             throw std::runtime_error("RAW AHB importer is unavailable");
         }
 
+        // The lens profile fixes the reader usage (vivo full-size modes configure
+        // only with GPU_DATA_BUFFER or no usage): the GPU reads the camera buffer
+        // through the buffer import, never the R16 image import.
+        if (profileReaderUsage_) {
+            realtime_.coordinator().latchRaw16BufferIngress();
+            std::ostringstream out;
+            out << "RAW_READER_PROFILE_USAGE format=" << rawrcam::geometry::rawPixelFormatName(format) << " usage=0x"
+                << std::hex << *profileReaderUsage_;
+            SESSION_LOGI("%s", out.str().c_str());
+            appendDiagnostic(out.str());
+            return rawFrameIngress_.create(generation, width, height, format, *profileReaderUsage_);
+        }
+
         // A GPU-usage reader never delivered a frame on this HAL: request CPU
         // read only. The GPU then reads the camera buffer through the buffer
         // import (copy/unpack), never the R16 image import that needs GPU usage.
