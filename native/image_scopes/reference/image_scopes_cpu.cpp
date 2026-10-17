@@ -104,12 +104,20 @@ std::uint32_t sceneExposureBin(float luma) noexcept {
 }
 
 SceneExposureStatsData measureSceneExposure(RgbaF32ImageView im, const float lumaWeights[3], float clipLuma,
-                                            std::uint32_t block, const float* channelCeilings) {
+                                            std::uint32_t block, const float* channelCeilings, const float* focus) {
     if (!im.data || !im.width || !im.height) throw std::invalid_argument("image_scopes CPU: invalid scene image");
     if (im.rowStrideFloats < static_cast<std::uint64_t>(im.width) * 4u)
         throw std::invalid_argument("image_scopes CPU: scene row stride too small");
     if (block != 2u && block != 4u) throw std::invalid_argument("image_scopes CPU: scene block must be 2 or 4");
     SceneExposureStatsData out{};
+    // The GPU's packed 8-bit rectangle (floor/ceil of 255 * bound).
+    std::uint32_t fx0 = 0, fy0 = 0, fx1 = 0, fy1 = 0;
+    const bool focusOn = focus && focus[2] > focus[0] && focus[3] > focus[1];
+    if (focusOn) {
+        const auto lo = [](float v) { return std::uint32_t(std::clamp(std::floor(v * 255.0f), 0.0f, 254.0f)); };
+        const auto hi = [](float v) { return std::uint32_t(std::clamp(std::ceil(v * 255.0f), 1.0f, 255.0f)); };
+        fx0 = lo(focus[0]), fy0 = lo(focus[1]), fx1 = hi(focus[2]), fy1 = hi(focus[3]);
+    }
     const std::uint32_t blocksX = (im.width + block - 1u) / block, blocksY = (im.height + block - 1u) / block;
     for (std::uint32_t by = 0; by < blocksY; ++by) {
         const std::uint32_t y0 = by * block, validH = std::min(block, im.height - y0);
@@ -137,6 +145,13 @@ SceneExposureStatsData measureSceneExposure(RgbaF32ImageView im, const float lum
                 frameLuma > 0.0f ? (std::log2(frameLuma) - kSceneFrameLogMinEv) * kSceneFrameLogScale : 0.0f;
             out.frameLogSum += std::uint32_t(std::clamp(frameLog + 0.5f, 0.0f, float(kSceneFrameLogMax)));
             ++out.frameSamples;
+            if (focusOn) {
+                const std::uint32_t sx = 255u * x / im.width, sy = 255u * y / im.height;
+                if (sx >= fx0 && sx < fx1 && sy >= fy0 && sy < fy1) {
+                    ++out.focusBins[clipped ? kSceneExposureBins - 1u : sceneExposureBin(luma)];
+                    ++out.focusSamples;
+                }
+            }
             out.totalWeight += w;
             ++out.sampleCount;
             if (clipped) out.clippedWeight += w;

@@ -243,6 +243,13 @@ struct FrameObservation {
     // Whole-frame log2 luma mean, when weightedBins only cover a spot: the
     // night look judges the scene, not the tapped area.
     std::optional<float> frameLogMeanEv{};
+    // Luma bins of the focus area (same layout); empty or null: none. The
+    // key is the frame's and the focus area's, blended in EV at focusShare:
+    // a subject 3 EV under the frame moves the exposure 3 x focusShare EV.
+    // (A weight share in one histogram would not: the key is a median, which
+    // ignores a minority and jumps once the focus area is half the weight.)
+    const std::uint32_t* focusBins = nullptr;
+    float focusShare = 0.0f;
 };
 
 struct Metered {
@@ -348,7 +355,12 @@ inline double clippedGuardCapEv(float ev100, const MeterPolicy& p) noexcept {
 inline std::optional<Metered> meter(const FrameObservation& f, NightLook look, float userEv,
                                     const MeterPolicy& p = {}) noexcept {
     if (!f.weightedBins || !std::isfinite(f.logExposure) || !std::isfinite(f.clipLumaEv)) return std::nullopt;
-    const auto key = sceneKeyEv(f.weightedBins);
+    // Highlights stay whole-frame; only the key leans to the focus area.
+    auto key = sceneKeyEv(f.weightedBins);
+    if (key && f.focusShare > 0.0f && binsPopulated(f.focusBins)) {
+        if (const auto focusKey = sceneKeyEv(f.focusBins))
+            key = *key + std::clamp(f.focusShare, 0.0f, 1.0f) * (*focusKey - *key);
+    }
     const auto high = readHighlight(f, p);
     if (!key || !high) return std::nullopt;
     Metered m;

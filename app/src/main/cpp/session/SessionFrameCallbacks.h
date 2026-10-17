@@ -39,6 +39,7 @@ class SessionFrameCallbacks final : public pipeline::FrameLifecyclePort,
     bool sceneKeyMeteringEnabled() override;
     std::array<float, 4> sceneMeteringSpot() override;
     uint32_t sceneMeteringWeighting() override;
+    std::array<float, 4> sceneMeteringFocus() override;
     std::optional<SceneKeyFeedback> updateSceneKey(std::uint32_t slotIndex,
                                                    const rawrcam::metadata::FrameMetadataSnapshot& metadata,
                                                    std::uint64_t timestampNs, bool recording) override;

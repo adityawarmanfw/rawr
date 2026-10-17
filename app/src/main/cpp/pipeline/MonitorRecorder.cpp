@@ -98,9 +98,10 @@ VkImageView MonitorRecorder::rawStateView(uint32_t slot) const { return monitori
 void MonitorRecorder::recordSceneExposure(VkCommandBuffer command, uint32_t slotIndex, VkImageView linearView,
                                           uint32_t width, uint32_t height, const std::array<float, 3>& lumaWeights,
                                           float clipLuma, const std::array<float, 4>& spot,
-                                          uint32_t weighting, const std::array<float, 3>& channelCeilings) const {
+                                          uint32_t weighting, const std::array<float, 3>& channelCeilings,
+                                          const std::array<float, 4>& focus) const {
     imageScopes_.recordSceneExposure(command, slotIndex, linearView, width, height, lumaWeights, clipLuma, spot,
-                                     weighting, channelCeilings);
+                                     weighting, channelCeilings, focus);
 }
 void MonitorRecorder::recordOverlays(const MonitorFrame& in) const {
     if (in.diagnosticMode == 0u) {

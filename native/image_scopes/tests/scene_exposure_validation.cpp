@@ -96,6 +96,7 @@ int main() {
         const float luma[3] = {0.3f, 0.6f, 0.1f};
         const float clipLuma = 4.0f;
         const float ceilings[3] = {2.0f, 1.0f, 1.5f};
+        const float focus[4] = {0.55f, 0.3f, 0.8f, 0.7f};
         const auto measure = [&](std::uint32_t block, bool spot) {
             vk.beginCommands();
             SceneExposureStatsRecordInfo info{};
@@ -106,6 +107,10 @@ int main() {
             std::memcpy(info.lumaWeights, luma, sizeof(luma));
             info.clipLuma = clipLuma;
             std::memcpy(info.channelCeilings, ceilings, sizeof(ceilings));
+            info.focusX0 = focus[0];
+            info.focusY0 = focus[1];
+            info.focusX1 = focus[2];
+            info.focusY1 = focus[3];
             if (spot) {
                 info.spotX0 = info.spotY0 = 0.4f;
                 info.spotX1 = info.spotY1 = 0.6f;
@@ -122,7 +127,18 @@ int main() {
         };
         for (std::uint32_t block : {4u, 2u}) {
             const auto gpu = measure(block, false);
-            const auto cpu = cpu::measureSceneExposure({ref.data(), W, H, W * 4u}, luma, clipLuma, block, ceilings);
+            const auto cpu =
+                cpu::measureSceneExposure({ref.data(), W, H, W * 4u}, luma, clipLuma, block, ceilings, focus);
+            require(gpu.focusSamples == cpu.focusSamples && gpu.focusSamples > 0u &&
+                        gpu.focusSamples < gpu.sampleCount / 4u,
+                    "focus samples mismatch");
+            std::uint64_t focusDiff = 0, focusSum = 0;
+            for (std::uint32_t b = 0; b < kSceneExposureBins; ++b) {
+                focusDiff += std::uint64_t(std::llabs(std::int64_t(gpu.focusBins[b]) - cpu.focusBins[b]));
+                focusSum += gpu.focusBins[b];
+            }
+            require(focusSum == gpu.focusSamples, "focus bins do not sum to focus samples");
+            require(focusDiff * 200u <= focusSum + 200u, "focus histogram differs from CPU reference");
             std::uint64_t diff = 0, sum = 0;
             for (std::uint32_t b = 0; b < kSceneExposureBins; ++b) {
                 diff += std::uint64_t(std::llabs(std::int64_t(gpu.channelBins[b]) - cpu.channelBins[b]));
@@ -141,6 +157,7 @@ int main() {
             require(spot.sampleCount < gpu.sampleCount / 10u && spot.sampleCount > 0, "spot must restrict the bins");
             require(spot.frameSamples == gpu.frameSamples && spot.frameLogSum == gpu.frameLogSum,
                     "the frame log sum must cover the whole frame under a spot");
+            require(spot.focusSamples == gpu.focusSamples, "the focus bins must not depend on a spot");
             std::cout << "SCENE_CHANNEL_PARITY block=" << block << " binDiff=" << diff << " frameLogMean="
                       << *sceneFrameLogMeanEv(gpu) << "\n";
         }

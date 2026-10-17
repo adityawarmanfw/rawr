@@ -1271,6 +1271,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
         c.spotActive = control.spotAeActive && control.exposureMode == ExposureControlMode::Auto;
         c.spotX = spotMetering.point().x;
         c.spotY = spotMetering.point().y;
+        if (const auto& af = focusControls.afRegion(); af && deviceSession.cameraContext())
+            c.focusArea = normalizedRegion(deviceSession.cameraContext()->geometry, *af);
         std::lock_guard<std::mutex> published(rawrAeContextMutex);
         rawrAePublished = c;
     }

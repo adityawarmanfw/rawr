@@ -562,24 +562,27 @@ void FrameSubmitCoordinator::submitSplitVideoAndMonitor(const SubmitParams& para
                              cameraToAp1, tone, performanceTracker_, acquired.swapIndex.has_value(), splitSubmit,
                              [&](VkCommandBuffer cmd, VkImageView view, uint32_t width, uint32_t height) {
                                  if (!diagnosticsPort_.sceneKeyMeteringEnabled()) return;
-                                 // The spot is on the full frame; the video image is its record crop.
-                                 std::array<float, 4> spot{};
-                                 const auto source = diagnosticsPort_.sceneMeteringSpot();
+                                 // Spot and focus are on the full frame; the video image is its record crop.
                                  const auto crop = rawrcam::video::videoSourceRect(config_.rawWidth, config_.rawHeight,
                                                                                    width, height);
-                                 if (source[2] > source[0] && crop.width > 0 && crop.height > 0) {
+                                 const auto toCrop = [&](const std::array<float, 4>& source) {
+                                     std::array<float, 4> out{};
+                                     if (!(source[2] > source[0]) || crop.width <= 0 || crop.height <= 0) return out;
                                      for (int i = 0; i < 4; ++i) {
                                          const bool x = (i % 2) == 0;
                                          const float raw = source[i] * float(x ? config_.rawWidth : config_.rawHeight);
                                          const float origin = float(x ? crop.x : crop.y);
                                          const float extent = float(x ? crop.width : crop.height);
-                                         spot[i] = std::clamp((raw - origin) / extent, 0.0f, 1.0f);
+                                         out[i] = std::clamp((raw - origin) / extent, 0.0f, 1.0f);
                                      }
-                                     if (!(spot[2] > spot[0] && spot[3] > spot[1])) spot = {};
-                                 }
-                                 resources_.recorder()->recordSceneExposure(cmd, slotIndex, view, width, height,
-                                                                            params.sensorToSrgb, params.wb, spot,
-                                                                            diagnosticsPort_.sceneMeteringWeighting());
+                                     if (!(out[2] > out[0] && out[3] > out[1])) out = {};
+                                     return out;
+                                 };
+                                 resources_.recorder()->recordSceneExposure(
+                                     cmd, slotIndex, view, width, height, params.sensorToSrgb, params.wb,
+                                     toCrop(diagnosticsPort_.sceneMeteringSpot()),
+                                     diagnosticsPort_.sceneMeteringWeighting(),
+                                     toCrop(diagnosticsPort_.sceneMeteringFocus()));
                              });
         if (!directBuffer && !bridgeCopy) {
             releaseRawInputImage(current, *acquired.raw, vulkanContext_.queueFamily(),
@@ -761,6 +764,7 @@ FrameSubmitCoordinator::RecordedSubmit FrameSubmitCoordinator::recordSubmitComma
     if (recordInput.sceneExposureEnabled) {
         recordInput.sceneSpot = diagnosticsPort_.sceneMeteringSpot();
         recordInput.sceneWeighting = diagnosticsPort_.sceneMeteringWeighting();
+        recordInput.sceneFocus = diagnosticsPort_.sceneMeteringFocus();
     }
     if (acquired.videoIndex && videoOutput_) {
         const auto cameraToAp1 = RawDevelopRecorder::composeCameraToAp1(params.sensorToSrgb);

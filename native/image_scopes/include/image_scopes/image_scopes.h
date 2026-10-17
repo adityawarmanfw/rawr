@@ -45,6 +45,9 @@ struct SceneExposureStatsRecordInfo {
     // Spot meter: when spotX1 > spotX0 and spotY1 > spotY0, only samples inside
     // this normalized [0,1] input rectangle count (1/255 resolution).
     float spotX0 = 0.0f, spotY0 = 0.0f, spotX1 = 0.0f, spotY1 = 0.0f;
+    // Focus area: when focusX1 > focusX0 and focusY1 > focusY0, samples inside
+    // this normalized rectangle also fill focusBins (1/255 resolution).
+    float focusX0 = 0.0f, focusY0 = 0.0f, focusX1 = 0.0f, focusY1 = 0.0f;
 };
 
 struct DisplayWaveformRecordInfo {

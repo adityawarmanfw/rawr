@@ -498,6 +498,28 @@ int main() {
         assert(metered(kClipEv - 0.4, 0.0, true).guardEv == 0.0f);
         assert(metered(kClipEv - 0.4, 0.0, false).guardEv < -0.1f);
     }
+    // Focus area: its key pulls the frame's by focusShare, in EV (a subject
+    // 3 EV under the frame moves the exposure 1.2 EV at 0.4), smoothly in
+    // the share; no focus bins or share 0 leave the frame's key.
+    {
+        Bins frame{}, subject{};
+        const auto binOf = [](float ev) { return std::size_t((ev - kSceneKeyMinEv) / kBinEv); };
+        for (int i = -4; i <= 4; ++i) frame[binOf(-3.3f + 0.25f * float(i))] = 100;
+        subject[binOf(-6.3f)] = 50;
+        const auto desired = [&](const std::uint32_t* focus, float share) {
+            FrameObservation f{frame.data(), kClipEv, std::log2(33e6 * 100.0), 33e6, 100.0, 1.8f, 1};
+            f.focusBins = focus;
+            f.focusShare = share;
+            return meter(f, NightLook::Off, 0.0f)->desiredLogExposure;
+        };
+        const double base = desired(nullptr, 0.4f);
+        assert(near(desired(subject.data(), 0.0f), base, 1e-9));
+        assert(near(desired(subject.data(), 0.4f) - base, 1.2, 0.05));
+        assert(near(desired(subject.data(), 0.25f) - base, 0.75, 0.05));
+        assert(near(desired(subject.data(), 0.5f) - base, 1.5, 0.05));
+        Bins none{};
+        assert(near(desired(none.data(), 0.4f), base, 1e-9));
+    }
     // Spot: the night look follows the whole frame, not the tapped area.
     // A dark subject in a bright room is exposed as tapped.
     {

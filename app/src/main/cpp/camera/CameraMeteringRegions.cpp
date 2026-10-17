@@ -54,6 +54,20 @@ std::optional<CameraMeteringRegion> faceFocusRegion(const metadata::SensorGeomet
         std::clamp(static_cast<int32_t>(std::lround(cy + rh * 0.5f)), base->top + 1, base->bottom), 1000};
 }
 
+std::optional<std::array<float, 4>> normalizedRegion(const metadata::SensorGeometry& geometry,
+                                                     const CameraMeteringRegion& region) {
+    const auto* base = meteringArray(geometry);
+    if (!base) return std::nullopt;
+    const float width = static_cast<float>(base->right - base->left);
+    const float height = static_cast<float>(base->bottom - base->top);
+    const std::array<float, 4> out{std::clamp(float(region[0] - base->left) / width, 0.0f, 1.0f),
+                                   std::clamp(float(region[1] - base->top) / height, 0.0f, 1.0f),
+                                   std::clamp(float(region[2] - base->left) / width, 0.0f, 1.0f),
+                                   std::clamp(float(region[3] - base->top) / height, 0.0f, 1.0f)};
+    if (!(out[2] > out[0] && out[3] > out[1])) return std::nullopt;
+    return out;
+}
+
 bool CameraSpotMeteringControls::requestTarget(CameraControlState& state, bool active, SensorPoint point) {
     if (active &&
         (state.exposureMode != ExposureControlMode::Auto || !std::isfinite(point.x) || !std::isfinite(point.y)))

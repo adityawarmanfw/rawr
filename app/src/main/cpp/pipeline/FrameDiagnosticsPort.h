@@ -50,6 +50,9 @@ class FrameDiagnosticsPort {
     virtual std::array<float, 4> sceneMeteringSpot() = 0;
     // Weighting outside a spot (image_scopes::SceneWeighting; 0 = matrix).
     virtual uint32_t sceneMeteringWeighting() = 0;
+    // Focus area the meter also bins on its own (normalized x0,y0,x1,y1 on
+    // the full source frame; all zero = none).
+    virtual std::array<float, 4> sceneMeteringFocus() = 0;
     // Consumes the slot's scene measurement and advances the auto key lift.
     virtual std::optional<SceneKeyFeedback> updateSceneKey(std::uint32_t slotIndex,
                                                            const rawrcam::metadata::FrameMetadataSnapshot& metadata,

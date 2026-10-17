@@ -78,10 +78,13 @@ struct SceneExposureStatsData {
     std::uint32_t channelBins[kSceneExposureBins]{};
     std::uint32_t frameLogSum = 0;
     std::uint32_t frameSamples = 0;
-    std::uint32_t reserved1 = 0;
+    std::uint32_t focusSamples = 0;
     std::uint32_t reserved2 = 0;
+    // Luma bins of the samples inside the focus rectangle only (weight 1,
+    // spot or not): the meter blends them in at a chosen share.
+    std::uint32_t focusBins[kSceneExposureBins]{};
 };
-static_assert(sizeof(SceneExposureStatsData) == (2u * kSceneExposureBins + 8u) * 4u);
+static_assert(sizeof(SceneExposureStatsData) == (3u * kSceneExposureBins + 8u) * 4u);
 
 // Mean log2 luma of the whole frame.
 inline std::optional<float> sceneFrameLogMeanEv(const SceneExposureStatsData& s) noexcept {

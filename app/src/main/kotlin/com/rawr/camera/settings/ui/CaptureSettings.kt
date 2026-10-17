@@ -91,7 +91,8 @@ internal fun ExposureSettings(state: SettingsUiState, dispatch: SettingsDispatch
             )
             if (ae.enabled) {
                 RawrAeChoice(
-                    "Metering", RawrMetering.entries, ae.metering, { it.label }, "Tap the viewfinder to meter a spot",
+                    "Metering", RawrMetering.entries, ae.metering, { it.label },
+                    "Long-press the viewfinder to meter a spot. Matrix also leans toward the focus area",
                     {
                         when (it) {
                             RawrMetering.Matrix ->
