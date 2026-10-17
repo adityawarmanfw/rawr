@@ -141,7 +141,9 @@ void VulkanContext::createDeviceForSurface(VkSurfaceKHR surface) {
     samplerYcbcrConversionEnabled_ = ycbcrSupported.samplerYcbcrConversion == VK_TRUE;
     storageImageExtendedFormats_ = features2.features.shaderStorageImageExtendedFormats == VK_TRUE;
 
-    float priorities[2] = {1.0f, 1.0f};
+    // Queue 0 runs the viewfinder; queue 1 runs multiframe merges and still
+    // renders. A 50 MP merge or render at equal priority stalls the preview.
+    float priorities[2] = {1.0f, 0.0f};
     const uint32_t wantedQueues = familyQueueCount_ >= 2 ? 2u : 1u;
     std::vector<const char*> enabledExtensions(std::begin(requiredExtensions), std::end(requiredExtensions));
     if (float16ComputeEnabled_) {
@@ -213,7 +215,7 @@ void VulkanContext::createDeviceForSurface(VkSurfaceKHR surface) {
         multiframeSubmission_.bind(mfQueue_);
         hasMultiframeQueue_ = mfQueue_ != VK_NULL_HANDLE;
     }
-    mfLowPriority_ = false;
+    mfLowPriority_ = hasMultiframeQueue_;
 
     getAhbProps_ = reinterpret_cast<PFN_vkGetAndroidHardwareBufferPropertiesANDROID>(
         vkGetDeviceProcAddr(device_, "vkGetAndroidHardwareBufferPropertiesANDROID"));
