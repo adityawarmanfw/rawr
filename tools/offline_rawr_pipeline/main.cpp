@@ -41,6 +41,7 @@ struct CaptureConfig {
     uint32_t fccSteps = 2;
     float fccEdgeSigma = 0.0f;
     float fccChromaBound = 0.0f;
+    bool fccNormalized = true;
     float defringeStrength = 0.0f;
     float defringeEdgeThreshold = 0.02f;
     float defringeLumaFloor = 0.08f;
@@ -191,6 +192,7 @@ CaptureConfig loadConfig(const std::filesystem::path& path) {
     if (values.count("fccSteps")) c.fccSteps = static_cast<uint32_t>(std::stoul(values.at("fccSteps")));
     if (values.count("fccEdgeSigma")) c.fccEdgeSigma = std::stof(values.at("fccEdgeSigma"));
     if (values.count("fccChromaBound")) c.fccChromaBound = std::stof(values.at("fccChromaBound"));
+    if (values.count("fccNormalized")) c.fccNormalized = std::stoi(values.at("fccNormalized")) != 0;
     if (values.count("defringeStrength")) c.defringeStrength = std::stof(values.at("defringeStrength"));
     if (values.count("defringeEdgeThreshold")) c.defringeEdgeThreshold = std::stof(values.at("defringeEdgeThreshold"));
     if (values.count("defringeLumaFloor")) c.defringeLumaFloor = std::stof(values.at("defringeLumaFloor"));
@@ -855,7 +857,7 @@ int main(int argc, char** argv) {
                 }
                 rawr::post::PostDemosaicProcessor post(
                     context.pd, context.dev, context.qf, config.width, config.height, config.fccSteps,
-                    false,config.fccEdgeSigma,config.fccChromaBound,config.defringeStrength,
+                    config.fccNormalized,config.fccEdgeSigma,config.fccChromaBound,config.defringeStrength,
                     config.defringeEdgeThreshold,config.defringeLumaFloor);
 
                 try {

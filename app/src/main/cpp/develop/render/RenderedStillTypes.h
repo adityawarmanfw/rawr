@@ -37,8 +37,10 @@ struct RenderedStillContext {
     void (*filmDiagnosticTap)(void*, VkCommandBuffer, const char*, VkBuffer, uint32_t, uint32_t) = nullptr;
     void* filmDiagnosticUserData = nullptr;
     bool replayBypassFcc = false;  // Diagnostic intervention, never set by normal captures.
-    // Still FCC uses absolute chroma; diagnostic replay can override it.
-    bool normalizedFcc = false;
+    // Still FCC medians chroma/Y and rescales by the pixel's own Y. RT's
+    // absolute chroma drags recovered highlights' (Y >> 1) chroma into dark
+    // pixels at window edges as red bands; diagnostic replay can override it.
+    bool normalizedFcc = true;
     // Edge-aware FCC average: bilateral sigma in Y units (0 = legacy uniform
     // 3x3). Production still default 0, wired from JpegCaptureContext.
     float fccEdgeSigma = 0.0f;
