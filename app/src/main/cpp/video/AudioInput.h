@@ -29,7 +29,8 @@ public:
         int deviceId = 0;
     };
     struct Block {
-        const int16_t* pcm = nullptr;  // Interleaved, channels() wide.
+        // Interleaved, channels() wide, after low-cut and gain; within [-1, 1).
+        const float* pcm = nullptr;
         int frames = 0;
         // CLOCK_BOOTTIME of the first frame, smoothed against AAudio timestamps.
         int64_t firstFrameBootNs = 0;

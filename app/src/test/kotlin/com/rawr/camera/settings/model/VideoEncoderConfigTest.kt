@@ -69,6 +69,12 @@ class VideoEncoderConfigTest {
         assertEquals(VideoAudioRoute.Auto, VideoAudioRoute.of(42))
     }
 
+    @Test fun audioCodecDefaultsToAacAndMapsPcmBits() {
+        assertEquals(VideoAudioCodec.Aac, VideoEncoderConfig().audioCodec)
+        assertEquals(VideoAudioCodec.Pcm24, VideoAudioCodec.of(24))
+        assertEquals(VideoAudioCodec.Aac, VideoAudioCodec.of(32))
+    }
+
     @Test fun bitrateModeWireValuesMatchMediaCodec() {
         assertEquals(VideoBitrateMode.Cq, VideoBitrateMode.of(0))
         assertEquals(VideoBitrateMode.Vbr, VideoBitrateMode.of(1))

@@ -86,6 +86,8 @@ class NativeVideoRecorder(private val context: Context, private val preview: Raw
                         val audioChannels: Int = 2,
                         /** AAC bitrate. Stereo default 192k; mono fallback steps down to 128k. */
                         val audioBitrate: Int = 192_000,
+                        /** 0 = AAC in .mp4; 16/24 = PCM in .mov. */
+                        val audioPcmBits: Int = 0,
                         /** Source, route, gain and low-cut; [audioChannels] above wins for channels. */
                         val audio: VideoAudioInput = VideoAudioInput(),
                         /** 8 = HEVC Main, 10 = HEVC Main10 (default). */
@@ -123,6 +125,7 @@ class NativeVideoRecorder(private val context: Context, private val preview: Raw
         require(request.maxBFrames in -1..4)
         require(request.audioChannels == 1 || request.audioChannels == 2)
         require(request.audioBitrate in 64_000..512_000)
+        require(request.audioPcmBits in listOf(0, 16, 24))
         require(request.bitDepth == 8 || request.bitDepth == 10)
         require(request.logProfile == null || request.bitDepth == 10) { "LOG requires 10-bit recording" }
         require(request.timestampPolicy in supportedTimestampPolicies()) {
@@ -133,12 +136,13 @@ class NativeVideoRecorder(private val context: Context, private val preview: Raw
         val rotation = preview.videoRotationDegrees(request.deviceRotationDegrees)
         check(rotation >= 0) { "Camera orientation is not ready for recording" }
         val capturedAt = System.currentTimeMillis()
-        val displayName = CaptureFileNames.baseName(capturedAt) + ".mp4"
+        val displayName = CaptureFileNames.baseName(capturedAt) + if (request.audioPcmBits > 0) ".mov" else ".mp4"
         uri = null
         journal = null
         try {
             check(preview.beginVideoFps(request.fps)) { "RAW camera could not lock ${request.fps} fps" }
-            uri = outputStore.create(request.saveLocationId, displayName, capturedAt)
+            uri = outputStore.create(request.saveLocationId, displayName, capturedAt,
+                if (request.audioPcmBits > 0) "video/quicktime" else "video/mp4")
             // The detached descriptor is closed by C++, including nativeStart failure paths.
             // Read+write provides the seekable descriptor needed by the muxer and metadata patcher.
             // A provider that cannot supply one fails here; never redirect to another folder.
@@ -147,7 +151,7 @@ class NativeVideoRecorder(private val context: Context, private val preview: Raw
             handle = engine.nativeStart(fd, request.width, request.height, request.fps,
                 request.bitrate, request.intraFrames, rotation, request.bitrateMode, request.maxBFrames,
                 request.audioChannels, request.audioBitrate, request.audio.preset, request.audio.deviceId(context),
-                request.audio.gainDb.toFloat(), request.audio.lowCutHz, request.bitDepth,
+                request.audio.gainDb.toFloat(), request.audio.lowCutHz, request.audioPcmBits, request.bitDepth,
                 request.timestampPolicy.nativeId, Build.MANUFACTURER.orEmpty(), Build.MODEL.orEmpty(),
                 "RAWR ${BuildConfig.VERSION_NAME}", request.renderProfile,
                 request.logProfile?.gamut?.label ?: "Rec.709 / sRGB",
@@ -169,6 +173,7 @@ class NativeVideoRecorder(private val context: Context, private val preview: Raw
                 .put("audioChannels", request.audioChannels).put("audioBitrate", request.audioBitrate)
                 .put("audioPreset", request.audio.preset).put("audioRoute", request.audio.route.name)
                 .put("audioGainDb", request.audio.gainDb).put("audioLowCutHz", request.audio.lowCutHz)
+                .put("audioPcmBits", request.audioPcmBits)
                 .put("bitDepth", request.bitDepth)
                 .put("renderProfile", request.renderProfile).put("renderProfileId", request.renderProfileId)
                 .put("logProfile", request.logProfile?.name)

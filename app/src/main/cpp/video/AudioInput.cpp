@@ -13,6 +13,8 @@ namespace {
 constexpr char kTag[] = "RawrAudioInput";
 // ~300 ms RMS integration at 1024-frame (21 ms) blocks.
 constexpr float kRmsSmoothing = 0.07f;
+// Largest 16-bit sample; anything at or past it reads as a clip at every bit depth.
+constexpr float kFullScale = 32'767.0f / 32'768.0f;
 
 int64_t bootNs() noexcept {
     timespec ts{};
@@ -72,7 +74,8 @@ AudioInput::AudioInput(const Config& config) : config_(config) {
         if (AAudio_createStreamBuilder(&builder) != AAUDIO_OK || !builder)
             throw std::runtime_error("create microphone builder failed");
         AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_INPUT);
-        AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_I16);
+        // Float keeps the HAL's precision past 16 bits for 24-bit PCM recording.
+        AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_FLOAT);
         AAudioStreamBuilder_setSampleRate(builder, kSampleRate);
         AAudioStreamBuilder_setChannelCount(builder, tryChannels);
         AAudioStreamBuilder_setInputPreset(builder, config.preset);
@@ -82,7 +85,7 @@ AudioInput::AudioInput(const Config& config) : config_(config) {
         AAudioStreamBuilder_delete(builder);
         const bool matches = opened == AAUDIO_OK && stream && AAudioStream_getSampleRate(stream) == kSampleRate &&
                              AAudioStream_getChannelCount(stream) == tryChannels &&
-                             AAudioStream_getFormat(stream) == AAUDIO_FORMAT_PCM_I16;
+                             AAudioStream_getFormat(stream) == AAUDIO_FORMAT_PCM_FLOAT;
         if (matches) {
             stream_ = stream;
             channels_ = tryChannels;
@@ -91,7 +94,7 @@ AudioInput::AudioInput(const Config& config) : config_(config) {
         if (stream) AAudioStream_close(stream);
         if (tryChannels == 1) break;
     }
-    if (!stream_) throw std::runtime_error("microphone did not provide 48 kHz PCM16");
+    if (!stream_) throw std::runtime_error("microphone did not provide 48 kHz float PCM");
     if (AAudioStream_requestStart(stream_) != AAUDIO_OK) {
         AAudioStream_close(stream_);
         throw std::runtime_error("start microphone failed");
@@ -131,7 +134,7 @@ AudioInput::Levels AudioInput::takeLevels() noexcept {
 }
 
 void AudioInput::run() noexcept {
-    std::array<int16_t, kReadFrames * kMaxChannels> pcm{};
+    std::array<float, kReadFrames * kMaxChannels> pcm{};
     int64_t totalFrames = 0;
     int64_t anchorNs = 0;
     HighPass filter;
@@ -158,14 +161,14 @@ void AudioInput::run() noexcept {
         bool inputClipped = false, outputClipped = false;
         for (int frame = 0; frame < count; ++frame) {
             for (int c = 0; c < channels_; ++c) {
-                int16_t& sample = pcm[static_cast<size_t>(frame * channels_ + c)];
-                inputClipped |= sample >= 32'767 || sample <= -32'768;
-                float y = filter.run(c, static_cast<float>(sample) / 32'768.0f) * gain;
-                if (std::abs(y) >= 1.0f) {
+                float& sample = pcm[static_cast<size_t>(frame * channels_ + c)];
+                inputClipped |= std::abs(sample) >= kFullScale;
+                float y = filter.run(c, sample) * gain;
+                if (std::abs(y) >= kFullScale) {
                     outputClipped = true;
-                    y = std::copysign(32'767.0f / 32'768.0f, y);
+                    y = std::copysign(kFullScale, y);
                 }
-                sample = static_cast<int16_t>(std::lrint(y * 32'768.0f));
+                sample = y;
                 peaks[c] = std::max(peaks[c], std::abs(y));
                 squares[c] += y * y;
             }

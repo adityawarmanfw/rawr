@@ -75,7 +75,7 @@ with tempfile.TemporaryDirectory(prefix="mov-", dir=build) as directory:
                         for _, track, sync, pts, data in sorted(samples, key=lambda s: (s[0], s[1])))
         (root/'csd').write_bytes(config); (root/'asc').write_bytes(asc); (root/'samples').write_bytes(blob)
         out = root/f'{name}.mp4'
-        run(helper, out, root/'csd', root/'asc', root/'samples', 160, 96, fps, 48000, 2, rotation)
+        run(helper, out, root/'csd', root/'asc', root/'samples', 160, 96, fps, 48000, 2, rotation, 0)
         info = probe(out, '-show_streams', '-show_format')
         video = next(s for s in info['streams'] if s['codec_type'] == 'video')
         audio = next(s for s in info['streams'] if s['codec_type'] == 'audio')
@@ -98,3 +98,31 @@ with tempfile.TemporaryDirectory(prefix="mov-", dir=build) as directory:
         assert probe(out, '-show_format')['format']['tags']['make'] == 'vivo'
         assert md5(out, 'v') == md5(source, 'v'), name
         print(name, 'ok', len(units), 'frames', len(frames), 'AAC packets')
+
+    # PCM in QuickTime: the muxed audio must be the exact input bytes, with the video unchanged.
+    for bits in (16, 24):
+        raw = root/f'pcm{bits}.raw'
+        run(ffmpeg, '-y', '-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=1000:sample_rate=48000:duration=2',
+            '-ac', '2', '-f', f's{bits}le', raw)
+        pcm = raw.read_bytes()
+        frame = 2 * bits // 8
+        blocks = [pcm[i:i + 1024 * frame] for i in range(0, len(pcm), 1024 * frame)]
+        samples = [(float(p['dts_time']), 0, 'K' in p['flags'], int(float(p['pts_time']) * 1e6) + 260_000, u)
+                   for p, u in zip(packets, units)]
+        samples += [(i * 1024 / 48000, 1, True, i * 1024 * 1_000_000 // 48000, b) for i, b in enumerate(blocks)]
+        blob = b''.join(struct.pack('<BBqI', track, sync, pts, len(data)) + data
+                        for _, track, sync, pts, data in sorted(samples, key=lambda s: (s[0], s[1])))
+        (root/'samples').write_bytes(blob)
+        out = root/f'pcm{bits}.mov'
+        run(helper, out, root/'csd', root/'asc', root/'samples', 160, 96, fps, 48000, 2, rotation, bits)
+        info = probe(out, '-show_streams', '-show_format')
+        audio = next(s for s in info['streams'] if s['codec_type'] == 'audio')
+        assert info['format']['format_name'].startswith('mov'), info['format']['format_name']
+        assert audio['codec_name'] == f'pcm_s{bits}le' and audio['channels'] == 2 and audio['sample_rate'] == '48000', audio
+        assert abs(float(audio['duration']) - len(pcm) / frame / 48000) < 1e-3, audio['duration']
+        copied = run(ffmpeg, '-v', 'error', '-i', out, '-map', '0:a', '-c', 'copy', '-f', f's{bits}le', '-')
+        assert copied == pcm, f'PCM {bits} bytes differ'
+        assert md5(out, 'v') == md5(source, 'v')
+        run(patch, out)
+        assert run(ffmpeg, '-v', 'error', '-i', out, '-map', '0:a', '-c', 'copy', '-f', f's{bits}le', '-') == pcm
+        print(f'pcm{bits} ok', len(blocks), 'blocks')

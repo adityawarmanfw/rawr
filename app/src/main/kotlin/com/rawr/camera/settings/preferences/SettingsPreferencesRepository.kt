@@ -33,6 +33,7 @@ import com.rawr.camera.settings.model.DenoiseConfig
 import com.rawr.camera.settings.model.MultiframeTuning
 import com.rawr.camera.settings.model.SettingsValues
 import com.rawr.camera.settings.model.KeyframeInterval
+import com.rawr.camera.settings.model.VideoAudioCodec
 import com.rawr.camera.settings.model.VideoAudioRoute
 import com.rawr.camera.settings.model.VideoAudioSource
 import com.rawr.camera.settings.model.VideoBitrateMode
@@ -649,6 +650,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
                 maxBFrames = p[Keys.videoMaxBFrames] ?: d.videoEncoder.maxBFrames,
                 audioChannels = p[Keys.videoAudioChannels] ?: d.videoEncoder.audioChannels,
                 audioBitrateKbps = p[Keys.videoAudioBitrateKbps] ?: d.videoEncoder.audioBitrateKbps,
+                audioCodec = p[Keys.videoAudioCodec]?.let(VideoAudioCodec::of) ?: d.videoEncoder.audioCodec,
                 audioSource = p[Keys.videoAudioSource]?.let(VideoAudioSource::of) ?: d.videoEncoder.audioSource,
                 audioRoute = p[Keys.videoAudioRoute]?.let(VideoAudioRoute::of) ?: d.videoEncoder.audioRoute,
                 audioGainDb = p[Keys.videoAudioGainDb] ?: d.videoEncoder.audioGainDb,
@@ -888,6 +890,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.videoMaxBFrames] = encoder.maxBFrames
         p[Keys.videoAudioChannels] = encoder.audioChannels
         p[Keys.videoAudioBitrateKbps] = encoder.audioBitrateKbps
+        p[Keys.videoAudioCodec] = encoder.audioCodec.pcmBits
         p[Keys.videoAudioSource] = encoder.audioSource.wireValue
         p[Keys.videoAudioRoute] = encoder.audioRoute.wireValue
         p[Keys.videoAudioGainDb] = encoder.audioGainDb
@@ -1175,6 +1178,8 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val videoMaxBFrames = intPreferencesKey("video_max_b_frames")
         val videoAudioChannels = intPreferencesKey("video_audio_channels")
         val videoAudioBitrateKbps = intPreferencesKey("video_audio_bitrate_kbps")
+        /** [VideoAudioCodec.pcmBits]: 0 = AAC. */
+        val videoAudioCodec = intPreferencesKey("video_audio_codec")
         val videoAudioSource = intPreferencesKey("video_audio_source")
         val videoAudioRoute = intPreferencesKey("video_audio_route")
         val videoAudioGainDb = intPreferencesKey("video_audio_gain_db")

@@ -598,7 +598,28 @@ std::vector<uint8_t> MovMuxer::audioTrak(uint32_t movieTimescale) const {
         put32(entry, static_cast<uint32_t>(audioConfig_.sampleRate) << 16);
         append(entry, esds(audioConfig_.aacConfig, audioConfig_.bitrate));
     } else {
-        throw std::logic_error("PCM sample description not implemented");
+        // QuickTime SoundDescription V2 'lpcm': one packet per frame, little-endian packed.
+        format = "lpcm";
+        put16(entry, 2);
+        put16(entry, 0);
+        put32(entry, 0);
+        put16(entry, 3);
+        put16(entry, 16);
+        put16(entry, 0xFFFE);
+        put16(entry, 0);
+        put32(entry, 0x00010000);
+        put32(entry, 72);
+        uint64_t rateBits = 0;
+        const double rate = audioConfig_.sampleRate;
+        std::memcpy(&rateBits, &rate, sizeof(rate));
+        put64(entry, rateBits);
+        put32(entry, static_cast<uint32_t>(audioConfig_.channels));
+        put32(entry, 0x7F000000);
+        put32(entry, static_cast<uint32_t>(audioConfig_.bitsPerSample));
+        // kAudioFormatFlagIsFloat (1) or IsSignedInteger (4), plus IsPacked (8).
+        put32(entry, (audioConfig_.floatSamples ? 1u : 4u) | 8u);
+        put32(entry, static_cast<uint32_t>(audioConfig_.channels * audioConfig_.bitsPerSample / 8));
+        put32(entry, 1);
     }
     Bytes stsd;
     put32(stsd, 1);
@@ -611,11 +632,21 @@ std::vector<uint8_t> MovMuxer::audioTrak(uint32_t movieTimescale) const {
         perChunk.push_back(chunk.samples);
         chunkOffsets.push_back(chunk.offset);
     }
-    put32(stsz, 0);
-    put32(stsz, static_cast<uint32_t>(audio_.sizes.size()));
-    for (uint32_t size : audio_.sizes) put32(stsz, size);
     Bytes stbl = fullBox("stsd", 0, 0, stsd);
-    append(stbl, runs("stts", deltas));
+    if (pcm) {
+        put32(stsz, static_cast<uint32_t>(audioConfig_.channels * audioConfig_.bitsPerSample / 8));
+        put32(stsz, static_cast<uint32_t>(audio_.pcmFrames));
+        Bytes stts;
+        put32(stts, 1);
+        put32(stts, static_cast<uint32_t>(audio_.pcmFrames));
+        put32(stts, 1);
+        append(stbl, fullBox("stts", 0, 0, stts));
+    } else {
+        put32(stsz, 0);
+        put32(stsz, static_cast<uint32_t>(audio_.sizes.size()));
+        for (uint32_t size : audio_.sizes) put32(stsz, size);
+        append(stbl, runs("stts", deltas));
+    }
     append(stbl, stsc(perChunk));
     append(stbl, fullBox("stsz", 0, 0, stsz));
     append(stbl, co64(chunkOffsets));

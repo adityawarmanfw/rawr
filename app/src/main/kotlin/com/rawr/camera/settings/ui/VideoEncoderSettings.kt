@@ -6,6 +6,7 @@ import com.rawr.camera.settings.architecture.SetVideoEncoder
 import com.rawr.camera.settings.architecture.SettingsDispatch
 import com.rawr.camera.settings.model.KeyframeInterval
 import com.rawr.camera.settings.model.SettingsUiState
+import com.rawr.camera.settings.model.VideoAudioCodec
 import com.rawr.camera.settings.model.VideoAudioRoute
 import com.rawr.camera.settings.model.VideoAudioSource
 import com.rawr.camera.settings.model.VideoBitrateMode
@@ -79,9 +80,15 @@ internal fun VideoEncoderSettings(state: SettingsUiState, dispatch: SettingsDisp
         }
         SettingsGroup(
             title = "Audio",
-            description = "AAC-LC, 48 kHz. Stereo falls back to mono at 128 kbps if the microphone can't do stereo. " +
+            description = "48 kHz. PCM records uncompressed audio in a .mov; AAC records a smaller .mp4. " +
+                "Stereo falls back to mono if the microphone can't do stereo. " +
                 "Gain is digital: Android has no analog mic gain. Watch the MIC meter; the lamp turns red on clipping."
         ) {
+            SettingsRow("Codec", value = encoder.audioCodec.label)
+            CompactChoiceRow(VideoAudioCodec.entries, encoder.audioCodec, { it.label }) {
+                set(encoder.copy(audioCodec = it))
+            }
+            SettingDivider()
             SettingsRow("Source", value = encoder.audioSource.label)
             CompactChoiceRow(
                 VideoAudioSource.entries.filter {
@@ -117,10 +124,12 @@ internal fun VideoEncoderSettings(state: SettingsUiState, dispatch: SettingsDisp
             CompactChoiceRow(listOf(2, 1), encoder.audioChannels, { if (it == 1) "Mono" else "Stereo" }) {
                 set(encoder.copy(audioChannels = it))
             }
-            SettingDivider()
-            SettingsRow("Bitrate", value = "${encoder.audioBitrateKbps} kbps")
-            CompactChoiceRow(VideoEncoderConfig.AUDIO_BITRATES_KBPS, encoder.audioBitrateKbps, { "$it" }) {
-                set(encoder.copy(audioBitrateKbps = it))
+            if (!encoder.audioCodec.isPcm) {
+                SettingDivider()
+                SettingsRow("Bitrate", value = "${encoder.audioBitrateKbps} kbps")
+                CompactChoiceRow(VideoEncoderConfig.AUDIO_BITRATES_KBPS, encoder.audioBitrateKbps, { "$it" }) {
+                    set(encoder.copy(audioBitrateKbps = it))
+                }
             }
         }
     }

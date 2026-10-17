@@ -111,7 +111,8 @@ class MainActivity : ComponentActivity() {
         autoVideoSeconds = intent.getIntExtra("raw_video_seconds", 0).coerceIn(0, 600)
         val encoderOverrideNames = listOf(
             "raw_video_bitrate", "raw_video_intra_frames", "raw_video_bitrate_mode",
-            "raw_video_max_b_frames", "raw_video_audio_channels", "raw_video_audio_bitrate", "raw_video_bit_depth"
+            "raw_video_max_b_frames", "raw_video_audio_channels", "raw_video_audio_bitrate", "raw_video_bit_depth",
+            "raw_video_audio_pcm_bits"
         )
         captureViewModel.recordingOptions = com.rawr.camera.video.RecordingOptions(
             shutterNs = if (BuildConfig.DEBUG && intent.hasExtra("raw_video_test_shutter_ns"))

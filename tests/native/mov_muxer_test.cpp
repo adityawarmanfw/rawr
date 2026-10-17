@@ -1,5 +1,6 @@
 // Muxes recorded samples with MovMuxer, as NativeAvRecorder does.
-// usage: mov_muxer_helper out.mp4 hevc_csd.bin aac_asc.bin samples.bin width height fps rate channels rotation
+// usage: mov_muxer_helper out hevc_csd.bin aac_asc.bin samples.bin width height fps rate channels rotation pcm_bits
+// pcm_bits 0 = AAC in MP4; 16/24 = PCM in QuickTime MOV (audio records then hold raw PCM).
 // samples.bin: repeated [u8 track (0 video, 1 audio)][u8 sync][i64 ptsUs][u32 size][bytes], little-endian.
 // tests/mov_muxer.py builds the inputs from ffmpeg output and checks the result with ffprobe.
 #include <fcntl.h>
@@ -23,14 +24,15 @@ static std::vector<uint8_t> slurp(const char* path) {
 }
 
 int main(int argc, char** argv) {
-    if (argc != 11) {
-        std::fprintf(stderr, "usage: %s out csd asc samples width height fps rate channels rotation\n", argv[0]);
+    if (argc != 12) {
+        std::fprintf(stderr, "usage: %s out csd asc samples width height fps rate channels rotation pcm_bits\n", argv[0]);
         return 2;
     }
     const int fd = open(argv[1], O_RDWR | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) return 2;
     try {
-        MovMuxer muxer(fd, MovMuxer::Brand::Mp4);
+        const int pcmBits = std::stoi(argv[11]);
+        MovMuxer muxer(fd, pcmBits > 0 ? MovMuxer::Brand::QuickTime : MovMuxer::Brand::Mp4);
         MovMuxer::Video video;
         video.annexBConfig = slurp(argv[2]);
         video.width = std::stoi(argv[5]);
@@ -45,6 +47,10 @@ int main(int argc, char** argv) {
         audio.sampleRate = std::stoi(argv[8]);
         audio.channels = std::stoi(argv[9]);
         audio.bitrate = 128'000;
+        if (pcmBits > 0) {
+            audio.codec = MovMuxer::Audio::Codec::Pcm;
+            audio.bitsPerSample = pcmBits;
+        }
         // Like the recorder: whichever encoder reports its format first.
         muxer.setAudio(audio);
         muxer.setVideo(video);

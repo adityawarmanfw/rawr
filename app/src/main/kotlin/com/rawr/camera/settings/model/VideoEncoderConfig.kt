@@ -29,6 +29,19 @@ enum class VideoAudioSource(val wireValue: Int, val label: String) {
     }
 }
 
+/** Audio track format. PCM records a QuickTime .mov; AAC an .mp4. [pcmBits] 0 = AAC. */
+enum class VideoAudioCodec(val pcmBits: Int, val label: String) {
+    Aac(0, "AAC"),
+    Pcm16(16, "PCM 16"),
+    Pcm24(24, "PCM 24");
+
+    val isPcm: Boolean get() = pcmBits > 0
+
+    companion object {
+        fun of(pcmBits: Int): VideoAudioCodec = entries.firstOrNull { it.pcmBits == pcmBits } ?: Aac
+    }
+}
+
 /** Which microphone to record from. Auto follows Android routing, which picks an attached USB or wired mic. */
 enum class VideoAudioRoute(val wireValue: Int, val label: String) {
     Auto(0, "Auto"),
@@ -77,6 +90,7 @@ data class VideoEncoderConfig(
     /** 1 = mono, 2 = stereo. */
     val audioChannels: Int = 2,
     val audioBitrateKbps: Int = 192,
+    val audioCodec: VideoAudioCodec = VideoAudioCodec.Aac,
     val audioSource: VideoAudioSource = VideoAudioSource.Camcorder,
     val audioRoute: VideoAudioRoute = VideoAudioRoute.Auto,
     /** Digital gain after capture; Android exposes no analog mic gain. */

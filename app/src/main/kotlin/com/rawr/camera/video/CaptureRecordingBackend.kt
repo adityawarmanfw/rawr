@@ -69,6 +69,7 @@ internal class CaptureRecordingBackend(
                     deviceRotationDegrees = deviceRotationDegrees, bitrateMode = bitrateMode,
                     maxBFrames = maxBFrames, audioChannels = audioChannels, audioBitrate = audioBitrate,
                     audio = VideoAudioInput.of(encoder),
+                    audioPcmBits = extra("raw_video_audio_pcm_bits", encoder.audioCodec.pcmBits),
                     bitDepth = bitDepth,
                     renderProfile = imageSettings.activeProfileLabel(),
                     logProfile = imageSettings.videoLogProfile.takeIf { log },

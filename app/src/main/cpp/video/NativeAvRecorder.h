@@ -47,6 +47,8 @@ public:
         int audioDeviceId = 0;
         float audioGainDb = 0.0f;
         int audioLowCutHz = 0;
+        // 0 = AAC in MP4; 16 or 24 = little-endian PCM in QuickTime MOV.
+        int audioPcmBits = 0;
         // 8 = HEVC Main, 10 = HEVC Main10.
         int bitDepth = 10;
         // Written into the finished MP4 (moov/udta and mdta keys).
