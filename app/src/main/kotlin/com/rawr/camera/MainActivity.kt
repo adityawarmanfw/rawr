@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
+import android.view.KeyEvent
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -18,6 +19,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import com.rawr.camera.architecture.TriggerCapture
 import com.rawr.camera.integration.NativeCameraUiSnapshot
+import com.rawr.camera.model.CaptureMode
 import com.rawr.camera.settings.SettingsActivity
 import com.rawr.camera.ui.CaptureRoute
 import com.rawr.camera.ui.CaptureTheme
@@ -341,6 +343,26 @@ class MainActivity : ComponentActivity() {
         captureViewModel.stopPreviewAfterRecording()
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         super.onStop()
+    }
+
+    // Volume down is a hardware shutter: photo capture, or start/stop in video.
+    // Held-key repeats are dropped so one press is one shot, and the key is
+    // consumed so the system volume panel never appears over the viewfinder.
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (keyCode != KeyEvent.KEYCODE_VOLUME_DOWN) return super.onKeyDown(keyCode, event)
+        if (started && event.repeatCount == 0) triggerShutter()
+        return true
+    }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean =
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) true else super.onKeyUp(keyCode, event)
+
+    private fun triggerShutter() {
+        if (captureViewModel.controller.state.value.captureMode == CaptureMode.Video) {
+            toggleVideoRecording()
+        } else {
+            captureViewModel.controller.dispatch(TriggerCapture)
+        }
     }
 
     private fun toggleVideoRecording() {
