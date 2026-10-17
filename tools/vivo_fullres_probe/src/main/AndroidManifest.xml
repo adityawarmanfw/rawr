@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.CAMERA" />
+    <application android:label="FullRes Probe" android:largeHeap="true" android:process="${probeProcess}">
+        <activity android:name=".ProbeActivity" android:exported="true" />
+        <receiver android:name=".InfoReceiver" android:exported="true" />
+    </application>
+</manifest>
