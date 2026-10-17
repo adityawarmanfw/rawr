@@ -142,10 +142,18 @@ rawr_test(dng_capture_test native/dng_capture_test.cpp
 target_link_libraries(dng_capture_test PRIVATE rawr_tinydng)
 add_executable(hevc_metadata_helper native/hevc_log_metadata_test.cpp "${APP}/video/HevcLogMetadata.cpp")
 add_executable(mp4_metadata_helper native/mp4_metadata_patcher_test.cpp "${APP}/video/Mp4MetadataPatcher.cpp" "${APP}/video/HevcLogMetadata.cpp")
+add_executable(hevc_frame_type_helper native/hevc_frame_type_test.cpp)
+add_executable(mov_muxer_helper native/mov_muxer_test.cpp "${APP}/video/MovMuxer.cpp")
+target_link_libraries(mov_muxer_helper PRIVATE Threads::Threads)
+target_include_directories(mov_muxer_helper PRIVATE "${APP}")
+target_compile_options(mov_muxer_helper PRIVATE -Wall -Wextra -Werror)
 target_include_directories(hevc_metadata_helper PRIVATE "${APP}")
+target_include_directories(hevc_frame_type_helper PRIVATE "${APP}")
 target_include_directories(mp4_metadata_helper PRIVATE "${APP}")
 find_program(FFMPEG ffmpeg REQUIRED)
 find_program(FFPROBE ffprobe REQUIRED)
+add_test(NAME hevc_frame_types COMMAND "${UV_EXECUTABLE}" run --no-project --cache-dir "${RAWR_ROOT}/tmp/uv-cache" "${CMAKE_CURRENT_SOURCE_DIR}/hevc_frame_types.py" "$<TARGET_FILE:hevc_frame_type_helper>" "${FFMPEG}" "${FFPROBE}" "${CMAKE_CURRENT_BINARY_DIR}")
+add_test(NAME mov_muxer COMMAND "${UV_EXECUTABLE}" run --no-project --cache-dir "${RAWR_ROOT}/tmp/uv-cache" "${CMAKE_CURRENT_SOURCE_DIR}/mov_muxer.py" "$<TARGET_FILE:mov_muxer_helper>" "$<TARGET_FILE:mp4_metadata_helper>" "${FFMPEG}" "${FFPROBE}" "${CMAKE_CURRENT_BINARY_DIR}")
 add_test(NAME video_containers COMMAND "${UV_EXECUTABLE}" run --no-project --cache-dir "${RAWR_ROOT}/tmp/uv-cache" "${CMAKE_CURRENT_SOURCE_DIR}/video_containers.py" "$<TARGET_FILE:hevc_metadata_helper>" "$<TARGET_FILE:mp4_metadata_helper>" "${FFMPEG}" "${FFPROBE}" "${CMAKE_CURRENT_BINARY_DIR}")
 
 rawr_test(raw_pixel_source_test

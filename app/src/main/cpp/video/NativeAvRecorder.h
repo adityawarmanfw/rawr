@@ -1,23 +1,25 @@
 #pragma once
 
-#include <aaudio/AAudio.h>
 #include <android/native_window.h>
 #include <media/NdkMediaCodec.h>
-#include <media/NdkMediaMuxer.h>
 
 #include <atomic>
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
 
 #include "diagnostics/timing/RecentPeak.h"
+#include "video/AudioInput.h"
+#include "video/HevcFrameType.h"
+#include "video/MovMuxer.h"
 
 namespace rawrcam::video {
 
-// Owns the microphone, both hardware encoders, their drain threads, and the
+// Shares the video-mode microphone (AudioInput), owns both hardware encoders, their drain threads, and the
 // muxer. The UI hands over one MediaStore fd and the resulting encoder Surface.
 class NativeAvRecorder final {
 public:
@@ -33,12 +35,20 @@ public:
         int height = 1080;
         int fps = 30;
         int bitrate = 12'000'000;
-        int intraSeconds = 1;
+        // Frames between I-frames; 1 = all-intra.
+        int intraFrames = 30;
         int rotationDegrees = 0;
         int bitrateMode = 2;
         int maxBFrames = -1;
         int audioChannels = 2;
         int audioBitrate = 192'000;
+        // AAUDIO_INPUT_PRESET_*, AudioDeviceInfo id (0 = system routing), digital gain, high-pass corner (0 = off).
+        int audioPreset = AAUDIO_INPUT_PRESET_CAMCORDER;
+        int audioDeviceId = 0;
+        float audioGainDb = 0.0f;
+        int audioLowCutHz = 0;
+        // 0 = AAC in MP4; 16 or 24 = little-endian PCM in QuickTime MOV.
+        int audioPcmBits = 0;
         // 8 = HEVC Main, 10 = HEVC Main10.
         int bitDepth = 10;
         // Written into the finished MP4 (moov/udta and mdta keys).
@@ -48,6 +58,8 @@ public:
         std::string renderProfile;
         std::string gamut;
         std::string transfer;
+        // Sample index for recovering an interrupted recording; empty = none.
+        std::string indexPath;
         bool log = false;
         TimestampPolicy timestampPolicy = TimestampPolicy::PreserveRealtime;
     };
@@ -64,21 +76,15 @@ public:
 
 private:
     enum class Track { Video, Audio };
-    struct PendingSample {
-        Track track;
-        AMediaCodecBufferInfo info{};
-        std::vector<uint8_t> bytes;
-    };
-
     void configureVideo();
     void configureAudio();
     void drainVideo() noexcept;
-    void captureAudio() noexcept;
+    void onAudioBlock(const AudioInput::Block& block);
+    void finishAudio() noexcept;
     void drainAudio(bool untilEos);
     void setFormat(Track track, AMediaFormat* format);
     void writeSample(Track track, const uint8_t* data, size_t capacity,
                      const AMediaCodecBufferInfo& info, int64_t presentationTimeUs);
-    void writePendingLocked();
     void setFailure(const std::string& message) noexcept;
     void cleanup() noexcept;
     [[nodiscard]] static int64_t bootNs() noexcept;
@@ -88,6 +94,7 @@ private:
     Settings settings_{};
     int actualAudioChannels_ = 0;
     int actualAudioBitrate_ = 0;
+    int actualAudioPreset_ = -1;
     bool audioFallback_ = false;
     int64_t originBootUs_ = 0;
     int64_t monotonicToBootUs_ = 0;
@@ -95,20 +102,14 @@ private:
     std::string videoCodecName_;
     AMediaCodec* audioCodec_ = nullptr;
     ANativeWindow* inputWindow_ = nullptr;
-    AAudioStream* audioStream_ = nullptr;
-    AMediaMuxer* muxer_ = nullptr;
+    std::shared_ptr<AudioInput> audioInput_;
+    // Next audio PTS after the last queued block; the AAC EOS timestamp.
+    int64_t audioEndUs_ = 0;
+    std::unique_ptr<MovMuxer> muxer_;
     std::thread videoThread_;
-    std::thread audioThread_;
     std::atomic<bool> audioRunning_{false};
     std::atomic<bool> stopRequested_{false};
     bool started_ = false;
-    bool muxerStarted_ = false;
-    bool videoFormatReady_ = false;
-    bool audioFormatReady_ = false;
-    int videoTrack_ = -1;
-    int audioTrack_ = -1;
-    std::vector<PendingSample> pending_;
-    size_t pendingBytes_ = 0;
     mutable std::mutex muxerMutex_;
     mutable std::mutex statsMutex_;
     std::string failure_;
@@ -126,6 +127,12 @@ private:
     std::deque<int64_t> recentVideoPtsUs_;
     mutable uint64_t cumulativeTargetDeficit_ = 0;
     uint64_t encodedFrameGaps_ = 0;
+    // Encoded frame structure, from slice headers: index 0 = I, 1 = P, 2 = B.
+    HevcFrameTypeParser frameTypes_;
+    uint64_t frameTypeCount_[3] = {};
+    uint64_t frameTypeBytes_[3] = {};
+    uint64_t framesSinceI_ = 0;
+    uint64_t lastGopFrames_ = 0;
     uint64_t audioSamples_ = 0;
     long double audioSumSquares_ = 0;
     int16_t audioPeak_ = 0;

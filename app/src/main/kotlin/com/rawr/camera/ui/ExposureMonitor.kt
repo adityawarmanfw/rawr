@@ -71,16 +71,7 @@ internal fun MonitorMetric(label: String, value: String, valueColor: Color = Col
     // centered: caps-only mono glyphs otherwise sit above geometric center.
     val tight = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            label,
-            color = CaptureColors.Muted.copy(alpha = .72f),
-            fontFamily = CaptureMono,
-            fontSize = 6.sp,
-            lineHeight = 6.sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = .4.sp,
-            style = tight
-        )
+        MonitorLabel(label)
         Text(
             " $value",
             color = valueColor,
@@ -91,4 +82,18 @@ internal fun MonitorMetric(label: String, value: String, valueColor: Color = Col
             style = tight
         )
     }
+}
+
+@Composable
+internal fun MonitorLabel(label: String) {
+    Text(
+        label,
+        color = CaptureColors.Muted.copy(alpha = .72f),
+        fontFamily = CaptureMono,
+        fontSize = 6.sp,
+        lineHeight = 6.sp,
+        fontWeight = FontWeight.Bold,
+        letterSpacing = .4.sp,
+        style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
+    )
 }

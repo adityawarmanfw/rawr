@@ -15,7 +15,7 @@ class VideoEncoderConfigTest {
         assertEquals(40, d.bitrateMbps(VideoResolutionMode.UHD4K))
         assertEquals(60, d.bitrateMbps(VideoResolutionMode.OPEN_GATE))
         assertEquals(2, d.bitrateMode.wireValue)
-        assertEquals(1, d.keyframeSeconds)
+        assertEquals(KeyframeInterval.One, d.keyframeInterval)
         assertEquals(-1, d.maxBFrames)
         assertEquals(2, d.audioChannels)
         assertEquals(192, d.audioBitrateKbps)
@@ -25,16 +25,54 @@ class VideoEncoderConfigTest {
     @Test fun sanitizedClampsToWhatTheNativeRecorderAccepts() {
         val s = VideoEncoderConfig(
             bitDepth = 12, bitrate1080pMbps = 0, bitrate4kMbps = 500, bitrateOpenGateMbps = -3,
-            keyframeSeconds = 99, maxBFrames = 7, audioChannels = 6, audioBitrateKbps = 200
+            maxBFrames = 7, audioChannels = 6, audioBitrateKbps = 200
         ).sanitized()
         assertEquals(10, s.bitDepth)
         assertEquals(1, s.bitrate1080pMbps)
         assertEquals(400, s.bitrate4kMbps)
         assertEquals(1, s.bitrateOpenGateMbps)
-        assertEquals(10, s.keyframeSeconds)
         assertEquals(2, s.maxBFrames)
         assertEquals(2, s.audioChannels)
         assertEquals(192, s.audioBitrateKbps)
+    }
+
+    @Test fun keyframeIntervalScalesWithFrameRate() {
+        assertEquals(listOf(1, 12, 24, 48), KeyframeInterval.entries.map { it.frames(24) })
+        assertEquals(listOf(1, 15, 30, 60), KeyframeInterval.entries.map { it.frames(30) })
+    }
+
+    @Test fun keyframeWireValuesMapToNearestChoice() {
+        assertEquals(KeyframeInterval.AllIntra, KeyframeInterval.of(0))
+        assertEquals(KeyframeInterval.One, KeyframeInterval.of(2))
+        // Legacy whole seconds x 2: 1 s -> 1x, 10 s -> 2x.
+        assertEquals(KeyframeInterval.Two, KeyframeInterval.of(20))
+    }
+
+    @Test fun gopPatternDescribesRequestedStructure() {
+        assertEquals("I I I … (all-intra)", VideoEncoderConfig.gopPattern(1, 2))
+        assertEquals("I B B P B B P … (30)", VideoEncoderConfig.gopPattern(30, 2))
+        assertEquals("I P P P (4)", VideoEncoderConfig.gopPattern(4, 0))
+        assertEquals("I P P P P P P … (30) · B-frames auto", VideoEncoderConfig.gopPattern(30, -1))
+    }
+
+    @Test fun audioGainAndLowCutClampToSupportedValues() {
+        val s = VideoEncoderConfig(audioGainDb = 40, audioLowCutHz = 100).sanitized()
+        assertEquals(24, s.audioGainDb)
+        assertEquals(80, s.audioLowCutHz)
+        assertEquals(-12, VideoEncoderConfig(audioGainDb = -50).sanitized().audioGainDb)
+    }
+
+    @Test fun audioSourceWireValuesMatchAAudioPresets() {
+        assertEquals(5, VideoAudioSource.Camcorder.wireValue)
+        assertEquals(9, VideoAudioSource.Unprocessed.wireValue)
+        assertEquals(VideoAudioSource.Camcorder, VideoAudioSource.of(42))
+        assertEquals(VideoAudioRoute.Auto, VideoAudioRoute.of(42))
+    }
+
+    @Test fun audioCodecDefaultsToAacAndMapsPcmBits() {
+        assertEquals(VideoAudioCodec.Aac, VideoEncoderConfig().audioCodec)
+        assertEquals(VideoAudioCodec.Pcm24, VideoAudioCodec.of(24))
+        assertEquals(VideoAudioCodec.Aac, VideoAudioCodec.of(32))
     }
 
     @Test fun bitrateModeWireValuesMatchMediaCodec() {

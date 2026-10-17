@@ -32,6 +32,10 @@ import com.rawr.camera.model.TonemapControlContract
 import com.rawr.camera.settings.model.DenoiseConfig
 import com.rawr.camera.settings.model.MultiframeTuning
 import com.rawr.camera.settings.model.SettingsValues
+import com.rawr.camera.settings.model.KeyframeInterval
+import com.rawr.camera.settings.model.VideoAudioCodec
+import com.rawr.camera.settings.model.VideoAudioRoute
+import com.rawr.camera.settings.model.VideoAudioSource
 import com.rawr.camera.settings.model.VideoBitrateMode
 import com.rawr.camera.settings.model.VideoEncoderConfig
 import com.rawr.camera.settings.model.toLegacy
@@ -641,10 +645,16 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
                 bitrate4kMbps = p[Keys.videoBitrate4kMbps] ?: d.videoEncoder.bitrate4kMbps,
                 bitrateOpenGateMbps = p[Keys.videoBitrateOpenGateMbps] ?: d.videoEncoder.bitrateOpenGateMbps,
                 bitrateMode = p[Keys.videoBitrateMode]?.let(VideoBitrateMode::of) ?: d.videoEncoder.bitrateMode,
-                keyframeSeconds = p[Keys.videoKeyframeSeconds] ?: d.videoEncoder.keyframeSeconds,
+                keyframeInterval = (p[Keys.videoKeyframeInterval] ?: p[Keys.videoKeyframeSeconds]?.let { it * 2 })
+                    ?.let(KeyframeInterval::of) ?: d.videoEncoder.keyframeInterval,
                 maxBFrames = p[Keys.videoMaxBFrames] ?: d.videoEncoder.maxBFrames,
                 audioChannels = p[Keys.videoAudioChannels] ?: d.videoEncoder.audioChannels,
-                audioBitrateKbps = p[Keys.videoAudioBitrateKbps] ?: d.videoEncoder.audioBitrateKbps
+                audioBitrateKbps = p[Keys.videoAudioBitrateKbps] ?: d.videoEncoder.audioBitrateKbps,
+                audioCodec = p[Keys.videoAudioCodec]?.let(VideoAudioCodec::of) ?: d.videoEncoder.audioCodec,
+                audioSource = p[Keys.videoAudioSource]?.let(VideoAudioSource::of) ?: d.videoEncoder.audioSource,
+                audioRoute = p[Keys.videoAudioRoute]?.let(VideoAudioRoute::of) ?: d.videoEncoder.audioRoute,
+                audioGainDb = p[Keys.videoAudioGainDb] ?: d.videoEncoder.audioGainDb,
+                audioLowCutHz = p[Keys.videoAudioLowCutHz] ?: d.videoEncoder.audioLowCutHz
             ).sanitized(),
             photoLensShadingEnabled = p[Keys.photoLensShading] ?: p[Keys.lensShadingCorrection] ?: d.photoLensShadingEnabled,
             videoLensShadingEnabled = p[Keys.videoLensShading] ?: d.videoLensShadingEnabled,
@@ -876,10 +886,15 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.videoBitrate4kMbps] = encoder.bitrate4kMbps
         p[Keys.videoBitrateOpenGateMbps] = encoder.bitrateOpenGateMbps
         p[Keys.videoBitrateMode] = encoder.bitrateMode.wireValue
-        p[Keys.videoKeyframeSeconds] = encoder.keyframeSeconds
+        p[Keys.videoKeyframeInterval] = encoder.keyframeInterval.wireValue
         p[Keys.videoMaxBFrames] = encoder.maxBFrames
         p[Keys.videoAudioChannels] = encoder.audioChannels
         p[Keys.videoAudioBitrateKbps] = encoder.audioBitrateKbps
+        p[Keys.videoAudioCodec] = encoder.audioCodec.pcmBits
+        p[Keys.videoAudioSource] = encoder.audioSource.wireValue
+        p[Keys.videoAudioRoute] = encoder.audioRoute.wireValue
+        p[Keys.videoAudioGainDb] = encoder.audioGainDb
+        p[Keys.videoAudioLowCutHz] = encoder.audioLowCutHz
         p[Keys.photoLensShading] = v.photoLensShadingEnabled
         p[Keys.videoLensShading] = v.videoLensShadingEnabled
         p[Keys.distortionCorrection] = v.distortionCorrectionEnabled
@@ -1156,10 +1171,19 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val videoBitrate4kMbps = intPreferencesKey("video_bitrate_4k_mbps")
         val videoBitrateOpenGateMbps = intPreferencesKey("video_bitrate_open_gate_mbps")
         val videoBitrateMode = intPreferencesKey("video_bitrate_mode")
+        /** Legacy whole seconds; read once to migrate into [videoKeyframeInterval]. */
         val videoKeyframeSeconds = intPreferencesKey("video_keyframe_seconds")
+        /** [KeyframeInterval.wireValue]: half-seconds, 0 = all-intra. */
+        val videoKeyframeInterval = intPreferencesKey("video_keyframe_interval")
         val videoMaxBFrames = intPreferencesKey("video_max_b_frames")
         val videoAudioChannels = intPreferencesKey("video_audio_channels")
         val videoAudioBitrateKbps = intPreferencesKey("video_audio_bitrate_kbps")
+        /** [VideoAudioCodec.pcmBits]: 0 = AAC. */
+        val videoAudioCodec = intPreferencesKey("video_audio_codec")
+        val videoAudioSource = intPreferencesKey("video_audio_source")
+        val videoAudioRoute = intPreferencesKey("video_audio_route")
+        val videoAudioGainDb = intPreferencesKey("video_audio_gain_db")
+        val videoAudioLowCutHz = intPreferencesKey("video_audio_low_cut_hz")
         val photoLensShading = booleanPreferencesKey("photo_lens_shading")
         val videoLensShading = booleanPreferencesKey("video_lens_shading")
         val distortionCorrection = booleanPreferencesKey("distortion_correction")

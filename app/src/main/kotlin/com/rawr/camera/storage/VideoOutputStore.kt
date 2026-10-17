@@ -9,14 +9,14 @@ import androidx.core.net.toUri
 
 /** Provider operations for pending MediaStore videos and user-selected document trees. */
 internal class VideoOutputStore(private val context: Context) {
-    fun create(saveLocationId: String, displayName: String, capturedAt: Long): Uri {
+    fun create(saveLocationId: String, displayName: String, capturedAt: Long, mimeType: String = "video/mp4"): Uri {
         val destination = CaptureSaveLocation.fromId(saveLocationId, CaptureSaveLocation.VIDEO_ROOTS)
         val resolver = context.contentResolver
         val tree = destination.treeUri?.toUri()
         if (destination.relativePath.isNotEmpty()) {
             val values = ContentValues().apply {
                 put(MediaStore.Video.Media.DISPLAY_NAME, displayName)
-                put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+                put(MediaStore.Video.Media.MIME_TYPE, mimeType)
                 put(MediaStore.Video.Media.RELATIVE_PATH, destination.relativePath)
                 put(MediaStore.Video.Media.IS_PENDING, 1)
                 put(MediaStore.Video.Media.DATE_TAKEN, capturedAt)
@@ -29,7 +29,7 @@ internal class VideoOutputStore(private val context: Context) {
             }
         }
         val parent = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
-        return checkNotNull(DocumentsContract.createDocument(resolver, parent, "video/mp4", displayName)) {
+        return checkNotNull(DocumentsContract.createDocument(resolver, parent, mimeType, displayName)) {
             "Could not create video in the selected folder"
         }
     }

@@ -4,6 +4,7 @@
 #include <android/log.h>
 #include <media/NdkMediaFormat.h>
 #include <time.h>
+#include <fcntl.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -21,16 +22,12 @@ constexpr int kSurfaceColorFormat = 2130708361;  // MediaCodecInfo.COLOR_FormatS
 constexpr int kMainProfile = 1;                  // HEVCProfileMain.
 constexpr int kMain10Profile = 2;                // HEVCProfileMain10.
 constexpr int kAacLcProfile = 2;
-constexpr int kSampleRate = 48'000;
+constexpr int kSampleRate = AudioInput::kSampleRate;
 constexpr int kMaxAudioChannels = 2;
 constexpr int kMonoFallbackBitrate = 128'000;
-constexpr int kAudioReadFrames = 1024;
 
 void requireMedia(media_status_t status, const char* operation) {
     if (status != AMEDIA_OK) throw std::runtime_error(std::string(operation) + " status=" + std::to_string(status));
-}
-void requireAudio(aaudio_result_t status, const char* operation) {
-    if (status != AAUDIO_OK) throw std::runtime_error(std::string(operation) + " status=" + std::to_string(status));
 }
 int64_t clockNs(clockid_t which) noexcept {
     timespec ts{};
@@ -49,10 +46,11 @@ bool NativeAvRecorder::supportsTimestampPolicy(TimestampPolicy policy) noexcept 
 NativeAvRecorder::NativeAvRecorder(int outputFd, Settings settings) : outputFd_(outputFd), settings_(settings) {
     if (outputFd_ < 0 || settings_.width <= 0 || settings_.height <= 0 || (settings_.width & 1) != 0 ||
         (settings_.height & 1) != 0 || (settings_.fps != 24 && settings_.fps != 30) || settings_.bitrate < 1'000'000 ||
-        settings_.bitrate > 400'000'000 || settings_.intraSeconds < 1 || settings_.intraSeconds > 10 ||
+        settings_.bitrate > 400'000'000 || settings_.intraFrames < 1 || settings_.intraFrames > 60 ||
         settings_.rotationDegrees % 90 != 0 || settings_.bitrateMode < -1 || settings_.bitrateMode > 2 ||
         settings_.maxBFrames < -1 || settings_.maxBFrames > 4 ||
         (settings_.audioChannels != 1 && settings_.audioChannels != 2) || settings_.audioBitrate < 64'000 ||
+        (settings_.audioPcmBits != 0 && settings_.audioPcmBits != 16 && settings_.audioPcmBits != 24) ||
         settings_.audioBitrate > 512'000 || (settings_.bitDepth != 8 && settings_.bitDepth != 10) ||
         (settings_.log && settings_.bitDepth != 10) || !supportsTimestampPolicy(settings_.timestampPolicy))
         throw std::invalid_argument("invalid native recording settings");
@@ -80,11 +78,15 @@ void NativeAvRecorder::configureVideo() {
     AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_PROFILE, settings_.bitDepth == 8 ? kMainProfile : kMain10Profile);
     AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_BIT_RATE, settings_.bitrate);
     AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_FRAME_RATE, settings_.fps);
-    AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_I_FRAME_INTERVAL, settings_.intraSeconds);
+    // i-frame-interval is in seconds and accepts a float; 0 asks for every frame to be a sync frame.
+    AMediaFormat_setFloat(format, AMEDIAFORMAT_KEY_I_FRAME_INTERVAL,
+                          settings_.intraFrames <= 1 ? 0.0f
+                                                     : static_cast<float>(settings_.intraFrames) / settings_.fps);
     if (settings_.bitrateMode >= 0) AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_BITRATE_MODE, settings_.bitrateMode);
     // Optional codec key. A codec may reject the request during configure;
     // omit it when left at the automatic default.
-    if (settings_.maxBFrames >= 0) AMediaFormat_setInt32(format, "max-bframes", settings_.maxBFrames);
+    const int maxBFrames = settings_.intraFrames <= 1 ? 0 : settings_.maxBFrames;
+    if (maxBFrames >= 0) AMediaFormat_setInt32(format, "max-bframes", maxBFrames);
     // Preserve the encoder's BT.709 RGB-to-YCbCr conversion. LOG signalling
     // is rewritten after encoding, without changing the encoded samples.
     AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_COLOR_STANDARD, 1);
@@ -105,47 +107,33 @@ void NativeAvRecorder::configureVideo() {
 
 void NativeAvRecorder::configureAudio() {
     const int requestedChannels = settings_.audioChannels;
-    int openedChannels = 0;
-    // Stereo-first with single mono fallback. Never fails the recording for topology.
-    for (int attempt = 0; attempt < 2; ++attempt) {
-        const int tryChannels = (attempt == 0) ? requestedChannels : 1;
-        if (attempt == 1 && requestedChannels == 1) break;
-        AAudioStreamBuilder* builder = nullptr;
-        requireAudio(AAudio_createStreamBuilder(&builder), "create microphone builder");
-        if (!builder) throw std::runtime_error("microphone builder is null");
-        AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_INPUT);
-        AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_I16);
-        AAudioStreamBuilder_setSampleRate(builder, kSampleRate);
-        AAudioStreamBuilder_setChannelCount(builder, tryChannels);
-        AAudioStreamBuilder_setInputPreset(builder, AAUDIO_INPUT_PRESET_CAMCORDER);
-        AAudioStream* stream = nullptr;
-        const aaudio_result_t opened = AAudioStreamBuilder_openStream(builder, &stream);
-        AAudioStreamBuilder_delete(builder);
-        if (opened != AAUDIO_OK || !stream) {
-            if (stream) AAudioStream_close(stream);
-            if (attempt == 0 && requestedChannels != 1) continue;
-            requireAudio(opened, "open microphone");
-            throw std::runtime_error("microphone open failed");
-        }
-        const bool matches = AAudioStream_getSampleRate(stream) == kSampleRate &&
-                             AAudioStream_getChannelCount(stream) == tryChannels &&
-                             AAudioStream_getFormat(stream) == AAUDIO_FORMAT_PCM_I16;
-        if (!matches) {
-            AAudioStream_close(stream);
-            if (attempt == 0 && requestedChannels != 1) continue;
-            throw std::runtime_error("microphone did not provide 48 kHz PCM16 at requested channels");
-        }
-        audioStream_ = stream;
-        openedChannels = tryChannels;
-        break;
-    }
-    if (!audioStream_ || openedChannels <= 0) throw std::runtime_error("microphone unavailable at requested channels");
-    actualAudioChannels_ = openedChannels;
+    // Reuses the meter's running stream; a stereo stream is downmixed for a mono request.
+    AudioInput::Config config;
+    config.channels = requestedChannels;
+    config.preset = settings_.audioPreset;
+    config.deviceId = settings_.audioDeviceId;
+    audioInput_ = AudioInput::acquire(config);
+    audioInput_->setProcessing(settings_.audioGainDb, settings_.audioLowCutHz);
+    // A stream already open for the meter keeps its preset; report what was recorded.
+    actualAudioPreset_ = audioInput_->config().preset;
+    actualAudioChannels_ = std::min(requestedChannels, audioInput_->channels());
     audioFallback_ = (actualAudioChannels_ != requestedChannels);
     // Agreed policy: mono fallback steps down to 128k even if stereo asked for 192k.
     actualAudioBitrate_ =
         audioFallback_ ? std::min(settings_.audioBitrate, kMonoFallbackBitrate) : settings_.audioBitrate;
 
+    if (settings_.audioPcmBits > 0) {
+        // Uncompressed: blocks go straight to the muxer; there is no encoder format to wait for.
+        actualAudioBitrate_ = kSampleRate * actualAudioChannels_ * settings_.audioPcmBits;
+        MovMuxer::Audio audio;
+        audio.codec = MovMuxer::Audio::Codec::Pcm;
+        audio.sampleRate = kSampleRate;
+        audio.channels = actualAudioChannels_;
+        audio.bitsPerSample = settings_.audioPcmBits;
+        std::lock_guard<std::mutex> lock(muxerMutex_);
+        muxer_->setAudio(audio);
+        return;
+    }
     audioCodec_ = AMediaCodec_createEncoderByType("audio/mp4a-latm");
     if (!audioCodec_) throw std::runtime_error("AAC encoder unavailable");
     AMediaFormat* format = AMediaFormat_new();
@@ -155,13 +143,12 @@ void NativeAvRecorder::configureAudio() {
     AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_CHANNEL_COUNT, actualAudioChannels_);
     AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_AAC_PROFILE, kAacLcProfile);
     AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_BIT_RATE, actualAudioBitrate_);
-    AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_MAX_INPUT_SIZE, kAudioReadFrames * actualAudioChannels_ * 2);
+    AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_MAX_INPUT_SIZE, AudioInput::kReadFrames * actualAudioChannels_ * 2);
     const media_status_t configured =
         AMediaCodec_configure(audioCodec_, format, nullptr, nullptr, AMEDIACODEC_CONFIGURE_FLAG_ENCODE);
     AMediaFormat_delete(format);
     requireMedia(configured, "configure AAC");
     requireMedia(AMediaCodec_start(audioCodec_), "start AAC");
-    requireAudio(AAudioStream_requestStart(audioStream_), "start microphone");
 }
 
 void NativeAvRecorder::start() {
@@ -169,20 +156,23 @@ void NativeAvRecorder::start() {
     originBootUs_ = bootNs() / 1'000;
     monotonicToBootUs_ = (bootNs() - clockNs(CLOCK_MONOTONIC)) / 1'000;
     try {
-        muxer_ = AMediaMuxer_new(outputFd_, AMEDIAMUXER_OUTPUT_FORMAT_MPEG_4);
-        if (!muxer_) throw std::runtime_error("native MP4 muxer unavailable");
-        requireMedia(AMediaMuxer_setOrientationHint(muxer_, (settings_.rotationDegrees + 360) % 360),
-                     "set MP4 orientation");
+        // Best effort: without an index the recording still works, it just cannot be recovered.
+        const int indexFd = settings_.indexPath.empty()
+                                ? -1
+                                : open(settings_.indexPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_APPEND | O_CLOEXEC, 0600);
+        muxer_ = std::make_unique<MovMuxer>(
+            outputFd_, settings_.audioPcmBits > 0 ? MovMuxer::Brand::QuickTime : MovMuxer::Brand::Mp4, indexFd);
         configureVideo();
         configureAudio();
         started_ = true;
         audioRunning_.store(true);
         videoThread_ = std::thread([this] { drainVideo(); });
-        audioThread_ = std::thread([this] { captureAudio(); });
+        audioInput_->setSink({[this](const AudioInput::Block& block) { onAudioBlock(block); },
+                              [this](const std::string& error) { setFailure(error); }});
     } catch (...) {
         audioRunning_.store(false);
         stopRequested_.store(true);
-        if (audioStream_) (void)AAudioStream_requestStop(audioStream_);
+        if (audioInput_) audioInput_->setSink({});
         if (videoThread_.joinable() && videoCodec_) (void)AMediaCodec_signalEndOfInputStream(videoCodec_);
         cleanup();
         throw;
@@ -210,31 +200,44 @@ void NativeAvRecorder::setFormat(Track track, AMediaFormat* format) {
         const auto patched = logHevcAccessUnit(static_cast<const uint8_t*>(csd), size, true);
         AMediaFormat_setBuffer(format, "csd-0", patched.data(), patched.size());
     }
+    if (track == Track::Video) {
+        void* csd = nullptr;
+        size_t size = 0;
+        if (AMediaFormat_getBuffer(format, "csd-0", &csd, &size))
+            frameTypes_.setCodecConfig(static_cast<const uint8_t*>(csd), size);
+    }
+    const auto int32 = [format](const char* key, int32_t fallback) {
+        int32_t value = 0;
+        return AMediaFormat_getInt32(format, key, &value) ? value : fallback;
+    };
+    void* csd = nullptr;
+    size_t csdSize = 0;
+    if (!AMediaFormat_getBuffer(format, "csd-0", &csd, &csdSize) || !csd || csdSize == 0)
+        throw std::runtime_error("encoder output format missing csd-0");
+    const auto* config = static_cast<const uint8_t*>(csd);
     std::lock_guard<std::mutex> lock(muxerMutex_);
-    bool& ready = track == Track::Video ? videoFormatReady_ : audioFormatReady_;
-    int& index = track == Track::Video ? videoTrack_ : audioTrack_;
-    if (ready) throw std::runtime_error("duplicate encoder output format");
-    index = static_cast<int>(AMediaMuxer_addTrack(muxer_, format));
-    if (index < 0) throw std::runtime_error("add MP4 track failed: " + std::to_string(index));
-    ready = true;
-    if (videoFormatReady_ && audioFormatReady_) {
-        requireMedia(AMediaMuxer_start(muxer_), "start MP4 muxer");
-        muxerStarted_ = true;
-        writePendingLocked();
+    if (track == Track::Video) {
+        if (muxer_->hasVideo()) throw std::runtime_error("duplicate encoder output format");
+        MovMuxer::Video video;
+        video.annexBConfig.assign(config, config + csdSize);
+        video.width = settings_.width;
+        video.height = settings_.height;
+        video.fps = settings_.fps;
+        video.rotationDegrees = (settings_.rotationDegrees + 360) % 360;
+        // As configured in configureVideo(); LOG signalling is rewritten by the metadata patcher.
+        video.colorStandard = int32(AMEDIAFORMAT_KEY_COLOR_STANDARD, 1);
+        video.colorTransfer = int32(AMEDIAFORMAT_KEY_COLOR_TRANSFER, 3);
+        video.colorRange = int32(AMEDIAFORMAT_KEY_COLOR_RANGE, 2);
+        muxer_->setVideo(video);
+    } else {
+        if (muxer_->hasAudio()) throw std::runtime_error("duplicate encoder output format");
+        MovMuxer::Audio audio;
+        audio.aacConfig.assign(config, config + csdSize);
+        audio.sampleRate = int32(AMEDIAFORMAT_KEY_SAMPLE_RATE, kSampleRate);
+        audio.channels = int32(AMEDIAFORMAT_KEY_CHANNEL_COUNT, actualAudioChannels_);
+        audio.bitrate = actualAudioBitrate_;
+        muxer_->setAudio(audio);
     }
-}
-
-void NativeAvRecorder::writePendingLocked() {
-    std::stable_sort(pending_.begin(), pending_.end(), [](const PendingSample& a, const PendingSample& b) {
-        return a.info.presentationTimeUs < b.info.presentationTimeUs;
-    });
-    for (auto& sample : pending_) {
-        const int index = sample.track == Track::Video ? videoTrack_ : audioTrack_;
-        requireMedia(AMediaMuxer_writeSampleData(muxer_, static_cast<size_t>(index), sample.bytes.data(), &sample.info),
-                     "write pending MP4 sample");
-    }
-    pending_.clear();
-    pendingBytes_ = 0;
 }
 
 void NativeAvRecorder::writeSample(Track track, const uint8_t* data, size_t capacity, const AMediaCodecBufferInfo& info,
@@ -253,20 +256,16 @@ void NativeAvRecorder::writeSample(Track track, const uint8_t* data, size_t capa
         sample.size = static_cast<int32_t>(patched.size());
     }
     std::lock_guard<std::mutex> lock(muxerMutex_);
-    if (!muxerStarted_) {
-        if (pending_.size() >= 256 || pendingBytes_ + static_cast<size_t>(sample.size) > 8'000'000)
-            throw std::runtime_error("MP4 startup queue exceeded bound");
-        PendingSample saved{};
-        saved.track = track;
-        saved.info = sample;
-        saved.info.offset = 0;
-        saved.bytes.assign(data + sample.offset, data + sample.offset + sample.size);
-        pendingBytes_ += saved.bytes.size();
-        pending_.push_back(std::move(saved));
-        return;
+    // Each encoder reports its output format before its first sample.
+    const uint8_t* bytes = data + sample.offset;
+    if (track == Track::Video) {
+        if (!muxer_->hasVideo()) throw std::runtime_error("HEVC sample before output format");
+        muxer_->writeVideo(bytes, static_cast<size_t>(sample.size), sample.presentationTimeUs,
+                           (sample.flags & AMEDIACODEC_BUFFER_FLAG_KEY_FRAME) != 0);
+    } else {
+        if (!muxer_->hasAudio()) throw std::runtime_error("AAC sample before output format");
+        muxer_->writeAudio(bytes, static_cast<size_t>(sample.size), sample.presentationTimeUs);
     }
-    const int index = track == Track::Video ? videoTrack_ : audioTrack_;
-    requireMedia(AMediaMuxer_writeSampleData(muxer_, static_cast<size_t>(index), data, &sample), "write MP4 sample");
 }
 
 void NativeAvRecorder::drainVideo() noexcept {
@@ -314,7 +313,20 @@ void NativeAvRecorder::drainVideo() noexcept {
                             snappedPtsUs = lastSnappedVideoPtsUs_ + frameDurUs;
                     }
                     writeSample(Track::Video, data, capacity, info, snappedPtsUs);
+                    const auto frameType = frameTypes_.classify(data + info.offset, static_cast<size_t>(info.size));
                     std::lock_guard<std::mutex> lock(statsMutex_);
+                    if (frameType != HevcFrameTypeParser::Type::Unknown) {
+                        const int slot = frameType == HevcFrameTypeParser::Type::I   ? 0
+                                         : frameType == HevcFrameTypeParser::Type::P ? 1
+                                                                                     : 2;
+                        ++frameTypeCount_[slot];
+                        frameTypeBytes_[slot] += static_cast<uint64_t>(info.size);
+                        if (slot == 0) {
+                            if (frameTypeCount_[0] > 1) lastGopFrames_ = framesSinceI_;
+                            framesSinceI_ = 0;
+                        }
+                    }
+                    ++framesSinceI_;
                     if (lastVideoPtsUs_ >= 0 && bootPtsUs > lastVideoPtsUs_) {
                         const int64_t deltaUs = bootPtsUs - lastVideoPtsUs_;
                         const int64_t missed = static_cast<int64_t>(std::llround(static_cast<double>(deltaUs) *
@@ -391,73 +403,100 @@ void NativeAvRecorder::drainAudio(bool untilEos) {
     throw std::runtime_error("AAC EOS timeout");
 }
 
-void NativeAvRecorder::captureAudio() noexcept {
+void NativeAvRecorder::onAudioBlock(const AudioInput::Block& block) {
+    if (!audioRunning_.load()) return;
     try {
-        const int channels = actualAudioChannels_ > 0 ? actualAudioChannels_ : settings_.audioChannels;
-        std::array<int16_t, kAudioReadFrames * kMaxAudioChannels> pcm{};
-        int64_t totalFrames = 0;
-        int64_t anchorNs = 0;
-        while (audioRunning_.load()) {
-            const aaudio_result_t count = AAudioStream_read(audioStream_, pcm.data(), kAudioReadFrames, 50'000'000);
-            if (count < 0) throw std::runtime_error("microphone read failed: " + std::to_string(count));
-            if (count == 0) {
-                drainAudio(false);
-                continue;
-            }
-            int64_t timestampFrame = 0, timestampNs = 0;
-            int64_t measuredFirstNs = bootNs() - static_cast<int64_t>(count) * 1'000'000'000LL / kSampleRate;
-            if (AAudioStream_getTimestamp(audioStream_, CLOCK_BOOTTIME, &timestampFrame, &timestampNs) == AAUDIO_OK)
-                measuredFirstNs = timestampNs + (totalFrames - timestampFrame) * 1'000'000'000LL / kSampleRate;
-            const int64_t measuredAnchor = measuredFirstNs - totalFrames * 1'000'000'000LL / kSampleRate;
-            anchorNs = anchorNs == 0 ? measuredAnchor
-                                     : anchorNs + std::clamp<int64_t>(measuredAnchor - anchorNs, -1'000'000, 1'000'000);
-            long double squares = 0;
-            int32_t peak = 0;
-            const int64_t totalSamples = static_cast<int64_t>(count) * channels;
-            for (int64_t i = 0; i < totalSamples; ++i) {
-                const int32_t value = pcm[static_cast<size_t>(i)];
+        const int inputChannels = audioInput_->channels();
+        const int channels = actualAudioChannels_;
+        // Recorded channel layout, downmixing a stereo stream for a mono request.
+        const auto sampleAt = [&](int frame, int channel) {
+            if (inputChannels == channels) return block.pcm[frame * channels + channel];
+            return (block.pcm[frame * 2] + block.pcm[frame * 2 + 1]) * 0.5f;
+        };
+        std::array<int16_t, AudioInput::kReadFrames * kMaxAudioChannels> pcm16{};
+        std::array<uint8_t, AudioInput::kReadFrames * kMaxAudioChannels * 3> packed{};
+        long double squares = 0;
+        int32_t peak = 0;
+        const int64_t totalSamples = static_cast<int64_t>(block.frames) * channels;
+        for (int frame = 0; frame < block.frames; ++frame) {
+            for (int c = 0; c < channels; ++c) {
+                const float x = sampleAt(frame, c);
+                const size_t i = static_cast<size_t>(frame * channels + c);
+                pcm16[i] = static_cast<int16_t>(std::clamp<long>(std::lrint(x * 32'768.0f), -32'768, 32'767));
+                if (settings_.audioPcmBits == 24) {
+                    const auto v = static_cast<int32_t>(std::clamp<long>(std::lrint(x * 8'388'608.0f), -8'388'608, 8'388'607));
+                    packed[i * 3] = static_cast<uint8_t>(v);
+                    packed[i * 3 + 1] = static_cast<uint8_t>(v >> 8);
+                    packed[i * 3 + 2] = static_cast<uint8_t>(v >> 16);
+                }
+                const int32_t value = pcm16[i];
                 squares += static_cast<long double>(value) * value;
                 peak = std::max(peak, std::abs(value));
             }
-            {
-                std::lock_guard<std::mutex> lock(statsMutex_);
-                audioSamples_ += static_cast<uint64_t>(totalSamples);
-                audioSumSquares_ += squares;
-                audioPeak_ = static_cast<int16_t>(std::min<int32_t>(32'767, std::max<int32_t>(audioPeak_, peak)));
-                audioXruns_ = AAudioStream_getXRunCount(audioStream_);
-            }
-            int consumed = 0;
-            while (consumed < count && audioRunning_.load()) {
-                const ssize_t index = AMediaCodec_dequeueInputBuffer(audioCodec_, 10'000);
-                if (index == AMEDIACODEC_INFO_TRY_AGAIN_LATER) {
-                    drainAudio(false);
-                    continue;
-                }
-                if (index < 0) throw std::runtime_error("AAC input dequeue failed: " + std::to_string(index));
-                size_t capacity = 0;
-                uint8_t* input = AMediaCodec_getInputBuffer(audioCodec_, static_cast<size_t>(index), &capacity);
-                const int part = std::min<int>(
-                    count - consumed, static_cast<int>(capacity / (sizeof(int16_t) * static_cast<size_t>(channels))));
-                if (!input || part <= 0) throw std::runtime_error("AAC input buffer unavailable");
-                std::memcpy(input, pcm.data() + static_cast<size_t>(consumed) * static_cast<size_t>(channels),
-                            static_cast<size_t>(part) * static_cast<size_t>(channels) * sizeof(int16_t));
-                const int64_t ptsUs = (anchorNs + (totalFrames + consumed) * 1'000'000'000LL / kSampleRate) / 1'000;
-                requireMedia(AMediaCodec_queueInputBuffer(
-                                 audioCodec_, static_cast<size_t>(index), 0,
-                                 static_cast<size_t>(part) * static_cast<size_t>(channels) * sizeof(int16_t),
-                                 static_cast<uint64_t>(std::max<int64_t>(0, ptsUs)), 0),
-                             "queue AAC PCM");
-                consumed += part;
-                drainAudio(false);
-            }
-            totalFrames += count;
         }
-        const int64_t endUs = (anchorNs + totalFrames * 1'000'000'000LL / kSampleRate) / 1'000;
+        {
+            std::lock_guard<std::mutex> lock(statsMutex_);
+            audioSamples_ += static_cast<uint64_t>(totalSamples);
+            audioSumSquares_ += squares;
+            audioPeak_ = static_cast<int16_t>(std::min<int32_t>(32'767, std::max<int32_t>(audioPeak_, peak)));
+            audioXruns_ = audioInput_->xruns();
+        }
+        if (settings_.audioPcmBits > 0) {
+            // Samples are already little-endian on Android; 24-bit is packed above.
+            const uint8_t* bytes = settings_.audioPcmBits == 24 ? packed.data()
+                                                                : reinterpret_cast<const uint8_t*>(pcm16.data());
+            const size_t size = static_cast<size_t>(totalSamples) * static_cast<size_t>(settings_.audioPcmBits / 8);
+            const int64_t ptsUs = std::max<int64_t>(0, block.firstFrameBootNs / 1'000 - originBootUs_);
+            {
+                std::lock_guard<std::mutex> lock(muxerMutex_);
+                muxer_->writeAudio(bytes, size, ptsUs);
+            }
+            std::lock_guard<std::mutex> lock(statsMutex_);
+            if (firstAudioPtsUs_ < 0) firstAudioPtsUs_ = block.firstFrameBootNs / 1'000;
+            lastAudioPtsUs_ = block.firstFrameBootNs / 1'000;
+            ++encodedAudioPackets_;
+            return;
+        }
+        int consumed = 0;
+        while (consumed < block.frames && audioRunning_.load()) {
+            const ssize_t index = AMediaCodec_dequeueInputBuffer(audioCodec_, 10'000);
+            if (index == AMEDIACODEC_INFO_TRY_AGAIN_LATER) {
+                drainAudio(false);
+                continue;
+            }
+            if (index < 0) throw std::runtime_error("AAC input dequeue failed: " + std::to_string(index));
+            size_t capacity = 0;
+            uint8_t* input = AMediaCodec_getInputBuffer(audioCodec_, static_cast<size_t>(index), &capacity);
+            const int part = std::min<int>(
+                block.frames - consumed, static_cast<int>(capacity / (sizeof(int16_t) * static_cast<size_t>(channels))));
+            if (!input || part <= 0) throw std::runtime_error("AAC input buffer unavailable");
+            std::memcpy(input, pcm16.data() + static_cast<size_t>(consumed) * static_cast<size_t>(channels),
+                        static_cast<size_t>(part) * static_cast<size_t>(channels) * sizeof(int16_t));
+            const int64_t ptsUs = (block.firstFrameBootNs + consumed * 1'000'000'000LL / kSampleRate) / 1'000;
+            requireMedia(AMediaCodec_queueInputBuffer(
+                             audioCodec_, static_cast<size_t>(index), 0,
+                             static_cast<size_t>(part) * static_cast<size_t>(channels) * sizeof(int16_t),
+                             static_cast<uint64_t>(std::max<int64_t>(0, ptsUs)), 0),
+                         "queue AAC PCM");
+            consumed += part;
+            audioEndUs_ = (block.firstFrameBootNs + consumed * 1'000'000'000LL / kSampleRate) / 1'000;
+            drainAudio(false);
+        }
+    } catch (const std::exception& error) {
+        audioRunning_.store(false);
+        setFailure(error.what());
+    }
+}
+
+// Runs on the stopping thread after the sink is detached, so no block is in flight.
+void NativeAvRecorder::finishAudio() noexcept {
+    if (!audioCodec_) return;
+    try {
         for (;;) {
             const ssize_t index = AMediaCodec_dequeueInputBuffer(audioCodec_, 10'000);
             if (index >= 0) {
                 requireMedia(AMediaCodec_queueInputBuffer(audioCodec_, static_cast<size_t>(index), 0, 0,
-                                                          static_cast<uint64_t>(std::max<int64_t>(0, endUs)),
+                                                          static_cast<uint64_t>(std::max<int64_t>(0, audioEndUs_)),
                                                           AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM),
                              "queue AAC EOS");
                 break;
@@ -478,9 +517,9 @@ bool NativeAvRecorder::stop() noexcept {
         return false;
     }
     started_ = false;
+    if (audioInput_) audioInput_->setSink({});
     audioRunning_.store(false);
-    if (audioStream_) (void)AAudioStream_requestStop(audioStream_);
-    if (audioThread_.joinable()) audioThread_.join();
+    finishAudio();
     stopRequested_.store(true);
     if (videoCodec_) {
         const media_status_t status = AMediaCodec_signalEndOfInputStream(videoCodec_);
@@ -490,13 +529,13 @@ bool NativeAvRecorder::stop() noexcept {
     bool finalized = false;
     {
         std::lock_guard<std::mutex> lock(muxerMutex_);
-        if (muxerStarted_) {
-            const media_status_t status = AMediaMuxer_stop(muxer_);
-            if (status != AMEDIA_OK) setFailure("finalize MP4 failed: " + std::to_string(status));
-            finalized = status == AMEDIA_OK;
-            muxerStarted_ = false;
-        } else
-            setFailure("MP4 tracks were not initialized");
+        try {
+            if (!muxer_) throw std::runtime_error("MP4 tracks were not initialized");
+            muxer_->finish();
+            finalized = true;
+        } catch (const std::exception& error) {
+            setFailure(std::string("finalize MP4 failed: ") + error.what());
+        }
     }
     // Device tags are best effort. LOG colour signalling must succeed before publication.
     if (finalized && outputFd_ >= 0 && (settings_.log || !settings_.deviceMake.empty() || !settings_.deviceModel.empty())) {
@@ -521,13 +560,11 @@ bool NativeAvRecorder::stop() noexcept {
 
 void NativeAvRecorder::cleanup() noexcept {
     audioRunning_.store(false);
-    if (audioStream_) (void)AAudioStream_requestStop(audioStream_);
-    if (audioThread_.joinable()) audioThread_.join();
-    if (videoThread_.joinable()) videoThread_.join();
-    if (audioStream_) {
-        (void)AAudioStream_close(audioStream_);
-        audioStream_ = nullptr;
+    if (audioInput_) {
+        audioInput_->setSink({});
+        audioInput_.reset();
     }
+    if (videoThread_.joinable()) videoThread_.join();
     if (audioCodec_) {
         (void)AMediaCodec_stop(audioCodec_);
         (void)AMediaCodec_delete(audioCodec_);
@@ -542,10 +579,7 @@ void NativeAvRecorder::cleanup() noexcept {
         ANativeWindow_release(inputWindow_);
         inputWindow_ = nullptr;
     }
-    if (muxer_) {
-        (void)AMediaMuxer_delete(muxer_);
-        muxer_ = nullptr;
-    }
+    muxer_.reset();
     if (outputFd_ >= 0) {
         close(outputFd_);
         outputFd_ = -1;
@@ -577,11 +611,14 @@ std::string NativeAvRecorder::statsJson() const {
                                        : 0;
     cumulativeTargetDeficit_ = std::max(cumulativeTargetDeficit_, targetDeficit);
     const double rms = audioSamples_ == 0 ? 0.0 : std::sqrt(static_cast<double>(audioSumSquares_ / audioSamples_));
+    const auto avgKb = [this](int slot) {
+        return frameTypeCount_[slot] == 0 ? 0.0 : frameTypeBytes_[slot] / 1024.0 / frameTypeCount_[slot];
+    };
     const double audioRmsDbfs = rms <= 0.0 ? -120.0 : 20.0 * std::log10(rms / 32768.0);
     return std::string("{\"videoCodec\":\"") + escaped(videoCodecName_) +
            "\",\"width\":" + std::to_string(settings_.width) + ",\"height\":" + std::to_string(settings_.height) +
            ",\"requestedFps\":" + std::to_string(settings_.fps) + ",\"bitrate\":" + std::to_string(settings_.bitrate) +
-           ",\"intraSeconds\":" + std::to_string(settings_.intraSeconds) +
+           ",\"intraFrames\":" + std::to_string(settings_.intraFrames) +
            ",\"bitrateMode\":" + std::to_string(settings_.bitrateMode) +
            ",\"maxBFrames\":" + std::to_string(settings_.maxBFrames) +
            ",\"bitDepth\":" + std::to_string(settings_.bitDepth) +
@@ -589,6 +626,12 @@ std::string NativeAvRecorder::statsJson() const {
            std::to_string(actualAudioChannels_ > 0 ? actualAudioChannels_ : settings_.audioChannels) +
            ",\"audioBitrateRequested\":" + std::to_string(settings_.audioBitrate) + ",\"audioBitrateActual\":" +
            std::to_string(actualAudioBitrate_ > 0 ? actualAudioBitrate_ : settings_.audioBitrate) +
+           ",\"audioPreset\":" + std::to_string(settings_.audioPreset) +
+           ",\"audioPresetActual\":" + std::to_string(actualAudioPreset_) +
+           ",\"audioDeviceId\":" + std::to_string(settings_.audioDeviceId) +
+           ",\"audioGainDb\":" + std::to_string(settings_.audioGainDb) +
+           ",\"audioLowCutHz\":" + std::to_string(settings_.audioLowCutHz) +
+           ",\"audioPcmBits\":" + std::to_string(settings_.audioPcmBits) +
            ",\"audioFallback\":" + (audioFallback_ ? "true" : "false") + ",\"timestampPolicy\":\"" + policyName +
            "\",\"videoTimestampSource\":\"encoder_surface_grid_snapped\"" +
            ",\"encodedFrames\":" + std::to_string(encodedFrames_) +
@@ -596,6 +639,10 @@ std::string NativeAvRecorder::statsJson() const {
            ",\"currentFps\":" + std::to_string(currentFps) +
            ",\"targetFrameShortfall\":" + std::to_string(cumulativeTargetDeficit_) +
            ",\"encodedFrameGaps\":" + std::to_string(encodedFrameGaps_) +
+           ",\"iFrames\":" + std::to_string(frameTypeCount_[0]) + ",\"pFrames\":" + std::to_string(frameTypeCount_[1]) +
+           ",\"bFrames\":" + std::to_string(frameTypeCount_[2]) + ",\"avgIKb\":" + std::to_string(avgKb(0)) +
+           ",\"avgPKb\":" + std::to_string(avgKb(1)) + ",\"avgBKb\":" + std::to_string(avgKb(2)) +
+           ",\"actualGop\":" + std::to_string(lastGopFrames_) +
            ",\"encoderLatencyMs\":" + std::to_string(encoderLatencyMs_) +
            ",\"encoderLatencyPeakMs\":" + std::to_string(encoderLatencyPeak_.peak(bootNs())) +
            ",\"encoderLatencyMaxMs\":" + std::to_string(encoderLatencyPeak_.max()) +
