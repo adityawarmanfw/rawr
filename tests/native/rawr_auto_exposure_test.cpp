@@ -353,10 +353,10 @@ int main() {
         const Scene window{kRoom, kRoom + 3.32 + 7.0, 0.0, 0.0, 0.15};
         const std::size_t enter = sim.preview.size();
         sim.run(window, 4.0);
-        assert(near(sim.ae.last()->metered.guardEv, -0.75, 0.01));
+        assert(near(sim.ae.last()->metered.guardEv, -1.25, 0.01));
         // The cap plus the window lifting the median; the full guard would
         // leave the room ~1.8 EV down.
-        assert(sim.preview.back() > room - 1.1);
+        assert(sim.preview.back() > room - 1.65);
         for (std::size_t i = enter; i < sim.preview.size(); ++i) assert(sim.preview[i] > sim.preview.back() - 0.1);
         const std::size_t at = sim.preview.size();
         sim.run(window, 2.0);
@@ -375,7 +375,7 @@ int main() {
         sim.run({kSun, kSun + 3.32 + kClipEv + 0.8, 1.0}, 5.0);
         const auto& last = sim.ae.last();
         assert(last->metered.sceneEv100 > 11.0f);
-        // Luma needs more than the indoor cap (0.75) and gets it.
+        // Saved in full (the outdoor cap is the whole guard).
         assert(last->metered.guardEv < (channel ? -0.6f : -1.0f) && last->metered.guardEv >= -1.5f);
         double low = sim.preview.back();
         for (std::size_t i = at; i < sim.preview.size(); ++i) low = std::min(low, sim.preview[i]);

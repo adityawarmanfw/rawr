@@ -182,7 +182,7 @@ struct MeterPolicy {
     // off, would pump.) Outdoors (scene EV100 from outdoorEv100Low to
     // outdoorEv100High) a clipped highlight is usually sky worth saving: the
     // cap eases up to the full maxGuardEv.
-    float clippedGuardMaxEv = 0.75f;
+    float clippedGuardMaxEv = 1.25f;
     // The sensor runs this far under the shown exposure (the viewfinder and
     // photo gain carry it back; the render rolls off what lands above
     // white): highlights may sit this much higher before they clip.
