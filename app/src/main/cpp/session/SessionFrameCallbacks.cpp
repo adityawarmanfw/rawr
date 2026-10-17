@@ -96,6 +96,10 @@ void SessionFrameCallbacks::updateRawrAe(const image_scopes::SceneExposureStatsD
                                  context.config.maxDigitalGainEv};
     ae::FrameObservation f{stats->weightedBins, std::log2(clipLuma), exposure->logExposure(), exposure->shutterNs,
                            exposure->iso, metadata.aperture.value_or(0.0f), timestampNs};
+    static_assert(image_scopes::kSceneChannelClip == ae::kChannelClip);
+    f.channelBins = stats->channelBins;
+    // A spot's bins cover the tapped area only; the night look judges the frame.
+    if (context.spotActive) f.frameLogMeanEv = image_scopes::sceneFrameLogMeanEv(*stats);
     // A tapped spot meters with the default highlight handling.
     const auto meterPolicy = context.spotActive ? ae::MeterPolicy{} : ae::meterPolicyFor(context.config.metering);
     if (const auto step = rawrAe_.update(f, settings, context.userEv, meterPolicy, ae::filterPolicyForSpeed(context.video ? 0 : context.config.speed)))

@@ -41,8 +41,10 @@ WaveformData measureDisplayWaveform(Rgba8ImageView image, WaveformMode mode, Sam
                                     std::uint32_t signalBins = kDisplayWaveformBins);
 // Bin of a non-clipped luma in SceneExposureStatsData (top bin excluded).
 std::uint32_t sceneExposureBin(float luma) noexcept;
+// Matrix weighting, no spot. channelCeilings (optional) fill channelBins.
 SceneExposureStatsData measureSceneExposure(RgbaF32ImageView image, const float lumaWeights[3], float clipLuma,
-                                            std::uint32_t sampleBlockSize = 4);
+                                            std::uint32_t sampleBlockSize = 4,
+                                            const float* channelCeilings = nullptr);
 VectorscopeData measureVectorscope(Rgba8ImageView image, SamplingMode samplingMode,
                                    std::uint32_t bins = kVectorscopeBins);
 

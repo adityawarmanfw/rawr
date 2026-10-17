@@ -9,24 +9,37 @@ layout(std430, binding = 1) buffer Out {
     uint sampleCount;
     uint clippedWeight;
     uint reserved;
+    uint channelBins[256];
+    uint frameLogSum;
+    uint frameSamples;
+    uint reserved1;
+    uint reserved2;
 }
 outb;
 const uint PARTITIONS = 16u;
 const uint BIN_COUNT = 256u;
-const uint COUNTERS = 4u;
-const uint STRIDE = BIN_COUNT + COUNTERS;
+const uint COUNTERS = 8u;
+const uint STRIDE = 2u * BIN_COUNT + COUNTERS;
 
 void main() {
     uint i = gl_LocalInvocationIndex;
-    uint sum = 0u;
-    for (uint p = 0u; p < PARTITIONS; ++p) sum += partial.data[p * STRIDE + i];
+    uint sum = 0u, channel = 0u;
+    for (uint p = 0u; p < PARTITIONS; ++p) {
+        sum += partial.data[p * STRIDE + i];
+        channel += partial.data[p * STRIDE + BIN_COUNT + i];
+    }
     outb.weightedBins[i] = sum;
+    outb.channelBins[i] = channel;
     if (i < COUNTERS) {
         uint c = 0u;
-        for (uint p = 0u; p < PARTITIONS; ++p) c += partial.data[p * STRIDE + BIN_COUNT + i];
+        for (uint p = 0u; p < PARTITIONS; ++p) c += partial.data[p * STRIDE + 2u * BIN_COUNT + i];
         if (i == 0u) outb.totalWeight = c;
         if (i == 1u) outb.sampleCount = c;
         if (i == 2u) outb.clippedWeight = c;
         if (i == 3u) outb.reserved = 0u;
+        if (i == 4u) outb.frameLogSum = c;
+        if (i == 5u) outb.frameSamples = c;
+        if (i == 6u) outb.reserved1 = 0u;
+        if (i == 7u) outb.reserved2 = 0u;
     }
 }

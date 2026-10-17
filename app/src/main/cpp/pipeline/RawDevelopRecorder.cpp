@@ -645,7 +645,8 @@ void RawDevelopRecorder::recordSceneExposure(VkCommandBuffer command, uint32_t f
     const std::array<float, 3> ceilings{wb[0], 0.5f * (wb[1] + wb[2]), wb[3]};
     float whiteLuma = 0.0f;
     for (size_t c = 0; c < 3; ++c) whiteLuma += lumaRow[c] * ceilings[c];
-    monitor_.recordSceneExposure(command, frameSlot, view, width, height, lumaRow, 0.9f * whiteLuma, spot, weighting);
+    monitor_.recordSceneExposure(command, frameSlot, view, width, height, lumaRow, 0.9f * whiteLuma, spot, weighting,
+                                 ceilings);
 }
 
 void RawDevelopRecorder::recordVideoScopes(VkCommandBuffer command, uint32_t slot, VkImageView view, VkImage image,

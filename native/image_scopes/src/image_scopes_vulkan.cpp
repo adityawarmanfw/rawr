@@ -31,7 +31,7 @@ enum SetKind : std::uint32_t {
     SceneReduce
 };
 constexpr VkDeviceSize kExposureScratchBytes = 16ull * 260ull * 4ull;
-constexpr VkDeviceSize kSceneScratchBytes = 16ull * (kSceneExposureBins + 4ull) * 4ull;
+constexpr VkDeviceSize kSceneScratchBytes = 16ull * (2ull * kSceneExposureBins + 8ull) * 4ull;
 constexpr VkDeviceSize kVecScratchBytes = static_cast<VkDeviceSize>(detail::kVectorScratchBytes);
 constexpr std::uint32_t kMaxDisplayWidth = (std::numeric_limits<std::uint32_t>::max() - 511u) / 512u;
 constexpr std::uint32_t kMaxDisplayHeight = std::numeric_limits<std::uint32_t>::max() / 64u;
@@ -198,8 +198,12 @@ struct SceneMeasurePush {
     std::uint32_t width, height, sampleBlockSize;
     float lumaR, lumaG, lumaB, clipLuma;
     std::uint32_t p0;
+    float invCeilR, invCeilG, invCeilB;
+    std::uint32_t pad;
 };
-static_assert(sizeof(SceneMeasurePush) == 32);
+static_assert(sizeof(SceneMeasurePush) == 48);
+// Measure/reduce pipeline layouts: the scene meter's push block is the largest.
+constexpr std::uint32_t kMeasurePushBytes = sizeof(SceneMeasurePush);
 struct WaveMeasurePush {
     std::uint32_t width, height, mode, samplingMode, sampledCountOffset, maxOffset, sampledPixelCount, p1;
 };
@@ -280,7 +284,7 @@ struct ImageScopes::Impl {
                  {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}}};
             dl.pBindings = rb.data();
             check(vkCreateDescriptorSetLayout(d, &dl, alloc, &renderDsl), "image_scopes: render DSL failed");
-            VkPushConstantRange pr{VK_SHADER_STAGE_COMPUTE_BIT, 0, 32};
+            VkPushConstantRange pr{VK_SHADER_STAGE_COMPUTE_BIT, 0, kMeasurePushBytes};
             VkPipelineLayoutCreateInfo pli{};
             pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
             pli.setLayoutCount = 1;
@@ -661,12 +665,19 @@ void ImageScopes::recordSceneExposureStats(const SceneExposureStatsRecordInfo& i
     }
     const auto weighting = static_cast<std::uint32_t>(i.weighting);
     if (weighting > 2u) throw std::invalid_argument("image_scopes: scene weighting must be 0..2");
+    float invCeil[3]{};
+    for (int c = 0; c < 3; ++c) {
+        if (!std::isfinite(i.channelCeilings[c]) || i.channelCeilings[c] < 0.0f)
+            throw std::invalid_argument("image_scopes: scene channel ceilings must be finite and >= 0");
+        invCeil[c] = i.channelCeilings[c] > 0.0f ? 1.0f / i.channelCeilings[c] : 0.0f;
+    }
     // Block size in the low byte, weighting above it.
     SceneMeasurePush mp{i.input.width,    i.input.height,   i.sampleBlockSize | (weighting << 8), i.lumaWeights[0],
-                        i.lumaWeights[1], i.lumaWeights[2], i.clipLuma,        spotPacked};
+                        i.lumaWeights[1], i.lumaWeights[2], i.clipLuma,        spotPacked,
+                        invCeil[0],       invCeil[1],       invCeil[2],        0u};
     vkCmdBindPipeline(i.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, impl_->sceneMeasure);
     vkCmdBindDescriptorSets(i.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, impl_->measurePl, 0, 1, &ms, 0, nullptr);
-    vkCmdPushConstants(i.commandBuffer, impl_->measurePl, VK_SHADER_STAGE_COMPUTE_BIT, 0, 32, &mp);
+    vkCmdPushConstants(i.commandBuffer, impl_->measurePl, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(mp), &mp);
     vkCmdDispatch(i.commandBuffer, 16u, 1u, 1u);
     Impl::computeBarrier(i.commandBuffer, scratch.b, scratch.size);
     auto rs = impl_->bindReduce(i.frameSlot, SceneReduce, scratch, out);

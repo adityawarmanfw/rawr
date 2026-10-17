@@ -104,7 +104,7 @@ std::uint32_t sceneExposureBin(float luma) noexcept {
 }
 
 SceneExposureStatsData measureSceneExposure(RgbaF32ImageView im, const float lumaWeights[3], float clipLuma,
-                                            std::uint32_t block) {
+                                            std::uint32_t block, const float* channelCeilings) {
     if (!im.data || !im.width || !im.height) throw std::invalid_argument("image_scopes CPU: invalid scene image");
     if (im.rowStrideFloats < static_cast<std::uint64_t>(im.width) * 4u)
         throw std::invalid_argument("image_scopes CPU: scene row stride too small");
@@ -126,6 +126,17 @@ SceneExposureStatsData measureSceneExposure(RgbaF32ImageView im, const float lum
             const std::uint32_t w = centre ? kSceneExposureCentreWeight : 1u;
             const bool clipped = clipLuma > 0.0f && luma >= clipLuma;
             out.weightedBins[clipped ? kSceneExposureBins - 1u : sceneExposureBin(luma)] += w;
+            if (channelCeilings) {
+                float peak = 0.0f;
+                for (int c = 0; c < 3; ++c)
+                    if (channelCeilings[c] > 0.0f) peak = std::max(peak, std::max(p[c], 0.0f) / channelCeilings[c]);
+                out.channelBins[peak >= kSceneChannelClip ? kSceneExposureBins - 1u : sceneExposureBin(peak)] += w;
+            }
+            const float frameLuma = clipped ? clipLuma : luma;
+            const float frameLog =
+                frameLuma > 0.0f ? (std::log2(frameLuma) - kSceneFrameLogMinEv) * kSceneFrameLogScale : 0.0f;
+            out.frameLogSum += std::uint32_t(std::clamp(frameLog + 0.5f, 0.0f, float(kSceneFrameLogMax)));
+            ++out.frameSamples;
             out.totalWeight += w;
             ++out.sampleCount;
             if (clipped) out.clippedWeight += w;

@@ -1,6 +1,7 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 
 #if IMAGE_SCOPES_HAS_VULKAN
 #include <vulkan/vulkan.h>
@@ -57,14 +58,36 @@ inline constexpr float kSceneExposureMinEv = -20.0f;
 inline constexpr float kSceneExposureMaxEv = 4.0f;
 inline constexpr std::uint32_t kSceneExposureCentreWeight = 3;
 
+// Per-channel highlights: channelBins bin log2 of the brightest channel
+// over its saturation ceiling, same layout and weights; at or above
+// kSceneChannelClip a sample lands in the top bin.
+inline constexpr float kSceneChannelClip = 0.95f;
+// Whole-frame log2 luma, every sample (a spot included), unweighted: each
+// adds round((log2 luma - kSceneFrameLogMinEv) * kSceneFrameLogScale),
+// clamped to [0, kSceneFrameLogMax]; clipped samples count at the clip.
+inline constexpr float kSceneFrameLogMinEv = -24.0f;
+inline constexpr float kSceneFrameLogScale = 16.0f;
+inline constexpr std::uint32_t kSceneFrameLogMax = 28u * 16u;
+
 struct SceneExposureStatsData {
     std::uint32_t weightedBins[kSceneExposureBins]{};
     std::uint32_t totalWeight = 0;
     std::uint32_t sampleCount = 0;
     std::uint32_t clippedWeight = 0;
     std::uint32_t reserved = 0;
+    std::uint32_t channelBins[kSceneExposureBins]{};
+    std::uint32_t frameLogSum = 0;
+    std::uint32_t frameSamples = 0;
+    std::uint32_t reserved1 = 0;
+    std::uint32_t reserved2 = 0;
 };
-static_assert(sizeof(SceneExposureStatsData) == (kSceneExposureBins + 4u) * 4u);
+static_assert(sizeof(SceneExposureStatsData) == (2u * kSceneExposureBins + 8u) * 4u);
+
+// Mean log2 luma of the whole frame.
+inline std::optional<float> sceneFrameLogMeanEv(const SceneExposureStatsData& s) noexcept {
+    if (s.frameSamples == 0) return std::nullopt;
+    return float(double(s.frameLogSum) / double(s.frameSamples) / double(kSceneFrameLogScale)) + kSceneFrameLogMinEv;
+}
 
 struct RawStatus {
     std::uint32_t completeCellCount = 0;
