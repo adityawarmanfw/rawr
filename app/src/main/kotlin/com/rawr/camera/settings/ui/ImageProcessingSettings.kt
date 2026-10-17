@@ -34,6 +34,7 @@ internal fun HighlightReconstructionGroup(state: SettingsUiState, dispatch: Sett
             strengthEnabled = v.photoHighlightEnabled,
             threshold = v.photoHighlightThreshold,
             compression = v.photoHighlightCompression,
+            compressionDefault = 45f,
             thresholdIdentity = "highlight_threshold_photo",
             onMethod = { dispatch.invoke(SetPhotoHighlightMethod(it)) },
             onThreshold = { dispatch.invoke(SetPhotoHighlightThreshold(it)) },
@@ -47,6 +48,7 @@ internal fun HighlightReconstructionGroup(state: SettingsUiState, dispatch: Sett
             strengthEnabled = v.videoHighlightEnabled,
             threshold = v.videoHighlightThreshold,
             compression = v.videoHighlightCompression,
+            compressionDefault = 100f,
             thresholdIdentity = "highlight_threshold_video",
             onMethod = { dispatch.invoke(SetVideoHighlightMethod(it)) },
             onThreshold = { dispatch.invoke(SetVideoHighlightThreshold(it)) },
@@ -62,6 +64,7 @@ private fun HighlightMethodOptions(
     strengthEnabled: Boolean,
     threshold: Float,
     compression: Float,
+    compressionDefault: Float,
     thresholdIdentity: String,
     onMethod: (Int) -> Unit,
     onThreshold: (Float) -> Unit,
@@ -95,7 +98,7 @@ private fun HighlightMethodOptions(
             label = "Highlight compression",
             supportingText = "SDR shoulder strength; UltraHDR color stays uncompressed",
             minimum = 0f, maximum = 300f, step = 1f, decimals = 0,
-            value = compression, defaultValue = 100f, enabled = strengthEnabled
+            value = compression, defaultValue = compressionDefault, enabled = strengthEnabled
         ) { onCompression(it) }
     }
 }

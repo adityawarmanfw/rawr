@@ -1149,7 +1149,7 @@ data class SettingsValues(
     // 0 = existing propagation; 1 = RawTherapee Coloropp for still renders.
     val photoHighlightMethod: Int = 1,
     val photoHighlightThreshold: Float = 1f,
-    val photoHighlightCompression: Float = 100f,
+    val photoHighlightCompression: Float = 45f,
     val videoHighlightEnabled: Boolean = false,
     val videoHighlightMethod: Int = 0,
     val videoHighlightThreshold: Float = 1f,
