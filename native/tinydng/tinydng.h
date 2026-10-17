@@ -174,6 +174,15 @@ typedef enum tinydng_sample_format {
 #define TINYDNG_LIGHTSOURCE_D65           22
 #define TINYDNG_LIGHTSOURCE_D75           23
 
+/* Local addition: opaque tag blob (MakerNote/XMP passthrough). */
+typedef struct tinydng_blob {
+  uint16_t type;
+  uint64_t count;
+  uint8_t *data; /* context-owned copy of count*elem bytes */
+  size_t size;
+  uint8_t present;
+} tinydng_blob;
+
 typedef struct tinydng_exif {
   char *make;
   char *model;
@@ -231,6 +240,15 @@ typedef struct tinydng_exif {
   char *lens_serial;
   double lens_spec[4];
   uint8_t has_lens_spec;
+  /* --- Converter carry: parsed by the reader as well (the extension fields
+     above are too); emitted by the writer when present. --- */
+  int32_t exposure_compensation[2]; /* SRATIONAL */
+  uint8_t has_exposure_compensation;
+  uint16_t sharpness;
+  uint8_t has_sharpness;
+  uint8_t exif_version[4];
+  uint8_t has_exif_version;
+  tinydng_blob maker_note; /* ExifIFD */
 } tinydng_exif;
 
 typedef struct tinydng_cfa {
@@ -355,6 +373,10 @@ typedef struct tinydng_raw_info {
   uint8_t has_camera_calibration2;
   uint16_t cfa_layout; /* 0 => default 1 */
   uint8_t has_cfa_layout;
+  /* --- Converter carry (reader-parsed, writer-emitted). --- */
+  uint8_t tiff_ep_standard_id[4];
+  uint8_t has_tiff_ep_standard_id;
+  tinydng_blob xmp_packet; /* IFD0 */
 } tinydng_raw_info;
 
 typedef struct tinydng_field {

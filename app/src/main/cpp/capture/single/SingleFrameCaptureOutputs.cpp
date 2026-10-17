@@ -110,7 +110,6 @@ bool SingleFrameCaptureOutputs::startJpeg(const SingleFrameDevelopResult& result
     jpegContext.output.refinementMs = completed.refinementMs;
     jpegContext.output.tonemapMs = completed.tonemapMs;
     jpegContext.output.denoiseMs = completed.denoiseMs;
-    jpegContext.output.galoshYuvMs = completed.galoshYuvMs;
     jpegContext.output.gainmapMs = completed.gainmapMs;
     jpegContext.output.postTailMs = completed.postTailMs;
     jpegContext.output.highlightStage = completed.highlightStage;

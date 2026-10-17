@@ -38,8 +38,7 @@ bool StillImageRenderer::start(const rawrcam::vulkan::VulkanContext& context, st
                                      context.device(),
                                      queueOverride ? queueOverride : context.queue(),
                                      context.queueFamily(),
-                                     queueSubmitMutexOverride ? queueSubmitMutexOverride : &queueSubmitMutex,
-                                     context.float16ComputeEnabled()};
+                                     queueSubmitMutexOverride ? queueSubmitMutexOverride : &queueSubmitMutex};
     resources_.bind(device);
 
     try {

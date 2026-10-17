@@ -75,17 +75,13 @@ int main() {
     assert(contains(film, "- Highlight anchor: +1.20 EV\n\nFilm simulation:\n- Stock: Gold 200\n"));
     assert(!contains(film, "AgX parameters") && !contains(film, "Tonemap parameters"));
 
-    // Denoise sections print only for stages that ran.
-    develop.galoshRawMode = 2;
+    // The denoise section prints only when the stage ran.
     const std::string denoised = jpeg::buildPublicDescription(develop, tone, "AgX Sigmoid", 98,
                                                               jpeg::ChromaSubsampling::Yuv420, false, "", 1.5f,
                                                               1e-4f, 2e-6f);
     assert(contains(denoised, "\nDenoise parameters:\n- Strength: 1.50\n- Detail: 1.00\n"));
-    assert(contains(denoised, "\nDenoise (galosh-raw) parameters:\n- Mode: chroma-only\n"));
-    assert(!contains(denoised, "galosh-yuv"));
-    // Pipeline order: denoise sections precede the AgX and tonemap sections.
+    // Pipeline order: the denoise section precedes the AgX section.
     assert(denoised.find("Denoise parameters:") < denoised.find("AgX parameters:"));
-    assert(denoised.find("Denoise (galosh-raw)") < denoised.find("Tonemap parameters:"));
 
     // Renderer exports swap the verb and the mode line, nothing else.
     const std::string rendered = jpeg::buildPublicDescription(develop, tone, "AgX Sigmoid", 98,

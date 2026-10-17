@@ -196,6 +196,8 @@ class CameraInventorySource(context: Context) {
     private val manager = context.applicationContext.getSystemService(CameraManager::class.java)
     private val native = NativePreviewEngine()
 
+    init { native.installCameraTagResolver(CameraTagResolver(context)) }
+
     fun cameras(): CameraInventory = CameraInventoryParser.parseCameras(native.probeCameras())
 
     fun keys(cameraId: String, physicalCameraId: String): CameraKeyCatalog {

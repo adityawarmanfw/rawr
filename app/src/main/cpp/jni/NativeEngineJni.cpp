@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "camera/CameraProbe.h"
+#include "camera/CameraMetadataTags.h"
 #include "camera/CameraProfileJson.h"
 #include "camera/CameraVideoCapabilities.h"
 #include "camera/NativeCameraController.h"
@@ -129,12 +130,9 @@ rawrcam::encoding::dng::DngCaptureContext makeDngContext(jint fd, jint rotation,
     return out;
 }
 // Collapsed denoise intent at the JNI boundary (see DenoiseConfig
-// toModesArray/toStrengthsArray): modes[master, method, rawMode, yuvMode,
-// waveletMaxScale], strengths[waveletStrength, waveletDetail, rawStrength,
-// rawLuma, rawChroma, yuvStrengthY, yuvStrengthC, waveletForceY]. One
-// IntArray + one FloatArray instead of thirteen positional params. The
-// trailing waveletForceY / waveletMaxScale are optional: (4/7) arrays load
-// with shipped-tuning defaults (0.25/7).
+// toModesArray/toStrengthsArray): modes[master, waveletMaxScale],
+// strengths[waveletStrength, waveletDetail, waveletForceY]. One IntArray +
+// one FloatArray instead of positional params.
 using rawrcam::jni::DenoiseIntent;
 using rawrcam::jni::parseDenoiseSpec;
 void fillJpegContext(JNIEnv* env, rawrcam::capture::JpegCaptureRequest& jpeg, jint fd, jint rotation,
@@ -932,4 +930,9 @@ extern "C" JNIEXPORT jstring JNICALL Java_com_rawr_camera_integration_SystemProp
     char value[PROP_VALUE_MAX]{};
     __system_property_get(jString(env, key).c_str(), value);
     return env->NewStringUTF(value);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_rawr_camera_integration_NativePreviewEngine_installCameraTagResolver(JNIEnv* env, jobject, jobject resolver) {
+    rawrcam::camera::installCameraTagResolver(env, resolver);
 }

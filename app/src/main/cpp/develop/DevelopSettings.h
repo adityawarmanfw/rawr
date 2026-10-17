@@ -32,23 +32,9 @@ struct DevelopSettings {
     // wavelet band count (1..7, shipped 7). Clamped at record time.
     float denoiseForceY = 0.25f;
     int denoiseMaxScale = 7;
-    // GALOSH-RAW Bayer denoise (pre-demosaic, P1a). 0 = off (default,
-    // legacy bit-identical); 1 = full luma+chroma; 2 = chroma-only
-    // (luma lane bypassed, detail preserved). Mirrors
-    // galosh::GaloshRawMode; mapped from JNI/Settings in P1c.
-    int galoshRawMode = 0;
-    float galoshStrength = 1.0f;
-    float galoshLuma = 1.0f;
-    float galoshChroma = 1.0f;
-    // GALOSH-YUV denoise (post-tonemap linear RGB, P1b). 0 = off
-    // (default, legacy bit-identical); 1 = full; 2 = chroma-only.
-    // Mirrors galosh::GaloshYuvMode; mapped from JNI/Settings in P1c.
-    int galoshYuvMode = 0;
     // Multiframe only: chroma-only profiled wavelet on the merge, noise from
     // the burst fit / frame count (independent of the single-frame denoise).
     bool multiframeChromaDenoise = false;
-    float galoshYuvStrengthY = 1.0f;
-    float galoshYuvStrengthC = 1.0f;
     bool lensShadingCorrectionEnabled = false;
     bool highlightReconstructionEnabled = true;
     std::uint32_t highlightReconstructionMethod = 0;  // 0 propagation, 1 RawTherapee Coloropp

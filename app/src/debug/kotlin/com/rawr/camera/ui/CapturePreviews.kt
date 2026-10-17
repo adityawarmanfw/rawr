@@ -170,7 +170,6 @@ private fun filmQuickSample() = FilmSimQuickState(
     presets = listOf(
         FilmSimQuickOption("portra400", "Portra 400 Natural"),
         FilmSimQuickOption("gold200", "Gold 200 Warm"),
-        FilmSimQuickOption("ektachrome", "Ektachrome Clean"),
         FilmSimQuickOption("velvia", "Velvia Vivid")
     ),
     params = mapOf(

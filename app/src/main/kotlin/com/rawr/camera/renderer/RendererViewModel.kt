@@ -93,8 +93,20 @@ internal class RendererViewModel(application: Application) : AndroidViewModel(ap
             mutablePreview.value?.close()
             editorJobId = selected?.id
             mutableEditor.value = selected?.let { job ->
-                RendererEditorSession(RendererRecipe.decode(job.draft, settings.state.value)) {
+                val initial = RendererRecipe.decode(job.draft, settings.state.value)
+                var presets = initial.filmPresets to initial.agxLooks
+                RendererEditorSession(initial) {
                     store.updateDraft(job.id, it)
+                    // Presets saved or edited here belong to the shared library.
+                    // Push only this editor's own changes, never its stale copy.
+                    val next = it.filmPresets to it.agxLooks
+                    if (next != presets) {
+                        val before = presets
+                        presets = next
+                        settings.update { global -> global.copy(
+                            filmPresets = if (next.first != before.first) next.first else global.filmPresets,
+                            agxLooks = if (next.second != before.second) next.second else global.agxLooks) }
+                    }
                 }
             }
             mutablePreview.value = selected?.let { RendererPreviewSession(it, store, ::report) }
@@ -119,6 +131,9 @@ internal class RendererViewModel(application: Application) : AndroidViewModel(ap
     fun renderOriginal(job: RenderJob) = operation {
         val ready = store.edit(job, settings.values.first())
         store.export(ready.id, original = true)
+    }
+    fun renderAll(items: List<Pair<Uri, String>>) {
+        store.renderAll(items) { settings.values.first() }
     }
     fun export(id: String) {
         if (state.value.loading || store.busy.value) return

@@ -9,6 +9,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Renderer DNG library: scan, thumbnail and convert DNGs in the gallery. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.raw" android:required="true" />
     <uses-feature android:name="android.hardware.vulkan.level" android:version="1" android:required="true" />
@@ -51,6 +54,7 @@
                 <data android:scheme="file" android:mimeType="image/x-dng" />
             </intent-filter>
         </activity>
+        <service android:name=".renderer.library.DngConvertService" android:exported="false" android:foregroundServiceType="dataSync|mediaProcessing" />
         <service android:name=".renderer.RendererService" android:exported="false" android:foregroundServiceType="dataSync|mediaProcessing" />
         <service
             android:name=".storage.StillProcessingService"

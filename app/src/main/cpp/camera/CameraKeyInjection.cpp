@@ -6,12 +6,12 @@
 #include <optional>
 #include <sstream>
 
-#include "camera/vivo/VivoVendorTags.h"
+#include "camera/CameraMetadataTags.h"
 
 namespace rawrcam::camera {
 namespace {
 
-std::optional<uint32_t> resolveTag(const ACameraMetadata* characteristics, const std::string& tag, std::string* error) {
+std::optional<uint32_t> resolveTag(const ACameraMetadata* characteristics, const char* cameraId, const std::string& tag, std::string* error) {
     if (!tag.empty() && tag[0] >= '0' && tag[0] <= '9') {
         char* end = nullptr;
         const unsigned long value = std::strtoul(tag.c_str(), &end, 0);
@@ -19,7 +19,7 @@ std::optional<uint32_t> resolveTag(const ACameraMetadata* characteristics, const
         if (error) *error = "invalid_numeric_tag";
         return std::nullopt;
     }
-    return vivo::resolveMetadataTagByNameCompat(characteristics, tag.c_str(), error);
+    return resolveMetadataTagByNameCompat(characteristics, cameraId, tag.c_str(), error);
 }
 
 camera_status_t setEntry(ACaptureRequest* request, uint32_t tag, const CameraKeySetting& key) {
@@ -50,7 +50,7 @@ camera_status_t setEntry(ACaptureRequest* request, uint32_t tag, const CameraKey
 }  // namespace
 
 CameraKeyInjectionResult applyCameraKeySettings(ACaptureRequest* request, const ACameraMetadata* characteristics,
-                                                const std::vector<CameraKeySetting>& keys,
+                                                const std::vector<CameraKeySetting>& keys, const char* cameraId,
                                                 CameraKeySetting::Scope scope, const char* origin,
                                                 const std::function<void(const std::string&)>& diag) {
     CameraKeyInjectionResult result;
@@ -58,13 +58,13 @@ CameraKeyInjectionResult applyCameraKeySettings(ACaptureRequest* request, const 
     for (const auto& key : keys) {
         if (!key.enabled || key.scope != scope) continue;
         std::string error;
-        const auto tag = resolveTag(characteristics, key.tag, &error);
+        const auto tag = resolveTag(characteristics, cameraId, key.tag, &error);
         std::string skip;
         if (!tag) {
             skip = "lookup:" + error;
         } else if (key.values.empty()) {
             skip = "no_values";
-        } else if (session && !vivo::containsI32Tag(characteristics, ACAMERA_REQUEST_AVAILABLE_SESSION_KEYS, *tag)) {
+        } else if (session && !containsI32Tag(characteristics, ACAMERA_REQUEST_AVAILABLE_SESSION_KEYS, *tag)) {
             skip = "not_advertised_as_session_key";
         } else if (const camera_status_t s = setEntry(request, *tag, key); s != ACAMERA_OK) {
             skip = "set_status=" + std::to_string(s);

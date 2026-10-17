@@ -294,19 +294,12 @@ internal fun RendererControls(stage: RendererStage, v: SettingsValues, dispatch:
                 }
                 EditorSection("Noise reduction") {
                 val denoise=v.photoDenoise
-                EditorChoice("Denoise",when(denoise){DenoiseConfig.Off->"Off";is DenoiseConfig.Wavelet->"Wavelet";else->"GALOSH"},listOf("Off","Wavelet","GALOSH")){
-                    send(SetPhotoDenoiseEnabled(it!=0));if(it!=0)send(SetPhotoDenoiseMethod(it-1))
-                }
+                EditorToggle("Denoise",denoise!=DenoiseConfig.Off){send(SetPhotoDenoiseEnabled(it))}
                 if(denoise is DenoiseConfig.Wavelet) EditorNested {
                     EditorNumber("Strength",denoise.config.strength,0f,8f,.05f,1f){send(SetPhotoDenoiseStrength(it))}
                     EditorNumber("Detail",denoise.config.detail,0f,1.8f,.05f,1f){send(SetPhotoDenoiseDetail(it))}
                     EditorNumber("Luma",denoise.config.luma,0f,1f,.01f,.25f){send(SetPhotoDenoiseLuma(it))}
                     EditorNumber("Scales",denoise.config.scales.toFloat(),1f,7f,1f,7f){send(SetPhotoDenoiseScales(it.toInt()))}
-                }
-                if(denoise is DenoiseConfig.Galosh) EditorNested {
-                    EditorChoice("YUV",denoise.yuv.mode.name,LaneMode.entries.map{it.name}){send(SetGaloshYuvMode(it))}
-                    EditorNumber("Luma",denoise.yuv.strengthY,0f,8f,.05f,1f){send(SetGaloshYuvStrengthY(it))}
-                    EditorNumber("Chroma",denoise.yuv.strengthC,0f,8f,.05f,1f){send(SetGaloshYuvStrengthC(it))}
                 }
                 }
             }
@@ -382,6 +375,7 @@ internal fun RendererControls(stage: RendererStage, v: SettingsValues, dispatch:
                     EditorChoice("Preset", presetLabel, presets.map { it.name }) {
                         send(SelectFilmPreset(presets[it].id))
                     }
+                    RendererFilmPresetActions(v, dispatch)
                     FilmSimCatalog.sections.forEach { section -> RendererFilmGroup(section.section, v.filmSimLook, dispatch) {
                         section.subsections.forEach { sub -> EditorGroup(sub.title) {
                             sub.controls.forEach { control -> when(control) {
@@ -395,6 +389,7 @@ internal fun RendererControls(stage: RendererStage, v: SettingsValues, dispatch:
                     } }
                 } else if(v.colorRenderProfile==ColorRenderProfile.AgX) {
                     EditorChoice("Look",v.agxPreset.lookLabel,AgxPreset.entries.map{it.lookLabel}){send(SetAgxPreset(AgxPreset.entries[it]))}
+                    RendererAgxLookControls(v, dispatch)
                     tone(ImageToneNumericParameter.RenderExposure)
                     AgxSection.entries.forEach { section ->
                         val groups = AgxGroup.entries.filter { it.section == section }

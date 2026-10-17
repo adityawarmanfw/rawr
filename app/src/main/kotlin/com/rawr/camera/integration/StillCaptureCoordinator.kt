@@ -26,7 +26,8 @@ class StillCaptureCoordinator(
     private val application: Application,
     private val preview: RawPreviewCoordinator,
     private val settings: () -> SettingsValues,
-    private val onJpegPublished: (Uri) -> Unit = {}
+    private val onJpegPublished: (Uri) -> Unit = {},
+    private val onDngPublished: () -> Unit = {}
 ) {
     data class CompletionEvent(val requestId: Long, val artifact: Artifact, val success: Boolean, val jpegRequested: Boolean = false,
                                 val filmFallbackMemory: Boolean = false, val dngFailed: Boolean = false) {
@@ -362,6 +363,7 @@ class StillCaptureCoordinator(
             val state = requestStates[requestId] ?: return@let
             if (state.remainingDngs == 0 || !state.completedDngNames.add(displayName)) return@let
             val publication = outputs.completeDng(requestId, displayName, success)
+            if (publication.success) onDngPublished()
             state.let { state ->
                 state.allDngsSuccessful = state.allDngsSuccessful && publication.success
                 if (state.remainingDngs > 0) state.remainingDngs -= 1

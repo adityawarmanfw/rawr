@@ -39,6 +39,17 @@ class LensProfileCodecTest {
         )
 
     @Test
+    fun trimsLoadedKeyNamesWithoutDiscardingMalformedEntries() {
+        val json = """{"lenses":[{"id":"DCG","cameraId":"0","keys":[
+            {"tag":" \tvendor.mode\n","values":[7]},
+            {"tag":"vendor.mode\nInt32\n7","values":[7]}]}]}"""
+        val keys = requireNotNull(LensProfileCodec.decode(json)).single().vendorKeys
+        assertEquals("vendor.mode", keys[0].tag)
+        // Retain the bad entry so the editor can show its validation error and repair it.
+        assertEquals("vendor.mode\nInt32\n7", keys[1].tag)
+    }
+
+    @Test
     fun roundTripKeepsEveryField() {
         assertEquals(lenses, LensProfileCodec.decode(LensProfileCodec.encode(lenses)))
     }

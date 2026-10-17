@@ -45,6 +45,14 @@
 #define TD_WTAG_FNUMBER 33437u
 #define TD_WTAG_PHOTO_SENSITIVITY 34855u
 #define TD_WTAG_EXIF_VERSION 36864u
+#define TD_WTAG_LINEARIZATION_TABLE 50712u
+#define TD_WTAG_PROFILE_NAME 50936u
+#define TD_WTAG_PROFILE_EMBED_POLICY 50941u
+#define TD_WTAG_TIFF_EP_STANDARD_ID 37398u
+#define TD_WTAG_XMP 700u
+#define TD_WTAG_EXPOSURE_COMPENSATION 37380u
+#define TD_WTAG_SHARPNESS 41994u
+#define TD_WTAG_MAKER_NOTE 37500u
 #define TD_WTAG_DATETIME_ORIGINAL 36867u
 #define TD_WTAG_DATETIME_DIGITIZED 36868u
 #define TD_WTAG_OFFSET_TIME 36880u
@@ -243,6 +251,35 @@ static void td_add_bytes(td_writer *w, uint16_t tag, const uint8_t *v,
   td_add(w, tag, TD_TYPE_BYTE, n, v, n);
 }
 
+/* Smallest power-of-two or power-of-ten denominator that represents v
+ * exactly with |v * den| <= limit (DNG matrices are commonly n/128 or
+ * n/10000). Returns 0 when none does. */
+static uint32_t td_exact_den(double v, double limit) {
+  uint32_t best = 0;
+  uint32_t den;
+  int k;
+  if (!(v == v) || v * v > limit * limit) {
+    return 0;
+  }
+  for (k = 0, den = 1u; k <= 30; k++, den <<= 1) {
+    double d = v * (double)den;
+    if (d > limit || d < -limit) break;
+    if (d == (double)(int64_t)d) {
+      best = den;
+      break;
+    }
+  }
+  for (k = 0, den = 1u; k <= 9; k++, den *= 10u) {
+    double d = v * (double)den;
+    if (d > limit || d < -limit) break;
+    if (d == (double)(int64_t)d) {
+      if (!best || den < best) best = den;
+      break;
+    }
+  }
+  return best;
+}
+
 /* Doubles -> SRATIONAL (num/den). The denominator is the largest power of ten
  * <= 1e6 that keeps the numerator in range, so large values (e.g. 16-bit
  * black levels) stay exact instead of saturating. The double->int32
@@ -258,10 +295,14 @@ static void td_add_srationals(td_writer *w, uint16_t tag, const double *v,
   }
   for (i = 0; i < n; i++) {
     int32_t num;
-    int32_t den = 1000000;
-    while (den > 1 && v[i] == v[i] && (v[i] * (double)den >= 2147483647.0 || v[i] * (double)den <= -2147483648.0))
-      den /= 10;
+    int32_t den = (int32_t)td_exact_den(v[i], 2147483647.0);
+    if (!den) {
+      den = 1000000;
+      while (den > 1 && v[i] == v[i] && (v[i] * (double)den >= 2147483647.0 || v[i] * (double)den <= -2147483648.0))
+        den /= 10;
+    }
     double d = v[i] * (double)den;
+    d = d < 0.0 ? d - 0.5 : d + 0.5; /* round, not truncate */
     if (!(d == d)) { /* NaN */
       num = 0;
     } else if (d >= 2147483647.0) {
@@ -290,9 +331,12 @@ static void td_add_rationals(td_writer *w, uint16_t tag, const double *v,
   }
   for (i = 0; i < n; i++) {
     uint32_t num;
-    uint32_t den = 1000000u;
-    while (den > 1u && v[i] == v[i] && v[i] * (double)den >= 4294967295.0) den /= 10u;
-    double d = v[i] * (double)den;
+    uint32_t den = v[i] > 0.0 ? td_exact_den(v[i], 4294967295.0) : 0u;
+    if (!den) {
+      den = 1000000u;
+      while (den > 1u && v[i] == v[i] && v[i] * (double)den >= 4294967295.0) den /= 10u;
+    }
+    double d = v[i] * (double)den + 0.5; /* round, not truncate */
     if (!(d == d) || d <= 0.0) { /* NaN or negative */
       num = 0;
     } else if (d >= 4294967295.0) {
@@ -859,6 +903,10 @@ struct tinydng_writer {
   td_writer_seg *segs;
   td_writer w;
   uint64_t data_pos;
+  /* Metadata (extras, EXIF sub-IFD, main IFD) is reserved right after the
+     header so readers that only scan the first part of a file (Android's
+     media scanner on 200MP DNGs) find it; pixel data follows. */
+  uint64_t meta_end;
   int finished;
   /* Rawr: staged EXIF sub-IFD (entries + extras built at create, file
      offsets resolved at finish). Has its own extras buffer. */
@@ -1333,6 +1381,14 @@ static tinydng_status td_writer_put_header(tinydng_write_io *sink, int be,
   return TINYDNG_OK;
 }
 
+static tinydng_status td_relayout_extras(tinydng_context *ctx, td_writer *tw,
+                                         tinydng_error *err);
+
+static size_t td_ifd_size(const td_writer *w) {
+  return w->bigtiff ? (8u + w->entry_count * 20u + 8u)
+                    : (2u + w->entry_count * 12u + 4u);
+}
+
 static uint32_t td_wceil(uint32_t a, uint32_t b) {
   return (b == 0u) ? 0u : (a / b) + ((a % b) != 0u);
 }
@@ -1509,6 +1565,11 @@ tinydng_status tinydng_writer_create(tinydng_context *ctx,
   w->w.big_endian = be;
   w->w.bigtiff = w->bigtiff;
   w->w.extras_cap = w->bigtiff ? (4u * 1024u * 1024u) : TD_WMAX_EXTRAS;
+  if (meta->raw) {
+    /* Passthrough blobs can exceed the fixed metadata budget. */
+    if (meta->raw->xmp_packet.present) w->w.extras_cap += meta->raw->xmp_packet.size + 16u;
+    if (meta->raw->linearization_table) w->w.extras_cap += meta->raw->linearization_table_count * 2u + 16u;
+  }
   w->w.extras = (uint8_t *)td_ctx_alloc(ctx, w->w.extras_cap, err);
   if (!w->w.extras) {
     td_ctx_free(ctx, w->segs);
@@ -1533,7 +1594,10 @@ tinydng_status tinydng_writer_create(tinydng_context *ctx,
   }
   td_add_short(&w->w, TD_TAG_COMPRESSION, comp);
   if (comp == TINYDNG_COMPRESSION_NEW_JPEG) {
-    td_add_short(&w->w, TD_TAG_PREDICTOR, w->ljpeg_predictor);
+    /* The LJPEG predictor lives in the JPEG stream. TIFF Predictor values > 1
+       mean horizontal differencing / floating point to readers, so the tag
+       is always 1 here. */
+    td_add_short(&w->w, TD_TAG_PREDICTOR, 1u);
   }
   td_add_short(&w->w, TD_TAG_PHOTOMETRIC, photo);
   td_add_short(&w->w, TD_TAG_SAMPLES_PER_PIXEL, spp);
@@ -1750,7 +1814,7 @@ tinydng_status tinydng_writer_create(tinydng_context *ctx,
                (const uint8_t *)raw->rawr_private_data,
                raw->rawr_private_size);
       }
-      if (raw->has_default_black_render) {
+      if (raw->has_default_black_render && raw->default_black_render <= 1u) {
         td_add_long(&w->w, TD_WTAG_DEFAULT_BLACK_RENDER, raw->default_black_render);
       }
       if (raw->noise_profile_count) {
@@ -1813,6 +1877,26 @@ tinydng_status tinydng_writer_create(tinydng_context *ctx,
           free(buf);
         }
       }
+      /* Converter carry: tags a DNG-to-DNG rewrite must keep. */
+      if (raw->linearization_table && raw->linearization_table_count &&
+          raw->linearization_table_count <= 65536u) {
+        td_add_shorts(&w->w, TD_WTAG_LINEARIZATION_TABLE, raw->linearization_table,
+                      (uint32_t)raw->linearization_table_count);
+      }
+      if (raw->profile_name) {
+        td_add_ascii(&w->w, TD_WTAG_PROFILE_NAME, raw->profile_name);
+      }
+      if (raw->has_profile_embed_policy) {
+        td_add_long(&w->w, TD_WTAG_PROFILE_EMBED_POLICY, (uint32_t)raw->profile_embed_policy);
+      }
+      if (raw->has_tiff_ep_standard_id) {
+        td_add(&w->w, TD_WTAG_TIFF_EP_STANDARD_ID, TD_TYPE_BYTE, 4,
+               raw->tiff_ep_standard_id, 4);
+      }
+      if (raw->xmp_packet.present && raw->xmp_packet.data && raw->xmp_packet.size) {
+        td_add(&w->w, TD_WTAG_XMP, raw->xmp_packet.type, raw->xmp_packet.count,
+               raw->xmp_packet.data, raw->xmp_packet.size);
+      }
       /* IFD0 descriptive tags from EXIF sidecar. */
     }
     {
@@ -1843,7 +1927,8 @@ tinydng_status tinydng_writer_create(tinydng_context *ctx,
             e->ctx = ctx;
             e->big_endian = be;
             e->bigtiff = w->bigtiff;
-            e->extras_cap = 64u * 1024u;
+            e->extras_cap = 64u * 1024u +
+                            (ex->maker_note.present ? ex->maker_note.size + 16u : 0u);
             e->extras = (uint8_t *)td_ctx_alloc(ctx, e->extras_cap, err);
             if (!e->extras) {
               td_ctx_free(ctx, w->w.extras);
@@ -1945,6 +2030,18 @@ tinydng_status tinydng_writer_create(tinydng_context *ctx,
           if (ex->has_focal_length_35mm) {
             td_add_short(e, TD_WTAG_FOCAL_LENGTH_35MM, ex->focal_length_35mm);
           }
+          if (ex->has_exposure_compensation) {
+            td_add_srational_pairs(e, TD_WTAG_EXPOSURE_COMPENSATION,
+                                   &ex->exposure_compensation[0],
+                                   &ex->exposure_compensation[1], 1);
+          }
+          if (ex->has_sharpness) {
+            td_add_short(e, TD_WTAG_SHARPNESS, ex->sharpness);
+          }
+          if (ex->maker_note.present && ex->maker_note.data && ex->maker_note.size) {
+            td_add(e, TD_WTAG_MAKER_NOTE, ex->maker_note.type, ex->maker_note.count,
+                   ex->maker_note.data, ex->maker_note.size);
+          }
           if (ex->body_serial) {
             td_add_ascii(e, TD_WTAG_BODY_SERIAL_NUMBER, ex->body_serial);
           } else if (raw && raw->body_serial) {
@@ -1970,7 +2067,8 @@ tinydng_status tinydng_writer_create(tinydng_context *ctx,
           }
           if (e->entry_count && !e->failed) {
             uint8_t ever[4] = {'0', '2', '3', '0'};
-            td_add(e, TD_WTAG_EXIF_VERSION, TD_TYPE_UNDEFINED, 4, ever, 4);
+            td_add(e, TD_WTAG_EXIF_VERSION, TD_TYPE_UNDEFINED, 4,
+                   ex->has_exif_version ? ex->exif_version : ever, 4);
           }
           if (e->failed) {
             w->w.failed = 1;
@@ -2044,7 +2142,33 @@ tinydng_status tinydng_writer_create(tinydng_context *ctx,
       return TINYDNG_E_OOM;
     }
   }
-  w->data_pos = w->bigtiff ? 16u : 8u;
+  {
+    /* Reserve the metadata block. Its size is final here: finish only fills
+       segment offsets/counts into already sized arrays. */
+    uint64_t end = w->bigtiff ? 16u : 8u;
+    st = td_relayout_extras(ctx, &w->w, err);
+    if (st == TINYDNG_OK && w->has_exif) st = td_relayout_extras(ctx, &w->exif, err);
+    if (st != TINYDNG_OK) {
+      td_ctx_free(ctx, w->lzw_tbl.keys);
+      td_ctx_free(ctx, w->lzw_tbl.codes);
+      td_ctx_free(ctx, w->exif.extras);
+      td_ctx_free(ctx, w->w.extras);
+      td_ctx_free(ctx, w->segs);
+      td_ctx_free(ctx, w);
+      return st;
+    }
+    end += w->w.extras_len;
+    if (w->has_exif) {
+      end += w->exif.extras_len;
+      end += end & 1u;
+      end += td_ifd_size(&w->exif);
+    }
+    end += end & 1u;
+    end += td_ifd_size(&w->w);
+    end += end & 1u;
+    w->meta_end = end;
+    w->data_pos = end;
+  }
   *out = w;
   return TINYDNG_OK;
 }
@@ -2295,7 +2419,7 @@ tinydng_status tinydng_writer_finish(tinydng_writer *w, tinydng_error *err) {
     goto cleanup;
   }
 
-  extras_base = w->data_pos; /* already even-aligned */
+  extras_base = w->bigtiff ? 16u : 8u; /* reserved block after the header */
   if (w->w.extras_len > 0u) {
     if (w->sink.write(&w->sink, extras_base, w->w.extras, w->w.extras_len) !=
         w->w.extras_len) {
@@ -2379,10 +2503,13 @@ tinydng_status tinydng_writer_finish(tinydng_writer *w, tinydng_error *err) {
       ifd_off = main_ifd_off;
     }
   }
-  if (!w->bigtiff && ifd_off > (uint64_t)UINT32_MAX) {
-    td_set_error(err, TINYDNG_E_BOUNDS, TINYDNG_STAGE_WRITE, 0, 0, ifd_off,
-                 "classic TIFF offset limit exceeded");
-    st = TINYDNG_E_BOUNDS;
+  if (ifd_off & 1u) {
+    ifd_off++;
+  }
+  if (ifd_off + td_ifd_size(&w->w) > w->meta_end) {
+    td_set_error(err, TINYDNG_E_INTERNAL, TINYDNG_STAGE_WRITE, 0, 0, ifd_off,
+                 "metadata outgrew its reserved block");
+    st = TINYDNG_E_INTERNAL;
     goto cleanup;
   }
   st = td_writer_emit_ifd(&w->w, &w->sink, ifd_off, extras_base, err);

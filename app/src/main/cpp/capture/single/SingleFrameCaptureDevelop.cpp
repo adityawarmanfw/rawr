@@ -58,30 +58,6 @@ bool SingleFrameCaptureDevelop::start(const std::shared_ptr<const rawrcam::imagi
             demosaicRaw = std::move(concealed);
         }
 
-        // GALOSH-RAW Bayer request (P1a): resolved per shot from the
-        // frozen JPEG context + frame metadata. Anything invalid forces
-        // Off (legacy bit-identical); non-RGGB CFA logs + forces Off
-        // until the phase-aware CFA extension lands (future work).
-        ::galosh::GaloshRawParams galoshRequest{};
-        {
-            const int mode = jpegContext.develop.galoshRawMode;
-            float black = 0.0f, white = 0.0f;
-            const bool levelsOk = develop::rendered::resolveGaloshRawLevels(captured.metadata, black, white);
-            if (mode >= 1 && mode <= 2 && levelsOk) {
-                if (camera.rawPreviewCfa != 0u) {
-                    emit("GALOSH_RAW_SKIP requestId=" + std::to_string(captured.requestId) + " reason=non_rggb_cfa");
-                } else {
-                    galoshRequest.mode = static_cast<::galosh::GaloshRawMode>(mode);
-                    galoshRequest.strength = std::clamp(jpegContext.develop.galoshStrength, 0.0f, 8.0f);
-                    galoshRequest.lumaStrength = std::clamp(jpegContext.develop.galoshLuma, 0.0f, 8.0f);
-                    galoshRequest.chromaStrength = std::clamp(jpegContext.develop.galoshChroma, 0.0f, 8.0f);
-                    galoshRequest.black = black;
-                    galoshRequest.white = white;
-                    galoshRequest.cfa = ::galosh::GaloshCfa::Rggb;
-                }
-            }
-        }
-
         switch (jpegContext.develop.demosaicAlgorithm) {
             // Demosaic on the multiframe queue when present (same
             // rationale as the rendered still chain): keep queue0 for
@@ -93,7 +69,7 @@ bool SingleFrameCaptureDevelop::start(const std::shared_ptr<const rawrcam::imagi
                                  vulkanContext_.hasMultiframeQueue() ? vulkanContext_.multiframeQueue() : VK_NULL_HANDLE,
                                  vulkanContext_.hasMultiframeQueue() ? &vulkanContext_.mfSubmitMutex() : nullptr);
                 if (!amaze_.start(captured, demosaicRaw, jpegContext.develop.lensShadingCorrectionEnabled,
-                                  jpegContext.develop.highlightReconstructionEnabled, galoshRequest))
+                                  jpegContext.develop.highlightReconstructionEnabled))
                     throw std::runtime_error("AMaZE start rejected");
                 break;
             case develop::DemosaicAlgorithm::Rcd:
@@ -104,7 +80,7 @@ bool SingleFrameCaptureDevelop::start(const std::shared_ptr<const rawrcam::imagi
                                vulkanContext_.hasMultiframeQueue() ? vulkanContext_.multiframeQueue() : VK_NULL_HANDLE,
                                vulkanContext_.hasMultiframeQueue() ? &vulkanContext_.mfSubmitMutex() : nullptr);
                 if (!rcd_.start(captured, demosaicRaw, jpegContext.develop.lensShadingCorrectionEnabled,
-                                jpegContext.develop.highlightReconstructionEnabled, galoshRequest))
+                                jpegContext.develop.highlightReconstructionEnabled))
                     throw std::runtime_error("RCD start rejected");
                 break;
             case develop::DemosaicAlgorithm::Vng4:
@@ -115,7 +91,7 @@ bool SingleFrameCaptureDevelop::start(const std::shared_ptr<const rawrcam::imagi
                                vulkanContext_.hasMultiframeQueue() ? vulkanContext_.multiframeQueue() : VK_NULL_HANDLE,
                                vulkanContext_.hasMultiframeQueue() ? &vulkanContext_.mfSubmitMutex() : nullptr);
                 if (!vng_.start(captured, demosaicRaw, jpegContext.develop.lensShadingCorrectionEnabled,
-                                jpegContext.develop.highlightReconstructionEnabled, galoshRequest))
+                                jpegContext.develop.highlightReconstructionEnabled))
                     throw std::runtime_error(
                         std::string(singleFrameDemosaicName(jpegContext.develop.demosaicAlgorithm)) +
                         " start rejected");
@@ -134,7 +110,7 @@ bool SingleFrameCaptureDevelop::start(const std::shared_ptr<const rawrcam::imagi
                                     ? ::dual::Primary::Amaze
                                     : ::dual::Primary::Rcd);
                 if (!dual_.start(captured, demosaicRaw, jpegContext.develop.lensShadingCorrectionEnabled,
-                                 jpegContext.develop.highlightReconstructionEnabled, galoshRequest))
+                                 jpegContext.develop.highlightReconstructionEnabled))
                     throw std::runtime_error(
                         std::string(singleFrameDemosaicName(jpegContext.develop.demosaicAlgorithm)) +
                         " start rejected");

@@ -56,21 +56,21 @@ class PersistentSettingsController(
                 com.rawr.camera.model.RenderProfileSelection.Agx(action.preset)))
             is SetAgxValue -> state.withValues(state.values.withAgxValue(action.parameter, action.value))
             is ResetAgxValue -> state.withValues(state.values.withAgxDefault(action.parameter))
+            is SaveAgxLook, is ApplyAgxLook, is RenameAgxLook, is DeleteAgxLook,
+            is UpdateAgxLook, is ImportAgxLook -> reduceAgxLooks(state, action)
 
             is SetFilmSimEnabled, is SetFilmSimNumericValue,
             is SetFilmSimDiscreteValue, is SetFilmSimFlag, is SelectFilmPreset,
             is SaveFilmPreset, is RenameFilmPreset, is DeleteFilmPreset,
-            is RevertFilmPreset, is UpdateFilmPreset -> reduceFilmSettings(state, action)
+            is RevertFilmPreset, is UpdateFilmPreset, is ImportFilmPreset -> reduceFilmSettings(state, action)
 
             is SetMultiframeChromaDenoise, is SetMultiframeBaseFrameMode, is SetMultiframeNumericValue,
             is SetMultiframeOutputResolution, is SetMultiframeMergeAlgorithm -> reduceMultiframeSettings(state, action)
 
             is SetPhotoDenoiseEnabled, is SetPhotoDenoiseStrength, is SetPhotoDenoiseDetail,
-            is SetPhotoDenoiseLuma, is SetPhotoDenoiseScales, is SetPhotoDenoiseMethod,
+            is SetPhotoDenoiseLuma, is SetPhotoDenoiseScales,
             is SetVideoDenoiseEnabled, is SetVideoDenoiseStrength, is SetVideoDenoiseDetail,
-            is SetVideoDenoiseLuma, is SetVideoDenoiseScales, is SetGaloshRawMode,
-            is SetGaloshStrength, is SetGaloshLuma, is SetGaloshChroma,
-            is SetGaloshYuvMode, is SetGaloshYuvStrengthY, is SetGaloshYuvStrengthC -> reduceDenoiseSettings(state, action)
+            is SetVideoDenoiseLuma, is SetVideoDenoiseScales -> reduceDenoiseSettings(state, action)
 
             is SetDemosaicAlgorithm, is SetDualAutoContrast, is SetDualContrastPercent,
             is SetPhotoFccSteps,

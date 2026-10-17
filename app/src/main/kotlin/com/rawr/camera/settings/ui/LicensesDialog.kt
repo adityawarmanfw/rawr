@@ -32,7 +32,6 @@ private val LICENSE_ASSETS =
         "licenses/NOTICE",
         "licenses/THIRD_PARTY_NOTICES.md",
         "licenses/Apache-2.0.txt",
-        "licenses/galosh-NOTICE.txt",
         "licenses/libjpeg-turbo-LICENSE.md",
         "licenses/libjpeg-turbo-README.ijg",
         "licenses/tinydng-LICENSE.txt",

@@ -12,7 +12,7 @@ import com.rawr.camera.settings.architecture.*
 import com.rawr.camera.settings.model.*
 
 @Composable
-internal fun AboutSettings() {
+internal fun AboutSettings(onExportBackup: () -> Unit = {}, onImportBackup: () -> Unit = {}) {
     var showLicenses by remember { mutableStateOf(false) }
     SettingsPageContainer(testTag = SettingsTestTags.sectionRoot("About")) {
         SettingsGroup {
@@ -39,6 +39,23 @@ internal fun AboutSettings() {
                 "Third-party notices and full license texts",
                 testTag = SettingsTestTags.row("About", "licenses"),
                 onClick = { showLicenses = true }
+            )
+        }
+        SettingsGroup(
+            title = "Backup",
+            description = "Settings, lens profiles and, if chosen, LUT profiles as a zip. Save location and GPU driver stay on this phone."
+        ) {
+            SettingsRow(
+                "Export Backup",
+                "Zip",
+                testTag = SettingsTestTags.row("About", "export_backup"),
+                onClick = onExportBackup
+            )
+            SettingDivider()
+            SettingsRow(
+                "Import Backup",
+                testTag = SettingsTestTags.row("About", "import_backup"),
+                onClick = onImportBackup
             )
         }
     }

@@ -738,6 +738,7 @@ static void td_free_exif(tinydng_context *ctx, tinydng_exif *e) {
   td_ctx_free(ctx, e->lens_make);
   td_ctx_free(ctx, e->lens_model);
   td_ctx_free(ctx, e->lens_serial);
+  td_ctx_free(ctx, e->maker_note.data);
   memset(e, 0, sizeof(*e));
 }
 
@@ -762,6 +763,7 @@ void td_free_image_payload(tinydng_context *ctx, tinydng_image_info *img) {
   td_ctx_free(ctx, img->raw.warps);
   td_ctx_free(ctx, img->raw.vignettes);
   td_ctx_free(ctx, img->raw.unique_camera_model);
+  td_ctx_free(ctx, img->raw.xmp_packet.data);
   td_ctx_free(ctx, img->raw.lens_make);
   td_ctx_free(ctx, img->raw.lens_model);
   td_ctx_free(ctx, img->raw.lens_serial);

@@ -502,6 +502,190 @@ int td_dng_handle_tag(tinydng_context *ctx, const td_reader *r,
       }
       break;
     }
+    /* Converter carry: EXIF identity/exposure tags for DNG-to-DNG rewrites.
+       Rationals fill both the signed pair and the unsigned copy the writer
+       emits. */
+#define TD_CARRY_RATIONAL(signed_pair, unsigned_pair, flag)                    \
+  do {                                                                         \
+    int32_t num_, den_;                                                        \
+    if ((type == TD_TYPE_RATIONAL || type == TD_TYPE_SRATIONAL) &&            \
+        td_r_i32(r, data_off, &num_) && td_r_i32(r, data_off + 4u, &den_)) { \
+      if (signed_pair) {                                                       \
+        ((int32_t *)(signed_pair))[0] = num_;                                  \
+        ((int32_t *)(signed_pair))[1] = den_;                                  \
+      }                                                                        \
+      if (unsigned_pair) {                                                     \
+        ((uint32_t *)(unsigned_pair))[0] = (uint32_t)num_;                     \
+        ((uint32_t *)(unsigned_pair))[1] = (uint32_t)den_;                     \
+      }                                                                        \
+      (flag) = 1;                                                              \
+    }                                                                          \
+  } while (0)
+#define TD_CARRY_SHORT(field, flag)                                            \
+  do {                                                                         \
+    uint64_t v_;                                                               \
+    if (td_read_uints(r, type, data_off, count, &v_, 1)) {                     \
+      (field) = (uint16_t)v_;                                                  \
+      (flag) = 1;                                                              \
+    }                                                                          \
+  } while (0)
+#define TD_CARRY_BYTES4(field, flag)                                           \
+  do {                                                                         \
+    uint64_t v_[4];                                                            \
+    size_t i_, n_ = td_read_uints(r, type, data_off, count, v_, 4);            \
+    for (i_ = 0; i_ < n_; i_++) (field)[i_] = (uint8_t)v_[i_];                 \
+    if (n_ >= 4) (flag) = 1;                                                   \
+  } while (0)
+    case TD_TAG_FNUMBER:
+      TD_CARRY_RATIONAL(img->exif.fnumber, img->exif.fnumber_rational, img->exif.has_fnumber);
+      break;
+    case TD_TAG_FOCAL_LENGTH:
+      TD_CARRY_RATIONAL(img->exif.focal_length, img->exif.focal_length_rational,
+                        img->exif.has_focal_length);
+      break;
+    case TD_TAG_SUBJECT_DISTANCE:
+      TD_CARRY_RATIONAL(img->exif.subject_distance, img->exif.subject_distance_rational,
+                        img->exif.has_subject_distance);
+      break;
+    case TD_TAG_MAX_APERTURE_VALUE:
+      TD_CARRY_RATIONAL(img->exif.max_aperture_value, img->exif.max_aperture_rational,
+                        img->exif.has_max_aperture_value);
+      break;
+    case TD_TAG_DIGITAL_ZOOM_RATIO:
+      TD_CARRY_RATIONAL((int32_t *)NULL, img->exif.digital_zoom_rational,
+                        img->exif.has_digital_zoom);
+      break;
+    case TD_TAG_EXPOSURE_COMPENSATION:
+      TD_CARRY_RATIONAL(img->exif.exposure_compensation, (uint32_t *)NULL,
+                        img->exif.has_exposure_compensation);
+      break;
+    case TD_TAG_FLASH:
+      TD_CARRY_SHORT(img->exif.flash, img->exif.has_flash);
+      break;
+    case TD_TAG_SENSING_METHOD:
+      TD_CARRY_SHORT(img->exif.sensing_method, img->exif.has_sensing_method);
+      break;
+    case TD_TAG_EXPOSURE_MODE:
+      TD_CARRY_SHORT(img->exif.exposure_mode, img->exif.has_exposure_mode);
+      break;
+    case TD_TAG_WHITE_BALANCE:
+      TD_CARRY_SHORT(img->exif.white_balance, img->exif.has_white_balance);
+      break;
+    case TD_TAG_LIGHT_SOURCE:
+      TD_CARRY_SHORT(img->exif.light_source, img->exif.has_light_source);
+      break;
+    case TD_TAG_FOCAL_LENGTH_35MM:
+      TD_CARRY_SHORT(img->exif.focal_length_35mm, img->exif.has_focal_length_35mm);
+      break;
+    case TD_TAG_SHARPNESS:
+      TD_CARRY_SHORT(img->exif.sharpness, img->exif.has_sharpness);
+      break;
+    case TD_TAG_EXIF_VERSION:
+      TD_CARRY_BYTES4(img->exif.exif_version, img->exif.has_exif_version);
+      break;
+    case TD_TAG_DATETIME_ORIGINAL:
+      td_set_ascii(ctx, &img->exif.datetime_original, r, data_off, count, err);
+      break;
+    case TD_TAG_DATETIME_DIGITIZED:
+      td_set_ascii(ctx, &img->exif.datetime_digitized, r, data_off, count, err);
+      break;
+    case TD_TAG_OFFSET_TIME:
+      td_set_ascii(ctx, &img->exif.offset_time, r, data_off, count, err);
+      break;
+    case TD_TAG_OFFSET_TIME_ORIGINAL:
+      td_set_ascii(ctx, &img->exif.offset_time_original, r, data_off, count, err);
+      break;
+    case TD_TAG_OFFSET_TIME_DIGITIZED:
+      td_set_ascii(ctx, &img->exif.offset_time_digitized, r, data_off, count, err);
+      break;
+    case TD_TAG_SUBSEC_TIME:
+      td_set_ascii(ctx, &img->exif.subsec_time, r, data_off, count, err);
+      break;
+    case TD_TAG_SUBSEC_TIME_ORIGINAL:
+      td_set_ascii(ctx, &img->exif.subsec_time_original, r, data_off, count, err);
+      break;
+    case TD_TAG_SUBSEC_TIME_DIGITIZED:
+      td_set_ascii(ctx, &img->exif.subsec_time_digitized, r, data_off, count, err);
+      break;
+    case TD_TAG_BODY_SERIAL:
+      td_set_ascii(ctx, &img->exif.body_serial, r, data_off, count, err);
+      break;
+    case TD_TAG_LENS_MAKE:
+      td_set_ascii(ctx, &img->exif.lens_make, r, data_off, count, err);
+      break;
+    case TD_TAG_LENS_MODEL:
+      td_set_ascii(ctx, &img->exif.lens_model, r, data_off, count, err);
+      break;
+    case TD_TAG_LENS_SERIAL:
+      td_set_ascii(ctx, &img->exif.lens_serial, r, data_off, count, err);
+      break;
+    case TD_TAG_LENS_SPEC: {
+      size_t n = td_read_reals(r, type, data_off, count, img->exif.lens_spec, 4);
+      if (n == 4) img->exif.has_lens_spec = 1;
+      break;
+    }
+    case TD_TAG_UNIQUE_CAMERA_MODEL:
+      td_set_ascii(ctx, &img->raw.unique_camera_model, r, data_off, count, err);
+      break;
+    case TD_TAG_DNG_BACKWARD_VERSION:
+      TD_CARRY_BYTES4(img->raw.dng_backward_version, img->raw.has_dng_backward_version);
+      break;
+    case TD_TAG_TIFF_EP_STANDARD_ID:
+      TD_CARRY_BYTES4(img->raw.tiff_ep_standard_id, img->raw.has_tiff_ep_standard_id);
+      break;
+    case TD_TAG_BASELINE_EXPOSURE: {
+      int32_t num, den;
+      if ((type == TD_TYPE_RATIONAL || type == TD_TYPE_SRATIONAL) &&
+          td_r_i32(r, data_off, &num) && td_r_i32(r, data_off + 4u, &den) && den != 0) {
+        img->raw.baseline_exposure = (double)num / (double)den;
+        img->raw.has_baseline_exposure = 1;
+      }
+      break;
+    }
+    case TD_TAG_BLACK_LEVEL_REPEAT_DIM: {
+      uint64_t v[2];
+      if (td_read_uints(r, type, data_off, count, v, 2) == 2) {
+        img->raw.black_level_repeat[0] = (uint16_t)v[0];
+        img->raw.black_level_repeat[1] = (uint16_t)v[1];
+        img->raw.has_black_level_repeat = 1;
+      }
+      break;
+    }
+    case TD_TAG_MAKER_NOTE:
+    case TD_TAG_XMP: {
+      /* Opaque bounded copy; MakerNote belongs to ExifIFD and XMP to IFD0,
+         and the writer puts them back there. */
+      size_t ts = td_tiff_type_size(type);
+      size_t span;
+      const uint8_t *base;
+      uint8_t *copy;
+      tinydng_blob *dst =
+          (tag == TD_TAG_MAKER_NOTE) ? &img->exif.maker_note : &img->raw.xmp_packet;
+      if (ts == 0u || count == 0u || count > (uint64_t)(TD_BLOB_MAX_BYTES / ts)) {
+        break;
+      }
+      span = (size_t)count * ts;
+      copy = (uint8_t *)td_ctx_alloc(ctx, span, err);
+      if (!copy) {
+        return 0;
+      }
+      base = td_bulk_span_view(r, data_off, span, copy, span);
+      if (!base) {
+        td_ctx_free(ctx, copy);
+        break;
+      }
+      if (base != copy) memcpy(copy, base, span);
+      td_ctx_free(ctx, dst->data);
+      dst->data = copy;
+      dst->size = span;
+      dst->type = type;
+      dst->count = count;
+      dst->present = 1;
+      break;
+    }
+#undef TD_CARRY_RATIONAL
+#undef TD_CARRY_SHORT
+#undef TD_CARRY_BYTES4
 
     case TD_TAG_CFA_REPEAT_PATTERN_DIM: {
       uint64_t v[2];
@@ -593,13 +777,19 @@ int td_dng_handle_tag(tinydng_context *ctx, const td_reader *r,
       }
       break;
     case TD_TAG_COLOR_MATRIX2:
-      (void)td_read_reals(r, type, data_off, count, img->raw.color_matrix2, 9);
+      if (td_read_reals(r, type, data_off, count, img->raw.color_matrix2, 9) == 9) {
+        img->raw.has_color_matrix2 = 1;
+      }
       break;
     case TD_TAG_FORWARD_MATRIX1:
-      (void)td_read_reals(r, type, data_off, count, img->raw.forward_matrix1, 9);
+      if (td_read_reals(r, type, data_off, count, img->raw.forward_matrix1, 9) == 9) {
+        img->raw.has_forward_matrix1 = 1;
+      }
       break;
     case TD_TAG_FORWARD_MATRIX2:
-      (void)td_read_reals(r, type, data_off, count, img->raw.forward_matrix2, 9);
+      if (td_read_reals(r, type, data_off, count, img->raw.forward_matrix2, 9) == 9) {
+        img->raw.has_forward_matrix2 = 1;
+      }
       break;
     case TD_TAG_CAMERA_CALIBRATION1:
       if (td_read_reals(r, type, data_off, count, img->raw.camera_calibration1,
@@ -608,8 +798,9 @@ int td_dng_handle_tag(tinydng_context *ctx, const td_reader *r,
       }
       break;
     case TD_TAG_CAMERA_CALIBRATION2:
-      (void)td_read_reals(r, type, data_off, count,
-                          img->raw.camera_calibration2, 9);
+      if (td_read_reals(r, type, data_off, count, img->raw.camera_calibration2, 9) == 9) {
+        img->raw.has_camera_calibration2 = 1;
+      }
       break;
     case TD_TAG_ANALOG_BALANCE:
       if (td_read_reals(r, type, data_off, count, img->raw.analog_balance, 3)) {

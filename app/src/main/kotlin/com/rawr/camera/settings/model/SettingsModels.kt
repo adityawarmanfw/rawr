@@ -401,7 +401,11 @@ enum class MultiframeMergeAlgorithm(val nativeId: Int, val label: String) {
     Wronski(0, "Super-resolution"),
     HdrPlus(1, "HDR+"),
     HdrPlusQuality(2, "HDR+ Quality"),
-    HdrPlusBracketed(3, "HDR+ Bracketed")
+    HdrPlusBracketed(3, "HDR+ Bracketed");
+
+    /** False when this build hides the algorithm (see [FeatureFlags]). */
+    val available: Boolean
+        get() = this != HdrPlusBracketed || FeatureFlags.hdrPlusBracketed
 }
 
 enum class MultiframeBaseFrameMode(val nativeId: Int, val label: String) {
@@ -1018,6 +1022,8 @@ data class SettingsValues(
     val videoAgxPreset: AgxPreset = AgxPreset.Default,
     /** Edited AgX controls per preset; a missing preset uses its defaults. */
     val agxValues: Map<AgxPreset, AgxValues> = emptyMap(),
+    /** User-saved AgX looks; applying one writes its values into its base look. */
+    val agxLooks: List<AgxLook> = emptyList(),
     val videoColorRenderProfile: ColorRenderProfile = ColorRenderProfile.RawrBase,
     val videoUserLutProfileId: String? = null,
     val videoLogEnabled: Boolean = false,
@@ -1057,10 +1063,9 @@ data class SettingsValues(
     val videoDefringeEnabled: Boolean = false,
     val videoDefringeStrength: Float = 1f,
     // Photo-pipeline denoise, single source of truth (see DenoiseConfig).
-    // Off by default; Wavelet is profiled (sensor noise model), Galosh
-    // carries the blind RAW and/or YUV lanes (stills only).
+    // Off by default; Wavelet is profiled (sensor noise model).
     val photoDenoise: DenoiseConfig = DenoiseConfig.Off,
-    // Video denoise is wavelet-only primitives (no Galosh on video).
+    // Video denoise has its own wavelet primitives.
     val videoDenoiseEnabled: Boolean = false,
     val videoDenoiseStrength: Float = 1f,
     val videoDenoiseDetail: Float = 1f,

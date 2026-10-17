@@ -692,10 +692,6 @@ object FilmFactoryPresets {
             baseLook.copy(film = 6, filmExposureEv = 0.3f, printHighlightShape = 0.2f)
         ),
         FilmPreset(
-            "ektachrome", "Ektachrome Clean",
-            baseLook.copy(film = 16, rgbToRawMethod = 2, printGamma = 1.1f, process = 1)
-        ),
-        FilmPreset(
             "velvia", "Velvia Vivid",
             baseLook.copy(film = 18, filmExposureEv = -0.2f, printGamma = 1.15f, process = 1)
         )

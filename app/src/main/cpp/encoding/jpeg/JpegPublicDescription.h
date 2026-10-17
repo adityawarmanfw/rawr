@@ -101,21 +101,6 @@ inline std::string buildPublicDescription(const develop::DevelopSettings& develo
             << "- Noise B: " << denoiseNoiseB << '\n'
             << std::setprecision(2);
     }
-    // GALOSH blind denoisers (1 full, 2 chroma-only). Labels match the
-    // TIMINGS stage names ("Denoise (galosh-yuv)").
-    if (develop.galoshRawMode == 1 || develop.galoshRawMode == 2) {
-        out << "\nDenoise (galosh-raw) parameters:\n"
-            << "- Mode: " << (develop.galoshRawMode == 1 ? "full" : "chroma-only") << '\n'
-            << "- Strength: " << develop.galoshStrength << '\n'
-            << "- Luma: " << develop.galoshLuma << '\n'
-            << "- Chroma: " << develop.galoshChroma << '\n';
-    }
-    if (develop.galoshYuvMode == 1 || develop.galoshYuvMode == 2) {
-        out << "\nDenoise (galosh-yuv) parameters:\n"
-            << "- Mode: " << (develop.galoshYuvMode == 1 ? "full" : "chroma-only") << '\n'
-            << "- Strength Y: " << develop.galoshYuvStrengthY << '\n'
-            << "- Strength C: " << develop.galoshYuvStrengthC << '\n';
-    }
     const ToneParameters described = toneParametersFrom(tone, develop.colorRenderProfile);
     out << '\n' << formatAdaptiveTone(described) << '\n';
     if (filmRendered)

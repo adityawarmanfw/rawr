@@ -329,6 +329,13 @@ bool readKeys(const std::vector<Json>& list, std::vector<CameraKeySetting>& out,
     for (const auto& k : list) {
         CameraKeySetting key;
         key.tag = k.str("tag");
+        const auto first = key.tag.find_first_not_of(" \t\r\n\f\v");
+        key.tag = first == std::string::npos ? "" :
+            key.tag.substr(first, key.tag.find_last_not_of(" \t\r\n\f\v") - first + 1);
+        if (key.tag.find_first_of(" \t\r\n\f\v") != std::string::npos) {
+            if (error) *error = "Key name cannot contain whitespace; enter type and value in their separate fields";
+            return false;
+        }
         const auto type = parseType(k.str("type", "int32"));
         if (key.tag.empty() || !type) {
             if (error) *error = "invalid key " + key.tag;

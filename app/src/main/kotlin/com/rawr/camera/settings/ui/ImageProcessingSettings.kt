@@ -321,7 +321,6 @@ internal fun ImageSettings(state: SettingsUiState, dispatch: SettingsDispatch) {
 private fun photoDenoiseLabel(denoise: DenoiseConfig): String = when (denoise) {
     is DenoiseConfig.Off -> "Off"
     is DenoiseConfig.Wavelet -> "Wavelet %.1f".format(denoise.config.strength)
-    is DenoiseConfig.Galosh -> "Galosh"
 }
 
 @Composable

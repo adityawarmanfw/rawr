@@ -106,7 +106,7 @@ bool AmazeStillProcessor::busy() const noexcept { return worker_.busy(); }
 
 bool AmazeStillProcessor::start(const rawrcam::imaging::RawSnapshot& frame,
                                 std::shared_ptr<const std::vector<uint8_t>> raw, bool lensShadingCorrectionEnabled,
-                                bool highlightReconstructionEnabled, const ::galosh::GaloshRawParams& galosh) {
+                                bool highlightReconstructionEnabled) {
     if (!configured()) return false;
 
     const uint64_t expectedBytes = static_cast<uint64_t>(width_) * height_ * sizeof(uint16_t);
@@ -146,7 +146,7 @@ bool AmazeStillProcessor::start(const rawrcam::imaging::RawSnapshot& frame,
         rawrcam::develop::highlight::LensShadingMapSnapshot::fromMetadata(frame.metadata, lensShadingCorrectionEnabled);
 
     worker_.spawn([this, requestId, timestampNs, blackPhysical, whiteLevel, whiteBalanceRggb, lensShading,
-                   highlightReconstructionEnabled, galosh, raw = std::move(raw)]() mutable {
+                   highlightReconstructionEnabled, raw = std::move(raw)]() mutable {
         StillCompletion done{};
         done.requestId = requestId;
         done.timestampNs = timestampNs;
@@ -156,7 +156,7 @@ bool AmazeStillProcessor::start(const rawrcam::imaging::RawSnapshot& frame,
             done.setupMs =
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
             VkCommandBuffer command = runtime_.beginFrame(*raw, blackPhysical, whiteLevel, whiteBalanceRggb,
-                                                          lensShading, highlightReconstructionEnabled, galosh);
+                                                          lensShading, highlightReconstructionEnabled);
             raw.reset();
             done.persistentBytes = currentAllocatedBytes();
             // Bounded submissions (upload/packing, then each tile batch) so the

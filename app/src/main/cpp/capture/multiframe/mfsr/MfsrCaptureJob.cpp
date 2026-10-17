@@ -682,8 +682,8 @@ void MfsrCaptureJob::runStages(Published& published) {
                 renderedContext.filmLook.filmExposureEv += liftEv;
                 renderedContext.sensorToLinearSrgb = job->referenceColor.cameraToLinearSrgbRowMajor;
                 develop::applyDevelopSettings(renderedContext, mergedJpeg.develop);
-                // The single-frame denoisers (Image > Denoise: wavelet, GALOSH
-                // RAW/YUV) never run here; Kotlin resolves them off and native
+                // The single-frame denoisers (Image > Denoise: wavelet) never
+                // runs here; Kotlin resolves them off and native
                 // enforces it. The multiframe Chroma Denoise toggle instead runs
                 // the profiled wavelet chroma-only (forceY 0: luma untouched) on
                 // the merged image, with the burst-fitted green noise divided by
@@ -691,7 +691,6 @@ void MfsrCaptureJob::runStages(Published& published) {
                 // assumed noise makes the wavelet's per-band thresholds erase
                 // texture, so the single-frame profile is never used.
                 renderedContext.denoiseStrength = 0.0f;
-                renderedContext.galoshYuvMode = 0;
                 outputInfo.chromaDenoiseLabel = "off";
                 if (mergedJpeg.develop.multiframeChromaDenoise) {
                     const auto& n = mergeResult->estimatedNoise;
@@ -785,7 +784,6 @@ void MfsrCaptureJob::runStages(Published& published) {
                     mergedJpeg.output.refinementMs = renderedDone->refinementMs;
                     mergedJpeg.output.tonemapMs = renderedDone->tonemapMs;
                     mergedJpeg.output.denoiseMs = renderedDone->denoiseMs;
-                    mergedJpeg.output.galoshYuvMs = renderedDone->galoshYuvMs;
                     mergedJpeg.output.gainmapMs = renderedDone->gainmapMs;
                     mergedJpeg.output.postTailMs = renderedDone->postTailMs;
                     mergedJpeg.output.highlightStage = renderedDone->highlightStage;

@@ -16,6 +16,8 @@ internal fun SettingsSectionContent(
     onDumpInternalTrace: () -> Unit = {},
     onClearInternalTrace: () -> Unit = {},
     onExportDiagnosticsBundle: () -> Unit = {},
+    onExportBackup: () -> Unit = {},
+    onImportBackup: () -> Unit = {},
     onRequestSaveNotificationPermission: () -> Unit = {}
 ) {
     when (section) {
@@ -134,7 +136,7 @@ internal fun SettingsSectionContent(
         }
 
         SettingsSection.About -> {
-            AboutSettings()
+            AboutSettings(onExportBackup, onImportBackup)
         }
 
         SettingsSection.CameraDevice -> {

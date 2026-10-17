@@ -6,7 +6,6 @@ import com.rawr.camera.model.valueFor
 import com.rawr.camera.model.withValue
 import com.rawr.camera.settings.model.*
 import com.rawr.camera.settings.preferences.LutProfileCodec
-import com.rawr.camera.settings.preferences.FilmSimCodec
 import org.json.JSONObject
 
 internal object RendererRecipe {
@@ -100,7 +99,6 @@ internal object RendererRecipe {
     }
 
     fun encode(v: SettingsValues): String = JSONObject(CaptureRecipe.encode(v)).apply {
-        put("editorFilmPresets", FilmSimCodec.encodePresets(v.filmPresets))
         put("editorFilmPresetId", v.selectedFilmPresetId)
         put("editorProfiles", LutProfileCodec.encode(v.userLutProfiles))
         put("editorTones", JSONObject().apply {
@@ -323,7 +321,9 @@ internal object RendererRecipe {
             agxValues = agx?.let { d.agxValues + it } ?: d.agxValues,
             rawrBaseTone = if (profile == ColorRenderProfile.RawrBase) profileTone else d.rawrBaseTone,
             filmSimEnabled = j.optBoolean("filmSimEnabled"), filmSimLook = film,
-            filmPresets = if (j.has("editorFilmPresets")) FilmSimCodec.decodePresets(j.getString("editorFilmPresets")) else library.filmPresets,
+            // The preset library is shared with Settings: a draft's frozen copy
+            // would resurrect presets deleted since, and the editor syncs back.
+            filmPresets = library.filmPresets,
             selectedFilmPresetId = j.optString("editorFilmPresetId").takeIf { it.isNotBlank() && it != "null" },
             selectedUserLutProfileId = selected.takeIf { profile == ColorRenderProfile.UserLut },
             userLutProfiles = (profiles.filterNot { it.id == embedded?.id } + listOfNotNull(embedded)).map {
@@ -345,22 +345,14 @@ internal object RendererRecipe {
             photoDefringeStrength = j.optDouble("defringeStrength", 1.0).toFloat(),
             photoDenoise = DenoiseConfig.fromLegacy(
                 enabled = j.optBoolean("denoiseEnabled", false),
-                method = j.optInt("denoiseMethod", 0),
                 waveletStrength = j.optDouble("denoiseStrength", 1.0).toFloat(),
                 waveletDetail = j.optDouble("denoiseDetail", 1.0).toFloat(),
                 waveletLuma = j.optDouble("denoiseLuma", 0.25).toFloat(),
-                waveletScales = j.optInt("denoiseScales", 7),
-                rawMode = j.optInt("galoshRawMode", 0),
-                rawStrength = j.optDouble("galoshStrength", 1.0).toFloat(),
-                rawLuma = j.optDouble("galoshLuma", 1.0).toFloat(),
-                rawChroma = j.optDouble("galoshChroma", 1.0).toFloat(),
-                yuvMode = j.optInt("galoshYuvMode", 0),
-                yuvStrengthY = j.optDouble("galoshYuvStrengthY", 1.0).toFloat(),
-                yuvStrengthC = j.optDouble("galoshYuvStrengthC", 1.0).toFloat()
+                waveletScales = j.optInt("denoiseScales", 7)
             ))
     }
     fun neutral(library: SettingsValues): SettingsValues = SettingsCatalog.initialState().values.copy(
-        userLutProfiles = library.userLutProfiles, filmPresets = library.filmPresets,
+        userLutProfiles = library.userLutProfiles, filmPresets = library.filmPresets, agxLooks = library.agxLooks,
         selectedUserLutProfileId = null, filmSimEnabled = false, rawrBaseTone = ProfileTone.Neutral,
         photoLensShadingEnabled = true, distortionCorrectionEnabled = true,
         saveLocationId = library.saveLocationId)

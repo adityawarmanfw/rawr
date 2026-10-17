@@ -94,7 +94,7 @@ class PostDemosaicProcessor final {
     }
     [[nodiscard]] VkImageView sdrOutputView() const noexcept;
     // Image twin of sdrOutputView() for passes that record their own
-    // barriers (GALOSH-YUV in-place tap). Same coloropp/output switch.
+    // barriers. Same coloropp/output switch.
     [[nodiscard]] VkImage sdrOutputImage() const noexcept;
     // When set, record() skips the Inpaint Opposed SDR tone tap and the SDR
     // output is outputView(); the caller applies the tap itself (the video

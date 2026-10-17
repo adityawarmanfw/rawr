@@ -23,9 +23,9 @@ inline std::string formatMs1(double value) {
                                                    double setupMs, double hlMs, double fccMs, double colorMs,
                                                    double toneMs, double gapsMs, double readbackMs,
                                                    double gainmapMs = 0.0, double denoiseMs = 0.0,
-                                                   double galoshYuvMs = 0.0, double postTailMs = 0.0) noexcept {
+                                                   double postTailMs = 0.0) noexcept {
     return baseReadMs + projectMs + demosaicOrPrepMs + setupMs + hlMs + fccMs + colorMs + toneMs + gainmapMs +
-           denoiseMs + galoshYuvMs + postTailMs + gapsMs + readbackMs;
+           denoiseMs + postTailMs + gapsMs + readbackMs;
 }
 
 // Label for the defringe / Inpaint Opposed tone line, empty when neither ran.
@@ -53,7 +53,7 @@ inline std::string formatImageProcessing(bool directRgb, double demosaicMs,
                                          std::uint32_t fccSteps, double fccMs, double colorMs, double toneMs,
                                          bool filmRendered, double gapsMs, double readbackMs,
                                          bool multiframe = true, double gainmapMs = 0.0, double denoiseMs = 0.0,
-                                         double galoshYuvMs = 0.0, int highlightStage = -1, double postTailMs = 0.0,
+                                         int highlightStage = -1, double postTailMs = 0.0,
                                          bool defringeEnabled = false) {
     // highlightStage -1 keeps the legacy lines. Otherwise: 0 off, 1 colour
     // propagation, 2 Inpaint Opposed, whose reconstruction runs inside the
@@ -68,12 +68,10 @@ inline std::string formatImageProcessing(bool directRgb, double demosaicMs,
     const double gainmap = gainmapMs > 0.0 ? gainmapMs : 0.0;
     // Profiled denoise only: same zero-keeps-legacy contract as gainmap.
     const double denoise = denoiseMs > 0.0 ? denoiseMs : 0.0;
-    // GALOSH-YUV only: same zero-keeps-legacy contract.
-    const double galoshYuv = galoshYuvMs > 0.0 ? galoshYuvMs : 0.0;
     std::ostringstream out;
     out << "\nImage Processing: "
         << formatMs1(imageProcessingTotalMs(0.0, 0.0, demosaicOrPrep, setupMs, hlMs, fccMs, colorMs, toneMs,
-                                            gapsMs, readbackMs, gainmap, denoise, galoshYuv, postTail))
+                                            gapsMs, readbackMs, gainmap, denoise, postTail))
         << " ms\n";
     // Stages in execution order: demosaic, render setup, then the
     // post-demosaic passes as recorded (wavelet denoise runs pre-WB; FCC
@@ -104,7 +102,6 @@ inline std::string formatImageProcessing(bool directRgb, double demosaicMs,
     if (*tailLabel) out << "- " << tailLabel << ": " << formatMs1(postTail) << " ms\n";
     out << "- FCC (chroma cleanup, " << fccSteps << (fccSteps == 1u ? " step" : " steps") << "): " << formatMs1(fccMs)
         << " ms\n";
-    if (galoshYuv > 0.0) out << "- Denoise (galosh-yuv): " << formatMs1(galoshYuv) << " ms\n";
     out << "- " << (filmRendered ? "Film record" : "Tonemap") << ": " << formatMs1(toneMs) << " ms\n";
     if (gainmap > 0.0) out << "- Gain map (GPU): " << formatMs1(gainmap) << " ms\n";
     out << "- Submit/fence gaps: " << formatMs1(gapsMs) << " ms\n"

@@ -81,14 +81,6 @@ develop::rendered::RenderedStillContext makeSingleFrameRenderContext(
         rendered.denoiseDetail = jpeg->develop.denoiseDetail;
         rendered.denoiseForceY = jpeg->develop.denoiseForceY;
         rendered.denoiseMaxScale = jpeg->develop.denoiseMaxScale;
-        // GALOSH-YUV (P1c): blind, no noise model needed. Out-of-range
-        // ints fall back to off (legacy bit-identical); JNI pre-clamps.
-        {
-            const int yuvMode = jpeg->develop.galoshYuvMode;
-            rendered.galoshYuvMode = (yuvMode == 1 || yuvMode == 2) ? yuvMode : 0;
-        }
-        rendered.galoshYuvStrengthY = jpeg->develop.galoshYuvStrengthY;
-        rendered.galoshYuvStrengthC = jpeg->develop.galoshYuvStrengthC;
         rendered.denoiseNoiseA = 0.0f;
         rendered.denoiseNoiseB = 0.0f;
         if (rendered.denoiseStrength > 0.0f) {

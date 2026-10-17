@@ -28,16 +28,6 @@ internal fun reduceDenoiseSettings(
         state.withValues(state.values.copy(photoDenoise = state.values.photoDenoise.withWaveletScales(action.value)))
     }
 
-    is SetPhotoDenoiseMethod -> {
-        // Explicit method switch (0 = wavelet, 1 = galosh).
-        val next = if (action.method.coerceIn(0, 1) == 1) {
-            state.values.photoDenoise.withGaloshMethod()
-        } else {
-            state.values.photoDenoise.withWaveletMethod()
-        }
-        state.withValues(state.values.copy(photoDenoise = next))
-    }
-
     is SetVideoDenoiseEnabled -> {
         state.withValues(state.values.copy(videoDenoiseEnabled = action.enabled))
     }
@@ -56,45 +46,6 @@ internal fun reduceDenoiseSettings(
 
     is SetVideoDenoiseScales -> {
         state.withValues(state.values.copy(videoDenoiseScales = action.value.coerceIn(1, 7)))
-    }
-
-    is SetGaloshRawMode -> {
-        // Lane picks imply the galosh method + master switch; parking
-        // the last lane falls back to wavelet. All inside withRawMode.
-        state.withValues(
-            state.values.copy(photoDenoise = state.values.photoDenoise.withRawMode(LaneMode.of(action.mode)))
-        )
-    }
-
-    is SetGaloshStrength -> {
-        state.withValues(state.values.copy(photoDenoise = state.values.photoDenoise.withRawStrengths(strength = action.value)))
-    }
-
-    is SetGaloshLuma -> {
-        state.withValues(state.values.copy(photoDenoise = state.values.photoDenoise.withRawStrengths(luma = action.value)))
-    }
-
-    is SetGaloshChroma -> {
-        state.withValues(state.values.copy(photoDenoise = state.values.photoDenoise.withRawStrengths(chroma = action.value)))
-    }
-
-    is SetGaloshYuvMode -> {
-        // Same method/master semantics as the RAW lane.
-        state.withValues(
-            state.values.copy(photoDenoise = state.values.photoDenoise.withYuvMode(LaneMode.of(action.mode)))
-        )
-    }
-
-    is SetGaloshYuvStrengthY -> {
-        state.withValues(
-            state.values.copy(photoDenoise = state.values.photoDenoise.withYuvStrengths(strengthY = action.value))
-        )
-    }
-
-    is SetGaloshYuvStrengthC -> {
-        state.withValues(
-            state.values.copy(photoDenoise = state.values.photoDenoise.withYuvStrengths(strengthC = action.value))
-        )
     }
     else -> error("Unsupported denoise settings action: $action")
 }

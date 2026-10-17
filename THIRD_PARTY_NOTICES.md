@@ -20,7 +20,6 @@ of this file. The GNU GPL v3 text is the repository `LICENSE`.
 | spektrafilm / spektrafilm-ofx | `native/spektrafilm`, `app/src/main/assets/spektrafilm` | https://github.com/chaert-s/spektrafilm-ofx , https://github.com/andreavolpato/spektrafilm | GPL-3.0-only |
 | Handheld Multi-Frame Super-Resolution (Wronski et al.) | `native/multiframe` | https://github.com/Jamy-L/Handheld-Multi-Frame-Super-Resolution | MIT |
 | hdr-plus-swift / Burst Photo (HDR+ spatial merge) | `native/multiframe/merge_hdrplus` | https://github.com/martin-marek/hdr-plus-swift | GPL-3.0 |
-| GALOSH | `native/galosh` | https://github.com/luxgrain/GALOSH | Apache-2.0 |
 | libultrahdr (Ultra HDR / JPEG_R mux) | `native/gainmap` | https://github.com/google/libultrahdr | Apache-2.0 |
 | Oklab gamut clipping (Björn Ottosson) | `native/tonemap_engine` | https://bottosson.github.io/posts/gamutclipping/ | MIT |
 | Exposure-fusion local tonemapping demo (Bart Wronski) | `native/local_tone` (`ExposureFusion`, `fus_*.comp`) | https://bartwronski.com/2022/02/28/exposure-fusion-local-tonemapping-for-real-time-rendering/ | Public domain |
@@ -36,15 +35,13 @@ Vendored full license texts in this repository:
 
 - libjpeg-turbo: `native/libjpeg-turbo/LICENSE.md` (+ `README.ijg`, which carries
   the IJG License text)
-- GALOSH: `native/galosh/UPSTREAM_LICENSE` (Apache-2.0),
-  `native/galosh/UPSTREAM_NOTICE`
 - tinydng: `native/tinydng/LICENSE`
 - Redistributed Gradle dependencies: license metadata is packaged in each
   dependency's own artifact.
 
 Bundled into the app (`app/src/main/assets/licenses/`) and shown by the in-app
 Legal notices screen: `LICENSE`, `NOTICE`, `THIRD_PARTY_NOTICES.md`,
-`Apache-2.0.txt`, `galosh-NOTICE.txt`, `libjpeg-turbo-LICENSE.md`,
+`Apache-2.0.txt`, `libjpeg-turbo-LICENSE.md`,
 `libjpeg-turbo-README.ijg`, `tinydng-LICENSE.txt`.
 
 ## 2. Copyright notices
@@ -63,7 +60,6 @@ Legal notices screen: `LICENSE`, `NOTICE`, `THIRD_PARTY_NOTICES.md`,
   (profiles).
 - **Handheld Multi-Frame Super-Resolution** — Copyright (c) 2023 Jamy Lafenetre
   (jamy.lafenetre@ens-paris-saclay.fr). MIT.
-- **GALOSH** — Copyright 2026 luxgrain. Apache-2.0.
 - **libultrahdr** — Copyright (c) Google LLC. Apache-2.0.
 - **Oklab gamut clipping** — Copyright (c) Björn Ottosson. MIT.
 - **Exposure-fusion local tonemapping demo** — Bart Wronski, released to the
@@ -249,7 +245,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ## Apache License 2.0
 
 The full text is bundled with the app at `assets/licenses/Apache-2.0.txt` and is
-shown by the in-app Legal notices screen. It applies to GALOSH, libultrahdr, and
+shown by the in-app Legal notices screen. It applies to libultrahdr and
 the Gradle dependencies (AndroidX, Compose, Media3, Kotlin). A copy is also kept
 in the APK's dependency license metadata.
 

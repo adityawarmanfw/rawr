@@ -15,7 +15,7 @@
 
 #include "camera/CameraDiscovery.h"
 #include "camera/CameraProfileJson.h"
-#include "camera/vivo/VivoVendorTags.h"
+#include "camera/CameraMetadataTags.h"
 #include "geometry/RawGeometry.h"
 
 namespace rawrcam::camera {
@@ -296,7 +296,7 @@ std::string probeCameraKeysJson(const std::string& cameraId, const std::vector<s
         if (i) out += ',';
         out += "{\"name\":";
         appendJsonString(out, names[i]);
-        const auto tag = vivo::resolveMetadataTagByNameCompat(chars.get(), names[i].c_str(), nullptr);
+        const auto tag = resolveMetadataTagByNameCompat(chars.get(), cameraId.c_str(), names[i].c_str(), nullptr);
         out += ",\"tag\":" + (tag ? std::to_string(*tag) : std::string("null")) + '}';
     }
     out += "],";

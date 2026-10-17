@@ -416,7 +416,12 @@ internal fun Thumbnail(state: CaptureUiState, imageUri: Uri?, onClick: () -> Uni
         thumbnail =
             imageUri?.let { uri ->
                 withContext(Dispatchers.IO) {
-                    runCatching { context.contentResolver.loadThumbnail(uri, Size(256, 256), null) }.getOrNull()
+                    // DNG-only captures: the platform thumbnailer cannot decode most RAWs.
+                    if (com.rawr.camera.storage.GalleryMediaStore(context).isDng(uri)) {
+                        com.rawr.camera.renderer.library.DngLibrary.get(context).thumbnail(uri)
+                    } else {
+                        runCatching { context.contentResolver.loadThumbnail(uri, Size(256, 256), null) }.getOrNull()
+                    }
                 }
             }
     }

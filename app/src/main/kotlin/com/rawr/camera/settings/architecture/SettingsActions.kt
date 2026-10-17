@@ -134,6 +134,22 @@ data object RevertFilmPreset : SettingsApplicationAction
 
 data class UpdateFilmPreset(val id: String) : SettingsApplicationAction
 
+/** Adds an exported film preset under a fresh id. */
+data class ImportFilmPreset(val name: String, val look: FilmSimLook) : SettingsApplicationAction
+
+data class SaveAgxLook(val name: String) : SettingsApplicationAction
+
+data class ApplyAgxLook(val id: String) : SettingsApplicationAction
+
+data class RenameAgxLook(val id: String, val name: String) : SettingsApplicationAction
+
+data class DeleteAgxLook(val id: String) : SettingsApplicationAction
+
+data class UpdateAgxLook(val id: String) : SettingsApplicationAction
+
+/** Adds an exported AgX look under a fresh id. */
+data class ImportAgxLook(val name: String, val base: AgxPreset, val values: AgxValues) : SettingsApplicationAction
+
 // Maps film actions onto FilmSimLook. Ranges mirror the native validate
 // contract; out-of-range values are clamped, never rejected silently.
 internal fun FilmSimLook.withNumeric(action: SetFilmSimNumericValue): FilmSimLook {
@@ -293,7 +309,6 @@ data class SetMultiframeBaseFrameMode(val value: MultiframeBaseFrameMode) : Sett
 
 data class SetMultiframeChromaDenoise(val enabled: Boolean) : SettingsApplicationAction
 
-
 data class SetMultiframeNumericValue(val parameter: MultiframeNumericParameter, val value: Float) :
     SettingsApplicationAction
 
@@ -337,8 +352,6 @@ data class SetDualContrastPercent(val value: Float) : SettingsApplicationAction
 
     data class SetVideoDefringeStrength(val value: Float) : SettingsApplicationAction
 
-
-
     data class SetPhotoDenoiseEnabled(val enabled: Boolean) : SettingsApplicationAction
 
     data class SetPhotoDenoiseStrength(val value: Float) : SettingsApplicationAction
@@ -349,8 +362,6 @@ data class SetDualContrastPercent(val value: Float) : SettingsApplicationAction
 
     data class SetPhotoDenoiseScales(val value: Int) : SettingsApplicationAction
 
-    data class SetPhotoDenoiseMethod(val method: Int) : SettingsApplicationAction
-
     data class SetVideoDenoiseEnabled(val enabled: Boolean) : SettingsApplicationAction
 
     data class SetVideoDenoiseStrength(val value: Float) : SettingsApplicationAction
@@ -360,20 +371,6 @@ data class SetDualContrastPercent(val value: Float) : SettingsApplicationAction
     data class SetVideoDenoiseLuma(val value: Float) : SettingsApplicationAction
 
     data class SetVideoDenoiseScales(val value: Int) : SettingsApplicationAction
-
-    data class SetGaloshRawMode(val mode: Int) : SettingsApplicationAction
-
-    data class SetGaloshStrength(val value: Float) : SettingsApplicationAction
-
-    data class SetGaloshLuma(val value: Float) : SettingsApplicationAction
-
-    data class SetGaloshChroma(val value: Float) : SettingsApplicationAction
-
-    data class SetGaloshYuvMode(val mode: Int) : SettingsApplicationAction
-
-    data class SetGaloshYuvStrengthY(val value: Float) : SettingsApplicationAction
-
-    data class SetGaloshYuvStrengthC(val value: Float) : SettingsApplicationAction
 
 data class SetPhotoLensShadingEnabled(val enabled: Boolean) : SettingsApplicationAction
 

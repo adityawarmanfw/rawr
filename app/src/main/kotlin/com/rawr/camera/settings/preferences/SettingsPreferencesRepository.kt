@@ -59,6 +59,16 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         dataStore.edit { prefs -> encode(prefs, values) }
     }
 
+    /** The exact key set [save] would persist for [values], for backups. */
+    fun encodeForBackup(values: SettingsValues): Preferences =
+        androidx.datastore.preferences.core.mutablePreferencesOf().also { encode(it, values) }
+
+    /** Decodes backed-up keys through the same migrations as stored settings; null if from a newer schema. */
+    fun decodeBackup(p: Preferences): SettingsValues? {
+        val version = p[Keys.schemaVersion] ?: LEGACY_SCHEMA_VERSION
+        return if (version > CURRENT_SCHEMA_VERSION) null else decode(p)
+    }
+
     private fun decode(p: Preferences): SettingsValues {
         val storedVersion = p[Keys.schemaVersion] ?: LEGACY_SCHEMA_VERSION
         if (storedVersion > CURRENT_SCHEMA_VERSION || storedVersion < LEGACY_SCHEMA_VERSION) return defaults
@@ -500,6 +510,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
             agxPreset = enumOrDefault(p[Keys.agxPreset], d.agxPreset),
             videoAgxPreset = enumOrDefault(p[Keys.videoAgxPreset], d.videoAgxPreset),
             agxValues = decodeAgxValues(p[Keys.agxValues]),
+            agxLooks = LookFileCodec.decodeAgxLooks(p[Keys.agxLooks]),
             srgbTone = ProfileTone(
                 renderExposure = p[Keys.srgbToneRenderExposure] ?: 0f,
                 blacks = p[Keys.srgbToneBlacks] ?: 0f,
@@ -539,7 +550,8 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
                             d.multiframeTuning.outputResolution
                         ),
                     mergeAlgorithm =
-                        enumOrDefault(p[Keys.multiframeMergeAlgorithm], d.multiframeTuning.mergeAlgorithm),
+                        enumOrDefault(p[Keys.multiframeMergeAlgorithm], d.multiframeTuning.mergeAlgorithm)
+                            .takeIf { it.available } ?: d.multiframeTuning.mergeAlgorithm,
                     hdrPlusStrength = p[Keys.multiframeHdrPlusStrength] ?: d.multiframeTuning.hdrPlusStrength,
                     hdrPlusTileSize = p[Keys.multiframeHdrPlusTileSize] ?: d.multiframeTuning.hdrPlusTileSize,
                     bracketEv = p[Keys.multiframeBracketEv] ?: d.multiframeTuning.bracketEv,
@@ -603,26 +615,15 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
             photoDefringeLumaFloor = (p[Keys.photoDefringeLumaFloor] ?: p[Keys.defringeLumaFloor] ?: d.photoDefringeLumaFloor).coerceIn(0f, 0.5f),
             videoDefringeEnabled = p[Keys.videoDefringeEnabled] ?: d.videoDefringeEnabled,
             videoDefringeStrength = (p[Keys.videoDefringeStrength] ?: p[Keys.defringeStrength] ?: d.videoDefringeStrength).coerceIn(0f, 1f),
-            // Photo denoise keeps the stable eleven-key schema; video
-            // denoise is three new wavelet-only keys (no Galosh on video).
+            // Photo and video denoise keep separate wavelet keys.
             photoDenoise = run {
                 val fallback = d.photoDenoise.toLegacy()
                 DenoiseConfig.fromLegacy(
                     enabled = p[Keys.denoiseEnabled] ?: fallback.enabled,
-                    method = p[Keys.denoiseMethod] ?: if ((p[Keys.galoshRawMode] ?: 0) != 0 ||
-                        (p[Keys.galoshYuvMode] ?: 0) != 0
-                    ) 1 else fallback.method,
                     waveletStrength = (p[Keys.denoiseStrength] ?: fallback.waveletStrength).coerceIn(0f, 8f),
                     waveletDetail = (p[Keys.denoiseDetail] ?: fallback.waveletDetail).coerceIn(0f, 1.8f),
                     waveletLuma = (p[Keys.denoiseLuma] ?: fallback.waveletLuma).coerceIn(0f, 1f),
-                    waveletScales = (p[Keys.denoiseScales] ?: fallback.waveletScales).coerceIn(1, 7),
-                    rawMode = (p[Keys.galoshRawMode] ?: fallback.rawMode).coerceIn(0, 2),
-                    rawStrength = (p[Keys.galoshStrength] ?: fallback.rawStrength).coerceIn(0f, 8f),
-                    rawLuma = (p[Keys.galoshLuma] ?: fallback.rawLuma).coerceIn(0f, 8f),
-                    rawChroma = (p[Keys.galoshChroma] ?: fallback.rawChroma).coerceIn(0f, 8f),
-                    yuvMode = (p[Keys.galoshYuvMode] ?: fallback.yuvMode).coerceIn(0, 2),
-                    yuvStrengthY = (p[Keys.galoshYuvStrengthY] ?: fallback.yuvStrengthY).coerceIn(0f, 8f),
-                    yuvStrengthC = (p[Keys.galoshYuvStrengthC] ?: fallback.yuvStrengthC).coerceIn(0f, 8f)
+                    waveletScales = (p[Keys.denoiseScales] ?: fallback.waveletScales).coerceIn(1, 7)
                 )
             },
             videoDenoiseEnabled = p[Keys.videoDenoiseEnabled] ?: d.videoDenoiseEnabled,
@@ -737,6 +738,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.agxPreset] = v.agxPreset.name
         p[Keys.videoAgxPreset] = v.videoAgxPreset.name
         p[Keys.agxValues] = encodeAgxValues(v.agxValues)
+        p[Keys.agxLooks] = LookFileCodec.encodeAgxLooks(v.agxLooks)
         p[Keys.srgbToneRenderExposure] = v.srgbTone.renderExposure
         p[Keys.srgbToneBlacks] = v.srgbTone.blacks
         p[Keys.srgbToneShadows] = v.srgbTone.shadows
@@ -848,14 +850,6 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.denoiseDetail] = legacyDenoise.waveletDetail.coerceIn(0f, 1.8f)
         p[Keys.denoiseLuma] = legacyDenoise.waveletLuma.coerceIn(0f, 1f)
         p[Keys.denoiseScales] = legacyDenoise.waveletScales.coerceIn(1, 7)
-        p[Keys.denoiseMethod] = legacyDenoise.method.coerceIn(0, 1)
-        p[Keys.galoshRawMode] = legacyDenoise.rawMode.coerceIn(0, 2)
-        p[Keys.galoshStrength] = legacyDenoise.rawStrength.coerceIn(0f, 8f)
-        p[Keys.galoshLuma] = legacyDenoise.rawLuma.coerceIn(0f, 8f)
-        p[Keys.galoshChroma] = legacyDenoise.rawChroma.coerceIn(0f, 8f)
-        p[Keys.galoshYuvMode] = legacyDenoise.yuvMode.coerceIn(0, 2)
-        p[Keys.galoshYuvStrengthY] = legacyDenoise.yuvStrengthY.coerceIn(0f, 8f)
-        p[Keys.galoshYuvStrengthC] = legacyDenoise.yuvStrengthC.coerceIn(0f, 8f)
         p[Keys.videoDenoiseEnabled] = v.videoDenoiseEnabled
         p[Keys.videoDenoiseStrength] = v.videoDenoiseStrength.coerceIn(0f, 8f)
         p[Keys.videoDenoiseDetail] = v.videoDenoiseDetail.coerceIn(0f, 1.8f)
@@ -1061,6 +1055,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val filmSimLook = stringPreferencesKey("film_sim_look")
         val selectedFilmPresetId = stringPreferencesKey("selected_film_preset_id")
         val filmPresets = stringPreferencesKey("film_presets")
+        val agxLooks = stringPreferencesKey("agx_looks")
         val multiframeBaseFrameMode = stringPreferencesKey("multiframe_base_frame_mode")
         val multiframeChromaDenoise = booleanPreferencesKey("multiframe_chroma_denoise")
         val camera2NoiseModelEnabled = booleanPreferencesKey("camera2_noise_model_enabled")
@@ -1128,14 +1123,6 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val denoiseDetail = floatPreferencesKey("denoise_detail")
         val denoiseLuma = floatPreferencesKey("denoise_luma")
         val denoiseScales = intPreferencesKey("denoise_scales")
-        val denoiseMethod = intPreferencesKey("denoise_method")
-        val galoshRawMode = intPreferencesKey("galosh_raw_mode")
-        val galoshStrength = floatPreferencesKey("galosh_strength")
-        val galoshLuma = floatPreferencesKey("galosh_luma")
-        val galoshChroma = floatPreferencesKey("galosh_chroma")
-        val galoshYuvMode = intPreferencesKey("galosh_yuv_mode")
-        val galoshYuvStrengthY = floatPreferencesKey("galosh_yuv_strength_y")
-        val galoshYuvStrengthC = floatPreferencesKey("galosh_yuv_strength_c")
         val videoDenoiseEnabled = booleanPreferencesKey("video_denoise_enabled")
         val videoDenoiseStrength = floatPreferencesKey("video_denoise_strength")
         val videoDenoiseDetail = floatPreferencesKey("video_denoise_detail")

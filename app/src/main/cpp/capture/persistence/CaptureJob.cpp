@@ -386,6 +386,14 @@ void readLegacyJob(Reader& a, CaptureJob& v) {
     n.motionThreshold = t.motionThreshold;
     (void)noise;  // multiframe now always fits noise from the burst
 }
+// Journal slots of the removed second denoiser: still written (zeros) and
+// read (discarded) so the on-disk layout and versions stay unchanged.
+struct RetiredDenoise {
+    int rawMode = 0;
+    float rawStrength = 1.0f, rawLuma = 1.0f, rawChroma = 1.0f;
+    int yuvMode = 0;
+    float yuvStrengthY = 1.0f, yuvStrengthC = 1.0f;
+};
 void save(const std::string& path, CaptureJob& job, const std::function<std::vector<uint8_t>(size_t)>& readFrame) {
     const uint64_t n = payloadSize(job);
     const auto dir = std::filesystem::path(path).parent_path();
@@ -394,6 +402,7 @@ void save(const std::string& path, CaptureJob& job, const std::function<std::vec
     try {
         std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
         Writer w{stream};
+        RetiredDenoise retired{};
         auto version = magic;
         w(version);
         fields(w, job);
@@ -401,9 +410,9 @@ void save(const std::string& path, CaptureJob& job, const std::function<std::vec
           job.mergedDng.resolvedRecipe, job.mergedDng.sourceRole, job.jpeg.develop.fccEdgeSigma,
           job.jpeg.develop.fccChromaBound, job.jpeg.develop.defringeStrength, job.jpeg.develop.defringeEdgeThreshold,
           job.jpeg.develop.defringeLumaFloor, job.jpeg.develop.denoiseStrength, job.jpeg.develop.denoiseDetail,
-          job.jpeg.develop.denoiseForceY, job.jpeg.develop.denoiseMaxScale, job.jpeg.develop.galoshRawMode,
-          job.jpeg.develop.galoshStrength, job.jpeg.develop.galoshLuma, job.jpeg.develop.galoshChroma,
-          job.jpeg.develop.galoshYuvMode, job.jpeg.develop.galoshYuvStrengthY, job.jpeg.develop.galoshYuvStrengthC,
+          job.jpeg.develop.denoiseForceY, job.jpeg.develop.denoiseMaxScale, retired.rawMode,
+          retired.rawStrength, retired.rawLuma, retired.rawChroma, retired.yuvMode, retired.yuvStrengthY,
+          retired.yuvStrengthC,
           job.jpeg.output.ultraHdr, job.jpeg.develop.highlightReconstructionMethod, job.jpeg.develop.highlightThreshold,
           job.jpeg.develop.highlightCompression, job.jpeg.develop.multiframeChromaDenoise, job.dng.compression,
           job.mergedDng.compression);
@@ -437,6 +446,7 @@ CaptureJob load(const std::string& path,
                 const std::function<void(CaptureJob&, size_t, const std::vector<uint8_t>&)>& consume) {
     std::ifstream stream(path, std::ios::binary);
     Reader r{stream};
+    RetiredDenoise retired{};
     uint64_t version = 0;
     r(version);
     if (version != magic && version != magicV8 && version != magicV7 && version != magicV6 && version != magicV5 && version != magicV4 &&
@@ -450,9 +460,9 @@ CaptureJob load(const std::string& path,
           job.mergedDng.resolvedRecipe, job.mergedDng.sourceRole, job.jpeg.develop.fccEdgeSigma,
           job.jpeg.develop.fccChromaBound, job.jpeg.develop.defringeStrength, job.jpeg.develop.defringeEdgeThreshold,
           job.jpeg.develop.defringeLumaFloor, job.jpeg.develop.denoiseStrength, job.jpeg.develop.denoiseDetail,
-          job.jpeg.develop.denoiseForceY, job.jpeg.develop.denoiseMaxScale, job.jpeg.develop.galoshRawMode,
-          job.jpeg.develop.galoshStrength, job.jpeg.develop.galoshLuma, job.jpeg.develop.galoshChroma,
-          job.jpeg.develop.galoshYuvMode, job.jpeg.develop.galoshYuvStrengthY, job.jpeg.develop.galoshYuvStrengthC);
+          job.jpeg.develop.denoiseForceY, job.jpeg.develop.denoiseMaxScale, retired.rawMode,
+          retired.rawStrength, retired.rawLuma, retired.rawChroma, retired.yuvMode, retired.yuvStrengthY,
+          retired.yuvStrengthC);
         if (version == magic || version == magicV8 || version == magicV7 || version == magicV6)
             r(job.jpeg.output.ultraHdr, job.jpeg.develop.highlightReconstructionMethod,
               job.jpeg.develop.highlightThreshold, job.jpeg.develop.highlightCompression);
@@ -467,16 +477,15 @@ CaptureJob load(const std::string& path,
               job.jpeg.develop.fccChromaBound, job.jpeg.develop.defringeStrength,
               job.jpeg.develop.defringeEdgeThreshold, job.jpeg.develop.defringeLumaFloor);
         // v4 save() wrote force/max-scale between the wavelet pair and the
-        // GALOSH block; read in that order (the old reader read them last).
+        // retired denoise block; read in that order (the old reader read them last).
         if (version == magicV4)
             r(job.jpeg.develop.denoiseStrength, job.jpeg.develop.denoiseDetail, job.jpeg.develop.denoiseForceY,
               job.jpeg.develop.denoiseMaxScale);
         else if (version == magicV3)
             r(job.jpeg.develop.denoiseStrength, job.jpeg.develop.denoiseDetail);
         if (version == magicV4 || version == magicV3)
-            r(job.jpeg.develop.galoshRawMode, job.jpeg.develop.galoshStrength, job.jpeg.develop.galoshLuma,
-              job.jpeg.develop.galoshChroma, job.jpeg.develop.galoshYuvMode, job.jpeg.develop.galoshYuvStrengthY,
-              job.jpeg.develop.galoshYuvStrengthC);
+            r(retired.rawMode, retired.rawStrength, retired.rawLuma, retired.rawChroma, retired.yuvMode,
+              retired.yuvStrengthY, retired.yuvStrengthC);
         if (version == legacyMagic && job.multiframe) {
             job.dng.sourceRole = "base";
             job.mergedDng.sourceRole = "merged";

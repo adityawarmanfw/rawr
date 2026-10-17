@@ -14,10 +14,26 @@ import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+
+/** Progress of [RendererStore.renderAll]. */
+internal data class BulkRenderState(
+    val total: Int = 0,
+    val done: Int = 0,
+    val failed: List<String> = emptyList(),
+    val current: String? = null
+) {
+    val running: Boolean get() = current != null
+    val finished: Boolean get() = current == null && total > 0
+}
 
 /** Coordinates renderer use cases under one native-operation lane. */
 internal class RendererStore private constructor(private val context: Context) {
@@ -73,6 +89,51 @@ internal class RendererStore private constructor(private val context: Context) {
     fun hasInterruptedExport() = exports.hasInterruptedExport()
     fun resumeInterrupted() = exports.resumeInterrupted()
     fun export(id: String, original: Boolean = false, resume: Boolean = false) = exports.export(id, original, resume)
+
+    private val mutableBulk = MutableStateFlow(BulkRenderState())
+    val bulk = mutableBulk.asStateFlow()
+    @Volatile private var bulkCancelled = false
+
+    /**
+     * Renders each DNG with its original recipe to a JPEG, one after another:
+     * import, open, export, wait. Runs at app scope so leaving the screen does
+     * not stop it; finished jobs leave the queue as single exports do.
+     */
+    fun renderAll(items: List<Pair<Uri, String>>, library: suspend () -> SettingsValues) {
+        if (bulk.value.running || items.isEmpty()) return
+        bulkCancelled = false
+        mutableBulk.value = BulkRenderState(total = items.size, current = items.first().second)
+        scope.launch {
+            for ((uri, name) in items) {
+                if (bulkCancelled) break
+                mutableBulk.update { it.copy(current = name) }
+                try {
+                    busy.first { !it }
+                    val job = edit(import(uri, library()), library())
+                    export(job.id, original = true)
+                    busy.first { !it }
+                    val left = repository.jobs.value.firstOrNull { it.id == job.id }
+                    if (left?.status == "Failed") mutableBulk.update { it.copy(failed = it.failed + "$name: ${left.error}") }
+                    else mutableBulk.update { it.copy(done = it.done + 1) }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    mutableBulk.update { it.copy(failed = it.failed + "$name: ${e.message ?: "Render failed"}") }
+                }
+            }
+            mutableBulk.update { it.copy(current = null) }
+        }
+    }
+
+    /** Stops the current render and skips the rest. */
+    fun cancelBulk() {
+        bulkCancelled = true
+        if (busy.value) cancel()
+    }
+
+    fun dismissBulk() {
+        if (!bulk.value.running) mutableBulk.value = BulkRenderState()
+    }
     suspend fun import(uri: Uri, library: SettingsValues): RenderJob = withContext(Dispatchers.IO) {
         lane.withLock {
             val id = UUID.randomUUID().toString(); val d = repository.directory(id).apply { mkdirs() }

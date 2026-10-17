@@ -34,6 +34,14 @@ class RendererIncomingDngTest {
             .setDataAndType(Uri.parse("https://example.com/photo.dng"), "image/x-adobe-dng")))
     }
 
+    @Test fun genericImageTypeResolvesDngFromProvider() {
+        val dng = { _: Uri -> "image/x-adobe-dng" }
+        assertEquals(uri, extractIncomingDngUri(Intent(Intent.ACTION_EDIT).setDataAndType(uri, "image/*"), dng))
+        assertEquals(uri, extractIncomingDngUri(Intent(Intent.ACTION_SEND).setType("image/*")
+            .putExtra(Intent.EXTRA_STREAM, uri), dng))
+        assertNull(extractIncomingDngUri(Intent(Intent.ACTION_EDIT).setDataAndType(uri, "image/*")) { "image/jpeg" })
+    }
+
     @Test fun manifestOffersRendererForOpeningDngButNotJpeg() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         fun handlers(mime: String) = context.packageManager.queryIntentActivities(

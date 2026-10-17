@@ -119,7 +119,7 @@ void DualStillProcessor::prepareRecord(const std::array<float, 4>& whiteBalanceR
 
 bool DualStillProcessor::start(const rawrcam::imaging::RawSnapshot& frame,
                                std::shared_ptr<const std::vector<uint8_t>> raw, bool lensShadingCorrectionEnabled,
-                               bool highlightReconstructionEnabled, const ::galosh::GaloshRawParams& galosh) {
+                               bool highlightReconstructionEnabled) {
     if (!configured()) return false;
     const uint64_t expected = static_cast<uint64_t>(width_) * height_ * sizeof(uint16_t);
     if (frame.width != width_ || frame.height != height_ || expected > std::numeric_limits<size_t>::max() || !raw ||
@@ -137,7 +137,7 @@ bool DualStillProcessor::start(const rawrcam::imaging::RawSnapshot& frame,
     const auto wb = frame.colorState.baselineWbRggb;
     const auto lensShading =
         rawrcam::develop::highlight::LensShadingMapSnapshot::fromMetadata(frame.metadata, lensShadingCorrectionEnabled);
-    worker_.spawn([this, requestId, timestampNs, black, white, wb, lensShading, highlightReconstructionEnabled, galosh,
+    worker_.spawn([this, requestId, timestampNs, black, white, wb, lensShading, highlightReconstructionEnabled,
                    raw = std::move(raw)]() mutable {
         StillCompletion done{};
         done.requestId = requestId;
@@ -148,7 +148,7 @@ bool DualStillProcessor::start(const rawrcam::imaging::RawSnapshot& frame,
             done.setupMs =
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
             VkCommandBuffer cmd =
-                runtime_.beginFrame(*raw, black, white, wb, lensShading, highlightReconstructionEnabled, galosh);
+                runtime_.beginFrame(*raw, black, white, wb, lensShading, highlightReconstructionEnabled);
             raw.reset();
             done.persistentBytes = currentAllocatedBytes();
             runtime_.flush();

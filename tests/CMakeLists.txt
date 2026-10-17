@@ -32,6 +32,14 @@ endfunction()
 
 rawr_test(renderer_bayer_bin_test
   "${RAWR_ROOT}/tests/native/renderer_bayer_bin_test.cpp")
+rawr_test(convert_natural_bin_test
+  "${RAWR_ROOT}/tests/native/convert_natural_bin_test.cpp")
+rawr_test(convert_bayer_resample_test
+  "${RAWR_ROOT}/tests/native/convert_bayer_resample_test.cpp")
+rawr_test(convert_binned_raw_test
+  "${RAWR_ROOT}/tests/native/convert_binned_raw_test.cpp"
+  "${APP}/convert/DngConverter.cpp")
+target_link_libraries(convert_binned_raw_test PRIVATE rawr_tinydng)
 rawr_test(renderer_resample_test
   "${RAWR_ROOT}/tests/native/renderer_resample_test.cpp"
   "${APP}/renderer/LinearResample.cpp")

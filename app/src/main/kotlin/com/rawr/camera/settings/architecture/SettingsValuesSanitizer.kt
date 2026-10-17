@@ -134,7 +134,7 @@ internal fun sanitizeSettingsValues(persisted: SettingsValues, defaults: Setting
             videoHighlightThreshold = persisted.videoHighlightThreshold.coerceIn(0.5f, 2f),
             videoHighlightCompression = persisted.videoHighlightCompression.coerceIn(0f, 300f),
             // Denoise needs no sanitize entry: DenoiseConfig is valid by
-            // construction (Galosh requires a lane). Legacy states are
+            // construction. Legacy states are
             // repaired once at the prefs-decode and recipe-parse
             // boundaries via DenoiseConfig.fromLegacy.
         )

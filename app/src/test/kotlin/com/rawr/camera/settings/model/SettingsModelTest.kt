@@ -552,16 +552,16 @@ class SettingsModelTest {
             .resolve(StillPath.SINGLE)
         assertEquals(1f, resolved.waveletLuma)
         assertEquals(7, resolved.waveletScales)
-        assertEquals(5, resolved.toModesArray().size)
-        assertEquals(8, resolved.toStrengthsArray().size)
-        assertEquals(1f, resolved.toStrengthsArray()[7])
-        assertEquals(7, resolved.toModesArray()[4])
+        assertEquals(2, resolved.toModesArray().size)
+        assertEquals(3, resolved.toStrengthsArray().size)
+        assertEquals(1f, resolved.toStrengthsArray()[2])
+        assertEquals(7, resolved.toModesArray()[1])
         controller.dispatch(SetPhotoDenoiseLuma(0.5f))
         controller.dispatch(SetPhotoDenoiseScales(5))
         resolved = (controller.state.value.values.photoDenoise as DenoiseConfig.Wavelet)
             .resolve(StillPath.SINGLE)
-        assertEquals(0.5f, resolved.toStrengthsArray()[7])
-        assertEquals(5, resolved.toModesArray()[4])
+        assertEquals(0.5f, resolved.toStrengthsArray()[2])
+        assertEquals(5, resolved.toModesArray()[1])
     }
 
     @Test fun multiframeBaseFrameModeDefaultsToSharpestAndIsPersistable() {

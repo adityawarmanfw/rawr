@@ -11,8 +11,6 @@
 #include <stdexcept>
 #include <utility>
 
-#include "develop/galosh/GaloshShaderTable.h"
-#include "galosh/GaloshVkUtils.hpp"
 #include "replay_tagged_decode.h"
 #include "sensor_clip_pack.h"
 
@@ -54,14 +52,12 @@ void SharedHighlightRuntime::configure(const rawrcam::vulkan::VulkanContext& con
         }
         if (queueOverride) queue_ = queueOverride;
         queueSubmitMutex_ = queueSubmitMutexOverride ? queueSubmitMutexOverride : &queueSubmitMutex;
-        float16Compute_ = context.float16ComputeEnabled();
         return;
     }
     physicalDevice_ = context.physicalDevice();
     device_ = context.device();
     queue_ = queueOverride ? queueOverride : context.queue();
     queueFamily_ = context.queueFamily();
-    float16Compute_ = context.float16ComputeEnabled();
     queueSubmitMutex_ = queueSubmitMutexOverride ? queueSubmitMutexOverride : &queueSubmitMutex;
     width_ = width;
     height_ = height;
@@ -262,23 +258,10 @@ VkCommandBuffer SharedHighlightRuntime::beginTaggedPackedReplay(const std::vecto
     return command_;
 }
 
-void SharedHighlightRuntime::ensureGalosh() {
-    if (galosh_) {
-        if (galoshDevice_ == device_) return;
-        galosh_.reset();
-        galoshDevice_ = VK_NULL_HANDLE;
-    }
-    if (!queueSubmitMutex_) throw std::logic_error(label_ + " galosh without queue mutex");
-    galosh_ =
-        std::make_unique<::galosh::GaloshRawPipeline>(physicalDevice_, device_, queueFamily_, galosh::rawShaderMap());
-    galoshDevice_ = device_;
-}
-
 VkCommandBuffer SharedHighlightRuntime::beginFrame(
     const std::vector<uint8_t>& rawCopy, const std::array<float, 4>& blackPhysical, float whiteLevel,
     const std::array<float, 4>& whiteBalanceRggb,
-    const rawrcam::develop::highlight::LensShadingMapSnapshot& lensShading, bool highlightReconstructionEnabled,
-    const ::galosh::GaloshRawParams& galosh) {
+    const rawrcam::develop::highlight::LensShadingMapSnapshot& lensShading, bool highlightReconstructionEnabled) {
     // Reconstruction now belongs exclusively to the post-WB RGB stage. This
     // argument is retained at the adapter boundary for source compatibility.
     (void)highlightReconstructionEnabled;
@@ -316,64 +299,6 @@ VkCommandBuffer SharedHighlightRuntime::beginFrame(
     b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
     vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr,
                          0, nullptr, 1, &b);
-
-    // GALOSH-RAW tap (P1a): denoise input_ in place before highlight
-    // packing. process() submits + fence-waits on its own command buffers,
-    // so the recorded upload above must EXECUTE first: end/submit/wait the
-    // prefix and begin a fresh CB. Without the flush the tap would denoise
-    // stale input (and the upload would clobber its output). Off (or no
-    // f16 device support) = the legacy path below runs bit-identically.
-    //
-    // NOTE (Adreno watchdog): Full died on first submit (device lost ~5 s
-    // in) while chroma-only + YUV survived: pass12Banded fired 146x108
-    // heavy workgroups in ONE submit, past the driver watchdog. Fixed by
-    // 2D micro-banding in GaloshRawPipeline.cpp (bit-identical, bounded
-    // per-submit work). This quarantine is LIFTED for verification; if
-    // Full dies again on device, reinstate Full->ChromaOnly here.
-    ::galosh::GaloshRawParams galoshEff = galosh;
-    const bool galoshRawRequested = galoshEff.mode != ::galosh::GaloshRawMode::Off;
-    if (galoshRawRequested && !float16Compute_) {
-        emit("GALOSH_RAW_SKIP reason=no_f16");
-        __android_log_print(ANDROID_LOG_INFO, "RawrCamNative", "GALOSH_RAW_SKIP %s reason=no_f16", label_.c_str());
-    } else if (galoshRawRequested && (width_ < 64 || height_ < 64)) {
-        emit("GALOSH_RAW_SKIP reason=too_small");
-        __android_log_print(ANDROID_LOG_INFO, "RawrCamNative", "GALOSH_RAW_SKIP %s reason=too_small", label_.c_str());
-    } else if (galoshRawRequested) {
-        // Denoise failures degrade to the legacy path (never fail the shot
-        // for denoise), matching the YUV tap policy. ensureGalosh() (pipeline
-        // build) runs before the prefix submit so a throw there leaves the
-        // recorded upload intact; process() runs after the prefix flush on a
-        // fresh CB so a throw there leaves an empty outer CB — both safe to
-        // continue.
-        try {
-            ensureGalosh();
-        } catch (const std::exception& e) {
-            __android_log_print(ANDROID_LOG_WARN, "RawrCamNative", "GALOSH_RAW_FALLBACK %s reason=%s", label_.c_str(),
-                                e.what());
-            emit(std::string("GALOSH_RAW_FALLBACK reason=") + e.what());
-            galoshEff.mode = ::galosh::GaloshRawMode::Off;
-        }
-        if (galoshEff.mode != ::galosh::GaloshRawMode::Off) {
-            __android_log_print(ANDROID_LOG_INFO, "RawrCamNative",
-                                "GALOSH_RAW_TAP %s mode=%d wh=%ux%u strength=%.2f luma=%.2f chroma=%.2f",
-                                label_.c_str(), static_cast<int>(galoshEff.mode), width_, height_, galoshEff.strength,
-                                galoshEff.lumaStrength, galoshEff.chromaStrength);
-            flush();
-            try {
-                galosh_->process(queue_, *queueSubmitMutex_, input_.view, input_.view, width_, height_, galoshEff,
-                                 VK_NULL_HANDLE);
-                ::galosh::vk::fullBarrier(command_);
-            } catch (const std::exception& e) {
-                __android_log_print(ANDROID_LOG_WARN, "RawrCamNative", "GALOSH_RAW_FALLBACK %s reason=%s",
-                                    label_.c_str(), e.what());
-                emit(std::string("GALOSH_RAW_FALLBACK reason=") + e.what());
-                // In-place tap may have partially overwritten input_; the
-                // legacy highlight path below still runs (artifact risk
-                // preferred over a failed shot). Barrier for visibility.
-                ::galosh::vk::fullBarrier(command_);
-            }
-        }
-    }
 
     if (sharedHighlightPacked_) {
         VkImageMemoryBarrier pw{};
@@ -845,10 +770,6 @@ void SharedHighlightRuntime::releaseOutput() noexcept {
 }
 
 void SharedHighlightRuntime::reset() noexcept {
-    // Destroy GALOSH while device_ is still valid (pipeline dtor issues
-    // vkDestroy* on its stored VkDevice).
-    galosh_.reset();
-    galoshDevice_ = VK_NULL_HANDLE;
     destroyWorkspaceResources(false);
     physicalDevice_ = VK_NULL_HANDLE;
     device_ = VK_NULL_HANDLE;

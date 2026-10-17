@@ -44,7 +44,7 @@ cpp/
 │   ├── CameraCadencePolicy.h
 │   ├── TapFocusPolicy.h
 │   ├── Camera*Controls/Capabilities/Result* files
-│   └── vivo/                         # Vendor-specific Camera2 tags
+│   └── CameraMetadataTags.{h,cpp}    # Shared Camera2 tag lookup and compatibility
 ├── imaging/
 │   ├── FrameLimits.h                 # Shared reader/queue/pairer/slot capacity budget
 │   ├── RawFrameIngress.{h,cpp}        # AImageReader acquisition
@@ -106,7 +106,6 @@ cpp/
 │   │   ├── FilmRenderStage.{h,cpp}    # Film/tone recording and typed fallback outcome
 │   │   └── RenderReadback.{h,cpp}     # GPU download, timing/checksum/stats/diagnostics
 │   ├── highlight/                     # Highlight contracts and snapshots
-│   └── galosh/                        # Denoiser shader adapter
 ├── encoding/
 │   ├── dng/                           # DNG writer and TinyDNG adapter
 │   ├── jpeg/                          # JPEG output options, writer, EXIF

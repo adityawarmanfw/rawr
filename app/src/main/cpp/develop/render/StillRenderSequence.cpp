@@ -74,102 +74,12 @@ void recordPostDemosaic(RenderResources& resources, RenderCommandSession& comman
     // so the preview queue can run between them.
     commands.submitAndRestart("post-demosaic");
 }
-bool runGaloshYuv(RenderResources& resources, RenderCommandSession& commands, const RenderDeviceContext& device,
-                  const RenderedStillContext& rendered, const RenderResources::Diagnostic& emit) {
-    // GALOSH-YUV blind denoise (P1c): in-place on the linear SDR
-    // buffer after FCC/defringe, before the tonemap/film branch
-    // (both consume sdr, so one tap serves both). process() runs
-    // its own submits, so flush the recorded prefix first — same
-    // staleness rule as the RAW tap (SharedHighlightRuntime); the
-    // restart barrier covers cross-submit visibility. HDR knee
-    // keeps highlights exact for the tonemap. Blind: valid on
-    // merged frames where wavelet stays off. Any failure degrades
-    // to the legacy path (never fail the shot for denoise).
-    // Timing slots 12-15 have no stage owner: close them here as
-    // adjacent 0ms pairs FIRST (process() overwrites 14-15 with
-    // real timings when it runs; repeat writes are last-wins), so
-    // the fixed 0-16 fetch never wedges on unwritten queries even
-    // when the tap is off or throws mid-frame.
-    if (commands.timingPool()) {
-        vkCmdWriteTimestamp(commands.command(), VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, commands.timingPool(), 12);
-        vkCmdWriteTimestamp(commands.command(), VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, commands.timingPool(), 13);
-        vkCmdWriteTimestamp(commands.command(), VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, commands.timingPool(), 14);
-        vkCmdWriteTimestamp(commands.command(), VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, commands.timingPool(), 15);
-    }
-    const bool galoshYuvRequested = (rendered.galoshYuvMode == 1 || rendered.galoshYuvMode == 2);
-    const bool galoshYuvOn =
-        galoshYuvRequested && device.float16Compute && rendered.width >= 64 && rendered.height >= 64;
-    bool galoshYuvSuccess = false;
-    if (rendered.galoshYuvMode != 0 && !galoshYuvOn) {
-        std::string reason = !galoshYuvRequested ? "invalid_mode" : !device.float16Compute ? "no_f16" : "too_small";
-        emit("GALOSH_YUV_SKIP requestId=" + std::to_string(rendered.requestId) + " reason=" + reason);
-        __android_log_print(ANDROID_LOG_INFO, "RawrCamNative", "GALOSH_YUV_SKIP requestId=%llu reason=%s",
-                            (unsigned long long)rendered.requestId, reason.c_str());
-    }
-    if (galoshYuvOn) {
-        // resources.ensureGaloshYuv() (pipeline build) runs before the prefix
-        // flush so a throw there leaves the recorded prefix intact —
-        // safe to degrade to legacy. The flush itself uses vkCheck
-        // (driver-level: fail the shot, don't record on an ended CB).
-        // process() runs after the flush on a fresh CB, so a throw
-        // there also leaves a recording outer CB — safe for fallback.
-        bool galoshYuvAttempt = true;
-        try {
-            resources.ensureGaloshYuv();
-        } catch (const std::exception& e) {
-            __android_log_print(ANDROID_LOG_WARN, "RawrCamNative", "GALOSH_YUV_FALLBACK requestId=%llu reason=%s",
-                                (unsigned long long)rendered.requestId, e.what());
-            emit("GALOSH_YUV_FALLBACK requestId=" + std::to_string(rendered.requestId) + " reason=" + e.what());
-            galoshYuvAttempt = false;
-        }
-        if (galoshYuvAttempt) {
-            __android_log_print(ANDROID_LOG_INFO, "RawrCamNative",
-                                "GALOSH_YUV_TAP requestId=%llu mode=%d wh=%ux%u sy=%.2f sc=%.2f",
-                                (unsigned long long)rendered.requestId, rendered.galoshYuvMode, rendered.width,
-                                rendered.height, rendered.galoshYuvStrengthY, rendered.galoshYuvStrengthC);
-            commands.submitAndRestart("galosh yuv prefix");
-            try {
-                ::galosh::GaloshYuvParams yuv{};
-                yuv.mode = static_cast<::galosh::GaloshYuvMode>(rendered.galoshYuvMode);
-                yuv.strengthY = std::clamp(rendered.galoshYuvStrengthY, 0.0f, 8.0f);
-                yuv.strengthC = std::clamp(rendered.galoshYuvStrengthC, 0.0f, 8.0f);
-                resources.galoshYuv().process(device.queue, *device.queueSubmitMutex,
-                                              resources.postDemosaic().sdrOutputView(),
-                                              resources.postDemosaic().sdrOutputView(), rendered.width, rendered.height,
-                                              yuv, commands.timingPool());
-                galoshYuvSuccess = true;
-            } catch (const std::exception& e) {
-                // Logcat-visible AND callback: a throwing tap must never
-                // be silent (multiframe runs without a log watcher).
-                __android_log_print(ANDROID_LOG_WARN, "RawrCamNative", "GALOSH_YUV_FALLBACK requestId=%llu reason=%s",
-                                    (unsigned long long)rendered.requestId, e.what());
-                emit("GALOSH_YUV_FALLBACK requestId=" + std::to_string(rendered.requestId) + " reason=" + e.what());
-            }
-            // Post-tap visibility: process() runs fence-waited submits
-            // writing the SDR image in place. Fences are host-side only;
-            // same-queue visibility needs an image barrier before the
-            // tonemap/film reads below. Without this the tap can appear
-            // to do nothing (stale reads) and validation reports
-            // READ_AFTER_WRITE. Recorded on both success and fallback so
-            // partial writes are at least visible.
-            if (VkImage sdrImage = resources.postDemosaic().sdrOutputImage(); sdrImage != VK_NULL_HANDLE) {
-                VkImageMemoryBarrier yuvReady{};
-                yuvReady.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-                yuvReady.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-                yuvReady.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-                yuvReady.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-                yuvReady.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-                yuvReady.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                yuvReady.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                yuvReady.image = sdrImage;
-                yuvReady.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                vkCmdPipelineBarrier(commands.command(), VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &yuvReady);
-            }
-        }
-    }
-
-    return galoshYuvSuccess;
+void closeSpareTimings(RenderCommandSession& commands) {
+    // Timing slots 12-15 have no stage owner: close them as adjacent 0ms
+    // pairs so the fixed 0-16 fetch never wedges on unwritten queries.
+    if (!commands.timingPool()) return;
+    for (uint32_t i : {12u, 13u, 14u, 15u})
+        vkCmdWriteTimestamp(commands.command(), VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, commands.timingPool(), i);
 }
 // Local tone mapping (exposure fusion): a regional gain applied in
 // place to the scene-linear images every later stage reads (tone/film read
@@ -181,7 +91,7 @@ void recordLocalTone(RenderResources& resources, RenderCommandSession& commands,
     const auto& lt = rendered.tonemapParams.localTone;
     if (!rawr::local_tone::fusionActive(lt.shadowsEv)) return;
     resources.ensureLocalTone();
-    // Earlier stages (post-demosaic, GALOSH) wrote these images in place.
+    // Earlier stages (post-demosaic) wrote these images in place.
     VkMemoryBarrier written{};
     written.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     written.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -466,10 +376,9 @@ RenderedStillCompletion executeStillRender(RenderResources& resources, RenderCom
 
         commands.create(device);
         commands.begin();
-        bool galoshYuvSuccess = false;
         if (!rendered.reuseLinearResult) {
             recordPostDemosaic(resources, commands, rendered, sourceImage, sourceView, clipStateImage, clipStateView);
-            galoshYuvSuccess = runGaloshYuv(resources, commands, device, rendered, emit);
+            closeSpareTimings(commands);
             recordLocalTone(resources, commands, rendered, emit);
         } else if (commands.timingPool()) {
             // Skipped stages still own valid adjacent zero-duration timestamp pairs.
@@ -513,7 +422,7 @@ RenderedStillCompletion executeStillRender(RenderResources& resources, RenderCom
         done.renderSetupMs =
             std::max(0.0, std::chrono::duration<double, std::milli>(tSubmit - t0).count() - commands.chunkWaitMs());
         done.queueGapsMs = std::chrono::duration<double, std::milli>(tFence - tSubmit).count() + commands.chunkWaitMs();
-        completeReadback(resources, commands, rendered, sourceImage, filesDir, preWbOk, clipEvidence, galoshYuvSuccess,
+        completeReadback(resources, commands, rendered, sourceImage, filesDir, preWbOk, clipEvidence,
                          gainmap.clipUsed, gainmap.clipBoost, tFence, done, emit);
         done.success = true;
 
@@ -522,7 +431,7 @@ RenderedStillCompletion executeStillRender(RenderResources& resources, RenderCom
         __android_log_print(ANDROID_LOG_ERROR, "RawrCamNative", "STILL_RENDER_FAIL requestId=%llu error=%s",
                             (unsigned long long)rendered.requestId, done.error.c_str());
         // A failed or timed-out wait can leave this render's submissions (chunks,
-        // film tiles, GALOSH) running. Callers free the command pool, engines and
+        // film tiles) running. Callers free the command pool, engines and
         // images next, so the queue must drain first. Device loss also returns here.
         std::lock_guard<std::mutex> queueLock(*device.queueSubmitMutex);
         const VkResult idle = vkQueueWaitIdle(device.queue);
