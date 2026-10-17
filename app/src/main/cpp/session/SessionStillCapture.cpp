@@ -144,7 +144,7 @@ void SessionEngine::setPersistentEngineEnabled(bool enabled) {
 }
 namespace {
 constexpr uint64_t kFullSizeRawPixels = 25'000'000;  // Above any binned 12-16 MP stream.
-constexpr uint32_t kFullSizeMaxFrames = 4;
+constexpr uint32_t kFullSizeMaxFrames = 6;
 }  // namespace
 
 uint32_t SessionEngine::prepareExperimentalMultiframe(uint32_t maxFrames, uint32_t longFrames) {
