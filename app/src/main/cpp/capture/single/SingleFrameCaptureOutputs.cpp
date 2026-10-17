@@ -21,15 +21,11 @@ SingleFrameCaptureOutputs::~SingleFrameCaptureOutputs() {
     resetJpeg();
 }
 bool SingleFrameCaptureOutputs::validate(const encoding::dng::DngCaptureContext& dng, const JpegCaptureRequest& jpeg) {
-    return (dng.outputFd >= 0 || jpeg.output.outputFd >= 0) &&
-           (jpeg.output.outputFd < 0 || (jpeg.output.quality >= 95 && jpeg.output.quality <= 100));
+    return (dng.outputFd.valid() || jpeg.output.outputFd.valid()) &&
+           (!jpeg.output.outputFd.valid() || (jpeg.output.quality >= 95 && jpeg.output.quality <= 100));
 }
 void SingleFrameCaptureOutputs::accept(encoding::dng::DngCaptureContext dng, JpegCaptureRequest jpeg,
                                        bool jpegRequested) {
-    dngFd_.reset(dng.outputFd);
-    dng.outputFd = -1;
-    jpegFd_.reset(jpeg.output.outputFd);
-    jpeg.output.outputFd = -1;
     dng_ = std::move(dng);
     if (jpegRequested) jpeg_ = std::move(jpeg);
 }
@@ -58,7 +54,7 @@ void SingleFrameCaptureOutputs::prepare(const imaging::RawSnapshot& captured, co
 }
 bool SingleFrameCaptureOutputs::startDng(std::shared_ptr<const imaging::RawSnapshot> frame, const std::string& recipe) {
     if (!dng_) return false;
-    if (dngFd_.get() < 0) {
+    if (!dng_->outputFd.valid()) {
         dng_.reset();
         return false;
     }
@@ -67,7 +63,6 @@ bool SingleFrameCaptureOutputs::startDng(std::shared_ptr<const imaging::RawSnaps
     context.resolvedRecipe = recipe;
     persistence::attachFrameRecipes(context, *frame);
     const std::string name = context.displayName;
-    context.outputFd = dngFd_.release();
     if (dngWriter_.start(frame, std::move(context))) {
         emit("DNG_CAPTURE_WRITE_STARTED requestId=" + std::to_string(frame->requestId) +
              " timestampNs=" + std::to_string(frame->timestampNs));
@@ -132,7 +127,6 @@ bool SingleFrameCaptureOutputs::startJpeg(const SingleFrameDevelopResult& result
         jpegContext.output.ultraHdr.enabled && result.pixels.gainmapPixels && result.pixels.gainmapBytes > 0;
     bool writerAccepted = false;
     if (ultraHdr) {
-        jpegContext.output.outputFd = jpegFd_.release();
         writerAccepted = jpegWriter_.startUltraHdr(completed.requestId, result.pixels.pixels, result.pixels.bytes,
                                                    completed.width, completed.height, result.pixels.gainmapPixels,
                                                    result.pixels.gainmapBytes, result.pixels.gainmapWidth,
@@ -140,7 +134,6 @@ bool SingleFrameCaptureOutputs::startJpeg(const SingleFrameDevelopResult& result
     } else {
         if (jpegContext.output.ultraHdr.enabled)
             emit("ULTRAHDR_MAP_MISSING requestId=" + std::to_string(completed.requestId) + " fallback=legacy_jpeg");
-        jpegContext.output.outputFd = jpegFd_.release();
         writerAccepted = jpegWriter_.start(completed.requestId, result.pixels.pixels, result.pixels.bytes,
                                            completed.width, completed.height, std::move(jpegContext.output));
     }
@@ -280,17 +273,14 @@ void SingleFrameCaptureOutputs::failJpeg(uint64_t id, const std::string& reason,
         done.displayName = jpeg_->output.displayName;
         jpeg_.reset();
     }
-    jpegFd_.reset();
     jpegCompletion_ = std::move(done);
     emit("JPEG_CAPTURE_FAIL requestId=" + std::to_string(id) + " error=" + reason);
 }
 void SingleFrameCaptureOutputs::cancelDng() noexcept {
-    dngFd_.reset();
     dng_.reset();
 }
 void SingleFrameCaptureOutputs::resetJpeg() noexcept {
     jpegWriter_.reset();
-    jpegFd_.reset();
     jpeg_.reset();
     jpegCompletion_.reset();
 }

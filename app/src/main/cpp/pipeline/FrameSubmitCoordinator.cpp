@@ -178,19 +178,17 @@ bool FrameSubmitCoordinator::submitMetadata(const rawrcam::metadata::FrameMetada
     return true;
 }
 
-void FrameSubmitCoordinator::onRawFrame(rawrcam::imaging::AcquiredRawFrame frame) {
-    if (!configured_ || frame.generation != config_.generation) {
-        if (frame.acquireFenceFd >= 0) close(frame.acquireFenceFd);
-        if (frame.image) AImage_delete(frame.image);
+void FrameSubmitCoordinator::onRawFrame(rawrcam::imaging::RawFrameLease frame) {
+    if (!configured_ || frame.get().generation != config_.generation) {
         performanceTracker_.recordDropped();
         if (videoActive()) ++videoDropReasons_.stale;
         return;
     }
 
+    const uint64_t key = frame.get().timestampNs;
     rawrcam::diagnostics::RuntimeTraceRecorder::instance().record(rawrcam::diagnostics::RuntimeTraceStage::RawImage,
-                                                                  frame.timestampNs);
-    const uint64_t key = frame.timestampNs;
-    framePairer_->putImage(key, rawrcam::imaging::PendingRawImage{frame.image, frame.ahb, frame.acquireFenceFd});
+                                                                  key);
+    framePairer_->putImage(key, std::move(frame));
     tryPair(key);
     trimPairer();
 }
@@ -223,36 +221,27 @@ bool FrameSubmitCoordinator::submitMatchedFrame(rawrcam::imaging::MatchedFrame& 
     // Calibration and its transition frames must never reach presentation,
     // scopes, the ZSL ring, or a pending single-frame capture. The camera has
     // already consumed their results for ISO calibration. Keep the previous
-    // displayed image and release each camera buffer/fence without importing it.
+    // displayed image; the lease releases the camera buffer/fence unimported.
     if (meta.snapshot.suppressPreview ||
         meta.snapshot.optimizedStillRequestId == metadata::kSensitivityProbeRequestId) {
-        if (image.acquireFenceFd >= 0) close(image.acquireFenceFd);
-        image.acquireFenceFd = -1;
-        if (image.image) AImage_delete(image.image);
-        image.image = nullptr;
         return false;
     }
 
     auto applyCpuSnapshotFence = [&](int gpuAcquireFenceFd, const char* failureTag) -> bool {
         if (gpuAcquireFenceFd == -2) {
             lifecyclePort_.postDiagnostic(std::string(failureTag) + " timestampNs=" + std::to_string(timestampNs));
-            if (image.acquireFenceFd >= 0) close(image.acquireFenceFd);
-            AImage_delete(image.image);
-            image.image = nullptr;
+            image.reset();
             performanceTracker_.recordDropped();
             return false;
         }
-        if (image.acquireFenceFd != gpuAcquireFenceFd) {
-            if (image.acquireFenceFd >= 0) close(image.acquireFenceFd);
-            image.acquireFenceFd = gpuAcquireFenceFd;
-        }
+        image.resetFence(gpuAcquireFenceFd);
         return true;
     };
 
     capturePort_.advanceStill();
     lifecyclePort_.finalizeDetachedStill();
     if (diagnosticsPort_.cpuCopyNeedsSample()) {
-        const auto outcome = diagnosticsPort_.sampleCpuCopy(image.image, image.ahb, image.acquireFenceFd, timestampNs);
+        const auto outcome = diagnosticsPort_.sampleCpuCopy(image.image(), image.ahb(), image.fence(), timestampNs);
         if (!applyCpuSnapshotFence(outcome.frameRejected ? -2 : outcome.fenceFd,
                                    "CPU_RAW_COPY_PROBE_FRAME_REJECTED reason=cpu_unlock_failed")) {
             return false;
@@ -263,19 +252,18 @@ bool FrameSubmitCoordinator::submitMatchedFrame(rawrcam::imaging::MatchedFrame& 
         }
     }
 
-    const bool accepted =
-        submitAhb(timestampNs, image.ahb, image.acquireFenceFd, image.image, meta.snapshot.blackLevelPhysicalRggb,
-                  meta.snapshot.effectiveWhiteLevel, meta.colorState.baselineWbRggb,
-                  meta.colorState.cameraToLinearSrgbRowMajor, meta.snapshot, meta.colorState);
+    const bool accepted = submitAhb(timestampNs, image, meta.snapshot.blackLevelPhysicalRggb,
+                                    meta.snapshot.effectiveWhiteLevel, meta.colorState.baselineWbRggb,
+                                    meta.colorState.cameraToLinearSrgbRowMajor, meta.snapshot, meta.colorState);
     if (capturePort_.isStillCaptureRequested()) {
         const bool claimed =
             capturePort_.deferSubmittedFrame(meta.snapshot, meta.colorState, tonemapParams_,
                                              lifecyclePort_.postGainFor(meta.snapshot), filmSimEnabled_, filmLook_);
         if (claimed && !accepted &&
-            capturePort_.beginDeferredSnapshot(image.image, image.ahb, timestampNs, image.acquireFenceFd)) {
+            capturePort_.beginDeferredSnapshot(image.image(), image.ahb(), timestampNs, image.fence())) {
             // An unavailable/background swapchain must not prevent RAW acquisition.
-            // The worker waits on the camera fence, then releases this image lease.
-            image.image = nullptr;
+            // The worker waits on the camera fence, then releases the image it now owns.
+            (void)image.takeImage().release();
         }
         lifecyclePort_.finalizeDetachedStill();
     }
@@ -286,10 +274,7 @@ bool FrameSubmitCoordinator::submitMatchedFrame(rawrcam::imaging::MatchedFrame& 
                                  " accepted=" + (accepted ? "true" : "false"));
     }
 
-    if (image.acquireFenceFd >= 0) close(image.acquireFenceFd);
-    image.acquireFenceFd = -1;
-    if (!accepted && image.image) AImage_delete(image.image);
-    if (!accepted) image.image = nullptr;
+    image.reset();
     return accepted;
 }
 
@@ -359,7 +344,7 @@ std::optional<FrameSubmitCoordinator::AcquiredSubmit> FrameSubmitCoordinator::ac
 }
 
 rawrcam::vulkan::ImportedRaw& FrameSubmitCoordinator::ingestRaw(const SubmitParams& params, uint32_t slotIndex) {
-    const auto format = rawrcam::imaging::rawPixelFormatOf(params.imageLease);
+    const auto format = rawrcam::imaging::rawPixelFormatOf(params.lease->image());
     const bool raw10 = format == rawrcam::geometry::RawPixelFormat::Raw10;
     if (!raw10 && !cpuIngressRequired() && !raw16ImageImportLatched_.load(std::memory_order_relaxed)) {
         try {
@@ -419,7 +404,7 @@ rawrcam::vulkan::ImportedRaw& FrameSubmitCoordinator::ingestRaw(const SubmitPara
         config_.diagnosticMode == 0u) {
         try {
             int32_t rowStride = 0;
-            if (!params.imageLease || AImage_getPlaneRowStride(params.imageLease, 0, &rowStride) != AMEDIA_OK ||
+            if (!params.lease->image() || AImage_getPlaneRowStride(params.lease->image(), 0, &rowStride) != AMEDIA_OK ||
                 rowStride <= 0)
                 throw std::runtime_error("RAW10 row stride unavailable");
             const auto& camera = resources_.importer()->importRaw10Buffer(
@@ -431,7 +416,7 @@ rawrcam::vulkan::ImportedRaw& FrameSubmitCoordinator::ingestRaw(const SubmitPara
                     lifecyclePort_.postDiagnostic(report);
                 }
                 if (cpuUpload_.raw10ParityIdle() && (++raw10ParityFrame_ % 30u) == 0u)
-                    cpuUpload_.armRaw10Parity(slotIndex, params.imageLease, params.ahb, params.acquireFenceFd);
+                    cpuUpload_.armRaw10Parity(slotIndex, params.lease->image(), params.ahb, params.acquireFenceFd);
             }
             rawrcam::vulkan::ImportedRaw& raw = cpuUpload_.gpuUnpack(slotIndex, camera);
             if (!raw10GpuUnpackLogged_) {
@@ -458,7 +443,7 @@ rawrcam::vulkan::ImportedRaw& FrameSubmitCoordinator::ingestRaw(const SubmitPara
         LOGI("%s", line.c_str());
         lifecyclePort_.postDiagnostic(line);
     }
-    return cpuUpload_.upload(slotIndex, params.imageLease, params.ahb, params.acquireFenceFd);
+    return cpuUpload_.upload(slotIndex, params.lease->image(), params.ahb, params.acquireFenceFd);
 }
 
 void FrameSubmitCoordinator::submitSplitVideoAndMonitor(const SubmitParams& params, const AcquiredSubmit& acquired,
@@ -603,14 +588,14 @@ void FrameSubmitCoordinator::submitSplitVideoAndMonitor(const SubmitParams& para
             submitPart(VK_NULL_HANDLE, nullptr, slot->fence);
             submitted = true;
             slot->submitted = true;
-            slot->imageLease = params.imageLease;
+            slot->imageLease = params.lease->takeImage();
             slot->timestampNs = params.timestampNs;
         }
         throw;
     }
     submitted = true;
     slot->submitted = true;
-    slot->imageLease = params.imageLease;
+    slot->imageLease = params.lease->takeImage();
     slot->timestampNs = params.timestampNs;
     slot->metadataSnapshot = metadata;
     slot->colorStateSnapshot = *params.colorState;
@@ -868,11 +853,13 @@ void FrameSubmitCoordinator::submitAndPresent(const SubmitParams& params, const 
     trace.record(rawrcam::diagnostics::RuntimeTraceStage::QueueSubmitEnd, params.timestampNs, metadata.frameOrdinal,
                  static_cast<int32_t>(slotIndex), metadata.exposureTimeNs, metadata.sensitivity);
     submitted = true;
+    // The GPU now reads the camera buffer: the slot owns it before anything
+    // else can throw, so an accepted frame is always retired by its fence.
+    slot->submitted = true;
+    slot->imageLease = params.lease->takeImage();
+    slot->timestampNs = params.timestampNs;
     capturePort_.commitMultiframeFrame(params.timestampNs);
 
-    slot->submitted = true;
-    slot->imageLease = params.imageLease;
-    slot->timestampNs = params.timestampNs;
     slot->metadataSnapshot = metadata;
     slot->colorStateSnapshot = *params.colorState;
     performanceTracker_.recordSubmitted();
@@ -977,11 +964,14 @@ float FrameSubmitCoordinator::previewPostGain(const rawrcam::metadata::FrameMeta
     return std::min(16.0f, gain * float(lastRepeatingExposure_ / exposure));
 }
 
-bool FrameSubmitCoordinator::submitAhb(uint64_t timestampNs, AHardwareBuffer* ahb, int acquireFenceFd,
-                                       AImage* imageLease, const std::array<float, 4>& black, float white,
+bool FrameSubmitCoordinator::submitAhb(uint64_t timestampNs, rawrcam::imaging::RawFrameLease& lease,
+                                       const std::array<float, 4>& black, float white,
                                        const std::array<float, 4>& wb, const std::array<float, 9>& sensorToSrgb,
                                        const rawrcam::metadata::FrameMetadataSnapshot& metadata,
                                        const rawrcam::color::FrameColorTransform& colorState) {
+    AImage* const imageLease = lease.image();
+    AHardwareBuffer* const ahb = lease.ahb();
+    const int acquireFenceFd = lease.fence();
     const bool videoReady = videoOutput_ && videoOutput_->ready() && config_.diagnosticMode == 0u;
     if (!configured_ || ((!swapchainRenderer_.ready() || presentationPaused_) && !videoReady)) return false;
 
@@ -1008,8 +998,8 @@ bool FrameSubmitCoordinator::submitAhb(uint64_t timestampNs, AHardwareBuffer* ah
     auto& trace = rawrcam::diagnostics::RuntimeTraceRecorder::instance();
     trace.record(rawrcam::diagnostics::RuntimeTraceStage::SubmitBegin, timestampNs, metadata.frameOrdinal, -1,
                  metadata.exposureTimeNs, metadata.sensitivity);
-    const SubmitParams params{timestampNs, ahb, acquireFenceFd, imageLease, black,
-                              white,       wb,  sensorToSrgb,   &metadata,  &colorState};
+    const SubmitParams params{timestampNs, ahb, acquireFenceFd, &lease,    black,
+                              white,       wb,  sensorToSrgb,   &metadata, &colorState};
     uint32_t slotIndex = 0;
     bool slotSelected = false;
     bool swapchainImageAcquired = false;
@@ -1126,14 +1116,13 @@ void FrameSubmitCoordinator::retireSlot(uint32_t slotIndex, pipeline::FrameSlot&
 
     if (slot.imageLease) {
         AHardwareBuffer* completedAhb = nullptr;
-        bool leaseTransferred = false;
-        if (AImage_getHardwareBuffer(slot.imageLease, &completedAhb) == AMEDIA_OK && completedAhb != nullptr) {
-            leaseTransferred = capturePort_.beginDeferredSnapshot(slot.imageLease, completedAhb, slot.timestampNs);
+        if (AImage_getHardwareBuffer(slot.imageLease.image(), &completedAhb) == AMEDIA_OK && completedAhb != nullptr &&
+            capturePort_.beginDeferredSnapshot(slot.imageLease.image(), completedAhb, slot.timestampNs)) {
+            (void)slot.imageLease.release();  // The capture worker now owns the image.
         }
         trace.record(rawrcam::diagnostics::RuntimeTraceStage::ImageRelease, slot.timestampNs, frameOrdinal,
                      static_cast<int32_t>(slotIndex));
-        if (!leaseTransferred) AImage_delete(slot.imageLease);
-        slot.imageLease = nullptr;
+        slot.imageLease.reset();
     }
     slot.metadataSnapshot.reset();
     slot.colorStateSnapshot.reset();

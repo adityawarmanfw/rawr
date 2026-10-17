@@ -28,7 +28,6 @@
 #include <vng4/Pipeline.hpp>
 
 #include "LinearResample.h"
-#include "RendererSurface.h"
 #include "image_scopes/image_scopes.h"
 #include "color/ColorMath.h"
 #include "raw_demosaic/EmbeddedShaders.hpp"
@@ -206,13 +205,12 @@ RendererEngine::RendererEngine(const std::string& dir, const std::string& lib, A
 RendererEngine::~RendererEngine() {
     scopeEngine_.reset();
     vulkan::destroyOwnedImage(vulkan_.device(), scopeImage_);
-    surface_.reset();
     processor_.reset();
     processor_.shutdownFilm();
     vulkan::destroyOwnedImage(vulkan_.device(), overviewWorking_);
     vulkan::destroyOwnedImage(vulkan_.device(), overviewInput_);
 }
-void RendererEngine::renderWaveform(uint32_t width, uint32_t height, uint32_t orientation, bool surfacePreview) {
+void RendererEngine::renderWaveform(uint32_t width, uint32_t height, uint32_t orientation) {
     // Same GPU measurement/render backend, target size and defaults as ImageScopesProcessor.
     constexpr uint32_t scopeWidth = 512, scopeHeight = 384;
     if (!scopeEngine_) {
@@ -227,7 +225,7 @@ void RendererEngine::renderWaveform(uint32_t width, uint32_t height, uint32_t or
         scopeHeight, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
     Commands commands(vulkan_);
     Buffer readback(vulkan_, scopeWidth * scopeHeight * 4);
-    const auto inputLayout = surfacePreview ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    const auto inputLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     commands.begin();
     barrier(commands.command, processor_.outputImage(), inputLayout, VK_IMAGE_LAYOUT_GENERAL);
     barrier(commands.command, scopeImage_.image, newTarget ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -275,11 +273,6 @@ void RendererEngine::renderWaveform(uint32_t width, uint32_t height, uint32_t or
         }
 }
 
-void RendererEngine::setSurface(ANativeWindow* window) {
-    if (!surface_) surface_ = std::make_unique<RendererSurface>(vulkan_);
-    surface_->attach(window);
-}
-bool RendererEngine::hasSurface() const noexcept { return surface_ && surface_->attached(); }
 void RendererEngine::check() {
     if (cancelled.load()) throw std::runtime_error("Cancelled");
 }
@@ -752,7 +745,6 @@ std::vector<uint8_t> RendererEngine::render(DngSource& source, const std::string
     auto context = options.context;
     context.width = w;
     context.height = h;
-    context.surfacePreview = options.surfacePreview;
     context.whiteBalanceRgb = source.wb;
     context.cfaPattern = source.cfa;
     // Profiled denoise model from the source DNG NoiseProfile (green S,O,
@@ -853,15 +845,8 @@ std::vector<uint8_t> RendererEngine::render(DngSource& source, const std::string
         if (!completion->success) throw std::runtime_error(completion->error);
         lastCompletion_ = *completion;
         if (options.overview) linearResultKey_ = linearKey.str();
-        if (options.waveform) renderWaveform(w, h, source.orientation, options.surfacePreview);
+        if (options.waveform) renderWaveform(w, h, source.orientation);
         else waveformPixels_.clear();
-        if (options.surfacePreview) {
-            if (!hasSurface()) throw std::runtime_error("Renderer display is unavailable");
-            surface_->present(processor_.outputImageView(), w, h, source.orientation);
-            processor_.releasePixels();
-            progress = 95;
-            return {};
-        }
         auto* bytes = static_cast<const uint8_t*>(processor_.pixelData());
         std::vector<uint8_t> result(bytes, bytes + processor_.pixelBytes());
         // Stable gain-map copy for the JPEG exporter (processor memory is

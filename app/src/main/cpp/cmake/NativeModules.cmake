@@ -84,6 +84,7 @@ rawrcam_module(diagnostics_probes
     diagnostics/probes/RawIntegrityProbe.cpp
     diagnostics/probes/Raw16SourceParityProbe.cpp
     diagnostics/probes/PipelineDiagnostics.cpp
+    diagnostics/probes/ZeroCopyImportProbe.cpp
 )
 
 rawrcam_module(develop
@@ -108,7 +109,7 @@ rawrcam_module(develop
 
 rawrcam_module(encoding
   DIRECTORY encoding
-  DEPENDS color develop diagnostics_logging geometry imaging metadata tonemap
+  DEPENDS color develop diagnostics_logging geometry imaging metadata support tonemap
   SOURCES
     encoding/jpeg/JpegCaptureWriter.cpp
     encoding/rzsl/RzslBundleSink.cpp
@@ -177,13 +178,12 @@ rawrcam_module(video
 
 rawrcam_module(renderer
   DIRECTORY renderer
-  DEPENDS color develop imaging presentation vulkan
+  DEPENDS color develop imaging support vulkan
   SOURCES
     renderer/LinearResample.cpp
     renderer/DngSource.cpp
     renderer/SceneKeyMeter.cpp
     renderer/RendererEngine.cpp
-    renderer/RendererSurface.cpp
 )
 
 rawrcam_module(capture

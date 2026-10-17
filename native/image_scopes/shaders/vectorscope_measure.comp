@@ -4,8 +4,9 @@
 
 // First pass: 16 workgroups own disjoint source stripes and disjoint dense
 // partial vectorscope planes. Samples are aggregated in a shared-memory hash
-// table in 1024-pixel batches, then flushed with ordinary stores/adds to the
-// workgroup-private partial plane. No device-memory atomics are used here.
+// table in batches of up to 1024 selected samples, then flushed with ordinary
+// stores/adds to the workgroup-private numerical plane. The presentation field
+// still uses one device-memory atomic per selected sample.
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 layout(binding = 0, rgba8) uniform readonly image2D src;
 layout(std430, binding = 1) buffer Partial { uint density[]; }
@@ -59,7 +60,14 @@ void main() {
 
     uint y0 = (part * pc.height) / PARTITIONS;
     uint y1 = ((part + 1u) * pc.height) / PARTITIONS;
-    uint stripePixels = (y1 - y0) * pc.width;
+    // Production stripes partition block rows, so no selected lane is lost at a stripe edge.
+    uint blocksX = (pc.width + 1u) / 2u;
+    uint blocksY = (pc.height + 1u) / 2u;
+    uint by0 = (part * blocksY) / PARTITIONS;
+    uint by1 = ((part + 1u) * blocksY) / PARTITIONS;
+    uint perBlock = pc.samplingMode == 2u ? 1u : 2u;
+    uint stripePixels = pc.samplingMode == 0u ? (y1 - y0) * pc.width :
+                        (by1 - by0) * blocksX * perBlock;
 
     for (uint batch = 0u; batch < stripePixels; batch += 1024u) {
         for (uint i = li; i < TABLE; i += 256u) {
@@ -71,10 +79,19 @@ void main() {
         for (uint k = 0u; k < 4u; ++k) {
             uint idx = batch + li + k * 256u;
             if (idx >= stripePixels) continue;
-            uint sx = idx % pc.width;
-            uint sy = y0 + idx / pc.width;
-            uvec2 p = uvec2(sx, sy);
-            if (!sampleSelected(p, pc.samplingMode)) continue;
+            uvec2 p;
+            if (pc.samplingMode == 0u) {
+                p = uvec2(idx % pc.width, y0 + idx / pc.width);
+            } else {
+                uint block = idx / perBlock;
+                uvec2 b = uvec2(block % blocksX, by0 + block / blocksX);
+                uint h = hash2(b);
+                uint sampleInBlock = idx % perBlock;
+                uint lane = pc.samplingMode == 2u ? (h & 3u) :
+                            ((h & 1u) != 0u ? 3u * sampleInBlock : 1u + sampleInBlock);
+                p = 2u * b + uvec2(lane & 1u, lane >> 1u);
+                if (p.x >= pc.width || p.y >= pc.height) continue;
+            }
             uvec3 c = uvec3(round(clamp(imageLoad(src, ivec2(p)).rgb, 0.0, 1.0) * 255.0));
             ivec2 cc = cbcrQ16(c);
             uint xb = min(pc.gridBins - 1u, uint(cc.x) * pc.gridBins / 256u);

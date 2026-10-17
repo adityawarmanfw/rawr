@@ -141,18 +141,10 @@ std::uint64_t MfsrCaptureService::start(std::unique_ptr<PendingMultiframeCapture
                                         rawrcam::capture::multiframe::MultiframeTuning tuning,
                                         rawrcam::capture::multiframe::MultiframeBaseFrameMode baseFrameMode,
                                         bool filmEnabled, const spektrafilm_native::FilmLook& filmLook) {
-    const bool jpegRequested = mergedJpeg.output.outputFd >= 0;
-    const int baseFd = baseDng.outputFd;
-    const int mergedFd = mergedDng.outputFd;
-    const int jpegFd = mergedJpeg.output.outputFd;
-    auto closeOutputs = [&]() noexcept {
-        if (baseFd >= 0) close(baseFd);
-        if (mergedFd >= 0) close(mergedFd);
-        if (jpegFd >= 0) close(jpegFd);
-    };
-    if (!capture || (baseFd < 0 && mergedFd < 0 && jpegFd < 0) ||
+    // A rejected request closes its destinations as the contexts go out of scope.
+    const bool jpegRequested = mergedJpeg.output.outputFd.valid();
+    if (!capture || (!baseDng.outputFd.valid() && !mergedDng.outputFd.valid() && !jpegRequested) ||
         (jpegRequested && (mergedJpeg.output.quality < 95 || mergedJpeg.output.quality > 100))) {
-        closeOutputs();
         return 0u;
     }
 
@@ -162,10 +154,7 @@ std::uint64_t MfsrCaptureService::start(std::unique_ptr<PendingMultiframeCapture
                                             uint64_t(capture->frames.front().raw.ref.width) *
                                                 capture->frames.front().raw.ref.height * 2 * reservedFrames,
                                             false);
-    if (!reservation) {
-        closeOutputs();
-        return 0;
-    }
+    if (!reservation) return 0;
     const uint64_t requestId = nextRequestId_++;
     auto work = std::make_unique<MultiframeWorkItem>();
     work->requestId = requestId;
@@ -228,11 +217,10 @@ std::uint64_t MfsrCaptureService::start(std::unique_ptr<PendingMultiframeCapture
                     LOGI("BURST_READY requestId=%llu acceptedToReadyMs=%.1f",
                          static_cast<unsigned long long>(original.requestId),
                          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - original.acceptedAt).count());
-                    restored->baseDng.outputFd = original.baseDng.outputFd;
-                    restored->mergedDng.outputFd = original.mergedDng.outputFd;
-                    restored->mergedJpeg.output.outputFd = original.mergedJpeg.output.outputFd;
+                    restored->baseDng.outputFd = std::move(original.baseDng.outputFd);
+                    restored->mergedDng.outputFd = std::move(original.mergedDng.outputFd);
+                    restored->mergedJpeg.output.outputFd = std::move(original.mergedJpeg.output.outputFd);
                     restored->dumpRzslRequested = original.dumpRzslRequested;
-                    original.baseDng.outputFd = original.mergedDng.outputFd = original.mergedJpeg.output.outputFd = -1;
                     MfsrCaptureJob::Context ctx{vulkan_,
                                                 queue0Mutex_,
                                                 filesDir_,
@@ -250,13 +238,15 @@ std::uint64_t MfsrCaptureService::start(std::unique_ptr<PendingMultiframeCapture
                          static_cast<unsigned long long>(original.requestId),
                          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - original.acceptedAt).count());
                 } catch (const std::exception& e) {
-                    for (int fd :
-                         {original.baseDng.outputFd, original.mergedDng.outputFd, original.mergedJpeg.output.outputFd})
-                        if (fd >= 0) close(fd);
+                    // Outputs still held here were never handed to the job, which publishes its own.
+                    const bool baseHeld = original.baseDng.outputFd.valid();
+                    const bool mergedHeld = original.mergedDng.outputFd.valid();
+                    original.baseDng.outputFd.reset();
+                    original.mergedDng.outputFd.reset();
+                    original.mergedJpeg.output.outputFd.reset();
                     auto prefix = std::to_string(original.requestId) + "\t0\t";
-                    if (original.baseDng.outputFd >= 0)
-                        dngBox_.push(prefix + original.baseDng.displayName + "\t" + e.what());
-                    if (original.mergedDng.outputFd >= 0)
+                    if (baseHeld) dngBox_.push(prefix + original.baseDng.displayName + "\t" + e.what());
+                    if (mergedHeld)
                         dngBox_.push(prefix + original.mergedDng.displayName + "\t" + e.what());
                     if (original.jpegRequested)
                         jpegBox_.push(prefix + original.mergedJpeg.output.displayName + "\t" + e.what() + "\t0");
@@ -282,7 +272,9 @@ std::uint64_t MfsrCaptureService::start(std::unique_ptr<PendingMultiframeCapture
             std::lock_guard<std::mutex> lock(queueMutex_);
             workerActive_ = false;
         }
-        closeOutputs();
+        pending->work->baseDng.outputFd.reset();
+        pending->work->mergedDng.outputFd.reset();
+        pending->work->mergedJpeg.output.outputFd.reset();
         return 0;
     }
 }

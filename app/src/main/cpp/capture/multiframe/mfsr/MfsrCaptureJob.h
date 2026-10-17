@@ -41,9 +41,15 @@ class MfsrCaptureJob {
 
     MfsrCaptureJob(Context context, std::unique_ptr<MultiframeWorkItem> work)
         : context_(std::move(context)), work_(std::move(work)) {}
-    void run();
+    // Every requested output gets exactly one completion, even when a stage
+    // throws outside its own error handling.
+    void run() noexcept;
 
    private:
+    struct Published {
+        bool base = false, merged = false, jpeg = false;
+    };
+    void runStages(Published& published);
     Context context_;
     std::unique_ptr<MultiframeWorkItem> work_;
 };

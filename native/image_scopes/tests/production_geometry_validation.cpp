@@ -71,6 +71,90 @@ void finishAndFree(t::VulkanTestContext& vk, VkCommandBuffer cb) {
     vkFreeCommandBuffers(vk.device(), vk.commandPool(), 1, &cb);
 }
 
+// Independent pixel-by-pixel oracle: sampling is in source coordinates, X bins in display coordinates.
+// Each slot is reused Full -> 25% -> 50%: maxima must decrease with the current
+// histogram, including a zero-sample 1x1 frame. Rotation also switches RGB back to luma.
+void validateRotatedSampling(t::VulkanTestContext& vk, unsigned w, unsigned h) {
+    const auto px = pattern(w, h);
+    auto input = vk.createRgbaImage(w, h);
+    vk.uploadRgba(input, px);
+    auto host = vk.createBuffer(sizeof(detail::DisplayWaveformStd430), VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    ImageScopes scopes({{vk.physicalDevice(), vk.device(), nullptr}, 1});
+    for (unsigned q = 0; q < 4; ++q)
+        for (auto mode : {WaveformMode::Luma, WaveformMode::RgbOverlay})
+            for (auto sampling :
+                 {SamplingMode::FullReference, SamplingMode::Production25, SamplingMode::Production50}) {
+                const unsigned planes = mode == WaveformMode::Luma ? 1u : 3u;
+                std::vector<std::uint32_t> expected(planes * detail::kWavePlaneElements);
+                unsigned count = 0;
+                for (unsigned y = 0; y < h; ++y)
+                    for (unsigned x = 0; x < w; ++x) {
+                        if (!cpu::sampleSelected(x, y, sampling)) continue;
+                        ++count;
+                        unsigned dx = q == 0 ? x : q == 1 ? h - 1u - y : q == 2 ? w - 1u - x : y;
+                        unsigned column = dx * 512u / ((q & 1u) ? h : w);
+                        const auto* c = &px[(std::size_t(y) * w + x) * 4u];
+                        for (unsigned ch = 0; ch < planes; ++ch) {
+                            const unsigned bin = planes == 1 ? cpu::encodedLumaQ16(c[0], c[1], c[2]) : c[ch];
+                            ++expected[ch * detail::kWavePlaneElements + bin * 512u + column];
+                        }
+                    }
+                vk.beginCommands();
+                DisplayWaveformRecordInfo r{};
+                r.commandBuffer = vk.commandBuffer();
+                r.input = {input.view, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_GENERAL, w, h};
+                r.render.mode = mode;
+                r.samplingMode = sampling;
+                r.sourceQuarterTurns = q;
+                r.renderEnabled = false;
+                scopes.recordDisplayWaveform(r);
+                scopes.recordCopyDisplayWaveform(vk.commandBuffer(), 0, host.buffer, 0);
+                vk.submitAndWait();
+                scopes.retireFrameSlot(0);
+                const auto* actual = static_cast<const detail::DisplayWaveformStd430*>(vk.map(host));
+                vk.invalidate(host);
+                require(std::equal(expected.begin(), expected.end(), actual->density),
+                        "rotated waveform density mismatch");
+                require(actual->sampledPixelCount == count, "rotated waveform sample count mismatch");
+                for (unsigned ch = 0; ch < planes; ++ch) {
+                    const auto first = expected.begin() + ch * detail::kWavePlaneElements;
+                    require(actual->maxima[ch] == *std::max_element(first, first + detail::kWavePlaneElements),
+                            "rotated waveform maximum mismatch");
+                }
+                for (unsigned ch = planes; ch < 3u; ++ch)
+                    require(actual->maxima[ch] == 0u, "inactive waveform maximum not reset");
+                vk.unmap(host);
+            }
+    // Odd edges and short stripes also exercise both vectorscope grids.
+    for (auto grid : {VectorscopeGrid::Compact128, VectorscopeGrid::Reference256})
+        for (auto sampling : {SamplingMode::FullReference, SamplingMode::Production25, SamplingMode::Production50}) {
+            vk.beginCommands();
+            VectorscopeRecordInfo r{};
+            r.commandBuffer = vk.commandBuffer();
+            r.input = {input.view, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_GENERAL, w, h};
+            r.grid = grid;
+            r.samplingMode = sampling;
+            r.renderEnabled = false;
+            scopes.recordVectorscope(r);
+            scopes.recordCopyVectorscope(vk.commandBuffer(), 0, host.buffer, 0);
+            vk.submitAndWait();
+            scopes.retireFrameSlot(0);
+            const auto ref = cpu::measureVectorscope({px.data(), w, h, w * 4u}, sampling, static_cast<unsigned>(grid));
+            const auto* actual = static_cast<const detail::VectorscopeStd430*>(vk.map(host));
+            vk.invalidate(host);
+            require(std::equal(ref.density.begin(), ref.density.end(), actual->density),
+                    "edge vectorscope density mismatch");
+            require(actual->sampledPixelCount == ref.sampling.sampledPixelCount, "edge vectorscope count mismatch");
+            require(actual->maximum == *std::max_element(ref.density.begin(), ref.density.end()),
+                    "edge vectorscope maximum mismatch");
+            vk.unmap(host);
+        }
+    vk.destroyBuffer(host);
+    vk.destroyRgbaImage(input);
+    std::cout << "ROTATED_SAMPLING_PARITY_PASS " << w << "x" << h << "\n";
+}
+
 void validateDisplayGeometry(t::VulkanTestContext& vk, std::uint32_t w, std::uint32_t h) {
     auto px = pattern(w, h);
     auto input = vk.createRgbaImage(w, h);
@@ -422,6 +506,16 @@ int main() {
     try {
         t::VulkanTestContext vk;
         std::cout << "Using GPU: " << vk.deviceName() << "\n";
+        for (const auto& [w, h] : {std::pair<unsigned, unsigned>{1, 1},
+                                   {1, 17},
+                                   {19, 1},
+                                   {7, 9},
+                                   {511, 513},
+                                   {2041, 1533},
+                                   {2048, 1536},
+                                   {2040, 1532},
+                                   {2040, 1536}})
+            validateRotatedSampling(vk, w, h);
         validateDisplayGeometry(vk, 2048u, 1536u);
         validateDisplayGeometry(vk, 2040u, 1532u);
         validateDisplayGeometry(vk, 2040u, 1536u);

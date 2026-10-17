@@ -30,9 +30,6 @@ struct RenderedStillContext {
     // space); timeSec derives from timestampNs (grain frozen per shot).
     bool filmEnabled = false;
     bool rendererStrict = false;
-    // Renderer editor only: leave the RGBA8 output on the GPU for direct
-    // surface presentation. Still exports continue to use CPU readback.
-    bool surfacePreview = false;
     // Renderer owns the dependency key and keeps the post engine alive.
     bool reuseLinearResult = false;
     bool filmTiled = false;

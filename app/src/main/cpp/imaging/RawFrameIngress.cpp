@@ -3,6 +3,7 @@
 #include <android/log.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
@@ -29,6 +30,7 @@ ANativeWindow* RawFrameIngress::create(uint64_t generation, uint32_t width, uint
     usage_ = ahbUsage;
     imageDescriptionLogged_ = false;
     auditImageCount_ = 0;
+    readerStats_ = {};
 
     const int32_t imageFormat = format == geometry::RawPixelFormat::Raw10 ? AIMAGE_FORMAT_RAW10 : AIMAGE_FORMAT_RAW16;
     const media_status_t status = AImageReader_newWithUsage(static_cast<int32_t>(width), static_cast<int32_t>(height),
@@ -87,6 +89,7 @@ void RawFrameIngress::onImageAvailable(AImageReader* reader) {
         // frames, so neither recording nor diagnostics can account for those gaps.
         // The downstream bounded queue decides which frame to discard under load.
         const media_status_t status = AImageReader_acquireNextImageAsync(reader, &image, &fenceFd);
+        if (status == AMEDIA_IMGREADER_MAX_IMAGES_ACQUIRED) ++readerStats_.maxImagesHits;
         if (status != AMEDIA_OK || !image) return;
 
         if (!imageDescriptionLogged_) logImageDescription(image);
@@ -125,6 +128,7 @@ void RawFrameIngress::onImageAvailable(AImageReader* reader) {
             }
         }
 
+        recordReaderStats(static_cast<uint64_t>(timestamp));
         if (frameCallback_) {
             frameCallback_(AcquiredRawFrame{image, ahb, fenceFd, static_cast<uint64_t>(timestamp), generation_});
         } else {
@@ -132,6 +136,28 @@ void RawFrameIngress::onImageAvailable(AImageReader* reader) {
             AImage_delete(image);
         }
     }
+}
+
+void RawFrameIngress::recordReaderStats(uint64_t timestampNs) {
+    auto& s = readerStats_;
+    if (s.lastTimestampNs != 0 && timestampNs > s.lastTimestampNs && s.count < s.intervalsNs.size())
+        s.intervalsNs[s.count++] = timestampNs - s.lastTimestampNs;
+    s.lastTimestampNs = timestampNs;
+    if (s.count < s.intervalsNs.size()) return;
+    // A sensor interval over 1.5x the window's shortest is a frame the camera dropped.
+    const uint64_t shortest = *std::min_element(s.intervalsNs.begin(), s.intervalsNs.end());
+    uint32_t gaps = 0;
+    uint64_t longest = 0;
+    for (const uint64_t interval : s.intervalsNs) {
+        if (interval * 2 > shortest * 3) ++gaps;
+        longest = std::max(longest, interval);
+    }
+    std::ostringstream d;
+    d << "RAW_READER_STATS frames=" << s.count << " maxImagesHits=" << s.maxImagesHits << " sensorGaps=" << gaps
+      << " frameMs=" << shortest / 1'000'000.0 << " longestMs=" << longest / 1'000'000.0;
+    LOGI("%s", d.str().c_str());
+    s.count = 0;
+    s.maxImagesHits = 0;
 }
 
 void RawFrameIngress::logImageDescription(AImage* image) {

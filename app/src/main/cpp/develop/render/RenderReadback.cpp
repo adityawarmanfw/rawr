@@ -242,7 +242,7 @@ void completeReadback(RenderResources& resources, RenderCommandSession& commands
     // Android Bitmap/JPEG consumer yet, so no platform-specific channel swap belongs here.
     // No full-image checksum here: a byte-wise pass over mapped memory cost
     // ~45 ms per renderer slider frame and only fed a diagnostic log line.
-    if (!rendered.surfacePreview) done.pixelBytes = static_cast<uint64_t>(resources.outputView().bytes);
+    done.pixelBytes = static_cast<uint64_t>(resources.outputView().bytes);
     if (rendered.ultraHdrEnabled && resources.outputView().gainmapPixels != nullptr &&
         resources.outputView().gainmapWidth > 0 && resources.outputView().gainmapHeight > 0) {
         // Map content telemetry on the already-mapped readback: max

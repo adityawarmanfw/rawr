@@ -1,12 +1,22 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cassert>
+#include <chrono>
+#include <stdexcept>
+#include <thread>
 #include <iostream>
 #include <type_traits>
 
 #include "camera/CameraCallbackLifetime.h"
 #include "imaging/FrameIngressQueue.h"
+#include "imaging/FramePairer.h"
+#include "support/JoinGuard.h"
+#include "vulkan/DeviceObjects.h"
+
+#include <string>
+#include <vector>
 #include "support/UniqueFd.h"
 
 struct AImage {
@@ -20,6 +30,46 @@ extern "C" void AImage_delete(AImage* image) {
         ++imagesDeleted;
         delete image;
     }
+}
+namespace {
+std::vector<std::string> destroyed;
+}
+extern "C" {
+VKAPI_ATTR void VKAPI_CALL vkDestroyImage(VkDevice, VkImage h, const VkAllocationCallbacks*) {
+    destroyed.push_back("image" + std::to_string(reinterpret_cast<uintptr_t>(h)));
+}
+VKAPI_ATTR void VKAPI_CALL vkDestroyImageView(VkDevice, VkImageView h, const VkAllocationCallbacks*) {
+    destroyed.push_back("view" + std::to_string(reinterpret_cast<uintptr_t>(h)));
+}
+VKAPI_ATTR void VKAPI_CALL vkDestroyBuffer(VkDevice, VkBuffer h, const VkAllocationCallbacks*) {
+    destroyed.push_back("buffer" + std::to_string(reinterpret_cast<uintptr_t>(h)));
+}
+VKAPI_ATTR void VKAPI_CALL vkFreeMemory(VkDevice, VkDeviceMemory h, const VkAllocationCallbacks*) {
+    destroyed.push_back("memory" + std::to_string(reinterpret_cast<uintptr_t>(h)));
+}
+VKAPI_ATTR void VKAPI_CALL vkDestroyPipeline(VkDevice, VkPipeline h, const VkAllocationCallbacks*) {
+    destroyed.push_back("pipeline" + std::to_string(reinterpret_cast<uintptr_t>(h)));
+}
+VKAPI_ATTR void VKAPI_CALL vkDestroyPipelineLayout(VkDevice, VkPipelineLayout h, const VkAllocationCallbacks*) {
+    destroyed.push_back("layout" + std::to_string(reinterpret_cast<uintptr_t>(h)));
+}
+VKAPI_ATTR void VKAPI_CALL vkDestroyDescriptorSetLayout(VkDevice, VkDescriptorSetLayout h,
+                                                        const VkAllocationCallbacks*) {
+    destroyed.push_back("setLayout" + std::to_string(reinterpret_cast<uintptr_t>(h)));
+}
+VKAPI_ATTR void VKAPI_CALL vkDestroyDescriptorPool(VkDevice, VkDescriptorPool h, const VkAllocationCallbacks*) {
+    destroyed.push_back("pool" + std::to_string(reinterpret_cast<uintptr_t>(h)));
+}
+VKAPI_ATTR void VKAPI_CALL vkDestroyShaderModule(VkDevice, VkShaderModule h, const VkAllocationCallbacks*) {
+    destroyed.push_back("module" + std::to_string(reinterpret_cast<uintptr_t>(h)));
+}
+VKAPI_ATTR void VKAPI_CALL vkDestroySampler(VkDevice, VkSampler h, const VkAllocationCallbacks*) {
+    destroyed.push_back("sampler" + std::to_string(reinterpret_cast<uintptr_t>(h)));
+}
+}
+template <typename Handle>
+Handle fakeHandle(uintptr_t id) {
+    return reinterpret_cast<Handle>(id);
 }
 using namespace rawrcam;
 
@@ -88,6 +138,76 @@ int main() {
     queue.enqueue(frame(5, rejected, 300, 10));
     assert(closed(rejected) && imagesDeleted == 5);
     assert(!queue.enqueue(metadata::FrameMetadataSnapshot{}));
+    // Splitting a lease: the image moves out, the fence stays and closes on replacement.
+    int splitFd = newFd();
+    {
+        imaging::RawFrameLease lease(frame(6, splitFd, 400, 10));
+        imaging::RawFrameLease image = lease.takeImage();
+        assert(!lease && lease.fence() == splitFd && image && image.fence() == -1);
+        int replacement = newFd();
+        lease.resetFence(replacement);
+        assert(closed(splitFd) && lease.fence() == replacement);
+        image.reset();
+        assert(imagesDeleted == 6);
+    }
+    // Pairer: replacement, trim, matching, and destruction release each lease once.
+    {
+        imaging::FramePairer pairer;
+        int replaced = newFd(), oldest = newFd(), matchedFd = newFd(), pending = newFd();
+        pairer.putImage(500, imaging::RawFrameLease(frame(7, replaced, 500, 10)));
+        pairer.putImage(500, imaging::RawFrameLease(frame(8, oldest, 500, 10)));
+        assert(closed(replaced) && imagesDeleted == 7);
+        pairer.putImage(600, imaging::RawFrameLease(frame(9, matchedFd, 600, 10)));
+        pairer.putImage(700, imaging::RawFrameLease(frame(10, pending, 700, 10)));
+        assert(pairer.trim(2, 3) == 1 && closed(oldest) && imagesDeleted == 8);
+        pairer.putMetadata(600, {});
+        {
+            imaging::MatchedFrame matched{};
+            assert(pairer.takeMatched(600, &matched) && matched.image.fence() == matchedFd);
+            assert(imagesDeleted == 8);
+        }
+        assert(closed(matchedFd) && imagesDeleted == 9 && !closed(pending));
+    }
+    assert(imagesDeleted == 10);
+    // Device objects: reverse creation order; appended and moved objects are destroyed once.
+    {
+        const auto device = fakeHandle<VkDevice>(99);
+        vulkan::DeviceObjects entry(device);
+        entry.adoptImage(fakeHandle<VkImage>(1));
+        entry.adoptMemory(fakeHandle<VkDeviceMemory>(2));
+        entry.adoptView(VK_NULL_HANDLE);
+        {
+            vulkan::DeviceObjects failed(device);
+            failed.adoptImage(fakeHandle<VkImage>(3));
+        }
+        assert((destroyed == std::vector<std::string>{"image3"}));
+        vulkan::DeviceObjects candidate(device);
+        candidate.adoptBuffer(fakeHandle<VkBuffer>(4));
+        candidate.adoptView(fakeHandle<VkImageView>(5));
+        entry.append(std::move(candidate));
+        vulkan::DeviceObjects moved(std::move(entry));
+        entry.reset();
+        assert(destroyed.size() == 1);
+    }
+    assert((destroyed == std::vector<std::string>{"image3", "view5", "buffer4", "memory2", "image1"}));
+    // Every object kind reaches its own destroy call; an OwnedImage releases view, image, then memory.
+    destroyed.clear();
+    {
+        vulkan::DeviceObjects all(fakeHandle<VkDevice>(99));
+        all.adoptDescriptorSetLayout(fakeHandle<VkDescriptorSetLayout>(1));
+        all.adoptPipelineLayout(fakeHandle<VkPipelineLayout>(2));
+        all.adoptPipeline(fakeHandle<VkPipeline>(3));
+        all.adoptDescriptorPool(fakeHandle<VkDescriptorPool>(4));
+        all.adoptShaderModule(fakeHandle<VkShaderModule>(5));
+        all.adoptSampler(fakeHandle<VkSampler>(6));
+        rawr::vk::OwnedImage owned{};
+        owned.memory = fakeHandle<VkDeviceMemory>(7);
+        owned.image = fakeHandle<VkImage>(8);
+        owned.view = fakeHandle<VkImageView>(9);
+        all.adoptOwnedImage(owned);
+    }
+    assert((destroyed == std::vector<std::string>{"view9", "image8", "memory7", "sampler6", "module5", "pool4",
+                                                  "pipeline3", "layout2", "setLayout1"}));
     // Revocation blocks late callbacks while retaining an already admitted callback.
     struct Owner {
     } owner;
@@ -104,5 +224,23 @@ int main() {
         assert(late.owner == nullptr && lifetime->inFlight == 1);
     }
     assert(lifetime->inFlight == 0);
+    // A throw after some workers started (a failed later thread start) joins them instead of std::terminate.
+    {
+        std::atomic<int> finished{0};
+        bool caught = false;
+        try {
+            std::vector<std::thread> threads;
+            support::JoinGuard joinAll(threads);
+            for (int i = 0; i < 2; ++i)
+                threads.emplace_back([&finished] {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                    ++finished;
+                });
+            throw std::runtime_error("thread start failed");
+        } catch (const std::runtime_error&) {
+            caught = true;
+        }
+        assert(caught && finished == 2);
+    }
     std::cout << "NATIVE_OWNERSHIP_PASS\n";
 }

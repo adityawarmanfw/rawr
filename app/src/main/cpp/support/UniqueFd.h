@@ -16,6 +16,7 @@ class UniqueFd final {
         return *this;
     }
     int get() const noexcept { return fd_; }
+    bool valid() const noexcept { return fd_ >= 0; }
     int release() noexcept { return std::exchange(fd_, -1); }
     void reset(int fd = -1) noexcept {
         if (fd_ >= 0 && fd_ != fd) ::close(fd_);

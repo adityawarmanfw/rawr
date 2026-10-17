@@ -13,6 +13,10 @@ std::string SessionEngine::runHighlightReplay(const std::string& inputPath) {
             appendDiagnostic("HIGHLIGHT_REPLAY_STAGE stopping_camera");
             cameraControls_.setCameraActive(false);
             std::lock_guard<std::mutex> lock(mu_);
+            // Stopping the camera does not wait for HAL or GPU retirement;
+            // preview slots may still be running on the resources torn down below.
+            if (vulkanContext_.device()) vulkanContext_.waitIdle();
+            realtime_.coordinator().releaseCompletedSlots(true);
             destroyRawInputInternal();
             realtime_.releaseProcessingResourcesForFrozenReplay();
             swapchainRenderer_.destroySwapchain();

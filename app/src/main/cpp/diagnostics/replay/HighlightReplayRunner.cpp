@@ -283,8 +283,8 @@ std::string HighlightReplayRunner::run(const std::string& inputPath) {
                 if (filmReplay && ctx.filmDiagnosticTap) taps.write(filesDir_ + "/" + stem);
                 if (filmReplay) {
                     rawrcam::encoding::jpeg::JpegCaptureContext jpeg{};
-                    jpeg.outputFd =
-                        ::open((filesDir_ + "/" + stem + ".jpg").c_str(), O_CREAT | O_TRUNC | O_WRONLY, 0600);
+                    jpeg.outputFd = rawrcam::encoding::OutputFd(
+                        ::open((filesDir_ + "/" + stem + ".jpg").c_str(), O_CREAT | O_TRUNC | O_WRONLY, 0600));
                     jpeg.quality = jpegQuality;
                     jpeg.subsampling = rawrcam::encoding::jpeg::ChromaSubsampling::Yuv422;
                     jpeg.exifOrientation = 6;

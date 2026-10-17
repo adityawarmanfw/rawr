@@ -190,65 +190,69 @@ uint64_t MultiframeCaptureCoordinator::startPreparedMultiframeCapture(
     rawrcam::capture::multiframe::MultiframeTuning tuning,
     rawrcam::capture::multiframe::MultiframeBaseFrameMode baseFrameMode, const tonemap::TonemapParams& tone,
     bool filmEnabled, const spektrafilm_native::FilmLook& filmLook, std::optional<BracketPlan>* bracketPlan) noexcept {
-    const bool jpegRequested = mergedJpeg.output.outputFd >= 0;
-    const int baseFd = baseDng.outputFd;
-    const int mergedFd = mergedDng.outputFd;
-    const int jpegFd = mergedJpeg.output.outputFd;
-    auto closeOutputs = [&]() noexcept {
-        if (baseFd >= 0) close(baseFd);
-        if (mergedFd >= 0) close(mergedFd);
-        if (jpegFd >= 0) close(jpegFd);
-    };
-    if (!pendingMultiframeCapture_ || (baseFd < 0 && mergedFd < 0 && jpegFd < 0) ||
+    // A rejected request closes its destinations as the contexts go out of scope.
+    const bool jpegRequested = mergedJpeg.output.outputFd.valid();
+    if (!pendingMultiframeCapture_ || (!baseDng.outputFd.valid() && !mergedDng.outputFd.valid() && !jpegRequested) ||
         (jpegRequested && (mergedJpeg.output.quality < 95 || mergedJpeg.output.quality > 100))) {
-        closeOutputs();
         pendingMultiframeCapture_.reset();
         return 0u;
     }
 
-    auto frozenTonemap = baseDng.captureTone ? *baseDng.captureTone : tone;
-    frozenTonemap.aePostGain = postGainFor_(pendingMultiframeCapture_->referenceMetadata);
-    // HDR+ bracketed: arm a collector for the post-shutter dark frames. The
-    // caller submits the camera requests (outside the session lock); the
-    // spool worker waits for the frames before the burst becomes durable.
-    abandonActiveBracket();
+    // Admission must never throw out of this noexcept entry point: a failure
+    // rejects the capture, and the contexts close their outputs on unwinding.
     std::shared_ptr<BracketCollector> collector;
-    if (bracketPlan && tuning.mergeAlgorithm == kMergeAlgorithmHdrPlusBracketed && tuning.bracketFrames > 0u) {
-        const auto& reference = pendingMultiframeCapture_->referenceMetadata;
-        // Frozen frames stay pinned; the dark frames need free ring slots
-        // beyond the preview frames in flight.
-        const std::size_t capacity = multiframeRingFrames(config_.rawWidth, config_.rawHeight);
-        const std::size_t used = pendingMultiframeCapture_->frames.size() + rawrcam::imaging::kRealtimeFramesInFlight;
-        const auto frames =
-            static_cast<std::uint32_t>(std::min<std::size_t>(tuning.bracketFrames, capacity > used ? capacity - used : 0u));
-        if (frames > 0u && reference.exposureTimeNs > 0 && reference.sensitivity > 0) {
-            collector = std::make_shared<BracketCollector>(nextBracketRequestId_++, frames);
-            BracketPlan plan{};
-            plan.requestId = collector->requestId();
-            plan.baseExposureTimeNs = reference.exposureTimeNs;
-            plan.baseSensitivity = reference.sensitivity;
-            plan.evOffsets.assign(frames, std::min(0.0f, tuning.bracketEv));
-            *bracketPlan = plan;
-            pendingMultiframeCapture_->pendingBracket = collector;
-            activeBracket_ = collector;
-        } else {
-            LOGW("MULTIFRAME_BRACKET_SKIP freeSlots=%u exposureNs=%lld iso=%d", frames,
-                 static_cast<long long>(reference.exposureTimeNs), reference.sensitivity);
+    try {
+        auto frozenTonemap = baseDng.captureTone ? *baseDng.captureTone : tone;
+        frozenTonemap.aePostGain = postGainFor_(pendingMultiframeCapture_->referenceMetadata);
+        // HDR+ bracketed: arm a collector for the post-shutter dark frames. The
+        // caller submits the camera requests (outside the session lock); the
+        // spool worker waits for the frames before the burst becomes durable.
+        abandonActiveBracket();
+        if (bracketPlan && tuning.mergeAlgorithm == kMergeAlgorithmHdrPlusBracketed && tuning.bracketFrames > 0u) {
+            const auto& reference = pendingMultiframeCapture_->referenceMetadata;
+            // Frozen frames stay pinned; the dark frames need free ring slots
+            // beyond the preview frames in flight.
+            const std::size_t capacity = multiframeRingFrames(config_.rawWidth, config_.rawHeight);
+            const std::size_t used = pendingMultiframeCapture_->frames.size() + rawrcam::imaging::kRealtimeFramesInFlight;
+            const auto frames =
+                static_cast<std::uint32_t>(std::min<std::size_t>(tuning.bracketFrames, capacity > used ? capacity - used : 0u));
+            if (frames > 0u && reference.exposureTimeNs > 0 && reference.sensitivity > 0) {
+                collector = std::make_shared<BracketCollector>(nextBracketRequestId_++, frames);
+                BracketPlan plan{};
+                plan.requestId = collector->requestId();
+                plan.baseExposureTimeNs = reference.exposureTimeNs;
+                plan.baseSensitivity = reference.sensitivity;
+                plan.evOffsets.assign(frames, std::min(0.0f, tuning.bracketEv));
+                *bracketPlan = plan;
+                pendingMultiframeCapture_->pendingBracket = collector;
+                activeBracket_ = collector;
+            } else {
+                LOGW("MULTIFRAME_BRACKET_SKIP freeSlots=%u exposureNs=%lld iso=%d", frames,
+                     static_cast<long long>(reference.exposureTimeNs), reference.sensitivity);
+            }
         }
+        const bool captureFilmEnabled = baseDng.captureFilm ? baseDng.captureFilmEnabled : filmEnabled;
+        const auto captureFilm = baseDng.captureFilm ? *baseDng.captureFilm : filmLook;
+        auto capture = std::move(pendingMultiframeCapture_);
+        const uint64_t requestId =
+            mfsrService_->start(std::move(capture), std::move(baseDng), std::move(mergedDng), std::move(mergedJpeg),
+                                dumpRzslRequested, frozenTonemap, tuning, baseFrameMode, captureFilmEnabled, captureFilm);
+        if (requestId == 0u) {
+            // The service owned and closed the outputs on rejection; nothing pending remains.
+            if (collector) abandonBracket(collector->requestId());
+            if (bracketPlan) bracketPlan->reset();
+            return 0u;
+        }
+        return requestId;
+    } catch (const std::exception& e) {
+        LOGW("MULTIFRAME_START_REJECTED %s", e.what());
+    } catch (...) {
+        LOGW("MULTIFRAME_START_REJECTED unknown");
     }
-    const bool captureFilmEnabled = baseDng.captureFilm ? baseDng.captureFilmEnabled : filmEnabled;
-    const auto captureFilm = baseDng.captureFilm ? *baseDng.captureFilm : filmLook;
-    auto capture = std::move(pendingMultiframeCapture_);
-    const uint64_t requestId =
-        mfsrService_->start(std::move(capture), std::move(baseDng), std::move(mergedDng), std::move(mergedJpeg),
-                            dumpRzslRequested, frozenTonemap, tuning, baseFrameMode, captureFilmEnabled, captureFilm);
-    if (requestId == 0u) {
-        // Service closed the output FDs on rejection; nothing pending remains.
-        if (collector) abandonBracket(collector->requestId());
-        if (bracketPlan) bracketPlan->reset();
-        return 0u;
-    }
-    return requestId;
+    pendingMultiframeCapture_.reset();
+    if (collector) abandonBracket(collector->requestId());
+    if (bracketPlan) bracketPlan->reset();
+    return 0u;
 }
 
 void MultiframeCaptureCoordinator::resetZsl() noexcept {

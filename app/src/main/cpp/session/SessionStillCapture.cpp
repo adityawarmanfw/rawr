@@ -8,10 +8,12 @@ namespace rawrcam::session {
 uint64_t SessionEngine::recoverStill(const std::string& name, bool multiframe, int dng, int merged, int jpeg) {
     std::lock_guard<std::mutex> lock(mu_);
     try {
+        // recover() owns the descriptors from its first statement, including when it throws.
         if (vulkanContext_.device() != VK_NULL_HANDLE && (dng >= 0 || merged >= 0 || jpeg >= 0))
             return capture_.single().recover(name, multiframe, dng, merged, jpeg);
     } catch (const std::exception& e) {
         appendDiagnostic("STILL_RECOVERY_FAILED " + std::string(e.what()));
+        return 0;
     }
     for (int fd : {dng, merged, jpeg})
         if (fd >= 0) close(fd);
@@ -20,25 +22,21 @@ uint64_t SessionEngine::recoverStill(const std::string& name, bool multiframe, i
 
 uint64_t SessionEngine::requestRawStillCapture(rawrcam::encoding::dng::DngCaptureContext dngContext,
                                                rawrcam::capture::JpegCaptureRequest jpegContext) {
-    if (dngContext.outputFd < 0 && jpegContext.output.outputFd < 0) {
+    // Rejections close the destinations as the contexts go out of scope.
+    if (!dngContext.outputFd.valid() && !jpegContext.output.outputFd.valid()) {
         appendDiagnostic("RAW_STILL_CAPTURE_REQUEST_REJECTED reason=invalid_dng_fd");
-        if (jpegContext.output.outputFd >= 0) close(jpegContext.output.outputFd);
         return 0;
     }
-    const bool jpegRequested = jpegContext.output.outputFd >= 0;
+    const bool jpegRequested = jpegContext.output.outputFd.valid();
     if (jpegRequested && (jpegContext.output.quality < 95 || jpegContext.output.quality > 100)) {
         appendDiagnostic("RAW_STILL_CAPTURE_REQUEST_REJECTED reason=invalid_jpeg_quality quality=" +
                          std::to_string(jpegContext.output.quality));
-        if (dngContext.outputFd >= 0) close(dngContext.outputFd);
-        close(jpegContext.output.outputFd);
         return 0;
     }
     std::lock_guard<std::mutex> lock(mu_);
     auto* camera = cameraControls_.controller();
     if (!camera || !camera->stillCaptureMetadataReady()) {
         appendDiagnostic("RAW_STILL_CAPTURE_REQUEST_REJECTED reason=camera_not_streaming");
-        if (dngContext.outputFd >= 0) close(dngContext.outputFd);
-        if (jpegRequested) close(jpegContext.output.outputFd);
         return 0;
     }
     dngContext.autoKeyEv = appliedAutoKeyEv();

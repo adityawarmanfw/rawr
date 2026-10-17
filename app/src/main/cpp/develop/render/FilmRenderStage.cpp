@@ -164,9 +164,11 @@ FilmRenderOutcome renderFilmOrTone(RenderResources& resources, RenderCommandSess
             outcome.rendered = true;
             outcome.usedGlow = fri.glowGainOutput.view != VK_NULL_HANDLE;
         } catch (const std::exception& e) {
-            if (rendered.rendererStrict) throw;
-            // Never a broken still: a rejected look or GPU fault falls
-            // back to tonemap for this shot (and logs loudly).
+            // A failed submit or wait leaves the command buffer ended or
+            // still pending; only a failure while recording can fall back.
+            if (rendered.rendererStrict || !commands.recording()) throw;
+            // Never a broken still: a rejected look falls back to tonemap
+            // for this shot (and logs loudly).
             emit(std::string("STILL_FILM_FALLBACK_RECORD error=") + e.what());
             __android_log_print(ANDROID_LOG_ERROR, "RawrCamNative", "STILL_FILM_FALLBACK_RECORD error=%s", e.what());
             if (commands.timingPool())

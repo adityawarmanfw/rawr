@@ -13,7 +13,7 @@ SingleFrameCaptureJob::SingleFrameCaptureJob(const vulkan::VulkanContext& vk, st
       outputs_(std::move(filesDir), diagnostic_) {}
 SingleFrameCaptureJob::~SingleFrameCaptureJob() { shutdown(); }
 uint64_t SingleFrameCaptureJob::requestRawStillCapture(encoding::dng::DngCaptureContext dng, JpegCaptureRequest jpeg) {
-    support::UniqueFd dngDestination(dng.outputFd), jpegDestination(jpeg.output.outputFd);
+    // A rejected request closes its destinations as dng/jpeg go out of scope.
     if (!SingleFrameCaptureOutputs::validate(dng, jpeg) || detachedHqWorkActive()) {
         emit("RAW_STILL_CAPTURE_REQUEST_REJECTED reason=invalid_output_or_busy");
         return 0;
@@ -22,10 +22,8 @@ uint64_t SingleFrameCaptureJob::requestRawStillCapture(encoding::dng::DngCapture
     if (!acquisition_.request(id)) {
         return 0;
     }
-    const bool jpegRequested = jpeg.output.outputFd >= 0;
+    const bool jpegRequested = jpeg.output.outputFd.valid();
     journal_.freeze(dng, jpegRequested ? &jpeg : nullptr);
-    dng.outputFd = dngDestination.release();
-    jpeg.output.outputFd = jpegDestination.release();
     outputs_.accept(std::move(dng), std::move(jpeg), jpegRequested);
     requestId_ = id;
     const auto* acceptedJpeg = outputs_.jpegRequest();
@@ -135,18 +133,16 @@ void SingleFrameCaptureJob::shutdown() noexcept {
     outputs_.resetJpeg();
     develop_.shutdown();
 }
-void SingleFrameCaptureJob::recover(persistence::CaptureJob saved, const std::string& path, uint64_t id, int dng,
-                                    int jpeg, bool jpegRequested, AAssetManager* assets) {
-    support::UniqueFd dngDestination(dng), jpegDestination(jpeg);
+void SingleFrameCaptureJob::recover(persistence::CaptureJob saved, const std::string& path, uint64_t id,
+                                    encoding::OutputFd dng, encoding::OutputFd jpeg, bool jpegRequested,
+                                    AAssetManager* assets) {
+    saved.dng.outputFd = std::move(dng);
+    saved.jpeg.output.outputFd = std::move(jpeg);
     journal_.setRecoveryPath(path);
     setAssetManager(assets);
-    saved.dng.outputFd = dng;
-    saved.jpeg.output.outputFd = jpeg;
     saved.frame.requestId = id;
     requestId_ = id;
     journal_.freeze(saved.dng, jpegRequested ? &saved.jpeg : nullptr);
-    saved.dng.outputFd = dngDestination.release();
-    saved.jpeg.output.outputFd = jpegDestination.release();
     outputs_.accept(std::move(saved.dng), std::move(saved.jpeg), jpegRequested);
     SingleFrameSnapshot snapshot{std::make_shared<imaging::RawSnapshot>(std::move(saved.frame)),
                                  saved.tone,

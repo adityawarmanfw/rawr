@@ -120,6 +120,7 @@ internal class CaptureJournal(private val directory: File, private val syncDirec
         File(directory, entry.name + ".job.fallback.tmp").delete()
         File(directory, entry.name + ".properties").delete()
         File(directory, entry.name + SKIPPED_SUFFIX).delete()
+        File(directory, entry.name + StillOutputStore.RENDERER_EDITED).delete()
         val assetId = Regex("\"importedProfileId\":\"(capture_[A-Za-z0-9-]+)\"").find(entry.recipe)?.groupValues?.get(1)
         if (assetId != null) releaseCaptureAssets(requireNotNull(directory.parentFile), assetId)
         syncDirectory(directory)

@@ -28,7 +28,8 @@ internal class RendererJobRepository(private val context: Context, private val s
     private val root = File(context.filesDir, "renderer_jobs").apply { mkdirs() }
     private val journal = CaptureJournal(File(context.filesDir, "still_jobs"))
     private val saveLane = Mutex()
-    fun directory(id: String) = File(root, id).also { require(id.matches(Regex("[A-Za-z0-9.-]+"))) }
+    // Capture job ids carry the capture name (RAWR_<date>_<time>), hence "_".
+    fun directory(id: String) = File(root, id).also { require(id.matches(Regex("[A-Za-z0-9._-]+")) && ".." !in id) }
     private fun read(file: File): RenderJob {
         val j = JSONObject(file.readText())
         return RenderJob(j.getString("id"), j.getString("name"), j.optString("capture"),
@@ -40,7 +41,8 @@ internal class RendererJobRepository(private val context: Context, private val s
     }
     @Synchronized fun refresh() {
         val saved = root.listFiles().orEmpty().mapNotNull { d -> runCatching { read(File(d, "job.json")) }.getOrNull() }
-        val queued = journal.readAll().filter { !it.complete && journal.hasInput(it) && saved.none { s -> s.capture == it.name } }
+        val queued = journal.readAll().filter { !it.complete && journal.hasInput(it) && saved.none { s -> s.capture == it.name } &&
+            !StillOutputStore.rendererEdited(context.filesDir, it.name) }
             .map { RenderJob("capture-${it.name}", it.name, capture = it.name, original = it.recipe,
                 status = if (StillOutputStore.isClaimed(it.name)) "Processing capture" else "Unfinished capture", error = it.lastError) }
         mutableJobs.value = saved.map { disk -> if (draftWrites[disk.id]?.isActive == true) mutableJobs.value.firstOrNull { it.id == disk.id } ?: disk else disk } + queued

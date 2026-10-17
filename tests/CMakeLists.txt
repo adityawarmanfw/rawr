@@ -102,7 +102,8 @@ rawr_test(multiframe_exif_test
   "${RAWR_ROOT}/app/src/main/cpp/capture/multiframe/MultiframeDescription.cpp")
 rawr_test(native_ownership_test
   "${RAWR_ROOT}/tests/native/native_ownership_test.cpp"
-  "${RAWR_ROOT}/app/src/main/cpp/imaging/FrameIngressQueue.cpp")
+  "${RAWR_ROOT}/app/src/main/cpp/imaging/FrameIngressQueue.cpp"
+  "${RAWR_ROOT}/app/src/main/cpp/imaging/FramePairer.cpp")
 target_include_directories(native_ownership_test BEFORE PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/native/ownership_stubs")
 rawr_test(raw_still_capture_manager_test
   "${RAWR_ROOT}/tests/native/raw_still_capture_manager_test.cpp"

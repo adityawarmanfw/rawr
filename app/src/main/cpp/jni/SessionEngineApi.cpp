@@ -87,19 +87,13 @@ uint64_t startPreparedMultiframeCapture(EngineHandle h, rawrcam::encoding::dng::
                                         rawrcam::capture::JpegCaptureRequest mergedJpeg, bool dumpRzslRequested,
                                         rawrcam::capture::multiframe::MultiframeTuning tuning,
                                         rawrcam::capture::multiframe::MultiframeBaseFrameMode baseFrameMode) noexcept {
-    if (!h) {
-        if (baseDng.outputFd >= 0) close(baseDng.outputFd);
-        if (mergedDng.outputFd >= 0) close(mergedDng.outputFd);
-        if (mergedJpeg.output.outputFd >= 0) close(mergedJpeg.output.outputFd);
-        return 0u;
-    }
+    // The contexts own their destinations: whoever holds them when a request
+    // is rejected or throws closes them exactly once.
+    if (!h) return 0u;
     try {
         return engine(h)->startPreparedMultiframeCapture(
             std::move(baseDng), std::move(mergedDng), std::move(mergedJpeg), dumpRzslRequested, tuning, baseFrameMode);
     } catch (...) {
-        if (baseDng.outputFd >= 0) close(baseDng.outputFd);
-        if (mergedDng.outputFd >= 0) close(mergedDng.outputFd);
-        if (mergedJpeg.output.outputFd >= 0) close(mergedJpeg.output.outputFd);
         return 0u;
     }
 }
@@ -175,16 +169,11 @@ void setScopePresentationState(EngineHandle h, const rawrcam::monitoring::ScopeP
 }
 uint64_t requestRawStillCapture(EngineHandle h, rawrcam::encoding::dng::DngCaptureContext dngContext,
                                 rawrcam::capture::JpegCaptureRequest jpegContext) noexcept {
-    if (!h) {
-        if (dngContext.outputFd >= 0) close(dngContext.outputFd);
-        if (jpegContext.output.outputFd >= 0) close(jpegContext.output.outputFd);
-        return 0;
-    }
+    // As above: the contexts close their own destinations on rejection.
+    if (!h) return 0;
     try {
         return engine(h)->requestRawStillCapture(std::move(dngContext), std::move(jpegContext));
     } catch (...) {
-        if (dngContext.outputFd >= 0) close(dngContext.outputFd);
-        if (jpegContext.output.outputFd >= 0) close(jpegContext.output.outputFd);
         return 0;
     }
 }

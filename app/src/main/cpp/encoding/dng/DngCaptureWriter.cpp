@@ -108,19 +108,13 @@ bool DngCaptureWriter::busy() const noexcept {
 }
 
 bool DngCaptureWriter::start(std::shared_ptr<const rawrcam::imaging::RawSnapshot> frame, DngCaptureContext context) {
-    if (!frame || context.outputFd < 0) {
-        if (context.outputFd >= 0) ::close(context.outputFd);
-        return false;
-    }
+    // A rejected request closes its destination as context goes out of scope.
+    if (!frame || !context.outputFd.valid()) return false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (busy_ || completion_) {
-            ::close(context.outputFd);
-            return false;
-        }
+        if (busy_ || completion_) return false;
         busy_ = true;
     }
-    const int ownedFd = context.outputFd;
     try {
         worker_ = std::thread([this, frame = std::move(frame), context = std::move(context)]() mutable {
             // Background priority: file encoding must never preempt camera or
@@ -129,7 +123,7 @@ bool DngCaptureWriter::start(std::shared_ptr<const rawrcam::imaging::RawSnapshot
             DngWriteCompletion done{};
             done.requestId = frame->requestId;
             done.displayName = context.displayName;
-            const int fd = context.outputFd;
+            const int fd = context.outputFd.get();
             try {
                 std::string adaptError;
                 auto params = makeTinyDngWriteParams(*frame, context, &adaptError);
@@ -195,7 +189,8 @@ bool DngCaptureWriter::start(std::shared_ptr<const rawrcam::imaging::RawSnapshot
             } catch (...) {
                 done.error = "dng_encoding_failed";
             }
-            if (::close(fd) != 0 && done.error.empty())
+            // Closed explicitly: a failed close can mean lost data on some file systems.
+            if (::close(context.outputFd.release()) != 0 && done.error.empty())
                 done.error = "close failed: " + std::string(std::strerror(errno));
             done.success = done.error.empty();
             std::lock_guard<std::mutex> lock(mutex_);
@@ -203,7 +198,7 @@ bool DngCaptureWriter::start(std::shared_ptr<const rawrcam::imaging::RawSnapshot
             busy_ = false;
         });
     } catch (...) {
-        ::close(ownedFd);
+        // The unstarted closure, which owns the destination, has already closed it.
         std::lock_guard<std::mutex> lock(mutex_);
         busy_ = false;
         return false;

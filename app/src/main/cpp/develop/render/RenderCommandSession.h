@@ -19,6 +19,9 @@ class RenderCommandSession final {
     void finish(uint64_t requestId);
     void reset() noexcept;
     VkCommandBuffer command() const noexcept { return command_; }
+    // False once a submit, wait or re-begin has failed: the command buffer
+    // is ended or still pending and must not be recorded into.
+    bool recording() const noexcept { return recording_; }
     VkQueryPool timingPool() const noexcept { return timingPool_; }
     double chunkWaitMs() const noexcept { return chunkWaitMs_; }
     std::optional<std::array<uint64_t, timingQueryCount>> timestamps();
@@ -33,5 +36,6 @@ class RenderCommandSession final {
     float timestampPeriodNs_ = 0.0f;
     uint32_t timestampValidBits_ = 0;
     double chunkWaitMs_ = 0.0;
+    bool recording_ = false;
 };
 }  // namespace rawrcam::develop::rendered

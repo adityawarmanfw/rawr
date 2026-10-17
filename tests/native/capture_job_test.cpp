@@ -1,3 +1,4 @@
+#include <fcntl.h>
 #include <unistd.h>
 
 #include <cassert>
@@ -17,7 +18,7 @@ int main(int argc, char** argv) {
         assert(legacy.tone.exposureEV == -1.5f && legacy.dng.processingRecipe.empty());
         assert(legacy.tone.renderTransform == tonemap::RenderTransform::Existing);
         assert(legacy.tone.adaptiveTone.liftEv == 0.0f);
-        assert(legacy.dng.outputFd == -1 && legacy.jpeg.output.outputFd == -1);
+        assert(!legacy.dng.outputFd.valid() && !legacy.jpeg.output.outputFd.valid());
     }
     std::string directory = (std::filesystem::temp_directory_path() / "rawr-capture-job-XXXXXX").string();
     assert(mkdtemp(directory.data()));
@@ -40,12 +41,14 @@ int main(int argc, char** argv) {
     j.frame.metadata.suppressPreview = true;  // Transient startup state must not survive recovery.
     j.frame.colorState.source = "frozen";
     j.frame.colorState.baselineWbRggb = {2, 1, 1, 3};
-    j.dng.outputFd = 123;
+    // Real descriptors: the contexts own and close them.
+    j.dng.outputFd = rawrcam::encoding::OutputFd(::open("/dev/null", O_WRONLY));
+    assert(j.dng.outputFd.valid());
     j.dng.displayName = "capture.dng";
     j.dng.deviceModel = "V2562";
     j.dng.deviceDisplayModel = "X300 Ultra";
     j.mergedDng.deviceDisplayModel = "X300 Ultra";
-    j.jpeg.output.outputFd = 456;
+    j.jpeg.output.outputFd = rawrcam::encoding::OutputFd(::open("/dev/null", O_WRONLY));
     j.jpegRequested = true;
     j.jpeg.output.displayName = "capture.jpg";
     j.jpeg.output.filmDescription = "Frozen C200";
@@ -113,7 +116,17 @@ int main(int argc, char** argv) {
     assert(!restored.frame.metadata.suppressPreview);
     assert(restored.frame.metadata.lensShadingMap == j.frame.metadata.lensShadingMap);
     assert(restored.frame.colorState.source == "frozen");
-    assert(restored.dng.outputFd == -1 && restored.jpeg.output.outputFd == -1);
+    assert(!restored.dng.outputFd.valid() && !restored.jpeg.output.outputFd.valid());
+    // Copies are snapshots: they never share the original's descriptor, which stays open.
+    {
+        const int original = j.dng.outputFd.get();
+        auto snapshot = j.dng;
+        assert(!snapshot.outputFd.valid() && j.dng.outputFd.get() == original);
+        auto moved = std::move(j.dng);
+        assert(moved.outputFd.get() == original && !j.dng.outputFd.valid());
+        j.dng = std::move(moved);
+        assert(::fcntl(original, F_GETFD) != -1);
+    }
     assert(restored.jpeg.output.filmDescription == "Frozen C200" && restored.jpeg.output.quality == 99);
     assert(restored.film.film == 14 && restored.film.filmExposureEv == .75f && restored.tone.exposureEV == -1.5f);
     assert(restored.tone.renderTransform == tonemap::RenderTransform::Rec709 && restored.tone.agx.whiteEv == 9.25f);

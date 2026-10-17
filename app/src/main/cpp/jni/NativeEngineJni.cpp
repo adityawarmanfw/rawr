@@ -113,7 +113,7 @@ rawrcam::encoding::dng::DngCaptureContext makeDngContext(jint fd, jint rotation,
                                                          int16_t utcOffsetMinutes, std::string make, std::string model,
                                                          std::string displayName) {
     rawrcam::encoding::dng::DngCaptureContext out{};
-    out.outputFd = fd;
+    out.outputFd = rawrcam::encoding::OutputFd(fd);
     out.deviceRotationDegrees = rotation;
     out.wallClockUnixMillis = wallClockMillis;
     out.utcOffsetMinutes = utcOffsetMinutes;
@@ -145,7 +145,7 @@ void fillJpegContext(JNIEnv* env, rawrcam::capture::JpegCaptureRequest& jpeg, ji
                      jboolean defringeEnabled, jfloat defringeStrength, jfloat defringeEdgeThreshold,
                      jfloat defringeLumaFloor, const DenoiseIntent& denoise, jboolean ultraHdrEnabled,
                      jint ultraHdrGainmapQuality) {
-    jpeg.output.outputFd = fd;
+    jpeg.output.outputFd = rawrcam::encoding::OutputFd(fd);
     jpeg.output.filmDescription = jString(env, filmDescription);
     jpeg.output.deviceRotationDegrees = rotation;
     jpeg.output.wallClockUnixMillis = wallClockMillis;
@@ -673,7 +673,7 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_integration_NativePrevie
     base.appLensShadingCorrection = lensShadingCorrectionEnabled == JNI_TRUE;
     freezeCaptureIntent(env, base, captureTone, captureFilmValues, captureFilmEnums, captureFilmEnabled == JNI_TRUE);
     rawrcam::encoding::dng::DngCaptureContext merged = base;
-    merged.outputFd = mergedDngFd;
+    merged.outputFd = rawrcam::encoding::OutputFd(mergedDngFd);
     merged.sourceRole = "merged";
     merged.displayName = jString(env, mergedDngDisplayName);
     rawrcam::capture::JpegCaptureRequest jpeg{};

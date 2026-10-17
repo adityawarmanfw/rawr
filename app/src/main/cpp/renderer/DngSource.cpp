@@ -15,6 +15,7 @@
 
 #include "BayerBin.h"
 #include "NaturalBayerBin.h"
+#include "support/JoinGuard.h"
 
 namespace rawrcam::renderer {
 namespace {
@@ -414,6 +415,7 @@ void DngSource::prepareBinned(const std::string& path, bool shading, const std::
             for (uint32_t y0=0;y0<oh;y0+=32u*workers) {
                 check();
                 std::vector<std::thread> threads;
+                rawrcam::support::JoinGuard joinAll(threads);
                 for (unsigned t=0;t<workers;++t) {
                     const uint32_t y=y0+32u*t;
                     if (y>=oh) break;

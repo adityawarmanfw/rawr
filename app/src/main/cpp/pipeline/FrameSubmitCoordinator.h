@@ -156,7 +156,7 @@ class FrameSubmitCoordinator final {
     [[nodiscard]] bool lensShadingCorrectionEnabled() const noexcept { return lensShadingCorrectionEnabled_; }
 
     bool submitMetadata(const rawrcam::metadata::FrameMetadataSnapshot& metadata);
-    void onRawFrame(rawrcam::imaging::AcquiredRawFrame frame);
+    void onRawFrame(rawrcam::imaging::RawFrameLease frame);
     void releaseCompletedSlots(bool force);
 
     [[nodiscard]] VkImageUsageFlags importedRawUsage() const noexcept;
@@ -203,7 +203,8 @@ class FrameSubmitCoordinator final {
         std::uint64_t timestampNs = 0;
         AHardwareBuffer* ahb = nullptr;
         int acquireFenceFd = -1;
-        AImage* imageLease = nullptr;
+        // Caller's lease. A queued submission moves its image into the slot.
+        rawrcam::imaging::RawFrameLease* lease = nullptr;
         std::array<float, 4> black{};
         float white = 0.0f;
         std::array<float, 4> wb{};
@@ -235,8 +236,8 @@ class FrameSubmitCoordinator final {
                           bool& submitted);
     void recoverFailedSubmit(std::uint32_t slotIndex, bool slotSelected, bool queueSubmitted,
                              bool swapchainImageAcquired, const char* error);
-    bool submitAhb(uint64_t timestampNs, AHardwareBuffer* ahb, int acquireFenceFd, AImage* imageLease,
-                   const std::array<float, 4>& black, float white, const std::array<float, 4>& wb,
+    // On acceptance the slot owns lease's image; lease keeps the fence.
+    bool submitAhb(uint64_t timestampNs, rawrcam::imaging::RawFrameLease& lease, const std::array<float, 4>& black, float white, const std::array<float, 4>& wb,
                    const std::array<float, 9>& sensorToSrgb, const rawrcam::metadata::FrameMetadataSnapshot& metadata,
                    const rawrcam::color::FrameColorTransform& colorState);
 

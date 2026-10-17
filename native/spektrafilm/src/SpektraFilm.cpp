@@ -1140,6 +1140,8 @@ struct SpektraFilm::Impl {
         // the slot. No boost buffers: tiled + boost is rejected (record-only
         // cannot do the GPU-readback milestone).
         struct TileBufs {
+            // Shared spatial arena; the phase buffers below alias these.
+            VkBuffer spatial[5] = {};
             VkBuffer filmRaw = VK_NULL_HANDLE;
             VkBuffer filmDensity = VK_NULL_HANDLE;
             VkBuffer grainDensity = VK_NULL_HANDLE;
@@ -1193,6 +1195,7 @@ struct SpektraFilm::Impl {
     };
     std::vector<Slot> slots;
     std::vector<VkDeviceMemory> ownedMemory;
+    std::vector<VkShaderModule> shaderModules;
 
     explicit Impl(const SpektraFilmCreateInfo& ci)
         : context(ci.context),
@@ -1294,25 +1297,32 @@ struct SpektraFilm::Impl {
         VkBuffer buffer = VK_NULL_HANDLE;
         checkVk(vkCreateBuffer(context.device, &bi, context.allocator, &buffer),
                 "create buffer");
-        VkMemoryRequirements req{};
-        vkGetBufferMemoryRequirements(context.device, buffer, &req);
-        VkMemoryAllocateInfo ai{};
-        ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        ai.allocationSize = req.size;
-        ai.memoryTypeIndex =
-            findMemoryType(context.physicalDevice, req.memoryTypeBits, memFlags);
-        VkDeviceMemory memory = VK_NULL_HANDLE;
-        checkVk(vkAllocateMemory(context.device, &ai, context.allocator, &memory),
-                "alloc buffer memory");
-        checkVk(vkBindBufferMemory(context.device, buffer, memory, 0),
-                "bind buffer memory");
-        ownedMemory.push_back(memory);
-        if (memoryOut) {
-            *memoryOut = memory;
-        }
-        if (mapped) {
-            checkVk(vkMapMemory(context.device, memory, 0, req.size, 0, mapped),
-                    "map buffer memory");
+        try {
+            VkMemoryRequirements req{};
+            vkGetBufferMemoryRequirements(context.device, buffer, &req);
+            VkMemoryAllocateInfo ai{};
+            ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            ai.allocationSize = req.size;
+            ai.memoryTypeIndex =
+                findMemoryType(context.physicalDevice, req.memoryTypeBits, memFlags);
+            ownedMemory.reserve(ownedMemory.size() + 1u);
+            VkDeviceMemory memory = VK_NULL_HANDLE;
+            checkVk(vkAllocateMemory(context.device, &ai, context.allocator, &memory),
+                    "alloc buffer memory");
+            // Tracked before bind/map so destroy() frees it if either fails.
+            ownedMemory.push_back(memory);
+            checkVk(vkBindBufferMemory(context.device, buffer, memory, 0),
+                    "bind buffer memory");
+            if (memoryOut) {
+                *memoryOut = memory;
+            }
+            if (mapped) {
+                checkVk(vkMapMemory(context.device, memory, 0, req.size, 0, mapped),
+                        "map buffer memory");
+            }
+        } catch (...) {
+            vkDestroyBuffer(context.device, buffer, context.allocator);
+            throw;
         }
         return buffer;
     }
@@ -1427,10 +1437,21 @@ struct SpektraFilm::Impl {
         mi.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
         mi.codeSize = bytes;
         mi.pCode = words;
-        VkShaderModule module = VK_NULL_HANDLE;
-        checkVk(vkCreateShaderModule(context.device, &mi, context.allocator, &module),
+        // Tracked until construction finishes so a later failure frees it.
+        shaderModules.push_back(VK_NULL_HANDLE);
+        checkVk(vkCreateShaderModule(context.device, &mi, context.allocator,
+                                     &shaderModules.back()),
                 what);
-        return module;
+        return shaderModules.back();
+    }
+
+    void destroyShaderModules() noexcept {
+        for (VkShaderModule m : shaderModules) {
+            if (m) {
+                vkDestroyShaderModule(context.device, m, context.allocator);
+            }
+        }
+        shaderModules.clear();
     }
 
     VkPipeline makeComputePipeline(VkPipelineLayout layout, VkShaderModule module) {
@@ -1504,14 +1525,6 @@ struct SpektraFilm::Impl {
         halationPipeline = makeComputePipeline(corePipelineLayout, halation);
         diffusionPipeline = makeComputePipeline(corePipelineLayout, diffusion);
         scannerPipeline = makeComputePipeline(corePipelineLayout, scanner);
-        vkDestroyShaderModule(context.device, exposure, context.allocator);
-        vkDestroyShaderModule(context.device, develop, context.allocator);
-        vkDestroyShaderModule(context.device, printScan, context.allocator);
-        vkDestroyShaderModule(context.device, grain, context.allocator);
-        vkDestroyShaderModule(context.device, dir, context.allocator);
-        vkDestroyShaderModule(context.device, halation, context.allocator);
-        vkDestroyShaderModule(context.device, diffusion, context.allocator);
-        vkDestroyShaderModule(context.device, scanner, context.allocator);
 
         // IO layout: binding 0 buffer + binding 1 storage image, 8B push.
         std::array<VkDescriptorSetLayoutBinding, 2> ioBindings{};
@@ -1542,16 +1555,12 @@ struct SpektraFilm::Impl {
                                            "output shader module");
         inputPipeline = makeComputePipeline(ioPipelineLayout, input);
         outputPipeline = makeComputePipeline(ioPipelineLayout, output);
-        vkDestroyShaderModule(context.device, input, context.allocator);
-        vkDestroyShaderModule(context.device, output, context.allocator);
         if (ci.hdrOutputSpirv && ci.hdrOutputSpirvBytes) {
             VkShaderModule outputHalf =
                 makeModule(ci.hdrOutputSpirv, ci.hdrOutputSpirvBytes,
                            "half output shader module");
             outputHalfPipeline =
                 makeComputePipeline(ioPipelineLayout, outputHalf);
-            vkDestroyShaderModule(context.device, outputHalf,
-                                  context.allocator);
         }
         if (ci.boostMilestoneSpirv && ci.boostMilestoneSpirvBytes) {
             VkShaderModule milestone =
@@ -1559,8 +1568,6 @@ struct SpektraFilm::Impl {
                            "boost milestone shader module");
             milestonePipeline =
                 makeComputePipeline(corePipelineLayout, milestone);
-            vkDestroyShaderModule(context.device, milestone,
-                                  context.allocator);
         }
         // Glow-ratio layout: bindings 0/1 storage buffers (pre/post scatter
         // linear) + binding 2 storage image, 8B push (width/height).
@@ -1596,19 +1603,18 @@ struct SpektraFilm::Impl {
                            "glow ratio shader module");
             glowRatioPipeline =
                 makeComputePipeline(glowRatioPipelineLayout, glowRatio);
-            vkDestroyShaderModule(context.device, glowRatio,
-                                  context.allocator);
         }
+        destroyShaderModules();
 
         std::array<VkDescriptorPoolSize, 2> poolSizes{};
         poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        // 42 core + 3 IO (input, output) + 1 glow-ratio per slot, plus 44
-        // core for the tile-memory bundle. Buffer/image counts stay loose
-        // over-estimates, as before.
+        // 42 core + 2 IO (input, output) + 2 glow-ratio per slot, plus 44
+        // core for the tile-memory bundle. The IO and glow-ratio sets hold
+        // one storage image each; buffer counts stay a loose over-estimate.
         const uint32_t setsPerSlot = tileMemorySaving ? 90u : 46u;
         poolSizes[0].descriptorCount = slotCount * (setsPerSlot * 31u + 2u);
         poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        poolSizes[1].descriptorCount = slotCount * 3u;
+        poolSizes[1].descriptorCount = slotCount * 4u;
         VkDescriptorPoolCreateInfo poolInfo{};
         poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         poolInfo.maxSets = slotCount * setsPerSlot;
@@ -1624,8 +1630,11 @@ struct SpektraFilm::Impl {
             static_cast<VkDeviceSize>(maxWidth) * maxHeight * 16u;
         const VkDeviceSize filteredBytes =
             static_cast<VkDeviceSize>(tables.wavelengthCount) * 8u * sizeof(float);
+        // The tile-memory path fills the chunk buffer and copies rows
+        // between full-frame and tile buffers with transfer commands.
         const VkBufferUsageFlags pixelUsage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-            (diagnosticTransfers ? VK_BUFFER_USAGE_TRANSFER_SRC_BIT : 0);
+            (diagnosticTransfers ? VK_BUFFER_USAGE_TRANSFER_SRC_BIT : 0) |
+            (tileMemorySaving ? VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT : 0);
         // Conditional scratch (still engines): skip effect buffers whose
         // enable flags are off in the baked look. record() only runs an
         // effect when its buffers exist, and the caller recreates when the
@@ -1825,7 +1834,7 @@ struct SpektraFilm::Impl {
                 const uint32_t spatialCount =
                     wantScanner ? 5u : wantHalation ? 4u :
                     wantDir ? 3u : wantProdGrain ? 1u : 0u;
-                VkBuffer spatial[5] = {};
+                VkBuffer* spatial = t.spatial;
                 for (uint32_t i = 0; i < spatialCount; ++i) {
                     spatial[i] = makeBuffer(tileBytes, pixelUsage,
                                             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, nullptr);
@@ -2792,6 +2801,9 @@ struct SpektraFilm::Impl {
                                 slot.sharedS0, slot.sharedS1, slot.sharedS2,
                                 slot.destination, slot.filteredEnlarger,
                                 slot.frameFloats, slot.frameInts,
+                                slot.tile.spatial[0], slot.tile.spatial[1],
+                                slot.tile.spatial[2], slot.tile.spatial[3],
+                                slot.tile.spatial[4],
                                 slot.tile.filmRaw, slot.tile.filmDensity,
                                 slot.tile.grainDensity, slot.tile.grainDensityB,
                                 slot.tile.grainMicroA, slot.tile.grainMicroB,
@@ -2852,6 +2864,7 @@ struct SpektraFilm::Impl {
             vkDestroyDescriptorPool(context.device, descriptorPool,
                                     context.allocator);
         }
+        destroyShaderModules();
         slots.clear();
         context.device = VK_NULL_HANDLE;
     }

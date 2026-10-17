@@ -47,7 +47,8 @@ struct PushConstants {
 };
 }  // namespace
 
-RawPreview::RawPreview(const RawPreviewCreateInfo& ci) : physicalDevice_(ci.physicalDevice), device_(ci.device) {
+RawPreview::RawPreview(const RawPreviewCreateInfo& ci)
+    : physicalDevice_(ci.physicalDevice), device_(ci.device), objects_(ci.device) {
     if (!device_ || !physicalDevice_) throw std::runtime_error("RawPreview: null Vulkan device");
     if (ci.workgroupX != 8 || ci.workgroupY != 8)
         throw std::runtime_error("RawPreview requires the validated 8x8 workgroup size");
@@ -73,6 +74,7 @@ RawPreview::RawPreview(const RawPreviewCreateInfo& ci) : physicalDevice_(ci.phys
         dslInfo.pBindings = bindings.data();
         checkVkResult(vkCreateDescriptorSetLayout(device_, &dslInfo, nullptr, &descriptorSetLayout),
                       "vkCreateDescriptorSetLayout failed");
+        objects_.adoptDescriptorSetLayout(descriptorSetLayout);
 
         VkPushConstantRange pushRange{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PushConstants)};
         VkPipelineLayoutCreateInfo layoutInfo{};
@@ -83,6 +85,7 @@ RawPreview::RawPreview(const RawPreviewCreateInfo& ci) : physicalDevice_(ci.phys
         layoutInfo.pPushConstantRanges = &pushRange;
         checkVkResult(vkCreatePipelineLayout(device_, &layoutInfo, nullptr, &pipelineLayout),
                       "vkCreatePipelineLayout failed");
+        objects_.adoptPipelineLayout(pipelineLayout);
 
         auto spirv = readSpirv(shaderPath);
         VkShaderModuleCreateInfo moduleInfo{};
@@ -91,6 +94,8 @@ RawPreview::RawPreview(const RawPreviewCreateInfo& ci) : physicalDevice_(ci.phys
         moduleInfo.pCode = spirv.data();
         VkShaderModule module{};
         checkVkResult(vkCreateShaderModule(device_, &moduleInfo, nullptr, &module), "vkCreateShaderModule failed");
+        rawr::vk::DeviceObjects scratch(device_);
+        scratch.adoptShaderModule(module);
 
         VkPipelineShaderStageCreateInfo stageInfo{};
         stageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -101,9 +106,9 @@ RawPreview::RawPreview(const RawPreviewCreateInfo& ci) : physicalDevice_(ci.phys
         pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
         pipelineInfo.stage = stageInfo;
         pipelineInfo.layout = pipelineLayout;
-        VkResult result = vkCreateComputePipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline);
-        vkDestroyShaderModule(device_, module, nullptr);
-        checkVkResult(result, "vkCreateComputePipelines failed");
+        checkVkResult(vkCreateComputePipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline),
+                      "vkCreateComputePipelines failed");
+        objects_.adoptPipeline(pipeline);
     };
 
     createLayoutAndPipeline(4, 2, ci.shaderPath, dsl_, layout_, pipeline_);
@@ -134,6 +139,7 @@ RawPreview::RawPreview(const RawPreviewCreateInfo& ci) : physicalDevice_(ci.phys
         ds.pBindings = bindings.data();
         checkVkResult(vkCreateDescriptorSetLayout(device_, &ds, nullptr, &descriptorSetLayout),
                       "RawPreview highlight set layout failed");
+        objects_.adoptDescriptorSetLayout(descriptorSetLayout);
         VkPushConstantRange pr{VK_SHADER_STAGE_COMPUTE_BIT, 0, pushBytes};
         VkPipelineLayoutCreateInfo pl{};
         pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -143,6 +149,7 @@ RawPreview::RawPreview(const RawPreviewCreateInfo& ci) : physicalDevice_(ci.phys
         pl.pPushConstantRanges = &pr;
         checkVkResult(vkCreatePipelineLayout(device_, &pl, nullptr, &pipelineLayout),
                       "RawPreview highlight pipeline layout failed");
+        objects_.adoptPipelineLayout(pipelineLayout);
         auto spirv = readSpirv(shaderPath);
         VkShaderModuleCreateInfo sm{};
         sm.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -151,6 +158,8 @@ RawPreview::RawPreview(const RawPreviewCreateInfo& ci) : physicalDevice_(ci.phys
         VkShaderModule module{};
         checkVkResult(vkCreateShaderModule(device_, &sm, nullptr, &module),
                       "RawPreview highlight shader module failed");
+        rawr::vk::DeviceObjects scratch(device_);
+        scratch.adoptShaderModule(module);
         VkPipelineShaderStageCreateInfo st{};
         st.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         st.stage = VK_SHADER_STAGE_COMPUTE_BIT;
@@ -160,9 +169,9 @@ RawPreview::RawPreview(const RawPreviewCreateInfo& ci) : physicalDevice_(ci.phys
         pi.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
         pi.stage = st;
         pi.layout = pipelineLayout;
-        VkResult result = vkCreateComputePipelines(device_, VK_NULL_HANDLE, 1, &pi, nullptr, &pipeline);
-        vkDestroyShaderModule(device_, module, nullptr);
-        checkVkResult(result, "RawPreview highlight compute pipeline failed");
+        checkVkResult(vkCreateComputePipelines(device_, VK_NULL_HANDLE, 1, &pi, nullptr, &pipeline),
+                      "RawPreview highlight compute pipeline failed");
+        objects_.adoptPipeline(pipeline);
     };
     auto createImagePipeline = [&](uint32_t bindingCount, uint32_t pushBytes, const std::string& shaderPath,
                                    VkDescriptorSetLayout& descriptorSetLayout, VkPipelineLayout& pipelineLayout,
@@ -221,38 +230,12 @@ RawPreview::RawPreview(const RawPreviewCreateInfo& ci) : physicalDevice_(ci.phys
     poolInfo.poolSizeCount = 2;
     poolInfo.pPoolSizes = poolSizes;
     checkVkResult(vkCreateDescriptorPool(device_, &poolInfo, nullptr, &pool_), "vkCreateDescriptorPool failed");
+    objects_.adoptDescriptorPool(pool_);
 }
 
-RawPreview::~RawPreview() {
-    if (!device_) return;
-    highlightResources_.clear();
-    guidePipelines_.reset();
-    for (auto& kv : coloroppResources_) {
-        rawr::vk::destroyOwnedImage(device_, kv.second.sdr);
-        rawr::vk::destroyOwnedImage(device_, kv.second.demosaiced);
-    }
-    if (coloroppTonePipeline_) vkDestroyPipeline(device_, coloroppTonePipeline_, nullptr);
-    if (coloroppToneLayout_) vkDestroyPipelineLayout(device_, coloroppToneLayout_, nullptr);
-    if (coloroppToneDsl_) vkDestroyDescriptorSetLayout(device_, coloroppToneDsl_, nullptr);
-    if (coloroppPipeline_) vkDestroyPipeline(device_, coloroppPipeline_, nullptr);
-    if (coloroppLayout_) vkDestroyPipelineLayout(device_, coloroppLayout_, nullptr);
-    if (coloroppDsl_) vkDestroyDescriptorSetLayout(device_, coloroppDsl_, nullptr);
-    for (auto& kv : lscBuffers_) destroyLscBuffer(kv.second);
-    for (auto& kv : clipFlags_) {
-        if (kv.second.buffer) vkDestroyBuffer(device_, kv.second.buffer, nullptr);
-        if (kv.second.memory) vkFreeMemory(device_, kv.second.memory, nullptr);
-    }
-    if (pool_) vkDestroyDescriptorPool(device_, pool_, nullptr);
-    if (highlightApplyPipeline_) vkDestroyPipeline(device_, highlightApplyPipeline_, nullptr);
-    if (highlightApplyLayout_) vkDestroyPipelineLayout(device_, highlightApplyLayout_, nullptr);
-    if (highlightApplyDsl_) vkDestroyDescriptorSetLayout(device_, highlightApplyDsl_, nullptr);
-    if (cfaStatePipeline_) vkDestroyPipeline(device_, cfaStatePipeline_, nullptr);
-    if (cfaStateLayout_) vkDestroyPipelineLayout(device_, cfaStateLayout_, nullptr);
-    if (cfaStateDsl_) vkDestroyDescriptorSetLayout(device_, cfaStateDsl_, nullptr);
-    if (pipeline_) vkDestroyPipeline(device_, pipeline_, nullptr);
-    if (layout_) vkDestroyPipelineLayout(device_, layout_, nullptr);
-    if (dsl_) vkDestroyDescriptorSetLayout(device_, dsl_, nullptr);
-}
+// Members release in reverse order: per-view caches and guide chains first,
+// then the guide pipelines, then objects_ (pipelines, layouts, pool).
+RawPreview::~RawPreview() = default;
 
 RawPreview::HighlightResources& RawPreview::highlightResourcesFor(VkImageView outputView, uint32_t width,
                                                                   uint32_t height) {
@@ -274,31 +257,25 @@ RawPreview::ColoroppResources& RawPreview::coloroppResourcesFor(VkImageView outp
                                                                 uint32_t height) {
     auto found = coloroppResources_.find(outputView);
     if (found != coloroppResources_.end()) return found->second;
-    ColoroppResources r{};
-    try {
-        r.demosaiced = rawr::vk::createOwnedImage(physicalDevice_, device_, width, height,
-                                                  VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT);
-        // Same usage as the caller's linear image: the display path samples,
-        // blits (film) and stores to it.
-        r.sdr = rawr::vk::createOwnedImage(
-            physicalDevice_, device_, width, height, VK_FORMAT_R16G16B16A16_SFLOAT,
-            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
-        VkDescriptorSetLayout layouts[2]{coloroppDsl_, coloroppToneDsl_};
-        VkDescriptorSet sets[2]{};
-        VkDescriptorSetAllocateInfo ai{};
-        ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        ai.descriptorPool = pool_;
-        ai.descriptorSetCount = 2;
-        ai.pSetLayouts = layouts;
-        checkVkResult(vkAllocateDescriptorSets(device_, &ai, sets), "RawPreview Inpaint Opposed sets failed");
-        r.coloroppSet = sets[0];
-        r.toneSet = sets[1];
-    } catch (...) {
-        rawr::vk::destroyOwnedImage(device_, r.sdr);
-        rawr::vk::destroyOwnedImage(device_, r.demosaiced);
-        throw;
-    }
-    return coloroppResources_.emplace(outputView, r).first->second;
+    ColoroppResources r{rawr::vk::DeviceObjects(device_)};
+    r.demosaiced = r.objects.adoptOwnedImage(rawr::vk::createOwnedImage(
+        physicalDevice_, device_, width, height, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT));
+    // Same usage as the caller's linear image: the display path samples,
+    // blits (film) and stores to it.
+    r.sdr = r.objects.adoptOwnedImage(rawr::vk::createOwnedImage(
+        physicalDevice_, device_, width, height, VK_FORMAT_R16G16B16A16_SFLOAT,
+        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT));
+    VkDescriptorSetLayout layouts[2]{coloroppDsl_, coloroppToneDsl_};
+    VkDescriptorSet sets[2]{};
+    VkDescriptorSetAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    ai.descriptorPool = pool_;
+    ai.descriptorSetCount = 2;
+    ai.pSetLayouts = layouts;
+    checkVkResult(vkAllocateDescriptorSets(device_, &ai, sets), "RawPreview Inpaint Opposed sets failed");
+    r.coloroppSet = sets[0];
+    r.toneSet = sets[1];
+    return coloroppResources_.emplace(outputView, std::move(r)).first->second;
 }
 
 VkDescriptorSet RawPreview::descriptorSetFor(VkImageView inputView, VkImageView outputView, VkBuffer lscBuffer,
@@ -411,8 +388,10 @@ VkDescriptorSet RawPreview::cfaStateDescriptorSetFor(VkImageView inputView, VkIm
 }
 
 RawPreview::ClipFlag& RawPreview::clipFlagFor(VkImageView outputView) {
-    auto& f = clipFlags_[outputView];
-    if (f.buffer) return f;
+    auto found = clipFlags_.find(outputView);
+    if (found != clipFlags_.end()) return found->second;
+    // Cached only once complete, so a failed allocation is retried, never reused unbound.
+    ClipFlag f{rawr::vk::DeviceObjects(device_)};
     VkBufferCreateInfo bi{};
     bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bi.size = 16;
@@ -420,6 +399,7 @@ RawPreview::ClipFlag& RawPreview::clipFlagFor(VkImageView outputView) {
                (beginConditional_ ? VK_BUFFER_USAGE_CONDITIONAL_RENDERING_BIT_EXT : 0u);
     bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     checkVkResult(vkCreateBuffer(device_, &bi, nullptr, &f.buffer), "RawPreview clip flag vkCreateBuffer failed");
+    f.objects.adoptBuffer(f.buffer);
     VkMemoryRequirements req{};
     vkGetBufferMemoryRequirements(device_, f.buffer, &req);
     VkPhysicalDeviceMemoryProperties mp{};
@@ -436,29 +416,25 @@ RawPreview::ClipFlag& RawPreview::clipFlagFor(VkImageView outputView) {
     ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     ai.allocationSize = req.size;
     ai.memoryTypeIndex = type;
-    checkVkResult(vkAllocateMemory(device_, &ai, nullptr, &f.memory), "RawPreview clip flag vkAllocateMemory failed");
-    checkVkResult(vkBindBufferMemory(device_, f.buffer, f.memory, 0), "RawPreview clip flag bind failed");
-    return f;
-}
-
-void RawPreview::destroyLscBuffer(LscBuffer& b) noexcept {
-    if (b.mapped && b.memory) vkUnmapMemory(device_, b.memory);
-    if (b.buffer) vkDestroyBuffer(device_, b.buffer, nullptr);
-    if (b.memory) vkFreeMemory(device_, b.memory, nullptr);
-    b = {};
+    VkDeviceMemory memory{};
+    checkVkResult(vkAllocateMemory(device_, &ai, nullptr, &memory), "RawPreview clip flag vkAllocateMemory failed");
+    f.objects.adoptMemory(memory);
+    checkVkResult(vkBindBufferMemory(device_, f.buffer, memory, 0), "RawPreview clip flag bind failed");
+    return clipFlags_.emplace(outputView, std::move(f)).first->second;
 }
 
 RawPreview::LscBuffer& RawPreview::lscBufferFor(VkImageView outputView, size_t floatCount) {
     const VkDeviceSize needed = std::max<VkDeviceSize>(sizeof(float) * 4u, VkDeviceSize(floatCount * sizeof(float)));
-    auto& b = lscBuffers_[outputView];
-    if (b.buffer && b.bytes >= needed) return b;
-    destroyLscBuffer(b);
+    auto found = lscBuffers_.find(outputView);
+    if (found != lscBuffers_.end() && found->second.bytes >= needed) return found->second;
+    LscBuffer b{rawr::vk::DeviceObjects(device_)};
     VkBufferCreateInfo bi{};
     bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bi.size = needed;
     bi.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
     bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     checkVkResult(vkCreateBuffer(device_, &bi, nullptr, &b.buffer), "RawPreview LSC vkCreateBuffer failed");
+    b.objects.adoptBuffer(b.buffer);
     VkMemoryRequirements req{};
     vkGetBufferMemoryRequirements(device_, b.buffer, &req);
     VkPhysicalDeviceMemoryProperties mp{};
@@ -477,16 +453,19 @@ RawPreview::LscBuffer& RawPreview::lscBufferFor(VkImageView outputView, size_t f
     ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     ai.allocationSize = req.size;
     ai.memoryTypeIndex = type;
-    checkVkResult(vkAllocateMemory(device_, &ai, nullptr, &b.memory), "RawPreview LSC vkAllocateMemory failed");
-    checkVkResult(vkBindBufferMemory(device_, b.buffer, b.memory, 0), "RawPreview LSC vkBindBufferMemory failed");
-    checkVkResult(vkMapMemory(device_, b.memory, 0, VK_WHOLE_SIZE, 0, &b.mapped), "RawPreview LSC vkMapMemory failed");
+    VkDeviceMemory memory{};
+    checkVkResult(vkAllocateMemory(device_, &ai, nullptr, &memory), "RawPreview LSC vkAllocateMemory failed");
+    b.objects.adoptMemory(memory);
+    checkVkResult(vkBindBufferMemory(device_, b.buffer, memory, 0), "RawPreview LSC vkBindBufferMemory failed");
+    checkVkResult(vkMapMemory(device_, memory, 0, VK_WHOLE_SIZE, 0, &b.mapped), "RawPreview LSC vkMapMemory failed");
     b.bytes = needed;
     // Reallocation changes descriptor buffer handles; invalidate cached sets using this output view.
     for (auto it = descriptorCache_.begin(); it != descriptorCache_.end();)
         it = (it->first.output == outputView) ? descriptorCache_.erase(it) : std::next(it);
     for (auto it = cfaStateDescriptorCache_.begin(); it != cfaStateDescriptorCache_.end();)
         it = (it->first.output == outputView) ? cfaStateDescriptorCache_.erase(it) : std::next(it);
-    return b;
+    // Replacing an entry releases the smaller buffer it held.
+    return lscBuffers_.insert_or_assign(outputView, std::move(b)).first->second;
 }
 
 RawPreviewRecordResult RawPreview::record(const RawPreviewRecordInfo& recordInfo) {

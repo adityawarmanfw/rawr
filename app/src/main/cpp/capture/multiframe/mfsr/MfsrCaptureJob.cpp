@@ -65,7 +65,35 @@ void vkCheck(VkResult r, const char* what) {
 
 }  // namespace
 
-void MfsrCaptureJob::run() {
+void MfsrCaptureJob::run() noexcept {
+    const std::uint64_t requestId = work_->requestId;
+    const std::string baseName = work_->baseDng.displayName, mergedName = work_->mergedDng.displayName,
+                      jpegName = work_->mergedJpeg.output.displayName;
+    const bool wantBase = work_->baseDng.outputFd.valid(), wantMerged = work_->mergedDng.outputFd.valid(),
+               wantJpeg = work_->jpegRequested;
+    Published published;
+    std::string error;
+    try {
+        runStages(published);
+        return;
+    } catch (const std::exception& e) {
+        error = std::string("multiframe_job_failed: ") + e.what();
+    } catch (...) {
+        error = "multiframe_job_failed";
+    }
+    LOGE("MULTIFRAME_JOB_FAIL requestId=%llu %s", static_cast<unsigned long long>(requestId), error.c_str());
+    // Unwinding closed every output descriptor the stages still held.
+    const std::string prefix = std::to_string(requestId) + "\t0\t";
+    try {
+        if (wantBase && !published.base) context_.dngBox.push(prefix + baseName + "\t" + error);
+        if (wantMerged && !published.merged) context_.dngBox.push(prefix + mergedName + "\t" + error);
+        if (wantJpeg && !published.jpeg) context_.jpegBox.push(prefix + jpegName + "\t" + error + "\t0");
+    } catch (...) {
+        LOGE("MULTIFRAME_JOB_FAIL completions not published requestId=%llu", static_cast<unsigned long long>(requestId));
+    }
+}
+
+void MfsrCaptureJob::runStages(Published& published) {
     auto& ctx = context_;
     auto& work = work_;
     const std::uint64_t requestId = work->requestId;
@@ -175,8 +203,10 @@ void MfsrCaptureJob::run() {
         std::ostringstream out;
         out << done.requestId << '\t' << (done.success ? 1 : 0) << '\t' << done.displayName << '\t' << done.error;
         ctx.dngBox.push(out.str());
+        if (done.displayName == baseDisplayName) published.base = true;
+        if (done.displayName == mergedDisplayName) published.merged = true;
     };
-    const bool wantBase = baseDng.outputFd >= 0, wantMerged = mergedDng.outputFd >= 0;
+    const bool wantBase = baseDng.outputFd.valid(), wantMerged = mergedDng.outputFd.valid();
     auto failDng = [&](const std::string& displayName, const std::string& error) {
         if ((displayName == baseDisplayName && !wantBase) || (displayName == mergedDisplayName && !wantMerged)) return;
         DngWriteCompletion done{};
@@ -190,6 +220,7 @@ void MfsrCaptureJob::run() {
         out << done.requestId << '\t' << (done.success ? 1 : 0) << '\t' << done.displayName << '\t' << done.error
             << '\t' << (done.filmFallbackMemory ? 1 : 0);
         ctx.jpegBox.push(out.str());
+        published.jpeg = true;
     };
     auto failJpeg = [&](const std::string& error) {
         JpegWriteCompletion done{};
@@ -230,8 +261,8 @@ void MfsrCaptureJob::run() {
     DngCaptureWriter mergedWriter;
     bool baseStarted = false;
     bool mergedStarted = false;
-    const bool baseRequested = baseDng.outputFd >= 0;
-    const bool mergedRequested = mergedDng.outputFd >= 0;
+    const bool baseRequested = baseDng.outputFd.valid();
+    const bool mergedRequested = mergedDng.outputFd.valid();
     bool basePublished = !baseRequested;
     bool mergedPublished = !mergedRequested;
     bool jpegPublished = !jpegRequested;
@@ -277,7 +308,6 @@ void MfsrCaptureJob::run() {
             auto baseFrame = makeCaptured(std::move(basePacked));
             baseDng.imageDescription = std::string(rawrcam::encoding::kCapturedWith) + "\nMultiframe base frame\n";
             auto context = std::move(baseDng);
-            baseDng.outputFd = -1;
             rawrcam::capture::persistence::attachFrameRecipes(context, *baseFrame);
             baseStarted = baseWriter.start(baseFrame, std::move(context));
             if (!baseStarted) {
@@ -285,10 +315,7 @@ void MfsrCaptureJob::run() {
                 basePublished = true;
             }
         } catch (const std::exception& e) {
-            if (baseDng.outputFd >= 0) {
-                close(baseDng.outputFd);
-                baseDng.outputFd = -1;
-            }
+            baseDng.outputFd.reset();
             failDng(baseDisplayName, std::string("base_output_failed: ") + e.what());
             basePublished = true;
         }
@@ -412,7 +439,6 @@ void MfsrCaptureJob::run() {
                              : "");
                 }
                 auto context = std::move(mergedDng);
-                mergedDng.outputFd = -1;
                 rawrcam::capture::persistence::attachFrameRecipes(context, *mergedFrame);
                 mergedStarted = mergedWriter.start(mergedFrame, std::move(context));
                 if (!mergedStarted) {
@@ -420,18 +446,12 @@ void MfsrCaptureJob::run() {
                     mergedPublished = true;
                 }
             } catch (const std::exception& e) {
-                if (mergedDng.outputFd >= 0) {
-                    close(mergedDng.outputFd);
-                    mergedDng.outputFd = -1;
-                }
+                mergedDng.outputFd.reset();
                 failDng(mergedDisplayName, std::string("merged_projection_failed: ") + e.what());
                 mergedPublished = true;
             }
         } else if (mergedRequested) {
-            if (mergedDng.outputFd >= 0) {
-                close(mergedDng.outputFd);
-                mergedDng.outputFd = -1;
-            }
+            mergedDng.outputFd.reset();
             failDng(mergedDisplayName, "merged_projection_unavailable");
             mergedPublished = true;
         }
@@ -716,8 +736,7 @@ void MfsrCaptureJob::run() {
                 }
                 if (renderedDone->filmFallbackMemory) {
                     persistence::markFilmFallback(persistence::jobPath(ctx.filesDir, baseDisplayName));
-                    if (mergedJpeg.output.outputFd >= 0) close(mergedJpeg.output.outputFd);
-                    mergedJpeg.output.outputFd = -1;
+                    mergedJpeg.output.outputFd.reset();
                     JpegWriteCompletion fallback{};
                     fallback.requestId = requestId;
                     fallback.displayName = jpegDisplayName;
@@ -783,7 +802,6 @@ void MfsrCaptureJob::run() {
                     auto jpegContext = std::move(mergedJpeg);
                     jpegContext.output.appliedLensShadingCorrection = jpegContext.develop.lensShadingCorrectionEnabled;
                     jpegContext.output.appliedFccSteps = jpegContext.develop.fccSteps;
-                    mergedJpeg.output.outputFd = -1;
                     const bool mfUltraHdr = jpegContext.output.ultraHdr.enabled && rendered.gainmapPixelData() &&
                                             rendered.gainmapPixelBytes() > 0;
                     bool mfWriterAccepted = false;
@@ -815,10 +833,7 @@ void MfsrCaptureJob::run() {
                     rendered.releasePixels();
                 }
             } catch (const std::exception& e) {
-                if (mergedJpeg.output.outputFd >= 0) {
-                    close(mergedJpeg.output.outputFd);
-                    mergedJpeg.output.outputFd = -1;
-                }
+                mergedJpeg.output.outputFd.reset();
                 // Release mapped pixels so a worker exception cannot poison
                 // the persistent engine: start() rejects while mapped_ is set.
                 rendered.releasePixels();
@@ -828,18 +843,12 @@ void MfsrCaptureJob::run() {
         }
         dumpRzsl();
     } catch (const std::exception& e) {
-        if (mergedDng.outputFd >= 0) {
-            close(mergedDng.outputFd);
-            mergedDng.outputFd = -1;
-        }
+        mergedDng.outputFd.reset();
         if (!mergedPublished) {
             failDng(mergedDisplayName, std::string("merge_failed: ") + e.what());
             mergedPublished = true;
         }
-        if (mergedJpeg.output.outputFd >= 0) {
-            close(mergedJpeg.output.outputFd);
-            mergedJpeg.output.outputFd = -1;
-        }
+        mergedJpeg.output.outputFd.reset();
         if (!jpegPublished) {
             failJpeg(std::string("merge_failed: ") + e.what());
             jpegPublished = true;
@@ -866,11 +875,11 @@ void MfsrCaptureJob::run() {
     awaitDng(mergedWriter, mergedStarted, mergedPublished);
     if (!basePublished) failDng(baseDisplayName, "base_dng_not_started");
     if (!mergedPublished) {
-        if (mergedDng.outputFd >= 0) close(mergedDng.outputFd);
+        mergedDng.outputFd.reset();
         failDng(mergedDisplayName, "merged_dng_not_started");
     }
     if (!jpegPublished && jpegRequested) {
-        if (mergedJpeg.output.outputFd >= 0) close(mergedJpeg.output.outputFd);
+        mergedJpeg.output.outputFd.reset();
         failJpeg("merged_jpeg_not_started");
     }
     job->snapshot.reset();

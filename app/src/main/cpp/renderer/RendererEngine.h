@@ -9,7 +9,6 @@
 #include "develop/render/StillImageRenderer.h"
 namespace image_scopes { class ImageScopes; }
 namespace rawrcam::renderer {
-class RendererSurface;
 struct RenderOptions {
     develop::rendered::RenderedStillContext context;
     // Recipe develop settings, kept for the export's ImageDescription.
@@ -25,7 +24,6 @@ struct RenderOptions {
     bool overview = false;
     bool quickProxy = false;
     bool bayerBin2x = false;
-    bool surfacePreview = false;
     bool waveform = false;
     bool shading = true;
     bool distortion = true;
@@ -45,8 +43,6 @@ class RendererEngine {
     void prepareProxy(DngSource& source, const std::string& cachePath, bool shading);
     void prepare(DngSource& source, const std::string& cachePath, const RenderOptions& options);
     std::vector<uint8_t> render(DngSource& source, const std::string& cachePath, const RenderOptions& options);
-    void setSurface(ANativeWindow* window);
-    bool hasSurface() const noexcept;
     const std::vector<uint32_t>& waveform() const { return waveformPixels_; }
     // Last post-demosaic completion (GPU stage times, setup/gaps/readback).
     // Populated by render(); valid only when render() succeeded. Lets the
@@ -71,7 +67,7 @@ class RendererEngine {
 
    private:
     void check();
-    void renderWaveform(uint32_t width, uint32_t height, uint32_t orientation, bool surfacePreview);
+    void renderWaveform(uint32_t width, uint32_t height, uint32_t orientation);
     std::unique_ptr<image_scopes::ImageScopes> scopeEngine_;
     vulkan::OwnedImage scopeImage_{};
     std::vector<uint32_t> waveformPixels_;
@@ -79,7 +75,6 @@ class RendererEngine {
     vulkan::VulkanContext vulkan_;
     std::mutex& queueMutex_ = vulkan_.primaryQueue().mutex();
     develop::rendered::StillImageRenderer processor_;
-    std::unique_ptr<RendererSurface> surface_;
     // Pristine linear overview. PostDemosaicProcessor writes its input, so
     // render() copies this image before handing it to the still pipeline.
     vulkan::OwnedImage overviewInput_{};
