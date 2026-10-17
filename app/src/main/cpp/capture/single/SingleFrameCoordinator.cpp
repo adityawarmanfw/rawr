@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <thread>
 #include <cmath>
 #include <condition_variable>
 #include <cstddef>
@@ -244,7 +245,13 @@ class SingleFrameCoordinator::Impl {
                              const spektrafilm_native::FilmLook& filmLook) {
         advance();
         for (const auto& entry : entries()) {
-            if (entry->handedOff.load() || !entry->prepared.load() || !entry->shot->captureRequested()) continue;
+            if (entry->handedOff.load()) continue;
+            // This is the first frame after the shutter (the caller checked the
+            // cutoff). Its RAW destination may still be allocating (100 MB at
+            // 50 MP): wait for it rather than letting this frame pass, or the
+            // photo is taken from a later moment than the press.
+            if (!entry->prepared.load()) waitPrepared(*entry, kPreparationWait);
+            if (!entry->prepared.load() || !entry->shot->captureRequested()) continue;
             const bool claimed = entry->shot->deferSubmittedFrame(metadata, color, tone, gain, filmEnabled, filmLook);
             if (!claimed && !entry->shot->captureRequested()) {
                 if (!entry->shot->hasDngCompletion()) entry->shot->failLensShadingTimeout("raw_snapshot_failed");
@@ -253,6 +260,13 @@ class SingleFrameCoordinator::Impl {
             return claimed;
         }
         return false;
+    }
+    // Bounded: a stuck preparation fails through advance()'s timeout instead of stalling ingress.
+    static constexpr std::chrono::milliseconds kPreparationWait{1500};
+    static void waitPrepared(const Entry& entry, std::chrono::milliseconds limit) {
+        const auto deadline = std::chrono::steady_clock::now() + limit;
+        while (!entry.prepared.load() && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
     bool beginDeferredSnapshot(AImage* imageLease, AHardwareBuffer* ahb, uint64_t timestamp, int fence) {
         for (const auto& entry : entries()) {
