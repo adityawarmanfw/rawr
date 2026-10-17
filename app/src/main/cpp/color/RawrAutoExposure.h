@@ -161,12 +161,34 @@ struct MeterPolicy {
     // Trimmed median scene key is placed here (scene-linear luma, white = 1).
     // Similar to where Camera2 AE puts it; AutoKey may lift further.
     float targetKey = 0.10f;
-    // Highlights: this percentile is kept channelMarginEv under the clip
-    // (luma under-reports single-channel clipping, e.g. blue sky).
+    // Highlights: this percentile of the per-channel histogram (brightest
+    // channel over its saturation) is kept channelMarginEv under the clip.
+    // Without it, the luma percentile keeps lumaMarginEv (luma under-reports
+    // single-channel clipping, e.g. blue sky).
     float highlightPercentile = 0.99f;
-    float channelMarginEv = 0.6f;
-    // The highlight guard may darken the key at most this far.
+    float channelMarginEv = 0.25f;
+    float lumaMarginEv = 0.6f;
+    // The highlight guard may darken the key at most this far. A highlight
+    // needing more cannot be saved without sinking the scene (a window from
+    // a dark room): the guard eases off to guardReleasedEv by the time it
+    // would need guardGiveUpEv, and the highlight clips.
     float maxGuardEv = 1.5f;
+    float guardReleasedEv = 0.5f;
+    float guardGiveUpEv = 4.0f;
+    // A clipped highlight does not show how far over it is, so indoors it
+    // darkens at most clippedGuardMaxEv: one just over then shows unclipped
+    // and gets the full guard; a window from a dark room stays clipped and
+    // the room keeps its exposure. (Going further to find out, then backing
+    // off, would pump.) Outdoors (scene EV100 from outdoorEv100Low to
+    // outdoorEv100High) a clipped highlight is usually sky worth saving: the
+    // cap eases up to the full maxGuardEv.
+    float clippedGuardMaxEv = 1.25f;
+    // The sensor runs this far under the shown exposure (the viewfinder and
+    // photo gain carry it back; the render rolls off what lands above
+    // white): highlights may sit this much higher before they clip.
+    float sensorHeadroomEv = 0.0f;
+    float outdoorEv100Low = 8.0f;
+    float outdoorEv100High = 11.0f;
     // Highlight-weighted: the percentile sits at the clip (less the margin)
     // whatever the key, within keyRangeEv below / highlightLiftEv above it.
     bool highlightPriority = false;
@@ -176,8 +198,12 @@ struct MeterPolicy {
     // no highlight guard.
     bool linearMean = false;
     float linearMeanTarget = 0.18f;
-    // A clipped percentile does not say by how much; assume this far over.
-    float clippedOverEv = 0.5f;
+    // A clipped percentile does not say by how much; assume this far over
+    // (also where the linear mean counts clipped samples). Each frame
+    // re-guesses from its own clip, so a larger guess overshoots: a
+    // highlight barely over the clip dips the exposure by about this much
+    // before it recovers.
+    float clippedOverEv = 0.3f;
     // Night: below dayEv100 the key target lowers smoothly, reaching
     // nightKeyEv at nightEv100 (Natural; Bright uses half).
     float dayEv100 = 7.0f;
@@ -203,6 +229,10 @@ inline float nightKeyOffsetEv(float ev100, NightLook look, const MeterPolicy& p 
     return s * p.nightKeyEv * (look == NightLook::Bright ? 0.5f : 1.0f);
 }
 
+// Per-channel histogram: samples whose brightest channel reaches this
+// fraction of its saturation are clipped (image_scopes kSceneChannelClip).
+inline constexpr float kChannelClip = 0.95f;
+
 struct FrameObservation {
     const std::uint32_t* weightedBins = nullptr;  // AutoKey layout (kSceneKeyBins)
     float clipLumaEv = 0.0f;                       // log2 of the clip luma
@@ -211,10 +241,26 @@ struct FrameObservation {
     double iso = 0.0;                              // request coordinate
     float aperture = 0.0f;
     std::uint64_t timestampNs = 0;
+    // Same layout, log2(max channel / its saturation); null or empty: the
+    // highlights are judged on luma.
+    const std::uint32_t* channelBins = nullptr;
+    // Whole-frame log2 luma mean, when weightedBins only cover a spot: the
+    // night look judges the scene, not the tapped area.
+    std::optional<float> frameLogMeanEv{};
+    // Luma bins of the focus area (same layout); empty or null: none. The
+    // key is the frame's and the focus area's, blended in EV at focusShare:
+    // a subject 3 EV under the frame moves the exposure 3 x focusShare EV.
+    // (A weight share in one histogram would not: the key is a median, which
+    // ignores a minority and jumps once the focus area is half the weight.)
+    const std::uint32_t* focusBins = nullptr;
+    float focusShare = 0.0f;
 };
 
 struct Metered {
     double desiredLogExposure = 0.0;
+    // How far the highlights need the exposure under the key's (before the
+    // guard and any headroom; <= 0: they fit).
+    double highlightNeedEv = 0.0;
     float sceneEv100 = 0.0f;
     float nightOffsetEv = 0.0f;
     float guardEv = 0.0f;  // <= 0
@@ -222,19 +268,50 @@ struct Metered {
 
 // Exposure the scene wants, independent of the frame's own exposure.
 // Weighted mean of linear luma over the scene histogram (log2). Top-bin
-// (clipped) samples count at the bin's floor, a lower bound.
-inline std::optional<float> sceneLinearMeanEv(const std::uint32_t* bins) noexcept {
-    if (!bins) return std::nullopt;
+// (clipped) samples count at the clip plus overEv: the bin itself spans
+// up to +4 EV and says nothing about how far over they are.
+inline std::optional<float> sceneLinearMeanEv(const std::uint32_t* bins, float clipEv, float overEv) noexcept {
+    if (!bins || !std::isfinite(clipEv)) return std::nullopt;
     const double width = double(kSceneKeyMaxEv - kSceneKeyMinEv) / double(kSceneKeyBins);
     double total = 0.0, sum = 0.0;
     for (std::size_t b = 0; b < kSceneKeyBins; ++b) {
         if (!bins[b]) continue;
-        const double ev = kSceneKeyMinEv + (double(b) + (b + 1 == kSceneKeyBins ? 0.0 : 0.5)) * width;
+        const double ev = b + 1 == kSceneKeyBins ? double(clipEv) + double(overEv)
+                                                  : kSceneKeyMinEv + (double(b) + 0.5) * width;
         total += bins[b];
         sum += bins[b] * std::exp2(ev);
     }
     if (!(total > 0.0) || !(sum > 0.0)) return std::nullopt;
     return float(std::log2(sum / total));
+}
+
+// The highlight percentile of one frame, scene-referred (exposure removed).
+struct HighlightReading {
+    bool clipped = false;
+    // Unclipped: the percentile. Clipped: the clip plus clippedOverEv.
+    double sceneEv = 0.0;
+    // Exposure is right when the percentile sits at targetEv (frame units).
+    double targetEv = 0.0;
+};
+
+inline bool binsPopulated(const std::uint32_t* bins) noexcept {
+    if (!bins) return false;
+    for (std::size_t b = 0; b < kSceneKeyBins; ++b)
+        if (bins[b]) return true;
+    return false;
+}
+
+inline std::optional<HighlightReading> readHighlight(const FrameObservation& f, const MeterPolicy& p) noexcept {
+    const bool channel = binsPopulated(f.channelBins);
+    const std::uint32_t* bins = channel ? f.channelBins : f.weightedBins;
+    const float clipEv = channel ? std::log2(kChannelClip) : f.clipLumaEv;
+    const auto high = scenePercentileEv(bins, p.highlightPercentile);
+    if (!high) return std::nullopt;
+    HighlightReading h;
+    h.clipped = *high >= clipEv - 0.05f;
+    h.sceneEv = (h.clipped ? double(clipEv) + double(p.clippedOverEv) : double(*high)) - f.logExposure;
+    h.targetEv = double(clipEv) - double(channel ? p.channelMarginEv : p.lumaMarginEv);
+    return h;
 }
 
 // Metering modes (Settings). The sample weighting itself (matrix, centre,
@@ -259,33 +336,60 @@ inline MeterPolicy meterPolicyFor(int metering) noexcept {
     return p;
 }
 
+// Darkening the guard applies for a highlight needing `need` EV: all of it
+// up to maxGuardEv, then easing (smoothly) to guardReleasedEv at
+// guardGiveUpEv and beyond.
+inline double guardDarkeningEv(double need, const MeterPolicy& p) noexcept {
+    const double cap = p.maxGuardEv;
+    if (need <= cap) return std::max(0.0, need);
+    const double span = double(p.guardGiveUpEv) - cap;
+    const double x = span > 0.0 ? std::clamp((need - cap) / span, 0.0, 1.0) : 1.0;
+    const double eased = x * x * (3.0 - 2.0 * x);
+    return cap + (std::min(double(p.guardReleasedEv), cap) - cap) * eased;
+}
+
+inline double clippedGuardCapEv(float ev100, const MeterPolicy& p) noexcept {
+    const float span = p.outdoorEv100High - p.outdoorEv100Low;
+    const float x = span > 0.0f && std::isfinite(ev100) ? std::clamp((ev100 - p.outdoorEv100Low) / span, 0.0f, 1.0f)
+                                                        : 0.0f;
+    const float s = x * x * (3.0f - 2.0f * x);
+    const float indoor = std::min(p.clippedGuardMaxEv, p.maxGuardEv);
+    return double(indoor + (p.maxGuardEv - indoor) * s);
+}
+
+// The user's EV applies after the highlight handling, as on a camera: the
+// guard protects the metered exposure, not the user's choice.
 inline std::optional<Metered> meter(const FrameObservation& f, NightLook look, float userEv,
                                     const MeterPolicy& p = {}) noexcept {
     if (!f.weightedBins || !std::isfinite(f.logExposure) || !std::isfinite(f.clipLumaEv)) return std::nullopt;
-    const auto key = sceneKeyEv(f.weightedBins);
-    const auto high = scenePercentileEv(f.weightedBins, p.highlightPercentile);
+    // Highlights stay whole-frame; only the key leans to the focus area.
+    auto key = sceneKeyEv(f.weightedBins);
+    if (key && f.focusShare > 0.0f && binsPopulated(f.focusBins)) {
+        if (const auto focusKey = sceneKeyEv(f.focusBins))
+            key = *key + std::clamp(f.focusShare, 0.0f, 1.0f) * (*focusKey - *key);
+    }
+    const auto high = readHighlight(f, p);
     if (!key || !high) return std::nullopt;
     Metered m;
-    m.sceneEv100 = sceneEv100(*key, f.shutterNs, f.iso, f.aperture, p.midGray);
+    const float nightKey = f.frameLogMeanEv && std::isfinite(*f.frameLogMeanEv) ? *f.frameLogMeanEv : *key;
+    m.sceneEv100 = sceneEv100(nightKey, f.shutterNs, f.iso, f.aperture, p.midGray);
     m.nightOffsetEv = nightKeyOffsetEv(m.sceneEv100, look, p);
     // Scene-referred (exposure removed) key and highlight.
     const double keyScene = double(*key) - f.logExposure;
-    const bool clipped = *high >= f.clipLumaEv - 0.05f;
-    const double highScene = (clipped ? double(f.clipLumaEv + p.clippedOverEv) : double(*high)) - f.logExposure;
-    double keyTarget = std::log2(double(p.targetKey)) + double(m.nightOffsetEv) + double(userEv);
-    double byKey = keyTarget - keyScene;
+    double byKey = std::log2(double(p.targetKey)) + double(m.nightOffsetEv) - keyScene;
     if (p.linearMean) {
-        if (const auto mean = sceneLinearMeanEv(f.weightedBins)) {
-            keyTarget = std::log2(double(p.linearMeanTarget)) + double(m.nightOffsetEv) + double(userEv);
-            byKey = keyTarget - (double(*mean) - f.logExposure);
-        }
+        if (const auto mean = sceneLinearMeanEv(f.weightedBins, f.clipLumaEv, p.clippedOverEv))
+            byKey = std::log2(double(p.linearMeanTarget)) + double(m.nightOffsetEv) - (double(*mean) - f.logExposure);
     }
-    const double byHighlight = double(f.clipLumaEv - p.channelMarginEv) - highScene;
+    const double byHighlight = high->targetEv - high->sceneEv + double(p.sensorHeadroomEv);
+    m.highlightNeedEv = byKey - byHighlight + double(p.sensorHeadroomEv);
+    double darkening = guardDarkeningEv(byKey - byHighlight, p);
+    if (high->clipped) darkening = std::min(darkening, clippedGuardCapEv(m.sceneEv100, p));
     const double guarded = p.highlightPriority
                                ? std::clamp(byHighlight, byKey - double(p.maxGuardEv), byKey + double(p.highlightLiftEv))
-                               : std::max(std::min(byKey, byHighlight), byKey - double(p.maxGuardEv));
+                               : byKey - darkening;
     m.guardEv = float(guarded - byKey);
-    m.desiredLogExposure = guarded;
+    m.desiredLogExposure = guarded + double(userEv);
     return m;
 }
 
@@ -384,12 +488,22 @@ struct Settings {
     // 0: no snapping; else the mains period.
     std::int64_t flickerPeriodNs = 0;
     Limits limits{};
+    // Highlight headroom, up to this much: the sensor runs under the shown
+    // exposure by what the highlights need (as Camera2 AE does with its
+    // post-RAW boost), the viewfinder/photo gain carries it back and the
+    // render rolls those highlights off. No highlights, no headroom (no
+    // noise for nothing). Past it the guard darkens what is shown.
+    float headroomEv = 1.0f;
+    // Headroom rises at once (a highlight must not clip on the way) and
+    // falls with this time constant.
+    float headroomFallTauSec = 0.3f;
 };
 
 struct Step {
     Solution request;           // what to put on the repeating request
     double targetLogExposure;   // smoothed target the viewfinder shows
     Metered metered;
+    float headroomEv = 0.0f;    // request = target - headroomEv
 };
 
 // Frame-lane state: meter -> clamp to reachable -> filter -> solve.
@@ -400,13 +514,31 @@ class Controller {
    public:
     std::optional<Step> update(const FrameObservation& f, const Settings& s, float userEv,
                                const MeterPolicy& mp = {}, const FilterPolicy& fp = {}) noexcept {
-        const auto m = meter(f, s.night, userEv, mp);
+        // Headroom: what the highlights need (metered without any), up to the
+        // setting; rises at once, falls smoothly.
+        const auto plain = meter(f, s.night, userEv, mp);
+        if (!plain) return std::nullopt;
+        // Highlight-weighted already places the highlights at the shown white.
+        const double wanted = mp.highlightPriority ? 0.0
+                                                   : std::clamp(plain->highlightNeedEv, 0.0,
+                                                                double(std::max(0.0f, s.headroomEv)));
+        if (wanted >= headroom_ || headroomNs_ == 0) {
+            headroom_ = wanted;
+        } else if (f.timestampNs > headroomNs_) {
+            const double dt = std::min(double(f.timestampNs - headroomNs_) * 1e-9, 0.2);
+            headroom_ += (wanted - headroom_) * (1.0 - std::exp(-dt / std::max(1e-3f, s.headroomFallTauSec)));
+        }
+        headroomNs_ = std::max(headroomNs_, f.timestampNs);
+        const float headroom = float(headroom_);
+        MeterPolicy policy = mp;
+        policy.sensorHeadroomEv = headroom;
+        const auto m = headroom > 0.0f ? meter(f, s.night, userEv, policy) : plain;
         if (!m) return std::nullopt;
         // Clamp the desire to what the sensor (+ digital cap) can deliver, so
         // the viewfinder never has to show an exposure the photo cannot get.
-        const auto reachable = solve(requestFor(m->desiredLogExposure, s)).logExposure();
+        const auto reachable = solve(requestFor(m->desiredLogExposure - headroom, s)).logExposure() + headroom;
         const double target = filter_.update(reachable, f.timestampNs, fp);
-        Step step{solve(requestFor(target, s)), target, *m};
+        Step step{solve(requestFor(target - headroom, s)), target, *m, headroom};
         // Requests only change by a visible-to-the-sensor amount; the
         // residual gain covers the rest exactly (no stream of tiny
         // re-submissions while the filter's tail settles).
@@ -461,6 +593,8 @@ class Controller {
     std::array<Entry, 256> ring_{};  // ~8 s at 30 fps: covers the ZSL reference
     std::size_t next_ = 0;
     std::optional<Step> last_;
+    double headroom_ = 0.0;
+    std::uint64_t headroomNs_ = 0;
 };
 
 }  // namespace rawrcam::color::rawr_ae

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <array>
 #include <optional>
 #include <string>
 #include <vector>
@@ -128,6 +129,9 @@ class NativeCameraController {
         // Spot AE target (source-normalized centre) rawr meters instead of the frame.
         bool spotActive = false;
         float spotX = 0.5f, spotY = 0.5f;
+        // Tap or face autofocus area (source-normalized x0,y0,x1,y1); Matrix
+        // leans its key toward it.
+        std::optional<std::array<float, 4>> focusArea;
     };
     void setRawrAeConfig(const RawrAeConfig& config);
     [[nodiscard]] RawrAeContext rawrAeContext() const;

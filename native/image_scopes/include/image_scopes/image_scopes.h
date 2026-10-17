@@ -39,9 +39,15 @@ struct SceneExposureStatsRecordInfo {
     // Sample weighting outside a spot: matrix (centre half x3), centre-weighted
     // (smooth falloff from the centre), or average (all equal).
     SceneWeighting weighting = SceneWeighting::Matrix;
+    // Per-channel saturation of the input (e.g. the white-balance gains when
+    // sensor white is 1): fills channelBins. All zero leaves them empty.
+    float channelCeilings[3] = {0.0f, 0.0f, 0.0f};
     // Spot meter: when spotX1 > spotX0 and spotY1 > spotY0, only samples inside
     // this normalized [0,1] input rectangle count (1/255 resolution).
     float spotX0 = 0.0f, spotY0 = 0.0f, spotX1 = 0.0f, spotY1 = 0.0f;
+    // Focus area: when focusX1 > focusX0 and focusY1 > focusY0, samples inside
+    // this normalized rectangle also fill focusBins (1/255 resolution).
+    float focusX0 = 0.0f, focusY0 = 0.0f, focusX1 = 0.0f, focusY1 = 0.0f;
 };
 
 struct DisplayWaveformRecordInfo {

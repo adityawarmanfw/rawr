@@ -1,7 +1,10 @@
 // Adapts narrow frame ports to session-owned domain collaborators.
 
+#include <sys/system_properties.h>
+
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 #include "capture/multiframe/BracketExposure.h"
 #include "color/AePostGainCurve.h"
@@ -54,6 +57,19 @@ std::optional<RawrFrameExposure> rawrFrameExposure(const rawrcam::metadata::Fram
 }
 }  // namespace
 
+// Share of the Matrix key the focus area takes, in EV. Tuning:
+// `adb shell setprop debug.rawr.ae_focus_share 0..100` (percent; read once
+// per process).
+static float rawrAeFocusShare() {
+    static const float share = [] {
+        char value[PROP_VALUE_MAX]{};
+        if (__system_property_get("debug.rawr.ae_focus_share", value) > 0)
+            return std::clamp(float(std::atoi(value)), 0.0f, 100.0f) / 100.0f;
+        return 0.4f;
+    }();
+    return share;
+}
+
 bool SessionFrameCallbacks::rawrAeEngaged() const {
     const auto* controller = engine_->cameraControls_.controller();
     return controller && controller->rawrAeContext().engaged;
@@ -96,6 +112,15 @@ void SessionFrameCallbacks::updateRawrAe(const image_scopes::SceneExposureStatsD
                                  context.config.maxDigitalGainEv};
     ae::FrameObservation f{stats->weightedBins, std::log2(clipLuma), exposure->logExposure(), exposure->shutterNs,
                            exposure->iso, metadata.aperture.value_or(0.0f), timestampNs};
+    static_assert(image_scopes::kSceneChannelClip == ae::kChannelClip);
+    f.channelBins = stats->channelBins;
+    // A spot's bins cover the tapped area only; the night look judges the frame.
+    if (context.spotActive) f.frameLogMeanEv = image_scopes::sceneFrameLogMeanEv(*stats);
+    // Matrix leans its key toward the focus area (empty bins when there is none).
+    if (!context.spotActive && context.config.metering == 0) {
+        f.focusBins = stats->focusBins;
+        f.focusShare = rawrAeFocusShare();
+    }
     // A tapped spot meters with the default highlight handling.
     const auto meterPolicy = context.spotActive ? ae::MeterPolicy{} : ae::meterPolicyFor(context.config.metering);
     if (const auto step = rawrAe_.update(f, settings, context.userEv, meterPolicy, ae::filterPolicyForSpeed(context.video ? 0 : context.config.speed)))
@@ -206,6 +231,16 @@ uint32_t SessionFrameCallbacks::sceneMeteringWeighting() {
     // Highlight-weighted keeps matrix weighting; it changes the policy only.
     const int m = context.config.metering;
     return m == 1 || m == 2 ? uint32_t(m) : 0u;
+}
+
+std::array<float, 4> SessionFrameCallbacks::sceneMeteringFocus() {
+    const auto* controller = engine_->cameraControls_.controller();
+    if (!controller) return {};
+    const auto context = controller->rawrAeContext();
+    // Matrix only: a spot meters the tapped area itself, the averages and
+    // highlight-weighted keep their whole-frame meaning.
+    if (!context.engaged || context.spotActive || context.config.metering != 0 || !context.focusArea) return {};
+    return *context.focusArea;
 }
 
 bool SessionFrameCallbacks::sceneKeyMeteringEnabled() {

@@ -36,6 +36,8 @@ class CameraFocusControls {
     CameraMeteringRequest request(std::optional<CameraMeteringRegion> aeRegion) const {
         return {region_, aeRegion, trigger_};
     }
+    // The current tap or face autofocus area (sensor coordinates), if any.
+    const std::optional<CameraMeteringRegion>& afRegion() const { return region_; }
 
    private:
     TapFocusPolicy tapPolicy_;

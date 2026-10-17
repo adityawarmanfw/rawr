@@ -9,7 +9,11 @@
 // weighting: only samples inside it count. sampleBlockSize carries the
 // weighting above its low byte: 0 matrix (centre half x3), 1 centre-weighted
 // (1 + 31 exp(-4.5 r^2), r = distance from the centre in half the short
-// side), 2 average.
+// side), 2 average. With channel ceilings, a second histogram bins the
+// brightest channel over its ceiling (top bin at >= 0.95), same weights.
+// Every sample, spot or not, adds its quantised log2 luma to a whole-frame
+// sum (the spot's night look judges the scene). Samples inside the focus
+// rectangle (packed like the spot, nonzero) also fill focus luma bins.
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 layout(binding = 0, rgba16f) uniform readonly image2D src;
 layout(std430, binding = 1) buffer Partial { uint data[]; }
@@ -17,11 +21,19 @@ partial;
 
 const uint PARTITIONS = 16u;
 const uint BIN_COUNT = 256u;
-const uint COUNTERS = 4u;  // total weight, samples, clipped weight, reserved
-const uint STRIDE = BIN_COUNT + COUNTERS;
+// total weight, samples, clipped weight, reserved, frame log sum, frame
+// samples, focus samples, reserved
+const uint COUNTERS = 8u;
+const uint CHANNEL = BIN_COUNT;
+const uint FOCUS = 2u * BIN_COUNT;
+const uint STRIDE = 3u * BIN_COUNT + COUNTERS;
+const float CHANNEL_CLIP = 0.95;
+const float FRAME_LOG_MIN = -24.0;
+const float FRAME_LOG_SCALE = 16.0;
+const float FRAME_LOG_MAX = 448.0;
 const float MIN_EV = -20.0;
 const float BINS_PER_EV = 256.0 / 24.0;
-shared uint bins[BIN_COUNT];
+shared uint bins[3u * BIN_COUNT];
 shared uint counters[COUNTERS];
 layout(push_constant) uniform PC {
     uint width;
@@ -32,8 +44,18 @@ layout(push_constant) uniform PC {
     float lumaB;
     float clipLuma;
     uint spot;
+    float invCeilR;
+    float invCeilG;
+    float invCeilB;
+    uint focus;
 }
 pc;
+
+// 255 * x / width against packed 8-bit x0,y0,x1,y1 bounds, in integers.
+bool insideRect(uint rect, uint x, uint y) {
+    uint sx = (255u * x) / pc.width, sy = (255u * y) / pc.height;
+    return sx >= (rect & 255u) && sx < ((rect >> 16) & 255u) && sy >= ((rect >> 8) & 255u) && sy < (rect >> 24);
+}
 
 uint sceneBin(float y) {
     if (!(y > 0.0)) return 0u;
@@ -44,6 +66,8 @@ uint sceneBin(float y) {
 void main() {
     uint li = gl_LocalInvocationIndex;
     bins[li] = 0u;
+    bins[CHANNEL + li] = 0u;
+    bins[FOCUS + li] = 0u;
     if (li < COUNTERS) counters[li] = 0u;
     barrier();
 
@@ -56,6 +80,8 @@ void main() {
     uint by0 = (part * blocksY) / PARTITIONS;
     uint by1 = ((part + 1u) * blocksY) / PARTITIONS;
     vec3 lumaRow = vec3(pc.lumaR, pc.lumaG, pc.lumaB);
+    vec3 invCeil = vec3(pc.invCeilR, pc.invCeilG, pc.invCeilB);
+    bool channelOn = invCeil.r > 0.0 || invCeil.g > 0.0 || invCeil.b > 0.0;
 
     for (uint by = by0; by < by1; ++by) {
         uint y0 = by * block;
@@ -71,13 +97,18 @@ void main() {
             vec3 c = max(imageLoad(src, ivec2(x, y)).rgb, vec3(0.0));
             float luma = dot(lumaRow, c);
             if (isnan(luma)) luma = 0.0;
+            bool clipped = pc.clipLuma > 0.0 && luma >= pc.clipLuma;
+            float frameLuma = clipped ? pc.clipLuma : luma;
+            float frameLog = frameLuma > 0.0 ? (log2(frameLuma) - FRAME_LOG_MIN) * FRAME_LOG_SCALE : 0.0;
+            atomicAdd(counters[4], uint(clamp(frameLog + 0.5, 0.0, FRAME_LOG_MAX)));
+            atomicAdd(counters[5], 1u);
+            if (pc.focus != 0u && insideRect(pc.focus, x, y)) {
+                atomicAdd(bins[FOCUS + (clipped ? BIN_COUNT - 1u : sceneBin(luma))], 1u);
+                atomicAdd(counters[6], 1u);
+            }
             uint w;
             if (pc.spot != 0u) {
-                // 255 * x / width against the packed bounds, in integers.
-                uint sx = (255u * x) / pc.width, sy = (255u * y) / pc.height;
-                bool inside = sx >= (pc.spot & 255u) && sx < ((pc.spot >> 16) & 255u) &&
-                              sy >= ((pc.spot >> 8) & 255u) && sy < (pc.spot >> 24);
-                if (!inside) continue;
+                if (!insideRect(pc.spot, x, y)) continue;
                 w = 1u;
             } else if (weighting == 1u) {
                 vec2 d = (vec2(x, y) - 0.5 * vec2(pc.width, pc.height)) / (0.5 * shortSide);
@@ -89,8 +120,13 @@ void main() {
                               4u * y < 3u * pc.height;
                 w = centre ? 3u : 1u;
             }
-            bool clipped = pc.clipLuma > 0.0 && luma >= pc.clipLuma;
             atomicAdd(bins[clipped ? BIN_COUNT - 1u : sceneBin(luma)], w);
+            if (channelOn) {
+                vec3 rel = c * invCeil;
+                float peak = max(rel.r, max(rel.g, rel.b));
+                if (isnan(peak)) peak = 0.0;
+                atomicAdd(bins[CHANNEL + (peak >= CHANNEL_CLIP ? BIN_COUNT - 1u : sceneBin(peak))], w);
+            }
             atomicAdd(counters[0], w);
             atomicAdd(counters[1], 1u);
             if (clipped) atomicAdd(counters[2], w);
@@ -99,5 +135,7 @@ void main() {
     barrier();
     uint base = part * STRIDE;
     partial.data[base + li] = bins[li];
-    if (li < COUNTERS) partial.data[base + BIN_COUNT + li] = counters[li];
+    partial.data[base + CHANNEL + li] = bins[CHANNEL + li];
+    partial.data[base + FOCUS + li] = bins[FOCUS + li];
+    if (li < COUNTERS) partial.data[base + 3u * BIN_COUNT + li] = counters[li];
 }

@@ -16,9 +16,9 @@ using Bins = std::array<std::uint32_t, kSceneKeyBins>;
 constexpr float kBinEv = (kSceneKeyMaxEv - kSceneKeyMinEv) / float(kSceneKeyBins);
 constexpr float kClipEv = -0.152f;  // log2(0.9)
 
-void add(Bins& bins, float ev, std::uint32_t weight) {
+void add(Bins& bins, float ev, std::uint32_t weight, float clipEv = kClipEv) {
     // Clipped samples land in the top bin, as in image_scopes.
-    const float clamped = ev >= kClipEv ? kSceneKeyMaxEv - kBinEv * 0.5f : ev;
+    const float clamped = ev >= clipEv ? kSceneKeyMaxEv - kBinEv * 0.5f : ev;
     const auto b = std::size_t(std::clamp((clamped - kSceneKeyMinEv) / kBinEv, 0.0f, float(kSceneKeyBins - 1)));
     bins[b] += weight;
 }
@@ -27,16 +27,43 @@ void add(Bins& bins, float ev, std::uint32_t weight) {
 // scene-referred units (add log exposure to get frame luma).
 struct Scene {
     double keyEv;
-    double highlightEv;  // 1.5% of the frame
+    double highlightEv;          // 1.5% of the frame
+    double highlightSpreadEv{};  // > 0: a gradient up to highlightEv (sky)
+    double chromaEv{};           // brightest channel over luma in the highlight
+    double area = 0.015;         // highlight share of the frame
 };
 
-Bins frameBins(const Scene& s, double logE) {
-    Bins bins{};
-    for (int i = -8; i <= 8; ++i) add(bins, float(s.keyEv + logE + i * 0.25), 600 - std::abs(i) * 30);
+// Channel bins: log2(max channel / saturation); neutral luma at the clip
+// is the channel clip.
+constexpr float kChannelClipEv = -0.074f;  // log2(0.95)
+constexpr float kLumaToChannelEv = kChannelClipEv - kClipEv;
+
+struct FrameBins {
+    Bins luma{}, channel{};
+};
+
+FrameBins frameBins(const Scene& s, double logE) {
+    FrameBins f;
+    const auto both = [&](double ev, std::uint32_t w, double chroma) {
+        add(f.luma, float(ev), w);
+        add(f.channel, float(ev + kLumaToChannelEv + chroma), w, kChannelClipEv);
+    };
     std::uint32_t total = 0;
-    for (auto w : bins) total += w;
-    add(bins, float(s.highlightEv + logE), total * 15 / 985);
-    return bins;
+    for (int i = -8; i <= 8; ++i) {
+        both(s.keyEv + logE + i * 0.25, 600 - std::abs(i) * 30, 0.0);
+        total += 600 - std::abs(i) * 30;
+    }
+    const auto high = std::uint32_t(double(total) * s.area / (1.0 - s.area));
+    if (s.highlightSpreadEv > 0.0) {
+        // The gradient continues down to the body at the same density.
+        constexpr int kSteps = 24;
+        for (int i = 0; i < kSteps; ++i)
+            both(s.highlightEv + logE - s.highlightSpreadEv * (double(i) + 0.5) / kSteps, high / kSteps * 2,
+                 s.chromaEv);
+    } else {
+        both(s.highlightEv + logE, high, s.chromaEv);
+    }
+    return f;
 }
 
 struct Sim {
@@ -53,10 +80,13 @@ struct Sim {
     std::uint64_t frame = 0;
     std::vector<double> preview;  // log2 viewfinder brightness of the key
     std::vector<Solution> applied;
+    MeterPolicy policy{};
+    bool channel = false;  // feed the per-channel histogram too
 
     Sim() {
         settings.enabled = true;
         settings.limits = Limits{100, 6400, 1600, 20'000, 66'666'667, 33'333'333, 2.0f};
+        settings.headroomEv = 0.0f;  // the headroom tests turn it on
         sensor = {10'000'000, 100, 0.0f};
         pending = sensor;
         for (int i = 0; i < latencyFrames; ++i) inFlight.push_back(sensor);
@@ -76,10 +106,12 @@ struct Sim {
             const float residual = ae.residualEvFor(ts, logE).value_or(0.0f);
             const double measuredKey = scene.keyEv + (noiseEv > 0 ? noise(rng) : 0.0);
             preview.push_back(scene.keyEv + logE + residual);
-            const Scene observed{measuredKey, scene.highlightEv};
+            Scene observed = scene;
+            observed.keyEv = measuredKey;
             const auto bins = frameBins(observed, logE);
-            FrameObservation f{bins.data(), kClipEv, logE, double(sensor.shutterNs), double(sensor.iso), 1.8f, ts};
-            if (const auto step = ae.update(f, settings, userEv)) pending = step->request;
+            FrameObservation f{bins.luma.data(), kClipEv, logE, double(sensor.shutterNs), double(sensor.iso), 1.8f, ts};
+            if (channel) f.channelBins = bins.channel.data();
+            if (const auto step = ae.update(f, settings, userEv, policy)) pending = step->request;
             applied.push_back(sensor);
         }
     }
@@ -293,16 +325,74 @@ int main() {
         const auto& last = night.ae.last();
         assert(last && last->metered.nightOffsetEv < -1.0f);
     }
-    // Highlight guard: clipped highlights pull the exposure down, at most
-    // maxGuardEv, and it settles (no clip/unclip cycle).
-    {
+    // Highlight guard: a highlight that can be saved pulls the exposure down
+    // as far as it needs (within maxGuardEv), and it settles (no clip/unclip
+    // cycle).
+    for (const bool channel : {false, true}) {
         Sim sim;
-        sim.run({kDayKey, kDayKey + 4.5}, 4.0);
+        sim.channel = channel;
+        // Frame highlight 0.5 EV over the clip at the unguarded exposure.
+        sim.run({kDayKey, kDayKey + 3.32 + kClipEv + 0.5}, 4.0);
         const auto& last = sim.ae.last();
-        assert(last && last->metered.guardEv < -0.5f && last->metered.guardEv >= -1.5f);
+        assert(last && last->metered.guardEv < -0.6f && last->metered.guardEv >= -1.5f);
         const std::size_t at = sim.preview.size();
-        sim.run({kDayKey, kDayKey + 4.5}, 2.0);
+        sim.run({kDayKey, kDayKey + 3.32 + kClipEv + 0.5}, 2.0);
         assert(maxAbsDelta(sim.preview, at, sim.preview.size()) < 0.02);
+    }
+    // A window from a dark room (7 EV over): it stays clipped, so the guard
+    // stops at clippedGuardMaxEv and the room keeps nearly its exposure,
+    // without first darkening further and backing off. Once the window
+    // leaves, a saveable highlight is protected in full again.
+    for (const bool channel : {false, true}) {
+        Sim sim;
+        sim.channel = channel;
+        constexpr double kRoom = kDayKey - 5.0;  // EV100 ~5
+        sim.settings.night = NightLook::Off;  // the guard alone
+        sim.run({kRoom, kRoom + 1.5}, 2.0);
+        const double room = sim.preview.back();
+        const Scene window{kRoom, kRoom + 3.32 + 7.0, 0.0, 0.0, 0.15};
+        const std::size_t enter = sim.preview.size();
+        sim.run(window, 4.0);
+        assert(near(sim.ae.last()->metered.guardEv, -1.25, 0.01));
+        // The cap plus the window lifting the median; the full guard would
+        // leave the room ~1.8 EV down.
+        assert(sim.preview.back() > room - 1.65);
+        for (std::size_t i = enter; i < sim.preview.size(); ++i) assert(sim.preview[i] > sim.preview.back() - 0.1);
+        const std::size_t at = sim.preview.size();
+        sim.run(window, 2.0);
+        assert(maxAbsDelta(sim.preview, at, sim.preview.size()) < 0.02);
+        sim.run({kRoom, kRoom + 3.32 + kClipEv + 0.5}, 4.0);
+        assert(sim.ae.last()->metered.guardEv < -0.6f);
+    }
+    // Outdoors (EV100 ~13) a clipped sky needing more than the indoor cap
+    // is saved in full, smoothly.
+    for (const bool channel : {false, true}) {
+        Sim sim;
+        sim.channel = channel;
+        constexpr double kSun = kDayKey + 3.0;
+        sim.run({kSun, kSun + 1.5}, 2.0);
+        const std::size_t at = sim.preview.size();
+        sim.run({kSun, kSun + 3.32 + kClipEv + 0.8, 1.0}, 5.0);
+        const auto& last = sim.ae.last();
+        assert(last->metered.sceneEv100 > 11.0f);
+        // Saved in full (the outdoor cap is the whole guard).
+        assert(last->metered.guardEv < (channel ? -0.6f : -1.0f) && last->metered.guardEv >= -1.5f);
+        double low = sim.preview.back();
+        for (std::size_t i = at; i < sim.preview.size(); ++i) low = std::min(low, sim.preview[i]);
+        assert(sim.preview.back() - low < 0.12);
+    }
+    // The guard's darkening: all of it up to the cap, easing to the release
+    // level by the give-up point, never jumping.
+    {
+        const MeterPolicy p;
+        assert(near(guardDarkeningEv(1.0, p), 1.0, 1e-9) && near(guardDarkeningEv(1.5, p), 1.5, 1e-9));
+        assert(near(guardDarkeningEv(4.0, p), 0.5, 1e-9) && near(guardDarkeningEv(9.0, p), 0.5, 1e-9));
+        double prev = 0.0;
+        for (double need = 0.0; need < 6.0; need += 0.01) {
+            const double d = guardDarkeningEv(need, p);
+            assert(std::abs(d - prev) < 0.02);
+            prev = d;
+        }
     }
     // Flicker snapping in the loop still gives a smooth viewfinder.
     {
@@ -334,6 +424,149 @@ int main() {
         sim.settings.lockedIso = 400;
         sim.run({kDayKey - 3.0, kDayKey}, 3.0);
         for (std::size_t i = 10; i < sim.applied.size(); ++i) assert(sim.applied[i].iso == 400);
+    }
+    // A highlight appearing just over the clip (lamp or sky gradient): the
+    // viewfinder darkens to protect it without dipping below where it
+    // settles by more than a fraction of a stop, even at 6 frames latency.
+    {
+        for (const bool channel : {false, true})
+            for (const int metering : {0, 3})
+                for (const double spread : {0.0, 2.0})
+                    for (double over = 0.05; over < 1.6; over += 0.15) {
+                        Sim sim;
+                        sim.channel = channel;
+                        sim.policy = meterPolicyFor(metering);
+                        sim.latencyFrames = 6;
+                        for (int i = 0; i < 2; ++i) sim.inFlight.push_back(sim.sensor);
+                        sim.run({kDayKey, kDayKey + 1.5}, 3.0);
+                        const std::size_t at = sim.preview.size();
+                        sim.run({kDayKey, kDayKey + 3.32 + kClipEv + over, spread}, 5.0);
+                        double low = sim.preview.back();
+                        for (std::size_t i = at; i < sim.preview.size(); ++i) low = std::min(low, sim.preview[i]);
+                        assert(sim.preview.back() - low < 0.12);
+                    }
+    }
+    // Centre-weighted / average: clipped samples count near the clip, not at
+    // the top of the histogram (+4 EV), so a lamp does not darken the frame.
+    {
+        Bins clean{}, lamp{};
+        const auto binOf = [](float ev) { return std::size_t((ev - kSceneKeyMinEv) / kBinEv); };
+        clean[binOf(-3.3f)] = 1000;
+        lamp[binOf(-3.3f)] = 900;
+        lamp[kSceneKeyBins - 1] = 100;  // 10% clipped
+        const auto at = [](const Bins& b, int metering) {
+            FrameObservation f{b.data(), kClipEv, std::log2(33e6 * 100.0), 33e6, 100.0, 1.8f, 1};
+            return meter(f, NightLook::Off, 0.0f, meterPolicyFor(metering))->desiredLogExposure;
+        };
+        for (const int metering : {1, 2}) {
+            const double darker = at(clean, metering) - at(lamp, metering);
+            assert(darker > 0.5 && darker < 1.4);
+        }
+    }
+    // EV compensation applies on top of the highlight handling: +1 EV is
+    // +1 EV in highlight-weighted, and in matrix with the guard active.
+    {
+        Bins bins{};
+        const auto binOf = [](float ev) { return std::size_t((ev - kSceneKeyMinEv) / kBinEv); };
+        bins[binOf(-3.3f)] = 900;
+        bins[kSceneKeyBins - 1] = 100;
+        FrameObservation f{bins.data(), kClipEv, std::log2(33e6 * 100.0), 33e6, 100.0, 1.8f, 1};
+        for (const int metering : {0, 3}) {
+            const auto base = meter(f, NightLook::Off, 0.0f, meterPolicyFor(metering));
+            const auto up = meter(f, NightLook::Off, 1.0f, meterPolicyFor(metering));
+            const auto down = meter(f, NightLook::Off, -1.0f, meterPolicyFor(metering));
+            assert(base->guardEv < -0.3f);
+            assert(near(up->desiredLogExposure - base->desiredLogExposure, 1.0, 1e-6));
+            assert(near(base->desiredLogExposure - down->desiredLogExposure, 1.0, 1e-6));
+        }
+    }
+    // Per-channel highlights: a saturated colour clipping one channel is
+    // protected though its luma is well under the clip; a neutral highlight
+    // just under saturation is left alone (luma needed a wide margin).
+    {
+        const double logE = std::log2(33e6 * 100.0);
+        const auto metered = [&](double highlightFrameEv, double chroma, bool channel) {
+            const Scene scene{-3.32 - logE, highlightFrameEv - logE, 0.0, chroma};
+            const auto bins = frameBins(scene, logE);
+            FrameObservation f{bins.luma.data(), kClipEv, logE, 33e6, 100.0, 1.8f, 1};
+            if (channel) f.channelBins = bins.channel.data();
+            return *meter(f, NightLook::Off, 0.0f);
+        };
+        // Red light: luma 0.5 EV under the clip, red channel 0.8 EV over.
+        assert(metered(kClipEv - 0.5, 1.3, true).guardEv < -0.4f);
+        assert(metered(kClipEv - 0.5, 1.3, false).guardEv > -0.15f);
+        // Neutral highlight 0.4 EV under saturation.
+        assert(metered(kClipEv - 0.4, 0.0, true).guardEv == 0.0f);
+        assert(metered(kClipEv - 0.4, 0.0, false).guardEv < -0.1f);
+    }
+    // Focus area: its key pulls the frame's by focusShare, in EV (a subject
+    // 3 EV under the frame moves the exposure 1.2 EV at 0.4), smoothly in
+    // the share; no focus bins or share 0 leave the frame's key.
+    {
+        Bins frame{}, subject{};
+        const auto binOf = [](float ev) { return std::size_t((ev - kSceneKeyMinEv) / kBinEv); };
+        for (int i = -4; i <= 4; ++i) frame[binOf(-3.3f + 0.25f * float(i))] = 100;
+        subject[binOf(-6.3f)] = 50;
+        const auto desired = [&](const std::uint32_t* focus, float share) {
+            FrameObservation f{frame.data(), kClipEv, std::log2(33e6 * 100.0), 33e6, 100.0, 1.8f, 1};
+            f.focusBins = focus;
+            f.focusShare = share;
+            return meter(f, NightLook::Off, 0.0f)->desiredLogExposure;
+        };
+        const double base = desired(nullptr, 0.4f);
+        assert(near(desired(subject.data(), 0.0f), base, 1e-9));
+        assert(near(desired(subject.data(), 0.4f) - base, 1.2, 0.05));
+        assert(near(desired(subject.data(), 0.25f) - base, 0.75, 0.05));
+        assert(near(desired(subject.data(), 0.5f) - base, 1.5, 0.05));
+        Bins none{};
+        assert(near(desired(none.data(), 0.4f), base, 1e-9));
+    }
+    // Headroom: the sensor runs under the shown exposure by what the
+    // highlights need, up to 1 EV, and the viewfinder shows the same as
+    // without it; the guard only darkens past that. No highlights (or a dim
+    // scene without them): no headroom. A dim room with a bright doorway
+    // still gets it.
+    {
+        const auto settle = [](float headroomEv, double keyEv, double highlightEv) {
+            Sim sim;
+            sim.settings.headroomEv = headroomEv;
+            sim.run({keyEv, highlightEv}, 4.0);
+            return sim;
+        };
+        // 0.5 EV over the shown clip: guarded without headroom; with it the
+        // RAW holds it, the shown exposure barely moves.
+        const double over = kDayKey + 3.32 + kClipEv + 0.5;
+        const auto plain = settle(0.0f, kDayKey, over);
+        const auto spare = settle(1.0f, kDayKey, over);
+        assert(plain.ae.last()->metered.guardEv < -0.6f);
+        assert(spare.ae.last()->metered.guardEv > -0.15f);
+        assert(near(spare.ae.last()->headroomEv, 1.0, 0.01));
+        assert(spare.preview.back() > plain.preview.back() + 0.5);
+        assert(spare.applied.back().logExposure() < spare.ae.last()->targetLogExposure - 0.95);
+        // Nothing bright: no headroom, same exposure as before.
+        const auto calm = settle(1.0f, kDayKey, kDayKey + 1.5);
+        assert(calm.ae.last()->headroomEv < 0.01f);
+        assert(near(calm.preview.back(), settle(0.0f, kDayKey, kDayKey + 1.5).preview.back(), 0.02));
+        // Dim garage, sunlit doorway far over: full headroom.
+        const auto garage = settle(1.0f, kDayKey - 7.0, kDayKey - 7.0 + 3.32 + 5.0);
+        assert(near(garage.ae.last()->headroomEv, 1.0, 0.01));
+        // The highlight leaving: headroom falls back smoothly, the view holds.
+        auto leave = settle(1.0f, kDayKey, over);
+        const std::size_t at = leave.preview.size();
+        leave.run({kDayKey, kDayKey + 1.5}, 3.0);
+        assert(leave.ae.last()->headroomEv < 0.05f);
+        assert(maxAbsDelta(leave.preview, at, leave.preview.size()) < 0.05);
+    }
+    // Spot: the night look follows the whole frame, not the tapped area.
+    // A dark subject in a bright room is exposed as tapped.
+    {
+        Bins spot{};
+        const auto binOf = [](float ev) { return std::size_t((ev - kSceneKeyMinEv) / kBinEv); };
+        spot[binOf(-7.0f)] = 1000;
+        FrameObservation f{spot.data(), kClipEv, std::log2(10e6 * 100.0), 10e6, 100.0, 1.8f, 1};
+        assert(meter(f, NightLook::Natural, 0.0f)->nightOffsetEv < -0.3f);
+        f.frameLogMeanEv = -3.3f;
+        assert(meter(f, NightLook::Natural, 0.0f)->nightOffsetEv == 0.0f);
     }
     std::puts("rawr_auto_exposure_test ok");
     return 0;
