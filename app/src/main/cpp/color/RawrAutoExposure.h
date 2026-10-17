@@ -161,10 +161,13 @@ struct MeterPolicy {
     // Trimmed median scene key is placed here (scene-linear luma, white = 1).
     // Similar to where Camera2 AE puts it; AutoKey may lift further.
     float targetKey = 0.10f;
-    // Highlights: this percentile is kept channelMarginEv under the clip
-    // (luma under-reports single-channel clipping, e.g. blue sky).
+    // Highlights: this percentile of the per-channel histogram (brightest
+    // channel over its saturation) is kept channelMarginEv under the clip.
+    // Without it, the luma percentile keeps lumaMarginEv (luma under-reports
+    // single-channel clipping, e.g. blue sky).
     float highlightPercentile = 0.99f;
-    float channelMarginEv = 0.6f;
+    float channelMarginEv = 0.25f;
+    float lumaMarginEv = 0.6f;
     // The highlight guard may darken the key at most this far.
     float maxGuardEv = 1.5f;
     // Highlight-weighted: the percentile sits at the clip (less the margin)
@@ -176,8 +179,12 @@ struct MeterPolicy {
     // no highlight guard.
     bool linearMean = false;
     float linearMeanTarget = 0.18f;
-    // A clipped percentile does not say by how much; assume this far over.
-    float clippedOverEv = 0.5f;
+    // A clipped percentile does not say by how much; assume this far over
+    // (also where the linear mean counts clipped samples). Each frame
+    // re-guesses from its own clip, so a larger guess overshoots: a
+    // highlight barely over the clip dips the exposure by about this much
+    // before it recovers.
+    float clippedOverEv = 0.3f;
     // Night: below dayEv100 the key target lowers smoothly, reaching
     // nightKeyEv at nightEv100 (Natural; Bright uses half).
     float dayEv100 = 7.0f;
@@ -203,6 +210,10 @@ inline float nightKeyOffsetEv(float ev100, NightLook look, const MeterPolicy& p 
     return s * p.nightKeyEv * (look == NightLook::Bright ? 0.5f : 1.0f);
 }
 
+// Per-channel histogram: samples whose brightest channel reaches this
+// fraction of its saturation are clipped (image_scopes kSceneChannelClip).
+inline constexpr float kChannelClip = 0.95f;
+
 struct FrameObservation {
     const std::uint32_t* weightedBins = nullptr;  // AutoKey layout (kSceneKeyBins)
     float clipLumaEv = 0.0f;                       // log2 of the clip luma
@@ -211,6 +222,12 @@ struct FrameObservation {
     double iso = 0.0;                              // request coordinate
     float aperture = 0.0f;
     std::uint64_t timestampNs = 0;
+    // Same layout, log2(max channel / its saturation); null or empty: the
+    // highlights are judged on luma.
+    const std::uint32_t* channelBins = nullptr;
+    // Whole-frame log2 luma mean, when weightedBins only cover a spot: the
+    // night look judges the scene, not the tapped area.
+    std::optional<float> frameLogMeanEv{};
 };
 
 struct Metered {
@@ -222,19 +239,50 @@ struct Metered {
 
 // Exposure the scene wants, independent of the frame's own exposure.
 // Weighted mean of linear luma over the scene histogram (log2). Top-bin
-// (clipped) samples count at the bin's floor, a lower bound.
-inline std::optional<float> sceneLinearMeanEv(const std::uint32_t* bins) noexcept {
-    if (!bins) return std::nullopt;
+// (clipped) samples count at the clip plus overEv: the bin itself spans
+// up to +4 EV and says nothing about how far over they are.
+inline std::optional<float> sceneLinearMeanEv(const std::uint32_t* bins, float clipEv, float overEv) noexcept {
+    if (!bins || !std::isfinite(clipEv)) return std::nullopt;
     const double width = double(kSceneKeyMaxEv - kSceneKeyMinEv) / double(kSceneKeyBins);
     double total = 0.0, sum = 0.0;
     for (std::size_t b = 0; b < kSceneKeyBins; ++b) {
         if (!bins[b]) continue;
-        const double ev = kSceneKeyMinEv + (double(b) + (b + 1 == kSceneKeyBins ? 0.0 : 0.5)) * width;
+        const double ev = b + 1 == kSceneKeyBins ? double(clipEv) + double(overEv)
+                                                  : kSceneKeyMinEv + (double(b) + 0.5) * width;
         total += bins[b];
         sum += bins[b] * std::exp2(ev);
     }
     if (!(total > 0.0) || !(sum > 0.0)) return std::nullopt;
     return float(std::log2(sum / total));
+}
+
+// The highlight percentile of one frame, scene-referred (exposure removed).
+struct HighlightReading {
+    bool clipped = false;
+    // Unclipped: the percentile. Clipped: the clip plus clippedOverEv.
+    double sceneEv = 0.0;
+    // Exposure is right when the percentile sits at targetEv (frame units).
+    double targetEv = 0.0;
+};
+
+inline bool binsPopulated(const std::uint32_t* bins) noexcept {
+    if (!bins) return false;
+    for (std::size_t b = 0; b < kSceneKeyBins; ++b)
+        if (bins[b]) return true;
+    return false;
+}
+
+inline std::optional<HighlightReading> readHighlight(const FrameObservation& f, const MeterPolicy& p) noexcept {
+    const bool channel = binsPopulated(f.channelBins);
+    const std::uint32_t* bins = channel ? f.channelBins : f.weightedBins;
+    const float clipEv = channel ? std::log2(kChannelClip) : f.clipLumaEv;
+    const auto high = scenePercentileEv(bins, p.highlightPercentile);
+    if (!high) return std::nullopt;
+    HighlightReading h;
+    h.clipped = *high >= clipEv - 0.05f;
+    h.sceneEv = (h.clipped ? double(clipEv) + double(p.clippedOverEv) : double(*high)) - f.logExposure;
+    h.targetEv = double(clipEv) - double(channel ? p.channelMarginEv : p.lumaMarginEv);
+    return h;
 }
 
 // Metering modes (Settings). The sample weighting itself (matrix, centre,
@@ -259,33 +307,31 @@ inline MeterPolicy meterPolicyFor(int metering) noexcept {
     return p;
 }
 
+// The user's EV applies after the highlight handling, as on a camera: the
+// guard protects the metered exposure, not the user's choice.
 inline std::optional<Metered> meter(const FrameObservation& f, NightLook look, float userEv,
                                     const MeterPolicy& p = {}) noexcept {
     if (!f.weightedBins || !std::isfinite(f.logExposure) || !std::isfinite(f.clipLumaEv)) return std::nullopt;
     const auto key = sceneKeyEv(f.weightedBins);
-    const auto high = scenePercentileEv(f.weightedBins, p.highlightPercentile);
+    const auto high = readHighlight(f, p);
     if (!key || !high) return std::nullopt;
     Metered m;
-    m.sceneEv100 = sceneEv100(*key, f.shutterNs, f.iso, f.aperture, p.midGray);
+    const float nightKey = f.frameLogMeanEv && std::isfinite(*f.frameLogMeanEv) ? *f.frameLogMeanEv : *key;
+    m.sceneEv100 = sceneEv100(nightKey, f.shutterNs, f.iso, f.aperture, p.midGray);
     m.nightOffsetEv = nightKeyOffsetEv(m.sceneEv100, look, p);
     // Scene-referred (exposure removed) key and highlight.
     const double keyScene = double(*key) - f.logExposure;
-    const bool clipped = *high >= f.clipLumaEv - 0.05f;
-    const double highScene = (clipped ? double(f.clipLumaEv + p.clippedOverEv) : double(*high)) - f.logExposure;
-    double keyTarget = std::log2(double(p.targetKey)) + double(m.nightOffsetEv) + double(userEv);
-    double byKey = keyTarget - keyScene;
+    double byKey = std::log2(double(p.targetKey)) + double(m.nightOffsetEv) - keyScene;
     if (p.linearMean) {
-        if (const auto mean = sceneLinearMeanEv(f.weightedBins)) {
-            keyTarget = std::log2(double(p.linearMeanTarget)) + double(m.nightOffsetEv) + double(userEv);
-            byKey = keyTarget - (double(*mean) - f.logExposure);
-        }
+        if (const auto mean = sceneLinearMeanEv(f.weightedBins, f.clipLumaEv, p.clippedOverEv))
+            byKey = std::log2(double(p.linearMeanTarget)) + double(m.nightOffsetEv) - (double(*mean) - f.logExposure);
     }
-    const double byHighlight = double(f.clipLumaEv - p.channelMarginEv) - highScene;
+    const double byHighlight = high->targetEv - high->sceneEv;
     const double guarded = p.highlightPriority
                                ? std::clamp(byHighlight, byKey - double(p.maxGuardEv), byKey + double(p.highlightLiftEv))
                                : std::max(std::min(byKey, byHighlight), byKey - double(p.maxGuardEv));
     m.guardEv = float(guarded - byKey);
-    m.desiredLogExposure = guarded;
+    m.desiredLogExposure = guarded + double(userEv);
     return m;
 }
 
