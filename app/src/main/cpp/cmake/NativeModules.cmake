@@ -171,6 +171,7 @@ rawrcam_module(video
     video/VideoRecorder.cpp
     video/VideoSession.cpp
     video/AudioInput.cpp
+    video/MovMuxer.cpp
     video/NativeAvRecorder.cpp
     video/Mp4MetadataPatcher.cpp
     video/HevcLogMetadata.cpp

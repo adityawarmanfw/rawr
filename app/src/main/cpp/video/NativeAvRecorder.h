@@ -2,7 +2,6 @@
 
 #include <android/native_window.h>
 #include <media/NdkMediaCodec.h>
-#include <media/NdkMediaMuxer.h>
 
 #include <atomic>
 #include <cstdint>
@@ -16,6 +15,7 @@
 #include "diagnostics/timing/RecentPeak.h"
 #include "video/AudioInput.h"
 #include "video/HevcFrameType.h"
+#include "video/MovMuxer.h"
 
 namespace rawrcam::video {
 
@@ -72,12 +72,6 @@ public:
 
 private:
     enum class Track { Video, Audio };
-    struct PendingSample {
-        Track track;
-        AMediaCodecBufferInfo info{};
-        std::vector<uint8_t> bytes;
-    };
-
     void configureVideo();
     void configureAudio();
     void drainVideo() noexcept;
@@ -87,7 +81,6 @@ private:
     void setFormat(Track track, AMediaFormat* format);
     void writeSample(Track track, const uint8_t* data, size_t capacity,
                      const AMediaCodecBufferInfo& info, int64_t presentationTimeUs);
-    void writePendingLocked();
     void setFailure(const std::string& message) noexcept;
     void cleanup() noexcept;
     [[nodiscard]] static int64_t bootNs() noexcept;
@@ -108,18 +101,11 @@ private:
     std::shared_ptr<AudioInput> audioInput_;
     // Next audio PTS after the last queued block; the AAC EOS timestamp.
     int64_t audioEndUs_ = 0;
-    AMediaMuxer* muxer_ = nullptr;
+    std::unique_ptr<MovMuxer> muxer_;
     std::thread videoThread_;
     std::atomic<bool> audioRunning_{false};
     std::atomic<bool> stopRequested_{false};
     bool started_ = false;
-    bool muxerStarted_ = false;
-    bool videoFormatReady_ = false;
-    bool audioFormatReady_ = false;
-    int videoTrack_ = -1;
-    int audioTrack_ = -1;
-    std::vector<PendingSample> pending_;
-    size_t pendingBytes_ = 0;
     mutable std::mutex muxerMutex_;
     mutable std::mutex statsMutex_;
     std::string failure_;

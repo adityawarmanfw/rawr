@@ -142,10 +142,7 @@ void NativeAvRecorder::start() {
     originBootUs_ = bootNs() / 1'000;
     monotonicToBootUs_ = (bootNs() - clockNs(CLOCK_MONOTONIC)) / 1'000;
     try {
-        muxer_ = AMediaMuxer_new(outputFd_, AMEDIAMUXER_OUTPUT_FORMAT_MPEG_4);
-        if (!muxer_) throw std::runtime_error("native MP4 muxer unavailable");
-        requireMedia(AMediaMuxer_setOrientationHint(muxer_, (settings_.rotationDegrees + 360) % 360),
-                     "set MP4 orientation");
+        muxer_ = std::make_unique<MovMuxer>(outputFd_, MovMuxer::Brand::Mp4);
         configureVideo();
         configureAudio();
         started_ = true;
@@ -190,31 +187,38 @@ void NativeAvRecorder::setFormat(Track track, AMediaFormat* format) {
         if (AMediaFormat_getBuffer(format, "csd-0", &csd, &size))
             frameTypes_.setCodecConfig(static_cast<const uint8_t*>(csd), size);
     }
+    const auto int32 = [format](const char* key, int32_t fallback) {
+        int32_t value = 0;
+        return AMediaFormat_getInt32(format, key, &value) ? value : fallback;
+    };
+    void* csd = nullptr;
+    size_t csdSize = 0;
+    if (!AMediaFormat_getBuffer(format, "csd-0", &csd, &csdSize) || !csd || csdSize == 0)
+        throw std::runtime_error("encoder output format missing csd-0");
+    const auto* config = static_cast<const uint8_t*>(csd);
     std::lock_guard<std::mutex> lock(muxerMutex_);
-    bool& ready = track == Track::Video ? videoFormatReady_ : audioFormatReady_;
-    int& index = track == Track::Video ? videoTrack_ : audioTrack_;
-    if (ready) throw std::runtime_error("duplicate encoder output format");
-    index = static_cast<int>(AMediaMuxer_addTrack(muxer_, format));
-    if (index < 0) throw std::runtime_error("add MP4 track failed: " + std::to_string(index));
-    ready = true;
-    if (videoFormatReady_ && audioFormatReady_) {
-        requireMedia(AMediaMuxer_start(muxer_), "start MP4 muxer");
-        muxerStarted_ = true;
-        writePendingLocked();
+    if (track == Track::Video) {
+        if (muxer_->hasVideo()) throw std::runtime_error("duplicate encoder output format");
+        MovMuxer::Video video;
+        video.annexBConfig.assign(config, config + csdSize);
+        video.width = settings_.width;
+        video.height = settings_.height;
+        video.fps = settings_.fps;
+        video.rotationDegrees = (settings_.rotationDegrees + 360) % 360;
+        // As configured in configureVideo(); LOG signalling is rewritten by the metadata patcher.
+        video.colorStandard = int32(AMEDIAFORMAT_KEY_COLOR_STANDARD, 1);
+        video.colorTransfer = int32(AMEDIAFORMAT_KEY_COLOR_TRANSFER, 3);
+        video.colorRange = int32(AMEDIAFORMAT_KEY_COLOR_RANGE, 2);
+        muxer_->setVideo(video);
+    } else {
+        if (muxer_->hasAudio()) throw std::runtime_error("duplicate encoder output format");
+        MovMuxer::Audio audio;
+        audio.aacConfig.assign(config, config + csdSize);
+        audio.sampleRate = int32(AMEDIAFORMAT_KEY_SAMPLE_RATE, kSampleRate);
+        audio.channels = int32(AMEDIAFORMAT_KEY_CHANNEL_COUNT, actualAudioChannels_);
+        audio.bitrate = actualAudioBitrate_;
+        muxer_->setAudio(audio);
     }
-}
-
-void NativeAvRecorder::writePendingLocked() {
-    std::stable_sort(pending_.begin(), pending_.end(), [](const PendingSample& a, const PendingSample& b) {
-        return a.info.presentationTimeUs < b.info.presentationTimeUs;
-    });
-    for (auto& sample : pending_) {
-        const int index = sample.track == Track::Video ? videoTrack_ : audioTrack_;
-        requireMedia(AMediaMuxer_writeSampleData(muxer_, static_cast<size_t>(index), sample.bytes.data(), &sample.info),
-                     "write pending MP4 sample");
-    }
-    pending_.clear();
-    pendingBytes_ = 0;
 }
 
 void NativeAvRecorder::writeSample(Track track, const uint8_t* data, size_t capacity, const AMediaCodecBufferInfo& info,
@@ -233,20 +237,16 @@ void NativeAvRecorder::writeSample(Track track, const uint8_t* data, size_t capa
         sample.size = static_cast<int32_t>(patched.size());
     }
     std::lock_guard<std::mutex> lock(muxerMutex_);
-    if (!muxerStarted_) {
-        if (pending_.size() >= 256 || pendingBytes_ + static_cast<size_t>(sample.size) > 8'000'000)
-            throw std::runtime_error("MP4 startup queue exceeded bound");
-        PendingSample saved{};
-        saved.track = track;
-        saved.info = sample;
-        saved.info.offset = 0;
-        saved.bytes.assign(data + sample.offset, data + sample.offset + sample.size);
-        pendingBytes_ += saved.bytes.size();
-        pending_.push_back(std::move(saved));
-        return;
+    // Each encoder reports its output format before its first sample.
+    const uint8_t* bytes = data + sample.offset;
+    if (track == Track::Video) {
+        if (!muxer_->hasVideo()) throw std::runtime_error("HEVC sample before output format");
+        muxer_->writeVideo(bytes, static_cast<size_t>(sample.size), sample.presentationTimeUs,
+                           (sample.flags & AMEDIACODEC_BUFFER_FLAG_KEY_FRAME) != 0);
+    } else {
+        if (!muxer_->hasAudio()) throw std::runtime_error("AAC sample before output format");
+        muxer_->writeAudio(bytes, static_cast<size_t>(sample.size), sample.presentationTimeUs);
     }
-    const int index = track == Track::Video ? videoTrack_ : audioTrack_;
-    requireMedia(AMediaMuxer_writeSampleData(muxer_, static_cast<size_t>(index), data, &sample), "write MP4 sample");
 }
 
 void NativeAvRecorder::drainVideo() noexcept {
@@ -484,13 +484,13 @@ bool NativeAvRecorder::stop() noexcept {
     bool finalized = false;
     {
         std::lock_guard<std::mutex> lock(muxerMutex_);
-        if (muxerStarted_) {
-            const media_status_t status = AMediaMuxer_stop(muxer_);
-            if (status != AMEDIA_OK) setFailure("finalize MP4 failed: " + std::to_string(status));
-            finalized = status == AMEDIA_OK;
-            muxerStarted_ = false;
-        } else
-            setFailure("MP4 tracks were not initialized");
+        try {
+            if (!muxer_) throw std::runtime_error("MP4 tracks were not initialized");
+            muxer_->finish();
+            finalized = true;
+        } catch (const std::exception& error) {
+            setFailure(std::string("finalize MP4 failed: ") + error.what());
+        }
     }
     // Device tags are best effort. LOG colour signalling must succeed before publication.
     if (finalized && outputFd_ >= 0 && (settings_.log || !settings_.deviceMake.empty() || !settings_.deviceModel.empty())) {
@@ -534,10 +534,7 @@ void NativeAvRecorder::cleanup() noexcept {
         ANativeWindow_release(inputWindow_);
         inputWindow_ = nullptr;
     }
-    if (muxer_) {
-        (void)AMediaMuxer_delete(muxer_);
-        muxer_ = nullptr;
-    }
+    muxer_.reset();
     if (outputFd_ >= 0) {
         close(outputFd_);
         outputFd_ = -1;
