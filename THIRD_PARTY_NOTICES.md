@@ -23,6 +23,8 @@ of this file. The GNU GPL v3 text is the repository `LICENSE`.
 | GALOSH | `native/galosh` | https://github.com/luxgrain/GALOSH | Apache-2.0 |
 | libultrahdr (Ultra HDR / JPEG_R mux) | `native/gainmap` | https://github.com/google/libultrahdr | Apache-2.0 |
 | Oklab gamut clipping (Björn Ottosson) | `native/tonemap_engine` | https://bottosson.github.io/posts/gamutclipping/ | MIT |
+| Exposure-fusion local tonemapping demo (Bart Wronski) | `native/local_tone` (`ExposureFusion`, `fus_*.comp`) | https://bartwronski.com/2022/02/28/exposure-fusion-local-tonemapping-for-real-time-rendering/ | Public domain |
+| three.js `ACESFilmicToneMapping` fit (r138), used as the fusion lightness curve | `native/local_tone/shaders/fus_common.glsl` | https://github.com/mrdoob/three.js | MIT |
 | tinydng | `native/tinydng` | https://github.com/syoyo/tinydng | MIT |
 | libjpeg-turbo | `native/libjpeg-turbo` | https://github.com/libjpeg-turbo/libjpeg-turbo | IJG + BSD-3-Clause |
 | libadrenotools | build-time fetch (Adreno driver loading) | https://github.com/bylaws/libadrenotools | BSD-2-Clause |
@@ -64,6 +66,9 @@ Legal notices screen: `LICENSE`, `NOTICE`, `THIRD_PARTY_NOTICES.md`,
 - **GALOSH** — Copyright 2026 luxgrain. Apache-2.0.
 - **libultrahdr** — Copyright (c) Google LLC. Apache-2.0.
 - **Oklab gamut clipping** — Copyright (c) Björn Ottosson. MIT.
+- **Exposure-fusion local tonemapping demo** — Bart Wronski, released to the
+  public domain ("I release it to public domain, feel free to use or modify").
+- **three.js** — Copyright © 2010-2022 three.js authors. MIT.
 - **tinydng** — Copyright (c) 2016-Present Syoyo Fujita and many contributors.
   MIT.
 - **libjpeg-turbo** — IJG License, Copyright (C) 1991-2020 Thomas G. Lane and
@@ -143,6 +148,9 @@ Independent Rawr implementations of published methods, credited for provenance:
   Malvar, He, Cutler (2004).
 - **Handheld MFSR** (`native/multiframe`): Wronski et al., SIGGRAPH 2019.
 - **Ultra HDR gain map** (`native/gainmap`): ISO 21496-1.
+- **Exposure fusion** (`native/local_tone`): Mertens, Kautz, Van Reeth,
+  "Exposure Fusion" (Pacific Graphics 2007), in the real-time single-image form
+  of Bart Wronski (2022).
 
 ## 7. Outstanding items before release
 

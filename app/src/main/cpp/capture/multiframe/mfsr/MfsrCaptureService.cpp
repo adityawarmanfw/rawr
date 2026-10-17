@@ -20,7 +20,8 @@ namespace {
 constexpr const char* kTag = "RawrCamNative";
 // Post-shutter bracket frames normally land within ~150 ms; past this the
 // burst merges without (the spool keeps the ZSL pins meanwhile).
-constexpr auto kBracketWait = std::chrono::milliseconds(1500);
+// 16 after-shutter frames at 1/15 s take ~1.1 s plus pipeline latency.
+constexpr auto kBracketWait = std::chrono::milliseconds(2500);
 constexpr std::size_t kMaxBurstFrames = 30u;  // capture journal limit
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, kTag, __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, kTag, __VA_ARGS__)
@@ -297,13 +298,14 @@ void MfsrCaptureService::spoolLoop() {
             // its single read-back pass. Middle mode skips this with zero cost.
             // Any failure keeps the frozen middle reference.
             auto& burst = *pending->work->capture;
-            // HDR+ bracketed: append the post-shutter dark frames (whatever
-            // arrived by the deadline; none = plain HDR+ Quality merge).
+            // HDR+ bracketed: append the post-shutter long frames (whatever
+            // arrived by the deadline; none = a uniform merge of the
+            // underexposed burst, still lifted back).
             if (auto collector = std::move(burst.pendingBracket)) {
                 const auto begin = std::chrono::steady_clock::now();
-                auto dark = collector->take(begin + kBracketWait);
+                auto taken = collector->take(begin + kBracketWait);
                 std::size_t appended = 0;
-                for (auto& f : dark) {
+                for (auto& f : taken) {
                     if (burst.frames.size() >= kMaxBurstFrames || f.frames.size() != 1u || f.refs.size() != 1u ||
                         f.metadata.size() != 1u || f.colors.size() != 1u || !f.snapshot ||
                         f.frames.front().raw.ref.width != burst.frames.front().raw.ref.width ||
@@ -388,7 +390,8 @@ void MfsrCaptureService::spoolLoop() {
                 }
             }
             // Bracketed bursts merge onto the darkest frame (sharpest among
-            // those when scored), whatever the base frame mode.
+            // those when scored), whatever the base frame mode: the
+            // underexposed ZSL burst, not the long frames.
             if (pending->work->tuning.mergeAlgorithm == kMergeAlgorithmHdrPlusBracketed &&
                 burst.metadata.size() == burst.frames.size() && burst.colors.size() == burst.frames.size() &&
                 isExposureBracketed(burst.metadata)) {

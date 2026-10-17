@@ -23,6 +23,12 @@ Local changes:
   Weight upsample, lerp and accumulate are fused into one pass; the noise
   mean stays on the GPU. Tile size 64 ("Large") is not supported.
 - Odd half-padding is rounded to keep both padded sides even (Bayer phase).
+- Uniform merges (Fast and Higher quality) scale each companion's
+  black-subtracted signal to the reference exposure (exposure time x ISO from
+  the frame metadata), like upstream's prepare_texture, but keep the uniform
+  merge otherwise; upstream switches any burst with unequal exposures to its
+  non-uniform path. AE still settling across the ZSL ring (a few percent per
+  frame) otherwise left a half-tile grid in the frequency merge.
 
 Bracketed exposure (Rawr "HDR+ Bracketed", frequency merge only): based on
 the upstream non-uniform-exposure path of `align_merge_frequency_domain` —
@@ -58,6 +64,9 @@ equivalents near highlights, these reach ~80-115):
 - Brighter companions align against a reference pyramid whose finest-level
   input is clamped just below their clip point (their own pyramid gets the
   same clamp): otherwise clipped plateaus, where the noisy dark reference
-  still has detail, misalign whole tiles next to highlights.
+  still has detail, misalign whole tiles next to highlights. The clamp is
+  rebuilt per exposure (brighter companions merge in exposure order): ZSL
+  frames a little brighter than the reference while AE settles and the long
+  frames clip at very different points.
 - The highlights norm ramp starts at 0.90 of white (upstream 0.50), since
   clipped cells are already substituted.

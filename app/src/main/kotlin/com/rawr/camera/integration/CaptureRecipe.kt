@@ -99,6 +99,12 @@ internal object CaptureRecipe {
         // Shadow-lift mode the adaptive tone was captured with; the Renderer
         // offers the other modes from the stored (or its own) scene key.
         put("autoKeyExposure", v.autoKeyExposure.name)
+        put("localToneTuning", JSONObject().apply {
+            put("highlightsEv", v.localToneTuning.highlightsEv)
+            put("sigma", v.localToneTuning.sigma)
+            put("coarsestMip", v.localToneTuning.coarsestMip)
+            put("boostLocalContrast", v.localToneTuning.boostLocalContrast)
+        })
         put("tone", JSONObject().apply {
             val value = v.activeImageTone()
             TonemapCatalog.all.forEach { put(it.jsonKey, value.valueFor(it)) }
@@ -246,6 +252,7 @@ internal object CaptureRecipe {
             if (value.mergeAlgorithm == MultiframeMergeAlgorithm.HdrPlusBracketed) {
                 put("bracketEv", value.bracketEv)
                 put("bracketFrames", value.bracketFrames)
+                put("longFrameEv", value.longFrameEv)
             }
             put("maxFrames", value.maxFrames)
             put("lkIterations", value.lkIterations)

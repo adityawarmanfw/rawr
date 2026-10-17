@@ -15,11 +15,25 @@ namespace tonemap {
 // 16x linear gain is +4 EV (log2(16) = 4). Applications integrating an
 // exposure controller must configure its maximum post gain at or below this
 // value; TonemapEngine rejects larger values and never silently clamps them.
-inline constexpr float kMaxAePostGain = 16.0f;
+// 64 = the 4x HAL post-gain cap times HDR+ Bracketed's 4 EV headroom lift.
+inline constexpr float kMaxAePostGain = 64.0f;
 
 // AgX writes outputSpace.transfer (sRGB or Rec.709) from a parametric curve
 // instead of the RAWR NTRL LUT; see Agx.h.
 enum class RenderTransform : unsigned { Existing = 0, SRgb = 1, Rec709 = 2, Log = 3, AgX = 4 };
+
+// Local tone mapping (native/local_tone exposure fusion), applied to the
+// scene-linear image before this tonemap; carried here so captures, recipes
+// and the editor replay it with the rest of the tone. shadowsEv 0 = off
+// (the adaptive curve applies instead). New fields append to the historical
+// two-float prefix; CaptureJob accepts both journal layouts.
+struct LocalToneParams {
+    float shadowsEv = 0.0f;     // brighter synthetic exposure (EV), already noise-limited
+    float highlightsEv = 2.0f;  // darker synthetic exposure (EV)
+    float sigma = 5.0f;
+    unsigned coarsestMip = 6;
+    unsigned boostLocalContrast = 0;
+};
 
 struct TonemapParams {
     float exposureEV;
@@ -49,6 +63,8 @@ struct TonemapParams {
     AdaptiveToneParams adaptiveTone{};
     // Read only by RenderTransform::AgX.
     AgxParams agx{};
+    // Appended (capture journals accept the shorter layout).
+    LocalToneParams localTone{};
 };
 
 // Renderer configuration. These values describe the current validated rendering

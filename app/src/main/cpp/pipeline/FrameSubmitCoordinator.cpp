@@ -26,6 +26,7 @@
 #include "pipeline/RawDevelopRecorder.h"
 #include "presentation/SwapchainRenderer.h"
 #include "raw_preview/RawPreview.hpp"
+#include "tonemap/TonemapMath.h"
 #include "video/VideoSession.h"
 #include "vulkan/RawAhbImporter.h"
 #include "vulkan/Synchronization.h"
@@ -499,7 +500,7 @@ void FrameSubmitCoordinator::submitSplitVideoAndMonitor(const SubmitParams& para
     frame.noiseProfileValid = rawrcam::develop::rendered::resolveDenoiseNoise(metadata, frame.noiseA, frame.noiseB);
     auto tone = tonemapParams_;
     tone.aePostGain = previewPostGain(metadata);
-    lifecyclePort_.applyAutoKey(tone);
+    lifecyclePort_.applyAutoKey(tone, metadata);
     const auto cameraToAp1 = RawDevelopRecorder::composeCameraToAp1(params.sensorToSrgb);
 
     // The first submission waits for the camera buffer and the encoder image
@@ -690,7 +691,7 @@ FrameSubmitCoordinator::RecordedSubmit FrameSubmitCoordinator::recordSubmitComma
 
     auto frameTonemapParams = tonemapParams_;
     frameTonemapParams.aePostGain = previewPostGain(metadata);
-    lifecyclePort_.applyAutoKey(frameTonemapParams);
+    lifecyclePort_.applyAutoKey(frameTonemapParams, metadata);
     trace.record(rawrcam::diagnostics::RuntimeTraceStage::PostGain, params.timestampNs, metadata.frameOrdinal,
                  static_cast<int32_t>(slotIndex), metadata.exposureTimeNs, metadata.sensitivity, 0,
                  static_cast<int64_t>(std::llround(frameTonemapParams.aePostGain * 1000000.0f)));
@@ -955,13 +956,15 @@ float FrameSubmitCoordinator::previewPostGain(const rawrcam::metadata::FrameMeta
     if (!(exposure > 0.0)) return gain;
     if (!metadata.optimizedStillRequestId || *metadata.optimizedStillRequestId == 0) {
         lastRepeatingExposure_ = exposure;
+        lastRepeatingGain_ = gain;
         return gain;
     }
     if (lastRepeatingExposure_ <= 0.0) return gain;
-    // Interior-ISO calibration probes can also be brighter than preview.
-    // Compensate in both directions without changing the repeating seed.
-    // Same 16x ceiling the tonemap engine enforces.
-    return std::min(16.0f, gain * float(lastRepeatingExposure_ / exposure));
+    // Interior-ISO calibration probes and HDR+ long frames can also be
+    // brighter than preview. Match the repeating frames' rendered brightness
+    // (their gain includes any HDR+ headroom lift) without changing the
+    // repeating seed. Same ceiling the tonemap engine enforces.
+    return std::min(tonemap::kMaxAePostGain, lastRepeatingGain_ * float(lastRepeatingExposure_ / exposure));
 }
 
 bool FrameSubmitCoordinator::submitAhb(uint64_t timestampNs, rawrcam::imaging::RawFrameLease& lease,

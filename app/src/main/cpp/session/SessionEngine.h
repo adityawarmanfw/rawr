@@ -38,6 +38,7 @@
 #include "presentation/PresentationSurface.h"
 #include "presentation/SwapchainRenderer.h"
 #include "session/SessionFrameCallbacks.h"
+#include "local_tone/ExposureFusion.h"
 #include "video/VideoSession.h"
 #include "vulkan/VulkanContext.h"
 
@@ -94,6 +95,9 @@ class SessionEngine {
     // overlay, as a JSON array [[x,y,w,h,score],...]. Empty array when none.
     std::string faceDetectionsDisplaySnapshot();
     [[nodiscard]] bool rawCpuIngressActive() const noexcept { return realtime_.coordinator().cpuIngressActive(); }
+    [[nodiscard]] capture::multiframe::MultiframeCaptureCoordinator::BracketHold bracketHold() const noexcept {
+        return capture_.multiframe().bracketHold();
+    }
     void setSpotAeDisplay(bool active, float x, float y);
     void setColorMode(const std::string& mode);
     void setCpuRawCopyProbeFrames(uint32_t frames);
@@ -105,10 +109,21 @@ class SessionEngine {
     std::string pollJpegWriteCompletion();
     void setPersistZslRingEnabled(bool enabled);
     void setExperimentalMultiframeEnabled(bool enabled);
-    // HDR+ Bracketed selected (with multiframe on): allows the DCG ISO calibration frame.
-    void setHdrPlusBracketEnabled(bool enabled);
+    // HDR+ Bracketed selected (with multiframe on): maxEv < 0 is the most
+    // highlight headroom the meter may take (ZSL underexposure); 0 = off.
+    // Also allows the DCG ISO calibration frame for the long frames.
+    void setHdrPlusHeadroomMaxEv(float maxEv);
+    [[nodiscard]] float hdrHeadroomMaxEv() const noexcept { return hdrHeadroomMaxEv_.load(std::memory_order_relaxed); }
+    // Headroom EV (<= 0) a delivered frame was exposed with, from its actual
+    // exposure against the normalizer's reference (ExposureNormalizer); its
+    // reported compensation when the frame was not normalized; 0 when none.
+    [[nodiscard]] float hdrHeadroomEvFor(const metadata::FrameMetadataSnapshot& metadata) const;
+    // The compensation part only, as the frame's result reports it.
+    [[nodiscard]] float reportedHeadroomEvFor(const metadata::FrameMetadataSnapshot& metadata) const;
     void setPersistentEngineEnabled(bool enabled);
-    uint32_t prepareExperimentalMultiframe(uint32_t maxFrames);
+    // longFrames: HDR+ Bracketed post-shutter frames planned after these
+    // maxFrames burst frames; frozen as burst frames when they would be skipped.
+    uint32_t prepareExperimentalMultiframe(uint32_t maxFrames, uint32_t longFrames = 0u);
     uint64_t startPreparedMultiframeCapture(rawrcam::encoding::dng::DngCaptureContext baseDng,
                                             rawrcam::encoding::dng::DngCaptureContext mergedDng,
                                             rawrcam::capture::JpegCaptureRequest mergedJpeg, bool dumpRzslRequested,
@@ -136,9 +151,48 @@ class SessionEngine {
         std::lock_guard<std::mutex> lock(autoKeyMutex_);
         return autoKeyCurve_.liftEv;
     }
-    void applyAutoKey(tonemap::TonemapParams& tone) const {
+    // Photo tone mapping: local (exposure fusion, shadows EV > 0) replaces the
+    // adaptive shadow-lift curve; 0 keeps the curve. The app sends 0 in video.
+    // LOG stays scene-referred.
+    void setLocalTone(float shadowsEv, float highlightsEv, float sigma, unsigned coarsestMip, bool boostLocalContrast);
+    // Frames the next photo merges (1 = single frame): the viewfinder's
+    // noise limit then matches the still's.
+    void setExpectedMergeFrames(std::uint32_t frames) noexcept {
+        expectedMergeFrames_.store(std::max<std::uint32_t>(1u, frames), std::memory_order_relaxed);
+    }
+    [[nodiscard]] std::uint32_t expectedMergeFrames() const noexcept {
+        return expectedMergeFrames_.load(std::memory_order_relaxed);
+    }
+    // Noise of a rendered frame for the local tone lift limit: the frame's
+    // sensor noise model, its render gain and the frames merged into it.
+    [[nodiscard]] static rawr::local_tone::LiftNoise liftNoiseFor(const metadata::FrameMetadataSnapshot& m,
+                                                                  float renderGain, std::uint32_t frames) noexcept;
+    // The latest viewfinder frame's noise model (for a still whose frame is
+    // picked later).
+    [[nodiscard]] rawr::local_tone::LiftNoise latestLiftNoise(float renderGain) const noexcept {
+        return {latestNoiseShot_.load(std::memory_order_relaxed), latestNoiseRead_.load(std::memory_order_relaxed),
+                renderGain, 1u};
+    }
+    void noteLiftNoise(const rawr::local_tone::LiftNoise& n) noexcept {
+        latestNoiseShot_.store(n.shot, std::memory_order_relaxed);
+        latestNoiseRead_.store(n.read, std::memory_order_relaxed);
+    }
+    [[nodiscard]] tonemap::LocalToneParams localToneFor(const tonemap::TonemapParams& tone,
+                                                        const rawr::local_tone::LiftNoise& noise) const noexcept {
+        const float shadows = localToneShadowsEv_.load(std::memory_order_relaxed);
+        if (!(shadows > 0.0f) || sceneReferredRender_.load(std::memory_order_relaxed) ||
+            tone.renderTransform == tonemap::RenderTransform::Log)
+            return {};
+        return {rawr::local_tone::noiseLimitedShadowsEv(shadows, noise),
+                localToneHighlightsEv_.load(std::memory_order_relaxed), localToneSigma_.load(std::memory_order_relaxed),
+                localToneMip_.load(std::memory_order_relaxed), unsigned(localToneBoost_.load(std::memory_order_relaxed))};
+    }
+    // A default noise (unknown model) applies no limit.
+    void applyAutoKey(tonemap::TonemapParams& tone, const rawr::local_tone::LiftNoise& noise = {}) const {
+        tone.localTone = localToneFor(tone, noise);
+        const bool local = tone.localTone.shadowsEv > 0.0f;
         std::lock_guard<std::mutex> lock(autoKeyMutex_);
-        tone.adaptiveTone = autoKeyMode() == rawrcam::color::AutoKeyMode::Off ||
+        tone.adaptiveTone = local || autoKeyMode() == rawrcam::color::AutoKeyMode::Off ||
                                     sceneReferredRender_.load(std::memory_order_relaxed) ||
                                     tone.renderTransform == tonemap::RenderTransform::Log
                                 ? tonemap::AdaptiveToneParams{}
@@ -265,6 +319,18 @@ class SessionEngine {
     std::atomic<int> autoKeyMode_{0};
     mutable std::mutex autoKeyMutex_;
     tonemap::AdaptiveToneParams autoKeyCurve_{};
+    // HDR+ Bracketed headroom floor (EV < 0) or 0 when the meter is off.
+    std::atomic<float> hdrHeadroomMaxEv_{0.0f};
+    // The prepared HDR+ Bracketed capture froze its long-frame slots as burst
+    // frames (long frames would be skipped). Guarded by mu_.
+    bool bracketSkippedForPending_ = false;
+    // Image > Shadow Lift: photo local tone mapping shadows EV (0 = adaptive curve).
+    std::atomic<float> localToneShadowsEv_{0.0f};
+    std::atomic<float> localToneHighlightsEv_{2.0f}, localToneSigma_{5.0f};
+    std::atomic<unsigned> localToneMip_{6};
+    std::atomic<bool> localToneBoost_{false};
+    std::atomic<std::uint32_t> expectedMergeFrames_{1u};
+    std::atomic<float> latestNoiseShot_{0.0f}, latestNoiseRead_{0.0f};
     // LOG profiles stay scene-referred: no auto key lift.
     std::atomic<bool> sceneReferredRender_{false};
 };

@@ -1,4 +1,6 @@
 #pragma once
+
+#include <atomic>
 #include <functional>
 #include <optional>
 
@@ -36,6 +38,23 @@ class MultiframeCaptureCoordinator final {
                                             const spektrafilm_native::FilmLook& filmLook,
                                             std::optional<BracketPlan>* bracketPlan = nullptr) noexcept;
     void cancelPreparedMultiframeCapture() noexcept;
+    // Reference of the burst frozen by prepareExperimentalMultiframeOnShutter.
+    std::uint32_t preparedFrameCount() const {
+        return pendingMultiframeCapture_ ? static_cast<std::uint32_t>(pendingMultiframeCapture_->frames.size()) : 0u;
+    }
+    std::optional<metadata::FrameMetadataSnapshot> preparedReferenceMetadata() const {
+        if (!pendingMultiframeCapture_) return std::nullopt;
+        return pendingMultiframeCapture_->referenceMetadata;
+    }
+    // HDR+ bracketed post-shutter frames: brackets armed / finished (all
+    // frames in, abandoned, or timed out). opened != done: hold still.
+    struct BracketHold {
+        std::uint64_t opened = 0, done = 0;
+    };
+    BracketHold bracketHold() const noexcept {
+        const auto done = bracketHold_->done.load(std::memory_order_acquire);
+        return {bracketHold_->opened.load(std::memory_order_acquire), done};
+    }
     // The camera rejected the bracket requests: stop waiting for them.
     void abandonBracket(std::uint64_t bracketRequestId) noexcept;
     std::string pollMultiframeDngCompletion();
@@ -63,6 +82,11 @@ class MultiframeCaptureCoordinator final {
     // (frame lane, under the session lock like the ring).
     std::shared_ptr<BracketCollector> activeBracket_;
     std::uint64_t nextBracketRequestId_ = 1;
+    struct BracketHoldCounters {
+        std::atomic<std::uint64_t> opened{0}, done{0};
+    };
+    // Shared with collectors, which may outlive a session reconfigure.
+    std::shared_ptr<BracketHoldCounters> bracketHold_ = std::make_shared<BracketHoldCounters>();
     void abandonActiveBracket() noexcept;
 };
 }  // namespace rawrcam::capture::multiframe

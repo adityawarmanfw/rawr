@@ -21,6 +21,7 @@ class CameraResultProcessor final {
                                 const metadata::CameraContextMetadataPtr&, const std::optional<LevelOverride>& staticLevels,
                                 bool sensorModeOverridden, uint64_t latestSubmittedSerial);
     std::optional<double> sensitivityReportedPerRequest() const { return resultState_.sensitivityReportedPerRequest(); }
+    void seedSensitivityRatio(double ratio) { resultState_.seedSensitivityRatio(ratio); }
 
    private:
     void diag(const std::string& line) const {

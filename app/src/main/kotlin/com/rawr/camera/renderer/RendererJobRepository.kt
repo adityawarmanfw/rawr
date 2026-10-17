@@ -85,6 +85,11 @@ internal class RendererJobRepository(private val context: Context, private val s
         val job = current(id)
         writeDraft(job.copy(draft = RendererRecipe.withAdaptiveToneMode(job.draft, mode)))
     }
+    fun updateLocalTone(id: String, shadowsEv: Float) {
+        draftWrites.remove(id)?.cancel()
+        val job = current(id)
+        writeDraft(job.copy(draft = RendererRecipe.withLocalTone(job.draft, shadowsEv)))
+    }
     private fun writeDraft(job: RenderJob) {
         val updated = job.copy(status = "Editing", error = "")
         mutableJobs.value = mutableJobs.value.map { if (it.id == job.id) updated else it }

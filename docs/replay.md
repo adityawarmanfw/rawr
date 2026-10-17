@@ -36,3 +36,7 @@ The intended replacement is one production-backed replay pipeline: single DNG,
 RZSL burst, or explicit DNG burst/batch; a versioned recipe plus parameter
 overrides; the app's processing stages and output encoding. It must reject
 unsupported settings explicitly rather than silently substitute defaults.
+
+For HDR+ performance comparisons, burst replay supports `--repeat N` to reuse the
+coordinator and decoded frames, and `--dump-cfa` to export the full-precision
+normalized Bayer output as `.cfa.f32`.

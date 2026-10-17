@@ -805,6 +805,12 @@ std::vector<uint8_t> RendererEngine::render(DngSource& source, const std::string
     if (context.highlightReconstructionEnabled && context.highlightReconstructionMethod == 1u)
         linearKey << ',' << (context.filmEnabled ? color::filmExposureEv(context.filmLook, context.tonemapParams.aePostGain)
             : context.tonemapParams.exposureEV + std::log2(std::max(context.tonemapParams.aePostGain, 1e-6f)));
+    // Local tone mapping is baked into the linear result, measured as rendered.
+    if (context.tonemapParams.localTone.shadowsEv > 0.0f)
+        linearKey << ",lt:" << context.tonemapParams.localTone.shadowsEv << ',' << context.tonemapParams.localTone.highlightsEv
+                  << ',' << context.tonemapParams.localTone.sigma << ',' << context.tonemapParams.localTone.coarsestMip
+                  << ',' << context.tonemapParams.localTone.boostLocalContrast
+                  << ',' << context.tonemapParams.aePostGain << ',' << context.tonemapParams.exposureEV;
     context.reuseLinearResult = options.overview && linearResultKey_ == linearKey.str();
     linearResultKey_.clear();
     if (options.overview && !context.reuseLinearResult) {

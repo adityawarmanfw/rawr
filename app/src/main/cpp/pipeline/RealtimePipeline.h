@@ -3,6 +3,7 @@
 #include <memory>
 #include <string>
 
+#include "local_tone/ExposureFusion.h"
 #include "diagnostics/timing/GpuTimingTracker.h"
 #include "metadata/CameraContextMetadata.h"
 #include "pipeline/FrameSlotPool.h"
@@ -79,6 +80,7 @@ class RealtimePipeline final : public RealtimeResources {
     std::unique_ptr<vulkan::RawAhbImporter> rawAhbImporter_;
     std::unique_ptr<raw_preview::RawPreview> rawPreview_;
     std::unique_ptr<RawDevelopRecorder> frameProcessor_;
+    std::unique_ptr<rawr::local_tone::ExposureFusionProcessor> localTone_;
     FrameSubmitCoordinator realtime_;
     bool configured_ = false;
     uint64_t generation_ = 0;

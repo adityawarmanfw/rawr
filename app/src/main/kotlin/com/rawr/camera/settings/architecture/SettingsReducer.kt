@@ -94,7 +94,7 @@ object SettingsReducer {
             SettingsDestination.Section(SettingsSection.ImageTone)
         }
 
-        SettingsSection.ImageTone, SettingsSection.Demosaic, SettingsSection.HighlightReconstruction,
+        SettingsSection.ImageTone, SettingsSection.DynamicRange, SettingsSection.Demosaic, SettingsSection.HighlightReconstruction,
         SettingsSection.Defringe, SettingsSection.Denoise, SettingsSection.FilmSim,
         SettingsSection.LensShading -> {
             SettingsDestination.Section(

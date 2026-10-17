@@ -197,5 +197,20 @@ data class CaptureUiState(
     /** Monotonic run id; ticks from a stale run are ignored. */
     val selfTimerRunId: Long = 0L,
     /** Mirrors settings experimentalMultiframeEnabled for the V2 shutter-row toggle. */
-    val experimentalMultiframeEnabled: Boolean = false
-)
+    val experimentalMultiframeEnabled: Boolean = false,
+    /** Settings multiframe merge is HDR+ Bracketed. */
+    val hdrPlusBracketedSelected: Boolean = false,
+    /** HDR+ Bracketed post-shutter frames: brackets armed / finished, from native. */
+    val bracketHoldOpened: Long = 0L,
+    val bracketHoldDone: Long = 0L,
+    /** HDR+ Bracketed shutter presses native has not armed yet (hold starts at the press). */
+    val bracketHoldPresses: Int = 0
+) {
+    /** From the shutter press until the post-shutter frames are in: the user should hold still. */
+    val bracketHoldActive: Boolean
+        get() = bracketHoldPresses > 0 || bracketHoldOpened != bracketHoldDone
+
+    /** HDR+ Bracketed runs: multiframe on, Photo mode. */
+    val hdrPlusBracketedActive: Boolean
+        get() = hdrPlusBracketedSelected && experimentalMultiframeEnabled && captureMode == CaptureMode.Photo
+}

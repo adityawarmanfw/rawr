@@ -1,8 +1,12 @@
 package com.rawr.camera.settings.ui
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import com.rawr.camera.settings.architecture.*
 import com.rawr.camera.settings.model.*
 import kotlin.math.roundToInt
@@ -13,6 +17,7 @@ internal fun MultiframeSettings(state: SettingsUiState, dispatch: SettingsDispat
     val tuning = state.values.multiframeTuning
     val spec = { parameter: MultiframeNumericParameter -> MultiframeSpecs.forParameter(parameter) }
     val hdrPlus = tuning.mergeAlgorithm != MultiframeMergeAlgorithm.Wronski
+    val bracketed = tuning.mergeAlgorithm == MultiframeMergeAlgorithm.HdrPlusBracketed
     SettingsPageContainer {
         SettingsGroup(
             description = "Multiframe still pipeline. Off leaves the existing single-frame capture path untouched."
@@ -31,7 +36,7 @@ internal fun MultiframeSettings(state: SettingsUiState, dispatch: SettingsDispat
         }
         SettingsGroup(
             title = "Merge Algorithm",
-            description = "Super-resolution: kernel-regression merge, smoother with optional upscaling. HDR+: tile-aligned robust average on the RAW mosaic; keeps natural single-frame grain at higher SNR and avoids blotches in low light. HDR+ Quality: per-frequency merge, cleaner with mild sharpening and blends motion more, slower. HDR+ Bracketed: HDR+ Quality plus a few darker frames taken right after the shutter, so bright areas (sky, lamps) keep detail instead of clipping; hold still a moment longer (all HDR+ modes: native resolution only)."
+            description = "Super-resolution: kernel-regression merge, smoother with optional upscaling. HDR+: tile-aligned robust average on the RAW mosaic; keeps natural single-frame grain at higher SNR and avoids blotches in low light. HDR+ Quality: per-frequency merge, cleaner with mild sharpening and blends motion more, slower. HDR+ Bracketed: HDR+ Quality on a burst metered darker to keep bright areas (sky, lamps) from clipping, brightened back, plus a few longer frames right after the shutter for cleaner shadows; hold still a moment longer (all HDR+ modes: native resolution only)."
         ) {
             MultiframeMergeAlgorithm.entries.forEachIndexed { index, candidate ->
                 if (index > 0) SettingDivider()
@@ -74,12 +79,6 @@ internal fun MultiframeSettings(state: SettingsUiState, dispatch: SettingsDispat
                 MultiframeSlider(spec(MultiframeNumericParameter.HdrPlusStrength), tuning, enabled, dispatch)
                 SettingDivider()
                 MultiframeSlider(spec(MultiframeNumericParameter.HdrPlusTileSize), tuning, enabled, dispatch)
-                if (tuning.mergeAlgorithm == MultiframeMergeAlgorithm.HdrPlusBracketed) {
-                    SettingDivider()
-                    MultiframeSlider(spec(MultiframeNumericParameter.BracketEv), tuning, enabled, dispatch)
-                    SettingDivider()
-                    MultiframeSlider(spec(MultiframeNumericParameter.BracketFrames), tuning, enabled, dispatch)
-                }
             } else {
                 StandaloneNumericSliderRow(
                     identity = "mf_output_resolution",
@@ -113,8 +112,38 @@ internal fun MultiframeSettings(state: SettingsUiState, dispatch: SettingsDispat
                     )
                 }
             }
-            SettingDivider()
-            MultiframeSlider(spec(MultiframeNumericParameter.MaxFrames), tuning, enabled, dispatch)
+            // HDR+ Bracketed sets its own frame counts below.
+            if (!bracketed) {
+                SettingDivider()
+                MultiframeSlider(spec(MultiframeNumericParameter.MaxFrames), tuning, enabled, dispatch)
+            }
+        }
+        if (bracketed) {
+            SettingsGroup(
+                title = "HDR+ Bracketed",
+                description = "Exposures are relative to auto exposure (AE). The ZSL burst from before the shutter goes darker to protect highlights; the frames after it are brighter to clean up shadows."
+            ) {
+                MultiframeSlider(spec(MultiframeNumericParameter.BracketEv), tuning, enabled, dispatch)
+                SettingDivider()
+                MultiframeSlider(
+                    spec(MultiframeNumericParameter.LongFrameEv), tuning, enabled && tuning.bracketFrames > 0, dispatch
+                )
+                SettingDivider()
+                MultiframeSlider(spec(MultiframeNumericParameter.MaxFrames), tuning, enabled, dispatch)
+                SettingDivider()
+                // Its range follows Maximum Frames (a 2-frame burst stays before the press).
+                val afterMax = tuning.maxPostShutterFrames()
+                MultiframeSlider(
+                    spec(MultiframeNumericParameter.BracketFrames), tuning, enabled && afterMax > 0, dispatch,
+                    maximum = afterMax.coerceAtLeast(1).toFloat(), value = tuning.postShutterFrames().toFloat()
+                )
+                Text(
+                    "Uses ${tuning.zslFrames()} frames from before the shutter + ${tuning.postShutterFrames()} after",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+            }
         }
         if (!hdrPlus) {
             SettingsGroup(
@@ -193,23 +222,29 @@ private fun MultiframeSlider(
     spec: MultiframeNumericSpec,
     tuning: MultiframeTuning,
     enabled: Boolean,
-    dispatch: SettingsDispatch
+    dispatch: SettingsDispatch,
+    maximum: Float = spec.maximum,
+    value: Float = tuning.value(spec.parameter)
 ) {
     StandaloneNumericSliderRow(
         identity = "mf_${spec.parameter.name}",
         label = spec.label,
         supportingText = spec.supportingText,
         minimum = spec.minimum,
-        maximum = spec.maximum,
+        maximum = maximum,
         step = spec.step,
         decimals = spec.decimals,
-        value = tuning.value(spec.parameter),
+        value = value.coerceIn(spec.minimum, maximum),
         enabled = enabled,
         defaultValue = spec.defaultValue,
         unit = spec.unit,
         valueFormatter =
             if (spec.parameter == MultiframeNumericParameter.HessianEpsilonExponent) {
                 { value -> "1e${value.roundToInt()}" }
+            } else if (spec.parameter == MultiframeNumericParameter.LongFrameEv) {
+                { value -> if (value <= 0f) "Auto exposure" else String.format(java.util.Locale.US, "AE +%.1fEV", value) }
+            } else if (spec.parameter == MultiframeNumericParameter.BracketEv) {
+                { value -> String.format(java.util.Locale.US, "up to AE %.1fEV", value) }
             } else {
                 null
             }

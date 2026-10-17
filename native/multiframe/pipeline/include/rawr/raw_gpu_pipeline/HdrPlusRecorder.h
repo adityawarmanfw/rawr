@@ -27,8 +27,8 @@ class HdrPlusRecorder final {
         hotPixelBuffer_ = buffer;
         hotPixelCount_ = count;
     }
-    // Bracketed bursts: scale applied to the next companion's black-subtracted
-    // signal (reference exposure / companion exposure). 1 for uniform bursts.
+    // Scale applied to the next companion's black-subtracted signal
+    // (reference exposure / companion exposure); 1 when they match.
     void setCompanionGain(float gain) noexcept { companionGain_ = gain; }
     // Bracketed bursts: rebuilds the reference pyramid with its finest-level
     // input clamped to clampTo (raw units); later companion pyramids use the
@@ -103,6 +103,11 @@ class HdrPlusFrequencyRecorder final {
     // exposure (all 1, or empty, merges exactly like the uniform path) and
     // each frame's white level for the clipped-highlights norm.
     void setExposure(std::vector<float> exposureFactors, std::vector<float> whiteLevels);
+    // Uniform merges of frames whose exposure drifted (AE settling in the
+    // ZSL ring): gains[i] = reference exposure / frame i exposure scales each
+    // companion to the reference before alignment and merge, as upstream's
+    // prepare_texture does; the merge itself stays the uniform one.
+    void setExposureNormalization(std::vector<float> gains) { normalizationGains_ = std::move(gains); }
     void beginPass(std::uint32_t pass) noexcept;
     // Align-once mode: companions are aligned (and the reference prepared)
     // only in pass 0; later passes read through a coordinate offset.
@@ -112,6 +117,12 @@ class HdrPlusFrequencyRecorder final {
     // when alignsThisPass() (storing the shifts in slot), else the padded frame.
     void recordCompanionAlign(VkCommandBuffer command, VkImageView rawU16, const RawNormalization& frame,
                               std::uint32_t slot);
+    // The same as two submissions, so preview work can interleave: padded
+    // frame, pyramid and the coarse levels; then the finest level (most of
+    // the cost) and the shift store. Only when alignsThisPass().
+    void recordCompanionAlignCoarse(VkCommandBuffer command, VkImageView rawU16, const RawNormalization& frame,
+                                    std::uint32_t slot);
+    void recordCompanionAlignFinest(VkCommandBuffer command, std::uint32_t slot);
     // mark(k), when set, is called after warp (1), mismatch+spectrum (2) and
     // mismatch normalization (3) for sub-stage GPU timestamps.
     void recordCompanionMerge(VkCommandBuffer command, std::uint32_t frameCount, std::uint32_t slot,
@@ -125,6 +136,8 @@ class HdrPlusFrequencyRecorder final {
     [[nodiscard]] bool brighterCompanion(std::uint32_t slot) const noexcept {
         return !uniformExposure_ && frameExposure(slot) > 1.001f;
     }
+    // Bracketed bursts: frame exposure / reference exposure (1 otherwise).
+    [[nodiscard]] float exposureFactor(std::uint32_t slot) const noexcept { return frameExposure(slot); }
     void recordSubstitutionSource(VkCommandBuffer command);
     [[nodiscard]] bool needsSubstitutionSource(std::uint32_t slot) const noexcept {
         return brighterCompanion(slot) && !substitutionReady_;
@@ -139,11 +152,17 @@ class HdrPlusFrequencyRecorder final {
     std::uint32_t pass_ = 0;
     std::vector<float> exposureFactors_{};
     std::vector<float> whiteLevels_{};
+    std::vector<float> normalizationGains_{};
     bool uniformExposure_ = true;
     bool substitutionReady_ = false;  // this pass's hdrq_out_rgba holds the dark-frame estimate
-    bool pyramidClamped_ = false;     // reference pyramid rebuilt for brighter companions this pass
+    float pyramidClamp_ = 0.0f;       // reference pyramid clamp this pass (raw units), 0 = none
     float frameExposure(std::uint32_t slot) const noexcept {
         return slot < exposureFactors_.size() ? exposureFactors_[slot] : 1.0f;
+    }
+    // Companion prepare gain: bracketed exposure, else the drift normalization.
+    float frameGain(std::uint32_t slot) const noexcept {
+        if (!exposureFactors_.empty()) return 1.0f / frameExposure(slot);
+        return slot < normalizationGains_.size() ? normalizationGains_[slot] : 1.0f;
     }
     // Raw-pixel offset from this pass's padded coordinates into the prepared frame.
     std::array<std::int32_t, 2> passOffset() const noexcept;

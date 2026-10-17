@@ -16,8 +16,8 @@ namespace rawrcam::color {
 // - raw <= cap: identity (linear, C1 at hinge).
 // - raw > cap and cap > 1: capEV + width*(1-exp(-excess/width)).
 // - cap <= 1: hard cap (no knee) so "1x" truly means no lift.
-// Result is clamped to [1, 16] to respect TonemapEngine's ceiling
-// (TonemapMath.h kMaxAePostGain); TonemapEngine still rejects >16.
+// Result is clamped to [1, 16], within TonemapEngine's ceiling
+// (TonemapMath.h kMaxAePostGain), which leaves room for HDR+ headroom lifts.
 inline float effectiveAePostGain(int32_t rawBoost100, float maxGain, float kneeWidthEv = 1.0f) noexcept {
     float rawGain = std::max(1.0f, static_cast<float>(rawBoost100) / 100.0f);
     float cap = std::clamp(maxGain, 1.0f, 16.0f);

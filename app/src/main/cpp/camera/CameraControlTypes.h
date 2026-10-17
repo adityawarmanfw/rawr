@@ -179,6 +179,12 @@ struct CameraControlState {
     int64_t requestedExposureTimeNs = 0;
     int32_t requestedSensitivity = 0;
     int32_t requestedEvSteps = 0;
+    // HDR+ Bracketed highlight headroom (<= 0 steps), added to the user's EV
+    // compensation in Auto exposure so the ZSL burst protects highlights; the
+    // viewfinder and stills lift it back. Previous value kept while frames
+    // from before a change are still arriving.
+    int32_t hdrHeadroomSteps = 0;
+    int32_t previousHdrHeadroomSteps = 0;
     // Requested AE antibanding mode (NDK values OFF=0, 50HZ=1, 60HZ=2, AUTO=3).
     uint8_t requestedAntibandingMode = 3;
     float requestedManualFocusNormalized = 1.0f;

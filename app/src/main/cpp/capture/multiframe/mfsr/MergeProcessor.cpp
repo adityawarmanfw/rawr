@@ -45,12 +45,15 @@ rawr::raw_gpu_pipeline::BurstRunResult MergeProcessor::run(
                            : tuning.mergeAlgorithm == 2u ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusFrequency
                            : tuning.mergeAlgorithm == 1u ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusSpatial
                                                          : rawr::raw_gpu_pipeline::MergeAlgorithm::Wronski;
-    // Per-frame exposure from the (journaled) metadata; a burst whose dark
-    // frames never arrived merges like HDR+ Quality.
-    if (algorithm == rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusBracketed &&
-        burst.metadata.size() == burst.frames.size()) {
+    // Per-frame exposure from the (journaled) metadata. HDR+ merges scale
+    // every companion to the reference exposure (AE may still be settling
+    // across the ring); a bracketed burst whose dark frames never arrived
+    // merges like HDR+ Quality.
+    if (algorithm != rawr::raw_gpu_pipeline::MergeAlgorithm::Wronski && burst.metadata.size() == burst.frames.size())
         for (std::size_t i = 0; i < burst.frames.size(); ++i)
             burst.frames[i].exposure = float(linearExposure(burst.metadata[i]) * 1.0e-6);
+    if (algorithm == rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusBracketed &&
+        burst.metadata.size() == burst.frames.size()) {
         LOGI("MULTIFRAME_BRACKET merge frames=%zu reference=%u bracketed=%d lift=%.2fEV", burst.frames.size(),
              burst.referenceIndex, isExposureBracketed(burst.metadata) ? 1 : 0,
              bracketLiftEv(burst.metadata, burst.referenceIndex));

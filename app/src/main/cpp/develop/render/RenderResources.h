@@ -9,6 +9,7 @@
 #include "develop/render/RenderDeviceContext.h"
 #include "develop/render/RenderedStillTypes.h"
 #include "galosh/GaloshYuvPipeline.hpp"
+#include "local_tone/ExposureFusion.h"
 #include "post_demosaic/PostDemosaicProcessor.h"
 #include "vulkan/ImageResources.h"
 #include "vulkan/VulkanContext.h"
@@ -36,6 +37,7 @@ class RenderResources final {
     tonemap::TonemapEngine& tone() { return *tonemap_; }
     spektrafilm_native::SpektraFilm& film() { return *film_; }
     ::galosh::GaloshYuvPipeline& galoshYuv() { return *galoshYuv_; }
+    rawr::local_tone::ExposureFusionProcessor& localTone() { return *localTone_; }
     gainmap::GainmapCompute& gainmap() { return *gainmap_; }
     RenderImageView output() const noexcept { return {output_.image, output_.view}; }
     RenderImageView map() const noexcept { return {map_.image, map_.view}; }
@@ -51,6 +53,7 @@ class RenderResources final {
     void destroyFilm() noexcept;
 
     void ensureGaloshYuv();
+    void ensureLocalTone();
     void createPixels(const RenderedStillContext& rendered);
 
    private:
@@ -97,6 +100,10 @@ class RenderResources final {
     // every shot; a device change (surface recreation) must rebuild galosh
     // instead of submitting to a destroyed VkDevice.
     VkDevice galoshYuvDevice_ = VK_NULL_HANDLE;
+    // Local tone mapping (HDR+ Bracketed): small low-res images, rebuilt on
+    // a device change like galosh.
+    std::unique_ptr<rawr::local_tone::ExposureFusionProcessor> localTone_;
+    VkDevice localToneDevice_ = VK_NULL_HANDLE;
     bool float16Compute_ = false;
     // Rebuild match keys for engine persistence. Compared in start(); a
     // mismatch rebuilds that engine only (build-then-swap, so a failed build

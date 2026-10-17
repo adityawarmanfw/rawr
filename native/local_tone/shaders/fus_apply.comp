@@ -1,0 +1,52 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// Full resolution: 3x3 guided upsampling of the base-level blend against the
+// base-level midtones lightness, then the local exposure as a gain on the
+// scene-linear pixel (demo FinalCombinePassShader, which applies it before
+// its ACES; here the real tone curve follows).
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(binding = 0, rgba16f) uniform image2D target;
+layout(binding = 1, rgba16f) uniform image2D secondTarget;
+layout(binding = 4) uniform sampler2D guide;
+layout(binding = 5) uniform sampler2D fused;
+#include "fus_common.glsl"
+
+void main() {
+    ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    if (q.x >= int(pc.size.x) || q.y >= int(pc.size.y)) return;
+    vec2 uv = (vec2(q) + 0.5) / vec2(pc.size.xy);
+    vec2 texel = 1.0 / vec2(pc.size.zw);
+    float mX = 0.0, mY = 0.0, mX2 = 0.0, mXY = 0.0, ws = 0.0;
+    for (int dy = -1; dy <= 1; ++dy)
+        for (int dx = -1; dx <= 1; ++dx) {
+            vec2 tuv = uv + vec2(dx, dy) * texel;
+            float x = texture(guide, tuv).g;
+            float y = texture(fused, tuv).r;
+            float w = exp(-0.5 * float(dx * dx + dy * dy) / (0.7 * 0.7));
+            mX += x * w;
+            mY += y * w;
+            mX2 += x * x * w;
+            mXY += x * y * w;
+            ws += w;
+        }
+    mX /= ws;
+    mY /= ws;
+    mX2 /= ws;
+    mXY /= ws;
+    float a = (mXY - mX * mY) / (max(mX2 - mX * mX, 0.0) + 0.00001);
+    float b = mY - a * mX;
+    vec4 pixel = imageLoad(target, q);
+    // Evaluate the regression in exactly the same lightness space as its
+    // guide. A compressed SDR target is not a valid substitute for the HDR
+    // measurement: extrapolating with it produces outlines around edges.
+    float luminance = rawrFusLightness(rawrFus709(pixel.rgb)).g + 0.00001;
+    float multiplier = max(a * luminance + b, 0.0) / luminance;
+    // Demo: keep near-black pixels from being boosted by a lot.
+    const float threshold = 0.007;
+    if (luminance <= threshold) multiplier = mix(1.0, multiplier, (luminance / threshold) * (luminance / threshold));
+    imageStore(target, q, vec4(pixel.rgb * multiplier, pixel.a));
+    if (pc.targetCount == 2u) {
+        vec4 second = imageLoad(secondTarget, q);
+        imageStore(secondTarget, q, vec4(second.rgb * multiplier, second.a));
+    }
+}

@@ -23,6 +23,7 @@ enum class SettingsSection(val title: String) {
     Ois("OIS"),
     Image("Image"),
     ImageTone("Tone & Color"),
+    DynamicRange("Dynamic Range"),
     LutProfile("LUT Profile"),
     Demosaic("Demosaic"),
     Defringe("Defringe"),
@@ -202,6 +203,61 @@ enum class HighlightProtection(val label: String, val kneeSummary: String) {
 }
 
 /** Shadow lift (adaptive scene-key curve) after the brightness boost; native AutoKeyMode ids. */
+/** Photo dynamic range method as stored: Adaptive = the global curve (strength in autoKeyExposure). */
+enum class PhotoToneMapping { Adaptive, Local }
+
+/**
+ * Dynamic Range as the UI presents it (Image > Rendering > Dynamic Range,
+ * Renderer > Render): fitting the scene's range before Tone Mapping.
+ * Off and Global are the adaptive curve's strength (Off / the rest).
+ */
+enum class DynamicRangeMethod(val label: String, val summary: String) {
+    Off("Off", "No shadow brightening: the image as exposed"),
+    Global("Global", "One curve for the whole image"),
+    Local("Local", "Region by region (exposure fusion): keeps local contrast")
+}
+
+// Keep the experimental implementation and recipe support, but hide its controls.
+const val LOCAL_TONE_CONTROLS_VISIBLE = false
+val visibleDynamicRangeMethods: List<DynamicRangeMethod> = DynamicRangeMethod.entries.filter {
+    LOCAL_TONE_CONTROLS_VISIBLE || it != DynamicRangeMethod.Local
+}
+
+fun SettingsValues.photoDynamicRange(): DynamicRangeMethod = when {
+    photoToneMapping == PhotoToneMapping.Local -> DynamicRangeMethod.Local
+    autoKeyExposure == AutoKeyExposure.Off -> DynamicRangeMethod.Off
+    else -> DynamicRangeMethod.Global
+}
+
+fun SettingsValues.videoDynamicRange(): DynamicRangeMethod =
+    if (videoAutoKeyExposure == AutoKeyExposure.Off) DynamicRangeMethod.Off else DynamicRangeMethod.Global
+
+/** Global strengths (the adaptive curve without Off). */
+val globalDynamicRangeStrengths: List<AutoKeyExposure> = AutoKeyExposure.entries.filter { it != AutoKeyExposure.Off }
+
+/** Conservative UI ranges; image quality still depends on scene content. */
+data class LocalToneTuning(
+    val highlightsEv: Float = 2f,
+    val sigma: Float = 5f,
+    val coarsestMip: Int = 6,
+    val boostLocalContrast: Boolean = false
+) {
+    fun sanitized() = copy(
+        highlightsEv = if (highlightsEv.isFinite()) (highlightsEv.coerceIn(.5f, 2f) * 10f).roundToInt() / 10f else 2f,
+        sigma = if (sigma.isFinite()) (sigma.coerceIn(3f, 5f) * 10f).roundToInt() / 10f else 5f,
+        coarsestMip = coarsestMip.coerceIn(6, 8)
+    )
+}
+
+/** Local tone mapping shadows range, shared with native local_tone/ExposureFusion.h. */
+object LocalToneLimits {
+    const val DEFAULT_SHADOWS_EV = 2.0f
+    const val MIN_SHADOWS_EV = 1.0f
+    const val MAX_SHADOWS_EV = 3.0f
+    fun shadowsEv(value: Float): Float =
+        if (value.isFinite()) (value.coerceIn(MIN_SHADOWS_EV, MAX_SHADOWS_EV) * 10f).roundToInt() / 10f else DEFAULT_SHADOWS_EV
+}
+
 enum class AutoKeyExposure(val label: String, val summary: String, val nativeId: Int) {
     Off("Off", "No lift · renders the boosted exposure as is", 0),
     Natural("Natural", "Lifts shadows up to 1 EV", 1),
@@ -379,7 +435,8 @@ enum class MultiframeNumericParameter {
     HdrPlusStrength,
     HdrPlusTileSize,
     BracketEv,
-    BracketFrames
+    BracketFrames,
+    LongFrameEv
 }
 
 data class MultiframeNumericSpec(
@@ -395,6 +452,9 @@ data class MultiframeNumericSpec(
 ) {
     fun accepts(value: Float): Boolean = value.isFinite() && value in minimum..maximum
 }
+
+/** Frames one multiframe capture may merge (native capture journal limit). */
+const val MAX_BURST_FRAMES = 30
 
 object MultiframeSpecs {
     val maxFrames =
@@ -668,14 +728,29 @@ object MultiframeSpecs {
             "px"
         )
 
+    // HDR+ Bracketed, shown in this order: Underexpose, Overexpose, then
+    // Maximum Frames (the total) and After-Shutter Frames (its split).
     val bracketEv =
         MultiframeNumericSpec(
             MultiframeNumericParameter.BracketEv,
-            "Bracket Exposure",
-            "Exposure of the extra dark frames taken after the shutter, relative to the burst. Lower: recovers brighter highlights (sun, lamps) but the dark frames are noisier. Higher: cleaner merge, recovers only mildly clipped areas.",
+            "ZSL Underexposure (max)",
+            "The furthest below auto exposure the ZSL burst (and the live viewfinder stream, brightened back) may go to keep bright areas (sky, lamps) from clipping. Metered per scene: it goes only as dark as needed, often 0, and at most -1.5 EV in low light. Lower: recovers brighter highlights, noisier shadows. Higher: cleaner shadows. Auto exposure only.",
             -4f,
             -1f,
-            -2f,
+            -3f,
+            .5f,
+            1,
+            "EV"
+        )
+
+    val longFrameEv =
+        MultiframeNumericSpec(
+            MultiframeNumericParameter.LongFrameEv,
+            "After-Shutter Exposure",
+            "Exposure of the after-shutter frames relative to auto exposure (your exposure in manual), whatever the ZSL burst used. 0: at auto exposure. Always at least 1 EV brighter than the burst. A longer shutter first (up to 1/15 s), then more ISO; limited by both. Lower: less motion blur. Higher: cleaner deep shadows, highlights clip in these frames (the burst keeps them).",
+            0f,
+            3f,
+            0f,
             .5f,
             1,
             "EV"
@@ -684,10 +759,10 @@ object MultiframeSpecs {
     val bracketFrames =
         MultiframeNumericSpec(
             MultiframeNumericParameter.BracketFrames,
-            "Bracket Frames",
-            "Dark frames captured after the shutter. Lower: shorter wait after the shutter. Higher: cleaner recovered highlights.",
-            1f,
-            4f,
+            "After-Shutter Frames",
+            "Of Maximum Frames, how many are brighter frames taken right after the shutter press (hold still until the tick); the rest come from just before it. 0: none. Lower: shorter hold. Higher: cleaner shadows, longer hold and more motion risk. When the scene is too dark for them to get brighter, they are taken before the press instead.",
+            0f,
+            16f,
             2f,
             1f,
             0
@@ -720,7 +795,8 @@ object MultiframeSpecs {
             hdrPlusStrength,
             hdrPlusTileSize,
             bracketEv,
-            bracketFrames
+            bracketFrames,
+            longFrameEv
         )
 
     fun forParameter(parameter: MultiframeNumericParameter): MultiframeNumericSpec =
@@ -732,8 +808,9 @@ data class MultiframeTuning(
     val mergeAlgorithm: MultiframeMergeAlgorithm = MultiframeMergeAlgorithm.HdrPlusQuality,
     val hdrPlusStrength: Float = 13f,
     val hdrPlusTileSize: Int = 32,
-    val bracketEv: Float = -2f,
+    val bracketEv: Float = -3f,
     val bracketFrames: Int = 2,
+    val longFrameEv: Float = 0f,
     val maxFrames: Int = 16,
     val lkIterations: Int = 5,
     val hessianEpsilonExponent: Int = -10,
@@ -784,6 +861,7 @@ data class MultiframeTuning(
         MultiframeNumericParameter.HdrPlusTileSize -> hdrPlusTileSize.toFloat()
         MultiframeNumericParameter.BracketEv -> bracketEv
         MultiframeNumericParameter.BracketFrames -> bracketFrames.toFloat()
+        MultiframeNumericParameter.LongFrameEv -> longFrameEv
     }
 
     fun withValue(parameter: MultiframeNumericParameter, value: Float): MultiframeTuning = when (parameter) {
@@ -813,6 +891,7 @@ data class MultiframeTuning(
         MultiframeNumericParameter.HdrPlusTileSize -> copy(hdrPlusTileSize = if (value < 24f) 16 else 32)
         MultiframeNumericParameter.BracketEv -> copy(bracketEv = (value * 2f).roundToInt() / 2f)
         MultiframeNumericParameter.BracketFrames -> copy(bracketFrames = value.roundToInt())
+        MultiframeNumericParameter.LongFrameEv -> copy(longFrameEv = (value * 2f).roundToInt() / 2f)
     }
 
     fun sanitized(defaults: MultiframeTuning = MultiframeTuning()): MultiframeTuning {
@@ -856,23 +935,28 @@ data class MultiframeTuning(
         fallbackLuma
     )
 
-    /** ZSL frames to freeze at the shutter; HDR+ Bracketed leaves room for its post-shutter dark frames. */
+    /** Most after-shutter frames HDR+ Bracketed can take: the total minus a 2-frame burst, at most 16. */
+    fun maxPostShutterFrames(): Int = (maxFrames - 2).coerceIn(0, 16)
+
+    /** ZSL frames to freeze at the shutter; HDR+ Bracketed leaves the rest of Maximum Frames to its after-shutter frames. */
     fun zslFrames(): Int =
-        if (mergeAlgorithm == MultiframeMergeAlgorithm.HdrPlusBracketed) (maxFrames - bracketFrames).coerceAtLeast(2)
+        if (mergeAlgorithm == MultiframeMergeAlgorithm.HdrPlusBracketed) (maxFrames - postShutterFrames()).coerceAtLeast(2)
         else maxFrames
 
-    /** Dark frames HDR+ Bracketed requests after the shutter (0 for other merges). */
+    /** Long frames HDR+ Bracketed requests after the shutter (0 for other merges). */
     fun postShutterFrames(): Int =
-        if (mergeAlgorithm == MultiframeMergeAlgorithm.HdrPlusBracketed) maxFrames - zslFrames() else 0
+        if (mergeAlgorithm == MultiframeMergeAlgorithm.HdrPlusBracketed) bracketFrames.coerceIn(0, maxPostShutterFrames())
+        else 0
 
-    // Appended after the multiframe chroma-denoise flag (native indices 23-27).
+    // Appended after the multiframe chroma-denoise flag (native indices 23-28).
     fun nativeMergeValues(): FloatArray =
         floatArrayOf(
             mergeAlgorithm.nativeId.toFloat(),
             hdrPlusStrength,
             hdrPlusTileSize.toFloat(),
             bracketEv,
-            bracketFrames.toFloat()
+            bracketFrames.toFloat(),
+            longFrameEv
         )
 }
 
@@ -891,7 +975,15 @@ data class SettingsValues(
     val antiFlicker: AntiFlicker = AntiFlicker.Auto,
     val exposureStep: ExposureStep = ExposureStep.Third,
     val highlightProtection: HighlightProtection = HighlightProtection.High,
+    /** Adaptive shadow-lift strength for photos (when Photo tone mapping is Adaptive). */
     val autoKeyExposure: AutoKeyExposure = AutoKeyExposure.Natural,
+    /** Adaptive shadow-lift strength for video (always adaptive). */
+    val videoAutoKeyExposure: AutoKeyExposure = AutoKeyExposure.Natural,
+    /** Photo tone mapping (JPEG/viewfinder only; video always Adaptive). */
+    val photoToneMapping: PhotoToneMapping = PhotoToneMapping.Adaptive,
+    /** Local tone mapping: how far shadows may be brightened (EV), noise-limited natively. */
+    val localToneShadowsEv: Float = LocalToneLimits.DEFAULT_SHADOWS_EV,
+    val localToneTuning: LocalToneTuning = LocalToneTuning(),
     val maxPostGainId: String = "gain.200",
     val autoMinFpsId: String = "fps.12",
     val controlSurfaceStyle: ControlSurfaceStyle = ControlSurfaceStyle.Basic,

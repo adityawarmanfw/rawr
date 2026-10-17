@@ -6,7 +6,10 @@
 #include <quadfix/Pipeline.hpp>
 #include <gainmap/GainmapCompute.h>
 #include <spektrafilm/SpektraFilm.h>
+#include <local_tone/ExposureFusion.h>
 #include <tonemap/TonemapEngine.h>
+
+#include <cstdio>
 
 #include <array>
 #include <chrono>
@@ -70,6 +73,14 @@ struct Arguments {
     bool quadfixFastMedian = false;
     float exposureEV = 0.0f;
     float postGain = 1.0f;
+    // Captured AutoKey curve (lift, key, highlight EV); lift 0 = off.
+    tonemap::AdaptiveToneParams adaptiveTone{};
+    // AgX render transform with a darktable preset instead of NTRL (-1 = off).
+    int agxPreset = -1;
+    // Local tone mapping (exposure fusion); --local-tone sets it as captures
+    // do, --fusion with every parameter.
+    bool fusion = false;
+    rawr::local_tone::FusionParams fusionParams{};
     float highlightBias = 0.0f;
     float rtHighlightCompression = 0.0f;
     bool appColoropp = false;
@@ -222,6 +233,36 @@ Arguments parseArguments(int argc, char** argv) {
             args.hasExposureEV = true;
         } else if (value == "--post-gain" && i + 1 < argc) {
             args.postGain = std::stof(argv[++i]);
+        } else if (value == "--local-tone" && i + 1 < argc) {
+            float shadows = 0.0f, highlights = rawr::local_tone::kDefaultHighlightsEv;
+            if (std::sscanf(argv[++i], "%f,%f", &shadows, &highlights) < 1)
+                throw std::invalid_argument("--local-tone needs SHADOWS_EV[,HIGHLIGHTS_EV] (0 = off)");
+            args.fusion = rawr::local_tone::fusionActive(shadows);
+            args.fusionParams = rawr::local_tone::fusionParams(shadows, highlights);
+            if (args.fusion && !rawr::local_tone::validParams(args.fusionParams))
+                throw std::invalid_argument("invalid --local-tone");
+        } else if (value == "--agx" && i + 1 < argc) {
+            const std::string name = argv[++i];
+            const char* names[] = {"default", "base", "punchy", "sigmoid", "smooth"};
+            for (int p = 0; p < 5; ++p)
+                if (name == names[p]) args.agxPreset = p;
+            if (args.agxPreset < 0) throw std::invalid_argument("--agx needs default|base|punchy|sigmoid|smooth");
+        } else if (value == "--fusion" && i + 1 < argc) {
+            unsigned mip = args.fusionParams.coarsestMip, boost = 0;
+            auto& f = args.fusionParams;
+            if (std::sscanf(argv[++i], "%f,%f,%f,%f,%u,%u", &f.exposure, &f.shadowsEv, &f.highlightsEv, &f.sigma, &mip,
+                            &boost) < 4)
+                throw std::invalid_argument("--fusion needs EXPOSURE,SHADOWS,HIGHLIGHTS,SIGMA[,MIP[,BOOST]]");
+            f.coarsestMip = mip;
+            f.boostLocalContrast = boost != 0;
+            if (!rawr::local_tone::validParams(f)) throw std::invalid_argument("invalid --fusion");
+            args.fusion = true;
+        } else if (value == "--adaptive-tone" && i + 1 < argc) {
+            float v[3]{};
+            if (std::sscanf(argv[++i], "%f,%f,%f", &v[0], &v[1], &v[2]) != 3)
+                throw std::invalid_argument("--adaptive-tone needs LIFT,KEY,HIGHLIGHT");
+            args.adaptiveTone = {v[0], v[1], v[2]};
+            if (!tonemap::validAdaptiveTone(args.adaptiveTone)) throw std::invalid_argument("invalid --adaptive-tone");
         } else if (value == "--highlight-bias" && i + 1 < argc) {
             args.highlightBias = std::stof(argv[++i]);
         } else if (value == "--rt-highlight-compression" && i + 1 < argc) {
@@ -618,6 +659,7 @@ int main(int argc, char** argv) {
         // (RenderedStillProcessor: full-res, 1 frame in flight, conditional
         // effect scratch).
         std::unique_ptr<spektrafilm_native::SpektraFilm> film;
+        std::unique_ptr<rawr::local_tone::ExposureFusionProcessor> fusion;
         spektrafilm_native::FilmLook filmBaseLook{};
         std::vector<std::vector<uint32_t>> filmSpvStorage;
         std::vector<uint8_t> filmHanatosBytes;
@@ -961,6 +1003,31 @@ int main(int argc, char** argv) {
                     }
                     film->record(fri);
                 } else {
+                // Local tone mapping (exposure fusion), as StillRenderSequence.
+                if (args.fusion) {
+                    VkMemoryBarrier written{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+                    written.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+                    written.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+                    vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &written, 0, nullptr, 0, nullptr);
+                    if (!fusion)
+                        fusion = std::make_unique<rawr::local_tone::ExposureFusionProcessor>(
+                            rawr::vk::GpuContext{context.pd, context.dev, context.qf}, 1u);
+                    rawr::local_tone::FusionRecordInfo fi{};
+                    fi.commandBuffer = command;
+                    fi.width = config.width;
+                    fi.height = config.height;
+                    fi.measure = {post.outputImage(), post.outputView()};
+                    fi.targets[0] = fi.measure;
+                    if (post.sdrOutputImage() != post.outputImage()) {
+                        fi.targets[1] = {post.sdrOutputImage(), post.sdrOutputView()};
+                        fi.targetCount = 2;
+                    }
+                    std::copy(config.cameraToWorking.begin(), config.cameraToWorking.end(), fi.cameraToWorking.begin());
+                    fi.renderGain = args.postGain * std::exp2(config.exposureEV);
+                    fi.params = args.fusionParams;
+                    if (!fusion->record(fi)) throw std::invalid_argument("invalid --fusion");
+                }
                 VkImageView toneInputView = post.sdrOutputView();
                 if (args.rtHighlightCompression > 0.0f) {
                     toneImage = vktest::mkImg(context.pd, context.dev, config.width, config.height,
@@ -1028,6 +1095,11 @@ int main(int argc, char** argv) {
                 params.exposureEV = config.exposureEV;
                 params.highlightBiasEV = highlights;
                 params.aePostGain = args.postGain;
+                params.adaptiveTone = args.adaptiveTone;
+                if (args.agxPreset >= 0) {
+                    params.renderTransform = tonemap::RenderTransform::AgX;
+                    params.agx = tonemap::agxPreset(static_cast<tonemap::AgxPreset>(args.agxPreset));
+                }
                 tonemap::TonemapRecordInfo tone{};
                 tone.commandBuffer = command;
                 tone.input = {toneInputView, VK_FORMAT_R16G16B16A16_SFLOAT,

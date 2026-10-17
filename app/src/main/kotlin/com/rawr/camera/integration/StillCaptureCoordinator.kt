@@ -124,13 +124,18 @@ class StillCaptureCoordinator(
         val jpegQuality = current.imageTone.jpegQuality.toInt().coerceIn(95, 100)
         val multiframeFrames =
             if (current.experimentalMultiframeEnabled) {
-                preview.prepareExperimentalMultiframe(current.multiframeTuning.zslFrames()).coerceIn(0, 30)
+                preview.prepareExperimentalMultiframe(
+                    current.multiframeTuning.zslFrames(), current.multiframeTuning.postShutterFrames()
+                ).coerceIn(0, 30)
             } else {
                 0
             }
         val multiframe = multiframeFrames >= 2
         // File names count every merged frame, including HDR+ Bracketed's post-shutter dark frames.
-        val namedFrames = multiframeFrames + current.multiframeTuning.postShutterFrames()
+        // A burst longer than requested already holds the long frames' slots (skipped).
+        val postShutterFrames =
+            if (multiframeFrames > current.multiframeTuning.zslFrames()) 0 else current.multiframeTuning.postShutterFrames()
+        val namedFrames = multiframeFrames + postShutterFrames
         if (current.experimentalMultiframeEnabled && !multiframe) {
             Log.i(TAG, "Multiframe ring unavailable; capturing a fresh single frame")
         }

@@ -74,10 +74,10 @@ void setPersistentDiagnosticsEnabled(EngineHandle h, bool v) noexcept {
 void setPersistZslRingEnabled(EngineHandle h, bool v) noexcept {
     if (h) engine(h)->setPersistZslRingEnabled(v);
 }
-uint32_t prepareExperimentalMultiframe(EngineHandle h, uint32_t maxFrames) noexcept {
+uint32_t prepareExperimentalMultiframe(EngineHandle h, uint32_t maxFrames, uint32_t longFrames) noexcept {
     if (!h) return 0u;
     try {
-        return engine(h)->prepareExperimentalMultiframe(maxFrames);
+        return engine(h)->prepareExperimentalMultiframe(maxFrames, longFrames);
     } catch (...) {
         return 0u;
     }
@@ -109,8 +109,8 @@ void setExperimentalZeroCopy(EngineHandle h, bool v) noexcept {
 void setExperimentalMultiframeEnabled(EngineHandle h, bool v) noexcept {
     if (h) engine(h)->setExperimentalMultiframeEnabled(v);
 }
-void setHdrPlusBracketEnabled(EngineHandle h, bool v) noexcept {
-    if (h) engine(h)->setHdrPlusBracketEnabled(v);
+void setHdrPlusHeadroomMaxEv(EngineHandle h, float v) noexcept {
+    if (h) engine(h)->setHdrPlusHeadroomMaxEv(v);
 }
 void setPersistentEngineEnabled(EngineHandle h, bool v) noexcept {
     if (h) engine(h)->setPersistentEngineEnabled(v);
@@ -126,6 +126,12 @@ void setMaxAePostGain(EngineHandle h, float gain) noexcept {
 }
 void setPostGainKneeWidthEv(EngineHandle h, float widthEv) noexcept {
     if (h) engine(h)->setPostGainKneeWidthEv(widthEv);
+}
+void setLocalTone(EngineHandle h, float shadowsEv, float highlightsEv, float sigma, unsigned coarsestMip, bool boostLocalContrast) noexcept {
+    if (h) engine(h)->setLocalTone(shadowsEv, highlightsEv, sigma, coarsestMip, boostLocalContrast);
+}
+void setExpectedMergeFrames(EngineHandle h, uint32_t frames) noexcept {
+    if (h) engine(h)->setExpectedMergeFrames(frames);
 }
 void setAutoKeyMode(EngineHandle h, int mode) noexcept {
     if (h) engine(h)->setAutoKeyMode(mode);
@@ -191,10 +197,13 @@ std::string runHighlightReplay(EngineHandle h, const std::string& inputPath) {
 std::string cameraControlSnapshot(EngineHandle h) {
     if (!h) return "{}";
     auto json = engine(h)->cameraControls().cameraControlSnapshot();
-    // Ingress lives in the pipeline, not the camera controller; append it here.
+    // Ingress and the bracket hold live in the pipeline, not the camera controller; append them here.
     if (json.size() > 2 && json.back() == '}') {
         json.pop_back();
-        json += std::string(",\"rawCpuIngress\":") + (engine(h)->rawCpuIngressActive() ? "true" : "false") + "}";
+        const auto hold = engine(h)->bracketHold();
+        json += std::string(",\"rawCpuIngress\":") + (engine(h)->rawCpuIngressActive() ? "true" : "false") +
+                ",\"bracketHoldOpened\":" + std::to_string(hold.opened) +
+                ",\"bracketHoldDone\":" + std::to_string(hold.done) + "}";
     }
     return json;
 }

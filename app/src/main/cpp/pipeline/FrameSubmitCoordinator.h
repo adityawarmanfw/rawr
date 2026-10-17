@@ -270,6 +270,7 @@ class FrameSubmitCoordinator final {
     // Live RAW content sampling (logcat, at most once per second of sensor time).
     uint64_t lastRawContentStatsNs_ = 0;
     double lastRepeatingExposure_ = 0.0;  // exposure time x sensitivity of the last untagged frame
+    float lastRepeatingGain_ = 1.0f;      // its preview post-gain
     std::string lastSubmitFailure_;
     uint64_t repeatedSubmitFailures_ = 0;
     RawCpuUploadPool cpuUpload_;

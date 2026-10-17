@@ -130,6 +130,14 @@ internal fun CaptureStateHaptics(state: CaptureUiState) {
         }
     }
 
+    // HDR+ Bracketed: a light tick once the post-shutter frames are in (the user may move).
+    var previousBracketDone by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<Long?>(null) }
+    LaunchedEffect(state.bracketHoldDone) {
+        val previous = previousBracketDone
+        if (previous != null && state.bracketHoldDone > previous) haptics.sliderTick()
+        previousBracketDone = state.bracketHoldDone
+    }
+
     // Self-timer countdown ticks: one detent per whole-second boundary.
     val timerSecond = state.selfTimerRemainingMs?.let { ((it + 999) / 1000).toInt().coerceAtLeast(1) }
     LaunchedEffect(timerSecond) {

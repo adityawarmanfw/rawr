@@ -39,7 +39,7 @@ void setPreferredColorMode(EngineHandle handle, const std::string& mode) noexcep
 void setPipelineDiagnostic(EngineHandle handle, uint32_t mode) noexcept;
 void setPersistentDiagnosticsEnabled(EngineHandle handle, bool enabled) noexcept;
 void setPersistZslRingEnabled(EngineHandle handle, bool enabled) noexcept;
-uint32_t prepareExperimentalMultiframe(EngineHandle handle, uint32_t maxFrames) noexcept;
+uint32_t prepareExperimentalMultiframe(EngineHandle handle, uint32_t maxFrames, uint32_t longFrames) noexcept;
 uint64_t startPreparedMultiframeCapture(EngineHandle handle, rawrcam::encoding::dng::DngCaptureContext baseDng,
                                         rawrcam::encoding::dng::DngCaptureContext mergedDng,
                                         rawrcam::capture::JpegCaptureRequest mergedJpeg, bool dumpRzslRequested,
@@ -49,13 +49,17 @@ void cancelPreparedMultiframeCapture(EngineHandle handle) noexcept;
 void setInternalTraceCaptureEnabled(EngineHandle handle, bool enabled) noexcept;
 void setExperimentalZeroCopy(EngineHandle handle, bool enabled) noexcept;
 void setExperimentalMultiframeEnabled(EngineHandle handle, bool enabled) noexcept;
-void setHdrPlusBracketEnabled(EngineHandle handle, bool enabled) noexcept;
+// HDR+ Bracketed: most ZSL highlight headroom in EV (< 0), or 0 when off.
+void setHdrPlusHeadroomMaxEv(EngineHandle handle, float maxEv) noexcept;
 void setPersistentEngineEnabled(EngineHandle handle, bool enabled) noexcept;
 void setLensShadingCorrectionEnabled(EngineHandle handle, bool enabled) noexcept;
 void setHighlightReconstructionEnabled(EngineHandle handle, bool enabled) noexcept;
 void setMaxAePostGain(EngineHandle handle, float gain) noexcept;
 void setPostGainKneeWidthEv(EngineHandle handle, float widthEv) noexcept;
 void setAutoKeyMode(EngineHandle handle, int mode) noexcept;
+// HDR+ Bracketed local tone mapping (strength 0..1, detail 0.8..1.3).
+void setLocalTone(EngineHandle handle, float shadowsEv, float highlightsEv, float sigma, unsigned coarsestMip, bool boostLocalContrast) noexcept;
+void setExpectedMergeFrames(EngineHandle handle, uint32_t frames) noexcept;
 void setAutoMinFps(EngineHandle handle, int fps) noexcept;
 void setAePriorityDisabled(EngineHandle handle, bool disabled) noexcept;
 bool setRecordingFps(EngineHandle handle, int fps) noexcept;

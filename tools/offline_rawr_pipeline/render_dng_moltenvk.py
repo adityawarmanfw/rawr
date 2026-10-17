@@ -64,6 +64,13 @@ def main():
                         help="production tonemap Highlights control for comparison")
     parser.add_argument("--post-gain", type=float,
                         help="override the recipe's AE post gain for an exposure diagnostic")
+    parser.add_argument("--adaptive-tone", help="override the captured AutoKey curve: LIFT,KEY,HIGHLIGHT (lift 0 = off)")
+    parser.add_argument("--local-tone", help="override the captured local tone mapping: SHADOWS_EV[,HIGHLIGHTS_EV] (0 = off)")
+    parser.add_argument("--agx", help="AgX render transform preset: default|base|punchy|sigmoid|smooth")
+    parser.add_argument("--fusion", help="exposure-fusion local tone mapping instead: EXPOSURE,SHADOWS,HIGHLIGHTS,SIGMA[,MIP[,BOOST]]")
+    parser.add_argument("--any-demosaic", action="store_true",
+                        help="render other demosaics with DualRcdVng4 (tone comparisons only)")
+    parser.add_argument("--sdr-only", action="store_true", help="skip the UltraHDR gain map")
     parser.add_argument("--build-dir", type=Path, default=ROOT/"tmp/offline_rawr_pipeline")
     parser.add_argument("--skip-build", action="store_true")
     args = parser.parse_args()
@@ -75,8 +82,8 @@ def main():
         parser.error("RT highlight compression must be 0..500")
     if not 0 <= args.app_compression <= 300:
         parser.error("App highlight compression must be 0..300")
-    if args.post_gain is not None and not 0.0 < args.post_gain <= 16.0:
-        parser.error("AE post gain must be in (0, 16]")
+    if args.post_gain is not None and not 0.0 < args.post_gain <= 64.0:
+        parser.error("AE post gain must be in (0, 64]")
     args.output.mkdir(parents=True, exist_ok=True)
     if not args.skip_build:
         run(["cmake", "-S", ROOT/"tools/offline_rawr_pipeline", "-B", args.build_dir,
@@ -102,7 +109,7 @@ def main():
         frame = json.loads(extension["com.rawrcam.processing.frame.v1"])
     except (ValueError, KeyError) as error:
         raise ValueError("Host replay needs a RAWR DNG with embedded recipe and resolved frame") from error
-    if recipe["demosaicAlgorithm"] != "DualRcdVng4":
+    if recipe["demosaicAlgorithm"] != "DualRcdVng4" and not args.any_demosaic:
         raise ValueError("Host replay currently supports DualRcdVng4 DNGs")
     if recipe.get("filmSimEnabled"):
         raise ValueError("Host replay currently supports the RawrBase tonemap")
@@ -122,7 +129,7 @@ def main():
     recovery_on = recovery_mode == "on"
     if args.app_coloropp and (not recovery_on or not 0.5 <= args.hlth <= 2.0 or args.rt_compression != 0):
         raise ValueError("App Coloropp requires recovery on, Hlth 0.5..2, and no separate RT compression")
-    want_uhdr = bool(recipe.get("ultraHdrEnabled", False))
+    want_uhdr = bool(recipe.get("ultraHdrEnabled", False)) and not args.sdr_only
     post_gain = args.post_gain if args.post_gain is not None else resolved["aePostGain"]
     source = args.cfa if args.cfa else decoded/"input_cfa.f32"
     if not source.is_file() or source.stat().st_size != width*height*4:
@@ -158,6 +165,27 @@ def main():
                "--single-recovery", "1" if recovery_on else "0",
                "--post-gain", post_gain, "--highlight-bias", args.highlight_bias,
                "--rt-highlight-compression", args.rt_compression]
+    captured = resolved.get("tonemap", {}).get("adaptiveTone", {})
+    adaptive = args.adaptive_tone or ",".join(
+        str(captured.get(k, d)) for k, d in (("liftEv", 0), ("keyEv", -4), ("highlightEv", 0)))
+    command += ["--adaptive-tone", adaptive]
+    captured_local = resolved.get("tonemap", {}).get("localTone", {})
+    if captured_local.get("version", 1) >= 2:
+        captured_value = f'{captured_local.get("shadowsEv", 0)},{captured_local.get("highlightsEv", 2)}'
+    else:  # earlier guided-filter lift: replayed as fusion at the defaults
+        captured_value = "2,2" if captured_local.get("strength", 0) > 0 else "0"
+    local = args.local_tone or captured_value
+    command += ["--local-tone", local]
+    if args.fusion:
+        command += ["--fusion", args.fusion]
+    elif float(local.split(",")[0]) > 0:
+        exposures = local.split(",")
+        highlights = exposures[1] if len(exposures) > 1 else "2"
+        command += ["--fusion", ",".join(map(str, (
+            1, exposures[0], highlights, captured_local.get("sigma", 5),
+            captured_local.get("coarsestMip", 6), int(captured_local.get("boostLocalContrast", False))))) ]
+    if args.agx:
+        command += ["--agx", args.agx]
     if recovery_mode == "preserve":
         command.append("--preserve-reconstructed")
     if args.app_coloropp:

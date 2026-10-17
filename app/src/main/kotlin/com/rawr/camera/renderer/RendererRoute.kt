@@ -113,6 +113,7 @@ internal fun RendererRoute(viewModel: RendererViewModel, onExit: () -> Unit) {
                     busy = busy || loading,
                     onBackToQueue = { if (busy) viewModel.back() else viewModel.backToQueue() },
                     onShadowLift = viewModel::setAdaptiveToneMode,
+                    onLocalTone = viewModel::setLocalTone,
                     onExport = {
                         notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
                         viewModel.export(job.id)

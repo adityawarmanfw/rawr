@@ -30,6 +30,10 @@ inline std::string resolvedRecipe(const tonemap::TonemapParams& tone, float gain
     RAWR_TONE_FIELD(vibrance)
     out << ",\"adaptiveTone\":{\"version\":1,\"liftEv\":" << tone.adaptiveTone.liftEv
         << ",\"keyEv\":" << tone.adaptiveTone.keyEv << ",\"highlightEv\":" << tone.adaptiveTone.highlightEv << "}";
+    out << ",\"localTone\":{\"version\":3,\"method\":\"exposureFusion\",\"shadowsEv\":" << tone.localTone.shadowsEv
+        << ",\"highlightsEv\":" << tone.localTone.highlightsEv
+        << ",\"sigma\":" << tone.localTone.sigma << ",\"coarsestMip\":" << tone.localTone.coarsestMip
+        << ",\"boostLocalContrast\":" << (tone.localTone.boostLocalContrast ? "true" : "false") << "}";
 #undef RAWR_TONE_FIELD
     out << "},\"film\":{\"version\":1";
 #define RAWR_FILM_FIELD(type, name) out << ",\"" #name "\":" << film.name;

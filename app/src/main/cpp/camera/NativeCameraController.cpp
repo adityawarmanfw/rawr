@@ -8,6 +8,10 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <fstream>
+#include <iomanip>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -227,6 +231,33 @@ struct NativeCameraController::Impl final : CameraEventSink {
         return route;
     }
 
+    // Long frames are capped by the handheld shutter limit and the manual
+    // gain range; Camera2 AE's own frames may go further with digital gain.
+    static constexpr int64_t kLongFrameMaxNs = 66'666'667;  // OIS keeps 1/15 s sharp
+    static constexpr double kMinLongFrameGainEv = 0.5;
+    // Most a long frame can gain over a frame at (exposure, reported ISO),
+    // in EV; nullopt when unknown (no session, unknown ISO coordinate).
+    std::optional<double> longFrameRoomEvLocked(int64_t exposureTimeNs, int32_t reportedSensitivity) const {
+        if (!deviceSession.hasSession() || !control.capabilities.manualExposureSupported || exposureTimeNs <= 0 ||
+            reportedSensitivity <= 0)
+            return std::nullopt;
+        double sensitivity = reportedSensitivity;
+        if (const auto ratio = results.sensitivityReportedPerRequest(); ratio && *ratio > 0.0)
+            sensitivity /= *ratio;
+        else if (deviceSession.sensorModeOverridden())
+            return std::nullopt;
+        const auto& caps = control.capabilities;
+        const int64_t timeMax = std::max(caps.exposureTimeMinNs, std::min(exposureTimeNs, caps.exposureTimeMaxNs));
+        const int64_t longTimeMax = std::max(timeMax, std::min(kLongFrameMaxNs, caps.exposureTimeMaxNs));
+        const double isoMax = std::max(caps.sensitivityMin, caps.sensitivityMax);
+        return std::log2(double(longTimeMax) * isoMax / (double(exposureTimeNs) * sensitivity));
+    }
+    std::optional<double> longFrameRoomEv() const {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (!control.appliedExposureTimeNs || !control.appliedSensitivity) return std::nullopt;
+        return longFrameRoomEvLocked(*control.appliedExposureTimeNs, *control.appliedSensitivity);
+    }
+
     bool captureExposureBracket(uint64_t requestId, int64_t baseExposureTimeNs, int32_t baseReportedSensitivity,
                                 const std::vector<float>& evOffsets) {
         std::lock_guard<std::mutex> lock(mutex);
@@ -250,18 +281,47 @@ struct NativeCameraController::Impl final : CameraEventSink {
         const int64_t timeMin = caps.exposureTimeMinNs;
         // Never longer than the preview frame (motion blur, capture time).
         const int64_t timeMax = std::max(timeMin, std::min(baseExposureTimeNs, caps.exposureTimeMaxNs));
+        // Long frames may exceed it, up to a handheld limit.
+        const int64_t longTimeMax = std::max(timeMax, std::min(kLongFrameMaxNs, caps.exposureTimeMaxNs));
         std::vector<CameraRequestPipeline::BracketExposure> exposures;
+        // Long frames the shutter/gain limits leave nearly as dark as the
+        // burst add little shadow signal but still cost the user a 15 fps
+        // hold: skip them (the merge stays a uniform burst merge). The shutter
+        // usually checks first (longFrameRoomEv) and freezes a longer burst.
+        double bestLongEv = 0.0;
+        bool anyLong = false;
         for (const float ev : evOffsets) {
+            if (ev > 0.0f) {
+                // Longer shutter first at the reference gain (more light, not
+                // more gain), then gain for what the handheld limit leaves.
+                const double target = double(baseExposureTimeNs) * double(sensitivity) * std::exp2(ev);
+                const int32_t baseIso = std::clamp(sensitivity, isoMin, isoMax);
+                const int64_t time =
+                    std::clamp<int64_t>(std::llround(target / double(baseIso)), timeMin, longTimeMax);
+                const auto iso = static_cast<int32_t>(
+                    std::clamp<double>(std::round(target / double(time)), double(isoMin), double(isoMax)));
+                exposures.push_back({time, iso});
+                anyLong = true;
+                bestLongEv = std::max(bestLongEv, std::log2(double(time) * double(iso) /
+                                                            (double(baseExposureTimeNs) * double(sensitivity))));
+                continue;
+            }
             // Lower gain first, down to base ISO: at high ISO highlights clip
             // in the gain stage, so the same shutter at lower gain keeps all
             // the light and only adds headroom. A shorter shutter takes the
             // rest. The preview ISO may exceed the manual maximum (AE digital
             // gain), so the product, not the ISO, is matched.
-            const double target = double(baseExposureTimeNs) * double(sensitivity) * std::exp2(std::min(0.0f, ev));
+            const double target = double(baseExposureTimeNs) * double(sensitivity) * std::exp2(ev);
             const auto iso = static_cast<int32_t>(std::clamp<double>(
                 std::round(target / double(timeMax)), double(isoMin), double(isoMax)));
             const int64_t time = std::clamp<int64_t>(std::llround(target / double(iso)), timeMin, timeMax);
             exposures.push_back({time, iso});
+        }
+        if (anyLong && bestLongEv < kMinLongFrameGainEv) {
+            char gain[16];
+            std::snprintf(gain, sizeof(gain), "%.2f", bestLongEv);
+            diag(std::string("CAMERA_BRACKET_SKIPPED longEv=") + gain + " limit=exposure");
+            return false;
         }
         return requests.captureBracket(deviceSession.session(), deviceSession.request(), deviceSession.callbackContext(),
                                        control, exposures, requestId);
@@ -270,6 +330,50 @@ struct NativeCameraController::Impl final : CameraEventSink {
     // Calibration is part of lens startup, before any preview is published.
     SensitivityProbeStartup sensitivityStartup;
     bool sensitivityCalibrationWanted = false;
+    // Reported/requested ISO ratios already measured, per camera, lens and
+    // profile (its sensor mode keys). A device constant: later sessions on
+    // the same camera skip the probe and show the viewfinder at once.
+    std::map<std::string, double> sensitivityRatioCache;
+    std::string sensitivityCacheKeyLocked() const {
+        const auto& context = deviceSession.cameraContext();
+        if (!context || !deviceSession.sensorModeOverridden()) return {};
+        return context->cameraId + "/" + context->lensId + "/" + profile.id;
+    }
+    // Saved across launches so the probe runs once per camera, ever.
+    std::string sensitivityStorePath;
+    void loadSensitivityStoreLocked() {
+        std::ifstream in(sensitivityStorePath);
+        std::string key;
+        double ratio = 0.0;
+        while (in >> std::quoted(key) >> ratio)
+            if (std::isfinite(ratio) && ratio > 0.0) sensitivityRatioCache[key] = ratio;
+    }
+    void saveSensitivityStoreLocked() const {
+        if (sensitivityStorePath.empty()) return;
+        const std::string temp = sensitivityStorePath + ".tmp";
+        {
+            std::ofstream out(temp, std::ios::trunc);
+            out.precision(9);
+            for (const auto& [key, ratio] : sensitivityRatioCache) out << std::quoted(key) << ' ' << ratio << '\n';
+            if (!out) return;
+        }
+        std::rename(temp.c_str(), sensitivityStorePath.c_str());
+    }
+    // Seeds this session from the cache, or records a fresh measurement.
+    void syncSensitivityCacheLocked() {
+        const std::string key = sensitivityCacheKeyLocked();
+        if (key.empty()) return;
+        if (const auto measured = results.sensitivityReportedPerRequest()) {
+            auto& cached = sensitivityRatioCache[key];
+            if (std::abs(cached - *measured) > 1e-6) {
+                cached = *measured;
+                saveSensitivityStoreLocked();
+            }
+        } else if (const auto it = sensitivityRatioCache.find(key); it != sensitivityRatioCache.end()) {
+            results.seedSensitivityRatio(it->second);
+            diag("CAMERA_SENSITIVITY_RATIO_CACHED ratio=" + std::to_string(it->second));
+        }
+    }
     bool sensitivityProbeEligibleLocked() const {
         return sensitivityCalibrationWanted && deviceSession.sensorModeOverridden() &&
                control.capabilities.manualExposureSupported && !control.videoMode && control.recordingFps <= 0;
@@ -292,6 +396,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
     }
 
     void restartForSensitivityCalibrationLocked(std::unique_lock<std::mutex>& lock) {
+        syncSensitivityCacheLocked();
         if (!active || starting || !sensitivityStartup.finished() || !sensitivityProbeEligibleLocked() ||
             results.sensitivityReportedPerRequest()) return;
         // Enabling bracket mode after preview appeared must use a new startup,
@@ -306,6 +411,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
     }
 
     bool submitRepeatingLocked() {
+        publishHeadroomLocked();
         return requests.submit(deviceSession.session(), deviceSession.request(), deviceSession.callbackContext(),
                                control, meteringRequestLocked());
     }
@@ -613,6 +719,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
              frame.aeState == ACAMERA_CONTROL_AE_STATE_LOCKED ||
              frame.aeState == ACAMERA_CONTROL_AE_STATE_FLASH_REQUIRED || frame.aeState < 0);
         const bool wasReady = sensitivityStartup.finished();
+        syncSensitivityCacheLocked();
         const auto decision = sensitivityStartup.observe(frame, sensitivityProbeEligibleLocked(),
             results.sensitivityReportedPerRequest().has_value(), autoSettled, SensitivityProbeStartup::Clock::now());
         actions.frame->suppressPreview = decision.suppressPreview;
@@ -731,6 +838,56 @@ struct NativeCameraController::Impl final : CameraEventSink {
         control.requestedEvSteps = std::clamp(value, control.capabilities.evMinSteps, control.capabilities.evMaxSteps);
         diag("CAMERA_CONTROL_REQUEST evSteps=" + std::to_string(control.requestedEvSteps));
         submitRepeatingLocked();
+    }
+    float evStepEvLocked() const {
+        const auto& caps = control.capabilities;
+        return caps.evStepDenominator > 0 && caps.evStepNumerator > 0
+                   ? float(caps.evStepNumerator) / float(caps.evStepDenominator)
+                   : 0.0f;
+    }
+    // Frame-lane requests land here; the camera lane applies them on its tick.
+    std::atomic<float> pendingHdrHeadroomEv{0.0f};
+    void applyHdrHeadroomLocked() {
+        // Stills only: video keeps Camera2 AE exposure.
+        const bool video = control.videoMode || control.recordingFps > 0;
+        const float ev = video ? 0.0f : pendingHdrHeadroomEv.load(std::memory_order_relaxed);
+        const float step = evStepEvLocked();
+        const int32_t target =
+            step > 0.0f ? std::clamp(int32_t(std::lround(std::min(0.0f, ev) / step)),
+                                     control.capabilities.evMinSteps - control.capabilities.evMaxSteps, 0)
+                        : 0;
+        if (target == control.hdrHeadroomSteps) return;
+        // Glide at most 0.2 EV per tick (100 ms): each step re-converges AE a
+        // little instead of all at once; the viewfinder normalizes per frame.
+        const int32_t maxStep = step > 0.0f ? std::max(1, int32_t(std::lround(0.2f / step))) : 1;
+        const int32_t steps = control.hdrHeadroomSteps +
+                              std::clamp(target - control.hdrHeadroomSteps, -maxStep, maxStep);
+        control.previousHdrHeadroomSteps = control.hdrHeadroomSteps;
+        control.hdrHeadroomSteps = steps;
+        if (steps == target) diag("CAMERA_CONTROL_REQUEST hdrHeadroomSteps=" + std::to_string(steps));
+        if (control.exposureMode == ExposureControlMode::Auto && deviceSession.request() && deviceSession.session())
+            submitRepeatingLocked();
+        else
+            publishHeadroomLocked();
+    }
+    // Lock-free mirror for the per-frame lift (the frame lane must not wait
+    // on camera calls holding mutex). Published whenever these inputs change.
+    std::atomic<int32_t> publishedUserEvSteps{0};
+    std::atomic<int32_t> publishedHeadroomFloorSteps{0};
+    std::atomic<float> publishedEvStepEv{0.0f};
+    void publishHeadroomLocked() {
+        publishedUserEvSteps.store(
+            std::clamp(control.requestedEvSteps, control.capabilities.evMinSteps, control.capabilities.evMaxSteps),
+            std::memory_order_relaxed);
+        publishedHeadroomFloorSteps.store(std::min(control.hdrHeadroomSteps, control.previousHdrHeadroomSteps),
+                                          std::memory_order_relaxed);
+        publishedEvStepEv.store(evStepEvLocked(), std::memory_order_relaxed);
+    }
+    float hdrHeadroomEvFor(int32_t aeMode, std::optional<int32_t> appliedSteps) const {
+        const int32_t floor = publishedHeadroomFloorSteps.load(std::memory_order_relaxed);
+        if (floor >= 0 || !appliedSteps || aeMode == ACAMERA_CONTROL_AE_MODE_OFF) return 0.0f;
+        const int32_t user = publishedUserEvSteps.load(std::memory_order_relaxed);
+        return float(std::clamp(*appliedSteps - user, floor, 0)) * publishedEvStepEv.load(std::memory_order_relaxed);
     }
     bool setWhiteBalanceModeValue(WhiteBalanceControlMode mode, int64_t requestId) {
         std::lock_guard<std::mutex> lock(mutex);
@@ -910,6 +1067,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
     }
     void tickControls(int64_t nowMs) {
         std::lock_guard<std::mutex> lock(mutex);
+        applyHdrHeadroomLocked();
         if (focusControls.expireTap(control, nowMs) && deviceSession.request() && deviceSession.session()) {
             diag("CAMERA_CONTROL_REQUEST tapAfCleared reason=explicit_clear");
             submitRepeatingLocked();
@@ -981,6 +1139,11 @@ void NativeCameraController::setAccessRoute(const std::string& route) {
     impl_->accessRoute = route.empty() ? "direct" : route;
 }
 CameraControlState NativeCameraController::controlState() const { return impl_->getControlState(); }
+std::optional<double> NativeCameraController::longFrameRoomEv() const { return impl_->longFrameRoomEv(); }
+bool NativeCameraController::longFramesWorthwhile() const {
+    const auto room = impl_->longFrameRoomEv();
+    return !room || *room >= Impl::kMinLongFrameGainEv;
+}
 int NativeCameraController::videoRotationDegrees(int deviceRotationDegrees) const {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     if (!impl_->deviceSession.cameraContext() || impl_->deviceSession.cameraContext()->lensFacing < 0) return -1;
@@ -995,6 +1158,11 @@ bool NativeCameraController::captureExposureBracket(uint64_t requestId, int64_t 
                                                     int32_t baseReportedSensitivity, const std::vector<float>& evOffsets) {
     return impl_->captureExposureBracket(requestId, baseExposureTimeNs, baseReportedSensitivity, evOffsets);
 }
+void NativeCameraController::setSensitivityCalibrationStore(const std::string& path) {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    impl_->sensitivityStorePath = path;
+    impl_->loadSensitivityStoreLocked();
+}
 void NativeCameraController::setSensitivityCalibrationWanted(bool wanted) {
     std::unique_lock<std::mutex> lock(impl_->mutex);
     const bool changed = impl_->sensitivityCalibrationWanted != wanted;
@@ -1002,6 +1170,12 @@ void NativeCameraController::setSensitivityCalibrationWanted(bool wanted) {
     if (changed && wanted) impl_->restartForSensitivityCalibrationLocked(lock);
 }
 void NativeCameraController::setExposureCompensationSteps(int32_t value) { impl_->setEvSteps(value); }
+void NativeCameraController::setHdrHeadroomEv(float ev) {
+    impl_->pendingHdrHeadroomEv.store(std::isfinite(ev) ? std::min(0.0f, ev) : 0.0f, std::memory_order_relaxed);
+}
+float NativeCameraController::hdrHeadroomEvFor(int32_t aeMode, std::optional<int32_t> appliedSteps) const {
+    return impl_->hdrHeadroomEvFor(aeMode, appliedSteps);
+}
 bool NativeCameraController::setWhiteBalanceMode(WhiteBalanceControlMode mode, int64_t requestId) {
     return impl_->setWhiteBalanceModeValue(mode, requestId);
 }

@@ -1,5 +1,11 @@
 #pragma once
 #include "color/AutoKeyExposure.h"
+#include "color/ExposureNormalizer.h"
+#include "color/HdrHeadroomMeter.h"
+
+#include <mutex>
+#include <optional>
+#include "image_scopes/types.h"
 #include "pipeline/FrameCapturePort.h"
 #include "pipeline/FrameDiagnosticsPort.h"
 #include "pipeline/FrameLifecyclePort.h"
@@ -15,7 +21,9 @@ class SessionFrameCallbacks final : public pipeline::FrameLifecyclePort,
     void notifySwapchainOutOfDate() override;
     void finalizeDetachedStill() override;
     float postGainFor(const rawrcam::metadata::FrameMetadataSnapshot& metadata) override;
-    void applyAutoKey(tonemap::TonemapParams& tone) override;
+    // HDR+ Bracketed: the lift (EV) the viewfinder showed this frame with.
+    std::optional<float> normalizedLiftEv(std::uint64_t timestampNs) const;
+    void applyAutoKey(tonemap::TonemapParams& tone, const rawrcam::metadata::FrameMetadataSnapshot& metadata) override;
     void advanceStill() override;
     bool isStillCaptureRequested() override;
     bool deferSubmittedFrame(const rawrcam::metadata::FrameMetadataSnapshot& metadata,
@@ -58,6 +66,12 @@ class SessionFrameCallbacks final : public pipeline::FrameLifecyclePort,
     // Frame-thread only (slot retire).
     rawrcam::color::AutoKeySmoother autoKeySmoother_;
     rawrcam::color::AutoKeySmoother keySmoother_, highlightSmoother_;
+    rawrcam::color::HdrHeadroomMeter headroomMeter_;
+    // Frame lane and still admission both ask for lifts.
+    mutable std::mutex normalizerMutex_;
+    rawrcam::color::ExposureNormalizer normalizer_;
+    void updateHdrHeadroom(const image_scopes::SceneExposureStatsData* stats, float clipLuma,
+                           const rawrcam::metadata::FrameMetadataSnapshot& metadata, std::uint64_t timestampNs);
 };
 
 }  // namespace rawrcam::session

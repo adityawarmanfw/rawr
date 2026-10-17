@@ -38,10 +38,24 @@ struct MultiframeTuning {
     float hdrplusStrength = 13.0f;
     std::uint32_t hdrplusTileSize = 32;  // 16 tracks small motion better, 32 steadier in heavy noise
     // Appended (journal prefix-compatible), used by mergeAlgorithm 3 only:
-    // exposure of the post-shutter dark frames relative to the burst, and
-    // how many of them to capture.
+    // the most highlight headroom the ZSL burst may be underexposed by
+    // (legacy captures: the post-shutter dark frames' EV), and how many
+    // post-shutter long frames to capture.
     float bracketEv = -2.0f;
     std::uint32_t bracketFrames = 2;
+    // Appended (journal prefix-compatible), mergeAlgorithm 3 only. Long-frame
+    // exposure over Camera2 AE (the user's exposure in manual) in EV; 0 = at
+    // Camera2 AE. Always at least +1 EV over the ZSL reference.
+    float longFrameEv = 0.0f;
+    // Set at the shutter, not from settings. 1 = underexposed ZSL burst plus
+    // post-shutter long frames; 0 = older journals' dark post-shutter frames.
+    std::uint32_t bracketCapture = 0;
+    // Camera2 AE exposure the ZSL burst was underexposed from (exposure time
+    // ns x ISO of the prepared reference, times 2^-headroom); 0 = unknown.
+    // The merged DNGs lift their reference back to it.
+    float aeLinearExposure = 0.0f;
+    // Unused (a reverted tone split); kept so the journal layout is stable.
+    float bracketCurveEv = 0.0f;
 };
 
 }  // namespace rawrcam::capture::multiframe

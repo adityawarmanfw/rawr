@@ -24,7 +24,7 @@ struct BurstFrame {
     rawr::zsl_ring::GpuRawImageView raw{};
     MultiframeFrameParameters parameters{};
     // Linear exposure (exposure time x gain, any consistent unit); only ratios
-    // to the reference are used, by HdrPlusBracketed. <= 0 = unknown, treated
+    // to the reference are used, by the HDR+ merges. <= 0 = unknown, treated
     // as the reference exposure.
     float exposure = 0.0f;
 };

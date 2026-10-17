@@ -49,7 +49,7 @@ import kotlin.math.roundToInt
 // interactive outside the pane. All preview images use the same Compose compositor.
 internal fun Modifier.clipEditorViewport(): Modifier = clipToBounds()
 
-internal enum class RendererStage { RAW, LINEAR, TONEMAP, OUTPUT }
+internal enum class RendererStage { RAW, LINEAR, RENDER, OUTPUT }
 
 // Match the capture strip's instrument typography, with room for full parameter names.
 internal val EditorLabelStyle = TextStyle(fontFamily = CaptureMono, fontSize = 13.sp, lineHeight = 18.sp)
@@ -242,7 +242,7 @@ private fun EditorGroup(title: String, enabled: Boolean? = null, onEnabled: (Boo
 @Composable
 internal fun RendererControls(stage: RendererStage, v: SettingsValues, dispatch: SettingsDispatch,
                               job: RenderJob, resolution: (Double)->Unit, importLut: (String?)->Unit,
-                              shadowLift: (AutoKeyExposure)->Unit = {}) {
+                              shadowLift: (AutoKeyExposure)->Unit = {}, localTone: (Float)->Unit = {}) {
     fun send(a: SettingsAction)=dispatch.invoke(a)
     @Composable fun tone(p: ImageToneNumericParameter) {
         val s=p.reviewSpec();val t=v.activeImageTone()
@@ -310,15 +310,63 @@ internal fun RendererControls(stage: RendererStage, v: SettingsValues, dispatch:
                 }
                 }
             }
-            RendererStage.TONEMAP -> {
-                // Same modes as the camera's shadow lift; it feeds every mode below (tone,
-                // AgX and film). Unknown older captures show "As captured" until changed.
-                val lift = RendererRecipe.adaptiveToneMode(job.draft)
-                EditorChoice("Shadow lift", lift?.label ?: "As captured", AutoKeyExposure.entries.map { it.label }) {
-                    shadowLift(AutoKeyExposure.entries[it])
+            RendererStage.RENDER -> {
+                // Dynamic Range, as the camera's: local (exposure fusion), the global
+                // curve or off. It runs before the Tone Mapping below (RAWR, AgX, film).
+                val shadows = RendererRecipe.localToneShadows(job.draft)
+                val lift = RendererRecipe.adaptiveToneMode(job.draft)  // null: older capture, "as captured"
+                val method = when {
+                    shadows > 0f -> DynamicRangeMethod.Local
+                    lift == AutoKeyExposure.Off -> DynamicRangeMethod.Off
+                    else -> DynamicRangeMethod.Global
+                }
+                // Preserve historical local recipes without exposing experimental controls.
+                val methodLabel = if (method == DynamicRangeMethod.Local && !LOCAL_TONE_CONTROLS_VISIBLE)
+                    "As captured" else method.label
+                EditorChoice("Dynamic Range", methodLabel, visibleDynamicRangeMethods.map { it.label }) {
+                    when (visibleDynamicRangeMethods[it]) {
+                        DynamicRangeMethod.Local -> localTone(LocalToneLimits.DEFAULT_SHADOWS_EV)
+                        DynamicRangeMethod.Global -> {
+                            localTone(0f)
+                            if (lift == AutoKeyExposure.Off) shadowLift(AutoKeyExposure.Natural)
+                        }
+                        DynamicRangeMethod.Off -> {
+                            localTone(0f)
+                            shadowLift(AutoKeyExposure.Off)
+                        }
+                    }
+                }
+                when (method) {
+                    DynamicRangeMethod.Local -> if (LOCAL_TONE_CONTROLS_VISIBLE) EditorNested {
+                        EditorNumber("Strength", shadows, LocalToneLimits.MIN_SHADOWS_EV, LocalToneLimits.MAX_SHADOWS_EV,
+                            .1f, LocalToneLimits.DEFAULT_SHADOWS_EV) { localTone(it) }
+                        val tuning = v.localToneTuning
+                        EditorNumber("Highlight protection (EV)", tuning.highlightsEv, .5f, 2f, .1f, 2f) {
+                            send(SetLocalTone(tuning = tuning.copy(highlightsEv = it)))
+                        }
+                        EditorNumber("Exposure selectivity", tuning.sigma, 3f, 5f, .1f, 5f) {
+                            send(SetLocalTone(tuning = tuning.copy(sigma = it)))
+                        }
+                        EditorNumber("Blend scale", (tuning.coarsestMip - 5).toFloat(), 1f, 3f, 1f, 1f) {
+                            send(SetLocalTone(tuning = tuning.copy(coarsestMip = it.toInt() + 5)))
+                        }
+                        EditorToggle("Local contrast boost", tuning.boostLocalContrast) {
+                            send(SetLocalTone(tuning = tuning.copy(boostLocalContrast = it)))
+                        }
+                        TextButton(onClick = {
+                            localTone(LocalToneLimits.DEFAULT_SHADOWS_EV)
+                            send(SetLocalTone(tuning = LocalToneTuning()))
+                        }) { Text("Reset local tone") }
+                    }
+                    DynamicRangeMethod.Global -> EditorNested {
+                        EditorChoice("Strength", lift?.label ?: "As captured", globalDynamicRangeStrengths.map { it.label }) {
+                            shadowLift(globalDynamicRangeStrengths[it])
+                        }
+                    }
+                    DynamicRangeMethod.Off -> Unit
                 }
                 val mode=if(v.filmSimEnabled)"Film Sim" else if(v.colorRenderProfile==ColorRenderProfile.AgX)"AgX" else "RAWR"
-                EditorChoice("Mode",mode,listOf("RAWR","AgX","Film Sim")){
+                EditorChoice("Tone Mapping",mode,listOf("RAWR","AgX","Film Sim")){
                     send(SetFilmSimEnabled(it==2))
                     if(it==0)send(SetColorRenderProfile(ColorRenderProfile.RawrBase))
                     if(it==1)send(SetAgxPreset(v.agxPreset))
@@ -346,7 +394,7 @@ internal fun RendererControls(stage: RendererStage, v: SettingsValues, dispatch:
                         } }
                     } }
                 } else if(v.colorRenderProfile==ColorRenderProfile.AgX) {
-                    EditorChoice("Preset",v.agxPreset.label,AgxPreset.entries.map{it.label}){send(SetAgxPreset(AgxPreset.entries[it]))}
+                    EditorChoice("Look",v.agxPreset.lookLabel,AgxPreset.entries.map{it.lookLabel}){send(SetAgxPreset(AgxPreset.entries[it]))}
                     tone(ImageToneNumericParameter.RenderExposure)
                     AgxSection.entries.forEach { section ->
                         val groups = AgxGroup.entries.filter { it.section == section }

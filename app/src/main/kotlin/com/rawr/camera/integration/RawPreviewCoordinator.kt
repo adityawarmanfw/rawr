@@ -237,8 +237,9 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
 
 
 
-    fun prepareExperimentalMultiframe(maxFrames: Int): Int =
-        native.prepareExperimentalMultiframe(nativeHandle, maxFrames.coerceIn(2, 30))
+    /** Frames frozen; more than maxFrames when native folded the long frames into the burst. */
+    fun prepareExperimentalMultiframe(maxFrames: Int, longFrames: Int = 0): Int =
+        native.prepareExperimentalMultiframe(nativeHandle, maxFrames.coerceIn(2, 30), longFrames.coerceIn(0, 28))
 
     fun cancelPreparedMultiframeCapture() = native.cancelPreparedMultiframeCapture(nativeHandle)
 
@@ -261,6 +262,11 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
         postNative { native.setPostGainKneeWidthEv(nativeHandle, widthEv) }
 
     fun setAutoKeyMode(mode: Int) = postNative { native.setAutoKeyMode(nativeHandle, mode) }
+    /** Photo local tone mapping shadows EV; 0 = adaptive curve (always 0 in video). */
+    fun setLocalTone(shadowsEv: Float, tuning: com.rawr.camera.settings.model.LocalToneTuning) = postNative {
+        native.setLocalTone(nativeHandle, shadowsEv, tuning.highlightsEv, tuning.sigma, tuning.coarsestMip, tuning.boostLocalContrast)
+    }
+    fun setExpectedMergeFrames(frames: Int) = postNative { native.setExpectedMergeFrames(nativeHandle, frames.coerceIn(1, 30)) }
 
     fun setAutoMinFps(fps: Int) = postNative { native.setAutoMinFps(nativeHandle, fps) }
     fun setAePriorityDisabled(disabled: Boolean) = postNative { native.setAePriorityDisabled(nativeHandle, disabled) }
@@ -284,8 +290,9 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
     // the zero-copy reader usage no longer depends on the toggle.
     fun setExperimentalMultiframeEnabled(enabled: Boolean) =
         postNative { native.setExperimentalMultiframeEnabled(nativeHandle, enabled) }
-    fun setHdrPlusBracketEnabled(enabled: Boolean) =
-        postNative { native.setHdrPlusBracketEnabled(nativeHandle, enabled) }
+    /** HDR+ Bracketed ZSL highlight headroom limit in EV (< 0); 0 turns the meter off. */
+    fun setHdrPlusHeadroomMaxEv(maxEv: Float) =
+        postNative { native.setHdrPlusHeadroomMaxEv(nativeHandle, maxEv) }
 
     // No restart needed: the film engine is created lazily with a queue
     // wait-idle and the preview ingress is untouched.

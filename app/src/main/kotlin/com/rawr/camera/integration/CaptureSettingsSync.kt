@@ -43,7 +43,20 @@ internal class CaptureSettingsSync(
         syncSetting({ it.highlightProtection }) {
             previewCoordinator.setPostGainKneeWidthEv(com.rawr.camera.settings.model.postGainKneeWidthEvFor(it))
         }
-        syncSetting({ it.autoKeyExposure }) { previewCoordinator.setAutoKeyMode(it.nativeId) }
+        syncSetting({ if (it.isVideo) it.videoAutoKeyExposure else it.autoKeyExposure }) {
+            previewCoordinator.setAutoKeyMode(it.nativeId)
+        }
+        // Photo local tone mapping; video always takes the adaptive curve.
+        syncSetting({
+            (if (!it.isVideo && it.photoToneMapping == PhotoToneMapping.Local) it.localToneShadowsEv else 0f) to it.localToneTuning
+        }) { (shadows, tuning) -> previewCoordinator.setLocalTone(shadows, tuning) }
+        // The next photo's merged frame count: the viewfinder's noise limit
+        // on the local tone lift matches the still's.
+        syncSetting({
+            if (!it.isVideo && it.experimentalMultiframeEnabled)
+                (it.multiframeTuning.zslFrames() + it.multiframeTuning.postShutterFrames()).coerceIn(1, 30)
+            else 1
+        }) { previewCoordinator.setExpectedMergeFrames(it) }
         syncSetting({ it.maxPostGainId }) {
             previewCoordinator.setMaxAePostGain(com.rawr.camera.settings.model.maxPostGainForId(it))
         }
@@ -70,9 +83,10 @@ internal class CaptureSettingsSync(
         syncSetting({ it.experimentalZeroCopyEnabled }) { previewCoordinator.setExperimentalZeroCopy(it) }
         syncSetting({ it.experimentalMultiframeEnabled }) { previewCoordinator.setExperimentalMultiframeEnabled(it) }
         syncSetting({
-            it.experimentalMultiframeEnabled &&
+            if (!it.isVideo && it.experimentalMultiframeEnabled &&
                 it.multiframeTuning.mergeAlgorithm == MultiframeMergeAlgorithm.HdrPlusBracketed
-        }) { previewCoordinator.setHdrPlusBracketEnabled(it) }
+            ) it.multiframeTuning.bracketEv else 0f
+        }) { previewCoordinator.setHdrPlusHeadroomMaxEv(it) }
         syncSetting({ it.persistentEngineEnabled }) { previewCoordinator.setPersistentEngineEnabled(it) }
         syncSetting({ it.internalTraceRetainedRows }) {
             com.rawr.camera.integration.InternalTraceNative.setRetainedRows(it)

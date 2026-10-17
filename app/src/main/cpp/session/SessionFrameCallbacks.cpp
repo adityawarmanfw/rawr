@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cmath>
 
+#include "capture/multiframe/BracketExposure.h"
 #include "color/AePostGainCurve.h"
+#include "camera/NativeCameraController.h"
 #include "color/AutoKeyExposure.h"
 #include "image_scopes/types.h"
 #include "session/SessionEngine.h"
@@ -30,15 +32,94 @@ float SessionFrameCallbacks::postGainFor(const rawrcam::metadata::FrameMetadataS
     // Camera2 boost (100 == 1x) shaped by the user cap + HighlightProtection
     // knee width. Both live on SessionEngine so preview/stills share one
     // choke point.
-    return rawrcam::color::effectiveAePostGain(metadata.postRawSensitivityBoost, engine_->maxAePostGain(),
-                                               engine_->postGainKneeWidthEv());
+    // HDR+ Bracketed headroom is lifted back here as a linear gain, so the
+    // viewfinder, AutoKey and frozen still gains all see the scene at Camera2
+    // AE brightness. Highlights above display white are the render's: AgX,
+    // NTRL (DaVinci Intermediate), film and log LUT inputs roll them off;
+    // only direct sRGB/Rec.709 clip, as for any capture.
+    const float gain = rawrcam::color::effectiveAePostGain(metadata.postRawSensitivityBoost, engine_->maxAePostGain(),
+                                                           engine_->postGainKneeWidthEv());
+    // HDR+ Bracketed with Camera2 AE: lift by reference / actual exposure so
+    // compensation steps and AE re-convergence never show (ExposureNormalizer).
+    constexpr int32_t kAeModeOff = 0, kAeStateConverged = 2, kAeStateLocked = 3, kAeStateFlashRequired = 4;
+    const bool tagged = metadata.optimizedStillRequestId && *metadata.optimizedStillRequestId != 0;
+    if (engine_->hdrHeadroomMaxEv() < 0.0f && metadata.aeMode != kAeModeOff && !tagged) {
+        const double exposure = rawrcam::capture::multiframe::linearExposure(metadata);
+        if (exposure > 0.0) {
+            const bool settled = metadata.aeState == kAeStateConverged || metadata.aeState == kAeStateLocked ||
+                                 metadata.aeState == kAeStateFlashRequired;
+            float lift;
+            {
+                std::lock_guard<std::mutex> lock(normalizerMutex_);
+                lift = normalizer_.update(metadata.timestampNs, exposure, engine_->reportedHeadroomEvFor(metadata),
+                                          settled);
+            }
+            return std::clamp(gain * std::exp2(lift), 1.0f / 16.0f, tonemap::kMaxAePostGain);
+        }
+    } else if (!tagged) {
+        std::lock_guard<std::mutex> lock(normalizerMutex_);
+        if (normalizer_.primed()) normalizer_.reset();
+    }
+    const float headroomEv = engine_->reportedHeadroomEvFor(metadata);
+    return headroomEv < 0.0f ? std::min(tonemap::kMaxAePostGain, gain * std::exp2(-headroomEv)) : gain;
 }
 
-void SessionFrameCallbacks::applyAutoKey(tonemap::TonemapParams& tone) { engine_->applyAutoKey(tone); }
+std::optional<float> SessionFrameCallbacks::normalizedLiftEv(std::uint64_t timestampNs) const {
+    std::lock_guard<std::mutex> lock(normalizerMutex_);
+    return normalizer_.liftFor(timestampNs);
+}
+
+void SessionFrameCallbacks::applyAutoKey(tonemap::TonemapParams& tone,
+                                         const rawrcam::metadata::FrameMetadataSnapshot& metadata) {
+    // The noise limit assumes the next photo's merge, so the viewfinder shows
+    // the lift the photo will get.
+    const auto noise = SessionEngine::liftNoiseFor(metadata, tone.aePostGain * std::exp2(tone.exposureEV),
+                                                   engine_->expectedMergeFrames());
+    engine_->noteLiftNoise(noise);
+    engine_->applyAutoKey(tone, noise);
+}
 
 bool SessionFrameCallbacks::sceneKeyMeteringEnabled() {
-    return engine_->autoKeyMode() != rawrcam::color::AutoKeyMode::Off &&
-           !engine_->sceneReferredRender_.load(std::memory_order_relaxed);
+    return engine_->hdrHeadroomMaxEv() < 0.0f || (engine_->autoKeyMode() != rawrcam::color::AutoKeyMode::Off &&
+                                                   !engine_->sceneReferredRender_.load(std::memory_order_relaxed));
+}
+
+void SessionFrameCallbacks::updateHdrHeadroom(const image_scopes::SceneExposureStatsData* stats, float clipLuma,
+                                              const rawrcam::metadata::FrameMetadataSnapshot& metadata,
+                                              std::uint64_t timestampNs) {
+    auto* controller = engine_->cameraControls_.controller();
+    const float floorEv = engine_->hdrHeadroomMaxEv();
+    if (!controller) return;
+    if (!(floorEv < 0.0f)) {
+        headroomMeter_.reset();
+        return;
+    }
+    // Manual exposure keeps the user's shutter/ISO; one-shot frames and AE
+    // transitions say nothing about the repeating exposure.
+    constexpr int32_t kAeModeOff = 0, kAeStateSearching = 1;
+    if (!stats || !(clipLuma > 0.0f) || metadata.aeMode == kAeModeOff || metadata.aeState == kAeStateSearching ||
+        !metadata.aeCompensationSteps || (metadata.optimizedStillRequestId && *metadata.optimizedStillRequestId != 0))
+        return;
+    // Low light: once Camera2 AE is adding gain, every EV of headroom is an
+    // EV of shadow noise; lights at night are not worth it. Judge the light
+    // by the exposure Camera2 AE would use without headroom (this frame's
+    // shutter is already shortened by it), and ease the floor from the full
+    // underexposure up to kLowLightFloorEv over two stops, so a scene near
+    // the threshold does not flip between limits.
+    constexpr double kLowLightBegin = 20e6 * 1600.0;  // 1/50 s at ISO 1600, in ns x ISO
+    constexpr float kLowLightFloorEv = -1.5f;
+    const float appliedEv = engine_->hdrHeadroomEvFor(metadata);
+    float meterFloorEv = floorEv;
+    if (metadata.exposureTimeNs > 0 && metadata.sensitivity > 0 && floorEv < kLowLightFloorEv) {
+        const double normal = double(metadata.exposureTimeNs) * double(metadata.sensitivity) *
+                              std::exp2(-double(appliedEv));
+        const float t = std::clamp(float(std::log2(normal / kLowLightBegin)) * 0.5f, 0.0f, 1.0f);
+        meterFloorEv = floorEv + (kLowLightFloorEv - floorEv) * t;
+    }
+    const auto target =
+        headroomMeter_.update(stats->weightedBins, stats->totalWeight, std::log2(clipLuma), appliedEv,
+                              meterFloorEv, timestampNs);
+    if (target) controller->setHdrHeadroomEv(*target);
 }
 
 std::optional<rawrcam::pipeline::FrameDiagnosticsPort::SceneKeyFeedback> SessionFrameCallbacks::updateSceneKey(
@@ -48,6 +129,8 @@ std::optional<rawrcam::pipeline::FrameDiagnosticsPort::SceneKeyFeedback> Session
     static_assert(image_scopes::kSceneExposureMinEv == rawrcam::color::kSceneKeyMinEv);
     static_assert(image_scopes::kSceneExposureMaxEv == rawrcam::color::kSceneKeyMaxEv);
     const auto stats = engine_->monitoringCoordinator_.scopes().consumeSceneExposure(slotIndex);
+    updateHdrHeadroom(stats ? &*stats : nullptr, engine_->monitoringCoordinator_.scopes().sceneClipLuma(slotIndex),
+                      metadata, timestampNs);
     const auto mode = engine_->autoKeyMode();
     if (mode == rawrcam::color::AutoKeyMode::Off || !sceneKeyMeteringEnabled()) {
         autoKeySmoother_.reset();
@@ -61,8 +144,8 @@ std::optional<rawrcam::pipeline::FrameDiagnosticsPort::SceneKeyFeedback> Session
     if (!stats || (metadata.optimizedStillRequestId && *metadata.optimizedStillRequestId != 0)) return std::nullopt;
     const auto keyEv = rawrcam::color::sceneKeyEv(stats->weightedBins);
     if (!keyEv) return std::nullopt;
-    const float halGain = rawrcam::color::effectiveAePostGain(
-        metadata.postRawSensitivityBoost, engine_->maxAePostGain(), engine_->postGainKneeWidthEv());
+    // Includes the HDR+ headroom lift, like the render gain it predicts.
+    const float halGain = postGainFor(metadata);
     const auto highEv = rawrcam::color::scenePercentileEv(stats->weightedBins, 0.95f);
     if (!highEv) return std::nullopt;
     auto curve = rawrcam::color::autoKeyCurve(*keyEv, *highEv, halGain, rawrcam::color::autoKeyPolicy(mode));
@@ -87,7 +170,7 @@ bool SessionFrameCallbacks::deferSubmittedFrame(const rawrcam::metadata::FrameMe
     // shutter was accepted. Do not let queue delay turn one into the photo.
     if (!engine_->capture_.acceptsStillTimestamp(metadata.timestampNs)) return false;
     auto tone = tonemapParams;
-    engine_->applyAutoKey(tone);
+    engine_->applyAutoKey(tone, SessionEngine::liftNoiseFor(metadata, aePostGain * std::exp2(tone.exposureEV), 1u));
     return engine_->capture_.single().deferSubmittedFrame(metadata, colorState, tone, aePostGain, filmEnabled,
                                                           filmLook);
 }

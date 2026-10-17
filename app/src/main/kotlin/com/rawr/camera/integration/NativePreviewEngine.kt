@@ -68,7 +68,7 @@ class NativePreviewEngine {
     external fun setExperimentalZeroCopy(handle: Long, enabled: Boolean)
 
     external fun setExperimentalMultiframeEnabled(handle: Long, enabled: Boolean)
-    external fun setHdrPlusBracketEnabled(handle: Long, enabled: Boolean)
+    external fun setHdrPlusHeadroomMaxEv(handle: Long, maxEv: Float)
 
     external fun setPersistentEngineEnabled(handle: Long, enabled: Boolean)
 
@@ -89,6 +89,9 @@ class NativePreviewEngine {
     external fun setPostGainKneeWidthEv(handle: Long, widthEv: Float)
 
     external fun setAutoKeyMode(handle: Long, mode: Int)
+    external fun setLocalTone(handle: Long, shadowsEv: Float, highlightsEv: Float, sigma: Float, coarsestMip: Int, boostLocalContrast: Boolean)
+
+    external fun setExpectedMergeFrames(handle: Long, frames: Int)
 
     external fun setAutoMinFps(handle: Long, fps: Int)
     external fun setAePriorityDisabled(handle: Long, disabled: Boolean)
@@ -99,7 +102,7 @@ class NativePreviewEngine {
 
 
 
-    external fun prepareExperimentalMultiframe(handle: Long, maxFrames: Int): Int
+    external fun prepareExperimentalMultiframe(handle: Long, maxFrames: Int, longFrames: Int): Int
 
     external fun startPreparedMultiframeCapture(
         handle: Long,

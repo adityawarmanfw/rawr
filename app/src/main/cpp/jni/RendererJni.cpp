@@ -18,6 +18,7 @@
 #include <type_traits>
 #include <unordered_map>
 
+#include "local_tone/ExposureFusion.h"
 #include "capture/multiframe/mfsr/MfsrCaptureJob.h"
 #include "capture/persistence/CaptureJob.h"
 #include "color/AutoKeyExposure.h"
@@ -75,6 +76,11 @@ std::shared_ptr<Session> get(jlong id) {
 // the stored key when the camera metered, else from this DNG's own meter.
 // No override keeps the captured adaptive tone exactly.
 void resolveAdaptiveTone(Session& s, rawrcam::renderer::RenderOptions& o) {
+    // Local tone mapping replaces the adaptive curve, as at capture.
+    if (rawr::local_tone::fusionActive(o.context.tonemapParams.localTone.shadowsEv)) {
+        o.context.tonemapParams.adaptiveTone = {};
+        return;
+    }
     if (o.adaptiveToneMode.empty()) return;
     const auto mode = rawrcam::color::autoKeyModeFromName(o.adaptiveToneMode);
     if (!mode) throw std::runtime_error("Unsupported shadow lift mode");
@@ -144,6 +150,32 @@ rawrcam::renderer::RenderOptions options(JNIEnv* env, jstring recipe, int workin
     t.adaptiveTone = {float(adaptive.number("liftEv", 0)), float(adaptive.number("keyEv", -4)),
                       float(adaptive.number("highlightEv", 0))};
     if (!tonemap::validAdaptiveTone(t.adaptiveTone)) throw std::runtime_error("Invalid adaptive tone recipe");
+    // Captures carry their local tone mapping; absent = off. Version 1 was
+    // the earlier guided-filter lift (strength/detail): replayed as exposure
+    // fusion at the defaults when it was on.
+    Json localTone(env, json.child("localTone"));
+    if (localTone.number("version", 1) >= 2) {
+        t.localTone = {float(localTone.number("shadowsEv", 0)),
+                       float(localTone.number("highlightsEv", rawr::local_tone::kDefaultHighlightsEv)),
+                       float(localTone.number("sigma", 5)), unsigned(localTone.number("coarsestMip", 6)),
+                       unsigned(localTone.flag("boostLocalContrast", false))};
+    } else {
+        t.localTone = localTone.number("strength", 0) > 0
+                          ? tonemap::LocalToneParams{rawr::local_tone::kDefaultShadowsEv,
+                                                     rawr::local_tone::kDefaultHighlightsEv}
+                          : tonemap::LocalToneParams{};
+    }
+    // Editor override (Tone mapping / Local shadows); 0 = adaptive curve.
+    if (const double shadows = json.number("localToneShadowsEv", -1); shadows >= 0)
+        t.localTone.shadowsEv = float(shadows);
+    Json tuning(env, json.child("localToneTuning"));
+    t.localTone.highlightsEv = float(tuning.number("highlightsEv", t.localTone.highlightsEv));
+    t.localTone.sigma = float(tuning.number("sigma", t.localTone.sigma));
+    t.localTone.coarsestMip = unsigned(tuning.number("coarsestMip", t.localTone.coarsestMip));
+    t.localTone.boostLocalContrast = unsigned(tuning.flag("boostLocalContrast", t.localTone.boostLocalContrast != 0));
+    if (rawr::local_tone::fusionActive(t.localTone.shadowsEv) &&
+        !rawr::local_tone::validParams(rawr::local_tone::fusionParams(t.localTone.shadowsEv, t.localTone.highlightsEv, t.localTone.sigma, t.localTone.coarsestMip, t.localTone.boostLocalContrast != 0)))
+        throw std::runtime_error("Invalid local tone recipe");
     o.adaptiveToneMode = json.text("adaptiveToneMode");
     if (o.adaptiveToneMode == "null") o.adaptiveToneMode.clear();
     // Captures since the mode was recorded say whether the camera metered;

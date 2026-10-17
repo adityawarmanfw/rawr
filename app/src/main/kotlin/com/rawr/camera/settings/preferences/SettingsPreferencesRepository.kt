@@ -4,6 +4,11 @@ import com.rawr.camera.settings.model.AgxCatalog
 import com.rawr.camera.settings.model.AgxParameter
 import com.rawr.camera.settings.model.AgxPreset
 import com.rawr.camera.settings.model.AgxValues
+import com.rawr.camera.settings.model.LocalToneTuning
+import com.rawr.camera.settings.model.LOCAL_TONE_CONTROLS_VISIBLE
+import com.rawr.camera.settings.model.PhotoToneMapping
+import com.rawr.camera.settings.model.LocalToneLimits
+import com.rawr.camera.settings.model.MAX_BURST_FRAMES
 import com.rawr.camera.settings.model.ProfileTone
 import com.rawr.camera.settings.model.VideoLogProfile
 
@@ -443,6 +448,17 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
             exposureStep = enumOrDefault(p[Keys.exposureStep], d.exposureStep),
             highlightProtection = enumOrDefault(p[Keys.highlightProtection], d.highlightProtection),
             autoKeyExposure = enumOrDefault(p[Keys.autoKeyExposure], d.autoKeyExposure),
+            // Until set, video keeps the strength it shared with photos.
+            videoAutoKeyExposure = enumOrDefault(p[Keys.videoAutoKeyExposure] ?: p[Keys.autoKeyExposure], d.videoAutoKeyExposure),
+            // Do not leave hidden local processing enabled in camera preferences.
+            // Saved renderer recipes are independent and remain replayable.
+            photoToneMapping = if (LOCAL_TONE_CONTROLS_VISIBLE)
+                enumOrDefault(p[Keys.photoToneMapping], d.photoToneMapping) else PhotoToneMapping.Adaptive,
+            localToneShadowsEv = LocalToneLimits.shadowsEv(p[Keys.localToneShadowsEv] ?: d.localToneShadowsEv),
+            localToneTuning = LocalToneTuning(
+                p[Keys.localToneHighlightsEv] ?: 2f, p[Keys.localToneSigma] ?: 5f,
+                p[Keys.localToneMip] ?: 6, p[Keys.localToneBoost] ?: false
+            ).sanitized(),
             maxPostGainId = p[Keys.maxPostGainId] ?: d.maxPostGainId,
             autoMinFpsId = p[Keys.autoMinFpsId] ?: d.autoMinFpsId,
             controlSurfaceStyle = enumOrDefault(p[Keys.controlSurfaceStyle], d.controlSurfaceStyle),
@@ -528,7 +544,13 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
                     hdrPlusTileSize = p[Keys.multiframeHdrPlusTileSize] ?: d.multiframeTuning.hdrPlusTileSize,
                     bracketEv = p[Keys.multiframeBracketEv] ?: d.multiframeTuning.bracketEv,
                     bracketFrames = p[Keys.multiframeBracketFrames] ?: d.multiframeTuning.bracketFrames,
-                    maxFrames = p[Keys.multiframeMaxFrames] ?: d.multiframeTuning.maxFrames,
+                    longFrameEv = p[Keys.multiframeLongFrameEv] ?: d.multiframeTuning.longFrameEv,
+                    // A separate ZSL count existed briefly (2026-10-15): fold it into the total once.
+                    maxFrames = (p[Keys.multiframeMaxFrames] ?: d.multiframeTuning.maxFrames).let { total ->
+                        p[Keys.legacyBracketZslFrames]?.let { zsl ->
+                            maxOf(total, zsl + (p[Keys.multiframeBracketFrames] ?: 0)).coerceAtMost(MAX_BURST_FRAMES)
+                        } ?: total
+                    },
                     lkIterations = p[Keys.multiframeLkIterations] ?: d.multiframeTuning.lkIterations,
                     hessianEpsilonExponent =
                         p[Keys.multiframeHessianExponent] ?: d.multiframeTuning.hessianEpsilonExponent,
@@ -668,6 +690,13 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.exposureStep] = v.exposureStep.name
         p[Keys.highlightProtection] = v.highlightProtection.name
         p[Keys.autoKeyExposure] = v.autoKeyExposure.name
+        p[Keys.videoAutoKeyExposure] = v.videoAutoKeyExposure.name
+        p[Keys.photoToneMapping] = v.photoToneMapping.name
+        p[Keys.localToneShadowsEv] = v.localToneShadowsEv
+        p[Keys.localToneHighlightsEv] = v.localToneTuning.highlightsEv
+        p[Keys.localToneSigma] = v.localToneTuning.sigma
+        p[Keys.localToneMip] = v.localToneTuning.coarsestMip
+        p[Keys.localToneBoost] = v.localToneTuning.boostLocalContrast
         p[Keys.maxPostGainId] = v.maxPostGainId
         p[Keys.autoMinFpsId] = v.autoMinFpsId
         p[Keys.controlSurfaceStyle] = v.controlSurfaceStyle.name
@@ -763,7 +792,9 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.multiframeHdrPlusTileSize] = v.multiframeTuning.hdrPlusTileSize
         p[Keys.multiframeBracketEv] = v.multiframeTuning.bracketEv
         p[Keys.multiframeBracketFrames] = v.multiframeTuning.bracketFrames
+        p[Keys.multiframeLongFrameEv] = v.multiframeTuning.longFrameEv
         p[Keys.multiframeMaxFrames] = v.multiframeTuning.maxFrames
+        p.remove(Keys.legacyBracketZslFrames)
         p[Keys.multiframeLkIterations] = v.multiframeTuning.lkIterations
         p[Keys.multiframeHessianExponent] = v.multiframeTuning.hessianEpsilonExponent
         p[Keys.multiframeKDetail] = v.multiframeTuning.kDetail
@@ -952,6 +983,13 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val exposureStep = stringPreferencesKey("exposure_step")
         val highlightProtection = stringPreferencesKey("highlight_protection")
         val autoKeyExposure = stringPreferencesKey("auto_key_exposure")
+        val videoAutoKeyExposure = stringPreferencesKey("video_auto_key_exposure")
+        val photoToneMapping = stringPreferencesKey("photo_tone_mapping")
+        val localToneShadowsEv = floatPreferencesKey("local_tone_shadows_ev")
+        val localToneHighlightsEv = floatPreferencesKey("local_tone_highlights_ev")
+        val localToneSigma = floatPreferencesKey("local_tone_sigma")
+        val localToneMip = intPreferencesKey("local_tone_mip")
+        val localToneBoost = booleanPreferencesKey("local_tone_boost")
         val maxPostGainId = stringPreferencesKey("max_post_gain_id")
         val autoMinFpsId = stringPreferencesKey("auto_min_fps_id")
         val controlSurfaceStyle = stringPreferencesKey("control_surface_style")
@@ -1033,6 +1071,9 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val multiframeHdrPlusTileSize = intPreferencesKey("multiframe_hdrplus_tile_size")
         val multiframeBracketEv = floatPreferencesKey("multiframe_bracket_ev")
         val multiframeBracketFrames = intPreferencesKey("multiframe_bracket_frames")
+        val multiframeLongFrameEv = floatPreferencesKey("multiframe_long_frame_ev")
+        // Read once for migration, then removed on the next save.
+        val legacyBracketZslFrames = intPreferencesKey("multiframe_bracket_zsl_frames")
         val multiframeMaxFrames = intPreferencesKey("multiframe_max_frames")
         val multiframeLkIterations = intPreferencesKey("multiframe_lk_iterations")
         val multiframeHessianExponent = intPreferencesKey("multiframe_hessian_exponent")

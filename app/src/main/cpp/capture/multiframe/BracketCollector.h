@@ -3,6 +3,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <utility>
 #include <vector>
@@ -11,10 +12,11 @@
 
 namespace rawrcam::capture::multiframe {
 
-// Post-shutter dark frames for an HDR+ bracketed capture: what to request
-// from the camera. Exposure/sensitivity are the reference ZSL frame's
+// Post-shutter frames for an HDR+ bracketed capture: what to request from
+// the camera. Exposure/sensitivity are the reference ZSL frame's
 // CaptureResult values; the camera owner converts them to its request
-// coordinate and applies evOffsets (all <= 0) per frame.
+// coordinate and applies evOffsets per frame (> 0: long frames over the
+// underexposed burst; <= 0: older dark-frame captures).
 struct BracketPlan {
     std::uint64_t requestId = 0;  // tags the one-shot requests (optimizedStillRequestId)
     std::int64_t baseExposureTimeNs = 0;
@@ -22,12 +24,18 @@ struct BracketPlan {
     std::vector<float> evOffsets;
 };
 
-// Hands tagged dark frames from the frame lane (as single-frame frozen
+// Hands tagged frames from the frame lane (as single-frame frozen
 // bursts, pinned in the ZSL ring) to the spool worker, which waits for them
 // with a deadline before the burst is made durable. Thread-safe.
 class BracketCollector final {
    public:
-    BracketCollector(std::uint64_t requestId, std::uint32_t expected) : requestId_(requestId), expected_(expected) {}
+    // onDone runs once, when the last frame arrives, the collector is
+    // abandoned, or the spool worker stops waiting (the user may move).
+    BracketCollector(std::uint64_t requestId, std::uint32_t expected, std::function<void()> onDone = {})
+        : requestId_(requestId), expected_(expected), onDone_(std::move(onDone)) {}
+    ~BracketCollector() { doneLocked(); }  // dropped unconsumed: never leave a hold open
+    BracketCollector(const BracketCollector&) = delete;
+    BracketCollector& operator=(const BracketCollector&) = delete;
     std::uint64_t requestId() const noexcept { return requestId_; }
     std::uint32_t expected() const noexcept { return expected_; }
     // False once full or closed (the caller drops the frame and its pin).
@@ -36,6 +44,7 @@ class BracketCollector final {
             std::lock_guard<std::mutex> lock(mutex_);
             if (closed_ || frames_.size() >= expected_) return false;
             frames_.push_back(std::move(frame));
+            if (frames_.size() >= expected_) doneLocked();
         }
         changed_.notify_all();
         return true;
@@ -45,6 +54,7 @@ class BracketCollector final {
         {
             std::lock_guard<std::mutex> lock(mutex_);
             closed_ = true;
+            doneLocked();
         }
         changed_.notify_all();
     }
@@ -59,12 +69,20 @@ class BracketCollector final {
         std::unique_lock<std::mutex> lock(mutex_);
         changed_.wait_until(lock, deadline, [&] { return closed_ || frames_.size() >= expected_; });
         closed_ = true;
+        doneLocked();
         return std::move(frames_);
     }
 
    private:
+    void doneLocked() {
+        if (done_) return;
+        done_ = true;
+        if (onDone_) onDone_();
+    }
     const std::uint64_t requestId_;
     const std::uint32_t expected_;
+    const std::function<void()> onDone_;
+    bool done_ = false;
     std::mutex mutex_;
     std::condition_variable changed_;
     bool closed_ = false;

@@ -1,11 +1,24 @@
 package com.rawr.camera.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -16,6 +29,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rawr.camera.model.GridMode
@@ -213,3 +227,71 @@ internal fun SelfTimerCountdownOverlay(
         )
     }
 }
+
+/**
+ * Brief notice at the top of the viewfinder when HDR+ Bracketed becomes
+ * active (and on entering the camera with it on): the burst is exposed darker
+ * and lifted back, and frames follow the shutter. Fades out on its own.
+ */
+@Composable
+internal fun HdrBracketedNotice(active: Boolean, orientation: Orientation, modifier: Modifier = Modifier) {
+    var visible by remember { mutableStateOf(false) }
+    LaunchedEffect(active) {
+        visible = active
+        if (active) {
+            kotlinx.coroutines.delay(HDR_BRACKETED_NOTICE_MS)
+            visible = false
+        }
+    }
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(tween(250)),
+        exit = fadeOut(tween(600)),
+        modifier = modifier
+    ) {
+        Text(
+            "HDR+ Bracketed is active. The app will keep highlights from clipping and take a few " +
+                "extra frames after the shutter, so hold still a moment.",
+            color = Color.White,
+            fontSize = 13.sp,
+            textAlign = TextAlign.Center,
+            style = ViewfinderTextStyle,
+            modifier = Modifier
+                .uprightInLandscape(orientation)
+                .widthIn(max = 320.dp)
+                .background(Color.Black.copy(alpha = .45f), RoundedCornerShape(12.dp))
+                .padding(horizontal = 14.dp, vertical = 8.dp)
+                .testTag(CaptureTestTags.HDR_BRACKETED_NOTICE)
+        )
+    }
+}
+
+private const val HDR_BRACKETED_NOTICE_MS = 4_000L
+
+/**
+ * "Hold still" from the HDR+ Bracketed shutter press until the post-shutter
+ * frames are in; the end is also felt as a tick.
+ */
+@Composable
+internal fun BracketHoldNotice(active: Boolean, orientation: Orientation, modifier: Modifier = Modifier) {
+    AnimatedVisibility(
+        visible = active,
+        enter = fadeIn(tween(80)),
+        exit = fadeOut(tween(250)),
+        modifier = modifier
+    ) {
+        Text(
+            "Hold still",
+            color = Color.White,
+            fontSize = 15.sp,
+            textAlign = TextAlign.Center,
+            style = ViewfinderTextStyle,
+            modifier = Modifier
+                .uprightInLandscape(orientation)
+                .background(Color.Black.copy(alpha = .45f), RoundedCornerShape(12.dp))
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .testTag(CaptureTestTags.BRACKET_HOLD_NOTICE)
+        )
+    }
+}
+

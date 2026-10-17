@@ -45,7 +45,8 @@ import com.rawr.camera.storage.launchPicker
 internal fun RendererEditor(job: RenderJob, session: RendererEditorSession, previewSession: RendererPreviewSession,
     onSaveResolution: (RenderJob,Double)->Unit, onImportLut: (String?,Uri)->Unit,
     busy: Boolean, onBackToQueue: ()->Unit, onExport: ()->Unit,
-    onShadowLift: (RenderJob, com.rawr.camera.settings.model.AutoKeyExposure)->Unit = { _, _ -> }) {
+    onShadowLift: (RenderJob, com.rawr.camera.settings.model.AutoKeyExposure)->Unit = { _, _ -> },
+    onLocalTone: (RenderJob, Float)->Unit = { _, _ -> }) {
     val controller by session.controller.collectAsStateWithLifecycle()
     val settings by controller.state.collectAsStateWithLifecycle()
     val preview by previewSession.state.collectAsStateWithLifecycle()
@@ -57,7 +58,8 @@ internal fun RendererEditor(job: RenderJob, session: RendererEditorSession, prev
         onSaveResolution = { onSaveResolution(job, it) },
         onImportLut = { lutTarget = it; importer.launchPicker(context, arrayOf("*/*")) },
         metadata = { dismiss -> RendererMetadata(job, previewSession, dismiss) },
-        onShadowLift = { if (!busy) onShadowLift(job, it) })
+        onShadowLift = { if (!busy) onShadowLift(job, it) },
+        onLocalTone = { if (!busy) onLocalTone(job, it) })
 }
 
 /** UI-only editor. Tests drive this exact layout without native rendering or job mutation. */
@@ -68,12 +70,13 @@ internal fun RendererEditorContent(
     onViewport: (RendererViewport) -> Unit, onWaveform: (Boolean) -> Unit,
     onSaveResolution: (Double) -> Unit, onImportLut: (String?) -> Unit,
     metadata: @Composable (() -> Unit) -> Unit,
-    onShadowLift: (com.rawr.camera.settings.model.AutoKeyExposure) -> Unit = {}
+    onShadowLift: (com.rawr.camera.settings.model.AutoKeyExposure) -> Unit = {},
+    onLocalTone: (Float) -> Unit = {}
 ) {
     var waveformVisible by remember(job.id) { mutableStateOf(false) }
     var metadataVisible by remember(job.id) { mutableStateOf(false) }
     val waveform = preview.frame?.waveform
-    var stage by remember(job.id){mutableStateOf(RendererStage.TONEMAP)}
+    var stage by remember(job.id){mutableStateOf(RendererStage.RENDER)}
     var pane by remember(job.id){mutableIntStateOf(1)}
     val waveformShown = waveformVisible && pane != 2
     LaunchedEffect(waveformShown) { onWaveform(waveformShown) }
@@ -124,7 +127,7 @@ internal fun RendererEditorContent(
                         paneFraction = if (pane == 2) .72f else .45f
                         sideFraction = if (pane == 2) .55f else .38f
                     }) {
-                    RendererControls(selectedStage, values, dispatch, job, onSaveResolution, onImportLut, onShadowLift)
+                    RendererControls(selectedStage, values, dispatch, job, onSaveResolution, onImportLut, onShadowLift, onLocalTone)
                 }
             })
     }

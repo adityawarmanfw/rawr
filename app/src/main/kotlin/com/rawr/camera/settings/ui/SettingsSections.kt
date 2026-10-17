@@ -115,6 +115,10 @@ internal fun SettingsSectionContent(
             FilmSimSettings(state, dispatch)
         }
 
+        SettingsSection.DynamicRange -> {
+            DynamicRangeSettings(state, dispatch)
+        }
+
         SettingsSection.Debug -> {
             DebugSettings(state, dispatch, onRequestSaveNotificationPermission)
         }

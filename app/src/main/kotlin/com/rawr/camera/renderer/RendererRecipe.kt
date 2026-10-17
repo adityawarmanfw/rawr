@@ -20,7 +20,8 @@ internal object RendererRecipe {
         capture.isNotBlank() || !embeddedRecipe.isNullOrBlank()
 
     /** Capture metadata every draft carries from its source, whatever the editor settings. */
-    private val sourceKeys = listOf("aePostGain", "adaptiveTone", "capturedAutoKeyExposure", "timestampNs", "resolvedFrame")
+    private val sourceKeys =
+        listOf("aePostGain", "adaptiveTone", "localTone", "capturedAutoKeyExposure", "timestampNs", "resolvedFrame")
 
     /** Capture-time adaptive shadow lift in a draft or source recipe; null when it carries none. */
     fun adaptiveLift(recipe: String): Float? = runCatching {
@@ -36,6 +37,32 @@ internal object RendererRecipe {
     fun adaptiveToneMode(draft: String): AutoKeyExposure? = runCatching {
         JSONObject(draft).optString("adaptiveToneMode").let { name -> AutoKeyExposure.entries.firstOrNull { it.name == name } }
     }.getOrNull() ?: capturedAutoKey(draft) ?: AutoKeyExposure.Off.takeIf { (adaptiveLift(draft) ?: 0f) <= 0f }
+
+    /** Local tone mapping shadows EV the capture rendered with; 0 = adaptive curve. */
+    fun capturedLocalTone(recipe: String): Float = runCatching {
+        val lt = JSONObject(recipe).optJSONObject("localTone") ?: return@runCatching 0f
+        if (lt.optInt("version", 1) >= 2) lt.optDouble("shadowsEv", 0.0).toFloat()
+        else if (lt.optDouble("strength", 0.0) > 0.0) LocalToneLimits.DEFAULT_SHADOWS_EV else 0f
+    }.getOrDefault(0f)
+
+    /** The editor's local tone shadows EV: its override, else the capture's; 0 = adaptive curve. */
+    fun localToneShadows(draft: String): Float = runCatching {
+        JSONObject(draft).takeIf { it.has("localToneShadowsEv") }?.getDouble("localToneShadowsEv")?.toFloat()
+    }.getOrNull() ?: capturedLocalTone(draft)
+
+    /**
+     * [draft] with local tone [shadowsEv] (0 = adaptive curve). The capture's value clears the
+     * override. Leaving local tone mapping re-meters the adaptive curve (a local capture
+     * stored none), keeping the chosen strength.
+     */
+    fun withLocalTone(draft: String, shadowsEv: Float): String {
+        val json = JSONObject(draft)
+        val value = if (shadowsEv > 0f) LocalToneLimits.shadowsEv(shadowsEv) else 0f
+        if (value == capturedLocalTone(draft)) json.remove("localToneShadowsEv") else json.put("localToneShadowsEv", value.toDouble())
+        if (value == 0f && capturedLocalTone(draft) > 0f && !json.has("adaptiveToneMode"))
+            json.put("adaptiveToneMode", (capturedAutoKey(draft) ?: AutoKeyExposure.Natural).name)
+        return json.toString()
+    }
 
     /**
      * [draft] with shadow-lift [mode]. Choosing what the source was captured with clears the
@@ -59,6 +86,8 @@ internal object RendererRecipe {
         sourceKeys.forEach { key -> if (source.has(key)) draft.put(key, source.get(key)) }
         runCatching { JSONObject(previousDraft).optString("adaptiveToneMode") }.getOrNull()
             ?.takeIf { it.isNotBlank() }?.let { draft.put("adaptiveToneMode", it) }
+        runCatching { JSONObject(previousDraft).takeIf { it.has("localToneShadowsEv") }?.getDouble("localToneShadowsEv") }
+            .getOrNull()?.let { draft.put("localToneShadowsEv", it) }
         return draft.toString()
     }
 
@@ -281,7 +310,11 @@ internal object RendererRecipe {
             selected != null -> ColorRenderProfile.UserLut
             else -> ColorRenderProfile.RawrBase
         }
-        return d.copy(imageTone = tone,
+        val local = j.optJSONObject("localToneTuning") ?: j.optJSONObject("localTone") ?: JSONObject()
+        val tuning = LocalToneTuning(local.optDouble("highlightsEv", 2.0).toFloat(),
+            local.optDouble("sigma", 5.0).toFloat(), local.optInt("coarsestMip", 6),
+            local.optBoolean("boostLocalContrast", false)).sanitized()
+        return d.copy(imageTone = tone, localToneTuning = tuning,
             colorRenderProfile = profile,
             srgbTone = if (profile == ColorRenderProfile.SRgb) profileTone else d.srgbTone,
             rec709Tone = if (profile == ColorRenderProfile.Rec709) profileTone else d.rec709Tone,

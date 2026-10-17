@@ -97,7 +97,7 @@ int main() {
     {
         const auto preset = tonemap::TonemapPresets::NeutralBaseline();
         if (preset.params.exposureEV != 0.0f || preset.params.saturation != 0.0f || preset.params.vibrance != 0.0f ||
-            preset.params.aePostGain != 1.0f || tonemap::kMaxAePostGain != 16.0f || preset.config.middleGray != 0.18f) {
+            preset.params.aePostGain != 1.0f || tonemap::kMaxAePostGain != 64.0f || preset.config.middleGray != 0.18f) {
             std::cerr << "baseline params drift\n";
             return 3;
         }
