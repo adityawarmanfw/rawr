@@ -21,8 +21,9 @@ vivo's camera (AppType 1). The HAL's sensor-mode selector
 (`/vendor/etc/camera/sensormode-selector/PD2547.json`) keeps the full-size modes
 (`DNGHWREMOSAIC`, `FULLSATREMOSAIC`) in its `AppType == vivo` branch; any other app type
 fails full-size stream configuration ("Function not implemented"). Key 33 is rewritten by
-cameraserver at open and needs no change. The value is system-wide: save it before the change,
-restore it after the device closes, and recover it after a crash.
+cameraserver at open and needs no change. cameraserver reads key 40 while it configures streams,
+not while the camera runs: hold it around `createCaptureSession` only (~40 ms) and give it back
+right after. The value is system-wide: save it before the change and recover it after a crash.
 
 ## 50 MP (streaming, Bayer)
 
