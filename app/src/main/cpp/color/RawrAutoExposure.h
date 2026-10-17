@@ -258,6 +258,9 @@ struct FrameObservation {
 
 struct Metered {
     double desiredLogExposure = 0.0;
+    // How far the highlights need the exposure under the key's (before the
+    // guard and any headroom; <= 0: they fit).
+    double highlightNeedEv = 0.0;
     float sceneEv100 = 0.0f;
     float nightOffsetEv = 0.0f;
     float guardEv = 0.0f;  // <= 0
@@ -379,6 +382,7 @@ inline std::optional<Metered> meter(const FrameObservation& f, NightLook look, f
             byKey = std::log2(double(p.linearMeanTarget)) + double(m.nightOffsetEv) - (double(*mean) - f.logExposure);
     }
     const double byHighlight = high->targetEv - high->sceneEv + double(p.sensorHeadroomEv);
+    m.highlightNeedEv = byKey - byHighlight + double(p.sensorHeadroomEv);
     double darkening = guardDarkeningEv(byKey - byHighlight, p);
     if (high->clipped) darkening = std::min(darkening, clippedGuardCapEv(m.sceneEv100, p));
     const double guarded = p.highlightPriority
@@ -484,19 +488,16 @@ struct Settings {
     // 0: no snapping; else the mains period.
     std::int64_t flickerPeriodNs = 0;
     Limits limits{};
-    // Highlight headroom: the sensor is exposed this far under the shown
-    // exposure in good light (as Camera2 AE does with its post-RAW boost),
-    // fading to none in dim scenes where noise matters more (see
-    // headroomForEv100).
+    // Highlight headroom, up to this much: the sensor runs under the shown
+    // exposure by what the highlights need (as Camera2 AE does with its
+    // post-RAW boost), the viewfinder/photo gain carries it back and the
+    // render rolls those highlights off. No highlights, no headroom (no
+    // noise for nothing). Past it the guard darkens what is shown.
     float headroomEv = 1.0f;
+    // Headroom rises at once (a highlight must not clip on the way) and
+    // falls with this time constant.
+    float headroomFallTauSec = 0.3f;
 };
-
-// Headroom in effect at a scene EV100: full at 7 and up, none at 4 and down.
-inline float headroomForEv100(float headroomEv, float ev100) noexcept {
-    if (!std::isfinite(ev100)) return 0.0f;
-    const float x = std::clamp((ev100 - 4.0f) / 3.0f, 0.0f, 1.0f);
-    return std::max(0.0f, headroomEv) * x * x * (3.0f - 2.0f * x);
-}
 
 struct Step {
     Solution request;           // what to put on the repeating request
@@ -513,12 +514,25 @@ class Controller {
    public:
     std::optional<Step> update(const FrameObservation& f, const Settings& s, float userEv,
                                const MeterPolicy& mp = {}, const FilterPolicy& fp = {}) noexcept {
-        // Headroom follows the light of the last metered frame.
-        const float headroom =
-            last_ ? headroomForEv100(s.headroomEv, last_->metered.sceneEv100) : 0.0f;
+        // Headroom: what the highlights need (metered without any), up to the
+        // setting; rises at once, falls smoothly.
+        const auto plain = meter(f, s.night, userEv, mp);
+        if (!plain) return std::nullopt;
+        // Highlight-weighted already places the highlights at the shown white.
+        const double wanted = mp.highlightPriority ? 0.0
+                                                   : std::clamp(plain->highlightNeedEv, 0.0,
+                                                                double(std::max(0.0f, s.headroomEv)));
+        if (wanted >= headroom_ || headroomNs_ == 0) {
+            headroom_ = wanted;
+        } else if (f.timestampNs > headroomNs_) {
+            const double dt = std::min(double(f.timestampNs - headroomNs_) * 1e-9, 0.2);
+            headroom_ += (wanted - headroom_) * (1.0 - std::exp(-dt / std::max(1e-3f, s.headroomFallTauSec)));
+        }
+        headroomNs_ = std::max(headroomNs_, f.timestampNs);
+        const float headroom = float(headroom_);
         MeterPolicy policy = mp;
         policy.sensorHeadroomEv = headroom;
-        const auto m = meter(f, s.night, userEv, policy);
+        const auto m = headroom > 0.0f ? meter(f, s.night, userEv, policy) : plain;
         if (!m) return std::nullopt;
         // Clamp the desire to what the sensor (+ digital cap) can deliver, so
         // the viewfinder never has to show an exposure the photo cannot get.
@@ -579,6 +593,8 @@ class Controller {
     std::array<Entry, 256> ring_{};  // ~8 s at 30 fps: covers the ZSL reference
     std::size_t next_ = 0;
     std::optional<Step> last_;
+    double headroom_ = 0.0;
+    std::uint64_t headroomNs_ = 0;
 };
 
 }  // namespace rawrcam::color::rawr_ae

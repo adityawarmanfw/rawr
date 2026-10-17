@@ -521,10 +521,11 @@ int main() {
         Bins none{};
         assert(near(desired(none.data(), 0.4f), base, 1e-9));
     }
-    // Headroom: in daylight the sensor runs 1 EV under the shown exposure and
-    // the viewfinder shows the same as without it; a highlight up to ~1 EV
-    // over the shown white is kept in the RAW without darkening the scene.
-    // In dim light the headroom fades out (noise first).
+    // Headroom: the sensor runs under the shown exposure by what the
+    // highlights need, up to 1 EV, and the viewfinder shows the same as
+    // without it; the guard only darkens past that. No highlights (or a dim
+    // scene without them): no headroom. A dim room with a bright doorway
+    // still gets it.
     {
         const auto settle = [](float headroomEv, double keyEv, double highlightEv) {
             Sim sim;
@@ -532,19 +533,29 @@ int main() {
             sim.run({keyEv, highlightEv}, 4.0);
             return sim;
         };
-        const auto plain = settle(0.0f, kDayKey, kDayKey + 1.5);
-        const auto spare = settle(1.0f, kDayKey, kDayKey + 1.5);
-        assert(near(spare.preview.back(), plain.preview.back(), 0.03));
-        assert(near(spare.ae.last()->headroomEv, 1.0, 0.01));
-        assert(near(plain.applied.back().logExposure() - spare.applied.back().logExposure(), 1.0, 0.05));
-        // 0.5 EV over the shown clip: guarded without headroom, not with it.
+        // 0.5 EV over the shown clip: guarded without headroom; with it the
+        // RAW holds it, the shown exposure barely moves.
         const double over = kDayKey + 3.32 + kClipEv + 0.5;
-        assert(settle(0.0f, kDayKey, over).ae.last()->metered.guardEv < -0.6f);
-        assert(settle(1.0f, kDayKey, over).ae.last()->metered.guardEv > -0.15f);
-        // Dim room (EV100 ~3): no headroom.
-        const auto dim = settle(1.0f, kDayKey - 7.0, kDayKey - 5.5);
-        assert(dim.ae.last()->headroomEv < 0.01f);
-        assert(near(headroomForEv100(1.0f, 7.0f), 1.0, 1e-6) && headroomForEv100(1.0f, 4.0f) == 0.0f);
+        const auto plain = settle(0.0f, kDayKey, over);
+        const auto spare = settle(1.0f, kDayKey, over);
+        assert(plain.ae.last()->metered.guardEv < -0.6f);
+        assert(spare.ae.last()->metered.guardEv > -0.15f);
+        assert(near(spare.ae.last()->headroomEv, 1.0, 0.01));
+        assert(spare.preview.back() > plain.preview.back() + 0.5);
+        assert(spare.applied.back().logExposure() < spare.ae.last()->targetLogExposure - 0.95);
+        // Nothing bright: no headroom, same exposure as before.
+        const auto calm = settle(1.0f, kDayKey, kDayKey + 1.5);
+        assert(calm.ae.last()->headroomEv < 0.01f);
+        assert(near(calm.preview.back(), settle(0.0f, kDayKey, kDayKey + 1.5).preview.back(), 0.02));
+        // Dim garage, sunlit doorway far over: full headroom.
+        const auto garage = settle(1.0f, kDayKey - 7.0, kDayKey - 7.0 + 3.32 + 5.0);
+        assert(near(garage.ae.last()->headroomEv, 1.0, 0.01));
+        // The highlight leaving: headroom falls back smoothly, the view holds.
+        auto leave = settle(1.0f, kDayKey, over);
+        const std::size_t at = leave.preview.size();
+        leave.run({kDayKey, kDayKey + 1.5}, 3.0);
+        assert(leave.ae.last()->headroomEv < 0.05f);
+        assert(maxAbsDelta(leave.preview, at, leave.preview.size()) < 0.05);
     }
     // Spot: the night look follows the whole frame, not the tapped area.
     // A dark subject in a bright room is exposed as tapped.
