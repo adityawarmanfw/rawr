@@ -278,7 +278,7 @@ internal fun RendererControls(stage: RendererStage, v: SettingsValues, dispatch:
                     EditorChoice("Method",methods[v.photoHighlightMethod.coerceIn(0,1)],methods){send(SetPhotoHighlightMethod(it))}
                     if(v.photoHighlightMethod==1) {
                         EditorNumber("Threshold",v.photoHighlightThreshold,.5f,2f,.05f,1f){send(SetPhotoHighlightThreshold(it))}
-                        EditorNumber("Compression",v.photoHighlightCompression,0f,300f,1f,100f){send(SetPhotoHighlightCompression(it))}
+                        EditorNumber("Compression",v.photoHighlightCompression,0f,300f,1f,45f){send(SetPhotoHighlightCompression(it))}
                     }
                 }
                 }

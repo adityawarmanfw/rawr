@@ -627,7 +627,7 @@ static void fillHighlightIntent(JNIEnv* env, rawrcam::capture::JpegCaptureReques
     env->GetFloatArrayRegion(toneValues, 9, 3, values);
     jpeg.develop.highlightReconstructionMethod = std::isfinite(values[0]) && values[0] >= 0.5f ? 1u : 0u;
     jpeg.develop.highlightThreshold = std::isfinite(values[1]) ? std::clamp(values[1], 0.5f, 2.0f) : 1.0f;
-    jpeg.develop.highlightCompression = std::isfinite(values[2]) ? std::clamp(values[2], 0.0f, 300.0f) : 100.0f;
+    jpeg.develop.highlightCompression = std::isfinite(values[2]) ? std::clamp(values[2], 0.0f, 300.0f) : 45.0f;
 }
 extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_integration_NativePreviewEngine_requestRawStillCapture(
     JNIEnv* env, jobject, jlong h, jint dngFd, jint jpegFd, jint jpegQuality, jint jpegSubsampling,
