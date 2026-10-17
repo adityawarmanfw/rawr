@@ -30,6 +30,7 @@ struct Scene {
     double highlightEv;          // 1.5% of the frame
     double highlightSpreadEv{};  // > 0: a gradient up to highlightEv (sky)
     double chromaEv{};           // brightest channel over luma in the highlight
+    double area = 0.015;         // highlight share of the frame
 };
 
 // Channel bins: log2(max channel / saturation); neutral luma at the clip
@@ -52,7 +53,7 @@ FrameBins frameBins(const Scene& s, double logE) {
         both(s.keyEv + logE + i * 0.25, 600 - std::abs(i) * 30, 0.0);
         total += 600 - std::abs(i) * 30;
     }
-    const std::uint32_t high = total * 15 / 985;
+    const auto high = std::uint32_t(double(total) * s.area / (1.0 - s.area));
     if (s.highlightSpreadEv > 0.0) {
         // The gradient continues down to the body at the same density.
         constexpr int kSteps = 24;
@@ -323,16 +324,55 @@ int main() {
         const auto& last = night.ae.last();
         assert(last && last->metered.nightOffsetEv < -1.0f);
     }
-    // Highlight guard: clipped highlights pull the exposure down, at most
-    // maxGuardEv, and it settles (no clip/unclip cycle).
-    {
+    // Highlight guard: a highlight that can be saved pulls the exposure down
+    // as far as it needs (within maxGuardEv), and it settles (no clip/unclip
+    // cycle).
+    for (const bool channel : {false, true}) {
         Sim sim;
-        sim.run({kDayKey, kDayKey + 4.5}, 4.0);
+        sim.channel = channel;
+        // Frame highlight 0.5 EV over the clip at the unguarded exposure.
+        sim.run({kDayKey, kDayKey + 3.32 + kClipEv + 0.5}, 4.0);
         const auto& last = sim.ae.last();
-        assert(last && last->metered.guardEv < -0.5f && last->metered.guardEv >= -1.5f);
+        assert(last && last->metered.guardEv < -0.6f && last->metered.guardEv >= -1.5f);
         const std::size_t at = sim.preview.size();
-        sim.run({kDayKey, kDayKey + 4.5}, 2.0);
+        sim.run({kDayKey, kDayKey + 3.32 + kClipEv + 0.5}, 2.0);
         assert(maxAbsDelta(sim.preview, at, sim.preview.size()) < 0.02);
+    }
+    // A window from a dark room (7 EV over): it stays clipped, so the guard
+    // stops at clippedGuardMaxEv and the room keeps nearly its exposure,
+    // without first darkening further and backing off. Once the window
+    // leaves, a saveable highlight is protected in full again.
+    for (const bool channel : {false, true}) {
+        Sim sim;
+        sim.channel = channel;
+        sim.run({kDayKey, kDayKey + 1.5}, 2.0);
+        const double room = sim.preview.back();
+        const Scene window{kDayKey, kDayKey + 3.32 + 7.0, 0.0, 0.0, 0.15};
+        const std::size_t enter = sim.preview.size();
+        sim.run(window, 4.0);
+        assert(near(sim.ae.last()->metered.guardEv, -0.75, 0.01));
+        // The cap plus the window lifting the median; the full guard would
+        // leave the room ~1.8 EV down.
+        assert(sim.preview.back() > room - 1.1);
+        for (std::size_t i = enter; i < sim.preview.size(); ++i) assert(sim.preview[i] > sim.preview.back() - 0.1);
+        const std::size_t at = sim.preview.size();
+        sim.run(window, 2.0);
+        assert(maxAbsDelta(sim.preview, at, sim.preview.size()) < 0.02);
+        sim.run({kDayKey, kDayKey + 3.32 + kClipEv + 0.5}, 4.0);
+        assert(sim.ae.last()->metered.guardEv < -0.6f);
+    }
+    // The guard's darkening: all of it up to the cap, easing to the release
+    // level by the give-up point, never jumping.
+    {
+        const MeterPolicy p;
+        assert(near(guardDarkeningEv(1.0, p), 1.0, 1e-9) && near(guardDarkeningEv(1.5, p), 1.5, 1e-9));
+        assert(near(guardDarkeningEv(4.0, p), 0.5, 1e-9) && near(guardDarkeningEv(9.0, p), 0.5, 1e-9));
+        double prev = 0.0;
+        for (double need = 0.0; need < 6.0; need += 0.01) {
+            const double d = guardDarkeningEv(need, p);
+            assert(std::abs(d - prev) < 0.02);
+            prev = d;
+        }
     }
     // Flicker snapping in the loop still gives a smooth viewfinder.
     {

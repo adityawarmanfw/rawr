@@ -94,10 +94,13 @@ internal fun ExposureSettings(state: SettingsUiState, dispatch: SettingsDispatch
                     "Metering", RawrMetering.entries, ae.metering, { it.label }, "Tap the viewfinder to meter a spot",
                     {
                         when (it) {
-                            RawrMetering.Matrix -> "Whole frame, centre counts more, highlights protected"
-                            RawrMetering.CenterWeighted -> "Average weighted to the centre"
-                            RawrMetering.Average -> "Whole-frame average"
-                            RawrMetering.Highlight -> "Brightest areas just below white"
+                            RawrMetering.Matrix ->
+                                "Whole frame, centre counts more. Darkens a little to save highlights; lets windows and very bright skies clip"
+                            RawrMetering.CenterWeighted ->
+                                "Average weighted to the centre. Bright areas pull it darker; no highlight protection"
+                            RawrMetering.Average ->
+                                "Whole-frame average. Bright areas pull it darker; no highlight protection"
+                            RawrMetering.Highlight -> "Keeps the brightest areas just below white; the rest may go dark"
                         }
                     }
                 ) { setAe(ae.copy(metering = it)) }

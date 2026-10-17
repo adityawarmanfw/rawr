@@ -168,8 +168,18 @@ struct MeterPolicy {
     float highlightPercentile = 0.99f;
     float channelMarginEv = 0.25f;
     float lumaMarginEv = 0.6f;
-    // The highlight guard may darken the key at most this far.
+    // The highlight guard may darken the key at most this far. A highlight
+    // needing more cannot be saved without sinking the scene (a window from
+    // a dark room): the guard eases off to guardReleasedEv by the time it
+    // would need guardGiveUpEv, and the highlight clips.
     float maxGuardEv = 1.5f;
+    float guardReleasedEv = 0.5f;
+    float guardGiveUpEv = 4.0f;
+    // A clipped highlight does not show how far over it is, so it darkens at
+    // most this far. One just over then shows unclipped and gets the full
+    // guard; a window stays clipped and the scene keeps its exposure. (Going
+    // further to find out, then backing off, would pump.)
+    float clippedGuardMaxEv = 0.75f;
     // Highlight-weighted: the percentile sits at the clip (less the margin)
     // whatever the key, within keyRangeEv below / highlightLiftEv above it.
     bool highlightPriority = false;
@@ -307,6 +317,18 @@ inline MeterPolicy meterPolicyFor(int metering) noexcept {
     return p;
 }
 
+// Darkening the guard applies for a highlight needing `need` EV: all of it
+// up to maxGuardEv, then easing (smoothly) to guardReleasedEv at
+// guardGiveUpEv and beyond.
+inline double guardDarkeningEv(double need, const MeterPolicy& p) noexcept {
+    const double cap = p.maxGuardEv;
+    if (need <= cap) return std::max(0.0, need);
+    const double span = double(p.guardGiveUpEv) - cap;
+    const double x = span > 0.0 ? std::clamp((need - cap) / span, 0.0, 1.0) : 1.0;
+    const double eased = x * x * (3.0 - 2.0 * x);
+    return cap + (std::min(double(p.guardReleasedEv), cap) - cap) * eased;
+}
+
 // The user's EV applies after the highlight handling, as on a camera: the
 // guard protects the metered exposure, not the user's choice.
 inline std::optional<Metered> meter(const FrameObservation& f, NightLook look, float userEv,
@@ -327,9 +349,11 @@ inline std::optional<Metered> meter(const FrameObservation& f, NightLook look, f
             byKey = std::log2(double(p.linearMeanTarget)) + double(m.nightOffsetEv) - (double(*mean) - f.logExposure);
     }
     const double byHighlight = high->targetEv - high->sceneEv;
+    double darkening = guardDarkeningEv(byKey - byHighlight, p);
+    if (high->clipped) darkening = std::min(darkening, double(p.clippedGuardMaxEv));
     const double guarded = p.highlightPriority
                                ? std::clamp(byHighlight, byKey - double(p.maxGuardEv), byKey + double(p.highlightLiftEv))
-                               : std::max(std::min(byKey, byHighlight), byKey - double(p.maxGuardEv));
+                               : byKey - darkening;
     m.guardEv = float(guarded - byKey);
     m.desiredLogExposure = guarded + double(userEv);
     return m;
