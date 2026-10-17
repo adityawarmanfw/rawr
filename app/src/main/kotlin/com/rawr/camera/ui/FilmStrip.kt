@@ -371,18 +371,24 @@ internal fun FilmConfigBlock(
             }
         }
         // L2: subsections of the active section, parked at the thumb like L3.
+        // Same edge inset as L3 and the L1 nav row so all three rows share a right edge.
         BoxWithConstraints(
             Modifier
                 .fillMaxWidth()
+                .padding(horizontal = CaptureDimens.CompactParamRowEdgeInset)
                 .height(CaptureDimens.CompactParamRowHeight)
         ) {
+            // Parked like the L3 params above, so both rows start at the same x.
+            val parkedStart = parkedParamsPadding(
+                maxWidth, paramsCellWidths(maxWidth)[0], CaptureDimens.ControlGap
+            )
             LazyRow(
                 Modifier
                     .fillMaxSize()
                     .testTag(CaptureTestTags.filmSubsectionRow(section?.key ?: "")),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(StripDimens.ParamSpacing, Alignment.End),
-                contentPadding = PaddingValues(start = parkedParamsPadding(maxWidth))
+                contentPadding = PaddingValues(start = parkedStart)
             ) {
             section?.subsections?.forEach { sub ->
                 val active = sub.key == subsection?.key
