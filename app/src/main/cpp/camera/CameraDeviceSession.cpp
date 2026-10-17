@@ -382,8 +382,22 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
         if (selected->levels.isStatic) staticLevels_ = selected->levels;
     }
 
+    // cameraserver reads the vendor gate (vivo key 40) only while it
+    // configures the streams, which this call does synchronously: hold it for
+    // the call alone, so a killed process can't leave it set behind a running
+    // session. A later session on the same device takes it again.
+    if (selected && !selected->vendorGate.empty() && heldGate_.empty()) {
+        std::string gateError;
+        if (!acquireVendorCameraGate(selected->vendorGate, &gateError))
+            return fail("vendor_gate", "gate=" + selected->vendorGate + " reason=" + gateError);
+        heldGate_ = selected->vendorGate;
+    }
     s = ACameraDevice_createCaptureSessionWithSessionParameters(device_, outputs_, sessionParameters_,
                                                                 &sessionCallbacks, &session_);
+    if (!heldGate_.empty()) {
+        diag("CAMERA_NDK_VENDOR_GATE_RELEASED gate=" + heldGate_ + " after=configure");
+        releaseHeldGate();
+    }
     if (!ok(s) || !session_) {
         return fail(sessionKeysApplied_ ? "create_with_session_keys" : "create_standard_with_session_parameters",
                     "status=" + statusText(s));
