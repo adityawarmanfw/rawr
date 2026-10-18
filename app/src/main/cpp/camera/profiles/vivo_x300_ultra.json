@@ -1,7 +1,7 @@
 {
   "id": "vivo_x300_ultra",
   "name": "vivo X300 Ultra",
-  "version": 3,
+  "version": 4,
   "match": {
     "models": ["V2562", "V2547A", "V2547DA"],
     "verifiedModels": ["V2562"],
@@ -203,75 +203,7 @@
       ]
     },
     {
-      "id": "F35",
-      "cameraId": "3",
-      "physicalCameraId": "",
-      "stream": {
-        "format": "RAW16",
-        "width": 8160,
-        "height": 6128,
-        "unlisted": true
-      },
-      "levels": {
-        "static": true,
-        "black": [64, 64, 64, 64],
-        "white": 1023
-      },
-      "keys": [
-        {
-          "tag": "vivo.control.forceSensorMode",
-          "type": "int32",
-          "scope": "session",
-          "values": [2],
-          "enabled": true
-        },
-        {
-          "tag": "vivo.control.forceSensorMode",
-          "type": "int32",
-          "scope": "request",
-          "values": [2],
-          "enabled": true
-        }
-      ],
-      "readerUsage": "gpuDataBuffer",
-      "vendorGate": "vivoFullSize"
-    },
-    {
-      "id": "F85",
-      "cameraId": "5",
-      "physicalCameraId": "",
-      "stream": {
-        "format": "RAW16",
-        "width": 8160,
-        "height": 6144,
-        "unlisted": true
-      },
-      "levels": {
-        "static": true,
-        "black": [64, 64, 64, 64],
-        "white": 1023
-      },
-      "keys": [
-        {
-          "tag": "vivo.control.forceSensorMode",
-          "type": "int32",
-          "scope": "session",
-          "values": [14],
-          "enabled": true
-        },
-        {
-          "tag": "vivo.control.forceSensorMode",
-          "type": "int32",
-          "scope": "request",
-          "values": [14],
-          "enabled": true
-        }
-      ],
-      "readerUsage": "gpuDataBuffer",
-      "vendorGate": "vivoFullSize"
-    },
-    {
-      "id": "S35",
+      "id": "H35",
       "cameraId": "3",
       "physicalCameraId": "",
       "stream": {
@@ -441,7 +373,7 @@
       }
     },
     {
-      "id": "S85",
+      "id": "H85",
       "cameraId": "5",
       "physicalCameraId": "",
       "stream": {
