@@ -16,7 +16,7 @@ data class FocusScrubPosition(val diopters: Float, val heldAnchor: FocusStop? = 
 /**
  * Continuous manual-focus scrub scale. Drag maps to diopters with a gain
  * proportional to the lens position, so every doubling of the focus distance
- * (0.5 -> 1 m, 2 -> 4 m) takes the same drag; past ~7 m the gain stays at a
+ * (0.5 -> 1 m, 2 -> 4 m) takes the same drag; past ~10 m the gain stays at a
  * floor so ∞ is reached. Exact magnetic anchors sit at NEAR, hyperfocal and ∞
  * (exactly 0 D); leaving one costs [ANCHOR_RELEASE_DP]. Continuous (not
  * quantized) so a drag starts exactly at the current lens position and never
@@ -30,6 +30,17 @@ class FocusLadder private constructor(val minimumFocusDistance: Float, val ancho
 
     /** Diopters moved per dp of drag at [diopters]. */
     fun dioptersPerDp(diopters: Float): Float = max(diopters * LOG_GAIN_PER_DP, FAR_DIOPTERS_PER_DP)
+
+    /**
+     * Drag (dp at 1x speed) from ∞ to [diopters]: the scale's even coordinate,
+     * so haptic ticks every [TICK_DP] of it are evenly spaced however far.
+     */
+    fun travelDpOf(diopters: Float): Float {
+        val knee = FAR_DIOPTERS_PER_DP / LOG_GAIN_PER_DP
+        val d = diopters.coerceAtLeast(0f)
+        return if (d <= knee) d / FAR_DIOPTERS_PER_DP
+        else knee / FAR_DIOPTERS_PER_DP + kotlin.math.ln(d / knee) / LOG_GAIN_PER_DP
+    }
 
     fun anchorNear(normalized: Float, radius: Float): FocusStop? =
         anchors.filter { abs(it.normalized - normalized) <= radius }.minByOrNull { abs(it.normalized - normalized) }
@@ -72,10 +83,19 @@ class FocusLadder private constructor(val minimumFocusDistance: Float, val ancho
     }
 
     companion object {
-        /** Relative focus change per dp: a doubling of distance takes ln 2 / 0.008 ≈ 87 dp. */
-        const val LOG_GAIN_PER_DP = .008f
-        /** Gain floor (beyond ~7 m): the last 0.19 D to ∞ takes ~125 dp. */
-        const val FAR_DIOPTERS_PER_DP = .0015f
+        /** Relative focus change per dp: a doubling of distance takes ln 2 / 0.006 ≈ 115 dp. */
+        const val LOG_GAIN_PER_DP = .006f
+        /** Gain floor (beyond ~10 m): the last 0.1 D to ∞ takes ~167 dp. */
+        const val FAR_DIOPTERS_PER_DP = .0006f
+        /** Haptic tick spacing along [travelDpOf]. */
+        const val TICK_DP = 10f
+        /** Drag speed (dp/ms) up to which a drag moves at 1x; faster drags speed up to [MAX_SPEEDUP]. */
+        const val FINE_SPEED_DP_PER_MS = .25f
+        const val MAX_SPEEDUP = 4f
+
+        /** Gain multiplier for a drag moving at [dpPerMs]: fine when slow, quick across the range when fast. */
+        fun speedup(dpPerMs: Float): Float =
+            if (!dpPerMs.isFinite()) 1f else (dpPerMs / FINE_SPEED_DP_PER_MS).coerceIn(1f, MAX_SPEEDUP)
         /** Drag needed to pull off a magnetic anchor. */
         const val ANCHOR_RELEASE_DP = 10f
 
