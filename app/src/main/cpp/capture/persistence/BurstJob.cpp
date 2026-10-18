@@ -2,6 +2,7 @@
 #include <rawr/raw_multiframe_output/MultiframeOutputAdapter.h>
 
 #include <cstring>
+#include <fstream>
 #include <chrono>
 #include <android/log.h>
 #include <stdexcept>
@@ -91,14 +92,68 @@ void saveBurst(const std::string& path, multiframe::MultiframeWorkItem& work, co
         static_cast<unsigned long long>(uint64_t(job.frame.width) * job.frame.height * 2 * burst.frames.size()),
         totalMs, readbackMs, totalMs - readbackMs);
 }
+namespace {
+// Frames read from the journal on demand (lazy loadBurst).
+struct JournalFrames {
+    std::ifstream file;
+    uint64_t offset = 0;
+    size_t bytes = 0;
+    std::vector<uint8_t> buffer;
+    std::vector<bool> loaded;
+};
+}  // namespace
 std::unique_ptr<multiframe::MultiframeWorkItem> loadBurst(const std::string& path, const vulkan::VulkanContext& vk,
-                                                          std::mutex& mutex) {
+                                                          std::mutex& mutex, bool lazy) {
     const auto started = std::chrono::steady_clock::now();
     double uploadMs = 0.0;
     auto work = std::make_unique<multiframe::MultiframeWorkItem>();
     work->capture = std::make_unique<multiframe::PendingMultiframeCapture>();
     auto uploaded = std::make_shared<multiframe::RawBurstUpload>();
-    auto job = load(path, [&](CaptureJob& j, size_t i, const std::vector<uint8_t>& raw) {
+    CaptureJob job;
+    if (lazy) {
+        auto source = std::make_shared<JournalFrames>();
+        job = loadHeader(path, source->offset);
+        if (!job.multiframe) throw std::runtime_error("capture_job_not_burst");
+        const uint32_t width = job.frame.width, height = job.frame.height;
+        source->bytes = size_t(width) * height * sizeof(uint16_t);
+        source->file.open(path, std::ios::binary);
+        if (!source->file) throw std::runtime_error("capture_job_open_failed");
+        source->loaded.assign(job.metadata.size(), false);
+        uploaded->initialize(vk, source->bytes);
+        auto* burst = work->capture.get();
+        for (size_t i = 0; i < job.metadata.size(); ++i) {
+            rawr::raw_gpu_pipeline::BurstFrame frame;
+            frame.raw.ref = {i + 1, job.metadata[i].timestampNs, width, height};
+            frame.parameters = job.parameters[i];
+            burst->frames.push_back(frame);
+            burst->refs.push_back(frame.raw.ref);
+        }
+        const auto* vulkan = &vk;
+        auto* queueMutex = &mutex;
+        burst->loadFrame = [source, uploaded, burst, vulkan, queueMutex, width, height](std::size_t i) {
+            if (i >= source->loaded.size() || source->loaded[i]) return;
+            source->buffer.resize(source->bytes);
+            source->file.seekg(std::streamoff(source->offset + i * source->bytes));
+            source->file.read(reinterpret_cast<char*>(source->buffer.data()), std::streamsize(source->bytes));
+            if (!source->file) throw std::runtime_error("capture_job_frame_read_failed");
+            auto& frame = burst->frames[i];
+            frame.raw = uploaded->add(*vulkan, *queueMutex, width, height, frame.raw.ref.timestampNs,
+                                      source->buffer.data(), source->bytes);
+            source->loaded[i] = true;
+        };
+        burst->releaseFrame = [source, uploaded, burst](std::size_t i) {
+            if (i >= source->loaded.size() || !source->loaded[i]) return;
+            auto& raw = burst->frames[i].raw;
+            uploaded->release(raw);
+            raw.image = VK_NULL_HANDLE;
+            raw.view = VK_NULL_HANDLE;
+            source->loaded[i] = false;
+        };
+        // The reference stays resident: the base DNG and the clip map read it.
+        const auto begin = std::chrono::steady_clock::now();
+        burst->loadFrame(job.referenceIndex);
+        uploadMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
+    } else job = load(path, [&](CaptureJob& j, size_t i, const std::vector<uint8_t>& raw) {
         if (!j.multiframe) throw std::runtime_error("capture_job_not_burst");
         const auto begin = std::chrono::steady_clock::now();
         if (i == 0) uploaded->initialize(vk, raw.size());
@@ -129,8 +184,9 @@ std::unique_ptr<multiframe::MultiframeWorkItem> loadBurst(const std::string& pat
     work->sharpnessMs = job.sharpnessMs;
     const double totalMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
     __android_log_print(ANDROID_LOG_INFO, "RawrCamNative",
-        "BURST_LOAD requestId=%llu frames=%zu totalMs=%.1f uploadMs=%.1f storageAndSetupMs=%.1f",
-        static_cast<unsigned long long>(work->requestId), b.frames.size(), totalMs, uploadMs, totalMs - uploadMs);
+        "BURST_LOAD requestId=%llu frames=%zu lazy=%d totalMs=%.1f uploadMs=%.1f storageAndSetupMs=%.1f",
+        static_cast<unsigned long long>(work->requestId), b.frames.size(), lazy ? 1 : 0, totalMs, uploadMs,
+        totalMs - uploadMs);
     return work;
 }
 }  // namespace rawrcam::capture::persistence

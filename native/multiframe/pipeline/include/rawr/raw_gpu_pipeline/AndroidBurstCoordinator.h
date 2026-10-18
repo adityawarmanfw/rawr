@@ -90,6 +90,11 @@ class AndroidBurstCoordinator final {
     using Submit = std::function<void(const VkSubmitInfo&, VkFence)>;
     using StageSink = std::function<void(Stage, VkDeviceSize, VkDeviceSize)>;
     using FrameConsumed = std::function<void(std::uint32_t)>;
+    // Makes frames[i].raw usable (idempotent): run() calls it right before a
+    // frame's first use, so a single-pass merge holds only the reference and
+    // the companion in flight (FrameConsumed then frees it). Multi-pass merges
+    // load every frame first. Unset: frames are resident.
+    using FrameLoad = std::function<void(std::uint32_t)>;
     AndroidBurstCoordinator() = default;
     ~AndroidBurstCoordinator() { reset(); }
     AndroidBurstCoordinator(const AndroidBurstCoordinator&) = delete;
@@ -111,7 +116,7 @@ class AndroidBurstCoordinator final {
     void warmAll(VkPhysicalDevice physical, VkDevice device, std::uint32_t queueFamily, std::uint32_t width,
                  std::uint32_t height);
     BurstRunResult run(const std::vector<BurstFrame>& frames, std::uint32_t referenceIndex,
-                       FrameConsumed frameConsumed = {});
+                       FrameConsumed frameConsumed = {}, FrameLoad frameLoad = {});
     // One-shot wait inserted on the next submitted chunk (cross-queue memory
     // edge, e.g. prior-queue writes to borrowed inputs). The coordinator does
     // not own the semaphore; the caller signals it before run() and destroys
@@ -165,9 +170,9 @@ class AndroidBurstCoordinator final {
                              const std::function<void()>& record);
     void recordTimestamp(std::uint32_t query);
     BurstRunResult runHdrPlus(const std::vector<BurstFrame>& frames, std::uint32_t referenceIndex,
-                              const FrameConsumed& frameConsumed);
+                              const FrameConsumed& frameConsumed, const FrameLoad& frameLoad);
     BurstRunResult runHdrPlusFrequency(const std::vector<BurstFrame>& frames, std::uint32_t referenceIndex,
-                                       const FrameConsumed& frameConsumed);
+                                       const FrameConsumed& frameConsumed, const FrameLoad& frameLoad);
     [[nodiscard]] bool hdrplusSelected() const noexcept { return algorithm_ != MergeAlgorithm::Wronski; }
     bool arenaReady_ = false;
     bool layoutsInitialized_ = false;

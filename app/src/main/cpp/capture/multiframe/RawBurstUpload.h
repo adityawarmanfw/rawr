@@ -35,6 +35,18 @@ class RawBurstUpload final {
         VkDeviceMemory memory{};
     };
     std::vector<Image> images;
+    // Destroys the image add() created for this view (its ref.frameId - 1 slot is
+    // reused by nothing; the vector keeps indices stable).
+    void release(const rawr::zsl_ring::GpuRawImageView& view) {
+        for (auto& i : images) {
+            if (i.image != view.image) continue;
+            if (i.view) vkDestroyImageView(device, i.view, nullptr);
+            if (i.image) vkDestroyImage(device, i.image, nullptr);
+            if (i.memory) vkFreeMemory(device, i.memory, nullptr);
+            i = Image{};
+            return;
+        }
+    }
     RawBurstUpload() = default;
     RawBurstUpload(const RawBurstUpload&) = delete;
     RawBurstUpload& operator=(const RawBurstUpload&) = delete;

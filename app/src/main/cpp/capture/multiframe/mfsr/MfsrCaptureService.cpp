@@ -213,7 +213,12 @@ std::uint64_t MfsrCaptureService::start(std::unique_ptr<PendingMultiframeCapture
                                 diagnostics::RuntimeTraceStage::StillProcessingEnd, 0, id, -1, 0, 0, 1u);
                         }
                     } traceEnd{original.requestId};
-                    auto restored = persistence::loadBurst(current->path, vulkan_, queue0Mutex_);
+                    // Frames load from the journal as the merge reaches them: single-pass
+                    // merges (super-resolution, HDR+) hold the reference plus one
+                    // companion and drop each once merged; HDR+ Quality's four passes
+                    // load the whole burst first. The RZSL dump reads every frame.
+                    auto restored =
+                        persistence::loadBurst(current->path, vulkan_, queue0Mutex_, !original.dumpRzslRequested);
                     restored->acceptedAt = original.acceptedAt;
                     LOGI("BURST_READY requestId=%llu acceptedToReadyMs=%.1f",
                          static_cast<unsigned long long>(original.requestId),

@@ -40,8 +40,13 @@ void save(const std::string& path, CaptureJob& job,
           const std::function<void(size_t, std::vector<uint8_t>&)>& fillFrame);
 CaptureJob load(const std::string& path,
                 const std::function<void(CaptureJob&, size_t, const std::vector<uint8_t>&)>& consume = {});
+// Header only (frames validated by extent, not read): frame i's packed RAW16
+// starts at framesOffset + i * width * height * 2.
+CaptureJob loadHeader(const std::string& path, uint64_t& framesOffset);
 void saveBurst(const std::string& path, multiframe::MultiframeWorkItem& work, const vulkan::VulkanContext& vulkan,
                std::mutex& queueMutex);
+// lazy: only the reference frame is uploaded; the rest load on demand
+// (burst.loadFrame) and drop after the merge (burst.releaseFrame).
 std::unique_ptr<multiframe::MultiframeWorkItem> loadBurst(const std::string& path, const vulkan::VulkanContext& vulkan,
-                                                          std::mutex& queueMutex);
+                                                          std::mutex& queueMutex, bool lazy = false);
 }  // namespace rawrcam::capture::persistence

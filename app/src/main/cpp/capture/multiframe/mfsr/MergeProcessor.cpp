@@ -78,11 +78,18 @@ rawr::raw_gpu_pipeline::BurstRunResult MergeProcessor::run(
     }
     LOGI("MULTIFRAME_QUEUE mode=%s lowpri=%d", useMfQueue ? "dualq" : "singleq",
          context.multiframeQueueLowPriority() ? 1 : 0);
-    auto result = coordinator.run(burst.frames, burst.referenceIndex, [&burst, dumpRzslRequested](std::uint32_t index) {
-        if (!dumpRzslRequested && burst.snapshot && index < burst.frames.size() && index != burst.referenceIndex) {
-            burst.snapshot->release(burst.frames[index].raw.ref.frameId);
-        }
-    });
+    auto result = coordinator.run(
+        burst.frames, burst.referenceIndex,
+        [&burst, dumpRzslRequested](std::uint32_t index) {
+            if (!dumpRzslRequested && burst.snapshot && index < burst.frames.size() && index != burst.referenceIndex) {
+                burst.snapshot->release(burst.frames[index].raw.ref.frameId);
+            }
+            // Journal-backed: the companion's image goes once merged.
+            if (burst.releaseFrame && index != burst.referenceIndex) burst.releaseFrame(index);
+        },
+        burst.loadFrame ? rawr::raw_gpu_pipeline::AndroidBurstCoordinator::FrameLoad(
+                              [&burst](std::uint32_t index) { burst.loadFrame(index); })
+                        : rawr::raw_gpu_pipeline::AndroidBurstCoordinator::FrameLoad{});
 
     return result;
 }

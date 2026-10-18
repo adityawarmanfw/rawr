@@ -24,6 +24,10 @@ struct FrozenBurst {
     // frames[i].raw then carries only its ref. The source owns the camera
     // images until the burst is released.
     std::function<void(std::size_t, std::vector<std::uint8_t>&)> cpuFrame;
+    // Journal-backed bursts (lazy load): makes frames[i].raw usable / drops it.
+    // Unset: frames are resident.
+    std::function<void(std::size_t)> loadFrame;
+    std::function<void(std::size_t)> releaseFrame;
     std::vector<rawr::zsl_ring::RawImageRef> refs;
     std::vector<rawr::raw_gpu_pipeline::BurstFrame> frames;
     std::vector<rawrcam::metadata::FrameMetadataSnapshot> metadata;
