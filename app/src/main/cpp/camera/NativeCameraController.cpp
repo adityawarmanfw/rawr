@@ -271,6 +271,12 @@ struct NativeCameraController::Impl final : CameraEventSink {
     std::atomic<int64_t> longExposureStartMs{-1};
     // Tagged frames still to come before the cue ends (a full-size burst has several).
     std::atomic<int32_t> longExposureFramesLeft{0};
+    // The cue ends when the sensor is done with the last tagged frame, not at
+    // its result: vivo's 200 MP main-camera result comes ~4 s after the
+    // exposure (HAL processing), and the user need not hold still for that.
+    std::atomic<int32_t> longExposureStartsLeft{0};
+    std::atomic<int64_t> longExposureEndMs{-1};
+    static constexpr int64_t kReadoutMarginMs = 150;  // a 200 MP readout
     std::atomic<int> lastLongExposureHonored{-1};  // -1 none yet, 0 shortened, 1 honored
     std::chrono::steady_clock::time_point longExposureSubmitted{};
     static int64_t monotonicMs() {
@@ -326,6 +332,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
         longExposureTag.store(requestId, std::memory_order_relaxed);
         longExposureNs.store(e.exposureTimeNs, std::memory_order_relaxed);
         longExposureFramesLeft.store(int32_t(count), std::memory_order_relaxed);
+        longExposureStartsLeft.store(int32_t(count), std::memory_order_relaxed);
+        longExposureEndMs.store(-1, std::memory_order_relaxed);
         longExposureStartMs.store(monotonicMs(), std::memory_order_relaxed);
         longExposureSubmitted = std::chrono::steady_clock::now();
         // The still queues behind the in-flight preview requests (~0.6 s at
@@ -355,6 +363,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
         longExposureTag.store(requestId, std::memory_order_relaxed);
         longExposureNs.store(pair->exposureTimeNs, std::memory_order_relaxed);
         longExposureFramesLeft.store(1, std::memory_order_relaxed);
+        longExposureStartsLeft.store(1, std::memory_order_relaxed);
+        longExposureEndMs.store(-1, std::memory_order_relaxed);
         // Submit time until the sensor reports the exposure started.
         longExposureStartMs.store(monotonicMs(), std::memory_order_relaxed);
         longExposureSubmitted = std::chrono::steady_clock::now();
@@ -879,8 +889,12 @@ struct NativeCameraController::Impl final : CameraEventSink {
         if (tag == 0) return;
         void* userContext = nullptr;
         if (ACaptureRequest_getUserContext(requestCopy, &userContext) != ACAMERA_OK || !userContext) return;
-        if (static_cast<const CameraRequestProvenance*>(userContext)->optimizedStillRequestId == tag)
-            longExposureStartMs.store(monotonicMs(), std::memory_order_relaxed);
+        if (static_cast<const CameraRequestProvenance*>(userContext)->optimizedStillRequestId != tag) return;
+        const int64_t now = monotonicMs();
+        longExposureStartMs.store(now, std::memory_order_relaxed);
+        if (longExposureStartsLeft.fetch_sub(1, std::memory_order_relaxed) <= 1)
+            longExposureEndMs.store(now + longExposureNs.load(std::memory_order_relaxed) / 1'000'000 + kReadoutMarginMs,
+                                    std::memory_order_relaxed);
     }
     void cameraCaptureFailed(uint64_t callbackGeneration) override {
         // Set once at construction; the receiver checks the generation.
@@ -975,6 +989,10 @@ struct NativeCameraController::Impl final : CameraEventSink {
         }
         snapshot.longExposureNs = longExposureNs.load(std::memory_order_relaxed);
         snapshot.longExposureStartMs = longExposureStartMs.load(std::memory_order_relaxed);
+        // Exposure over: the frame is in the sensor's hands no longer; the
+        // result (and the viewfinder freeze) may still be on its way.
+        if (const int64_t end = longExposureEndMs.load(std::memory_order_relaxed); end >= 0 && monotonicMs() >= end)
+            snapshot.longExposureStartMs = -1;
         snapshot.lastLongExposureHonored = lastLongExposureHonored.load(std::memory_order_relaxed);
         snapshot.requestedShutterAngleDegrees = cadencePolicy.shutterAngle();
         snapshot.shutterAngleChoices = cadencePolicy.shutterChoices(control.capabilities.exposureTimeMinNs,
