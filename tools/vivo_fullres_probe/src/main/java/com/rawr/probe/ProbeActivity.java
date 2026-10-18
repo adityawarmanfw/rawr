@@ -183,6 +183,12 @@ public final class ProbeActivity extends Activity {
 
     // ---- the stock camera's 200 MP RAW route (captured with cmd media.camera watch, 2026-10-17) ------------------------
 
+    @SuppressWarnings("unchecked")
+    private static <T> void copyKey(CaptureRequest.Builder from, CaptureRequest.Builder to, CaptureRequest.Key<T> key) {
+        T v = from.get(key);
+        if (v != null) to.set(key, v);
+    }
+
     private static void setInt(CaptureRequest.Builder b, String name, int... v) {
         b.set(new CaptureRequest.Key<>(name, int[].class), v);
     }
@@ -444,6 +450,13 @@ public final class ProbeActivity extends Activity {
                         pb.set(CaptureRequest.SENSOR_SENSITIVITY, 200);
                         pb.set(CaptureRequest.SENSOR_FRAME_DURATION, 33_333_333L);
                         break;
+                    case "aeoffdim":  // rawr AE in a dim room: 1/15 s at ISO 800
+                        pb.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF);
+                        pb.set(CaptureRequest.SENSOR_EXPOSURE_TIME, 66_666_667L);
+                        pb.set(CaptureRequest.SENSOR_SENSITIVITY, 800);
+                        pb.set(CaptureRequest.SENSOR_FRAME_DURATION, 66_666_667L);
+                        break;
+                    case "cchq": pb.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_HIGH_QUALITY); break;
                     case "prio": pb.set(new CaptureRequest.Key<>("android.control.aePriorityMode", int.class), 0); break;
                     case "fps": pb.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, new android.util.Range<>(12, 30)); break;
                     default: break;
@@ -489,6 +502,58 @@ public final class ProbeActivity extends Activity {
                 }
             }, h);
             SystemClock.sleep(3000);
+            // --ei aftaps N: N tap-to-focus sequences 2 s apart (vivo camera's: CANCEL in continuous AF without
+            // regions, then START in AUTO with the region as AF and AE region), at random points
+            final int afTaps = getIntent().getIntExtra("aftaps", 0);
+            if (afTaps > 0) {
+                android.graphics.Rect active = manager.getCameraCharacteristics(cam).get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
+                java.util.Random random = new java.util.Random(7);
+                for (int t = 0; t < afTaps && error[0] == null; ++t) {
+                    CaptureRequest.Builder cancel = device[0].createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
+                    CaptureRequest.Builder start = device[0].createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
+                    for (CaptureRequest.Builder b : new CaptureRequest.Builder[]{cancel, start}) {
+                        if (!rawOnly && !previewYuvOff) b.addTarget(preview.getSurface());
+                        if (rawVf || rawOnly) b.addTarget(rawBinned.getSurface());
+                        if (previewDrop.isEmpty()) stockSessionKeys(b); else previewKeys(b);
+                    }
+                    for (CaptureRequest.Builder b : new CaptureRequest.Builder[]{cancel, start})
+                        for (CaptureRequest.Key<?> k : new CaptureRequest.Key<?>[]{CaptureRequest.CONTROL_AE_MODE,
+                                CaptureRequest.SENSOR_EXPOSURE_TIME, CaptureRequest.SENSOR_SENSITIVITY,
+                                CaptureRequest.SENSOR_FRAME_DURATION, CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,
+                                CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE, CaptureRequest.STATISTICS_HOT_PIXEL_MAP_MODE,
+                                CaptureRequest.STATISTICS_FACE_DETECT_MODE, CaptureRequest.DISTORTION_CORRECTION_MODE,
+                                CaptureRequest.HOT_PIXEL_MODE, CaptureRequest.COLOR_CORRECTION_MODE})
+                            copyKey(pb, b, k);
+                    cancel.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
+                    cancel.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_CANCEL);
+                    int w = active.width() * 3 / 20, x = random.nextInt(active.width() - w), y = random.nextInt(active.height() - w);
+                    android.hardware.camera2.params.MeteringRectangle[] region = {
+                            new android.hardware.camera2.params.MeteringRectangle(x, y, w, w, 250)};
+                    start.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO);
+                    start.set(CaptureRequest.CONTROL_AF_REGIONS, region);
+                    start.set(CaptureRequest.CONTROL_AE_REGIONS, region);
+                    start.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_START);
+                    session[0].captureBurst(java.util.Arrays.asList(cancel.build(), start.build()), null, h);
+                    // after the start the repeating request holds AUTO + region at IDLE, like vivo's camera
+                    pb.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO);
+                    pb.set(CaptureRequest.CONTROL_AF_REGIONS, region);
+                    pb.set(CaptureRequest.CONTROL_AE_REGIONS, region);
+                    session[0].setRepeatingRequest(pb.build(), null, h);
+                    if (getIntent().getBooleanExtra("churn", false)) {
+                        // rawr AE: a new repeating request about every frame with a slightly different exposure
+                        Long base = pb.get(CaptureRequest.SENSOR_EXPOSURE_TIME);
+                        for (int k = 0; k < 28 && base != null; ++k) {
+                            pb.set(CaptureRequest.SENSOR_EXPOSURE_TIME, (long) (base * (0.95 + 0.1 * random.nextDouble())));
+                            session[0].setRepeatingRequest(pb.build(), null, h);
+                            SystemClock.sleep(70);
+                        }
+                        pb.set(CaptureRequest.SENSOR_EXPOSURE_TIME, base);
+                    } else {
+                        SystemClock.sleep(2000);
+                    }
+                }
+                meta.println("af taps " + afTaps + " done error=" + error[0]);
+            }
             meta.println("preview frames before the still: " + previews[0] + " focus=" + focus[0]);
 
             CaptureRequest.Builder still = device[0].createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
