@@ -316,10 +316,12 @@ internal fun LongExposureNotice(state: LongExposureUiState, orientation: Orienta
         }
     }
     val text = when {
+        // Until the frame is in: a real long exposure counts down; a short wait
+        // (a full-size still waiting for the sensor switch) asks to hold still.
         active -> {
             val remainingMs = (state.activeNs / 1_000_000L - (now - state.startMs)).coerceAtLeast(0L)
-            // Shown until the frame is in (a full-size still waits for the sensor switch).
-            if (remainingMs > 0L) "%.1f s".format(remainingMs / 1000.0) else "Capturing…"
+            if (state.activeNs >= 1_000_000_000L && remainingMs > 0L) "%.1f s".format(remainingMs / 1000.0)
+            else "HOLD STILL"
         }
         state.deferredNs > 0L -> buildString {
             append("Long exposure · ")
@@ -329,11 +331,14 @@ internal fun LongExposureNotice(state: LongExposureUiState, orientation: Orienta
         }
         else -> null
     }
+    // The fade-out keeps the last text: an emptied pill would flash.
+    var shown by remember { mutableStateOf("") }
+    if (text != null) shown = text
     AnimatedVisibility(visible = text != null, enter = fadeIn(tween(80)), exit = fadeOut(tween(250)), modifier = modifier) {
         Text(
-            text ?: "",
+            shown,
             color = Color.White,
-            fontSize = if (active) 28.sp else 13.sp,
+            fontSize = 13.sp,
             textAlign = TextAlign.Center,
             style = ViewfinderTextStyle,
             modifier = Modifier

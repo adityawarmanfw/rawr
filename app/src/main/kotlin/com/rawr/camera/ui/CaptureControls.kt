@@ -431,12 +431,21 @@ internal fun Shutter(
                 .background(Color(0xFFF5F5F5).copy(alpha = if (exposing) .35f else 1f), CircleShape)
         )
         if (exposing) {
+            // Under a second (a full-size still waiting for the sensor switch):
+            // a spinning arc until the frame is in; longer exposures fill the ring.
+            val waiting = longExposure.activeNs < 1_000_000_000L
+            val spin by rememberInfiniteTransition(label = "shutterWait").animateFloat(
+                initialValue = 0f,
+                targetValue = 360f,
+                animationSpec = infiniteRepeatable(tween(durationMillis = 900, easing = LinearEasing)),
+                label = "shutterWaitAngle"
+            )
             androidx.compose.foundation.Canvas(Modifier.matchParentSize()) {
                 val stroke = 4.dp.toPx()
                 drawArc(
                     color = Color.White,
-                    startAngle = -90f,
-                    sweepAngle = 360f * exposureProgress,
+                    startAngle = if (waiting) spin - 90f else -90f,
+                    sweepAngle = if (waiting) 90f else 360f * exposureProgress,
                     useCenter = false,
                     topLeft = androidx.compose.ui.geometry.Offset(stroke / 2f, stroke / 2f),
                     size = androidx.compose.ui.geometry.Size(size.width - stroke, size.height - stroke),
