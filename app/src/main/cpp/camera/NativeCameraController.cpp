@@ -686,6 +686,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // on a request without a target fps range (AE off). Continuous AF
         // without regions and manual focus stay.
         control.capabilities.tapAfHoldsUntilNextTap = !route.vendorGate.empty();
+        control.capabilities.faceAfSteering = route.vendorGate.empty();
         if (route.unlistedStream) {
             control.capabilities.tapAfSupported = false;
             control.capabilities.maxAfRegions = 0;

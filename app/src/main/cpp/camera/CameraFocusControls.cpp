@@ -78,7 +78,8 @@ bool CameraFocusControls::finishTrigger() {
 FaceFocusChange CameraFocusControls::steerFaces(const CameraControlState& state,
                                                 const metadata::SensorGeometry* geometry, bool requestReady) {
     if (state.focusMode != FocusControlMode::Continuous || state.tapAfActive ||
-        !state.capabilities.faceDetectSupported || state.capabilities.maxAfRegions <= 0 || !geometry || !requestReady) {
+        !state.capabilities.faceDetectSupported || !state.capabilities.faceAfSteering ||
+        state.capabilities.maxAfRegions <= 0 || !geometry || !requestReady) {
         faceSteering_ = false;
         return FaceFocusChange::None;
     }

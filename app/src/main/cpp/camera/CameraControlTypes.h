@@ -131,6 +131,9 @@ struct CameraControlCapabilities {
     // dim scene crashes the X300 Ultra camera provider (vivo's camera never
     // makes it either).
     bool tapAfHoldsUntilNextTap = false;
+    // Continuous AF follows the first detected face. Off on vivo-gated routes:
+    // moving or clearing the region there crashes the same AF publisher.
+    bool faceAfSteering = true;
     bool manualFocusSupported = false;
     // True when the HAL advertises STATISTICS face detection (FULL preferred,
     // SIMPLE accepted). Powers the face boxes + face-steered continuous AF.
