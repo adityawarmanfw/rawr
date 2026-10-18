@@ -102,6 +102,8 @@ rawr_test(film_exposure_test
   "${RAWR_ROOT}/tests/native/film_exposure_test.cpp")
 rawr_test(bracket_exposure_test
   "${RAWR_ROOT}/tests/native/bracket_exposure_test.cpp")
+rawr_test(strip_merge_test
+  "${RAWR_ROOT}/tests/native/strip_merge_test.cpp")
 rawr_test(hdr_headroom_meter_test
   "${RAWR_ROOT}/tests/native/hdr_headroom_meter_test.cpp")
 rawr_test(exposure_normalizer_test

@@ -346,7 +346,8 @@ class SingleFrameCoordinator::Impl {
             if (!entry->recoveryPath.empty()) {
                 try {
                     if (entry->recoverMultiframe) {
-                        auto work = persistence::loadBurst(entry->recoveryPath, vulkan_, submitMutex_);
+                        // Lazy: frames load as merged (and a 200 MP burst can merge in strips).
+                        auto work = persistence::loadBurst(entry->recoveryPath, vulkan_, submitMutex_, true);
                         work->requestId = entry->id;
                         work->jpegRequested = entry->jpegRequested;
                         work->baseDng.outputFd = std::move(entry->recoveryDng);

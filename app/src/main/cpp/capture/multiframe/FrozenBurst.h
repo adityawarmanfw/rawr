@@ -28,6 +28,9 @@ struct FrozenBurst {
     // Unset: frames are resident.
     std::function<void(std::size_t)> loadFrame;
     std::function<void(std::size_t)> releaseFrame;
+    // Journal-backed: later loads read only rows [y0, y0 + rows) of each
+    // frame (strip merge); drops every loaded frame. rows 0 = whole frames.
+    std::function<void(std::uint32_t y0, std::uint32_t rows)> setRowWindow;
     std::vector<rawr::zsl_ring::RawImageRef> refs;
     std::vector<rawr::raw_gpu_pipeline::BurstFrame> frames;
     std::vector<rawrcam::metadata::FrameMetadataSnapshot> metadata;

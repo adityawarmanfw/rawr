@@ -662,7 +662,7 @@ extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_renderer_RendererNative_m
             vk.createInstance();
             vk.createDeviceForSurface(VK_NULL_HANDLE);
             std::mutex& mutex = vk.primaryQueue().mutex();
-            auto work = capture::persistence::loadBurst(str(e, path), vk, mutex);
+            auto work = capture::persistence::loadBurst(str(e, path), vk, mutex, true);
             work->requestId = 1;
             work->jpegRequested = false;
             work->baseDng.outputFd.reset();

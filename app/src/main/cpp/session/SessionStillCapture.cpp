@@ -186,14 +186,6 @@ uint32_t SessionEngine::prepareExperimentalMultiframe(uint32_t maxFrames, uint32
     if (const auto* controller = cameraControls_.controller(); controller && controller->hasFullSizeCapture()) {
         uint32_t cap = kFullSizeMaxFrames;
         if (const uint32_t limit = controller->fullSizeBurstLimit()) cap = std::min(cap, limit);
-        {
-            // A 200 MP merge needs ~8 GB of GPU memory: single stills only.
-            std::lock_guard<std::mutex> stillLock(fullSize_.mutex);
-            if (fullSize_.context && uint64_t(fullSize_.context->geometry.rawBufferWidth) *
-                                             fullSize_.context->geometry.rawBufferHeight >
-                                         kFullSizeUltraPixels)
-                cap = 1u;
-        }
         // A lens whose HAL fails full-size bursts takes a single still instead.
         if (cap < 2u) {
             LOGI("MULTIFRAME_FULL_SIZE_SINGLE limit=%u", cap);
