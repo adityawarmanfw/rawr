@@ -553,8 +553,11 @@ struct NativeCameraController::Impl final : CameraEventSink {
         const bool sameCameraRestart =
             !previousControl.capabilities.cameraId.empty() && previousControl.capabilities.cameraId == route.cameraId;
         control = deviceSession.initialControls(route);
-        halShutterPriority = control.capabilities.shutterPrioritySupported;
-        halIsoPriority = control.capabilities.isoPrioritySupported;
+        // Vendor full-size modes: the HAL's S/I priority AE crashes the camera
+        // provider once it raises gain (vivo X300 Ultra 50 MP); only rawr AE
+        // may own S/I there.
+        halShutterPriority = control.capabilities.shutterPrioritySupported && !route.unlistedStream;
+        halIsoPriority = control.capabilities.isoPrioritySupported && !route.unlistedStream;
         applyAePriorityPreferenceLocked();
         publishProfileLocked();
         control.focusRequestId = previousControl.focusRequestId;
@@ -617,6 +620,15 @@ struct NativeCameraController::Impl final : CameraEventSink {
         cadencePolicy.setRecordingFps(control.recordingFps);
         if (!sameCameraRestart) cadencePolicy.clearShutterAngle();
         applyHeldShutterLocked();
+        // Vendor full-size modes (vivo X300 Ultra 50 MP) crash the camera
+        // provider on an AF region change (its focus search, in dim scenes) and
+        // on a request without a target fps range (AE off). Continuous AF
+        // without regions and manual focus stay.
+        if (route.unlistedStream) {
+            control.capabilities.tapAfSupported = false;
+            control.capabilities.maxAfRegions = 0;
+            control.capabilities.targetFpsRangeRequired = true;
+        }
         diag(describeCameraControlCapabilities(control));
 
         diag(metadata::describe(*deviceSession.cameraContext()));

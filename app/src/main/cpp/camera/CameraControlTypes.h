@@ -79,6 +79,9 @@ struct CameraControlCapabilities {
     int64_t exposureTimeMinNs = 0;
     int64_t exposureTimeMaxNs = 0;
     int64_t maxFrameDurationNs = 0;
+    // Every request must carry CONTROL_AE_TARGET_FPS_RANGE, even with AE off: the
+    // vivo X300 Ultra provider crashes on a full-size mode request without it.
+    bool targetFpsRangeRequired = false;
     // What the camera advertises; the bounds above may be widened by the
     // lens profile's extended exposure (extendedExposure).
     int32_t advertisedSensitivityMax = 0;
