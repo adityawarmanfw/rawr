@@ -12,7 +12,10 @@ enum class VendorKeyScope(val wireName: String, val label: String) {
     Session("session", "Session"),
 
     /** Set on every capture request (preview, stills, multiframe, video). */
-    Request("request", "Request");
+    Request("request", "Request"),
+
+    /** Only on full-size still requests of a capture-stream lens (vivo 50/200 MP). */
+    Still("still", "Still");
 
     companion object {
         fun fromWire(value: String?): VendorKeyScope = entries.firstOrNull { it.wireName == value } ?: Session
@@ -97,7 +100,11 @@ data class LensProfile(
     /** RAW reader usage the mode needs ("gpuDataBuffer", "none"); null for the app's own choice. */
     val readerUsage: String? = null,
     /** Vendor state held while the camera is open ("vivoFullSize"); empty for none. */
-    val vendorGate: String = ""
+    val vendorGate: String = "",
+    /** Full-size RAW stream only still requests fill (vivo seamless 50/200 MP); null for none. */
+    val captureStream: RawStreamChoice? = null,
+    /** Most full-size stills one merge may request (1 = none); 0 = the app's own cap. */
+    val captureBurst: Int = 0
 )
 
 /** Problems with one lens, in display order; empty when the lens is valid. */

@@ -39,6 +39,27 @@ class LensProfileCodecTest {
         )
 
     @Test
+    fun keepsSeamlessLensFieldsThroughARoundTrip() {
+        // vivo 50/200 MP: binned viewfinder + capture stream, still-only keys, burst limit.
+        val seamless =
+            LensProfile(
+                name = "F85",
+                cameraId = "5",
+                stream = RawStreamChoice(RawStreamFormat.Raw16, 4080, 3072),
+                vendorKeys = listOf(VendorKey("com.vivo.current_ui_module", VendorKeyScope.Still, VendorKeyType.Int32, listOf(74.0))),
+                vendorGate = "vivoFullSize",
+                captureStream = RawStreamChoice(RawStreamFormat.Raw16, 16320, 12288),
+                captureBurst = 3
+            )
+        val json = LensProfileCodec.encode(listOf(seamless))
+        assertEquals(seamless, requireNotNull(LensProfileCodec.decode(json)).single())
+        val lens = JSONObject(json).getJSONArray("lenses").getJSONObject(0)
+        assertEquals("still", lens.getJSONArray("keys").getJSONObject(0).getString("scope"))
+        assertEquals(16320, lens.getJSONObject("captureStream").getInt("width"))
+        assertEquals(3, lens.getInt("captureBurst"))
+    }
+
+    @Test
     fun keepsFullSizeLensFieldsThroughARoundTrip() {
         val full =
             LensProfile(

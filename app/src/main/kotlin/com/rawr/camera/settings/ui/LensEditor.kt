@@ -457,8 +457,11 @@ private fun VendorKeyDialog(
                 Text("Applied", style = MaterialTheme.typography.labelLarge)
                 CompactChoiceRow(VendorKeyScope.entries, scope, { it.label }) { scope = it }
                 Text(
-                    if (scope == VendorKeyScope.Session) "Set when each capture session starts (photo or video)."
-                    else "Set on every capture request (preview, stills, multiframe, video).",
+                    when (scope) {
+                        VendorKeyScope.Session -> "Set when each capture session starts (photo or video)."
+                        VendorKeyScope.Request -> "Set on every capture request (preview, stills, multiframe, video)."
+                        VendorKeyScope.Still -> "Set only on full-size still requests (capture-stream lenses)."
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
