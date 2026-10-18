@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <condition_variable>
 #include <mutex>
@@ -53,7 +54,10 @@ void CameraDeviceSession::releaseRequestOutputs(bool orphan) noexcept {
         target_ = nullptr;
         output_ = nullptr;
         outputs_ = nullptr;
-        // The orphaned session may still write to the companion window.
+        // The orphaned session may still write to the companion and capture windows.
+        captureWindow_ = nullptr;
+        captureOutput_ = nullptr;
+        captureTarget_ = nullptr;
         companionReader_ = nullptr;
         companionOutput_ = nullptr;
         companionTarget_ = nullptr;
@@ -69,6 +73,13 @@ void CameraDeviceSession::releaseRequestOutputs(bool orphan) noexcept {
     if (outputs_ && output_) (void)ACaptureSessionOutputContainer_remove(outputs_, output_);
     if (output_) ACaptureSessionOutput_free(output_);
     output_ = nullptr;
+    if (captureTarget_) ACameraOutputTarget_free(captureTarget_);
+    captureTarget_ = nullptr;
+    if (outputs_ && captureOutput_) (void)ACaptureSessionOutputContainer_remove(outputs_, captureOutput_);
+    if (captureOutput_) ACaptureSessionOutput_free(captureOutput_);
+    captureOutput_ = nullptr;
+    captureWindow_ = nullptr;
+    stillKeys_.clear();
     if (companionTarget_) ACameraOutputTarget_free(companionTarget_);
     companionTarget_ = nullptr;
     companionTargeted_ = false;
@@ -344,6 +355,21 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
         companionReader_ = nullptr;
     }
 
+    if (captureWindow_) {
+        // Physical outputs would need the physical camera's sizes; capture routes name a camera directly.
+        if (!physicalCameraId.empty()) return fail("capture_output", "reason=physical_camera_unsupported");
+        s = ACaptureSessionOutput_create(captureWindow_, &captureOutput_);
+        if (!ok(s)) return fail("capture_output", "status=" + statusText(s));
+        s = ACaptureSessionOutputContainer_add(outputs_, captureOutput_);
+        if (!ok(s)) return fail("add_capture_output", "status=" + statusText(s));
+        s = ACameraOutputTarget_create(captureWindow_, &captureTarget_);
+        if (!ok(s) || !captureTarget_) return fail("capture_target", "status=" + statusText(s));
+        if (selected) {
+            stillKeys_ = selected->keys;
+            stillKeysCameraId_ = selected->cameraId;
+        }
+    }
+
     auto* callbackContext = callbacks.sessionContext(generation_);
     callbackContext->physicalCameraId = physicalCameraId;
     sessionContext_ = callbackContext;
@@ -394,7 +420,10 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
     }
     s = ACameraDevice_createCaptureSessionWithSessionParameters(device_, outputs_, sessionParameters_,
                                                                 &sessionCallbacks, &session_);
-    if (!heldGate_.empty()) {
+    // Capture-stream routes keep it until the device closes: the HAL rebuilds
+    // its still pipeline per full-size request and crashes if the client is no
+    // longer vivo's camera by then.
+    if (!heldGate_.empty() && !captureWindow_) {
         diag("CAMERA_NDK_VENDOR_GATE_RELEASED gate=" + heldGate_ + " after=configure");
         releaseHeldGate();
     }
@@ -444,7 +473,8 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
     }
     if (!pipeline.submit(session_, request_, callbackContext, control, metering))
         return fail("initial_repeating", "status=control_or_submit_rejected");
-    diag("CAMERA_NDK_SESSION_RUNNING companion=" + std::string(companionTarget_ ? "1" : "0"));
+    diag("CAMERA_NDK_SESSION_RUNNING companion=" + std::string(companionTarget_ ? "1" : "0") +
+         " captureStream=" + (captureTarget_ ? "1" : "0"));
     const auto& raw = cameraContext_->geometry;
     diagnostics::RuntimeTraceRecorder::instance().record(
         diagnostics::RuntimeTraceStage::CameraSessionCreated, 0, generation_, -1, 0, 0, companionTarget_ ? 1u : 0u,
@@ -568,4 +598,62 @@ void CameraDeviceSession::sessionClosed(uint64_t callbackGeneration, ACameraCapt
     }
 }
 
+}  // namespace rawrcam::camera
+
+namespace rawrcam::camera {
+bool CameraDeviceSession::captureFullSize(CameraRequestPipeline& pipeline, const CameraControlState& control,
+                                          const std::vector<CameraRequestPipeline::BracketExposure>& exposures,
+                                          uint64_t tagId, const Diagnostic& diag) {
+    if (!session_ || !request_ || !captureTarget_ || !sessionContext_) return false;
+    bool keysLogged = false;
+    // vivo's per-still ids (its camera app's values: request id = frame flag =
+    // a millisecond stamp, global capture id = stamp + 5); a still without
+    // them crashes the provider's request metadata handling.
+    int64_t stamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()).count();
+    // Build from the still template, not the repeating request: a copy of the
+    // preview request (rawr's statistics / map / region settings) crashes the
+    // provider's request metadata handling on these stills.
+    ACaptureRequest* base = nullptr;
+    if (!ok(ACameraDevice_createCaptureRequest(device_, TEMPLATE_STILL_CAPTURE, &base)) || !base) return false;
+    struct FreeBase {
+        ACaptureRequest* r;
+        ~FreeBase() { ACaptureRequest_free(r); }
+    } freeBase{base};
+    if (!ok(ACaptureRequest_addTarget(base, target_))) return false;
+    const auto requestKeys = applyCameraKeySettings(base, characteristics_, stillKeys_, stillKeysCameraId_.c_str(),
+                                                    CameraKeySetting::Scope::Request, "lens",
+                                                    [](const std::string&) {});
+    if (!requestKeys.failures.empty()) return false;
+    return pipeline.captureBracket(session_, base, sessionContext_, control, exposures, tagId,
+                                   [&](ACaptureRequest* request) {
+        if (ACaptureRequest_addTarget(request, captureTarget_) != ACAMERA_OK) return false;
+        const uint8_t intent = ACAMERA_CONTROL_CAPTURE_INTENT_STILL_CAPTURE;
+        (void)ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_CAPTURE_INTENT, 1, &intent);
+        // The lens holds where the viewfinder's AF left it (as vivo's own stills).
+        if (control.appliedFocusDistance && std::isfinite(*control.appliedFocusDistance)) {
+            const uint8_t afOff = ACAMERA_CONTROL_AF_MODE_OFF;
+            const float distance = *control.appliedFocusDistance;
+            (void)ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AF_MODE, 1, &afOff);
+            (void)ACaptureRequest_setEntry_float(request, ACAMERA_LENS_FOCUS_DISTANCE, 1, &distance);
+        }
+        auto keys = stillKeys_;
+        const double id = double(stamp++);
+        for (const auto& [tag, value] : {std::pair{"vivo.control.requestId", id}, std::pair{"vivo.control.frameFlag", id},
+                                         std::pair{"vivo.control.globalCaptureId", id + 5}}) {
+            CameraKeySetting k;
+            k.tag = tag;
+            k.type = CameraKeySetting::Type::Int64;
+            k.scope = CameraKeySetting::Scope::Still;
+            k.values = {value};
+            keys.push_back(std::move(k));
+        }
+        // Log the still keys once per burst.
+        const auto result = applyCameraKeySettings(request, characteristics_, keys, stillKeysCameraId_.c_str(),
+                                                   CameraKeySetting::Scope::Still, "lens",
+                                                   keysLogged ? Diagnostic([](const std::string&) {}) : diag);
+        keysLogged = true;
+        return result.failures.empty();
+    });
+}
 }  // namespace rawrcam::camera

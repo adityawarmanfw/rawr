@@ -299,6 +299,35 @@ struct NativeCameraController::Impl final : CameraEventSink {
         std::lock_guard<std::mutex> lock(mutex);
         return deferredCaptureExposureLocked();
     }
+    // Full-size stills of a capture-stream route at the viewfinder's exposure.
+    bool captureFullSize(uint64_t requestId, uint32_t count) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (requestId == 0 || count == 0 || !deviceSession.hasCaptureStream()) return false;
+        CameraRequestPipeline::BracketExposure e{};
+        if (control.exposureMode == ExposureControlMode::Manual) {
+            e = {control.requestedExposureTimeNs, control.requestedSensitivity};
+        } else if (control.rawrAeActive && control.rawrAeExposureTimeNs > 0 && control.rawrAeSensitivity > 0) {
+            e = {control.rawrAeExposureTimeNs, control.rawrAeSensitivity};
+        } else if (control.appliedExposureTimeNs && control.appliedSensitivity) {
+            e = {*control.appliedExposureTimeNs, *control.appliedSensitivity};
+        }
+        if (e.exposureTimeNs <= 0 || e.sensitivity <= 0) {
+            diag("CAMERA_FULL_SIZE_SUBMIT sent=0 reason=no_exposure tag=" + std::to_string(requestId));
+            return false;
+        }
+        const std::vector<CameraRequestPipeline::BracketExposure> exposures(count, e);
+        const bool sent = deviceSession.captureFullSize(requests, control, exposures, requestId,
+                                                        [this](const std::string& line) { diag(line); });
+        diag("CAMERA_FULL_SIZE_SUBMIT sent=" + std::to_string(sent ? 1 : 0) + " tag=" + std::to_string(requestId) +
+             " count=" + std::to_string(count) + " exposureNs=" + std::to_string(e.exposureTimeNs) +
+             " iso=" + std::to_string(e.sensitivity));
+        return sent;
+    }
+    bool hasFullSizeCapture() const {
+        std::lock_guard<std::mutex> lock(mutex);
+        return deviceSession.hasCaptureStream();
+    }
+
     bool captureLongExposure(uint64_t requestId, NativeCameraController::LongExposure* submitted) {
         std::lock_guard<std::mutex> lock(mutex);
         const auto pair = deferredCaptureExposureLocked();
@@ -640,9 +669,12 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // `debug.rawr.companion_stream 0|1` overrides.
         const std::string companionOverride = systemProperty("debug.rawr.companion_stream");
         const std::string companionRouteKey = route.cameraId + '/' + route.physicalCameraId;
+        // A capture-stream route (vivo seamless) needs a YUV output configured or
+        // its full-size stills crash the camera provider.
         const bool companionStream =
-            companionOverride == "1" || (companionOverride != "0" && !builtInMatch.verified &&
-                                         !route.unlistedStream && !rawOnlyRoutes.count(companionRouteKey));
+            route.captureStream.has_value() || companionOverride == "1" ||
+            (companionOverride != "0" && !builtInMatch.verified && !route.unlistedStream &&
+             !rawOnlyRoutes.count(companionRouteKey));
         std::ostringstream selection;
         selection << "CAMERA_NDK_SELECTION profile=" << profile.id << " model=" << deviceModel
                   << " lensId=" << route.lensId << " cameraId=" << route.cameraId
@@ -661,12 +693,17 @@ struct NativeCameraController::Impl final : CameraEventSink {
         lock.unlock();
         bool configured = false;
         ANativeWindow* window = nullptr;
+        ANativeWindow* captureWindow = nullptr;
         try {
             configured = callbacks.configurePreview &&
                          callbacks.configurePreview(setupGeneration, *setupContext, setupCapabilities);
             if (configured && callbacks.createRawWindow)
                 window = callbacks.createRawWindow(setupGeneration, route.stream.width, route.stream.height,
                                                    route.stream.format);
+            if (configured && window && route.captureStream && callbacks.createCaptureWindow)
+                captureWindow = callbacks.createCaptureWindow(setupGeneration, route.captureStream->width,
+                                                              route.captureStream->height,
+                                                              route.captureStream->format);
         } catch (...) {
             configured = false;
         }
@@ -674,14 +711,23 @@ struct NativeCameraController::Impl final : CameraEventSink {
         if (!active || shutDown || setupGeneration != deviceSession.generation()) {
             lock.unlock();
             if (window && callbacks.destroyRawWindow) callbacks.destroyRawWindow(setupGeneration);
+            if (captureWindow && callbacks.destroyCaptureWindow) callbacks.destroyCaptureWindow(setupGeneration);
             lock.lock();
             return;
         }
-        if (!configured || !window) {
-            rollbackCameraStartLocked(lock, configured ? "create_raw_window" : "configure_preview");
+        if (!configured || !window || (route.captureStream && !captureWindow)) {
+            // Not handed to the device session yet: nothing else owns them.
+            lock.unlock();
+            if (configured && window && callbacks.destroyRawWindow) callbacks.destroyRawWindow(setupGeneration);
+            if (captureWindow && callbacks.destroyCaptureWindow) callbacks.destroyCaptureWindow(setupGeneration);
+            lock.lock();
+            rollbackCameraStartLocked(lock, !configured ? "configure_preview"
+                                            : !window   ? "create_raw_window"
+                                                        : "create_capture_window");
             return;
         }
         deviceSession.setRawWindow(window);
+        deviceSession.setCaptureWindow(captureWindow);
         const auto stillCurrent = [&] {
             return active && !shutDown && setupGeneration == deviceSession.generation();
         };
@@ -745,6 +791,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // Session cleanup takes its mutex. Generation scopes cleanup to its reader.
         lock.unlock();
         if (retired.destroy && callbacks.destroyRawWindow) callbacks.destroyRawWindow(retired.generation);
+        if (retired.destroy && callbacks.destroyCaptureWindow) callbacks.destroyCaptureWindow(retired.generation);
         lock.lock();
     }
 
@@ -1420,6 +1467,10 @@ std::optional<double> NativeCameraController::longFrameRoomEv() const { return i
 std::optional<NativeCameraController::LongExposure> NativeCameraController::deferredCaptureExposure() const {
     return impl_->deferredCaptureExposure();
 }
+bool NativeCameraController::captureFullSize(uint64_t requestId, uint32_t count) {
+    return impl_->captureFullSize(requestId, count);
+}
+bool NativeCameraController::hasFullSizeCapture() const { return impl_->hasFullSizeCapture(); }
 bool NativeCameraController::captureLongExposure(uint64_t requestId, LongExposure* submitted) {
     return impl_->captureLongExposure(requestId, submitted);
 }

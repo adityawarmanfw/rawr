@@ -9,6 +9,7 @@
 #include "diagnostics/logging/NativeLog.h"
 #include "diagnostics/logging/RuntimeTraceRecorder.h"
 #include "metadata/MetadataDiagnostics.h"
+#include "imaging/RawFrameLease.h"
 #include "session/SessionEngine.h"
 #include "video_pipeline/VideoCrop.h"
 #include "vulkan/VulkanDispatch.h"
@@ -79,6 +80,28 @@ SessionEngine::SessionEngine(std::string filesDir) : filesDir_(std::move(filesDi
         rawReaderUsage_.readerDestroyed(generation);
         destroyRawInput();
         cameraReaderGeneration_ = 0;
+    };
+    callbacks.createCaptureWindow = [this](uint64_t generation, uint32_t width, uint32_t height,
+                                           rawrcam::geometry::RawPixelFormat format) {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (generation != cameraSetupGeneration_) return static_cast<ANativeWindow*>(nullptr);
+        try {
+            // vivo full-size outputs configure only with no usage or GPU_DATA_BUFFER.
+            auto* window = captureFrameIngress_.create(generation, width, height, format,
+                                                       AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER);
+            captureReaderGeneration_ = generation;
+            fullSizeFrames_.store(0, std::memory_order_relaxed);
+            return window;
+        } catch (const std::exception& e) {
+            appendDiagnostic(std::string("FULL_SIZE_READER_FAILED error=") + e.what());
+            return static_cast<ANativeWindow*>(nullptr);
+        }
+    };
+    callbacks.destroyCaptureWindow = [this](uint64_t generation) {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (generation != captureReaderGeneration_) return;
+        captureFrameIngress_.destroy();
+        captureReaderGeneration_ = 0;
     };
     callbacks.captureFailed = [this](uint64_t generation) {
         std::lock_guard<std::mutex> lock(mu_);
@@ -299,6 +322,8 @@ void SessionEngine::shutdown() {
     {
         capture_.single().shutdown();
         if (vulkanContext_.device()) vulkanContext_.waitIdle();
+        captureFrameIngress_.destroy();
+        captureReaderGeneration_ = 0;
         destroyRawInputInternal();
         realtime_.shutdown();
         swapchainRenderer_.destroySwapchain();
@@ -313,4 +338,13 @@ void SessionEngine::requestVideoPrewarm(uint32_t width, uint32_t height, uint32_
 void SessionEngine::releaseVideoProcessing() { videoSession_.releaseVideoProcessing(); }
 void SessionEngine::markVideoPrewarmDirty() { videoSession_.markVideoPrewarmDirty(); }
 void SessionEngine::waitForVideoPrewarmIdle() { videoSession_.waitForVideoPrewarmIdle(); }
+}  // namespace rawrcam::session
+
+namespace rawrcam::session {
+void SessionEngine::onFullSizeFrame(imaging::AcquiredRawFrame frame) {
+    imaging::RawFrameLease lease(frame);  // stage A: count and release
+    const auto n = fullSizeFrames_.fetch_add(1, std::memory_order_relaxed) + 1;
+    appendDiagnostic("FULL_SIZE_FRAME n=" + std::to_string(n) + " timestampNs=" + std::to_string(frame.timestampNs) +
+                     " generation=" + std::to_string(frame.generation));
+}
 }  // namespace rawrcam::session

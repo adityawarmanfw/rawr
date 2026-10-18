@@ -167,9 +167,10 @@ void testProfiles() {
         {"Z170", "5", RawPixelFormat::Raw10, 4080, 3072, 31, true, 64, 1023},
         {"Z340", "5", RawPixelFormat::Raw10, 4080, 3072, 6, true, 64, 1023},
     };
-    // The binned lenses, then the full-size F35 / F85 (checked in testProfileJson).
-    assert(dev.lenses.size() == std::size(table) + 2);
+    // The binned lenses, then the full-size F35 / F85 and S35 / S85 (checked in testProfileJson).
+    assert(dev.lenses.size() == std::size(table) + 4);
     assert(dev.lenses[std::size(table)].lensId == "F35" && dev.lenses[std::size(table) + 1].lensId == "F85");
+    assert(dev.lenses[std::size(table) + 2].lensId == "S35" && dev.lenses[std::size(table) + 3].lensId == "S85");
     for (size_t i = 0; i < std::size(table); ++i) {
         const auto& e = table[i];
         const auto& r = dev.lenses[i];  // Profile order is the capture-screen order.
@@ -254,6 +255,31 @@ void testProfileJson() {
             }
             assert(session && request);
         }
+        // vivo seamless lenses: binned viewfinder stream, full-size capture stream, still-only keys.
+        for (const auto& [lensId, cameraId, h] : {std::tuple{"S35", "3", 3064u}, std::tuple{"S85", "5", 3072u}}) {
+            const auto s = routeForLens(x300, lensId);
+            assert(s && s->cameraId == cameraId && !s->unlistedStream && !s->readerUsage);
+            assert(s->preferredStream.width == 4080 && s->preferredStream.height == h);
+            assert(s->captureStream && s->captureStream->width == 8192 && s->captureStream->height == 6144);
+            assert(s->captureStream->format == RawPixelFormat::Raw16 && s->vendorGate == "vivoFullSize");
+            bool stillUiModule = false, sessionUiModule = false, forced = false;
+            for (const auto& k : s->keys) {
+                forced |= k.tag == "vivo.control.forceSensorMode";
+                if (k.tag != "com.vivo.current_ui_module") continue;
+                stillUiModule |= k.scope == CameraKeySetting::Scope::Still;
+                sessionUiModule |= k.scope != CameraKeySetting::Scope::Still;
+            }
+            // ui_module 74 on the session or repeating request silences the RAW viewfinder.
+            assert(stillUiModule && !sessionUiModule && !forced);
+        }
+        const auto still = parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0",
+            "captureStream":{"format":"RAW16","width":8,"height":6},
+            "keys":[{"tag":"vendor.still","scope":"still","values":[1]}]}]})");
+        assert(still && still->lenses[0].captureStream && still->lenses[0].captureStream->height == 6);
+        assert(still->lenses[0].keys[0].scope == CameraKeySetting::Scope::Still);
+        assert(serializeCameraProfile(*parseCameraProfile(serializeCameraProfile(*still))) ==
+               serializeCameraProfile(*still));
+        assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","captureStream":{"width":0}}]})"));
         // Binned lenses keep the ladder's reader usage and no gate.
         const auto l35 = routeForLens(x300, "L35");
         assert(l35 && !l35->unlistedStream && !l35->readerUsage && l35->vendorGate.empty());

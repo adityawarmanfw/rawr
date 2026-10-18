@@ -19,7 +19,9 @@ namespace rawrcam::camera {
 // the repeating RAW request).
 struct CameraKeySetting {
     enum class Type : uint8_t { Byte, Int32, Int64, Float, Double };
-    enum class Scope : uint8_t { Session, Request };
+    // Still: only on full-size still requests (LensRoute::captureStream), never
+    // on the session or the repeating request.
+    enum class Scope : uint8_t { Session, Request, Still };
     std::string tag;
     Type type = Type::Int32;
     Scope scope = Scope::Session;
@@ -71,6 +73,10 @@ struct LensRoute {
     std::optional<uint64_t> readerUsage;
     // Vendor state the app holds while the device is open (see VendorCameraGate).
     std::string vendorGate;
+    // Full-size stills from a second RAW stream that only still requests fill
+    // (vivo seamless route): `stream` is then the binned viewfinder, and the
+    // HAL switches the sensor to full size for each still. Unlisted size.
+    std::optional<geometry::RawStreamPreference> captureStream;
 };
 
 struct CameraProfile {

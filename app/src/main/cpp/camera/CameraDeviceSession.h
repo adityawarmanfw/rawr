@@ -46,6 +46,14 @@ class CameraDeviceSession final {
         rawWindow_ = window;
         readerGeneration_ = generation_;
     }
+    // Window of LensRoute::captureStream: a session output no repeating request targets.
+    void setCaptureWindow(ANativeWindow* window) noexcept { captureWindow_ = window; }
+    bool hasCaptureStream() const noexcept { return captureTarget_ != nullptr; }
+    // Burst of full-size stills (one per exposure, tagged tagId): copies of the
+    // repeating request that also fill the capture stream, with STILL_CAPTURE
+    // intent and the lens's still-scope keys.
+    bool captureFullSize(CameraRequestPipeline&, const CameraControlState&,
+                         const std::vector<CameraRequestPipeline::BracketExposure>&, uint64_t tagId, const Diagnostic&);
     bool hasDevice() const noexcept { return device_ != nullptr; }
     bool hasSession() const noexcept { return session_ != nullptr; }
     ACaptureRequest* request() const noexcept { return request_; }
@@ -78,6 +86,11 @@ class CameraDeviceSession final {
     ACaptureRequest* sessionParameters_ = nullptr;
     ACameraOutputTarget* target_ = nullptr;
     ACaptureSessionOutput* output_ = nullptr;
+    ANativeWindow* captureWindow_ = nullptr;
+    ACaptureSessionOutput* captureOutput_ = nullptr;
+    ACameraOutputTarget* captureTarget_ = nullptr;
+    std::vector<CameraKeySetting> stillKeys_;
+    std::string stillKeysCameraId_;
     AImageReader* companionReader_ = nullptr;
     ACaptureSessionOutput* companionOutput_ = nullptr;
     ACameraOutputTarget* companionTarget_ = nullptr;

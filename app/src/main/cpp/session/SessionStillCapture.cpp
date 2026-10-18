@@ -68,6 +68,10 @@ uint64_t SessionEngine::requestRawStillCapture(rawrcam::encoding::dng::DngCaptur
             appendDiagnostic("RAW_STILL_LONG_EXPOSURE_SUBMIT_FAILED requestId=" + std::to_string(requestId));
         }
     }
+    // Stage A of the vivo seamless route: also request one full-size still
+    // (logged on arrival); the photo still comes from the viewfinder frame.
+    if (requestId != 0 && camera->hasFullSizeCapture() && !camera->captureFullSize(requestId, 1))
+        appendDiagnostic("FULL_SIZE_SUBMIT_FAILED requestId=" + std::to_string(requestId));
     finalizeDeferredSurfaceDetach();
     return requestId;
 }

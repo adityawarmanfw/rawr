@@ -304,6 +304,15 @@ class SessionEngine {
         [this](imaging::AcquiredRawFrame frame) { enqueueRawFrame(std::move(frame)); },
         [this](const std::string& line) { appendDiagnostic(line); },
         [this](const std::string& line) { recordPipelineAuditLine(line); }};
+    // Full-size stills of a capture-stream lens (vivo seamless route); its
+    // frames bypass the viewfinder.
+    imaging::RawFrameIngress captureFrameIngress_{
+        [this](imaging::AcquiredRawFrame frame) { onFullSizeFrame(std::move(frame)); },
+        [this](const std::string& line) { appendDiagnostic(line); },
+        [this](const std::string& line) { recordPipelineAuditLine(line); }};
+    uint64_t captureReaderGeneration_ = 0;
+    std::atomic<uint32_t> fullSizeFrames_{0};
+    void onFullSizeFrame(imaging::AcquiredRawFrame frame);
     presentation::PresentationSurface presentationSurface_;
     bool deferredSurfaceDetach_ = false;
 

@@ -21,8 +21,12 @@ class CameraRequestPipeline final {
         int64_t exposureTimeNs = 0;
         int32_t sensitivity = 0;  // request coordinate
     };
+    // prepare (optional) adjusts each copy before submit, e.g. full-size still
+    // targets and keys; false aborts the burst.
+    using PrepareRequest = std::function<bool(ACaptureRequest*)>;
     bool captureBracket(ACameraCaptureSession*, const ACaptureRequest* repeating, CameraSessionCallbackContext*,
-                        const CameraControlState&, const std::vector<BracketExposure>&, uint64_t tagId);
+                        const CameraControlState&, const std::vector<BracketExposure>&, uint64_t tagId,
+                        const PrepareRequest& prepare = {});
     uint64_t latestSubmittedSerial() const noexcept { return latestSubmittedRequestSerial_; }
     void retire() noexcept { provenance_.clear(); }
 
