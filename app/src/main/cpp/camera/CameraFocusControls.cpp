@@ -58,8 +58,15 @@ void CameraFocusControls::acceptTap(CameraControlState& state, const CameraTapFo
 void CameraFocusControls::clearTap(CameraControlState& state) {
     state.tapAfActive = false;
     tapPolicy_.clear();
-    region_.reset();
     faceSteering_ = false;
+    // vivo-gated routes: after a tap scan, an AF cancel or dropping the tap's
+    // AF region crashes the provider (leaving a tap for MF or AF-C does both).
+    // Keep the region on every later request; the mode change alone ends the tap.
+    if (state.capabilities.tapAfHoldsUntilNextTap) {
+        trigger_ = CameraFocusTrigger::Idle;
+        return;
+    }
+    region_.reset();
     trigger_ = CameraFocusTrigger::Cancel;
 }
 

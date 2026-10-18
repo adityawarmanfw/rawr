@@ -143,6 +143,25 @@ void tapLeavesManualFocus() {
     assert(focus.expireTap(state, 4100) && !state.tapAfActive);
 }
 
+// vivo-gated routes: leaving a tap for MF or AF-C neither cancels AF nor drops
+// the tap's region (either crashes the provider after a tap scan).
+void heldTapRegionOutlivesTheTap() {
+    CameraFocusControls focus;
+    auto state = controls();
+    state.capabilities.tapAfHoldsUntilNextTap = true;
+    const auto tap = focus.planTap(state, geometry(), {0.3f, 0.6f});
+    assert(tap);
+    focus.acceptTap(state, *tap, 100);
+    assert(focus.finishTrigger());
+    assert(focus.requestManualFocus(state, 0.5f, 2));
+    assert(state.focusMode == FocusControlMode::Manual && !state.tapAfActive);
+    auto request = focus.request(std::nullopt);
+    assert(request.trigger == CameraFocusTrigger::Idle && request.afRegion == tap->region);
+    assert(focus.requestMode(state, FocusControlMode::Continuous, 3));
+    request = focus.request(std::nullopt);
+    assert(request.trigger == CameraFocusTrigger::Idle && request.afRegion == tap->region);
+}
+
 void faceHysteresisAndTapOwnership() {
     CameraFocusControls focus;
     auto state = controls();
@@ -244,6 +263,7 @@ int main() {
     regionGeometry();
     modeAndManualFocus();
     tapLeavesManualFocus();
+    heldTapRegionOutlivesTheTap();
     tapSequenceAndExpiry();
     lockedTapAndModeCleanup();
     faceHysteresisAndTapOwnership();
