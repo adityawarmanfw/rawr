@@ -31,7 +31,10 @@ CameraResultActions CameraResultProcessor::process(const ACaptureRequest* reques
     const auto* provenance = requestObservation.provenance ? &*requestObservation.provenance : nullptr;
 
     std::string error;
-    auto frame = metadata::readFrameMetadataSnapshot(result, cameraContext, frameOrdinal_ + 1, &error);
+    // Colour from the last valid frame of this camera context when the result has none.
+    const bool fallbackUsable = lastColor_ && lastColor_->cameraContext == cameraContext;
+    auto frame = metadata::readFrameMetadataSnapshot(result, cameraContext, frameOrdinal_ + 1, &error,
+                                                     fallbackUsable ? &*lastColor_ : nullptr);
     if (frame && staticLevels) {
         frame->blackLevelPhysicalRggb = staticLevels->blackRggb;
         frame->effectiveWhiteLevel = staticLevels->white;
@@ -53,6 +56,8 @@ CameraResultActions CameraResultProcessor::process(const ACaptureRequest* reques
         if (metadataLogCount_ < 3) diag("FRAME_METADATA_REJECT error=" + error);
         return actions;
     }
+    // Viewfinder results only: a still that borrowed colour must not seed it.
+    if (!provenance || provenance->optimizedStillRequestId == 0) lastColor_ = *frame;
     if (acceptAuditCount_ < 6) {
         ++acceptAuditCount_;
         diag("PIPELINE_FRAME_METADATA_ACCEPTED generation=" + std::to_string(cameraContext->cameraContextGeneration) +

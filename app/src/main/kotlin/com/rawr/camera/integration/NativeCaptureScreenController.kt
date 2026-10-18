@@ -421,7 +421,8 @@ class NativeCaptureScreenController(
     }
 
     private fun enqueueStillCapture() {
-        val format = CaptureOutputFormat.from(state.value.dngEnabled, state.value.jpegEnabled)
+        val format = CaptureOutputFormat.from(state.value.dngEnabled, state.value.jpegEnabled,
+                                              state.value.capabilities.dngOnly)
         // HDR+ Bracketed: "hold still" starts at the press, not when native arms the bracket.
         if (state.value.hdrPlusBracketedActive) update { it.copy(bracketHoldPresses = it.bracketHoldPresses + 1) }
         try {

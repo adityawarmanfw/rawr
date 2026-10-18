@@ -42,6 +42,9 @@ class FrameCapturePort {
     // Its result, with the viewfinder-stream frame's colour state (bursts merge from it).
     virtual void observeFullSizeStillCopy(const rawrcam::metadata::FrameMetadataSnapshot&,
                                           const rawrcam::color::FrameColorTransform&) {}
+    // A full-size still is in flight: its copy's result comes only with the
+    // full-size frame (~4 s at 200 MP), so the pairer must hold the copy longer.
+    virtual bool fullSizeStillPending() { return false; }
     virtual bool deferSubmittedFrame(const rawrcam::metadata::FrameMetadataSnapshot& metadata,
                                      const rawrcam::color::FrameColorTransform& colorState,
                                      const tonemap::TonemapParams& tonemapParams, float aePostGain, bool filmEnabled,

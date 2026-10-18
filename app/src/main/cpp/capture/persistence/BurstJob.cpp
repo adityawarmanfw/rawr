@@ -98,6 +98,7 @@ struct JournalFrames {
     std::ifstream file;
     uint64_t offset = 0;
     size_t bytes = 0;
+    uint32_t windowY0 = 0, windowRows = 0;  // 0 rows: whole frames
     std::vector<uint8_t> buffer;
     std::vector<bool> loaded;
 };
@@ -132,13 +133,15 @@ std::unique_ptr<multiframe::MultiframeWorkItem> loadBurst(const std::string& pat
         auto* queueMutex = &mutex;
         burst->loadFrame = [source, uploaded, burst, vulkan, queueMutex, width, height](std::size_t i) {
             if (i >= source->loaded.size() || source->loaded[i]) return;
-            source->buffer.resize(source->bytes);
-            source->file.seekg(std::streamoff(source->offset + i * source->bytes));
-            source->file.read(reinterpret_cast<char*>(source->buffer.data()), std::streamsize(source->bytes));
+            const uint32_t rows = source->windowRows ? source->windowRows : height;
+            const size_t rowBytes = size_t(width) * sizeof(uint16_t), bytes = rowBytes * rows;
+            source->buffer.resize(bytes);
+            source->file.seekg(std::streamoff(source->offset + i * source->bytes + source->windowY0 * rowBytes));
+            source->file.read(reinterpret_cast<char*>(source->buffer.data()), std::streamsize(bytes));
             if (!source->file) throw std::runtime_error("capture_job_frame_read_failed");
             auto& frame = burst->frames[i];
-            frame.raw = uploaded->add(*vulkan, *queueMutex, width, height, frame.raw.ref.timestampNs,
-                                      source->buffer.data(), source->bytes);
+            frame.raw = uploaded->add(*vulkan, *queueMutex, width, rows, frame.raw.ref.timestampNs,
+                                      source->buffer.data(), bytes);
             source->loaded[i] = true;
         };
         burst->releaseFrame = [source, uploaded, burst](std::size_t i) {
@@ -148,6 +151,15 @@ std::unique_ptr<multiframe::MultiframeWorkItem> loadBurst(const std::string& pat
             raw.image = VK_NULL_HANDLE;
             raw.view = VK_NULL_HANDLE;
             source->loaded[i] = false;
+        };
+        burst->setRowWindow = [source, burst, height](uint32_t y0, uint32_t rows) {
+            if (rows && (y0 + rows > height || (y0 & 1u))) throw std::runtime_error("capture_job_row_window_invalid");
+            for (size_t i = 0; i < source->loaded.size(); ++i) burst->releaseFrame(i);
+            source->windowY0 = rows ? y0 : 0;
+            source->windowRows = rows;
+            // The merge checks each frame's size before it loads it.
+            for (auto& frame : burst->frames) frame.raw.ref.height = rows ? rows : height;
+            source->buffer = {};  // whole-frame capacity no longer needed
         };
         // The reference stays resident: the base DNG and the clip map read it.
         const auto begin = std::chrono::steady_clock::now();

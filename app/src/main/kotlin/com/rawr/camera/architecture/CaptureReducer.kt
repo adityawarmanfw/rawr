@@ -34,7 +34,9 @@ object CaptureReducer {
         }
 
         CycleOutputFormat -> {
-            CaptureOutputFormat.from(state.dngEnabled, state.jpegEnabled).next().let {
+            // A DNG-only lens shows DNG; the saved choice returns on other lenses.
+            if (state.capabilities.dngOnly) state
+            else CaptureOutputFormat.from(state.dngEnabled, state.jpegEnabled).next().let {
                 state.copy(dngEnabled = it.dng, jpegEnabled = it.jpeg)
             }
         }

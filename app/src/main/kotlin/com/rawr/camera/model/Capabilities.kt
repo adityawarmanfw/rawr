@@ -75,7 +75,9 @@ data class CameraCapabilities(
     /** Advertised HAL AWB presets (never contains ManualTempTint). Always contains Auto. */
     val supportedWhiteBalanceModes: Set<WhiteBalanceMode> = setOf(WhiteBalanceMode.Auto),
     /** True when the HAL advertises COLOR_CORRECTION TRANSFORM_MATRIX. */
-    val manualWhiteBalanceSupported: Boolean = false
+    val manualWhiteBalanceSupported: Boolean = false,
+    /** The lens saves DNG only (200 MP): the output format is shown and captured as DNG. */
+    val dngOnly: Boolean = false
 ) {
     init {
         require(lenses.isNotEmpty()) { "A usable camera capability snapshot must contain at least one lens" }

@@ -440,6 +440,7 @@ std::string serializeCameraProfile(const CameraProfile& profile) {
             out += "\",\"width\":" + std::to_string(r.captureStream->width) +
                    ",\"height\":" + std::to_string(r.captureStream->height) + "}";
         }
+        if (r.captureBurst) out += ",\"captureBurst\":" + std::to_string(r.captureBurst);
         out += '}';
     }
     out += "]}";
@@ -500,6 +501,7 @@ std::optional<CameraProfile> readProfile(const Json& root, std::string* error) {
             }
             r.captureStream = capture;
         }
+        r.captureBurst = uint32_t(std::clamp(l.num("captureBurst"), 0.0, 30.0));
         if (!readLevels(l.get("levels"), r.levels)) {
             if (error) *error = "invalid levels for lens " + r.lensId;
             return std::nullopt;

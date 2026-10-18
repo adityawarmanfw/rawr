@@ -292,7 +292,8 @@ struct Reader {
 uint64_t payloadSize(const CaptureJob& job) {
     const auto& f = job.frame;
     uint64_t n = uint64_t(f.width) * f.height * 2;
-    if (!f.width || !f.height || n > 256 * MiB || f.packedRowStrideBytes != f.width * 2 || !f.metadata.cameraContext)
+    // A 200 MP RAW16 frame is 382 MiB.
+    if (!f.width || !f.height || n > 1024 * MiB || f.packedRowStrideBytes != f.width * 2 || !f.metadata.cameraContext)
         throw std::runtime_error("capture_job_geometry_invalid");
     if (job.multiframe && (job.metadata.size() < 2 || job.metadata.size() > 30 ||
                            job.parameters.size() != job.metadata.size() || job.referenceIndex >= job.metadata.size()))
@@ -321,9 +322,12 @@ std::shared_ptr<void> reserve(const std::string& filesDir, uint64_t rawBytes, bo
     const long pages = sysconf(_SC_PHYS_PAGES), pageSize = sysconf(_SC_PAGESIZE);
     if (!rawBytes || rawBytes > 8ull * 1024 * MiB || statvfs(filesDir.c_str(), &disk) != 0) return {};
     uint64_t cpuLimit = 128 * MiB;
-    if (pages > 0 && pageSize > 0)
-        cpuLimit = std::clamp(uint64_t(pages) * uint64_t(pageSize) / 32, 64 * MiB, 256 * MiB);
+    const uint64_t physical = pages > 0 && pageSize > 0 ? uint64_t(pages) * uint64_t(pageSize) : 0;
+    if (physical) cpuLimit = std::clamp(physical / 32, 64 * MiB, 256 * MiB);
     uint64_t cpu = cpuAcquisition ? rawBytes : 0;
+    // One frame alone is always admitted when it fits in an eighth of RAM:
+    // a 200 MP RAW16 frame (382 MiB) is larger than the queue budget.
+    if (!reservedCpu) cpuLimit = std::max(cpuLimit, std::min(cpu, physical / 8));
     uint64_t storage = rawBytes * 2 + 32 * MiB;
     const uint64_t free = uint64_t(disk.f_bavail) * disk.f_frsize;
     if (cpu + reservedCpu > cpuLimit || free < reservedDisk + storage + 512 * MiB) return {};

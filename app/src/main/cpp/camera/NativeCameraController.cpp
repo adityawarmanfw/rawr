@@ -35,6 +35,7 @@
 namespace rawrcam::camera {
 namespace {
 constexpr const char* kTag = "RawrCamCameraNDK";
+constexpr uint64_t kDngOnlyPixels = 100'000'000;  // 200 MP full-size stills: DNG only.
 #define CAMI(...) __android_log_print(ANDROID_LOG_INFO, kTag, __VA_ARGS__)
 #define CAME(...) __android_log_print(ANDROID_LOG_ERROR, kTag, __VA_ARGS__)
 
@@ -115,6 +116,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
     // stream; they start RAW-only for the rest of this process.
     std::set<std::string> rawOnlyRoutes;
     std::string accessRoute = "direct";
+    uint32_t fullSizeBurstLimit = 0;
     bool oisEnabledPreference = true;
     // User preference to bypass Camera2 AE priority; the HAL's advertised
     // support is kept so the preference can be turned back off live.
@@ -269,6 +271,12 @@ struct NativeCameraController::Impl final : CameraEventSink {
     std::atomic<int64_t> longExposureStartMs{-1};
     // Tagged frames still to come before the cue ends (a full-size burst has several).
     std::atomic<int32_t> longExposureFramesLeft{0};
+    // The cue ends when the sensor is done with the last tagged frame, not at
+    // its result: vivo's 200 MP main-camera result comes ~4 s after the
+    // exposure (HAL processing), and the user need not hold still for that.
+    std::atomic<int32_t> longExposureStartsLeft{0};
+    std::atomic<int64_t> longExposureEndMs{-1};
+    static constexpr int64_t kReadoutMarginMs = 150;  // a 200 MP readout
     std::atomic<int> lastLongExposureHonored{-1};  // -1 none yet, 0 shortened, 1 honored
     std::chrono::steady_clock::time_point longExposureSubmitted{};
     static int64_t monotonicMs() {
@@ -324,6 +332,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
         longExposureTag.store(requestId, std::memory_order_relaxed);
         longExposureNs.store(e.exposureTimeNs, std::memory_order_relaxed);
         longExposureFramesLeft.store(int32_t(count), std::memory_order_relaxed);
+        longExposureStartsLeft.store(int32_t(count), std::memory_order_relaxed);
+        longExposureEndMs.store(-1, std::memory_order_relaxed);
         longExposureStartMs.store(monotonicMs(), std::memory_order_relaxed);
         longExposureSubmitted = std::chrono::steady_clock::now();
         // The still queues behind the in-flight preview requests (~0.6 s at
@@ -353,6 +363,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
         longExposureTag.store(requestId, std::memory_order_relaxed);
         longExposureNs.store(pair->exposureTimeNs, std::memory_order_relaxed);
         longExposureFramesLeft.store(1, std::memory_order_relaxed);
+        longExposureStartsLeft.store(1, std::memory_order_relaxed);
+        longExposureEndMs.store(-1, std::memory_order_relaxed);
         // Submit time until the sensor reports the exposure started.
         longExposureStartMs.store(monotonicMs(), std::memory_order_relaxed);
         longExposureSubmitted = std::chrono::steady_clock::now();
@@ -687,6 +699,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // without regions and manual focus stay.
         control.capabilities.tapAfHoldsUntilNextTap = !route.vendorGate.empty();
         control.capabilities.faceAfSteering = route.vendorGate.empty();
+        control.capabilities.dngOnly =
+            route.captureStream && uint64_t(route.captureStream->width) * route.captureStream->height > kDngOnlyPixels;
         if (route.unlistedStream) {
             control.capabilities.tapAfSupported = false;
             control.capabilities.maxAfRegions = 0;
@@ -762,6 +776,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         }
         deviceSession.setRawWindow(window);
         deviceSession.setCaptureWindow(captureWindow);
+        fullSizeBurstLimit = route.captureBurst;
         const auto stillCurrent = [&] {
             return active && !shutDown && setupGeneration == deviceSession.generation();
         };
@@ -874,8 +889,12 @@ struct NativeCameraController::Impl final : CameraEventSink {
         if (tag == 0) return;
         void* userContext = nullptr;
         if (ACaptureRequest_getUserContext(requestCopy, &userContext) != ACAMERA_OK || !userContext) return;
-        if (static_cast<const CameraRequestProvenance*>(userContext)->optimizedStillRequestId == tag)
-            longExposureStartMs.store(monotonicMs(), std::memory_order_relaxed);
+        if (static_cast<const CameraRequestProvenance*>(userContext)->optimizedStillRequestId != tag) return;
+        const int64_t now = monotonicMs();
+        longExposureStartMs.store(now, std::memory_order_relaxed);
+        if (longExposureStartsLeft.fetch_sub(1, std::memory_order_relaxed) <= 1)
+            longExposureEndMs.store(now + longExposureNs.load(std::memory_order_relaxed) / 1'000'000 + kReadoutMarginMs,
+                                    std::memory_order_relaxed);
     }
     void cameraCaptureFailed(uint64_t callbackGeneration) override {
         // Set once at construction; the receiver checks the generation.
@@ -970,6 +989,10 @@ struct NativeCameraController::Impl final : CameraEventSink {
         }
         snapshot.longExposureNs = longExposureNs.load(std::memory_order_relaxed);
         snapshot.longExposureStartMs = longExposureStartMs.load(std::memory_order_relaxed);
+        // Exposure over: the frame is in the sensor's hands no longer; the
+        // result (and the viewfinder freeze) may still be on its way.
+        if (const int64_t end = longExposureEndMs.load(std::memory_order_relaxed); end >= 0 && monotonicMs() >= end)
+            snapshot.longExposureStartMs = -1;
         snapshot.lastLongExposureHonored = lastLongExposureHonored.load(std::memory_order_relaxed);
         snapshot.requestedShutterAngleDegrees = cadencePolicy.shutterAngle();
         snapshot.shutterAngleChoices = cadencePolicy.shutterChoices(control.capabilities.exposureTimeMinNs,
@@ -1292,6 +1315,12 @@ struct NativeCameraController::Impl final : CameraEventSink {
     void clearTapAf(uint64_t requestId) {
         std::lock_guard<std::mutex> lock(mutex);
         control.focusRequestId = std::max(control.focusRequestId, requestId);
+        // A held tap stays until the next tap: returning to continuous AF after
+        // a tap scan crashes the vivo provider (the lens switch sends this clear).
+        if (control.capabilities.tapAfHoldsUntilNextTap && control.tapAfActive) {
+            diag("CAMERA_CONTROL_REQUEST tapAfClearSkipped reason=held_until_next_tap");
+            return;
+        }
         focusControls.clearTap(control);
         if (deviceSession.request() && deviceSession.session()) {
             diag("CAMERA_CONTROL_REQUEST tapAfCleared reason=explicit_clear");
@@ -1508,6 +1537,10 @@ bool NativeCameraController::captureFullSize(uint64_t requestId, uint32_t count)
     return impl_->captureFullSize(requestId, count);
 }
 bool NativeCameraController::hasFullSizeCapture() const { return impl_->hasFullSizeCapture(); }
+uint32_t NativeCameraController::fullSizeBurstLimit() const {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    return impl_->fullSizeBurstLimit;
+}
 bool NativeCameraController::captureLongExposure(uint64_t requestId, LongExposure* submitted) {
     return impl_->captureLongExposure(requestId, submitted);
 }

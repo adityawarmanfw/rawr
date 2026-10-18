@@ -342,6 +342,7 @@ void SessionFrameCallbacks::observeFullSizeStillCopy(const rawrcam::metadata::Fr
                                                      const rawrcam::color::FrameColorTransform& color) {
     engine_->observeFullSizeBurstFrame(metadata, color);
 }
+bool SessionFrameCallbacks::fullSizeStillPending() { return engine_->fullSizeStillPending(); }
 bool SessionFrameCallbacks::deferSubmittedFrame(const rawrcam::metadata::FrameMetadataSnapshot& metadata,
                                                 const rawrcam::color::FrameColorTransform& colorState,
                                                 const tonemap::TonemapParams& tonemapParams, float aePostGain,

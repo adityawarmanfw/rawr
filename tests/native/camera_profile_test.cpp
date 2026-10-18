@@ -167,9 +167,10 @@ void testProfiles() {
         {"Z170", "5", RawPixelFormat::Raw10, 4080, 3072, 31, true, 64, 1023},
         {"Z340", "5", RawPixelFormat::Raw10, 4080, 3072, 6, true, 64, 1023},
     };
-    // The binned lenses, then the 50 MP H35 / H85 (checked in testProfileJson).
-    assert(dev.lenses.size() == std::size(table) + 2);
+    // The binned lenses, then the 50 MP H35 / H85 and 200 MP F35 / F85 (checked in testProfileJson).
+    assert(dev.lenses.size() == std::size(table) + 4);
     assert(dev.lenses[std::size(table)].lensId == "H35" && dev.lenses[std::size(table) + 1].lensId == "H85");
+    assert(dev.lenses[std::size(table) + 2].lensId == "F35" && dev.lenses[std::size(table) + 3].lensId == "F85");
     for (size_t i = 0; i < std::size(table); ++i) {
         const auto& e = table[i];
         const auto& r = dev.lenses[i];  // Profile order is the capture-screen order.
@@ -257,10 +258,26 @@ void testProfileJson() {
             // ui_module 74 on the session or repeating request silences the RAW viewfinder.
             assert(stillUiModule && !sessionUiModule && !forced && stillMode);
         }
+        // vivo 200 MP lenses: the same route with the ultra flag and no forced mode (the HAL switches by itself).
+        // The main camera's HAL fails 200 MP bursts: single stills only there.
+        for (const auto& [lensId, cameraId, h, burst] :
+             {std::tuple{"F35", "3", 12256u, 1u}, std::tuple{"F85", "5", 12288u, 3u}}) {
+            const auto s = routeForLens(x300, lensId);
+            assert(s && s->cameraId == cameraId && s->vendorGate == "vivoFullSize" && s->captureBurst == burst);
+            assert(s->captureStream && s->captureStream->width == 16320 && s->captureStream->height == h);
+            bool ultra = false, aiHighRes = false, forced = false;
+            for (const auto& k : s->keys) {
+                ultra |= k.tag == "vivo.control.ultra_highresolution" && k.values == std::vector<double>{1.0};
+                aiHighRes |= k.tag == "vivo.control.ai_highresolution";
+                forced |= k.tag == "vivo.control.forceSensorMode";
+            }
+            assert(ultra && !aiHighRes && !forced);
+        }
         const auto still = parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0",
-            "captureStream":{"format":"RAW16","width":8,"height":6},
+            "captureStream":{"format":"RAW16","width":8,"height":6},"captureBurst":2,
             "keys":[{"tag":"vendor.still","scope":"still","values":[1]}]}]})");
         assert(still && still->lenses[0].captureStream && still->lenses[0].captureStream->height == 6);
+        assert(still->lenses[0].captureBurst == 2);
         assert(still->lenses[0].keys[0].scope == CameraKeySetting::Scope::Still);
         assert(serializeCameraProfile(*parseCameraProfile(serializeCameraProfile(*still))) ==
                serializeCameraProfile(*still));

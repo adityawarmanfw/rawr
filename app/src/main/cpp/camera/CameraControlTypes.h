@@ -134,6 +134,9 @@ struct CameraControlCapabilities {
     // Continuous AF follows the first detected face. Off on vivo-gated routes:
     // moving or clearing the region there crashes the same AF publisher.
     bool faceAfSteering = true;
+    // Stills save DNG only: a JPEG develop of a 200 MP full-size still
+    // doesn't fit in memory.
+    bool dngOnly = false;
     bool manualFocusSupported = false;
     // True when the HAL advertises STATISTICS face detection (FULL preferred,
     // SIMPLE accepted). Powers the face boxes + face-steered continuous AF.

@@ -60,6 +60,13 @@ internal object LensProfileCodec {
         .apply {
             lens.readerUsage?.let { put("readerUsage", it) }
             if (lens.vendorGate.isNotEmpty()) put("vendorGate", lens.vendorGate)
+            lens.captureStream?.let {
+                put(
+                    "captureStream",
+                    JSONObject().put("format", it.format.wireName).put("width", it.width).put("height", it.height)
+                )
+            }
+            if (lens.captureBurst > 0) put("captureBurst", lens.captureBurst)
         }
 
     private fun decodeLens(o: JSONObject): LensProfile {
@@ -91,7 +98,11 @@ internal object LensProfileCodec {
             levels = if (!levels.isStatic && legacyLevels?.isStatic == true) legacyLevels else levels,
             vendorKeys = decodeKeys(o.optJSONArray("keys")) + decodeKeys(legacyDcg?.optJSONArray("keys")),
             readerUsage = o.optString("readerUsage").ifEmpty { null },
-            vendorGate = o.optString("vendorGate")
+            vendorGate = o.optString("vendorGate"),
+            captureStream = o.optJSONObject("captureStream")?.let {
+                RawStreamChoice(RawStreamFormat.fromWire(it.optString("format")), it.optInt("width"), it.optInt("height"))
+            }?.takeIf { it.width > 0 && it.height > 0 },
+            captureBurst = o.optInt("captureBurst").coerceIn(0, 30)
         )
     }
 

@@ -194,6 +194,7 @@ class FrameSubmitCoordinator final {
     // Three GPU slots + one ingress image + one unmatched image leave one
     // AImageReader lease free (maxImages=6) during ordinary preview operation.
     static constexpr size_t kMaxPairerImages = imaging::kMaxPairerImages;
+    static constexpr size_t kMaxPairerImagesFullSize = 3;  // of the viewfinder reader's 6
     static constexpr size_t kMaxPairerMetadata = imaging::kMaxPairerMetadata;
     void trimPairer();
 

@@ -21,6 +21,7 @@
 #include "capture/multiframe/MultiframeDescription.h"
 #include "capture/multiframe/MultiframeQueueHelpers.h"
 #include "capture/multiframe/RzslCaptureWriter.h"
+#include "capture/multiframe/StripMerge.h"
 #include "capture/multiframe/mfsr/MergeProcessor.h"
 #include "capture/persistence/CaptureJob.h"
 #include "capture/persistence/FrameRecipe.h"
@@ -55,6 +56,7 @@
 namespace rawrcam::capture::multiframe {
 namespace {
 constexpr const char* kTag = "RawrCamNative";
+constexpr std::uint64_t kStripMergePixels = 56'000'000;  // a 50 MP merge fits
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, kTag, __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, kTag, __VA_ARGS__)
 
@@ -102,7 +104,13 @@ void MfsrCaptureJob::runStages(Published& published) {
     auto baseDng = std::move(work->baseDng);
     auto mergedDng = std::move(work->mergedDng);
     auto mergedJpeg = std::move(work->mergedJpeg);
-    const bool jpegRequested = work->jpegRequested;
+    // A burst too large for one merge arena (vivo 200 MP: ~8 GB) merges in
+    // overlapping strips the size of a 50 MP merge, stitched on the CPU.
+    // DNG only: the merged CFA never exists on the GPU whole.
+    const auto strips = job && job->setRowWindow ? stripWindows(ctx.rawWidth, ctx.rawHeight, kStripMergePixels)
+                                                 : std::vector<StripWindow>{};
+    const bool stripMode = strips.size() > 1;
+    const bool jpegRequested = work->jpegRequested && !stripMode;
     const bool dumpRzslRequested = work->dumpRzslRequested;
     const auto tuning = [&] {
         // Super-resolution output must stay within the GPU's 2D image limit
@@ -248,6 +256,10 @@ void MfsrCaptureJob::runStages(Published& published) {
         done.error = error;
         publishJpeg(done);
     };
+    if (stripMode && work->jpegRequested) {
+        mergedJpeg.output.outputFd.reset();
+        failJpeg("strip_merge_dng_only");
+    }
     auto makeCaptured = [&](rawr::raw_multiframe_output::PackedRaw16 packed) {
         auto captured = std::make_shared<rawrcam::imaging::RawSnapshot>();
         captured->requestId = requestId;
@@ -345,10 +357,86 @@ void MfsrCaptureJob::runStages(Published& published) {
 
     std::optional<rawr::raw_gpu_pipeline::BurstRunResult> mergeResult;
     std::shared_ptr<rawrcam::imaging::RawSnapshot> mergedFrame;
+    // project_cfa_u16 indexes black by physical position (colour order in metadata).
+    // 16-bit merged DNG: widen codes so white maps to 65535 and the merge's
+    // sub-code precision survives; HDR+ also projects from its full-precision
+    // R32F CFA plane instead of the RGBA16F output.
+    auto projectionFor = [&](const rawr::raw_gpu_pipeline::BurstRunResult& merged) {
+        rawr::raw_multiframe_output::CfaProjectionParameters projection{};
+        projection.blackByPhase =
+            rawrcam::geometry::reorderRggbByCode(job->referenceMetadata.blackLevelPhysicalRggb, ctx.cfa);
+        projection.whiteLevel = job->referenceMetadata.effectiveWhiteLevel;
+        projection.cfa = ctx.cfa;
+        projection.codeScale = rawr::raw_multiframe_output::sixteenBitCodeScale(projection.whiteLevel);
+        projection.sourceIsCfaR32f = merged.cfaView != VK_NULL_HANDLE;
+        return projection;
+    };
+    auto projectMerged = [&](const rawr::raw_gpu_pipeline::BurstRunResult& merged) {
+        const auto projection = projectionFor(merged);
+        return projection.sourceIsCfaR32f ? outputAdapter.projectMerged(merged.cfaImage, merged.cfaView, projection)
+                                          : outputAdapter.projectMerged(merged.output, merged.outputView, projection);
+    };
+    std::optional<rawr::raw_multiframe_output::PackedRaw16> stitched;
     try {
         auto& coordinator = ctx.burstCoordinator;
-        mergeResult = MergeProcessor::run(ctx.vulkan, coordinator, *job, ctx.rawWidth, ctx.rawHeight, ctx.cfa, tuning,
-                                          dumpRzslRequested, queueSubmit, mergeSubmit);
+        if (stripMode) {
+            // Each window: its rows of every frame from the journal, merged and
+            // projected like a whole burst, then crossfaded into the full CFA.
+            const auto stripsBegin = std::chrono::steady_clock::now();
+            rawr::raw_multiframe_output::PackedRaw16 packed;
+            packed.width = ctx.rawWidth;
+            packed.height = ctx.rawHeight;
+            packed.rowStrideBytes = ctx.rawWidth * sizeof(std::uint16_t);
+            packed.pixels.resize(std::size_t(packed.rowStrideBytes) * ctx.rawHeight);
+            auto* full = reinterpret_cast<std::uint16_t*>(packed.pixels.data());
+            const auto hotPixels = job->referenceMetadata.hotPixelMap;
+            rawr::raw_gpu_pipeline::BurstStageTimings total{};
+            for (const auto& window : strips) {
+                job->setRowWindow(window.y0, window.rows);
+                auto& stripHot = job->referenceMetadata.hotPixelMap;
+                stripHot.clear();
+                for (std::size_t i = 0; i + 1 < hotPixels.size(); i += 2)
+                    if (hotPixels[i + 1] >= int32_t(window.y0) && hotPixels[i + 1] < int32_t(window.y0 + window.rows)) {
+                        stripHot.push_back(hotPixels[i]);
+                        stripHot.push_back(hotPixels[i + 1] - int32_t(window.y0));
+                    }
+                auto merged = MergeProcessor::run(ctx.vulkan, coordinator, *job, ctx.rawWidth, window.rows, ctx.cfa,
+                                                  tuning, false, queueSubmit, mergeSubmit);
+                if (!outputAdapterReady) {
+                    outputAdapter.initialize(ctx.vulkan.physicalDevice(), ctx.vulkan.device(),
+                                             ctx.vulkan.queueFamily(), mergeSubmit, ctx.rawWidth, window.rows);
+                    outputAdapterReady = true;
+                }
+                const auto projectBegin = std::chrono::steady_clock::now();
+                const auto packed = projectMerged(merged);
+                projectMs += wallMs(projectBegin);
+                writeStrip(full, ctx.rawWidth, window, reinterpret_cast<const std::uint16_t*>(packed.pixels.data()));
+                const auto& t = merged.timings;
+                total.initializeMs += t.initializeMs;
+                total.noiseEstimateMs += t.noiseEstimateMs;
+                total.referencePrepareMs += t.referencePrepareMs;
+                total.referenceStatsMs += t.referenceStatsMs;
+                total.companionPrepareMs += t.companionPrepareMs;
+                total.alignmentMs += t.alignmentMs;
+                total.kernelStatsMs += t.kernelStatsMs;
+                total.robustnessMs += t.robustnessMs;
+                total.accumulationMs += t.accumulationMs;
+                total.finalizeMs += t.finalizeMs;
+                total.totalMs += t.totalMs;
+                LOGI("MULTIFRAME_STRIP y0=%u rows=%u write=%u..%u blend=%u mergeMs=%.1f", window.y0, window.rows,
+                     window.writeBegin, window.writeEnd, window.blendEnd - window.writeBegin, t.totalMs);
+                mergeResult = std::move(merged);
+            }
+            job->referenceMetadata.hotPixelMap = hotPixels;
+            job->setRowWindow(0, 0);
+            mergeResult->timings = total;
+            mergeResult->outputExtent = {ctx.rawWidth, ctx.rawHeight};
+            stitched = std::move(packed);
+            LOGI("MULTIFRAME_STRIPS count=%zu totalMs=%.1f", strips.size(), wallMs(stripsBegin));
+        } else {
+            mergeResult = MergeProcessor::run(ctx.vulkan, coordinator, *job, ctx.rawWidth, ctx.rawHeight, ctx.cfa,
+                                              tuning, dumpRzslRequested, queueSubmit, mergeSubmit);
+        }
         // Merge timings feed both horizons (merged DNG and JPEG). Populate
         // here — not inside the merged-DNG gate below — so JPEG-only captures
         // (no merged DNG requested) still report the merge/alignment stages
@@ -397,7 +485,7 @@ void MfsrCaptureJob::runStages(Published& published) {
                            mergeResult->frameCount,
                            static_cast<int64_t>((mergeResult->physicalImageBytes * 1000ull) / (1024ull * 1024ull)));
 
-        try {
+        if (!stripMode) try {
             // Projection reads merge-arena output: keep it on the merge queue
             // so no cross-queue handoff is needed (host fence covers readback).
             outputAdapter.initialize(ctx.vulkan.physicalDevice(), ctx.vulkan.device(), ctx.vulkan.queueFamily(),
@@ -409,24 +497,10 @@ void MfsrCaptureJob::runStages(Published& published) {
 
         if (mergedRequested && outputAdapterReady) {
             try {
-                rawr::raw_multiframe_output::CfaProjectionParameters projection{};
-                // project_cfa_u16 indexes black by physical position (colour order in metadata).
-                projection.blackByPhase =
-                    rawrcam::geometry::reorderRggbByCode(job->referenceMetadata.blackLevelPhysicalRggb, ctx.cfa);
-                projection.whiteLevel = job->referenceMetadata.effectiveWhiteLevel;
-                projection.cfa = ctx.cfa;
-                // 16-bit merged DNG: widen codes so white maps to 65535 and the
-                // merge's sub-code precision survives; HDR+ also projects from its
-                // full-precision R32F CFA plane instead of the RGBA16F output.
-                projection.codeScale =
-                    rawr::raw_multiframe_output::sixteenBitCodeScale(projection.whiteLevel);
-                projection.sourceIsCfaR32f = mergeResult->cfaView != VK_NULL_HANDLE;
+                const auto projection = projectionFor(*mergeResult);
                 const auto projectBegin = std::chrono::steady_clock::now();
-                auto mergedPacked =
-                    projection.sourceIsCfaR32f
-                        ? outputAdapter.projectMerged(mergeResult->cfaImage, mergeResult->cfaView, projection)
-                        : outputAdapter.projectMerged(mergeResult->output, mergeResult->outputView, projection);
-                projectMs = wallMs(projectBegin);
+                auto mergedPacked = stitched ? std::move(*stitched) : projectMerged(*mergeResult);
+                if (!stitched) projectMs = wallMs(projectBegin);
                 mergedFrame = makeCaptured(std::move(mergedPacked));
                 // DNG BlackLevel/WhiteLevel follow the widened code range.
                 for (auto& black : mergedFrame->metadata.blackLevelPhysicalRggb) black *= projection.codeScale;
