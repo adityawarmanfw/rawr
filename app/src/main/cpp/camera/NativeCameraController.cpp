@@ -316,8 +316,23 @@ struct NativeCameraController::Impl final : CameraEventSink {
             return false;
         }
         const std::vector<CameraRequestPipeline::BracketExposure> exposures(count, e);
+        // The still is taken after the press (sensor switch + exposure): show it
+        // as a long exposure, so the shutter ring tells the user to hold still
+        // until the frame is in.
+        longExposureTag.store(requestId, std::memory_order_relaxed);
+        longExposureNs.store(e.exposureTimeNs, std::memory_order_relaxed);
+        longExposureStartMs.store(monotonicMs(), std::memory_order_relaxed);
+        longExposureSubmitted = std::chrono::steady_clock::now();
+        // The still would queue behind every in-flight preview request (~0.6 s
+        // at 15 fps): discard those first, then resume the preview behind it.
+        const camera_status_t aborted = ACameraCaptureSession_abortCaptures(deviceSession.session());
         const bool sent = deviceSession.captureFullSize(requests, control, exposures, requestId,
                                                         [this](const std::string& line) { diag(line); });
+        if (aborted == ACAMERA_OK) submitRepeatingLocked();
+        if (!sent) {
+            longExposureTag.store(0, std::memory_order_relaxed);
+            longExposureStartMs.store(-1, std::memory_order_relaxed);
+        }
         diag("CAMERA_FULL_SIZE_SUBMIT sent=" + std::to_string(sent ? 1 : 0) + " tag=" + std::to_string(requestId) +
              " count=" + std::to_string(count) + " exposureNs=" + std::to_string(e.exposureTimeNs) +
              " iso=" + std::to_string(e.sensitivity));
