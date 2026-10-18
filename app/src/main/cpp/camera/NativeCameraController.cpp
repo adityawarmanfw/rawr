@@ -323,12 +323,12 @@ struct NativeCameraController::Impl final : CameraEventSink {
         longExposureNs.store(e.exposureTimeNs, std::memory_order_relaxed);
         longExposureStartMs.store(monotonicMs(), std::memory_order_relaxed);
         longExposureSubmitted = std::chrono::steady_clock::now();
-        // The still would queue behind every in-flight preview request (~0.6 s
-        // at 15 fps): discard those first, then resume the preview behind it.
-        const camera_status_t aborted = ACameraCaptureSession_abortCaptures(deviceSession.session());
+        // The still queues behind the in-flight preview requests (~0.6 s at
+        // 15 fps on V2562). abortCaptures would skip them, but the camera then
+        // hands out new buffers, which the RAW import and descriptor caches
+        // can't absorb shot after shot.
         const bool sent = deviceSession.captureFullSize(requests, control, exposures, requestId,
                                                         [this](const std::string& line) { diag(line); });
-        if (aborted == ACAMERA_OK) submitRepeatingLocked();
         if (!sent) {
             longExposureTag.store(0, std::memory_order_relaxed);
             longExposureStartMs.store(-1, std::memory_order_relaxed);
