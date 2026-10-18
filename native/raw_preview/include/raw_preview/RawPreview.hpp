@@ -130,6 +130,9 @@ public:
     RawPreview& operator=(const RawPreview&) = delete;
     // Records commands only; caller owns submission and synchronization.
     RawPreviewRecordResult record(const RawPreviewRecordInfo&);
+    // Frees the cached descriptor sets that bind this camera input (view or
+    // import buffer) once it can no longer be in flight.
+    void forgetInput(VkImageView inputView, VkBuffer importBuffer);
     size_t cachedDescriptorSetCount() const { return descriptorCache_.size(); }
 private:
     struct ViewPair { VkImageView input{}, output{}; VkBuffer import{}; bool operator==(const ViewPair& o) const { return input==o.input && output==o.output && import==o.import; } };

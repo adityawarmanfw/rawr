@@ -226,6 +226,7 @@ RawPreview::RawPreview(const RawPreviewCreateInfo& ci)
     VkDescriptorPoolSize poolSizes[2]{{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 384}, {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 256}};
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;  // forgetInput frees sets
     poolInfo.maxSets = 128;
     poolInfo.poolSizeCount = 2;
     poolInfo.pPoolSizes = poolSizes;
@@ -466,6 +467,24 @@ RawPreview::LscBuffer& RawPreview::lscBufferFor(VkImageView outputView, size_t f
         it = (it->first.output == outputView) ? cfaStateDescriptorCache_.erase(it) : std::next(it);
     // Replacing an entry releases the smaller buffer it held.
     return lscBuffers_.insert_or_assign(outputView, std::move(b)).first->second;
+}
+
+void RawPreview::forgetInput(VkImageView inputView, VkBuffer importBuffer) {
+    const auto matches = [&](VkImageView input, VkBuffer import) {
+        return (inputView && input == inputView) || (importBuffer && import == importBuffer);
+    };
+    std::vector<VkDescriptorSet> sets;
+    for (auto it = descriptorCache_.begin(); it != descriptorCache_.end();) {
+        if (!matches(it->first.input, it->first.import)) { ++it; continue; }
+        sets.push_back(it->second);
+        it = descriptorCache_.erase(it);
+    }
+    for (auto it = cfaStateDescriptorCache_.begin(); it != cfaStateDescriptorCache_.end();) {
+        if (!matches(it->first.input, it->first.import)) { ++it; continue; }
+        sets.push_back(it->second);
+        it = cfaStateDescriptorCache_.erase(it);
+    }
+    if (!sets.empty()) vkFreeDescriptorSets(device_, pool_, uint32_t(sets.size()), sets.data());
 }
 
 RawPreviewRecordResult RawPreview::record(const RawPreviewRecordInfo& recordInfo) {

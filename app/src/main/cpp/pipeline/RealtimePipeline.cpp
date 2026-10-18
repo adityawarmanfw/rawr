@@ -243,6 +243,10 @@ bool RealtimePipeline::configureGeometry(uint64_t generation, uint32_t width, ui
                 rawCreate.conditionalRendering = false;
         }
         rawPreview_ = std::make_unique<raw_preview::RawPreview>(rawCreate);
+        if (rawAhbImporter_)
+            rawAhbImporter_->setEvictListener([preview = rawPreview_.get()](const vulkan::ImportedRaw& raw) {
+                preview->forgetInput(raw.view, raw.importBuffer);
+            });
         try {
             localTone_ = std::make_unique<rawr::local_tone::ExposureFusionProcessor>(
                 rawr::vk::GpuContext{vulkanContext_.physicalDevice(), vulkanContext_.device(),
@@ -408,6 +412,7 @@ void RealtimePipeline::destroyCameraResources(bool preserveHqStill, bool teardow
     rawIntegrityProbe_.reset();
     pipelineDiagnostics_.reset();
     monitoring_.reset();
+    if (rawAhbImporter_) rawAhbImporter_->setEvictListener({});
     rawPreview_.reset();
     look_.clearProcessing(teardownFilm);
     frameSlots_.destroyImages();

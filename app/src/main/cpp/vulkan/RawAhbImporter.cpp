@@ -86,8 +86,12 @@ ImportedRaw& RawAhbImporter::import(AHardwareBuffer* ahb, uint32_t rawWidth_, ui
                                     VkImageUsageFlags imageUsage, RawImportOptions options) {
     const uintptr_t key = reinterpret_cast<uintptr_t>(ahb);
     auto it = imported_.find(key);
-    if (it != imported_.end()) return it->second.raw;
+    if (it != imported_.end()) {
+        touch(key);
+        return it->second.raw;
+    }
 
+    evictIdleEntry();
     Entry entry = newEntry(ahb, rawWidth_, rawHeight_);
     ImportedRaw& r = entry.raw;
 
@@ -229,6 +233,7 @@ ImportedRaw& RawAhbImporter::import(AHardwareBuffer* ahb, uint32_t rawWidth_, ui
 
     if (options.afterImport) options.afterImport(facts, r, entry.objects);
 
+    touch(key);
     auto inserted = imported_.emplace(key, std::move(entry));
     const ImportedRaw& cached = inserted.first->second.raw;
     std::ostringstream ok;
@@ -344,9 +349,32 @@ ImportedRaw& RawAhbImporter::importRaw16Buffer(AHardwareBuffer* ahb, uint32_t ex
 ImportedRaw& RawAhbImporter::bufferEntry(AHardwareBuffer* ahb, uint32_t expectedWidth, uint32_t expectedHeight) {
     const uintptr_t key = reinterpret_cast<uintptr_t>(ahb);
     auto it = imported_.find(key);
-    if (it == imported_.end()) it = imported_.emplace(key, newEntry(ahb, expectedWidth, expectedHeight)).first;
+    if (it == imported_.end()) {
+        evictIdleEntry();
+        it = imported_.emplace(key, newEntry(ahb, expectedWidth, expectedHeight)).first;
+    }
+    touch(key);
     return it->second.raw;
 }
 
-void RawAhbImporter::clear() noexcept { imported_.clear(); }
+void RawAhbImporter::clear() noexcept {
+    imported_.clear();
+    lastUse_.clear();
+}
+void RawAhbImporter::touch(uintptr_t key) { lastUse_[key] = std::chrono::steady_clock::now(); }
+void RawAhbImporter::evictIdleEntry() {
+    if (imported_.size() < 16u) return;
+    constexpr auto kIdle = std::chrono::seconds(1);  // far longer than any in-flight frame
+    auto oldest = lastUse_.end();
+    for (auto it = lastUse_.begin(); it != lastUse_.end(); ++it)
+        if (oldest == lastUse_.end() || it->second < oldest->second) oldest = it;
+    if (oldest == lastUse_.end() || std::chrono::steady_clock::now() - oldest->second < kIdle) return;
+    const auto entry = imported_.find(oldest->first);
+    if (entry != imported_.end()) {
+        if (evictListener_) evictListener_(entry->second.raw);
+        imported_.erase(entry);
+    }
+    lastUse_.erase(oldest);
+    if (diagnostic_) diagnostic_("RAW_AHB_IMPORT_EVICTED remaining=" + std::to_string(imported_.size()));
+}
 }  // namespace rawrcam::vulkan
