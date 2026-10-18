@@ -318,7 +318,8 @@ internal fun LongExposureNotice(state: LongExposureUiState, orientation: Orienta
     val text = when {
         active -> {
             val remainingMs = (state.activeNs / 1_000_000L - (now - state.startMs)).coerceAtLeast(0L)
-            if (remainingMs > 0L) "%.1f s".format(remainingMs / 1000.0) else "Saving…"
+            // Shown until the frame is in (a full-size still waits for the sensor switch).
+            if (remainingMs > 0L) "%.1f s".format(remainingMs / 1000.0) else "Capturing…"
         }
         state.deferredNs > 0L -> buildString {
             append("Long exposure · ")
