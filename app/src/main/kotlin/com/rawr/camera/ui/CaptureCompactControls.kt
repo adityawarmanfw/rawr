@@ -3,6 +3,7 @@ package com.rawr.camera.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -14,13 +15,19 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import com.rawr.camera.architecture.CaptureDispatch
 import com.rawr.camera.architecture.CaptureFilmEvent
+import com.rawr.camera.architecture.CaptureQuickEvent
 import com.rawr.camera.model.CaptureUiState
 import com.rawr.camera.model.ExposureParameter
 import com.rawr.camera.model.FilmSimQuickState
 import com.rawr.camera.model.RenderProfileQuickState
+import com.rawr.camera.model.ViewfinderQuickState
 
 /**
  * V2 compact control strip.
@@ -40,12 +47,57 @@ internal fun CompactViewfinderStrip(
     renderProfiles: RenderProfileQuickState = RenderProfileQuickState(),
     onSelectRenderProfile: (com.rawr.camera.model.RenderProfileSelection) -> Unit = {},
     filmQuick: FilmSimQuickState? = null,
-    onFilmEvent: (CaptureFilmEvent) -> Unit = {}
+    onFilmEvent: (CaptureFilmEvent) -> Unit = {},
+    quick: ViewfinderQuickState = ViewfinderQuickState(),
+    onQuickEvent: (CaptureQuickEvent) -> Unit = {},
+    /** Distance from the top of the control frame the rail must stay below (scopes). */
+    railTopLimit: Dp = 0.dp
+) {
+    val density = LocalDensity.current
+    val topLimitPx = with(density) { railTopLimit.roundToPx() }
+    // The rail floats directly above whatever the strip stack currently is, so
+    // multi-level strips push it up instead of overlapping it. It is measured
+    // after the stack and only gets the height left under the scopes.
+    BoxWithConstraints(modifier) {
+        // The AF cell is the last column of the param row below (row inset each side).
+        val afColumn = paramsCellWidths(maxWidth - CaptureDimens.CompactParamRowEdgeInset * 2).last()
+        Layout(
+            content = {
+                CompactStripStack(state, dispatch, forceTonemapStrip, renderProfiles, onSelectRenderProfile, filmQuick, onFilmEvent)
+                ViewfinderQuickRail(quick, state.spotAe.active, onQuickEvent, chipWidth = afColumn)
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) { measurables, constraints ->
+            val stack = measurables[0].measure(constraints.copy(minHeight = 0))
+            val room = if (constraints.hasBoundedHeight) {
+                (constraints.maxHeight - topLimitPx - stack.height).coerceAtLeast(0)
+            } else {
+                androidx.compose.ui.unit.Constraints.Infinity
+            }
+            val rail = measurables[1].measure(constraints.copy(minWidth = 0, minHeight = 0, maxHeight = room))
+            val height = stack.height + rail.height
+            layout(stack.width, height) {
+                stack.place(0, height - stack.height)
+                rail.place(stack.width - rail.width, 0)
+            }
+        }
+    }
+}
+
+@Composable
+private fun CompactStripStack(
+    state: CaptureUiState,
+    dispatch: CaptureDispatch,
+    forceTonemapStrip: Boolean,
+    renderProfiles: RenderProfileQuickState,
+    onSelectRenderProfile: (com.rawr.camera.model.RenderProfileSelection) -> Unit,
+    filmQuick: FilmSimQuickState?,
+    onFilmEvent: (CaptureFilmEvent) -> Unit
 ) {
     // No scrim: legibility on bright and dark scenes comes from drop shadows
     // on every glyph instead of a background wash.
     Column(
-        modifier.pointerInput(Unit) {
+        Modifier.pointerInput(Unit) {
             // Swallow plain taps so they never fall through to tap-to-focus;
             // the buttons handle their own scrub/long-press/double-tap.
             detectTapGestures(onTap = {})

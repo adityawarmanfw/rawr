@@ -11,6 +11,8 @@ import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import com.rawr.camera.architecture.CaptureDispatch
 import com.rawr.camera.architecture.CaptureFilmEvent
+import com.rawr.camera.architecture.CaptureQuickEvent
+import com.rawr.camera.model.ViewfinderQuickState
 import com.rawr.camera.model.CaptureControlLayout
 import com.rawr.camera.model.CaptureMode
 import com.rawr.camera.model.CaptureUiState
@@ -41,6 +43,8 @@ internal fun PhysicalCaptureLayout(
     modifier: Modifier,
     filmQuick: FilmSimQuickState? = null,
     onFilmEvent: (CaptureFilmEvent) -> Unit = {},
+    quick: ViewfinderQuickState = ViewfinderQuickState(),
+    onQuickEvent: (CaptureQuickEvent) -> Unit = {},
     videoControls: VideoControlState = VideoControlState(),
     onToggleVideoRecording: () -> Unit = {}
 ) {
@@ -82,7 +86,9 @@ internal fun PhysicalCaptureLayout(
                     forceCompact = isVideo,
                     forceTonemapStrip = isVideo,
                     filmQuick = filmQuick,
-                    onFilmEvent = onFilmEvent
+                    onFilmEvent = onFilmEvent,
+                    quick = quick.copy(locked = isVideo && videoLocked),
+                    onQuickEvent = onQuickEvent
                 )
                 if (isVideo && videoControls.recording) {
                     VideoRecordTimer(

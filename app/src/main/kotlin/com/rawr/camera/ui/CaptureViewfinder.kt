@@ -10,9 +10,11 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
@@ -20,6 +22,7 @@ import com.rawr.camera.architecture.ActivateSpotAe
 import com.rawr.camera.architecture.CancelSelfTimer
 import com.rawr.camera.architecture.CaptureDispatch
 import com.rawr.camera.architecture.CaptureFilmEvent
+import com.rawr.camera.architecture.CaptureQuickEvent
 import com.rawr.camera.architecture.CloseFocusSelector
 import com.rawr.camera.architecture.FocusAt
 import com.rawr.camera.architecture.ToggleMonitorPanel
@@ -45,7 +48,9 @@ internal fun CaptureViewfinder(
     /** Forces the compact strip content (used by the video overlay regardless of layout). */
     forceCompact: Boolean = false,
     filmQuick: FilmSimQuickState? = null,
-    onFilmEvent: (CaptureFilmEvent) -> Unit = {}
+    onFilmEvent: (CaptureFilmEvent) -> Unit = {},
+    quick: ViewfinderQuickState = ViewfinderQuickState(),
+    onQuickEvent: (CaptureQuickEvent) -> Unit = {}
 ) {
     val haptics = LocalCaptureHaptics.current
     Box(
@@ -68,6 +73,16 @@ internal fun CaptureViewfinder(
             state.focus.selectorOpen && !state.monitorPanelOpen &&
                 !state.whiteBalancePanelOpen
         val modalOpen = state.monitorPanelOpen || state.whiteBalancePanelOpen
+        // The rail shares the right edge with the compact scopes; keep it below them.
+        val density = LocalDensity.current
+        val railTopLimit = with(density) {
+            val bottom = rightScopeBottom(
+                viewfinderSize.width.toDp(), viewfinderSize.height.toDp(),
+                state.orientation == Orientation.Landscape, state.activeScopes.size,
+                preview.deviceRotationDegrees
+            )
+            if (bottom > 0.dp) bottom + 6.dp else 0.dp
+        }
         val popupOpen = focusOnly || modalOpen
         Box(
             Modifier
@@ -131,7 +146,10 @@ internal fun CaptureViewfinder(
                 forceCompact = forceCompact,
                 forceTonemapStrip = forceTonemapStrip,
                 filmQuick = filmQuick,
-                onFilmEvent = onFilmEvent
+                onFilmEvent = onFilmEvent,
+                quick = quick,
+                onQuickEvent = onQuickEvent,
+                railTopLimit = railTopLimit
             )
         }
 
@@ -222,7 +240,10 @@ internal fun ViewfinderBottomSlot(
     forceCompact: Boolean = false,
     forceTonemapStrip: Boolean = false,
     filmQuick: FilmSimQuickState? = null,
-    onFilmEvent: (CaptureFilmEvent) -> Unit = {}
+    onFilmEvent: (CaptureFilmEvent) -> Unit = {},
+    quick: ViewfinderQuickState = ViewfinderQuickState(),
+    onQuickEvent: (CaptureQuickEvent) -> Unit = {},
+    railTopLimit: Dp = 0.dp
 ) {
     Column(
         modifier,
@@ -245,7 +266,10 @@ internal fun ViewfinderBottomSlot(
                 renderProfiles = renderProfiles,
                 onSelectRenderProfile = onSelectRenderProfile,
                 filmQuick = filmQuick,
-                onFilmEvent = onFilmEvent
+                onFilmEvent = onFilmEvent,
+                quick = quick,
+                onQuickEvent = onQuickEvent,
+                railTopLimit = railTopLimit
             )
         } else {
             QuickControlsRow(state, dispatch)

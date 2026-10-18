@@ -7,6 +7,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.rawr.camera.architecture.CaptureFilmEvent
+import com.rawr.camera.architecture.CaptureQuickEvent
+import com.rawr.camera.model.ViewfinderQuickState
 import com.rawr.camera.architecture.CaptureScreenController
 import com.rawr.camera.architecture.SetOrientation
 import com.rawr.camera.integration.RawPreviewCoordinator
@@ -31,6 +33,8 @@ fun CaptureRoute(
     onOpenMultiframeSettings: () -> Unit = {},
     filmQuick: FilmSimQuickState? = null,
     onFilmEvent: (CaptureFilmEvent) -> Unit,
+    quick: ViewfinderQuickState = ViewfinderQuickState(),
+    onQuickEvent: (CaptureQuickEvent) -> Unit = {},
     videoControls: VideoControlState = VideoControlState(),
     onToggleVideoRecording: () -> Unit
 ) {
@@ -107,6 +111,8 @@ fun CaptureRoute(
         onOpenMultiframeSettings = onOpenMultiframeSettings,
         filmQuick = filmQuick,
         onFilmEvent = onFilmEvent,
+        quick = quick,
+        onQuickEvent = onQuickEvent,
         videoControls = videoControls,
         onToggleVideoRecording = onToggleVideoRecording
     )

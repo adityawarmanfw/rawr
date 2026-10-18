@@ -102,3 +102,22 @@ internal fun calculateScopeGeometry(
             }
     )
 }
+
+/**
+ * Lowest edge of the compact scopes in the right half of the viewfinder, or 0
+ * when none sit there. The viewfinder rail stays below it.
+ */
+internal fun rightScopeBottom(
+    maxWidth: androidx.compose.ui.unit.Dp,
+    maxHeight: androidx.compose.ui.unit.Dp,
+    landscape: Boolean,
+    scopeCount: Int,
+    deviceRotationDegrees: Int
+): androidx.compose.ui.unit.Dp {
+    var bottom = 0.dp
+    repeat(scopeCount.coerceAtMost(3)) { index ->
+        val g = calculateScopeGeometry(maxWidth, maxHeight, landscape, scopeCount, index, false, deviceRotationDegrees)
+        if (g.x + g.physicalWidth / 2 > maxWidth / 2) bottom = maxOf(bottom, g.y + g.physicalHeight)
+    }
+    return bottom
+}

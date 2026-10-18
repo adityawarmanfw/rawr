@@ -59,6 +59,14 @@ object CaptureTestTags {
     const val FILM_STRIP_BACK = "capture_film_strip_back"
     const val FILM_STRIP_SECTION_ROW = "capture_film_strip_sections"
 
+    const val RAIL_AE = "capture_rail_ae"
+    const val RAIL_METERING = "capture_rail_metering"
+    const val RAIL_HIGHLIGHT = "capture_rail_highlight"
+
+    const val RAIL_HIGHLIGHT_MODE = "capture_rail_highlight_mode"
+    const val RAIL_HIGHLIGHT_THRESHOLD = "capture_rail_highlight_threshold"
+    const val RAIL_HIGHLIGHT_COMPRESSION = "capture_rail_highlight_compression"
+
     const val TONEMAP_STRIP = "capture_tonemap_strip"
     const val TONEMAP_STRIP_PROFILE = "capture_tonemap_strip_profile"
     const val TONEMAP_STRIP_PARAMS = "capture_tonemap_strip_params"
