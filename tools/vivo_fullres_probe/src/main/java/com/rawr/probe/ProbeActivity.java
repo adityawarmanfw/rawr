@@ -316,7 +316,10 @@ public final class ProbeActivity extends Activity {
         final String[] error = new String[1];
         final int[] previews = new int[1];
         final File[] saved = new File[2];
-        final ImageReader preview = ImageReader.newInstance(1440, 1080, ImageFormat.YUV_420_888, 4);
+        // --ei pvw / pvh: YUV preview size; --ez pvyuvoff: the YUV is configured but not a repeating target
+        final ImageReader preview = ImageReader.newInstance(getIntent().getIntExtra("pvw", 1440), getIntent().getIntExtra("pvh", 1080),
+                ImageFormat.YUV_420_888, 4);
+        final boolean previewYuvOff = getIntent().getBooleanExtra("pvyuvoff", false);
         // --el fullusage N: the full-size RAW reader's usage (the stock stream: 0x131075 combined; 0 = no CPU flags)
         final long fullUsage = getIntent().getLongExtra("fullusage", 0L);
         final int burst = getIntent().getIntExtra("burst", 1);  // --ei burst N: N back-to-back stills
@@ -334,7 +337,8 @@ public final class ProbeActivity extends Activity {
                 : ImageReader.newInstance(fw, fh, ImageFormat.RAW_SENSOR, 2, fullUsage);
         meta.println("full RAW reader usage " + fullUsage + (fullUsage == 3 ? " (default CPU_READ_OFTEN)" : ""));
         final ImageReader yuvFull = ImageReader.newInstance(fw, fh, ImageFormat.YUV_420_888, 1);
-        final ImageReader rawBinned = ImageReader.newInstance(bw, bh, ImageFormat.RAW_SENSOR, 2, 0);
+        final ImageReader rawBinned = ImageReader.newInstance(bw, bh, ImageFormat.RAW_SENSOR, 2,
+                getIntent().getLongExtra("binnedusage", 0L));  // --el binnedusage
         try {
             preview.setOnImageAvailableListener(r -> { Image i = r.acquireNextImage(); if (i != null) { previews[0]++; i.close(); } }, h);
             yuvFull.setOnImageAvailableListener(r -> { Image i = r.acquireNextImage(); if (i != null) { meta.println("full YUV frame (unexpected)"); i.close(); } }, h);
@@ -425,7 +429,26 @@ public final class ProbeActivity extends Activity {
             meta.println("session configured");
 
             CaptureRequest.Builder pb = device[0].createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
-            if (!rawOnly) pb.addTarget(preview.getSurface());
+            if (!rawOnly && !previewYuvOff) pb.addTarget(preview.getSurface());
+            // --es rawrpv a,b: rawr's preview statistics settings (shading, hotmap, faces, nodist, nohot)
+            for (String opt : stringExtra("rawrpv", "").split(",")) {
+                switch (opt) {
+                    case "shading": pb.set(CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE, CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE_ON); break;
+                    case "hotmap": pb.set(CaptureRequest.STATISTICS_HOT_PIXEL_MAP_MODE, true); break;
+                    case "faces": pb.set(CaptureRequest.STATISTICS_FACE_DETECT_MODE, CaptureRequest.STATISTICS_FACE_DETECT_MODE_SIMPLE); break;
+                    case "nodist": pb.set(CaptureRequest.DISTORTION_CORRECTION_MODE, CaptureRequest.DISTORTION_CORRECTION_MODE_OFF); break;
+                    case "nohot": pb.set(CaptureRequest.HOT_PIXEL_MODE, CaptureRequest.HOT_PIXEL_MODE_OFF); break;
+                    case "aeoff":
+                        pb.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF);
+                        pb.set(CaptureRequest.SENSOR_EXPOSURE_TIME, 33_000_000L);
+                        pb.set(CaptureRequest.SENSOR_SENSITIVITY, 200);
+                        pb.set(CaptureRequest.SENSOR_FRAME_DURATION, 33_333_333L);
+                        break;
+                    case "prio": pb.set(new CaptureRequest.Key<>("android.control.aePriorityMode", int.class), 0); break;
+                    case "fps": pb.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, new android.util.Range<>(12, 30)); break;
+                    default: break;
+                }
+            }
             if (rawVf || rawOnly) pb.addTarget(rawBinned.getSurface());
             meta.println("rawvf=" + rawVf + " noyuv=" + noYuv + " burst=" + burst + " exps=" + exps);
             // --ef focus D: lens fixed at D diopters on the preview and the still (no AF)
