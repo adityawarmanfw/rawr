@@ -173,10 +173,14 @@ bool CameraRequestPipeline::captureAfTrigger(ACameraCaptureSession* session, con
                                                                : ACAMERA_CONTROL_AF_TRIGGER_CANCEL;
     if (ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AF_TRIGGER, 1, &value) != ACAMERA_OK) return false;
     // vivo's camera sequence: the cancel returns to continuous AF without
-    // regions; the start carries the tap region for AE as well as AF.
+    // regions; the start carries the tap region for AE as well as AF. A cancel
+    // into MF keeps the repeating request's AF off and lens distance: a
+    // continuous-AF frame would refocus away from the manual position.
     if (trigger == CameraFocusTrigger::Cancel) {
-        const uint8_t continuous = ACAMERA_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
-        (void)ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AF_MODE, 1, &continuous);
+        if (control.focusMode != FocusControlMode::Manual) {
+            const uint8_t continuous = ACAMERA_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
+            (void)ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AF_MODE, 1, &continuous);
+        }
         (void)ACaptureRequest_setEntry_i32(request, ACAMERA_CONTROL_AF_REGIONS, 0, nullptr);
     } else {
         ACameraMetadata_const_entry af{};

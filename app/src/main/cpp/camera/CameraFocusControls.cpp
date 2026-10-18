@@ -30,6 +30,8 @@ bool CameraFocusControls::requestManualFocus(CameraControlState& state, float no
     if (!std::isfinite(normalized) || !state.capabilities.manualFocusSupported) return false;
     state.requestedManualFocusNormalized = std::clamp(normalized, 0.0f, 1.0f);
     state.focusMode = FocusControlMode::Manual;
+    // Every scrub step lands here; only the first, leaving a live tap, cancels
+    // its scan (the HAL holds a finished AUTO scan's lens position until then).
     clearTap(state);
     return true;
 }
@@ -55,7 +57,9 @@ void CameraFocusControls::acceptTap(CameraControlState& state, const CameraTapFo
     trigger_ = CameraFocusTrigger::Start;
 }
 
-void CameraFocusControls::clearTap(CameraControlState& state) {
+void CameraFocusControls::clearTap(CameraControlState& state, bool cancelScan) {
+    // Only a tap still in play has a scan to cancel.
+    cancelScan = cancelScan && (state.tapAfActive || trigger_ == CameraFocusTrigger::Start);
     state.tapAfActive = false;
     tapPolicy_.clear();
     faceSteering_ = false;
@@ -67,7 +71,7 @@ void CameraFocusControls::clearTap(CameraControlState& state) {
         return;
     }
     region_.reset();
-    trigger_ = CameraFocusTrigger::Cancel;
+    trigger_ = cancelScan ? CameraFocusTrigger::Cancel : CameraFocusTrigger::Idle;
 }
 
 bool CameraFocusControls::expireTap(CameraControlState& state, int64_t nowMs) {
