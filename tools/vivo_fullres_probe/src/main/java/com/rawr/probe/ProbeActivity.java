@@ -195,7 +195,47 @@ public final class ProbeActivity extends Activity {
     private int stockAiHighRes = -1;  // --ei aihr
     private float stockZoom = 0f;  // --ef zoom: CONTROL_ZOOM_RATIO on every request (the stock app's 50 MP tele is camera 2 at 3.7)
 
+    private boolean stockMinKeys = false;  // --ez minkeys: only ai_highresolution (no pro-mode keys)
+
+    private java.util.Set<String> stockDrop = new java.util.HashSet<>();  // --es dropkeys a,b: stock keys left out
+
+    // --es pvdrop a,b: keys also left out of the repeating preview request only; --es sessdrop: of the session only
+    private java.util.Set<String> previewDrop = new java.util.HashSet<>(), sessionDrop = new java.util.HashSet<>();
+
+    private void previewKeys(CaptureRequest.Builder b) { keysWithout(b, previewDrop); }
+    private void sessionKeys(CaptureRequest.Builder b) { keysWithout(b, sessionDrop); }
+    private void keysWithout(CaptureRequest.Builder b, java.util.Set<String> extra) {
+        java.util.Set<String> saved = stockDrop;
+        stockDrop = new java.util.HashSet<>(saved);
+        stockDrop.addAll(extra);
+        if (stockDrop.isEmpty()) stockDrop.add("-");  // force the per-key path
+        try { stockSessionKeys(b); } finally { stockDrop = saved; }
+    }
+
     private void stockSessionKeys(CaptureRequest.Builder b) {
+        if (!stockDrop.isEmpty()) {
+            java.util.Map<String, int[]> keys = new java.util.LinkedHashMap<>();
+            keys.put("vivo.control.ultra_highresolution", new int[]{stockUltra});
+            keys.put("vivo.control.is_pro_mode", new int[]{1});
+            keys.put("vivo.control.is_ProRaw_on", new int[]{2});
+            keys.put("com.vivo.current_ui_module", new int[]{74});
+            keys.put("vivo.control.echo.mode", new int[]{2});
+            keys.put("vivo.control.scenery.subfunction", new int[]{5});
+            keys.put("vivo.control.session.uiSwitch_state", new int[]{2});
+            keys.put("vivo.control.streamsUsage", stockUsage);
+            for (java.util.Map.Entry<String, int[]> e : keys.entrySet()) {
+                String shortName = e.getKey().substring(e.getKey().lastIndexOf('.') + 1);
+                if (!stockDrop.contains(shortName)) setInt(b, e.getKey(), e.getValue());
+            }
+            if (!stockDrop.contains("camera_scenery_pro"))
+                setInt(b, "vivo.control.camera_scenery_pro", 1);  // as the full set (worked for stills)
+            if (stockAiHighRes >= 0) setInt(b, "vivo.control.ai_highresolution", stockAiHighRes);
+            return;
+        }
+        if (stockMinKeys) {
+            if (stockAiHighRes >= 0) setInt(b, "vivo.control.ai_highresolution", stockAiHighRes);
+            return;
+        }
         if (stockZoom > 0f) {
             b.set(CaptureRequest.CONTROL_ZOOM_RATIO, stockZoom);
             b.set(new CaptureRequest.Key<>("vivo.control.zoom_ratio", float[].class), new float[]{stockZoom});
@@ -226,6 +266,12 @@ public final class ProbeActivity extends Activity {
         stockUltra = getIntent().getIntExtra("ultra", 1);
         stockZoom = getIntent().getFloatExtra("zoom", 0f);
         stockAiHighRes = getIntent().getIntExtra("aihr", -1);
+        stockMinKeys = getIntent().getBooleanExtra("minkeys", false);
+        String drop = stringExtra("dropkeys", "");
+        if (!drop.isEmpty()) stockDrop.addAll(java.util.Arrays.asList(drop.split(",")));
+        String pvd = stringExtra("pvdrop", ""), ssd = stringExtra("sessdrop", "");
+        if (!pvd.isEmpty()) previewDrop.addAll(java.util.Arrays.asList(pvd.split(",")));
+        if (!ssd.isEmpty()) sessionDrop.addAll(java.util.Arrays.asList(ssd.split(",")));
         final String usage = stringExtra("usage", stockUltra == 1 ? "4,1,0,5" : "5,0,1,0,5,0");
         stockUsage = java.util.Arrays.stream(usage.split(",")).mapToInt(Integer::parseInt).toArray();
         final File dir = runDir("stock_cam" + cam);
@@ -274,6 +320,14 @@ public final class ProbeActivity extends Activity {
         // --el fullusage N: the full-size RAW reader's usage (the stock stream: 0x131075 combined; 0 = no CPU flags)
         final long fullUsage = getIntent().getLongExtra("fullusage", 0L);
         final int burst = getIntent().getIntExtra("burst", 1);  // --ei burst N: N back-to-back stills
+        // --ez rawvf: the binned RAW stream is the viewfinder (repeating target); every binned timestamp is logged
+        final boolean rawVf = getIntent().getBooleanExtra("rawvf", false);
+        final boolean noYuv = getIntent().getBooleanExtra("noyuv", false);  // --ez noyuv: no full-size YUV stream
+        // --ez rawonly: only the two RAW streams; the binned one is the viewfinder (as rawr streams)
+        final boolean rawOnly = getIntent().getBooleanExtra("rawonly", false);
+        final String exps = stringExtra("exps", "");  // --es exps a,b,..: per-still exposure (ns), cycled over the burst
+        final java.util.List<Long> binnedFrames = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+        final int[] fullIndex = {0};
         final java.util.List<Long> fullFrames = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
         final long[] burstT0 = {0};
         final ImageReader rawFull = fullUsage == 3 ? ImageReader.newInstance(fw, fh, ImageFormat.RAW_SENSOR, 2)
@@ -288,7 +342,32 @@ public final class ProbeActivity extends Activity {
                 Image img = r.acquireNextImage();
                 if (img == null) return;
                 final int slot = r == rawFull ? 0 : 1;
+                if (slot == 1 && (rawVf || rawOnly)) {
+                    binnedFrames.add(img.getTimestamp());
+                    img.close();
+                    return;
+                }
                 if (slot == 0) fullFrames.add(img.getTimestamp());
+                final int index = slot == 0 ? fullIndex[0]++ : 0;
+                if (slot == 0 && burst > 1 && index == burst - 1) {
+                    try {
+                        Image.Plane plane = img.getPlanes()[0];
+                        ByteBuffer buf = plane.getBuffer();
+                        int stride = plane.getRowStride();
+                        File out = new File(dir, "full_last_" + img.getWidth() + "x" + img.getHeight() + ".raw");
+                        try (FileOutputStream o = new FileOutputStream(out)) {
+                            byte[] line = new byte[img.getWidth() * 2];
+                            for (int y = 0; y < img.getHeight(); y++) { buf.position(y * stride); buf.get(line); o.write(line); }
+                        }
+                        meta.println("raw " + out.getName() + " ts=" + img.getTimestamp());
+                    } catch (Exception e) {
+                        meta.println("raw write failed: " + e);
+                    } finally {
+                        img.close();
+                        synchronized (lock) { lock.notifyAll(); }
+                    }
+                    return;
+                }
                 if (saved[slot] != null) {  // burst: keep only the first frame of each stream
                     meta.println("raw " + (slot == 0 ? "full" : "binned") + " frame ts=" + img.getTimestamp() + " at " + (SystemClock.elapsedRealtime() - burstT0[0]) + "ms");
                     img.close();
@@ -313,7 +392,9 @@ public final class ProbeActivity extends Activity {
                     synchronized (lock) { lock.notifyAll(); }
                 }
             };
-            rawFull.setOnImageAvailableListener(rawSaver, h);
+            HandlerThread writer = new HandlerThread("probe-writer");
+            writer.start();
+            rawFull.setOnImageAvailableListener(rawSaver, new Handler(writer.getLooper()));
             rawBinned.setOnImageAvailableListener(rawSaver, h);
 
             CameraManager manager = getSystemService(CameraManager.class);
@@ -326,9 +407,12 @@ public final class ProbeActivity extends Activity {
             if (device[0] == null) throw new IllegalStateException("open failed: " + error[0]);
 
             CaptureRequest.Builder sb = device[0].createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
-            stockSessionKeys(sb);
+            if (sessionDrop.isEmpty()) stockSessionKeys(sb); else sessionKeys(sb);
             SessionConfiguration config = new SessionConfiguration(SessionConfiguration.SESSION_REGULAR,
-                    java.util.Arrays.asList(new OutputConfiguration(preview.getSurface()), new OutputConfiguration(rawFull.getSurface()),
+                rawOnly ? java.util.Arrays.asList(new OutputConfiguration(rawFull.getSurface()), new OutputConfiguration(rawBinned.getSurface()))
+                : noYuv ? java.util.Arrays.asList(new OutputConfiguration(preview.getSurface()), new OutputConfiguration(rawFull.getSurface()),
+                            new OutputConfiguration(rawBinned.getSurface()))
+                      : java.util.Arrays.asList(new OutputConfiguration(preview.getSurface()), new OutputConfiguration(rawFull.getSurface()),
                             new OutputConfiguration(yuvFull.getSurface()), new OutputConfiguration(rawBinned.getSurface())),
                     h::post, new CameraCaptureSession.StateCallback() {
                         @Override public void onConfigured(CameraCaptureSession s) { synchronized (lock) { session[0] = s; lock.notifyAll(); } }
@@ -341,7 +425,9 @@ public final class ProbeActivity extends Activity {
             meta.println("session configured");
 
             CaptureRequest.Builder pb = device[0].createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
-            pb.addTarget(preview.getSurface());
+            if (!rawOnly) pb.addTarget(preview.getSurface());
+            if (rawVf || rawOnly) pb.addTarget(rawBinned.getSurface());
+            meta.println("rawvf=" + rawVf + " noyuv=" + noYuv + " burst=" + burst + " exps=" + exps);
             // --ef focus D: lens fixed at D diopters on the preview and the still (no AF)
             final float fixedFocus = getIntent().getFloatExtra("focus", -1f);
             if (fixedFocus >= 0) {
@@ -362,12 +448,21 @@ public final class ProbeActivity extends Activity {
                 pb.set(CaptureRequest.CONTROL_AF_REGIONS, region);
                 meta.println("AF region " + region[0]);
             }
-            setInt(pb, "vivo.control.ultra_highresolution", stockUltra);
-            if (getIntent().getBooleanExtra("allkeys", true)) stockSessionKeys(pb);  // the stock app repeats them on every request
+            if (!stockMinKeys && stockDrop.isEmpty()) setInt(pb, "vivo.control.ultra_highresolution", stockUltra);
+            if (getIntent().getBooleanExtra("allkeys", true)) {  // the stock app repeats them on every request
+                if (previewDrop.isEmpty()) stockSessionKeys(pb); else previewKeys(pb);
+            }
             final Float[] focus = {null};
+            final int[] lost = {0};
             session[0].setRepeatingRequest(pb.build(), new CameraCaptureSession.CaptureCallback() {
                 @Override public void onCaptureCompleted(CameraCaptureSession s, CaptureRequest r, TotalCaptureResult res) {
                     focus[0] = res.get(CaptureResult.LENS_FOCUS_DISTANCE);
+                }
+                @Override public void onCaptureBufferLost(CameraCaptureSession s, CaptureRequest r, android.view.Surface t, long f) {
+                    if (lost[0]++ < 3) meta.println("preview buffer lost frame " + f + (t == rawBinned.getSurface() ? " (binned RAW)" : ""));
+                }
+                @Override public void onCaptureFailed(CameraCaptureSession s, CaptureRequest r, CaptureFailure f) {
+                    if (lost[0]++ < 3) meta.println("preview capture failed reason=" + f.getReason());
                 }
             }, h);
             SystemClock.sleep(3000);
@@ -384,7 +479,7 @@ public final class ProbeActivity extends Activity {
             still.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF);
             if (fixedFocus >= 0) still.set(CaptureRequest.LENS_FOCUS_DISTANCE, fixedFocus);
             else if (focus[0] != null) still.set(CaptureRequest.LENS_FOCUS_DISTANCE, focus[0]);
-            setInt(still, "vivo.control.ultra_highresolution", stockUltra);
+            if (!stockMinKeys && stockDrop.isEmpty()) setInt(still, "vivo.control.ultra_highresolution", stockUltra);
             if (getIntent().getBooleanExtra("allkeys", true)) stockSessionKeys(still);
             // the stock app's still keys (cmd media.camera watch, 2026-10-17): a DNG-only seamless 200 MP capture
             if (getIntent().getBooleanExtra("stillkeys", true)) {
@@ -407,6 +502,12 @@ public final class ProbeActivity extends Activity {
                 still.set(new CaptureRequest.Key<>("vivo.control.requestId", long[].class), new long[]{id});
                 still.set(new CaptureRequest.Key<>("vivo.control.globalCaptureId", long[].class), new long[]{id + 5});
                 still.set(new CaptureRequest.Key<>("vivo.control.frameFlag", long[].class), new long[]{id});
+                if (!exps.isEmpty()) {
+                    String[] e = exps.split(",");
+                    long ns = Long.parseLong(e[i % e.length]);
+                    still.set(CaptureRequest.SENSOR_EXPOSURE_TIME, ns);
+                    still.set(CaptureRequest.SENSOR_FRAME_DURATION, Math.max(ns, 33_333_333L));
+                }
                 stills.add(still.build());
             }
             session[0].captureBurst(stills, new CameraCaptureSession.CaptureCallback() {
@@ -423,11 +524,18 @@ public final class ProbeActivity extends Activity {
             }, h);
             final long deadline = SystemClock.elapsedRealtime() + 30000;
             synchronized (lock) {
-                while ((saved[0] == null || saved[1] == null || fullFrames.size() < burst) && error[0] == null
+                while ((saved[0] == null || (saved[1] == null && !rawVf && !rawOnly) || fullFrames.size() < burst) && error[0] == null
                         && SystemClock.elapsedRealtime() < deadline)
                     lock.wait(1000);
             }
             meta.println("full frames " + fullFrames.size() + "/" + burst + " ts=" + fullFrames);
+            if (rawVf || rawOnly) {
+                SystemClock.sleep(500);  // viewfinder frames after the burst
+                java.util.List<Long> b = new java.util.ArrayList<>(binnedFrames);
+                StringBuilder gaps = new StringBuilder();
+                for (int i = 1; i < b.size(); i++) gaps.append((b.get(i) - b.get(i - 1)) / 100_000 / 10.0).append(fullFrames.contains(b.get(i)) ? "*" : "").append(' ');
+                meta.println("viewfinder frames " + b.size() + " gaps ms (* = burst frame): " + gaps);
+            }
             meta.println("full=" + saved[0] + " binned=" + saved[1] + " previews total=" + previews[0] + " error=" + error[0]
                     + " took=" + (SystemClock.elapsedRealtime() - t0) + "ms");
             try { session[0].stopRepeating(); } catch (Exception ignored) { }
