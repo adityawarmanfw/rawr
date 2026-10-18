@@ -12,6 +12,7 @@
 #include "vulkan/VulkanContext.h"
 
 namespace rawrcam::capture::persistence {
+
 namespace {
 void check(VkResult r) {
     if (r != VK_SUCCESS) throw std::runtime_error("capture_job_vulkan_" + std::to_string(r));
@@ -54,6 +55,21 @@ void saveBurst(const std::string& path, multiframe::MultiframeWorkItem& work, co
     job.referenceIndex = burst.referenceIndex;
     job.metadata = burst.metadata;
     for (auto& f : burst.frames) job.parameters.push_back(f.parameters);
+    // CPU-held frames are journaled straight from their source (no GPU readback).
+    if (burst.cpuFrame) {
+        double readMs = 0.0;
+        save(path, job, std::function<void(size_t, std::vector<uint8_t>&)>([&](size_t i, std::vector<uint8_t>& pixels) {
+            const auto begin = std::chrono::steady_clock::now();
+            burst.cpuFrame(i, pixels);
+            readMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
+        }));
+        const double totalMs =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+        __android_log_print(ANDROID_LOG_INFO, "RawrCamNative",
+            "BURST_SAVE requestId=%llu frames=%zu source=cpu totalMs=%.1f readMs=%.1f",
+            static_cast<unsigned long long>(work.requestId), burst.frames.size(), totalMs, readMs);
+        return;
+    }
     rawr::raw_multiframe_output::MultiframeOutputAdapter adapter;
     adapter.initialize(
         vk.physicalDevice(), vk.device(), vk.queueFamily(),

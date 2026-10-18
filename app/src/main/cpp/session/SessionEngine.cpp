@@ -12,7 +12,6 @@
 #include "diagnostics/logging/NativeLog.h"
 #include "diagnostics/logging/RuntimeTraceRecorder.h"
 #include "metadata/MetadataDiagnostics.h"
-#include "capture/multiframe/RawBurstUpload.h"
 #include "imaging/Raw16CpuSnapshot.h"
 #include "color/WhiteBalance.h"
 #include "geometry/CfaPattern.h"
@@ -477,38 +476,35 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
     appendDiagnostic("FULL_SIZE_BURST_FRAMES tag=" + std::to_string(tag) + " requested=" + std::to_string(count) +
                      " received=" + std::to_string(frames.size()));
     if (frames.size() < 2) return 0u;
-    // CPU copy (the full-size reader lends GPU_DATA_BUFFER images) and upload
-    // into device-local images the merge owns.
+    // The camera images stay held (the reader lends them) until the burst is
+    // journaled: each is copied to the journal once, straight from the camera
+    // buffer, with no GPU upload or readback. The merge loads the journal.
     const uint32_t width = context->geometry.rawBufferWidth, height = context->geometry.rawBufferHeight;
     auto pending = std::make_unique<rawrcam::capture::multiframe::PendingMultiframeCapture>();
-    try {
-        auto upload = std::make_shared<rawrcam::capture::multiframe::RawBurstUpload>();
-        upload->initialize(vulkanContext_, uint64_t(width) * height * sizeof(uint16_t));
-        std::vector<uint8_t> packed(size_t(width) * height * sizeof(uint16_t));
-        for (auto& f : frames) {
-            const auto copy = imaging::copyCompletedRaw16AhbToPacked(f.lease.ahb(), width, height, packed,
-                                                                     f.lease.fence(), f.lease.image());
-            if (copy.gpuAcquireFenceFd >= 0) close(copy.gpuAcquireFenceFd);
-            if (!copy.success) throw std::runtime_error("full_size_copy_failed:" + copy.error);
-            f.lease = imaging::RawFrameLease(imaging::AcquiredRawFrame{});  // the camera may reuse it now
-            rawr::raw_gpu_pipeline::BurstFrame frame{};
-            frame.raw = upload->add(vulkanContext_, queueSubmitMutex_, width, height, f.metadata.timestampNs,
-                                    packed.data(), packed.size());
-            const std::uint32_t cfa = context->rawPreviewCfa;
-            frame.parameters.normalization.blackByPhase =
-                rawrcam::geometry::reorderRggbByCode(f.metadata.blackLevelPhysicalRggb, cfa);
-            frame.parameters.normalization.whiteLevel = f.metadata.effectiveWhiteLevel;
-            frame.parameters.whiteBalance = rawrcam::color::collapseRggbToRgb(f.color.baselineWbRggb);
-            pending->refs.push_back(frame.raw.ref);
-            pending->frames.push_back(frame);
-            pending->metadata.push_back(f.metadata);
-            pending->colors.push_back(f.color);
-        }
-        pending->recoveryImages = upload;
-    } catch (const std::exception& e) {
-        appendDiagnostic(std::string("FULL_SIZE_BURST_FAILED error=") + e.what());
-        return 0u;
+    auto leases = std::make_shared<std::vector<imaging::RawFrameLease>>();
+    for (size_t i = 0; i < frames.size(); ++i) {
+        auto& f = frames[i];
+        rawr::raw_gpu_pipeline::BurstFrame frame{};
+        frame.raw.ref = {i + 1, f.metadata.timestampNs, width, height};
+        const std::uint32_t cfa = context->rawPreviewCfa;
+        frame.parameters.normalization.blackByPhase =
+            rawrcam::geometry::reorderRggbByCode(f.metadata.blackLevelPhysicalRggb, cfa);
+        frame.parameters.normalization.whiteLevel = f.metadata.effectiveWhiteLevel;
+        frame.parameters.whiteBalance = rawrcam::color::collapseRggbToRgb(f.color.baselineWbRggb);
+        pending->refs.push_back(frame.raw.ref);
+        pending->frames.push_back(frame);
+        pending->metadata.push_back(f.metadata);
+        pending->colors.push_back(f.color);
+        leases->push_back(std::move(f.lease));
     }
+    pending->cpuFrame = [leases, width, height](std::size_t i, std::vector<std::uint8_t>& packed) {
+        auto& lease = leases->at(i);
+        const auto copy =
+            imaging::copyCompletedRaw16AhbToPacked(lease.ahb(), width, height, packed, lease.fence(), lease.image());
+        if (copy.gpuAcquireFenceFd >= 0) close(copy.gpuAcquireFenceFd);
+        if (!copy.success) throw std::runtime_error("full_size_copy_failed:" + copy.error);
+        lease = imaging::RawFrameLease(imaging::AcquiredRawFrame{});  // journaled: the camera may reuse it
+    };
     pending->referenceIndex = static_cast<std::uint32_t>(pending->frames.size() / 2u);
     pending->referenceMetadata = pending->metadata[pending->referenceIndex];
     pending->referenceColor = pending->colors[pending->referenceIndex];

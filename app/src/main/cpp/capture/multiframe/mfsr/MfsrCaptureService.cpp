@@ -322,7 +322,10 @@ void MfsrCaptureService::spoolLoop() {
                      static_cast<unsigned long long>(collector->requestId()), collector->expected(), appended,
                      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count());
             }
-            if (pending->work->baseFrameMode == MultiframeBaseFrameMode::Sharpest && burst.frames.size() >= 2u &&
+            // CPU-held frames (full-size bursts) have nothing on the GPU to score:
+            // they keep the middle reference.
+            if (pending->work->baseFrameMode == MultiframeBaseFrameMode::Sharpest && !burst.cpuFrame &&
+                burst.frames.size() >= 2u &&
                 burst.frames.size() <= raw_sharpness::RawSharpness::kMaxFrames) {
                 try {
                     {

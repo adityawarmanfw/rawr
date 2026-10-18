@@ -2,6 +2,8 @@
 #include <rawr/raw_gpu_pipeline/AndroidBurstCoordinator.h>
 #include <rawr/zsl_ring/RawImageRing.h>
 
+#include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -17,6 +19,11 @@ struct FrozenBurst {
     // Set while post-shutter bracket frames are still arriving; the spool
     // worker appends them before the burst becomes durable.
     std::shared_ptr<BracketCollector> pendingBracket;
+    // Frames held outside the GPU (full-size bursts): fills the packed RAW16 of
+    // frame i (buffer sized by the caller), once, when the burst is journaled;
+    // frames[i].raw then carries only its ref. The source owns the camera
+    // images until the burst is released.
+    std::function<void(std::size_t, std::vector<std::uint8_t>&)> cpuFrame;
     std::vector<rawr::zsl_ring::RawImageRef> refs;
     std::vector<rawr::raw_gpu_pipeline::BurstFrame> frames;
     std::vector<rawrcam::metadata::FrameMetadataSnapshot> metadata;
