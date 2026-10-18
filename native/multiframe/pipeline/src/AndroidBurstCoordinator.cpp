@@ -361,7 +361,7 @@ void AndroidBurstCoordinator::recordTimestamp(std::uint32_t query) {
         vkCmdWriteTimestamp(command_, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, timestampPool_, query);
 }
 BurstRunResult AndroidBurstCoordinator::run(const std::vector<BurstFrame>& frames, std::uint32_t ref,
-                                            FrameConsumed frameConsumed) {
+                                            FrameConsumed frameConsumed, FrameLoad frameLoad) {
     if (!device_ || !arenaReady_ || frames.size() < 2 || ref >= frames.size())
         throw std::invalid_argument("multiframe burst: invalid run");
     if (frames[ref].raw.ref.width != width_ || frames[ref].raw.ref.height != height_)
@@ -379,8 +379,9 @@ BurstRunResult AndroidBurstCoordinator::run(const std::vector<BurstFrame>& frame
     BurstStageTimings timings{};
     timings.initializeMs = pendingInitializeMs_;
     const auto timestamp = [&](std::uint32_t query) { recordTimestamp(query); };
-    if (algorithm_ == MergeAlgorithm::HdrPlusSpatial) return runHdrPlus(frames, ref, frameConsumed);
-    if (usesFrequencyMerge(algorithm_)) return runHdrPlusFrequency(frames, ref, frameConsumed);
+    if (algorithm_ == MergeAlgorithm::HdrPlusSpatial) return runHdrPlus(frames, ref, frameConsumed, frameLoad);
+    if (usesFrequencyMerge(algorithm_)) return runHdrPlusFrequency(frames, ref, frameConsumed, frameLoad);
+    if (frameLoad) frameLoad(ref);
     // Burst noise estimation: the profile it fits drives everything below
     // (robustness LUT, kernel GAT, aperture gate), so it runs first. The
     // configured profile is restored after the run (also on failure).
@@ -392,6 +393,7 @@ BurstRunResult AndroidBurstCoordinator::run(const std::vector<BurstFrame>& frame
     bool noiseEstimated = false;
     if (merge_.estimateNoiseFromBurst) {
         const std::uint32_t neighbour = ref + 1u < frames.size() ? ref + 1u : ref - 1u;
+        if (frameLoad) frameLoad(neighbour);
         const std::uint32_t blocksX = (width_ + kNoiseBlockSize - 1u) / kNoiseBlockSize;
         const std::uint32_t blocksY = (height_ + kNoiseBlockSize - 1u) / kNoiseBlockSize;
         ensureHostBuffer(noiseStats_, VkDeviceSize(blocksX) * blocksY * kNoiseBlockFloats * sizeof(float));
@@ -508,6 +510,7 @@ BurstRunResult AndroidBurstCoordinator::run(const std::vector<BurstFrame>& frame
         if (i == ref) continue;
         if (frames[i].raw.ref.width != width_ || frames[i].raw.ref.height != height_)
             throw std::invalid_argument("multiframe burst: RAW geometry mismatch");
+        if (frameLoad) frameLoad(i);
         const auto prepareTiming = executeChunk(11u, i, 2u, [&] {
             timestamp(0u);
             recorder.recordCompanionPrepare(command_, frames[i].raw.view, frames[i].parameters);
@@ -578,7 +581,8 @@ BurstRunResult AndroidBurstCoordinator::run(const std::vector<BurstFrame>& frame
     return result;
 }
 BurstRunResult AndroidBurstCoordinator::runHdrPlus(const std::vector<BurstFrame>& frames, std::uint32_t ref,
-                                                   const FrameConsumed& frameConsumed) {
+                                                   const FrameConsumed& frameConsumed, const FrameLoad& frameLoad) {
+    if (frameLoad) frameLoad(ref);
     // Chunks reuse the Wronski trace codes: 1=reference, 11=prepare and
     // alignment (two submissions), 14=merge/accumulate, 20=finalize. Splitting
     // each companion lets preview work interleave on a shared queue.
@@ -612,6 +616,7 @@ BurstRunResult AndroidBurstCoordinator::runHdrPlus(const std::vector<BurstFrame>
         // Keep the expensive finest level in its own submission so preview
         // can interleave. Preparation and the much smaller coarse levels share
         // one submission instead of a fence round-trip for every level.
+        if (frameLoad) frameLoad(i);
         const bool profile = std::getenv("RAWR_HDRP_PROFILE") != nullptr;
         const std::uint32_t coarseLevels = recorder.levelCount() - 1u;
         recorder.setCompanionGain(exposureGain(frames, ref, i));
@@ -699,7 +704,11 @@ BurstRunResult AndroidBurstCoordinator::runHdrPlus(const std::vector<BurstFrame>
     return result;
 }
 BurstRunResult AndroidBurstCoordinator::runHdrPlusFrequency(const std::vector<BurstFrame>& frames, std::uint32_t ref,
-                                                            const FrameConsumed& frameConsumed) {
+                                                            const FrameConsumed& frameConsumed,
+                                                            const FrameLoad& frameLoad) {
+    // Four passes revisit every companion: all frames stay resident.
+    if (frameLoad)
+        for (std::uint32_t i = 0; i < frames.size(); ++i) frameLoad(i);
     // Four half-tile-shifted passes. Companions are aligned in pass 0 only
     // (align-once, default) or re-aligned on each pass's padding (upstream).
     // Chunk codes: 1=pass reference, 11=companion prepare/alignment,

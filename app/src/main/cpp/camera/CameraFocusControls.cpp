@@ -49,7 +49,8 @@ void CameraFocusControls::acceptTap(CameraControlState& state, const CameraTapFo
     if (state.focusMode == FocusControlMode::Manual) state.focusMode = FocusControlMode::Continuous;
     region_ = plan.region;
     state.tapAfActive = true;
-    tapPolicy_.acceptedTap(state.focusMode == FocusControlMode::Continuous, nowMs);
+    tapPolicy_.acceptedTap(state.focusMode == FocusControlMode::Continuous && !state.capabilities.tapAfHoldsUntilNextTap,
+                           nowMs);
     faceSteering_ = false;
     trigger_ = CameraFocusTrigger::Start;
 }
@@ -77,7 +78,8 @@ bool CameraFocusControls::finishTrigger() {
 FaceFocusChange CameraFocusControls::steerFaces(const CameraControlState& state,
                                                 const metadata::SensorGeometry* geometry, bool requestReady) {
     if (state.focusMode != FocusControlMode::Continuous || state.tapAfActive ||
-        !state.capabilities.faceDetectSupported || state.capabilities.maxAfRegions <= 0 || !geometry || !requestReady) {
+        !state.capabilities.faceDetectSupported || !state.capabilities.faceAfSteering ||
+        state.capabilities.maxAfRegions <= 0 || !geometry || !requestReady) {
         faceSteering_ = false;
         return FaceFocusChange::None;
     }

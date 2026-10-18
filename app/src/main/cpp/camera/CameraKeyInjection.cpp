@@ -70,7 +70,8 @@ CameraKeyInjectionResult applyCameraKeySettings(ACaptureRequest* request, const 
             skip = "set_status=" + std::to_string(s);
         }
         std::ostringstream line;
-        line << "CAMERA_KEY_INJECTION scope=" << (session ? "session" : "request") << " origin=" << origin
+        line << "CAMERA_KEY_INJECTION scope="
+             << (session ? "session" : scope == CameraKeySetting::Scope::Request ? "request" : "still") << " origin=" << origin
              << " tag=" << key.tag;
         if (tag) line << " id=0x" << std::hex << *tag << std::dec;
         line << " values=";

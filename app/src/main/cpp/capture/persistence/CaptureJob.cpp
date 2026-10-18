@@ -394,7 +394,21 @@ struct RetiredDenoise {
     int yuvMode = 0;
     float yuvStrengthY = 1.0f, yuvStrengthC = 1.0f;
 };
+namespace {
+void save(const std::string& path, CaptureJob& job, const std::function<std::vector<uint8_t>(size_t)>& readFrame,
+          const std::function<void(size_t, std::vector<uint8_t>&)>* fillFrame, std::vector<uint8_t>* buffer);
+}  // namespace
+void save(const std::string& path, CaptureJob& job,
+          const std::function<void(size_t, std::vector<uint8_t>&)>& fillFrame) {
+    std::vector<uint8_t> buffer;
+    save(path, job, std::function<std::vector<uint8_t>(size_t)>{}, &fillFrame, &buffer);
+}
 void save(const std::string& path, CaptureJob& job, const std::function<std::vector<uint8_t>(size_t)>& readFrame) {
+    save(path, job, readFrame, nullptr, nullptr);
+}
+namespace {
+void save(const std::string& path, CaptureJob& job, const std::function<std::vector<uint8_t>(size_t)>& readFrame,
+          const std::function<void(size_t, std::vector<uint8_t>&)>* fillFrame, std::vector<uint8_t>* buffer) {
     const uint64_t n = payloadSize(job);
     const auto dir = std::filesystem::path(path).parent_path();
     std::filesystem::create_directories(dir);
@@ -419,7 +433,11 @@ void save(const std::string& path, CaptureJob& job, const std::function<std::vec
         w(job.dng.deviceDisplayModel, job.mergedDng.deviceDisplayModel);
         const size_t count = job.multiframe ? job.metadata.size() : 1;
         for (size_t i = 0; i < count; ++i) {
-            if (readFrame) {
+            if (fillFrame) {
+                buffer->resize(n);
+                (*fillFrame)(i, *buffer);
+                w.bytes(buffer->data(), n);
+            } else if (readFrame) {
                 auto raw = readFrame(i);
                 if (raw.size() != n) throw std::runtime_error("capture_job_raw_size");
                 w.bytes(raw.data(), raw.size());
@@ -442,8 +460,21 @@ void save(const std::string& path, CaptureJob& job, const std::function<std::vec
         throw;
     }
 }
+}  // namespace
+namespace {
+CaptureJob loadImpl(const std::string& path,
+                    const std::function<void(CaptureJob&, size_t, const std::vector<uint8_t>&)>& consume,
+                    uint64_t* framesOffset);
+}  // namespace
 CaptureJob load(const std::string& path,
                 const std::function<void(CaptureJob&, size_t, const std::vector<uint8_t>&)>& consume) {
+    return loadImpl(path, consume, nullptr);
+}
+CaptureJob loadHeader(const std::string& path, uint64_t& framesOffset) { return loadImpl(path, {}, &framesOffset); }
+namespace {
+CaptureJob loadImpl(const std::string& path,
+                    const std::function<void(CaptureJob&, size_t, const std::vector<uint8_t>&)>& consume,
+                    uint64_t* framesOffset) {
     std::ifstream stream(path, std::ios::binary);
     Reader r{stream};
     RetiredDenoise retired{};
@@ -500,6 +531,16 @@ CaptureJob load(const std::string& path,
     stream.seekg(pos);
     if (end - pos != std::streamoff(count * n + sizeof(uint32_t) + sizeof(uint64_t)))
         throw std::runtime_error("capture_job_extent_invalid");
+    if (framesOffset) {
+        *framesOffset = uint64_t(pos);
+        stream.seekg(std::streamoff(count * n), std::ios::cur);
+        uint64_t marker = 0;
+        r(marker);
+        if (marker != footer) throw std::runtime_error("capture_job_commit_invalid");
+        job.dng.appLensShadingCorrection = job.jpeg.develop.lensShadingCorrectionEnabled;
+        job.mergedDng.appLensShadingCorrection = job.jpeg.develop.lensShadingCorrectionEnabled;
+        return job;
+    }
     std::vector<uint8_t> raw(n);
     for (size_t i = 0; i < count; ++i) {
         r.bytes(raw.data(), n);
@@ -514,4 +555,5 @@ CaptureJob load(const std::string& path,
     job.mergedDng.appLensShadingCorrection = job.jpeg.develop.lensShadingCorrectionEnabled;
     return job;
 }
+}  // namespace
 }  // namespace rawrcam::capture::persistence

@@ -297,7 +297,9 @@ void appendKeys(std::string& out, const std::vector<CameraKeySetting>& keys) {
         out += ",\"type\":\"";
         out += typeName(k.type);
         out += "\",\"scope\":\"";
-        out += k.scope == CameraKeySetting::Scope::Session ? "session" : "request";
+        out += k.scope == CameraKeySetting::Scope::Session   ? "session"
+               : k.scope == CameraKeySetting::Scope::Request ? "request"
+                                                             : "still";
         out += "\",\"values\":[";
         for (size_t v = 0; v < k.values.size(); ++v) {
             if (v) out += ',';
@@ -355,8 +357,10 @@ bool readKeys(const std::vector<Json>& list, std::vector<CameraKeySetting>& out,
             return false;
         }
         key.type = *type;
-        key.scope = k.str("scope", "session") == "request" ? CameraKeySetting::Scope::Request
-                                                           : CameraKeySetting::Scope::Session;
+        const std::string scope = k.str("scope", "session");
+        key.scope = scope == "request" ? CameraKeySetting::Scope::Request
+                    : scope == "still" ? CameraKeySetting::Scope::Still
+                                       : CameraKeySetting::Scope::Session;
         for (const auto& v : k.array("values"))
             if (v.kind == Json::Kind::Number) key.values.push_back(v.number);
         key.enabled = k.flag("enabled", true);
@@ -430,6 +434,12 @@ std::string serializeCameraProfile(const CameraProfile& profile) {
             out += ",\"vendorGate\":";
             appendJsonString(out, r.vendorGate);
         }
+        if (r.captureStream) {
+            out += ",\"captureStream\":{\"format\":\"";
+            out += geometry::rawPixelFormatName(r.captureStream->format);
+            out += "\",\"width\":" + std::to_string(r.captureStream->width) +
+                   ",\"height\":" + std::to_string(r.captureStream->height) + "}";
+        }
         out += '}';
     }
     out += "]}";
@@ -478,6 +488,18 @@ std::optional<CameraProfile> readProfile(const Json& root, std::string* error) {
             }
         }
         r.vendorGate = l.str("vendorGate");
+        if (const Json* c = l.get("captureStream"); c && c->kind == Json::Kind::Object) {
+            geometry::RawStreamPreference capture;
+            capture.format =
+                c->str("format") == "RAW10" ? geometry::RawPixelFormat::Raw10 : geometry::RawPixelFormat::Raw16;
+            capture.width = uint32_t(std::max(0.0, c->num("width")));
+            capture.height = uint32_t(std::max(0.0, c->num("height")));
+            if (capture.width == 0 || capture.height == 0) {
+                if (error) *error = "invalid captureStream for lens " + r.lensId;
+                return std::nullopt;
+            }
+            r.captureStream = capture;
+        }
         if (!readLevels(l.get("levels"), r.levels)) {
             if (error) *error = "invalid levels for lens " + r.lensId;
             return std::nullopt;

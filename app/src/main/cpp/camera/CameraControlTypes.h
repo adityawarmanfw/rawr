@@ -79,6 +79,9 @@ struct CameraControlCapabilities {
     int64_t exposureTimeMinNs = 0;
     int64_t exposureTimeMaxNs = 0;
     int64_t maxFrameDurationNs = 0;
+    // Every request must carry CONTROL_AE_TARGET_FPS_RANGE, even with AE off: the
+    // vivo X300 Ultra provider crashes on a full-size mode request without it.
+    bool targetFpsRangeRequired = false;
     // What the camera advertises; the bounds above may be widened by the
     // lens profile's extended exposure (extendedExposure).
     int32_t advertisedSensitivityMax = 0;
@@ -123,6 +126,14 @@ struct CameraControlCapabilities {
     // the uncalibrated gains inverse.
     metadata::StaticColorCalibration wbDisplayCalibration{};
     bool tapAfSupported = false;
+    // A tap's focus holds until the next tap instead of returning to continuous
+    // AF after a dwell: on vivo-gated routes the AUTO -> continuous switch in a
+    // dim scene crashes the X300 Ultra camera provider (vivo's camera never
+    // makes it either).
+    bool tapAfHoldsUntilNextTap = false;
+    // Continuous AF follows the first detected face. Off on vivo-gated routes:
+    // moving or clearing the region there crashes the same AF publisher.
+    bool faceAfSteering = true;
     bool manualFocusSupported = false;
     // True when the HAL advertises STATISTICS face detection (FULL preferred,
     // SIMPLE accepted). Powers the face boxes + face-steered continuous AF.

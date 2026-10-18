@@ -104,6 +104,9 @@ struct RawPreviewRecordInfo {
     uint32_t inputRawStridePixels = 0;
     uint32_t width = 0;
     uint32_t height = 0;
+    // Each output pixel averages cellScale x cellScale 2x2 Bayer cells: the
+    // output is (width / 2 / cellScale) x (height / 2 / cellScale).
+    uint32_t cellScale = 1;
     RawFrameParameters parameters{};
     uint32_t lensShadingMapWidth = 0;
     uint32_t lensShadingMapHeight = 0;
@@ -127,6 +130,9 @@ public:
     RawPreview& operator=(const RawPreview&) = delete;
     // Records commands only; caller owns submission and synchronization.
     RawPreviewRecordResult record(const RawPreviewRecordInfo&);
+    // Frees the cached descriptor sets that bind this camera input (view or
+    // import buffer) once it can no longer be in flight.
+    void forgetInput(VkImageView inputView, VkBuffer importBuffer);
     size_t cachedDescriptorSetCount() const { return descriptorCache_.size(); }
 private:
     struct ViewPair { VkImageView input{}, output{}; VkBuffer import{}; bool operator==(const ViewPair& o) const { return input==o.input && output==o.output && import==o.import; } };

@@ -176,6 +176,11 @@ void faceHysteresisAndTapOwnership() {
     assert(focus.steerFaces(state, &g, false) == FaceFocusChange::None);
     state.capabilities.maxAfRegions = 0;
     assert(focus.steerFaces(state, &g, true) == FaceFocusChange::None);
+    // vivo-gated routes keep tap AF but never steer to faces (provider crash).
+    state.capabilities.maxAfRegions = 1;
+    state.capabilities.faceAfSteering = false;
+    assert(focus.steerFaces(state, &g, true) == FaceFocusChange::None);
+    assert(!focus.request(std::nullopt).afRegion);
 }
 
 void spotMeteringOwnership() {

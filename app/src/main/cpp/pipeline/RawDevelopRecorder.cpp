@@ -341,6 +341,8 @@ RawDevelopRecordResult RawDevelopRecorder::record(const RawDevelopRecordInput& i
     rawRecord.outputCfaStateR16UintView = monitor_.rawStateView(in.slotIndex);
     rawRecord.width = in.rawWidth;
     rawRecord.height = in.rawHeight;
+    // The preview is the RAW binned by 2 * cellScale (RealtimePipeline picks it).
+    rawRecord.cellScale = std::max(1u, in.rawWidth / std::max(1u, 2u * in.previewWidth));
     rawRecord.parameters = params;
     if (in.lensShadingCorrectionEnabled && !in.metadata.lensShadingMap.empty()) {
         if (auditSubmitCount < 3u && audit_) {

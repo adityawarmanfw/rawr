@@ -2,158 +2,22 @@
 #include <rawr/raw_multiframe_output/MultiframeOutputAdapter.h>
 
 #include <cstring>
+#include <fstream>
 #include <chrono>
 #include <android/log.h>
 #include <stdexcept>
 #include <vector>
 
+#include "capture/multiframe/RawBurstUpload.h"
 #include "capture/persistence/CaptureJob.h"
 #include "vulkan/VulkanContext.h"
 
 namespace rawrcam::capture::persistence {
+
 namespace {
 void check(VkResult r) {
     if (r != VK_SUCCESS) throw std::runtime_error("capture_job_vulkan_" + std::to_string(r));
 }
-struct Upload {
-    VkDevice device{};
-    VkPhysicalDevice physical{};
-    VkCommandPool pool{};
-    VkCommandBuffer command{};
-    VkFence fence{};
-    VkBuffer buffer{};
-    VkDeviceMemory bufferMemory{};
-    void* mapped{};
-    struct Image {
-        VkImage image{};
-        VkImageView view{};
-        VkDeviceMemory memory{};
-    };
-    std::vector<Image> images;
-    ~Upload() {
-        for (auto& i : images) {
-            if (i.view) vkDestroyImageView(device, i.view, nullptr);
-            if (i.image) vkDestroyImage(device, i.image, nullptr);
-            if (i.memory) vkFreeMemory(device, i.memory, nullptr);
-        }
-        if (mapped) vkUnmapMemory(device, bufferMemory);
-        if (buffer) vkDestroyBuffer(device, buffer, nullptr);
-        if (bufferMemory) vkFreeMemory(device, bufferMemory, nullptr);
-        if (fence) vkDestroyFence(device, fence, nullptr);
-        if (pool) vkDestroyCommandPool(device, pool, nullptr);
-    }
-    uint32_t memoryType(uint32_t mask, VkMemoryPropertyFlags flags) {
-        VkPhysicalDeviceMemoryProperties props;
-        vkGetPhysicalDeviceMemoryProperties(physical, &props);
-        for (uint32_t i = 0; i < props.memoryTypeCount; ++i)
-            if ((mask & (1u << i)) && (props.memoryTypes[i].propertyFlags & flags) == flags) return i;
-        throw std::runtime_error("capture_job_memory_type");
-    }
-    void initialize(const vulkan::VulkanContext& vk, uint64_t bytes) {
-        device = vk.device();
-        physical = vk.physicalDevice();
-        VkCommandPoolCreateInfo p{};
-        p.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-        p.queueFamilyIndex = vk.queueFamily();
-        p.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-        check(vkCreateCommandPool(device, &p, nullptr, &pool));
-        VkCommandBufferAllocateInfo c{};
-        c.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        c.commandPool = pool;
-        c.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        c.commandBufferCount = 1;
-        check(vkAllocateCommandBuffers(device, &c, &command));
-        VkFenceCreateInfo f{};
-        f.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-        check(vkCreateFence(device, &f, nullptr, &fence));
-        VkBufferCreateInfo b{};
-        b.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        b.size = bytes;
-        b.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-        check(vkCreateBuffer(device, &b, nullptr, &buffer));
-        VkMemoryRequirements req;
-        vkGetBufferMemoryRequirements(device, buffer, &req);
-        VkMemoryAllocateInfo a{};
-        a.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        a.allocationSize = req.size;
-        a.memoryTypeIndex =
-            memoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        check(vkAllocateMemory(device, &a, nullptr, &bufferMemory));
-        check(vkBindBufferMemory(device, buffer, bufferMemory, 0));
-        check(vkMapMemory(device, bufferMemory, 0, bytes, 0, &mapped));
-    }
-    rawr::zsl_ring::GpuRawImageView add(const vulkan::VulkanContext& vk, std::mutex& mutex, uint32_t width,
-                                        uint32_t height, uint64_t timestamp, const std::vector<uint8_t>& raw) {
-        images.emplace_back();
-        auto& i = images.back();
-        VkImageCreateInfo ci{};
-        ci.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-        ci.imageType = VK_IMAGE_TYPE_2D;
-        ci.format = VK_FORMAT_R16_UINT;
-        ci.extent = {width, height, 1};
-        ci.mipLevels = 1;
-        ci.arrayLayers = 1;
-        ci.samples = VK_SAMPLE_COUNT_1_BIT;
-        ci.tiling = VK_IMAGE_TILING_OPTIMAL;
-        ci.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-        check(vkCreateImage(device, &ci, nullptr, &i.image));
-        VkMemoryRequirements req;
-        vkGetImageMemoryRequirements(device, i.image, &req);
-        VkMemoryAllocateInfo a{};
-        a.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        a.allocationSize = req.size;
-        a.memoryTypeIndex = memoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-        check(vkAllocateMemory(device, &a, nullptr, &i.memory));
-        check(vkBindImageMemory(device, i.image, i.memory, 0));
-        VkImageViewCreateInfo vi{};
-        vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        vi.image = i.image;
-        vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        vi.format = VK_FORMAT_R16_UINT;
-        vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        check(vkCreateImageView(device, &vi, nullptr, &i.view));
-        std::memcpy(mapped, raw.data(), raw.size());
-        check(vkResetCommandBuffer(command, 0));
-        check(vkResetFences(device, 1, &fence));
-        VkCommandBufferBeginInfo begin{};
-        begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        check(vkBeginCommandBuffer(command, &begin));
-        VkImageMemoryBarrier barrier{};
-        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.image = i.image;
-        barrier.subresourceRange = vi.subresourceRange;
-        vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr,
-                             0, nullptr, 1, &barrier);
-        VkBufferImageCopy region{};
-        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        region.imageExtent = {width, height, 1};
-        vkCmdCopyBufferToImage(command, buffer, i.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
-        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
-                             nullptr, 1, &barrier);
-        check(vkEndCommandBuffer(command));
-        VkSubmitInfo submit{};
-        submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        submit.commandBufferCount = 1;
-        submit.pCommandBuffers = &command;
-        {
-            std::lock_guard<std::mutex> lock(mutex);
-            check(vkQueueSubmit(vk.queue(), 1, &submit, fence));
-        }
-        check(vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX));
-        return {{images.size(), timestamp, width, height}, i.image, i.view, VK_FORMAT_R16_UINT, req.size};
-    }
-};
 }  // namespace
 void saveBurst(const std::string& path, multiframe::MultiframeWorkItem& work, const vulkan::VulkanContext& vk,
                std::mutex& mutex) {
@@ -192,6 +56,21 @@ void saveBurst(const std::string& path, multiframe::MultiframeWorkItem& work, co
     job.referenceIndex = burst.referenceIndex;
     job.metadata = burst.metadata;
     for (auto& f : burst.frames) job.parameters.push_back(f.parameters);
+    // CPU-held frames are journaled straight from their source (no GPU readback).
+    if (burst.cpuFrame) {
+        double readMs = 0.0;
+        save(path, job, std::function<void(size_t, std::vector<uint8_t>&)>([&](size_t i, std::vector<uint8_t>& pixels) {
+            const auto begin = std::chrono::steady_clock::now();
+            burst.cpuFrame(i, pixels);
+            readMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
+        }));
+        const double totalMs =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+        __android_log_print(ANDROID_LOG_INFO, "RawrCamNative",
+            "BURST_SAVE requestId=%llu frames=%zu source=cpu totalMs=%.1f readMs=%.1f",
+            static_cast<unsigned long long>(work.requestId), burst.frames.size(), totalMs, readMs);
+        return;
+    }
     rawr::raw_multiframe_output::MultiframeOutputAdapter adapter;
     adapter.initialize(
         vk.physicalDevice(), vk.device(), vk.queueFamily(),
@@ -213,14 +92,68 @@ void saveBurst(const std::string& path, multiframe::MultiframeWorkItem& work, co
         static_cast<unsigned long long>(uint64_t(job.frame.width) * job.frame.height * 2 * burst.frames.size()),
         totalMs, readbackMs, totalMs - readbackMs);
 }
+namespace {
+// Frames read from the journal on demand (lazy loadBurst).
+struct JournalFrames {
+    std::ifstream file;
+    uint64_t offset = 0;
+    size_t bytes = 0;
+    std::vector<uint8_t> buffer;
+    std::vector<bool> loaded;
+};
+}  // namespace
 std::unique_ptr<multiframe::MultiframeWorkItem> loadBurst(const std::string& path, const vulkan::VulkanContext& vk,
-                                                          std::mutex& mutex) {
+                                                          std::mutex& mutex, bool lazy) {
     const auto started = std::chrono::steady_clock::now();
     double uploadMs = 0.0;
     auto work = std::make_unique<multiframe::MultiframeWorkItem>();
     work->capture = std::make_unique<multiframe::PendingMultiframeCapture>();
-    auto uploaded = std::make_shared<Upload>();
-    auto job = load(path, [&](CaptureJob& j, size_t i, const std::vector<uint8_t>& raw) {
+    auto uploaded = std::make_shared<multiframe::RawBurstUpload>();
+    CaptureJob job;
+    if (lazy) {
+        auto source = std::make_shared<JournalFrames>();
+        job = loadHeader(path, source->offset);
+        if (!job.multiframe) throw std::runtime_error("capture_job_not_burst");
+        const uint32_t width = job.frame.width, height = job.frame.height;
+        source->bytes = size_t(width) * height * sizeof(uint16_t);
+        source->file.open(path, std::ios::binary);
+        if (!source->file) throw std::runtime_error("capture_job_open_failed");
+        source->loaded.assign(job.metadata.size(), false);
+        uploaded->initialize(vk, source->bytes);
+        auto* burst = work->capture.get();
+        for (size_t i = 0; i < job.metadata.size(); ++i) {
+            rawr::raw_gpu_pipeline::BurstFrame frame;
+            frame.raw.ref = {i + 1, job.metadata[i].timestampNs, width, height};
+            frame.parameters = job.parameters[i];
+            burst->frames.push_back(frame);
+            burst->refs.push_back(frame.raw.ref);
+        }
+        const auto* vulkan = &vk;
+        auto* queueMutex = &mutex;
+        burst->loadFrame = [source, uploaded, burst, vulkan, queueMutex, width, height](std::size_t i) {
+            if (i >= source->loaded.size() || source->loaded[i]) return;
+            source->buffer.resize(source->bytes);
+            source->file.seekg(std::streamoff(source->offset + i * source->bytes));
+            source->file.read(reinterpret_cast<char*>(source->buffer.data()), std::streamsize(source->bytes));
+            if (!source->file) throw std::runtime_error("capture_job_frame_read_failed");
+            auto& frame = burst->frames[i];
+            frame.raw = uploaded->add(*vulkan, *queueMutex, width, height, frame.raw.ref.timestampNs,
+                                      source->buffer.data(), source->bytes);
+            source->loaded[i] = true;
+        };
+        burst->releaseFrame = [source, uploaded, burst](std::size_t i) {
+            if (i >= source->loaded.size() || !source->loaded[i]) return;
+            auto& raw = burst->frames[i].raw;
+            uploaded->release(raw);
+            raw.image = VK_NULL_HANDLE;
+            raw.view = VK_NULL_HANDLE;
+            source->loaded[i] = false;
+        };
+        // The reference stays resident: the base DNG and the clip map read it.
+        const auto begin = std::chrono::steady_clock::now();
+        burst->loadFrame(job.referenceIndex);
+        uploadMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
+    } else job = load(path, [&](CaptureJob& j, size_t i, const std::vector<uint8_t>& raw) {
         if (!j.multiframe) throw std::runtime_error("capture_job_not_burst");
         const auto begin = std::chrono::steady_clock::now();
         if (i == 0) uploaded->initialize(vk, raw.size());
@@ -251,8 +184,9 @@ std::unique_ptr<multiframe::MultiframeWorkItem> loadBurst(const std::string& pat
     work->sharpnessMs = job.sharpnessMs;
     const double totalMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
     __android_log_print(ANDROID_LOG_INFO, "RawrCamNative",
-        "BURST_LOAD requestId=%llu frames=%zu totalMs=%.1f uploadMs=%.1f storageAndSetupMs=%.1f",
-        static_cast<unsigned long long>(work->requestId), b.frames.size(), totalMs, uploadMs, totalMs - uploadMs);
+        "BURST_LOAD requestId=%llu frames=%zu lazy=%d totalMs=%.1f uploadMs=%.1f storageAndSetupMs=%.1f",
+        static_cast<unsigned long long>(work->requestId), b.frames.size(), lazy ? 1 : 0, totalMs, uploadMs,
+        totalMs - uploadMs);
     return work;
 }
 }  // namespace rawrcam::capture::persistence

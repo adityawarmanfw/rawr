@@ -55,10 +55,23 @@ uint64_t SessionEngine::requestRawStillCapture(rawrcam::encoding::dng::DngCaptur
     }
     // Long exposure: the viewfinder runs a shorter shutter, so the capture is
     // its own one-shot frame; wait for it instead of the next viewfinder frame.
-    const auto longExposure = camera->deferredCaptureExposure();
+    const bool fullSize = camera->hasFullSizeCapture();
+    const auto longExposure = fullSize ? std::nullopt : camera->deferredCaptureExposure();
     const uint64_t requestId = capture_.requestSingle(std::move(dngContext), std::move(jpegContext), [this] {
         return ingressQueue_.latestTimestamp(realtime_.generation());
     });
+    if (requestId != 0 && fullSize) {
+        // Capture-stream lens: the photo is the full-size still this request asks for.
+        {
+            std::lock_guard<std::mutex> stillLock(fullSize_.mutex);
+            fullSize_.requestIds.insert(requestId);
+        }
+        capture_.single().expectOptimizedFrame(requestId, std::chrono::milliseconds(1500));
+        if (!camera->captureFullSize(requestId, 1)) {
+            capture_.single().expectOptimizedFrame(requestId);
+            appendDiagnostic("FULL_SIZE_SUBMIT_FAILED requestId=" + std::to_string(requestId));
+        }
+    }
     if (requestId != 0 && longExposure) {
         const auto waitMs = std::chrono::milliseconds(longExposure->exposureTimeNs / 1'000'000 + 1000);
         capture_.single().expectOptimizedFrame(requestId, waitMs);
@@ -157,6 +170,10 @@ uint32_t SessionEngine::prepareExperimentalMultiframe(uint32_t maxFrames, uint32
         LOGI("MULTIFRAME_LONG_EXPOSURE_SINGLE burst=%u", maxFrames + longFrames);
         return 0u;
     }
+    // Capture-stream lens: the ZSL ring holds only binned viewfinder frames;
+    // the merge takes a burst of full-size stills requested now.
+    if (const auto* controller = cameraControls_.controller(); controller && controller->hasFullSizeCapture())
+        return prepareFullSizeBurst(std::min<uint32_t>(maxFrames + longFrames, kFullSizeMaxFrames));
     bool skipLong = false;
     if (longFrames > 0u) {
         const auto* controller = cameraControls_.controller();
@@ -188,7 +205,8 @@ uint64_t SessionEngine::startPreparedMultiframeCapture(
         // burst is lifted back to (unchanged reference exposure in manual).
         if (tuning.mergeAlgorithm == rawrcam::capture::multiframe::kMergeAlgorithmHdrPlusBracketed) {
             tuning.bracketCapture = 1u;
-            // Their slots were frozen as burst frames at the shutter.
+            // Their slots were frozen as burst frames at the shutter (or a
+            // full-size burst has no binned long frames to take).
             if (bracketSkippedForPending_) tuning.bracketFrames = 0u;
             if (const auto reference = capture_.multiframe().preparedReferenceMetadata()) {
                 const double exposure = rawrcam::capture::multiframe::linearExposure(*reference);

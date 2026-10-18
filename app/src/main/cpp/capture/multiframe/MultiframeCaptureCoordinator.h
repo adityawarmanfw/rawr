@@ -18,6 +18,9 @@ class MultiframeCaptureCoordinator final {
                                  PostGain postGain);
     ~MultiframeCaptureCoordinator();
     void configure(uint32_t width, uint32_t height, uint32_t cfa);
+    // Capture-stream lens: merges take full-size bursts (adoptPreparedCapture)
+    // at this size, and the viewfinder ZSL ring stays unallocated.
+    void configureFullSize(uint32_t width, uint32_t height, uint32_t cfa);
     void reset() noexcept;
     void shutdown() noexcept;
     void recordFrame(VkCommandBuffer command, VkImage rawCopy, uint64_t timestampNs,
@@ -38,6 +41,8 @@ class MultiframeCaptureCoordinator final {
                                             const spektrafilm_native::FilmLook& filmLook,
                                             std::optional<BracketPlan>* bracketPlan = nullptr) noexcept;
     void cancelPreparedMultiframeCapture() noexcept;
+    // A burst assembled outside the ring (full-size stills); false when one is pending.
+    bool adoptPreparedCapture(std::unique_ptr<PendingMultiframeCapture> capture) noexcept;
     // Reference of the burst frozen by prepareExperimentalMultiframeOnShutter.
     std::uint32_t preparedFrameCount() const {
         return pendingMultiframeCapture_ ? static_cast<std::uint32_t>(pendingMultiframeCapture_->frames.size()) : 0u;
@@ -74,6 +79,7 @@ class MultiframeCaptureCoordinator final {
     MfsrCaptureService::Geometry config_{};
     bool configured_ = false;
     bool persistZslRingEnabled_ = false;
+    bool fullSizeOnly_ = false;
     bool experimentalMultiframeEnabled_ = false;
     std::unique_ptr<MultiframeFrameRing> multiframeFrameRing_;
     std::unique_ptr<MfsrCaptureService> mfsrService_;

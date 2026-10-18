@@ -8,6 +8,8 @@
 #include <unistd.h>
 
 #include <atomic>
+#include <map>
+#include <set>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -304,6 +306,46 @@ class SessionEngine {
         [this](imaging::AcquiredRawFrame frame) { enqueueRawFrame(std::move(frame)); },
         [this](const std::string& line) { appendDiagnostic(line); },
         [this](const std::string& line) { recordPipelineAuditLine(line); }};
+    // Full-size stills of a capture-stream lens (vivo seamless route); its
+    // frames bypass the viewfinder.
+    imaging::RawFrameIngress captureFrameIngress_{
+        [this](imaging::AcquiredRawFrame frame) { onFullSizeFrame(std::move(frame)); },
+        [this](const std::string& line) { appendDiagnostic(line); },
+        [this](const std::string& line) { recordPipelineAuditLine(line); }};
+    uint64_t captureReaderGeneration_ = 0;
+    std::atomic<uint32_t> fullSizeFrames_{0};
+    void onFullSizeFrame(imaging::AcquiredRawFrame frame);
+    // Full-size stills of a capture-stream lens: each still also lands binned
+    // (same timestamp) in the viewfinder stream, where the photo claims it;
+    // the photo then snapshots the full-size frame instead.
+    struct FullSizeStills {
+        std::mutex mutex;
+        std::condition_variable arrived;
+        std::deque<imaging::RawFrameLease> frames;  // newest last, at most kMaxFrames
+        metadata::CameraContextMetadataPtr context;  // the session's context at full size
+        std::set<uint64_t> requestIds;               // photos waiting for a full-size still
+        std::set<uint64_t> claimedTimestamps;        // claimed binned copies awaiting their snapshot
+        // Merged bursts: their tags, and each frame's result (full-size context) by timestamp.
+        std::set<uint64_t> burstTags;
+        std::map<uint64_t, std::pair<metadata::FrameMetadataSnapshot, color::FrameColorTransform>> burstResults;
+        static constexpr size_t kMaxFrames = 6;
+    };
+    FullSizeStills fullSize_;
+    metadata::CameraContextMetadataPtr lastCameraContext_;
+    // The full-size context when `metadata` is a full-size still's binned copy (and marks it claimed).
+    metadata::CameraContextMetadataPtr claimFullSizeStill(const metadata::FrameMetadataSnapshot& metadata);
+    bool fullSizeStillClaimed(uint64_t timestampNs);
+    bool isFullSizeStillCopy(const metadata::FrameMetadataSnapshot& metadata);
+    void observeFullSizeBurstFrame(const metadata::FrameMetadataSnapshot& metadata,
+                                   const color::FrameColorTransform& color);
+    // Merged mode on a capture-stream lens: requests a burst of full-size
+    // stills, waits for them, uploads them and prepares the merge. Frames, or 0.
+    uint32_t prepareFullSizeBurst(uint32_t maxFrames);
+    uint64_t nextFullSizeBurstTag_ = 1ull << 62;  // apart from photo request ids
+    // A capture-stream lens: photos come only from its full-size stills, never a binned viewfinder frame.
+    bool fullSizeStillsOnly();
+    // Snapshots the full-size frame of a claimed still; on success also deletes `binned`, which the caller hands over.
+    bool snapshotFullSizeStill(AImage* binned, uint64_t timestampNs);
     presentation::PresentationSurface presentationSurface_;
     bool deferredSurfaceDetach_ = false;
 

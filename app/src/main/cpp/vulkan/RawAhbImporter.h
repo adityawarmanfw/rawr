@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <chrono>
 #include <unordered_map>
 
 #include "vulkan/DeviceObjects.h"
@@ -112,6 +113,10 @@ class RawAhbImporter {
     ImportedRaw& importRaw16Buffer(AHardwareBuffer* ahb, uint32_t expectedWidth, uint32_t expectedHeight);
     void clear() noexcept;
     size_t size() const noexcept { return imported_.size(); }
+    // Told about an entry before eviction drops it, so per-import GPU state
+    // (descriptor sets) can go with it. Called on the importing thread.
+    using EvictListener = std::function<void(const ImportedRaw&)>;
+    void setEvictListener(EvictListener listener) { evictListener_ = std::move(listener); }
 
    private:
     // One AHardwareBuffer_acquire reference, released on destruction.
@@ -143,6 +148,14 @@ class RawAhbImporter {
     uint32_t queueFamily_;
     PFN_vkGetAndroidHardwareBufferPropertiesANDROID getProperties_;
     Diagnostic diagnostic_;
+    // Makes room for a new identity: drops the least recently used entry when
+    // it has been idle long enough to have left every in-flight frame. Camera
+    // buffer queues can rotate identities (vivo replaces the viewfinder
+    // buffers around each full-size still); a cache full of live ones throws.
+    void evictIdleEntry();
+    void touch(uintptr_t key);
     std::unordered_map<uintptr_t, Entry> imported_;
+    std::unordered_map<uintptr_t, std::chrono::steady_clock::time_point> lastUse_;
+    EvictListener evictListener_;
 };
 }  // namespace rawrcam::vulkan

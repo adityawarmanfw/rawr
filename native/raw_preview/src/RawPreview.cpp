@@ -34,7 +34,7 @@ struct PushConstants {
     float chromaBlend;
     float highlightWarningThreshold;
     float shadowWarningThreshold;
-    float pad0;
+    uint32_t cellScale;
     uint32_t width;
     uint32_t height;
     uint32_t pattern;
@@ -226,6 +226,7 @@ RawPreview::RawPreview(const RawPreviewCreateInfo& ci)
     VkDescriptorPoolSize poolSizes[2]{{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 384}, {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 256}};
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;  // forgetInput frees sets
     poolInfo.maxSets = 128;
     poolInfo.poolSizeCount = 2;
     poolInfo.pPoolSizes = poolSizes;
@@ -468,6 +469,24 @@ RawPreview::LscBuffer& RawPreview::lscBufferFor(VkImageView outputView, size_t f
     return lscBuffers_.insert_or_assign(outputView, std::move(b)).first->second;
 }
 
+void RawPreview::forgetInput(VkImageView inputView, VkBuffer importBuffer) {
+    const auto matches = [&](VkImageView input, VkBuffer import) {
+        return (inputView && input == inputView) || (importBuffer && import == importBuffer);
+    };
+    std::vector<VkDescriptorSet> sets;
+    for (auto it = descriptorCache_.begin(); it != descriptorCache_.end();) {
+        if (!matches(it->first.input, it->first.import)) { ++it; continue; }
+        sets.push_back(it->second);
+        it = descriptorCache_.erase(it);
+    }
+    for (auto it = cfaStateDescriptorCache_.begin(); it != cfaStateDescriptorCache_.end();) {
+        if (!matches(it->first.input, it->first.import)) { ++it; continue; }
+        sets.push_back(it->second);
+        it = cfaStateDescriptorCache_.erase(it);
+    }
+    if (!sets.empty()) vkFreeDescriptorSets(device_, pool_, uint32_t(sets.size()), sets.data());
+}
+
 RawPreviewRecordResult RawPreview::record(const RawPreviewRecordInfo& recordInfo) {
     if (!recordInfo.commandBuffer || !recordInfo.inputRawR16UintView || !recordInfo.outputLinearRgba16fView ||
         recordInfo.width < 2 || recordInfo.height < 2)
@@ -483,7 +502,8 @@ RawPreviewRecordResult RawPreview::record(const RawPreviewRecordInfo& recordInfo
                              coloroppTonePipeline_;
     const bool usePropagatedHighlight =
         recordInfo.parameters.highlightReconstructionEnabled && writeCfaState && !useColoropp;
-    const uint32_t outputWidth = recordInfo.width >> 1u, outputHeight = recordInfo.height >> 1u;
+    const uint32_t cellScale = std::max(1u, recordInfo.cellScale);
+    const uint32_t outputWidth = (recordInfo.width >> 1u) / cellScale, outputHeight = (recordInfo.height >> 1u) / cellScale;
     ColoroppResources* coloropp =
         useColoropp ? &coloroppResourcesFor(recordInfo.outputLinearRgba16fView, outputWidth, outputHeight) : nullptr;
     if (coloropp && !coloropp->initialized) {
@@ -564,6 +584,7 @@ RawPreviewRecordResult RawPreview::record(const RawPreviewRecordInfo& recordInfo
     push.chromaBlend = std::max(0.0f, std::min(1.0f, recordInfo.parameters.chromaBlend));
     push.highlightWarningThreshold = std::max(0.0f, std::min(1.0f, recordInfo.parameters.highlightWarningThreshold));
     push.shadowWarningThreshold = std::max(0.0f, std::min(1.0f, recordInfo.parameters.shadowWarningThreshold));
+    push.cellScale = cellScale;
     push.width = recordInfo.width;
     push.height = recordInfo.height;
     push.pattern = uint32_t(recordInfo.parameters.pattern);
@@ -584,7 +605,7 @@ RawPreviewRecordResult RawPreview::record(const RawPreviewRecordInfo& recordInfo
     vkCmdBindDescriptorSets(recordInfo.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1,
                             &descriptorSet, 0, nullptr);
     vkCmdPushConstants(recordInfo.commandBuffer, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
-    vkCmdDispatch(recordInfo.commandBuffer, ((recordInfo.width >> 1) + 7) / 8, ((recordInfo.height >> 1) + 7) / 8, 1);
+    vkCmdDispatch(recordInfo.commandBuffer, (outputWidth + 7) / 8, (outputHeight + 7) / 8, 1);
 
     if (coloropp) {
         recordColoropp(recordInfo, *coloropp, lsc.buffer, lscValid);
@@ -662,7 +683,8 @@ void RawPreview::recordColoropp(const RawPreviewRecordInfo& recordInfo, Coloropp
                                 bool lscValid) {
     using namespace rawr::highlight;
     const VkCommandBuffer cmd = recordInfo.commandBuffer;
-    const uint32_t width = recordInfo.width >> 1u, height = recordInfo.height >> 1u;
+    const uint32_t cellScale = std::max(1u, recordInfo.cellScale);
+    const uint32_t width = (recordInfo.width >> 1u) / cellScale, height = (recordInfo.height >> 1u) / cellScale;
     auto computeToCompute = [&]() {
         VkMemoryBarrier b{};
         b.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
@@ -689,7 +711,7 @@ void RawPreview::recordColoropp(const RawPreviewRecordInfo& recordInfo, Coloropp
     vkUpdateDescriptorSets(device_, 3, writes, 0, nullptr);
     const auto& p = recordInfo.parameters;
     const float greenWb = 0.5f * (p.whiteBalance[1] + p.whiteBalance[2]);
-    // Preview pixels are 2x2 sensor cells from the sensor origin; the CFA-state
+    // Preview pixels are 2*cellScale square sensor blocks from the sensor origin; the CFA-state
     // pass has already applied lens shading and white balance.
     const ColoroppPush push{width,
                             height,
@@ -705,7 +727,7 @@ void RawPreview::recordColoropp(const RawPreviewRecordInfo& recordInfo, Coloropp
                             recordInfo.height,
                             0u,
                             0u,
-                            2u};
+                            2u * cellScale};
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, coloroppPipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, coloroppLayout_, 0, 1, &r.coloroppSet, 0, nullptr);
     vkCmdPushConstants(cmd, coloroppLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);

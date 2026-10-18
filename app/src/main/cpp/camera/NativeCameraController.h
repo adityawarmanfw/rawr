@@ -22,6 +22,10 @@ struct PreviewCallbacks {
         configurePreview;
     std::function<ANativeWindow*(uint64_t, uint32_t, uint32_t, geometry::RawPixelFormat)> createRawWindow;
     std::function<void(uint64_t)> destroyRawWindow;
+    // Full-size still reader of a LensRoute::captureStream route (same
+    // generation lifecycle as the RAW window).
+    std::function<ANativeWindow*(uint64_t, uint32_t, uint32_t, geometry::RawPixelFormat)> createCaptureWindow;
+    std::function<void(uint64_t)> destroyCaptureWindow;
     std::function<void(uint64_t)> captureFailed;
     std::function<bool(const metadata::FrameMetadataSnapshot&)> submitMetadata;
     std::function<void(const std::string&)> diagnostic;
@@ -71,6 +75,10 @@ class NativeCameraController {
     // requestId; the viewfinder stalls until it returns. False when not
     // needed or not submitted.
     bool captureLongExposure(uint64_t requestId, LongExposure* submitted);
+    // Capture-stream routes (LensRoute::captureStream): `count` full-size
+    // stills at the viewfinder's exposure, tagged requestId.
+    bool captureFullSize(uint64_t requestId, uint32_t count);
+    bool hasFullSizeCapture() const;
     // Most a positive-EV long frame can gain over the current repeating
     // exposure (EV); nullopt when unknown.
     std::optional<double> longFrameRoomEv() const;

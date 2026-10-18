@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <cstdio>
 #include <cstring>
 #include <limits>
 
@@ -39,7 +38,9 @@ Raw16CpuSnapshotResult copyToPacked(AImage* image, AHardwareBuffer* ahb, int loc
 
     RawPixelFormat format = RawPixelFormat::Raw16;
     uint64_t sourceRowBytes = static_cast<uint64_t>(desc.stride) * sizeof(uint16_t);
-    bool layoutOk = desc.width == width && desc.height == height;
+    // The buffer may be wider/taller than the image (vivo 8192-wide stills of
+    // an 8160-wide sensor): the image is its top-left.
+    bool layoutOk = desc.width >= width && desc.height >= height;
     if (image) {
         int32_t imageWidth = 0;
         int32_t imageHeight = 0;
@@ -49,7 +50,7 @@ Raw16CpuSnapshotResult copyToPacked(AImage* image, AHardwareBuffer* ahb, int loc
                    AImage_getHeight(image, &imageHeight) == AMEDIA_OK &&
                    AImage_getNumberOfPlanes(image, &planeCount) == AMEDIA_OK && planeCount == 1 &&
                    AImage_getPlaneRowStride(image, 0, &out.sourceRowStrideBytes) == AMEDIA_OK &&
-                   imageWidth == static_cast<int32_t>(width) && imageHeight == static_cast<int32_t>(height) &&
+                   imageWidth >= static_cast<int32_t>(width) && imageHeight >= static_cast<int32_t>(height) &&
                    out.sourceRowStrideBytes > 0;
         // Pixel stride is undefined for packed RAW10 (the NDK reports it as
         // unsupported); RAW16 must be exactly two bytes per pixel.
@@ -61,12 +62,12 @@ Raw16CpuSnapshotResult copyToPacked(AImage* image, AHardwareBuffer* ahb, int loc
         if (layoutOk) {
             format = *imageFormat;
             sourceRowBytes = static_cast<uint64_t>(out.sourceRowStrideBytes);
-        } else if (imageFormat == RawPixelFormat::Raw16 && desc.width == width && desc.height == height &&
-                   desc.format == kHalPixelFormatRaw16 && desc.stride >= width &&
-                   (desc.usage & AHARDWAREBUFFER_USAGE_CPU_READ_MASK) == 0) {
+        } else if (imageFormat == RawPixelFormat::Raw16 && desc.width >= width && desc.height >= height &&
+                   desc.format == kHalPixelFormatRaw16 && desc.stride >= width) {
             // A reader without CPU usage (vivo full-size modes accept only
             // GPU_DATA_BUFFER): the NDK refuses the AImage plane queries, but the
-            // buffer itself describes its RAW16 layout and locks for reading.
+            // buffer itself describes its RAW16 layout and locks for reading
+            // (gralloc may still add CPU bits to it).
             layoutOk = true;
             out.sourceRowStrideBytes = static_cast<int32_t>(sourceRowBytes);
             out.sourcePixelStrideBytes = static_cast<int32_t>(sizeof(uint16_t));

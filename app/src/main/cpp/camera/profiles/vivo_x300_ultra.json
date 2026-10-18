@@ -1,7 +1,7 @@
 {
   "id": "vivo_x300_ultra",
   "name": "vivo X300 Ultra",
-  "version": 2,
+  "version": 4,
   "match": {
     "models": ["V2562", "V2547A", "V2547DA"],
     "verifiedModels": ["V2562"],
@@ -203,14 +203,13 @@
       ]
     },
     {
-      "id": "F35",
+      "id": "H35",
       "cameraId": "3",
       "physicalCameraId": "",
       "stream": {
         "format": "RAW16",
-        "width": 8160,
-        "height": 6128,
-        "unlisted": true
+        "width": 4080,
+        "height": 3064
       },
       "levels": {
         "static": true,
@@ -219,32 +218,168 @@
       },
       "keys": [
         {
-          "tag": "vivo.control.forceSensorMode",
+          "tag": "vivo.control.ai_highresolution",
+          "type": "int32",
+          "scope": "session",
+          "values": [1],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.ultra_highresolution",
+          "type": "int32",
+          "scope": "session",
+          "values": [0],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.is_ProRaw_on",
           "type": "int32",
           "scope": "session",
           "values": [2],
           "enabled": true
         },
         {
-          "tag": "vivo.control.forceSensorMode",
+          "tag": "vivo.control.echo.mode",
+          "type": "int32",
+          "scope": "session",
+          "values": [2],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.scenery.subfunction",
+          "type": "int32",
+          "scope": "session",
+          "values": [5],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.session.uiSwitch_state",
+          "type": "int32",
+          "scope": "session",
+          "values": [2],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.ai_highresolution",
+          "type": "int32",
+          "scope": "request",
+          "values": [1],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.ultra_highresolution",
+          "type": "int32",
+          "scope": "request",
+          "values": [0],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.is_pro_mode",
+          "type": "int32",
+          "scope": "request",
+          "values": [1],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.is_ProRaw_on",
           "type": "int32",
           "scope": "request",
           "values": [2],
           "enabled": true
+        },
+        {
+          "tag": "vivo.control.echo.mode",
+          "type": "int32",
+          "scope": "request",
+          "values": [2],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.camera_scenery_pro",
+          "type": "byte",
+          "scope": "request",
+          "values": [1],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.scenery.subfunction",
+          "type": "int32",
+          "scope": "request",
+          "values": [5],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.session.uiSwitch_state",
+          "type": "int32",
+          "scope": "request",
+          "values": [2],
+          "enabled": true
+        },
+        {
+          "tag": "com.vivo.current_ui_module",
+          "type": "int32",
+          "scope": "still",
+          "values": [74],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.onlyDng",
+          "type": "int32",
+          "scope": "still",
+          "values": [1],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.isCapture",
+          "type": "int32",
+          "scope": "still",
+          "values": [0],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.sensorMode",
+          "type": "int32",
+          "scope": "still",
+          "values": [0],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.isUpscale",
+          "type": "int32",
+          "scope": "still",
+          "values": [0],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.isPAPNeeded",
+          "type": "byte",
+          "scope": "still",
+          "values": [1],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.forceSensorMode",
+          "type": "int32",
+          "scope": "still",
+          "values": [2],
+          "enabled": true
         }
       ],
-      "readerUsage": "gpuDataBuffer",
-      "vendorGate": "vivoFullSize"
+      "vendorGate": "vivoFullSize",
+      "captureStream": {
+        "format": "RAW16",
+        "width": 8192,
+        "height": 6144
+      }
     },
     {
-      "id": "F85",
+      "id": "H85",
       "cameraId": "5",
       "physicalCameraId": "",
       "stream": {
         "format": "RAW16",
-        "width": 8160,
-        "height": 6144,
-        "unlisted": true
+        "width": 4080,
+        "height": 3072
       },
       "levels": {
         "static": true,
@@ -253,22 +388,159 @@
       },
       "keys": [
         {
-          "tag": "vivo.control.forceSensorMode",
+          "tag": "vivo.control.ai_highresolution",
           "type": "int32",
           "scope": "session",
-          "values": [14],
+          "values": [1],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.ultra_highresolution",
+          "type": "int32",
+          "scope": "session",
+          "values": [0],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.is_ProRaw_on",
+          "type": "int32",
+          "scope": "session",
+          "values": [2],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.echo.mode",
+          "type": "int32",
+          "scope": "session",
+          "values": [2],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.scenery.subfunction",
+          "type": "int32",
+          "scope": "session",
+          "values": [5],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.session.uiSwitch_state",
+          "type": "int32",
+          "scope": "session",
+          "values": [2],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.ai_highresolution",
+          "type": "int32",
+          "scope": "request",
+          "values": [1],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.ultra_highresolution",
+          "type": "int32",
+          "scope": "request",
+          "values": [0],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.is_pro_mode",
+          "type": "int32",
+          "scope": "request",
+          "values": [1],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.is_ProRaw_on",
+          "type": "int32",
+          "scope": "request",
+          "values": [2],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.echo.mode",
+          "type": "int32",
+          "scope": "request",
+          "values": [2],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.camera_scenery_pro",
+          "type": "byte",
+          "scope": "request",
+          "values": [1],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.scenery.subfunction",
+          "type": "int32",
+          "scope": "request",
+          "values": [5],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.session.uiSwitch_state",
+          "type": "int32",
+          "scope": "request",
+          "values": [2],
+          "enabled": true
+        },
+        {
+          "tag": "com.vivo.current_ui_module",
+          "type": "int32",
+          "scope": "still",
+          "values": [74],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.onlyDng",
+          "type": "int32",
+          "scope": "still",
+          "values": [1],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.isCapture",
+          "type": "int32",
+          "scope": "still",
+          "values": [0],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.sensorMode",
+          "type": "int32",
+          "scope": "still",
+          "values": [0],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.isUpscale",
+          "type": "int32",
+          "scope": "still",
+          "values": [0],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.isPAPNeeded",
+          "type": "byte",
+          "scope": "still",
+          "values": [1],
           "enabled": true
         },
         {
           "tag": "vivo.control.forceSensorMode",
           "type": "int32",
-          "scope": "request",
+          "scope": "still",
           "values": [14],
           "enabled": true
         }
       ],
-      "readerUsage": "gpuDataBuffer",
-      "vendorGate": "vivoFullSize"
+      "vendorGate": "vivoFullSize",
+      "captureStream": {
+        "format": "RAW16",
+        "width": 8192,
+        "height": 6144
+      }
     }
   ]
 }
