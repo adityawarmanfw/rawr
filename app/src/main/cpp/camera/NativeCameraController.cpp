@@ -524,8 +524,21 @@ struct NativeCameraController::Impl final : CameraEventSink {
 
     bool submitRepeatingLocked() {
         publishHeadroomLocked();
-        return requests.submit(deviceSession.session(), deviceSession.request(), deviceSession.callbackContext(),
-                               control, meteringRequestLocked());
+        // AF triggers go out once, as a one-shot copy after the repeating
+        // request (which keeps the new AF mode / region at IDLE).
+        auto metering = meteringRequestLocked();
+        const auto trigger = metering.trigger;
+        metering.trigger = CameraFocusTrigger::Idle;
+        const bool submitted = requests.submit(deviceSession.session(), deviceSession.request(),
+                                               deviceSession.callbackContext(), control, metering);
+        if (submitted && trigger != CameraFocusTrigger::Idle) {
+            focusControls.finishTrigger();
+            if (!requests.captureAfTrigger(deviceSession.session(), deviceSession.request(),
+                                           deviceSession.callbackContext(), control, trigger))
+                diag(std::string("CAMERA_AF_TRIGGER_FAILED trigger=") +
+                     (trigger == CameraFocusTrigger::Start ? "start" : "cancel"));
+        }
+        return submitted;
     }
 
     CameraMeteringRequest meteringRequestLocked() const {
@@ -653,6 +666,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // provider on an AF region change (its focus search, in dim scenes) and
         // on a request without a target fps range (AE off). Continuous AF
         // without regions and manual focus stay.
+        control.capabilities.tapAfHoldsUntilNextTap = !route.vendorGate.empty();
         if (route.unlistedStream) {
             control.capabilities.tapAfSupported = false;
             control.capabilities.maxAfRegions = 0;
@@ -1415,7 +1429,9 @@ struct NativeCameraController::Impl final : CameraEventSink {
         }
         // Keep the two submissions ordered: CANCEL the existing trigger first,
         // then install the new region/START using the same controller lock.
-        if (plan->cancelFirst) {
+        // A START from a locked AF state begins a new scan anyway; on vivo-gated
+        // routes the CANCEL itself crashes the provider in a dim scene.
+        if (plan->cancelFirst && !control.capabilities.tapAfHoldsUntilNextTap) {
             focusControls.cancelTrigger();
             submitRepeatingLocked();
         }

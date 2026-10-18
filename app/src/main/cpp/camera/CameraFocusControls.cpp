@@ -49,7 +49,8 @@ void CameraFocusControls::acceptTap(CameraControlState& state, const CameraTapFo
     if (state.focusMode == FocusControlMode::Manual) state.focusMode = FocusControlMode::Continuous;
     region_ = plan.region;
     state.tapAfActive = true;
-    tapPolicy_.acceptedTap(state.focusMode == FocusControlMode::Continuous, nowMs);
+    tapPolicy_.acceptedTap(state.focusMode == FocusControlMode::Continuous && !state.capabilities.tapAfHoldsUntilNextTap,
+                           nowMs);
     faceSteering_ = false;
     trigger_ = CameraFocusTrigger::Start;
 }
