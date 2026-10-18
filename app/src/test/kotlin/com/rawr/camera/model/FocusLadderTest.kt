@@ -39,10 +39,23 @@ class FocusLadderTest {
     }
 
     @Test
-    fun macroIsFinerThanMidRange() {
-        val ladder = FocusLadder.build(5f)
-        assertTrue(ladder.dioptersPerDp(4f) < ladder.dioptersPerDp(1.5f))
-        assertTrue(ladder.dioptersPerDp(.2f) < ladder.dioptersPerDp(1.5f))
+    fun everyDoublingOfDistanceTakesTheSameDrag() {
+        val ladder = FocusLadder.build(10f)
+        fun dpBetween(fromM: Float, toM: Float): Float {
+            var p = ladder.start(1f / fromM)
+            var dp = 0f
+            while (p.diopters > 1f / toM) {
+                p = ladder.scrub(p, .5f).first
+                dp += .5f
+            }
+            return dp
+        }
+        val nearDoubling = dpBetween(.25f, .5f)
+        assertTrue(nearDoubling in 80f..95f, "0.25 -> 0.5 m took $nearDoubling dp")
+        assertTrue(kotlin.math.abs(dpBetween(1f, 2f) - nearDoubling) < 3f)
+        assertTrue(kotlin.math.abs(dpBetween(2f, 4f) - nearDoubling) < 3f)
+        // Far zone: a floor, so ∞ is reached.
+        assertEquals(FocusLadder.FAR_DIOPTERS_PER_DP, ladder.dioptersPerDp(.05f))
     }
 
     @Test
