@@ -335,6 +335,9 @@ std::optional<rawrcam::pipeline::FrameDiagnosticsPort::SceneKeyFeedback> Session
 
 void SessionFrameCallbacks::advanceStill() { engine_->capture_.single().advance(); }
 bool SessionFrameCallbacks::isStillCaptureRequested() { return engine_->capture_.single().captureRequested(); }
+bool SessionFrameCallbacks::isFullSizeStillCopy(const rawrcam::metadata::FrameMetadataSnapshot& metadata) {
+    return engine_->isFullSizeStillCopy(metadata);
+}
 bool SessionFrameCallbacks::deferSubmittedFrame(const rawrcam::metadata::FrameMetadataSnapshot& metadata,
                                                 const rawrcam::color::FrameColorTransform& colorState,
                                                 const tonemap::TonemapParams& tonemapParams, float aePostGain,

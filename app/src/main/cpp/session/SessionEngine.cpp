@@ -389,6 +389,11 @@ bool SessionEngine::fullSizeStillsOnly() {
     std::lock_guard<std::mutex> lock(fullSize_.mutex);
     return fullSize_.context != nullptr;
 }
+bool SessionEngine::isFullSizeStillCopy(const rawrcam::metadata::FrameMetadataSnapshot& metadata) {
+    std::lock_guard<std::mutex> lock(fullSize_.mutex);
+    return fullSize_.context && metadata.optimizedStillRequestId &&
+           fullSize_.requestIds.count(*metadata.optimizedStillRequestId);
+}
 bool SessionEngine::fullSizeStillClaimed(uint64_t timestampNs) {
     std::lock_guard<std::mutex> lock(fullSize_.mutex);
     return fullSize_.claimedTimestamps.count(timestampNs) != 0;

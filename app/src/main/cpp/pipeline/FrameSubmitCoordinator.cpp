@@ -254,7 +254,8 @@ bool FrameSubmitCoordinator::submitMatchedFrame(rawrcam::imaging::MatchedFrame& 
         }
     }
 
-    const bool accepted = submitAhb(timestampNs, image, meta.snapshot.blackLevelPhysicalRggb,
+    const bool accepted = !capturePort_.isFullSizeStillCopy(meta.snapshot) &&
+                          submitAhb(timestampNs, image, meta.snapshot.blackLevelPhysicalRggb,
                                     meta.snapshot.effectiveWhiteLevel, meta.colorState.baselineWbRggb,
                                     meta.colorState.cameraToLinearSrgbRowMajor, meta.snapshot, meta.colorState);
     if (capturePort_.isStillCaptureRequested()) {

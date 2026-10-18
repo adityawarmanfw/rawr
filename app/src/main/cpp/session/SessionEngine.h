@@ -331,6 +331,7 @@ class SessionEngine {
     // The full-size context when `metadata` is a full-size still's binned copy (and marks it claimed).
     metadata::CameraContextMetadataPtr claimFullSizeStill(const metadata::FrameMetadataSnapshot& metadata);
     bool fullSizeStillClaimed(uint64_t timestampNs);
+    bool isFullSizeStillCopy(const metadata::FrameMetadataSnapshot& metadata);
     // A capture-stream lens: photos come only from its full-size stills, never a binned viewfinder frame.
     bool fullSizeStillsOnly();
     // Snapshots the full-size frame of a claimed still; on success also deletes `binned`, which the caller hands over.
