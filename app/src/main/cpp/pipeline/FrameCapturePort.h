@@ -39,6 +39,9 @@ class FrameCapturePort {
     // The viewfinder-stream copy of a full-size still (capture-stream lens):
     // claimed by the photo but never shown (the HAL fills it with a crop).
     virtual bool isFullSizeStillCopy(const rawrcam::metadata::FrameMetadataSnapshot&) { return false; }
+    // Its result, with the viewfinder-stream frame's colour state (bursts merge from it).
+    virtual void observeFullSizeStillCopy(const rawrcam::metadata::FrameMetadataSnapshot&,
+                                          const rawrcam::color::FrameColorTransform&) {}
     virtual bool deferSubmittedFrame(const rawrcam::metadata::FrameMetadataSnapshot& metadata,
                                      const rawrcam::color::FrameColorTransform& colorState,
                                      const tonemap::TonemapParams& tonemapParams, float aePostGain, bool filmEnabled,

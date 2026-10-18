@@ -267,6 +267,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
     std::atomic<uint64_t> longExposureTag{0};
     std::atomic<int64_t> longExposureNs{0};
     std::atomic<int64_t> longExposureStartMs{-1};
+    // Tagged frames still to come before the cue ends (a full-size burst has several).
+    std::atomic<int32_t> longExposureFramesLeft{0};
     std::atomic<int> lastLongExposureHonored{-1};  // -1 none yet, 0 shortened, 1 honored
     std::chrono::steady_clock::time_point longExposureSubmitted{};
     static int64_t monotonicMs() {
@@ -321,6 +323,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // until the frame is in.
         longExposureTag.store(requestId, std::memory_order_relaxed);
         longExposureNs.store(e.exposureTimeNs, std::memory_order_relaxed);
+        longExposureFramesLeft.store(int32_t(count), std::memory_order_relaxed);
         longExposureStartMs.store(monotonicMs(), std::memory_order_relaxed);
         longExposureSubmitted = std::chrono::steady_clock::now();
         // The still queues behind the in-flight preview requests (~0.6 s at
@@ -349,6 +352,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         if (!pair || requestId == 0 || !deviceSession.request()) return false;
         longExposureTag.store(requestId, std::memory_order_relaxed);
         longExposureNs.store(pair->exposureTimeNs, std::memory_order_relaxed);
+        longExposureFramesLeft.store(1, std::memory_order_relaxed);
         // Submit time until the sensor reports the exposure started.
         longExposureStartMs.store(monotonicMs(), std::memory_order_relaxed);
         longExposureSubmitted = std::chrono::steady_clock::now();
@@ -897,7 +901,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // Freeze the viewfinder on the press until the long frame is in, and
         // never show the long frame itself.
         if (longTag != 0) actions.frame->hidePreview = true;
-        if (const uint64_t tag = longTag; tag != 0 && actions.frame->optimizedStillRequestId == tag) {
+        if (const uint64_t tag = longTag; tag != 0 && actions.frame->optimizedStillRequestId == tag &&
+                                              longExposureFramesLeft.fetch_sub(1, std::memory_order_relaxed) <= 1) {
             // Honored when the sensor reports the shutter and the frame took
             // about that long; a HAL that clamps returns early.
             const auto requested = longExposureNs.load(std::memory_order_relaxed);

@@ -424,6 +424,13 @@
           "scope": "still",
           "values": [1],
           "enabled": true
+        },
+        {
+          "tag": "vivo.control.forceSensorMode",
+          "type": "int32",
+          "scope": "still",
+          "values": [2],
+          "enabled": true
         }
       ],
       "vendorGate": "vivoFullSize",
@@ -586,6 +593,13 @@
           "type": "byte",
           "scope": "still",
           "values": [1],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.forceSensorMode",
+          "type": "int32",
+          "scope": "still",
+          "values": [14],
           "enabled": true
         }
       ],

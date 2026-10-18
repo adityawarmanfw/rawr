@@ -264,7 +264,8 @@ void testProfileJson() {
             assert(s->captureStream->format == RawPixelFormat::Raw16 && s->vendorGate == "vivoFullSize");
             bool stillUiModule = false, sessionUiModule = false, forced = false;
             for (const auto& k : s->keys) {
-                forced |= k.tag == "vivo.control.forceSensorMode";
+                // The full-size mode only on stills: it forces the switch where the AI would stay binned.
+                forced |= k.tag == "vivo.control.forceSensorMode" && k.scope != CameraKeySetting::Scope::Still;
                 if (k.tag != "com.vivo.current_ui_module") continue;
                 stillUiModule |= k.scope == CameraKeySetting::Scope::Still;
                 sessionUiModule |= k.scope != CameraKeySetting::Scope::Still;

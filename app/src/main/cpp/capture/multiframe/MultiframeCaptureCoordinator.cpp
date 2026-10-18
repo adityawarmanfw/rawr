@@ -48,9 +48,17 @@ void MultiframeCaptureCoordinator::recordFrame(VkCommandBuffer command, VkImage 
                                                const color::FrameColorTransform& color) {
     if (multiframeFrameRing_) multiframeFrameRing_->observeSubmit(command, rawCopy, timestampNs, metadata, color);
 }
+void MultiframeCaptureCoordinator::configureFullSize(uint32_t width, uint32_t height, uint32_t cfa) {
+    config_ = {width, height, cfa};
+    configured_ = true;
+    fullSizeOnly_ = true;
+    resetZsl();
+    mfsrService_->configure(config_, experimentalMultiframeEnabled_);
+}
 void MultiframeCaptureCoordinator::configure(uint32_t width, uint32_t height, uint32_t cfa) {
     config_ = {width, height, cfa};
     configured_ = true;
+    fullSizeOnly_ = false;
     resetZsl();
     initializeZslIfNeeded();
     mfsrService_->configure(config_, experimentalMultiframeEnabled_);
@@ -60,6 +68,7 @@ void MultiframeCaptureCoordinator::reset() noexcept {
     if (mfsrService_) mfsrService_->reset();
     resetZsl();
     configured_ = false;
+    fullSizeOnly_ = false;
     config_ = {};
 }
 void MultiframeCaptureCoordinator::shutdown() noexcept {
@@ -83,7 +92,7 @@ void MultiframeCaptureCoordinator::setPersistZslRingEnabled(bool enabled) noexce
 }
 
 void MultiframeCaptureCoordinator::initializeZslIfNeeded() noexcept {
-    if (!configured_) return;
+    if (!configured_ || fullSizeOnly_) return;
     try {
         if (experimentalMultiframeEnabled_ && !multiframeFrameRing_) {
             const std::size_t ringFrames = multiframeRingFrames(config_.rawWidth, config_.rawHeight);
@@ -180,6 +189,11 @@ uint32_t MultiframeCaptureCoordinator::prepareExperimentalMultiframeOnShutter(ui
 }
 
 void MultiframeCaptureCoordinator::cancelPreparedMultiframeCapture() noexcept { pendingMultiframeCapture_.reset(); }
+bool MultiframeCaptureCoordinator::adoptPreparedCapture(std::unique_ptr<PendingMultiframeCapture> capture) noexcept {
+    if (!capture || capture->frames.size() < 2 || pendingMultiframeCapture_) return false;
+    pendingMultiframeCapture_ = std::move(capture);
+    return true;
+}
 
 std::string MultiframeCaptureCoordinator::pollMultiframeDngCompletion() { return mfsrService_->pollDngCompletion(); }
 

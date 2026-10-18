@@ -171,11 +171,9 @@ uint32_t SessionEngine::prepareExperimentalMultiframe(uint32_t maxFrames, uint32
         return 0u;
     }
     // Capture-stream lens: the ZSL ring holds only binned viewfinder frames;
-    // the photo is a single full-size still until merges take full-size bursts.
-    if (const auto* controller = cameraControls_.controller(); controller && controller->hasFullSizeCapture()) {
-        LOGI("MULTIFRAME_FULL_SIZE_SINGLE burst=%u", maxFrames + longFrames);
-        return 0u;
-    }
+    // the merge takes a burst of full-size stills requested now.
+    if (const auto* controller = cameraControls_.controller(); controller && controller->hasFullSizeCapture())
+        return prepareFullSizeBurst(std::min<uint32_t>(maxFrames + longFrames, kFullSizeMaxFrames));
     bool skipLong = false;
     if (longFrames > 0u) {
         const auto* controller = cameraControls_.controller();
@@ -207,7 +205,8 @@ uint64_t SessionEngine::startPreparedMultiframeCapture(
         // burst is lifted back to (unchanged reference exposure in manual).
         if (tuning.mergeAlgorithm == rawrcam::capture::multiframe::kMergeAlgorithmHdrPlusBracketed) {
             tuning.bracketCapture = 1u;
-            // Their slots were frozen as burst frames at the shutter.
+            // Their slots were frozen as burst frames at the shutter (or a
+            // full-size burst has no binned long frames to take).
             if (bracketSkippedForPending_) tuning.bracketFrames = 0u;
             if (const auto reference = capture_.multiframe().preparedReferenceMetadata()) {
                 const double exposure = rawrcam::capture::multiframe::linearExposure(*reference);

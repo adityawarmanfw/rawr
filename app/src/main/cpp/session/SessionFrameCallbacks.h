@@ -28,6 +28,8 @@ class SessionFrameCallbacks final : public pipeline::FrameLifecyclePort,
     void advanceStill() override;
     bool isStillCaptureRequested() override;
     bool isFullSizeStillCopy(const rawrcam::metadata::FrameMetadataSnapshot& metadata) override;
+    void observeFullSizeStillCopy(const rawrcam::metadata::FrameMetadataSnapshot& metadata,
+                                  const rawrcam::color::FrameColorTransform& color) override;
     bool deferSubmittedFrame(const rawrcam::metadata::FrameMetadataSnapshot& metadata,
                              const rawrcam::color::FrameColorTransform& colorState,
                              const tonemap::TonemapParams& tonemapParams, float aePostGain, bool filmEnabled,
