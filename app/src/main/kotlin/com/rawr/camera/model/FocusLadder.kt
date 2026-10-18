@@ -14,26 +14,32 @@ data class FocusStop(val normalized: Float, val diopters: Float, val anchor: Foc
 data class FocusScrubPosition(val diopters: Float, val heldAnchor: FocusStop? = null, val escapeDp: Float = 0f)
 
 /**
- * Continuous manual-focus scrub scale. Drag maps to diopters with a gain that
- * depends on where the lens is: fine through the macro end, faster across the
- * middle, fine again in the far zone. Exact magnetic anchors sit at NEAR,
- * hyperfocal and ∞ (exactly 0 D); leaving one costs [ANCHOR_RELEASE_DP].
- * Continuous (not quantized) so a drag starts exactly at the current lens
- * position and never jumps.
+ * Continuous manual-focus scrub scale. Drag maps to diopters with a gain
+ * proportional to the lens position, so every doubling of the focus distance
+ * (0.5 -> 1 m, 2 -> 4 m) takes the same drag; past ~10 m the gain stays at a
+ * floor so ∞ is reached. Exact magnetic anchors sit at NEAR, hyperfocal and ∞
+ * (exactly 0 D); leaving one costs [ANCHOR_RELEASE_DP]. Continuous (not
+ * quantized) so a drag starts exactly at the current lens position and never
+ * jumps.
  */
 class FocusLadder private constructor(val minimumFocusDistance: Float, val anchors: List<FocusStop>) {
-    private val macroStart = minimumFocusDistance * (1f - MACRO_ZONE_FRACTION)
-
     fun normalizedOf(diopters: Float): Float =
         if (diopters <= 0f) 1f else (1f - diopters / minimumFocusDistance).coerceIn(0f, 1f)
 
     fun dioptersOf(normalized: Float): Float = ((1f - normalized) * minimumFocusDistance).coerceIn(0f, minimumFocusDistance)
 
     /** Diopters moved per dp of drag at [diopters]. */
-    fun dioptersPerDp(diopters: Float): Float = when {
-        diopters < FAR_ZONE_DIOPTERS -> FAR_DIOPTERS_PER_DP
-        diopters >= macroStart -> minimumFocusDistance * MACRO_GAIN_FRACTION
-        else -> minimumFocusDistance * MID_GAIN_FRACTION
+    fun dioptersPerDp(diopters: Float): Float = max(diopters * LOG_GAIN_PER_DP, FAR_DIOPTERS_PER_DP)
+
+    /**
+     * Drag (dp at 1x speed) from ∞ to [diopters]: the scale's even coordinate,
+     * so haptic ticks every [TICK_DP] of it are evenly spaced however far.
+     */
+    fun travelDpOf(diopters: Float): Float {
+        val knee = FAR_DIOPTERS_PER_DP / LOG_GAIN_PER_DP
+        val d = diopters.coerceAtLeast(0f)
+        return if (d <= knee) d / FAR_DIOPTERS_PER_DP
+        else knee / FAR_DIOPTERS_PER_DP + kotlin.math.ln(d / knee) / LOG_GAIN_PER_DP
     }
 
     fun anchorNear(normalized: Float, radius: Float): FocusStop? =
@@ -77,13 +83,19 @@ class FocusLadder private constructor(val minimumFocusDistance: Float, val ancho
     }
 
     companion object {
-        /** Beyond 2 m (diopters below this) is the far zone. */
-        const val FAR_ZONE_DIOPTERS = .5f
-        const val FAR_DIOPTERS_PER_DP = .004f
-        /** Top share of the diopter range treated as macro. */
-        const val MACRO_ZONE_FRACTION = .4f
-        const val MACRO_GAIN_FRACTION = .002f
-        const val MID_GAIN_FRACTION = .004f
+        /** Relative focus change per dp: a doubling of distance takes ln 2 / 0.006 ≈ 115 dp. */
+        const val LOG_GAIN_PER_DP = .006f
+        /** Gain floor (beyond ~10 m): the last 0.1 D to ∞ takes ~167 dp. */
+        const val FAR_DIOPTERS_PER_DP = .0006f
+        /** Haptic tick spacing along [travelDpOf]. */
+        const val TICK_DP = 10f
+        /** Drag speed (dp/ms) up to which a drag moves at 1x; faster drags speed up to [MAX_SPEEDUP]. */
+        const val FINE_SPEED_DP_PER_MS = .25f
+        const val MAX_SPEEDUP = 4f
+
+        /** Gain multiplier for a drag moving at [dpPerMs]: fine when slow, quick across the range when fast. */
+        fun speedup(dpPerMs: Float): Float =
+            if (!dpPerMs.isFinite()) 1f else (dpPerMs / FINE_SPEED_DP_PER_MS).coerceIn(1f, MAX_SPEEDUP)
         /** Drag needed to pull off a magnetic anchor. */
         const val ANCHOR_RELEASE_DP = 10f
 

@@ -68,7 +68,8 @@ void modeAndManualFocus() {
     state.appliedFocusDistance = 4;
     assert(focus.requestMode(state, FocusControlMode::Manual, 3));
     assert(std::abs(state.requestedManualFocusNormalized - 0.6f) < 1e-6f);
-    assert(focus.request(std::nullopt).trigger == CameraFocusTrigger::Cancel);
+    // AF off ends AF; a cancel would go out as a continuous-AF frame and refocus.
+    assert(focus.request(std::nullopt).trigger == CameraFocusTrigger::Idle);
     assert(!focus.request(std::nullopt).afRegion && !state.tapAfActive);
     assert(focus.requestManualFocus(state, 2, 4));
     assert(state.requestedManualFocusNormalized == 1);
@@ -76,7 +77,20 @@ void modeAndManualFocus() {
     assert(state.requestedManualFocusNormalized == 0);
     assert(!focus.requestManualFocus(state, std::numeric_limits<float>::quiet_NaN(), 6));
     assert(state.focusRequestId == 6 && state.requestedManualFocusNormalized == 0);
-    assert(focus.finishTrigger() && !focus.finishTrigger());
+    assert(!focus.finishTrigger());
+    // Scrubbing MF right after a tap: one cancel releases the scan's lens
+    // position, then no more (each would be its own frame).
+    state.focusMode = FocusControlMode::Continuous;
+    const auto tap = focus.planTap(state, geometry(), {0.5f, 0.5f});
+    focus.acceptTap(state, *tap, 100);
+    assert(focus.finishTrigger());
+    assert(focus.requestManualFocus(state, 0.2f, 7));
+    assert(focus.request(std::nullopt).trigger == CameraFocusTrigger::Cancel);
+    assert(focus.finishTrigger());
+    for (float n : {0.3f, 0.4f}) {
+        assert(focus.requestManualFocus(state, n, 8));
+        assert(focus.request(std::nullopt).trigger == CameraFocusTrigger::Idle);
+    }
 }
 
 void tapSequenceAndExpiry() {
@@ -115,13 +129,22 @@ void lockedTapAndModeCleanup() {
     CameraFocusControls focus;
     auto state = controls();
     assert(focus.requestMode(state, FocusControlMode::LockedAuto, 1));
+    // No tap scan ran: nothing to cancel before the first locked tap.
     auto locked = focus.planTap(state, geometry(), {0.5f, 0.5f});
-    assert(locked && locked->cancelFirst);
+    assert(locked && !locked->cancelFirst);
     focus.acceptTap(state, *locked, 100);
     assert(!focus.expireTap(state, 1000000));
     assert(focus.requestMode(state, FocusControlMode::Manual, 2));
     assert(!state.tapAfActive && !focus.request(std::nullopt).afRegion && !focus.expireTap(state, 1000000));
+    // Leaving the live tap for MF cancels its scan once (the HAL holds its lens position until then).
+    assert(focus.request(std::nullopt).trigger == CameraFocusTrigger::Cancel);
+    assert(focus.finishTrigger());
     assert(focus.requestMode(state, FocusControlMode::Continuous, 3));
+    assert(focus.request(std::nullopt).trigger == CameraFocusTrigger::Idle);
+    // Leaving a live tap for AF-C cancels its scan.
+    assert(focus.requestMode(state, FocusControlMode::LockedAuto, 4));
+    focus.acceptTap(state, *focus.planTap(state, geometry(), {0.5f, 0.5f}), 100);
+    assert(focus.requestMode(state, FocusControlMode::Continuous, 5));
     assert(focus.request(std::nullopt).trigger == CameraFocusTrigger::Cancel);
     focus.finishTrigger();
     const auto tap = focus.planTap(state, geometry(), {0.5f, 0.5f});
@@ -141,6 +164,25 @@ void tapLeavesManualFocus() {
     assert(state.focusMode == FocusControlMode::Continuous && state.tapAfActive);
     assert(focus.request(std::nullopt).afRegion == tap->region);
     assert(focus.expireTap(state, 4100) && !state.tapAfActive);
+}
+
+// vivo-gated routes: leaving a tap for MF or AF-C neither cancels AF nor drops
+// the tap's region (either crashes the provider after a tap scan).
+void heldTapRegionOutlivesTheTap() {
+    CameraFocusControls focus;
+    auto state = controls();
+    state.capabilities.tapAfHoldsUntilNextTap = true;
+    const auto tap = focus.planTap(state, geometry(), {0.3f, 0.6f});
+    assert(tap);
+    focus.acceptTap(state, *tap, 100);
+    assert(focus.finishTrigger());
+    assert(focus.requestManualFocus(state, 0.5f, 2));
+    assert(state.focusMode == FocusControlMode::Manual && !state.tapAfActive);
+    auto request = focus.request(std::nullopt);
+    assert(request.trigger == CameraFocusTrigger::Idle && request.afRegion == tap->region);
+    assert(focus.requestMode(state, FocusControlMode::Continuous, 3));
+    request = focus.request(std::nullopt);
+    assert(request.trigger == CameraFocusTrigger::Idle && request.afRegion == tap->region);
 }
 
 void faceHysteresisAndTapOwnership() {
@@ -244,6 +286,7 @@ int main() {
     regionGeometry();
     modeAndManualFocus();
     tapLeavesManualFocus();
+    heldTapRegionOutlivesTheTap();
     tapSequenceAndExpiry();
     lockedTapAndModeCleanup();
     faceHysteresisAndTapOwnership();

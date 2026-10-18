@@ -28,7 +28,8 @@ class CameraFocusControls {
                                               SensorPoint point) const;
     void acceptTap(CameraControlState& state, const CameraTapFocusPlan& plan, int64_t nowMs);
     void cancelTrigger() { trigger_ = CameraFocusTrigger::Cancel; }
-    void clearTap(CameraControlState& state);
+    // Ends a tap; an AF cancel goes out only if a tap scan may be in play.
+    void clearTap(CameraControlState& state, bool cancelScan = true);
     bool expireTap(CameraControlState& state, int64_t nowMs);
     bool finishTrigger();
     FaceFocusChange steerFaces(const CameraControlState& state, const metadata::SensorGeometry* geometry,

@@ -39,10 +39,30 @@ class FocusLadderTest {
     }
 
     @Test
-    fun macroIsFinerThanMidRange() {
-        val ladder = FocusLadder.build(5f)
-        assertTrue(ladder.dioptersPerDp(4f) < ladder.dioptersPerDp(1.5f))
-        assertTrue(ladder.dioptersPerDp(.2f) < ladder.dioptersPerDp(1.5f))
+    fun everyDoublingOfDistanceTakesTheSameDrag() {
+        val ladder = FocusLadder.build(10f)
+        fun dpBetween(fromM: Float, toM: Float): Float {
+            var p = ladder.start(1f / fromM)
+            var dp = 0f
+            while (p.diopters > 1f / toM) {
+                p = ladder.scrub(p, .5f).first
+                dp += .5f
+            }
+            return dp
+        }
+        val nearDoubling = dpBetween(.25f, .5f)
+        assertTrue(nearDoubling in 105f..125f, "0.25 -> 0.5 m took $nearDoubling dp")
+        assertTrue(kotlin.math.abs(dpBetween(1f, 2f) - nearDoubling) < 3f)
+        assertTrue(kotlin.math.abs(dpBetween(2f, 4f) - nearDoubling) < 3f)
+        // Far zone: a floor, so ∞ is reached.
+        assertEquals(FocusLadder.FAR_DIOPTERS_PER_DP, ladder.dioptersPerDp(.05f))
+        // Haptic coordinate: increasing toward near, continuous at the knee, even per doubling.
+        val knee = FocusLadder.FAR_DIOPTERS_PER_DP / FocusLadder.LOG_GAIN_PER_DP
+        assertEquals(0f, ladder.travelDpOf(0f))
+        assertTrue(kotlin.math.abs(ladder.travelDpOf(knee * 1.0001f) - ladder.travelDpOf(knee)) < .1f)
+        assertTrue(kotlin.math.abs((ladder.travelDpOf(2f) - ladder.travelDpOf(1f)) - nearDoubling) < 3f)
+        assertEquals(1f, FocusLadder.speedup(.1f))
+        assertEquals(FocusLadder.MAX_SPEEDUP, FocusLadder.speedup(5f))
     }
 
     @Test
@@ -68,7 +88,7 @@ class FocusLadderTest {
             p = ladder.scrub(p, 1f).first
             dp += 1f
         }
-        assertTrue(dp in 350f..600f, "traverse $dp dp")
+        assertTrue(dp in 600f..1000f, "traverse $dp dp (at 1x; fast drags speed up)")
     }
 
     @Test

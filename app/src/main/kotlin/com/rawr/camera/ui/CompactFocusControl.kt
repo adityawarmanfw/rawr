@@ -102,11 +102,18 @@ internal fun CompactFocusButton(state: CaptureUiState, dispatch: CaptureDispatch
                             },
                             onDrag = { change, drag ->
                                 change.consume()
-                                val (next, landed) = ladder.scrub(position, (drag.x - drag.y).toDp().value)
+                                // Slow drags move 1:1 on the even scale; fast ones cross it quicker.
+                                val dragDp = (drag.x - drag.y).toDp().value
+                                val dtMs = (change.uptimeMillis - change.previousUptimeMillis).coerceAtLeast(1L)
+                                val speedup = FocusLadder.speedup(kotlin.math.abs(dragDp) / dtMs)
+                                val (next, landed) = ladder.scrub(position, dragDp * speedup)
                                 if (next.diopters != position.diopters) {
                                     dispatch(SetManualFocus(ladder.normalizedOf(next.diopters)))
                                 }
-                                if (landed) haptics.detent()
+                                // A tick every TICK_DP of the even scale; anchors get the firmer detent.
+                                val tickFrom = kotlin.math.floor(ladder.travelDpOf(position.diopters) / FocusLadder.TICK_DP)
+                                val tickTo = kotlin.math.floor(ladder.travelDpOf(next.diopters) / FocusLadder.TICK_DP)
+                                if (landed) haptics.detent() else if (tickFrom != tickTo) haptics.sliderTick()
                                 position = next
                             },
                             onDragEnd = { dragging = false },
