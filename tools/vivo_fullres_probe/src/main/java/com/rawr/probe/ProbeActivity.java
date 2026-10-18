@@ -218,7 +218,10 @@ public final class ProbeActivity extends Activity {
         try { stockSessionKeys(b); } finally { stockDrop = saved; }
     }
 
+    private java.util.Map<String, Integer> extraKeys = new java.util.LinkedHashMap<>();  // --es setkeys a=1,b=2
+
     private void stockSessionKeys(CaptureRequest.Builder b) {
+        for (java.util.Map.Entry<String, Integer> e : extraKeys.entrySet()) setInt(b, e.getKey(), e.getValue());
         if (!stockDrop.isEmpty()) {
             java.util.Map<String, int[]> keys = new java.util.LinkedHashMap<>();
             keys.put("vivo.control.ultra_highresolution", new int[]{stockUltra});
@@ -273,6 +276,10 @@ public final class ProbeActivity extends Activity {
         stockZoom = getIntent().getFloatExtra("zoom", 0f);
         stockAiHighRes = getIntent().getIntExtra("aihr", -1);
         stockMinKeys = getIntent().getBooleanExtra("minkeys", false);
+        for (String kv : stringExtra("setkeys", "").split(",")) {
+            int eq = kv.indexOf('=');
+            if (eq > 0) extraKeys.put(kv.substring(0, eq), Integer.parseInt(kv.substring(eq + 1)));
+        }
         String drop = stringExtra("dropkeys", "");
         if (!drop.isEmpty()) stockDrop.addAll(java.util.Arrays.asList(drop.split(",")));
         String pvd = stringExtra("pvdrop", ""), ssd = stringExtra("sessdrop", "");
@@ -590,6 +597,8 @@ public final class ProbeActivity extends Activity {
                 still.set(new CaptureRequest.Key<>("vivo.control.requestId", long[].class), new long[]{id});
                 still.set(new CaptureRequest.Key<>("vivo.control.globalCaptureId", long[].class), new long[]{id + 5});
                 still.set(new CaptureRequest.Key<>("vivo.control.frameFlag", long[].class), new long[]{id});
+                final int stillMode = getIntent().getIntExtra("stillmode", -1);  // --ei stillmode N: forceSensorMode on stills only
+                if (stillMode >= 0) setInt(still, "vivo.control.forceSensorMode", stillMode);
                 if (!exps.isEmpty()) {
                     String[] e = exps.split(",");
                     long ns = Long.parseLong(e[i % e.length]);
