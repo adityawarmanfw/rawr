@@ -1,5 +1,6 @@
 #include "diagnostics/timing/GpuTimingTracker.h"
 // Composition root: construction, core lifecycle, metadata ingress, shutdown.
+#include <algorithm>
 #include <chrono>
 #include <sstream>
 #include <stdexcept>
@@ -49,6 +50,7 @@ SessionEngine::SessionEngine(std::string filesDir) : filesDir_(std::move(filesDi
         if (generation < cameraSetupGeneration_) return false;
         cameraSetupGeneration_ = generation;
         const bool configured = realtime_.configureCamera(generation, metadata);
+        lastCameraContext_ = std::make_shared<const rawrcam::metadata::CameraContextMetadata>(metadata);
         profileReaderUsage_ = metadata.rawReaderUsage;
         // The RAW size may have changed (or become known): rebuild the prewarm.
         if (configured) {
@@ -91,6 +93,19 @@ SessionEngine::SessionEngine(std::string filesDir) : filesDir_(std::move(filesDi
                                                        AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER);
             captureReaderGeneration_ = generation;
             fullSizeFrames_.store(0, std::memory_order_relaxed);
+            // Full size is twice the binned pixel array; the buffer may be wider (8192 vs 8160 on vivo).
+            if (lastCameraContext_) {
+                auto context = std::make_shared<rawrcam::metadata::CameraContextMetadata>(*lastCameraContext_);
+                auto& g = context->geometry;
+                g.rawBufferWidth = std::min(width, 2 * g.pixelArrayWidth);
+                g.rawBufferHeight = std::min(height, 2 * g.pixelArrayHeight);
+                capture_.single().configureRawSnapshot(g.rawBufferWidth, g.rawBufferHeight, generation);
+                appendDiagnostic("FULL_SIZE_STILL_CONFIG raw=" + std::to_string(g.rawBufferWidth) + "x" +
+                                 std::to_string(g.rawBufferHeight) + " buffer=" + std::to_string(width) + "x" +
+                                 std::to_string(height));
+                std::lock_guard<std::mutex> stillLock(fullSize_.mutex);
+                fullSize_.context = std::move(context);
+            }
             return window;
         } catch (const std::exception& e) {
             appendDiagnostic(std::string("FULL_SIZE_READER_FAILED error=") + e.what());
@@ -100,6 +115,13 @@ SessionEngine::SessionEngine(std::string filesDir) : filesDir_(std::move(filesDi
     callbacks.destroyCaptureWindow = [this](uint64_t generation) {
         std::lock_guard<std::mutex> lock(mu_);
         if (generation != captureReaderGeneration_) return;
+        {
+            std::lock_guard<std::mutex> stillLock(fullSize_.mutex);
+            fullSize_.frames.clear();
+            fullSize_.context.reset();
+            fullSize_.requestIds.clear();
+            fullSize_.claimedTimestamps.clear();
+        }
         captureFrameIngress_.destroy();
         captureReaderGeneration_ = 0;
     };
@@ -342,9 +364,60 @@ void SessionEngine::waitForVideoPrewarmIdle() { videoSession_.waitForVideoPrewar
 
 namespace rawrcam::session {
 void SessionEngine::onFullSizeFrame(imaging::AcquiredRawFrame frame) {
-    imaging::RawFrameLease lease(frame);  // stage A: count and release
     const auto n = fullSizeFrames_.fetch_add(1, std::memory_order_relaxed) + 1;
     appendDiagnostic("FULL_SIZE_FRAME n=" + std::to_string(n) + " timestampNs=" + std::to_string(frame.timestampNs) +
                      " generation=" + std::to_string(frame.generation));
+    {
+        std::lock_guard<std::mutex> lock(fullSize_.mutex);
+        fullSize_.frames.emplace_back(frame);
+        // The reader holds few images: never keep more than it can lend.
+        while (fullSize_.frames.size() > FullSizeStills::kMaxFrames) fullSize_.frames.pop_front();
+    }
+    fullSize_.arrived.notify_all();
+}
+rawrcam::metadata::CameraContextMetadataPtr SessionEngine::claimFullSizeStill(
+    const rawrcam::metadata::FrameMetadataSnapshot& metadata) {
+    std::lock_guard<std::mutex> lock(fullSize_.mutex);
+    if (!fullSize_.context || !metadata.optimizedStillRequestId ||
+        !fullSize_.requestIds.count(*metadata.optimizedStillRequestId))
+        return nullptr;
+    fullSize_.requestIds.erase(*metadata.optimizedStillRequestId);
+    fullSize_.claimedTimestamps.insert(metadata.timestampNs);
+    return fullSize_.context;
+}
+bool SessionEngine::fullSizeStillsOnly() {
+    std::lock_guard<std::mutex> lock(fullSize_.mutex);
+    return fullSize_.context != nullptr;
+}
+bool SessionEngine::fullSizeStillClaimed(uint64_t timestampNs) {
+    std::lock_guard<std::mutex> lock(fullSize_.mutex);
+    return fullSize_.claimedTimestamps.count(timestampNs) != 0;
+}
+bool SessionEngine::snapshotFullSizeStill(AImage* binned, uint64_t timestampNs) {
+    // Both copies come from one capture: the full-size frame is at most a
+    // moment behind the binned one.
+    constexpr auto kWait = std::chrono::milliseconds(1500);
+    imaging::RawFrameLease full{imaging::AcquiredRawFrame{}};
+    {
+        std::unique_lock<std::mutex> lock(fullSize_.mutex);
+        const auto find = [&] {
+            return std::find_if(fullSize_.frames.begin(), fullSize_.frames.end(),
+                                [&](const auto& f) { return f.get().timestampNs == timestampNs; });
+        };
+        fullSize_.arrived.wait_for(lock, kWait, [&] { return find() != fullSize_.frames.end(); });
+        fullSize_.claimedTimestamps.erase(timestampNs);
+        const auto it = find();
+        if (it == fullSize_.frames.end()) {
+            appendDiagnostic("FULL_SIZE_STILL_MISSING timestampNs=" + std::to_string(timestampNs));
+            return false;
+        }
+        full = std::move(*it);
+        fullSize_.frames.erase(it);
+    }
+    if (!capture_.single().beginDeferredSnapshot(full.image(), full.ahb(), timestampNs, full.fence())) return false;
+    (void)full.takeImage().release();  // the capture worker owns the full-size image now
+    AImage_delete(binned);             // and the caller hands the binned copy over
+    appendDiagnostic("FULL_SIZE_STILL_SNAPSHOT timestampNs=" + std::to_string(timestampNs));
+    return true;
 }
 }  // namespace rawrcam::session

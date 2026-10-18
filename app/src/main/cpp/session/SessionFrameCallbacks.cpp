@@ -344,11 +344,20 @@ bool SessionFrameCallbacks::deferSubmittedFrame(const rawrcam::metadata::FrameMe
     if (!engine_->capture_.acceptsStillTimestamp(metadata.timestampNs)) return false;
     auto tone = tonemapParams;
     engine_->applyAutoKey(tone, SessionEngine::liftNoiseFor(metadata, aePostGain * std::exp2(tone.exposureEV), 1u));
+    // A full-size still's binned copy: the photo is the full-size frame.
+    if (auto fullSize = engine_->claimFullSizeStill(metadata)) {
+        auto full = metadata;
+        full.cameraContext = std::move(fullSize);
+        return engine_->capture_.single().deferSubmittedFrame(full, colorState, tone, aePostGain, filmEnabled,
+                                                              filmLook);
+    }
+    if (engine_->fullSizeStillsOnly()) return false;
     return engine_->capture_.single().deferSubmittedFrame(metadata, colorState, tone, aePostGain, filmEnabled,
                                                           filmLook);
 }
 bool SessionFrameCallbacks::beginDeferredSnapshot(AImage* imageLease, AHardwareBuffer* ahb, std::uint64_t timestampNs,
                                                   int acquireFenceFd) {
+    if (engine_->fullSizeStillClaimed(timestampNs)) return engine_->snapshotFullSizeStill(imageLease, timestampNs);
     return engine_->capture_.single().beginDeferredSnapshot(imageLease, ahb, timestampNs, acquireFenceFd);
 }
 

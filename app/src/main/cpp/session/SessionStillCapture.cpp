@@ -55,10 +55,23 @@ uint64_t SessionEngine::requestRawStillCapture(rawrcam::encoding::dng::DngCaptur
     }
     // Long exposure: the viewfinder runs a shorter shutter, so the capture is
     // its own one-shot frame; wait for it instead of the next viewfinder frame.
-    const auto longExposure = camera->deferredCaptureExposure();
+    const bool fullSize = camera->hasFullSizeCapture();
+    const auto longExposure = fullSize ? std::nullopt : camera->deferredCaptureExposure();
     const uint64_t requestId = capture_.requestSingle(std::move(dngContext), std::move(jpegContext), [this] {
         return ingressQueue_.latestTimestamp(realtime_.generation());
     });
+    if (requestId != 0 && fullSize) {
+        // Capture-stream lens: the photo is the full-size still this request asks for.
+        {
+            std::lock_guard<std::mutex> stillLock(fullSize_.mutex);
+            fullSize_.requestIds.insert(requestId);
+        }
+        capture_.single().expectOptimizedFrame(requestId, std::chrono::milliseconds(1500));
+        if (!camera->captureFullSize(requestId, 1)) {
+            capture_.single().expectOptimizedFrame(requestId);
+            appendDiagnostic("FULL_SIZE_SUBMIT_FAILED requestId=" + std::to_string(requestId));
+        }
+    }
     if (requestId != 0 && longExposure) {
         const auto waitMs = std::chrono::milliseconds(longExposure->exposureTimeNs / 1'000'000 + 1000);
         capture_.single().expectOptimizedFrame(requestId, waitMs);
@@ -68,10 +81,6 @@ uint64_t SessionEngine::requestRawStillCapture(rawrcam::encoding::dng::DngCaptur
             appendDiagnostic("RAW_STILL_LONG_EXPOSURE_SUBMIT_FAILED requestId=" + std::to_string(requestId));
         }
     }
-    // Stage A of the vivo seamless route: also request one full-size still
-    // (logged on arrival); the photo still comes from the viewfinder frame.
-    if (requestId != 0 && camera->hasFullSizeCapture() && !camera->captureFullSize(requestId, 1))
-        appendDiagnostic("FULL_SIZE_SUBMIT_FAILED requestId=" + std::to_string(requestId));
     finalizeDeferredSurfaceDetach();
     return requestId;
 }
@@ -159,6 +168,12 @@ uint32_t SessionEngine::prepareExperimentalMultiframe(uint32_t maxFrames, uint32
     // single-shot as its own exposure (the ZSL ring holds only viewfinder frames).
     if (const auto* controller = cameraControls_.controller(); controller && controller->deferredCaptureExposure()) {
         LOGI("MULTIFRAME_LONG_EXPOSURE_SINGLE burst=%u", maxFrames + longFrames);
+        return 0u;
+    }
+    // Capture-stream lens: the ZSL ring holds only binned viewfinder frames;
+    // the photo is a single full-size still until merges take full-size bursts.
+    if (const auto* controller = cameraControls_.controller(); controller && controller->hasFullSizeCapture()) {
+        LOGI("MULTIFRAME_FULL_SIZE_SINGLE burst=%u", maxFrames + longFrames);
         return 0u;
     }
     bool skipLong = false;
