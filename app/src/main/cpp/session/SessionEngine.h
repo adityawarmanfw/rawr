@@ -344,6 +344,7 @@ class SessionEngine {
     uint64_t nextFullSizeBurstTag_ = 1ull << 62;  // apart from photo request ids
     // A capture-stream lens: photos come only from its full-size stills, never a binned viewfinder frame.
     bool fullSizeStillsOnly();
+    bool fullSizeStillPending();
     // Snapshots the full-size frame of a claimed still; on success also deletes `binned`, which the caller hands over.
     bool snapshotFullSizeStill(AImage* binned, uint64_t timestampNs);
     presentation::PresentationSurface presentationSurface_;

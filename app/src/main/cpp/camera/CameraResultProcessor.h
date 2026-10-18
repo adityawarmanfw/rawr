@@ -2,9 +2,11 @@
 #include <camera/NdkCaptureRequest.h>
 
 #include <functional>
+#include <optional>
 
 #include "camera/CameraResultState.h"
 #include "camera/CameraRouting.h"
+#include "metadata/FrameMetadataSnapshot.h"
 namespace rawrcam::camera {
 struct CameraResultActions {
     std::optional<metadata::FrameMetadataSnapshot> frame;
@@ -30,6 +32,8 @@ class CameraResultProcessor final {
     Diagnostic diagnostic_;
     CameraResultState resultState_;
     uint64_t metadataLogCount_ = 0, frameOrdinal_ = 0;
+    // The latest valid viewfinder result: colour for results that carry none.
+    std::optional<metadata::FrameMetadataSnapshot> lastColor_;
     uint32_t callbackAuditCount_ = 0, rejectAuditCount_ = 0, acceptAuditCount_ = 0;
 };
 }  // namespace rawrcam::camera

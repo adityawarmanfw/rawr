@@ -63,7 +63,8 @@ internal class NativeCaptureSnapshotPresentation {
         val videoFps: Int?,
         val angles: List<NativeShutterAngleChoice>,
         // Lens settings can change the list without restarting the camera.
-        val lenses: List<Pair<String, String>>
+        val lenses: List<Pair<String, String>>,
+        val dngOnly: Boolean
     ) {
         companion object {
             fun from(s: NativeCameraUiSnapshot, fps: Int?) = CapabilityContext(
@@ -72,7 +73,7 @@ internal class NativeCaptureSnapshotPresentation {
                 s.manualExposureSupported, s.shutterPrioritySupported, s.isoPrioritySupported,
                 s.tapAfSupported, s.manualFocusSupported, s.focusDistanceReadoutTrustworthy,
                 s.minimumFocusDistance, s.hyperfocalDistance, s.manualWhiteBalanceSupported, s.supportedAwbModes,
-                fps, if (fps != null) s.shutterAngleChoices else emptyList(), s.profileLenses
+                fps, if (fps != null) s.shutterAngleChoices else emptyList(), s.profileLenses, s.dngOnly
             )
         }
     }

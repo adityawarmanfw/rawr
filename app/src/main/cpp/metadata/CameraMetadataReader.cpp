@@ -219,7 +219,8 @@ std::optional<CameraContextMetadata> readCameraContextMetadata(const ACameraMeta
 
 std::optional<FrameMetadataSnapshot> readFrameMetadataSnapshot(const ACameraMetadata* result,
                                                                CameraContextMetadataPtr cameraContext,
-                                                               uint64_t frameOrdinal, std::string* error) {
+                                                               uint64_t frameOrdinal, std::string* error,
+                                                               const FrameMetadataSnapshot* colorFallback) {
     if (!result) {
         if (error) *error = "null capture result";
         return std::nullopt;
@@ -325,6 +326,23 @@ std::optional<FrameMetadataSnapshot> readFrameMetadataSnapshot(const ACameraMeta
             out.lensShadingMapWidth = out.cameraContext->lensShadingMapWidth;
             out.lensShadingMapHeight = out.cameraContext->lensShadingMapHeight;
             out.lensShadingMap.assign(shading->data.f, shading->data.f + shading->count);
+        }
+    }
+    const auto& gains = out.colorCorrectionGainsRggb;
+    const bool gainsValid =
+        std::all_of(gains.begin(), gains.end(), [](float g) { return std::isfinite(g) && g > 0.0f; });
+    if (!gainsValid && colorFallback) {
+        out.colorCorrectionGainsRggb = colorFallback->colorCorrectionGainsRggb;
+        out.colorCorrectionTransform = colorFallback->colorCorrectionTransform;
+        out.colorCorrectionMode = colorFallback->colorCorrectionMode;
+        if (!out.hasNeutralColorPoint) {
+            out.neutralColorPoint = colorFallback->neutralColorPoint;
+            out.hasNeutralColorPoint = colorFallback->hasNeutralColorPoint;
+        }
+        if (out.lensShadingMap.empty()) {
+            out.lensShadingMapWidth = colorFallback->lensShadingMapWidth;
+            out.lensShadingMapHeight = colorFallback->lensShadingMapHeight;
+            out.lensShadingMap = colorFallback->lensShadingMap;
         }
     }
     std::string validationError;

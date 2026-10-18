@@ -35,6 +35,7 @@
 namespace rawrcam::camera {
 namespace {
 constexpr const char* kTag = "RawrCamCameraNDK";
+constexpr uint64_t kDngOnlyPixels = 100'000'000;  // 200 MP full-size stills: DNG only.
 #define CAMI(...) __android_log_print(ANDROID_LOG_INFO, kTag, __VA_ARGS__)
 #define CAME(...) __android_log_print(ANDROID_LOG_ERROR, kTag, __VA_ARGS__)
 
@@ -115,6 +116,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
     // stream; they start RAW-only for the rest of this process.
     std::set<std::string> rawOnlyRoutes;
     std::string accessRoute = "direct";
+    uint32_t fullSizeBurstLimit = 0;
     bool oisEnabledPreference = true;
     // User preference to bypass Camera2 AE priority; the HAL's advertised
     // support is kept so the preference can be turned back off live.
@@ -687,6 +689,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // without regions and manual focus stay.
         control.capabilities.tapAfHoldsUntilNextTap = !route.vendorGate.empty();
         control.capabilities.faceAfSteering = route.vendorGate.empty();
+        control.capabilities.dngOnly =
+            route.captureStream && uint64_t(route.captureStream->width) * route.captureStream->height > kDngOnlyPixels;
         if (route.unlistedStream) {
             control.capabilities.tapAfSupported = false;
             control.capabilities.maxAfRegions = 0;
@@ -762,6 +766,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         }
         deviceSession.setRawWindow(window);
         deviceSession.setCaptureWindow(captureWindow);
+        fullSizeBurstLimit = route.captureBurst;
         const auto stillCurrent = [&] {
             return active && !shutDown && setupGeneration == deviceSession.generation();
         };
@@ -1292,6 +1297,12 @@ struct NativeCameraController::Impl final : CameraEventSink {
     void clearTapAf(uint64_t requestId) {
         std::lock_guard<std::mutex> lock(mutex);
         control.focusRequestId = std::max(control.focusRequestId, requestId);
+        // A held tap stays until the next tap: returning to continuous AF after
+        // a tap scan crashes the vivo provider (the lens switch sends this clear).
+        if (control.capabilities.tapAfHoldsUntilNextTap && control.tapAfActive) {
+            diag("CAMERA_CONTROL_REQUEST tapAfClearSkipped reason=held_until_next_tap");
+            return;
+        }
         focusControls.clearTap(control);
         if (deviceSession.request() && deviceSession.session()) {
             diag("CAMERA_CONTROL_REQUEST tapAfCleared reason=explicit_clear");
@@ -1508,6 +1519,10 @@ bool NativeCameraController::captureFullSize(uint64_t requestId, uint32_t count)
     return impl_->captureFullSize(requestId, count);
 }
 bool NativeCameraController::hasFullSizeCapture() const { return impl_->hasFullSizeCapture(); }
+uint32_t NativeCameraController::fullSizeBurstLimit() const {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    return impl_->fullSizeBurstLimit;
+}
 bool NativeCameraController::captureLongExposure(uint64_t requestId, LongExposure* submitted) {
     return impl_->captureLongExposure(requestId, submitted);
 }

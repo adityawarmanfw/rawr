@@ -77,6 +77,9 @@ struct LensRoute {
     // (vivo seamless route): `stream` is then the binned viewfinder, and the
     // HAL switches the sensor to full size for each still. Unlisted size.
     std::optional<geometry::RawStreamPreference> captureStream;
+    // Most full-size stills one merge may request (1 = none: the HAL fails
+    // bursts); 0 = the app's own cap.
+    uint32_t captureBurst = 0;
 };
 
 struct CameraProfile {

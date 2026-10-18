@@ -79,6 +79,8 @@ class NativeCameraController {
     // stills at the viewfinder's exposure, tagged requestId.
     bool captureFullSize(uint64_t requestId, uint32_t count);
     bool hasFullSizeCapture() const;
+    // LensRoute::captureBurst of the open route (0 = no profile limit).
+    uint32_t fullSizeBurstLimit() const;
     // Most a positive-EV long frame can gain over the current repeating
     // exposure (EV); nullopt when unknown.
     std::optional<double> longFrameRoomEv() const;

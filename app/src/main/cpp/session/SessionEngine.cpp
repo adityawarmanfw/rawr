@@ -98,12 +98,14 @@ SessionEngine::SessionEngine(std::string filesDir) : filesDir_(std::move(filesDi
                                                        AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER);
             captureReaderGeneration_ = generation;
             fullSizeFrames_.store(0, std::memory_order_relaxed);
-            // Full size is twice the binned pixel array; the buffer may be wider (8192 vs 8160 on vivo).
+            // Full size is 2x (50 MP) or 4x (200 MP) the binned pixel array; the buffer may be wider
+            // (8192 vs 8160 on vivo).
             if (lastCameraContext_) {
                 auto context = std::make_shared<rawrcam::metadata::CameraContextMetadata>(*lastCameraContext_);
                 auto& g = context->geometry;
-                g.rawBufferWidth = std::min(width, 2 * g.pixelArrayWidth);
-                g.rawBufferHeight = std::min(height, 2 * g.pixelArrayHeight);
+                const uint32_t scale = g.pixelArrayWidth ? std::max(1u, width / g.pixelArrayWidth) : 1u;
+                g.rawBufferWidth = std::min(width, scale * g.pixelArrayWidth);
+                g.rawBufferHeight = std::min(height, scale * g.pixelArrayHeight);
                 capture_.single().configureRawSnapshot(g.rawBufferWidth, g.rawBufferHeight, generation);
                 capture_.multiframe().configureFullSize(g.rawBufferWidth, g.rawBufferHeight, context->rawPreviewCfa);
                 appendDiagnostic("FULL_SIZE_STILL_CONFIG raw=" + std::to_string(g.rawBufferWidth) + "x" +
@@ -390,6 +392,10 @@ rawrcam::metadata::CameraContextMetadataPtr SessionEngine::claimFullSizeStill(
     fullSize_.requestIds.erase(*metadata.optimizedStillRequestId);
     fullSize_.claimedTimestamps.insert(metadata.timestampNs);
     return fullSize_.context;
+}
+bool SessionEngine::fullSizeStillPending() {
+    std::lock_guard<std::mutex> lock(fullSize_.mutex);
+    return !fullSize_.requestIds.empty() || !fullSize_.burstTags.empty();
 }
 bool SessionEngine::fullSizeStillsOnly() {
     std::lock_guard<std::mutex> lock(fullSize_.mutex);

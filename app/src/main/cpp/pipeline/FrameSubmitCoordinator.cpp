@@ -130,7 +130,10 @@ bool FrameSubmitCoordinator::videoActive() const noexcept {
 }
 
 void FrameSubmitCoordinator::trimPairer() {
-    const uint64_t dropped = framePairer_->trim(kMaxPairerImages, kMaxPairerMetadata);
+    // While a full-size still is in flight, hold its viewfinder copy (and the
+    // frames behind it) until the still's late result pairs it.
+    const size_t maxImages = capturePort_.fullSizeStillPending() ? kMaxPairerImagesFullSize : kMaxPairerImages;
+    const uint64_t dropped = framePairer_->trim(maxImages, kMaxPairerMetadata);
     performanceTracker_.recordDropped(dropped);
     if (videoActive()) videoDropReasons_.pairer += dropped;
     if (dropped > 0 && pairerPressureLogCount_ % 120 == 0) {

@@ -13,5 +13,8 @@ enum class CaptureOutputFormat(val dng: Boolean, val jpeg: Boolean, val label: S
             dng -> DngAndJpeg
             else -> Jpeg
         }
+
+        /** The format a capture uses: DNG on a DNG-only (200 MP) lens, else the chosen one. */
+        fun from(dng: Boolean, jpeg: Boolean, dngOnly: Boolean) = if (dngOnly) Dng else from(dng, jpeg)
     }
 }

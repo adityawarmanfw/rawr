@@ -112,20 +112,27 @@ internal fun CaptureTopBar(
             }
         } else {
             TopBarSlot {
+                // A DNG-only (200 MP) lens pins the button to DNG; the saved choice returns on other lenses.
+                val dngOnly = state.capabilities.dngOnly
+                val format = com.rawr.camera.model.CaptureOutputFormat.from(state.dngEnabled, state.jpegEnabled, dngOnly)
                 TextButton(
                     onClick = {
                         haptics.selection()
                         dispatch(CycleOutputFormat)
                     },
+                    enabled = !dngOnly,
                     modifier = Modifier.size(48.dp).testTag(CaptureTestTags.TOPBAR_JPEG)
-                        .semantics { contentDescription = "Output format: ${com.rawr.camera.model.CaptureOutputFormat.from(state.dngEnabled, state.jpegEnabled).label}. Tap to cycle formats" },
+                        .semantics {
+                            contentDescription = if (dngOnly) "Output format: DNG only on this lens"
+                            else "Output format: ${format.label}. Tap to cycle formats"
+                        },
                     contentPadding = PaddingValues(0.dp)
                 ) {
                     Text(
-                        when {
-                            !state.jpegEnabled -> "DNG"
-                            state.dngEnabled -> "DNG +\nJPEG"
-                            else -> "JPEG"
+                        when (format) {
+                            com.rawr.camera.model.CaptureOutputFormat.Dng -> "DNG"
+                            com.rawr.camera.model.CaptureOutputFormat.DngAndJpeg -> "DNG +\nJPEG"
+                            com.rawr.camera.model.CaptureOutputFormat.Jpeg -> "JPEG"
                         },
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                         lineHeight = 13.sp,

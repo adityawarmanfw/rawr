@@ -27,6 +27,10 @@ uint64_t SessionEngine::recoverStill(const std::string& name, bool multiframe, i
     return 0;
 }
 
+namespace {
+constexpr uint64_t kFullSizeUltraPixels = 100'000'000;  // 200 MP stills
+}  // namespace
+
 uint64_t SessionEngine::requestRawStillCapture(rawrcam::encoding::dng::DngCaptureContext dngContext,
                                                rawrcam::capture::JpegCaptureRequest jpegContext) {
     // Rejections close the destinations as the contexts go out of scope.
@@ -62,11 +66,18 @@ uint64_t SessionEngine::requestRawStillCapture(rawrcam::encoding::dng::DngCaptur
     });
     if (requestId != 0 && fullSize) {
         // Capture-stream lens: the photo is the full-size still this request asks for.
+        // The sensor switch takes ~0.4 s at 50 MP; a 200 MP still takes ~1 s
+        // on the telephoto and ~4.5 s on the main camera.
+        auto wait = std::chrono::milliseconds(1500);
         {
             std::lock_guard<std::mutex> stillLock(fullSize_.mutex);
             fullSize_.requestIds.insert(requestId);
+            if (fullSize_.context && uint64_t(fullSize_.context->geometry.rawBufferWidth) *
+                                             fullSize_.context->geometry.rawBufferHeight >
+                                         kFullSizeUltraPixels)
+                wait = std::chrono::milliseconds(8000);
         }
-        capture_.single().expectOptimizedFrame(requestId, std::chrono::milliseconds(1500));
+        capture_.single().expectOptimizedFrame(requestId, wait);
         if (!camera->captureFullSize(requestId, 1)) {
             capture_.single().expectOptimizedFrame(requestId);
             appendDiagnostic("FULL_SIZE_SUBMIT_FAILED requestId=" + std::to_string(requestId));
@@ -172,8 +183,16 @@ uint32_t SessionEngine::prepareExperimentalMultiframe(uint32_t maxFrames, uint32
     }
     // Capture-stream lens: the ZSL ring holds only binned viewfinder frames;
     // the merge takes a burst of full-size stills requested now.
-    if (const auto* controller = cameraControls_.controller(); controller && controller->hasFullSizeCapture())
-        return prepareFullSizeBurst(std::min<uint32_t>(maxFrames + longFrames, kFullSizeMaxFrames));
+    if (const auto* controller = cameraControls_.controller(); controller && controller->hasFullSizeCapture()) {
+        uint32_t cap = kFullSizeMaxFrames;
+        if (const uint32_t limit = controller->fullSizeBurstLimit()) cap = std::min(cap, limit);
+        // A lens whose HAL fails full-size bursts takes a single still instead.
+        if (cap < 2u) {
+            LOGI("MULTIFRAME_FULL_SIZE_SINGLE limit=%u", cap);
+            return 0u;
+        }
+        return prepareFullSizeBurst(std::min<uint32_t>(maxFrames + longFrames, cap));
+    }
     bool skipLong = false;
     if (longFrames > 0u) {
         const auto* controller = cameraControls_.controller();
