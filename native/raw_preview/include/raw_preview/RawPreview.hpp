@@ -104,6 +104,9 @@ struct RawPreviewRecordInfo {
     uint32_t inputRawStridePixels = 0;
     uint32_t width = 0;
     uint32_t height = 0;
+    // Each output pixel averages cellScale x cellScale 2x2 Bayer cells: the
+    // output is (width / 2 / cellScale) x (height / 2 / cellScale).
+    uint32_t cellScale = 1;
     RawFrameParameters parameters{};
     uint32_t lensShadingMapWidth = 0;
     uint32_t lensShadingMapHeight = 0;

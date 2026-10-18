@@ -44,6 +44,11 @@
 
 namespace rawrcam::pipeline {
 namespace {
+// Wider RAW frames are vendor full-size modes (8160 px); 12 MP sensors are ~4096.
+constexpr uint32_t kFullSizeRawWidth = 6000;
+}  // namespace
+
+namespace {
 #define SESSION_LOGI(...) __android_log_print(ANDROID_LOG_INFO, "RawrCamNative", __VA_ARGS__)
 #define SESSION_LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "RawrCamNative", __VA_ARGS__)
 void vkCheck(VkResult result, const char* what) {
@@ -204,8 +209,11 @@ bool RealtimePipeline::configureGeometry(uint64_t generation, uint32_t width, ui
         generation_ = generation;
         rawWidth_ = width;
         rawHeight_ = height;
-        previewWidth_ = width / 2;
-        previewHeight_ = height / 2;
+        // The viewfinder bins 2x2 Bayer cells; full-size (50 MP) frames bin
+        // 4x4 so the live pipeline stays at the ~12 MP sensors' cost.
+        const uint32_t bin = width > kFullSizeRawWidth ? 4u : 2u;
+        previewWidth_ = width / bin;
+        previewHeight_ = height / bin;
         cfa_ = cfa;
         black_ = black;
         white_ = white;
