@@ -271,7 +271,11 @@ extern "C" JNIEXPORT jstring JNICALL Java_com_rawr_camera_renderer_RendererNativ
              << ",\"whiteLevel\":" << source.whiteLevel
              << ",\"cfa\":" << source.cfa
              << ",\"blackLevels\":[" << source.black[0] << ',' << source.black[1] << ','
-             << source.black[2] << ',' << source.black[3] << "]}";
+             << source.black[2] << ',' << source.black[3] << ']'
+             // Validated digits/separators only: safe to embed unescaped.
+             << ",\"dateTimeOriginal\":\"" << source.captureExif().dateTimeOriginal
+             << "\",\"offsetTimeOriginal\":\"" << source.captureExif().offsetTimeOriginal
+             << "\",\"subsecTimeOriginal\":\"" << source.captureExif().subsecTimeOriginal << "\"}";
         return e->NewStringUTF(text.str().c_str());
     } catch (const std::exception& error) {
         fail(e, error);
@@ -470,19 +474,35 @@ Java_com_rawr_camera_renderer_RendererNative_render(JNIEnv* e, jobject, jlong id
                                                                    : 0;
             // Export identity (Kotlin-built, still-capture format). Absent on
             // recipes predating the export block: fall back to the legacy values.
-            c.deviceMake = exportJson.text("deviceMake");
-            if (c.deviceMake.empty()) c.deviceMake = "RAWR";
-            c.deviceModel = exportJson.text("deviceModel");
-            if (c.deviceModel == "null") c.deviceModel.clear();
+            // The source DNG's camera wins; the exporting device only fills in
+            // for a source that names none.
+            const auto& source = s->source.captureExif();
+            std::string deviceMake = exportJson.text("deviceMake");
+            if (deviceMake.empty()) deviceMake = "RAWR";
+            std::string deviceModel = exportJson.text("deviceModel");
+            if (deviceModel == "null") deviceModel.clear();
+            auto identity = rawrcam::renderer::exportIdentity(source, deviceMake, deviceModel);
+            c.deviceMake = std::move(identity.make);
+            c.deviceModel = std::move(identity.model);
             c.wallClockUnixMillis = std::int64_t(exportJson.number("wallClockMillis", 0));
             c.utcOffsetMinutes = std::int16_t(exportJson.number("utcOffsetMinutes", 0));
             c.displayName = exportJson.text("displayName");
             if (c.displayName.empty()) c.displayName = "Renderer.jpg";
             // Capture EXIF carried by the source DNG, when present. Tags are
-            // omitted when absent, matching the still writer's behavior.
-            if (const auto exposure = s->source.exposureTimeNs()) c.exposureTimeNs = *exposure;
-            if (const auto sensitivity = s->source.sensitivity()) c.sensitivity = *sensitivity;
-            if (const auto aperture = s->source.aperture()) c.aperture = *aperture;
+            // omitted when absent, matching the still writer's behavior; an
+            // absent DateTimeOriginal falls back to the export time.
+            if (source.exposureTimeNs) c.exposureTimeNs = *source.exposureTimeNs;
+            if (source.sensitivity) c.sensitivity = *source.sensitivity;
+            c.aperture = source.fNumber;
+            c.focalLengthMm = source.focalLengthMm;
+            c.focalLength35mm = source.focalLength35mm;
+            c.lensSpecification = source.lensSpecification;
+            c.lensMake = source.lensMake;
+            c.lensModel = source.lensModel;
+            c.dateTimeOriginal = source.dateTimeOriginal;
+            c.dateTimeDigitized = source.dateTimeDigitized;
+            c.offsetTimeOriginal = source.offsetTimeOriginal;
+            c.subsecTimeOriginal = source.subsecTimeOriginal;
             // Stage timings: same attribution as still captures. Demosaic is
             // the renderer pre-work wall time (prepare + resample/warp/upload).
             const auto& completion = engine.lastCompletion();

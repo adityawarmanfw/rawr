@@ -138,6 +138,17 @@ std::vector<unsigned char> buildExif(const JpegCaptureContext& c, std::uint32_t 
     // ExifIFDPointer placeholder; value is patched after IFD0 layout is known.
     ifd0.push_back({0x8769, 4, 1, longData(0)});
 
+    // A re-rendered DNG keeps its source capture time; DateTime stays the
+    // render (file modification) time, qualified by OffsetTime.
+    const bool sourceTime = !c.dateTimeOriginal.empty();
+    const std::string original = sourceTime ? c.dateTimeOriginal : dateTime;
+    const std::string digitized = sourceTime && !c.dateTimeDigitized.empty() ? c.dateTimeDigitized : original;
+    const std::string originalOffset = sourceTime ? c.offsetTimeOriginal : offset;
+    const std::string originalSubsec = sourceTime ? c.subsecTimeOriginal : subsec;
+    auto ascii = [](std::uint16_t tag, const std::string& s) {
+        return IfdEntry{tag, 2, static_cast<std::uint32_t>(s.size() + 1), asciiData(s)};
+    };
+
     std::vector<IfdEntry> exif;
     if (c.exposureTimeNs > 0)
         exif.push_back({0x829A, 5, 1, rationalData(static_cast<double>(c.exposureTimeNs) / 1.0e9, 1000000u)});
@@ -145,14 +156,26 @@ std::vector<unsigned char> buildExif(const JpegCaptureContext& c, std::uint32_t 
     if (c.sensitivity > 0 && c.sensitivity <= 65535)
         exif.push_back({0x8827, 3, 1, shortData(static_cast<std::uint16_t>(c.sensitivity))});
     exif.push_back({0x9000, 7, 4, std::vector<unsigned char>{'0', '2', '3', '2'}});
-    if (!dateTime.empty()) {
-        exif.push_back({0x9003, 2, 20, asciiData(dateTime)});
-        exif.push_back({0x9004, 2, 20, asciiData(dateTime)});
-        exif.push_back({0x9011, 2, static_cast<std::uint32_t>(offset.size() + 1), asciiData(offset)});
+    if (!original.empty()) {
+        exif.push_back(ascii(0x9003, original));
+        exif.push_back(ascii(0x9004, digitized));
+        if (!originalOffset.empty()) exif.push_back(ascii(0x9011, originalOffset));
     }
-    if (!subsec.empty()) exif.push_back({0x9291, 2, static_cast<std::uint32_t>(subsec.size() + 1), asciiData(subsec)});
+    if (sourceTime && !dateTime.empty()) exif.push_back(ascii(0x9010, offset));
+    if (!originalSubsec.empty()) exif.push_back(ascii(0x9291, originalSubsec));
     if (c.focalLengthMm && *c.focalLengthMm > 0.0f)
         exif.push_back({0x920A, 5, 1, rationalData(*c.focalLengthMm, 10000u)});
+    if (c.focalLength35mm && *c.focalLength35mm > 0) exif.push_back({0xA405, 3, 1, shortData(*c.focalLength35mm)});
+    if (c.lensSpecification) {
+        std::vector<unsigned char> spec;
+        for (double v : *c.lensSpecification) {
+            const auto r = rationalData(v, 10000u);
+            spec.insert(spec.end(), r.begin(), r.end());
+        }
+        exif.push_back({0xA432, 5, 4, spec});
+    }
+    if (!c.lensMake.empty()) exif.push_back(ascii(0xA433, c.lensMake));
+    if (!c.lensModel.empty()) exif.push_back(ascii(0xA434, c.lensModel));
     exif.push_back({0xA001, 3, 1, shortData(1)});  // sRGB
     exif.push_back({0xA002, 4, 1, longData(width)});
     exif.push_back({0xA003, 4, 1, longData(height)});

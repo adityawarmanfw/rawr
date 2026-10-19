@@ -48,6 +48,9 @@ internal class RendererExportCoordinator(
     fun resumeInterrupted() {
         if (!mutableBusy.value) repository.jobs.value.firstOrNull { it.status in setOf("Rendering", "Publishing", "Complete") }?.let { export(it.id, resume = true) }
     }
+    private fun sourceTaken(runRecipe: String): Long? = runCatching {
+        JSONObject(runRecipe).optJSONObject("export")?.takeIf { it.has("sourceTakenMillis") }?.getLong("sourceTakenMillis")
+    }.getOrNull()
     fun export(id: String, original: Boolean = false, resume: Boolean = false) {
         check(!mutableBusy.value)
         val admitted = repository.current(id)
@@ -64,7 +67,7 @@ internal class RendererExportCoordinator(
                 }
                 if (resume && job.status == "Publishing" && job.output.isNotEmpty()) {
                     val uri = job.output.toUri()
-                    output.publish(uri)
+                    output.publish(uri, sourceTaken(job.runRecipe))
                     job = job.copy(status = "Complete"); repository.save(job)
                     runCatching { RendererService.completed(context, visible(), uri) }
                     removeCompleted(job); return@withLock
@@ -82,6 +85,12 @@ internal class RendererExportCoordinator(
                 val exportBase = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date(exportMillis))
                 val displayName = "RAWR_${exportBase}_$resSuffix.jpg"
                 val decoded = RendererRecipe.decode(recipe, SettingsCatalog.initialState().values)
+                // DATE_TAKEN follows the source capture, as the JPEG EXIF does
+                // natively; persisted with the export so a resumed publish keeps it.
+                val sourceTaken = runCatching { JSONObject(native.metadata(job)).let { info ->
+                    SourceCaptureTime.takenMillis(info.optString("dateTimeOriginal"),
+                        info.optString("offsetTimeOriginal"), info.optString("subsecTimeOriginal"))
+                } }.getOrNull()
                 val exportRecipe = JSONObject(recipe).apply {
                     put("export", JSONObject()
                         .put("displayName", displayName)
@@ -90,7 +99,8 @@ internal class RendererExportCoordinator(
                         .put("deviceMake", Build.MANUFACTURER)
                         .put("deviceModel", com.rawr.camera.integration.DeviceNames.marketingModel())
                         .put("filmDescription", if (decoded.filmSimEnabled) decoded.filmSimLook.describeFilm() else "")
-                        .put("rendererDisplayName", decoded.captureRendererDisplayName()))
+                        .put("rendererDisplayName", decoded.captureRendererDisplayName())
+                        .apply { if (sourceTaken != null) put("sourceTakenMillis", sourceTaken) })
                 }.toString()
                 job = job.copy(runRecipe = exportRecipe); repository.save(job)
                 val (w, h) = RenderResolution.dimensions(job.width, job.height, job.megapixels)
@@ -108,7 +118,7 @@ internal class RendererExportCoordinator(
                 mutableProgress.value = 99
                 check(!cancelled) { "Cancelled" }
                 repository.save(job.copy(status = "Publishing"))
-                output.publish(uri)
+                output.publish(uri, sourceTaken)
                 mutableProgress.value = 100
                 job = job.copy(status = "Complete"); repository.save(job)
                 mutableCompletion.value = uri.toString()

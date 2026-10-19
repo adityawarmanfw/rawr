@@ -9,6 +9,8 @@
 #include <string>
 #include <vector>
 
+#include "SourceCaptureExif.h"
+
 namespace rawrcam::renderer {
 // Pixel coordinates always refer to the uncropped, unrotated sensor raster.
 class DngSource {
@@ -43,13 +45,13 @@ class DngSource {
     uint32_t orientation = 1;
     std::string provenance;
     bool rawr = false;
-    // Capture EXIF carried by the source DNG, when present. ExposureTime and
-    // ISOSpeedRatings are standard tags; both are optional here so tagless
-    // files still render (the JPEG writer omits absent tags, as on stills).
-    // ApertureValue is APEX; converted to f-number on read.
-    std::optional<std::int64_t> exposureTimeNs() const;
-    std::optional<std::int32_t> sensitivity() const;
-    std::optional<float> aperture() const;
+    // Capture EXIF carried by the source DNG (image IFD, then IFD0), when
+    // present. All optional so tagless files still render (the JPEG writer
+    // omits absent tags, as on stills). Aperture prefers FNumber over APEX.
+    const SourceCaptureExif& captureExif() const { return captureExif_; }
+    std::optional<std::int64_t> exposureTimeNs() const { return captureExif_.exposureTimeNs; }
+    std::optional<std::int32_t> sensitivity() const { return captureExif_.sensitivity; }
+    std::optional<float> aperture() const { return captureExif_.fNumber; }
     size_t memoryPeak() const { return tinydng_context_memory_peak(context_); }
 
    private:
@@ -60,6 +62,7 @@ class DngSource {
     tinydng_document* document_ = nullptr;
     const tinydng_image_info* image_ = nullptr;
     size_t index_ = 0;
+    SourceCaptureExif captureExif_;
     bool rawCacheRequired_ = false;
     std::string rawCachePath_;
     const uint16_t* rawCache_ = nullptr;

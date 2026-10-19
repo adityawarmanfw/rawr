@@ -40,6 +40,10 @@ rawr_test(convert_binned_raw_test
   "${RAWR_ROOT}/tests/native/convert_binned_raw_test.cpp"
   "${APP}/convert/DngConverter.cpp")
 target_link_libraries(convert_binned_raw_test PRIVATE rawr_tinydng)
+rawr_test(renderer_source_exif_test
+  "${RAWR_ROOT}/tests/native/renderer_source_exif_test.cpp"
+  "${APP}/renderer/SourceCaptureExif.cpp")
+target_link_libraries(renderer_source_exif_test PRIVATE rawr_tinydng)
 rawr_test(renderer_resample_test
   "${RAWR_ROOT}/tests/native/renderer_resample_test.cpp"
   "${APP}/renderer/LinearResample.cpp")
