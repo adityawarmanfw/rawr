@@ -5,6 +5,7 @@
 #include <gainmap/UltrahdrMux.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
+#include <sys/system_properties.h>
 #include <turbojpeg.h>
 
 #include "StripJpegEncoder.h"
@@ -336,6 +337,13 @@ bool writeUltraHdrFallback(int fd, const unsigned char* baseJpeg, std::size_t ba
 // thread as before. The output, like tj3Compress8's, is released with tj3Free.
 bool encodeParallel(const unsigned char* pixels, std::uint32_t width, std::uint32_t height, int quality, int subsamp,
                     std::uint64_t requestId, unsigned char** jpeg, std::size_t* size) {
+    // `adb shell setprop debug.rawr.jpeg_strips 0` encodes on one thread (A/B checks of the strip encoder).
+    char prop[PROP_VALUE_MAX] = {};
+    if (__system_property_get("debug.rawr.jpeg_strips", prop) > 0 && prop[0] == '0') {
+        __android_log_print(ANDROID_LOG_INFO, "RawrCamNative", "JPEG_STRIPS requestId=%llu one_thread reason=debug_prop",
+                            (unsigned long long)requestId);
+        return false;
+    }
     int strips = 0;
     std::string why;
     if (encodeStripsRgba8(pixels, static_cast<int>(width), static_cast<int>(height), quality, subsamp, jpeg, size,
