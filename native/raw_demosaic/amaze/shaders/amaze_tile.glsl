@@ -11,7 +11,7 @@ struct TileParams {
     float color00, color01, color02, color10;
     float color11, color12, color20, color21;
     float color22, sourceIsFloat, outputScale, outputAlpha;
-    float inputMode, inputWidth, pattern, reserved;  // amaze.wgsl: highlight_reconstruction, _pad3
+    float inputMode, inputWidth, pattern, reserved;  // amaze.wgsl: highlight_reconstruction, _pad3; reserved = image height
 };
 // One dispatch covers a batch of tiles; workgroup z selects the tile and its slot.
 layout(std430, set = 0, binding = 1) readonly buffer TileParamsBatch { TileParams tiles[]; };
