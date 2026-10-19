@@ -17,6 +17,10 @@ class AcquiredRawJournal {
     AcquiredRawJournal(const AcquiredRawJournal&) = delete;
     AcquiredRawJournal& operator=(const AcquiredRawJournal&) = delete;
     void append(const std::vector<uint8_t>& pixels);
+    // One frame fewer will be appended (the camera returned an unusable one).
+    void dropExpected() {
+        if (expected_ > count_) --expected_;
+    }
     void commit(const std::string& path, CaptureJob& job);
     const std::shared_ptr<void>& reservation() const { return reservation_; }
     const std::string& pendingPath() const { return path_; }
