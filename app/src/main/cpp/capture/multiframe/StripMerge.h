@@ -23,8 +23,11 @@ inline std::vector<StripWindow> stripWindows(std::uint32_t width, std::uint32_t 
                                              std::uint32_t minOverlap = 256, std::uint32_t blendRows = 128) {
     std::vector<StripWindow> out;
     if (!width || !height) return out;
-    std::uint32_t rows = std::uint32_t(std::min<std::uint64_t>(height, maxPixels / width)) / 64u * 64u;
-    if (rows >= height || rows <= minOverlap) {
+    // Fits test before the 64-row rounding: a frame whose height is not a
+    // multiple of 64 (vivo H35: 6128 rows) must not split into strips.
+    const std::uint64_t maxRows = maxPixels / width;
+    const std::uint32_t rows = std::uint32_t(std::min<std::uint64_t>(height, maxRows)) / 64u * 64u;
+    if (maxRows >= height || rows <= minOverlap) {
         out.push_back({0, height, 0, 0, height});
         return out;
     }

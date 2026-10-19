@@ -96,6 +96,18 @@ class CaptureJournalTest {
         assertEquals("", restored.recipe)
     }
 
+    @Test fun recoveryAttemptsSurviveRestartAndClearOnRemove() = withJournal { dir, journal ->
+        val entry = CaptureJournal.Entry("burst", listOf(CaptureJournal.Target("content://test/1", "burst.dng")))
+        journal.write(entry)
+        assertEquals(0, journal.recoveryAttempts(entry))
+        assertEquals(1, journal.recordRecoveryAttempt(entry))
+        assertEquals(2, CaptureJournal(dir).recordRecoveryAttempt(entry))
+        assertEquals(2, CaptureJournal(dir).recoveryAttempts(entry))
+        journal.remove(entry)
+        assertEquals(0, journal.recoveryAttempts(entry))
+        assertTrue(dir.listFiles().orEmpty().none { it.name.startsWith("burst") })
+    }
+
     @Test fun backlogBeyondEightSurvivesNewOwner() = withJournal { dir, journal ->
         repeat(40) { i ->
             val name = "RAWR_$i.dng"
