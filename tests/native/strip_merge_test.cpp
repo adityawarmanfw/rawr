@@ -13,6 +13,11 @@ int main() {
         const auto w = stripWindows(8160, 6144, 56'000'000);
         assert(w.size() == 1 && w[0].y0 == 0 && w[0].rows == 6144 && w[0].writeEnd == 6144);
     }
+    // Fits with a height off the 64-row grid (vivo H35 50 MP: 6128 rows): still one window.
+    for (const std::uint32_t height : {6128u, 3064u}) {
+        const auto w = stripWindows(8192, height, 56'000'000);
+        assert(w.size() == 1 && w[0].rows == height && w[0].writeEnd == height);
+    }
     // vivo 200 MP tele: four ~55 MP windows, even starts, full coverage, bands inside overlaps.
     for (const std::uint32_t height : {12288u, 12256u}) {
         const auto w = stripWindows(16320, height, 56'000'000);
