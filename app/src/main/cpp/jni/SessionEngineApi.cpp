@@ -1,4 +1,5 @@
 #include "capture/CaptureRequest.h"
+#include "capture/FullSizeFallbacks.h"
 
 #include <algorithm>
 #include <cmath>
@@ -229,7 +230,11 @@ std::string cameraControlSnapshot(EngineHandle h) {
                 ",\"fullSizeCapture\":" + (fullSize ? "true" : "false") +
                 ",\"fullSizeCapturePending\":" + (acquiring ? "true" : "false") +
                 ",\"bracketHoldOpened\":" + std::to_string(hold.opened) +
-                ",\"bracketHoldDone\":" + std::to_string(hold.done) + "}";
+                ",\"bracketHoldDone\":" + std::to_string(hold.done) +
+                ",\"fullSizeBinnedStills\":" +
+                std::to_string(rawrcam::capture::fullSizeFallbacks().binnedStills.load(std::memory_order_relaxed)) +
+                ",\"fullSizeBurstsToSingle\":" +
+                std::to_string(rawrcam::capture::fullSizeFallbacks().burstsToSingle.load(std::memory_order_relaxed)) + "}";
     }
     return json;
 }

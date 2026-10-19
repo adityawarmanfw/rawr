@@ -365,6 +365,7 @@ struct AmazePipeline::Impl {
             p.inputMode = inputMode;
             p.inputWidth = float(cfg.width);
             p.pattern = float(static_cast<uint32_t>(cfg.pattern));
+            p.reserved = float(cfg.height);  // amaze_export: the image border
             const VkDeviceSize offset = (i / batchTiles) * batchParamStride + (i % batchTiles) * sizeof(TileParams);
             std::memcpy(static_cast<char*>(paramsMapped) + offset, &p, sizeof(p));
         }

@@ -106,7 +106,7 @@ class MainActivity : ComponentActivity() {
             java.io.File(filesDir, "av_sync_probe.json").writeText(report)
             android.util.Log.i("RawrVideoProbe", "Wrote av_sync_probe.json")
         }
-        intent.getStringExtra(EXTRA_CAMERA_ID)?.takeIf { id -> id.toIntOrNull()?.let { it in 0..11 } == true }?.let {
+        intent.getStringExtra(EXTRA_CAMERA_ID)?.takeIf { id -> id.toIntOrNull()?.let { it in 0..63 } == true }?.let {
             diagnosticTargetCameraId = it
             captureViewModel.selectCameraIdFromIntent(it)
         }

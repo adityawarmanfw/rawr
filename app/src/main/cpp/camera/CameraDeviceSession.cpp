@@ -94,6 +94,23 @@ void CameraDeviceSession::releaseRequestOutputs(bool orphan) noexcept {
 void CameraDeviceSession::releaseCharacteristics() noexcept {
     if (characteristics_) ACameraMetadata_free(characteristics_);
     characteristics_ = nullptr;
+    vendorTags_.clear();
+}
+std::optional<int64_t> CameraDeviceSession::vendorResultValue(const ACameraMetadata* result, const std::string& name) {
+    if (!result || !characteristics_ || !cameraContext_) return std::nullopt;
+    auto it = vendorTags_.find(name);
+    if (it == vendorTags_.end())
+        it = vendorTags_.emplace(name, resolveMetadataTagByNameCompat(characteristics_, cameraContext_->cameraId.c_str(),
+                                                                      name.c_str(), nullptr)).first;
+    if (!it->second) return std::nullopt;
+    ACameraMetadata_const_entry e{};
+    if (ACameraMetadata_getConstEntry(result, *it->second, &e) != ACAMERA_OK || e.count == 0) return std::nullopt;
+    switch (e.type) {
+        case ACAMERA_TYPE_BYTE: return e.data.u8[0];
+        case ACAMERA_TYPE_INT32: return e.data.i32[0];
+        case ACAMERA_TYPE_INT64: return e.data.i64[0];
+        default: return std::nullopt;
+    }
 }
 void CameraDeviceSession::releaseHeldGate() noexcept {
     if (heldGate_.empty()) return;

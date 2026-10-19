@@ -271,20 +271,48 @@ internal fun HdrBracketedNotice(active: Boolean, orientation: Orientation, modif
 
 private const val HDR_BRACKETED_NOTICE_MS = 4_000L
 
+private const val FULL_SIZE_FALLBACK_NOTICE_MS = 3_000L
+
 /**
  * "Hold still" from the HDR+ Bracketed shutter press until the post-shutter
- * frames are in; the end is also felt as a tick.
+ * frames are in; the end is also felt as a tick. Afterwards the same pill says
+ * when the camera returned a full-size capture binned (the counters went up).
  */
 @Composable
-internal fun BracketHoldNotice(active: Boolean, orientation: Orientation, modifier: Modifier = Modifier) {
+internal fun BracketHoldNotice(
+    active: Boolean,
+    orientation: Orientation,
+    modifier: Modifier = Modifier,
+    fullSizeBinnedStills: Long = 0L,
+    fullSizeBurstsToSingle: Long = 0L
+) {
+    var seenStills by remember { mutableLongStateOf(fullSizeBinnedStills) }
+    var seenBursts by remember { mutableLongStateOf(fullSizeBurstsToSingle) }
+    var fallback by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(fullSizeBinnedStills, fullSizeBurstsToSingle) {
+        val text = when {
+            fullSizeBinnedStills > seenStills -> "Camera skipped full res · saved at 12 MP"
+            fullSizeBurstsToSingle > seenBursts -> "Camera skipped full res · took a single shot"
+            else -> return@LaunchedEffect
+        }
+        seenStills = fullSizeBinnedStills
+        seenBursts = fullSizeBurstsToSingle
+        fallback = text
+        kotlinx.coroutines.delay(FULL_SIZE_FALLBACK_NOTICE_MS)
+        fallback = null
+    }
+    val text = if (active) "Hold still" else fallback
+    // The fade-out keeps the last text: an emptied pill would flash.
+    var shown by remember { mutableStateOf("Hold still") }
+    if (text != null) shown = text
     AnimatedVisibility(
-        visible = active,
+        visible = text != null,
         enter = fadeIn(tween(80)),
         exit = fadeOut(tween(250)),
         modifier = modifier
     ) {
         Text(
-            "Hold still",
+            shown,
             color = Color.White,
             fontSize = 15.sp,
             textAlign = TextAlign.Center,

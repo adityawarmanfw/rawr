@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <functional>
+#include <map>
 #include <optional>
 
 #include "camera/CameraCallbacks.h"
@@ -70,6 +71,9 @@ class CameraDeviceSession final {
     // Removes the companion target from the repeating request; the stream stays
     // configured. True when a target was removed (resubmit to apply).
     bool detachCompanionTarget(const Diagnostic&);
+    // Integer value of a vendor result tag, looked up by name once per open
+    // camera; nullopt when the camera or this result lacks it.
+    std::optional<int64_t> vendorResultValue(const ACameraMetadata* result, const std::string& name);
 
    private:
     void releaseRequestOutputs(bool orphan) noexcept;
@@ -106,6 +110,7 @@ class CameraDeviceSession final {
     uint64_t generation_ = 0, readerGeneration_ = 0, closeGeneration_ = 0;
     bool closePending_ = false, forcedRetire_ = false;
     std::string heldGate_;  // LensRoute::vendorGate held for the open device.
+    std::map<std::string, std::optional<uint32_t>> vendorTags_;  // name -> tag of the open camera
     std::condition_variable closed_;
 };
 }  // namespace rawrcam::camera

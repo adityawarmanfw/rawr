@@ -476,7 +476,9 @@ class NativeCaptureScreenController(
                 bracketHoldOpened = opened,
                 bracketHoldDone = done,
                 fullSizeCapture = snapshot.fullSizeCapture,
-                fullSizeCapturePending = snapshot.fullSizeCapturePending
+                fullSizeCapturePending = snapshot.fullSizeCapturePending,
+                fullSizeBinnedStills = maxOf(current.fullSizeBinnedStills, snapshot.fullSizeBinnedStills),
+                fullSizeBurstsToSingle = maxOf(current.fullSizeBurstsToSingle, snapshot.fullSizeBurstsToSingle)
             )
         }
         val prepared = snapshotPresentation.prepare(state.value, snapshot) ?: return

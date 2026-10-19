@@ -5,7 +5,10 @@
 #include <gainmap/UltrahdrMux.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
+#include <sys/system_properties.h>
 #include <turbojpeg.h>
+
+#include "StripJpegEncoder.h"
 #include <unistd.h>
 
 #include <algorithm>
@@ -135,6 +138,17 @@ std::vector<unsigned char> buildExif(const JpegCaptureContext& c, std::uint32_t 
     // ExifIFDPointer placeholder; value is patched after IFD0 layout is known.
     ifd0.push_back({0x8769, 4, 1, longData(0)});
 
+    // A re-rendered DNG keeps its source capture time; DateTime stays the
+    // render (file modification) time, qualified by OffsetTime.
+    const bool sourceTime = !c.dateTimeOriginal.empty();
+    const std::string original = sourceTime ? c.dateTimeOriginal : dateTime;
+    const std::string digitized = sourceTime && !c.dateTimeDigitized.empty() ? c.dateTimeDigitized : original;
+    const std::string originalOffset = sourceTime ? c.offsetTimeOriginal : offset;
+    const std::string originalSubsec = sourceTime ? c.subsecTimeOriginal : subsec;
+    auto ascii = [](std::uint16_t tag, const std::string& s) {
+        return IfdEntry{tag, 2, static_cast<std::uint32_t>(s.size() + 1), asciiData(s)};
+    };
+
     std::vector<IfdEntry> exif;
     if (c.exposureTimeNs > 0)
         exif.push_back({0x829A, 5, 1, rationalData(static_cast<double>(c.exposureTimeNs) / 1.0e9, 1000000u)});
@@ -142,14 +156,26 @@ std::vector<unsigned char> buildExif(const JpegCaptureContext& c, std::uint32_t 
     if (c.sensitivity > 0 && c.sensitivity <= 65535)
         exif.push_back({0x8827, 3, 1, shortData(static_cast<std::uint16_t>(c.sensitivity))});
     exif.push_back({0x9000, 7, 4, std::vector<unsigned char>{'0', '2', '3', '2'}});
-    if (!dateTime.empty()) {
-        exif.push_back({0x9003, 2, 20, asciiData(dateTime)});
-        exif.push_back({0x9004, 2, 20, asciiData(dateTime)});
-        exif.push_back({0x9011, 2, static_cast<std::uint32_t>(offset.size() + 1), asciiData(offset)});
+    if (!original.empty()) {
+        exif.push_back(ascii(0x9003, original));
+        exif.push_back(ascii(0x9004, digitized));
+        if (!originalOffset.empty()) exif.push_back(ascii(0x9011, originalOffset));
     }
-    if (!subsec.empty()) exif.push_back({0x9291, 2, static_cast<std::uint32_t>(subsec.size() + 1), asciiData(subsec)});
+    if (sourceTime && !dateTime.empty()) exif.push_back(ascii(0x9010, offset));
+    if (!originalSubsec.empty()) exif.push_back(ascii(0x9291, originalSubsec));
     if (c.focalLengthMm && *c.focalLengthMm > 0.0f)
         exif.push_back({0x920A, 5, 1, rationalData(*c.focalLengthMm, 10000u)});
+    if (c.focalLength35mm && *c.focalLength35mm > 0) exif.push_back({0xA405, 3, 1, shortData(*c.focalLength35mm)});
+    if (c.lensSpecification) {
+        std::vector<unsigned char> spec;
+        for (double v : *c.lensSpecification) {
+            const auto r = rationalData(v, 10000u);
+            spec.insert(spec.end(), r.begin(), r.end());
+        }
+        exif.push_back({0xA432, 5, 4, spec});
+    }
+    if (!c.lensMake.empty()) exif.push_back(ascii(0xA433, c.lensMake));
+    if (!c.lensModel.empty()) exif.push_back(ascii(0xA434, c.lensModel));
     exif.push_back({0xA001, 3, 1, shortData(1)});  // sRGB
     exif.push_back({0xA002, 4, 1, longData(width)});
     exif.push_back({0xA003, 4, 1, longData(height)});
@@ -330,6 +356,29 @@ bool writeUltraHdrFallback(int fd, const unsigned char* baseJpeg, std::size_t ba
                         (unsigned long long)requestId, originalError.c_str());
     return true;
 }
+// The strip-parallel encoder (pixels identical to one tj3Compress8 with these settings); false = encode on one
+// thread as before. The output, like tj3Compress8's, is released with tj3Free.
+bool encodeParallel(const unsigned char* pixels, std::uint32_t width, std::uint32_t height, int quality, int subsamp,
+                    std::uint64_t requestId, unsigned char** jpeg, std::size_t* size) {
+    // `adb shell setprop debug.rawr.jpeg_strips 0` encodes on one thread (A/B checks of the strip encoder).
+    char prop[PROP_VALUE_MAX] = {};
+    if (__system_property_get("debug.rawr.jpeg_strips", prop) > 0 && prop[0] == '0') {
+        __android_log_print(ANDROID_LOG_INFO, "RawrCamNative", "JPEG_STRIPS requestId=%llu one_thread reason=debug_prop",
+                            (unsigned long long)requestId);
+        return false;
+    }
+    int strips = 0;
+    std::string why;
+    if (encodeStripsRgba8(pixels, static_cast<int>(width), static_cast<int>(height), quality, subsamp, jpeg, size,
+                          &strips, &why)) {
+        __android_log_print(ANDROID_LOG_INFO, "RawrCamNative", "JPEG_STRIPS requestId=%llu strips=%d",
+                            (unsigned long long)requestId, strips);
+        return true;
+    }
+    __android_log_print(ANDROID_LOG_INFO, "RawrCamNative", "JPEG_STRIPS requestId=%llu one_thread reason=%s",
+                        (unsigned long long)requestId, why.c_str());
+    return false;
+}
 }  // namespace
 
 bool JpegCaptureWriter::busy() const noexcept {
@@ -388,7 +437,9 @@ bool JpegCaptureWriter::start(std::uint64_t requestId, const void* rgba8, std::s
                            // production contract and device diagnostics independent of library defaults.
                            tj3Set(handle, TJPARAM_FASTDCT, 0) != 0) {
                     done.error = tj3GetErrorStr(handle);
-                } else if (tj3Compress8(handle, pixels, static_cast<int>(width), 0, static_cast<int>(height), TJPF_RGBA,
+                } else if (!encodeParallel(pixels, width, height, context.quality, tjSubsampling(context.subsampling),
+                                           requestId, &jpegBuf, &jpegSize) &&
+                           tj3Compress8(handle, pixels, static_cast<int>(width), 0, static_cast<int>(height), TJPF_RGBA,
                                         &jpegBuf, &jpegSize) != 0) {
                     done.error = tj3GetErrorStr(handle);
                 } else if (jpegSize < 2 || jpegBuf[0] != 0xFFu || jpegBuf[1] != 0xD8u) {
@@ -545,7 +596,9 @@ bool JpegCaptureWriter::startUltraHdr(std::uint64_t requestId, const void* rgba8
                      std::string baseError;
                      std::thread baseWorker([&] {
                          ::setpriority(PRIO_PROCESS, 0, 10);
-                         if (tj3Compress8(baseHandle, pixels, static_cast<int>(width), 0, static_cast<int>(height),
+                         if (!encodeParallel(pixels, width, height, context.quality,
+                                             tjSubsampling(context.subsampling), requestId, &baseBuf, &baseSize) &&
+                             tj3Compress8(baseHandle, pixels, static_cast<int>(width), 0, static_cast<int>(height),
                                           TJPF_RGBA, &baseBuf, &baseSize) != 0) {
                              baseError = tj3GetErrorStr(baseHandle);
                          } else if (baseSize < 2 || baseBuf[0] != 0xFFu || baseBuf[1] != 0xD8u) {
@@ -592,7 +645,9 @@ bool JpegCaptureWriter::startUltraHdr(std::uint64_t requestId, const void* rgba8
                                          std::chrono::duration<double, std::milli>(fitT1 - fitT0).count(), mapWidth,
                                          mapHeight, colorRestored ? 1 : 0, context.ultraHdr.gainMapMinLog2,
                                          context.ultraHdr.gainMapMaxLog2);
-                     if (tj3Compress8(mapHandle, mapEncodePixels, static_cast<int>(mapWidth), 0,
+                     if (!encodeParallel(mapEncodePixels, mapWidth, mapHeight, mapQuality, TJSAMP_444, requestId,
+                                         &mapBuf, &mapSize) &&
+                         tj3Compress8(mapHandle, mapEncodePixels, static_cast<int>(mapWidth), 0,
                                       static_cast<int>(mapHeight), TJPF_RGBA, &mapBuf, &mapSize) != 0) {
                         uhError = tj3GetErrorStr(mapHandle);
                     } else if (mapSize < 2 || mapBuf[0] != 0xFFu || mapBuf[1] != 0xD8u) {

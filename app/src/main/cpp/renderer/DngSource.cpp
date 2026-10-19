@@ -125,6 +125,9 @@ DngSource::DngSource(const std::string& path) : rawCachePath_(path + ".raw16-v1"
         orientation = p.exif.orientation ? p.exif.orientation : (exif ? exif->orientation : 1);
         if (!orientation) orientation = 1;
         if (orientation > 8) throw std::runtime_error("Invalid DNG orientation");
+        const auto* root = tinydng_image_get(document_, 0);
+        captureExif_ = readSourceCaptureExif(p.exif, exif, p.raw.unique_camera_model ? p.raw.unique_camera_model
+                                                                                       : root->raw.unique_camera_model);
         for (int i = 0; i < 4; ++i) {
             black[i] = p.raw.black_level_exact[i];
             if (!std::isfinite(black[i])) throw std::runtime_error("Invalid DNG black level");
@@ -273,27 +276,6 @@ void DngSource::ensureRawCache() {
         std::filesystem::remove(temporary);
         throw;
     }
-}
-std::optional<std::int64_t> DngSource::exposureTimeNs() const {
-    const auto& exif = image_->exif;
-    if (!exif.has_exposure_time || exif.exposure_time[1] <= 0 || exif.exposure_time[0] <= 0) return std::nullopt;
-    const double seconds = double(exif.exposure_time[0]) / double(exif.exposure_time[1]);
-    if (!std::isfinite(seconds) || seconds <= 0.0) return std::nullopt;
-    return std::int64_t(seconds * 1.0e9);
-}
-std::optional<std::int32_t> DngSource::sensitivity() const {
-    const auto& exif = image_->exif;
-    if (!exif.has_iso || exif.iso == 0 || exif.iso > 65535) return std::nullopt;
-    return std::int32_t(exif.iso);
-}
-std::optional<float> DngSource::aperture() const {
-    const auto& exif = image_->exif;
-    if (!exif.has_aperture_value || exif.aperture_value[1] <= 0) return std::nullopt;
-    const double apex = double(exif.aperture_value[0]) / double(exif.aperture_value[1]);
-    if (!std::isfinite(apex)) return std::nullopt;
-    const double fnumber = std::pow(2.0, apex / 2.0);
-    if (!std::isfinite(fnumber) || fnumber <= 0.0 || fnumber > 1000.0) return std::nullopt;
-    return float(fnumber);
 }
 std::vector<uint16_t> DngSource::read(uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
     if (!w || !h || x >= image_->width || y >= image_->height || w > image_->width - x || h > image_->height - y)

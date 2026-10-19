@@ -150,7 +150,7 @@ public final class ProbeActivity extends Activity {
         }
     }
 
-    private static String format(Object v) {
+    static String format(Object v) {
         if (v == null || !v.getClass().isArray()) return String.valueOf(v);
         int n = Array.getLength(v);
         StringBuilder b = new StringBuilder("[").append(n).append("] ");
@@ -582,12 +582,12 @@ public final class ProbeActivity extends Activity {
                 setInt(still, "vivo.control.onlyDng", 1);
                 setInt(still, "vivo.control.isCapture", 0);
                 setInt(still, "vivo.control.sensorMode", 0);
-                setInt(still, "vivo.control.isUpscale", stockUltra);
+                setInt(still, "vivo.control.isUpscale", getIntent().getIntExtra("upscale", stockUltra));  // --ei upscale N
                 still.set(new CaptureRequest.Key<>("vivo.control.requestId", long[].class), new long[]{id});
                 still.set(new CaptureRequest.Key<>("vivo.control.globalCaptureId", long[].class), new long[]{id + 5});
                 still.set(new CaptureRequest.Key<>("vivo.control.frameFlag", long[].class), new long[]{id});
                 still.set(new CaptureRequest.Key<>("vivo.control.isPAPNeeded", byte[].class), new byte[]{1});
-                meta.println("still keys: onlyDng 1, isCapture 0, sensorMode 0, isUpscale " + stockUltra + ", isPAPNeeded 1, ids " + id);
+                meta.println("still keys: onlyDng 1, isCapture 0, sensorMode 0, isUpscale " + getIntent().getIntExtra("upscale", stockUltra) + ", isPAPNeeded 1, ids " + id);
             }
             final long t0 = SystemClock.elapsedRealtime();
             burstT0[0] = t0;
@@ -669,7 +669,7 @@ public final class ProbeActivity extends Activity {
 
     interface Provider { int get(int key) throws Exception; void set(int key, int value) throws Exception; }
 
-    private static Provider provider() throws Exception {
+    static Provider provider() throws Exception {
         Class<?> api = Class.forName("android.hardware.vivocamera.VivoCameraManager");
         Object manager = api.getMethod("getInstance").invoke(null);
         Method get = api.getMethod("getInfo", int.class), set = api.getMethod("setValue", int.class, int.class);
@@ -879,7 +879,7 @@ public final class ProbeActivity extends Activity {
             } else {
                 session[0].setRepeatingRequest(request, callback, handler);
             }
-            synchronized (lock) { if (got[0] < frames && error[0] == null) lock.wait(20000); }
+            synchronized (lock) { if (got[0] < frames && error[0] == null) lock.wait(getIntent().getIntExtra("waitms", 20000)); }  // --ei waitms N
             if (still > 0) meta.println("preview frames total: " + previews[0]);
             meta.println("last focus=" + lastFocus[0] + " dpt afState=" + lastAf[0]);
             meta.println("frames=" + got[0] + "/" + frames + " seen=" + seen[0] + " results=" + results[0] + " error=" + error[0]);

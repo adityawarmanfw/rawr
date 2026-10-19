@@ -17,6 +17,7 @@
 #include <optional>
 #include <set>
 #include <sstream>
+#include <string_view>
 #include <thread>
 #include <utility>
 
@@ -1045,6 +1046,21 @@ struct NativeCameraController::Impl final : CameraEventSink {
                                        requests.latestSubmittedSerial());
         captureChanged.notify_all();
         if (!actions.frame) return;
+        if (actions.optimizedStill && deviceSession.hasCaptureStream()) {
+            // What the HAL reports it did with a full-size still: some vendors
+            // skip the sensor switch and return the binned readout in the
+            // corner of the full-size buffer.
+            std::string line = "CAMERA_FULL_SIZE_RESULT tag=" +
+                               std::to_string(actions.frame->optimizedStillRequestId.value_or(0)) +
+                               " timestampNs=" + std::to_string(actions.frame->timestampNs);
+            for (const char* name : {"vcf.parameter.seamlessMode", "vivo.parameter.highResolutionDngType",
+                                     "vivo.control.seamless.remosaic.enable", "vivo.control.sensorMode"}) {
+                const auto value = deviceSession.vendorResultValue(result, name);
+                line += std::string(" ") + name + "=" + (value ? std::to_string(*value) : "missing");
+                if (std::string_view(name) == "vcf.parameter.seamlessMode") actions.frame->vendorSeamlessMode = value;
+            }
+            diag(line);
+        }
         const uint64_t longTag = longExposureTag.load(std::memory_order_relaxed);
         // Freeze the viewfinder on the press until the long frame is in, and
         // never show the long frame itself.

@@ -16,6 +16,8 @@
 #include "diagnostics/logging/NativeLog.h"
 #include "diagnostics/logging/RuntimeTraceRecorder.h"
 #include "geometry/CfaPattern.h"
+#include "capture/FullSizeFallbacks.h"
+#include "imaging/BinnedCorner.h"
 #include "imaging/Raw16CpuSnapshot.h"
 #include "imaging/RawFrameLease.h"
 #include "metadata/MetadataDiagnostics.h"
@@ -567,6 +569,7 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
         rawrcam::color::FrameColorTransform color;
     };
     std::vector<Frame> frames;
+    uint32_t binnedCorners = 0;
     // Submit all exposures before copying or writing any frame. The camera can
     // schedule the burst consecutively while we drain its completed buffers.
     if (!controller->captureFullSize(tag, count, true))
@@ -611,12 +614,27 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
             ++it;  // retain metadata whose RAW buffer has not arrived yet
         }
         lock.unlock();
-        if (frames.size() != index + 1) return UINT32_MAX;
+        if (frames.size() + binnedCorners != index + 1) return UINT32_MAX;
         auto& lease = frames.back().lease;
         const auto copy =
             imaging::copyCompletedRaw16AhbToPacked(lease.ahb(), width, height, packed, lease.fence(), lease.image());
         lease = imaging::RawFrameLease(imaging::AcquiredRawFrame{});
         if (!copy.success) throw std::runtime_error("full_size_copy_failed:" + copy.error);
+        // A frame the HAL returned binned (corner of the buffer) would wreck
+        // the merge: leave it out and merge the full-size ones.
+        if (const auto check = imaging::fullSizeBinnedCorner(packed, width, height, context->geometry.pixelArrayWidth,
+                                                             context->geometry.pixelArrayHeight,
+                                                             frames.back().metadata.vendorSeamlessMode);
+            check.divisor > 1) {
+            appendDiagnostic("FULL_SIZE_BINNED_CORNER tag=" + std::to_string(tag) +
+                             " timestampNs=" + std::to_string(frames.back().metadata.timestampNs) +
+                             " burst=1 reason=" + check.reason + " seamlessMode=" +
+                             std::to_string(frames.back().metadata.vendorSeamlessMode.value_or(-1)));
+            frames.pop_back();
+            journal->dropExpected();
+            ++binnedCorners;
+            continue;
+        }
         journal->append(packed);
     }
     // Completion belongs to the whole burst, never to each individual frame.
@@ -628,8 +646,14 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
     }
     forget();
     appendDiagnostic("FULL_SIZE_BURST_FRAMES tag=" + std::to_string(tag) + " requested=" + std::to_string(count) +
-                     " received=" + std::to_string(frames.size()));
-    if (frames.size() != count) return UINT32_MAX;
+                     " received=" + std::to_string(frames.size()) + " binnedCorners=" + std::to_string(binnedCorners));
+    if (frames.size() + binnedCorners != count) return UINT32_MAX;
+    // Fewer than two full-size frames is no merge: the press falls back to a
+    // single still, which also retries the sensor switch.
+    if (frames.size() < 2u) {
+        capture::fullSizeFallbacks().burstsToSingle.fetch_add(1, std::memory_order_relaxed);
+        return 0u;
+    }
     // Camera buffers are released as they are copied. Reuse one CPU frame buffer
     // and keep the journal in place for the existing strip merge.
     std::vector<uint8_t>().swap(packed);

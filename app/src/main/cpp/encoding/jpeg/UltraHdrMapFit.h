@@ -48,9 +48,10 @@ inline bool fitAndRemapMap(const unsigned char* src, std::uint32_t w, std::uint3
     const std::size_t n = static_cast<std::size_t>(w) * h;
     const float wideMax = uh.gainMapMaxLog2;
     if (n == 0 || wideMax <= 0.0f || uh.gamma != 1.0f) return false;
+    // Every pass is per pixel (or integer / min-max reductions), so the worker count never changes the result.
     unsigned workers = std::thread::hardware_concurrency();
     if (workers < 1) workers = 1;
-    if (workers > 4) workers = 4;
+    if (workers > 8) workers = 8;
     if (n < 4096) workers = 1;
     // p99.9 of per-pixel channel-mean log-gain via a 2048-bin histogram
     // (~0.0023 EV bins at wide 4.7: exact enough, single pass, no 50MB sort).
@@ -132,7 +133,9 @@ inline bool fitAndRemapMap(const unsigned char* src, std::uint32_t w, std::uint3
                             std::min(baseW - 1, static_cast<std::uint32_t>(std::uint64_t(x) * baseW / w));
                         const unsigned char* p = base + (static_cast<std::size_t>(by) * baseW + bx) * 4;
                         const float luma = 0.2126f * eotf[p[0]] + 0.7152f * eotf[p[1]] + 0.0722f * eotf[p[2]];
-                        const float fl = luma > 0.0f ? floorScale * std::pow(luma, floorExp) : 0.0f;
+                        // exp2(e*log2) instead of pow: ~3x cheaper on every texel; the 8-bit quantisation below
+                        // absorbs the last-ulp difference (tools/jpeg_strip_check --fit: map bytes compared).
+                        const float fl = luma > 0.0f ? floorScale * std::exp2(floorExp * std::log2(luma)) : 0.0f;
                         for (int k = 0; k < 3; ++k) c[k] = std::max(c[k], fl);
                     }
                     // Shoulder each channel, then average: mean of shouldered
@@ -187,16 +190,18 @@ inline bool restoreHighlightColor(std::vector<unsigned char>& map, const unsigne
         linear[i] = c <= .04045f ? c / 12.92f : std::pow((c + .055f) / 1.055f, 2.4f);
         boost[i] = std::exp2(float(i) / 255 * fittedMax);
     }
-    const auto gains = [&](uint32_t x, uint32_t y, float* g) {
+    // The gains of one texel. Returns false when it keeps its fitted gain (g = map code / 255 * fittedMax, inside
+    // [0, fittedMax]): it cannot move the encoding range, so the range pass skips it. The SDR colour is checked first,
+    // so the ~99 % of texels away from white skip the restore arithmetic.
+    const auto gains = [&](uint32_t x, uint32_t y, float* g) -> bool {
         const size_t i = size_t(y) * w + x;
         const uint32_t bx = std::min(baseW - 1, uint32_t(uint64_t(x) * baseW / w));
         const uint32_t by = std::min(baseH - 1, uint32_t(uint64_t(y) * baseH / h));
         const auto* b = base + (size_t(by) * baseW + bx) * 4;
-        float s[3], original[3];
+        float s[3];
         for (int k = 0; k < 3; ++k) {
             s[k] = linear[b[k]];
             g[k] = float(map[i * 4 + k]) / 255 * fittedMax;
-            original[k] = (s[k] + uh.offsetSdr) * boost[map[i * 4 + k]] - uh.offsetHdr;
         }
         // Restore only where the SDR lost colour: channels pressed against
         // white. A brightness ramp would also recolour well-exposed SDR
@@ -204,24 +209,27 @@ inline bool restoreHighlightColor(std::vector<unsigned char>& map, const unsigne
         const float smax = std::max(s[0], std::max(s[1], s[2]));
         float t = std::clamp((smax - .75f) / .20f, 0.0f, 1.0f);
         t = t * t * (3 - 2 * t);
-        if (t == 0) return;
+        if (t == 0) return false;
         const auto* c = chromaticity + i * 4;
         const unsigned r = unsigned(c[0]) | (unsigned(c[1]) << 8);
         const unsigned green = unsigned(c[2]) | (unsigned(c[3]) << 8);
-        if (r == 65535 && green == 65535) return;  // invalid/black tap
+        if (r == 65535 && green == 65535) return false;  // invalid/black tap
+        float original[3];
+        for (int k = 0; k < 3; ++k) original[k] = (s[k] + uh.offsetSdr) * boost[map[i * 4 + k]] - uh.offsetHdr;
         float color[3] = {float(r) / 65535, float(green) / 65535,
                           std::max(0.0f, 1 - float(r + green) / 65535)};
         const float cy = .2126f * color[0] + .7152f * color[1] + .0722f * color[2];
         const float oy = .2126f * original[0] + .7152f * original[1] + .0722f * original[2];
-        if (!(cy > 1e-8f) || !(oy > 0)) return;
+        if (!(cy > 1e-8f) || !(oy > 0)) return false;
         for (int k = 0; k < 3; ++k) {
             const float target = original[k] * (1 - t) + color[k] * (oy / cy) * t;
             g[k] = std::log2((std::max(target, 0.0f) + uh.offsetHdr) / (s[k] + uh.offsetSdr));
         }
+        return true;
     };
     // Two bounded-memory passes. First find the signed encoding range;
     // then quantize. Each worker only reads/writes its own rows.
-    const unsigned workers = n < 4096 ? 1u : std::clamp(std::thread::hardware_concurrency(), 1u, 4u);
+    const unsigned workers = n < 4096 ? 1u : std::clamp(std::thread::hardware_concurrency(), 1u, 8u);
     std::vector<float> low(workers, 0), high(workers, fittedMax);
     std::vector<std::thread> threads;
     rawrcam::support::JoinGuard joinAll(threads);
@@ -229,7 +237,8 @@ inline bool restoreHighlightColor(std::vector<unsigned char>& map, const unsigne
         threads.emplace_back([&, worker] {
             for (uint32_t y = h * worker / workers; y < h * (worker + 1) / workers; ++y)
                 for (uint32_t x = 0; x < w; ++x) {
-                    float g[3]; gains(x, y, g);
+                    float g[3];
+                    if (!gains(x, y, g)) continue;
                     for (float v : g) { low[worker] = std::min(low[worker], v); high[worker] = std::max(high[worker], v); }
                 }
         });

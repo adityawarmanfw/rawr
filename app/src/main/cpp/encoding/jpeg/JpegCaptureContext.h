@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -45,6 +46,17 @@ struct JpegCaptureContext {
     std::int32_t sensitivity = 0;
     std::optional<float> aperture;
     std::optional<float> focalLengthMm;
+    // Re-rendered DNGs only: the source's lens and capture time. Empty/absent
+    // on camera captures, whose DateTimeOriginal stays wallClockUnixMillis.
+    // When dateTimeOriginal is set, DateTime (0x0132) remains the export time.
+    std::optional<std::uint16_t> focalLength35mm;
+    std::optional<std::array<double, 4>> lensSpecification;
+    std::string lensMake;
+    std::string lensModel;
+    std::string dateTimeOriginal;  // "YYYY:MM:DD HH:MM:SS"
+    std::string dateTimeDigitized;
+    std::string offsetTimeOriginal;
+    std::string subsecTimeOriginal;
 
     // Frozen public metadata. Keep implementation-specific algorithm names out of this report.
     std::string imageDescription;

@@ -199,7 +199,9 @@ internal fun CaptureViewfinder(
             BracketHoldNotice(
                 active = state.bracketHoldActive,
                 orientation = state.orientation,
-                modifier = Modifier.align(Alignment.Center)
+                modifier = Modifier.align(Alignment.Center),
+                fullSizeBinnedStills = state.fullSizeBinnedStills,
+                fullSizeBurstsToSingle = state.fullSizeBurstsToSingle
             )
             // One place for the notice and its countdown: moving it while it
             // fades out left an empty pill behind.
