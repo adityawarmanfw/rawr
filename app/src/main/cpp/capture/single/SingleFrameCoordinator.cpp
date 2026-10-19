@@ -290,8 +290,9 @@ class SingleFrameCoordinator::Impl {
         std::lock_guard<std::mutex> lock(mutex_);
         return !queue_.empty();
     }
-    void cancelAcquisition(const std::string& reason) {
+    void cancelAcquisition(const std::string& reason, uint64_t requestId = 0) {
         for (const auto& entry : entries()) {
+            if (requestId && entry->id != requestId) continue;
             if (entry->handedOff.load()) continue;
             if (entry->preparation.joinable()) entry->preparation.join();
             entry->shot->cancelAcquisition(reason);
@@ -496,6 +497,9 @@ std::string SingleFrameCoordinator::pollDngCompletion() { return impl_->pollDngC
 std::string SingleFrameCoordinator::pollJpegCompletion() { return impl_->pollJpegCompletion(); }
 bool SingleFrameCoordinator::detachedHqWorkActive() const noexcept { return impl_->detachedHqWorkActive(); }
 void SingleFrameCoordinator::cancelPendingDngBeforeIngressDestroy() { impl_->cancelPendingDngBeforeIngressDestroy(); }
+void SingleFrameCoordinator::failAcquisition(uint64_t id, const std::string& reason) {
+    impl_->cancelAcquisition(reason, id);
+}
 void SingleFrameCoordinator::resetHqProcessing() noexcept { impl_->resetHqProcessing(); }
 void SingleFrameCoordinator::shutdown() noexcept { impl_->shutdown(); }
 

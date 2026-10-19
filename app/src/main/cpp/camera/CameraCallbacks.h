@@ -17,6 +17,9 @@ class CameraEventSink {
     virtual void cameraCaptureStarted(uint64_t /*generation*/, const ACaptureRequest* /*request*/) {}
     // Every failed capture or lost buffer, unthrottled. Runs on a camera thread.
     virtual void cameraCaptureFailed(uint64_t /*generation*/) {}
+    virtual void cameraStillFailed(uint64_t /*generation*/, const ACaptureRequest* /*request*/) {}
+    virtual void cameraDeviceFailed(uint64_t /*generation*/) {}
+    virtual void cameraSequenceEnded(uint64_t /*generation*/, int /*sequenceId*/, bool /*aborted*/) {}
 };
 using CameraEventLifetime = CameraCallbackLifetime<CameraEventSink>;
 struct CameraSessionCallbackContext {
@@ -60,6 +63,8 @@ class CameraCallbacks final {
     static void onFailed(void*, ACameraCaptureSession*, ACaptureRequest*, ACameraCaptureFailure*);
     static void onLogicalFailed(void*, ACameraCaptureSession*, ACaptureRequest*, ALogicalCameraCaptureFailure*);
     static void onBufferLost(void*, ACameraCaptureSession*, ACaptureRequest*, ACameraWindowType*, int64_t);
+    static void onSequenceCompleted(void*, ACameraCaptureSession*, int, int64_t);
+    static void onSequenceAborted(void*, ACameraCaptureSession*, int);
     std::shared_ptr<CameraEventLifetime> lifetime_ = std::make_shared<CameraEventLifetime>();
 };
 }  // namespace rawrcam::camera

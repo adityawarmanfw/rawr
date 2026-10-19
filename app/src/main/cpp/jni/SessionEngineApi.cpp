@@ -98,8 +98,11 @@ uint32_t prepareExperimentalMultiframe(EngineHandle h, uint32_t maxFrames, uint3
     if (!h) return 0u;
     try {
         return engine(h)->prepareExperimentalMultiframe(maxFrames, longFrames);
+    } catch (const std::exception& e) {
+        LOGE("MULTIFRAME_PREPARATION_FAILED error=%s", e.what());
+        return UINT32_MAX;
     } catch (...) {
-        return 0u;
+        return UINT32_MAX;  // jint -1: failed acquisition, not an unavailable ZSL ring
     }
 }
 uint64_t startPreparedMultiframeCapture(EngineHandle h, rawrcam::encoding::dng::DngCaptureContext baseDng,
@@ -221,7 +224,10 @@ std::string cameraControlSnapshot(EngineHandle h) {
     if (json.size() > 2 && json.back() == '}') {
         json.pop_back();
         const auto hold = engine(h)->bracketHold();
+        const auto [fullSize, acquiring] = engine(h)->fullSizeCaptureState();
         json += std::string(",\"rawCpuIngress\":") + (engine(h)->rawCpuIngressActive() ? "true" : "false") +
+                ",\"fullSizeCapture\":" + (fullSize ? "true" : "false") +
+                ",\"fullSizeCapturePending\":" + (acquiring ? "true" : "false") +
                 ",\"bracketHoldOpened\":" + std::to_string(hold.opened) +
                 ",\"bracketHoldDone\":" + std::to_string(hold.done) + "}";
     }

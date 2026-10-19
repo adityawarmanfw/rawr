@@ -161,6 +161,8 @@ add_test(NAME video_containers COMMAND "${UV_EXECUTABLE}" run --no-project --cac
 rawr_test(raw_pixel_source_test
   "${RAWR_ROOT}/tests/native/raw_pixel_source_test.cpp"
   "${APP}/imaging/RawPixelSource.cpp")
+rawr_test(full_size_sequence_test
+  "${RAWR_ROOT}/tests/native/full_size_sequence_test.cpp")
 rawr_test(camera_profile_test
   "${RAWR_ROOT}/tests/native/camera_profile_test.cpp"
   "${APP}/camera/CameraRouting.cpp"

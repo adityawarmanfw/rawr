@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "camera/StillFocus.h"
+
 namespace rawrcam::camera {
 
 void CameraFocusControls::reset(CameraControlState& state) {
@@ -46,6 +48,7 @@ std::optional<CameraTapFocusPlan> CameraFocusControls::planTap(const CameraContr
 }
 
 void CameraFocusControls::acceptTap(CameraControlState& state, const CameraTapFocusPlan& plan, int64_t nowMs) {
+    invalidateFocus(state);
     // A viewfinder tap is an AF request: leave MF (AF_MODE_OFF would ignore it)
     // for continuous AF steered to the tap, exactly like a tap from AF.
     if (state.focusMode == FocusControlMode::Manual) state.focusMode = FocusControlMode::Continuous;
@@ -58,6 +61,7 @@ void CameraFocusControls::acceptTap(CameraControlState& state, const CameraTapFo
 }
 
 void CameraFocusControls::clearTap(CameraControlState& state, bool cancelScan) {
+    invalidateFocus(state);
     // Only a tap still in play has a scan to cancel.
     cancelScan = cancelScan && (state.tapAfActive || trigger_ == CameraFocusTrigger::Start);
     state.tapAfActive = false;

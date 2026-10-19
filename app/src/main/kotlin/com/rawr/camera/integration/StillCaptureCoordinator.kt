@@ -127,7 +127,9 @@ class StillCaptureCoordinator(
             if (current.experimentalMultiframeEnabled) {
                 preview.prepareExperimentalMultiframe(
                     current.multiframeTuning.zslFrames(), current.multiframeTuning.postShutterFrames()
-                ).coerceIn(0, 30)
+                ).also { frames ->
+                    check(frames >= 0) { "Full-resolution acquisition failed; no replacement capture was submitted" }
+                }.coerceAtMost(30)
             } else {
                 0
             }

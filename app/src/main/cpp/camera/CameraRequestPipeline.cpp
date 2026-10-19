@@ -13,10 +13,11 @@ bool ok(camera_status_t status) { return status == ACAMERA_OK; }
 std::string statusText(camera_status_t status) { return std::to_string(static_cast<int>(status)); }
 }  // namespace
 const CameraRequestProvenance* CameraRequestPipeline::attach(ACaptureRequest* request,
-                                                             const CameraControlState& control) {
+                                                             const CameraControlState& control, bool focusStart) {
     if (!request) return nullptr;
     auto provenance =
         std::make_unique<CameraRequestProvenance>(CameraRequestProvenance::from(control, nextRequestSerial_++));
+    provenance->focusTriggerStart = focusStart;
     CameraRequestProvenance* const ptr = provenance.get();
     if (ACaptureRequest_setUserContext(request, ptr) == ACAMERA_OK) {
         provenance_.push_back(std::move(provenance));
@@ -30,6 +31,10 @@ bool CameraRequestPipeline::submit(ACameraCaptureSession* session, ACaptureReque
                                    const CameraMeteringRequest& metering) {
     if (!session || !request || !context) return false;
     const auto applyResult = applyCameraControlState(request, control, metering);
+    if (applyResult.focusStatus != ACAMERA_OK) {
+        diag("CAMERA_FOCUS_REQUEST_FAILED status=" + statusText(applyResult.focusStatus));
+        return false;
+    }
     const bool priorityMode = applyResult.halPriorityMode;
     if (priorityMode && (!applyResult.aePriorityRequested || applyResult.aePriorityStatus != ACAMERA_OK)) {
         diag("CAMERA_AE_PRIORITY_REQUEST_FAIL mode=" + std::to_string(static_cast<int>(control.exposureMode)) +
@@ -154,6 +159,7 @@ bool CameraRequestPipeline::captureBracket(ACameraCaptureSession* session, const
         return false;
     }
     std::string line = "CAMERA_BRACKET_SUBMIT tag=" + std::to_string(tagId) + " sequenceId=" + std::to_string(sequenceId);
+    lastCaptureSequence_ = sequenceId;
     for (const auto& e : exposures)
         line += " " + std::to_string(e.exposureTimeNs) + "ns@" + std::to_string(e.sensitivity);
     diag(line);
@@ -163,6 +169,10 @@ bool CameraRequestPipeline::captureAfTrigger(ACameraCaptureSession* session, con
                                              CameraSessionCallbackContext* context, const CameraControlState& control,
                                              CameraFocusTrigger trigger) {
     if (!session || !repeating || !context || trigger == CameraFocusTrigger::Idle) return false;
+    if (trigger == CameraFocusTrigger::Cancel && control.capabilities.tapAfHoldsUntilNextTap) {
+        diag("CAMERA_AF_CANCEL_BLOCKED reason=vendor_driver");
+        return false;
+    }
     ACaptureRequest* request = ACaptureRequest_copy(repeating);
     if (!request) return false;
     struct FreeRequest {
@@ -195,7 +205,8 @@ bool CameraRequestPipeline::captureAfTrigger(ACameraCaptureSession* session, con
             (void)ACaptureRequest_setEntry_i32(request, ACAMERA_CONTROL_AE_REGIONS, 5, region.data());
         }
     }
-    if (!attach(request, control)) return false;
+    const auto* provenance = attach(request, control, trigger == CameraFocusTrigger::Start);
+    if (!provenance) return false;
     int sequenceId = 0;
     camera_status_t s = ACAMERA_OK;
     if (context->physicalCameraId.empty()) {

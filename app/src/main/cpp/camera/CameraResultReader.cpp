@@ -27,6 +27,10 @@ CameraRequestObservation readCameraRequestObservation(const ACaptureRequest* req
     if (ACaptureRequest_getConstEntry(requestCopy, ACAMERA_SENSOR_SENSITIVITY, &value) == ACAMERA_OK &&
         value.data.i32 && value.count >= 1)
         observation.sensitivity = value.data.i32[0];
+    value = {};
+    if (ACaptureRequest_getConstEntry(requestCopy, ACAMERA_CONTROL_AF_MODE, &value) == ACAMERA_OK && value.data.u8 &&
+        value.count >= 1)
+        observation.afMode = value.data.u8[0];
     void* userContext = nullptr;
     if (ACaptureRequest_getUserContext(requestCopy, &userContext) == ACAMERA_OK && userContext) {
         observation.provenance = *static_cast<const CameraRequestProvenance*>(userContext);
@@ -38,6 +42,10 @@ CameraControlResult readCameraControlResult(const ACameraMetadata* result,
                                             const CameraControlCapabilities& capabilities,
                                             const metadata::SensorGeometry& geometry) {
     CameraControlResult observation;
+    if (const auto e = entry(result, ACAMERA_CONTROL_AF_MODE); e && e->data.u8 && e->count >= 1)
+        observation.afMode = e->data.u8[0];
+    if (const auto e = entry(result, ACAMERA_LENS_STATE); e && e->data.u8 && e->count >= 1)
+        observation.lensState = e->data.u8[0];
     if (const auto e = entry(result, ACAMERA_SENSOR_FRAME_DURATION); e && e->data.i64 && e->count >= 1)
         observation.frameDurationNs = e->data.i64[0];
     if (const auto e = entry(result, ACAMERA_CONTROL_AE_TARGET_FPS_RANGE); e && e->data.i32 && e->count >= 2)

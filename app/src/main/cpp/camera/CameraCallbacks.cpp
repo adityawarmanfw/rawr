@@ -7,7 +7,7 @@ namespace rawrcam::camera {
 namespace {
 std::atomic<uint32_t> gFailureDiagnostics{0};
 void reportFailure(CameraSessionCallbackContext* callback, const char* kind, int64_t frameNumber, int reason,
-                   int sequenceId) {
+                   int sequenceId, ACaptureRequest* request) {
     auto& trace = diagnostics::RuntimeTraceRecorder::instance();
     if (sequenceId >= 0)
         trace.record(diagnostics::RuntimeTraceStage::CameraCaptureFailed, 0, callback->generation, sequenceId, 0, 0,
@@ -17,6 +17,7 @@ void reportFailure(CameraSessionCallbackContext* callback, const char* kind, int
                      frameNumber);
     CameraCallbackGuard<CameraEventSink> guard(callback->lifetime);
     if (guard.owner) guard.owner->cameraCaptureFailed(callback->generation);
+    if (guard.owner) guard.owner->cameraStillFailed(callback->generation, request);
     if (gFailureDiagnostics.fetch_add(1, std::memory_order_relaxed) >= 6) return;
     if (guard.owner)
         guard.owner->cameraDeviceEvent(callback->generation, std::string(kind) + " frame=" +
@@ -58,6 +59,8 @@ ACameraCaptureSession_captureCallbacks CameraCallbacks::captures(CameraSessionCa
     captures.onCaptureCompleted = onCompleted;
     captures.onCaptureFailed = onFailed;
     captures.onCaptureBufferLost = onBufferLost;
+    captures.onCaptureSequenceCompleted = onSequenceCompleted;
+    captures.onCaptureSequenceAborted = onSequenceAborted;
     return captures;
 }
 ACameraCaptureSession_logicalCamera_captureCallbacks CameraCallbacks::logicalCaptures(
@@ -68,18 +71,22 @@ ACameraCaptureSession_logicalCamera_captureCallbacks CameraCallbacks::logicalCap
     captures.onLogicalCameraCaptureCompleted = onLogicalCompleted;
     captures.onLogicalCameraCaptureFailed = onLogicalFailed;
     captures.onCaptureBufferLost = onBufferLost;
+    captures.onCaptureSequenceCompleted = onSequenceCompleted;
+    captures.onCaptureSequenceAborted = onSequenceAborted;
     return captures;
 }
 void CameraCallbacks::onDisconnected(void* context, ACameraDevice*) {
     auto* callback = static_cast<CameraDeviceCallbackContext*>(context);
     CameraCallbackGuard<CameraEventSink> guard(callback->lifetime);
     if (guard.owner) guard.owner->cameraDeviceEvent(callback->generation, "CAMERA_NDK_DISCONNECTED");
+    if (guard.owner) guard.owner->cameraDeviceFailed(callback->generation);
 }
 void CameraCallbacks::onError(void* context, ACameraDevice*, int error) {
     auto* callback = static_cast<CameraDeviceCallbackContext*>(context);
     CameraCallbackGuard<CameraEventSink> guard(callback->lifetime);
     if (guard.owner)
         guard.owner->cameraDeviceEvent(callback->generation, "CAMERA_NDK_ERROR error=" + std::to_string(error));
+    if (guard.owner) guard.owner->cameraDeviceFailed(callback->generation);
 }
 void CameraCallbacks::onClosed(void* context, ACameraCaptureSession* session) {
     auto* callback = static_cast<CameraSessionCallbackContext*>(context);
@@ -113,21 +120,32 @@ void CameraCallbacks::onLogicalCompleted(void* context, ACameraCaptureSession*, 
     CameraCallbackGuard<CameraEventSink> guard(callback->lifetime);
     if (guard.owner) guard.owner->cameraCaptureCompleted(callback->generation, request, chosen);
 }
-void CameraCallbacks::onFailed(void* context, ACameraCaptureSession*, ACaptureRequest*,
+void CameraCallbacks::onFailed(void* context, ACameraCaptureSession*, ACaptureRequest* request,
                                ACameraCaptureFailure* failure) {
     if (!failure) return;
     reportFailure(static_cast<CameraSessionCallbackContext*>(context), "CAMERA_CAPTURE_FAILED", failure->frameNumber,
-                  failure->reason, failure->sequenceId);
+                  failure->reason, failure->sequenceId, request);
 }
-void CameraCallbacks::onLogicalFailed(void* context, ACameraCaptureSession*, ACaptureRequest*,
+void CameraCallbacks::onLogicalFailed(void* context, ACameraCaptureSession*, ACaptureRequest* request,
                                       ALogicalCameraCaptureFailure* failure) {
     if (!failure) return;
     const auto& f = failure->captureFailure;
-    reportFailure(static_cast<CameraSessionCallbackContext*>(context), "CAMERA_CAPTURE_FAILED", f.frameNumber,
-                  f.reason, f.sequenceId);
+    reportFailure(static_cast<CameraSessionCallbackContext*>(context), "CAMERA_CAPTURE_FAILED", f.frameNumber, f.reason,
+                  f.sequenceId, request);
 }
-void CameraCallbacks::onBufferLost(void* context, ACameraCaptureSession*, ACaptureRequest*, ACameraWindowType*,
+void CameraCallbacks::onBufferLost(void* context, ACameraCaptureSession*, ACaptureRequest* request, ACameraWindowType*,
                                    int64_t frameNumber) {
-    reportFailure(static_cast<CameraSessionCallbackContext*>(context), "CAMERA_BUFFER_LOST", frameNumber, 0, -1);
+    reportFailure(static_cast<CameraSessionCallbackContext*>(context), "CAMERA_BUFFER_LOST", frameNumber, 0, -1,
+                  request);
+}
+void CameraCallbacks::onSequenceCompleted(void* context, ACameraCaptureSession*, int id, int64_t) {
+    auto* callback = static_cast<CameraSessionCallbackContext*>(context);
+    CameraCallbackGuard<CameraEventSink> guard(callback->lifetime);
+    if (guard.owner) guard.owner->cameraSequenceEnded(callback->generation, id, false);
+}
+void CameraCallbacks::onSequenceAborted(void* context, ACameraCaptureSession*, int id) {
+    auto* callback = static_cast<CameraSessionCallbackContext*>(context);
+    CameraCallbackGuard<CameraEventSink> guard(callback->lifetime);
+    if (guard.owner) guard.owner->cameraSequenceEnded(callback->generation, id, true);
 }
 }  // namespace rawrcam::camera

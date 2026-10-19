@@ -1,4 +1,5 @@
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <cassert>
@@ -7,6 +8,7 @@
 #include <fstream>
 #include <iostream>
 
+#include "capture/persistence/AcquiredRawJournal.h"
 #include "capture/persistence/CaptureJob.h"
 #include "capture/persistence/ProcessingRecipe.h"
 using namespace rawrcam::capture::persistence;
@@ -200,6 +202,110 @@ int main(int argc, char** argv) {
     try {
         (void)load(path);
     } catch (...) {
+        failed = true;
+    }
+    assert(failed);
+    // Acquired RAW becomes the journal in place. Old v1/v9 jobs above still load.
+    const auto directPath = jobPath(root, "direct.dng");
+    std::string pendingPath;
+    struct stat before{}, after{};
+    {
+        AcquiredRawJournal acquired(root, 384, 2);
+        pendingPath = acquired.pendingPath();
+        assert(::stat(pendingPath.c_str(), &before) == 0);
+        auto pixels = std::vector<uint8_t>(384, 17);
+        acquired.append(pixels);
+        failed = false;
+        try {
+            acquired.commit(directPath, j);
+        } catch (const std::runtime_error&) {
+            failed = true;
+        }
+        assert(failed && !std::filesystem::exists(directPath));
+        failed = false;
+        try {
+            uint64_t pendingOffset = 0;
+            (void)loadHeader(pendingPath, pendingOffset);
+        } catch (const std::runtime_error&) {
+            failed = true;
+        }
+        assert(failed);  // partial input is never recoverable
+        failed = false;
+        try {
+            acquired.append(std::vector<uint8_t>(383));
+        } catch (const std::runtime_error&) {
+            failed = true;
+        }
+        assert(failed);
+        // Cleanup discards an unlocked process-death remnant, keeps live files.
+        const auto orphan = root + "/still_jobs/.acquiring-orphan.tmp";
+        {
+            std::ofstream out(orphan);
+            out << "partial";
+        }
+        std::string aborted;
+        {
+            AcquiredRawJournal other(root, 384, 2);
+            aborted = other.pendingPath();
+            assert(!std::filesystem::exists(orphan));
+            assert(std::filesystem::exists(pendingPath));
+        }
+        assert(!std::filesystem::exists(aborted));
+        std::fill(pixels.begin(), pixels.end(), 29);
+        acquired.append(pixels);
+        acquired.commit(directPath, j);
+        assert(acquired.pendingPath().empty());
+        assert(::stat(directPath.c_str(), &after) == 0);
+        assert(before.st_dev == after.st_dev && before.st_ino == after.st_ino);  // rename, no second payload file
+        failed = false;
+        try {
+            acquired.commit(directPath, j);
+        } catch (const std::runtime_error&) {
+            failed = true;
+        }
+        assert(failed);
+    }
+    assert(!std::filesystem::exists(pendingPath) && std::filesystem::exists(directPath));
+    uint64_t directOffset = 0;
+    const auto direct = loadHeader(directPath, directOffset);
+    assert(directOffset == 24 && direct.referenceIndex == j.referenceIndex);
+    assert(direct.dng.deviceDisplayModel == "X300 Ultra");
+    assert(direct.dng.resolvedRecipe == j.dng.resolvedRecipe);
+    assert(direct.sharpnessScores == j.sharpnessScores);
+    frames = 0;
+    (void)load(directPath, [&](CaptureJob&, size_t i, const std::vector<uint8_t>& pixels) {
+        assert(pixels == std::vector<uint8_t>(384, i == 0 ? 17 : 29));
+        ++frames;
+    });
+    assert(frames == 2);
+    // Strip loader's exact addressing contract still reads rows from either frame.
+    {
+        std::ifstream input(directPath, std::ios::binary);
+        input.seekg(std::streamoff(directOffset + 384 + 4 * 32));
+        std::vector<uint8_t> rows(3 * 32);
+        input.read(reinterpret_cast<char*>(rows.data()), rows.size());
+        assert(rows == std::vector<uint8_t>(3 * 32, 29));
+    }
+    auto damaged = jobPath(root, "damaged.dng");
+    std::filesystem::copy_file(directPath, damaged);
+    {
+        std::fstream file(damaged, std::ios::in | std::ios::out | std::ios::binary);
+        file.seekp(16);  // serialized header-offset value, after the size prefix
+        uint64_t badOffset = UINT64_MAX;
+        file.write(reinterpret_cast<const char*>(&badOffset), sizeof(badOffset));
+    }
+    failed = false;
+    try {
+        (void)loadHeader(damaged, directOffset);
+    } catch (const std::runtime_error&) {
+        failed = true;
+    }
+    assert(failed);
+    std::filesystem::resize_file(directPath, std::filesystem::file_size(directPath) - 1);
+    failed = false;
+    try {
+        (void)loadHeader(directPath, directOffset);
+    } catch (const std::runtime_error&) {
         failed = true;
     }
     assert(failed);

@@ -423,8 +423,8 @@ class NativeCaptureScreenController(
     private fun enqueueStillCapture() {
         val format = CaptureOutputFormat.from(state.value.dngEnabled, state.value.jpegEnabled,
                                               state.value.capabilities.dngOnly)
-        // HDR+ Bracketed: "hold still" starts at the press, not when native arms the bracket.
-        if (state.value.hdrPlusBracketedActive) update { it.copy(bracketHoldPresses = it.bracketHoldPresses + 1) }
+        // Hold starts at the press, including full-size allocation and focus readiness.
+        if (state.value.hdrPlusBracketedActive || state.value.fullSizeCapture) update { it.copy(bracketHoldPresses = it.bracketHoldPresses + 1) }
         try {
             captureQueue.enqueue(format)
         } catch (error: RuntimeException) {
@@ -459,7 +459,8 @@ class NativeCaptureScreenController(
             else current.copy(
                 bracketHoldPresses = current.bracketHoldPresses - 1,
                 bracketHoldOpened = snapshot?.bracketHoldOpened ?: current.bracketHoldOpened,
-                bracketHoldDone = snapshot?.bracketHoldDone ?: current.bracketHoldDone
+                bracketHoldDone = snapshot?.bracketHoldDone ?: current.bracketHoldDone,
+                fullSizeCapturePending = snapshot?.fullSizeCapturePending ?: current.fullSizeCapturePending
             )
         }
     }
@@ -471,8 +472,12 @@ class NativeCaptureScreenController(
         update { current ->
             val opened = maxOf(current.bracketHoldOpened, snapshot.bracketHoldOpened)
             val done = maxOf(current.bracketHoldDone, snapshot.bracketHoldDone)
-            if (current.bracketHoldOpened == opened && current.bracketHoldDone == done) current
-            else current.copy(bracketHoldOpened = opened, bracketHoldDone = done)
+            current.copy(
+                bracketHoldOpened = opened,
+                bracketHoldDone = done,
+                fullSizeCapture = snapshot.fullSizeCapture,
+                fullSizeCapturePending = snapshot.fullSizeCapturePending
+            )
         }
         val prepared = snapshotPresentation.prepare(state.value, snapshot) ?: return
         update { current ->

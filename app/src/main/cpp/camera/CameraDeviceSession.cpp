@@ -630,12 +630,29 @@ bool CameraDeviceSession::captureFullSize(CameraRequestPipeline& pipeline, const
         if (ACaptureRequest_addTarget(request, captureTarget_) != ACAMERA_OK) return false;
         const uint8_t intent = ACAMERA_CONTROL_CAPTURE_INTENT_STILL_CAPTURE;
         (void)ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_CAPTURE_INTENT, 1, &intent);
-        // The lens holds where the viewfinder's AF left it (as vivo's own stills).
-        if (control.appliedFocusDistance && std::isfinite(*control.appliedFocusDistance)) {
-            const uint8_t afOff = ACAMERA_CONTROL_AF_MODE_OFF;
-            const float distance = *control.appliedFocusDistance;
-            (void)ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AF_MODE, 1, &afOff);
-            (void)ACaptureRequest_setEntry_float(request, ACAMERA_LENS_FOCUS_DISTANCE, 1, &distance);
+        // Preserve the actual preview AF mode and retained tap region. Changing
+        // AUTO/CONTINUOUS to OFF for one still resets AF and can move the lens.
+        // Copy only these focus keys onto the fresh template: cloning the whole
+        // preview request is unsafe on this vendor's full-size path.
+        ACameraMetadata_const_entry af{};
+        if (ACaptureRequest_getConstEntry(request_, ACAMERA_CONTROL_AF_MODE, &af) != ACAMERA_OK || af.count != 1 ||
+            !af.data.u8)
+            return false;
+        const uint8_t afMode = af.data.u8[0];
+        if (ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AF_MODE, 1, &afMode) != ACAMERA_OK) return false;
+        ACameraMetadata_const_entry region{};
+        if (ACaptureRequest_getConstEntry(request_, ACAMERA_CONTROL_AF_REGIONS, &region) == ACAMERA_OK &&
+            region.count == 5 && region.data.i32) {
+            if (ACaptureRequest_setEntry_i32(request, ACAMERA_CONTROL_AF_REGIONS, 5, region.data.i32) != ACAMERA_OK)
+                return false;
+        }
+        // Only the user's MF mode owns a lens-distance request. An AF result's
+        // distance is telemetry, not a reason to switch to manual on shutter.
+        if (afMode == ACAMERA_CONTROL_AF_MODE_OFF && control.capabilities.manualFocusSupported) {
+            if (!control.stillFocusDistance || !std::isfinite(*control.stillFocusDistance)) return false;
+            const float distance = *control.stillFocusDistance;
+            if (ACaptureRequest_setEntry_float(request, ACAMERA_LENS_FOCUS_DISTANCE, 1, &distance) != ACAMERA_OK)
+                return false;
         }
         auto keys = stillKeys_;
         const double id = double(stamp++);

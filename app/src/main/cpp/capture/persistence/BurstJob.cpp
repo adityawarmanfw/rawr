@@ -1,15 +1,16 @@
-#include "capture/persistence/ProcessingRecipe.h"
+#include <android/log.h>
 #include <rawr/raw_multiframe_output/MultiframeOutputAdapter.h>
 
+#include <chrono>
 #include <cstring>
 #include <fstream>
-#include <chrono>
-#include <android/log.h>
 #include <stdexcept>
 #include <vector>
 
 #include "capture/multiframe/RawBurstUpload.h"
+#include "capture/persistence/AcquiredRawJournal.h"
 #include "capture/persistence/CaptureJob.h"
+#include "capture/persistence/ProcessingRecipe.h"
 #include "vulkan/VulkanContext.h"
 
 namespace rawrcam::capture::persistence {
@@ -56,6 +57,16 @@ void saveBurst(const std::string& path, multiframe::MultiframeWorkItem& work, co
     job.referenceIndex = burst.referenceIndex;
     job.metadata = burst.metadata;
     for (auto& f : burst.frames) job.parameters.push_back(f.parameters);
+    if (burst.acquiredJournal) {
+        burst.acquiredJournal->commit(path, job);
+        const double totalMs =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+        __android_log_print(
+            ANDROID_LOG_INFO, "RawrCamNative",
+            "BURST_SAVE requestId=%llu frames=%zu source=acquisition_journal payloadRewrittenBytes=0 totalMs=%.1f",
+            static_cast<unsigned long long>(work.requestId), burst.frames.size(), totalMs);
+        return;
+    }
     // CPU-held frames are journaled straight from their source (no GPU readback).
     if (burst.cpuFrame) {
         double readMs = 0.0;

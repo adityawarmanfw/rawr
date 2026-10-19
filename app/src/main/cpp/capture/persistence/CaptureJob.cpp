@@ -5,11 +5,14 @@
 #include <android/log.h>
 #endif
 #include <fcntl.h>
+#include <sys/file.h>
+#include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
@@ -17,6 +20,7 @@
 #include <type_traits>
 
 #include "capture/CaptureRequest.h"
+#include "capture/persistence/AcquiredRawJournal.h"
 
 namespace rawrcam::capture::persistence {
 namespace {
@@ -40,6 +44,11 @@ constexpr uint64_t magicV7 = 0x524157524a4f4207ull;
 constexpr uint64_t magicV8 = 0x524157524a4f4208ull;
 // v9 preserves a separate friendly EXIF model without changing RAW identity.
 constexpr uint64_t magic = 0x524157524a4f4209ull;
+// v10 acquisition journals place packed frames first and the finalized v9
+// metadata at the end. The prefix stores its offset; RAW never has to move.
+constexpr uint64_t acquisitionMagic = 0x524157524a4f420aull;
+constexpr uint64_t acquisitionPrefixBytes = 2 * (sizeof(uint32_t) + sizeof(uint64_t));
+std::mutex acquisitionMutex;
 constexpr uint64_t footer = 0x434f4d4d49545445ull;
 constexpr uint64_t MiB = 1024ull * 1024;
 std::mutex budgetMutex;
@@ -399,6 +408,99 @@ struct RetiredDenoise {
     float yuvStrengthY = 1.0f, yuvStrengthC = 1.0f;
 };
 namespace {
+void writeHeader(Writer& w, CaptureJob& job) {
+    RetiredDenoise retired{};
+    fields(w, job);
+    w(job.dng.processingRecipe, job.dng.resolvedRecipe, job.dng.sourceRole, job.mergedDng.processingRecipe,
+      job.mergedDng.resolvedRecipe, job.mergedDng.sourceRole, job.jpeg.develop.fccEdgeSigma,
+      job.jpeg.develop.fccChromaBound, job.jpeg.develop.defringeStrength, job.jpeg.develop.defringeEdgeThreshold,
+      job.jpeg.develop.defringeLumaFloor, job.jpeg.develop.denoiseStrength, job.jpeg.develop.denoiseDetail,
+      job.jpeg.develop.denoiseForceY, job.jpeg.develop.denoiseMaxScale, retired.rawMode, retired.rawStrength,
+      retired.rawLuma, retired.rawChroma, retired.yuvMode, retired.yuvStrengthY, retired.yuvStrengthC,
+      job.jpeg.output.ultraHdr, job.jpeg.develop.highlightReconstructionMethod, job.jpeg.develop.highlightThreshold,
+      job.jpeg.develop.highlightCompression, job.jpeg.develop.multiframeChromaDenoise, job.dng.compression,
+      job.mergedDng.compression);
+    w(job.dng.deviceDisplayModel, job.mergedDng.deviceDisplayModel);
+}
+}  // namespace
+
+AcquiredRawJournal::AcquiredRawJournal(const std::string& filesDir, uint64_t frameBytes, uint32_t frames)
+    : bytes_(frameBytes), expected_(frames) {
+    if (!bytes_ || bytes_ > 1024 * MiB || frames < 2 || frames > 30)
+        throw std::runtime_error("capture_job_acquisition_geometry_invalid");
+    const auto directory = std::filesystem::path(filesDir) / "still_jobs";
+    std::filesystem::create_directories(directory);
+    std::lock_guard<std::mutex> lock(acquisitionMutex);
+    // Process death releases flock. Remove only abandoned, uncommitted inputs;
+    // active journals keep their lock until committed or discarded.
+    for (const auto& entry : std::filesystem::directory_iterator(directory)) {
+        const auto name = entry.path().filename().string();
+        if (name.size() != 21 || name.compare(0, 11, ".acquiring-") != 0 ||
+            name.compare(name.size() - 4, 4, ".tmp") != 0)
+            continue;
+        support::UniqueFd stale(open(entry.path().c_str(), O_RDWR | O_CLOEXEC));
+        if (stale.valid() && flock(stale.get(), LOCK_EX | LOCK_NB) == 0) {
+            std::error_code ignored;
+            std::filesystem::remove(entry.path(), ignored);
+        }
+    }
+    reservation_ = reserve(filesDir, bytes_ * frames, false);
+    if (!reservation_) throw std::runtime_error("capture_job_acquisition_budget_exceeded");
+    auto name = (directory / ".acquiring-XXXXXX.tmp").string();
+    fd_.reset(mkstemps(name.data(), 4));
+    if (!fd_.valid()) throw std::runtime_error("capture_job_acquisition_create_failed");
+    if (flock(fd_.get(), LOCK_EX | LOCK_NB) != 0 || ftruncate(fd_.get(), acquisitionPrefixBytes) != 0) {
+        unlink(name.c_str());
+        throw std::runtime_error("capture_job_acquisition_create_failed");
+    }
+    path_ = std::move(name);
+}
+AcquiredRawJournal::~AcquiredRawJournal() {
+    if (!path_.empty()) unlink(path_.c_str());
+}
+void AcquiredRawJournal::append(const std::vector<uint8_t>& pixels) {
+    if (path_.empty() || count_ >= expected_ || pixels.size() != bytes_)
+        throw std::runtime_error("capture_job_acquisition_frame_invalid");
+    size_t done = 0;
+    while (done < bytes_) {
+        const auto n =
+            pwrite(fd_.get(), pixels.data() + done, bytes_ - done, acquisitionPrefixBytes + count_ * bytes_ + done);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) throw std::runtime_error("capture_job_acquisition_write_failed");
+        done += size_t(n);
+    }
+    ++count_;
+}
+void AcquiredRawJournal::commit(const std::string& path, CaptureJob& job) {
+    if (path_.empty() || !job.multiframe || payloadSize(job) != bytes_ || count_ != expected_ ||
+        job.metadata.size() != count_)
+        throw std::runtime_error("capture_job_acquisition_incomplete");
+    const auto directory = std::filesystem::path(path).parent_path();
+    if (directory != std::filesystem::path(path_).parent_path())
+        throw std::runtime_error("capture_job_acquisition_directory_mismatch");
+    uint64_t headerOffset = acquisitionPrefixBytes + bytes_ * count_;
+    if (std::filesystem::file_size(path_) != headerOffset)
+        throw std::runtime_error("capture_job_acquisition_extent_invalid");
+    std::fstream stream(path_, std::ios::binary | std::ios::in | std::ios::out);
+    Writer w{stream};
+    stream.seekp(std::streamoff(headerOffset));
+    writeHeader(w, job);
+    auto end = footer;
+    w(end);
+    stream.seekp(0);
+    auto version = acquisitionMagic;
+    w(version, headerOffset);
+    stream.flush();
+    if (!stream) throw std::runtime_error("capture_job_flush_failed");
+    stream.close();
+    syncFile(path_);
+    std::filesystem::rename(path_, path);
+    path_.clear();  // the committed journal now owns the file, even if directory fsync fails
+    fd_.reset();
+    syncFile(directory.string(), true);
+}
+
+namespace {
 void save(const std::string& path, CaptureJob& job, const std::function<std::vector<uint8_t>(size_t)>& readFrame,
           const std::function<void(size_t, std::vector<uint8_t>&)>* fillFrame, std::vector<uint8_t>* buffer);
 }  // namespace
@@ -420,21 +522,9 @@ void save(const std::string& path, CaptureJob& job, const std::function<std::vec
     try {
         std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
         Writer w{stream};
-        RetiredDenoise retired{};
         auto version = magic;
         w(version);
-        fields(w, job);
-        w(job.dng.processingRecipe, job.dng.resolvedRecipe, job.dng.sourceRole, job.mergedDng.processingRecipe,
-          job.mergedDng.resolvedRecipe, job.mergedDng.sourceRole, job.jpeg.develop.fccEdgeSigma,
-          job.jpeg.develop.fccChromaBound, job.jpeg.develop.defringeStrength, job.jpeg.develop.defringeEdgeThreshold,
-          job.jpeg.develop.defringeLumaFloor, job.jpeg.develop.denoiseStrength, job.jpeg.develop.denoiseDetail,
-          job.jpeg.develop.denoiseForceY, job.jpeg.develop.denoiseMaxScale, retired.rawMode,
-          retired.rawStrength, retired.rawLuma, retired.rawChroma, retired.yuvMode, retired.yuvStrengthY,
-          retired.yuvStrengthC,
-          job.jpeg.output.ultraHdr, job.jpeg.develop.highlightReconstructionMethod, job.jpeg.develop.highlightThreshold,
-          job.jpeg.develop.highlightCompression, job.jpeg.develop.multiframeChromaDenoise, job.dng.compression,
-          job.mergedDng.compression);
-        w(job.dng.deviceDisplayModel, job.mergedDng.deviceDisplayModel);
+        writeHeader(w, job);
         const size_t count = job.multiframe ? job.metadata.size() : 1;
         for (size_t i = 0; i < count; ++i) {
             if (fillFrame) {
@@ -484,11 +574,21 @@ CaptureJob loadImpl(const std::string& path,
     RetiredDenoise retired{};
     uint64_t version = 0;
     r(version);
-    if (version != magic && version != magicV8 && version != magicV7 && version != magicV6 && version != magicV5 && version != magicV4 &&
-        version != magicV3 && version != magicV2 && version != legacyMagic)
+    if (version != acquisitionMagic && version != magic && version != magicV8 && version != magicV7 &&
+        version != magicV6 && version != magicV5 && version != magicV4 && version != magicV3 && version != magicV2 &&
+        version != legacyMagic)
         throw std::runtime_error("capture_job_version_unsupported");
+    uint64_t headerOffset = 0;
+    if (version == acquisitionMagic) {
+        r(headerOffset);
+        const auto extent = std::filesystem::file_size(path);
+        if (headerOffset < acquisitionPrefixBytes || headerOffset >= extent)
+            throw std::runtime_error("capture_job_acquisition_offset_invalid");
+        stream.seekg(std::streamoff(headerOffset));
+    }
     CaptureJob job;
-    if (version == magic || version == magicV8 || version == magicV7 || version == magicV6 || version == magicV5) {
+    if ((version == magic || version == acquisitionMagic) || version == magicV8 || version == magicV7 ||
+        version == magicV6 || version == magicV5) {
         fields(r, job);
         // Same order as save().
         r(job.dng.processingRecipe, job.dng.resolvedRecipe, job.dng.sourceRole, job.mergedDng.processingRecipe,
@@ -498,12 +598,16 @@ CaptureJob loadImpl(const std::string& path,
           job.jpeg.develop.denoiseForceY, job.jpeg.develop.denoiseMaxScale, retired.rawMode,
           retired.rawStrength, retired.rawLuma, retired.rawChroma, retired.yuvMode, retired.yuvStrengthY,
           retired.yuvStrengthC);
-        if (version == magic || version == magicV8 || version == magicV7 || version == magicV6)
+        if ((version == magic || version == acquisitionMagic) || version == magicV8 || version == magicV7 ||
+            version == magicV6)
             r(job.jpeg.output.ultraHdr, job.jpeg.develop.highlightReconstructionMethod,
               job.jpeg.develop.highlightThreshold, job.jpeg.develop.highlightCompression);
-        if (version == magic || version == magicV8 || version == magicV7) r(job.jpeg.develop.multiframeChromaDenoise);
-        if (version == magic || version == magicV8) r(job.dng.compression, job.mergedDng.compression);
-        if (version == magic) r(job.dng.deviceDisplayModel, job.mergedDng.deviceDisplayModel);
+        if ((version == magic || version == acquisitionMagic) || version == magicV8 || version == magicV7)
+            r(job.jpeg.develop.multiframeChromaDenoise);
+        if ((version == magic || version == acquisitionMagic) || version == magicV8)
+            r(job.dng.compression, job.mergedDng.compression);
+        if ((version == magic || version == acquisitionMagic))
+            r(job.dng.deviceDisplayModel, job.mergedDng.deviceDisplayModel);
     } else {
         readLegacyJob(r, job);
         if (version == magicV4 || version == magicV3 || version == magicV2)
@@ -529,15 +633,19 @@ CaptureJob loadImpl(const std::string& path,
     const auto n = payloadSize(job);
     const size_t count = job.multiframe ? job.metadata.size() : 1;
     // Validate file extent before allocating or uploading anything.
-    auto pos = stream.tellg();
+    const auto metadataEnd = stream.tellg();
+    const auto pos = version == acquisitionMagic ? std::streampos(acquisitionPrefixBytes) : metadataEnd;
+    const auto footerPos = version == acquisitionMagic ? metadataEnd : pos + std::streamoff(count * n);
     stream.seekg(0, std::ios::end);
-    auto end = stream.tellg();
-    stream.seekg(pos);
-    if (end - pos != std::streamoff(count * n + sizeof(uint32_t) + sizeof(uint64_t)))
+    const auto end = stream.tellg();
+    if (metadataEnd < 0 || footerPos < 0 || end - footerPos != std::streamoff(sizeof(uint32_t) + sizeof(uint64_t)) ||
+        (version == acquisitionMagic &&
+         (headerOffset != acquisitionPrefixBytes + count * n || metadataEnd <= std::streampos(headerOffset))))
         throw std::runtime_error("capture_job_extent_invalid");
+    stream.seekg(pos);
     if (framesOffset) {
         *framesOffset = uint64_t(pos);
-        stream.seekg(std::streamoff(count * n), std::ios::cur);
+        stream.seekg(footerPos);
         uint64_t marker = 0;
         r(marker);
         if (marker != footer) throw std::runtime_error("capture_job_commit_invalid");
@@ -551,6 +659,7 @@ CaptureJob loadImpl(const std::string& path,
         if (consume) consume(job, i, raw);
     }
     if (!consume && !job.multiframe) job.frame.raw16 = std::move(raw);
+    stream.seekg(footerPos);
     uint64_t marker = 0;
     r(marker);
     if (marker != footer) throw std::runtime_error("capture_job_commit_invalid");

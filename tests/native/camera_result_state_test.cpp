@@ -4,6 +4,7 @@
 #include <limits>
 
 #include "camera/CameraResultState.h"
+#include "camera/StillFocus.h"
 
 using namespace rawrcam::camera;
 using rawrcam::metadata::FrameMetadataSnapshot;
@@ -309,7 +310,72 @@ void faceNormalization() {
     assert(normalizeCameraFaces(active, rectangles, 4, nullptr, 0).front().score == 50);
 }
 
+void focusOwnershipAndFreshness() {
+    CameraResultState results;
+    auto state = controls();
+    state.capabilities.manualFocusSupported = true;
+    state.capabilities.minimumFocusDistance = 10;
+    auto old = CameraRequestProvenance::from(state, 1);
+    auto result = echoes();
+    result.afState = 4;
+    result.afMode = 1;
+    result.lensState = 0;
+    result.focusDistance = 2;
+    invalidateFocus(state);
+    state.tapAfActive = true;
+    results.observe(state, frame(10), result, &old, 2, false);
+    assert(!state.afState && !state.appliedFocusDistance);
+    auto request = CameraRequestProvenance::from(state, 2);
+    results.observe(state, frame(20), result, &request, 2, false);
+    assert(!state.afState);  // same intent, but no evidence START executed yet
+    request.focusTriggerStart = true;
+    results.observe(state, frame(30), result, &request, 2, false);
+    assert(state.afState == 4 && state.appliedFocusDistance == 2);
+    const auto now = state.focusObservedAtMs;
+    assert(stillFocusReady(state, now));
+    assert(!stillFocusReady(state, now + 1501));
+    result.focusDistance = 0;
+    results.observe(state, frame(25), result, &request, 3, false);
+    assert(state.appliedFocusDistance == 2);  // no time regression
+    request.focusTriggerStart = false;
+    result.focusDistance = 3;
+    results.observe(state, frame(40), result, &request, 99, false);
+    assert(state.appliedFocusDistance == 3);  // AE serial changes are irrelevant
+    results.observe(state, frame(50), {}, &request, 99, false);
+    assert(!stillFocusReady(state, now) && !state.afState);
+    assert(state.appliedFocusDistance == 3);  // historical readout only
+
+    state.focusMode = FocusControlMode::Manual;
+    state.tapAfActive = false;
+    state.requestedManualFocusNormalized = 0.25f;
+    invalidateFocus(state);
+    request = CameraRequestProvenance::from(state, 100);
+    result.afMode = 0;
+    result.focusDistance = 3;  // cached old position is not the requested 7.5 D
+    results.observe(state, frame(60), result, &request, 100, false);
+    assert(!stillFocusReady(state, state.focusObservedAtMs));
+    result.focusDistance = requestedFocusDiopters(state);
+    results.observe(state, frame(70), result, &request, 100, false);
+    assert(stillFocusReady(state, state.focusObservedAtMs));
+    // A still snapshot must not replace the preview's AF result or distance.
+    auto still = CameraRequestProvenance::from(state, 101);
+    still.optimizedStillRequestId = 5;
+    still.stillFocusDistance = requestedFocusDiopters(state);
+    result.focusDistance = 0;
+    results.observe(state, frame(80), result, &still, 100, false);
+    assert(state.appliedFocusDistance == 7.5f);
+    assert(stillFocusReady(state, state.focusObservedAtMs));
+    result.lensState = 1;
+    results.observe(state, frame(90), result, &request, 100, false);
+    assert(!stillFocusReady(state, state.focusObservedAtMs));
+    state.rawrAeActive = true;
+    state.rawrAeExposureTimeNs = 1;
+    state.rawrAeSensitivity = 100;
+    assert(CameraRequestProvenance::from(state, 101).focusEpoch == state.focusEpoch);
+}
+
 int main() {
+    focusOwnershipAndFreshness();
     requestProvenance();
     repeatingTelemetryAndOneShotIsolation();
     frameRateObservation();

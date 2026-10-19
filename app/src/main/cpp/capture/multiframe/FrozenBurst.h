@@ -9,9 +9,13 @@
 
 #include "color/FrameColorTransform.h"
 #include "metadata/FrameMetadataSnapshot.h"
+namespace rawrcam::capture::persistence {
+class AcquiredRawJournal;
+}
 namespace rawrcam::capture::multiframe {
 class BracketCollector;
 struct FrozenBurst {
+    std::shared_ptr<persistence::AcquiredRawJournal> acquiredJournal;
     std::shared_ptr<void> recoveryImages;  // Owns uploaded disk-backed inputs through the final GPU fence.
     std::unique_ptr<rawr::zsl_ring::RawImageRing::Snapshot> snapshot;
     // Pins of frames appended after the freeze (HDR+ bracket dark frames).

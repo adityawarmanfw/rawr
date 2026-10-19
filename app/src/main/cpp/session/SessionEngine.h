@@ -100,6 +100,8 @@ class SessionEngine {
     [[nodiscard]] capture::multiframe::MultiframeCaptureCoordinator::BracketHold bracketHold() const noexcept {
         return capture_.multiframe().bracketHold();
     }
+    // Full-size route availability and outstanding RAW acquisition, for the hold notice.
+    std::pair<bool, bool> fullSizeCaptureState();
     void setSpotAeDisplay(bool active, float x, float y);
     void setColorMode(const std::string& mode);
     void setCpuRawCopyProbeFrames(uint32_t frames);
@@ -321,6 +323,10 @@ class SessionEngine {
     struct FullSizeStills {
         std::mutex mutex;
         std::condition_variable arrived;
+        uint64_t generation = 0;
+        bool failed = false;
+        std::set<uint64_t> failures;
+        std::map<uint64_t, metadata::FrameMetadataSnapshot> results;
         std::deque<imaging::RawFrameLease> frames;  // newest last, at most kMaxFrames
         metadata::CameraContextMetadataPtr context;  // the session's context at full size
         std::set<uint64_t> requestIds;               // photos waiting for a full-size still
@@ -331,6 +337,8 @@ class SessionEngine {
         static constexpr size_t kMaxFrames = 6;
     };
     FullSizeStills fullSize_;
+    void drainFullSizeStills();  // session worker, under mu_; independent of preview pairing
+    std::atomic<uint64_t> failedCameraGeneration_{0};
     metadata::CameraContextMetadataPtr lastCameraContext_;
     // The full-size context when `metadata` is a full-size still's binned copy (and marks it claimed).
     metadata::CameraContextMetadataPtr claimFullSizeStill(const metadata::FrameMetadataSnapshot& metadata);
