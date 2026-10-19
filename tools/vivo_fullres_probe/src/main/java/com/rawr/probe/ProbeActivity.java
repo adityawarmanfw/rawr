@@ -150,7 +150,7 @@ public final class ProbeActivity extends Activity {
         }
     }
 
-    private static String format(Object v) {
+    static String format(Object v) {
         if (v == null || !v.getClass().isArray()) return String.valueOf(v);
         int n = Array.getLength(v);
         StringBuilder b = new StringBuilder("[").append(n).append("] ");
@@ -669,7 +669,7 @@ public final class ProbeActivity extends Activity {
 
     interface Provider { int get(int key) throws Exception; void set(int key, int value) throws Exception; }
 
-    private static Provider provider() throws Exception {
+    static Provider provider() throws Exception {
         Class<?> api = Class.forName("android.hardware.vivocamera.VivoCameraManager");
         Object manager = api.getMethod("getInstance").invoke(null);
         Method get = api.getMethod("getInfo", int.class), set = api.getMethod("setValue", int.class, int.class);
