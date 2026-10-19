@@ -17,6 +17,7 @@
 #include <optional>
 #include <set>
 #include <sstream>
+#include <string_view>
 #include <thread>
 #include <utility>
 
@@ -1056,6 +1057,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
                                      "vivo.control.seamless.remosaic.enable", "vivo.control.sensorMode"}) {
                 const auto value = deviceSession.vendorResultValue(result, name);
                 line += std::string(" ") + name + "=" + (value ? std::to_string(*value) : "missing");
+                if (std::string_view(name) == "vcf.parameter.seamlessMode") actions.frame->vendorSeamlessMode = value;
             }
             diag(line);
         }

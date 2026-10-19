@@ -87,6 +87,9 @@ struct FrameMetadataSnapshot {
     std::optional<int32_t> requestedSensitivity;
     // Non-zero only for the tagged one-shot request issued for this app capture.
     std::optional<uint64_t> optimizedStillRequestId;
+    // Full-size stills on vivo: how the HAL served the frame
+    // (vcf.parameter.seamlessMode); nullopt when the camera has no such tag.
+    std::optional<int64_t> vendorSeamlessMode;
     std::optional<float> aperture;
     std::optional<float> focalLengthMm;
     std::optional<float> focusDistanceDiopters;

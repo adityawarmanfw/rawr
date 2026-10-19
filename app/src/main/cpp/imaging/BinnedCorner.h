@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <cstring>
+#include <optional>
 #include <vector>
 
 namespace rawrcam::imaging {
@@ -49,16 +50,29 @@ inline void cropPackedRaw16ToCorner(std::vector<uint8_t>& raw16, uint32_t width,
     raw16.shrink_to_fit();
 }
 
-// Divisor for a full-size buffer (width/height exactly 2x or 4x the binned
-// pixel array) that only holds the binned corner; 1 for anything else, so
-// ordinary binned frames are never sampled.
-inline uint32_t fullSizeBinnedCorner(const std::vector<uint8_t>& raw16, uint32_t width, uint32_t height,
-                                     uint32_t pixelArrayWidth, uint32_t pixelArrayHeight) {
-    if (!pixelArrayWidth || !pixelArrayHeight || raw16.size() < size_t(width) * height * 2) return 1;
-    const bool scaled = (width == pixelArrayWidth * 2 && height == pixelArrayHeight * 2) ||
-                        (width == pixelArrayWidth * 4 && height == pixelArrayHeight * 4);
-    if (!scaled) return 1;
-    return binnedCornerDivisor(reinterpret_cast<const uint16_t*>(raw16.data()), width, height);
+struct BinnedCornerCheck {
+    uint32_t divisor = 1;        // >1: keep only the top-left width/d x height/d
+    const char* reason = "";     // "reported" (HAL result tag) or "empty" (zero samples)
+};
+
+// For a full-size buffer (width/height exactly 2x or 4x the binned pixel
+// array; anything else is never checked). First the HAL's own report: vivo's
+// seamlessMode is 768 when a still switched to the 200 MP mode and 259 for
+// 50 MP, so any other value means the binned readout. Without the tag, or
+// when it claims the switch, the zero samples decide.
+inline BinnedCornerCheck fullSizeBinnedCorner(const std::vector<uint8_t>& raw16, uint32_t width, uint32_t height,
+                                              uint32_t pixelArrayWidth, uint32_t pixelArrayHeight,
+                                              std::optional<int64_t> seamlessMode) {
+    if (!pixelArrayWidth || !pixelArrayHeight || raw16.size() < size_t(width) * height * 2) return {};
+    uint32_t d = 0;
+    for (const uint32_t k : {2u, 4u})
+        if (width == pixelArrayWidth * k && height == pixelArrayHeight * k) d = k;
+    if (!d) return {};
+    if (seamlessMode && *seamlessMode != (d == 4 ? 768 : 259)) return {d, "reported"};
+    if (const uint32_t empty = binnedCornerDivisor(reinterpret_cast<const uint16_t*>(raw16.data()), width, height);
+        empty > 1)
+        return {empty, "empty"};
+    return {};
 }
 
 }  // namespace rawrcam::imaging

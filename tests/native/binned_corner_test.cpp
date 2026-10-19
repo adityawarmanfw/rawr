@@ -51,6 +51,26 @@ int main() {
     stray[size_t(H * 15 / 16) * W + W * 15 / 16] = 70;
     check(binnedCornerDivisor(stray.data(), W, H) == 1, "data outside the half is a real frame");
 
+    // The HAL's report decides first; zero samples are the fallback.
+    using rawrcam::imaging::fullSizeBinnedCorner;
+    const auto bytes = [](const std::vector<uint16_t>& px) {
+        std::vector<uint8_t> out(px.size() * 2);
+        std::memcpy(out.data(), px.data(), out.size());
+        return out;
+    };
+    const auto fullBytes = bytes(full), quarterBytes = bytes(quarter);
+    check(fullSizeBinnedCorner(fullBytes, W, H, W / 4, H / 4, 768).divisor == 1, "200 MP switch reported, full data");
+    check(fullSizeBinnedCorner(fullBytes, W, H, W / 2, H / 2, 259).divisor == 1, "50 MP switch reported, full data");
+    // A reused buffer: stale full-size data around a binned corner, but the HAL says it did not switch.
+    const auto stale = fullSizeBinnedCorner(fullBytes, W, H, W / 4, H / 4, 1);
+    check(stale.divisor == 4 && std::strcmp(stale.reason, "reported") == 0, "no switch reported, stale buffer");
+    check(fullSizeBinnedCorner(fullBytes, W, H, W / 2, H / 2, 768).divisor == 2, "200 MP value on a 50 MP buffer");
+    const auto empty4 = fullSizeBinnedCorner(quarterBytes, W, H, W / 4, H / 4, std::nullopt);
+    check(empty4.divisor == 4 && std::strcmp(empty4.reason, "empty") == 0, "no tag: zero samples decide");
+    check(fullSizeBinnedCorner(quarterBytes, W, H, W / 4, H / 4, 768).divisor == 4, "switch claimed, corner only");
+    check(fullSizeBinnedCorner(quarterBytes, W, H, W / 3, H / 3, 1).divisor == 1, "not a 2x/4x buffer: never checked");
+    check(fullSizeBinnedCorner(quarterBytes, W / 4, H / 4, W / 4, H / 4, 1).divisor == 1, "binned stream: never checked");
+
     std::vector<uint8_t> packed(quarter.size() * 2);
     std::memcpy(packed.data(), quarter.data(), packed.size());
     cropPackedRaw16ToCorner(packed, W, H, 4);

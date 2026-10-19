@@ -622,10 +622,14 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
         if (!copy.success) throw std::runtime_error("full_size_copy_failed:" + copy.error);
         // A frame the HAL returned binned (corner of the buffer) would wreck
         // the merge: leave it out and merge the full-size ones.
-        if (imaging::fullSizeBinnedCorner(packed, width, height, context->geometry.pixelArrayWidth,
-                                          context->geometry.pixelArrayHeight) > 1) {
+        if (const auto check = imaging::fullSizeBinnedCorner(packed, width, height, context->geometry.pixelArrayWidth,
+                                                             context->geometry.pixelArrayHeight,
+                                                             frames.back().metadata.vendorSeamlessMode);
+            check.divisor > 1) {
             appendDiagnostic("FULL_SIZE_BINNED_CORNER tag=" + std::to_string(tag) +
-                             " timestampNs=" + std::to_string(frames.back().metadata.timestampNs) + " burst=1");
+                             " timestampNs=" + std::to_string(frames.back().metadata.timestampNs) +
+                             " burst=1 reason=" + check.reason + " seamlessMode=" +
+                             std::to_string(frames.back().metadata.vendorSeamlessMode.value_or(-1)));
             frames.pop_back();
             journal->dropExpected();
             ++binnedCorners;
