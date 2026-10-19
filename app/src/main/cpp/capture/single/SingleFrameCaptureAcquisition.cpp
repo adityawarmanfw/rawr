@@ -5,6 +5,7 @@
 
 #include <stdexcept>
 
+#include "capture/FullSizeFallbacks.h"
 #include "imaging/BinnedCorner.h"
 #include "imaging/Raw16CpuSnapshot.h"
 #include "imaging/RawFrameLease.h"
@@ -30,6 +31,7 @@ void keepBinnedCorner(imaging::RawSnapshot& frame) {
     frame.width /= d;
     frame.height /= d;
     frame.packedRowStrideBytes = frame.width * 2;
+    fullSizeFallbacks().binnedStills.fetch_add(1, std::memory_order_relaxed);
 }
 }  // namespace
 bool SingleFrameCaptureAcquisition::busy() const noexcept {

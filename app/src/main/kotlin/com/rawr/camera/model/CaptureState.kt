@@ -208,6 +208,9 @@ data class CaptureUiState(
     /** High/Full Res captures acquire RAW after the press, including short exposures. */
     val fullSizeCapture: Boolean = false,
     val fullSizeCapturePending: Boolean = false,
+    /** Full-size captures the camera returned binned: stills saved at the binned size, bursts taken as a single. */
+    val fullSizeBinnedStills: Long = 0L,
+    val fullSizeBurstsToSingle: Long = 0L,
     /** Post-shutter capture presses native has not armed yet (hold starts at the press). */
     val bracketHoldPresses: Int = 0
 ) {

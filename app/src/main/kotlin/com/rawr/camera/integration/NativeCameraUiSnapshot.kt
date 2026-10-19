@@ -82,6 +82,9 @@ internal data class NativeCameraUiSnapshot(
     val bracketHoldDone: Long = 0L,
     val fullSizeCapture: Boolean = false,
     val fullSizeCapturePending: Boolean = false,
+    /** Full-size captures the camera returned binned (monotonic counters, see FullSizeFallbacks.h). */
+    val fullSizeBinnedStills: Long = 0L,
+    val fullSizeBurstsToSingle: Long = 0L,
     /** Full-size (200 MP) lens: stills save DNG only, whatever the output format. */
     val dngOnly: Boolean = false
 ) {
@@ -178,6 +181,8 @@ internal data class NativeCameraUiSnapshot(
                 bracketHoldDone = j.optLong("bracketHoldDone", 0L),
                 fullSizeCapture = j.optBoolean("fullSizeCapture", false),
                 fullSizeCapturePending = j.optBoolean("fullSizeCapturePending", false),
+                fullSizeBinnedStills = j.optLong("fullSizeBinnedStills", 0L),
+                fullSizeBurstsToSingle = j.optLong("fullSizeBurstsToSingle", 0L),
                 dngOnly = j.optBoolean("dngOnly", false),
                 profileLenses = buildList {
                     val lenses = j.optJSONArray("profileLenses") ?: return@buildList

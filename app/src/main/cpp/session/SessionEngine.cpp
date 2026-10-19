@@ -16,6 +16,7 @@
 #include "diagnostics/logging/NativeLog.h"
 #include "diagnostics/logging/RuntimeTraceRecorder.h"
 #include "geometry/CfaPattern.h"
+#include "capture/FullSizeFallbacks.h"
 #include "imaging/BinnedCorner.h"
 #include "imaging/Raw16CpuSnapshot.h"
 #include "imaging/RawFrameLease.h"
@@ -645,7 +646,10 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
     if (frames.size() + binnedCorners != count) return UINT32_MAX;
     // Fewer than two full-size frames is no merge: the press falls back to a
     // single still, which also retries the sensor switch.
-    if (frames.size() < 2u) return 0u;
+    if (frames.size() < 2u) {
+        capture::fullSizeFallbacks().burstsToSingle.fetch_add(1, std::memory_order_relaxed);
+        return 0u;
+    }
     // Camera buffers are released as they are copied. Reuse one CPU frame buffer
     // and keep the journal in place for the existing strip merge.
     std::vector<uint8_t>().swap(packed);
