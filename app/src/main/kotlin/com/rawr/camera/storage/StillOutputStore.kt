@@ -305,12 +305,15 @@ class StillOutputStore(
             }
             if (journal.recoveryAttempts(entry) >= MAX_RECOVERY_ATTEMPTS) {
                 // Every earlier recovery died before finishing (the merge took the
-                // process down): retrying would crash-loop every launch while the
-                // burst payload holds gigabytes. Drop it and its pending outputs.
-                android.util.Log.e("RawrCamCapture", "Abandoning still ${entry.name} after " +
-                    "${journal.recoveryAttempts(entry)} unfinished recoveries")
-                entry.targets.filterNot { it.published }.forEach { runCatching { deleteUri(it.uri.toUri()) } }
-                runCatching { journal.remove(entry) }; claimed.remove(entry.name)
+                // process down): retrying would crash-loop every launch. Stop
+                // automatic recovery but keep the capture; the renderer lists it
+                // as unfinished so the user can still develop or delete it.
+                if (entry.lastError != RECOVERY_ABANDONED) {
+                    android.util.Log.e("RawrCamCapture", "Stopped recovering still ${entry.name} after " +
+                        "${journal.recoveryAttempts(entry)} unfinished attempts; left for the renderer")
+                    runCatching { journal.write(entry.copy(lastError = RECOVERY_ABANDONED)) }
+                }
+                claimed.remove(entry.name)
                 continue
             }
             if (entry.name in quarantinedThisLaunch || journal.isSkipped(entry)) {
@@ -383,8 +386,9 @@ class StillOutputStore(
         }
         fun rendererEdited(filesDir: File, name: String) = File(filesDir, "still_jobs/$name$RENDERER_EDITED").exists()
         const val RENDERER_EDITED = ".renderer-edited"
-        /** Recoveries that may die mid-merge before a job is abandoned. */
+        /** Recoveries that may die mid-merge before a job is left to the renderer. */
         const val MAX_RECOVERY_ATTEMPTS = 2
+        const val RECOVERY_ABANDONED = "Processing kept crashing; open it in the renderer to finish it"
         fun rendererRelease(filesDir: File, name: String) {
             File(filesDir, "still_jobs/$name.renderer-owner").delete()
             claimed.remove(name)
