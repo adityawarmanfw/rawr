@@ -303,6 +303,16 @@ class StillOutputStore(
                 journal.remove(entry); claimed.remove(entry.name)
                 continue
             }
+            if (journal.recoveryAttempts(entry) >= MAX_RECOVERY_ATTEMPTS) {
+                // Every earlier recovery died before finishing (the merge took the
+                // process down): retrying would crash-loop every launch while the
+                // burst payload holds gigabytes. Drop it and its pending outputs.
+                android.util.Log.e("RawrCamCapture", "Abandoning still ${entry.name} after " +
+                    "${journal.recoveryAttempts(entry)} unfinished recoveries")
+                entry.targets.filterNot { it.published }.forEach { runCatching { deleteUri(it.uri.toUri()) } }
+                runCatching { journal.remove(entry) }; claimed.remove(entry.name)
+                continue
+            }
             if (entry.name in quarantinedThisLaunch || journal.isSkipped(entry)) {
                 // Settled previously: the outputs are permanently unavailable.
                 // Silent by design — the journal + payload are preserved for a
@@ -326,6 +336,7 @@ class StillOutputStore(
                 val output = PreparedCapture(file(if (entry.multiframe) "base" else "single"), file("merged"), file("jpeg"),
                     entry.name, entry.multiframe, entry.targets.any { it.conditional && !it.skipped },
                     entry.capturedAt, entry.recipe, entry.fallback)
+                journal.recordRecoveryAttempt(entry)
                 recoveredEntries[entry.name] = entry
                 recoveryScratch[entry.name] = scratch
                 return output
@@ -372,6 +383,8 @@ class StillOutputStore(
         }
         fun rendererEdited(filesDir: File, name: String) = File(filesDir, "still_jobs/$name$RENDERER_EDITED").exists()
         const val RENDERER_EDITED = ".renderer-edited"
+        /** Recoveries that may die mid-merge before a job is abandoned. */
+        const val MAX_RECOVERY_ATTEMPTS = 2
         fun rendererRelease(filesDir: File, name: String) {
             File(filesDir, "still_jobs/$name.renderer-owner").delete()
             claimed.remove(name)

@@ -111,6 +111,22 @@ internal class CaptureJournal(private val directory: File, private val syncDirec
         syncDirectory(directory)
     }
 
+    /**
+     * Durable recovery attempt count. Bumped before native gets the job, cleared
+     * by remove(): a job whose merge kills the process (out of memory) keeps its
+     * count across launches, so recovery can give up instead of crash-looping.
+     */
+    fun recoveryAttempts(entry: Entry): Int =
+        File(directory, entry.name + ATTEMPTS_SUFFIX).takeIf { it.isFile }?.readText()?.trim()?.toIntOrNull() ?: 0
+
+    fun recordRecoveryAttempt(entry: Entry): Int {
+        require(entry.name.isNotBlank() && '/' !in entry.name && ".." !in entry.name)
+        val attempts = recoveryAttempts(entry) + 1
+        FileOutputStream(File(directory, entry.name + ATTEMPTS_SUFFIX)).use { it.write("$attempts\n".toByteArray()); it.fd.sync() }
+        syncDirectory(directory)
+        return attempts
+    }
+
     fun remove(entry: Entry) {
         // Remove payload first: an interrupted cleanup leaves a completed journal,
         // which recovery can safely finish without rendering or duplicating outputs.
@@ -120,6 +136,7 @@ internal class CaptureJournal(private val directory: File, private val syncDirec
         File(directory, entry.name + ".job.fallback.tmp").delete()
         File(directory, entry.name + ".properties").delete()
         File(directory, entry.name + SKIPPED_SUFFIX).delete()
+        File(directory, entry.name + ATTEMPTS_SUFFIX).delete()
         File(directory, entry.name + StillOutputStore.RENDERER_EDITED).delete()
         val assetId = Regex("\"importedProfileId\":\"(capture_[A-Za-z0-9-]+)\"").find(entry.recipe)?.groupValues?.get(1)
         if (assetId != null) releaseCaptureAssets(requireNotNull(directory.parentFile), assetId)
@@ -128,6 +145,7 @@ internal class CaptureJournal(private val directory: File, private val syncDirec
 
     private companion object {
         const val SKIPPED_SUFFIX = ".recovery-skipped"
+        const val ATTEMPTS_SUFFIX = ".recovery-attempts"
     }
 }
 
