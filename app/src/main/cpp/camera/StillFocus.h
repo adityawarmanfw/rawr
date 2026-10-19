@@ -29,6 +29,9 @@ inline bool stillFocusReady(const CameraControlState& state, int64_t nowMs) {
         const float wanted = requestedFocusDiopters(state);
         return state.appliedAfMode == 0 && focusDistanceMatches(*state.appliedFocusDistance, wanted);
     }
-    return state.afState == 2 || state.afState == 4;
+    // Settled means not scanning: a lock that failed (dim scene), a passive
+    // scan that gave up, or AF the HAL reset after a tap are all final; only
+    // PASSIVE_SCAN and ACTIVE_SCAN are worth waiting for.
+    return state.afState && *state.afState != 1 && *state.afState != 3;  // PASSIVE_SCAN, ACTIVE_SCAN
 }
 }  // namespace rawrcam::camera
