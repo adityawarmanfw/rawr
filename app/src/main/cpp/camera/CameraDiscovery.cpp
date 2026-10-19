@@ -53,9 +53,30 @@ std::set<std::string> enumeratedCameraIds(ACameraManager* manager) {
     return enumerated;
 }
 namespace {
-std::vector<std::string> discoveryCandidates(const std::set<std::string>& enumerated) {
+// Hidden vendor ids are not always contiguous (some phones expose 14..23 with
+// gaps below), so probing keeps going until kHiddenIdGap ids in a row past the
+// last hit are missing, up to kHiddenIdMax.
+constexpr int kHiddenIdGap = 16;
+constexpr int kHiddenIdMax = 63;
+
+bool hasCharacteristics(ACameraManager* manager, const std::string& id) {
+    ACameraMetadata* characteristics = nullptr;
+    const bool ok = ACameraManager_getCameraCharacteristics(manager, id.c_str(), &characteristics) == ACAMERA_OK &&
+                    characteristics;
+    if (characteristics) ACameraMetadata_free(characteristics);
+    return ok;
+}
+
+std::vector<std::string> discoveryCandidates(ACameraManager* manager, const std::set<std::string>& enumerated) {
     std::vector<std::string> ids;
-    for (int id = 0; id <= 11; ++id) ids.push_back(std::to_string(id));
+    int lastHit = -1;
+    for (int id = 0; id <= kHiddenIdMax && id - lastHit <= kHiddenIdGap; ++id) {
+        const auto name = std::to_string(id);
+        if (enumerated.count(name) || hasCharacteristics(manager, name)) {
+            ids.push_back(name);
+            lastHit = id;
+        }
+    }
     for (const auto& id : enumerated) {
         if (std::find(ids.begin(), ids.end(), id) == ids.end()) ids.push_back(id);
     }
@@ -64,13 +85,14 @@ std::vector<std::string> discoveryCandidates(const std::set<std::string>& enumer
 }  // namespace
 
 std::vector<std::string> cameraDiscoveryCandidates(ACameraManager* manager) {
-    return discoveryCandidates(enumeratedCameraIds(manager));
+    if (!manager) return {};
+    return discoveryCandidates(manager, enumeratedCameraIds(manager));
 }
 
 void emitCameraDiscovery(ACameraManager* manager, const CameraDiagnostic& diagnostic) {
     if (!manager || !diagnostic) return;
     const auto enumerated = enumeratedCameraIds(manager);
-    for (const auto& cameraId : discoveryCandidates(enumerated)) {
+    for (const auto& cameraId : discoveryCandidates(manager, enumerated)) {
         ACameraMetadata* characteristics = nullptr;
         if (ACameraManager_getCameraCharacteristics(manager, cameraId.c_str(), &characteristics) != ACAMERA_OK ||
             !characteristics) {

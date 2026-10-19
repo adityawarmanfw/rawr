@@ -11,7 +11,7 @@ namespace rawrcam::camera {
 //   "equivalentFocalMm":24.1,"rawStreams":[{"format":"RAW_SENSOR","width":4080,
 //   "height":3064,"supported":true}],"black":[64,64,64,64],"white":1023,
 //   "sessionKeys":[2147614720]}],"error":""}
-// Covers enumerated ids, the hidden 0..11 probe range, and the physical
+// Covers enumerated ids, probed hidden numeric ids (see cameraDiscoveryCandidates), and the physical
 // sub-cameras of logical multi-cameras (with parentId set). Does not open
 // any camera.
 [[nodiscard]] std::string probeCamerasJson();

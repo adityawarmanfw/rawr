@@ -20,7 +20,8 @@ using CameraDiagnostic = std::function<void(const std::string&)>;
 void emitCameraDiscovery(ACameraManager* manager, const CameraDiagnostic& diagnostic);
 // Ids from ACameraManager_getCameraIdList (the publicly enumerated cameras).
 std::set<std::string> enumeratedCameraIds(ACameraManager* manager);
-// Public IDs plus the existing hidden-provider probe range; routing stays native.
+// Public IDs plus hidden numeric IDs that answer a characteristics query (probed
+// until 16 in a row past the last hit are missing, up to 63); routing stays native.
 std::vector<std::string> cameraDiscoveryCandidates(ACameraManager* manager);
 // RAW16 (RAW_SENSOR) and RAW10 output streams from the default stream configuration table.
 std::vector<geometry::RawStreamOption> rawOutputStreams(const ACameraMetadata* characteristics);
