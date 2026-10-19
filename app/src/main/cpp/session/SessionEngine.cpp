@@ -1,21 +1,24 @@
 #include "diagnostics/timing/GpuTimingTracker.h"
 // Composition root: construction, core lifecycle, metadata ingress, shutdown.
-#include <algorithm>
 #include <unistd.h>
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
 
 #include "camera/NativeCameraController.h"
+#include "capture/persistence/AcquiredRawJournal.h"
+#include "color/ColorCalibration.h"
+#include "color/WhiteBalance.h"
 #include "diagnostics/logging/NativeLog.h"
 #include "diagnostics/logging/RuntimeTraceRecorder.h"
-#include "metadata/MetadataDiagnostics.h"
-#include "imaging/Raw16CpuSnapshot.h"
-#include "color/WhiteBalance.h"
 #include "geometry/CfaPattern.h"
+#include "imaging/Raw16CpuSnapshot.h"
 #include "imaging/RawFrameLease.h"
+#include "metadata/MetadataDiagnostics.h"
 #include "session/SessionEngine.h"
 #include "video_pipeline/VideoCrop.h"
 #include "vulkan/VulkanDispatch.h"
@@ -112,6 +115,9 @@ SessionEngine::SessionEngine(std::string filesDir) : filesDir_(std::move(filesDi
                                  std::to_string(g.rawBufferHeight) + " buffer=" + std::to_string(width) + "x" +
                                  std::to_string(height));
                 std::lock_guard<std::mutex> stillLock(fullSize_.mutex);
+                fullSize_.generation = generation;
+                fullSize_.failed = false;
+                fullSize_.failures.clear();
                 fullSize_.context = std::move(context);
             }
             return window;
@@ -129,13 +135,34 @@ SessionEngine::SessionEngine(std::string filesDir) : filesDir_(std::move(filesDi
             fullSize_.context.reset();
             fullSize_.requestIds.clear();
             fullSize_.claimedTimestamps.clear();
+            fullSize_.burstTags.clear();
+            fullSize_.burstResults.clear();
+            fullSize_.results.clear();
+            fullSize_.generation = 0;
+            fullSize_.failed = true;
         }
+        fullSize_.arrived.notify_all();
         captureFrameIngress_.destroy();
         captureReaderGeneration_ = 0;
     };
     callbacks.captureFailed = [this](uint64_t generation) {
         std::lock_guard<std::mutex> lock(mu_);
         rawReaderUsage_.captureFailed(generation);
+    };
+    callbacks.acquisitionFailed = [this](uint64_t generation, uint64_t tag) {
+        // Camera callbacks never acquire the session lock or run teardown.
+        if (!tag) failedCameraGeneration_.store(generation);
+        {
+            std::lock_guard<std::mutex> lock(fullSize_.mutex);
+            if (generation != fullSize_.generation) return;
+            if (tag)
+                fullSize_.failures.insert(tag);
+            else {
+                fullSize_.failed = true;
+                failedCameraGeneration_.store(generation);
+            }
+        }
+        fullSize_.arrived.notify_all();
     };
     callbacks.submitMetadata = [this](const rawrcam::metadata::FrameMetadataSnapshot& metadata) {
         return submitMetadata(metadata);
@@ -293,11 +320,30 @@ void SessionEngine::setScopeDeviceRotationDegrees(int rotation) {
 
 bool SessionEngine::submitMetadata(const metadata::FrameMetadataSnapshot& metadata) {
     cameraControls_.noteFrameResult();
+    if (metadata.optimizedStillRequestId && metadata.cameraContext) {
+        std::lock_guard<std::mutex> lock(fullSize_.mutex);
+        const auto tag = *metadata.optimizedStillRequestId;
+        if (fullSize_.context && metadata.cameraContext->cameraContextGeneration == fullSize_.generation &&
+            (fullSize_.requestIds.count(tag) || fullSize_.burstTags.count(tag))) {
+            fullSize_.results.insert_or_assign(metadata.timestampNs, metadata);
+            return true;
+        }
+    }
     return ingressQueue_.enqueue(metadata);
 }
 void SessionEngine::enqueueRawFrame(imaging::AcquiredRawFrame frame) { ingressQueue_.enqueue(std::move(frame)); }
 void SessionEngine::stopIngress() { ingressQueue_.stop(); }
 void SessionEngine::tickRawReaderUsage() {
+    const auto failed = failedCameraGeneration_.exchange(0);
+    if (failed) {
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            if (failed != cameraReaderGeneration_) return;
+            capture_.single().failAcquisition(0, "camera_device_failed");
+        }
+        cameraControls_.requestSessionRestart();
+        return;
+    }
     {
         std::lock_guard<std::mutex> lock(mu_);
         if (!rawReaderUsage_.advance(steadyMillis())) return;
@@ -325,6 +371,7 @@ void SessionEngine::consumeIngress(imaging::FrameIngressQueue::Event event, imag
     if (raw) cameraControls_.rawFrameArrived(std::get<imaging::RawFrameLease>(event.payload).get().generation);
     std::lock_guard<std::mutex> lock(mu_);
     if (raw) rawReaderUsage_.rawArrived(std::get<imaging::RawFrameLease>(event.payload).get().generation);
+    drainFullSizeStills();
     if (drops.images) realtime_.timing().recordDropped(drops.images);
     if (drops.images && videoSession_.ready() && realtime_.coordinator().videoSubmitted() > 0)
         videoIngressDrops_.fetch_add(drops.images, std::memory_order_relaxed);
@@ -372,16 +419,76 @@ void SessionEngine::waitForVideoPrewarmIdle() { videoSession_.waitForVideoPrewar
 
 namespace rawrcam::session {
 void SessionEngine::onFullSizeFrame(imaging::AcquiredRawFrame frame) {
+    imaging::RawFrameLease lease(frame);
     const auto n = fullSizeFrames_.fetch_add(1, std::memory_order_relaxed) + 1;
     appendDiagnostic("FULL_SIZE_FRAME n=" + std::to_string(n) + " timestampNs=" + std::to_string(frame.timestampNs) +
                      " generation=" + std::to_string(frame.generation));
     {
         std::lock_guard<std::mutex> lock(fullSize_.mutex);
-        fullSize_.frames.emplace_back(frame);
+        if (frame.generation != fullSize_.generation || fullSize_.failed) return;
+        fullSize_.frames.push_back(std::move(lease));
         // The reader holds few images: never keep more than it can lend.
         while (fullSize_.frames.size() > FullSizeStills::kMaxFrames) fullSize_.frames.pop_front();
     }
     fullSize_.arrived.notify_all();
+}
+void SessionEngine::drainFullSizeStills() {
+    std::lock_guard<std::mutex> lock(fullSize_.mutex);
+    if (!fullSize_.context) return;
+    if (fullSize_.failed) {
+        capture_.single().failAcquisition(0, "camera_device_failed");
+        fullSize_.requestIds.clear();
+        fullSize_.frames.clear();
+        fullSize_.results.clear();
+        return;
+    }
+    for (const auto tag : fullSize_.failures) {
+        if (fullSize_.requestIds.erase(tag)) capture_.single().failAcquisition(tag, "camera_capture_failed");
+    }
+    for (auto it = fullSize_.results.begin(); it != fullSize_.results.end();) {
+        auto full = it->second;
+        const auto tag = full.optimizedStillRequestId.value_or(0);
+        if (fullSize_.failures.count(tag)) {
+            it = fullSize_.results.erase(it);
+            continue;
+        }
+        full.cameraContext = fullSize_.context;
+        const auto color = color::deriveFrameColorTransform(full, color::parsePreviewColorMode(colorMode_));
+        if (fullSize_.burstTags.count(tag)) {
+            fullSize_.burstResults.insert_or_assign(it->first, std::make_pair(std::move(full), color));
+            it = fullSize_.results.erase(it);
+            fullSize_.arrived.notify_all();
+            continue;
+        }
+        if (!fullSize_.requestIds.count(tag)) {
+            it = fullSize_.results.erase(it);
+            continue;
+        }
+        const auto frame = std::find_if(fullSize_.frames.begin(), fullSize_.frames.end(),
+                                        [&](const auto& f) { return f.get().timestampNs == it->first; });
+        if (frame == fullSize_.frames.end()) {
+            ++it;
+            continue;
+        }
+        auto tone = look_.toneParams();
+        const float gain = pipelineCallbacks_.postGainFor(full);
+        applyAutoKey(tone, liftNoiseFor(full, gain * std::exp2(tone.exposureEV), 1u));
+        if (!capture_.single().deferSubmittedFrame(full, color, tone, gain, look_.requestedFilmEnabled(),
+                                                   look_.filmLook())) {
+            ++it;  // asynchronous shot preparation may not have finished yet
+            continue;
+        }
+        if (capture_.single().beginDeferredSnapshot(frame->image(), frame->ahb(), it->first, frame->fence())) {
+            (void)frame->takeImage().release();
+            appendDiagnostic("FULL_SIZE_DIRECT_SNAPSHOT tag=" + std::to_string(tag) +
+                             " timestampNs=" + std::to_string(it->first));
+        } else {
+            capture_.single().failAcquisition(tag, "full_size_snapshot_failed");
+        }
+        fullSize_.frames.erase(frame);
+        fullSize_.requestIds.erase(tag);
+        it = fullSize_.results.erase(it);
+    }
 }
 rawrcam::metadata::CameraContextMetadataPtr SessionEngine::claimFullSizeStill(
     const rawrcam::metadata::FrameMetadataSnapshot& metadata) {
@@ -392,6 +499,10 @@ rawrcam::metadata::CameraContextMetadataPtr SessionEngine::claimFullSizeStill(
     fullSize_.requestIds.erase(*metadata.optimizedStillRequestId);
     fullSize_.claimedTimestamps.insert(metadata.timestampNs);
     return fullSize_.context;
+}
+std::pair<bool, bool> SessionEngine::fullSizeCaptureState() {
+    std::lock_guard<std::mutex> lock(fullSize_.mutex);
+    return {fullSize_.context != nullptr, !fullSize_.requestIds.empty() || !fullSize_.burstTags.empty()};
 }
 bool SessionEngine::fullSizeStillPending() {
     std::lock_guard<std::mutex> lock(fullSize_.mutex);
@@ -439,19 +550,31 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
         for (auto it = fullSize_.burstResults.begin(); it != fullSize_.burstResults.end();)
             it = it->second.first.optimizedStillRequestId == tag ? fullSize_.burstResults.erase(it) : std::next(it);
     };
-    if (!controller->captureFullSize(tag, count)) {
+    struct Cleanup {
+        std::function<void()> release;
+        ~Cleanup() { release(); }
+    } cleanup{[&] {
         forget();
-        return 0u;
-    }
+        controller->releaseFullSizeFocus();
+    }};
+    const uint32_t width = context->geometry.rawBufferWidth, height = context->geometry.rawBufferHeight;
+    const size_t bytes = size_t(width) * height * sizeof(uint16_t);
+    auto journal = std::make_shared<capture::persistence::AcquiredRawJournal>(filesDir_, bytes, count);
+    std::vector<uint8_t> packed(bytes);
     struct Frame {
         imaging::RawFrameLease lease{imaging::AcquiredRawFrame{}};
         rawrcam::metadata::FrameMetadataSnapshot metadata;
         rawrcam::color::FrameColorTransform color;
     };
     std::vector<Frame> frames;
-    {
-        // The switch to full size, then one frame per exposure.
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(3000 + 300 * count);
+    // Submit all exposures before copying or writing any frame. The camera can
+    // schedule the burst consecutively while we drain its completed buffers.
+    if (!controller->captureFullSize(tag, count, true))
+        return UINT32_MAX;  // acquisition failed; never submit a replacement capture
+    const auto exposure = controller->deferredCaptureExposure();
+    const auto budgetMs = count * (8000 + (exposure ? exposure->exposureTimeNs / 1'000'000 : 0));
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(budgetMs);
+    for (uint32_t index = 0; index < count; ++index) {
         std::unique_lock<std::mutex> lock(fullSize_.mutex);
         const auto ready = [&] {
             uint32_t n = 0;
@@ -463,7 +586,15 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
             }
             return n;
         };
-        fullSize_.arrived.wait_until(lock, deadline, [&] { return ready() >= count; });
+        const bool received = fullSize_.arrived.wait_until(lock, deadline, [&] {
+            return ready() >= 1 || fullSize_.failed || fullSize_.failures.count(tag) || fullSize_.context != context;
+        });
+        if (!received || fullSize_.failed || fullSize_.failures.count(tag) || fullSize_.context != context) {
+            lock.unlock();
+            forget();
+            failedCameraGeneration_.store(context->cameraContextGeneration);
+            return UINT32_MAX;
+        }
         for (auto it = fullSize_.burstResults.begin(); it != fullSize_.burstResults.end();) {
             if (it->second.first.optimizedStillRequestId != tag) {
                 ++it;
@@ -474,20 +605,35 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
             if (frame != fullSize_.frames.end()) {
                 frames.push_back({std::move(*frame), std::move(it->second.first), it->second.second});
                 fullSize_.frames.erase(frame);
+                fullSize_.burstResults.erase(it);
+                break;
             }
-            it = fullSize_.burstResults.erase(it);
+            ++it;  // retain metadata whose RAW buffer has not arrived yet
         }
-        fullSize_.burstTags.erase(tag);
+        lock.unlock();
+        if (frames.size() != index + 1) return UINT32_MAX;
+        auto& lease = frames.back().lease;
+        const auto copy =
+            imaging::copyCompletedRaw16AhbToPacked(lease.ahb(), width, height, packed, lease.fence(), lease.image());
+        lease = imaging::RawFrameLease(imaging::AcquiredRawFrame{});
+        if (!copy.success) throw std::runtime_error("full_size_copy_failed:" + copy.error);
+        journal->append(packed);
     }
+    // Completion belongs to the whole burst, never to each individual frame.
+    const auto remainingMs = std::max<int64_t>(
+        0, std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count());
+    if (!controller->waitFullSizeIdle(remainingMs)) {
+        failedCameraGeneration_.store(context->cameraContextGeneration);
+        return UINT32_MAX;
+    }
+    forget();
     appendDiagnostic("FULL_SIZE_BURST_FRAMES tag=" + std::to_string(tag) + " requested=" + std::to_string(count) +
                      " received=" + std::to_string(frames.size()));
-    if (frames.size() < 2) return 0u;
-    // The camera images stay held (the reader lends them) until the burst is
-    // journaled: each is copied to the journal once, straight from the camera
-    // buffer, with no GPU upload or readback. The merge loads the journal.
-    const uint32_t width = context->geometry.rawBufferWidth, height = context->geometry.rawBufferHeight;
+    if (frames.size() != count) return UINT32_MAX;
+    // Camera buffers are released as they are copied. Reuse one CPU frame buffer
+    // and keep the journal in place for the existing strip merge.
+    std::vector<uint8_t>().swap(packed);
     auto pending = std::make_unique<rawrcam::capture::multiframe::PendingMultiframeCapture>();
-    auto leases = std::make_shared<std::vector<imaging::RawFrameLease>>();
     for (size_t i = 0; i < frames.size(); ++i) {
         auto& f = frames[i];
         rawr::raw_gpu_pipeline::BurstFrame frame{};
@@ -501,23 +647,15 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
         pending->frames.push_back(frame);
         pending->metadata.push_back(f.metadata);
         pending->colors.push_back(f.color);
-        leases->push_back(std::move(f.lease));
     }
-    pending->cpuFrame = [leases, width, height](std::size_t i, std::vector<std::uint8_t>& packed) {
-        auto& lease = leases->at(i);
-        const auto copy =
-            imaging::copyCompletedRaw16AhbToPacked(lease.ahb(), width, height, packed, lease.fence(), lease.image());
-        if (copy.gpuAcquireFenceFd >= 0) close(copy.gpuAcquireFenceFd);
-        if (!copy.success) throw std::runtime_error("full_size_copy_failed:" + copy.error);
-        lease = imaging::RawFrameLease(imaging::AcquiredRawFrame{});  // journaled: the camera may reuse it
-    };
+    pending->acquiredJournal = std::move(journal);
     pending->referenceIndex = static_cast<std::uint32_t>(pending->frames.size() / 2u);
     pending->referenceMetadata = pending->metadata[pending->referenceIndex];
     pending->referenceColor = pending->colors[pending->referenceIndex];
     const auto prepared = static_cast<uint32_t>(pending->frames.size());
     std::lock_guard<std::mutex> lock(mu_);
     bracketSkippedForPending_ = true;  // no binned long frames for a full-size burst
-    return capture_.multiframe().adoptPreparedCapture(std::move(pending)) ? prepared : 0u;
+    return capture_.multiframe().adoptPreparedCapture(std::move(pending)) ? prepared : UINT32_MAX;
 }
 bool SessionEngine::fullSizeStillClaimed(uint64_t timestampNs) {
     std::lock_guard<std::mutex> lock(fullSize_.mutex);

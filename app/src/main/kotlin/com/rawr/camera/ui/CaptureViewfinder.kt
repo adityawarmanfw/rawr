@@ -203,7 +203,9 @@ internal fun CaptureViewfinder(
             )
             // One place for the notice and its countdown: moving it while it
             // fades out left an empty pill behind.
-            LongExposureNotice(
+            // Full-size acquisition uses the hold notice until RAW arrives;
+            // a short sensor exposure does not mean its sensor switch is done.
+            if (!state.fullSizeCapture) LongExposureNotice(
                 state = state.longExposure,
                 orientation = state.orientation,
                 modifier = Modifier.align(Alignment.TopCenter).padding(top = 56.dp)

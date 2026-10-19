@@ -47,7 +47,7 @@ internal object NativeFocusPresentation {
                 1, 3 -> TargetStatus.Settling
                 2, 4 -> TargetStatus.Settled
                 5, 6 -> TargetStatus.Failed
-                else -> current.status
+                else -> TargetStatus.Settling
             },
             mfNormalized = snapshot.requestedManualFocusNormalized.coerceIn(0f, 1f)
         )

@@ -18,10 +18,15 @@ struct CameraRequestProvenance {
     int32_t targetFpsMin = 0;
     int32_t targetFpsMax = 0;
     uint64_t optimizedStillRequestId = 0;
+    uint64_t focusEpoch = 0;
+    bool focusTriggerStart = false;
+    std::optional<float> stillFocusDistance;
 
     static CameraRequestProvenance from(const CameraControlState& state, uint64_t serial) {
         CameraRequestProvenance result;
         result.requestSerial = serial;
+        result.focusEpoch = state.focusEpoch;
+        result.stillFocusDistance = state.stillFocusDistance;
         result.exposureMode = state.exposureMode;
         result.requestedExposureTimeNs = state.requestedExposureTimeNs;
         result.requestedSensitivity = state.requestedSensitivity;

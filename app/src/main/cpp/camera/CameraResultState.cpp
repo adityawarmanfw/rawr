@@ -1,6 +1,7 @@
 #include "camera/CameraResultState.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <utility>
@@ -44,8 +45,24 @@ std::optional<CameraPriorityAudit> CameraResultState::observe(CameraControlState
         if (ts != 0) lastMonitorTimestampNs_ = ts;
         observeWhiteBalanceResult(state, frame);
         if (result.evSteps) state.appliedEvSteps = result.evSteps;
-        if (result.afState) state.afState = result.afState;
-        if (result.focusDistance) state.appliedFocusDistance = result.focusDistance;
+        if (provenance && provenance->focusEpoch == state.focusEpoch && ts > state.focusTimestampNs) {
+            if (provenance->focusTriggerStart) state.focusTriggerTimestampNs = ts;
+            // A tap's pre-START repeating result may still echo the previous lock.
+            if ((!state.tapAfActive && state.focusMode != FocusControlMode::LockedAuto) ||
+                state.focusTriggerTimestampNs != 0 || state.focusMode == FocusControlMode::Manual) {
+                state.focusTimestampNs = ts;
+                state.afState = result.afState;
+                state.appliedAfMode = result.afMode;
+                state.lensState = result.lensState;
+                if (result.focusDistance) state.appliedFocusDistance = result.focusDistance;
+                state.focusObservedEpoch = provenance->focusEpoch;
+                state.focusObservedAtMs = result.focusDistance && result.lensState && result.afMode
+                                              ? std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                    std::chrono::steady_clock::now().time_since_epoch())
+                                                    .count()
+                                              : 0;
+            }
+        }
         state.faceDetections = std::move(result.faces);
     }
 

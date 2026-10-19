@@ -34,14 +34,16 @@ class CameraRequestPipeline final {
     bool captureAfTrigger(ACameraCaptureSession*, const ACaptureRequest* repeating, CameraSessionCallbackContext*,
                           const CameraControlState&, CameraFocusTrigger trigger);
     uint64_t latestSubmittedSerial() const noexcept { return latestSubmittedRequestSerial_; }
+    int lastCaptureSequence() const noexcept { return lastCaptureSequence_; }
     void retire() noexcept { provenance_.clear(); }
 
    private:
-    const CameraRequestProvenance* attach(ACaptureRequest*, const CameraControlState&);
+    const CameraRequestProvenance* attach(ACaptureRequest*, const CameraControlState&, bool focusStart = false);
     void diag(const std::string& line) const {
         if (diagnostic_) diagnostic_(line);
     }
     Diagnostic diagnostic_;
+    int lastCaptureSequence_ = -1;
     uint64_t nextRequestSerial_ = 1, latestSubmittedRequestSerial_ = 0;
     std::vector<std::unique_ptr<CameraRequestProvenance>> provenance_;
 };

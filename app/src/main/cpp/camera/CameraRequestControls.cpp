@@ -10,6 +10,7 @@
 #include "camera/Camera2PriorityCompat.h"
 #include "camera/CameraAePriority.h"
 #include "camera/CameraRequestCadence.h"
+#include "camera/StillFocus.h"
 #include "camera/ViewfinderExposure.h"
 #include "camera/WhiteBalanceMath.h"
 
@@ -244,7 +245,7 @@ CameraControlApplyResult applyCameraControlState(ACaptureRequest* request, const
     } else if (state.focusMode == FocusControlMode::LockedAuto || state.tapAfActive) {
         af = ACAMERA_CONTROL_AF_MODE_AUTO;
     }
-    (void)ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AF_MODE, 1, &af);
+    result.focusStatus = ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AF_MODE, 1, &af);
 
     // Face detection feeds the face boxes + face-steered continuous AF. FULL
     // carries per-face scores; fall back to SIMPLE. The repeating request is
@@ -261,18 +262,20 @@ CameraControlApplyResult applyCameraControlState(ACaptureRequest* request, const
                             : ACAMERA_LENS_OPTICAL_STABILIZATION_MODE_OFF;
     (void)ACaptureRequest_setEntry_u8(request, ACAMERA_LENS_OPTICAL_STABILIZATION_MODE, 1, &ois);
 
-    if (state.focusMode == FocusControlMode::Manual && state.capabilities.manualFocusSupported) {
-        const float normalized = std::clamp(state.requestedManualFocusNormalized, 0.0f, 1.0f);
-        const float diopters = (1.0f - normalized) * state.capabilities.minimumFocusDistance;
-        (void)ACaptureRequest_setEntry_float(request, ACAMERA_LENS_FOCUS_DISTANCE, 1, &diopters);
+    if ((state.focusMode == FocusControlMode::Manual) && state.capabilities.manualFocusSupported) {
+        const float diopters = requestedFocusDiopters(state);
+        const auto status = ACaptureRequest_setEntry_float(request, ACAMERA_LENS_FOCUS_DISTANCE, 1, &diopters);
+        if (status != ACAMERA_OK) result.focusStatus = status;
     }
     (void)ACaptureRequest_setEntry_i32(request, ACAMERA_CONTROL_AF_REGIONS, metering.afRegion ? 5 : 0,
                                        metering.afRegion ? metering.afRegion->data() : nullptr);
     (void)ACaptureRequest_setEntry_i32(request, ACAMERA_CONTROL_AE_REGIONS, metering.aeRegion ? 5 : 0,
                                        metering.aeRegion ? metering.aeRegion->data() : nullptr);
-    const uint8_t trigger = metering.trigger == CameraFocusTrigger::Start    ? ACAMERA_CONTROL_AF_TRIGGER_START
-                            : metering.trigger == CameraFocusTrigger::Cancel ? ACAMERA_CONTROL_AF_TRIGGER_CANCEL
-                                                                             : ACAMERA_CONTROL_AF_TRIGGER_IDLE;
+    const uint8_t trigger =
+        metering.trigger == CameraFocusTrigger::Start ? ACAMERA_CONTROL_AF_TRIGGER_START
+        : metering.trigger == CameraFocusTrigger::Cancel && !state.capabilities.tapAfHoldsUntilNextTap
+            ? ACAMERA_CONTROL_AF_TRIGGER_CANCEL
+            : ACAMERA_CONTROL_AF_TRIGGER_IDLE;
     (void)ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AF_TRIGGER, 1, &trigger);
     return result;
 }

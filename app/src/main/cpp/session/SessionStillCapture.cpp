@@ -44,12 +44,14 @@ uint64_t SessionEngine::requestRawStillCapture(rawrcam::encoding::dng::DngCaptur
                          std::to_string(jpegContext.output.quality));
         return 0;
     }
-    std::lock_guard<std::mutex> lock(mu_);
     auto* camera = cameraControls_.controller();
     if (!camera || !camera->stillCaptureMetadataReady()) {
         appendDiagnostic("RAW_STILL_CAPTURE_REQUEST_REJECTED reason=camera_not_streaming");
         return 0;
     }
+    const bool fullSize = camera->hasFullSizeCapture();
+    const auto longExposure = fullSize ? std::nullopt : camera->deferredCaptureExposure();
+    std::unique_lock<std::mutex> lock(mu_);
     dngContext.autoKeyEv = appliedAutoKeyEv();
     if (dngContext.captureTone) {
         auto capturedTone = std::make_shared<tonemap::TonemapParams>(*dngContext.captureTone);
@@ -59,8 +61,6 @@ uint64_t SessionEngine::requestRawStillCapture(rawrcam::encoding::dng::DngCaptur
     }
     // Long exposure: the viewfinder runs a shorter shutter, so the capture is
     // its own one-shot frame; wait for it instead of the next viewfinder frame.
-    const bool fullSize = camera->hasFullSizeCapture();
-    const auto longExposure = fullSize ? std::nullopt : camera->deferredCaptureExposure();
     const uint64_t requestId = capture_.requestSingle(std::move(dngContext), std::move(jpegContext), [this] {
         return ingressQueue_.latestTimestamp(realtime_.generation());
     });
@@ -78,8 +78,14 @@ uint64_t SessionEngine::requestRawStillCapture(rawrcam::encoding::dng::DngCaptur
                 wait = std::chrono::milliseconds(8000);
         }
         capture_.single().expectOptimizedFrame(requestId, wait);
-        if (!camera->captureFullSize(requestId, 1)) {
-            capture_.single().expectOptimizedFrame(requestId);
+        // Focus preparation consumes callback results; never wait under mu_.
+        lock.unlock();
+        const bool sent = camera->captureFullSize(requestId, 1);
+        lock.lock();
+        if (!sent) {
+            capture_.single().failAcquisition(requestId, "full_size_preparation_failed");
+            std::lock_guard<std::mutex> stillLock(fullSize_.mutex);
+            fullSize_.requestIds.erase(requestId);
             appendDiagnostic("FULL_SIZE_SUBMIT_FAILED requestId=" + std::to_string(requestId));
         }
     }

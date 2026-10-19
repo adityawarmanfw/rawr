@@ -11,6 +11,7 @@ namespace rawrcam::camera {
 struct CameraRequestObservation {
     std::optional<int64_t> exposureTimeNs;
     std::optional<int32_t> sensitivity;
+    std::optional<uint8_t> afMode;
     std::optional<CameraRequestProvenance> provenance;
 };
 

@@ -45,6 +45,7 @@ CameraResultActions CameraResultProcessor::process(const ACaptureRequest* reques
         frame->requestedSensitivity = requestObservation.sensitivity;
         if (provenance && provenance->optimizedStillRequestId != 0) {
             frame->optimizedStillRequestId = provenance->optimizedStillRequestId;
+            actions.expectedStillFocus = provenance->stillFocusDistance;
         }
     }
     if (!frame) {
@@ -65,6 +66,9 @@ CameraResultActions CameraResultProcessor::process(const ACaptureRequest* reques
     }
     ++frameOrdinal_;
     auto observation = readCameraControlResult(result, control.capabilities, cameraContext->geometry);
+    actions.requestAfMode = requestObservation.afMode;
+    actions.resultAfMode = observation.afMode;
+    actions.resultLensState = observation.lensState;
     const auto audit = resultState_.observe(control, *frame, std::move(observation), provenance,
                                             latestSubmittedRequestSerial, sensorModeOverridden);
     if (audit) {

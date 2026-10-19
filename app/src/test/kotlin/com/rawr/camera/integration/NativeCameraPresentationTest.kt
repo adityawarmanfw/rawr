@@ -6,6 +6,23 @@ import org.junit.Test
 
 class NativeCameraPresentationTest {
     @Test
+    fun fullSizeHoldCoversPreparationAndRawArrivalEvenWithNoExposureCountdown() {
+        val idle = CaptureUiState(NativeCapabilityProjection.pending(), fullSizeCapture = true)
+        assertFalse(idle.bracketHoldActive)
+        val preparing = idle.copy(bracketHoldPresses = 1)
+        assertTrue(preparing.bracketHoldActive)
+        // Native owns the request now. A short exposure may already have ended,
+        // but the 200 MP RAW has not arrived yet.
+        val acquiring = preparing.copy(bracketHoldPresses = 0, fullSizeCapturePending = true)
+        assertEquals(-1L, acquiring.longExposure.startMs)
+        assertTrue(acquiring.bracketHoldActive)
+        // Also covers a serial burst between frames: pending spans the batch.
+        assertTrue(acquiring.copy(longExposure = LongExposureUiState()).bracketHoldActive)
+        assertFalse(acquiring.copy(fullSizeCapturePending = false).bracketHoldActive)
+        assertFalse(preparing.copy(bracketHoldPresses = 0).bracketHoldActive) // preparation rejected
+    }
+
+    @Test
     fun manualFocusEntrySeedsOnlyDisplayFromLatestTelemetry() {
         val capabilities = NativeCapabilityProjection.project(snapshot()).capabilities.copy(
             manualFocus = ManualFocusCapability(supported = true, minimumFocusDistance = 10f)
@@ -121,6 +138,13 @@ class NativeCameraPresentationTest {
         val cleared = NativeFocusPresentation.project(settled, active.copy(tapAfActive = false), 2, false)
         assertEquals(TargetStatus.Hidden, cleared.status)
         assertNull(cleared.backendNativeReadout)
+    }
+
+    @Test
+    fun missingOrExpiredFocusResultDoesNotKeepGreenLock() {
+        val current = FocusUiState(mode = FocusMode.Af, status = TargetStatus.Settled)
+        val missing = snapshot().copy(focusRequestId = 2, tapAfActive = true, afState = null)
+        assertEquals(TargetStatus.Settling, NativeFocusPresentation.project(current, missing, 2, false).status)
     }
 
     @Test

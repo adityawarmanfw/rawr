@@ -11,6 +11,7 @@
 namespace rawrcam::camera {
 
 struct CameraControlApplyResult {
+    camera_status_t focusStatus = ACAMERA_OK;
     // The request asks the HAL for S/I priority (not rawr AE, not Auto fallback).
     bool halPriorityMode = false;
     bool aePriorityRequested = false;

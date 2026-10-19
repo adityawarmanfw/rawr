@@ -12,6 +12,7 @@
 #include "capture/multiframe/BracketCollector.h"
 #include "capture/multiframe/BracketExposure.h"
 #include "capture/multiframe/mfsr/MfsrCaptureJob.h"
+#include "capture/persistence/AcquiredRawJournal.h"
 #include "capture/persistence/CaptureJob.h"
 #include "diagnostics/logging/RuntimeTraceRecorder.h"
 
@@ -151,10 +152,12 @@ std::uint64_t MfsrCaptureService::start(std::unique_ptr<PendingMultiframeCapture
 
     const std::size_t reservedFrames =
         capture->frames.size() + (capture->pendingBracket ? capture->pendingBracket->expected() : 0u);
-    auto reservation = persistence::reserve(filesDir_,
-                                            uint64_t(capture->frames.front().raw.ref.width) *
-                                                capture->frames.front().raw.ref.height * 2 * reservedFrames,
-                                            false);
+    auto reservation = capture->acquiredJournal
+                           ? capture->acquiredJournal->reservation()
+                           : persistence::reserve(filesDir_,
+                                                  uint64_t(capture->frames.front().raw.ref.width) *
+                                                      capture->frames.front().raw.ref.height * 2 * reservedFrames,
+                                                  false);
     if (!reservation) return 0;
     const uint64_t requestId = nextRequestId_++;
     auto work = std::make_unique<MultiframeWorkItem>();
@@ -330,7 +333,7 @@ void MfsrCaptureService::spoolLoop() {
             // CPU-held frames (full-size bursts) have nothing on the GPU to score:
             // they keep the middle reference.
             if (pending->work->baseFrameMode == MultiframeBaseFrameMode::Sharpest && !burst.cpuFrame &&
-                burst.frames.size() >= 2u &&
+                !burst.acquiredJournal && burst.frames.size() >= 2u &&
                 burst.frames.size() <= raw_sharpness::RawSharpness::kMaxFrames) {
                 try {
                     {

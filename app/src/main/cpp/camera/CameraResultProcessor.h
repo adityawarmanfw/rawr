@@ -12,6 +12,8 @@ struct CameraResultActions {
     std::optional<metadata::FrameMetadataSnapshot> frame;
     bool fallbackToAuto = false;
     bool optimizedStill = false;
+    std::optional<float> expectedStillFocus;
+    std::optional<uint8_t> requestAfMode, resultAfMode, resultLensState;
 };
 class CameraResultProcessor final {
    public:

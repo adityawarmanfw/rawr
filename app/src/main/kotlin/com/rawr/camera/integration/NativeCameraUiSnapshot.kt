@@ -80,6 +80,8 @@ internal data class NativeCameraUiSnapshot(
     /** HDR+ Bracketed post-shutter brackets armed / finished (monotonic counters). */
     val bracketHoldOpened: Long = 0L,
     val bracketHoldDone: Long = 0L,
+    val fullSizeCapture: Boolean = false,
+    val fullSizeCapturePending: Boolean = false,
     /** Full-size (200 MP) lens: stills save DNG only, whatever the output format. */
     val dngOnly: Boolean = false
 ) {
@@ -174,6 +176,8 @@ internal data class NativeCameraUiSnapshot(
                 rawCpuIngress = j.optBoolean("rawCpuIngress", false),
                 bracketHoldOpened = j.optLong("bracketHoldOpened", 0L),
                 bracketHoldDone = j.optLong("bracketHoldDone", 0L),
+                fullSizeCapture = j.optBoolean("fullSizeCapture", false),
+                fullSizeCapturePending = j.optBoolean("fullSizeCapturePending", false),
                 dngOnly = j.optBoolean("dngOnly", false),
                 profileLenses = buildList {
                     val lenses = j.optJSONArray("profileLenses") ?: return@buildList

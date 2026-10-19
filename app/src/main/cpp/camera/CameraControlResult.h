@@ -16,6 +16,8 @@ struct CameraControlResult {
     std::optional<uint8_t> aePriority;
     std::optional<int32_t> evSteps;
     std::optional<uint8_t> afState;
+    std::optional<uint8_t> afMode;
+    std::optional<uint8_t> lensState;
     std::optional<float> focusDistance;
     std::vector<FaceDetection> faces;
 };

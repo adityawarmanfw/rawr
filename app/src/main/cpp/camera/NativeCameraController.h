@@ -27,6 +27,7 @@ struct PreviewCallbacks {
     std::function<ANativeWindow*(uint64_t, uint32_t, uint32_t, geometry::RawPixelFormat)> createCaptureWindow;
     std::function<void(uint64_t)> destroyCaptureWindow;
     std::function<void(uint64_t)> captureFailed;
+    std::function<void(uint64_t, uint64_t)> acquisitionFailed;  // tag 0 = device failure
     std::function<bool(const metadata::FrameMetadataSnapshot&)> submitMetadata;
     std::function<void(const std::string&)> diagnostic;
 };
@@ -77,7 +78,9 @@ class NativeCameraController {
     bool captureLongExposure(uint64_t requestId, LongExposure* submitted);
     // Capture-stream routes (LensRoute::captureStream): `count` full-size
     // stills at the viewfinder's exposure, tagged requestId.
-    bool captureFullSize(uint64_t requestId, uint32_t count);
+    bool captureFullSize(uint64_t requestId, uint32_t count, bool retainFocus = false);
+    bool waitFullSizeIdle(int64_t timeoutMs);
+    void releaseFullSizeFocus();
     bool hasFullSizeCapture() const;
     // LensRoute::captureBurst of the open route (0 = no profile limit).
     uint32_t fullSizeBurstLimit() const;

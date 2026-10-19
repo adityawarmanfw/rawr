@@ -90,6 +90,7 @@ class SingleFrameCoordinator final {
 
     // Mirrors the previous SessionEngine lifecycle semantics.
     void cancelPendingDngBeforeIngressDestroy();
+    void failAcquisition(uint64_t requestId, const std::string& reason);
     void resetHqProcessing() noexcept;
     // APK asset access for the still film engine's lookup tables. Safe any time.
     void setFilmAssetManager(AAssetManager* assetManager);

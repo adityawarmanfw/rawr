@@ -8,6 +8,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdio>
 #include <fstream>
 #include <iomanip>
@@ -26,9 +27,11 @@
 #include "camera/CameraProfileJson.h"
 #include "camera/CameraRequestPipeline.h"
 #include "camera/CameraResultProcessor.h"
-#include "camera/SensitivityProbeStartup.h"
-#include "camera/ViewfinderExposure.h"
 #include "camera/CameraWhiteBalanceControls.h"
+#include "camera/FullSizeSequence.h"
+#include "camera/SensitivityProbeStartup.h"
+#include "camera/StillFocus.h"
+#include "camera/ViewfinderExposure.h"
 #include "geometry/OrientationTransform.h"
 #include "metadata/MetadataDiagnostics.h"
 
@@ -96,6 +99,13 @@ struct NativeCameraController::Impl final : CameraEventSink {
     CameraSpotMeteringControls spotMetering;
     CameraCadencePolicy cadencePolicy;
     mutable std::mutex mutex;
+    std::condition_variable captureChanged;
+    FullSizeSequence fullSizeSequence;
+    bool preparingFocus = false;
+    std::optional<float> fullSizeFocusDistance;
+    bool retainFullSizeFocus = false;
+    std::function<void()> pendingFocus;
+    std::function<void()> pendingFocusMode;
     // Bounded retire for worker-driven stop/start-failure paths. Healthy
     // retires complete in ~0.4s; beyond this the HAL is wedged (fatal device
     // error with no onClosed) and the caller force-retires instead of
@@ -310,9 +320,59 @@ struct NativeCameraController::Impl final : CameraEventSink {
         return deferredCaptureExposureLocked();
     }
     // Full-size stills of a capture-stream route at the viewfinder's exposure.
-    bool captureFullSize(uint64_t requestId, uint32_t count) {
-        std::lock_guard<std::mutex> lock(mutex);
-        if (requestId == 0 || count == 0 || !deviceSession.hasCaptureStream()) return false;
+    bool captureFullSize(uint64_t requestId, uint32_t count, bool retainFocus) {
+        std::unique_lock<std::mutex> lock(mutex);
+        // Queue the whole burst as one sequence. Only an unrelated capture is
+        // blocked while that sequence remains unresolved.
+        if (requestId == 0 || count == 0 || count > 6 || fullSizeSequence.busy() || fullSizeSequence.failed() ||
+            !deviceSession.hasCaptureStream())
+            return false;
+        const auto generation = deviceSession.generation();
+        if (!fullSizeSequence.begin(generation, requestId)) return false;
+        preparingFocus = true;
+        retainFullSizeFocus = retainFocus;
+        const auto valid = [&] {
+            return !fullSizeSequence.failed() && generation == deviceSession.generation() && active;
+        };
+        const auto abandon = [&] {
+            fullSizeSequence.abandonPreparation();
+            preparingFocus = false;
+            fullSizeFocusDistance.reset();
+            retainFullSizeFocus = false;
+            captureChanged.notify_all();
+            return false;
+        };
+        // Observe the existing preview AF. Shutter must not switch repeating
+        // requests to MF, issue START/CANCEL, or refocus after the still.
+        // Every request in the burst uses the same focus plan.
+        if (!fullSizeFocusDistance) {
+            if (!captureChanged.wait_for(lock, std::chrono::seconds(4),
+                                         [&] { return !valid() || stillFocusReady(control, monotonicMs()); }) ||
+                !valid()) {
+                diag("CAMERA_FULL_SIZE_FOCUS_FAILED reason=not_settled tag=" + std::to_string(requestId) +
+                     " af=" + std::to_string(control.afState.value_or(255)) +
+                     " afMode=" + std::to_string(control.appliedAfMode.value_or(255)) +
+                     " lensState=" + std::to_string(control.lensState.value_or(255)) +
+                     " distance=" + std::to_string(control.appliedFocusDistance.value_or(-1)) +
+                     " epoch=" + std::to_string(control.focusEpoch) +
+                     " observedEpoch=" + std::to_string(control.focusObservedEpoch) +
+                     " ageMs=" + std::to_string(monotonicMs() - control.focusObservedAtMs));
+                return abandon();
+            }
+            if (control.capabilities.manualFocusSupported)
+                fullSizeFocusDistance = control.focusMode == FocusControlMode::Manual ? requestedFocusDiopters(control)
+                                                                                      : *control.appliedFocusDistance;
+        }
+        // This copy belongs only to the still; preview controls remain untouched.
+        auto stillControl = control;
+        stillControl.stillFocusDistance = fullSizeFocusDistance;
+        diag("CAMERA_STILL_FOCUS tag=" + std::to_string(requestId) + " epoch=" + std::to_string(control.focusEpoch) +
+             " mode=" + std::to_string(int(control.focusMode)) +
+             " distance=" + std::to_string(fullSizeFocusDistance.value_or(0)) +
+             " observed=" + std::to_string(control.appliedFocusDistance.value_or(-1)) +
+             " timestampNs=" + std::to_string(control.focusTimestampNs) +
+             " ageMs=" + std::to_string(monotonicMs() - control.focusObservedAtMs));
+        preparingFocus = false;
         CameraRequestPipeline::BracketExposure e{};
         if (control.exposureMode == ExposureControlMode::Manual) {
             e = {control.requestedExposureTimeNs, control.requestedSensitivity};
@@ -323,7 +383,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         }
         if (e.exposureTimeNs <= 0 || e.sensitivity <= 0) {
             diag("CAMERA_FULL_SIZE_SUBMIT sent=0 reason=no_exposure tag=" + std::to_string(requestId));
-            return false;
+            return abandon();
         }
         const std::vector<CameraRequestPipeline::BracketExposure> exposures(count, e);
         // The still is taken after the press (sensor switch + exposure): show it
@@ -340,16 +400,25 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // 15 fps on V2562). abortCaptures would skip them, but the camera then
         // hands out new buffers, which the RAW import and descriptor caches
         // can't absorb shot after shot.
-        const bool sent = deviceSession.captureFullSize(requests, control, exposures, requestId,
+        const bool sent = deviceSession.captureFullSize(requests, stillControl, exposures, requestId,
                                                         [this](const std::string& line) { diag(line); });
         if (!sent) {
             longExposureTag.store(0, std::memory_order_relaxed);
             longExposureStartMs.store(-1, std::memory_order_relaxed);
+            abandon();
+        } else {
+            fullSizeSequence.submitted(requests.lastCaptureSequence(), monotonicMs(), e.exposureTimeNs, count);
         }
         diag("CAMERA_FULL_SIZE_SUBMIT sent=" + std::to_string(sent ? 1 : 0) + " tag=" + std::to_string(requestId) +
              " count=" + std::to_string(count) + " exposureNs=" + std::to_string(e.exposureTimeNs) +
              " iso=" + std::to_string(e.sensitivity));
         return sent;
+    }
+    bool waitFullSizeIdle(int64_t timeoutMs) {
+        std::unique_lock<std::mutex> lock(mutex);
+        return captureChanged.wait_for(lock, std::chrono::milliseconds(timeoutMs), [&] {
+            return !fullSizeSequence.busy() || fullSizeSequence.failed();
+        }) && !fullSizeSequence.failed();
     }
     bool hasFullSizeCapture() const {
         std::lock_guard<std::mutex> lock(mutex);
@@ -554,6 +623,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
     }
 
     bool submitRepeatingLocked() {
+        if (fullSizeSequence.failed() || (fullSizeSequence.busy() && !preparingFocus)) return false;
         publishHeadroomLocked();
         // AF triggers go out once, as a one-shot copy after the repeating
         // request (which keeps the new AF mode / region at IDLE).
@@ -563,9 +633,10 @@ struct NativeCameraController::Impl final : CameraEventSink {
         const bool submitted = requests.submit(deviceSession.session(), deviceSession.request(),
                                                deviceSession.callbackContext(), control, metering);
         if (submitted && trigger != CameraFocusTrigger::Idle) {
-            focusControls.finishTrigger();
-            if (!requests.captureAfTrigger(deviceSession.session(), deviceSession.request(),
-                                           deviceSession.callbackContext(), control, trigger))
+            if (requests.captureAfTrigger(deviceSession.session(), deviceSession.request(),
+                                          deviceSession.callbackContext(), control, trigger))
+                focusControls.finishTrigger();
+            else
                 diag(std::string("CAMERA_AF_TRIGGER_FAILED trigger=") +
                      (trigger == CameraFocusTrigger::Start ? "start" : "cancel"));
         }
@@ -591,6 +662,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
 
     void startLocked(std::unique_lock<std::mutex>& lock) {
         if (!active || deviceSession.hasDevice() || starting || shutDown) return;
+        fullSizeSequence.reset();
         if (preferredCameraId.empty() && !routeForLens(profile, lensId) && !profile.lenses.empty()) {
             if (!lensId.empty())
                 diag("CAMERA_LENS_FALLBACK from=" + lensId + " to=" + profile.lenses.front().lensId +
@@ -697,8 +769,10 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // provider on an AF region change (its focus search, in dim scenes) and
         // on a request without a target fps range (AE off). Continuous AF
         // without regions and manual focus stay.
-        control.capabilities.tapAfHoldsUntilNextTap = !route.vendorGate.empty();
-        control.capabilities.faceAfSteering = route.vendorGate.empty();
+        // Device safety survives imported/user-edited lens profiles.
+        control.capabilities.tapAfHoldsUntilNextTap =
+            builtInMatch.profileId == "vivo_x300_ultra" || !route.vendorGate.empty();
+        control.capabilities.faceAfSteering = !control.capabilities.tapAfHoldsUntilNextTap;
         control.capabilities.dngOnly =
             route.captureStream && uint64_t(route.captureStream->width) * route.captureStream->height > kDngOnlyPixels;
         if (route.unlistedStream) {
@@ -829,11 +903,19 @@ struct NativeCameraController::Impl final : CameraEventSink {
     }
 
     void teardownCameraResourcesLocked(std::unique_lock<std::mutex>& lock) {
-        focusControls.reset(control);
         if (deviceSession.hasSession()) {
             diag("CAMERA_NDK_TEARDOWN_DEFERRED reason=session_not_retired");
             return;
         }
+        fullSizeSequence.reset();
+        preparingFocus = false;
+        retainFullSizeFocus = false;
+        pendingFocus = {};
+        pendingFocusMode = {};
+        fullSizeFocusDistance.reset();
+        invalidateFocus(control);
+        captureChanged.notify_all();
+        focusControls.reset(control);
         const auto retired = deviceSession.release([this](const std::string& line) { diag(line); });
         requests.retire();
         starting = false;
@@ -859,6 +941,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
     }
 
     void steerAfToFacesLocked() {
+        if (fullSizeSequence.busy() || retainFullSizeFocus) return;
         const auto change = focusControls.steerFaces(
             control, deviceSession.cameraContext() ? &deviceSession.cameraContext()->geometry : nullptr,
             deviceSession.request() && deviceSession.session());
@@ -883,9 +966,11 @@ struct NativeCameraController::Impl final : CameraEventSink {
         if (callbackGeneration == deviceSession.generation()) diag(message);
     }
     void cameraCaptureStarted(uint64_t callbackGeneration, const ACaptureRequest* requestCopy) override {
-        // Camera thread, no mutex: the countdown starts with the exposure.
+        // Validate before reading borrowed provenance, including late callbacks
+        // from a forcibly retired session whose request storage is gone.
+        std::lock_guard<std::mutex> lock(mutex);
+        if (callbackGeneration != deviceSession.generation() || !active) return;
         const uint64_t tag = longExposureTag.load(std::memory_order_relaxed);
-        (void)callbackGeneration;  // tags are unique; no session state is read
         if (tag == 0) return;
         void* userContext = nullptr;
         if (ACaptureRequest_getUserContext(requestCopy, &userContext) != ACAMERA_OK || !userContext) return;
@@ -899,6 +984,48 @@ struct NativeCameraController::Impl final : CameraEventSink {
     void cameraCaptureFailed(uint64_t callbackGeneration) override {
         // Set once at construction; the receiver checks the generation.
         if (callbacks.captureFailed) callbacks.captureFailed(callbackGeneration);
+    }
+    void cameraStillFailed(uint64_t generation, const ACaptureRequest* request) override {
+        uint64_t tag = 0;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (generation != deviceSession.generation()) return;
+            void* provenance = nullptr;
+            if (!request || ACaptureRequest_getUserContext(request, &provenance) != ACAMERA_OK || !provenance) return;
+            tag = static_cast<const CameraRequestProvenance*>(provenance)->optimizedStillRequestId;
+            if (!tag) return;
+            invalidateFocus(control);
+            captureChanged.notify_all();
+        }
+        if (callbacks.acquisitionFailed) callbacks.acquisitionFailed(generation, tag);
+    }
+    void cameraDeviceFailed(uint64_t generation) override {
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (generation != deviceSession.generation()) return;
+            fullSizeSequence.fail();
+            longExposureTag.store(0, std::memory_order_relaxed);
+            longExposureStartMs.store(-1, std::memory_order_relaxed);
+            invalidateFocus(control);
+            captureChanged.notify_all();
+        }
+        if (callbacks.acquisitionFailed) callbacks.acquisitionFailed(generation, 0);
+    }
+    void cameraSequenceEnded(uint64_t generation, int sequence, bool aborted) override {
+        uint64_t failedTag = 0;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (generation != deviceSession.generation()) return;
+            const auto tag = fullSizeSequence.complete(generation, sequence);
+            if (!tag) return;
+            if (aborted) failedTag = *tag;
+            if (!retainFullSizeFocus || aborted) {
+                fullSizeFocusDistance.reset();
+                retainFullSizeFocus = false;
+            }
+            captureChanged.notify_all();
+        }
+        if (failedTag && callbacks.acquisitionFailed) callbacks.acquisitionFailed(generation, failedTag);
     }
     void cameraSessionClosed(uint64_t callbackGeneration, ACameraCaptureSession* session) override {
         std::lock_guard<std::mutex> lock(mutex);
@@ -916,6 +1043,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         auto actions = results.process(requestCopy, result, control, deviceSession.cameraContext(),
                                        deviceSession.staticLevels(), deviceSession.sensorModeOverridden(),
                                        requests.latestSubmittedSerial());
+        captureChanged.notify_all();
         if (!actions.frame) return;
         const uint64_t longTag = longExposureTag.load(std::memory_order_relaxed);
         // Freeze the viewfinder on the press until the long frame is in, and
@@ -943,6 +1071,18 @@ struct NativeCameraController::Impl final : CameraEventSink {
             control.exposureMode = ExposureControlMode::Auto;
             submitRepeatingLocked();
         }
+        if (actions.expectedStillFocus && actions.frame->optimizedStillRequestId) {
+            const auto observed = actions.frame->focusDistanceDiopters;
+            const auto tag = *actions.frame->optimizedStillRequestId;
+            diag("CAMERA_STILL_FOCUS_RESULT tag=" + std::to_string(tag) +
+                 " requested=" + std::to_string(*actions.expectedStillFocus) +
+                 " observed=" + (observed ? std::to_string(*observed) : "missing") +
+                 " requestAfMode=" + std::to_string(actions.requestAfMode.value_or(255)) +
+                 " resultAfMode=" + std::to_string(actions.resultAfMode.value_or(255)) +
+                 " lensState=" + std::to_string(actions.resultLensState.value_or(255)));
+            if (observed && !focusDistanceMatches(*observed, *actions.expectedStillFocus))
+                diag("CAMERA_STILL_FOCUS_DIFFERENCE tag=" + std::to_string(tag) + " action=keep_frame");
+        }
         if (!actions.optimizedStill) steerAfToFacesLocked();
         const auto& frame = *actions.frame;
         if (frame.sceneFlicker == ACAMERA_STATISTICS_SCENE_FLICKER_50HZ ||
@@ -965,7 +1105,6 @@ struct NativeCameraController::Impl final : CameraEventSink {
         if (!wasReady && sensitivityStartup.finished())
             diag("CAMERA_CALIBRATION_PREVIEW_READY timeout=" + std::to_string(sensitivityStartup.timedOut()) +
                  " timestampNs=" + std::to_string(frame.timestampNs));
-        if (focusControls.finishTrigger()) submitRepeatingLocked();
         lock.unlock();
         if (callbacks.submitMetadata) (void)callbacks.submitMetadata(*actions.frame);
         lock.lock();
@@ -974,12 +1113,16 @@ struct NativeCameraController::Impl final : CameraEventSink {
 
     bool stillMetadataReady() {
         std::lock_guard<std::mutex> lock(mutex);
-        return deviceSession.request() && deviceSession.session() && deviceSession.cameraContext();
+        return !fullSizeSequence.failed() && deviceSession.request() && deviceSession.session() &&
+               deviceSession.cameraContext();
     }
 
     CameraControlState getControlState() const {
         std::lock_guard<std::mutex> lock(mutex);
         CameraControlState snapshot = control;
+        if (control.focusObservedEpoch != control.focusEpoch || control.focusObservedAtMs <= 0 ||
+            monotonicMs() - control.focusObservedAtMs > 1500)
+            snapshot.afState.reset();
         snapshot.videoMode = cadencePolicy.videoMode();
         snapshot.videoPreviewFps = cadencePolicy.videoFps();
         if (const auto deferred = deferredCaptureExposureLocked()) {
@@ -1299,6 +1442,11 @@ struct NativeCameraController::Impl final : CameraEventSink {
 
     bool setFocusModeValue(FocusControlMode mode, uint64_t requestId) {
         std::lock_guard<std::mutex> lock(mutex);
+        if (fullSizeSequence.busy() || retainFullSizeFocus) {
+            pendingFocusMode = [this, mode, requestId] { setFocusModeValue(mode, requestId); };
+            pendingFocus = {};
+            return true;
+        }
         if (!focusControls.requestMode(control, mode, requestId)) return false;
         diag("CAMERA_CONTROL_REQUEST focusMode=" + std::to_string(static_cast<int>(mode)));
         if (mode == FocusControlMode::Continuous)
@@ -1308,12 +1456,21 @@ struct NativeCameraController::Impl final : CameraEventSink {
     }
     void setManualFocus(float normalized, uint64_t requestId) {
         std::lock_guard<std::mutex> lock(mutex);
+        if (fullSizeSequence.busy() || retainFullSizeFocus) {
+            pendingFocusMode = [this, normalized, requestId] { setManualFocus(normalized, requestId); };
+            pendingFocus = {};
+            return;
+        }
         if (!focusControls.requestManualFocus(control, normalized, requestId)) return;
         diag("CAMERA_CONTROL_REQUEST manualFocusNormalized=" + std::to_string(control.requestedManualFocusNormalized));
         submitRepeatingLocked();
     }
     void clearTapAf(uint64_t requestId) {
         std::lock_guard<std::mutex> lock(mutex);
+        if (fullSizeSequence.busy() || retainFullSizeFocus) {
+            pendingFocus = [this, requestId] { clearTapAf(requestId); };
+            return;
+        }
         control.focusRequestId = std::max(control.focusRequestId, requestId);
         // A held tap stays until the next tap: returning to continuous AF after
         // a tap scan crashes the vivo provider (the lens switch sends this clear).
@@ -1453,7 +1610,31 @@ struct NativeCameraController::Impl final : CameraEventSink {
         if (toggled && config.enabled) restartForSensitivityCalibrationLocked(lock);
     }
     void tickControls(int64_t nowMs) {
-        std::lock_guard<std::mutex> lock(mutex);
+        std::unique_lock<std::mutex> lock(mutex);
+        if (fullSizeSequence.failed()) return;
+        if (fullSizeSequence.expire(nowMs)) {
+            invalidateFocus(control);
+            captureChanged.notify_all();
+            longExposureTag.store(0, std::memory_order_relaxed);
+            longExposureStartMs.store(-1, std::memory_order_relaxed);
+            const auto generation = deviceSession.generation();
+            diag("CAMERA_FULL_SIZE_SEQUENCE_TIMEOUT recovery=session_retirement");
+            lock.unlock();
+            if (callbacks.acquisitionFailed) callbacks.acquisitionFailed(generation, 0);
+            return;
+        }
+        if (fullSizeSequence.busy() || retainFullSizeFocus) return;
+        if (pendingFocus || pendingFocusMode) {
+            auto pending = std::move(pendingFocus);
+            auto mode = std::move(pendingFocusMode);
+            pendingFocus = {};
+            pendingFocusMode = {};
+            lock.unlock();
+            if (mode) mode();
+            if (pending) pending();
+            lock.lock();
+            if (fullSizeSequence.busy() || retainFullSizeFocus) return;
+        }
         applyRawrAeLocked();
         applyHdrHeadroomLocked();
         if (focusControls.expireTap(control, nowMs) && deviceSession.request() && deviceSession.session()) {
@@ -1463,6 +1644,10 @@ struct NativeCameraController::Impl final : CameraEventSink {
     }
     void focusAt(float nx, float ny, uint64_t requestId) {
         std::lock_guard<std::mutex> lock(mutex);
+        if (fullSizeSequence.busy() || retainFullSizeFocus) {
+            pendingFocus = [this, nx, ny, requestId] { focusAt(nx, ny, requestId); };
+            return;
+        }
         control.focusRequestId = std::max(control.focusRequestId, requestId);
         if (!std::isfinite(nx) || !std::isfinite(ny) || !deviceSession.request() || !deviceSession.cameraContext() ||
             !control.capabilities.tapAfSupported) {
@@ -1533,8 +1718,15 @@ std::optional<double> NativeCameraController::longFrameRoomEv() const { return i
 std::optional<NativeCameraController::LongExposure> NativeCameraController::deferredCaptureExposure() const {
     return impl_->deferredCaptureExposure();
 }
-bool NativeCameraController::captureFullSize(uint64_t requestId, uint32_t count) {
-    return impl_->captureFullSize(requestId, count);
+bool NativeCameraController::captureFullSize(uint64_t requestId, uint32_t count, bool retainFocus) {
+    return impl_->captureFullSize(requestId, count, retainFocus);
+}
+bool NativeCameraController::waitFullSizeIdle(int64_t timeoutMs) { return impl_->waitFullSizeIdle(timeoutMs); }
+void NativeCameraController::releaseFullSizeFocus() {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    // Releasing a software snapshot never changes AF mode or triggers a scan.
+    impl_->fullSizeFocusDistance.reset();
+    impl_->retainFullSizeFocus = false;
 }
 bool NativeCameraController::hasFullSizeCapture() const { return impl_->hasFullSizeCapture(); }
 uint32_t NativeCameraController::fullSizeBurstLimit() const {

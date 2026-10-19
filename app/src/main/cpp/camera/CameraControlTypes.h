@@ -255,6 +255,15 @@ struct CameraControlState {
     std::optional<int32_t> appliedEvSteps;
     std::optional<uint8_t> afState;
     std::optional<float> appliedFocusDistance;
+    uint64_t focusEpoch = 0;
+    uint64_t focusObservedEpoch = 0;
+    uint64_t focusTimestampNs = 0;
+    uint64_t focusTriggerTimestampNs = 0;
+    int64_t focusObservedAtMs = 0;
+    std::optional<uint8_t> appliedAfMode;
+    std::optional<uint8_t> lensState;
+    // Populated only in a still request snapshot, never in live preview controls.
+    std::optional<float> stillFocusDistance;
     // Camera2 CONTROL_POST_RAW_SENSITIVITY_BOOST result (100 == 1x).
     // Copied per repeating CaptureResult alongside appliedSensitivity so the
     // monitor can show the boost multiplier; null before the first result.
