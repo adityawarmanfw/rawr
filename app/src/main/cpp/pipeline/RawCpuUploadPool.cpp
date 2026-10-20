@@ -38,6 +38,7 @@ void RawCpuUploadPool::initialize(VkPhysicalDevice physical, VkDevice device, ui
     if (device != device_) {
         destroy();
         unpacker_.reset();
+        remosaicker_.reset();
     }
     physical_ = physical;
     device_ = device;
@@ -51,11 +52,29 @@ void RawCpuUploadPool::configure(uint32_t width, uint32_t height) noexcept {
     height_ = height;
 }
 
+void RawCpuUploadPool::configureRemosaic(uint32_t block, uint32_t order) noexcept {
+    remosaicBlock_ = block == 2u || block == 4u ? block : 1u;
+    remosaicOrder_ = order & 3u;
+}
+
+void RawCpuUploadPool::applyRemosaic(rawrcam::vulkan::ImportedRaw& raw, bool sourceRaw10) {
+    raw.remosaicker = nullptr;
+    raw.cfaBlock = 1;
+    if (remosaicBlock_ <= 1u) return;
+    if (!remosaicker_) remosaicker_ = rawr::raw_ingress::RawRemosaicker::create({physical_, device_, queueFamily_});
+    raw.remosaicker = remosaicker_.get();
+    raw.cfaBlock = remosaicBlock_;
+    raw.cfaOrder = remosaicOrder_;
+    raw.sourceRaw10 = sourceRaw10;
+    raw.unpacker = nullptr;
+}
+
 void RawCpuUploadPool::destroy() noexcept {
     for (auto& slot : slots_) release(slot);
     releaseParity();
-    // Its descriptor sets reference slot images and camera buffers.
+    // Their descriptor sets reference slot images and camera buffers.
     unpacker_.reset();
+    remosaicker_.reset();
 }
 
 void RawCpuUploadPool::release(Slot& slot) noexcept {
@@ -143,6 +162,10 @@ rawrcam::vulkan::ImportedRaw& RawCpuUploadPool::upload(uint32_t slotIndex, AImag
 
     slot.raw.ahb = ahb;
     slot.raw.desc = desc;
+    applyRemosaic(slot.raw, false);
+    slot.raw.unpackSlot = slotIndex;
+    // Consumers must read the remosaiced image, never the uploaded block mosaic.
+    slot.raw.importBufferAvailable = slot.raw.remosaicker == nullptr;
     return slot.raw;
 }
 
@@ -172,6 +195,7 @@ rawrcam::vulkan::ImportedRaw& RawCpuUploadPool::gpuUnpack(uint32_t slotIndex,
     raw.unpackSource = camera.importBuffer;
     raw.unpacker = unpacker_.get();
     raw.unpackSlot = slotIndex;
+    applyRemosaic(raw, true);
     if (parity_.armed && !parity_.recorded && parity_.slot == slotIndex) {
         const VkBuffer source = camera.importBuffer;
         const VkImage image = raw.image;
@@ -345,8 +369,25 @@ rawrcam::vulkan::ImportedRaw& RawCpuUploadPool::gpuCopy(uint32_t slotIndex, cons
     raw.rowStrideBytes = camera.rowStrideBytes;
     raw.unpackSource = camera.importBuffer;
     raw.unpackSlot = slotIndex;
+    applyRemosaic(raw, false);
     return raw;
 }
+
+namespace {
+void recordRemosaic(VkCommandBuffer command, const rawrcam::vulkan::ImportedRaw& raw, VkBuffer source,
+                    uint32_t rowStrideBytes) {
+    rawr::raw_ingress::RawRemosaicker::Frame f;
+    f.source = source;
+    f.destination = raw.view;
+    f.width = raw.desc.width;
+    f.height = raw.desc.height;
+    f.rowStrideBytes = rowStrideBytes;
+    f.raw10 = raw.sourceRaw10;
+    f.block = raw.cfaBlock;
+    f.order = raw.cfaOrder;
+    raw.remosaicker->record(command, raw.unpackSlot, f);
+}
+}  // namespace
 
 void acquireRawInputImage(VkCommandBuffer command, const rawrcam::vulkan::ImportedRaw& raw, uint32_t queueFamily,
                           VkPipelineStageFlags dstStage, VkAccessFlags dstAccess) {
@@ -364,6 +405,18 @@ void acquireRawInputImage(VkCommandBuffer command, const rawrcam::vulkan::Import
         toWrite.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         toWrite.image = raw.image;
         toWrite.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        if (raw.remosaicker) {
+            vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
+                                 0, nullptr, 0, nullptr, 1, &toWrite);
+            recordRemosaic(command, raw, raw.unpackSource, raw.rowStrideBytes);
+            VkImageMemoryBarrier toRead = toWrite;
+            toRead.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            toRead.dstAccessMask = dstAccess;
+            toRead.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, dstStage, 0, 0, nullptr, 0, nullptr, 1,
+                                 &toRead);
+            return;
+        }
         if (!raw.unpacker) {
             // RAW16 buffer ingress: the rows are already R16, copy them in.
             toWrite.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -401,6 +454,28 @@ void acquireRawInputImage(VkCommandBuffer command, const rawrcam::vulkan::Import
     }
     // Fill the owned image from this frame's buffer. Contents are fully
     // replaced, so the previous layout can be discarded.
+    if (raw.remosaicker) {
+        VkImageMemoryBarrier toWrite{};
+        toWrite.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        toWrite.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        toWrite.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        toWrite.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        toWrite.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toWrite.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toWrite.image = raw.image;
+        toWrite.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        // The host wrote the buffer before submission (coherent memory).
+        vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
+                             nullptr, 0, nullptr, 1, &toWrite);
+        recordRemosaic(command, raw, raw.importBuffer, raw.importBufferStridePixels * 2u);
+        VkImageMemoryBarrier toRead = toWrite;
+        toRead.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        toRead.dstAccessMask = dstAccess;
+        toRead.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, dstStage, 0, 0, nullptr, 0, nullptr, 1,
+                             &toRead);
+        return;
+    }
     VkImageMemoryBarrier toTransfer{};
     toTransfer.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     toTransfer.srcAccessMask = 0;
@@ -430,7 +505,7 @@ void releaseRawInputImage(VkCommandBuffer command, const rawrcam::vulkan::Import
     // App-owned images stay with this queue; the slot fence guards reuse.
     // A GPU-unpacked frame hands the camera buffer back after the unpack read it.
     if (raw.gpuUnpack) {
-        if (!raw.unpacker)
+        if (!raw.unpacker && !raw.remosaicker)
             rawrcam::vulkan::releaseForeignBuffer(command, raw.unpackSource, queueFamily,
                                                   VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
         else

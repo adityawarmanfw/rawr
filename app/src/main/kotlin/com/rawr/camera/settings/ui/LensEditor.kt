@@ -49,6 +49,8 @@ import com.rawr.camera.settings.architecture.NavigateBack
 import com.rawr.camera.settings.architecture.SetLensProfiles
 import com.rawr.camera.settings.architecture.SettingsDispatch
 import com.rawr.camera.settings.model.LENS_NAME_MAX_LENGTH
+import com.rawr.camera.settings.model.CFA_BLOCKS
+import com.rawr.camera.settings.model.CFA_ORDERS
 import com.rawr.camera.settings.model.EXTENDED_ISO_MAX
 import com.rawr.camera.settings.model.EXTENDED_SHUTTER_MAX_NS
 import com.rawr.camera.settings.model.LensExposure
@@ -130,6 +132,9 @@ internal fun LensEditorScreen(state: SettingsUiState, lensName: String?, dispatc
             levels = draft.levels,
             camera = camera
         ) { draft = draft.copy(levels = it) }
+        SensorLayoutGroup(draft.cfaBlock, draft.cfaOrder) { block, order ->
+            draft = draft.copy(cfaBlock = block, cfaOrder = order)
+        }
         ExtendedExposureGroup(draft.exposure) { draft = draft.copy(exposure = it) }
         VendorKeysGroup(
             title = "Vendor keys",
@@ -351,6 +356,33 @@ private fun LevelField(label: String, value: Float, modifier: Modifier, onValue:
 
 private fun formatLevel(value: Float): String =
     if (value == Math.round(value).toFloat()) Math.round(value).toString() else value.toString()
+
+@Composable
+private fun SensorLayoutGroup(block: Int, order: String?, onChange: (Int, String?) -> Unit) {
+    SettingsGroup(
+        title = "Sensor layout",
+        description = "For RAW that comes out as coloured blocks or with wrong colours: some sensor modes " +
+            "(often in-sensor crops) deliver the quad or 4x4 mosaic while reporting Bayer. Quad and 4x4 are " +
+            "remosaiced to Bayer at full resolution for the viewfinder, photos and video. Colour order fixes " +
+            "swapped red/blue or magenta-green casts; for quad and 4x4 it is the order of the blocks."
+    ) {
+        CompactChoiceRow(CFA_BLOCKS, block, ::cfaBlockLabel) { onChange(it, order) }
+        SettingDivider()
+        DropdownChoiceRow(
+            title = "Colour order",
+            selected = order,
+            values = listOf<String?>(null) + CFA_ORDERS,
+            label = { it ?: "Camera's" },
+            onSelect = { onChange(block, it) }
+        )
+    }
+}
+
+internal fun cfaBlockLabel(block: Int): String = when (block) {
+    2 -> "Quad 2×2"
+    4 -> "4×4"
+    else -> "Bayer"
+}
 
 @Composable
 private fun ExtendedExposureGroup(exposure: LensExposure, onChange: (LensExposure) -> Unit) {

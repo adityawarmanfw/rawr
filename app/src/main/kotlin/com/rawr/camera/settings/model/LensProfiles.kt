@@ -106,8 +106,18 @@ data class LensProfile(
     /** Most full-size stills one merge may request (1 = none); 0 = the app's own cap. */
     val captureBurst: Int = 0,
     /** Burst stills go in one at a time, each after the previous frame (HAL fails queued ones). */
-    val captureBurstSequential: Boolean = false
+    val captureBurstSequential: Boolean = false,
+    /**
+     * Same-colour block side the RAW really holds (1 Bayer, 2 quad, 4 for 4x4): blocks are remosaiced to Bayer
+     * for the viewfinder, stills and video. Some sensor modes (in-sensor crops) report Bayer but aren't.
+     */
+    val cfaBlock: Int = 1,
+    /** Block-level colour order ("RGGB", "GRBG", "GBRG", "BGGR") replacing the camera's; null keeps it. */
+    val cfaOrder: String? = null
 )
+
+val CFA_BLOCKS = listOf(1, 2, 4)
+val CFA_ORDERS = listOf("RGGB", "GRBG", "GBRG", "BGGR")
 
 /** Problems with one lens, in display order; empty when the lens is valid. */
 fun validateLensProfile(lens: LensProfile, others: List<LensProfile>): List<String> = buildList {

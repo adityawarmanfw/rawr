@@ -83,6 +83,12 @@ struct LensRoute {
     // Submit a burst one still at a time, each after the previous frame is in
     // (the HAL fails queued full-size stills but takes them back to back).
     bool captureBurstSequential = false;
+    // Sensor colour layout when the camera reports it wrong. cfaBlock: side of
+    // the same-colour blocks the RAW actually holds (1 Bayer, 2 quad, 4 for
+    // 4x4); ingress remosaics them to Bayer. cfaOrder: block-level colour
+    // order (CfaPattern code) replacing the camera's; nullopt keeps it.
+    uint32_t cfaBlock = 1;
+    std::optional<uint32_t> cfaOrder;
 };
 
 struct CameraProfile {

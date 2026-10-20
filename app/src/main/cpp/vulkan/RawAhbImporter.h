@@ -13,6 +13,7 @@
 #include "vulkan/RawImportOptions.h"
 namespace rawr::raw_ingress {
 class Raw10Unpacker;
+class RawRemosaicker;
 }
 namespace rawrcam::vulkan {
 // Borrowed view of one imported camera AHB. The importer's cache entry owns
@@ -83,6 +84,12 @@ struct ImportedRaw {
     VkBuffer unpackSource = VK_NULL_HANDLE;
     rawr::raw_ingress::Raw10Unpacker* unpacker = nullptr;
     uint32_t unpackSlot = 0;
+    // Block-CFA lens (CameraContextMetadata::cfaBlock > 1): instead of the
+    // unpack/copy, remosaic the source rows (unpackSource, or importBuffer on a
+    // CPU upload) into the owned image as Bayer. sourceRaw10 = MIPI RAW10 rows.
+    rawr::raw_ingress::RawRemosaicker* remosaicker = nullptr;
+    uint32_t cfaBlock = 1, cfaOrder = 0;
+    bool sourceRaw10 = false;
     // Debug parity probe (debug.rawr.raw10_parity): recorded once after the
     // unpack while the camera buffer and unpacked image are readable.
     std::function<void(VkCommandBuffer)> afterUnpack;

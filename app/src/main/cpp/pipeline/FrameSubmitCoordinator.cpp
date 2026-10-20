@@ -100,6 +100,7 @@ void FrameSubmitCoordinator::configure(const FrameSubmitConfiguration& config) {
         raw10ParityEnabled_ = __system_property_get("debug.rawr.raw10_parity", value) > 0 && value[0] == '1';
     }
     cpuUpload_.configure(config_.rawWidth, config_.rawHeight);
+    cpuUpload_.configureRemosaic(config_.cfaBlock, config_.cfa);
     cpuIngressActive_.store(false, std::memory_order_relaxed);
     raw16GpuCopyDeferredLogged_ = false;
     pipelineAuditMetadataCount_ = 0;
@@ -354,7 +355,10 @@ std::optional<FrameSubmitCoordinator::AcquiredSubmit> FrameSubmitCoordinator::ac
 rawrcam::vulkan::ImportedRaw& FrameSubmitCoordinator::ingestRaw(const SubmitParams& params, uint32_t slotIndex) {
     const auto format = rawrcam::imaging::rawPixelFormatOf(params.lease->image());
     const bool raw10 = format == rawrcam::geometry::RawPixelFormat::Raw10;
-    if (!raw10 && !cpuIngressRequired() && !raw16ImageImportLatched_.load(std::memory_order_relaxed)) {
+    // A block-CFA lens skips the zero-copy image import: consumers must read
+    // the remosaiced copy, never the camera's block mosaic.
+    if (!raw10 && !cpuIngressRequired() && !raw16ImageImportLatched_.load(std::memory_order_relaxed) &&
+        config_.cfaBlock <= 1u) {
         try {
             rawrcam::vulkan::ImportedRaw& raw =
                 resources_.importer()->import(params.ahb, config_.rawWidth, config_.rawHeight, importedRawUsage(),
@@ -382,8 +386,9 @@ rawrcam::vulkan::ImportedRaw& FrameSubmitCoordinator::ingestRaw(const SubmitPara
             rawrcam::vulkan::ImportedRaw& raw = cpuUpload_.gpuCopy(slotIndex, camera);
             if (!raw16GpuCopyLogged_) {
                 raw16GpuCopyLogged_ = true;
-                const std::string line =
-                    "RAW_INGRESS_GPU_COPY format=RAW16 rowStrideBytes=" + std::to_string(camera.rowStrideBytes);
+                const std::string line = std::string(raw.remosaicker ? "RAW_INGRESS_GPU_REMOSAIC" : "RAW_INGRESS_GPU_COPY") +
+                                         " format=RAW16 rowStrideBytes=" + std::to_string(camera.rowStrideBytes) +
+                                         " cfaBlock=" + std::to_string(config_.cfaBlock);
                 LOGI("%s", line.c_str());
                 lifecyclePort_.postDiagnostic(line);
             }

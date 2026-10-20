@@ -51,7 +51,9 @@ class LensProfileCodecTest {
                 vendorGate = "vivoFullSize",
                 captureStream = RawStreamChoice(RawStreamFormat.Raw16, 16320, 12288),
                 captureBurst = 3,
-                captureBurstSequential = true
+                captureBurstSequential = true,
+                cfaBlock = 4,
+                cfaOrder = "GRBG"
             )
         val json = LensProfileCodec.encode(listOf(seamless))
         assertEquals(seamless, requireNotNull(LensProfileCodec.decode(json)).single())
@@ -60,6 +62,8 @@ class LensProfileCodecTest {
         assertEquals(16320, lens.getJSONObject("captureStream").getInt("width"))
         assertEquals(3, lens.getInt("captureBurst"))
         assertTrue(lens.getBoolean("captureBurstSequential"))
+        assertEquals(4, lens.getJSONObject("cfa").getInt("block"))
+        assertEquals("GRBG", lens.getJSONObject("cfa").getString("order"))
     }
 
     @Test

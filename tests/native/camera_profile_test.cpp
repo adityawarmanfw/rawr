@@ -279,6 +279,14 @@ void testProfileJson() {
             "captureBurstSequential":true,"keys":[{"tag":"vendor.still","scope":"still","values":[1]}]}]})");
         assert(still && still->lenses[0].captureStream && still->lenses[0].captureStream->height == 6);
         assert(still->lenses[0].captureBurst == 2 && still->lenses[0].captureBurstSequential);
+        // Block CFA layout and colour order override.
+        const auto cfa = parseCameraProfile(R"({"lenses":[{"id":"q","cameraId":"5","cfa":{"block":4,"order":"GRBG"}},
+            {"id":"o","cameraId":"0","cfa":{"order":"BGGR"}}]})");
+        assert(cfa && cfa->lenses[0].cfaBlock == 4 && cfa->lenses[0].cfaOrder == 1u);
+        assert(cfa->lenses[1].cfaBlock == 1 && cfa->lenses[1].cfaOrder == 3u);
+        assert(serializeCameraProfile(*parseCameraProfile(serializeCameraProfile(*cfa))) == serializeCameraProfile(*cfa));
+        assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","cfa":{"block":3}}]})"));
+        assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","cfa":{"order":"RGBG"}}]})"));
         assert(still->lenses[0].keys[0].scope == CameraKeySetting::Scope::Still);
         assert(serializeCameraProfile(*parseCameraProfile(serializeCameraProfile(*still))) ==
                serializeCameraProfile(*still));

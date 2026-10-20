@@ -1,0 +1,130 @@
+#version 450
+// Block CFA (quad 2x2 / 4x4 same-colour blocks) -> Bayer remosaic, straight
+// from the camera buffer. One shader, three passes (pc.pass):
+//  0. green at every pixel, two pixels per invocation (packed 16-bit pairs);
+//  1. per R/B block, mean of raw - green;
+//  2. Bayer out into the R16 image.
+// Mirrors app/src/main/cpp/imaging/CfaRemosaic.h expression for expression;
+// tests/native/raw_remosaic_vulkan_test.cpp compares the two.
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(std430, set = 0, binding = 0) readonly buffer Source { uint words[]; } src;
+layout(set = 0, binding = 1, r16ui) writeonly uniform uimage2D dst;
+layout(std430, set = 0, binding = 2) buffer Green { uint pairs[]; } green;
+layout(std430, set = 0, binding = 3) buffer Diff { float values[]; } diff;
+layout(push_constant) uniform P {
+    uint width;
+    uint height;
+    uint rowStrideBytes;
+    uint block;
+    uint order;
+    uint raw10;
+    uint pass;
+    uint blocksX;
+    uint blocksY;
+}
+pc;
+
+uint byteAt(uint offset) { return (src.words[offset >> 2u] >> ((offset & 3u) * 8u)) & 0xffu; }
+
+float rawAt(int x, int y) {
+    uint ux = uint(clamp(x, 0, int(pc.width) - 1)), uy = uint(clamp(y, 0, int(pc.height) - 1));
+    if (pc.raw10 != 0u) {
+        uint base = uy * pc.rowStrideBytes + (ux >> 2u) * 5u, k = ux & 3u;
+        return float((byteAt(base + k) << 2u) | ((byteAt(base + 4u) >> (2u * k)) & 3u));
+    }
+    uint offset = uy * pc.rowStrideBytes + ux * 2u;
+    uint word = src.words[offset >> 2u];
+    return float((offset & 2u) != 0u ? word >> 16u : word & 0xffffu);
+}
+
+// 0 R, 1 G, 2 B at block (or pixel) parity.
+uint channelAt(uint x, uint y) {
+    uint i = (y & 1u) * 2u + (x & 1u);
+    if (pc.order == 0u) return i == 0u ? 0u : (i == 3u ? 2u : 1u);
+    if (pc.order == 1u) return i == 1u ? 0u : (i == 2u ? 2u : 1u);
+    if (pc.order == 2u) return i == 2u ? 0u : (i == 1u ? 2u : 1u);
+    return i == 3u ? 0u : (i == 0u ? 2u : 1u);
+}
+
+float greenEstimate(uint x, uint y) {
+    int N = int(pc.block), X = int(x), Y = int(y);
+    if (channelAt(x / pc.block, y / pc.block) == 1u) return rawAt(X, Y);
+    int x0 = X / N * N, y0 = Y / N * N;
+    int xl = x0 - 1 >= 0 ? x0 - 1 : x0 + N;
+    int xr = x0 + N < int(pc.width) ? x0 + N : xl;
+    int yt = y0 - 1 >= 0 ? y0 - 1 : y0 + N;
+    int yb = y0 + N < int(pc.height) ? y0 + N : yt;
+    float gl = rawAt(xl, Y), gr = rawAt(xr, Y), gt = rawAt(X, yt), gb = rawAt(X, yb);
+    float th = xr != xl ? float(X - xl) / float(xr - xl) : 0.5;
+    float tv = yb != yt ? float(Y - yt) / float(yb - yt) : 0.5;
+    float gh = gl + (gr - gl) * th, gv = gt + (gb - gt) * tv;
+    float ah = abs(gl - gr) + abs(rawAt(x0, Y) - rawAt(x0 + N - 1, Y)) +
+               0.5 * abs(rawAt(x0 - 2 * N + N - 1, Y) - rawAt(x0 + 2 * N, Y));
+    float av = abs(gt - gb) + abs(rawAt(X, y0) - rawAt(X, y0 + N - 1)) +
+               0.5 * abs(rawAt(X, y0 - 2 * N + N - 1) - rawAt(X, y0 + 2 * N));
+    const float kEps = 1.0;
+    float wh = 1.0 / ((ah + kEps) * (ah + kEps)), wv = 1.0 / ((av + kEps) * (av + kEps));
+    return (wh * gh + wv * gv) / (wh + wv);
+}
+
+uint roundDn(float v) { return uint(clamp(floor(abs(v) + 0.5) * sign(v), 0.0, 65535.0)); }
+
+float greenAt(uint x, uint y) {
+    uint pair = green.pairs[(y * pc.width + x) >> 1u];
+    return float((x & 1u) != 0u ? pair >> 16u : pair & 0xffffu);
+}
+
+void main() {
+    uint x = gl_GlobalInvocationID.x, y = gl_GlobalInvocationID.y;
+    if (pc.pass == 0u) {
+        uint x0 = x * 2u;
+        if (x0 >= pc.width || y >= pc.height) return;
+        uint g0 = roundDn(greenEstimate(x0, y)), g1 = roundDn(greenEstimate(x0 + 1u, y));
+        green.pairs[(y * pc.width + x0) >> 1u] = g0 | (g1 << 16u);
+        return;
+    }
+    if (pc.pass == 1u) {
+        if (x >= pc.blocksX || y >= pc.blocksY) return;
+        float mean = 0.0;
+        if (channelAt(x, y) != 1u) {
+            float sum = 0.0;
+            uint count = 0u;
+            for (uint py = y * pc.block; py < min(pc.height, y * pc.block + pc.block); ++py)
+                for (uint px = x * pc.block; px < min(pc.width, x * pc.block + pc.block); ++px, ++count)
+                    sum += rawAt(int(px), int(py)) - greenAt(px, py);
+            mean = count != 0u ? sum / float(count) : 0.0;
+        }
+        diff.values[y * pc.blocksX + x] = mean;
+        return;
+    }
+    if (x >= pc.width || y >= pc.height) return;
+    uint want = channelAt(x, y);
+    float v;
+    if (want == 1u) {
+        v = greenAt(x, y);
+    } else if (channelAt(x / pc.block, y / pc.block) == want) {
+        v = rawAt(int(x), int(y));
+    } else {
+        // Block parity of the wanted colour.
+        uint py = 0u, px = 0u;
+        for (uint i = 0u; i < 4u; ++i)
+            if (channelAt(i & 1u, i >> 1u) == want) {
+                py = i >> 1u;
+                px = i & 1u;
+            }
+        float n = float(pc.block), half_ = float(pc.block - 1u) * 0.5;
+        float fx = (float(x) - float(px * pc.block) - half_) / (2.0 * n);
+        float fy = (float(y) - float(py * pc.block) - half_) / (2.0 * n);
+        int kxMax = int((pc.blocksX - 1u - px) / 2u), kyMax = int((pc.blocksY - 1u - py) / 2u);
+        int kx = clamp(int(floor(fx)), 0, kxMax), ky = clamp(int(floor(fy)), 0, kyMax);
+        int kx1 = min(kx + 1, kxMax), ky1 = min(ky + 1, kyMax);
+        uint bx0 = uint(kx * 2 + int(px)), bx1 = uint(kx1 * 2 + int(px));
+        uint by0 = uint(ky * 2 + int(py)), by1 = uint(ky1 * 2 + int(py));
+        float tx = clamp(fx - float(kx), 0.0, 1.0), ty = clamp(fy - float(ky), 0.0, 1.0);
+        float d00 = diff.values[by0 * pc.blocksX + bx0], d10 = diff.values[by0 * pc.blocksX + bx1];
+        float d01 = diff.values[by1 * pc.blocksX + bx0], d11 = diff.values[by1 * pc.blocksX + bx1];
+        float top = d00 + (d10 - d00) * tx, bottom = d01 + (d11 - d01) * tx;
+        v = greenAt(x, y) + top + (bottom - top) * ty;
+    }
+    imageStore(dst, ivec2(int(x), int(y)), uvec4(roundDn(v), 0u, 0u, 0u));
+}

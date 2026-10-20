@@ -107,6 +107,8 @@ SessionEngine::SessionEngine(std::string filesDir) : filesDir_(std::move(filesDi
             // (8192 vs 8160 on vivo).
             if (lastCameraContext_) {
                 auto context = std::make_shared<rawrcam::metadata::CameraContextMetadata>(*lastCameraContext_);
+                // The HAL hands full-size stills over as Bayer: a block-CFA setting is the viewfinder stream's.
+                context->cfaBlock = 1;
                 auto& g = context->geometry;
                 const uint32_t scale = g.pixelArrayWidth ? std::max(1u, width / g.pixelArrayWidth) : 1u;
                 g.rawBufferWidth = std::min(width, scale * g.pixelArrayWidth);

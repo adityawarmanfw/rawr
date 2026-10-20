@@ -202,6 +202,8 @@ internal fun lensSummary(lens: LensProfile): String = buildList {
     add(cameraLabel(lens.cameraId, lens.physicalCameraId))
     add(lens.stream.label)
     add(if (lens.levels.isStatic) "Static levels" else "Dynamic levels")
+    if (lens.cfaBlock > 1) add(cfaBlockLabel(lens.cfaBlock))
+    lens.cfaOrder?.let { add(it) }
     val keys = lens.vendorKeys.count { it.enabled }
     if (keys > 0) add(if (keys == 1) "1 key" else "$keys keys")
 }.joinToString(" · ")
