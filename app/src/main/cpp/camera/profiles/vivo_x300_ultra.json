@@ -690,7 +690,8 @@
         "width": 16320,
         "height": 12256
       },
-      "captureBurst": 1
+      "captureBurst": 3,
+      "captureBurstSequential": true
     },
     {
       "id": "F85",

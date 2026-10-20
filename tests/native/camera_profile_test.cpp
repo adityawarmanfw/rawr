@@ -259,11 +259,12 @@ void testProfileJson() {
             assert(stillUiModule && !sessionUiModule && !forced && stillMode);
         }
         // vivo 200 MP lenses: the same route with the ultra flag and no forced mode (the HAL switches by itself).
-        // The main camera's HAL fails 200 MP bursts: single stills only there.
-        for (const auto& [lensId, cameraId, h, burst] :
-             {std::tuple{"F35", "3", 12256u, 1u}, std::tuple{"F85", "5", 12288u, 3u}}) {
+        // The main camera's HAL fails queued 200 MP stills: its burst goes in one still at a time.
+        for (const auto& [lensId, cameraId, h, sequential] :
+             {std::tuple{"F35", "3", 12256u, true}, std::tuple{"F85", "5", 12288u, false}}) {
             const auto s = routeForLens(x300, lensId);
-            assert(s && s->cameraId == cameraId && s->vendorGate == "vivoFullSize" && s->captureBurst == burst);
+            assert(s && s->cameraId == cameraId && s->vendorGate == "vivoFullSize" && s->captureBurst == 3 &&
+                   s->captureBurstSequential == sequential);
             assert(s->captureStream && s->captureStream->width == 16320 && s->captureStream->height == h);
             bool ultra = false, aiHighRes = false, forced = false;
             for (const auto& k : s->keys) {
@@ -275,9 +276,9 @@ void testProfileJson() {
         }
         const auto still = parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0",
             "captureStream":{"format":"RAW16","width":8,"height":6},"captureBurst":2,
-            "keys":[{"tag":"vendor.still","scope":"still","values":[1]}]}]})");
+            "captureBurstSequential":true,"keys":[{"tag":"vendor.still","scope":"still","values":[1]}]}]})");
         assert(still && still->lenses[0].captureStream && still->lenses[0].captureStream->height == 6);
-        assert(still->lenses[0].captureBurst == 2);
+        assert(still->lenses[0].captureBurst == 2 && still->lenses[0].captureBurstSequential);
         assert(still->lenses[0].keys[0].scope == CameraKeySetting::Scope::Still);
         assert(serializeCameraProfile(*parseCameraProfile(serializeCameraProfile(*still))) ==
                serializeCameraProfile(*still));

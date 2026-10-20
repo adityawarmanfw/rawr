@@ -10,6 +10,7 @@ import com.rawr.camera.settings.model.VendorKeyType
 import org.json.JSONObject
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 import kotlin.test.assertNull
 
 class LensProfileCodecTest {
@@ -49,7 +50,8 @@ class LensProfileCodecTest {
                 vendorKeys = listOf(VendorKey("com.vivo.current_ui_module", VendorKeyScope.Still, VendorKeyType.Int32, listOf(74.0))),
                 vendorGate = "vivoFullSize",
                 captureStream = RawStreamChoice(RawStreamFormat.Raw16, 16320, 12288),
-                captureBurst = 3
+                captureBurst = 3,
+                captureBurstSequential = true
             )
         val json = LensProfileCodec.encode(listOf(seamless))
         assertEquals(seamless, requireNotNull(LensProfileCodec.decode(json)).single())
@@ -57,6 +59,7 @@ class LensProfileCodecTest {
         assertEquals("still", lens.getJSONArray("keys").getJSONObject(0).getString("scope"))
         assertEquals(16320, lens.getJSONObject("captureStream").getInt("width"))
         assertEquals(3, lens.getInt("captureBurst"))
+        assertTrue(lens.getBoolean("captureBurstSequential"))
     }
 
     @Test

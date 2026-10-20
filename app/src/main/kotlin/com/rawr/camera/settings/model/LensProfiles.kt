@@ -104,7 +104,9 @@ data class LensProfile(
     /** Full-size RAW stream only still requests fill (vivo seamless 50/200 MP); null for none. */
     val captureStream: RawStreamChoice? = null,
     /** Most full-size stills one merge may request (1 = none); 0 = the app's own cap. */
-    val captureBurst: Int = 0
+    val captureBurst: Int = 0,
+    /** Burst stills go in one at a time, each after the previous frame (HAL fails queued ones). */
+    val captureBurstSequential: Boolean = false
 )
 
 /** Problems with one lens, in display order; empty when the lens is valid. */

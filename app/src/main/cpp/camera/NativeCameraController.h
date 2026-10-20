@@ -84,6 +84,8 @@ class NativeCameraController {
     bool hasFullSizeCapture() const;
     // LensRoute::captureBurst of the open route (0 = no profile limit).
     uint32_t fullSizeBurstLimit() const;
+    // LensRoute::captureBurstSequential of the open route.
+    bool fullSizeBurstSequential() const;
     // Most a positive-EV long frame can gain over the current repeating
     // exposure (EV); nullopt when unknown.
     std::optional<double> longFrameRoomEv() const;

@@ -67,6 +67,7 @@ internal object LensProfileCodec {
                 )
             }
             if (lens.captureBurst > 0) put("captureBurst", lens.captureBurst)
+            if (lens.captureBurstSequential) put("captureBurstSequential", true)
         }
 
     private fun decodeLens(o: JSONObject): LensProfile {
@@ -102,7 +103,8 @@ internal object LensProfileCodec {
             captureStream = o.optJSONObject("captureStream")?.let {
                 RawStreamChoice(RawStreamFormat.fromWire(it.optString("format")), it.optInt("width"), it.optInt("height"))
             }?.takeIf { it.width > 0 && it.height > 0 },
-            captureBurst = o.optInt("captureBurst").coerceIn(0, 30)
+            captureBurst = o.optInt("captureBurst").coerceIn(0, 30),
+            captureBurstSequential = o.optBoolean("captureBurstSequential")
         )
     }
 

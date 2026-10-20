@@ -80,6 +80,9 @@ struct LensRoute {
     // Most full-size stills one merge may request (1 = none: the HAL fails
     // bursts); 0 = the app's own cap.
     uint32_t captureBurst = 0;
+    // Submit a burst one still at a time, each after the previous frame is in
+    // (the HAL fails queued full-size stills but takes them back to back).
+    bool captureBurstSequential = false;
 };
 
 struct CameraProfile {
