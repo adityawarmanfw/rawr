@@ -1,5 +1,6 @@
 #include "capture/single/SingleShotSlot.h"
 
+#include "capture/single/StillCfaRemosaic.h"
 #include "imaging/Raw16CpuSnapshot.h"
 
 #ifndef NDEBUG
@@ -212,6 +213,7 @@ bool SingleShotSlot::captureMatchedFrame(AImage* image, AHardwareBuffer* ahb, in
     slot_.sourcePixelStrideBytes = copied.sourcePixelStrideBytes;
     slot_.metadata = metadata;
     slot_.colorState = colorState;
+    capture::remosaicBlockCfaStill(slot_);
     pendingRequestId_.reset();
     pendingCameraGeneration_.reset();
     expectedOptimizedRequestId_.reset();

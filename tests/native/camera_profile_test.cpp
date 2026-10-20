@@ -259,11 +259,12 @@ void testProfileJson() {
             assert(stillUiModule && !sessionUiModule && !forced && stillMode);
         }
         // vivo 200 MP lenses: the same route with the ultra flag and no forced mode (the HAL switches by itself).
-        // The main camera's HAL fails 200 MP bursts: single stills only there.
-        for (const auto& [lensId, cameraId, h, burst] :
-             {std::tuple{"F35", "3", 12256u, 1u}, std::tuple{"F85", "5", 12288u, 3u}}) {
+        // The main camera's HAL fails queued 200 MP stills: its burst goes in one still at a time.
+        for (const auto& [lensId, cameraId, h, sequential] :
+             {std::tuple{"F35", "3", 12256u, true}, std::tuple{"F85", "5", 12288u, false}}) {
             const auto s = routeForLens(x300, lensId);
-            assert(s && s->cameraId == cameraId && s->vendorGate == "vivoFullSize" && s->captureBurst == burst);
+            assert(s && s->cameraId == cameraId && s->vendorGate == "vivoFullSize" && s->captureBurst == 3 &&
+                   s->captureBurstSequential == sequential);
             assert(s->captureStream && s->captureStream->width == 16320 && s->captureStream->height == h);
             bool ultra = false, aiHighRes = false, forced = false;
             for (const auto& k : s->keys) {
@@ -275,9 +276,19 @@ void testProfileJson() {
         }
         const auto still = parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0",
             "captureStream":{"format":"RAW16","width":8,"height":6},"captureBurst":2,
-            "keys":[{"tag":"vendor.still","scope":"still","values":[1]}]}]})");
+            "captureBurstSequential":true,"keys":[{"tag":"vendor.still","scope":"still","values":[1]}]}]})");
         assert(still && still->lenses[0].captureStream && still->lenses[0].captureStream->height == 6);
-        assert(still->lenses[0].captureBurst == 2);
+        assert(still->lenses[0].captureBurst == 2 && still->lenses[0].captureBurstSequential);
+        // Block CFA layout and colour order override.
+        const auto cfa = parseCameraProfile(R"({"lenses":[{"id":"q","cameraId":"5","cfa":{"block":4,"order":"GRBG","live":"fast","photo":"standard"}},
+            {"id":"o","cameraId":"0","cfa":{"order":"BGGR"}}]})");
+        assert(cfa && cfa->lenses[0].cfaBlock == 4 && cfa->lenses[0].cfaOrder == 1u);
+        assert(cfa->lenses[0].cfaLiveQuality == 0u && cfa->lenses[0].cfaPhotoQuality == 1u);
+        assert(cfa->lenses[1].cfaBlock == 1 && cfa->lenses[1].cfaOrder == 3u);
+        assert(cfa->lenses[1].cfaLiveQuality == 1u && cfa->lenses[1].cfaPhotoQuality == 2u);  // defaults
+        assert(serializeCameraProfile(*parseCameraProfile(serializeCameraProfile(*cfa))) == serializeCameraProfile(*cfa));
+        assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","cfa":{"block":3}}]})"));
+        assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","cfa":{"order":"RGBG"}}]})"));
         assert(still->lenses[0].keys[0].scope == CameraKeySetting::Scope::Still);
         assert(serializeCameraProfile(*parseCameraProfile(serializeCameraProfile(*still))) ==
                serializeCameraProfile(*still));

@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.22)
 project(raw_ingress LANGUAGES CXX)
 
 # Camera RAW ingress on the GPU: RAW10 (MIPI packed) -> R16 unpack straight
-# from the imported camera buffer.
+# from the imported camera buffer, and block-CFA (quad / 4x4) remosaic to Bayer.
 if(ANDROID)
   find_library(VULKAN_LIB vulkan REQUIRED)
 else()
@@ -24,8 +24,10 @@ set(RAW_INGRESS_GEN ${CMAKE_CURRENT_BINARY_DIR}/generated)
 file(MAKE_DIRECTORY ${RAW_INGRESS_GEN})
 embed_spirv(raw10_unpack ${CMAKE_CURRENT_LIST_DIR}/shaders/raw10_unpack.comp raw10_unpack_spv
   OUTPUT_DIR ${RAW_INGRESS_GEN} FLAGS --target-env=vulkan1.1 -O)
+embed_spirv(raw_remosaic ${CMAKE_CURRENT_LIST_DIR}/shaders/raw_remosaic.comp raw_remosaic_spv
+  OUTPUT_DIR ${RAW_INGRESS_GEN} FLAGS --target-env=vulkan1.1 -O)
 
-add_library(raw_ingress STATIC src/Raw10Unpacker.cpp ${raw10_unpack_HDR})
+add_library(raw_ingress STATIC src/Raw10Unpacker.cpp src/RawRemosaicker.cpp ${raw10_unpack_HDR} ${raw_remosaic_HDR})
 add_library(rawr::raw_ingress ALIAS raw_ingress)
 target_include_directories(raw_ingress PUBLIC include PRIVATE ${RAW_INGRESS_GEN})
 target_link_libraries(raw_ingress PUBLIC rawr::vk_common ${VULKAN_LIB})

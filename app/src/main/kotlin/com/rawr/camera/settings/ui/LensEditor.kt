@@ -49,6 +49,10 @@ import com.rawr.camera.settings.architecture.NavigateBack
 import com.rawr.camera.settings.architecture.SetLensProfiles
 import com.rawr.camera.settings.architecture.SettingsDispatch
 import com.rawr.camera.settings.model.LENS_NAME_MAX_LENGTH
+import com.rawr.camera.settings.model.CFA_BLOCKS
+import com.rawr.camera.settings.model.CFA_LIVE_QUALITIES
+import com.rawr.camera.settings.model.CFA_ORDERS
+import com.rawr.camera.settings.model.CFA_PHOTO_QUALITIES
 import com.rawr.camera.settings.model.EXTENDED_ISO_MAX
 import com.rawr.camera.settings.model.EXTENDED_SHUTTER_MAX_NS
 import com.rawr.camera.settings.model.LensExposure
@@ -130,6 +134,7 @@ internal fun LensEditorScreen(state: SettingsUiState, lensName: String?, dispatc
             levels = draft.levels,
             camera = camera
         ) { draft = draft.copy(levels = it) }
+        SensorLayoutGroup(draft) { draft = it }
         ExtendedExposureGroup(draft.exposure) { draft = draft.copy(exposure = it) }
         VendorKeysGroup(
             title = "Vendor keys",
@@ -351,6 +356,60 @@ private fun LevelField(label: String, value: Float, modifier: Modifier, onValue:
 
 private fun formatLevel(value: Float): String =
     if (value == Math.round(value).toFloat()) Math.round(value).toString() else value.toString()
+
+@Composable
+private fun SensorLayoutGroup(lens: LensProfile, onChange: (LensProfile) -> Unit) {
+    SettingsGroup(
+        title = "Sensor layout",
+        description = "For RAW that comes out as coloured blocks or with wrong colours: some sensor modes " +
+            "(often in-sensor crops) deliver the quad or 4x4 mosaic while reporting Bayer. Quad and 4x4 are " +
+            "remosaiced to Bayer at full resolution. Colour order fixes swapped red/blue or magenta-green " +
+            "casts; for quad and 4x4 it is the order of the blocks."
+    ) {
+        CompactChoiceRow(CFA_BLOCKS, lens.cfaBlock, ::cfaBlockLabel) { onChange(lens.copy(cfaBlock = it)) }
+        SettingDivider()
+        DropdownChoiceRow(
+            title = "Colour order",
+            selected = lens.cfaOrder,
+            values = listOf<String?>(null) + CFA_ORDERS,
+            label = { it ?: "Camera's" },
+            onSelect = { onChange(lens.copy(cfaOrder = it)) }
+        )
+        if (lens.cfaBlock > 1) {
+            SettingDivider()
+            DropdownChoiceRow(
+                title = "Live remosaic",
+                selected = lens.cfaLive,
+                values = CFA_LIVE_QUALITIES,
+                label = ::cfaQualityLabel,
+                supportingText = "Viewfinder, video and merged photos (their frames come from the live stream). " +
+                    "Fast skips green interpolation: about 20% cheaper, softer colour detail.",
+                onSelect = { onChange(lens.copy(cfaLive = it)) }
+            )
+            SettingDivider()
+            DropdownChoiceRow(
+                title = "Photo remosaic",
+                selected = lens.cfaPhoto,
+                values = CFA_PHOTO_QUALITIES,
+                label = ::cfaQualityLabel,
+                supportingText = "Single photos. High searches wider for clean edges; adds ~0.15 s per photo.",
+                onSelect = { onChange(lens.copy(cfaPhoto = it)) }
+            )
+        }
+    }
+}
+
+internal fun cfaQualityLabel(quality: String): String = when (quality) {
+    "fast" -> "Fast"
+    "high" -> "High"
+    else -> "Standard"
+}
+
+internal fun cfaBlockLabel(block: Int): String = when (block) {
+    2 -> "Quad 2×2"
+    4 -> "4×4"
+    else -> "Bayer"
+}
 
 @Composable
 private fun ExtendedExposureGroup(exposure: LensExposure, onChange: (LensExposure) -> Unit) {

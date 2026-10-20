@@ -8,6 +8,15 @@
 namespace rawrcam::camera {
 namespace {
 
+// CfaPattern codes by name (0=RGGB, 1=GRBG, 2=GBRG, 3=BGGR).
+constexpr const char* kCfaOrderNames[] = {"RGGB", "GRBG", "GBRG", "BGGR"};
+const char* cfaOrderName(uint32_t code) { return code < 4 ? kCfaOrderNames[code] : "RGGB"; }
+std::optional<uint32_t> cfaOrderFromName(const std::string& name) {
+    for (uint32_t i = 0; i < 4; ++i)
+        if (name == kCfaOrderNames[i]) return i;
+    return std::nullopt;
+}
+
 // Minimal JSON reader: enough for profile documents written by the app.
 struct Json {
     enum class Kind : uint8_t { Null, Bool, Number, String, Array, Object };
@@ -441,6 +450,14 @@ std::string serializeCameraProfile(const CameraProfile& profile) {
                    ",\"height\":" + std::to_string(r.captureStream->height) + "}";
         }
         if (r.captureBurst) out += ",\"captureBurst\":" + std::to_string(r.captureBurst);
+        if (r.captureBurstSequential) out += ",\"captureBurstSequential\":true";
+        if (r.cfaBlock > 1 || r.cfaOrder) {
+            out += ",\"cfa\":{\"block\":" + std::to_string(r.cfaBlock);
+            if (r.cfaOrder) out += std::string(",\"order\":\"") + cfaOrderName(*r.cfaOrder) + "\"";
+            out += std::string(",\"live\":\"") + (r.cfaLiveQuality == 0 ? "fast" : "standard") + "\"";
+            out += std::string(",\"photo\":\"") + (r.cfaPhotoQuality == 2 ? "high" : "standard") + "\"";
+            out += '}';
+        }
         out += '}';
     }
     out += "]}";
@@ -502,6 +519,24 @@ std::optional<CameraProfile> readProfile(const Json& root, std::string* error) {
             r.captureStream = capture;
         }
         r.captureBurst = uint32_t(std::clamp(l.num("captureBurst"), 0.0, 30.0));
+        r.captureBurstSequential = l.flag("captureBurstSequential", false);
+        if (const Json* c = l.get("cfa"); c && c->kind == Json::Kind::Object) {
+            const double block = c->num("block", 1.0);
+            if (block != 1.0 && block != 2.0 && block != 4.0) {
+                if (error) *error = "invalid cfa block for lens " + r.lensId;
+                return std::nullopt;
+            }
+            r.cfaBlock = uint32_t(block);
+            if (const std::string order = c->str("order"); !order.empty()) {
+                r.cfaOrder = cfaOrderFromName(order);
+                if (!r.cfaOrder) {
+                    if (error) *error = "invalid cfa order " + order + " for lens " + r.lensId;
+                    return std::nullopt;
+                }
+            }
+            r.cfaLiveQuality = c->str("live", "standard") == "fast" ? 0u : 1u;
+            r.cfaPhotoQuality = c->str("photo", "high") == "standard" ? 1u : 2u;
+        }
         if (!readLevels(l.get("levels"), r.levels)) {
             if (error) *error = "invalid levels for lens " + r.lensId;
             return std::nullopt;

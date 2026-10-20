@@ -66,6 +66,10 @@ struct FrameSubmitConfiguration {
     uint32_t previewWidth = 0;
     uint32_t previewHeight = 0;
     uint32_t cfa = 0;
+    // Same-colour block side of the camera's RAW; >1 routes ingress through
+    // the GPU remosaic so every consumer reads Bayer in `cfa` order.
+    uint32_t cfaBlock = 1;
+    uint32_t cfaQuality = 1;  // imaging::CfaRemosaicQuality: Fast 0 / Standard 1
     int sensorOrientationDegrees = 0;
     uint32_t diagnosticMode = 0;
     bool experimentalZeroCopy = false;
@@ -169,9 +173,10 @@ class FrameSubmitCoordinator final {
     }
     // True once this configuration delivered a frame through CPU upload
     // (latched fallback, forced, or a RAW10 stream). Surfaced to the UI.
-    // RAW16 readers then need GPU buffer access instead of image usage.
+    // RAW16 readers then need GPU buffer access instead of image usage. A
+    // block-CFA lens always does: the remosaic reads the camera buffer.
     [[nodiscard]] bool raw16BufferIngressRequired() const noexcept {
-        return raw16ImageImportLatched_.load(std::memory_order_relaxed);
+        return raw16ImageImportLatched_.load(std::memory_order_relaxed) || config_.cfaBlock > 1u;
     }
     [[nodiscard]] bool cpuIngressActive() const noexcept { return cpuIngressActive_.load(std::memory_order_relaxed); }
     void setForceCpuIngress(bool enabled) noexcept { forceCpuIngress_.store(enabled, std::memory_order_relaxed); }

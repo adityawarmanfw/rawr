@@ -107,6 +107,8 @@ SessionEngine::SessionEngine(std::string filesDir) : filesDir_(std::move(filesDi
             // (8192 vs 8160 on vivo).
             if (lastCameraContext_) {
                 auto context = std::make_shared<rawrcam::metadata::CameraContextMetadata>(*lastCameraContext_);
+                // The HAL hands full-size stills over as Bayer: a block-CFA setting is the viewfinder stream's.
+                context->cfaBlock = 1;
                 auto& g = context->geometry;
                 const uint32_t scale = g.pixelArrayWidth ? std::max(1u, width / g.pixelArrayWidth) : 1u;
                 g.rawBufferWidth = std::min(width, scale * g.pixelArrayWidth);
@@ -536,7 +538,7 @@ void SessionEngine::observeFullSizeBurstFrame(const rawrcam::metadata::FrameMeta
 uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
     auto* controller = cameraControls_.controller();
     if (!controller) return 0u;
-    const uint32_t count = std::clamp<uint32_t>(maxFrames, 2u, FullSizeStills::kMaxFrames);
+    uint32_t count = std::clamp<uint32_t>(maxFrames, 2u, FullSizeStills::kMaxFrames);
     rawrcam::metadata::CameraContextMetadataPtr context;
     uint64_t tag = 0;
     {
@@ -572,11 +574,18 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
     uint32_t binnedCorners = 0;
     // Submit all exposures before copying or writing any frame. The camera can
     // schedule the burst consecutively while we drain its completed buffers.
-    if (!controller->captureFullSize(tag, count, true))
+    // A sequential lens gets one still now and each next one once the
+    // previous frame is in.
+    const bool sequential = controller->fullSizeBurstSequential();
+    if (!controller->captureFullSize(tag, sequential ? 1u : count, true))
         return UINT32_MAX;  // acquisition failed; never submit a replacement capture
     const auto exposure = controller->deferredCaptureExposure();
     const auto budgetMs = count * (8000 + (exposure ? exposure->exposureTimeNs / 1'000'000 : 0));
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(budgetMs);
+    const auto remainingMs = [&] {
+        return std::max<int64_t>(0, std::chrono::duration_cast<std::chrono::milliseconds>(
+                                        deadline - std::chrono::steady_clock::now()).count());
+    };
     for (uint32_t index = 0; index < count; ++index) {
         std::unique_lock<std::mutex> lock(fullSize_.mutex);
         const auto ready = [&] {
@@ -615,6 +624,15 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
         }
         lock.unlock();
         if (frames.size() + binnedCorners != index + 1) return UINT32_MAX;
+        // Next still goes in before this frame is copied: the copy overlaps
+        // the sensor switch. A refused submission ends the burst with the
+        // frames already in.
+        if (sequential && index + 1 < count &&
+            (!controller->waitFullSizeIdle(remainingMs()) || !controller->captureFullSize(tag, 1u, true))) {
+            appendDiagnostic("FULL_SIZE_BURST_SEQUENTIAL_STOPPED tag=" + std::to_string(tag) +
+                             " requested=" + std::to_string(count) + " submitted=" + std::to_string(index + 1));
+            for (; count > index + 1; --count) journal->dropExpected();
+        }
         auto& lease = frames.back().lease;
         const auto copy =
             imaging::copyCompletedRaw16AhbToPacked(lease.ahb(), width, height, packed, lease.fence(), lease.image());
@@ -638,9 +656,7 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
         journal->append(packed);
     }
     // Completion belongs to the whole burst, never to each individual frame.
-    const auto remainingMs = std::max<int64_t>(
-        0, std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count());
-    if (!controller->waitFullSizeIdle(remainingMs)) {
+    if (!controller->waitFullSizeIdle(remainingMs())) {
         failedCameraGeneration_.store(context->cameraContextGeneration);
         return UINT32_MAX;
     }

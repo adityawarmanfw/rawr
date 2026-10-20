@@ -37,6 +37,14 @@ struct CameraContextMetadata {
     std::optional<uint64_t> rawReaderUsage;
     uint32_t rawPreviewCfa = 0;  // RGGB=0, GRBG=1, GBRG=2, BGGR=3.
     int32_t camera2Cfa = -1;
+    // Side of the same-colour blocks in the camera's RAW (LensRoute::cfaBlock):
+    // >1 means ingress remosaics each frame to Bayer in the rawPreviewCfa
+    // order before anything else reads it. Never persisted: stored frames
+    // are already Bayer.
+    uint32_t cfaBlock = 1;
+    // imaging::CfaRemosaicQuality for live frames (ingress) and single stills.
+    uint32_t cfaLiveQuality = 1;
+    uint32_t cfaPhotoQuality = 2;
     int32_t lensFacing = -1;
     std::array<float, 4> baselineBlackLevelPhysicalRggb{0, 0, 0, 0};
     float baselineWhiteLevel = 0.0f;

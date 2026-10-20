@@ -104,8 +104,26 @@ data class LensProfile(
     /** Full-size RAW stream only still requests fill (vivo seamless 50/200 MP); null for none. */
     val captureStream: RawStreamChoice? = null,
     /** Most full-size stills one merge may request (1 = none); 0 = the app's own cap. */
-    val captureBurst: Int = 0
+    val captureBurst: Int = 0,
+    /** Burst stills go in one at a time, each after the previous frame (HAL fails queued ones). */
+    val captureBurstSequential: Boolean = false,
+    /**
+     * Same-colour block side the RAW really holds (1 Bayer, 2 quad, 4 for 4x4): blocks are remosaiced to Bayer
+     * for the viewfinder, stills and video. Some sensor modes (in-sensor crops) report Bayer but aren't.
+     */
+    val cfaBlock: Int = 1,
+    /** Block-level colour order ("RGGB", "GRBG", "GBRG", "BGGR") replacing the camera's; null keeps it. */
+    val cfaOrder: String? = null,
+    /** Remosaic for the viewfinder, video and merge frames: "fast" or "standard" (GPU). */
+    val cfaLive: String = "standard",
+    /** Remosaic for single photos: "standard" or "high" (CPU). */
+    val cfaPhoto: String = "high"
 )
+
+val CFA_BLOCKS = listOf(1, 2, 4)
+val CFA_ORDERS = listOf("RGGB", "GRBG", "GBRG", "BGGR")
+val CFA_LIVE_QUALITIES = listOf("fast", "standard")
+val CFA_PHOTO_QUALITIES = listOf("standard", "high")
 
 /** Problems with one lens, in display order; empty when the lens is valid. */
 fun validateLensProfile(lens: LensProfile, others: List<LensProfile>): List<String> = buildList {

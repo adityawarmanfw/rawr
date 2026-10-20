@@ -12,6 +12,7 @@
 
 #include "imaging/FrameLimits.h"
 #include "rawr/raw_ingress/Raw10Unpacker.h"
+#include "rawr/raw_ingress/RawRemosaicker.h"
 #include "vulkan/ImageResources.h"
 #include "vulkan/RawAhbImporter.h"
 
@@ -38,6 +39,9 @@ class RawCpuUploadPool final {
     void initialize(VkPhysicalDevice physical, VkDevice device, uint32_t queueFamily) noexcept;
     // Resources are allocated lazily per slot on first upload.
     void configure(uint32_t width, uint32_t height) noexcept;
+    // Block-CFA lens: every route below fills the owned image by remosaicing
+    // to Bayer in `order` (block 1 = off). Takes effect on the next frame.
+    void configureRemosaic(uint32_t block, uint32_t order, uint32_t quality) noexcept;
     void destroy() noexcept;
 
     // Copies the camera frame into the slot's buffer. The caller must have
@@ -76,6 +80,10 @@ class RawCpuUploadPool final {
     VkDevice device_ = VK_NULL_HANDLE;
     uint32_t queueFamily_ = 0;
     std::unique_ptr<rawr::raw_ingress::Raw10Unpacker> unpacker_;
+    std::unique_ptr<rawr::raw_ingress::RawRemosaicker> remosaicker_;
+    uint32_t remosaicBlock_ = 1, remosaicOrder_ = 0, remosaicQuality_ = 1;
+    // Points `raw` at the remosaicker when a block CFA is configured.
+    void applyRemosaic(rawrcam::vulkan::ImportedRaw& raw, bool sourceRaw10);
     struct Parity {
         bool armed = false, recorded = false;
         uint32_t slot = 0, strideBytes = 0;

@@ -7,6 +7,7 @@
 
 #include "capture/FullSizeFallbacks.h"
 #include "imaging/BinnedCorner.h"
+#include "capture/single/StillCfaRemosaic.h"
 #include "imaging/Raw16CpuSnapshot.h"
 #include "imaging/RawFrameLease.h"
 #include "sys/resource.h"
@@ -102,6 +103,7 @@ bool SingleFrameCaptureAcquisition::beginDeferredSnapshot(AImage* imageLease, AH
                     deferred.frame->sourceRowStrideBytes = deferred.copyResult.sourceRowStrideBytes;
                     deferred.frame->sourcePixelStrideBytes = deferred.copyResult.sourcePixelStrideBytes;
                     keepBinnedCorner(*deferred.frame);
+                    remosaicBlockCfaStill(*deferred.frame);
                     __android_log_print(ANDROID_LOG_INFO, "RawrCamNative", "%s",
                                         imaging::stillRawContentStatsLine(*deferred.frame).c_str());
                     journal_.commit(deferred);

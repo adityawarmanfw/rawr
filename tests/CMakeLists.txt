@@ -42,6 +42,8 @@ rawr_test(convert_binned_raw_test
 target_link_libraries(convert_binned_raw_test PRIVATE rawr_tinydng)
 rawr_test(binned_corner_test
   "${RAWR_ROOT}/tests/native/binned_corner_test.cpp")
+rawr_test(cfa_remosaic_test
+  "${RAWR_ROOT}/tests/native/cfa_remosaic_test.cpp")
 rawr_test(renderer_source_exif_test
   "${RAWR_ROOT}/tests/native/renderer_source_exif_test.cpp"
   "${APP}/renderer/SourceCaptureExif.cpp")
@@ -180,3 +182,9 @@ rawr_test(raw10_unpack_vulkan_test
   "${APP}/imaging/RawPixelSource.cpp")
 target_include_directories(raw10_unpack_vulkan_test PRIVATE "${RAWR_ROOT}/native/vk_common/testing")
 target_link_libraries(raw10_unpack_vulkan_test PRIVATE rawr::raw_ingress)
+# GPU block-CFA remosaic vs the CPU reference.
+rawr_test(raw_remosaic_vulkan_test
+  "${RAWR_ROOT}/tests/native/raw_remosaic_vulkan_test.cpp"
+  "${APP}/imaging/RawPixelSource.cpp")
+target_include_directories(raw_remosaic_vulkan_test PRIVATE "${RAWR_ROOT}/native/vk_common/testing")
+target_link_libraries(raw_remosaic_vulkan_test PRIVATE rawr::raw_ingress)

@@ -334,6 +334,17 @@ void focusOwnershipAndFreshness() {
     const auto now = state.focusObservedAtMs;
     assert(stillFocusReady(state, now));
     assert(!stillFocusReady(state, now + 1501));
+    // Only a scan in progress holds the still: a failed lock (5), a passive
+    // scan that gave up (6) and AF the HAL reset after the tap (0) are final.
+    for (const uint8_t settled : {0, 2, 5, 6}) {
+        state.afState = settled;
+        assert(stillFocusReady(state, now));
+    }
+    for (const uint8_t scanning : {1, 3}) {
+        state.afState = scanning;
+        assert(!stillFocusReady(state, now));
+    }
+    state.afState = 4;
     result.focusDistance = 0;
     results.observe(state, frame(25), result, &request, 3, false);
     assert(state.appliedFocusDistance == 2);  // no time regression

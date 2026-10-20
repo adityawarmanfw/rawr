@@ -128,6 +128,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
     std::set<std::string> rawOnlyRoutes;
     std::string accessRoute = "direct";
     uint32_t fullSizeBurstLimit = 0;
+    bool fullSizeBurstSequential = false;
     bool oisEnabledPreference = true;
     // User preference to bypass Camera2 AE priority; the HAL's advertised
     // support is kept so the preference can be turned back off live.
@@ -852,6 +853,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         deviceSession.setRawWindow(window);
         deviceSession.setCaptureWindow(captureWindow);
         fullSizeBurstLimit = route.captureBurst;
+        fullSizeBurstSequential = route.captureBurstSequential;
         const auto stillCurrent = [&] {
             return active && !shutDown && setupGeneration == deviceSession.generation();
         };
@@ -1748,6 +1750,10 @@ bool NativeCameraController::hasFullSizeCapture() const { return impl_->hasFullS
 uint32_t NativeCameraController::fullSizeBurstLimit() const {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     return impl_->fullSizeBurstLimit;
+}
+bool NativeCameraController::fullSizeBurstSequential() const {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    return impl_->fullSizeBurstSequential;
 }
 bool NativeCameraController::captureLongExposure(uint64_t requestId, LongExposure* submitted) {
     return impl_->captureLongExposure(requestId, submitted);
