@@ -27,6 +27,8 @@ class RawRemosaicker final {
     RawRemosaicker(const RawRemosaicker&) = delete;
     RawRemosaicker& operator=(const RawRemosaicker&) = delete;
 
+    // Mirrors imaging::CfaRemosaicQuality (High is CPU-only).
+    enum class Quality : std::uint32_t { Fast = 0, Standard = 1 };
     struct Frame {
         VkBuffer source = VK_NULL_HANDLE;
         VkImageView destination = VK_NULL_HANDLE;  // GENERAL layout
@@ -35,6 +37,7 @@ class RawRemosaicker final {
         bool raw10 = false;
         std::uint32_t block = 2;  // 2 or 4
         std::uint32_t order = 0;  // CfaPattern code of the blocks (and the Bayer out)
+        Quality quality = Quality::Standard;
         // Optional: timestamps 0..3 around raw-in, green + block diff, Bayer out (profiling).
         VkQueryPool timestamps = VK_NULL_HANDLE;
     };

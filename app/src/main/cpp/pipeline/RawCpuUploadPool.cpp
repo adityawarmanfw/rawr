@@ -52,9 +52,10 @@ void RawCpuUploadPool::configure(uint32_t width, uint32_t height) noexcept {
     height_ = height;
 }
 
-void RawCpuUploadPool::configureRemosaic(uint32_t block, uint32_t order) noexcept {
+void RawCpuUploadPool::configureRemosaic(uint32_t block, uint32_t order, uint32_t quality) noexcept {
     remosaicBlock_ = block == 2u || block == 4u ? block : 1u;
     remosaicOrder_ = order & 3u;
+    remosaicQuality_ = quality == 0u ? 0u : 1u;
 }
 
 void RawCpuUploadPool::applyRemosaic(rawrcam::vulkan::ImportedRaw& raw, bool sourceRaw10) {
@@ -65,6 +66,7 @@ void RawCpuUploadPool::applyRemosaic(rawrcam::vulkan::ImportedRaw& raw, bool sou
     raw.remosaicker = remosaicker_.get();
     raw.cfaBlock = remosaicBlock_;
     raw.cfaOrder = remosaicOrder_;
+    raw.cfaQuality = remosaicQuality_;
     raw.sourceRaw10 = sourceRaw10;
     raw.unpacker = nullptr;
 }
@@ -385,6 +387,8 @@ void recordRemosaic(VkCommandBuffer command, const rawrcam::vulkan::ImportedRaw&
     f.raw10 = raw.sourceRaw10;
     f.block = raw.cfaBlock;
     f.order = raw.cfaOrder;
+    f.quality = raw.cfaQuality == 0u ? rawr::raw_ingress::RawRemosaicker::Quality::Fast
+                                     : rawr::raw_ingress::RawRemosaicker::Quality::Standard;
     raw.remosaicker->record(command, raw.unpackSlot, f);
 }
 }  // namespace

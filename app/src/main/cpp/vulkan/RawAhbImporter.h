@@ -88,7 +88,7 @@ struct ImportedRaw {
     // unpack/copy, remosaic the source rows (unpackSource, or importBuffer on a
     // CPU upload) into the owned image as Bayer. sourceRaw10 = MIPI RAW10 rows.
     rawr::raw_ingress::RawRemosaicker* remosaicker = nullptr;
-    uint32_t cfaBlock = 1, cfaOrder = 0;
+    uint32_t cfaBlock = 1, cfaOrder = 0, cfaQuality = 1;
     bool sourceRaw10 = false;
     // Debug parity probe (debug.rawr.raw10_parity): recorded once after the
     // unpack while the camera buffer and unpacked image are readable.

@@ -5,9 +5,13 @@
 // of the camera buffer are not (Adreno 840: 9 ms -> see RawRemosaicker.cpp).
 // One shader, passes by pc.pass:
 //  3. RAW10 only: unpack the camera rows into the raw image;
-//  0. green at every pixel into the green image, and for R/B blocks the
-//     mean of raw - green;
+// Standard:
+//  0. green at every pixel into the green image, and per R/B block the
+//     mean of raw - green and the mean green;
 //  2. Bayer out into the destination image.
+// Fast:
+//  4. per block, the mean raw;
+//  5. Bayer out from the block means.
 // Mirrors app/src/main/cpp/imaging/CfaRemosaic.h expression for expression;
 // tests/native/raw_remosaic_vulkan_test.cpp compares the two.
 layout(local_size_x = 16, local_size_y = 16) in;
@@ -17,10 +21,11 @@ layout(set = 0, binding = 1, r16ui) writeonly uniform uimage2D dst;
 // Adreno caches only readonly image loads.
 layout(set = 0, binding = 2, r16ui) writeonly uniform uimage2D rawImage;
 layout(set = 0, binding = 3, r16ui) writeonly uniform uimage2D greenImage;
-layout(std430, set = 0, binding = 4) writeonly buffer Diff { float values[]; } diff;
+// Per block: Standard (raw - green mean, green mean); Fast (raw mean, unused).
+layout(std430, set = 0, binding = 4) writeonly buffer Diff { vec2 values[]; } diff;
 layout(set = 0, binding = 5, r16ui) readonly uniform uimage2D rawRead;
 layout(set = 0, binding = 6, r16ui) readonly uniform uimage2D greenRead;
-layout(std430, set = 0, binding = 7) readonly buffer DiffRead { float values[]; } diffRead;
+layout(std430, set = 0, binding = 7) readonly buffer DiffRead { vec2 values[]; } diffRead;
 layout(push_constant) uniform P {
     uint width;
     uint height;
@@ -117,10 +122,54 @@ float bayerAt(uint x, uint y) {
     uint bx0 = uint(kx * 2 + int(px)), bx1 = uint(kx1 * 2 + int(px));
     uint by0 = uint(ky * 2 + int(py)), by1 = uint(ky1 * 2 + int(py));
     float tx = clamp(fx - float(kx), 0.0, 1.0), ty = clamp(fy - float(ky), 0.0, 1.0);
-    float d00 = diffRead.values[by0 * pc.blocksX + bx0], d10 = diffRead.values[by0 * pc.blocksX + bx1];
-    float d01 = diffRead.values[by1 * pc.blocksX + bx0], d11 = diffRead.values[by1 * pc.blocksX + bx1];
-    float top = d00 + (d10 - d00) * tx, bottom = d01 + (d11 - d01) * tx;
-    return greenAt(x, y) + top + (bottom - top) * ty;
+    // cfaBlendDiff: bilinear weights scaled by green similarity, so a block
+    // across a strong edge doesn't push R/B on the dark side to black.
+    float g0 = greenAt(x, y);
+    uint bxs[2] = uint[2](bx0, bx1), bys[2] = uint[2](by0, by1);
+    float wx[2] = float[2](1.0 - tx, tx), wy[2] = float[2](1.0 - ty, ty);
+    float sum = 0.0, weight = 0.0;
+    for (int j = 0; j < 2; ++j)
+        for (int i = 0; i < 2; ++i) {
+            vec2 dg = diffRead.values[bys[j] * pc.blocksX + bxs[i]];
+            float sigma = 0.1 * max(g0, dg.y) + 4.0;
+            float r = (dg.y - g0) / sigma;
+            float wgt = (wx[i] * wy[j] + 1e-4) / (1.0 + r * r);
+            sum += wgt * dg.x;
+            weight += wgt;
+        }
+    return g0 + sum / weight;
+}
+
+// cfaFastAt: own sample, else block means of the wanted colour interpolated.
+float fastAt(uint x, uint y) {
+    uint want = channelAt(x, y), bx = x / pc.block, by = y / pc.block;
+    if (channelAt(bx, by) == want) return rawAt(int(x), int(y));
+    if (want == 1u) {
+        int bl = bx > 0u ? int(bx) - 1 : int(bx) + 1, br = bx + 1u < pc.blocksX ? int(bx) + 1 : bl;
+        int bt = by > 0u ? int(by) - 1 : int(by) + 1, bb = by + 1u < pc.blocksY ? int(by) + 1 : bt;
+        float tx = ((float(x % pc.block) + 0.5) / float(pc.block) + 0.5) * 0.5;
+        float ty = ((float(y % pc.block) + 0.5) / float(pc.block) + 0.5) * 0.5;
+        float ml = diffRead.values[by * pc.blocksX + uint(bl)].x, mr = diffRead.values[by * pc.blocksX + uint(br)].x;
+        float mt = diffRead.values[uint(bt) * pc.blocksX + bx].x, mb = diffRead.values[uint(bb) * pc.blocksX + bx].x;
+        float gh = ml + (mr - ml) * tx;
+        float gv = mt + (mb - mt) * ty;
+        return 0.5 * (gh + gv);
+    }
+    uint parity = want == 0u ? pc.parityR : pc.parityB;
+    uint py = parity >> 1u, px = parity & 1u;
+    float n = float(pc.block), half_ = float(pc.block - 1u) * 0.5;
+    float fx = (float(x) - float(px * pc.block) - half_) / (2.0 * n);
+    float fy = (float(y) - float(py * pc.block) - half_) / (2.0 * n);
+    int kxMax = int((pc.blocksX - 1u - px) / 2u), kyMax = int((pc.blocksY - 1u - py) / 2u);
+    int kx = clamp(int(floor(fx)), 0, kxMax), ky = clamp(int(floor(fy)), 0, kyMax);
+    int kx1 = min(kx + 1, kxMax), ky1 = min(ky + 1, kyMax);
+    uint bx0 = uint(kx * 2 + int(px)), bx1 = uint(kx1 * 2 + int(px));
+    uint by0 = uint(ky * 2 + int(py)), by1 = uint(ky1 * 2 + int(py));
+    float tx = clamp(fx - float(kx), 0.0, 1.0), ty = clamp(fy - float(ky), 0.0, 1.0);
+    float m00 = diffRead.values[by0 * pc.blocksX + bx0].x, m10 = diffRead.values[by0 * pc.blocksX + bx1].x;
+    float m01 = diffRead.values[by1 * pc.blocksX + bx0].x, m11 = diffRead.values[by1 * pc.blocksX + bx1].x;
+    float top = m00 + (m10 - m00) * tx, bottom = m01 + (m11 - m01) * tx;
+    return top + (bottom - top) * ty;
 }
 
 // Passes 0 and 2 run one invocation per 2x2 pixel group (always inside one
@@ -129,6 +178,7 @@ float bayerAt(uint x, uint y) {
 // blocks never straddle workgroups; pass 0 sums each block's groups in
 // shared memory.
 shared float partialSum[16][16];
+shared float partialGreen[16][16];
 shared uint partialCount[16][16];
 
 void main() {
@@ -142,26 +192,38 @@ void main() {
     }
     uint x0 = x * 2u, y0 = y * 2u;
     uint x1 = min(pc.width, x0 + 2u), y1 = min(pc.height, y0 + 2u);
-    if (pc.pass == 2u) {
+    if (pc.pass == 2u || pc.pass == 5u) {
         for (uint py = y0; py < y1; ++py)
-            for (uint px = x0; px < x1; ++px)
-                imageStore(dst, ivec2(int(px), int(py)), uvec4(roundDn(bayerAt(px, py)), 0u, 0u, 0u));
+            for (uint px = x0; px < x1; ++px) {
+                float v = pc.pass == 2u ? bayerAt(px, py) : fastAt(px, py);
+                imageStore(dst, ivec2(int(px), int(py)), uvec4(roundDn(v), 0u, 0u, 0u));
+            }
         return;
     }
-    // Pass 0: green over the group; for R/B blocks the partial sum of raw - green.
+    // Pass 0: green over the group; for R/B blocks the partial sums of raw -
+    // green and of green. Pass 4: the partial sum of raw.
     bool colour = channelAt(x0 / pc.block, y0 / pc.block) != 1u;
-    float sum = 0.0;
+    float sum = 0.0, greenSum = 0.0;
     uint count = 0u;
-    float g4[4];
-    greenGroup(x0, y0, g4);
-    for (uint py = y0; py < y1; ++py)
-        for (uint px = x0; px < x1; ++px, ++count) {
-            uint g = roundDn(g4[(py - y0) * 2u + (px - x0)]);
-            imageStore(greenImage, ivec2(int(px), int(py)), uvec4(g, 0u, 0u, 0u));
-            if (colour) sum += rawAt(int(px), int(py)) - float(g);
-        }
+    if (pc.pass == 4u) {
+        for (uint py = y0; py < y1; ++py)
+            for (uint px = x0; px < x1; ++px, ++count) sum += rawAt(int(px), int(py));
+    } else {
+        float g4[4];
+        greenGroup(x0, y0, g4);
+        for (uint py = y0; py < y1; ++py)
+            for (uint px = x0; px < x1; ++px, ++count) {
+                uint g = roundDn(g4[(py - y0) * 2u + (px - x0)]);
+                imageStore(greenImage, ivec2(int(px), int(py)), uvec4(g, 0u, 0u, 0u));
+                if (colour) {
+                    sum += rawAt(int(px), int(py)) - float(g);
+                    greenSum += float(g);
+                }
+            }
+    }
     uvec2 l = gl_LocalInvocationID.xy;
     partialSum[l.y][l.x] = sum;
+    partialGreen[l.y][l.x] = greenSum;
     partialCount[l.y][l.x] = count;
     barrier();
     // The block's first group adds up the block (n/2 x n/2 groups).
@@ -169,12 +231,16 @@ void main() {
     if (x % groups != 0u || y % groups != 0u) return;
     uint bx = x0 / pc.block, by = y0 / pc.block;
     if (bx >= pc.blocksX || by >= pc.blocksY) return;
-    float total = 0.0;
+    float total = 0.0, greenTotal = 0.0;
     uint pixels = 0u;
     for (uint j = 0u; j < groups; ++j)
         for (uint i = 0u; i < groups; ++i) {
             total += partialSum[l.y + j][l.x + i];
+            greenTotal += partialGreen[l.y + j][l.x + i];
             pixels += partialCount[l.y + j][l.x + i];
         }
-    diff.values[by * pc.blocksX + bx] = colour && pixels != 0u ? total / float(pixels) : 0.0;
+    if (pc.pass == 4u)
+        diff.values[by * pc.blocksX + bx] = vec2(pixels != 0u ? total / float(pixels) : 0.0, 0.0);
+    else
+        diff.values[by * pc.blocksX + bx] = colour && pixels != 0u ? vec2(total, greenTotal) / float(pixels) : vec2(0.0);
 }

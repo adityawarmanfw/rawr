@@ -207,6 +207,8 @@ std::optional<LensRoute> CameraDeviceSession::select(const LensRoute& requested,
     parsed->rawFormat = route.stream.format;
     parsed->rawReaderUsage = route.readerUsage;
     parsed->cfaBlock = route.cfaBlock;
+    parsed->cfaLiveQuality = route.cfaLiveQuality;
+    parsed->cfaPhotoQuality = route.cfaPhotoQuality;
     if (route.cfaOrder && int32_t(*route.cfaOrder) != parsed->camera2Cfa) {
         // The black pattern is per sensor position: undo the reported order, apply the profile's.
         const auto pattern = geometry::reorderRggbByCode(parsed->baselineBlackLevelPhysicalRggb, parsed->camera2Cfa);
@@ -216,7 +218,8 @@ std::optional<LensRoute> CameraDeviceSession::select(const LensRoute& requested,
     }
     if (route.cfaBlock > 1 || route.cfaOrder)
         diag("CAMERA_CFA_OVERRIDE lens=" + route.lensId + " block=" + std::to_string(route.cfaBlock) +
-             " order=" + std::to_string(parsed->rawPreviewCfa));
+             " order=" + std::to_string(parsed->rawPreviewCfa) + " live=" + std::to_string(route.cfaLiveQuality) +
+             " photo=" + std::to_string(route.cfaPhotoQuality));
 
     cameraContext_ = std::make_shared<const metadata::CameraContextMetadata>(std::move(*parsed));
     characteristics_ = chars;

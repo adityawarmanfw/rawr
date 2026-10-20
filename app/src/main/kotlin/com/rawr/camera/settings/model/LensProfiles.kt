@@ -113,11 +113,17 @@ data class LensProfile(
      */
     val cfaBlock: Int = 1,
     /** Block-level colour order ("RGGB", "GRBG", "GBRG", "BGGR") replacing the camera's; null keeps it. */
-    val cfaOrder: String? = null
+    val cfaOrder: String? = null,
+    /** Remosaic for the viewfinder, video and merge frames: "fast" or "standard" (GPU). */
+    val cfaLive: String = "standard",
+    /** Remosaic for single photos: "standard" or "high" (CPU). */
+    val cfaPhoto: String = "high"
 )
 
 val CFA_BLOCKS = listOf(1, 2, 4)
 val CFA_ORDERS = listOf("RGGB", "GRBG", "GBRG", "BGGR")
+val CFA_LIVE_QUALITIES = listOf("fast", "standard")
+val CFA_PHOTO_QUALITIES = listOf("standard", "high")
 
 /** Problems with one lens, in display order; empty when the lens is valid. */
 fun validateLensProfile(lens: LensProfile, others: List<LensProfile>): List<String> = buildList {

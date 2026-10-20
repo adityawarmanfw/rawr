@@ -20,6 +20,7 @@ namespace {
 struct Case {
     std::uint32_t width, height, block, order, strideBytes;
     bool raw10;
+    bool fast = false;
 };
 
 bool runCase(vktest::Ctx& c, rawr::raw_ingress::RawRemosaicker& remosaicker, VkCommandBuffer cmd, VkFence fence,
@@ -53,7 +54,9 @@ bool runCase(vktest::Ctx& c, rawr::raw_ingress::RawRemosaicker& remosaicker, VkC
         }
     }
     auto expected = pixels;
-    rawrcam::imaging::remosaicBlockCfa(expected.data(), k.width, k.height, k.block, k.order, 1);
+    rawrcam::imaging::remosaicBlockCfa(
+        expected.data(), k.width, k.height, k.block, k.order, 1,
+        k.fast ? rawrcam::imaging::CfaRemosaicQuality::Fast : rawrcam::imaging::CfaRemosaicQuality::Standard);
 
     const VkDeviceSize srcBytes = (packed.size() + 3u) & ~VkDeviceSize(3);
     const VkMemoryPropertyFlags host = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
@@ -90,6 +93,8 @@ bool runCase(vktest::Ctx& c, rawr::raw_ingress::RawRemosaicker& remosaicker, VkC
     f.raw10 = k.raw10;
     f.block = k.block;
     f.order = k.order;
+    f.quality = k.fast ? rawr::raw_ingress::RawRemosaicker::Quality::Fast
+                       : rawr::raw_ingress::RawRemosaicker::Quality::Standard;
     remosaicker.record(cmd, slot, f);
     b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
     b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -122,8 +127,9 @@ bool runCase(vktest::Ctx& c, rawr::raw_ingress::RawRemosaicker& remosaicker, VkC
     vktest::delBuf(c.dev, dst);
     vktest::delBuf(c.dev, src);
     const bool ok = worse == 0 && off1 * 1000 < expected.size();
-    std::printf("%s %ux%u block=%u order=%u %s stride=%u off1=%zu worse=%zu first=(%zu,%zu)\n", ok ? "PASS" : "FAIL",
-                k.width, k.height, k.block, k.order, k.raw10 ? "RAW10" : "RAW16", k.strideBytes, off1, worse,
+    std::printf("%s %ux%u block=%u order=%u %s %s stride=%u off1=%zu worse=%zu first=(%zu,%zu)\n",
+                ok ? "PASS" : "FAIL", k.width, k.height, k.block, k.order, k.fast ? "fast" : "standard",
+                k.raw10 ? "RAW10" : "RAW16", k.strideBytes, off1, worse,
                 first % k.width, first / k.width);
     return ok;
 }
@@ -161,6 +167,9 @@ int main() {
             ok = runCase(c, *remosaicker, cmd, fence, 0, {w, h, 2, 3, w * 2 + 128, false}) && ok;   // padded RAW16
             ok = runCase(c, *remosaicker, cmd, fence, 1, {w, h, 4, 0, w / 4 * 5 + 3, true}) && ok;  // RAW10
             ok = runCase(c, *remosaicker, cmd, fence, 2, {40, 24, 2, 0, 80, false}) && ok;         // tiny
+            for (std::uint32_t block : {2u, 4u})
+                for (std::uint32_t order : {0u, 3u})
+                    ok = runCase(c, *remosaicker, cmd, fence, slot++ % 3, {w, h, block, order, w * 2, false, true}) && ok;
         }
         vkDestroyFence(c.dev, fence, nullptr);
         vkDestroyCommandPool(c.dev, pool, nullptr);

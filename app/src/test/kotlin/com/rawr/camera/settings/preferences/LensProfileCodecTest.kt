@@ -53,7 +53,9 @@ class LensProfileCodecTest {
                 captureBurst = 3,
                 captureBurstSequential = true,
                 cfaBlock = 4,
-                cfaOrder = "GRBG"
+                cfaOrder = "GRBG",
+                cfaLive = "fast",
+                cfaPhoto = "standard"
             )
         val json = LensProfileCodec.encode(listOf(seamless))
         assertEquals(seamless, requireNotNull(LensProfileCodec.decode(json)).single())
@@ -64,6 +66,7 @@ class LensProfileCodecTest {
         assertTrue(lens.getBoolean("captureBurstSequential"))
         assertEquals(4, lens.getJSONObject("cfa").getInt("block"))
         assertEquals("GRBG", lens.getJSONObject("cfa").getString("order"))
+        assertEquals("fast", lens.getJSONObject("cfa").getString("live"))
     }
 
     @Test

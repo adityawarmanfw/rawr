@@ -69,6 +69,7 @@ struct FrameSubmitConfiguration {
     // Same-colour block side of the camera's RAW; >1 routes ingress through
     // the GPU remosaic so every consumer reads Bayer in `cfa` order.
     uint32_t cfaBlock = 1;
+    uint32_t cfaQuality = 1;  // imaging::CfaRemosaicQuality: Fast 0 / Standard 1
     int sensorOrientationDegrees = 0;
     uint32_t diagnosticMode = 0;
     bool experimentalZeroCopy = false;

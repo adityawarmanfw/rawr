@@ -89,6 +89,11 @@ struct LensRoute {
     // order (CfaPattern code) replacing the camera's; nullopt keeps it.
     uint32_t cfaBlock = 1;
     std::optional<uint32_t> cfaOrder;
+    // Remosaic quality (imaging::CfaRemosaicQuality): live = viewfinder, video
+    // and merge frames (GPU: Fast 0 / Standard 1); photo = single stills
+    // (CPU: Standard 1 / High 2).
+    uint32_t cfaLiveQuality = 1;
+    uint32_t cfaPhotoQuality = 2;
 };
 
 struct CameraProfile {

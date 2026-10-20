@@ -454,6 +454,8 @@ std::string serializeCameraProfile(const CameraProfile& profile) {
         if (r.cfaBlock > 1 || r.cfaOrder) {
             out += ",\"cfa\":{\"block\":" + std::to_string(r.cfaBlock);
             if (r.cfaOrder) out += std::string(",\"order\":\"") + cfaOrderName(*r.cfaOrder) + "\"";
+            out += std::string(",\"live\":\"") + (r.cfaLiveQuality == 0 ? "fast" : "standard") + "\"";
+            out += std::string(",\"photo\":\"") + (r.cfaPhotoQuality == 2 ? "high" : "standard") + "\"";
             out += '}';
         }
         out += '}';
@@ -532,6 +534,8 @@ std::optional<CameraProfile> readProfile(const Json& root, std::string* error) {
                     return std::nullopt;
                 }
             }
+            r.cfaLiveQuality = c->str("live", "standard") == "fast" ? 0u : 1u;
+            r.cfaPhotoQuality = c->str("photo", "high") == "standard" ? 1u : 2u;
         }
         if (!readLevels(l.get("levels"), r.levels)) {
             if (error) *error = "invalid levels for lens " + r.lensId;

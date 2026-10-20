@@ -59,6 +59,7 @@ class RealtimePipeline final : public RealtimeResources {
 
    private:
     bool configureGeometry(uint64_t generation, uint32_t width, uint32_t height, uint32_t cfa, uint32_t cfaBlock,
+                           uint32_t cfaQuality,
                            const std::array<float, 4>& black, float white, int sensorOrientationDegrees);
     void createFrameProcessor();
     void destroyCameraResources(bool preserveHqStill = false, bool teardownFilm = true) noexcept;
@@ -86,6 +87,7 @@ class RealtimePipeline final : public RealtimeResources {
     uint64_t generation_ = 0;
     uint32_t rawWidth_ = 0, rawHeight_ = 0, previewWidth_ = 0, previewHeight_ = 0, cfa_ = 0;
     uint32_t cfaBlock_ = 1;  // >1: ingress remosaics the block CFA (CameraContextMetadata::cfaBlock)
+    uint32_t cfaQuality_ = 1;  // CameraContextMetadata::cfaLiveQuality
     std::array<float, 4> black_{};
     float white_ = 0;
     int sensorOrientationDegrees_ = 0, displayRotationDegrees_ = 0, scopeDeviceRotationDegrees_ = 0;

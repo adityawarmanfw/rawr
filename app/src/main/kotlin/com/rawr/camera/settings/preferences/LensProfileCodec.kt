@@ -1,7 +1,9 @@
 package com.rawr.camera.settings.preferences
 
 import com.rawr.camera.settings.model.CFA_BLOCKS
+import com.rawr.camera.settings.model.CFA_LIVE_QUALITIES
 import com.rawr.camera.settings.model.CFA_ORDERS
+import com.rawr.camera.settings.model.CFA_PHOTO_QUALITIES
 import com.rawr.camera.settings.model.EXTENDED_ISO_MAX
 import com.rawr.camera.settings.model.EXTENDED_SHUTTER_MAX_NS
 import com.rawr.camera.settings.model.LensExposure
@@ -71,7 +73,11 @@ internal object LensProfileCodec {
             if (lens.captureBurst > 0) put("captureBurst", lens.captureBurst)
             if (lens.captureBurstSequential) put("captureBurstSequential", true)
             if (lens.cfaBlock > 1 || lens.cfaOrder != null) {
-                put("cfa", JSONObject().put("block", lens.cfaBlock).apply { lens.cfaOrder?.let { put("order", it) } })
+                put(
+                    "cfa",
+                    JSONObject().put("block", lens.cfaBlock).put("live", lens.cfaLive).put("photo", lens.cfaPhoto)
+                        .apply { lens.cfaOrder?.let { put("order", it) } }
+                )
             }
         }
 
@@ -111,7 +117,9 @@ internal object LensProfileCodec {
             captureBurst = o.optInt("captureBurst").coerceIn(0, 30),
             captureBurstSequential = o.optBoolean("captureBurstSequential"),
             cfaBlock = o.optJSONObject("cfa")?.optInt("block", 1)?.takeIf { it in CFA_BLOCKS } ?: 1,
-            cfaOrder = o.optJSONObject("cfa")?.optString("order")?.takeIf { it in CFA_ORDERS }
+            cfaOrder = o.optJSONObject("cfa")?.optString("order")?.takeIf { it in CFA_ORDERS },
+            cfaLive = o.optJSONObject("cfa")?.optString("live")?.takeIf { it in CFA_LIVE_QUALITIES } ?: "standard",
+            cfaPhoto = o.optJSONObject("cfa")?.optString("photo")?.takeIf { it in CFA_PHOTO_QUALITIES } ?: "high"
         )
     }
 

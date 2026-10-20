@@ -100,7 +100,7 @@ void FrameSubmitCoordinator::configure(const FrameSubmitConfiguration& config) {
         raw10ParityEnabled_ = __system_property_get("debug.rawr.raw10_parity", value) > 0 && value[0] == '1';
     }
     cpuUpload_.configure(config_.rawWidth, config_.rawHeight);
-    cpuUpload_.configureRemosaic(config_.cfaBlock, config_.cfa);
+    cpuUpload_.configureRemosaic(config_.cfaBlock, config_.cfa, config_.cfaQuality);
     cpuIngressActive_.store(false, std::memory_order_relaxed);
     raw16GpuCopyDeferredLogged_ = false;
     pipelineAuditMetadataCount_ = 0;
@@ -388,7 +388,8 @@ rawrcam::vulkan::ImportedRaw& FrameSubmitCoordinator::ingestRaw(const SubmitPara
                 raw16GpuCopyLogged_ = true;
                 const std::string line = std::string(raw.remosaicker ? "RAW_INGRESS_GPU_REMOSAIC" : "RAW_INGRESS_GPU_COPY") +
                                          " format=RAW16 rowStrideBytes=" + std::to_string(camera.rowStrideBytes) +
-                                         " cfaBlock=" + std::to_string(config_.cfaBlock);
+                                         " cfaBlock=" + std::to_string(config_.cfaBlock) +
+                                         " quality=" + (config_.cfaQuality == 0 ? "fast" : "standard");
                 LOGI("%s", line.c_str());
                 lifecyclePort_.postDiagnostic(line);
             }

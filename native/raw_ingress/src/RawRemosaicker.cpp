@@ -155,7 +155,7 @@ void RawRemosaicker::ensureScratch(std::uint32_t width, std::uint32_t height, st
                                                   VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
         scratch_.green = rawr::vk::createOwnedImage(context_.physicalDevice, d, width, height, VK_FORMAT_R16_UINT,
                                                     VK_IMAGE_USAGE_STORAGE_BIT);
-        make(VkDeviceSize(bw) * bh * 4u, scratch_.diff, scratch_.diffMemory);
+        make(VkDeviceSize(bw) * bh * 8u, scratch_.diff, scratch_.diffMemory);
     } catch (...) {
         releaseScratch();
         throw;
@@ -255,10 +255,11 @@ void RawRemosaicker::record(VkCommandBuffer command, std::uint32_t slot, const F
     }
     stamp(1);
     // One invocation per 2x2 pixel group (see the shader).
-    pass(0u, (f.width + 1u) / 2u, (f.height + 1u) / 2u);  // green + block colour difference
+    const bool fast = f.quality == Quality::Fast;
+    pass(fast ? 4u : 0u, (f.width + 1u) / 2u, (f.height + 1u) / 2u);  // block means / green + colour difference
     memoryBarrier(command, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
     stamp(2);
-    pass(2u, (f.width + 1u) / 2u, (f.height + 1u) / 2u);  // Bayer out
+    pass(fast ? 5u : 2u, (f.width + 1u) / 2u, (f.height + 1u) / 2u);  // Bayer out
     stamp(3);
 }
 
