@@ -75,6 +75,8 @@ struct JpegCaptureContext {
     // time, the effective highlight stage (-1 unknown, 0 off, 1 colour
     // propagation, 2 Inpaint Opposed) and whether defringe ran.
     double postTailMs = 0.0;
+    double captureSharpenMs = 0.0;  // Wall time; excludes reused Renderer cache work.
+    bool captureSharpenCached = false;
     int highlightStage = -1;
     bool defringeEnabled = false;
     double renderTotalMs = 0.0;

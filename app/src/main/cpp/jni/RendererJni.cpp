@@ -123,6 +123,9 @@ rawrcam::renderer::RenderOptions options(JNIEnv* env, jstring recipe, int workin
     const auto developSettings = rawrcam::jni::readRendererDevelopSettings(json);
     o.develop = developSettings;
     rawrcam::develop::applyDevelopSettings(c, developSettings);
+    // Capture sharpening runs on the full-resolution demosaic cache
+    // (RendererEngine::captureSharpened), never on the resampled preview.
+    c.captureSharpenIterations = 0;
     c.denoiseStrength = developSettings.denoiseStrength;
     c.denoiseDetail = developSettings.denoiseDetail;
     c.denoiseForceY = developSettings.denoiseForceY;
@@ -226,7 +229,7 @@ rawrcam::renderer::RenderOptions options(JNIEnv* env, jstring recipe, int workin
         c.gainmapParams = uhDefaults.toGainmapParams();
         const float aeGain = std::max(float(t.aePostGain), 1.0e-6f);
         if (c.filmEnabled) {
-            c.gainmapParams.hdrExposure = std::exp2(rawrcam::color::filmExposureEv(c.filmLook, aeGain));
+            c.gainmapParams.hdrExposure = std::exp2(rawrcam::color::filmExposureEv(c.filmLook, aeGain, float(t.exposureEV)));
         } else {
             c.gainmapParams.hdrExposure = aeGain * std::exp2(float(t.exposureEV));
         }
@@ -362,6 +365,7 @@ Java_com_rawr_camera_renderer_RendererNative_render(JNIEnv* e, jobject, jlong id
         array("whiteBalanceRggb", wb, 4);
         s->source.wb = {wb[0], (wb[1] + wb[2]) * .5f, wb[3]};
         array("cameraToLinearSrgbRowMajor", s->source.cameraToSrgb.data(), 9);
+        s->source.dcpWeight1 = std::clamp(float(frame.number("calibrationWeight1", s->source.dcpWeight1)), 0.0f, 1.0f);
         resolveAdaptiveTone(*s, o);
         const auto proxyPath = path + ".proxy";
         if (o.bayerBin2x) path += "-natural2x-f32-v1";
@@ -394,6 +398,17 @@ Java_com_rawr_camera_renderer_RendererNative_render(JNIEnv* e, jobject, jlong id
             engine.prepare(s->source, path, o);
             __android_log_print(ANDROID_LOG_INFO, "RawrRenderer", "Working RAW ready in %lldms",
                 static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-prepareStarted).count()));
+        }
+        // The quick proxy stands in until the full cache exists; it stays unsharpened.
+        double captureSharpenMs = 0.0;
+        bool captureSharpenCached = false;
+        if (o.develop.captureSharpenIterations > 0 && !o.quickProxy) {
+            engine.stage = 3;
+            path = engine.captureSharpened(s->source, path, s->source.info().width / (o.bayerBin2x ? 2u : 1u),
+                                           s->source.info().height / (o.bayerBin2x ? 2u : 1u),
+                                           o.develop.captureSharpenIterations);
+            captureSharpenMs = engine.lastCaptureSharpenMs();
+            captureSharpenCached = engine.lastCaptureSharpenCached();
         }
         jint region[4]{0, 0, jint(s->source.crop[2]), jint(s->source.crop[3])};
         if (crop) {
@@ -515,6 +530,8 @@ Java_com_rawr_camera_renderer_RendererNative_render(JNIEnv* e, jobject, jlong id
             c.gainmapMs = completion.gainmapMs;
             // Stage labels and the defringe/highlight-tone tail, as on still captures.
             c.postTailMs = completion.postTailMs;
+            c.captureSharpenMs = captureSharpenMs;
+            c.captureSharpenCached = captureSharpenCached;
             c.highlightStage = completion.highlightStage;
             c.defringeEnabled = completion.defringeEnabled;
             c.filmRendered = completion.filmRendered;
@@ -523,7 +540,7 @@ Java_com_rawr_camera_renderer_RendererNative_render(JNIEnv* e, jobject, jlong id
             c.renderEngineBuildMs = completion.engineBuildMs;
             c.queueGapsMs = completion.queueGapsMs;
             c.readbackMs = completion.readbackMs;
-            c.renderTotalMs = engine.lastDemosaicMs() + completion.totalMs;
+            c.renderTotalMs = engine.lastDemosaicMs() + captureSharpenMs + completion.totalMs;
             // UltraHDR intent: mux metadata mirrors the render gainmap params
             // so the file and the GPU encode can never drift field-by-field
             // (same toGainmapParams() defaults as still captures).

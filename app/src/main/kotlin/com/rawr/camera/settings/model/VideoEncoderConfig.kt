@@ -79,7 +79,7 @@ enum class KeyframeInterval(val wireValue: Int, val label: String) {
  */
 data class VideoEncoderConfig(
     /** 8 = HEVC Main, 10 = HEVC Main10. */
-    val bitDepth: Int = 10,
+    val bitDepth: Int = 8,
     val bitrate1080pMbps: Int = 12,
     val bitrate4kMbps: Int = 40,
     val bitrateOpenGateMbps: Int = 60,

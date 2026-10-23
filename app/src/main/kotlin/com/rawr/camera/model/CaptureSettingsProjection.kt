@@ -11,11 +11,13 @@ internal fun SettingsValues.toRenderProfileQuickState(): RenderProfileQuickState
     val builtIns = listOf(ColorRenderProfile.RawrBase, if (isVideo) ColorRenderProfile.Rec709 else ColorRenderProfile.SRgb)
     val selected = regularLutProfileId()?.takeIf { regularRenderProfile() == ColorRenderProfile.UserLut && usable.any { p -> p.id == it } }
     val agx = AgxPreset.entries.map { RenderProfileQuickOption(RenderProfileSelection.Agx(it), it.label) }
+    val savedAgx = agxLooks.map { RenderProfileQuickOption(RenderProfileSelection.SavedAgx(it.id), it.name) }
     return RenderProfileQuickState(
-        options = listOf(RenderProfileQuickOption(RenderProfileSelection.BuiltIn(builtIns[0]), builtIns[0].label)) + agx +
+        options = listOf(RenderProfileQuickOption(RenderProfileSelection.BuiltIn(builtIns[0]), builtIns[0].label)) + agx + savedAgx +
             builtIns.drop(1).map { RenderProfileQuickOption(RenderProfileSelection.BuiltIn(it), it.label) } +
             usable.map { RenderProfileQuickOption(RenderProfileSelection.Imported(it.id), it.name) },
         selectedId = selected?.let { RenderProfileSelection.Imported(it) }
+            ?: matchingAgxLook()?.let { RenderProfileSelection.SavedAgx(it.id) }.takeIf { isAgxActive() }
             ?: RenderProfileSelection.Agx(regularAgxPreset()).takeIf { regularRenderProfile() == ColorRenderProfile.AgX }
             ?: RenderProfileSelection.BuiltIn(regularRenderProfile().takeIf { it in builtIns } ?: ColorRenderProfile.RawrBase),
         agx = if (isAgxActive()) AgxQuickState(activeAgxValues(), regularAgxPreset().defaults) else null

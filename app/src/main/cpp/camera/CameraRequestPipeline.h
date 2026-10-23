@@ -27,6 +27,11 @@ class CameraRequestPipeline final {
     bool captureBracket(ACameraCaptureSession*, const ACaptureRequest* repeating, CameraSessionCallbackContext*,
                         const CameraControlState&, const std::vector<BracketExposure>&, uint64_t tagId,
                         const PrepareRequest& prepare = {});
+    // The same AE-off copy (one exposure) as the new repeating request, tagged
+    // tagId. The caller restores the normal repeating request with submit().
+    bool repeatBracket(ACameraCaptureSession*, const ACaptureRequest* repeating, CameraSessionCallbackContext*,
+                       const CameraControlState&, const BracketExposure&, uint64_t tagId,
+                       const PrepareRequest& prepare = {});
     // One-shot copy of the repeating request carrying an AF trigger. The
     // repeating request itself stays at IDLE: a trigger left in it repeats on
     // every frame until replaced and restarts the AF scan (vivo X300 Ultra:
@@ -39,6 +44,8 @@ class CameraRequestPipeline final {
 
    private:
     const CameraRequestProvenance* attach(ACaptureRequest*, const CameraControlState&, bool focusStart = false);
+    bool prepareBracketRequest(ACaptureRequest*, const CameraControlState&, const BracketExposure&, uint64_t tagId,
+                               const PrepareRequest&);
     void diag(const std::string& line) const {
         if (diagnostic_) diagnostic_(line);
     }

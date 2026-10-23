@@ -26,4 +26,10 @@ CameraKeyInjectionResult applyCameraKeySettings(ACaptureRequest* request, const 
                                                 CameraKeySetting::Scope scope, const char* origin,
                                                 const std::function<void(const std::string&)>& diag);
 
+// Logs every entry of a request, one line per tag ("CAMERA_REQUEST_DUMP
+// kind=<kind> tag=0x... type=... count=... values=..."), for comparing what a
+// request actually carries (diagnostics only).
+void dumpCaptureRequest(const ACaptureRequest* request, const char* kind,
+                        const std::function<void(const std::string&)>& diag);
+
 }  // namespace rawrcam::camera

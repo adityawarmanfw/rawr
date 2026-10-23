@@ -131,6 +131,7 @@ class SingleFrameCoordinator::Impl {
         cancelAcquisition(reason);
     }
     bool rawSnapshotConfigured() const noexcept { return !disabled_ && width_ && height_; }
+    uint64_t rawSnapshotBytes() const noexcept { return rawSnapshotConfigured() ? uint64_t(width_) * height_ * 2 : 0; }
     bool captureRequested() const noexcept {
         for (const auto& entry : entries()) {
             if (!entry->handedOff.load()) return true;
@@ -466,6 +467,7 @@ void SingleFrameCoordinator::configureRawSnapshot(uint32_t width, uint32_t heigh
 }
 void SingleFrameCoordinator::disableRawSnapshot(const std::string& reason) { impl_->disableRawSnapshot(reason); }
 bool SingleFrameCoordinator::rawSnapshotConfigured() const noexcept { return impl_->rawSnapshotConfigured(); }
+uint64_t SingleFrameCoordinator::rawSnapshotBytes() const noexcept { return impl_->rawSnapshotBytes(); }
 bool SingleFrameCoordinator::captureRequested() const noexcept { return impl_->captureRequested(); }
 uint64_t SingleFrameCoordinator::requestRawStillCapture(encoding::dng::DngCaptureContext dngContext,
                                                         rawrcam::capture::JpegCaptureRequest jpegContext) {

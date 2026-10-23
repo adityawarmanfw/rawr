@@ -20,7 +20,9 @@
 #include <type_traits>
 
 #include "capture/CaptureRequest.h"
+#include "capture/BurstLimits.h"
 #include "capture/persistence/AcquiredRawJournal.h"
+#include "color/DcpProfile.h"
 
 namespace rawrcam::capture::persistence {
 namespace {
@@ -43,10 +45,24 @@ constexpr uint64_t magicV7 = 0x524157524a4f4207ull;
 // the lossless default, so "Uncompressed" was ignored for multiframe DNGs).
 constexpr uint64_t magicV8 = 0x524157524a4f4208ull;
 // v9 preserves a separate friendly EXIF model without changing RAW identity.
-constexpr uint64_t magic = 0x524157524a4f4209ull;
+constexpr uint64_t magicV9 = 0x524157524a4f4209ull;
 // v10 acquisition journals place packed frames first and the finalized v9
 // metadata at the end. The prefix stores its offset; RAW never has to move.
-constexpr uint64_t acquisitionMagic = 0x524157524a4f420aull;
+constexpr uint64_t acquisitionMagicV10 = 0x524157524a4f420aull;
+// v11/v12 append capture-sharpening iterations to ordinary/acquisition metadata.
+constexpr uint64_t magicV11 = 0x524157524a4f420bull;
+constexpr uint64_t acquisitionMagicV12 = 0x524157524a4f420cull;
+// v13/v14 append the lens profile's distortion calibration (camera context
+// profileDistortion, one per job: every frame shares the lens).
+constexpr uint64_t magicV13 = 0x524157524a4f420dull;
+constexpr uint64_t acquisitionMagicV14 = 0x524157524a4f420eull;
+// v15/v16 append the lens's camera profile (.dcp bytes, empty for none); the
+// context's color already holds its calibration.
+constexpr uint64_t magicV15 = 0x524157524a4f420full;
+constexpr uint64_t acquisitionMagicV16 = 0x524157524a4f4210ull;
+// v17/v18 append the lens profile's mirror (geometry::LensMirror bits).
+constexpr uint64_t magic = 0x524157524a4f4211ull;
+constexpr uint64_t acquisitionMagic = 0x524157524a4f4212ull;
 constexpr uint64_t acquisitionPrefixBytes = 2 * (sizeof(uint32_t) + sizeof(uint64_t));
 std::mutex acquisitionMutex;
 constexpr uint64_t footer = 0x434f4d4d49545445ull;
@@ -325,25 +341,58 @@ std::string jobPath(const std::string& filesDir, const std::string& name) {
         throw std::runtime_error("capture_job_name_invalid");
     return filesDir + "/still_jobs/" + name + ".job";
 }
-std::shared_ptr<void> reserve(const std::string& filesDir, uint64_t rawBytes, bool cpuAcquisition) {
-    std::lock_guard<std::mutex> lock(budgetMutex);
+namespace {
+// MemAvailable from /proc/meminfo; 0 when unreadable.
+uint64_t availableMemory() {
+    std::ifstream in("/proc/meminfo");
+    std::string key;
+    uint64_t kib = 0;
+    std::string unit;
+    while (in >> key >> kib >> unit)
+        if (key == "MemAvailable:") return kib * 1024;
+    return 0;
+}
+// Called with budgetMutex held.
+bool admitLocked(const std::string& filesDir, uint64_t rawBytes, bool cpuAcquisition, uint64_t& storage,
+                 uint64_t& cpu) {
     struct statvfs disk{};
     const long pages = sysconf(_SC_PHYS_PAGES), pageSize = sysconf(_SC_PAGESIZE);
-    if (!rawBytes || rawBytes > 8ull * 1024 * MiB || statvfs(filesDir.c_str(), &disk) != 0) return {};
+    // Disk-backed bursts may contain up to 30 independently validated 1 GiB frames.
+    // This bounds arithmetic; actual admission still checks available disk and CPU memory below.
+    constexpr uint64_t maxBurstBytes = uint64_t(capture::kMaxBurstFrames) * 1024 * MiB;
+    if (!rawBytes || rawBytes > maxBurstBytes || statvfs(filesDir.c_str(), &disk) != 0) return false;
     uint64_t cpuLimit = 128 * MiB;
     const uint64_t physical = pages > 0 && pageSize > 0 ? uint64_t(pages) * uint64_t(pageSize) : 0;
     if (physical) cpuLimit = std::clamp(physical / 32, 64 * MiB, 256 * MiB);
-    uint64_t cpu = cpuAcquisition ? rawBytes : 0;
+    cpu = cpuAcquisition ? rawBytes : 0;
     // One frame alone is always admitted when it fits in an eighth of RAM:
     // a 200 MP RAW16 frame (382 MiB) is larger than the queue budget.
     if (!reservedCpu) cpuLimit = std::max(cpuLimit, std::min(cpu, physical / 8));
-    uint64_t storage = rawBytes * 2 + 32 * MiB;
+    // More while the system keeps an eighth of RAM (at least 1 GiB) available
+    // after this frame, up to a quarter of RAM reserved: back-to-back 200 MP
+    // stills on large-RAM phones instead of a refused press.
+    if (cpu + reservedCpu > cpuLimit && physical && cpu + reservedCpu <= physical / 4) {
+        const uint64_t available = availableMemory();
+        if (available >= cpu + std::max<uint64_t>(1024 * MiB, physical / 8)) cpuLimit = cpu + reservedCpu;
+    }
+    storage = rawBytes * 2 + 32 * MiB;
     const uint64_t free = uint64_t(disk.f_bavail) * disk.f_frsize;
-    if (cpu + reservedCpu > cpuLimit || free < reservedDisk + storage + 512 * MiB) return {};
+    return cpu + reservedCpu <= cpuLimit && free >= reservedDisk + storage + 512 * MiB;
+}
+}  // namespace
+std::shared_ptr<void> reserve(const std::string& filesDir, uint64_t rawBytes, bool cpuAcquisition) {
+    std::lock_guard<std::mutex> lock(budgetMutex);
+    uint64_t storage = 0, cpu = 0;
+    if (!admitLocked(filesDir, rawBytes, cpuAcquisition, storage, cpu)) return {};
     auto token = std::shared_ptr<Reservation>(new Reservation{storage, cpu});
     reservedCpu += cpu;
     reservedDisk += storage;
     return token;
+}
+bool canReserve(const std::string& filesDir, uint64_t rawBytes, bool cpuAcquisition) {
+    std::lock_guard<std::mutex> lock(budgetMutex);
+    uint64_t storage = 0, cpu = 0;
+    return admitLocked(filesDir, rawBytes, cpuAcquisition, storage, cpu);
 }
 // Frozen pre-v5 head layout, read-only: the 20-value tuning, the resolved
 // noise selection and the DNG noise-mode byte (both now unused, discarded).
@@ -421,6 +470,33 @@ void writeHeader(Writer& w, CaptureJob& job) {
       job.jpeg.develop.highlightCompression, job.jpeg.develop.multiframeChromaDenoise, job.dng.compression,
       job.mergedDng.compression);
     w(job.dng.deviceDisplayModel, job.mergedDng.deviceDisplayModel);
+    w(job.jpeg.develop.captureSharpenIterations);
+    const auto& context = job.frame.metadata.cameraContext
+                              ? job.frame.metadata.cameraContext
+                              : (job.metadata.empty() ? nullptr : job.metadata.front().cameraContext);
+    auto distortion = context ? context->profileDistortion : std::nullopt;
+    w(distortion);
+    // As a string: one length-prefixed block instead of a prefix per byte.
+    std::string dcp;
+    if (context && context->dcpProfile) dcp.assign(context->dcpProfile->bytes.begin(), context->dcpProfile->bytes.end());
+    w(dcp);
+    uint32_t mirror = context ? context->profileMirror : 0u;
+    w(mirror);
+}
+// The context fields predate the lens profile ones; put the job's back on every frame.
+void attachLensProfile(CaptureJob& job, const std::optional<geometry::LensDistortionModel>& distortion,
+                       const color::DcpProfilePtr& dcp, uint32_t mirror) {
+    if (!distortion && !dcp && !mirror) return;
+    const auto attach = [&](metadata::CameraContextMetadataPtr& context) {
+        if (!context) return;
+        auto copy = std::make_shared<metadata::CameraContextMetadata>(*context);
+        copy->profileDistortion = distortion;
+        copy->dcpProfile = dcp;
+        copy->profileMirror = mirror;
+        context = std::move(copy);
+    };
+    attach(job.frame.metadata.cameraContext);
+    for (auto& m : job.metadata) attach(m.cameraContext);
 }
 }  // namespace
 
@@ -445,7 +521,8 @@ AcquiredRawJournal::AcquiredRawJournal(const std::string& filesDir, uint64_t fra
         }
     }
     reservation_ = reserve(filesDir, bytes_ * frames, false);
-    if (!reservation_) throw std::runtime_error("capture_job_acquisition_budget_exceeded");
+    if (!reservation_) throw std::runtime_error("capture_job_acquisition_budget_exceeded frames=" +
+                                               std::to_string(frames) + " rawBytes=" + std::to_string(bytes_ * frames));
     auto name = (directory / ".acquiring-XXXXXX.tmp").string();
     fd_.reset(mkstemps(name.data(), 4));
     if (!fd_.valid()) throw std::runtime_error("capture_job_acquisition_create_failed");
@@ -574,12 +651,20 @@ CaptureJob loadImpl(const std::string& path,
     RetiredDenoise retired{};
     uint64_t version = 0;
     r(version);
-    if (version != acquisitionMagic && version != magic && version != magicV8 && version != magicV7 &&
+    const bool acquisition = version == acquisitionMagic || version == acquisitionMagicV16 ||
+                             version == acquisitionMagicV14 || version == acquisitionMagicV12 ||
+                             version == acquisitionMagicV10;
+    const bool hasMirror = version == magic || version == acquisitionMagic;
+    const bool hasDcp = hasMirror || version == magicV15 || version == acquisitionMagicV16;
+    const bool hasDistortion = hasDcp || version == magicV13 || version == acquisitionMagicV14;
+    const bool hasSharpening = hasDistortion || version == magicV11 || version == acquisitionMagicV12;
+    const bool hasDisplayModel = hasSharpening || version == magicV9 || version == acquisitionMagicV10;
+    if (!hasDisplayModel && version != magicV8 && version != magicV7 &&
         version != magicV6 && version != magicV5 && version != magicV4 && version != magicV3 && version != magicV2 &&
         version != legacyMagic)
         throw std::runtime_error("capture_job_version_unsupported");
     uint64_t headerOffset = 0;
-    if (version == acquisitionMagic) {
+    if (acquisition) {
         r(headerOffset);
         const auto extent = std::filesystem::file_size(path);
         if (headerOffset < acquisitionPrefixBytes || headerOffset >= extent)
@@ -587,7 +672,7 @@ CaptureJob loadImpl(const std::string& path,
         stream.seekg(std::streamoff(headerOffset));
     }
     CaptureJob job;
-    if ((version == magic || version == acquisitionMagic) || version == magicV8 || version == magicV7 ||
+    if (hasDisplayModel || version == magicV8 || version == magicV7 ||
         version == magicV6 || version == magicV5) {
         fields(r, job);
         // Same order as save().
@@ -598,16 +683,33 @@ CaptureJob loadImpl(const std::string& path,
           job.jpeg.develop.denoiseForceY, job.jpeg.develop.denoiseMaxScale, retired.rawMode,
           retired.rawStrength, retired.rawLuma, retired.rawChroma, retired.yuvMode, retired.yuvStrengthY,
           retired.yuvStrengthC);
-        if ((version == magic || version == acquisitionMagic) || version == magicV8 || version == magicV7 ||
+        if (hasDisplayModel || version == magicV8 || version == magicV7 ||
             version == magicV6)
             r(job.jpeg.output.ultraHdr, job.jpeg.develop.highlightReconstructionMethod,
               job.jpeg.develop.highlightThreshold, job.jpeg.develop.highlightCompression);
-        if ((version == magic || version == acquisitionMagic) || version == magicV8 || version == magicV7)
+        if (hasDisplayModel || version == magicV8 || version == magicV7)
             r(job.jpeg.develop.multiframeChromaDenoise);
-        if ((version == magic || version == acquisitionMagic) || version == magicV8)
+        if (hasDisplayModel || version == magicV8)
             r(job.dng.compression, job.mergedDng.compression);
-        if ((version == magic || version == acquisitionMagic))
+        if (hasDisplayModel)
             r(job.dng.deviceDisplayModel, job.mergedDng.deviceDisplayModel);
+        if (hasSharpening)
+            r(job.jpeg.develop.captureSharpenIterations);
+        if (hasDistortion) {
+            std::optional<geometry::LensDistortionModel> distortion;
+            r(distortion);
+            std::string dcpBytes;
+            if (hasDcp) r(dcpBytes);
+            color::DcpProfilePtr dcp;
+            // Saved from a parsed profile, so this parses; if not, the context's
+            // calibration still renders and the DNG falls back to plain matrices.
+            if (!dcpBytes.empty())
+                if (auto parsed = color::parseDcp(std::vector<uint8_t>(dcpBytes.begin(), dcpBytes.end())))
+                    dcp = std::make_shared<const color::DcpProfile>(std::move(*parsed));
+            uint32_t mirror = 0;
+            if (hasMirror) r(mirror);
+            attachLensProfile(job, distortion, dcp, mirror & geometry::kLensMirrorMask);
+        }
     } else {
         readLegacyJob(r, job);
         if (version == magicV4 || version == magicV3 || version == magicV2)
@@ -634,12 +736,12 @@ CaptureJob loadImpl(const std::string& path,
     const size_t count = job.multiframe ? job.metadata.size() : 1;
     // Validate file extent before allocating or uploading anything.
     const auto metadataEnd = stream.tellg();
-    const auto pos = version == acquisitionMagic ? std::streampos(acquisitionPrefixBytes) : metadataEnd;
-    const auto footerPos = version == acquisitionMagic ? metadataEnd : pos + std::streamoff(count * n);
+    const auto pos = acquisition ? std::streampos(acquisitionPrefixBytes) : metadataEnd;
+    const auto footerPos = acquisition ? metadataEnd : pos + std::streamoff(count * n);
     stream.seekg(0, std::ios::end);
     const auto end = stream.tellg();
     if (metadataEnd < 0 || footerPos < 0 || end - footerPos != std::streamoff(sizeof(uint32_t) + sizeof(uint64_t)) ||
-        (version == acquisitionMagic &&
+        (acquisition &&
          (headerOffset != acquisitionPrefixBytes + count * n || metadataEnd <= std::streampos(headerOffset))))
         throw std::runtime_error("capture_job_extent_invalid");
     stream.seekg(pos);
@@ -650,7 +752,9 @@ CaptureJob loadImpl(const std::string& path,
         r(marker);
         if (marker != footer) throw std::runtime_error("capture_job_commit_invalid");
         job.dng.appLensShadingCorrection = job.jpeg.develop.lensShadingCorrectionEnabled;
+        job.dng.appDistortionCorrection = job.jpeg.develop.distortionCorrectionEnabled;
         job.mergedDng.appLensShadingCorrection = job.jpeg.develop.lensShadingCorrectionEnabled;
+        job.mergedDng.appDistortionCorrection = job.jpeg.develop.distortionCorrectionEnabled;
         return job;
     }
     std::vector<uint8_t> raw(n);
@@ -665,7 +769,9 @@ CaptureJob loadImpl(const std::string& path,
     if (marker != footer) throw std::runtime_error("capture_job_commit_invalid");
     // Not persisted: the DNG shading decision follows the job's develop setting.
     job.dng.appLensShadingCorrection = job.jpeg.develop.lensShadingCorrectionEnabled;
+    job.dng.appDistortionCorrection = job.jpeg.develop.distortionCorrectionEnabled;
     job.mergedDng.appLensShadingCorrection = job.jpeg.develop.lensShadingCorrectionEnabled;
+    job.mergedDng.appDistortionCorrection = job.jpeg.develop.distortionCorrectionEnabled;
     return job;
 }
 }  // namespace

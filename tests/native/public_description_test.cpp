@@ -3,6 +3,7 @@
 #include <string>
 
 #include "encoding/jpeg/JpegPublicDescription.h"
+#include "encoding/jpeg/JpegTimingsDescription.h"
 
 using namespace rawrcam;
 using namespace rawrcam::encoding;
@@ -29,6 +30,20 @@ int main() {
     assert(contains(neutral, "- Demosaic: AMaZE+VNG4\n- Dual auto contrast: 25.0%\n"));
     assert(contains(neutral, "- FCC steps: 3\n- Vignette correction (LSC): on\n"));
     assert(contains(neutral, "- Highlight reconstruction: on (Inpaint Opposed)\n"));
+    assert(contains(neutral, "- Capture sharpening: off\n"));
+    for (bool rendererExport : {false, true}) {
+        for (const auto iterations : {2u, 3u, 4u, 6u}) {
+            develop.captureSharpenIterations = iterations;
+            const auto description = jpeg::buildPublicDescription(
+                develop, tone, "RAWR NTRL", 98, jpeg::ChromaSubsampling::Yuv420, false, "",
+                0.0f, 0.0f, 0.0f, rendererExport);
+            const char* level = iterations == 2 ? "Low" : iterations == 3 ? "Medium" :
+                                iterations == 4 ? "Sharp" : "Sharpest";
+            assert(contains(description, std::string("- Capture sharpening: ") + level +
+                                         " (" + std::to_string(iterations) + " iterations)\n"));
+        }
+    }
+    develop.captureSharpenIterations = 0;
     assert(contains(neutral, "- JPEG quality: 98, 4:2:0\n- Color profile: RAWR NTRL\n"));
     assert(!contains(neutral, "Chroma denoise"));
     // Same slider format as the multiframe section.
@@ -90,6 +105,27 @@ int main() {
     assert(rendered.rfind(std::string(kRenderedWith) + "\nDNG re-render\n\nPARAMETERS\n", 0) == 0);
     assert(rendered.substr(rendered.find("\n\nPARAMETERS")) == denoised.substr(denoised.find("\n\nPARAMETERS")));
 
+    // The sharpening wall time appears once in both section and overall totals.
+    jpeg::JpegCaptureContext timings;
+    timings.demosaicMs = 100.0;
+    timings.renderSetupMs = 10.0;
+    timings.captureSharpenMs = 25.0;
+    const auto timed = jpeg::appendProcessingTimes(timings, 5.0);
+    assert(contains(timed, "TIMINGS: 140.0 ms"));
+    assert(contains(timed, "Image Processing: 135.0 ms"));
+    assert(contains(timed, "- Capture sharpening (wall): 25.0 ms\n"));
+    timings.hasMultiframeTimings = true;
+    timings.multiframeTotalMs = 200.0;
+    assert(contains(jpeg::appendProcessingTimes(timings, 5.0), "TIMINGS: 340.0 ms"));
+    timings.hasMultiframeTimings = false;
+    timings.captureSharpenMs = 0.0;
+    timings.captureSharpenCached = true;
+    const auto cached = jpeg::appendProcessingTimes(timings, 5.0);
+    assert(contains(cached, "TIMINGS: 115.0 ms"));
+    assert(contains(cached, "Image Processing: 110.0 ms"));
+    assert(contains(cached, "- Capture sharpening: 0.0 ms (cached result reused)\n"));
+    timings.captureSharpenCached = false;
+    assert(!contains(jpeg::appendProcessingTimes(timings, 5.0), "Capture sharpening"));
     std::puts("public_description_test ok");
     return 0;
 }

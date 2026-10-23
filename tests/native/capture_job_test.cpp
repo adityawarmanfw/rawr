@@ -1,5 +1,6 @@
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <unistd.h>
 
 #include <cassert>
@@ -11,6 +12,7 @@
 #include "capture/persistence/AcquiredRawJournal.h"
 #include "capture/persistence/CaptureJob.h"
 #include "capture/persistence/ProcessingRecipe.h"
+#include "color/DcpProfile.h"
 using namespace rawrcam::capture::persistence;
 int main(int argc, char** argv) {
     if (argc == 2) {
@@ -205,6 +207,27 @@ int main(int argc, char** argv) {
         failed = true;
     }
     assert(failed);
+    // Burst length is independent of the six concurrently leased camera buffers.
+    // Acquisition appends and releases one frame at a time, including bursts above six.
+    for (uint32_t count : {16u, 30u}) {
+        auto large = j;
+        large.metadata.resize(count, j.frame.metadata);
+        large.parameters.resize(count);
+        large.sharpnessScores.resize(count, 1.0f);
+        const auto largePath = jobPath(root, "large-" + std::to_string(count) + ".dng");
+        AcquiredRawJournal acquired(root, 384, count);
+        for (uint32_t i = 0; i < count; ++i) {
+            auto pixels = std::vector<uint8_t>(384, static_cast<uint8_t>(i));
+            acquired.append(pixels);
+        }
+        acquired.commit(largePath, large);
+        size_t received = 0;
+        load(largePath, [&](CaptureJob&, size_t i, const std::vector<uint8_t>& raw) {
+            assert(raw.size() == 384 && raw.front() == i && raw.back() == i);
+            ++received;
+        });
+        assert(received == count);
+    }
     // Acquired RAW becomes the journal in place. Old v1/v9 jobs above still load.
     const auto directPath = jobPath(root, "direct.dng");
     std::string pendingPath;
@@ -278,6 +301,201 @@ int main(int argc, char** argv) {
         ++frames;
     });
     assert(frames == 2);
+    // Sharpening survives ordinary burst journals and acquisition journals,
+    // including the header-only path used by lazy multiframe loading.
+    for (uint32_t iterations : {0u, 2u, 3u, 4u, 5u, 6u, 7u}) {
+        j.jpeg.develop.captureSharpenIterations = iterations;
+        for (bool acquisition : {false, true}) {
+            const auto sharpeningPath = jobPath(root, acquisition ? "sharp-acquired.dng" : "sharp-burst.dng");
+            if (acquisition) {
+                AcquiredRawJournal acquired(root, 384, 2);
+                acquired.append(j.frame.raw16);
+                acquired.append(j.frame.raw16);
+                acquired.commit(sharpeningPath, j);
+            } else {
+                save(sharpeningPath, j, [&](size_t) { return j.frame.raw16; });
+            }
+            uint64_t offset = 0;
+            assert(loadHeader(sharpeningPath, offset).jpeg.develop.captureSharpenIterations == iterations);
+            size_t consumed = 0;
+            const auto loaded = load(sharpeningPath, [&](CaptureJob& header, size_t, const std::vector<uint8_t>& pixels) {
+                assert(header.jpeg.develop.captureSharpenIterations == iterations);
+                assert(pixels == j.frame.raw16);
+                ++consumed;
+            });
+            assert(consumed == 2 && loaded.jpeg.develop.captureSharpenIterations == iterations);
+
+            // Recreate v15/v16 by removing the mirror, then v13/v14 by removing the empty camera profile,
+            // v11/v12 by also removing the (absent) lens distortion, then
+            // v9/v10 by also removing sharpening. Existing journals keep
+            // their original behavior and frame addressing.
+            std::ifstream input(sharpeningPath, std::ios::binary);
+            std::string bytes((std::istreambuf_iterator<char>(input)), {});
+            constexpr size_t footerBytes = sizeof(uint32_t) + sizeof(uint64_t);
+            constexpr size_t sharpeningBytes = 2 * sizeof(uint32_t);
+            constexpr size_t distortionBytes = sizeof(uint32_t) + sizeof(bool);  // absent optional
+            constexpr size_t dcpBytes = sizeof(uint32_t) + sizeof(uint64_t);     // empty string
+            size_t fieldEnd = acquisition ? bytes.size() - footerBytes : offset;
+            constexpr size_t mirrorBytes = 2 * sizeof(uint32_t);
+            bytes.erase(fieldEnd - mirrorBytes, mirrorBytes);
+            fieldEnd -= mirrorBytes;
+            {
+                auto v15 = bytes;
+                const uint64_t version = acquisition ? 0x524157524a4f4210ull : 0x524157524a4f420full;
+                std::memcpy(v15.data() + sizeof(uint32_t), &version, sizeof(version));
+                const auto path = jobPath(root, "v15-profile.dng");
+                {
+                    std::ofstream output(path, std::ios::binary);
+                    output.write(v15.data(), v15.size());
+                }
+                assert(loadHeader(path, offset).frame.metadata.cameraContext->profileMirror == 0);
+                size_t count = 0;
+                (void)load(path, [&](CaptureJob& header, size_t, const std::vector<uint8_t>& pixels) {
+                    assert(header.frame.metadata.cameraContext->profileMirror == 0);
+                    assert(pixels == j.frame.raw16);
+                    ++count;
+                });
+                assert(count == 2);
+            }
+            {
+                auto v13 = bytes;
+                v13.erase(fieldEnd - dcpBytes, dcpBytes);
+                const uint64_t version = acquisition ? 0x524157524a4f420eull : 0x524157524a4f420dull;
+                std::memcpy(v13.data() + sizeof(uint32_t), &version, sizeof(version));
+                const auto v13Path = jobPath(root, "v13-distortion.dng");
+                {
+                    std::ofstream output(v13Path, std::ios::binary);
+                    output.write(v13.data(), v13.size());
+                }
+                assert(loadHeader(v13Path, offset).jpeg.develop.captureSharpenIterations == iterations);
+                size_t v13Frames = 0;
+                (void)load(v13Path, [&](CaptureJob&, size_t, const std::vector<uint8_t>& pixels) {
+                    assert(pixels == j.frame.raw16);
+                    ++v13Frames;
+                });
+                assert(v13Frames == 2);
+            }
+            bytes.erase(fieldEnd - dcpBytes, dcpBytes);
+            fieldEnd -= dcpBytes;
+            {
+                auto v11 = bytes;
+                v11.erase(fieldEnd - distortionBytes, distortionBytes);
+                const uint64_t version = acquisition ? 0x524157524a4f420cull : 0x524157524a4f420bull;
+                std::memcpy(v11.data() + sizeof(uint32_t), &version, sizeof(version));
+                const auto v11Path = jobPath(root, "v11-sharpening.dng");
+                {
+                    std::ofstream output(v11Path, std::ios::binary);
+                    output.write(v11.data(), v11.size());
+                }
+                assert(loadHeader(v11Path, offset).jpeg.develop.captureSharpenIterations == iterations);
+                size_t v11Frames = 0;
+                (void)load(v11Path, [&](CaptureJob&, size_t, const std::vector<uint8_t>& pixels) {
+                    assert(pixels == j.frame.raw16);
+                    ++v11Frames;
+                });
+                assert(v11Frames == 2);
+            }
+            bytes.erase(fieldEnd - distortionBytes - sharpeningBytes, distortionBytes + sharpeningBytes);
+            const uint64_t oldVersion = acquisition ? 0x524157524a4f420aull : 0x524157524a4f4209ull;
+            std::memcpy(bytes.data() + sizeof(uint32_t), &oldVersion, sizeof(oldVersion));
+            const auto oldPath = jobPath(root, "old-sharpening.dng");
+            {
+                std::ofstream output(oldPath, std::ios::binary);
+                output.write(bytes.data(), bytes.size());
+            }
+            assert(loadHeader(oldPath, offset).jpeg.develop.captureSharpenIterations == 0);
+            consumed = 0;
+            (void)load(oldPath, [&](CaptureJob& header, size_t, const std::vector<uint8_t>& pixels) {
+                assert(header.jpeg.develop.captureSharpenIterations == 0);
+                assert(pixels == j.frame.raw16);
+                ++consumed;
+            });
+            assert(consumed == 2);
+        }
+    }
+    // A mirror alone must survive both journal formats and lazy header loading.
+    for (uint32_t mirror : {0u, 1u, 2u, 3u}) {
+        for (bool acquisition : {false, true}) {
+            auto mirrored = j;
+            auto context = std::make_shared<rawrcam::metadata::CameraContextMetadata>(*camera);
+            context->profileMirror = mirror;
+            mirrored.frame.metadata.cameraContext = context;
+            for (auto& m : mirrored.metadata) m.cameraContext = context;
+            const auto path = jobPath(root, "mirror.dng");
+            if (acquisition) {
+                AcquiredRawJournal acquired(root, 384, 2);
+                acquired.append(j.frame.raw16);
+                acquired.append(j.frame.raw16);
+                acquired.commit(path, mirrored);
+            } else {
+                save(path, mirrored, [&](size_t) { return j.frame.raw16; });
+            }
+            uint64_t offset = 0;
+            const auto header = loadHeader(path, offset);
+            assert(header.frame.metadata.cameraContext->profileMirror == mirror);
+            for (const auto& m : header.metadata) assert(m.cameraContext->profileMirror == mirror);
+            size_t count = 0;
+            const auto loaded = load(path, [&](CaptureJob& h, size_t, const std::vector<uint8_t>& pixels) {
+                assert(h.frame.metadata.cameraContext->profileMirror == mirror);
+                assert(pixels == j.frame.raw16);
+                ++count;
+            });
+            assert(count == 2);
+            for (const auto& m : loaded.metadata) assert(m.cameraContext->profileMirror == mirror);
+        }
+    }
+    // A lens profile calibration rides along once per job and comes back on every frame's context.
+    for (bool acquisition : {false, true}) {
+        rawrcam::geometry::LensDistortionModel lens;
+        lens.width = 4096;
+        lens.height = 3072;
+        lens.fx = lens.fy = 1698.0;
+        lens.cx = 2047.5;
+        lens.cy = 1535.5;
+        lens.k = {-0.05, 0.015, 0.0001, 0.0003, 0, 0, -0.02, 0.014};
+        lens.outputScale = 0.97;
+        // A minimal single-illuminant camera profile ("IIRC", ColorMatrix1 + D65).
+        std::vector<uint8_t> dcpFile = {'I', 'I', 0x52, 0x43, 8, 0, 0, 0, 2, 0};
+        const auto put16 = [&](uint16_t v) { dcpFile.insert(dcpFile.end(), {uint8_t(v), uint8_t(v >> 8)}); };
+        const auto put32 = [&](uint32_t v) {
+            dcpFile.insert(dcpFile.end(), {uint8_t(v), uint8_t(v >> 8), uint8_t(v >> 16), uint8_t(v >> 24)});
+        };
+        put16(50721), put16(10), put32(9), put32(8 + 2 + 2 * 12 + 4);
+        put16(50778), put16(3), put32(1), put16(21), put16(0);
+        put32(0);
+        for (int i = 0; i < 9; ++i) put32(i % 4 == 0 ? 1 : 0), put32(1);
+        auto dcp = rawrcam::color::parseDcp(dcpFile);
+        assert(dcp);
+        const auto dcpProfile = std::make_shared<const rawrcam::color::DcpProfile>(std::move(*dcp));
+        auto withLens = j;
+        const auto attach = [&](rawrcam::metadata::CameraContextMetadataPtr& context) {
+            auto copy = std::make_shared<rawrcam::metadata::CameraContextMetadata>(
+                context ? *context : rawrcam::metadata::CameraContextMetadata{});
+            copy->profileDistortion = lens;
+            copy->dcpProfile = dcpProfile;
+            context = copy;
+        };
+        attach(withLens.frame.metadata.cameraContext);
+        for (auto& m : withLens.metadata) attach(m.cameraContext);
+        const auto lensPath = jobPath(root, acquisition ? "lens-acquired.dng" : "lens-burst.dng");
+        if (acquisition) {
+            AcquiredRawJournal acquired(root, 384, 2);
+            acquired.append(j.frame.raw16);
+            acquired.append(j.frame.raw16);
+            acquired.commit(lensPath, withLens);
+        } else {
+            save(lensPath, withLens, [&](size_t) { return j.frame.raw16; });
+        }
+        const auto loaded = load(lensPath, [](CaptureJob&, size_t, const std::vector<uint8_t>&) {});
+        const auto same = [&](const rawrcam::metadata::CameraContextMetadataPtr& context) {
+            return context && context->profileDistortion && context->profileDistortion->fx == lens.fx &&
+                   context->profileDistortion->k == lens.k && context->profileDistortion->outputScale == lens.outputScale &&
+                   context->dcpProfile && context->dcpProfile->bytes == dcpFile &&
+                   context->dcpProfile->illuminant1 == 21;
+        };
+        assert(same(loaded.frame.metadata.cameraContext));
+        for (const auto& m : loaded.metadata) assert(same(m.cameraContext));
+    }
     // Strip loader's exact addressing contract still reads rows from either frame.
     {
         std::ifstream input(directPath, std::ios::binary);
@@ -322,7 +540,15 @@ int main(int argc, char** argv) {
     assert(!held.empty());
     held.clear();
     assert(reserve(root, 25 * 1024 * 1024, true));
-    assert(!reserve(root, 9ull * 1024 * 1024 * 1024, false));
+    assert(!reserve(root, 31ull * 1024 * 1024 * 1024, false));
+    // A real 30-frame F85 input exceeds 8 GiB. Reservation does not allocate/write the payload.
+    constexpr uint64_t f85BurstBytes = 16320ull * 12288 * 2 * 30;
+    struct statvfs disk{};
+    assert(statvfs(root.c_str(), &disk) == 0);
+    if (uint64_t(disk.f_bavail) * disk.f_frsize > f85BurstBytes * 2 + 1024ull * 1024 * 1024) {
+        auto large = reserve(root, f85BurstBytes, false);
+        assert(large);
+    }
     std::filesystem::remove_all(root);
     std::cout << "Capture job roundtrip, burst, truncation, atomic replacement and budget tests passed\n";
 }

@@ -14,7 +14,8 @@ Local writer extensions (Rawr full-DNG parity, same MIT file): `tinydng_write.c`
 additionally emits ActiveArea/DefaultCrop/DefaultScale, UniqueCameraModel,
 rational BlackLevel, BackwardVersion, dual-illuminant color + forward +
 calibration matrices, AnalogBalance, BaselineExposure, DefaultBlackRender, LensInfo, serials,
-RawDataUniqueID, NoiseProfile, OpcodeList1/2/3 (re-serialized from generic
+RawDataUniqueID, NoiseProfile, DNG camera profile tags (HueSatMap 1/2, LookTable,
+ProfileToneCurve, encodings, ProfileCopyright, BaselineExposureOffset), OpcodeList1/2/3 (re-serialized from generic
 opcodes), DNGPrivateData, IFD0 descriptive tags, Orientation, and a staged
 EXIF sub-IFD. `tinydng_exif`/`tinydng_raw_info`/`tinydng_write_image` carry
 additive Rawr extension fields (writer-emitted; reader-accepted where parsed).

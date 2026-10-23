@@ -1,6 +1,14 @@
 package com.rawr.camera.renderer
 
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.unit.dp
+import com.rawr.camera.ui.CaptureColors
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,43 +55,60 @@ internal fun RendererFilmPresetActions(v: SettingsValues, dispatch: SettingsDisp
     }
 }
 
-/** Editor-side saved AgX looks: apply, save, update, rename, delete, export, import. */
+/**
+ * Editor-side AgX looks: one Look list (built-in then saved), a selected saved look
+ * that reads "Modified" once its controls drift, and quick Save / Update / Revert.
+ * The selection is editor-local; it starts from the saved look matching the values.
+ */
 @Composable
 internal fun RendererAgxLookControls(v: SettingsValues, dispatch: SettingsDispatch) {
     val files = rememberLookFiles(dispatch)
     var dialog by remember { mutableStateOf<String?>(null) }
-    var target by remember { mutableStateOf<AgxLook?>(null) }
-    val current = v.matchingAgxLook()
-    if (v.agxLooks.isNotEmpty()) {
-        EditorChoice("Saved look", current?.name ?: "None", v.agxLooks.map { it.name }) {
-            dispatch.invoke(ApplyAgxLook(v.agxLooks[it].id))
+    var picked by rememberSaveable { mutableStateOf<String?>(null) }
+    val matching = v.matchingAgxLook()
+    val selected = v.agxLooks.firstOrNull { it.id == picked } ?: matching
+    val modified = selected != null && matching?.id != selected.id
+    val builtIn = AgxPreset.entries
+    EditorChoice("Look", selected?.let { if (modified) "${it.name} · Modified" else it.name } ?: v.regularAgxPreset().lookLabel,
+        builtIn.map { it.lookLabel } + v.agxLooks.map { it.name }) {
+        if (it < builtIn.size) {
+            picked = null
+            dispatch.invoke(SetAgxPreset(builtIn[it]))
+        } else {
+            val look = v.agxLooks[it - builtIn.size]
+            picked = look.id
+            dispatch.invoke(ApplyAgxLook(look.id))
         }
     }
-    val actions = buildList<Pair<String, () -> Unit>> {
-        add("Save as new look" to { dialog = "save" })
-        v.agxLooks.filter { it.id != current?.id }.forEach { look ->
-            add("Update '${look.name}'" to { target = look; dialog = "update" })
+    Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+        @Composable fun action(label: String, onClick: () -> Unit) =
+            TextButton(onClick = onClick) { Text(label, style = EditorHeadingStyle, color = CaptureColors.AccentSoft) }
+        action("Save as new") { dialog = "save" }
+        if (selected != null && modified) {
+            action("Update") { dialog = "update" }
+            action("Revert") { dispatch.invoke(ApplyAgxLook(selected.id)) }
         }
-        if (current != null) {
-            add("Rename '${current.name}'" to { target = current; dialog = "rename" })
-            add("Delete '${current.name}'" to { target = current; dialog = "delete" })
+        val extra = buildList<Pair<String, () -> Unit>> {
+            if (selected != null) {
+                add("Rename '${selected.name}'" to { dialog = "rename" })
+                add("Delete '${selected.name}'" to { dialog = "delete" })
+            }
+            add("Export current look" to {
+                val name = selected?.name ?: "AgX ${v.regularAgxPreset().lookLabel}"
+                files.export(name, LookFileCodec.exportAgx(AgxLook("", name, v.regularAgxPreset(), v.activeAgxValues())))
+            })
+            add("Import look file" to { files.import() })
         }
-        add("Export current look" to {
-            val name = current?.name ?: "AgX ${v.regularAgxPreset().lookLabel}"
-            files.export(name, LookFileCodec.exportAgx(AgxLook("", name, v.regularAgxPreset(), v.activeAgxValues())))
-        })
-        add("Import look file" to { files.import() })
+        EditorChoice("More", "…", extra.map { it.first }) { extra[it].second() }
     }
-    EditorChoice("Manage looks", "…", actions.map { it.first }) { actions[it].second() }
-    val look = target
     when (dialog) {
-        "save" -> LookNameDialog("Save AgX look", "", "Save", { dialog = null }) { dispatch.invoke(SaveAgxLook(it)) }
-        "rename" -> if (look != null) LookNameDialog("Rename look", look.name, "Save", { dialog = null }) {
-            dispatch.invoke(RenameAgxLook(look.id, it))
+        "save" -> LookNameDialog("Save AgX look", "", "Save", { dialog = null }) { dispatch.invoke(SaveAgxLook(it)); picked = null }
+        "rename" -> if (selected != null) LookNameDialog("Rename look", selected.name, "Save", { dialog = null }) {
+            dispatch.invoke(RenameAgxLook(selected.id, it))
         }
-        "update" -> if (look != null) LookConfirmDialog("Update look?", "Overwrite '${look.name}' with the current AgX look?",
-            "Update", { dialog = null }) { dispatch.invoke(UpdateAgxLook(look.id)) }
-        "delete" -> if (look != null) LookConfirmDialog("Delete look?", "Delete '${look.name}'? The current adjustments are kept.",
-            "Delete", { dialog = null }) { dispatch.invoke(DeleteAgxLook(look.id)) }
+        "update" -> if (selected != null) LookConfirmDialog("Update look?", "Overwrite '${selected.name}' with the current AgX look?",
+            "Update", { dialog = null }) { dispatch.invoke(UpdateAgxLook(selected.id)) }
+        "delete" -> if (selected != null) LookConfirmDialog("Delete look?", "Delete '${selected.name}'? The current adjustments are kept.",
+            "Delete", { dialog = null }) { picked = null; dispatch.invoke(DeleteAgxLook(selected.id)) }
     }
 }

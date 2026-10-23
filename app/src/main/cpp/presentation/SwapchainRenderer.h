@@ -7,9 +7,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
+#include <utility>
 
+#include "geometry/LensDistortion.h"
 #include "imaging/FrameLimits.h"
 #include "monitoring/MonitoringState.h"
 #include "presentation/PresentRecorder.h"
@@ -53,9 +57,30 @@ class SwapchainRenderer final {
                 uint32_t previewHeight, int sensorOrientationDegrees, int displayRotationDegrees,
                 uint32_t diagnosticMode, bool monitoringOverlayEnabled, uint32_t exifOrientation = 0,
                 bool videoSource = false, uint32_t cropX = 0, uint32_t cropY = 0, uint32_t cropW = 0,
-                uint32_t cropH = 0);
+                uint32_t cropH = 0, const rawrcam::geometry::LensDistortionModel* lensWarp = nullptr,
+                uint32_t lensMirror = 0);
 
+    // Updated only after a fresh live RAW frame is accepted for presentation.
+    void noteLivePresentation(uint64_t generation, int64_t timestamp) {
+        std::lock_guard<std::mutex> lock(lensWarpMutex_);
+        livePresentation_ = {generation, timestamp};
+    }
+    std::pair<uint64_t, int64_t> livePresentation() const {
+        std::lock_guard<std::mutex> lock(lensWarpMutex_);
+        return livePresentation_;
+    }
     void resetLogging() noexcept { recorder_.resetLogging(); }
+    // Lens calibration the last live-viewfinder frame was undistorted with
+    // (nullopt = none), so display taps and face boxes map through it.
+    [[nodiscard]] std::optional<rawrcam::geometry::LensDistortionModel> presentedLensWarp() const {
+        std::lock_guard<std::mutex> lock(lensWarpMutex_);
+        return presentedLensWarp_;
+    }
+    // Lens profile mirror the last live-viewfinder frame was flipped with.
+    [[nodiscard]] uint32_t presentedLensMirror() const {
+        std::lock_guard<std::mutex> lock(lensWarpMutex_);
+        return presentedLensMirror_;
+    }
 
    private:
     struct PresentPush {
@@ -71,7 +96,16 @@ class SwapchainRenderer final {
         float cropY0;
         float cropX1;
         float cropY1;
+        uint32_t lensWarp;
+        float lensCx, lensCy, lensFx, lensFy, lensFxOut, lensFyOut;
+        std::array<float, 8> k;
+        uint32_t lensMirror;
     };
+
+    std::pair<uint64_t, int64_t> livePresentation_{};
+    mutable std::mutex lensWarpMutex_;
+    std::optional<rawrcam::geometry::LensDistortionModel> presentedLensWarp_;
+    uint32_t presentedLensMirror_ = 0;
 
     void createPipeline();
     void createFramebuffers();

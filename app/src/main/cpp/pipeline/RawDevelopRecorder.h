@@ -105,6 +105,9 @@ struct RawDevelopRecordInput {
     uint32_t sceneWeighting = 0;  // image_scopes::SceneWeighting
     // Focus area the meter also bins (normalized x0,y0,x1,y1; empty = none).
     std::array<float, 4> sceneFocus{};
+    // Undistort the viewfinder with the lens profile calibration (photo
+    // Distortion correction setting), so framing matches the photo.
+    bool distortionCorrectionEnabled = false;
 };
 
 struct RawDevelopRecordResult {

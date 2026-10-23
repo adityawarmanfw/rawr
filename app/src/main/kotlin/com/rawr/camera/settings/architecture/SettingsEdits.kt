@@ -89,6 +89,7 @@ internal fun SettingsValues.capturePreferences() = com.rawr.camera.architecture.
     experimentalMultiframeEnabled = experimentalMultiframeEnabled,
     hdrPlusBracketedSelected =
         multiframeTuning.mergeAlgorithm == com.rawr.camera.settings.model.MultiframeMergeAlgorithm.HdrPlusBracketed,
+    multiframeAlgorithm = multiframeTuning.mergeAlgorithm,
     captureLayout = captureControlLayout,
     captureMode = captureModeForId(captureModeId),
     videoResolution = videoResolutionForId(videoResolutionId),

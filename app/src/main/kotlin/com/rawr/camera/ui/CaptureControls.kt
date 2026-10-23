@@ -207,7 +207,12 @@ private fun PhotoLookToggles(
     ) {
         CompactSidePill(
             icon = Icons.Outlined.BurstMode,
-            label = "MERGED",
+            label = when (state.multiframeAlgorithm) {
+                com.rawr.camera.settings.model.MultiframeMergeAlgorithm.Wronski -> "MFSR"
+                com.rawr.camera.settings.model.MultiframeMergeAlgorithm.HdrPlus -> "HDR+"
+                com.rawr.camera.settings.model.MultiframeMergeAlgorithm.HdrPlusQuality -> "HDR+ Q"
+                com.rawr.camera.settings.model.MultiframeMergeAlgorithm.HdrPlusBracketed -> "HDR+ B"
+            },
             active = state.experimentalMultiframeEnabled,
             testTag = CaptureTestTags.COMPACT_MULTIFRAME,
             contentDescription = if (state.experimentalMultiframeEnabled) {
@@ -370,15 +375,17 @@ internal fun Shutter(
     longExposure: LongExposureUiState = LongExposureUiState()
 ) {
     val haptics = LocalCaptureHaptics.current
-    // Long exposure: the ring fills clockwise as the sensor exposes.
-    val exposing = longExposure.startMs > 0L && longExposure.activeNs > 0L
-    var exposureProgress by remember { mutableStateOf(0f) }
-    if (exposing) {
-        LaunchedEffect(longExposure.startMs) {
-            val durationMs = (longExposure.activeNs / 1_000_000L).coerceAtLeast(1L)
+    // The ring runs from the press over queue + exposure + readout: the HAL
+    // can report capture start a full exposure late, so waiting for it would
+    // show a spinner through the whole exposure and flash the ring.
+    val exposing = longExposure.active
+    var exposureProgress by remember(longExposure.startMs, longExposure.activeNs) {
+        mutableStateOf(longExposure.progressAt(android.os.SystemClock.uptimeMillis()))
+    }
+    if (exposing && !longExposure.waiting) {
+        LaunchedEffect(longExposure.startMs, longExposure.activeNs) {
             while (true) {
-                val elapsed = android.os.SystemClock.uptimeMillis() - longExposure.startMs
-                exposureProgress = (elapsed.toFloat() / durationMs).coerceIn(0f, 1f)
+                exposureProgress = longExposure.progressAt(android.os.SystemClock.uptimeMillis())
                 withFrameMillis { }
             }
         }
@@ -431,26 +438,42 @@ internal fun Shutter(
                 .background(Color(0xFFF5F5F5).copy(alpha = if (exposing) .35f else 1f), CircleShape)
         )
         if (exposing) {
-            // Under a second (a full-size still waiting for the sensor switch):
-            // a spinning arc until the frame is in; longer exposures fill the ring.
-            val waiting = longExposure.activeNs < 1_000_000_000L
-            val spin by rememberInfiniteTransition(label = "shutterWait").animateFloat(
-                initialValue = 0f,
-                targetValue = 360f,
-                animationSpec = infiniteRepeatable(tween(durationMillis = 900, easing = LinearEasing)),
-                label = "shutterWaitAngle"
-            )
-            androidx.compose.foundation.Canvas(Modifier.matchParentSize()) {
-                val stroke = 4.dp.toPx()
-                drawArc(
-                    color = Color.White,
-                    startAngle = if (waiting) spin - 90f else -90f,
-                    sweepAngle = if (waiting) 90f else 360f * exposureProgress,
-                    useCenter = false,
-                    topLeft = androidx.compose.ui.geometry.Offset(stroke / 2f, stroke / 2f),
+            // Pending sensor start and very short waits (full-size switch at the
+            // viewfinder exposure) use an indeterminate arc; real deferred
+            // exposures fill the timed ring. See LongExposureUiState.waiting.
+            val waiting = longExposure.waiting
+            if (waiting) {
+                val spin by rememberInfiniteTransition(label = "shutterWait").animateFloat(
+                    initialValue = 0f,
+                    targetValue = 360f,
+                    animationSpec = infiniteRepeatable(tween(durationMillis = 900, easing = LinearEasing)),
+                    label = "shutterWaitAngle"
+                )
+                androidx.compose.foundation.Canvas(Modifier.matchParentSize()) {
+                    val stroke = 4.dp.toPx()
+                    drawArc(
+                        color = Color.White,
+                        startAngle = spin - 90f,
+                        sweepAngle = 90f,
+                        useCenter = false,
+                        topLeft = androidx.compose.ui.geometry.Offset(stroke / 2f, stroke / 2f),
                     size = androidx.compose.ui.geometry.Size(size.width - stroke, size.height - stroke),
                     style = androidx.compose.ui.graphics.drawscope.Stroke(width = stroke)
                 )
+                }
+            } else {
+                androidx.compose.foundation.Canvas(Modifier.matchParentSize()) {
+                    val stroke = 4.dp.toPx()
+                    drawArc(
+                        color = Color.White,
+                        startAngle = -90f,
+                        sweepAngle = 360f * exposureProgress,
+                        useCenter = false,
+                        topLeft = androidx.compose.ui.geometry.Offset(stroke / 2f, stroke / 2f),
+                        size = androidx.compose.ui.geometry.Size(size.width - stroke, size.height - stroke),
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = stroke)
+                    )
+                }
             }
         }
     }

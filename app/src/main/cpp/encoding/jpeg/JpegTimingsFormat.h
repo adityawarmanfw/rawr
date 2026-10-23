@@ -23,9 +23,9 @@ inline std::string formatMs1(double value) {
                                                    double setupMs, double hlMs, double fccMs, double colorMs,
                                                    double toneMs, double gapsMs, double readbackMs,
                                                    double gainmapMs = 0.0, double denoiseMs = 0.0,
-                                                   double postTailMs = 0.0) noexcept {
+                                                   double postTailMs = 0.0, double captureSharpenMs = 0.0) noexcept {
     return baseReadMs + projectMs + demosaicOrPrepMs + setupMs + hlMs + fccMs + colorMs + toneMs + gainmapMs +
-           denoiseMs + postTailMs + gapsMs + readbackMs;
+           denoiseMs + postTailMs + gapsMs + readbackMs + captureSharpenMs;
 }
 
 // Label for the defringe / Inpaint Opposed tone line, empty when neither ran.
@@ -54,7 +54,8 @@ inline std::string formatImageProcessing(bool directRgb, double demosaicMs,
                                          bool filmRendered, double gapsMs, double readbackMs,
                                          bool multiframe = true, double gainmapMs = 0.0, double denoiseMs = 0.0,
                                          int highlightStage = -1, double postTailMs = 0.0,
-                                         bool defringeEnabled = false) {
+                                         bool defringeEnabled = false, double captureSharpenMs = 0.0,
+                                         bool captureSharpenCached = false) {
     // highlightStage -1 keeps the legacy lines. Otherwise: 0 off, 1 colour
     // propagation, 2 Inpaint Opposed, whose reconstruction runs inside the
     // colour-processing pass; defringe and the Inpaint Opposed tone tap get
@@ -71,7 +72,7 @@ inline std::string formatImageProcessing(bool directRgb, double demosaicMs,
     std::ostringstream out;
     out << "\nImage Processing: "
         << formatMs1(imageProcessingTotalMs(0.0, 0.0, demosaicOrPrep, setupMs, hlMs, fccMs, colorMs, toneMs,
-                                            gapsMs, readbackMs, gainmap, denoise, postTail))
+                                            gapsMs, readbackMs, gainmap, denoise, postTail, captureSharpenMs))
         << " ms\n";
     // Stages in execution order: demosaic, render setup, then the
     // post-demosaic passes as recorded (wavelet denoise runs pre-WB; FCC
@@ -86,6 +87,10 @@ inline std::string formatImageProcessing(bool directRgb, double demosaicMs,
     }
     out << "- Vignette correction (LSC): " << (lscOn ? "on (time in Demosaic)" : "off") << '\n'
         << "- Render setup: " << formatMs1(setupMs) << " ms\n";
+    if (captureSharpenCached)
+        out << "- Capture sharpening: 0.0 ms (cached result reused)\n";
+    else if (captureSharpenMs > 0.0)
+        out << "- Capture sharpening (wall): " << formatMs1(captureSharpenMs) << " ms\n";
     if (denoise > 0.0) out << "- Denoise (wavelet): " << formatMs1(denoise) << " ms\n";
     out << "- Color processing" << (described && highlightStage == 2 ? " (WB + Inpaint Opposed)" : "") << ": "
         << formatMs1(colorMs) << " ms\n";

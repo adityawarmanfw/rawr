@@ -198,6 +198,7 @@ internal fun CaptureViewfinder(
             )
             BracketHoldNotice(
                 active = state.bracketHoldActive,
+                restoringPreview = state.restoringPreview,
                 orientation = state.orientation,
                 modifier = Modifier.align(Alignment.Center),
                 fullSizeBinnedStills = state.fullSizeBinnedStills,
@@ -205,8 +206,7 @@ internal fun CaptureViewfinder(
             )
             // One place for the notice and its countdown: moving it while it
             // fades out left an empty pill behind.
-            // Full-size acquisition uses the hold notice until RAW arrives;
-            // a short sensor exposure does not mean its sensor switch is done.
+            // Full-size capture has separate exposure and preview-recovery phases in the central notice.
             if (!state.fullSizeCapture) LongExposureNotice(
                 state = state.longExposure,
                 orientation = state.orientation,

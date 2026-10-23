@@ -1,5 +1,9 @@
 #include "encoding/dng/DngMetadataAdapter.h"
 
+#include "color/DcpProfile.h"
+#include <filesystem>
+#include <fstream>
+
 #include <tinydng.h>
 #include <tiny_dng_ljpeg92_v2.h>
 
@@ -119,9 +123,23 @@ int main() {
     auto good = makeFrame(true);
     std::string error;
 
-    // The GainMap follows the app's render decision, not the HAL flag: a HAL
-    // reporting shading as applied still gets the map when the app applies it,
-    // and the map is omitted when the app renders without it.
+    // DNG keeps the sensor raster and composes the mirror before display rotation.
+    constexpr uint16_t mirrored[4][4] = {{1, 6, 3, 8}, {2, 7, 4, 5}, {4, 5, 2, 7}, {3, 8, 1, 6}};
+    for (uint32_t mirror = 0; mirror < 4; ++mirror) {
+        for (int turn = 0; turn < 4; ++turn) {
+            auto frame = makeFrame(true);
+            auto ctx = std::make_shared<rawrcam::metadata::CameraContextMetadata>(*frame.metadata.cameraContext);
+            ctx->profileMirror = mirror;
+            ctx->geometry.sensorOrientationDegrees = turn * 90;
+            frame.metadata.cameraContext = ctx;
+            auto params = rawrcam::encoding::dng::makeTinyDngWriteParams(frame, capture, &error);
+            if (!params || params->exif.orientation != mirrored[mirror][turn]) return 70;
+            if (frame.raw16 != good.raw16) return 71;
+        }
+    }
+
+    // The GainMap is always written: neither the HAL flag nor the app's own
+    // lens shading setting decides it; the app setting only lands in provenance.
     for (const bool hal : {false, true}) {
         for (const bool app : {false, true}) {
             auto frame = makeFrame(true);
@@ -133,8 +151,140 @@ int main() {
             shading.appLensShadingCorrection = app;
             auto params = rawrcam::encoding::dng::makeTinyDngWriteParams(frame, shading, &error);
             if (!params) return 30;
-            if (params->raw.opcode_count != (app ? 4 : 0)) return 31;
-            if (!privateHas(params->privateData, app ? "\"written\"" : "\"skipped_app_lsc_off\"")) return 32;
+            // Always written, whatever the app setting or HAL flag.
+            if (params->raw.opcode_count != 4) return 31;
+            if (!privateHas(params->privateData, "\"written\"")) return 32;
+            if (!privateHas(params->privateData, app ? "\"true\"" : "\"false\"")) return 33;
+        }
+    }
+
+    // A lens profile calibration goes in as WarpRectilinear (OpcodeList3)
+    // exactly when the app undistorts, and reads back through the reader.
+    for (const bool app : {false, true}) {
+        auto frame = makeFrame(true);
+        auto ctx = std::make_shared<rawrcam::metadata::CameraContextMetadata>(*frame.metadata.cameraContext);
+        rawrcam::geometry::LensDistortionModel lens;
+        lens.width = 4096;
+        lens.height = 3072;
+        lens.fx = 1698.182744;
+        lens.fy = 1696.500137;
+        lens.cx = 2042.360233;
+        lens.cy = 1548.313918;
+        lens.k = {-0.051307, 0.015171, 0.000123, 0.000357, 0, 0, -0.023536, 0.014256};
+        lens.outputScale = 0.975811;
+        ctx->profileDistortion = lens;
+        frame.metadata.cameraContext = ctx;
+        auto warp = capture;
+        warp.appDistortionCorrection = app;
+        auto params = rawrcam::encoding::dng::makeTinyDngWriteParams(frame, warp, &error);
+        if (!params) return 40;
+        if (params->raw.opcode_count != (app ? 5u : 4u)) return 41;
+        if (!privateHas(params->privateData, "com.rawrcam.distortion.warp") ||
+            !privateHas(params->privateData, app ? "\"written\"" : "\"skipped_app_off\""))
+            return 42;
+        if (!app) continue;
+        params->rebind();
+        const auto fit = rawrcam::geometry::fitWarpRectilinear(lens, frame.width, frame.height);
+        tinydng_config cfg{};
+        tinydng_error err{};
+        tinydng_context* tctx = tinydng_context_create(&cfg, &err);
+        uint8_t* out = nullptr;
+        size_t outSize = 0;
+        tinydng_document* doc = nullptr;
+        tinydng_open_options oopts{};
+        bool ok = fit && tctx &&
+                  tinydng_write_memory(tctx, &params->image, &params->options, &out, &outSize, &err) == TINYDNG_OK &&
+                  tinydng_open_memory(tctx, out, outSize, &oopts, &doc, &err) == TINYDNG_OK;
+        const tinydng_image_info* img = ok ? tinydng_image_get(doc, 0) : nullptr;
+        ok = img && img->raw.warp_count == 1 && img->raw.gainmap_count == 4;
+        if (ok) {
+            const auto& w = img->raw.warps[0];
+            ok = w.list == 3 && w.plane_count == 1 && std::abs(w.center[0] - fit->center[0]) < 1e-12 &&
+                 std::abs(w.center[1] - fit->center[1]) < 1e-12;
+            for (size_t i = 0; i < 4; ++i) ok = ok && std::abs(w.coeff[0][i] - fit->kr[i]) < 1e-12;
+            for (size_t i = 0; i < 2; ++i) ok = ok && std::abs(w.coeff[0][4 + i] - fit->kt[i]) < 1e-12;
+        }
+        if (doc) tinydng_document_destroy(tctx, doc);
+        if (out) tinydng_buffer_free(tctx, out);
+        if (tctx) tinydng_context_destroy(tctx);
+        if (!ok) return 43;
+    }
+
+    // A lens camera profile replaces the camera calibration in the DNG: its
+    // matrices and tables, no CameraCalibration. The written IFD0 reads back
+    // through the DCP parser as the same profile.
+    {
+        auto frame = makeFrame(true);
+        auto ctx = std::make_shared<rawrcam::metadata::CameraContextMetadata>(*frame.metadata.cameraContext);
+        ctx->color.calibrationTransform1.valid = true;
+        rawrcam::color::DcpProfile dcp;
+        dcp.name = "Lens Profile";
+        dcp.copyright = "rawr test";
+        dcp.illuminant1 = 17;
+        dcp.illuminant2 = 21;
+        dcp.colorMatrix1 = {1.2, -0.3, -0.1, -0.4, 1.3, 0.1, -0.1, 0.2, 0.6};
+        dcp.colorMatrix2 = std::array<double, 9>{0.8, -0.2, -0.1, -0.5, 1.4, 0.1, -0.1, 0.3, 0.5};
+        dcp.forwardMatrix1 = std::array<double, 9>{0.6, 0.3, 0.1, 0.2, 0.9, -0.1, 0.0, -0.3, 1.1};
+        dcp.forwardMatrix2 = std::array<double, 9>{0.5, 0.2, 0.3, 0.2, 0.7, 0.1, 0.0, -0.4, 1.2};
+        for (auto* t : {&dcp.hueSatMap1, &dcp.hueSatMap2, &dcp.lookTable}) {
+            t->hues = 6;
+            t->sats = 2;
+            t->vals = t == &dcp.lookTable ? 2 : 1;
+            t->data.assign(size_t(t->hues) * t->sats * t->vals * 3, 1.0f);
+        }
+        dcp.hueSatMap1.data[0] = -30.0f;
+        dcp.hueSatMap2.data[0] = 30.0f;
+        dcp.lookTable.encoding = 1;
+        dcp.toneCurve = {0.0f, 0.0f, 0.5f, 0.6f, 1.0f, 1.0f};
+        dcp.embedPolicy = 1;
+        dcp.baselineExposureOffset = -0.25;
+        ctx->dcpProfile = std::make_shared<const rawrcam::color::DcpProfile>(dcp);
+        frame.metadata.cameraContext = ctx;
+        auto params = rawrcam::encoding::dng::makeTinyDngWriteParams(frame, capture, &error);
+        if (!params) return 44;
+        if (!privateHas(params->privateData, "com.rawrcam.color.dcp")) return 45;
+        params->rebind();
+        tinydng_config cfg{};
+        tinydng_error err{};
+        tinydng_context* tctx = tinydng_context_create(&cfg, &err);
+        uint8_t* out = nullptr;
+        size_t outSize = 0;
+        tinydng_document* doc = nullptr;
+        tinydng_open_options oopts{};
+        bool ok = tctx &&
+                  tinydng_write_memory(tctx, &params->image, &params->options, &out, &outSize, &err) == TINYDNG_OK &&
+                  tinydng_open_memory(tctx, out, outSize, &oopts, &doc, &err) == TINYDNG_OK;
+        const tinydng_image_info* img = ok ? tinydng_image_get(doc, 0) : nullptr;
+        ok = img && !img->raw.camera_calibration_present && !img->raw.has_camera_calibration2;
+        std::optional<rawrcam::color::DcpProfile> back;
+        if (ok) back = rawrcam::color::parseDcp(std::vector<uint8_t>(out, out + outSize), &error);
+        ok = ok && back && back->name == dcp.name && back->copyright == dcp.copyright && back->illuminant1 == 17 &&
+             back->illuminant2 == 21 && back->forwardMatrix2 && back->hueSatMap1.data == dcp.hueSatMap1.data &&
+             back->hueSatMap2.data == dcp.hueSatMap2.data && back->lookTable.data == dcp.lookTable.data &&
+             back->lookTable.vals == 2 && back->lookTable.encoding == 1 && back->toneCurve == dcp.toneCurve &&
+             back->embedPolicy == 1u && back->baselineExposureOffset &&
+             std::abs(*back->baselineExposureOffset + 0.25) < 1e-6;
+        for (size_t i = 0; ok && i < 9; ++i)
+            ok = std::abs(back->colorMatrix1[i] - dcp.colorMatrix1[i]) < 1e-6 &&
+                 std::abs((*back->forwardMatrix2)[i] - (*dcp.forwardMatrix2)[i]) < 1e-6;
+        if (ok) {
+            const auto path = std::filesystem::temp_directory_path() / "dcp_embed_readback.dng";
+            {
+                std::ofstream file(path, std::ios::binary);
+                file.write(reinterpret_cast<const char*>(out), std::streamsize(outSize));
+            }
+            const auto embedded = rawrcam::color::loadEmbeddedDcp(path.string(), &error);
+            ok = embedded && embedded->name == dcp.name && embedded->toneCurve == dcp.toneCurve &&
+                 embedded->hueSatMap1.data == dcp.hueSatMap1.data && embedded->lookTable.data == dcp.lookTable.data &&
+                 embedded->bytes.size() < outSize;
+            std::filesystem::remove(path);
+        }
+        if (doc) tinydng_document_destroy(tctx, doc);
+        if (out) tinydng_buffer_free(tctx, out);
+        if (tctx) tinydng_context_destroy(tctx);
+        if (!ok) {
+            std::cerr << "dcp embed: " << error << "\n";
+            return 46;
         }
     }
 

@@ -29,6 +29,7 @@ enum class SettingsSection(val title: String) {
     Defringe("Defringe"),
     Denoise("Denoise"),
     LensShading("Lens Shading"),
+    Distortion("Distortion Correction"),
     Jpeg("JPEG"),
     DisplayControls("Display & Control"),
     Dng("DNG"),
@@ -245,10 +246,10 @@ enum class RawrMetering(val label: String, val nativeId: Int) {
     Highlight("Highlight", 3)
 }
 
-/** rawr auto exposure: Auto/S/I solved in the app with Camera2 AE off. Opt-in. */
+/** rawr auto exposure: Auto/S/I solved in the app with Camera2 AE off. On by default. */
 /** ISO always spans base to the sensor's analog maximum; no user range. */
 data class RawrAeSettings(
-    val enabled: Boolean = false,
+    val enabled: Boolean = true,
     val nightLook: RawrNightLook = RawrNightLook.Natural,
     val minShutter: RawrMinShutter = RawrMinShutter.Auto,
     val maxShutter: RawrMaxShutter = RawrMaxShutter.Auto,
@@ -328,7 +329,7 @@ object LocalToneLimits {
 
 enum class AutoKeyExposure(val label: String, val summary: String, val nativeId: Int) {
     Off("Off", "No lift · renders the boosted exposure as is", 0),
-    Natural("Natural", "Lifts shadows up to 1 EV", 1),
+    Natural("Low", "Lifts shadows up to 1 EV", 1),
     Medium("Medium", "Lifts shadows up to 2 EV", 3),
     Strong("Strong", "Lifts shadows up to 3 EV", 2)
 }
@@ -456,6 +457,14 @@ enum class DemosaicAlgorithm(val label: String) {
     Vng4("VNG4"),
     DualRcdVng4("RCD + VNG4"),
     DualAmazeVng4("AMaZE + VNG4")
+}
+
+/** RawTherapee capture sharpening strength: Richardson-Lucy iterations after demosaic. */
+enum class CaptureSharpeningLevel(val label: String, val iterations: Int) {
+    Low("Low", 2),
+    Medium("Medium", 3),
+    Sharp("Sharp", 4),
+    Sharpest("Sharpest", 6)
 }
 
 enum class MultiframeOutputResolution(val label: String, val outputScale: Float) {
@@ -1048,9 +1057,9 @@ data class SettingsValues(
     val exposureStep: ExposureStep = ExposureStep.Third,
     val highlightProtection: HighlightProtection = HighlightProtection.High,
     /** Adaptive shadow-lift strength for photos (when Photo tone mapping is Adaptive). */
-    val autoKeyExposure: AutoKeyExposure = AutoKeyExposure.Natural,
+    val autoKeyExposure: AutoKeyExposure = AutoKeyExposure.Medium,
     /** Adaptive shadow-lift strength for video (always adaptive). */
-    val videoAutoKeyExposure: AutoKeyExposure = AutoKeyExposure.Natural,
+    val videoAutoKeyExposure: AutoKeyExposure = AutoKeyExposure.Medium,
     /** Photo tone mapping (JPEG/viewfinder only; video always Adaptive). */
     val photoToneMapping: PhotoToneMapping = PhotoToneMapping.Adaptive,
     /** Local tone mapping: how far shadows may be brightened (EV), noise-limited natively. */
@@ -1062,7 +1071,7 @@ data class SettingsValues(
     val captureControlLayout: CaptureControlLayout = CaptureControlLayout.Compact,
     val jpegEnabled: Boolean = true,
     val dngEnabled: Boolean = true,
-    val dngCompressionId: String = "dng.uncompressed",
+    val dngCompressionId: String = "dng.lossless",
     val gridMode: GridMode = GridMode.Thirds,
     // Preview-only look-stage (tonemap or film) downsample divisor, 1..4.
     // Film always runs at 2 or more. Never touches stills, video, or EXIF.
@@ -1130,6 +1139,9 @@ data class SettingsValues(
     val photoDefringeLumaFloor: Float = 0.08f,
     val videoDefringeEnabled: Boolean = false,
     val videoDefringeStrength: Float = 1f,
+    // Photo capture sharpening (render only: JPEG and Renderer, never the DNG).
+    val photoCaptureSharpeningEnabled: Boolean = true,
+    val photoCaptureSharpeningLevel: CaptureSharpeningLevel = CaptureSharpeningLevel.Low,
     // Photo-pipeline denoise, single source of truth (see DenoiseConfig).
     // Off by default; Wavelet is profiled (sensor noise model).
     val photoDenoise: DenoiseConfig = DenoiseConfig.Off(),
@@ -1140,9 +1152,12 @@ data class SettingsValues(
     val videoDenoiseLuma: Float = 0.25f,
     val videoDenoiseScales: Int = 7,
     // Photo lens shading (preview + JPEG stills). Video is independent.
-    val photoLensShadingEnabled: Boolean = false,
-    val videoLensShadingEnabled: Boolean = false,
-    val distortionCorrectionEnabled: Boolean = false,
+    val photoLensShadingEnabled: Boolean = true,
+    val videoLensShadingEnabled: Boolean = true,
+    // Photo (preview + stills + DNG warp) and video undistort, for lenses
+    // whose profile carries a calibration.
+    val distortionCorrectionEnabled: Boolean = true,
+    val videoDistortionCorrectionEnabled: Boolean = true,
     // Photo highlight reconstruction (stills; live preview uses color
     // propagation). Video has its own method + controls below.
     val photoHighlightEnabled: Boolean = true,

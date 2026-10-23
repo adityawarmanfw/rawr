@@ -110,6 +110,68 @@ std::optional<GeometryMap> mapGeometry(const rawrcam::imaging::RawSnapshot& fram
     return std::nullopt;
 }
 
+// The lens's camera profile in place of the camera's calibration: its own
+// matrices (no CameraCalibration: the profile describes this camera) and
+// tables, so DNG editors render with it. Tables point into the profile, which
+// the params keep alive.
+void embedCameraProfile(TinyDngWriteParams& p, const rawrcam::color::DcpProfilePtr& dcp) {
+    tinydng_raw_info& raw = p.raw;
+    const auto& d = *dcp;
+    p.dcp = dcp;
+    raw.color_matrix_present = 1;
+    std::copy(d.colorMatrix1.begin(), d.colorMatrix1.end(), raw.color_matrix1);
+    raw.calibration_illuminant1 = d.illuminant1;
+    if (d.forwardMatrix1) {
+        std::copy(d.forwardMatrix1->begin(), d.forwardMatrix1->end(), raw.forward_matrix1);
+        raw.has_forward_matrix1 = 1;
+    }
+    if (d.colorMatrix2) {
+        std::copy(d.colorMatrix2->begin(), d.colorMatrix2->end(), raw.color_matrix2);
+        raw.has_color_matrix2 = 1;
+        raw.calibration_illuminant2 = d.illuminant2;
+        if (d.forwardMatrix2) {
+            std::copy(d.forwardMatrix2->begin(), d.forwardMatrix2->end(), raw.forward_matrix2);
+            raw.has_forward_matrix2 = 1;
+        }
+    }
+    const auto dims = [](const rawrcam::color::DcpHueSatTable& t, uint32_t* out) {
+        out[0] = t.hues;
+        out[1] = t.sats;
+        out[2] = t.vals;
+    };
+    if (!d.hueSatMap1.empty()) {
+        dims(d.hueSatMap1, raw.profile_hue_sat_map_dims);
+        raw.profile_hue_sat_map_data1 = d.hueSatMap1.data.data();
+        if (!d.hueSatMap2.empty()) raw.profile_hue_sat_map_data2 = d.hueSatMap2.data.data();
+        raw.profile_hue_sat_map_encoding = d.hueSatMap1.encoding;
+        raw.has_profile_hue_sat_map_encoding = d.hueSatMap1.encoding != 0;
+    }
+    if (!d.lookTable.empty()) {
+        dims(d.lookTable, raw.profile_look_table_dims);
+        raw.profile_look_table_data = d.lookTable.data.data();
+        raw.profile_look_table_encoding = d.lookTable.encoding;
+        raw.has_profile_look_table_encoding = d.lookTable.encoding != 0;
+    }
+    if (!d.toneCurve.empty()) {
+        raw.profile_tone_curve_points = d.toneCurve.data();
+        raw.profile_tone_curve_point_count = d.toneCurve.size();
+    }
+    if (d.baselineExposureOffset) {
+        raw.baseline_exposure_offset = *d.baselineExposureOffset;
+        raw.has_baseline_exposure_offset = 1;
+    }
+    if (d.defaultBlackRender) {
+        raw.default_black_render = uint16_t(*d.defaultBlackRender);
+        raw.has_default_black_render = 1;
+    }
+    // Editors list the embedded profile by name; copying it out stays allowed
+    // unless the profile says otherwise.
+    p.profileName = d.name.empty() ? "rawr lens profile" : d.name;
+    p.profileCopyright = d.copyright;
+    raw.profile_embed_policy = int8_t(std::min<uint32_t>(d.embedPolicy.value_or(0), 3));
+    raw.has_profile_embed_policy = 1;
+}
+
 }  // namespace
 
 void TinyDngWriteParams::rebind() noexcept {
@@ -129,6 +191,8 @@ void TinyDngWriteParams::rebind() noexcept {
     exif.subsec_time_digitized = subsecDig.empty() ? nullptr : subsecDig.data();
     exif.lens_make = lensMake.empty() ? nullptr : lensMake.data();
     exif.lens_model = lensModel.empty() ? nullptr : lensModel.data();
+    raw.profile_name = profileName.empty() ? nullptr : profileName.data();
+    raw.profile_copyright = profileCopyright.empty() ? nullptr : profileCopyright.data();
     image.cfa = &cfa;
     image.raw = &raw;
     image.exif = &exif;
@@ -224,31 +288,35 @@ std::optional<TinyDngWriteParams> makeTinyDngWriteParams(const rawrcam::imaging:
     raw.has_default_scale = 1;
     raw.default_scale[0] = 1.0;
     raw.default_scale[1] = 1.0;
-    raw.color_matrix_present = 1;
-    for (int i = 0; i < 9; ++i) raw.color_matrix1[i] = color.colorTransform1.rowMajor[size_t(i)];
-    if (color.calibrationTransform1.valid) {
-        for (int i = 0; i < 9; ++i) raw.camera_calibration1[i] = color.calibrationTransform1.rowMajor[size_t(i)];
-        raw.camera_calibration_present = 1;
-    }
-    if (color.forwardMatrix1.valid) {
-        for (int i = 0; i < 9; ++i) raw.forward_matrix1[i] = color.forwardMatrix1.rowMajor[size_t(i)];
-        raw.has_forward_matrix1 = 1;
-    }
-    const auto illum2 = illuminant(color.referenceIlluminant2);
-    if (illum2 && color.colorTransform2.valid) {
-        raw.calibration_illuminant2 = *illum2;
-        for (int i = 0; i < 9; ++i) raw.color_matrix2[i] = color.colorTransform2.rowMajor[size_t(i)];
-        raw.has_color_matrix2 = 1;
-        if (color.calibrationTransform2.valid) {
-            for (int i = 0; i < 9; ++i) raw.camera_calibration2[i] = color.calibrationTransform2.rowMajor[size_t(i)];
-            raw.has_camera_calibration2 = 1;
+    if (ctx.dcpProfile) {
+        embedCameraProfile(p, ctx.dcpProfile);
+    } else {
+        raw.color_matrix_present = 1;
+        for (int i = 0; i < 9; ++i) raw.color_matrix1[i] = color.colorTransform1.rowMajor[size_t(i)];
+        if (color.calibrationTransform1.valid) {
+            for (int i = 0; i < 9; ++i) raw.camera_calibration1[i] = color.calibrationTransform1.rowMajor[size_t(i)];
+            raw.camera_calibration_present = 1;
         }
-        if (color.forwardMatrix2.valid) {
-            for (int i = 0; i < 9; ++i) raw.forward_matrix2[i] = color.forwardMatrix2.rowMajor[size_t(i)];
-            raw.has_forward_matrix2 = 1;
+        if (color.forwardMatrix1.valid) {
+            for (int i = 0; i < 9; ++i) raw.forward_matrix1[i] = color.forwardMatrix1.rowMajor[size_t(i)];
+            raw.has_forward_matrix1 = 1;
         }
+        const auto illum2 = illuminant(color.referenceIlluminant2);
+        if (illum2 && color.colorTransform2.valid) {
+            raw.calibration_illuminant2 = *illum2;
+            for (int i = 0; i < 9; ++i) raw.color_matrix2[i] = color.colorTransform2.rowMajor[size_t(i)];
+            raw.has_color_matrix2 = 1;
+            if (color.calibrationTransform2.valid) {
+                for (int i = 0; i < 9; ++i) raw.camera_calibration2[i] = color.calibrationTransform2.rowMajor[size_t(i)];
+                raw.has_camera_calibration2 = 1;
+            }
+            if (color.forwardMatrix2.valid) {
+                for (int i = 0; i < 9; ++i) raw.forward_matrix2[i] = color.forwardMatrix2.rowMajor[size_t(i)];
+                raw.has_forward_matrix2 = 1;
+            }
+        }
+        raw.calibration_illuminant1 = *illum1;
     }
-    raw.calibration_illuminant1 = *illum1;
     raw.has_analog_balance = 1;
     raw.analog_balance[0] = raw.analog_balance[1] = raw.analog_balance[2] = 1.0;
 
@@ -345,15 +413,22 @@ std::optional<TinyDngWriteParams> makeTinyDngWriteParams(const rawrcam::imaging:
         raw.noise_profile_count = 6;
     }
 
-    // GainMap OpcodeList2 from the Camera2 lens-shading map, written exactly
-    // when the app's render applies that map, so the DNG renders like the
-    // capture's JPEG. The HAL's shading-applied flag is recorded in provenance
-    // but does not decide this: the app applies the map regardless of it.
-    if (!frame.metadata.lensShadingMap.empty() && captureContext.appLensShadingCorrection) {
+    // GainMap OpcodeList2 from the Camera2 lens-shading map, always written when
+    // the frame has one, whatever the app's lens shading setting or the HAL's
+    // shading-applied flag: the stored CFA never has shading baked in, so the
+    // DNG always describes the correction. Both flags are recorded in provenance.
+    if (!frame.metadata.lensShadingMap.empty()) {
         const DngGainMapArea area{gm->activeTop, gm->activeLeft, gm->activeBottom - gm->activeTop,
                                   gm->activeRight - gm->activeLeft, storedPattern};
         if (!appendLensShadingGainMaps(p, frame.metadata, area, error)) return std::nullopt;
     }
+    // Lens profile distortion as WarpRectilinear (OpcodeList3), under the
+    // same rule: written exactly when the app's render undistorts. A frame the
+    // calibration doesn't fit keeps its DNG, uncorrected (provenance says so).
+    if (const auto& lens = frame.metadata.cameraContext->profileDistortion;
+        lens && captureContext.appDistortionCorrection)
+        (void)appendLensDistortionWarp(p, *lens, gm->activeRight - gm->activeLeft, gm->activeBottom - gm->activeTop,
+                                       nullptr);
 
     fillDngExif(p, frame, captureContext);
 

@@ -354,6 +354,10 @@ data class SetDualContrastPercent(val value: Float) : SettingsApplicationAction
 
     data class SetVideoDefringeStrength(val value: Float) : SettingsApplicationAction
 
+    data class SetPhotoCaptureSharpeningEnabled(val enabled: Boolean) : SettingsApplicationAction
+
+    data class SetPhotoCaptureSharpeningLevel(val value: CaptureSharpeningLevel) : SettingsApplicationAction
+
     data class SetPhotoDenoiseEnabled(val enabled: Boolean) : SettingsApplicationAction
 
     data class SetPhotoDenoiseStrength(val value: Float) : SettingsApplicationAction
@@ -379,6 +383,8 @@ data class SetPhotoLensShadingEnabled(val enabled: Boolean) : SettingsApplicatio
 data class SetVideoLensShadingEnabled(val enabled: Boolean) : SettingsApplicationAction
 
 data class SetDistortionCorrectionEnabled(val enabled: Boolean) : SettingsApplicationAction
+
+data class SetVideoDistortionCorrectionEnabled(val enabled: Boolean) : SettingsApplicationAction
 
 data class SetPhotoHighlightEnabled(val enabled: Boolean) : SettingsApplicationAction
 data class SetPhotoHighlightMethod(val method: Int) : SettingsApplicationAction

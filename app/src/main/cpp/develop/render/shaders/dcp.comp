@@ -1,0 +1,77 @@
+#version 450
+layout(local_size_x=16, local_size_y=16) in;
+layout(binding=0, rgba16f) uniform image2D pixels;
+layout(std430, binding=1) readonly buffer Profile { float d[]; };
+layout(push_constant) uniform Params {
+    vec4 toProfile[3];
+    vec4 toCamera[3];
+    float weight;
+} p;
+vec3 transform(vec4 rows[3], vec3 v) { return vec3(dot(rows[0].xyz,v),dot(rows[1].xyz,v),dot(rows[2].xyz,v)); }
+float encode(float x) { return x <= 0.0031308 ? 12.92*x : 1.055*pow(x,1.0/2.4)-0.055; }
+float decode(float x) { return x <= 0.04045 ? x/12.92 : pow((x+0.055)/1.055,2.4); }
+vec3 hsv(vec3 c) {
+    float hi=max(c.r,max(c.g,c.b)), lo=min(c.r,min(c.g,c.b)), delta=hi-lo;
+    float h=0;
+    if (delta>1e-10) h = hi==c.r ? (c.g-c.b)/delta : hi==c.g ? 2+(c.b-c.r)/delta : 4+(c.r-c.g)/delta;
+    return vec3(fract(h/6),hi>0 ? delta/hi : 0,hi);
+}
+vec3 rgb(vec3 c) {
+    vec3 primary=clamp(abs(fract(c.x+vec3(0,2.0/3,1.0/3))*6-3)-1,0,1);
+    return c.z*mix(vec3(1),primary,c.y);
+}
+vec3 entry(ivec3 size, int offset, int h, int s, int v) {
+    int index=offset+3*((v*size.x+h)*size.y+s);
+    return vec3(d[index],d[index+1],d[index+2]);
+}
+vec3 sampleMap(int table, vec3 c) {
+    int base=table*4;
+    ivec3 size=ivec3(d[base],d[base+1],d[base+2]);
+    if(size.x==0) return vec3(0,1,1);
+    int offset=int(d[base+3]);
+    float value=d[12+table]==1 && size.z>1 ? encode(c.z) : c.z;
+    vec3 coord=vec3(c.x*size.x,clamp(c.y,0,1)*(size.y-1),clamp(value,0,1)*(size.z-1));
+    ivec3 low=ivec3(floor(coord));
+    ivec3 high=ivec3((low.x+1)%size.x,min(low.y+1,size.y-1),min(low.z+1,size.z-1));
+    low.x=low.x%size.x;
+    vec3 f=fract(coord);
+    vec3 a=mix(entry(size,offset,low.x,low.y,low.z),entry(size,offset,high.x,low.y,low.z),f.x);
+    vec3 b=mix(entry(size,offset,low.x,high.y,low.z),entry(size,offset,high.x,high.y,low.z),f.x);
+    vec3 e=mix(entry(size,offset,low.x,low.y,high.z),entry(size,offset,high.x,low.y,high.z),f.x);
+    vec3 g=mix(entry(size,offset,low.x,high.y,high.z),entry(size,offset,high.x,high.y,high.z),f.x);
+    return mix(mix(a,b,f.y),mix(e,g,f.y),f.z);
+}
+vec3 applyMap(vec3 c,int table,bool dual) {
+    if(d[table*4]==0) return c;
+    vec3 h=hsv(max(c,vec3(0)));
+    vec3 delta=sampleMap(table,h);
+    if(dual && d[4]>0) delta=mix(sampleMap(1,h),delta,p.weight);
+    bool encoded=d[12+table]==1 && d[table*4+2]>1;
+    h.x=fract(h.x+delta.x/360);
+    h.y=clamp(h.y*delta.y,0,1);
+    // Keep scene highlights above one; table indexing clamps at the last slice.
+    h.z=encoded ? decode(max(0,encode(h.z)*delta.z)) : max(0,h.z*delta.z);
+    return rgb(h);
+}
+float curve(float x) {
+    int offset=int(d[15]), count=int(d[16]);
+    float at=clamp(x,0,1)*(count-1);
+    int i=min(int(at),count-2);
+    float result=mix(d[offset+i],d[offset+i+1],at-i);
+    return x>1 ? result+(x-1)*max(0,(d[offset+count-1]-d[offset+count-2])*(count-1)) : result;
+}
+void main() {
+    ivec2 pos=ivec2(gl_GlobalInvocationID.xy);
+    if(any(greaterThanEqual(pos,imageSize(pixels)))) return;
+    vec4 original=imageLoad(pixels,pos);
+    vec3 c=transform(p.toProfile,original.rgb);
+    c=applyMap(c,0,true)*d[17];
+    c=applyMap(c,2,false);
+    if(d[16]>0) {
+        c=max(c,vec3(0));
+        float lo=min(c.r,min(c.g,c.b)), hi=max(c.r,max(c.g,c.b));
+        float low=curve(lo), high=curve(hi);
+        c=hi-lo>1e-10 ? low+(c-lo)*(high-low)/(hi-lo) : vec3(high);
+    }
+    imageStore(pixels,pos,vec4(transform(p.toCamera,c),original.a));
+}

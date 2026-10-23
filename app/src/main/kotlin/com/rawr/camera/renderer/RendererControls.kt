@@ -266,44 +266,24 @@ internal fun RendererControls(stage: RendererStage, v: SettingsValues, dispatch:
                     if(!v.dualAutoContrast)EditorNumber("Dual contrast",v.dualContrastPercent,0f,100f,1f,20f){send(SetDualContrastPercent(it))}
                 }
                 EditorToggle("Lens shading",v.photoLensShadingEnabled){send(SetPhotoLensShadingEnabled(it))}
+                EditorToggle("Distortion correction",v.distortionCorrectionEnabled){send(SetDistortionCorrectionEnabled(it))}
+                EditorNumber("False color passes",v.photoFccSteps.toFloat(),1f,8f,1f,1f){send(SetPhotoFccSteps(it.toInt()))}
+                EditorSection("Sharpening") {
+                    EditorToggle("Capture sharpening",v.photoCaptureSharpeningEnabled){send(SetPhotoCaptureSharpeningEnabled(it))}
+                    if(v.photoCaptureSharpeningEnabled) EditorNested {
+                        EditorChoice("Strength",v.photoCaptureSharpeningLevel.label,CaptureSharpeningLevel.entries.map{it.label}){
+                            send(SetPhotoCaptureSharpeningLevel(CaptureSharpeningLevel.entries[it]))
+                        }
+                    }
+                }
             }
             RendererStage.LINEAR -> {
+                // Scene-linear gain ahead of tone: RAWR, AgX, LUT and Film Sim all apply it.
+                EditorSection("Exposure") { tone(ImageToneNumericParameter.RenderExposure) }
                 EditorSection("White balance") {
                     tone(ImageToneNumericParameter.WbTemperature);tone(ImageToneNumericParameter.WbTint)
                 }
-                EditorSection("Highlight recovery") {
-                EditorToggle("Highlight reconstruction",v.photoHighlightEnabled){send(SetPhotoHighlightEnabled(it))}
-                if(v.photoHighlightEnabled) EditorNested {
-                    val methods=listOf("Color propagation","Inpaint Opposed")
-                    EditorChoice("Method",methods[v.photoHighlightMethod.coerceIn(0,1)],methods){send(SetPhotoHighlightMethod(it))}
-                    if(v.photoHighlightMethod==1) {
-                        EditorNumber("Threshold",v.photoHighlightThreshold,.5f,2f,.05f,1f){send(SetPhotoHighlightThreshold(it))}
-                        EditorNumber("Compression",v.photoHighlightCompression,0f,300f,1f,45f){send(SetPhotoHighlightCompression(it))}
-                    }
-                }
-                }
-                EditorSection("Corrections") {
-                EditorNumber("False color passes",v.photoFccSteps.toFloat(),1f,8f,1f,1f){send(SetPhotoFccSteps(it.toInt()))}
-                EditorToggle("Defringe",v.photoDefringeEnabled){send(SetPhotoDefringeEnabled(it))}
-                if(v.photoDefringeEnabled) EditorNested {
-                    EditorNumber("Strength",v.photoDefringeStrength,0f,1f,.01f){send(SetPhotoDefringeStrength(it))}
-                    // Renderer supplies a color matrix and uses Lab defringe. The legacy
-                    // camera-RGB edge/luma controls are not consumed by that algorithm.
-                }
-                EditorToggle("Distortion correction",v.distortionCorrectionEnabled){send(SetDistortionCorrectionEnabled(it))}
-                }
-                EditorSection("Noise reduction") {
-                val denoise=v.photoDenoise
-                EditorToggle("Denoise",denoise is DenoiseConfig.Wavelet){send(SetPhotoDenoiseEnabled(it))}
-                if(denoise is DenoiseConfig.Wavelet) EditorNested {
-                    EditorNumber("Strength",denoise.config.strength,0f,8f,.05f,1f){send(SetPhotoDenoiseStrength(it))}
-                    EditorNumber("Detail",denoise.config.detail,0f,1.8f,.05f,1f){send(SetPhotoDenoiseDetail(it))}
-                    EditorNumber("Luma",denoise.config.luma,0f,1f,.01f,.25f){send(SetPhotoDenoiseLuma(it))}
-                    EditorNumber("Scales",denoise.config.scales.toFloat(),1f,7f,1f,7f){send(SetPhotoDenoiseScales(it.toInt()))}
-                }
-                }
-            }
-            RendererStage.RENDER -> {
+                EditorSection("Dynamic range") {
                 // Dynamic Range, as the camera's: local (exposure fusion), the global
                 // curve or off. It runs before the Tone Mapping below (RAWR, AgX, film).
                 val shadows = RendererRecipe.localToneShadows(job.draft)
@@ -321,7 +301,7 @@ internal fun RendererControls(stage: RendererStage, v: SettingsValues, dispatch:
                         DynamicRangeMethod.Local -> localTone(LocalToneLimits.DEFAULT_SHADOWS_EV)
                         DynamicRangeMethod.Global -> {
                             localTone(0f)
-                            if (lift == AutoKeyExposure.Off) shadowLift(AutoKeyExposure.Natural)
+                            if (lift == AutoKeyExposure.Off) shadowLift(AutoKeyExposure.Medium)
                         }
                         DynamicRangeMethod.Off -> {
                             localTone(0f)
@@ -358,6 +338,38 @@ internal fun RendererControls(stage: RendererStage, v: SettingsValues, dispatch:
                     }
                     DynamicRangeMethod.Off -> Unit
                 }
+                }
+                EditorSection("Highlight recovery") {
+                EditorToggle("Highlight reconstruction",v.photoHighlightEnabled){send(SetPhotoHighlightEnabled(it))}
+                if(v.photoHighlightEnabled) EditorNested {
+                    val methods=listOf("Color propagation","Inpaint Opposed")
+                    EditorChoice("Method",methods[v.photoHighlightMethod.coerceIn(0,1)],methods){send(SetPhotoHighlightMethod(it))}
+                    if(v.photoHighlightMethod==1) {
+                        EditorNumber("Threshold",v.photoHighlightThreshold,.5f,2f,.05f,1f){send(SetPhotoHighlightThreshold(it))}
+                        EditorNumber("Compression",v.photoHighlightCompression,0f,300f,1f,45f){send(SetPhotoHighlightCompression(it))}
+                    }
+                }
+                }
+                EditorSection("Defringe") {
+                EditorToggle("Defringe",v.photoDefringeEnabled){send(SetPhotoDefringeEnabled(it))}
+                if(v.photoDefringeEnabled) EditorNested {
+                    EditorNumber("Strength",v.photoDefringeStrength,0f,1f,.01f){send(SetPhotoDefringeStrength(it))}
+                    // Renderer supplies a color matrix and uses Lab defringe. The legacy
+                    // camera-RGB edge/luma controls are not consumed by that algorithm.
+                }
+                }
+                EditorSection("Noise reduction") {
+                val denoise=v.photoDenoise
+                EditorToggle("Denoise",denoise is DenoiseConfig.Wavelet){send(SetPhotoDenoiseEnabled(it))}
+                if(denoise is DenoiseConfig.Wavelet) EditorNested {
+                    EditorNumber("Strength",denoise.config.strength,0f,8f,.05f,1f){send(SetPhotoDenoiseStrength(it))}
+                    EditorNumber("Detail",denoise.config.detail,0f,1.8f,.05f,1f){send(SetPhotoDenoiseDetail(it))}
+                    EditorNumber("Luma",denoise.config.luma,0f,1f,.01f,.25f){send(SetPhotoDenoiseLuma(it))}
+                    EditorNumber("Scales",denoise.config.scales.toFloat(),1f,7f,1f,7f){send(SetPhotoDenoiseScales(it.toInt()))}
+                }
+                }
+            }
+            RendererStage.RENDER -> {
                 val mode=if(v.filmSimEnabled)"Film Sim" else if(v.colorRenderProfile==ColorRenderProfile.AgX)"AgX" else "RAWR"
                 EditorChoice("Tone Mapping",mode,listOf("RAWR","AgX","Film Sim")){
                     send(SetFilmSimEnabled(it==2))
@@ -376,21 +388,26 @@ internal fun RendererControls(stage: RendererStage, v: SettingsValues, dispatch:
                         send(SelectFilmPreset(presets[it].id))
                     }
                     RendererFilmPresetActions(v, dispatch)
-                    FilmSimCatalog.sections.forEach { section -> RendererFilmGroup(section.section, v.filmSimLook, dispatch) {
-                        section.subsections.forEach { sub -> EditorGroup(sub.title) {
-                            sub.controls.forEach { control -> when(control) {
+                    FilmSimCatalog.sections.filter { it.section != FilmSimSection.Output }.forEach { section -> RendererFilmGroup(section.section, v.filmSimLook, dispatch) {
+                        section.subsections.forEach { sub ->
+                          // The group header toggle already owns these enables.
+                          val controls = sub.controls.filterNot { it is FilmControl.Flag && it.flag in headerOwnedFilmFlags }
+                          if (controls.isEmpty()) return@forEach
+                          val title = if (sub.title == "Setup" && section.section == FilmSimSection.Diffusion)
+                              if (sub.key.startsWith("camera")) "Camera setup" else "Print setup" else sub.title
+                          EditorGroup(title) {
+                            controls.forEach { control -> when(control) {
                                 is FilmControl.Numeric -> { val s=FilmSimSpecs.forParameter(control.parameter)
                                     EditorNumber(s.label,v.filmSimLook.numericValue(s.parameter),s.minimum,s.maximum,s.step,s.defaultValue){send(SetFilmSimNumericValue(s.parameter,it))} }
                                 is FilmControl.Discrete -> { val options=control.field.options()
                                     EditorChoice(editorDisplayName(control.field.name),options.getOrElse(v.filmSimLook.discretePosition(control.field)){"Custom"},options){send(SetFilmSimDiscreteValue(control.field,control.field.storedValue(it)))} }
                                 is FilmControl.Flag -> EditorToggle(editorDisplayName(control.flag.name),v.filmSimLook.flagValue(control.flag)){send(SetFilmSimFlag(control.flag,it))}
                             } }
-                        } }
+                          }
+                        }
                     } }
                 } else if(v.colorRenderProfile==ColorRenderProfile.AgX) {
-                    EditorChoice("Look",v.agxPreset.lookLabel,AgxPreset.entries.map{it.lookLabel}){send(SetAgxPreset(AgxPreset.entries[it]))}
                     RendererAgxLookControls(v, dispatch)
-                    tone(ImageToneNumericParameter.RenderExposure)
                     AgxSection.entries.forEach { section ->
                         val groups = AgxGroup.entries.filter { it.section == section }
                         val title = when (section) {
@@ -423,9 +440,8 @@ internal fun RendererControls(stage: RendererStage, v: SettingsValues, dispatch:
                 } else {
                     val profiles=listOf("RAWR","sRGB")+v.userLutProfiles.map{it.name}
                     EditorChoice("Profile",v.activeProfileLabel(),profiles){when(it){0->send(SetColorRenderProfile(ColorRenderProfile.RawrBase));1->send(SetColorRenderProfile(ColorRenderProfile.SRgb));else->send(SelectUserLutProfile(v.userLutProfiles[it-2].id))}}
-                    EditorSection("Exposure & contrast") {
-                        listOf(ImageToneNumericParameter.RenderExposure, ImageToneNumericParameter.Contrast,
-                            ImageToneNumericParameter.MidtonePivot).forEach { tone(it) }
+                    EditorSection("Contrast") {
+                        listOf(ImageToneNumericParameter.Contrast, ImageToneNumericParameter.MidtonePivot).forEach { tone(it) }
                     }
                     EditorGroup("Tonal range") {
                         listOf(ImageToneNumericParameter.BlackToe, ImageToneNumericParameter.Shadows,
@@ -465,7 +481,7 @@ internal fun RendererControls(stage: RendererStage, v: SettingsValues, dispatch:
                 }
                 EditorSection("JPEG encoding") {
                 tone(ImageToneNumericParameter.JpegQuality)
-                listOf(ChoiceSelectorKind.JpegChromaSubsampling,ChoiceSelectorKind.OutputColorSpace,ChoiceSelectorKind.TransferFunction).forEach { kind ->
+                listOf(ChoiceSelectorKind.JpegChromaSubsampling).forEach { kind ->
                     val caps=SettingsCatalog.initialState().capabilities
                     val options=when(kind) {
                         ChoiceSelectorKind.JpegChromaSubsampling->caps.jpegChromaSubsamplingChoices
@@ -481,6 +497,9 @@ internal fun RendererControls(stage: RendererStage, v: SettingsValues, dispatch:
         }
     }
 }
+
+/** Enables the RendererFilmGroup header switch already drives. */
+private val headerOwnedFilmFlags = setOf(FilmSimFlag.GrainEnabled, FilmSimFlag.HalationEnabled, FilmSimFlag.ScannerEnabled)
 
 private fun editorDisplayName(name: String): String =
     name.replace(Regex("([a-z])([A-Z])"), "$1 $2").replace('_', ' ')

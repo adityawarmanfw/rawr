@@ -2,9 +2,11 @@
 
 #include <camera/NdkCameraMetadataTags.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <optional>
 #include <sstream>
+#include <vector>
 
 #include "camera/CameraMetadataTags.h"
 
@@ -71,7 +73,11 @@ CameraKeyInjectionResult applyCameraKeySettings(ACaptureRequest* request, const 
         }
         std::ostringstream line;
         line << "CAMERA_KEY_INJECTION scope="
-             << (session ? "session" : scope == CameraKeySetting::Scope::Request ? "request" : "still") << " origin=" << origin
+             << (session                                       ? "session"
+                 : scope == CameraKeySetting::Scope::Request  ? "request"
+                 : scope == CameraKeySetting::Scope::Decision ? "decision"
+                                                              : "still")
+             << " origin=" << origin
              << " tag=" << key.tag;
         if (tag) line << " id=0x" << std::hex << *tag << std::dec;
         line << " values=";
@@ -86,6 +92,38 @@ CameraKeyInjectionResult applyCameraKeySettings(ACaptureRequest* request, const 
         diag(line.str());
     }
     return result;
+}
+
+void dumpCaptureRequest(const ACaptureRequest* request, const char* kind,
+                        const std::function<void(const std::string&)>& diag) {
+    if (!request) return;
+    int32_t count = 0;
+    const uint32_t* tags = nullptr;
+    if (ACaptureRequest_getAllTags(request, &count, &tags) != ACAMERA_OK || !tags) return;
+    std::vector<uint32_t> sorted(tags, tags + count);
+    std::sort(sorted.begin(), sorted.end());
+    for (const uint32_t tag : sorted) {
+        ACameraMetadata_const_entry e{};
+        if (ACaptureRequest_getConstEntry(request, tag, &e) != ACAMERA_OK) continue;
+        std::ostringstream line;
+        line << "CAMERA_REQUEST_DUMP kind=" << kind << " tag=0x" << std::hex << tag << std::dec
+             << " type=" << int(e.type) << " count=" << e.count << " values=";
+        const uint32_t shown = std::min<uint32_t>(e.count, 16);
+        for (uint32_t i = 0; i < shown; ++i) {
+            if (i) line << ',';
+            switch (e.type) {
+                case ACAMERA_TYPE_BYTE: line << int(e.data.u8[i]); break;
+                case ACAMERA_TYPE_INT32: line << e.data.i32[i]; break;
+                case ACAMERA_TYPE_INT64: line << e.data.i64[i]; break;
+                case ACAMERA_TYPE_FLOAT: line << e.data.f[i]; break;
+                case ACAMERA_TYPE_DOUBLE: line << e.data.d[i]; break;
+                case ACAMERA_TYPE_RATIONAL: line << e.data.r[i].numerator << '/' << e.data.r[i].denominator; break;
+                default: line << '?';
+            }
+        }
+        if (e.count > shown) line << ",...";
+        diag(line.str());
+    }
 }
 
 }  // namespace rawrcam::camera

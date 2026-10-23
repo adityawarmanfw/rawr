@@ -1,4 +1,7 @@
 #include <cassert>
+#include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <map>
 #include <string>
@@ -167,10 +170,11 @@ void testProfiles() {
         {"Z170", "5", RawPixelFormat::Raw10, 4080, 3072, 31, true, 64, 1023},
         {"Z340", "5", RawPixelFormat::Raw10, 4080, 3072, 6, true, 64, 1023},
     };
-    // The binned lenses, then the 50 MP H35 / H85 and 200 MP F35 / F85 (checked in testProfileJson).
-    assert(dev.lenses.size() == std::size(table) + 4);
-    assert(dev.lenses[std::size(table)].lensId == "H35" && dev.lenses[std::size(table) + 1].lensId == "H85");
-    assert(dev.lenses[std::size(table) + 2].lensId == "F35" && dev.lenses[std::size(table) + 3].lensId == "F85");
+    // The binned lenses, then the 50 MP H14 / H35 / H85 and 200 MP F35 / F85 (checked in testProfileJson).
+    assert(dev.lenses.size() == std::size(table) + 5);
+    assert(dev.lenses[std::size(table)].lensId == "H14" && dev.lenses[std::size(table) + 1].lensId == "H35" &&
+           dev.lenses[std::size(table) + 2].lensId == "H85");
+    assert(dev.lenses[std::size(table) + 3].lensId == "F35" && dev.lenses[std::size(table) + 4].lensId == "F85");
     for (size_t i = 0; i < std::size(table); ++i) {
         const auto& e = table[i];
         const auto& r = dev.lenses[i];  // Profile order is the capture-screen order.
@@ -235,14 +239,108 @@ void testProfileJson() {
     assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","keys":[{"tag":"vendor.mode\nInt32\n7","values":[7]}]}]})", &error));
     assert(error == "Key name cannot contain whitespace; enter type and value in their separate fields");
 
+    // A lens camera profile (.dcp) loads from its path; a missing or unusable
+    // file keeps the lens (camera colour) and says why.
+    {
+        const auto path = (std::filesystem::temp_directory_path() / "camera_profile_test.dcp").string();
+        std::vector<uint8_t> dcp = {'I', 'I', 0x52, 0x43, 8, 0, 0, 0, 2, 0};
+        const auto put16 = [&](uint16_t v) { dcp.insert(dcp.end(), {uint8_t(v), uint8_t(v >> 8)}); };
+        const auto put32 = [&](uint32_t v) {
+            dcp.insert(dcp.end(), {uint8_t(v), uint8_t(v >> 8), uint8_t(v >> 16), uint8_t(v >> 24)});
+        };
+        put16(50721), put16(10), put32(9), put32(8 + 2 + 2 * 12 + 4);
+        put16(50778), put16(3), put32(1), put16(21), put16(0);
+        put32(0);
+        for (int i = 0; i < 9; ++i) put32(i % 4 == 0 ? 1 : 0), put32(1);
+        std::ofstream(path, std::ios::binary).write(reinterpret_cast<const char*>(dcp.data()), long(dcp.size()));
+        const auto json = R"({"lenses":[{"id":"a","cameraId":"0","dcp":{"path":")" + path +
+                          R"("}},{"id":"b","cameraId":"0","dcp":{"path":"/nonexistent/x.dcp"}}]})";
+        const auto withDcp = parseCameraProfile(json, &error);
+        assert(withDcp && withDcp->lenses.size() == 2);
+        const auto& a = withDcp->lenses[0];
+        assert(a.dcp && a.dcp->illuminant1 == 21 && a.dcpPath == path && a.dcpError.empty());
+        const auto& b = withDcp->lenses[1];
+        assert(!b.dcp && !b.dcpError.empty());
+        assert(serializeCameraProfile(*withDcp).find(R"("dcp":{"path":")" + path + "\"}") != std::string::npos);
+        std::filesystem::remove(path);
+    }
+
+    // vivo ultrawide lenses carry the stock app's distortion calibration (OpenCV rational,
+    // 4096x3072); the DNG warp fit reproduces it on the binned and the 50 MP frame.
+    {
+        const auto& x300 = builtInCameraProfile("vivo_x300_ultra");
+        for (const char* lensId : {"L14", "D14", "H14"}) {
+            const auto r = routeForLens(x300, lensId);
+            assert(r && r->distortion && r->distortion->width == 4096 && r->distortion->height == 3072);
+            assert(std::abs(r->distortion->k[0] + 0.051307) < 1e-9 && std::abs(r->distortion->k[7] - 0.014256) < 1e-9);
+            assert(std::abs(r->distortion->outputScale - 0.975811) < 1e-9);
+        }
+        for (const char* lensId : {"L35", "D35", "H35", "H85", "F85"}) assert(!routeForLens(x300, lensId)->distortion);
+        const auto h14 = routeForLens(x300, "H14");
+        const auto& d = *h14->distortion;
+        // Fit verified against the stock JPEG (Python reference: kr0 1.0243256, kr1 -0.1207707).
+        const auto binned = rawrcam::geometry::fitWarpRectilinear(d, 4096, 3072);
+        const auto full = rawrcam::geometry::fitWarpRectilinear(d, 8192, 6144);
+        assert(binned && full);
+        assert(std::abs(binned->kr[0] - 1.0243256) < 1e-3 && std::abs(binned->kr[1] + 0.1207707) < 5e-3);
+        assert(binned->meanErrorPx < 0.2 && binned->maxErrorPx < 3.0);
+        for (size_t i = 0; i < 4; ++i) assert(std::abs(full->kr[i] - binned->kr[i]) < 1e-6);
+        assert(full->maxErrorPx < 6.0);
+        // Rejects another aspect; scaling keeps pixel-index centres consistent.
+        assert(!rawrcam::geometry::scaledTo(d, 8160, 6144));
+        const auto big = rawrcam::geometry::scaledTo(d, 8192, 6144);
+        assert(big && std::abs(big->cx - ((d.cx + 0.5) * 2 - 0.5)) < 1e-9 && std::abs(big->fx - 2 * d.fx) < 1e-9);
+        // Viewfinder UV mapping: resolution independent, matches the pixel mapping, inverts.
+        for (const auto [u, v] : {std::pair{0.5, 0.5}, std::pair{0.02, 0.03}, std::pair{0.97, 0.6}, std::pair{0.3, 0.99}}) {
+            const auto s = rawrcam::geometry::sourceUv(d, u, v);
+            const auto p = rawrcam::geometry::sourcePixel(d, u * d.width - 0.5, v * d.height - 0.5);
+            assert(std::abs(s[0] - (p[0] + 0.5) / d.width) < 1e-12 && std::abs(s[1] - (p[1] + 0.5) / d.height) < 1e-12);
+            const auto s2 = rawrcam::geometry::sourceUv(*big, u, v);
+            assert(std::abs(s2[0] - s[0]) < 1e-9 && std::abs(s2[1] - s[1]) < 1e-9);
+            const auto back = rawrcam::geometry::correctedUv(d, s[0], s[1]);
+            assert(std::abs(back[0] - u) < 1e-7 && std::abs(back[1] - v) < 1e-7);
+        }
+        // Video undistorts only its 16:9 record crop: the contained scale zooms just enough
+        // that every output pixel samples inside the crop.
+        {
+            const auto binned = *rawrcam::geometry::scaledTo(d, 4096, 3072);
+            const double crop = rawrcam::geometry::containedOutputScale(binned, 128, 456, 3840, 2160);
+            assert(crop > binned.outputScale && crop < 1.2);
+            auto m = binned;
+            m.outputScale = crop;
+            for (const auto [x, y] : {std::pair{128.0, 456.0}, std::pair{3967.0, 456.0}, std::pair{2048.0, 456.0},
+                                      std::pair{128.0, 1536.0}, std::pair{3967.0, 2615.0}}) {
+                const auto src = rawrcam::geometry::sourcePixel(m, x, y);
+                assert(src[0] >= 128.0 - 1e-6 && src[0] <= 3967.0 + 1e-6 && src[1] >= 456.0 - 1e-6 &&
+                       src[1] <= 2615.0 + 1e-6);
+            }
+            // Cached answer is the same; a slightly smaller scale would leave the crop.
+            assert(rawrcam::geometry::containedOutputScale(binned, 128, 456, 3840, 2160) == crop);
+            m.outputScale = crop * 0.99;
+            const auto top = rawrcam::geometry::sourcePixel(m, 2048.0, 456.0);
+            const auto side = rawrcam::geometry::sourcePixel(m, 128.0, 1536.0);
+            assert(top[1] < 456.0 || side[0] < 128.0);
+        }
+        // The source of the output centre is the centre; the round trip keeps the block.
+        const auto c = rawrcam::geometry::sourcePixel(d, d.cx, d.cy);
+        assert(std::abs(c[0] - d.cx) < 1e-9 && std::abs(c[1] - d.cy) < 1e-9);
+        const auto again = parseCameraProfile(serializeCameraProfile(x300));
+        const auto h14Again = routeForLens(*again, "H14");
+        const auto& d2 = *h14Again->distortion;
+        assert(std::abs(d2.fx - d.fx) < 1e-5 && std::abs(d2.k[6] - d.k[6]) < 1e-12 && d2.outputScale == d.outputScale);
+        assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","distortion":{"width":4096,"height":3072,
+            "intrinsic":[1,1,0],"coefficients":[0,0,0,0,0,0,0,0]}}]})"));
+    }
+
     // vivo 50 MP lenses (seamless route): binned viewfinder stream, full-size capture stream, still-only keys.
     {
         const auto& x300 = builtInCameraProfile("vivo_x300_ultra");
-        for (const auto& [lensId, cameraId, h, mode] :
-             {std::tuple{"H35", "3", 3064u, 2.0}, std::tuple{"H85", "5", 3072u, 14.0}}) {
+        for (const auto& [lensId, cameraId, w, h, mode] :
+             {std::tuple{"H14", "4", 4096u, 3072u, 0.0}, std::tuple{"H35", "3", 4080u, 3064u, 2.0},
+              std::tuple{"H85", "5", 4080u, 3072u, 14.0}}) {
             const auto s = routeForLens(x300, lensId);
             assert(s && s->cameraId == cameraId && !s->unlistedStream && !s->readerUsage);
-            assert(s->preferredStream.width == 4080 && s->preferredStream.height == h);
+            assert(s->preferredStream.width == w && s->preferredStream.height == h);
             assert(s->captureStream && s->captureStream->width == 8192 && s->captureStream->height == 6144);
             assert(s->captureStream->format == RawPixelFormat::Raw16 && s->vendorGate == "vivoFullSize");
             bool stillUiModule = false, sessionUiModule = false, forced = false, stillMode = false;
@@ -266,17 +364,21 @@ void testProfileJson() {
             assert(s && s->cameraId == cameraId && s->vendorGate == "vivoFullSize" && s->captureBurst == 3 &&
                    s->captureBurstSequential == sequential);
             assert(s->captureStream && s->captureStream->width == 16320 && s->captureStream->height == h);
-            bool ultra = false, aiHighRes = false, forced = false;
+            bool ultra = false, aiHighRes = false, forced = false, decisionUiModule = false;
             for (const auto& k : s->keys) {
                 ultra |= k.tag == "vivo.control.ultra_highresolution" && k.values == std::vector<double>{1.0};
                 aiHighRes |= k.tag == "vivo.control.ai_highresolution";
                 forced |= k.tag == "vivo.control.forceSensorMode";
+                // The HAL keeps its last full-size/binned choice until a frame with this key.
+                decisionUiModule |= k.tag == "com.vivo.current_ui_module" &&
+                                    k.scope == CameraKeySetting::Scope::Decision && k.values == std::vector<double>{74.0};
             }
-            assert(ultra && !aiHighRes && !forced);
+            assert(ultra && !aiHighRes && !forced && decisionUiModule);
         }
         const auto still = parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0",
             "captureStream":{"format":"RAW16","width":8,"height":6},"captureBurst":2,
-            "captureBurstSequential":true,"keys":[{"tag":"vendor.still","scope":"still","values":[1]}]}]})");
+            "captureBurstSequential":true,"keys":[{"tag":"vendor.still","scope":"still","values":[1]},
+            {"tag":"vendor.decision","scope":"decision","values":[2]}]}]})");
         assert(still && still->lenses[0].captureStream && still->lenses[0].captureStream->height == 6);
         assert(still->lenses[0].captureBurst == 2 && still->lenses[0].captureBurstSequential);
         // Block CFA layout and colour order override.
@@ -290,6 +392,8 @@ void testProfileJson() {
         assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","cfa":{"block":3}}]})"));
         assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","cfa":{"order":"RGBG"}}]})"));
         assert(still->lenses[0].keys[0].scope == CameraKeySetting::Scope::Still);
+        assert(still->lenses[0].keys[1].scope == CameraKeySetting::Scope::Decision);
+        assert(serializeCameraProfile(*still).find("\"scope\":\"decision\"") != std::string::npos);
         assert(serializeCameraProfile(*parseCameraProfile(serializeCameraProfile(*still))) ==
                serializeCameraProfile(*still));
         assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","captureStream":{"width":0}}]})"));
@@ -318,6 +422,23 @@ void testProfileJson() {
 }  // namespace
 
 int main() {
+    // Wire values and EXIF composition agree for every rotation and reflection.
+    constexpr uint16_t expected[4][8] = {
+        {1, 2, 3, 4, 5, 6, 7, 8},
+        {2, 1, 4, 3, 8, 7, 6, 5},
+        {4, 3, 2, 1, 6, 5, 8, 7},
+        {3, 4, 1, 2, 7, 8, 5, 6}};
+    const char* names[] = {"none", "horizontal", "vertical", "both"};
+    for (uint32_t mirror = 0; mirror < 4; ++mirror) {
+        const std::string json = std::string(R"({"lenses":[{"id":"a","cameraId":"0","mirror":")") + names[mirror] + R"("}]})";
+        const auto profile = rawrcam::camera::parseCameraProfile(json);
+        assert(profile && profile->lenses.front().mirror == mirror);
+        const auto again = rawrcam::camera::parseCameraProfile(rawrcam::camera::serializeCameraProfile(*profile));
+        assert(again && again->lenses.front().mirror == mirror);
+        for (uint16_t orientation = 1; orientation <= 8; ++orientation)
+            assert(rawrcam::geometry::mirroredOrientation(orientation, mirror) == expected[mirror][orientation - 1]);
+    }
+    assert(!rawrcam::camera::parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","mirror":"invalid"}]})"));
     testGeometryGate();
     testNegotiation();
     testEmbeddedProfiles();

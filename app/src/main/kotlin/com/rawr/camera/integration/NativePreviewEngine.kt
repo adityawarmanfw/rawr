@@ -35,7 +35,7 @@ class NativePreviewEngine {
         highlightEnabled: Boolean, highlightMethod: Int, highlightThreshold: Float,
         highlightCompression: Float, fccSteps: Int, defringeStrength: Float,
         waveletDenoiseStrength: Float, waveletDenoiseDetail: Float,
-        waveletDenoiseLuma: Float, waveletDenoiseScales: Int)
+        waveletDenoiseLuma: Float, waveletDenoiseScales: Int, distortionEnabled: Boolean)
     external fun setRecordingFps(handle: Long, fps: Int): Boolean
 
     external fun setScopeDeviceRotationDegrees(handle: Long, deviceRotationDegrees: Int)
@@ -60,6 +60,9 @@ class NativePreviewEngine {
 
     /** This device's built-in lens profile JSON (matched natively from system properties). */
     external fun builtInCameraProfile(): String
+
+    /** A lens camera profile (.dcp) file: [error, name, summary]; error is empty when the app can use it. */
+    external fun inspectCameraProfile(path: String): Array<String>
 
     external fun setPreferredCameraId(handle: Long, cameraId: String?)
 
@@ -88,6 +91,9 @@ class NativePreviewEngine {
     external fun setLensShadingCorrectionEnabled(handle: Long, enabled: Boolean)
 
     external fun setHighlightReconstructionEnabled(handle: Long, enabled: Boolean)
+
+    /** Undistorts the photo viewfinder with the lens profile calibration (photo Distortion correction). */
+    external fun setDistortionCorrectionEnabled(handle: Long, enabled: Boolean)
 
     external fun setMaxAePostGain(handle: Long, gain: Float)
 

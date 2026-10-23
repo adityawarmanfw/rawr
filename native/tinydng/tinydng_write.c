@@ -48,6 +48,16 @@
 #define TD_WTAG_LINEARIZATION_TABLE 50712u
 #define TD_WTAG_PROFILE_NAME 50936u
 #define TD_WTAG_PROFILE_EMBED_POLICY 50941u
+#define TD_WTAG_PROFILE_HUE_SAT_MAP_DIMS 50937u
+#define TD_WTAG_PROFILE_HUE_SAT_MAP_DATA1 50938u
+#define TD_WTAG_PROFILE_HUE_SAT_MAP_DATA2 50939u
+#define TD_WTAG_PROFILE_TONE_CURVE 50940u
+#define TD_WTAG_PROFILE_COPYRIGHT 50942u
+#define TD_WTAG_PROFILE_LOOK_TABLE_DIMS 50981u
+#define TD_WTAG_PROFILE_LOOK_TABLE_DATA 50982u
+#define TD_WTAG_PROFILE_HUE_SAT_MAP_ENCODING 51107u
+#define TD_WTAG_PROFILE_LOOK_TABLE_ENCODING 51108u
+#define TD_WTAG_BASELINE_EXPOSURE_OFFSET 51109u
 #define TD_WTAG_TIFF_EP_STANDARD_ID 37398u
 #define TD_WTAG_XMP 700u
 #define TD_WTAG_EXPOSURE_COMPENSATION 37380u
@@ -409,6 +419,35 @@ static void td_add_doubles(td_writer *w, uint16_t tag, const double *v,
 }
 
 /* Unsigned rational pairs (num/den arrays). */
+/* FLOAT array of any length (DCP tables); fails when n is zero. */
+static void td_add_floats(td_writer *w, uint16_t tag, const float *v,
+                          size_t n) {
+  uint8_t *tmp;
+  size_t i;
+  if (!v || n == 0u || n > (SIZE_MAX / 4u) || (uint64_t)n > UINT32_MAX) {
+    w->failed = 1;
+    return;
+  }
+  tmp = (uint8_t *)malloc(n * 4u);
+  if (!tmp) {
+    w->failed = 1;
+    return;
+  }
+  for (i = 0; i < n; i++) {
+    uint32_t u;
+    memcpy(&u, &v[i], 4);
+    td_put32(tmp + i * 4u, u, w->big_endian);
+  }
+  td_add(w, tag, TD_TYPE_FLOAT, n, tmp, n * 4u);
+  free(tmp);
+}
+
+/* Floats in a DCP table of the given dims (three per entry); 0 if invalid. */
+static size_t td_profile_table_floats(const uint32_t dims[3]) {
+  uint64_t n = (uint64_t)dims[0] * dims[1] * dims[2] * 3u;
+  return (dims[0] && dims[1] && dims[2] && n <= (1u << 22)) ? (size_t)n : 0u;
+}
+
 static void td_add_urational_pairs(td_writer *w, uint16_t tag,
                                    const uint32_t *num, const uint32_t *den,
                                    uint32_t n) {
@@ -1569,6 +1608,14 @@ tinydng_status tinydng_writer_create(tinydng_context *ctx,
     /* Passthrough blobs can exceed the fixed metadata budget. */
     if (meta->raw->xmp_packet.present) w->w.extras_cap += meta->raw->xmp_packet.size + 16u;
     if (meta->raw->linearization_table) w->w.extras_cap += meta->raw->linearization_table_count * 2u + 16u;
+    if (meta->raw->profile_hue_sat_map_data1)
+      w->w.extras_cap += td_profile_table_floats(meta->raw->profile_hue_sat_map_dims) * 4u + 16u;
+    if (meta->raw->profile_hue_sat_map_data2)
+      w->w.extras_cap += td_profile_table_floats(meta->raw->profile_hue_sat_map_dims) * 4u + 16u;
+    if (meta->raw->profile_look_table_data)
+      w->w.extras_cap += td_profile_table_floats(meta->raw->profile_look_table_dims) * 4u + 16u;
+    if (meta->raw->profile_tone_curve_points)
+      w->w.extras_cap += meta->raw->profile_tone_curve_point_count * 4u + 16u;
   }
   w->w.extras = (uint8_t *)td_ctx_alloc(ctx, w->w.extras_cap, err);
   if (!w->w.extras) {
@@ -1888,6 +1935,35 @@ tinydng_status tinydng_writer_create(tinydng_context *ctx,
       }
       if (raw->has_profile_embed_policy) {
         td_add_long(&w->w, TD_WTAG_PROFILE_EMBED_POLICY, (uint32_t)raw->profile_embed_policy);
+      }
+      if (raw->profile_copyright) {
+        td_add_ascii(&w->w, TD_WTAG_PROFILE_COPYRIGHT, raw->profile_copyright);
+      }
+      if (raw->profile_hue_sat_map_data1) {
+        size_t n = td_profile_table_floats(raw->profile_hue_sat_map_dims);
+        td_add_longs(&w->w, TD_WTAG_PROFILE_HUE_SAT_MAP_DIMS, raw->profile_hue_sat_map_dims, 3);
+        td_add_floats(&w->w, TD_WTAG_PROFILE_HUE_SAT_MAP_DATA1, raw->profile_hue_sat_map_data1, n);
+        if (raw->profile_hue_sat_map_data2) {
+          td_add_floats(&w->w, TD_WTAG_PROFILE_HUE_SAT_MAP_DATA2, raw->profile_hue_sat_map_data2, n);
+        }
+        if (raw->has_profile_hue_sat_map_encoding) {
+          td_add_long(&w->w, TD_WTAG_PROFILE_HUE_SAT_MAP_ENCODING, raw->profile_hue_sat_map_encoding);
+        }
+      }
+      if (raw->profile_look_table_data) {
+        td_add_longs(&w->w, TD_WTAG_PROFILE_LOOK_TABLE_DIMS, raw->profile_look_table_dims, 3);
+        td_add_floats(&w->w, TD_WTAG_PROFILE_LOOK_TABLE_DATA, raw->profile_look_table_data,
+                      td_profile_table_floats(raw->profile_look_table_dims));
+        if (raw->has_profile_look_table_encoding) {
+          td_add_long(&w->w, TD_WTAG_PROFILE_LOOK_TABLE_ENCODING, raw->profile_look_table_encoding);
+        }
+      }
+      if (raw->profile_tone_curve_points && raw->profile_tone_curve_point_count) {
+        td_add_floats(&w->w, TD_WTAG_PROFILE_TONE_CURVE, raw->profile_tone_curve_points,
+                      raw->profile_tone_curve_point_count);
+      }
+      if (raw->has_baseline_exposure_offset) {
+        td_add_srationals(&w->w, TD_WTAG_BASELINE_EXPOSURE_OFFSET, &raw->baseline_exposure_offset, 1);
       }
       if (raw->has_tiff_ep_standard_id) {
         td_add(&w->w, TD_WTAG_TIFF_EP_STANDARD_ID, TD_TYPE_BYTE, 4,

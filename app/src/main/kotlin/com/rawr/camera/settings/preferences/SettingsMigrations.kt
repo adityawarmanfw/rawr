@@ -28,3 +28,9 @@ internal fun migrateV33RenderProfiles(values: com.rawr.camera.settings.model.Set
     videoColorRenderProfile = values.colorRenderProfile,
     videoUserLutProfileId = values.selectedUserLutProfileId
 )
+
+/** Lens shading correction is on by default for photo and video; existing installs adopt it once. */
+internal fun migrateV37LensShadingDefaults(values: com.rawr.camera.settings.model.SettingsValues) = values.copy(
+    photoLensShadingEnabled = true,
+    videoLensShadingEnabled = true
+)

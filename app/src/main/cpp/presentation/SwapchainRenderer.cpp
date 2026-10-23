@@ -153,7 +153,8 @@ VkResult SwapchainRenderer::present(VkQueue queue, VkSemaphore renderFinished, u
 void SwapchainRenderer::record(VkCommandBuffer command, uint32_t frameSlot, uint32_t imageIndex, uint32_t previewWidth,
                                uint32_t previewHeight, int sensorOrientationDegrees, int displayRotationDegrees,
                                uint32_t diagnosticMode, bool monitoringOverlayEnabled, uint32_t exifOrientation,
-                               bool videoSource, uint32_t cropX, uint32_t cropY, uint32_t cropW, uint32_t cropH) {
+                               bool videoSource, uint32_t cropX, uint32_t cropY, uint32_t cropW, uint32_t cropH,
+                               const rawrcam::geometry::LensDistortionModel* lensWarp, uint32_t lensMirror) {
     if (frameSlot >= rawrcam::imaging::kRealtimeFramesInFlight || imageIndex >= swapImages_.size() ||
         !hasFrameSources_ || (videoSource && !hasVideoFrameSources_)) {
         throw std::out_of_range("SwapchainRenderer record indices/sources invalid");
@@ -182,6 +183,17 @@ void SwapchainRenderer::record(VkCommandBuffer command, uint32_t frameSlot, uint
     info.displayRotationDegrees = displayRotationDegrees;
     info.exifOrientation = exifOrientation;
     info.diagnosticMode = diagnosticMode;
+    info.lensWarp = videoSource ? nullptr : lensWarp;
+    // Video-source frames were mirrored by the recorder.
+    info.lensMirror = videoSource ? 0u : lensMirror;
+    if (!videoSource) {
+        // Same gate as PresentRecorder (live view only, no diagnostic/EXIF review).
+        const bool live = exifOrientation == 0u && diagnosticMode == 0u;
+        std::lock_guard<std::mutex> lock(lensWarpMutex_);
+        if (lensWarp && live) presentedLensWarp_ = *lensWarp;
+        else presentedLensWarp_.reset();
+        presentedLensMirror_ = live ? lensMirror : 0u;
+    }
     info.overlayEnabled =
         !videoSource && monitoringOverlayEnabled && overlayViews_[frameSlot] != VK_NULL_HANDLE && diagnosticMode == 0u;
     for (uint32_t i = 0; i < 3; ++i) {

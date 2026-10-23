@@ -29,6 +29,7 @@ PFN_vkCmdCopyBufferToImage vkCmdCopyBufferToImage = nullptr;
 PFN_vkCmdCopyImage vkCmdCopyImage = nullptr;
 PFN_vkCmdCopyImageToBuffer vkCmdCopyImageToBuffer = nullptr;
 PFN_vkCmdDispatch vkCmdDispatch = nullptr;
+PFN_vkCmdDispatchIndirect vkCmdDispatchIndirect = nullptr;
 PFN_vkCmdDispatchBase vkCmdDispatchBase = nullptr;
 PFN_vkCmdDraw vkCmdDraw = nullptr;
 PFN_vkCmdEndRenderPass vkCmdEndRenderPass = nullptr;
@@ -155,6 +156,7 @@ void clearFns() {
     vkCmdCopyImage = nullptr;
     vkCmdCopyImageToBuffer = nullptr;
     vkCmdDispatch = nullptr;
+    vkCmdDispatchIndirect = nullptr;
     vkCmdDispatchBase = nullptr;
     vkCmdDraw = nullptr;
     vkCmdEndRenderPass = nullptr;
@@ -397,6 +399,7 @@ void configure(const std::string& nativeLibraryDir, const std::string& path) {
     setIf(vkCmdCopyImage, gGipa(VK_NULL_HANDLE, "vkCmdCopyImage"));
     setIf(vkCmdCopyImageToBuffer, gGipa(VK_NULL_HANDLE, "vkCmdCopyImageToBuffer"));
     setIf(vkCmdDispatch, gGipa(VK_NULL_HANDLE, "vkCmdDispatch"));
+    setIf(vkCmdDispatchIndirect, gGipa(VK_NULL_HANDLE, "vkCmdDispatchIndirect"));
     setIf(vkCmdDispatchBase, gGipa(VK_NULL_HANDLE, "vkCmdDispatchBase"));
     setIf(vkCmdDraw, gGipa(VK_NULL_HANDLE, "vkCmdDraw"));
     setIf(vkCmdEndRenderPass, gGipa(VK_NULL_HANDLE, "vkCmdEndRenderPass"));
@@ -529,6 +532,7 @@ void loadInstance(VkInstance instance) {
     setIf(vkCmdCopyImage, gGipa(instance, "vkCmdCopyImage"));
     setIf(vkCmdCopyImageToBuffer, gGipa(instance, "vkCmdCopyImageToBuffer"));
     setIf(vkCmdDispatch, gGipa(instance, "vkCmdDispatch"));
+    setIf(vkCmdDispatchIndirect, gGipa(instance, "vkCmdDispatchIndirect"));
     setIf(vkCmdDispatchBase, gGipa(instance, "vkCmdDispatchBase"));
     setIf(vkCmdDraw, gGipa(instance, "vkCmdDraw"));
     setIf(vkCmdEndRenderPass, gGipa(instance, "vkCmdEndRenderPass"));
@@ -656,6 +660,7 @@ void loadDevice(VkDevice device) {
     setIf(vkCmdCopyImage, gGdpa(device, "vkCmdCopyImage"));
     setIf(vkCmdCopyImageToBuffer, gGdpa(device, "vkCmdCopyImageToBuffer"));
     setIf(vkCmdDispatch, gGdpa(device, "vkCmdDispatch"));
+    setIf(vkCmdDispatchIndirect, gGdpa(device, "vkCmdDispatchIndirect"));
     setIf(vkCmdDispatchBase, gGdpa(device, "vkCmdDispatchBase"));
     setIf(vkCmdDraw, gGdpa(device, "vkCmdDraw"));
     setIf(vkCmdEndRenderPass, gGdpa(device, "vkCmdEndRenderPass"));

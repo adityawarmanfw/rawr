@@ -1,8 +1,22 @@
 #include <cassert>
 
 #include "camera/FullSizeSequence.h"
+#include "capture/BurstLimits.h"
 using rawrcam::camera::FullSizeSequence;
 int main() {
+    using rawrcam::capture::fullSizeBurstCount;
+    assert(fullSizeBurstCount(16, 0) == 16);
+    assert(fullSizeBurstCount(16, 16) == 16);
+    assert(fullSizeBurstCount(16, 3) == 3);
+    assert(fullSizeBurstCount(16, 1) == 1);
+    assert(fullSizeBurstCount(58, 0) == 30);
+    assert(fullSizeBurstCount(58, 100) == 30);
+    FullSizeSequence largeBurst;
+    assert(largeBurst.begin(1, 1));
+    largeBurst.submitted(1, 0, 10'000'000, 16);
+    assert(!largeBurst.expire(6 * 8010));
+    assert(!largeBurst.expire(16 * 8010 - 1));
+    assert(largeBurst.expire(16 * 8010));
     FullSizeSequence shot;
     assert(shot.begin(1, 10));
     assert(!shot.begin(1, 11));  // includes focus preparation ownership

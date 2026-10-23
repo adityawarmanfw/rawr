@@ -213,6 +213,14 @@ void RenderResources::ensureLocalTone() {
         rawr::vk::GpuContext{physicalDevice_, device_, queueFamily_}, 1u);
     localToneDevice_ = device_;
 }
+void RenderResources::ensureCaptureSharpening() {
+    if (captureSharpening_ && captureSharpeningDevice_ == device_) return;
+    // A device change means the old one is gone; the caller has no work in flight.
+    captureSharpening_.reset();
+    captureSharpening_ = std::make_unique<rawr::capsharp::CaptureSharpening>(
+        rawr::vk::GpuContext{physicalDevice_, device_, queueFamily_});
+    captureSharpeningDevice_ = device_;
+}
 void RenderResources::closeFilmAssets() noexcept {
     if (filmAssets_.hanatos) {
         AAsset_close(filmAssets_.hanatos);
@@ -433,7 +441,10 @@ void RenderResources::releasePixels() noexcept {
         postDemosaic_.reset();
         localTone_.reset();
         localToneDevice_ = VK_NULL_HANDLE;
+        captureSharpening_.reset();
+        captureSharpeningDevice_ = VK_NULL_HANDLE;
     }
+    if (captureSharpening_) captureSharpening_->releaseScratch();
     if (device_) {
         if (mapped_ && readbackMemory_) vkUnmapMemory(device_, readbackMemory_);
         mapped_ = nullptr;
@@ -477,11 +488,14 @@ VkImageView RenderResources::prepareGlow(uint32_t width, uint32_t height) {
     return glowGain_.view;
 }
 void RenderResources::reset() noexcept {
+    dcpStage_.reset();
     // Destroy local tone while device_ is still valid: its destructor
     // issues vkDestroy* on its stored VkDevice. Must precede the nulling
     // below (destroyResources keeps it alive under persistence).
     localTone_.reset();
     localToneDevice_ = VK_NULL_HANDLE;
+    captureSharpening_.reset();
+    captureSharpeningDevice_ = VK_NULL_HANDLE;
     releasePixels();
     tonemap_.reset();
     postDemosaic_.reset();

@@ -69,6 +69,10 @@ internal fun SettingsSectionContent(
             LensShadingSettings(state, dispatch)
         }
 
+        SettingsSection.Distortion -> {
+            DistortionSettings(state, dispatch)
+        }
+
         SettingsSection.Jpeg -> {
             JpegSettings(state, dispatch)
         }

@@ -7,6 +7,7 @@
 #include <optional>
 
 #include "color/FrameColorTransform.h"
+#include "develop/render/DcpRenderStage.h"
 #include "imaging/FrameLimits.h"
 #include "imaging/RawFrameLease.h"
 #include "metadata/FrameMetadataSnapshot.h"
@@ -16,6 +17,9 @@
 namespace rawrcam::pipeline {
 
 struct FrameSlot {
+    VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
+    VkDevice device = VK_NULL_HANDLE;
+    std::unique_ptr<develop::rendered::DcpRenderStage> dcpStage;
     VkCommandBuffer command = VK_NULL_HANDLE;
     VkCommandBuffer videoCommand = VK_NULL_HANDLE;
     // Recording splits each frame into three submissions (demosaic, post,

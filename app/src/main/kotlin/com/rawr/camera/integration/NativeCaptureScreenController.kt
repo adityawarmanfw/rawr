@@ -68,11 +68,19 @@ class NativeCaptureScreenController(
                     overlayTriggers.autofocusStatus(focus.status, focus.mode == FocusMode.Mf)
                 }
                 updateFaces(NativeCameraUiSnapshot.parseFaces(coordinator.faceDetectionsSnapshot()))
-                captureQueue.poll { capturePresentation.completed(pollStillCompletion()) }
+
                 // Applied exposure is display telemetry, not part of the AE loop.
                 // 10 Hz is responsive enough and avoids unnecessary JNI/JSON/UI churn;
-                // a bracket hold polls faster so its end is shown promptly.
-                delay(if (state.value.bracketHoldActive) 33 else 100)
+                // a bracket hold, a long exposure, or preview recovery polls faster
+                // so the shutter ring start/end is shown promptly.
+                delay(if (state.value.bracketHoldActive || state.value.restoringPreview ||
+                    state.value.longExposure.active) 33 else 100)
+            }
+        }
+        scope.launch {
+            while (isActive) {
+                captureQueue.poll { capturePresentation.completed(pollStillCompletion()) }
+                delay(100)
             }
         }
     }
@@ -423,8 +431,8 @@ class NativeCaptureScreenController(
     private fun enqueueStillCapture() {
         val format = CaptureOutputFormat.from(state.value.dngEnabled, state.value.jpegEnabled,
                                               state.value.capabilities.dngOnly)
-        // Hold starts at the press, including full-size allocation and focus readiness.
-        if (state.value.hdrPlusBracketedActive || state.value.fullSizeCapture) update { it.copy(bracketHoldPresses = it.bracketHoldPresses + 1) }
+        // Hold starts at the press; the capture serial hands ownership to native when submission begins.
+        if (state.value.hdrPlusBracketedActive || state.value.fullSizeCapture) update { it.copy(bracketHoldPresses = it.bracketHoldPresses + 1, fullSizePressSerial = it.fullSizeCaptureSerial) }
         try {
             captureQueue.enqueue(format)
         } catch (error: RuntimeException) {
@@ -475,6 +483,9 @@ class NativeCaptureScreenController(
             current.copy(
                 bracketHoldOpened = opened,
                 bracketHoldDone = done,
+                fullSizeCaptureSerial = snapshot.fullSizeCaptureSerial,
+                fullSizeExposurePending = snapshot.fullSizeExposurePending,
+                restoringPreview = snapshot.restoringPreview,
                 fullSizeCapture = snapshot.fullSizeCapture,
                 fullSizeCapturePending = snapshot.fullSizeCapturePending,
                 fullSizeBinnedStills = maxOf(current.fullSizeBinnedStills, snapshot.fullSizeBinnedStills),

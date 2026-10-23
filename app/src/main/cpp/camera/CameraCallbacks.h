@@ -14,7 +14,7 @@ class CameraEventSink {
     virtual void cameraCaptureCompleted(uint64_t generation, const ACaptureRequest* request,
                                         const ACameraMetadata* result) = 0;
     // The sensor started exposing a request. Runs on a camera thread.
-    virtual void cameraCaptureStarted(uint64_t /*generation*/, const ACaptureRequest* /*request*/) {}
+    virtual void cameraCaptureStarted(uint64_t /*generation*/, const ACaptureRequest* /*request*/, int64_t /*timestamp*/) {}
     // Every failed capture or lost buffer, unthrottled. Runs on a camera thread.
     virtual void cameraCaptureFailed(uint64_t /*generation*/) {}
     virtual void cameraStillFailed(uint64_t /*generation*/, const ACaptureRequest* /*request*/) {}

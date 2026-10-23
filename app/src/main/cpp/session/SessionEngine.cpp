@@ -17,6 +17,8 @@
 #include "diagnostics/logging/RuntimeTraceRecorder.h"
 #include "geometry/CfaPattern.h"
 #include "capture/FullSizeFallbacks.h"
+#include "capture/BurstLimits.h"
+#include "imaging/FrameLimits.h"
 #include "imaging/BinnedCorner.h"
 #include "imaging/Raw16CpuSnapshot.h"
 #include "imaging/RawFrameLease.h"
@@ -432,7 +434,7 @@ void SessionEngine::onFullSizeFrame(imaging::AcquiredRawFrame frame) {
         if (frame.generation != fullSize_.generation || fullSize_.failed) return;
         fullSize_.frames.push_back(std::move(lease));
         // The reader holds few images: never keep more than it can lend.
-        while (fullSize_.frames.size() > FullSizeStills::kMaxFrames) fullSize_.frames.pop_front();
+        while (fullSize_.frames.size() > imaging::kRawReaderMaxImages) fullSize_.frames.pop_front();
     }
     fullSize_.arrived.notify_all();
 }
@@ -538,7 +540,7 @@ void SessionEngine::observeFullSizeBurstFrame(const rawrcam::metadata::FrameMeta
 uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
     auto* controller = cameraControls_.controller();
     if (!controller) return 0u;
-    uint32_t count = std::clamp<uint32_t>(maxFrames, 2u, FullSizeStills::kMaxFrames);
+    uint32_t count = std::clamp<uint32_t>(maxFrames, 2u, capture::kMaxBurstFrames);
     rawrcam::metadata::CameraContextMetadataPtr context;
     uint64_t tag = 0;
     {
@@ -577,7 +579,7 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
     // A sequential lens gets one still now and each next one once the
     // previous frame is in.
     const bool sequential = controller->fullSizeBurstSequential();
-    if (!controller->captureFullSize(tag, sequential ? 1u : count, true))
+    if (!controller->captureFullSize(tag, sequential ? 1u : count, true, sequential && count > 1))
         return UINT32_MAX;  // acquisition failed; never submit a replacement capture
     const auto exposure = controller->deferredCaptureExposure();
     const auto budgetMs = count * (8000 + (exposure ? exposure->exposureTimeNs / 1'000'000 : 0));
@@ -628,7 +630,7 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
         // the sensor switch. A refused submission ends the burst with the
         // frames already in.
         if (sequential && index + 1 < count &&
-            (!controller->waitFullSizeIdle(remainingMs()) || !controller->captureFullSize(tag, 1u, true))) {
+            (!controller->waitFullSizeIdle(remainingMs()) || !controller->captureFullSize(tag, 1u, true, index + 2 < count))) {
             appendDiagnostic("FULL_SIZE_BURST_SEQUENTIAL_STOPPED tag=" + std::to_string(tag) +
                              " requested=" + std::to_string(count) + " submitted=" + std::to_string(index + 1));
             for (; count > index + 1; --count) journal->dropExpected();
@@ -637,6 +639,10 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
         const auto copy =
             imaging::copyCompletedRaw16AhbToPacked(lease.ahb(), width, height, packed, lease.fence(), lease.image());
         lease = imaging::RawFrameLease(imaging::AcquiredRawFrame{});
+        // A queued burst may have filled every reader lease while this frame was copied.
+        // Returning a lease does not promise a new image-available notification.
+        // No fullSize_ or session mutex is held while the reader dispatches pending frames.
+        captureFrameIngress_.resumeAfterRelease(context->cameraContextGeneration);
         if (!copy.success) throw std::runtime_error("full_size_copy_failed:" + copy.error);
         // A frame the HAL returned binned (corner of the buffer) would wreck
         // the merge: leave it out and merge the full-size ones.

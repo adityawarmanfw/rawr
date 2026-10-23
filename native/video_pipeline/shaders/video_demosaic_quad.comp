@@ -1,0 +1,39 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_control_flow_attributes : require
+
+// Recording demosaic for 1:1 recordings (no 2x reduction); writes pre-WB RGB and
+// sensor clip state for post processing. One thread per 2x2 Bayer cell, so a
+// workgroup covers 32x32 output pixels; see video_quad_core.glsl.
+#define VIDEO_QT 16
+layout(local_size_x = VIDEO_QT, local_size_y = VIDEO_QT, local_size_z = 1) in;
+#define VIDEO_RAW_IMAGE_BINDING 0
+#define VIDEO_RAW_BUFFER_BINDING 1
+#define VIDEO_LSC_BINDING 3
+#include "video_quad_core.glsl"
+layout(binding = 2, rgba16f) uniform writeonly image2D linearOut;
+layout(binding = 4, r16ui) uniform writeonly uimage2D clipStateOut;
+
+void main() {
+    videoLoadTile();
+    videoBuildPlane();
+    ivec2 cell = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 outPixel = cell * 2;
+    if (outPixel.x >= int(pc.outWidth) || outPixel.y >= int(pc.outHeight)) return;
+    ivec2 base = ivec2(pc.cropX, pc.cropY) + outPixel;
+    videoLoadCellPlane(base);
+    uint state = 0u;
+    [[unroll]] for (int dy = 0; dy < 2; ++dy) {
+        [[unroll]] for (int dx = 0; dx < 2; ++dx) {
+            ivec2 q = base + ivec2(dx, dy);
+            float value = videoCachedAt(q);
+            ivec2 at = outPixel + ivec2(dx, dy);
+            if (at.x < int(pc.outWidth) && at.y < int(pc.outHeight))
+                imageStore(linearOut, at, vec4(videoPixelRgb(dx, dy, value) * videoGainAt(q), 1.0));
+            // The cache holds the normalized sample clamped to [0, 1].
+            if (value >= 0.995) state |= 1u << uint(videoChannelRel(ivec2(dx, dy)));
+        }
+    }
+    // One clip-state texel per cell: the image is half the output size.
+    imageStore(clipStateOut, cell, uvec4(state, 0u, 0u, 0u));
+}

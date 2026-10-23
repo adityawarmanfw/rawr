@@ -6,6 +6,7 @@ import com.rawr.camera.fixtures.CaptureFixtures
 import com.rawr.camera.settings.architecture.*
 import com.rawr.camera.settings.model.*
 import com.rawr.camera.settings.preferences.migrateV33RenderProfiles
+import com.rawr.camera.settings.preferences.migrateV37LensShadingDefaults
 import kotlin.test.*
 
 class RenderProfileSelectionTest {
@@ -66,6 +67,31 @@ class RenderProfileSelectionTest {
         assertEquals(ntrl, ntrl.withAgxValue(AgxParameter.ToePower, 2f))
     }
 
+    @Test fun savedAgxLooksAppearAfterReloadAndApplyFromCompactStrip() {
+        val edited = defaults.withRenderProfile(RenderProfileSelection.Agx(AgxPreset.Smooth))
+            .withAgxValue(AgxParameter.MasterOutset, 0.5f)
+        val saved = reduceAgxLooks(SettingsCatalog.initialState().copy(values = edited), SaveAgxLook("My AgX")).values
+        val reloaded = defaults.copy(agxLooks = com.rawr.camera.settings.preferences.LookFileCodec.decodeAgxLooks(
+            com.rawr.camera.settings.preferences.LookFileCodec.encodeAgxLooks(saved.agxLooks)))
+        val look = reloaded.agxLooks.single()
+        val selection = RenderProfileSelection.SavedAgx(look.id)
+        assertTrue(reloaded.toRenderProfileQuickState().options.contains(RenderProfileQuickOption(selection, "My AgX")))
+        assertEquals(builtIn(ColorRenderProfile.RawrBase), reloaded.toRenderProfileQuickState().selectedId)
+        for (mode in listOf("photo", "video")) {
+            val selected = reloaded.copy(captureModeId = mode).withRenderProfile(selection)
+            assertEquals(AgxPreset.Smooth, selected.regularAgxPreset())
+            assertEquals(edited.activeAgxValues(), selected.activeAgxValues())
+            assertEquals(selection, selected.toRenderProfileQuickState().selectedId)
+            assertEquals(look.values, selected.toRenderProfileQuickState().agx?.values)
+            assertEquals(RenderProfileSelection.Agx(look.base),
+                selected.withAgxValue(AgxParameter.MasterOutset, 0.25f).toRenderProfileQuickState().selectedId)
+        }
+        val log = reloaded.copy(captureModeId = "video", videoLogEnabled = true)
+        assertEquals(log, log.withRenderProfile(selection))
+        assertTrue(log.toRenderProfileQuickState().options.none { it.id is RenderProfileSelection.SavedAgx })
+        assertEquals(reloaded, reloaded.withRenderProfile(RenderProfileSelection.SavedAgx("deleted")))
+    }
+
     @Test fun logCatalogAndRememberedSelection() {
         val log = defaults.copy(captureModeId = "video", videoLogEnabled = true)
         val quick = log.toRenderProfileQuickState()
@@ -94,6 +120,16 @@ class RenderProfileSelectionTest {
         assertEquals(original.rawrBaseTone, migrated.rawrBaseTone)
         assertFalse(migrated.videoLogEnabled)
         assertEquals(VideoLogProfile.LogC3, migrated.videoLogProfile)
+    }
+
+    @Test fun lensShadingIsOnForPhotoAndVideoByDefaultAndAfterMigration() {
+        assertTrue(defaults.photoLensShadingEnabled)
+        assertTrue(defaults.videoLensShadingEnabled)
+        val saved = defaults.copy(photoLensShadingEnabled = false, videoLensShadingEnabled = false, videoDenoiseEnabled = true)
+        val migrated = migrateV37LensShadingDefaults(saved)
+        assertTrue(migrated.photoLensShadingEnabled)
+        assertTrue(migrated.videoLensShadingEnabled)
+        assertTrue(migrated.videoDenoiseEnabled)  // nothing else is touched
     }
 
     @Test fun toggleIsVideoOnlyAndPersistsSeparately() {

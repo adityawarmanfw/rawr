@@ -1,0 +1,27 @@
+#version 450
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+// In-place mirror of the final post-demosaic image (lens profile mirror).
+// Each pixel pairs with its mirror image; the pair's lower linear index swaps
+// both, so every pixel is written once and no second image is needed.
+layout(binding = 0, rgba16f) uniform restrict image2D image;
+layout(push_constant) uniform Push {
+    uint width;
+    uint height;
+    // Bit 0 flips horizontally, bit 1 vertically.
+    uint mirror;
+}
+pc;
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (uint(p.x) >= pc.width || uint(p.y) >= pc.height) return;
+    ivec2 q = ivec2((pc.mirror & 1u) != 0u ? int(pc.width) - 1 - p.x : p.x,
+                    (pc.mirror & 2u) != 0u ? int(pc.height) - 1 - p.y : p.y);
+    uint ip = uint(p.y) * pc.width + uint(p.x);
+    uint iq = uint(q.y) * pc.width + uint(q.x);
+    if (ip >= iq) return;
+    vec4 a = imageLoad(image, p);
+    vec4 b = imageLoad(image, q);
+    imageStore(image, p, b);
+    imageStore(image, q, a);
+}

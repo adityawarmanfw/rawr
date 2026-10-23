@@ -15,7 +15,14 @@ enum class VendorKeyScope(val wireName: String, val label: String) {
     Request("request", "Request"),
 
     /** Only on full-size still requests of a capture-stream lens (vivo 50/200 MP). */
-    Still("still", "Still");
+    Still("still", "Still"),
+
+    /**
+     * Only on a one-frame viewfinder request (lowest ISO, companion YUV only) sent before the
+     * full-size stills of a capture-stream lens: the vivo 200 MP HAL re-decides full size vs
+     * binned only on such a frame.
+     */
+    Decision("decision", "Decision");
 
     companion object {
         fun fromWire(value: String?): VendorKeyScope = entries.firstOrNull { it.wireName == value } ?: Session
@@ -87,6 +94,12 @@ data class RawStreamChoice(
     val label: String get() = if (isLargest) "${format.label} (largest)" else "${format.label} ${width}×$height"
 }
 
+/**
+ * A DNG camera profile (.dcp) for the lens, replacing the camera's colour calibration in the DNG and
+ * the app's render. [file] names the copy in app storage (content-addressed); [name] is its ProfileName.
+ */
+data class LensDcp(val file: String, val name: String)
+
 data class LensProfile(
     val name: String,
     val cameraId: String,
@@ -117,8 +130,26 @@ data class LensProfile(
     /** Remosaic for the viewfinder, video and merge frames: "fast" or "standard" (GPU). */
     val cfaLive: String = "standard",
     /** Remosaic for single photos: "standard" or "high" (CPU). */
-    val cfaPhoto: String = "high"
+    val cfaPhoto: String = "high",
+    /** Lens distortion calibration as its profile JSON object (validated natively); null for none. */
+    val distortion: String? = null,
+    /** Mirror of the image (photo, video, viewfinder; DNG via its orientation). */
+    val mirror: LensMirror = LensMirror.None,
+    /** Camera profile (.dcp) replacing the camera's colour; null for the camera's own. */
+    val dcp: LensDcp? = null
 )
+
+/** Lens image mirror in the sensor frame; [wireName] is the profile JSON value. */
+enum class LensMirror(val wireName: String, val label: String) {
+    None("none", "None"),
+    Horizontal("horizontal", "Horizontal"),
+    Vertical("vertical", "Vertical"),
+    Both("both", "Both (180°)");
+
+    companion object {
+        fun fromWire(value: String?): LensMirror = entries.firstOrNull { it.wireName == value } ?: None
+    }
+}
 
 val CFA_BLOCKS = listOf(1, 2, 4)
 val CFA_ORDERS = listOf("RGGB", "GRBG", "GBRG", "BGGR")
@@ -134,6 +165,10 @@ fun validateLensProfile(lens: LensProfile, others: List<LensProfile>): List<Stri
         others.any { it.name.trim().equals(name, ignoreCase = true) } -> add("Another lens is named $name")
     }
     if (lens.cameraId.isBlank()) add("Choose a camera")
+    lens.captureStream?.let {
+        if (it.width <= 0 || it.height <= 0) add("Capture width and height must be positive whole numbers")
+        if (lens.captureBurst !in 0..30) add("Maximum burst frames must be between 0 and 30")
+    }
     validateLevels(lens.levels)?.let { add(it) }
     lens.vendorKeys.forEach { key -> validateVendorKey(key)?.let { add(it) } }
 }

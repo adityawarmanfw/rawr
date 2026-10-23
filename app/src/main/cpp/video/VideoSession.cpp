@@ -82,6 +82,7 @@ void VideoSession::setProcessingConfig(const VideoProcessingConfig& config) noex
     // FCC capacity and the defringe pipeline are allocated at recording start.
     // Keep those settings latched; per-frame values can change without an idle.
     activeConfig_.lensShadingEnabled = config.lensShadingEnabled;
+    activeConfig_.distortionEnabled = config.distortionEnabled;
     activeConfig_.highlightEnabled = config.highlightEnabled;
     activeConfig_.highlightMethod = config.highlightMethod;
     activeConfig_.highlightThreshold = config.highlightThreshold;
@@ -144,7 +145,9 @@ void VideoSession::record(VkCommandBuffer command, uint32_t frameSlot, uint32_t 
     frozen.renderTransform = recordingTone_->renderTransform;
     frozen.outputSpace = recordingTone_->outputSpace;
     recorder_.record(command, frameSlot, imageIndex, rawWidth, rawHeight, rawFrame, cameraToAp1, frozen, timing,
-                     activeConfig_, monitorEnabled, splitSubmit, sceneMeter);
+                     activeConfig_, monitorEnabled, splitSubmit, sceneMeter,
+                     activeConfig_.distortionEnabled && lensDistortion_ ? &*lensDistortion_ : nullptr,
+                     dcpProfile_, dcpWeight1_, lensMirror_);
 }
 bool VideoSession::prewarmVideo(uint32_t width, uint32_t height, uint32_t bitDepth) {
     VideoSession::ProcessingKey key{};

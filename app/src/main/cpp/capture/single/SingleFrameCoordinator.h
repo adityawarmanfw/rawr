@@ -50,6 +50,8 @@ class SingleFrameCoordinator final {
     void configureRawSnapshot(uint32_t width, uint32_t height, uint64_t cameraGeneration);
     void disableRawSnapshot(const std::string& reason);
     [[nodiscard]] bool rawSnapshotConfigured() const noexcept;
+    // CPU bytes one accepted still reserves (0 when not configured).
+    [[nodiscard]] uint64_t rawSnapshotBytes() const noexcept;
     [[nodiscard]] bool captureRequested() const noexcept;
 
     // Camera2 metadata arming remains SessionEngine/NativeCameraController-owned.

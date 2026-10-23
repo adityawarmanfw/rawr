@@ -343,6 +343,10 @@ internal object RendererRecipe {
             photoDefringeLumaFloor = j.optDouble("defringeLumaFloor", .08).toFloat(),
             photoFccSteps = j.optInt("fccSteps", 1), photoDefringeEnabled = j.optBoolean("defringeEnabled", true),
             photoDefringeStrength = j.optDouble("defringeStrength", 1.0).toFloat(),
+            // DNGs captured before capture sharpening carry no key: off.
+            photoCaptureSharpeningEnabled = j.optBoolean("captureSharpeningEnabled", false),
+            photoCaptureSharpeningLevel = CaptureSharpeningLevel.entries
+                .firstOrNull { it.name == j.optString("captureSharpeningLevel") } ?: CaptureSharpeningLevel.Low,
             photoDenoise = DenoiseConfig.fromLegacy(
                 enabled = j.optBoolean("denoiseEnabled", false),
                 waveletStrength = j.optDouble("denoiseStrength", 1.0).toFloat(),

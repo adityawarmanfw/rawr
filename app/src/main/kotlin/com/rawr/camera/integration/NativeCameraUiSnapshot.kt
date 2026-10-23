@@ -64,9 +64,11 @@ internal data class NativeCameraUiSnapshot(
     val deferredCaptureExposureNs: Long = 0L,
     /** Its ISO on the reported scale (as appliedSensitivity). */
     val deferredCaptureReportedSensitivity: Int = 0,
-    /** Long exposure in flight: length, and CLOCK_MONOTONIC (uptime) ms it started; 0 submitted, -1 none. */
+    /** Long exposure in flight: length, CLOCK_MONOTONIC (uptime) ms of the press, and the
+     * predicted hold the ring fills over (queue + exposure + readout); -1 none. */
     val longExposureNs: Long = 0L,
     val longExposureStartMs: Long = -1L,
+    val longExposureTotalMs: Long = 0L,
     /** Last long exposure: -1 none yet, 0 the camera shortened it, 1 honored. */
     val lastLongExposureHonored: Int = -1,
     val requestedShutterAngleDegrees: Double? = null,
@@ -82,12 +84,21 @@ internal data class NativeCameraUiSnapshot(
     val bracketHoldDone: Long = 0L,
     val fullSizeCapture: Boolean = false,
     val fullSizeCapturePending: Boolean = false,
+    val fullSizeCaptureSerial: Long = 0,
+    val fullSizeExposurePending: Boolean = false,
+    val fullSizeLastExposureTimestamp: Long = 0,
+    val livePreviewGeneration: Long = 0,
+    val livePreviewTimestamp: Long = 0,
     /** Full-size captures the camera returned binned (monotonic counters, see FullSizeFallbacks.h). */
     val fullSizeBinnedStills: Long = 0L,
     val fullSizeBurstsToSingle: Long = 0L,
     /** Full-size (200 MP) lens: stills save DNG only, whatever the output format. */
     val dngOnly: Boolean = false
 ) {
+    val restoringPreview: Boolean
+        get() = fullSizeCapture && fullSizeLastExposureTimestamp > 0 &&
+            (livePreviewGeneration != generation || livePreviewTimestamp <= fullSizeLastExposureTimestamp)
+
     companion object {
         fun parse(text: String): NativeCameraUiSnapshot? = runCatching {
             val j = JSONObject(text)
@@ -162,6 +173,7 @@ internal data class NativeCameraUiSnapshot(
                 deferredCaptureReportedSensitivity = j.optInt("deferredCaptureReportedSensitivity", 0),
                 longExposureNs = j.optLong("longExposureNs", 0L),
                 longExposureStartMs = j.optLong("longExposureStartMs", -1L),
+                longExposureTotalMs = j.optLong("longExposureTotalMs", 0L),
                 lastLongExposureHonored = j.optInt("lastLongExposureHonored", -1),
                 requestedShutterAngleDegrees = j.nullableDouble("requestedShutterAngleDegrees"),
                 shutterAngleChoices = buildList {
@@ -181,6 +193,11 @@ internal data class NativeCameraUiSnapshot(
                 bracketHoldDone = j.optLong("bracketHoldDone", 0L),
                 fullSizeCapture = j.optBoolean("fullSizeCapture", false),
                 fullSizeCapturePending = j.optBoolean("fullSizeCapturePending", false),
+                fullSizeCaptureSerial = j.optLong("fullSizeCaptureSerial"),
+                fullSizeExposurePending = j.optBoolean("fullSizeExposurePending"),
+                fullSizeLastExposureTimestamp = j.optLong("fullSizeLastExposureTimestamp"),
+                livePreviewGeneration = j.optLong("livePreviewGeneration"),
+                livePreviewTimestamp = j.optLong("livePreviewTimestamp"),
                 fullSizeBinnedStills = j.optLong("fullSizeBinnedStills", 0L),
                 fullSizeBurstsToSingle = j.optLong("fullSizeBurstsToSingle", 0L),
                 dngOnly = j.optBoolean("dngOnly", false),

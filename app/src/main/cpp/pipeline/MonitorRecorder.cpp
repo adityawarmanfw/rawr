@@ -142,7 +142,7 @@ void MonitorRecorder::present(const MonitorFrame& in, uint32_t cropX, uint32_t c
         presentation_.record(in.command, in.slotIndex, in.swapImageIndex, in.width, in.height,
                              in.sensorOrientationDegrees, in.displayRotationDegrees, in.diagnosticMode,
                              in.overlayPresentationEnabled && monitoringOverlay_.enabled(), 0u, false, cropX, cropY,
-                             cropW, cropH);
+                             cropW, cropH, in.lensWarp, in.lensMirror);
         rawrcam::vulkan::fragmentReadToComputeWrite(in.command, in.tonemappedImage);
         if (in.diagnosticMode == 0u && monitoringOverlay_.enabled()) {
             rawrcam::vulkan::fragmentReadToComputeWrite(in.command, monitoringOverlay_.overlayImage(in.slotIndex));

@@ -43,7 +43,7 @@ inline std::string appendProcessingTimes(const JpegCaptureContext& c, double jpe
     const double imageTotal = imageProcessingTotalMs(
         0.0, 0.0, directRgb ? c.mfRgbPrepMs : c.demosaicMs, c.renderSetupMs, c.highlightReconstructionMs,
         c.refinementMs, c.colorProcessingMs, c.tonemapMs, c.queueGapsMs, c.readbackMs, c.gainmapMs, c.denoiseMs,
-        tailMs);
+        tailMs, c.captureSharpenMs);
     const double total =
         overallTotalMs((multiframe ? c.multiframeTotalMs : 0.0) + baseReadMs + projectMs, imageTotal, jpegEncodingMs);
     out << "\nTIMINGS: " << formatMs1(total)
@@ -54,7 +54,7 @@ inline std::string appendProcessingTimes(const JpegCaptureContext& c, double jpe
                                  c.highlightReconstructionMs, c.appliedLensShadingCorrection, c.appliedFccSteps,
                                  c.refinementMs, c.colorProcessingMs, c.tonemapMs, c.filmRendered, c.queueGapsMs,
                                  c.readbackMs, multiframe, c.gainmapMs, c.denoiseMs, c.highlightStage,
-                                 c.postTailMs, c.defringeEnabled)
+                                 c.postTailMs, c.defringeEnabled, c.captureSharpenMs, c.captureSharpenCached)
         << setupBreakdown(c) << formatJpegEncoding(jpegEncodingMs);
     if (ultraHdr)
         out << "- UltraHDR gain map JPEG: " << formatMs1(gainmapEncodeMs) << " ms (included in JPEG encoding)\n";

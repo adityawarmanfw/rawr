@@ -8,6 +8,8 @@
 #include <utility>
 #include <vector>
 
+#include "color/DcpProfile.h"
+#include "geometry/LensDistortion.h"
 #include "geometry/RawGeometry.h"
 
 namespace rawrcam::camera {
@@ -20,8 +22,9 @@ namespace rawrcam::camera {
 struct CameraKeySetting {
     enum class Type : uint8_t { Byte, Int32, Int64, Float, Double };
     // Still: only on full-size still requests (LensRoute::captureStream), never
-    // on the session or the repeating request.
-    enum class Scope : uint8_t { Session, Request, Still };
+    // on the session or the repeating request. Decision: only on the one-shot
+    // frame sent before those stills (see CameraDeviceSession::submitFullSizeDecision).
+    enum class Scope : uint8_t { Session, Request, Still, Decision };
     std::string tag;
     Type type = Type::Int32;
     Scope scope = Scope::Session;
@@ -94,6 +97,19 @@ struct LensRoute {
     // (CPU: Standard 1 / High 2).
     uint32_t cfaLiveQuality = 1;
     uint32_t cfaPhotoQuality = 2;
+    // Lens distortion calibration when the camera reports none (vendor
+    // calibration): undistorts photo renders and goes into the DNG as a
+    // WarpRectilinear opcode. Defined on its own frame size, scaled to others.
+    std::optional<geometry::LensDistortionModel> distortion;
+    // Mirror of the corrected image (geometry::kLensMirror* bits): photo,
+    // video and viewfinder flip it, the DNG composes it into Orientation.
+    uint32_t mirror = 0;
+    // Camera profile (.dcp) replacing the camera's colour calibration for the
+    // DNG and the render: its file, and the profile read from it (null when
+    // the file is missing or unusable; dcpError says why, the lens still opens).
+    std::string dcpPath;
+    color::DcpProfilePtr dcp;
+    std::string dcpError;
 };
 
 struct CameraProfile {

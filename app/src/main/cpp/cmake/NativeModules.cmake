@@ -10,6 +10,7 @@ rawrcam_module(geometry
   DEPENDS
   SOURCES
     geometry/DisplayToSensorMapper.cpp
+    geometry/LensDistortion.cpp
 )
 
 rawrcam_module(metadata
@@ -27,6 +28,8 @@ rawrcam_module(color
   SOURCES
     color/ColorMath.cpp
     color/ColorCalibration.cpp
+    color/DcpProfile.cpp
+    color/DcpRenderData.cpp
     color/WbDisplayEstimate.cpp
 )
 
@@ -100,6 +103,7 @@ rawrcam_module(develop
     develop/demosaic/DualStillProcessor.cpp
     develop/render/StillImageRenderer.cpp
     develop/render/RenderResources.cpp
+    develop/render/DcpRenderStage.cpp
     develop/render/RenderCommandSession.cpp
     develop/render/StillRenderSequence.cpp
     develop/render/FilmRenderStage.cpp
@@ -166,7 +170,7 @@ rawrcam_module(presentation
 
 rawrcam_module(video
   DIRECTORY video
-  DEPENDS diagnostics_logging diagnostics_timing imaging vulkan
+  DEPENDS color develop diagnostics_logging diagnostics_timing imaging vulkan
   SOURCES
     video/VideoOutput.cpp
     video/VideoProcessingResources.cpp

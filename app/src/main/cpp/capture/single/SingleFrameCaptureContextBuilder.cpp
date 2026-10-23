@@ -26,6 +26,23 @@ const char* singleFrameDemosaicName(develop::DemosaicAlgorithm algorithm) noexce
     }
     return "UNKNOWN";
 }
+bool applyProfileLensDistortion(develop::rendered::RenderedStillContext& rendered,
+                                const metadata::CameraContextMetadata& camera, uint32_t width, uint32_t height,
+                                bool enabled) {
+    rendered.lensMirror = camera.profileMirror;
+    if (!camera.profileDistortion) return false;
+    const auto model = geometry::scaledTo(*camera.profileDistortion, width, height);
+    if (!model) return false;
+    rendered.lensIntrinsic = {float(model->fx), float(model->fy), float(model->cx), float(model->cy), 0.0f};
+    rendered.lensDistortion = {float(model->k[0]), float(model->k[1]), float(model->k[2]), float(model->k[3]),
+                               float(model->k[4])};
+    rendered.lensDistortionDenominator = {float(model->k[5]), float(model->k[6]), float(model->k[7])};
+    rendered.lensOutputFocal = {float(model->fx * model->outputScale), float(model->fy * model->outputScale)};
+    rendered.rationalLensDistortion = true;
+    rendered.hasLensCalibration = true;
+    rendered.distortionCorrectionEnabled = enabled;
+    return true;
+}
 develop::rendered::RenderedStillContext makeSingleFrameRenderContext(
     const rawrcam::imaging::RawSnapshot& captured, const tonemap::TonemapParams& tonemapParams, float aePostGain,
     uint32_t presentationQuarterTurns, bool filmEnabled, const spektrafilm_native::FilmLook& filmLook,
@@ -34,6 +51,8 @@ develop::rendered::RenderedStillContext makeSingleFrameRenderContext(
     const rawrcam::color::math::Vec3 wb = rawrcam::color::collapseRggbToRgb(colorState.baselineWbRggb);
 
     develop::rendered::RenderedStillContext rendered{};
+    if (captured.metadata.cameraContext) rendered.dcpProfile = captured.metadata.cameraContext->dcpProfile;
+    rendered.dcpWeight1 = colorState.calibrationWeight1;
     rendered.requestId = captured.requestId;
     rendered.timestampNs = captured.timestampNs;
     rendered.width = captured.width;
@@ -60,7 +79,7 @@ develop::rendered::RenderedStillContext makeSingleFrameRenderContext(
         // mirrors renderExposureEV = log2(aePostGain) + exposureEV; film
         // path mirrors its folded EV exactly like the film record.
         if (filmEnabled) {
-            rendered.gainmapParams.hdrExposure = std::exp2(rawrcam::color::filmExposureEv(filmLook, aePostGain));
+            rendered.gainmapParams.hdrExposure = std::exp2(rawrcam::color::filmExposureEv(filmLook, aePostGain, tonemapParams.exposureEV));
         } else {
             rendered.gainmapParams.hdrExposure = std::max(aePostGain, 1.0e-6f) * std::exp2(tonemapParams.exposureEV);
         }
@@ -97,9 +116,17 @@ develop::rendered::RenderedStillContext makeSingleFrameRenderContext(
         rendered.cfaPattern = captured.metadata.cameraContext->rawPreviewCfa;
         rendered.lensShading = develop::highlight::LensShadingMapSnapshot::fromMetadata(
             captured.metadata, jpeg->develop.lensShadingCorrectionEnabled);
+        const auto& ctx = *captured.metadata.cameraContext;
+        // A lens profile calibration scales to any frame of the lens.
+        if (applyProfileLensDistortion(rendered, ctx, captured.width, captured.height,
+                                       jpeg->develop.distortionCorrectionEnabled)) {
+            if (rendered.distortionCorrectionEnabled)
+                emit("DISTORTION_CORRECTION_APPLY requestId=" + std::to_string(captured.requestId) +
+                     " model=rational source=profile k1=" + std::to_string(rendered.lensDistortion[0]));
+            return rendered;
+        }
         // Undistort calibration is defined on the full pixel array. Apply only
         // when the still frame covers it; merged/reconstructed grids skip.
-        const auto& ctx = *captured.metadata.cameraContext;
         const bool geometryMatches =
             captured.width == ctx.geometry.pixelArrayWidth && captured.height == ctx.geometry.pixelArrayHeight;
         const bool calibrationPresent = ctx.lensDistortion.size() == 5 && ctx.lensIntrinsicCalibration.size() == 5;

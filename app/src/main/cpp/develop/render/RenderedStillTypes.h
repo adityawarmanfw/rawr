@@ -9,6 +9,7 @@
 #include <string>
 
 #include "develop/highlight/LensShadingMapSnapshot.h"
+#include "color/DcpProfile.h"
 #include "tonemap/ColorRenderProfile.h"
 
 struct AAssetManager;
@@ -16,6 +17,8 @@ struct AAsset;
 
 namespace rawrcam::develop::rendered {
 struct RenderedStillContext {
+    color::DcpProfilePtr dcpProfile;
+    float dcpWeight1 = 1.0f;
     uint64_t requestId = 0;
     uint64_t timestampNs = 0;
     uint32_t width = 0;
@@ -47,6 +50,10 @@ struct RenderedStillContext {
     // Luminance-preserving chroma bound: >0 keeps display-range RGB in [0,1]
     // and allows scene-linear HDR headroom above 1. 0 = legacy unbounded.
     float fccChromaBound = 0.0f;
+    // Capture sharpening iterations on the demosaiced pre-WB image, before
+    // post-demosaic (0 = off). The Renderer applies it to its full-resolution
+    // demosaic cache instead and leaves this 0.
+    uint32_t captureSharpenIterations = 0;
     // Axial-defringe strength, forwarded to PostDemosaicProcessor (0 = off).
     float defringeStrength = 0.0f;
     float defringeEdgeThreshold = 0.02f;
@@ -95,6 +102,14 @@ struct RenderedStillContext {
     // [k1, k2, p1, p2, k3] from LENS_DISTORTION.
     std::array<float, 5> lensDistortion{0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
     bool hasLensCalibration = false;
+    // Lens profile calibration (OpenCV rational) in place of the Camera2
+    // model: lensIntrinsic/lensDistortion hold fx,fy,cx,cy / k1,k2,p1,p2,k3 in
+    // this frame's pixels, plus k4..k6 and the output focal.
+    bool rationalLensDistortion = false;
+    std::array<float, 3> lensDistortionDenominator{0.0f, 0.0f, 0.0f};
+    std::array<float, 2> lensOutputFocal{0.0f, 0.0f};
+    // Lens profile mirror (geometry::kLensMirror* bits), after undistort.
+    uint32_t lensMirror = 0;
     // UltraHDR gain map (GPU-direct, still-capture only). When enabled, the
     // still records a full-res recovery map (multi-channel RGB by default)
     // from the scene-linear HDR tap (post-demosaic, white-balanced *camera*
@@ -137,6 +152,7 @@ struct RenderedStillCompletion {
     double gainmapMs = 0.0;
     // Defringe plus the Inpaint Opposed tone tap (timestamps 16->17).
     double postTailMs = 0.0;
+    double captureSharpenMs = 0.0;
     // Effective highlight stage for the timing report: 0 off, 1 colour
     // propagation, 2 Inpaint Opposed (timed inside colour processing).
     int highlightStage = 0;

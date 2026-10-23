@@ -7,7 +7,38 @@ post-demosaic processor in `native/post_demosaic`.
 
 Layout: `include/video_pipeline/`, `src/`, `shaders/` (`video_demosaic.comp`
 and `video_raw_core.glsl`, which the fused RAW-input tonemap variant also
-includes). Android-only.
+includes; `video_demosaic_quad.comp` and `video_quad_core.glsl` for 1:1
+recordings). Android-only.
+
+## 1:1 recordings (4K, Open Gate)
+
+`video_demosaic_quad.comp` gives one thread a 2×2 Bayer cell. Crops are
+even-aligned, so a pixel's channel is the same in every thread of a wave: no
+per-pixel channel branching, and with the loops unrolled the roles fold to
+constants. Green at red/blue sites is the same Hamilton-Adams estimator as
+`video_mhc.glsl` (keep the two in sync). Red and blue are not MHC kernels: a
+shared plane of packed half pairs holds `sqrt(G)` and, at red/blue sites,
+`d = sqrt(sample) - sqrt(G)`; each missing value is `sqrt(G) + d` interpolated
+from the nearest samples of that colour, weighted by
+`1 / (0.03 + |sqrt(G) - sqrt(G_neighbour)|)`, so chroma follows green edges, and
+squared back. The sample's own channel is kept exactly. The green plane's
+edge guidance is what removes MHC's stripes along edges; plain unguided
+colour-difference interpolation scored below MHC, and a chroma median lowered
+every score, so neither is used.
+
+Checked against ground truth built from device DNGs (2×2-binned to true colour,
+re-mosaiced, so the truth is exact), RGGB and the other three CFA orders:
+about +0.9 to +1.4 dB on real frames and +1.2 dB on a synthetic edge chart, where
+visibly wrong-coloured pixels fall from 3.5% to 0.7%; roughly half as many at
+ISO-like noise. Known weakness: a one-pixel line of a saturated colour on gray can
+lose its colour. On the V2562 (Adreno) at 4080×3064 with lens shading the stage
+takes 5.9 ms against 7.7 ms for the tiled MHC build. The clip-state image is
+identical to the tiled build's. Pipeline creation falls back to the tiled
+`video_demosaic_1x` build if a driver rejects the quad shader; the journal's
+`rawStage` reports `quad_guided_chroma` or `tiled_mhc_5x5`. 2× reduction keeps
+the tiled and strip passes below. A speed-only variant with MHC maths (same output
+as the tiled build, 3.3 ms) and the pattern as a specialization constant (about
+4% more) were measured but are not used.
 
 `VideoProcessingConfig` is the native settings contract. Highlight method,
 threshold, compression, lens shading, and profiled denoise can update while

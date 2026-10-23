@@ -15,7 +15,9 @@ data class VideoImageSettings(
     val waveletDenoiseStrength: Float,
     val waveletDenoiseDetail: Float,
     val waveletDenoiseLuma: Float,
-    val waveletDenoiseScales: Int
+    val waveletDenoiseScales: Int,
+    /** Undistort with the lens profile calibration (lenses that have one). */
+    val distortionEnabled: Boolean = false
 ) {
     fun toJson(): JSONObject = JSONObject()
         .put("lensShadingEnabled", lensShadingEnabled)
@@ -29,6 +31,7 @@ data class VideoImageSettings(
         .put("waveletDenoiseDetail", waveletDenoiseDetail)
         .put("waveletDenoiseLuma", waveletDenoiseLuma)
         .put("waveletDenoiseScales", waveletDenoiseScales)
+        .put("distortionEnabled", distortionEnabled)
 }
 
 fun SettingsValues.toVideoImageSettings(): VideoImageSettings {
@@ -44,6 +47,7 @@ fun SettingsValues.toVideoImageSettings(): VideoImageSettings {
         if (videoDenoiseEnabled) videoDenoiseStrength else 0f,
         videoDenoiseDetail,
         videoDenoiseLuma,
-        videoDenoiseScales
+        videoDenoiseScales,
+        videoDistortionCorrectionEnabled
     )
 }

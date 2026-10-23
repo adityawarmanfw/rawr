@@ -89,16 +89,18 @@ internal object NativeExposurePresentation {
                 .firstOrNull { it.value == snapshot.requestedEvSteps }
                 ?.key
                 ?: current.exposureControl.requestedEvId
+        val longExposure = LongExposureUiState(
+            deferredNs = snapshot.deferredCaptureExposureNs,
+            activeNs = snapshot.longExposureNs,
+            startMs = snapshot.longExposureStartMs,
+            lastHonored = snapshot.lastLongExposureHonored,
+            totalMs = snapshot.longExposureTotalMs
+        )
         return current.copy(
             exposureApplied = applied,
             spotAe = if (snapshot.semanticExposureMode != 0) current.spotAe.copy(active = false) else current.spotAe,
             sensitivityBoost = snapshot.appliedPostRawSensitivityBoost,
-            longExposure = LongExposureUiState(
-                deferredNs = snapshot.deferredCaptureExposureNs,
-                activeNs = snapshot.longExposureNs,
-                startMs = snapshot.longExposureStartMs,
-                lastHonored = snapshot.lastLongExposureHonored
-            ),
+            longExposure = longExposure,
             rawFps = snapshot.appliedRawFps,
             viewfinderFps = snapshot.measuredViewfinderFps,
             exposureControl = current.exposureControl.copy(

@@ -95,7 +95,7 @@ class SettingsModelTest {
         assertEquals(GridMode.Thirds, v.gridMode)
         assertEquals(2, v.viewfinderDivisor)
         // Output.
-        assertEquals("dng.uncompressed", v.dngCompressionId)
+        assertEquals("dng.lossless", v.dngCompressionId)
         assertEquals(98f, v.imageTone.jpegQuality)
         assertEquals("jpeg.422", v.imageTone.jpegChromaSubsamplingId)
         assertTrue(v.ultraHdrEnabled)
@@ -118,26 +118,26 @@ class SettingsModelTest {
         }
     }
 
-    @Test fun dngCompressionDefaultsToUncompressed() {
+    @Test fun dngCompressionDefaultsToLossless() {
         val controller = PersistentSettingsController()
-        assertEquals("dng.uncompressed", controller.state.value.values.dngCompressionId)
+        assertEquals("dng.lossless", controller.state.value.values.dngCompressionId)
     }
 
     @Test fun dngCompressionChoiceUpdatesPreferenceAndPublishes() {
         var persisted: SettingsValues? = null
         val controller = PersistentSettingsController(onValuesChanged = { persisted = it })
-        controller.dispatch(SetChoice(ChoiceSelectorKind.DngCompression, "dng.lossless"))
-        assertEquals("dng.lossless", controller.state.value.values.dngCompressionId)
-        assertEquals("dng.lossless", persisted?.dngCompressionId)
         controller.dispatch(SetChoice(ChoiceSelectorKind.DngCompression, "dng.uncompressed"))
         assertEquals("dng.uncompressed", controller.state.value.values.dngCompressionId)
+        assertEquals("dng.uncompressed", persisted?.dngCompressionId)
+        controller.dispatch(SetChoice(ChoiceSelectorKind.DngCompression, "dng.lossless"))
+        assertEquals("dng.lossless", controller.state.value.values.dngCompressionId)
     }
 
     @Test fun invalidDngCompressionChoiceIsRejectedWithoutMutatingPreference() {
         var writes = 0
         val controller = PersistentSettingsController(onValuesChanged = { writes++ })
         controller.dispatch(SetChoice(ChoiceSelectorKind.DngCompression, "dng.invalid"))
-        assertEquals("dng.uncompressed", controller.state.value.values.dngCompressionId)
+        assertEquals("dng.lossless", controller.state.value.values.dngCompressionId)
         assertEquals(0, writes)
     }
 

@@ -8,6 +8,8 @@
 
 #include "develop/render/RenderDeviceContext.h"
 #include "develop/render/RenderedStillTypes.h"
+#include "develop/render/DcpRenderStage.h"
+#include "capture_sharpening/CaptureSharpening.h"
 #include "local_tone/ExposureFusion.h"
 #include "post_demosaic/PostDemosaicProcessor.h"
 #include "vulkan/ImageResources.h"
@@ -36,6 +38,7 @@ class RenderResources final {
     tonemap::TonemapEngine& tone() { return *tonemap_; }
     spektrafilm_native::SpektraFilm& film() { return *film_; }
     rawr::local_tone::ExposureFusionProcessor& localTone() { return *localTone_; }
+    rawr::capsharp::CaptureSharpening& captureSharpening() { return *captureSharpening_; }
     gainmap::GainmapCompute& gainmap() { return *gainmap_; }
     RenderImageView output() const noexcept { return {output_.image, output_.view}; }
     RenderImageView map() const noexcept { return {map_.image, map_.view}; }
@@ -51,6 +54,11 @@ class RenderResources final {
     void destroyFilm() noexcept;
 
     void ensureLocalTone();
+    DcpRenderStage& dcpStage() {
+        if (!dcpStage_) dcpStage_ = std::make_unique<DcpRenderStage>(physicalDevice_, device_);
+        return *dcpStage_;
+    }
+    void ensureCaptureSharpening();
     void createPixels(const RenderedStillContext& rendered);
 
    private:
@@ -89,10 +97,15 @@ class RenderResources final {
     VkDevice gainmapDevice_ = VK_NULL_HANDLE;
     std::unique_ptr<rawr::post::PostDemosaicProcessor> postDemosaic_;
     std::unique_ptr<tonemap::TonemapEngine> tonemap_;
+    std::unique_ptr<DcpRenderStage> dcpStage_;
     // Local tone mapping (HDR+ Bracketed): small low-res images, rebuilt on
     // a device change.
     std::unique_ptr<rawr::local_tone::ExposureFusionProcessor> localTone_;
     VkDevice localToneDevice_ = VK_NULL_HANDLE;
+    // Pipelines persist like local tone; the scratch is pixel memory and is
+    // released with the other per-capture pixels.
+    std::unique_ptr<rawr::capsharp::CaptureSharpening> captureSharpening_;
+    VkDevice captureSharpeningDevice_ = VK_NULL_HANDLE;
     // Rebuild match keys for engine persistence. Compared in start(); a
     // mismatch rebuilds that engine only (build-then-swap, so a failed build
     // keeps the previous engine).

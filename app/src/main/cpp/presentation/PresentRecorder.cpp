@@ -22,6 +22,11 @@ struct PresentPush {
     float cropY0;
     float cropX1;
     float cropY1;
+    // Lens undistort (see present.frag); zero = off.
+    uint32_t lensWarp;
+    float lensCx, lensCy, lensFx, lensFy, lensFxOut, lensFyOut;
+    std::array<float, 8> k;
+    uint32_t lensMirror;
 };
 }  // namespace
 void PresentRecorder::record(const RecordInfo& i) {
@@ -97,8 +102,34 @@ void PresentRecorder::record(const RecordInfo& i) {
                          cropX0,
                          cropY0,
                          cropX1,
-                         cropY1};
-    vkCmdPushConstants(i.command, i.layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+                         cropY1,
+                         0u,
+                         0.0f,
+                         0.0f,
+                         0.0f,
+                         0.0f,
+                         0.0f,
+                         0.0f,
+                         {},
+                         0u};
+    // Live viewfinder only (no EXIF review or diagnostic view). With the idle
+    // video crop the warp runs after it, in full-frame UV, like the recorder.
+    PresentPush pcWarp = pc;
+    if (i.exifOrientation == 0u && i.diagnosticMode == 0u) pcWarp.lensMirror = i.lensMirror;
+    if (i.lensWarp && i.exifOrientation == 0u && i.diagnosticMode == 0u) {
+        const auto& m = *i.lensWarp;
+        // Pixel-index model -> source UV (pixel i covers [i, i + 1) / size).
+        pcWarp.lensWarp = 1u;
+        pcWarp.lensCx = float((m.cx + 0.5) / m.width);
+        pcWarp.lensCy = float((m.cy + 0.5) / m.height);
+        pcWarp.lensFx = float(m.fx / m.width);
+        pcWarp.lensFy = float(m.fy / m.height);
+        pcWarp.lensFxOut = float(m.fx * m.outputScale / m.width);
+        pcWarp.lensFyOut = float(m.fy * m.outputScale / m.height);
+        for (size_t k = 0; k < 8; ++k) pcWarp.k[k] = float(m.k[k]);
+    }
+    static_assert(sizeof(PresentPush) <= 128, "push constants beyond the guaranteed minimum");
+    vkCmdPushConstants(i.command, i.layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pcWarp), &pcWarp);
     vkCmdDraw(i.command, 3, 1, 0, 0);
     for (const auto& s : i.scopes) {
         if (!s.enabled || s.descriptor == VK_NULL_HANDLE || s.width <= 0 || s.height <= 0) continue;
@@ -123,7 +154,7 @@ void PresentRecorder::record(const RecordInfo& i) {
         const PresentPush sp{
             s.quarterTurns, s.sourceAspect, static_cast<float>(ex - sx) / static_cast<float>(ey - sy), 100u, 0u,
             s.cornerRadius,
-            0u, 0u, 0.0f, 0.0f, 1.0f, 1.0f};
+            0u, 0u, 0.0f, 0.0f, 1.0f, 1.0f, 0u, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, {}, 0u};
         vkCmdPushConstants(i.command, i.layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(sp), &sp);
         vkCmdDraw(i.command, 3, 1, 0, 0);
     }

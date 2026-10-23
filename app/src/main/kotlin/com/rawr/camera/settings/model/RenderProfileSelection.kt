@@ -17,6 +17,12 @@ fun SettingsValues.withRenderProfile(selection: RenderProfileSelection): Setting
         else -> copy(colorRenderProfile = ColorRenderProfile.AgX, agxPreset = selection.preset,
             selectedUserLutProfileId = null)
     }
+    is RenderProfileSelection.SavedAgx -> {
+        val look = agxLooks.firstOrNull { it.id == selection.lookId }
+        if (isLogActive || look == null) this
+        else withRenderProfile(RenderProfileSelection.Agx(look.base))
+            .copy(agxValues = agxValues + (look.base to look.values))
+    }
     is RenderProfileSelection.Imported -> {
         if (isLogActive || userLutProfiles.none { it.id == selection.profileId && it.stages.isNotEmpty() }) this
         else if (isVideo) copy(videoColorRenderProfile = ColorRenderProfile.UserLut, videoUserLutProfileId = selection.profileId)

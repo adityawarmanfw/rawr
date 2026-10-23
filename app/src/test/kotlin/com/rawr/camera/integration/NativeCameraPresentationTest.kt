@@ -6,20 +6,77 @@ import org.junit.Test
 
 class NativeCameraPresentationTest {
     @Test
-    fun fullSizeHoldCoversPreparationAndRawArrivalEvenWithNoExposureCountdown() {
+    fun shutterProgressRunsFromPressOverPredictedTotal() {
+        // 2 s exposure: 600 ms queue estimate + 2000 ms + 150 ms readout.
+        val exposing = LongExposureUiState(activeNs = 2_000_000_000L, startMs = 30_000L, totalMs = 2750L)
+        assertTrue(exposing.active)
+        assertFalse(exposing.waiting)
+        assertEquals(0f, exposing.progressAt(30_000L), 0f)
+        assertEquals(0.5f, exposing.progressAt(31_375L), 0.01f)
+        assertEquals(1f, exposing.progressAt(33_000L), 0f)
+        assertEquals(2750L, exposing.remainingMs(30_000L))
+        assertEquals(0L, exposing.remainingMs(33_000L))
+        assertFalse(exposing.copy(startMs = -1L).active)
+        assertNull(exposing.copy(startMs = -1L).remainingMs(33_000L))
+    }
+
+    @Test
+    fun shutterProgressFallsBackToExposureWithoutTotal() {
+        val started = LongExposureUiState(activeNs = 5_000_000_000L, startMs = 30_000L)
+        assertFalse(started.waiting)
+        assertEquals(0f, started.progressAt(30_000L), 0f)
+        assertEquals(0.5f, started.progressAt(32_500L), 0f)
+        assertEquals(1f, started.progressAt(36_000L), 0f)
+    }
+
+    @Test
+    fun nextBurstExposureStartsFreshAndShortExposuresRemainIndeterminate() {
+        val first = LongExposureUiState(activeNs = 2_000_000_000L, startMs = 1000L)
+        assertEquals(1f, first.progressAt(4000L), 0f)
+        assertEquals(0f, first.copy(startMs = 4000L).progressAt(4000L), 0f)
+        assertTrue(first.copy(activeNs = 100_000_000L).waiting)
+        assertFalse(LongExposureUiState().active)
+    }
+
+    @Test
+    fun subSecondDeferredExposuresFillTimedRingWhileSensorSwitchWaitsSpin() {
+        // Full-size sensor-switch waits run at the viewfinder exposure (<= 1/5 s).
+        assertTrue(LongExposureUiState(activeNs = 200_000_000L, startMs = 1000L).waiting)
+        // Real deferred exposures (>= 300 ms) get the timed ring once started.
+        assertFalse(LongExposureUiState(activeNs = 500_000_000L, startMs = 1000L).waiting)
+        assertFalse(LongExposureUiState(activeNs = 2_000_000_000L, startMs = 1000L).waiting)
+        assertFalse(LongExposureUiState(activeNs = 5_000_000_000L, startMs = 1000L, totalMs = 5650L).waiting)
+        val halfSecond = LongExposureUiState(activeNs = 500_000_000L, startMs = 10_000L)
+        assertEquals(0.5f, halfSecond.progressAt(10_250L), 0.01f)
+    }
+
+    @Test
+    fun fullSizeHoldEndsAfterExposureWhileAcquisitionAndPreparationMayContinue() {
         val idle = CaptureUiState(NativeCapabilityProjection.pending(), fullSizeCapture = true)
-        assertFalse(idle.bracketHoldActive)
         val preparing = idle.copy(bracketHoldPresses = 1)
         assertTrue(preparing.bracketHoldActive)
-        // Native owns the request now. A short exposure may already have ended,
-        // but the 200 MP RAW has not arrived yet.
-        val acquiring = preparing.copy(bracketHoldPresses = 0, fullSizeCapturePending = true)
-        assertEquals(-1L, acquiring.longExposure.startMs)
-        assertTrue(acquiring.bracketHoldActive)
-        // Also covers a serial burst between frames: pending spans the batch.
-        assertTrue(acquiring.copy(longExposure = LongExposureUiState()).bracketHoldActive)
-        assertFalse(acquiring.copy(fullSizeCapturePending = false).bracketHoldActive)
-        assertFalse(preparing.copy(bracketHoldPresses = 0).bracketHoldActive) // preparation rejected
+        val exposing = preparing.copy(fullSizeCaptureSerial = 1, fullSizeExposurePending = true)
+        assertTrue(exposing.bracketHoldActive)
+        // The blocking capture worker has not returned; RAW acquisition is also still pending.
+        val processing = exposing.copy(fullSizeExposurePending = false, fullSizeCapturePending = true,
+            restoringPreview = true)
+        assertFalse(processing.bracketHoldActive)
+        assertTrue(processing.restoringPreview)
+        // Another queued press still requires holding for its upcoming exposure.
+        assertTrue(processing.copy(fullSizePressSerial = 1, bracketHoldPresses = 2).bracketHoldActive)
+        assertFalse(preparing.copy(bracketHoldPresses = 0).bracketHoldActive)
+    }
+
+    @Test
+    fun previewRecoveryRequiresANewerPresentedFrameFromTheSameSession() {
+        val waiting = snapshot().copy(fullSizeCapture = true, fullSizeLastExposureTimestamp = 1000,
+            livePreviewGeneration = 7, livePreviewTimestamp = 900)
+        assertTrue(waiting.restoringPreview)
+        assertTrue(waiting.copy(livePreviewTimestamp = 1000).restoringPreview)
+        assertFalse(waiting.copy(livePreviewTimestamp = 1001).restoringPreview)
+        assertTrue(waiting.copy(livePreviewTimestamp = 2000, livePreviewGeneration = 6).restoringPreview)
+        assertFalse(waiting.copy(fullSizeLastExposureTimestamp = 0).restoringPreview) // failure/teardown
+        assertFalse(waiting.copy(fullSizeCapture = false).restoringPreview)
     }
 
     @Test

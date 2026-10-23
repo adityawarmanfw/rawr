@@ -112,6 +112,7 @@ bool SingleFrameCaptureOutputs::startJpeg(const SingleFrameDevelopResult& result
     jpegContext.output.denoiseMs = completed.denoiseMs;
     jpegContext.output.gainmapMs = completed.gainmapMs;
     jpegContext.output.postTailMs = completed.postTailMs;
+    jpegContext.output.captureSharpenMs = completed.captureSharpenMs;
     jpegContext.output.highlightStage = completed.highlightStage;
     jpegContext.output.defringeEnabled = completed.defringeEnabled;
     jpegContext.output.filmRendered = completed.filmRendered;

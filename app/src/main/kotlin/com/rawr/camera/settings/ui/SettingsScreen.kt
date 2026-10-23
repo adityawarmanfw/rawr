@@ -1,6 +1,7 @@
 package com.rawr.camera.settings.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.compose.foundation.layout.*
 import com.rawr.camera.ui.icons.Icons
 import com.rawr.camera.ui.icons.automirrored.rounded.ArrowBack
@@ -72,6 +73,7 @@ fun SettingsScreen(
     onImportBackup: () -> Unit = {},
     onRequestSaveNotificationPermission: () -> Unit = {}
 ) {
+    val backDispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
     val navigateUp = {
         if (state.presentation.destination == SettingsDestination.Home) {
             onExitSettings()
@@ -93,7 +95,15 @@ fun SettingsScreen(
                 windowInsets = if (embedded) WindowInsets(0) else TopAppBarDefaults.windowInsets,
                 navigationIcon = {
                     IconButton(
-                        onClick = navigateUp,
+                        onClick = {
+                            // Let the lens editor's BackHandler protect its unsaved draft,
+                            // just as it does for the system back gesture.
+                            if (state.presentation.destination is SettingsDestination.LensEditor && backDispatcher != null) {
+                                backDispatcher.onBackPressed()
+                            } else {
+                                navigateUp()
+                            }
+                        },
                         modifier = Modifier.testTag(SettingsTestTags.TOPBAR_BACK)
                     ) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back")

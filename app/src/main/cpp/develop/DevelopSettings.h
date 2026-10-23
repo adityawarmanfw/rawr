@@ -40,6 +40,9 @@ struct DevelopSettings {
     std::uint32_t highlightReconstructionMethod = 0;  // 0 propagation, 1 RawTherapee Coloropp
     float highlightThreshold = 1.0f;
     float highlightCompression = 45.0f;
+    // RawTherapee capture sharpening right after demosaic: Richardson-Lucy
+    // iterations (0 = off; the Image setting offers 3 / 5 / 10).
+    std::uint32_t captureSharpenIterations = 0;
     // Geometric undistort in the still WB pass (Camera2 LENS_DISTORTION model).
     // Default off; gated on full-pixel-array geometry + calibration upstream.
     bool distortionCorrectionEnabled = false;

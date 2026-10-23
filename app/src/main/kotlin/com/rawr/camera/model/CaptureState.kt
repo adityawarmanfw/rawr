@@ -202,12 +202,18 @@ data class CaptureUiState(
     val experimentalMultiframeEnabled: Boolean = false,
     /** Settings multiframe merge is HDR+ Bracketed. */
     val hdrPlusBracketedSelected: Boolean = false,
+    /** Active multiframe merge algorithm; names the shutter-row pill. */
+    val multiframeAlgorithm: com.rawr.camera.settings.model.MultiframeMergeAlgorithm = com.rawr.camera.settings.model.MultiframeMergeAlgorithm.HdrPlusQuality,
     /** HDR+ Bracketed post-shutter frames: brackets armed / finished, from native. */
     val bracketHoldOpened: Long = 0L,
     val bracketHoldDone: Long = 0L,
     /** High/Full Res captures acquire RAW after the press, including short exposures. */
     val fullSizeCapture: Boolean = false,
     val fullSizeCapturePending: Boolean = false,
+    val fullSizeCaptureSerial: Long = 0,
+    val fullSizePressSerial: Long = 0,
+    val fullSizeExposurePending: Boolean = false,
+    val restoringPreview: Boolean = false,
     /** Full-size captures the camera returned binned: stills saved at the binned size, bursts taken as a single. */
     val fullSizeBinnedStills: Long = 0L,
     val fullSizeBurstsToSingle: Long = 0L,
@@ -216,7 +222,8 @@ data class CaptureUiState(
 ) {
     /** From the shutter press until the post-shutter frames are in: the user should hold still. */
     val bracketHoldActive: Boolean
-        get() = bracketHoldPresses > 0 || bracketHoldOpened != bracketHoldDone || fullSizeCapturePending
+        get() = (bracketHoldPresses > 0 && (!fullSizeCapture || fullSizeCaptureSerial == fullSizePressSerial)) ||
+            bracketHoldOpened != bracketHoldDone || fullSizeExposurePending
 
     /** HDR+ Bracketed runs: multiframe on, Photo mode. */
     val hdrPlusBracketedActive: Boolean
@@ -227,7 +234,33 @@ data class CaptureUiState(
 data class LongExposureUiState(
     val deferredNs: Long = 0L,
     val activeNs: Long = 0L,
-    /** CLOCK_MONOTONIC (SystemClock.uptimeMillis) ms the sensor started; 0 submitted, -1 none. */
+    /** CLOCK_MONOTONIC (SystemClock.uptimeMillis) ms of the press; -1 none. */
     val startMs: Long = -1L,
     val lastHonored: Int = -1,
-)
+    /**
+     * Hold the ring fills over (queue estimate + exposure + readout, ms).
+     * The started callback can arrive a full exposure late, so the ring runs
+     * from the press over this predicted total, corrected to the true total
+     * once the sensor timestamp arrives. 0 = fall back to [activeNs].
+     */
+    val totalMs: Long = 0L,
+) {
+    val active: Boolean get() = startMs >= 0L && activeNs > 0L
+    /**
+     * Indeterminate spinner for very short waits (a full-size sensor-switch
+     * wait runs at the viewfinder exposure, capped at 1/5 s); real deferred
+     * exposures fill the timed ring. 300 ms cleanly separates the two.
+     */
+    val waiting: Boolean get() = active && activeNs < 300_000_000L
+
+    private val spanMs: Double get() = if (totalMs > 0L) totalMs.toDouble() else activeNs / 1_000_000.0
+
+    fun progressAt(uptimeMs: Long): Float =
+        if (startMs < 0L || spanMs <= 0.0) 0f
+        else ((uptimeMs - startMs).toDouble() / spanMs).coerceIn(0.0, 1.0).toFloat()
+
+    /** Remaining hold until the user can move; null when inactive. */
+    fun remainingMs(uptimeMs: Long): Long? =
+        if (!active) null
+        else (spanMs - (uptimeMs - startMs).toDouble()).coerceAtLeast(0.0).toLong()
+}

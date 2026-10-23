@@ -78,7 +78,7 @@ class NativeCameraController {
     bool captureLongExposure(uint64_t requestId, LongExposure* submitted);
     // Capture-stream routes (LensRoute::captureStream): `count` full-size
     // stills at the viewfinder's exposure, tagged requestId.
-    bool captureFullSize(uint64_t requestId, uint32_t count, bool retainFocus = false);
+    bool captureFullSize(uint64_t requestId, uint32_t count, bool retainFocus = false, bool moreExposures = false);
     bool waitFullSizeIdle(int64_t timeoutMs);
     void releaseFullSizeFocus();
     bool hasFullSizeCapture() const;

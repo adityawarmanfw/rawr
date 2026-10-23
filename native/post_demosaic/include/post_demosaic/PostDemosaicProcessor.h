@@ -26,12 +26,30 @@ class LabDefringe;
 // Camera2 LENS_DISTORTION / LENS_INTRINSIC_CALIBRATION convention and are
 // expressed in full-pixel-array ActiveArea pixels. Gate on presence upstream;
 // all-zero distortion is an identity resample.
+//
+// Rational: an OpenCV rational calibration instead (lens profile, in source
+// frame pixels). Each output pixel maps directly to its distorted source:
+// normalized by outputFocal, radial (1+k1r2+k2r4+k3r6)/(1+k4r2+k5r4+k6r6) plus
+// tangential p1/p2, denormalized by intrinsic fx/fy.
 struct StillDistortionCorrection {
+    enum class Model : uint32_t { Camera2 = 0, Rational = 1 };
     bool enabled = false;
     // [fx, fy, cx, cy, s].
     std::array<float, 5> intrinsic{0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
     // [k1, k2, p1, p2, k3].
     std::array<float, 5> distortion{0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    Model model = Model::Camera2;
+    // Rational only: [k4, k5, k6] and the output focal [fx, fy].
+    std::array<float, 3> rationalDenominator{0.0f, 0.0f, 0.0f};
+    std::array<float, 2> outputFocal{0.0f, 0.0f};
+    // Rational only: the processed image is a crop of the calibrated frame
+    // (video): image pixel p is frame pixel frameOrigin + (p + 0.5) * frameScale - 0.5.
+    std::array<float, 2> frameOrigin{0.0f, 0.0f};
+    float frameScale = 1.0f;
+    // Lens profile mirror of the corrected image (bit 0 horizontal, bit 1
+    // vertical), independent of [enabled]: the final image is flipped in place
+    // after every sensor-aligned stage (highlights, defringe, FCC) has run.
+    uint32_t mirror = 0;
 };
 
 // Exact still-pipeline domain bridge: pre-WB camera-linear RGB -> WB camera RGB
@@ -115,12 +133,14 @@ class PostDemosaicProcessor final {
     void createHighlightGuidePipelines();
     void createDeriveClipPipeline();
     void createDefringePipeline();
+    void createMirrorPipeline();
     void createPredicateBuffer(VkPhysicalDevice physicalDevice);
     void destroyWbPipeline() noexcept;
     void destroyHighlightPipeline() noexcept;
     void destroyHighlightGuidePipelines() noexcept;
     void destroyDeriveClipPipeline() noexcept;
     void destroyDefringePipeline() noexcept;
+    void destroyMirrorPipeline() noexcept;
     void destroyPredicateBuffer() noexcept;
     static std::vector<uint32_t> fccShader(std::string_view name);
 
@@ -157,6 +177,12 @@ class PostDemosaicProcessor final {
     VkPipeline defringePipeline_ = VK_NULL_HANDLE;
     VkDescriptorPool defringePool_ = VK_NULL_HANDLE;
     VkDescriptorSet defringeSet_ = VK_NULL_HANDLE;
+    // In-place lens mirror of the final image; created on first use.
+    VkDescriptorSetLayout mirrorDsl_ = VK_NULL_HANDLE;
+    VkPipelineLayout mirrorLayout_ = VK_NULL_HANDLE;
+    VkPipeline mirrorPipeline_ = VK_NULL_HANDLE;
+    VkDescriptorPool mirrorPool_ = VK_NULL_HANDLE;
+    VkDescriptorSet mirrorSet_ = VK_NULL_HANDLE;
     VkImage finalImage_ = VK_NULL_HANDLE;
     VkImageView finalView_ = VK_NULL_HANDLE;
     bool defringeEnabled_ = false;

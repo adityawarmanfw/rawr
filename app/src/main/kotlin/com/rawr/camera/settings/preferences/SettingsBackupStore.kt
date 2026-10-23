@@ -12,6 +12,7 @@ import androidx.datastore.preferences.core.mutablePreferencesOf
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.rawr.camera.BuildConfig
 import com.rawr.camera.settings.model.ColorRenderProfile
+import com.rawr.camera.settings.model.LensProfile
 import com.rawr.camera.settings.model.SettingsValues
 import java.io.File
 import java.util.zip.ZipEntry
@@ -46,7 +47,8 @@ enum class BackupSection(val id: String, val label: String, val defaultOn: Boole
 class BackupContents internal constructor(
     val sections: Set<BackupSection>,
     internal val values: SettingsValues,
-    internal val lutFiles: File
+    internal val lutFiles: File,
+    internal val dcpFiles: File
 )
 
 /**
@@ -55,6 +57,7 @@ class BackupContents internal constructor(
  *   manifest.json   app version, device identity (no serials), creation time, included sections
  *   settings.json   each persisted key of the included sections as {"type": ..., "value": ...}
  *   luts/<name>     every .cube file a LUT profile references (LUT section only)
+ *   dcp/<name>      every camera profile (.dcp) a lens references (lens profile section only)
  *
  * Import decodes the keys through the normal settings migrations, so a backup from an older
  * version imports like an upgrade, then applies only the sections the user picks. Device-local
@@ -97,6 +100,15 @@ class SettingsBackupStore(context: Context, private val defaults: SettingsValues
                 it == SCHEMA_KEY || (it !in DEVICE_LOCAL_KEYS && BackupSection.sectionOf(it) in sections)
             }.toString(2).toByteArray())
             zip.closeEntry()
+            if (BackupSection.LensProfiles in sections) {
+                values.lensProfiles.orEmpty().mapNotNull { it.dcp?.file }.distinct().forEach { name ->
+                    val file = File(File(app.filesDir, DcpFileStore.DIR), name)
+                    if (!file.isFile) return@forEach
+                    zip.putNextEntry(ZipEntry(DCP_DIR + name))
+                    file.inputStream().use { it.copyTo(zip) }
+                    zip.closeEntry()
+                }
+            }
             if (BackupSection.Luts !in sections) return@use
             values.userLutProfiles
                 .flatMap { it.stages }
@@ -117,6 +129,7 @@ class SettingsBackupStore(context: Context, private val defaults: SettingsValues
         var settingsJson: JSONObject? = null
         var sections: Set<BackupSection>? = null
         val staging = File(app.cacheDir, "backup_restore").apply { deleteRecursively(); mkdirs() }
+        val dcpStaging = File(app.cacheDir, "backup_restore_dcp").apply { deleteRecursively(); mkdirs() }
         try {
             app.contentResolver.openInputStream(uri).use { input ->
                 requireNotNull(input) { "Unable to open backup" }
@@ -147,6 +160,17 @@ class SettingsBackupStore(context: Context, private val defaults: SettingsValues
                                 total += out.length()
                                 require(total <= MAX_LUT_BYTES) { "Backup LUTs are too large" }
                             }
+
+                            entry.name.startsWith(DCP_DIR) -> {
+                                val name = entry.name.removePrefix(DCP_DIR)
+                                if (!DcpFileStore.isFileName(name)) continue
+                                val out = File(dcpStaging, name)
+                                val bytes = zip.readNBytes(DcpFileStore.MAX_BYTES + 1)
+                                require(bytes.size <= DcpFileStore.MAX_BYTES) { "Camera profile is too large" }
+                                out.writeBytes(bytes)
+                                total += out.length()
+                                require(total <= MAX_LUT_BYTES) { "Backup files are too large" }
+                            }
                         }
                     }
                 }
@@ -156,9 +180,10 @@ class SettingsBackupStore(context: Context, private val defaults: SettingsValues
             val prefs = decodePreferences(requireNotNull(settingsJson) { "Backup has no settings" })
             val values =
                 requireNotNull(repository.decodeBackup(prefs)) { "Backup was made by a newer version of Rawr" }
-            return BackupContents(found, values, staging)
+            return BackupContents(found, values, staging, dcpStaging)
         } catch (t: Throwable) {
             staging.deleteRecursively()
+            dcpStaging.deleteRecursively()
             throw t
         }
     }
@@ -183,7 +208,7 @@ class SettingsBackupStore(context: Context, private val defaults: SettingsValues
                 } else {
                     current
                 }
-            if (BackupSection.LensProfiles in chosen) next = next.copy(lensProfiles = backup.lensProfiles)
+            if (BackupSection.LensProfiles in chosen) next = next.copy(lensProfiles = restoreDcpFiles(contents, backup.lensProfiles))
             if (BackupSection.Luts in chosen) {
                 val lutFiles = File(app.filesDir, LUT_FILES_PATH).apply { mkdirs() }
                 contents.lutFiles.listFiles()?.forEach { it.copyTo(File(lutFiles, it.name), overwrite = true) }
@@ -220,6 +245,12 @@ class SettingsBackupStore(context: Context, private val defaults: SettingsValues
 
     fun discard(contents: BackupContents) {
         contents.lutFiles.deleteRecursively()
+        contents.dcpFiles.deleteRecursively()
+    }
+
+    /** Installs the backup's camera profiles; a lens whose profile didn't come back keeps the camera's colour. */
+    private fun restoreDcpFiles(contents: BackupContents, lenses: List<LensProfile>?): List<LensProfile>? {
+        return DcpFileStore(app).restore(contents.dcpFiles, lenses)
     }
 
     private fun encodePreferences(p: Preferences, include: (String) -> Boolean): JSONObject {
@@ -267,6 +298,7 @@ class SettingsBackupStore(context: Context, private val defaults: SettingsValues
                 "debug_custom_gpu_driver_name"
             )
         const val LUT_DIR = "luts/"
+        const val DCP_DIR = "dcp/"
         const val LUT_FILES_PATH = "lut_profiles/files"
         const val MAX_LUT_BYTES = 512L * 1024L * 1024L
         val SAFE_NAME = Regex("[A-Za-z0-9._-]+")

@@ -151,7 +151,9 @@ endforeach()
 
 add_custom_target(rawr_offline_shaders DEPENDS ${OFFLINE_SHADER_OUTPUTS})
 
-add_executable(rawr_dng_decode dng_decode.cpp "${APP_CPP_DIR}/renderer/DngSource.cpp")
+add_executable(rawr_dng_decode dng_decode.cpp "${APP_CPP_DIR}/renderer/DngSource.cpp"
+  "${APP_CPP_DIR}/renderer/SourceCaptureExif.cpp" "${APP_CPP_DIR}/color/DcpProfile.cpp"
+  "${APP_CPP_DIR}/color/ColorCalibration.cpp" "${APP_CPP_DIR}/color/ColorMath.cpp")
 target_include_directories(rawr_dng_decode PRIVATE "${APP_CPP_DIR}")
 target_link_libraries(rawr_dng_decode PRIVATE rawr_tinydng)
 

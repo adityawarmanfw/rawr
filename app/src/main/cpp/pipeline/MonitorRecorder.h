@@ -3,6 +3,8 @@
 
 #include <array>
 #include <cstdint>
+
+#include "geometry/LensDistortion.h"
 namespace rawrcam::monitoring {
 class MonitoringOverlayProcessor;
 class ImageScopesProcessor;
@@ -24,6 +26,10 @@ struct MonitorFrame {
     bool renderedExposureFeedbackEnabled;
     float shadowLiftEv, blackPointEv;
     bool overlayPresentationEnabled = true;
+    // Lens profile calibration to undistort the viewfinder; null = off.
+    const rawrcam::geometry::LensDistortionModel* lensWarp = nullptr;
+    // Lens profile mirror of the viewfinder (geometry::kLensMirror* bits).
+    uint32_t lensMirror = 0;
 };
 class MonitorRecorder final {
    public:

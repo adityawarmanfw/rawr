@@ -142,6 +142,9 @@ void setPersistentEngineEnabled(EngineHandle h, bool v) noexcept {
 void setLensShadingCorrectionEnabled(EngineHandle h, bool v) noexcept {
     if (h) engine(h)->setLensShadingCorrectionEnabled(v);
 }
+void setDistortionCorrectionEnabled(EngineHandle h, bool v) noexcept {
+    if (h) engine(h)->setDistortionCorrectionEnabled(v);
+}
 void setHighlightReconstructionEnabled(EngineHandle h, bool v) noexcept {
     if (h) engine(h)->setHighlightReconstructionEnabled(v);
 }
@@ -225,8 +228,12 @@ std::string cameraControlSnapshot(EngineHandle h) {
     if (json.size() > 2 && json.back() == '}') {
         json.pop_back();
         const auto hold = engine(h)->bracketHold();
+
+        const auto [previewGeneration, previewTimestamp] = engine(h)->livePreviewState();
         const auto [fullSize, acquiring] = engine(h)->fullSizeCaptureState();
         json += std::string(",\"rawCpuIngress\":") + (engine(h)->rawCpuIngressActive() ? "true" : "false") +
+                ",\"livePreviewGeneration\":" + std::to_string(previewGeneration) +
+                ",\"livePreviewTimestamp\":" + std::to_string(previewTimestamp) +
                 ",\"fullSizeCapture\":" + (fullSize ? "true" : "false") +
                 ",\"fullSizeCapturePending\":" + (acquiring ? "true" : "false") +
                 ",\"bracketHoldOpened\":" + std::to_string(hold.opened) +

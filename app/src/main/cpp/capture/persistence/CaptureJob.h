@@ -34,6 +34,8 @@ std::string jobPath(const std::string& filesDir, const std::string& name);
 // Reservation covers not-yet-spooled input and output headroom; existing jobs
 // are already included in filesystem free space. Released by RAII on failure.
 std::shared_ptr<void> reserve(const std::string& filesDir, uint64_t rawBytes, bool cpuAcquisition);
+// Whether reserve() would admit the frame now (nothing is reserved).
+bool canReserve(const std::string& filesDir, uint64_t rawBytes, bool cpuAcquisition);
 void save(const std::string& path, CaptureJob& job, const std::function<std::vector<uint8_t>(size_t)>& readFrame = {});
 // Bursts whose frames fill one reused buffer (no per-frame allocation).
 void save(const std::string& path, CaptureJob& job,

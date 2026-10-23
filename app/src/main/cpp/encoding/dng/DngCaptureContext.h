@@ -49,11 +49,15 @@ struct DngCaptureContext {
     std::optional<std::array<double, 2>> noiseVarianceScale;
     bool reconstructedGeometry = false;       // merged CFA is a synthesized output grid, not sensor-pixel geometry
     // The app's own lens-shading decision for this capture (develop setting
-    // lensShadingCorrectionEnabled). The stored CFA never has shading baked
-    // in, so the DNG carries the Camera2 map as GainMap opcodes exactly when
-    // the app's render applies it; the HAL's LENS_SHADING_APPLIED flag does
-    // not decide this. Derived from the JPEG develop settings, not persisted.
+    // lensShadingCorrectionEnabled). It no longer gates the DNG: the stored CFA
+    // never has shading baked in, so the Camera2 map is always written as
+    // GainMap opcodes. Kept for provenance (whether the capture's JPEG applied
+    // it). Derived from the JPEG develop settings, not persisted.
     bool appLensShadingCorrection = false;
+    // The app's distortion decision (develop setting distortionCorrectionEnabled):
+    // a lens profile calibration goes in as a WarpRectilinear opcode exactly
+    // when the app's render undistorts. Not persisted, like the shading flag.
+    bool appDistortionCorrection = false;
     // DNG payload encoding. LosslessJpeg is the default; Uncompressed keeps
     // the legacy byte layout. Wired to the capture settings UI (follow-up);
     // JNI still constructs the default until then.

@@ -1,6 +1,7 @@
 package com.rawr.camera.settings.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -33,10 +34,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -57,6 +60,7 @@ import com.rawr.camera.settings.model.EXTENDED_ISO_MAX
 import com.rawr.camera.settings.model.EXTENDED_SHUTTER_MAX_NS
 import com.rawr.camera.settings.model.LensExposure
 import com.rawr.camera.settings.model.LensLevels
+import com.rawr.camera.settings.model.LensMirror
 import com.rawr.camera.settings.model.LensProfile
 import com.rawr.camera.settings.model.RawStreamChoice
 import com.rawr.camera.settings.model.RawStreamFormat
@@ -72,6 +76,13 @@ import com.rawr.camera.settings.model.removeLens
 import com.rawr.camera.settings.model.upsertLens
 import com.rawr.camera.settings.model.validateLensProfile
 import com.rawr.camera.settings.model.validateVendorKey
+import com.rawr.camera.settings.preferences.DcpFileStore
+import com.rawr.camera.storage.PickFile
+import com.rawr.camera.storage.launchPicker
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.rawr.camera.ui.icons.Icons
 import com.rawr.camera.ui.icons.rounded.Add
 import com.rawr.camera.ui.icons.rounded.Check
@@ -90,6 +101,29 @@ internal fun LensEditorScreen(state: SettingsUiState, lensName: String?, dispatc
     val others = lenses.filterNot { original != null && it.name.equals(original.name, ignoreCase = true) }
     val problems = validateLensProfile(draft, others)
     val dirty = draft != initial
+    val context = LocalContext.current
+    val dcpFiles = remember(context) { DcpFileStore(context.applicationContext) }
+    val scope = rememberCoroutineScope()
+    var importingDcp by remember { mutableStateOf(false) }
+    var dcpError by remember { mutableStateOf<String?>(null) }
+    val dcpPicker = rememberLauncherForActivityResult(PickFile()) { uri ->
+        if (uri != null) {
+            importingDcp = true
+            dcpError = null
+            scope.launch {
+                try {
+                    val profile = withContext(Dispatchers.IO) { dcpFiles.import(uri) }
+                    draft = draft.copy(dcp = profile)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    dcpError = e.message ?: "Unable to import camera profile"
+                } finally {
+                    importingDcp = false
+                }
+            }
+        }
+    }
 
     var pickCamera by remember { mutableStateOf(false) }
     var pickStream by remember { mutableStateOf(false) }
@@ -98,7 +132,15 @@ internal fun LensEditorScreen(state: SettingsUiState, lensName: String?, dispatc
     var confirmDiscard by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
 
-    BackHandler(enabled = dirty) { confirmDiscard = true }
+    val canSave = !importingDcp && problems.isEmpty() && (dirty || original == null)
+    val saveAndLeave = {
+        dispatch.invoke(SetLensProfiles(lenses.upsertLens(original?.name, draft)))
+        dispatch.invoke(NavigateBack)
+    }
+    val requestBack = {
+        if (dirty || importingDcp) confirmDiscard = true else dispatch.invoke(NavigateBack)
+    }
+    BackHandler(onBack = requestBack)
 
     SettingsPageContainer(testTag = SettingsTestTags.sectionRoot("LensEditor")) {
         SettingsGroup(title = "Lens") {
@@ -120,12 +162,47 @@ internal fun LensEditorScreen(state: SettingsUiState, lensName: String?, dispatc
             )
             SettingDivider()
             SettingsRow(
-                title = "RAW stream",
+                title = if (draft.captureStream != null) "Preview stream" else "RAW stream",
                 value = draft.stream.label,
                 supportingText = "Falls back to the largest usable stream if this one isn't offered",
                 enabled = draft.cameraId.isNotBlank(),
                 onClick = { pickStream = true }
             )
+        }
+        FullResolutionGroup(draft) { draft = it }
+        SettingsGroup(title = "Image") {
+            DropdownChoiceRow(
+                title = "Mirror",
+                selected = draft.mirror,
+                values = LensMirror.entries,
+                label = { it.label },
+                supportingText = "Flips photos, video and the viewfinder, e.g. for a lens behind a mirror or prism. " +
+                    "DNG files keep the sensor pixels and store the flip in their orientation.",
+                onSelect = { draft = draft.copy(mirror = it) }
+            )
+        }
+        SettingsGroup(title = "Camera profile") {
+            SettingsRow(
+                title = if (importingDcp) "Importing profile…" else "Import DCP file",
+                value = draft.dcp?.name ?: "Camera default",
+                supportingText = "Applies the profile’s colour and tone before your selected look; embeds it in DNG files",
+                enabled = !importingDcp,
+                testTag = SettingsTestTags.row("LensEditor", "dcp"),
+                onClick = { dcpPicker.launchPicker(context, arrayOf("*/*")) }
+            )
+            if (draft.dcp != null) {
+                SettingDivider()
+                SettingsRow(
+                    title = "Use camera default",
+                    enabled = !importingDcp,
+                    testTag = SettingsTestTags.row("LensEditor", "removeDcp"),
+                    onClick = { draft = draft.copy(dcp = null); dcpError = null }
+                )
+            }
+            dcpError?.let {
+                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(horizontal = SettingsRowHorizontalPadding, vertical = 12.dp))
+            }
         }
         LevelsGroup(
             title = "Black & white levels",
@@ -161,14 +238,11 @@ internal fun LensEditorScreen(state: SettingsUiState, lensName: String?, dispatc
                 TextButton(onClick = { confirmDelete = true }) { Text("Delete") }
                 Box(Modifier.weight(1f))
             }
-            OutlinedButton(onClick = { dispatch.invoke(NavigateBack) }) { Text("Cancel") }
+            OutlinedButton(onClick = requestBack) { Text("Cancel") }
             Button(
-                enabled = problems.isEmpty() && (dirty || original == null),
+                enabled = canSave,
                 modifier = Modifier.testTag(SettingsTestTags.row("LensEditor", "save")),
-                onClick = {
-                    dispatch.invoke(SetLensProfiles(lenses.upsertLens(original?.name, draft)))
-                    dispatch.invoke(NavigateBack)
-                }
+                onClick = saveAndLeave
             ) { Text("Save") }
         }
     }
@@ -225,15 +299,29 @@ internal fun LensEditorScreen(state: SettingsUiState, lensName: String?, dispatc
     if (confirmDiscard) {
         AlertDialog(
             onDismissRequest = { confirmDiscard = false },
-            title = { Text("Discard changes?") },
-            text = { Text("Your edits to this lens are not saved.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmDiscard = false
-                    dispatch.invoke(NavigateBack)
-                }) { Text("Discard") }
+            title = { Text("Save changes?") },
+            text = {
+                Text(when {
+                    importingDcp -> "Wait for the profile import to finish before saving, or discard your edits."
+                    problems.isNotEmpty() -> "Fix the lens settings before saving, or discard your edits."
+                    else -> "Your edits to this lens are not saved."
+                })
             },
-            dismissButton = { TextButton(onClick = { confirmDiscard = false }) { Text("Keep editing") } }
+            confirmButton = {
+                TextButton(enabled = canSave, onClick = {
+                    confirmDiscard = false
+                    saveAndLeave()
+                }) { Text("Save") }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { confirmDiscard = false }) { Text("Keep editing") }
+                    TextButton(onClick = {
+                        confirmDiscard = false
+                        dispatch.invoke(NavigateBack)
+                    }) { Text("Discard") }
+                }
+            }
         )
     }
     if (confirmDelete && original != null) {
@@ -520,6 +608,8 @@ private fun VendorKeyDialog(
                         VendorKeyScope.Session -> "Set when each capture session starts (photo or video)."
                         VendorKeyScope.Request -> "Set on every capture request (preview, stills, multiframe, video)."
                         VendorKeyScope.Still -> "Set only on full-size still requests (capture-stream lenses)."
+                        VendorKeyScope.Decision ->
+                            "Set only on one low-ISO viewfinder frame sent before full-size stills (capture-stream lenses)."
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -673,6 +763,99 @@ private fun streamForCamera(current: RawStreamChoice, camera: ProbedCamera): Raw
     if (usable.any { it.format == current.format && it.width == current.width && it.height == current.height }) return current
     val format = usable.firstOrNull { it.format == RawStreamFormat.Raw16 }?.format ?: usable.firstOrNull()?.format ?: current.format
     return RawStreamChoice(format)
+}
+
+@Composable
+private fun FullResolutionGroup(lens: LensProfile, onChange: (LensProfile) -> Unit) {
+    var retainedStream by remember { mutableStateOf(lens.captureStream ?: RawStreamChoice()) }
+    SettingsGroup(title = "Full-resolution capture") {
+        DropdownChoiceRow(
+            title = "Vendor gate",
+            selected = lens.vendorGate,
+            values = (listOf("", "vivoFullSize") + lens.vendorGate).distinct(),
+            label = { when (it) { "" -> "None"; "vivoFullSize" -> "Vivo full-size"; else -> it } },
+            onSelect = { onChange(lens.copy(vendorGate = it)) }
+        )
+        SettingDivider()
+        SettingsSwitchRow(
+            title = "Separate capture stream",
+            checked = lens.captureStream != null,
+            supportingText = "Use a separate RAW size for photos while the preview uses the main stream"
+        ) { enabled ->
+            lens.captureStream?.let { retainedStream = it }
+            onChange(lens.copy(captureStream = if (enabled) retainedStream else null))
+        }
+        lens.captureStream?.let { capture ->
+            SettingDivider()
+            DropdownChoiceRow(
+                title = "Capture format",
+                selected = capture.format,
+                values = RawStreamFormat.entries,
+                label = { it.label },
+                onSelect = { onChange(lens.copy(captureStream = capture.copy(format = it))) }
+            )
+            Column(
+                Modifier.fillMaxWidth().padding(horizontal = SettingsRowHorizontalPadding, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    CaptureNumberField("Width", capture.width, Modifier.weight(1f)) {
+                        onChange(lens.copy(captureStream = capture.copy(width = it)))
+                    }
+                    CaptureNumberField("Height", capture.height, Modifier.weight(1f)) {
+                        onChange(lens.copy(captureStream = capture.copy(height = it)))
+                    }
+                }
+                Text(
+                    if (capture.width > 0 && capture.height > 0)
+                        String.format(Locale.ROOT, "%.1f MP · Use dimensions supported by the sensor mode, including unadvertised sizes.",
+                            capture.width.toDouble() * capture.height / 1_000_000)
+                    else "Enter the sensor mode’s capture dimensions, including unadvertised sizes.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                CaptureNumberField("Burst frame limit", lens.captureBurst, Modifier.fillMaxWidth(),
+                    "Ceiling for this lens. Choose the requested count in Multiframe → Maximum Frames. " +
+                        "0 = app limit (30) · 1 = single frame") {
+                    onChange(lens.copy(captureBurst = it))
+                }
+            }
+            DropdownChoiceRow(
+                title = "Burst submission",
+                selected = lens.captureBurstSequential,
+                values = listOf(false, true),
+                label = { if (it) "Sequential" else "Queued" },
+                supportingText = if (lens.captureBurstSequential)
+                    "Submit each frame after the previous RAW arrives"
+                else "Submit all frames together; the camera determines capture timing",
+                onSelect = { onChange(lens.copy(captureBurstSequential = it)) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun CaptureNumberField(
+    label: String,
+    value: Int,
+    modifier: Modifier = Modifier,
+    hint: String? = null,
+    onChange: (Int) -> Unit
+) {
+    var text by remember { mutableStateOf(if (value == 0) "" else value.toString()) }
+    OutlinedTextField(
+        value = text,
+        onValueChange = { input ->
+            if (input.all { it in '0'..'9' }) {
+                text = input
+                onChange(if (input.isEmpty()) 0 else input.toIntOrNull() ?: -1)
+            }
+        },
+        label = { Text(label) },
+        supportingText = hint?.let { { Text(it) } },
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        singleLine = true,
+        modifier = modifier
+    )
 }
 
 @Composable

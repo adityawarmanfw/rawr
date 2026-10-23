@@ -209,6 +209,17 @@ std::optional<LensRoute> CameraDeviceSession::select(const LensRoute& requested,
     parsed->cfaBlock = route.cfaBlock;
     parsed->cfaLiveQuality = route.cfaLiveQuality;
     parsed->cfaPhotoQuality = route.cfaPhotoQuality;
+    parsed->profileDistortion = route.distortion;
+    parsed->profileMirror = route.mirror;
+    if (route.dcp) {
+        if (auto calibration = color::dcpColorCalibration(*route.dcp)) {
+            parsed->color = *calibration;
+            parsed->dcpProfile = route.dcp;
+            diag("DCP_PROFILE_APPLY lens=" + route.lensId + " " + color::describe(*route.dcp));
+        }
+    } else if (!route.dcpPath.empty()) {
+        diag("DCP_PROFILE_SKIP lens=" + route.lensId + " error=" + route.dcpError);
+    }
     if (route.cfaOrder && int32_t(*route.cfaOrder) != parsed->camera2Cfa) {
         // The black pattern is per sensor position: undo the reported order, apply the profile's.
         const auto pattern = geometry::reorderRggbByCode(parsed->baselineBlackLevelPhysicalRggb, parsed->camera2Cfa);
@@ -633,6 +644,41 @@ void CameraDeviceSession::sessionClosed(uint64_t callbackGeneration, ACameraCapt
 }  // namespace rawrcam::camera
 
 namespace rawrcam::camera {
+bool CameraDeviceSession::hasFullSizeDecision() const noexcept {
+    if (!captureTarget_ || !companionTarget_) return false;
+    return std::any_of(stillKeys_.begin(), stillKeys_.end(), [](const CameraKeySetting& k) {
+        return k.enabled && k.scope == CameraKeySetting::Scope::Decision;
+    });
+}
+bool CameraDeviceSession::repeatFullSizeDecision(CameraRequestPipeline& pipeline, const CameraControlState& control,
+                                                 uint64_t tagId, const Diagnostic& diag) {
+    if (!session_ || !request_ || !sessionContext_ || !hasFullSizeDecision()) return false;
+    // The viewfinder's own shutter keeps the stream cadence; only the gain decides.
+    const int64_t exposureNs = control.appliedExposureTimeNs.value_or(33'333'333);
+    const int32_t sensitivity = std::max(1, control.capabilities.sensitivityMin);
+    return pipeline.repeatBracket(session_, request_, sessionContext_, control, {exposureNs, sensitivity}, tagId,
+                                  [&](ACaptureRequest* request) {
+        if (ACaptureRequest_removeTarget(request, target_) != ACAMERA_OK) return false;
+        if (!companionTargeted_ && ACaptureRequest_addTarget(request, companionTarget_) != ACAMERA_OK) return false;
+        // Long stills also need the widest advertised fps range on these frames
+        // (none, or a narrower one, fails the same way).
+        const auto& caps = control.capabilities;
+        if (caps.priorityAeTargetFpsMin > 0 && caps.priorityAeTargetFpsMax >= caps.priorityAeTargetFpsMin) {
+            const int32_t fps[2] = {caps.priorityAeTargetFpsMin, caps.priorityAeTargetFpsMax};
+            if (ACaptureRequest_setEntry_i32(request, ACAMERA_CONTROL_AE_TARGET_FPS_RANGE, 2, fps) != ACAMERA_OK)
+                return false;
+        }
+        const auto keys = applyCameraKeySettings(request, characteristics_, stillKeys_, stillKeysCameraId_.c_str(),
+                                                 CameraKeySetting::Scope::Decision, "lens", diag);
+        return keys.applied > 0 && keys.failures.empty();
+    });
+}
+bool CameraDeviceSession::stopRepeating(const Diagnostic& diag) {
+    if (!session_) return false;
+    const camera_status_t s = ACameraCaptureSession_stopRepeating(session_);
+    diag("CAMERA_REPEATING_STOPPED status=" + statusText(s));
+    return ok(s);
+}
 bool CameraDeviceSession::captureFullSize(CameraRequestPipeline& pipeline, const CameraControlState& control,
                                           const std::vector<CameraRequestPipeline::BracketExposure>& exposures,
                                           uint64_t tagId, const Diagnostic& diag) {
@@ -701,6 +747,13 @@ bool CameraDeviceSession::captureFullSize(CameraRequestPipeline& pipeline, const
         const auto result = applyCameraKeySettings(request, characteristics_, keys, stillKeysCameraId_.c_str(),
                                                    CameraKeySetting::Scope::Still, "lens",
                                                    keysLogged ? Diagnostic([](const std::string&) {}) : diag);
+        // Every entry the session, the viewfinder and the first still carry
+        // (diagnostics: comparing full-size stills with a known-good request).
+        if (!keysLogged) {
+            dumpCaptureRequest(sessionParameters_, "session", diag);
+            dumpCaptureRequest(request_, "repeating", diag);
+            dumpCaptureRequest(request, "still", diag);
+        }
         keysLogged = true;
         return result.failures.empty();
     });

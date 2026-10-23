@@ -47,6 +47,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private val Context.captureSettingsDataStore by preferencesDataStore(name = "capture_settings")
 
@@ -57,11 +60,19 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
     val values: Flow<SettingsValues> =
         dataStore.data
             .catch { error ->
+                android.util.Log.e("RawrSettings", "Unable to read saved settings", error)
                 if (error is IOException) emit(emptyPreferences()) else throw error
             }.map(::decode)
 
     suspend fun save(values: SettingsValues) {
-        dataStore.edit { prefs -> encode(prefs, values) }
+        try {
+            dataStore.edit { prefs -> encode(prefs, values) }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            android.util.Log.e("RawrSettings", "Unable to persist settings", e)
+            throw e
+        }
     }
 
     /** The exact key set [save] would persist for [values], for backups. */
@@ -391,6 +402,9 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
                     35 -> values
                     // v36 -> v37: AgX render profile; absent keys use AgX defaults.
                     36 -> values
+                    // v37 -> v38: lens shading correction defaults on for photo and video;
+                    // existing installs move to it one-time (it can be turned off again).
+                    37 -> migrateV37LensShadingDefaults(values)
                     else -> {
                         return defaults
                     }
@@ -614,6 +628,8 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
             photoFccSteps = (p[Keys.photoFccSteps] ?: p[Keys.fccSteps] ?: d.photoFccSteps).coerceIn(1, 8),
             videoFccEnabled = p[Keys.videoFccEnabled] ?: d.videoFccEnabled,
             photoDefringeEnabled = p[Keys.photoDefringeEnabled] ?: p[Keys.defringeEnabled] ?: d.photoDefringeEnabled,
+            photoCaptureSharpeningEnabled = p[Keys.photoCaptureSharpeningEnabled] ?: d.photoCaptureSharpeningEnabled,
+            photoCaptureSharpeningLevel = enumOrDefault(p[Keys.photoCaptureSharpeningLevel], d.photoCaptureSharpeningLevel),
             photoDefringeStrength = (p[Keys.photoDefringeStrength] ?: p[Keys.defringeStrength] ?: d.photoDefringeStrength).coerceIn(0f, 1f),
             photoDefringeEdgeThreshold =
                 (p[Keys.photoDefringeEdgeThreshold] ?: p[Keys.defringeEdgeThreshold] ?: d.photoDefringeEdgeThreshold).coerceIn(0.005f, 0.2f),
@@ -659,6 +675,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
             photoLensShadingEnabled = p[Keys.photoLensShading] ?: p[Keys.lensShadingCorrection] ?: d.photoLensShadingEnabled,
             videoLensShadingEnabled = p[Keys.videoLensShading] ?: d.videoLensShadingEnabled,
             distortionCorrectionEnabled = p[Keys.distortionCorrection] ?: d.distortionCorrectionEnabled,
+            videoDistortionCorrectionEnabled = p[Keys.videoDistortionCorrection] ?: d.videoDistortionCorrectionEnabled,
             photoHighlightEnabled = p[Keys.photoHighlightEnabled] ?: p[Keys.highlightReconstruction] ?: d.photoHighlightEnabled,
             photoHighlightMethod = (p[Keys.photoHighlightMethod] ?: p[Keys.highlightMethod] ?: d.photoHighlightMethod).coerceIn(0, 1),
             photoHighlightThreshold = (p[Keys.photoHighlightThreshold] ?: p[Keys.highlightThreshold] ?: d.photoHighlightThreshold).coerceIn(0.5f, 2f),
@@ -859,6 +876,8 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.photoFccSteps] = v.photoFccSteps.coerceIn(1, 8)
         p[Keys.videoFccEnabled] = v.videoFccEnabled
         p[Keys.photoDefringeEnabled] = v.photoDefringeEnabled
+        p[Keys.photoCaptureSharpeningEnabled] = v.photoCaptureSharpeningEnabled
+        p[Keys.photoCaptureSharpeningLevel] = v.photoCaptureSharpeningLevel.name
         p[Keys.photoDefringeStrength] = v.photoDefringeStrength.coerceIn(0f, 1f)
         p[Keys.photoDefringeEdgeThreshold] = v.photoDefringeEdgeThreshold.coerceIn(0.005f, 0.2f)
         p[Keys.photoDefringeLumaFloor] = v.photoDefringeLumaFloor.coerceIn(0f, 0.5f)
@@ -898,6 +917,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.photoLensShading] = v.photoLensShadingEnabled
         p[Keys.videoLensShading] = v.videoLensShadingEnabled
         p[Keys.distortionCorrection] = v.distortionCorrectionEnabled
+        p[Keys.videoDistortionCorrection] = v.videoDistortionCorrectionEnabled
         p[Keys.photoHighlightEnabled] = v.photoHighlightEnabled
         p[Keys.photoHighlightMethod] = v.photoHighlightMethod
         p[Keys.photoHighlightThreshold] = v.photoHighlightThreshold
@@ -981,7 +1001,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
 
     private companion object {
         const val LEGACY_SCHEMA_VERSION = 0
-        const val CURRENT_SCHEMA_VERSION = 37
+        const val CURRENT_SCHEMA_VERSION = 38
     }
 
     private object Keys {
@@ -1140,6 +1160,8 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val videoFccEnabled = booleanPreferencesKey("video_fcc_enabled")
         val videoFccSteps = intPreferencesKey("video_fcc_steps")
         val photoDefringeEnabled = booleanPreferencesKey("photo_defringe_enabled")
+        val photoCaptureSharpeningEnabled = booleanPreferencesKey("photo_capture_sharpening_enabled")
+        val photoCaptureSharpeningLevel = stringPreferencesKey("photo_capture_sharpening_level")
         val photoDefringeStrength = floatPreferencesKey("photo_defringe_strength")
         val photoDefringeEdgeThreshold = floatPreferencesKey("photo_defringe_edge_threshold")
         val photoDefringeLumaFloor = floatPreferencesKey("photo_defringe_luma_floor")
@@ -1187,6 +1209,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val photoLensShading = booleanPreferencesKey("photo_lens_shading")
         val videoLensShading = booleanPreferencesKey("video_lens_shading")
         val distortionCorrection = booleanPreferencesKey("distortion_correction")
+        val videoDistortionCorrection = booleanPreferencesKey("video_distortion_correction")
         val photoHighlightEnabled = booleanPreferencesKey("photo_highlight_enabled")
         val photoHighlightMethod = intPreferencesKey("photo_highlight_method")
         val photoHighlightThreshold = floatPreferencesKey("photo_highlight_threshold")
@@ -1225,7 +1248,9 @@ object SettingsPreferencesStore {
         val repository = SettingsPreferencesRepository(context, defaults)
         val lutFiles = LutProfileFileStore(context.applicationContext)
         val gpuFiles = GpuDriverFileStore(context.applicationContext)
+        val dcpFiles = DcpFileStore(context.applicationContext)
         var profiles: List<com.rawr.camera.settings.model.ImportedLutProfile>? = null
+        var lensProfiles: List<com.rawr.camera.settings.model.LensProfile>? = null
         var gpuEnabled: Boolean? = null
         return com.rawr.camera.settings.architecture.SettingsEditor(
             defaults, repository.values, repository::save, scope,
@@ -1235,6 +1260,10 @@ object SettingsPreferencesStore {
                     lutFiles.sync(values.userLutProfiles, profiles.orEmpty())
                     profiles = values.userLutProfiles
                 }
+                if (lensProfiles != values.lensProfiles) {
+                    lensProfiles = values.lensProfiles
+                    dcpFiles.sync(values.lensProfiles)
+                }
                 if (gpuEnabled != values.customGpuDriverEnabled) {
                     gpuFiles.setEnabled(values.customGpuDriverEnabled)
                     gpuEnabled = values.customGpuDriverEnabled
@@ -1242,6 +1271,19 @@ object SettingsPreferencesStore {
                 com.rawr.camera.integration.LiveTonemapState.publish(values.activeImageTone())
                 com.rawr.camera.integration.LiveTonemapState.publishAgx(values.activeAgxValues())
             }
-        ).also { instance = it }
+        ).also { editor ->
+            instance = editor
+            scope.launch {
+                editor.saveFailure.filterNotNull().collect {
+                    withContext(Dispatchers.Main) {
+                        android.widget.Toast.makeText(
+                            context.applicationContext,
+                            "Settings could not be saved. Changes may be lost when the app closes.",
+                            android.widget.Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            }
+        }
     }
 }

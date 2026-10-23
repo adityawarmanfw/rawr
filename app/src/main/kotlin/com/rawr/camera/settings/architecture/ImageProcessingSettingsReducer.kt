@@ -54,6 +54,14 @@ internal fun reduceImageProcessingSettings(
         state.withValues(state.values.copy(videoDefringeStrength = action.value.coerceIn(0f, 1f)))
     }
 
+    is SetPhotoCaptureSharpeningEnabled -> {
+        state.withValues(state.values.copy(photoCaptureSharpeningEnabled = action.enabled))
+    }
+
+    is SetPhotoCaptureSharpeningLevel -> {
+        state.withValues(state.values.copy(photoCaptureSharpeningLevel = action.value))
+    }
+
     is SetPhotoLensShadingEnabled -> {
         state.withValues(state.values.copy(photoLensShadingEnabled = action.enabled))
     }
@@ -64,6 +72,10 @@ internal fun reduceImageProcessingSettings(
 
     is SetDistortionCorrectionEnabled -> {
         state.withValues(state.values.copy(distortionCorrectionEnabled = action.enabled))
+    }
+
+    is SetVideoDistortionCorrectionEnabled -> {
+        state.withValues(state.values.copy(videoDistortionCorrectionEnabled = action.enabled))
     }
 
     is SetPhotoHighlightEnabled -> {

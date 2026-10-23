@@ -152,6 +152,9 @@ class FrameSubmitCoordinator final {
         config_.lensShadingCorrectionEnabled = enabled;
     }
     void setHighlightReconstructionEnabled(bool enabled) noexcept { highlightReconstructionEnabled_ = enabled; }
+    void setDistortionCorrectionEnabled(bool enabled) noexcept {
+        distortionCorrectionEnabled_.store(enabled, std::memory_order_relaxed);
+    }
     void setHighlightMethod(uint32_t method, float threshold, float compression) noexcept {
         highlightMethod_ = method;
         highlightThreshold_ = threshold;
@@ -320,6 +323,7 @@ class FrameSubmitCoordinator final {
     uint32_t diagnosticMode_ = 0;
     bool experimentalZeroCopy_ = false;
     bool lensShadingCorrectionEnabled_ = false;
+    std::atomic<bool> distortionCorrectionEnabled_{false};
     // User settings outlive per-camera geometry and resource reconfiguration.
     bool highlightReconstructionEnabled_ = true;
     uint32_t highlightMethod_ = 0;

@@ -3,6 +3,7 @@
 #include <string>
 
 #include "encoding/dng/DngWriteParams.h"
+#include "geometry/LensDistortion.h"
 #include "metadata/FrameMetadataSnapshot.h"
 
 namespace rawrcam::encoding::dng {
@@ -19,5 +20,11 @@ struct DngGainMapArea {
 // with *error on an invalid map or unresolvable CFA phase.
 bool appendLensShadingGainMaps(TinyDngWriteParams& params, const rawrcam::metadata::FrameMetadataSnapshot& metadata,
                                const DngGainMapArea& area, std::string* error);
+
+// Appends a WarpRectilinear opcode (OpcodeList3, id 1, one plane) fitted to
+// the lens profile calibration on a width x height active area. Returns
+// false with *error when the calibration doesn't fit the area.
+bool appendLensDistortionWarp(TinyDngWriteParams& params, const rawrcam::geometry::LensDistortionModel& model,
+                              uint32_t width, uint32_t height, std::string* error);
 
 }  // namespace rawrcam::encoding::dng

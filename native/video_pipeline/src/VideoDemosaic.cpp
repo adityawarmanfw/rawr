@@ -11,6 +11,7 @@
 
 #include "video_demosaic.h"
 #include "video_demosaic_1x.h"
+#include "video_demosaic_quad.h"
 #include "video_downscale_h.h"
 #include "video_downscale_v.h"
 #include "video_pipeline/VideoCrop.h"
@@ -30,6 +31,28 @@ uint32_t memoryType(VkPhysicalDevice physical, uint32_t bits, VkMemoryPropertyFl
         if ((bits & (1u << i)) && (properties.memoryTypes[i].propertyFlags & flags) == flags) return i;
     }
     throw std::runtime_error("video demosaic host memory unavailable");
+}
+
+VkPipeline createComputePipeline(VkDevice device, VkPipelineLayout layout, const unsigned char* code, size_t size,
+                                 const char* what) {
+    VkShaderModuleCreateInfo shaderInfo{};
+    shaderInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    shaderInfo.codeSize = size;
+    shaderInfo.pCode = reinterpret_cast<const uint32_t*>(code);
+    VkShaderModule shader = VK_NULL_HANDLE;
+    check(vkCreateShaderModule(device, &shaderInfo, nullptr, &shader), what);
+    VkComputePipelineCreateInfo pipelineInfo{};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    pipelineInfo.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    pipelineInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    pipelineInfo.stage.module = shader;
+    pipelineInfo.stage.pName = "main";
+    pipelineInfo.layout = layout;
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    const VkResult result = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline);
+    vkDestroyShaderModule(device, shader, nullptr);
+    check(result, what);
+    return pipeline;
 }
 
 struct Push {
@@ -90,25 +113,25 @@ VideoDemosaic::VideoDemosaic(const rawr::vk::GpuContext& context, uint32_t rawWi
         layoutInfo.pPushConstantRanges = &pushRange;
         check(vkCreatePipelineLayout(device, &layoutInfo, nullptr, &pipelineLayout_), "video demosaic pipeline layout");
 
-        VkShaderModuleCreateInfo shaderInfo{};
-        shaderInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        // 1:1 recordings use the build whose tile cache fits one sensor pixel
-        // per output; 2x reduction (the box A/B path) needs the larger cache.
-        shaderInfo.codeSize = reduceCfa_ ? video_demosaic_spv_size : video_demosaic_1x_spv_size;
-        shaderInfo.pCode = reinterpret_cast<const uint32_t*>(reduceCfa_ ? video_demosaic_spv : video_demosaic_1x_spv);
-        VkShaderModule shader = VK_NULL_HANDLE;
-        check(vkCreateShaderModule(device, &shaderInfo, nullptr, &shader), "video demosaic shader");
-        VkComputePipelineCreateInfo pipelineInfo{};
-        pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-        pipelineInfo.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        pipelineInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-        pipelineInfo.stage.module = shader;
-        pipelineInfo.stage.pName = "main";
-        pipelineInfo.layout = pipelineLayout_;
-        const VkResult pipelineResult =
-            vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline_);
-        vkDestroyShaderModule(device, shader, nullptr);
-        check(pipelineResult, "video demosaic pipeline");
+        // 1:1 recordings run the quad-per-thread shader; if the driver rejects it,
+        // fall back to the tiled MHC build whose tile cache fits one sensor pixel
+        // per output. 2x reduction (the box A/B path) needs the larger cache.
+        if (!reduceCfa_) {
+            try {
+                pipeline_ = createComputePipeline(device, pipelineLayout_, video_demosaic_quad_spv,
+                                                  video_demosaic_quad_spv_size, "video quad pipeline");
+                quad_ = true;
+            } catch (const std::exception& error) {
+                __android_log_print(ANDROID_LOG_WARN, "RawrNativeVideo",
+                                    "VIDEO_QUAD_PIPELINE rejected, using tiled MHC: %s", error.what());
+            }
+        }
+        if (!pipeline_)
+            pipeline_ = reduceCfa_ ? createComputePipeline(device, pipelineLayout_, video_demosaic_spv,
+                                                           video_demosaic_spv_size, "video demosaic pipeline")
+                                   : createComputePipeline(device, pipelineLayout_, video_demosaic_1x_spv,
+                                                           video_demosaic_1x_spv_size, "video demosaic pipeline");
+        __android_log_print(ANDROID_LOG_INFO, "RawrNativeVideo", "VIDEO_DEMOSAIC_METHOD method=%s", method());
 
         constexpr uint32_t slots = kFramesInFlight;
         std::array<VkDescriptorPoolSize, 2> sizes{
@@ -159,28 +182,6 @@ void VideoDemosaic::selectDownscaleFilter() {
 }
 
 namespace {
-VkPipeline createComputePipeline(VkDevice device, VkPipelineLayout layout, const unsigned char* code, size_t size,
-                                 const char* what) {
-    VkShaderModuleCreateInfo shaderInfo{};
-    shaderInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    shaderInfo.codeSize = size;
-    shaderInfo.pCode = reinterpret_cast<const uint32_t*>(code);
-    VkShaderModule shader = VK_NULL_HANDLE;
-    check(vkCreateShaderModule(device, &shaderInfo, nullptr, &shader), what);
-    VkComputePipelineCreateInfo pipelineInfo{};
-    pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    pipelineInfo.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    pipelineInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-    pipelineInfo.stage.module = shader;
-    pipelineInfo.stage.pName = "main";
-    pipelineInfo.layout = layout;
-    VkPipeline pipeline = VK_NULL_HANDLE;
-    const VkResult result = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline);
-    vkDestroyShaderModule(device, shader, nullptr);
-    check(result, what);
-    return pipeline;
-}
-
 VkDescriptorSetLayout createLayout(VkDevice device, const std::vector<VkDescriptorType>& types, const char* what) {
     std::vector<VkDescriptorSetLayoutBinding> bindings(types.size());
     for (uint32_t i = 0; i < types.size(); ++i)
@@ -515,8 +516,10 @@ void VideoDemosaic::record(VkCommandBuffer command, uint32_t frameSlot, const Fr
         vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout_, 0, 1,
                                 &descriptors_[frameSlot], 0, nullptr);
         vkCmdPushConstants(command, pipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
-        // 16x16 workgroups; see VIDEO_TILE in video_demosaic.comp.
-        vkCmdDispatch(command, (outputWidth_ + 15u) / 16u, (outputHeight_ + 15u) / 16u, 1);
+        // Quad shader: 16x16 threads cover 32x32 output pixels (VIDEO_QT in
+        // video_demosaic_quad.comp); otherwise 16x16 workgroups (VIDEO_TILE in video_demosaic.comp).
+        const uint32_t tile = quad_ ? 32u : 16u;
+        vkCmdDispatch(command, (outputWidth_ + tile - 1u) / tile, (outputHeight_ + tile - 1u) / tile, 1);
     }
 
     std::array<VkImageMemoryBarrier, 2> ready{};

@@ -62,7 +62,7 @@ class VideoDemosaic final {
     void selectDownscaleFilter();
     void setAntiAlias(bool enabled) noexcept { antiAlias_ = enabled; }
     const char* method() const noexcept {
-        if (!reduceCfa_) return "tiled_mhc_5x5";
+        if (!reduceCfa_) return quad_ ? "quad_guided_chroma" : "tiled_mhc_5x5";
         return antiAlias_ ? "strip_mhc_lanczos3_2x+chroma420" : "tiled_mhc_fused_2x_area";
     }
 
@@ -83,6 +83,7 @@ class VideoDemosaic final {
     uint32_t outputWidth_ = 0, outputHeight_ = 0;
     uint32_t cropX_ = 0, cropY_ = 0;
     bool reduceCfa_ = false;
+    bool quad_ = false;  // 1:1 recording runs the quad-per-thread shader
     VkDescriptorSetLayout descriptorLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;

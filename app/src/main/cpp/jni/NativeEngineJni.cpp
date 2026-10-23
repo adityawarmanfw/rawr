@@ -17,6 +17,7 @@
 #include "camera/CameraVideoCapabilities.h"
 #include "camera/NativeCameraController.h"
 #include "capture/CaptureRequest.h"
+#include "color/DcpProfile.h"
 #include "diagnostics/logging/RuntimeTraceRecorder.h"
 #include "jni/DevelopSettingsReader.h"
 #include "jni/SessionEngineApi.h"
@@ -221,12 +222,13 @@ extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreview
     JNIEnv*, jobject, jlong h, jboolean lensShadingEnabled, jboolean highlightEnabled, jint highlightMethod,
     jfloat highlightThreshold, jfloat highlightCompression, jint fccSteps, jfloat defringeStrength,
     jfloat waveletDenoiseStrength, jfloat waveletDenoiseDetail,
-    jfloat waveletDenoiseForceY, jint waveletDenoiseScales) {
+    jfloat waveletDenoiseForceY, jint waveletDenoiseScales, jboolean distortionEnabled) {
     const auto finiteClamped = [](float value, float fallback, float lo, float hi) {
         return std::isfinite(value) ? std::clamp(value, lo, hi) : fallback;
     };
     rawrcam::video::VideoProcessingConfig config{};
     config.lensShadingEnabled = lensShadingEnabled == JNI_TRUE;
+    config.distortionEnabled = distortionEnabled == JNI_TRUE;
     config.highlightEnabled = highlightEnabled == JNI_TRUE;
     config.highlightMethod = static_cast<uint32_t>(std::clamp(static_cast<int>(highlightMethod), 0, 1));
     config.highlightThreshold = finiteClamped(highlightThreshold, 1.0f, 0.5f, 2.0f);
@@ -313,6 +315,31 @@ Java_com_rawr_camera_integration_NativePreviewEngine_builtInCameraProfile(JNIEnv
     const auto& profile = rawrcam::camera::deviceBuiltInCameraProfile();
     return env->NewStringUTF(rawrcam::camera::serializeCameraProfile(profile).c_str());
 }
+// [error, name, summary] for a lens camera profile (.dcp) file; error is empty
+// when the app can use it. DCP names are free-form bytes: ASCII only, so
+// NewStringUTF never sees invalid modified UTF-8.
+extern "C" JNIEXPORT jobjectArray JNICALL
+Java_com_rawr_camera_integration_NativePreviewEngine_inspectCameraProfile(JNIEnv* env, jobject, jstring path) {
+    std::string error;
+    auto profile = rawrcam::color::loadDcp(jString(env, path), &error);
+    if (profile && !profile->embeddable()) error = "This profile doesn't allow embedding in DNG files";
+    if (profile && error.empty() && !rawrcam::color::dcpColorCalibration(*profile))
+        error = "The profile's matrices are not invertible";
+    const auto ascii = [](std::string s) {
+        for (auto& c : s)
+            if (static_cast<unsigned char>(c) < 0x20 || static_cast<unsigned char>(c) > 0x7e) c = '?';
+        return s;
+    };
+    const std::string fields[3] = {ascii(error), profile ? ascii(profile->name) : std::string(),
+                                   profile ? ascii(rawrcam::color::describe(*profile)) : std::string()};
+    jobjectArray out = env->NewObjectArray(3, env->FindClass("java/lang/String"), nullptr);
+    for (jsize i = 0; i < 3; ++i) {
+        jstring value = env->NewStringUTF(fields[i].c_str());
+        env->SetObjectArrayElement(out, i, value);
+        env->DeleteLocalRef(value);
+    }
+    return out;
+}
 extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreviewEngine_setPreferredCameraId(JNIEnv* env,
                                                                                                             jobject,
                                                                                                             jlong h,
@@ -353,6 +380,10 @@ Java_com_rawr_camera_integration_NativePreviewEngine_cancelPreparedMultiframeCap
 extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreviewEngine_setInternalTraceCaptureEnabled(
     JNIEnv*, jobject, jlong h, jboolean v) {
     rawrcam::session::setInternalTraceCaptureEnabled(handle(h), v == JNI_TRUE);
+}
+extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreviewEngine_setDistortionCorrectionEnabled(
+    JNIEnv*, jobject, jlong h, jboolean v) {
+    rawrcam::session::setDistortionCorrectionEnabled(handle(h), v == JNI_TRUE);
 }
 extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreviewEngine_setLensShadingCorrectionEnabled(
     JNIEnv*, jobject, jlong h, jboolean v) {
@@ -630,6 +661,17 @@ static void fillHighlightIntent(JNIEnv* env, rawrcam::capture::JpegCaptureReques
     jpeg.develop.highlightThreshold = std::isfinite(values[1]) ? std::clamp(values[1], 0.5f, 2.0f) : 1.0f;
     jpeg.develop.highlightCompression = std::isfinite(values[2]) ? std::clamp(values[2], 0.0f, 300.0f) : 45.0f;
 }
+// Capture sharpening travels in the capture recipe (render intent, also
+// frozen into the DNG so the Renderer starts from the captured level).
+static void fillCaptureSharpening(JNIEnv* env, rawrcam::capture::JpegCaptureRequest& jpeg, jstring captureRecipe) {
+    if (!captureRecipe) return;
+    rawrcam::jni::Json recipe(env, captureRecipe);
+    if (env->ExceptionCheck()) {  // malformed recipe: keep the stage off
+        env->ExceptionClear();
+        return;
+    }
+    jpeg.develop.captureSharpenIterations = rawrcam::jni::captureSharpenIterations(recipe);
+}
 extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_integration_NativePreviewEngine_requestRawStillCapture(
     JNIEnv* env, jobject, jlong h, jint dngFd, jint jpegFd, jint jpegQuality, jint jpegSubsampling,
     jboolean pipelineDiagnosticsEnabled, jint colorRenderProfile, jstring importedLutProfileId,
@@ -651,6 +693,7 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_integration_NativePrevie
                                           : rawrcam::encoding::dng::DngCompression::LosslessJpeg;
     dng.processingRecipe = jString(env, captureRecipe);
     dng.appLensShadingCorrection = lensShadingCorrectionEnabled == JNI_TRUE;
+    dng.appDistortionCorrection = distortionCorrectionEnabled == JNI_TRUE;
     freezeCaptureIntent(env, dng, captureTone, captureFilmValues, captureFilmEnums, captureFilmEnabled == JNI_TRUE);
     rawrcam::capture::JpegCaptureRequest jpeg{};
     fillJpegContext(env, jpeg, jpegFd, rotation, static_cast<int64_t>(wallClockMillis),
@@ -661,6 +704,7 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_integration_NativePrevie
                     distortionCorrectionEnabled, filmDescription, defringeEnabled, defringeStrength,
                     defringeEdgeThreshold, defringeLumaFloor, denoise, ultraHdrEnabled, ultraHdrGainmapQuality);
     fillHighlightIntent(env, jpeg, captureTone);
+    fillCaptureSharpening(env, jpeg, captureRecipe);
     return static_cast<jlong>(rawrcam::session::requestRawStillCapture(handle(h), std::move(dng), std::move(jpeg)));
 }
 extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_integration_NativePreviewEngine_startPreparedMultiframeCapture(
@@ -686,6 +730,7 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_integration_NativePrevie
     base.sourceRole = "base";
     base.processingRecipe = jString(env, captureRecipe);
     base.appLensShadingCorrection = lensShadingCorrectionEnabled == JNI_TRUE;
+    base.appDistortionCorrection = distortionCorrectionEnabled == JNI_TRUE;
     freezeCaptureIntent(env, base, captureTone, captureFilmValues, captureFilmEnums, captureFilmEnabled == JNI_TRUE);
     rawrcam::encoding::dng::DngCaptureContext merged = base;
     merged.outputFd = rawrcam::encoding::OutputFd(mergedDngFd);
@@ -700,6 +745,7 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_integration_NativePrevie
                     defringeEnabled, defringeStrength, defringeEdgeThreshold, defringeLumaFloor, denoise,
                     ultraHdrEnabled, ultraHdrGainmapQuality);
     fillHighlightIntent(env, jpeg, captureTone);
+    fillCaptureSharpening(env, jpeg, captureRecipe);
     jpeg.develop.multiframeChromaDenoise = multiframeChromaDenoise(env, tuningValues);
     auto baseMode = rawrcam::capture::multiframe::MultiframeBaseFrameMode::Sharpest;
     if (baseFrameMode == 0) baseMode = rawrcam::capture::multiframe::MultiframeBaseFrameMode::Middle;

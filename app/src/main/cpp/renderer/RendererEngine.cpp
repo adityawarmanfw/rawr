@@ -1,5 +1,6 @@
 #include "color/FilmExposure.h"
 #include "RendererEngine.h"
+#include "capture_sharpening/CaptureSharpening.h"
 #include <android/log.h>
 #include <sstream>
 #include <iomanip>
@@ -203,6 +204,7 @@ RendererEngine::RendererEngine(const std::string& dir, const std::string& lib, A
     processor_.setEnginePersistenceEnabled(true);
 }
 RendererEngine::~RendererEngine() {
+    captureSharpening_.reset();
     scopeEngine_.reset();
     vulkan::destroyOwnedImage(vulkan_.device(), scopeImage_);
     processor_.reset();
@@ -603,6 +605,88 @@ void RendererEngine::prepareProxy(DngSource& source, const std::string& path, bo
         throw;
     }
 }
+std::string RendererEngine::captureSharpened(const DngSource& source, const std::string& path, uint32_t w,
+                                             uint32_t h, uint32_t iterations) {
+    const std::string sharpened = path + "-cs" + std::to_string(iterations) + "-v1";
+    const size_t bytes = size_t(w) * h * 8;
+    lastCaptureSharpenMs_ = 0.0;
+    lastCaptureSharpenCached_ = std::filesystem::exists(sharpened) && std::filesystem::file_size(sharpened) == bytes;
+    if (lastCaptureSharpenCached_) return sharpened;
+    check();
+    const auto begin = std::chrono::steady_clock::now();
+    if (!captureSharpening_)
+        captureSharpening_ = std::make_unique<rawr::capsharp::CaptureSharpening>(
+            rawr::vk::GpuContext{vulkan_.physicalDevice(), vulkan_.device(), vulkan_.queueFamily()});
+    Buffer staging(vulkan_, bytes);
+    {
+        MappedFile input(path, bytes, false);
+        std::memcpy(staging.data, input.data, bytes);
+    }
+    Image image(vulkan_, w, h);
+    Commands commands(vulkan_);
+    commands.begin();
+    barrier(commands.command, image.value.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {w, h, 1};
+    vkCmdCopyBufferToImage(commands.command, staging.buffer, image.value.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                           &region);
+    barrier(commands.command, image.value.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
+    rawr::capsharp::RecordInfo info{};
+    info.commandBuffer = commands.command;
+    info.width = w;
+    info.height = h;
+    info.image = image.value.image;
+    info.view = image.value.view;
+    // No sensor clip state here: sites at >= 0.95 of white count as clipped.
+    info.cfaPattern = source.cfa;
+    for (int c = 0; c < 3; ++c) info.whiteBalance[c] = source.wb[c];
+    info.params.iterations = iterations;
+    // Bands keep each submission short; the Renderer shares the GPU with the UI.
+    info.deconvBandRows = 16;
+    captureSharpening_->setTileBoundary([&] {
+        commands.submit();
+        check();
+        commands.begin();
+    });
+    bool recorded = false;
+    try {
+        recorded = captureSharpening_->record(info);
+    } catch (...) {
+        captureSharpening_->setTileBoundary({});
+        throw;
+    }
+    captureSharpening_->setTileBoundary({});
+    if (!recorded) throw std::runtime_error("Capture sharpening rejected the renderer cache");
+    barrier(commands.command, image.value.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    vkCmdCopyImageToBuffer(commands.command, image.value.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, staging.buffer, 1,
+                           &region);
+    commands.submit();
+    const auto result = captureSharpening_->lastResult();
+    const auto strips = captureSharpening_->lastStripCount();
+    captureSharpening_->releaseScratch();
+    const auto temporary = sharpened + ".tmp";
+    try {
+        MappedFile output(temporary, bytes, true);
+        std::memcpy(output.data, staging.data, bytes);
+        if (msync(output.data, output.size, MS_SYNC) || fsync(output.fd))
+            throw std::runtime_error("Cannot persist sharpened renderer cache");
+        std::filesystem::rename(temporary, sharpened);
+    } catch (...) {
+        std::filesystem::remove(temporary);
+        throw;
+    }
+    __android_log_print(ANDROID_LOG_INFO, "RawrRenderer",
+                        "CAPTURE_SHARPENING renderer iterations=%u radius=%.4f contrast=%.1f strips=%u dims=%ux%u "
+                        "wallMs=%lld",
+                        iterations, result.radius, result.contrast, strips, w, h,
+                        static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                   std::chrono::steady_clock::now() - begin)
+                                                   .count()));
+    lastCaptureSharpenMs_ =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
+    return sharpened;
+}
 std::vector<uint8_t> RendererEngine::render(DngSource& source, const std::string& path, const RenderOptions& options) {
     check();
     stage = 4;
@@ -775,6 +859,8 @@ std::vector<uint8_t> RendererEngine::render(DngSource& source, const std::string
     context.whiteBalanceRgb[1] *= std::exp2(-options.tint / 100.0f);
     context.whiteBalanceRgb[2] *= std::exp2(-options.temperature / 100.0f);
     context.sensorToLinearSrgb = source.cameraToSrgb;
+    context.dcpProfile = source.dcpProfile;
+    context.dcpWeight1 = source.dcpWeight1;
     context.cameraToWorkingColumnMajor = color::math::cameraToWorkingColumnMajor(source.cameraToSrgb);
     // UltraHDR (JPEG_R): preview/overview never allocates map resources,
     // matching the still-capture contract where preview skips the half-res
@@ -795,6 +881,7 @@ std::vector<uint8_t> RendererEngine::render(DngSource& source, const std::string
     linearKey << std::setprecision(9) << inputKey << ':';
     for (float f : context.whiteBalanceRgb) linearKey << f << ',';
     for (float f : context.sensorToLinearSrgb) linearKey << f << ',';
+    linearKey << context.dcpWeight1 << ',';
     linearKey << context.fccSteps << ',' << context.normalizedFcc << ',' << context.fccEdgeSigma << ','
         << context.fccChromaBound << ',' << context.defringeStrength << ',' << context.defringeEdgeThreshold << ','
         << context.defringeLumaFloor << ',' << context.highlightReconstructionEnabled << ','
@@ -802,7 +889,8 @@ std::vector<uint8_t> RendererEngine::render(DngSource& source, const std::string
         << context.denoiseStrength << ',' << context.denoiseDetail << ',' << context.denoiseForceY << ','
         << context.denoiseMaxScale << ',' << context.denoiseNoiseA << ',' << context.denoiseNoiseB;
     if (context.highlightReconstructionEnabled && context.highlightReconstructionMethod == 1u)
-        linearKey << ',' << (context.filmEnabled ? color::filmExposureEv(context.filmLook, context.tonemapParams.aePostGain)
+        linearKey << ',' << (context.filmEnabled ? color::filmExposureEv(context.filmLook, context.tonemapParams.aePostGain,
+                                                                context.tonemapParams.exposureEV)
             : context.tonemapParams.exposureEV + std::log2(std::max(context.tonemapParams.aePostGain, 1e-6f)));
     // Local tone mapping is baked into the linear result, measured as rendered.
     if (context.tonemapParams.localTone.shadowsEv > 0.0f)

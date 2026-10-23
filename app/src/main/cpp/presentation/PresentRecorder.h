@@ -5,6 +5,8 @@
 #include <functional>
 #include <string>
 #include <utility>
+
+#include "geometry/LensDistortion.h"
 namespace rawrcam::presentation {
 struct ScopeDraw {
     VkDescriptorSet descriptor = VK_NULL_HANDLE;
@@ -31,6 +33,10 @@ struct RecordInfo {
     uint32_t exifOrientation = 0;  // 0 keeps camera rotation; 1..8 for DNG display.
     uint32_t diagnosticMode = 0;
     bool overlayEnabled = false;
+    // Lens profile calibration to undistort the live viewfinder; null = off.
+    const rawrcam::geometry::LensDistortionModel* lensWarp = nullptr;
+    // Lens profile mirror (geometry::kLensMirror* bits), live viewfinder only.
+    uint32_t lensMirror = 0;
     std::array<ScopeDraw, 3> scopes{};
 };
 class PresentRecorder final {

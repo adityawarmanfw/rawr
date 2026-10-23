@@ -26,11 +26,13 @@ RawFrameIngress::~RawFrameIngress() { destroy(); }
 ANativeWindow* RawFrameIngress::create(uint64_t generation, uint32_t width, uint32_t height,
                                        geometry::RawPixelFormat format, uint64_t ahbUsage) {
     destroy();
+    std::unique_lock<std::mutex> lock(drainMutex_);
     generation_ = generation;
     usage_ = ahbUsage;
     imageDescriptionLogged_ = false;
     auditImageCount_ = 0;
     readerStats_ = {};
+    acquiredCount_ = releasedCount_ = slotLimitHits_ = 0;
 
     const int32_t imageFormat = format == geometry::RawPixelFormat::Raw10 ? AIMAGE_FORMAT_RAW10 : AIMAGE_FORMAT_RAW16;
     const media_status_t status = AImageReader_newWithUsage(static_cast<int32_t>(width), static_cast<int32_t>(height),
@@ -42,6 +44,7 @@ ANativeWindow* RawFrameIngress::create(uint64_t generation, uint32_t width, uint
         throw std::runtime_error(oss.str());
     }
 
+    lock.unlock();
     AImageReader_ImageListener listener{};
     listener.context = this;
     listener.onImageAvailable = &RawFrameIngress::imageAvailableThunk;
@@ -65,14 +68,32 @@ ANativeWindow* RawFrameIngress::create(uint64_t generation, uint32_t width, uint
 }
 
 void RawFrameIngress::destroy() {
-    if (!reader_) return;
+    AImageReader* retired = nullptr;
+    {
+        // Wait for active drains, then prevent callbacks/retries from touching the retiring reader.
+        std::lock_guard<std::mutex> lock(drainMutex_);
+        retired = std::exchange(reader_, nullptr);
+        generation_ = 0;
+        imageDescriptionLogged_ = false;
+        auditImageCount_ = 0;
+    }
+    if (!retired) return;
+    // Deletion can wait for listener callbacks: never hold their drain mutex here.
     AImageReader_ImageListener listener{};
-    AImageReader_setImageListener(reader_, &listener);
-    AImageReader_delete(reader_);
-    reader_ = nullptr;
-    generation_ = 0;
-    imageDescriptionLogged_ = false;
-    auditImageCount_ = 0;
+    AImageReader_setImageListener(retired, &listener);
+    AImageReader_delete(retired);
+}
+
+void RawFrameIngress::resumeAfterRelease(uint64_t generation) {
+    std::lock_guard<std::mutex> lock(drainMutex_);
+    if (!reader_ || generation != generation_) return;
+    ++releasedCount_;
+    const auto before = acquiredCount_;
+    drainLocked(reader_);
+    LOGI("RAW_READER_RELEASE_DRAIN generation=%llu acquired=%llu released=%llu resumed=%llu slotLimitHits=%llu",
+         static_cast<unsigned long long>(generation_), static_cast<unsigned long long>(acquiredCount_),
+         static_cast<unsigned long long>(releasedCount_), static_cast<unsigned long long>(acquiredCount_ - before),
+         static_cast<unsigned long long>(slotLimitHits_));
 }
 
 void RawFrameIngress::imageAvailableThunk(void* context, AImageReader* reader) {
@@ -80,6 +101,12 @@ void RawFrameIngress::imageAvailableThunk(void* context, AImageReader* reader) {
 }
 
 void RawFrameIngress::onImageAvailable(AImageReader* reader) {
+    std::lock_guard<std::mutex> lock(drainMutex_);
+    if (!reader_ || reader != reader_) return;
+    drainLocked(reader);
+}
+
+void RawFrameIngress::drainLocked(AImageReader* reader) {
     // Drain a short burst per callback. A callback is not a promise that a
     // second notification will arrive for an image already queued here.
     for (int drained = 0; drained < static_cast<int>(kRawReaderMaxImages); ++drained) {
@@ -89,9 +116,13 @@ void RawFrameIngress::onImageAvailable(AImageReader* reader) {
         // frames, so neither recording nor diagnostics can account for those gaps.
         // The downstream bounded queue decides which frame to discard under load.
         const media_status_t status = AImageReader_acquireNextImageAsync(reader, &image, &fenceFd);
-        if (status == AMEDIA_IMGREADER_MAX_IMAGES_ACQUIRED) ++readerStats_.maxImagesHits;
+        if (status == AMEDIA_IMGREADER_MAX_IMAGES_ACQUIRED) {
+            ++readerStats_.maxImagesHits;
+            ++slotLimitHits_;
+        }
         if (status != AMEDIA_OK || !image) return;
 
+        ++acquiredCount_;
         if (!imageDescriptionLogged_) logImageDescription(image);
 
         int64_t timestamp = 0;

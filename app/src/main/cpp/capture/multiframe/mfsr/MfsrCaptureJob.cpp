@@ -26,6 +26,7 @@
 #include "capture/persistence/CaptureJob.h"
 #include "capture/persistence/FrameRecipe.h"
 #include "capture/persistence/ProcessingRecipe.h"
+#include "capture/single/SingleFrameCaptureContextBuilder.h"
 #include "color/ColorMath.h"
 #include "color/FilmExposure.h"
 #include "color/WhiteBalance.h"
@@ -198,6 +199,7 @@ void MfsrCaptureJob::runStages(Published& published) {
     outputInfo.demosaicLabel = "n/a";
     outputInfo.dualLabel = "n/a";
     outputInfo.fccSteps = mergedJpeg.develop.fccSteps;
+    outputInfo.captureSharpenIterations = mergedJpeg.develop.captureSharpenIterations;
     outputInfo.lscEnabled = mergedJpeg.develop.lensShadingCorrectionEnabled;
     outputInfo.highlightReconstructionEnabled = mergedJpeg.develop.highlightReconstructionEnabled;
     outputInfo.highlightMethodLabel =
@@ -737,6 +739,9 @@ void MfsrCaptureJob::runStages(Published& published) {
                 const rawrcam::color::math::Vec3 whiteBalanceRgb =
                     rawrcam::color::collapseRggbToRgb(job->referenceColor.baselineWbRggb);
                 RenderedStillContext renderedContext{};
+                if (job->referenceMetadata.cameraContext)
+                    renderedContext.dcpProfile = job->referenceMetadata.cameraContext->dcpProfile;
+                renderedContext.dcpWeight1 = job->referenceColor.calibrationWeight1;
                 renderedContext.requestId = requestId;
                 renderedContext.timestampNs = job->referenceMetadata.timestampNs;
                 renderedContext.width = mergeResult->outputExtent.width;
@@ -790,6 +795,14 @@ void MfsrCaptureJob::runStages(Published& published) {
                 renderedContext.cfaPattern = camera.rawPreviewCfa;
                 renderedContext.lensShading = develop::highlight::LensShadingMapSnapshot::fromMetadata(
                     job->referenceMetadata, mergedJpeg.develop.lensShadingCorrectionEnabled);
+                // Lens profile calibration scaled to the merge output (Camera2's
+                // pixel-array model doesn't fit merged or super-resolved grids).
+                if (capture::applyProfileLensDistortion(renderedContext, *job->referenceMetadata.cameraContext,
+                                                        renderedContext.width, renderedContext.height,
+                                                        mergedJpeg.develop.distortionCorrectionEnabled) &&
+                    renderedContext.distortionCorrectionEnabled)
+                    LOGI("DISTORTION_CORRECTION_APPLY model=rational source=profile merged=%ux%u",
+                         renderedContext.width, renderedContext.height);
                 renderedContext.ultraHdrEnabled = mergedJpeg.output.ultraHdr.enabled;
                 renderedContext.gainmapParams = mergedJpeg.output.ultraHdr.toGainmapParams();
                 // HDR gainmap input is camera RGB: same calibrated matrix the
@@ -860,6 +873,7 @@ void MfsrCaptureJob::runStages(Published& published) {
                     mergedJpeg.output.denoiseMs = renderedDone->denoiseMs;
                     mergedJpeg.output.gainmapMs = renderedDone->gainmapMs;
                     mergedJpeg.output.postTailMs = renderedDone->postTailMs;
+                    mergedJpeg.output.captureSharpenMs = renderedDone->captureSharpenMs;
                     mergedJpeg.output.highlightStage = renderedDone->highlightStage;
                     mergedJpeg.output.defringeEnabled = renderedDone->defringeEnabled;
                     mergedJpeg.output.renderSetupMs = renderedDone->renderSetupMs;

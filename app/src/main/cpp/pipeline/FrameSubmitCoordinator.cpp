@@ -570,6 +570,11 @@ void FrameSubmitCoordinator::submitSplitVideoAndMonitor(const SubmitParams& para
     };
     try {
         performanceTracker_.markVideoProcessBegin(current, slotIndex, true);
+        videoOutput_->setLensDistortion(metadata.cameraContext ? metadata.cameraContext->profileDistortion
+                                                               : std::nullopt);
+        videoOutput_->setLensMirror(metadata.cameraContext ? metadata.cameraContext->profileMirror : 0u);
+        videoOutput_->setDcpProfile(metadata.cameraContext ? metadata.cameraContext->dcpProfile : nullptr,
+                                    params.colorState->calibrationWeight1);
         videoOutput_->record(current, slotIndex, *acquired.videoIndex, config_.rawWidth, config_.rawHeight, frame,
                              cameraToAp1, tone, performanceTracker_, acquired.swapIndex.has_value(), splitSubmit,
                              [&](VkCommandBuffer cmd, VkImageView view, uint32_t width, uint32_t height) {
@@ -763,6 +768,7 @@ FrameSubmitCoordinator::RecordedSubmit FrameSubmitCoordinator::recordSubmitComma
                                                          true,
                                                          {}};
     recordInput.multiframeEnabled = capturePort_.multiframeEnabled();
+    recordInput.distortionCorrectionEnabled = distortionCorrectionEnabled_.load(std::memory_order_relaxed);
     recordInput.videoCropOutWidth = videoCropOutWidth_.load(std::memory_order_relaxed);
     recordInput.videoCropOutHeight = videoCropOutHeight_.load(std::memory_order_relaxed);
     recordInput.filmEnabled = filmSimEnabled_;
@@ -801,6 +807,11 @@ FrameSubmitCoordinator::RecordedSubmit FrameSubmitCoordinator::recordSubmitComma
         videoFrame.noiseProfileValid =
             rawrcam::develop::rendered::resolveDenoiseNoise(metadata, videoFrame.noiseA, videoFrame.noiseB);
         recordInput.recordPrimaryVideo = [&, videoFrame, cameraToAp1, frameTonemapParams] {
+            videoOutput_->setLensDistortion(metadata.cameraContext ? metadata.cameraContext->profileDistortion
+                                                                   : std::nullopt);
+            videoOutput_->setLensMirror(metadata.cameraContext ? metadata.cameraContext->profileMirror : 0u);
+            videoOutput_->setDcpProfile(metadata.cameraContext ? metadata.cameraContext->dcpProfile : nullptr,
+                                        params.colorState->calibrationWeight1);
             videoOutput_->record(slot->command, slotIndex, *acquired.videoIndex, config_.rawWidth, config_.rawHeight,
                                  videoFrame, cameraToAp1, frameTonemapParams, performanceTracker_);
         };
@@ -929,6 +940,10 @@ void FrameSubmitCoordinator::submitAndPresent(const SubmitParams& params, const 
         }
         trace.record(rawrcam::diagnostics::RuntimeTraceStage::PresentEnd, params.timestampNs, metadata.frameOrdinal,
                      static_cast<int32_t>(slotIndex), metadata.exposureTimeNs, metadata.sensitivity, 0u, presentResult);
+        if ((presentResult == VK_SUCCESS || presentResult == VK_SUBOPTIMAL_KHR) &&
+            !metadata.hidePreview && !metadata.optimizedStillRequestId.value_or(0) && metadata.cameraContext) {
+            swapchainRenderer_.noteLivePresentation(metadata.cameraContext->cameraContextGeneration, params.timestampNs);
+        }
         if (presentResult == VK_ERROR_OUT_OF_DATE_KHR) {
             lifecyclePort_.notifySwapchainOutOfDate();
             if (acquired.videoIndex) ++previewSkippedDuringVideo_;

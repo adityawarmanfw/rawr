@@ -17,6 +17,7 @@
 #include "still_coloropp.h"
 #include "still_coloropp_tone.h"
 #include "still_defringe.h"
+#include "still_mirror.h"
 #include "still_derive_clip_state.h"
 #include "still_highlight_guide_propagate.h"
 #include "still_highlight_guide_seed.h"
@@ -136,6 +137,7 @@ PostDemosaicProcessor::PostDemosaicProcessor(VkPhysicalDevice pd, VkDevice devic
     destroyPredicateBuffer();
     destroyDeriveClipPipeline();
     destroyDefringePipeline();
+    destroyMirrorPipeline();
     destroyHighlightGuidePipelines();
     destroyHighlightPipeline();
     destroyWbPipeline();
@@ -153,6 +155,7 @@ PostDemosaicProcessor::~PostDemosaicProcessor() {
     destroyPredicateBuffer();
     destroyDeriveClipPipeline();
     destroyDefringePipeline();
+    destroyMirrorPipeline();
     destroyHighlightGuidePipelines();
     destroyHighlightPipeline();
     destroyWbPipeline();
@@ -186,7 +189,7 @@ void PostDemosaicProcessor::createWbPipeline() {
     ds.bindingCount = 3;
     ds.pBindings = b;
     ck(vkCreateDescriptorSetLayout(device_, &ds, nullptr, &wbDsl_), "WB set layout");
-    VkPushConstantRange pr{VK_SHADER_STAGE_COMPUTE_BIT, 0, 64};
+    VkPushConstantRange pr{VK_SHADER_STAGE_COMPUTE_BIT, 0, 96};
     VkPipelineLayoutCreateInfo pl{};
     pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pl.setLayoutCount = 1;
@@ -399,6 +402,69 @@ void PostDemosaicProcessor::destroyDefringePipeline() noexcept {
     defringeLayout_ = VK_NULL_HANDLE;
     defringeDsl_ = VK_NULL_HANDLE;
     defringeSet_ = VK_NULL_HANDLE;
+}
+void PostDemosaicProcessor::destroyMirrorPipeline() noexcept {
+    if (!device_) return;
+    if (mirrorPool_) vkDestroyDescriptorPool(device_, mirrorPool_, nullptr);
+    if (mirrorPipeline_) vkDestroyPipeline(device_, mirrorPipeline_, nullptr);
+    if (mirrorLayout_) vkDestroyPipelineLayout(device_, mirrorLayout_, nullptr);
+    if (mirrorDsl_) vkDestroyDescriptorSetLayout(device_, mirrorDsl_, nullptr);
+    mirrorPool_ = VK_NULL_HANDLE;
+    mirrorPipeline_ = VK_NULL_HANDLE;
+    mirrorLayout_ = VK_NULL_HANDLE;
+    mirrorDsl_ = VK_NULL_HANDLE;
+    mirrorSet_ = VK_NULL_HANDLE;
+}
+void PostDemosaicProcessor::createMirrorPipeline() {
+    VkDescriptorSetLayoutBinding b{};
+    b.binding = 0;
+    b.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    b.descriptorCount = 1;
+    b.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    VkDescriptorSetLayoutCreateInfo ds{};
+    ds.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    ds.bindingCount = 1;
+    ds.pBindings = &b;
+    ck(vkCreateDescriptorSetLayout(device_, &ds, nullptr, &mirrorDsl_), "mirror set layout");
+    VkPushConstantRange pr{VK_SHADER_STAGE_COMPUTE_BIT, 0, 12};
+    VkPipelineLayoutCreateInfo pl{};
+    pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pl.setLayoutCount = 1;
+    pl.pSetLayouts = &mirrorDsl_;
+    pl.pushConstantRangeCount = 1;
+    pl.pPushConstantRanges = &pr;
+    ck(vkCreatePipelineLayout(device_, &pl, nullptr, &mirrorLayout_), "mirror pipeline layout");
+    VkShaderModuleCreateInfo sm{};
+    sm.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    sm.codeSize = still_mirror_spv_size;
+    sm.pCode = reinterpret_cast<const uint32_t*>(still_mirror_spv);
+    VkShaderModule module = VK_NULL_HANDLE;
+    ck(vkCreateShaderModule(device_, &sm, nullptr, &module), "mirror shader module");
+    VkPipelineShaderStageCreateInfo st{};
+    st.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    st.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    st.module = module;
+    st.pName = "main";
+    VkComputePipelineCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    ci.stage = st;
+    ci.layout = mirrorLayout_;
+    VkResult r = vkCreateComputePipelines(device_, VK_NULL_HANDLE, 1, &ci, nullptr, &mirrorPipeline_);
+    vkDestroyShaderModule(device_, module, nullptr);
+    ck(r, "mirror compute pipeline");
+    VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1};
+    VkDescriptorPoolCreateInfo pi{};
+    pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pi.maxSets = 1;
+    pi.poolSizeCount = 1;
+    pi.pPoolSizes = &ps;
+    ck(vkCreateDescriptorPool(device_, &pi, nullptr, &mirrorPool_), "mirror descriptor pool");
+    VkDescriptorSetAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    ai.descriptorPool = mirrorPool_;
+    ai.descriptorSetCount = 1;
+    ai.pSetLayouts = &mirrorDsl_;
+    ck(vkAllocateDescriptorSets(device_, &ai, &mirrorSet_), "mirror descriptor set");
 }
 void PostDemosaicProcessor::createDefringePipeline() {
     VkDescriptorSetLayoutBinding b[2]{};
@@ -651,12 +717,14 @@ void PostDemosaicProcessor::record(VkCommandBuffer cmd, VkImage sourceImage, VkI
         float fx, fy, cx, cy;
         float k1, k2, p1, p2, k3;
         uint32_t highlightMode;
+        float k4, k5, k6, fxOut, fyOut;
+        float originX, originY, frameScale;
     } pc{width_,
          height_,
          gains[0],
          gains[1],
          gains[2],
-         distortion.enabled ? 1u : 0u,
+         distortion.enabled ? (distortion.model == StillDistortionCorrection::Model::Rational ? 2u : 1u) : 0u,
          distortion.intrinsic[0],
          distortion.intrinsic[1],
          distortion.intrinsic[2],
@@ -666,8 +734,16 @@ void PostDemosaicProcessor::record(VkCommandBuffer cmd, VkImage sourceImage, VkI
          distortion.distortion[2],
          distortion.distortion[3],
          distortion.distortion[4],
-         highlightFused ? (highlightStage == 2u ? 2u : 1u) : 0u};
-    static_assert(sizeof(Pc) == 64);
+         highlightFused ? (highlightStage == 2u ? 2u : 1u) : 0u,
+         distortion.rationalDenominator[0],
+         distortion.rationalDenominator[1],
+         distortion.rationalDenominator[2],
+         distortion.outputFocal[0],
+         distortion.outputFocal[1],
+         distortion.frameOrigin[0],
+         distortion.frameOrigin[1],
+         distortion.frameScale};
+    static_assert(sizeof(Pc) == 96);
     if (coloroppFusedWb) {
         // The highlight predicate stays zero: the guide chain is off with Inpaint Opposed.
         coloropp_->recordFused(cmd, sourceView, wbImage_.view, gains, highlightThreshold, shading, cfaPattern,
@@ -850,6 +926,31 @@ void PostDemosaicProcessor::record(VkCommandBuffer cmd, VkImage sourceImage, VkI
     } else if (timingPool) {
         vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, timingPool, 4);
         vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, timingPool, 5);
+    }
+    if (const uint32_t mirror = distortion.mirror & 3u; mirror != 0u) {
+        if (!mirrorPipeline_) createMirrorPipeline();
+        const VkImage mirrorImage = outputImage();
+        VkDescriptorImageInfo mi{VK_NULL_HANDLE, outputView(), VK_IMAGE_LAYOUT_GENERAL};
+        VkWriteDescriptorSet mw{};
+        mw.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        mw.dstSet = mirrorSet_;
+        mw.dstBinding = 0;
+        mw.descriptorCount = 1;
+        mw.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        mw.pImageInfo = &mi;
+        vkUpdateDescriptorSets(device_, 1, &mw, 0, nullptr);
+        auto before = barrier(mirrorImage, VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT,
+                              VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
+                             nullptr, 0, nullptr, 1, &before);
+        const uint32_t mp[3]{width_, height_, mirror};
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, mirrorPipeline_);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, mirrorLayout_, 0, 1, &mirrorSet_, 0, nullptr);
+        vkCmdPushConstants(cmd, mirrorLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(mp), mp);
+        vkCmdDispatch(cmd, (width_ + 15u) / 16u, (height_ + 15u) / 16u, 1);
+        auto after = barrier(mirrorImage, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
+                             nullptr, 0, nullptr, 1, &after);
     }
     if (coloroppActive_ && !deferColoroppTone_) {
         auto ready = barrier(outputImage(), VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
