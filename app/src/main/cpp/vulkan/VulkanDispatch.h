@@ -25,6 +25,7 @@ extern PFN_vkCmdCopyBufferToImage vkCmdCopyBufferToImage;
 extern PFN_vkCmdCopyImage vkCmdCopyImage;
 extern PFN_vkCmdCopyImageToBuffer vkCmdCopyImageToBuffer;
 extern PFN_vkCmdDispatch vkCmdDispatch;
+extern PFN_vkCmdDispatchIndirect vkCmdDispatchIndirect;
 extern PFN_vkCmdDispatchBase vkCmdDispatchBase;
 extern PFN_vkCmdDraw vkCmdDraw;
 extern PFN_vkCmdEndRenderPass vkCmdEndRenderPass;

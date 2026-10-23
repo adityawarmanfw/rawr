@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "color/ColorMath.h"
+#include "color/ColorCalibration.h"
 #include "color/FilmExposure.h"
 #include "diagnostics/probes/PipelineDiagnostics.h"
 #include "diagnostics/probes/RawIntegrityProbe.h"
@@ -323,11 +324,11 @@ RawDevelopRecordResult RawDevelopRecorder::record(const RawDevelopRecordInput& i
     params.highlightCompression = in.highlightCompression;
     params.bypassHighlightTone = in.tonemapParams.renderTransform != tonemap::RenderTransform::Existing;
     // The tone tap must see the exposure of the render that follows it: film
-    // ignores tonemap render exposure and applies its own folded EV.
+    // folds render exposure into its own exposure EV.
     const std::shared_ptr<spektrafilm_native::SpektraFilm> film = acquireFilm_();
     const bool useFilm = in.diagnosticMode == 0u && in.filmEnabled && film != nullptr;
     params.highlightExposureGain =
-        useFilm ? std::exp2(rawrcam::color::filmExposureEv(in.filmLook, in.tonemapParams.aePostGain))
+        useFilm ? std::exp2(rawrcam::color::filmExposureEv(in.filmLook, in.tonemapParams.aePostGain, in.tonemapParams.exposureEV))
                 : std::max(in.tonemapParams.aePostGain * std::exp2(in.tonemapParams.exposureEV), 1.0e-6f);
     raw_preview::RawPreviewRecordInfo rawRecord{};
     rawRecord.commandBuffer = slot.command;
@@ -413,6 +414,13 @@ RawDevelopRecordResult RawDevelopRecorder::record(const RawDevelopRecordInput& i
                             in.sensorToLinearSrgb, in.whiteBalance, in.sceneSpot, in.sceneWeighting, in.sceneFocus);
     }
 
+    if (in.diagnosticMode == 0u && in.metadata.cameraContext && in.metadata.cameraContext->dcpProfile) {
+        if (!slot.dcpStage) slot.dcpStage = std::make_unique<develop::rendered::DcpRenderStage>(slot.physicalDevice, slot.device);
+        const auto color = color::deriveFrameColorTransform(in.metadata, color::PreviewColorMode::Auto);
+        slot.dcpStage->record(slot.command, in.metadata.cameraContext->dcpProfile, in.sensorToLinearSrgb,
+                              color.calibrationWeight1, in.previewWidth, in.previewHeight, slot.linear.view, displayView);
+    }
+
     // Local tone mapping (exposure fusion): after the scene meter read the
     // unlifted linear image, before film/tonemap; in place on the display
     // input and the linear image (stills apply it to both copies too).
@@ -470,7 +478,8 @@ RawDevelopRecordResult RawDevelopRecorder::record(const RawDevelopRecordInput& i
         filmRecord.frameSlot = in.slotIndex;
         filmRecord.look = in.filmLook;
         filmRecord.timeSec = static_cast<double>(in.timestampNs) / 1e9;
-        filmRecord.look.filmExposureEv = rawrcam::color::filmExposureEv(in.filmLook, in.tonemapParams.aePostGain);
+        filmRecord.look.filmExposureEv = rawrcam::color::filmExposureEv(in.filmLook, in.tonemapParams.aePostGain,
+                                                                in.tonemapParams.exposureEV);
         filmRecord.adaptiveTone = {in.tonemapParams.adaptiveTone.liftEv, in.tonemapParams.adaptiveTone.keyEv,
                                    in.tonemapParams.adaptiveTone.highlightEv, in.tonemapParams.aePostGain};
         // The film input buffer holds sensor-native linear; the film model
@@ -622,7 +631,26 @@ RawDevelopRecordResult RawDevelopRecorder::record(const RawDevelopRecordInput& i
                                                                in.previewHeight);
         }
     }
-    monitor_.present(monitorFrame, previewCrop.x, previewCrop.y, previewCrop.width, previewCrop.height);
+    // Framing matches the undistorted photo or recording (Kotlin sends the
+    // current mode's setting); diagnostics show the sensor image as is. The
+    // idle video crop zooms like the recorder, which only demosaics the crop.
+    auto presented = monitorFrame;
+    // The mirror applies regardless of the distortion setting, like the recorder and stills.
+    if (in.diagnosticMode == 0u && in.metadata.cameraContext)
+        presented.lensMirror = in.metadata.cameraContext->profileMirror;
+    std::optional<rawrcam::geometry::LensDistortionModel> cropWarp;
+    if (in.distortionCorrectionEnabled && in.diagnosticMode == 0u && in.metadata.cameraContext &&
+        in.metadata.cameraContext->profileDistortion) {
+        const auto& lens = *in.metadata.cameraContext->profileDistortion;
+        if (previewCrop.width == 0) {
+            presented.lensWarp = &lens;
+        } else if ((cropWarp = rawrcam::geometry::scaledTo(lens, in.previewWidth, in.previewHeight))) {
+            cropWarp->outputScale = rawrcam::geometry::containedOutputScale(*cropWarp, previewCrop.x, previewCrop.y,
+                                                                            previewCrop.width, previewCrop.height);
+            presented.lensWarp = &*cropWarp;
+        }
+    }
+    monitor_.present(presented, previewCrop.x, previewCrop.y, previewCrop.width, previewCrop.height);
     performance_.markPresentationDone(slot.command, in.slotIndex);
     performance_.markFrameDone(slot.command, in.slotIndex);
     return {rawReadStage};

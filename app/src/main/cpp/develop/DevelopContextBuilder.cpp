@@ -15,5 +15,6 @@ void applyDevelopSettings(rendered::RenderedStillContext& context, const Develop
     context.highlightReconstructionMethod = settings.highlightReconstructionMethod;
     context.highlightThreshold = settings.highlightThreshold;
     context.highlightCompression = settings.highlightCompression;
+    context.captureSharpenIterations = settings.captureSharpenIterations;
 }
 }  // namespace rawrcam::develop

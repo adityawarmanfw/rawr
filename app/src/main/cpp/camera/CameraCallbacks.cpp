@@ -94,10 +94,10 @@ void CameraCallbacks::onClosed(void* context, ACameraCaptureSession* session) {
     if (guard.owner) guard.owner->cameraSessionClosed(callback->generation, session);
     delete callback;
 }
-void CameraCallbacks::onStarted(void* context, ACameraCaptureSession*, const ACaptureRequest* request, int64_t) {
+void CameraCallbacks::onStarted(void* context, ACameraCaptureSession*, const ACaptureRequest* request, int64_t timestamp) {
     auto* callback = static_cast<CameraSessionCallbackContext*>(context);
     CameraCallbackGuard<CameraEventSink> guard(callback->lifetime);
-    if (guard.owner) guard.owner->cameraCaptureStarted(callback->generation, request);
+    if (guard.owner) guard.owner->cameraCaptureStarted(callback->generation, request, timestamp);
 }
 void CameraCallbacks::onCompleted(void* context, ACameraCaptureSession*, ACaptureRequest* request,
                                   const ACameraMetadata* result) {

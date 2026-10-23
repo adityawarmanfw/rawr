@@ -1,7 +1,13 @@
 #version 450
 layout(set=0,binding=0) uniform sampler2D srcImage;
 layout(set=0,binding=1) uniform sampler2D overlayImage;
-layout(push_constant) uniform PC { uint quarterTurns; float srcAspect; float dstAspect; uint diagnosticMode; uint overlayEnabled; float cornerRadius; uint exifOrientation; uint cropEnabled; float cropX0; float cropY0; float cropX1; float cropY1; } pc;
+layout(push_constant) uniform PC { uint quarterTurns; float srcAspect; float dstAspect; uint diagnosticMode; uint overlayEnabled; float cornerRadius; uint exifOrientation; uint cropEnabled; float cropX0; float cropY0; float cropX1; float cropY1;
+    // Lens profile undistort of the live photo viewfinder (OpenCV rational, in
+    // source UV: centre, focal, output focal; k = k1,k2,p1,p2,k3,k4,k5,k6).
+    uint lensWarp; float lensCx; float lensCy; float lensFx; float lensFy; float lensFxOut; float lensFyOut;
+    float k1; float k2; float p1; float p2; float k3; float k4; float k5; float k6;
+    // Lens profile mirror of the corrected image (bit 0 horizontal, bit 1 vertical, sensor frame).
+    uint lensMirror; } pc;
 layout(location=0) in vec2 uv;
 layout(location=0) out vec4 outColor;
 
@@ -18,6 +24,17 @@ vec2 sourceUv(vec2 q) {
     if(pc.quarterTurns==2u) return vec2(1.0-q.x,1.0-q.y);
     if(pc.quarterTurns==3u) return vec2(1.0-q.y,q.x);
     return q;
+}
+
+// Corrected output UV -> distorted source UV.
+vec2 lensSource(vec2 s) {
+    vec2 c=vec2(pc.lensCx,pc.lensCy);
+    vec2 x=(s-c)/vec2(pc.lensFxOut,pc.lensFyOut);
+    float r2=dot(x,x);
+    float radial=(1.0+r2*(pc.k1+r2*(pc.k2+r2*pc.k3)))/(1.0+r2*(pc.k4+r2*(pc.k5+r2*pc.k6)));
+    vec2 d=vec2(x.x*radial+2.0*pc.p1*x.x*x.y+pc.p2*(r2+2.0*x.x*x.x),
+                x.y*radial+pc.p1*(r2+2.0*x.y*x.y)+2.0*pc.p2*x.x*x.y);
+    return c+d*vec2(pc.lensFx,pc.lensFy);
 }
 
 void main(){
@@ -47,6 +64,9 @@ void main(){
         q=vec2(mix(pc.cropX0,pc.cropX1,q.x),mix(pc.cropY0,pc.cropY1,q.y));
     }
     vec2 s=sourceUv(q);
+    if((pc.lensMirror & 1u) != 0u) s.x=1.0-s.x;
+    if((pc.lensMirror & 2u) != 0u) s.y=1.0-s.y;
+    if(pc.lensWarp != 0u) s=lensSource(s);
 
     // 100+ is an application-owned auxiliary texture (scope). The same
     // aspect-fit mapping is used so waveform grids and vectorscope circles are

@@ -131,7 +131,7 @@ internal fun DynamicRangeSettings(state: SettingsUiState, dispatch: SettingsDisp
                     }
                     DynamicRangeMethod.Global -> {
                         dispatch.invoke(SetLocalTone(mode = PhotoToneMapping.Adaptive))
-                        if (v.autoKeyExposure == AutoKeyExposure.Off) dispatch.invoke(SetAutoKeyExposure(AutoKeyExposure.Natural))
+                        if (v.autoKeyExposure == AutoKeyExposure.Off) dispatch.invoke(SetAutoKeyExposure(AutoKeyExposure.Medium))
                     }
                     DynamicRangeMethod.Local -> dispatch.invoke(SetLocalTone(mode = PhotoToneMapping.Local))
                 }
@@ -203,7 +203,7 @@ internal fun DynamicRangeSettings(state: SettingsUiState, dispatch: SettingsDisp
                 dispatch.invoke(
                     SetAutoKeyExposure(
                         if (it == DynamicRangeMethod.Off) AutoKeyExposure.Off
-                        else v.videoAutoKeyExposure.takeIf { s -> s != AutoKeyExposure.Off } ?: AutoKeyExposure.Natural,
+                        else v.videoAutoKeyExposure.takeIf { s -> s != AutoKeyExposure.Off } ?: AutoKeyExposure.Medium,
                         video = true
                     )
                 )
@@ -307,9 +307,14 @@ internal fun ImageSettings(state: SettingsUiState, dispatch: SettingsDispatch) {
                 onClick = { dispatch.invoke(OpenSection(SettingsSection.Denoise)) }
             )
             SettingDivider()
-            SettingsSwitchRow(title = "Distortion correction", checked = v.distortionCorrectionEnabled, value = "Photo only", onCheckedChange = {
-                dispatch.invoke(SetDistortionCorrectionEnabled(it))
-            })
+            CaptureSharpeningRows(state, dispatch)
+            SettingDivider()
+            SettingsRow(
+                title = "Distortion correction",
+                value = photoVideoSummary(v.distortionCorrectionEnabled, v.videoDistortionCorrectionEnabled),
+                testTag = SettingsTestTags.row("Image", "distortion"),
+                onClick = { dispatch.invoke(OpenSection(SettingsSection.Distortion)) }
+            )
             SettingDivider()
             SettingsRow(
                 title = "Lens shading",
@@ -436,6 +441,24 @@ internal fun LensShadingSettings(state: SettingsUiState, dispatch: SettingsDispa
 }
 
 @Composable
+internal fun DistortionSettings(state: SettingsUiState, dispatch: SettingsDispatch) {
+    val v = state.values
+    SettingsPageContainer(testTag = SettingsTestTags.sectionRoot("Distortion")) {
+        SettingsGroup(
+            description = "Straightens lens distortion on lenses with a calibration. Photo covers the viewfinder, " +
+                "stills and the DNG lens correction; Video covers recordings and the video viewfinder."
+        ) {
+            PhotoVideoTargetSelector(
+                photoOn = v.distortionCorrectionEnabled,
+                videoOn = v.videoDistortionCorrectionEnabled,
+                onPhotoChange = { dispatch.invoke(SetDistortionCorrectionEnabled(it)) },
+                onVideoChange = { dispatch.invoke(SetVideoDistortionCorrectionEnabled(it)) }
+            )
+        }
+    }
+}
+
+@Composable
 internal fun DefringeGroup(state: SettingsUiState, dispatch: SettingsDispatch) {
     val v = state.values
     SettingsGroup(
@@ -469,6 +492,27 @@ internal fun DefringeGroup(state: SettingsUiState, dispatch: SettingsDispatch) {
 }
 
 /**
+ * RawTherapee capture sharpening for photos (JPEG and Renderer; the DNG is
+ * never sharpened). Off by default; switching it on starts at Low.
+ */
+@Composable
+internal fun CaptureSharpeningRows(state: SettingsUiState, dispatch: SettingsDispatch) {
+    val v = state.values
+    SettingsSwitchRow(
+        title = "Capture sharpening",
+        checked = v.photoCaptureSharpeningEnabled,
+        value = "Photo only",
+        supportingText = "Restores detail lost to the lens and demosaic.",
+        testTag = SettingsTestTags.row("Image", "capture_sharpening")
+    ) { dispatch.invoke(SetPhotoCaptureSharpeningEnabled(it)) }
+    if (v.photoCaptureSharpeningEnabled) {
+        CompactChoiceRow(CaptureSharpeningLevel.entries, v.photoCaptureSharpeningLevel, { it.label }) {
+            dispatch.invoke(SetPhotoCaptureSharpeningLevel(it))
+        }
+    }
+}
+
+/**
  * Renderer-only Develop screen: demosaic, highlight reconstruction,
  * defringe and geometry in one scroll. Unlike [SettingsSection.Image] it
  * carries no Tone/Film/JPEG drill rows — those live on their own tabs.
@@ -487,6 +531,9 @@ internal fun DevelopSettings(state: SettingsUiState, dispatch: SettingsDispatch)
         HighlightReconstructionGroup(state, dispatch)
         SettingsGroup(title = "Defringe") {
             DefringeGroup(state, dispatch)
+        }
+        SettingsGroup(title = "Sharpening") {
+            CaptureSharpeningRows(state, dispatch)
         }
         SettingsGroup(title = "Geometry") {
             SettingsSwitchRow(

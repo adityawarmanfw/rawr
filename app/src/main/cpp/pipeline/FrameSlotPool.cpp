@@ -18,6 +18,8 @@ void FrameSlotPool::initialize(VkPhysicalDevice physical, VkDevice device, uint3
 
     for (uint32_t i = 0; i < rawrcam::imaging::kRealtimeFramesInFlight; ++i) {
         auto& slot = slots_[i];
+        slot.physicalDevice = physical;
+        slot.device = device;
         slot.command = commands_.command(i);
         slot.videoCommand = commands_.command(i + rawrcam::imaging::kRealtimeFramesInFlight);
         slot.videoStageCommands = {commands_.command(i + 2 * rawrcam::imaging::kRealtimeFramesInFlight),
@@ -147,6 +149,7 @@ void FrameSlotPool::transitionToGeneral(VkQueue queue, const VkImage* images, si
 void FrameSlotPool::destroyImages() {
     if (device_ == VK_NULL_HANDLE) return;
     for (auto& slot : slots_) {
+        slot.dcpStage.reset();
         rawrcam::vulkan::destroyOwnedImage(device_, slot.rawCopy);
         rawrcam::vulkan::destroyOwnedImage(device_, slot.linear);
         rawrcam::vulkan::destroyOwnedImage(device_, slot.tonemapped);

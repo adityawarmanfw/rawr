@@ -10,6 +10,8 @@
 namespace rawrcam::metadata {
 
 inline constexpr uint64_t kSensitivityProbeRequestId = ~uint64_t{0};
+// One-shot frame before full-size stills (CameraDeviceSession::submitFullSizeDecision).
+inline constexpr uint64_t kFullSizeDecisionRequestId = ~uint64_t{0} - 1;
 
 enum class EffectiveWhiteLevelSource : std::uint8_t {
     StaticCharacteristics = 0,

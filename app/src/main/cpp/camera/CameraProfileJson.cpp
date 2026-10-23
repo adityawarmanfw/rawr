@@ -296,6 +296,86 @@ void appendLevels(std::string& out, const LevelOverride& l) {
     out += '}';
 }
 
+void appendDistortion(std::string& out, const geometry::LensDistortionModel& d) {
+    out += ",\"distortion\":{\"model\":\"rational\",\"width\":" + std::to_string(d.width) +
+           ",\"height\":" + std::to_string(d.height) + ",\"intrinsic\":[";
+    const double intrinsic[4] = {d.fx, d.fy, d.cx, d.cy};
+    for (size_t i = 0; i < 4; ++i) {
+        if (i) out += ',';
+        appendNumber(out, intrinsic[i]);
+    }
+    out += "],\"coefficients\":[";
+    for (size_t i = 0; i < d.k.size(); ++i) {
+        if (i) out += ',';
+        appendNumber(out, d.k[i]);
+    }
+    out += "],\"outputScale\":";
+    appendNumber(out, d.outputScale);
+    out += '}';
+}
+
+// "distortion":{"model":"rational","width":4096,"height":3072,"intrinsic":[fx,fy,cx,cy],
+//   "coefficients":[k1,k2,p1,p2,k3,k4,k5,k6],"outputScale":0.9758} (OpenCV rational model).
+bool readDistortion(const Json* d, std::optional<geometry::LensDistortionModel>& out) {
+    if (!d) return true;
+    if (d->kind != Json::Kind::Object || d->str("model", "rational") != "rational") return false;
+    geometry::LensDistortionModel m;
+    m.width = uint32_t(std::max(0.0, d->num("width")));
+    m.height = uint32_t(std::max(0.0, d->num("height")));
+    const auto& intrinsic = d->array("intrinsic");
+    const auto& coefficients = d->array("coefficients");
+    if (intrinsic.size() != 4 || coefficients.size() != m.k.size()) return false;
+    for (const auto* list : {&intrinsic, &coefficients})
+        for (const auto& v : *list)
+            if (v.kind != Json::Kind::Number) return false;
+    m.fx = intrinsic[0].number;
+    m.fy = intrinsic[1].number;
+    m.cx = intrinsic[2].number;
+    m.cy = intrinsic[3].number;
+    for (size_t i = 0; i < m.k.size(); ++i) m.k[i] = coefficients[i].number;
+    m.outputScale = d->num("outputScale", 1.0);
+    if (!geometry::isValid(m)) return false;
+    out = m;
+    return true;
+}
+
+// "dcp":{"path":"/data/.../dcp_profiles/<id>.dcp"}. An unreadable profile
+// never rejects the camera profile: the lens opens with the camera's colour.
+void readDcp(const Json* d, LensRoute& r) {
+    if (!d || d->kind != Json::Kind::Object) return;
+    r.dcpPath = d->str("path");
+    if (r.dcpPath.empty()) return;
+    auto profile = color::loadDcp(r.dcpPath, &r.dcpError);
+    if (profile && !profile->embeddable()) {
+        r.dcpError = "profile forbids embedding (ProfileEmbedPolicy 2)";
+        profile.reset();
+    }
+    if (profile && !color::dcpColorCalibration(*profile)) {
+        r.dcpError = "profile matrices are not invertible";
+        profile.reset();
+    }
+    if (profile) r.dcp = std::make_shared<const color::DcpProfile>(std::move(*profile));
+}
+
+// "mirror":"horizontal" | "vertical" | "both"; absent for none.
+const char* mirrorName(uint32_t mirror) {
+    switch (mirror & geometry::kLensMirrorMask) {
+        case geometry::kLensMirrorHorizontal: return "horizontal";
+        case geometry::kLensMirrorVertical: return "vertical";
+        case geometry::kLensMirrorMask: return "both";
+        default: return "none";
+    }
+}
+
+bool readMirror(const std::string& name, uint32_t& out) {
+    if (name.empty() || name == "none") out = 0;
+    else if (name == "horizontal") out = geometry::kLensMirrorHorizontal;
+    else if (name == "vertical") out = geometry::kLensMirrorVertical;
+    else if (name == "both") out = geometry::kLensMirrorMask;
+    else return false;
+    return true;
+}
+
 void appendKeys(std::string& out, const std::vector<CameraKeySetting>& keys) {
     out += '[';
     for (size_t i = 0; i < keys.size(); ++i) {
@@ -306,9 +386,10 @@ void appendKeys(std::string& out, const std::vector<CameraKeySetting>& keys) {
         out += ",\"type\":\"";
         out += typeName(k.type);
         out += "\",\"scope\":\"";
-        out += k.scope == CameraKeySetting::Scope::Session   ? "session"
-               : k.scope == CameraKeySetting::Scope::Request ? "request"
-                                                             : "still";
+        out += k.scope == CameraKeySetting::Scope::Session    ? "session"
+               : k.scope == CameraKeySetting::Scope::Request  ? "request"
+               : k.scope == CameraKeySetting::Scope::Decision ? "decision"
+                                                              : "still";
         out += "\",\"values\":[";
         for (size_t v = 0; v < k.values.size(); ++v) {
             if (v) out += ',';
@@ -368,8 +449,9 @@ bool readKeys(const std::vector<Json>& list, std::vector<CameraKeySetting>& out,
         key.type = *type;
         const std::string scope = k.str("scope", "session");
         key.scope = scope == "request" ? CameraKeySetting::Scope::Request
-                    : scope == "still" ? CameraKeySetting::Scope::Still
-                                       : CameraKeySetting::Scope::Session;
+                    : scope == "still"    ? CameraKeySetting::Scope::Still
+                    : scope == "decision" ? CameraKeySetting::Scope::Decision
+                                          : CameraKeySetting::Scope::Session;
         for (const auto& v : k.array("values"))
             if (v.kind == Json::Kind::Number) key.values.push_back(v.number);
         key.enabled = k.flag("enabled", true);
@@ -458,6 +540,13 @@ std::string serializeCameraProfile(const CameraProfile& profile) {
             out += std::string(",\"photo\":\"") + (r.cfaPhotoQuality == 2 ? "high" : "standard") + "\"";
             out += '}';
         }
+        if (r.distortion) appendDistortion(out, *r.distortion);
+        if (r.mirror) out += std::string(",\"mirror\":\"") + mirrorName(r.mirror) + "\"";
+        if (!r.dcpPath.empty()) {
+            out += ",\"dcp\":{\"path\":";
+            appendJsonString(out, r.dcpPath);
+            out += '}';
+        }
         out += '}';
     }
     out += "]}";
@@ -541,6 +630,15 @@ std::optional<CameraProfile> readProfile(const Json& root, std::string* error) {
             if (error) *error = "invalid levels for lens " + r.lensId;
             return std::nullopt;
         }
+        if (!readDistortion(l.get("distortion"), r.distortion)) {
+            if (error) *error = "invalid distortion for lens " + r.lensId;
+            return std::nullopt;
+        }
+        if (!readMirror(l.str("mirror"), r.mirror)) {
+            if (error) *error = "invalid mirror for lens " + r.lensId;
+            return std::nullopt;
+        }
+        readDcp(l.get("dcp"), r);
         readExposure(l.get("exposure"), r.exposure);
         if (!readKeys(l.array("keys"), r.keys, error)) return std::nullopt;
         profile.lenses.push_back(std::move(r));

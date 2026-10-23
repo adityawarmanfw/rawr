@@ -76,6 +76,11 @@ develop::DevelopSettings readCaptureDevelopSettings(const CaptureDevelopInput& i
     }
     return out;
 }
+std::uint32_t captureSharpenIterations(Json& recipe) {
+    if (!recipe.flag("captureSharpeningEnabled", false)) return 0;
+    const std::string level = recipe.text("captureSharpeningLevel");
+    return level == "Sharpest" ? 6u : level == "Sharp" ? 4u : level == "Medium" ? 3u : 2u;
+}
 develop::DevelopSettings readRendererDevelopSettings(Json& json) {
     develop::DevelopSettings out{};
     out.importedLutProfileId = json.text("importedProfileId");
@@ -126,6 +131,7 @@ develop::DevelopSettings readRendererDevelopSettings(Json& json) {
     out.highlightReconstructionMethod = std::clamp(uint32_t(json.number("highlightReconstructionMethod", 0)), 0u, 1u);
     out.highlightThreshold = std::clamp(float(json.number("highlightThreshold", 1)), 0.5f, 2.0f);
     out.highlightCompression = std::clamp(float(json.number("highlightCompression", 45)), 0.0f, 300.0f);
+    out.captureSharpenIterations = captureSharpenIterations(json);
 
     return out;
 }

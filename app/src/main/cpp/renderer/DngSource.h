@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "SourceCaptureExif.h"
+#include "color/DcpProfile.h"
 
 namespace rawrcam::renderer {
 // Pixel coordinates always refer to the uncropped, unrotated sensor raster.
@@ -41,6 +42,8 @@ class DngSource {
     double whiteLevel = 0.0;
     std::array<float, 3> wb{1, 1, 1};
     std::array<float, 9> cameraToSrgb{};  // row-major, applied after wb
+    color::DcpProfilePtr dcpProfile;
+    float dcpWeight1 = 1.0f;
     uint32_t cfa = 0;
     uint32_t orientation = 1;
     std::string provenance;

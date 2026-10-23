@@ -171,6 +171,13 @@ struct CameraControlState {
     int32_t deferredCaptureReportedSensitivity = 0;
     int64_t longExposureNs = 0;
     int64_t longExposureStartMs = -1;
+    // Predicted hold the ring fills over (queue estimate + exposure +
+    // readout, CLOCK_MONOTONIC ms); corrected to the true total once the
+    // sensor timestamp is known.
+    int64_t longExposureTotalMs = 0;
+    uint64_t fullSizeCaptureSerial = 0;
+    int64_t fullSizeLastExposureTimestamp = 0;
+    bool fullSizeExposurePending = false;
     int lastLongExposureHonored = -1;
     std::optional<double> requestedShutterAngleDegrees;
     std::vector<ShutterAngleChoice> shutterAngleChoices;

@@ -1,6 +1,8 @@
 package com.rawr.camera.settings.preferences
 
+import com.rawr.camera.settings.model.LensMirror
 import com.rawr.camera.settings.model.LensLevels
+import com.rawr.camera.settings.model.LensDcp
 import com.rawr.camera.settings.model.LensProfile
 import com.rawr.camera.settings.model.RawStreamChoice
 import com.rawr.camera.settings.model.RawStreamFormat
@@ -14,6 +16,48 @@ import kotlin.test.assertTrue
 import kotlin.test.assertNull
 
 class LensProfileCodecTest {
+    @Test
+    fun mirrorRoundTripsForEveryLensAndDefaultsToNone() {
+        val lenses = LensMirror.entries.map { LensProfile(it.wireName, "0", mirror = it) }
+        val encoded = LensProfileCodec.encode(lenses)
+        assertEquals(lenses, LensProfileCodec.decode(encoded))
+        val json = JSONObject(encoded).getJSONArray("lenses")
+        assertTrue(!json.getJSONObject(0).has("mirror"))
+        for (i in 1 until json.length()) {
+            assertEquals(lenses[i].mirror.wireName, json.getJSONObject(i).getString("mirror"))
+        }
+        for (value in listOf("", "none", "unknown")) {
+            val input = """{"lenses":[{"id":"a","cameraId":"0","mirror":"$value"}]}"""
+            assertEquals(LensMirror.None, requireNotNull(LensProfileCodec.decode(input)).single().mirror)
+        }
+    }
+
+    @Test
+    fun dcpRoundTripKeepsPortableReferenceAndResolvesNativePath() {
+        val dcp = LensDcp("0123456789abcdef0123456789abcdef.dcp", "Daylight \"profile\"")
+        val lens = LensProfile("35", "3", dcp = dcp)
+        val stored = LensProfileCodec.encode(listOf(lens))
+        assertEquals(listOf(lens), LensProfileCodec.decode(stored))
+        assertTrue(!JSONObject(stored).getJSONArray("lenses").getJSONObject(0).getJSONObject("dcp").has("path"))
+        val dir = java.io.File("profiles").absoluteFile
+        val native = LensProfileCodec.encode(listOf(lens), dcpDir = dir)
+        assertEquals(java.io.File(dir, dcp.file).absolutePath,
+            JSONObject(native).getJSONArray("lenses").getJSONObject(0).getJSONObject("dcp").getString("path"))
+        assertEquals(listOf(lens), LensProfileCodec.decode(native))
+    }
+
+    @Test
+    fun unsafeDcpReferenceIsDroppedWithoutLosingLens() {
+        for (file in listOf("../outside.dcp", "/outside.dcp", "file.dcp", "")) {
+            val json = JSONObject().put("lenses", org.json.JSONArray().put(
+                JSONObject().put("id", "35").put("cameraId", "3")
+                    .put("dcp", JSONObject().put("file", file).put("path", "/untrusted/profile.dcp"))))
+            val lens = requireNotNull(LensProfileCodec.decode(json.toString())).single()
+            assertEquals("35", lens.name)
+            assertNull(lens.dcp)
+        }
+    }
+
     private val force = VendorKey("vivo.control.forceSensorMode", VendorKeyScope.Session, VendorKeyType.Int32, listOf(31.0))
     private val lenses =
         listOf(
@@ -47,7 +91,11 @@ class LensProfileCodecTest {
                 name = "F85",
                 cameraId = "5",
                 stream = RawStreamChoice(RawStreamFormat.Raw16, 4080, 3072),
-                vendorKeys = listOf(VendorKey("com.vivo.current_ui_module", VendorKeyScope.Still, VendorKeyType.Int32, listOf(74.0))),
+                vendorKeys =
+                    listOf(
+                        VendorKey("com.vivo.current_ui_module", VendorKeyScope.Still, VendorKeyType.Int32, listOf(74.0)),
+                        VendorKey("com.vivo.current_ui_module", VendorKeyScope.Decision, VendorKeyType.Int32, listOf(74.0))
+                    ),
                 vendorGate = "vivoFullSize",
                 captureStream = RawStreamChoice(RawStreamFormat.Raw16, 16320, 12288),
                 captureBurst = 3,
@@ -61,6 +109,7 @@ class LensProfileCodecTest {
         assertEquals(seamless, requireNotNull(LensProfileCodec.decode(json)).single())
         val lens = JSONObject(json).getJSONArray("lenses").getJSONObject(0)
         assertEquals("still", lens.getJSONArray("keys").getJSONObject(0).getString("scope"))
+        assertEquals("decision", lens.getJSONArray("keys").getJSONObject(1).getString("scope"))
         assertEquals(16320, lens.getJSONObject("captureStream").getInt("width"))
         assertEquals(3, lens.getInt("captureBurst"))
         assertTrue(lens.getBoolean("captureBurstSequential"))

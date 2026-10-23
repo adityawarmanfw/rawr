@@ -16,6 +16,7 @@
 #include "BayerBin.h"
 #include "NaturalBayerBin.h"
 #include "support/JoinGuard.h"
+#include "color/ColorCalibration.h"
 
 namespace rawrcam::renderer {
 namespace {
@@ -208,6 +209,24 @@ DngSource::DngSource(const std::string& path) : rawCachePath_(path + ".raw16-v1"
         for (int i = 0; i < 9; ++i) {
             cameraToSrgb[i] = float(final[i] / normal);
             if (!std::isfinite(cameraToSrgb[i])) throw std::runtime_error("Invalid DNG color calibration");
+        }
+        // Rawr embeds the selected DCP in IFD0. Read its metadata without
+        // pulling a potentially hundreds-of-megabytes RAW payload into RAM.
+        if (provenance.find("com.rawrcam.color.dcp") != std::string::npos) {
+            std::string why;
+            auto profile = color::loadEmbeddedDcp(path, &why);
+            if (!profile) throw std::runtime_error("Cannot read embedded camera profile: " + why);
+            auto calibration = color::dcpColorCalibration(*profile);
+            if (!calibration) throw std::runtime_error("Invalid embedded camera profile calibration");
+            dcpProfile = std::make_shared<const color::DcpProfile>(std::move(*profile));
+            metadata::FrameMetadataSnapshot frame;
+            auto context = std::make_shared<metadata::CameraContextMetadata>();
+            context->color = *calibration;
+            frame.cameraContext = context;
+            frame.colorCorrectionGainsRggb = {wb[0], wb[1], wb[1], wb[2]};
+            const auto resolved = color::deriveFrameColorTransform(frame, color::PreviewColorMode::Auto);
+            cameraToSrgb = resolved.cameraToLinearSrgbRowMajor;
+            dcpWeight1 = resolved.calibrationWeight1;
         }
     } catch (...) {
         tinydng_document_destroy(context_, document_);

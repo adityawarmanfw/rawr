@@ -43,6 +43,7 @@ endmacro()
 pd_embed(still_apply_wb ${CMAKE_CURRENT_LIST_DIR}/shaders/still_apply_wb.comp FLAGS -I${HL}
   DEPENDS ${HL}/raw_highlight_post_rgb.glsl)
 pd_embed(still_defringe ${CMAKE_CURRENT_LIST_DIR}/shaders/still_defringe.comp)
+pd_embed(still_mirror ${CMAKE_CURRENT_LIST_DIR}/shaders/still_mirror.comp)
 # Highlight: still/video geometry (RAWR_HL_SCALE=2).
 pd_embed(still_coloropp ${HL}/coloropp.comp FLAGS -I${SC} DEPENDS ${SC}/lens_shading.glsl ${SC}/cfa_common.glsl)
 pd_embed(still_coloropp_fused_wb ${HL}/coloropp.comp FLAGS -DRAWR_COLOROPP_FUSED_WB=1 -I${SC} -I${HL}
@@ -77,8 +78,14 @@ target_link_libraries(post_demosaic
          fcc::false_color_correction ${VULKAN_LIB})
 target_compile_features(post_demosaic PUBLIC cxx_std_17)
 
-option(POST_DEMOSAIC_BUILD_TESTS "Build production Lab file validation/timing harness" OFF)
+option(POST_DEMOSAIC_BUILD_TESTS "Build post-demosaic GPU validation harnesses" OFF)
 if(POST_DEMOSAIC_BUILD_TESTS)
+  add_executable(mirror_validate tests/mirror_validate.cpp)
+  target_include_directories(mirror_validate PRIVATE ${RAWR_NATIVE_DIR}/vk_common/testing)
+  target_link_libraries(mirror_validate PRIVATE rawr::post_demosaic)
+  add_executable(distortion_validate tests/distortion_validate.cpp)
+  target_include_directories(distortion_validate PRIVATE ${RAWR_NATIVE_DIR}/vk_common/testing)
+  target_link_libraries(distortion_validate PRIVATE rawr::post_demosaic)
   add_executable(lab_defringe_validate tests/lab_defringe_validate.cpp)
   target_include_directories(lab_defringe_validate PRIVATE ${RAWR_NATIVE_DIR}/vk_common/testing)
   target_link_libraries(lab_defringe_validate PRIVATE rawr::post_demosaic)

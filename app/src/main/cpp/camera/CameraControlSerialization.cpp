@@ -81,6 +81,10 @@ std::string serializeCameraControlState(const CameraControlState& st) {
        << ",\"deferredCaptureExposureNs\":" << st.deferredCaptureExposureNs
        << ",\"deferredCaptureReportedSensitivity\":" << st.deferredCaptureReportedSensitivity
        << ",\"longExposureNs\":" << st.longExposureNs << ",\"longExposureStartMs\":" << st.longExposureStartMs
+       << ",\"longExposureTotalMs\":" << st.longExposureTotalMs
+       << ",\"fullSizeCaptureSerial\":" << st.fullSizeCaptureSerial
+       << ",\"fullSizeLastExposureTimestamp\":" << st.fullSizeLastExposureTimestamp
+       << ",\"fullSizeExposurePending\":" << (st.fullSizeExposurePending ? "true" : "false")
        << ",\"lastLongExposureHonored\":" << st.lastLongExposureHonored
        << ",\"advertisedExposureTimeMaxNs\":" << c.advertisedExposureTimeMaxNs
        << ",\"extendedExposure\":" << (c.extendedExposure ? "true" : "false")

@@ -73,6 +73,8 @@ internal object CaptureRecipe {
         put("defringeStrength", v.photoDefringeStrength)
         put("defringeEdgeThreshold", v.photoDefringeEdgeThreshold)
         put("defringeLumaFloor", v.photoDefringeLumaFloor)
+        put("captureSharpeningEnabled", v.photoCaptureSharpeningEnabled)
+        put("captureSharpeningLevel", v.photoCaptureSharpeningLevel.name)
         // Photo denoise writes the stable recipe keys from the sealed value.
         val legacyDenoise = v.photoDenoise.toLegacy()
         put("denoiseEnabled", legacyDenoise.enabled)

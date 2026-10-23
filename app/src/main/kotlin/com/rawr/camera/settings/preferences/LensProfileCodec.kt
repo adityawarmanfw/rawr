@@ -6,8 +6,10 @@ import com.rawr.camera.settings.model.CFA_ORDERS
 import com.rawr.camera.settings.model.CFA_PHOTO_QUALITIES
 import com.rawr.camera.settings.model.EXTENDED_ISO_MAX
 import com.rawr.camera.settings.model.EXTENDED_SHUTTER_MAX_NS
+import com.rawr.camera.settings.model.LensDcp
 import com.rawr.camera.settings.model.LensExposure
 import com.rawr.camera.settings.model.LensLevels
+import com.rawr.camera.settings.model.LensMirror
 import com.rawr.camera.settings.model.LensProfile
 import com.rawr.camera.settings.model.RawStreamChoice
 import com.rawr.camera.settings.model.RawStreamFormat
@@ -25,9 +27,10 @@ import org.json.JSONObject
 internal object LensProfileCodec {
     const val PROFILE_ID = "user"
 
-    fun encode(lenses: List<LensProfile>, enabledOnly: Boolean = false): String {
+    /** [dcpDir]: the camera profile directory, for the native form (each "dcp" gets its absolute "path"). */
+    fun encode(lenses: List<LensProfile>, enabledOnly: Boolean = false, dcpDir: java.io.File? = null): String {
         val array = JSONArray()
-        lenses.filter { !enabledOnly || it.enabled }.forEach { array.put(encodeLens(it)) }
+        lenses.filter { !enabledOnly || it.enabled }.forEach { array.put(encodeLens(it, dcpDir)) }
         return JSONObject().put("id", PROFILE_ID).put("lenses", array).toString()
     }
 
@@ -39,7 +42,7 @@ internal object LensProfileCodec {
         return (0 until lenses.length()).mapNotNull { i -> runCatching { decodeLens(lenses.getJSONObject(i)) }.getOrNull() }
     }
 
-    private fun encodeLens(lens: LensProfile): JSONObject = JSONObject()
+    private fun encodeLens(lens: LensProfile, dcpDir: java.io.File?): JSONObject = JSONObject()
         .put("id", lens.name.trim())
         .put("enabled", lens.enabled)
         .put("cameraId", lens.cameraId)
@@ -77,6 +80,15 @@ internal object LensProfileCodec {
                     "cfa",
                     JSONObject().put("block", lens.cfaBlock).put("live", lens.cfaLive).put("photo", lens.cfaPhoto)
                         .apply { lens.cfaOrder?.let { put("order", it) } }
+                )
+            }
+            lens.distortion?.let { put("distortion", JSONObject(it)) }
+            if (lens.mirror != LensMirror.None) put("mirror", lens.mirror.wireName)
+            lens.dcp?.let { dcp ->
+                put(
+                    "dcp",
+                    JSONObject().put("file", dcp.file).put("name", dcp.name)
+                        .apply { dcpDir?.let { put("path", java.io.File(it, dcp.file).absolutePath) } }
                 )
             }
         }
@@ -119,7 +131,12 @@ internal object LensProfileCodec {
             cfaBlock = o.optJSONObject("cfa")?.optInt("block", 1)?.takeIf { it in CFA_BLOCKS } ?: 1,
             cfaOrder = o.optJSONObject("cfa")?.optString("order")?.takeIf { it in CFA_ORDERS },
             cfaLive = o.optJSONObject("cfa")?.optString("live")?.takeIf { it in CFA_LIVE_QUALITIES } ?: "standard",
-            cfaPhoto = o.optJSONObject("cfa")?.optString("photo")?.takeIf { it in CFA_PHOTO_QUALITIES } ?: "high"
+            cfaPhoto = o.optJSONObject("cfa")?.optString("photo")?.takeIf { it in CFA_PHOTO_QUALITIES } ?: "high",
+            distortion = o.optJSONObject("distortion")?.toString(),
+            mirror = LensMirror.fromWire(o.optString("mirror")),
+            dcp = o.optJSONObject("dcp")?.let { d ->
+                d.optString("file").takeIf { DcpFileStore.isFileName(it) }?.let { LensDcp(it, d.optString("name")) }
+            }
         )
     }
 

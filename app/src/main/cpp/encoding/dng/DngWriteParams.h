@@ -2,8 +2,11 @@
 #include <tinydng.h>
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
+
+#include "color/DcpProfile.h"
 
 namespace rawrcam::encoding::dng {
 
@@ -32,6 +35,9 @@ struct TinyDngWriteParams {
     std::string dateOriginal, dateDigitized, offsetTime, offsetOrig, offsetDig;
     std::string subsec, subsecOrig, subsecDig;
     std::string lensMake, lensModel;
+    std::string profileName, profileCopyright;
+    // Keeps the embedded camera profile's tables alive for the write.
+    color::DcpProfilePtr dcp;
 
     // Re-point all tinydng char*/data pointers at owned storage. Must be
     // called after any move (short strings may live inline and not survive

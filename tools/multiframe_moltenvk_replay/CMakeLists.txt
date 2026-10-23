@@ -36,7 +36,9 @@ add_executable(rawr_multiframe_moltenvk_replay
   "${RAWR_ROOT}/native/zsl_codec/src/ZslDecoder.cpp"
   "${RAWR_ROOT}/app/src/main/cpp/color/ColorMath.cpp"
   "${RAWR_ROOT}/app/src/main/cpp/color/ColorCalibration.cpp"
+  "${RAWR_ROOT}/app/src/main/cpp/color/DcpProfile.cpp"
   "${RAWR_ROOT}/app/src/main/cpp/renderer/DngSource.cpp"
+  "${RAWR_ROOT}/app/src/main/cpp/renderer/SourceCaptureExif.cpp"
   "${ZSL_HDR}")
 add_dependencies(rawr_multiframe_moltenvk_replay rawr_multiframe_replay_shaders)
 target_include_directories(rawr_multiframe_moltenvk_replay PRIVATE

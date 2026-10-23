@@ -71,6 +71,9 @@ rawr_test(camera_interaction_policy_test
   "${RAWR_ROOT}/tests/native/camera_interaction_policy_test.cpp"
   "${RAWR_ROOT}/app/src/main/cpp/camera/CameraControlSerialization.cpp"
   "${RAWR_ROOT}/app/src/main/cpp/camera/CameraProfileJson.cpp"
+  "${RAWR_ROOT}/app/src/main/cpp/color/DcpProfile.cpp"
+  "${RAWR_ROOT}/app/src/main/cpp/color/ColorMath.cpp"
+  "${RAWR_ROOT}/app/src/main/cpp/geometry/LensDistortion.cpp"
   "${RAWR_ROOT}/app/src/main/cpp/camera/CameraRouting.cpp")
 add_test(NAME camera_interaction_policy_test_snapshot COMMAND "${UV_EXECUTABLE}" run --no-project --cache-dir "${RAWR_ROOT}/tmp/uv-cache" "${CMAKE_CURRENT_SOURCE_DIR}/native/camera_interaction_policy_test_snapshot.py" "$<TARGET_FILE:camera_interaction_policy_test>")
 rawr_test(camera_result_state_test
@@ -98,13 +101,18 @@ rawr_test(camera_white_balance_test
   "${RAWR_ROOT}/app/src/main/cpp/camera/CameraWhiteBalanceControls.cpp"
   "${RAWR_ROOT}/app/src/main/cpp/camera/CameraControlSerialization.cpp"
   "${RAWR_ROOT}/app/src/main/cpp/camera/CameraProfileJson.cpp"
+  "${RAWR_ROOT}/app/src/main/cpp/color/DcpProfile.cpp"
+  "${RAWR_ROOT}/app/src/main/cpp/geometry/LensDistortion.cpp"
   "${RAWR_ROOT}/app/src/main/cpp/camera/CameraRouting.cpp"
   "${RAWR_ROOT}/app/src/main/cpp/color/WbDisplayEstimate.cpp"
   "${RAWR_ROOT}/app/src/main/cpp/color/ColorMath.cpp")
 add_test(NAME camera_white_balance_test_snapshot COMMAND "${UV_EXECUTABLE}" run --no-project --cache-dir "${RAWR_ROOT}/tmp/uv-cache" "${CMAKE_CURRENT_SOURCE_DIR}/native/camera_white_balance_test_snapshot.py" "$<TARGET_FILE:camera_white_balance_test>")
 rawr_test(capture_job_test
   "${RAWR_ROOT}/tests/native/capture_job_test.cpp"
-  "${RAWR_ROOT}/app/src/main/cpp/capture/persistence/CaptureJob.cpp")
+  "${RAWR_ROOT}/app/src/main/cpp/capture/persistence/CaptureJob.cpp"
+  "${RAWR_ROOT}/app/src/main/cpp/color/DcpProfile.cpp"
+  "${RAWR_ROOT}/app/src/main/cpp/color/ColorMath.cpp"
+  "${RAWR_ROOT}/app/src/main/cpp/geometry/LensDistortion.cpp")
 
 rawr_test(film_exposure_test
   "${RAWR_ROOT}/tests/native/film_exposure_test.cpp")
@@ -146,9 +154,12 @@ rawr_test(raw_image_ring_queue_test
 rawr_test(dng_capture_test native/dng_capture_test.cpp
   "${APP}/encoding/dng/DngExif.cpp"
   "${APP}/encoding/dng/DngGainMapOpcode.cpp"
+  "${APP}/geometry/LensDistortion.cpp"
   "${APP}/encoding/dng/DngMetadataAdapter.cpp"
   "${APP}/encoding/dng/DngPixelPayload.cpp"
-  "${APP}/encoding/dng/DngProvenance.cpp")
+  "${APP}/encoding/dng/DngProvenance.cpp"
+  "${APP}/color/DcpProfile.cpp"
+  "${APP}/color/ColorMath.cpp")
 target_link_libraries(dng_capture_test PRIVATE rawr_tinydng)
 add_executable(hevc_metadata_helper native/hevc_log_metadata_test.cpp "${APP}/video/HevcLogMetadata.cpp")
 add_executable(mp4_metadata_helper native/mp4_metadata_patcher_test.cpp "${APP}/video/Mp4MetadataPatcher.cpp" "${APP}/video/HevcLogMetadata.cpp")
@@ -171,10 +182,17 @@ rawr_test(raw_pixel_source_test
   "${APP}/imaging/RawPixelSource.cpp")
 rawr_test(full_size_sequence_test
   "${RAWR_ROOT}/tests/native/full_size_sequence_test.cpp")
+rawr_test(dcp_profile_test
+  "${RAWR_ROOT}/tests/native/dcp_profile_test.cpp"
+  "${APP}/color/DcpProfile.cpp"
+  "${APP}/color/ColorMath.cpp")
 rawr_test(camera_profile_test
   "${RAWR_ROOT}/tests/native/camera_profile_test.cpp"
   "${APP}/camera/CameraRouting.cpp"
-  "${APP}/camera/CameraProfileJson.cpp")
+  "${APP}/camera/CameraProfileJson.cpp"
+  "${APP}/color/DcpProfile.cpp"
+  "${APP}/color/ColorMath.cpp"
+  "${APP}/geometry/LensDistortion.cpp")
 # GPU RAW10 ingress vs the CPU fallback unpack (needs a Vulkan device).
 add_subdirectory("${RAWR_ROOT}/native/raw_ingress" "${CMAKE_CURRENT_BINARY_DIR}/raw_ingress")
 rawr_test(raw10_unpack_vulkan_test
@@ -188,3 +206,19 @@ rawr_test(raw_remosaic_vulkan_test
   "${APP}/imaging/RawPixelSource.cpp")
 target_include_directories(raw_remosaic_vulkan_test PRIVATE "${RAWR_ROOT}/native/vk_common/testing")
 target_link_libraries(raw_remosaic_vulkan_test PRIVATE rawr::raw_ingress)
+
+# The production DCP shader, exercised on a host Vulkan device.
+find_program(GLSLC glslc REQUIRED)
+include("${RAWR_ROOT}/native/vk_common/cmake/EmbedSpirv.cmake")
+embed_spirv(dcp "${APP}/develop/render/shaders/dcp.comp" dcp_spv
+  OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+rawr_test(dcp_render_test native/dcp_render_test.cpp
+  "${APP}/develop/render/DcpRenderStage.cpp"
+  "${APP}/color/DcpRenderData.cpp" "${APP}/color/ColorMath.cpp" ${dcp_HDR})
+target_include_directories(dcp_render_test PRIVATE "${RAWR_ROOT}/native/vk_common/testing")
+target_link_libraries(dcp_render_test PRIVATE Vulkan::Vulkan)
+
+rawr_test(raw_reader_drain_test
+  "${RAWR_ROOT}/tests/native/raw_reader_drain_test.cpp"
+  "${APP}/imaging/RawFrameIngress.cpp")
+target_include_directories(raw_reader_drain_test BEFORE PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/native/reader_stubs")

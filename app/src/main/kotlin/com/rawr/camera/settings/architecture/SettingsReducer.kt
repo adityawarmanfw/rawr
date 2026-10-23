@@ -96,7 +96,7 @@ object SettingsReducer {
 
         SettingsSection.ImageTone, SettingsSection.DynamicRange, SettingsSection.Demosaic, SettingsSection.HighlightReconstruction,
         SettingsSection.Defringe, SettingsSection.Denoise, SettingsSection.FilmSim,
-        SettingsSection.LensShading -> {
+        SettingsSection.LensShading, SettingsSection.Distortion -> {
             SettingsDestination.Section(
                 SettingsSection.Image
             )

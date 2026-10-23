@@ -19,7 +19,7 @@ inline std::string frameRecipe(uint64_t timestampNs, const color::FrameColorTran
     out << "],\"cameraToLinearSrgbRowMajor\":[";
     for (size_t i = 0; i < colorState.cameraToLinearSrgbRowMajor.size(); ++i)
         out << (i ? "," : "") << colorState.cameraToLinearSrgbRowMajor[i];
-    out << "]}";
+    out << "],\"calibrationWeight1\":" << colorState.calibrationWeight1 << "}";
     return out.str();
 }
 

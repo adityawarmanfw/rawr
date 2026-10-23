@@ -55,6 +55,21 @@ class CameraDeviceSession final {
     // intent and the lens's still-scope keys.
     bool captureFullSize(CameraRequestPipeline&, const CameraControlState&,
                          const std::vector<CameraRequestPipeline::BracketExposure>&, uint64_t tagId, const Diagnostic&);
+    // A lens with decision-scope keys repeats a decision request before its
+    // full-size stills: a copy of the repeating request at the lowest ISO
+    // carrying those keys, filling only the companion YUV. The vivo HAL
+    // decides between the full-size and the binned readout only on a
+    // viewfinder frame with com.vivo.current_ui_module 74, from that frame's
+    // gain, and keeps the decision for later stills (of any app). The RAW
+    // viewfinder stream must not receive such frames (device error). Once a
+    // decision frame is in, the caller stops repeating for the stills
+    // (stopRepeating) and restores the normal repeating request after them:
+    // a still over ~4 s fails (device error) while the RAW viewfinder repeats,
+    // and frames repeating through it complete before it, so the NDK drops
+    // the still's out-of-order result.
+    bool hasFullSizeDecision() const noexcept;
+    bool repeatFullSizeDecision(CameraRequestPipeline&, const CameraControlState&, uint64_t tagId, const Diagnostic&);
+    bool stopRepeating(const Diagnostic&);
     bool hasDevice() const noexcept { return device_ != nullptr; }
     bool hasSession() const noexcept { return session_ != nullptr; }
     ACaptureRequest* request() const noexcept { return request_; }

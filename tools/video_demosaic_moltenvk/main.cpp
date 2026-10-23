@@ -48,7 +48,7 @@ int run(int argc, char** argv) {
     if (argc != 19) {
         std::cerr << "usage: runner shader.spv raw.u16 output.rgba16f rawW rawH outW outH white cfa "
                      "blackR blackG1 blackG2 blackB wbR wbG1 wbG2 wbB repetitions\n"
-                     "output is pre-WB sensor-linear RGB; the clip-state image is exercised but not exported\n";
+                     "output is pre-WB sensor-linear RGB; RUNNER_CLIP_OUT=path also exports the r16ui clip-state image\n";
         return 2;
     }
     const uint32_t rawW = std::stoul(argv[4]), rawH = std::stoul(argv[5]);
@@ -103,11 +103,15 @@ int run(int argc, char** argv) {
     const Buf readback = mkBuf(context.pd, device, size_t(outW) * outH * 8u,
                               VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    const char* clipOutPath = std::getenv("RUNNER_CLIP_OUT");
+    const Buf clipReadback = mkBuf(context.pd, device, size_t(outW / 2u) * (outH / 2u) * 2u,
+                                   VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     Img dummy = mkImg(context.pd, device, 1, 1, VK_FORMAT_R16_UINT, VK_IMAGE_USAGE_STORAGE_BIT);
     Img output = mkImg(context.pd, device, outW, outH, VK_FORMAT_R16G16B16A16_SFLOAT,
                        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
     Img clipState = mkImg(context.pd, device, outW / 2u, outH / 2u, VK_FORMAT_R16_UINT,
-                          VK_IMAGE_USAGE_STORAGE_BIT);
+                          VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
     void* mapped = nullptr;
     ck(vkMapMemory(device, rawBuffer.m, 0, raw.size(), 0, &mapped), "map RAW");
     std::memcpy(mapped, raw.data(), raw.size());
@@ -271,6 +275,15 @@ int run(int argc, char** argv) {
             copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
             copy.imageExtent = {outW, outH, 1};
             vkCmdCopyImageToBuffer(command, output.i, VK_IMAGE_LAYOUT_GENERAL, readback.b, 1, &copy);
+            if (clipOutPath) {
+                barrier(command, clipState.i, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+                        VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+                VkBufferImageCopy clipCopy{};
+                clipCopy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                clipCopy.imageExtent = {outW / 2u, outH / 2u, 1};
+                vkCmdCopyImageToBuffer(command, clipState.i, VK_IMAGE_LAYOUT_GENERAL, clipReadback.b, 1, &clipCopy);
+            }
         }
         ck(vkEndCommandBuffer(command), "end command");
         VkSubmitInfo submit{};
@@ -290,6 +303,14 @@ int run(int argc, char** argv) {
     outputFile.write(static_cast<const char*>(mapped), static_cast<std::streamsize>(readback.size));
     if (!outputFile) throw std::runtime_error("write output failed");
     vkUnmapMemory(device, readback.m);
+    if (clipOutPath) {
+        void* clipMapped = nullptr;
+        ck(vkMapMemory(device, clipReadback.m, 0, clipReadback.size, 0, &clipMapped), "map clip output");
+        std::ofstream clipFile(clipOutPath, std::ios::binary);
+        clipFile.write(static_cast<const char*>(clipMapped), static_cast<std::streamsize>(clipReadback.size));
+        if (!clipFile) throw std::runtime_error("write clip output failed");
+        vkUnmapMemory(device, clipReadback.m);
+    }
     std::sort(gpuMs.begin(), gpuMs.end());
     std::cout << "{\"gpu\":\"" << context.prop.deviceName << "\",\"raw\":[" << rawW << ',' << rawH
               << "],\"output\":[" << outW << ',' << outH << "],\"crop\":[" << push.cropX << ','
@@ -309,10 +330,11 @@ int run(int argc, char** argv) {
     delImg(device, output);
     delImg(device, clipState);
     delImg(device, dummy);
-    auto rawOwned = rawBuffer, lscOwned = lscBuffer, readbackOwned = readback;
+    auto rawOwned = rawBuffer, lscOwned = lscBuffer, readbackOwned = readback, clipReadbackOwned = clipReadback;
     delBuf(device, rawOwned);
     delBuf(device, lscOwned);
     delBuf(device, readbackOwned);
+    delBuf(device, clipReadbackOwned);
     delCtx(context);
     return 0;
 }

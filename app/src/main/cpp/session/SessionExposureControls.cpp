@@ -66,6 +66,19 @@ void SessionEngine::setFocusMode(int mode, float x, float y, uint64_t requestId)
 void SessionEngine::setManualFocusNormalized(float value, uint64_t requestId) {
     if (cameraControls_.controller()) cameraControls_.controller()->setManualFocusNormalized(value, requestId);
 }
+namespace {
+// A display point on a mirrored/undistorted viewfinder -> where it sits on the sensor.
+std::optional<rawrcam::geometry::NormalizedPoint> throughLensWarp(
+    rawrcam::geometry::NormalizedPoint point, uint32_t mirror,
+    const std::optional<rawrcam::geometry::LensDistortionModel>& warp) {
+    const auto m = rawrcam::geometry::mirroredUv(mirror, point.x, point.y);
+    point = {float(m[0]), float(m[1])};
+    if (!warp) return point;
+    const auto s = rawrcam::geometry::sourceUv(*warp, point.x, point.y);
+    if (s[0] < 0.0 || s[0] > 1.0 || s[1] < 0.0 || s[1] > 1.0) return std::nullopt;
+    return rawrcam::geometry::NormalizedPoint{float(s[0]), float(s[1])};
+}
+}  // namespace
 void SessionEngine::focusAtDisplay(float x, float y, uint64_t requestId) {
     if (!cameraControls_.controller()) return;
     std::optional<rawrcam::geometry::NormalizedPoint> point;
@@ -77,6 +90,8 @@ void SessionEngine::focusAtDisplay(float x, float y, uint64_t requestId) {
             x, y, realtime_.previewWidth(), realtime_.previewHeight(), swapchainRenderer_.extent().width,
             swapchainRenderer_.extent().height, presentationRotation, previewVideoCropRectLocked());
     }
+    if (point) point = throughLensWarp(*point, swapchainRenderer_.presentedLensMirror(),
+                            swapchainRenderer_.presentedLensWarp());
     if (point)
         cameraControls_.controller()->focusAtSensorNormalized(point->x, point->y, requestId);
     else
@@ -103,10 +118,23 @@ std::string SessionEngine::faceDetectionsDisplaySnapshot() {
     s << std::fixed << std::setprecision(4) << '[';
     bool first = true;
     const auto crop = previewVideoCropRectLocked();
+    const auto warp = swapchainRenderer_.presentedLensWarp();
+    const uint32_t mirror = swapchainRenderer_.presentedLensMirror();
     for (const auto& f : faces) {
-        const auto a = rawrcam::geometry::sourceToDisplay(f.x, f.y, srcW, srcH, dstW, dstH, presentationRotation, crop);
-        const auto b = rawrcam::geometry::sourceToDisplay(f.x + f.w, f.y + f.h, srcW, srcH, dstW, dstH,
-                                                          presentationRotation, crop);
+        // Sensor corners -> the undistorted, mirrored viewfinder.
+        auto corner = [&](float sx, float sy) {
+            if (warp) {
+                const auto c = rawrcam::geometry::correctedUv(*warp, sx, sy);
+                sx = float(c[0]);
+                sy = float(c[1]);
+            }
+            const auto m = rawrcam::geometry::mirroredUv(mirror, sx, sy);
+            sx = float(m[0]);
+            sy = float(m[1]);
+            return rawrcam::geometry::sourceToDisplay(sx, sy, srcW, srcH, dstW, dstH, presentationRotation, crop);
+        };
+        const auto a = corner(f.x, f.y);
+        const auto b = corner(f.x + f.w, f.y + f.h);
         if (!a || !b) continue;
         const float x = std::min(a->x, b->x);
         const float y = std::min(a->y, b->y);
@@ -140,6 +168,8 @@ void SessionEngine::setSpotAeDisplay(bool active, float x, float y) {
             swapchainRenderer_.extent().height, presentationRotation, previewVideoCropRectLocked());
         if (!point) return;
     }
+    point = throughLensWarp(*point, swapchainRenderer_.presentedLensMirror(),
+                            swapchainRenderer_.presentedLensWarp());
 
     if (cameraControls_.controller()) {
         cameraControls_.controller()->setSpotMeteringTargetSensorNormalized(true, point->x, point->y);

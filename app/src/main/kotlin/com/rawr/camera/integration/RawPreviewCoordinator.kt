@@ -8,6 +8,7 @@ import com.rawr.camera.settings.model.DemosaicAlgorithm
 import com.rawr.camera.settings.model.LensProfile
 import com.rawr.camera.settings.model.MultiframeTuning
 import com.rawr.camera.settings.preferences.GpuDriverFileStore
+import com.rawr.camera.settings.preferences.DcpFileStore
 import com.rawr.camera.settings.preferences.LensProfileCodec
 import com.rawr.camera.video.VideoImageSettings
 
@@ -19,6 +20,7 @@ import com.rawr.camera.video.VideoImageSettings
  * - Native C++: Camera2 NDK and the entire realtime imaging pipeline.
  */
 class RawPreviewCoordinator(application: Application) : AutoCloseable {
+    private val dcpDir = java.io.File(application.filesDir, DcpFileStore.DIR)
     private val native = NativePreviewEngine()
     private val nativeHandle: Long
     @Volatile private var currentVideoImageSettings: VideoImageSettings? = null
@@ -61,7 +63,7 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
             settings.highlightEnabled, settings.highlightMethod, settings.highlightThreshold,
             settings.highlightCompression, settings.fccSteps, settings.defringeStrength,
             settings.waveletDenoiseStrength, settings.waveletDenoiseDetail,
-            settings.waveletDenoiseLuma, settings.waveletDenoiseScales)
+            settings.waveletDenoiseLuma, settings.waveletDenoiseScales, settings.distortionEnabled)
         }
     }
 
@@ -218,7 +220,7 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
 
     /** Enabled lenses in order; null restores the device's built-in lenses. */
     fun setLensProfiles(lenses: List<LensProfile>?) {
-        val json = lenses?.let { LensProfileCodec.encode(it, enabledOnly = true) }
+        val json = lenses?.let { LensProfileCodec.encode(it, enabledOnly = true, dcpDir = dcpDir) }
         postNative { native.setCameraProfile(nativeHandle, json ?: native.builtInCameraProfile()) }
     }
 
@@ -250,6 +252,9 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
 
     fun setLensShadingCorrectionEnabled(enabled: Boolean) =
         postNative { native.setLensShadingCorrectionEnabled(nativeHandle, enabled) }
+
+    fun setDistortionCorrectionEnabled(enabled: Boolean) =
+        postNative { native.setDistortionCorrectionEnabled(nativeHandle, enabled) }
 
     fun setHighlightReconstructionEnabled(enabled: Boolean) =
         postNative { native.setHighlightReconstructionEnabled(nativeHandle, enabled) }

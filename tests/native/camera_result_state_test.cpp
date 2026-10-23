@@ -344,6 +344,11 @@ void focusOwnershipAndFreshness() {
         state.afState = scanning;
         assert(!stillFocusReady(state, now));
     }
+    // Continuous AF reports the lens MOVING while focused: AF doesn't wait for it.
+    state.afState = 2;
+    state.lensState = 1;
+    assert(stillFocusReady(state, now));
+    state.lensState = 0;
     state.afState = 4;
     result.focusDistance = 0;
     results.observe(state, frame(25), result, &request, 3, false);

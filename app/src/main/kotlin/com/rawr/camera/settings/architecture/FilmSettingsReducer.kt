@@ -113,10 +113,7 @@ internal fun reduceAgxLooks(state: SettingsUiState, action: SettingsApplicationA
                 action.base, AgxCatalog.sanitized(action.values, action.base.defaults))))
         }
         is ApplyAgxLook -> {
-            val look = v.agxLooks.firstOrNull { it.id == action.id } ?: return state
-            val selected = v.withRenderProfile(com.rawr.camera.model.RenderProfileSelection.Agx(look.base))
-            if (!selected.isAgxActive()) state
-            else state.withValues(selected.copy(agxValues = selected.agxValues + (look.base to look.values)))
+            state.withValues(v.withRenderProfile(com.rawr.camera.model.RenderProfileSelection.SavedAgx(action.id)))
         }
         is RenameAgxLook -> {
             val name = rename(action.name)

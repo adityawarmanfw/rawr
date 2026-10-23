@@ -169,6 +169,7 @@ void VideoProcessingResources::install(Prepared&& prepared) {
 void VideoProcessingResources::release() noexcept {
     const VkDevice device = context_.device();
     if (device && tonemap_) (void)context_.waitIdle();
+    for (auto& stage : dcp_) stage.reset();
     tonemap_.reset();
     for (auto& stage : post_) stage.reset();
     demosaic_.reset();

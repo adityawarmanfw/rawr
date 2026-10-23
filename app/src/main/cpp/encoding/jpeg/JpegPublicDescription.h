@@ -44,6 +44,7 @@ inline OutputParameters outputParametersFrom(const develop::DevelopSettings& dev
         out.dualLabel = develop.dualAutoContrast ? "auto" : percent.str();
     }
     out.fccSteps = develop.fccSteps;
+    out.captureSharpenIterations = develop.captureSharpenIterations;
     out.lscEnabled = develop.lensShadingCorrectionEnabled;
     out.highlightReconstructionEnabled = develop.highlightReconstructionEnabled;
     out.highlightMethodLabel = highlightMethodLabel(develop.highlightReconstructionMethod);

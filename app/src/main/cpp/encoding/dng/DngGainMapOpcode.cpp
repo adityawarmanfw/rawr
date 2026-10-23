@@ -129,4 +129,37 @@ bool appendLensShadingGainMaps(TinyDngWriteParams& p, const rawrcam::metadata::F
     return true;
 }
 
+bool appendLensDistortionWarp(TinyDngWriteParams& p, const rawrcam::geometry::LensDistortionModel& model,
+                              uint32_t width, uint32_t height, std::string* error) {
+    const auto fit = rawrcam::geometry::fitWarpRectilinear(model, width, height);
+    if (!fit) {
+        if (error) *error = "lens distortion: calibration does not fit " + std::to_string(width) + "x" +
+                            std::to_string(height);
+        return false;
+    }
+    std::vector<uint8_t> params;
+    be32(params, 1);  // planes: one set for all
+    for (double k : fit->kr) beDouble(params, k);
+    for (double k : fit->kt) beDouble(params, k);
+    beDouble(params, fit->center[0]);
+    beDouble(params, fit->center[1]);
+    p.opcodeParams.push_back(std::move(params));
+    tinydng_opcode op{};
+    op.list = 3;
+    op.id = 1;
+    op.version = 0x01030000u;
+    op.flags = 1;  // optional: readers without it still render, uncorrected
+    op.params = p.opcodeParams.back().data();
+    op.params_size = p.opcodeParams.back().size();
+    p.opcodes.push_back(op);
+    // Pushing may move earlier params/opcodes: rebind them all, index-aligned.
+    for (size_t i = 0; i < p.opcodes.size(); ++i) {
+        p.opcodes[i].params = p.opcodeParams[i].data();
+        p.opcodes[i].params_size = p.opcodeParams[i].size();
+    }
+    p.raw.opcodes = p.opcodes.data();
+    p.raw.opcode_count = p.opcodes.size();
+    return true;
+}
+
 }  // namespace rawrcam::encoding::dng

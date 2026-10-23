@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.22)
 project(video_pipeline LANGUAGES CXX)
 
-# Recording-resolution RAW stage (Android): MHC demosaic, crop or anti-aliased
-# 2x reduction, lens shading and clip state. Its output feeds
+# Recording-resolution RAW stage (Android): quad-per-thread guided-chroma demosaic
+# for 1:1 recordings, MHC demosaic for 2x reduction, crop, lens shading and clip state. Its output feeds
 # native/post_demosaic.
 find_library(VULKAN_LIB vulkan REQUIRED)
 find_library(LOG_LIB log REQUIRED)
@@ -36,6 +36,13 @@ embed_spirv(video_demosaic_1x ${VIDEO_PIPELINE_SHADER_DIR}/video_demosaic.comp v
   DEPENDS ${VIDEO_PIPELINE_SHADER_DIR}/video_raw_core.glsl ${VIDEO_PIPELINE_SHADER_DIR}/video_mhc.glsl
           ${SC}/lens_shading.glsl ${SC}/cfa_common.glsl)
 
+# 1:1 recordings (4K, Open Gate): one thread per 2x2 cell with green-guided chroma.
+# The 1x build above stays as the fallback if a driver rejects this pipeline.
+embed_spirv(video_demosaic_quad ${VIDEO_PIPELINE_SHADER_DIR}/video_demosaic_quad.comp video_demosaic_quad_spv
+  OUTPUT_DIR ${VP_GEN}
+  FLAGS -I${SC} -I${VIDEO_PIPELINE_SHADER_DIR}
+  DEPENDS ${VIDEO_PIPELINE_SHADER_DIR}/video_quad_core.glsl ${SC}/lens_shading.glsl ${SC}/cfa_common.glsl)
+
 # Optimized SPIR-V: Adreno's compiler rejects the unoptimized strip pass
 # (vkCreateComputePipelines VK_ERROR_UNKNOWN), as with the gain map shaders.
 foreach(PASS h v)
@@ -47,6 +54,7 @@ foreach(PASS h v)
 endforeach()
 
 add_library(video_pipeline STATIC src/VideoDemosaic.cpp ${video_demosaic_HDR} ${video_demosaic_1x_HDR}
+  ${video_demosaic_quad_HDR}
   ${video_downscale_h_HDR}
   ${video_downscale_v_HDR})
 add_library(rawr::video_pipeline ALIAS video_pipeline)

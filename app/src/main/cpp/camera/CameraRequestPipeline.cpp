@@ -108,41 +108,7 @@ bool CameraRequestPipeline::captureBracket(ACameraCaptureSession* session, const
             return false;
         }
         requests.push_back(request);
-        const uint8_t aeOff = ACAMERA_CONTROL_AE_MODE_OFF;
-        // Bracket frames run at their own exposure but at least the preview
-        // cadence, so the repeating stream keeps its timing around them.
-        constexpr int64_t kThirtyFpsFrameNs = 33333333LL;
-        int64_t frameDuration = std::max(kThirtyFpsFrameNs, e.exposureTimeNs);
-        if (control.capabilities.maxFrameDurationNs > 0)
-            frameDuration = std::min(frameDuration, control.capabilities.maxFrameDurationNs);
-        if (ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AE_MODE, 1, &aeOff) != ACAMERA_OK ||
-            ACaptureRequest_setEntry_i64(request, ACAMERA_SENSOR_EXPOSURE_TIME, 1, &e.exposureTimeNs) != ACAMERA_OK ||
-            ACaptureRequest_setEntry_i32(request, ACAMERA_SENSOR_SENSITIVITY, 1, &e.sensitivity) != ACAMERA_OK ||
-            ACaptureRequest_setEntry_i64(request, ACAMERA_SENSOR_FRAME_DURATION, 1, &frameDuration) != ACAMERA_OK) {
-            diag("CAMERA_BRACKET_REQUEST_FAIL");
-            return false;
-        }
-        // Never replay a one-shot AF/AE trigger the repeating request may carry.
-        const uint8_t afIdle = ACAMERA_CONTROL_AF_TRIGGER_IDLE;
-        const uint8_t precaptureIdle = ACAMERA_CONTROL_AE_PRECAPTURE_TRIGGER_IDLE;
-        (void)ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AF_TRIGGER, 1, &afIdle);
-        (void)ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AE_PRECAPTURE_TRIGGER, 1, &precaptureIdle);
-        if (prepare && !prepare(request)) {
-            diag("CAMERA_BRACKET_PREPARE_FAIL");
-            return false;
-        }
-        auto provenance =
-            std::make_unique<CameraRequestProvenance>(CameraRequestProvenance::from(control, nextRequestSerial_++));
-        provenance->exposureMode = ExposureControlMode::Manual;
-        provenance->expectedAePriority = camera2_priority::kOff;
-        provenance->requestedExposureTimeNs = e.exposureTimeNs;
-        provenance->requestedSensitivity = e.sensitivity;
-        provenance->optimizedStillRequestId = tagId;
-        if (ACaptureRequest_setUserContext(request, provenance.get()) != ACAMERA_OK) {
-            diag("CAMERA_REQUEST_PROVENANCE_FAIL");
-            return false;
-        }
-        provenance_.push_back(std::move(provenance));
+        if (!prepareBracketRequest(request, control, e, tagId, prepare)) return false;
     }
     int sequenceId = 0;
     camera_status_t s = ACAMERA_OK;
@@ -163,6 +129,78 @@ bool CameraRequestPipeline::captureBracket(ACameraCaptureSession* session, const
     for (const auto& e : exposures)
         line += " " + std::to_string(e.exposureTimeNs) + "ns@" + std::to_string(e.sensitivity);
     diag(line);
+    return true;
+}
+bool CameraRequestPipeline::repeatBracket(ACameraCaptureSession* session, const ACaptureRequest* repeating,
+                                          CameraSessionCallbackContext* context, const CameraControlState& control,
+                                          const BracketExposure& exposure, uint64_t tagId,
+                                          const PrepareRequest& prepare) {
+    if (!session || !repeating || !context || tagId == 0) return false;
+    ACaptureRequest* request = ACaptureRequest_copy(repeating);
+    if (!request) {
+        diag("CAMERA_BRACKET_COPY_FAIL");
+        return false;
+    }
+    struct FreeRequest {
+        ACaptureRequest* r;
+        ~FreeRequest() { ACaptureRequest_free(r); }
+    } freeRequest{request};
+    if (!prepareBracketRequest(request, control, exposure, tagId, prepare)) return false;
+    int sequenceId = 0;
+    camera_status_t s = ACAMERA_OK;
+    if (context->physicalCameraId.empty()) {
+        auto captures = CameraCallbacks::captures(context);
+        s = ACameraCaptureSession_setRepeatingRequest(session, &captures, 1, &request, &sequenceId);
+    } else {
+        auto captures = CameraCallbacks::logicalCaptures(context);
+        s = ACameraCaptureSession_logicalCamera_setRepeatingRequest(session, &captures, 1, &request, &sequenceId);
+    }
+    if (!ok(s)) {
+        diag("CAMERA_BRACKET_REPEATING_FAILURE status=" + statusText(s));
+        return false;
+    }
+    diag("CAMERA_BRACKET_REPEATING tag=" + std::to_string(tagId) + " sequenceId=" + std::to_string(sequenceId) + " " +
+         std::to_string(exposure.exposureTimeNs) + "ns@" + std::to_string(exposure.sensitivity));
+    return true;
+}
+bool CameraRequestPipeline::prepareBracketRequest(ACaptureRequest* request, const CameraControlState& control,
+                                                  const BracketExposure& e, uint64_t tagId,
+                                                  const PrepareRequest& prepare) {
+    const uint8_t aeOff = ACAMERA_CONTROL_AE_MODE_OFF;
+    // Bracket frames run at their own exposure but at least the preview
+    // cadence, so the repeating stream keeps its timing around them.
+    constexpr int64_t kThirtyFpsFrameNs = 33333333LL;
+    int64_t frameDuration = std::max(kThirtyFpsFrameNs, e.exposureTimeNs);
+    if (control.capabilities.maxFrameDurationNs > 0)
+        frameDuration = std::min(frameDuration, control.capabilities.maxFrameDurationNs);
+    if (ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AE_MODE, 1, &aeOff) != ACAMERA_OK ||
+        ACaptureRequest_setEntry_i64(request, ACAMERA_SENSOR_EXPOSURE_TIME, 1, &e.exposureTimeNs) != ACAMERA_OK ||
+        ACaptureRequest_setEntry_i32(request, ACAMERA_SENSOR_SENSITIVITY, 1, &e.sensitivity) != ACAMERA_OK ||
+        ACaptureRequest_setEntry_i64(request, ACAMERA_SENSOR_FRAME_DURATION, 1, &frameDuration) != ACAMERA_OK) {
+        diag("CAMERA_BRACKET_REQUEST_FAIL");
+        return false;
+    }
+    // Never replay a one-shot AF/AE trigger the repeating request may carry.
+    const uint8_t afIdle = ACAMERA_CONTROL_AF_TRIGGER_IDLE;
+    const uint8_t precaptureIdle = ACAMERA_CONTROL_AE_PRECAPTURE_TRIGGER_IDLE;
+    (void)ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AF_TRIGGER, 1, &afIdle);
+    (void)ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AE_PRECAPTURE_TRIGGER, 1, &precaptureIdle);
+    if (prepare && !prepare(request)) {
+        diag("CAMERA_BRACKET_PREPARE_FAIL");
+        return false;
+    }
+    auto provenance =
+        std::make_unique<CameraRequestProvenance>(CameraRequestProvenance::from(control, nextRequestSerial_++));
+    provenance->exposureMode = ExposureControlMode::Manual;
+    provenance->expectedAePriority = camera2_priority::kOff;
+    provenance->requestedExposureTimeNs = e.exposureTimeNs;
+    provenance->requestedSensitivity = e.sensitivity;
+    provenance->optimizedStillRequestId = tagId;
+    if (ACaptureRequest_setUserContext(request, provenance.get()) != ACAMERA_OK) {
+        diag("CAMERA_REQUEST_PROVENANCE_FAIL");
+        return false;
+    }
+    provenance_.push_back(std::move(provenance));
     return true;
 }
 bool CameraRequestPipeline::captureAfTrigger(ACameraCaptureSession* session, const ACaptureRequest* repeating,

@@ -102,6 +102,9 @@ class SessionEngine {
     }
     // Full-size route availability and outstanding RAW acquisition, for the hold notice.
     std::pair<bool, bool> fullSizeCaptureState();
+    std::pair<uint64_t, int64_t> livePreviewState() const {
+        return swapchainRenderer_.livePresentation();
+    }
     void setSpotAeDisplay(bool active, float x, float y);
     void setColorMode(const std::string& mode);
     void setCpuRawCopyProbeFrames(uint32_t frames);
@@ -138,6 +141,7 @@ class SessionEngine {
     void setPersistentDiagnosticsEnabled(bool enabled);
     void setLensShadingCorrectionEnabled(bool enabled);
     void setHighlightReconstructionEnabled(bool enabled);
+    void setDistortionCorrectionEnabled(bool enabled);
     void setMaxAePostGain(float gain);
     [[nodiscard]] float maxAePostGain() const noexcept { return maxAePostGain_.load(std::memory_order_relaxed); }
     void setPostGainKneeWidthEv(float widthEv);
@@ -327,14 +331,13 @@ class SessionEngine {
         bool failed = false;
         std::set<uint64_t> failures;
         std::map<uint64_t, metadata::FrameMetadataSnapshot> results;
-        std::deque<imaging::RawFrameLease> frames;  // newest last, at most kMaxFrames
+        std::deque<imaging::RawFrameLease> frames;  // newest last, bounded by reader leases
         metadata::CameraContextMetadataPtr context;  // the session's context at full size
         std::set<uint64_t> requestIds;               // photos waiting for a full-size still
         std::set<uint64_t> claimedTimestamps;        // claimed binned copies awaiting their snapshot
         // Merged bursts: their tags, and each frame's result (full-size context) by timestamp.
         std::set<uint64_t> burstTags;
         std::map<uint64_t, std::pair<metadata::FrameMetadataSnapshot, color::FrameColorTransform>> burstResults;
-        static constexpr size_t kMaxFrames = 6;
     };
     FullSizeStills fullSize_;
     void drainFullSizeStills();  // session worker, under mu_; independent of preview pairing

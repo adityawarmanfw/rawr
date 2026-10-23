@@ -373,6 +373,23 @@ typedef struct tinydng_raw_info {
   uint8_t has_camera_calibration2;
   uint16_t cfa_layout; /* 0 => default 1 */
   uint8_t has_cfa_layout;
+  /* --- Rawr extension: DNG camera profile (DCP) tags, writer only. ---
+     Tables are FLOAT (hue shift, sat scale, val scale) triples; dims are
+     hue, sat, val divisions. Null data pointers omit the tag. */
+  const float *profile_hue_sat_map_data1;
+  const float *profile_hue_sat_map_data2;
+  uint32_t profile_hue_sat_map_dims[3];
+  uint32_t profile_hue_sat_map_encoding;
+  uint8_t has_profile_hue_sat_map_encoding;
+  const float *profile_look_table_data;
+  uint32_t profile_look_table_dims[3];
+  uint32_t profile_look_table_encoding;
+  uint8_t has_profile_look_table_encoding;
+  const float *profile_tone_curve_points; /* (x, y) pairs */
+  size_t profile_tone_curve_point_count;  /* floats, even */
+  char *profile_copyright;
+  double baseline_exposure_offset; /* SRATIONAL */
+  uint8_t has_baseline_exposure_offset;
   /* --- Converter carry (reader-parsed, writer-emitted). --- */
   uint8_t tiff_ep_standard_id[4];
   uint8_t has_tiff_ep_standard_id;

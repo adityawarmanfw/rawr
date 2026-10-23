@@ -69,6 +69,10 @@ internal class CaptureSettingsSync(
         syncSetting({ it.persistZslRingEnabled }) { previewCoordinator.setPersistZslRingEnabled(it) }
         syncSetting({ it.internalTraceCaptureEnabled }) { previewCoordinator.setInternalTraceCaptureEnabled(it) }
         syncSetting({ it.photoLensShadingEnabled }) { previewCoordinator.setLensShadingCorrectionEnabled(it) }
+        // The viewfinder frames what the current mode saves.
+        syncSetting({ if (it.isVideo) it.videoDistortionCorrectionEnabled else it.distortionCorrectionEnabled }) {
+            previewCoordinator.setDistortionCorrectionEnabled(it)
+        }
         // Idle video uses RawPreview until recording supplies the monitor
         // image. Match its recovery switch to the recorder, including when
         // entering/leaving Video; photo recovery can alter LOG highlights.
@@ -98,7 +102,8 @@ internal class CaptureSettingsSync(
         syncSetting({ it.renderProfileSyncKey() }) { (profile, id, _) ->
             previewCoordinator.setColorRenderProfile(profile, id)
         }
-        syncSetting({ it.filmSimEnabled }) { previewCoordinator.setFilmSim(it) }
+        // Film simulation is a photo look; the Video viewfinder must not apply it.
+        syncSetting({ it.filmSimEnabled && !it.isVideo }) { previewCoordinator.setFilmSim(it) }
         syncSetting({ it.viewfinderDivisor }) { previewCoordinator.setViewfinderDivisor(it) }
         syncSetting({ it.filmSimLook }) { look ->
             previewCoordinator.setFilmSimLook(look.toFloatArray(), look.toIntArray())

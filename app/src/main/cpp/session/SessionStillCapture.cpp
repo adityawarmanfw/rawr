@@ -1,9 +1,12 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <thread>
 
 #include "capture/CaptureRequest.h"
+#include "capture/BurstLimits.h"
 #include "capture/multiframe/BracketExposure.h"
+#include "capture/persistence/CaptureJob.h"
 #include "develop/render/DenoiseProfile.h"
 #include "local_tone/ExposureFusion.h"
 // Still + multiframe capture routing.
@@ -51,6 +54,27 @@ uint64_t SessionEngine::requestRawStillCapture(rawrcam::encoding::dng::DngCaptur
     }
     const bool fullSize = camera->hasFullSizeCapture();
     const auto longExposure = fullSize ? std::nullopt : camera->deferredCaptureExposure();
+    // A press while earlier stills still hold the capture budget (a 200 MP
+    // frame is 382 MiB until saved) waits for it instead of being refused.
+    // Presses run on the capture queue; the session lock isn't held.
+    uint64_t snapshotBytes = 0;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        snapshotBytes = capture_.single().rawSnapshotBytes();
+    }
+    if (snapshotBytes && !rawrcam::capture::persistence::canReserve(filesDir_, snapshotBytes, true)) {
+        const auto start = std::chrono::steady_clock::now();
+        const auto deadline = start + std::chrono::seconds(5);
+        bool admitted = false;
+        while (!admitted && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            admitted = rawrcam::capture::persistence::canReserve(filesDir_, snapshotBytes, true);
+        }
+        appendDiagnostic("RAW_STILL_CAPTURE_BUDGET_WAIT admitted=" + std::to_string(admitted ? 1 : 0) + " waitedMs=" +
+                         std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                            std::chrono::steady_clock::now() - start)
+                                            .count()));
+    }
     std::unique_lock<std::mutex> lock(mu_);
     dngContext.autoKeyEv = appliedAutoKeyEv();
     if (dngContext.captureTone) {
@@ -172,11 +196,6 @@ void SessionEngine::setPersistentEngineEnabled(bool enabled) {
     capture_.multiframe().setPersistentEngineEnabled(enabled);
     LOGI("PERSISTENT_ENGINE enabled=%s", enabled ? "true" : "false");
 }
-namespace {
-constexpr uint64_t kFullSizeRawPixels = 25'000'000;  // Above any binned 12-16 MP stream.
-constexpr uint32_t kFullSizeMaxFrames = 6;
-}  // namespace
-
 uint32_t SessionEngine::prepareExperimentalMultiframe(uint32_t maxFrames, uint32_t longFrames) {
     // HDR+ Bracketed: when the shutter/gain limits would leave the long
     // frames too dark to help (they would be skipped), freeze their slots as
@@ -190,14 +209,16 @@ uint32_t SessionEngine::prepareExperimentalMultiframe(uint32_t maxFrames, uint32
     // Capture-stream lens: the ZSL ring holds only binned viewfinder frames;
     // the merge takes a burst of full-size stills requested now.
     if (const auto* controller = cameraControls_.controller(); controller && controller->hasFullSizeCapture()) {
-        uint32_t cap = kFullSizeMaxFrames;
-        if (const uint32_t limit = controller->fullSizeBurstLimit()) cap = std::min(cap, limit);
+        const uint32_t profileLimit = controller->fullSizeBurstLimit();
+        const uint32_t cap = capture::fullSizeBurstCount(maxFrames + longFrames, profileLimit);
+        LOGI("MULTIFRAME_FULL_SIZE_PLAN requested=%u profileLimit=%u effective=%u sequential=%d",
+             maxFrames + longFrames, profileLimit, cap, controller->fullSizeBurstSequential() ? 1 : 0);
         // A lens whose HAL fails full-size bursts takes a single still instead.
         if (cap < 2u) {
             LOGI("MULTIFRAME_FULL_SIZE_SINGLE limit=%u", cap);
             return 0u;
         }
-        return prepareFullSizeBurst(std::min<uint32_t>(maxFrames + longFrames, cap));
+        return prepareFullSizeBurst(cap);
     }
     bool skipLong = false;
     if (longFrames > 0u) {
@@ -207,14 +228,8 @@ uint32_t SessionEngine::prepareExperimentalMultiframe(uint32_t maxFrames, uint32
     }
     std::lock_guard<std::mutex> lock(mu_);
     bracketSkippedForPending_ = skipLong;
-    uint32_t burst = std::min<uint32_t>(skipLong ? maxFrames + longFrames : maxFrames, 30u);
-    // Full-size (50 MP) frames are 4x a 12 MP frame: more than a few exhaust
-    // memory during the merge and stall the viewfinder.
-    if (uint64_t(realtime_.rawWidth()) * realtime_.rawHeight() > kFullSizeRawPixels && burst > kFullSizeMaxFrames) {
-        LOGI("MULTIFRAME_FULL_SIZE_CAP raw=%ux%u requested=%u capped=%u", realtime_.rawWidth(), realtime_.rawHeight(),
-             burst, kFullSizeMaxFrames);
-        burst = kFullSizeMaxFrames;
-    }
+    uint32_t burst = std::min<uint32_t>(skipLong ? maxFrames + longFrames : maxFrames, capture::kMaxBurstFrames);
+    // The streaming RAW ring enforces its own byte budget; do not impose a separate resolution-based count.
     return capture_.multiframe().prepareExperimentalMultiframeOnShutter(burst);
 }
 uint64_t SessionEngine::startPreparedMultiframeCapture(

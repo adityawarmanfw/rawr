@@ -193,6 +193,39 @@ public final class ProbeActivity extends Activity {
         b.set(new CaptureRequest.Key<>(name, int[].class), v);
     }
 
+    // Exact F85 profile key scopes, independent of the probe's stock session recipe.
+    private static void dumpRequest(PrintWriter meta, String kind, CaptureRequest r) {
+        for (CaptureRequest.Key<?> k : r.getKeys()) {
+            Object v = r.get(k);
+            String text;
+            if (v instanceof int[]) text = java.util.Arrays.toString((int[]) v);
+            else if (v instanceof long[]) text = java.util.Arrays.toString((long[]) v);
+            else if (v instanceof float[]) text = java.util.Arrays.toString((float[]) v);
+            else if (v instanceof byte[]) text = java.util.Arrays.toString((byte[]) v);
+            else if (v instanceof double[]) text = java.util.Arrays.toString((double[]) v);
+            else if (v instanceof Object[]) text = java.util.Arrays.deepToString((Object[]) v);
+            else text = String.valueOf(v);
+            meta.println("REQUEST_DUMP kind=" + kind + " key=" + k.getName() + " value=" + text);
+        }
+    }
+
+    private void rawrProfileKeys(CaptureRequest.Builder b, boolean sessionScope) {
+        setInt(b, "vivo.control.ultra_highresolution", 1);
+        setInt(b, "vivo.control.is_ProRaw_on", 2);
+        setInt(b, "vivo.control.echo.mode", 2);
+        setInt(b, "vivo.control.scenery.subfunction", 5);
+        setInt(b, "vivo.control.session.uiSwitch_state", 2);
+        if (sessionScope && getIntent().getBooleanExtra("sessionpro", false))
+            setInt(b, "vivo.control.is_pro_mode", 1);
+        if (sessionScope && getIntent().getBooleanExtra("sessionscenery", false))
+            b.set(new CaptureRequest.Key<>("vivo.control.camera_scenery_pro", byte[].class), new byte[]{1});
+        if (!sessionScope) {
+            setInt(b, "vivo.control.is_pro_mode", 1);
+            if (getIntent().getBooleanExtra("sceneryint", false)) setInt(b, "vivo.control.camera_scenery_pro", 1);
+            else b.set(new CaptureRequest.Key<>("vivo.control.camera_scenery_pro", byte[].class), new byte[]{1});
+        }
+    }
+
     /** 200 MP: ultra 1, streamsUsage [4 1 0 5]; 50 MP: ultra 0, streamsUsage [5 0 1 0 5 0] (--ei ultra, --es usage). */
     private int stockUltra = 1;
     private int[] stockUsage = {4, 1, 0, 5};
@@ -269,6 +302,7 @@ public final class ProbeActivity extends Activity {
         final String cam = stringExtra("cam", "5");
         final int fw = getIntent().getIntExtra("w", 16320), fh = getIntent().getIntExtra("h", 12288);
         final int bw = getIntent().getIntExtra("bw", 4080), bh = getIntent().getIntExtra("bh", 3072);
+        final boolean rawrKeys = getIntent().getBooleanExtra("rawrkeys", false);
         final int iso = getIntent().getIntExtra("iso", 50);
         final long exp = getIntent().getLongExtra("exp", 50_000_000L);
         final boolean lease = getIntent().getBooleanExtra("lease", true);
@@ -346,27 +380,78 @@ public final class ProbeActivity extends Activity {
         final int[] fullIndex = {0};
         final java.util.List<Long> fullFrames = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
         final long[] burstT0 = {0};
-        final ImageReader rawFull = fullUsage == 3 ? ImageReader.newInstance(fw, fh, ImageFormat.RAW_SENSOR, 2)
-                : ImageReader.newInstance(fw, fh, ImageFormat.RAW_SENSOR, 2, fullUsage);
+        // --ez holdvf: keep the RAW viewfinder images acquired (unreleased) while the still is in flight
+        final boolean[] holdVf = {false};
+        final java.util.List<Image> heldVf = new java.util.ArrayList<>();
+        // --ei fullimages / binnedimages: reader depth (rawr uses 6 for both)
+        final int fullImages = getIntent().getIntExtra("fullimages", 2), binnedImages = getIntent().getIntExtra("binnedimages", 2);
+        final ImageReader rawFull = fullUsage == 3 ? ImageReader.newInstance(fw, fh, ImageFormat.RAW_SENSOR, fullImages)
+                : ImageReader.newInstance(fw, fh, ImageFormat.RAW_SENSOR, fullImages, fullUsage);
         meta.println("full RAW reader usage " + fullUsage + (fullUsage == 3 ? " (default CPU_READ_OFTEN)" : ""));
         final ImageReader yuvFull = ImageReader.newInstance(fw, fh, ImageFormat.YUV_420_888, 1);
-        final ImageReader rawBinned = ImageReader.newInstance(bw, bh, ImageFormat.RAW_SENSOR, 2,
+        final boolean raw10Preview = getIntent().getBooleanExtra("raw10preview", false);
+        final boolean[] previewLayoutLogged = {false};
+        final ImageReader rawBinned = ImageReader.newInstance(bw, bh,
+                raw10Preview ? ImageFormat.RAW10 : ImageFormat.RAW_SENSOR, binnedImages,
                 getIntent().getLongExtra("binnedusage", 0L));  // --el binnedusage
+        meta.println("binned RAW format=" + (raw10Preview ? "RAW10" : "RAW_SENSOR"));
         try {
             preview.setOnImageAvailableListener(r -> { Image i = r.acquireNextImage(); if (i != null) { previews[0]++; i.close(); } }, h);
             yuvFull.setOnImageAvailableListener(r -> { Image i = r.acquireNextImage(); if (i != null) { meta.println("full YUV frame (unexpected)"); i.close(); } }, h);
             ImageReader.OnImageAvailableListener rawSaver = r -> {
-                Image img = r.acquireNextImage();
+                Image img;
+                try { img = r.acquireNextImage(); } catch (IllegalStateException full) { return; }  // all held
                 if (img == null) return;
                 final int slot = r == rawFull ? 0 : 1;
+                if (slot == 1 && holdVf[0] && heldVf.size() < getIntent().getIntExtra("holdcount", 4)) {
+                    heldVf.add(img);
+                    meta.println("holding viewfinder image " + heldVf.size());
+                    return;
+                }
+                if (slot == 0 && holdVf[0]) {
+                    holdVf[0] = false;
+                    meta.println("releasing " + heldVf.size() + " held viewfinder images");
+                    for (Image held : heldVf) held.close();
+                    heldVf.clear();
+                }
                 if (slot == 1 && (rawVf || rawOnly)) {
+                    if (raw10Preview && !previewLayoutLogged[0]) {
+                        previewLayoutLogged[0] = true;
+                        try {
+                            Image.Plane plane = img.getPlanes()[0];
+                            ByteBuffer buf = plane.getBuffer();
+                            int min = 1023, max = 0, nonzero = 0, count = 0;
+                            for (int y = 0; y < img.getHeight(); y += 64) {
+                                for (int x = 0; x < img.getWidth() - 3; x += 64) {
+                                    int offset = y * plane.getRowStride() + (x / 4) * 5;
+                                    int value = ((buf.get(offset) & 255) << 2) | (buf.get(offset + 4) & 3);
+                                    min = Math.min(min, value); max = Math.max(max, value);
+                                    if (value != 0) ++nonzero;
+                                    ++count;
+                                }
+                            }
+                            meta.println("RAW10 preview size=" + img.getWidth() + "x" + img.getHeight()
+                                    + " stride=" + plane.getRowStride() + " samples=" + count
+                                    + " min=" + min + " max=" + max + " nonzero=" + nonzero);
+                        } catch (Exception e) {
+                            meta.println("RAW10 preview layout check failed: " + e);
+                        }
+                    }
+                    if (raw10Preview && burstT0[0] > 0)
+                        meta.println("RAW10 preview arrival ts=" + img.getTimestamp() + " at "
+                                + (SystemClock.elapsedRealtime() - burstT0[0]) + "ms");
                     binnedFrames.add(img.getTimestamp());
                     img.close();
                     return;
                 }
-                if (slot == 0) fullFrames.add(img.getTimestamp());
+                if (slot == 0) {
+                    fullFrames.add(img.getTimestamp());
+                    meta.println("full arrival ts=" + img.getTimestamp() + " at "
+                            + (SystemClock.elapsedRealtime() - burstT0[0]) + "ms");
+                    meta.flush();
+                }
                 final int index = slot == 0 ? fullIndex[0]++ : 0;
-                if (slot == 0 && burst > 1 && index == burst - 1) {
+                if (slot == 0 && burst > 1 && index == burst - 1 && !getIntent().getBooleanExtra("nosave", false)) {
                     try {
                         Image.Plane plane = img.getPlanes()[0];
                         ByteBuffer buf = plane.getBuffer();
@@ -395,7 +480,24 @@ public final class ProbeActivity extends Activity {
                     Image.Plane plane = img.getPlanes()[0];
                     ByteBuffer buf = plane.getBuffer();
                     int stride = plane.getRowStride();
+                    if (slot == 0) {
+                        ByteBuffer samples = buf.duplicate().order(java.nio.ByteOrder.LITTLE_ENDIAN);
+                        int inside = 0, outside = 0, outsideNonzero = 0;
+                        for (int y = 16; y < img.getHeight(); y += 64)
+                            for (int x = 16; x < img.getWidth(); x += 64) {
+                                int value = samples.getShort(y * stride + x * 2) & 65535;
+                                if (x < bw && y < bh) { if (value != 0) ++inside; }
+                                else { ++outside; if (value != 0) ++outsideNonzero; }
+                            }
+                        meta.println("full pixels cornerNonzero=" + inside + " outsideNonzero=" + outsideNonzero + "/" + outside);
+                    }
                     File out = new File(dir, (slot == 0 ? "full_" : "binned_") + img.getWidth() + "x" + img.getHeight() + ".raw");
+                    // --ez nosave: keep only the pixel check (a 200 MP RAW write takes seconds)
+                    if (getIntent().getBooleanExtra("nosave", false)) {
+                        meta.println("raw " + out.getName() + " not saved stride=" + stride + " ts=" + img.getTimestamp());
+                        saved[slot] = out;
+                        return;
+                    }
                     try (FileOutputStream o = new FileOutputStream(out)) {
                         byte[] line = new byte[img.getWidth() * 2];
                         for (int y = 0; y < img.getHeight(); y++) { buf.position(y * stride); buf.get(line); o.write(line); }
@@ -418,13 +520,16 @@ public final class ProbeActivity extends Activity {
             manager.openCamera(cam, new CameraDevice.StateCallback() {
                 @Override public void onOpened(CameraDevice d) { synchronized (lock) { device[0] = d; lock.notifyAll(); } }
                 @Override public void onDisconnected(CameraDevice d) { error[0] = "disconnected"; d.close(); synchronized (lock) { lock.notifyAll(); } }
-                @Override public void onError(CameraDevice d, int e) { error[0] = "device error " + e; d.close(); synchronized (lock) { lock.notifyAll(); } }
+                @Override public void onError(CameraDevice d, int e) { error[0] = "device error " + e; meta.println(error[0]); meta.flush(); d.close(); synchronized (lock) { lock.notifyAll(); } }
             }, h);
             synchronized (lock) { if (device[0] == null && error[0] == null) lock.wait(5000); }
             if (device[0] == null) throw new IllegalStateException("open failed: " + error[0]);
 
             CaptureRequest.Builder sb = device[0].createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
-            if (sessionDrop.isEmpty()) stockSessionKeys(sb); else sessionKeys(sb);
+            if (rawrKeys) rawrProfileKeys(sb, true);
+            else if (sessionDrop.isEmpty()) stockSessionKeys(sb); else sessionKeys(sb);
+            if (getIntent().getBooleanExtra("sessionfps", false))
+                sb.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, new android.util.Range<>(12, 30));
             SessionConfiguration config = new SessionConfiguration(SessionConfiguration.SESSION_REGULAR,
                 rawOnly ? java.util.Arrays.asList(new OutputConfiguration(rawFull.getSurface()), new OutputConfiguration(rawBinned.getSurface()))
                 : noYuv ? java.util.Arrays.asList(new OutputConfiguration(preview.getSurface()), new OutputConfiguration(rawFull.getSurface()),
@@ -435,7 +540,8 @@ public final class ProbeActivity extends Activity {
                         @Override public void onConfigured(CameraCaptureSession s) { synchronized (lock) { session[0] = s; lock.notifyAll(); } }
                         @Override public void onConfigureFailed(CameraCaptureSession s) { error[0] = "configure failed"; synchronized (lock) { lock.notifyAll(); } }
                     });
-            config.setSessionParameters(sb.build());
+if (getIntent().getBooleanExtra("dumpreq", false)) dumpRequest(meta, "session", sb.build());
+                        config.setSessionParameters(sb.build());
             device[0].createCaptureSession(config);
             synchronized (lock) { if (session[0] == null && error[0] == null) lock.wait(8000); }
             if (session[0] == null) throw new IllegalStateException("session failed: " + error[0]);
@@ -466,8 +572,35 @@ public final class ProbeActivity extends Activity {
                     case "cchq": pb.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_HIGH_QUALITY); break;
                     case "prio": pb.set(new CaptureRequest.Key<>("android.control.aePriorityMode", int.class), 0); break;
                     case "fps": pb.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, new android.util.Range<>(12, 30)); break;
+                    // --es pvfps min-max: viewfinder AE target fps range (rawr sends one on every repeating request)
+                    case "pvfps": {
+                        if (stringExtra("pvfps", "").equals("removed")) {  // rawr M/I: entry removed from the repeating request
+                            pb.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, null);
+                            meta.println("preview fps range removed");
+                            break;
+                        }
+                        if (stringExtra("pvfps", "").equals("removed")) {  // rawr M/I: entry removed from the repeating request
+                            pb.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, null);
+                            meta.println("preview fps range removed");
+                            break;
+                        }
+                        String[] r = stringExtra("pvfps", "12-30").split("-");
+                        pb.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, new android.util.Range<>(Integer.parseInt(r[0]), Integer.parseInt(r[1])));
+                        meta.println("preview fps range " + r[0] + ".." + r[1]);
+                        break;
+                    }
                     default: break;
                 }
+            }
+            // Independently vary preview ISO/shutter while keeping the still unchanged.
+            final int previewIso = getIntent().getIntExtra("pviso", -1);
+            final long previewExp = getIntent().getLongExtra("pvexp", -1L);
+            if (previewIso > 0 && previewExp > 0) {
+                pb.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF);
+                pb.set(CaptureRequest.SENSOR_SENSITIVITY, previewIso);
+                pb.set(CaptureRequest.SENSOR_EXPOSURE_TIME, previewExp);
+                pb.set(CaptureRequest.SENSOR_FRAME_DURATION, Math.max(previewExp, 33_333_333L));
+                meta.println("manual preview iso=" + previewIso + " exp=" + previewExp);
             }
             if (rawVf || rawOnly) pb.addTarget(rawBinned.getSurface());
             meta.println("rawvf=" + rawVf + " noyuv=" + noYuv + " burst=" + burst + " exps=" + exps);
@@ -493,13 +626,21 @@ public final class ProbeActivity extends Activity {
             }
             if (!stockMinKeys && stockDrop.isEmpty()) setInt(pb, "vivo.control.ultra_highresolution", stockUltra);
             if (getIntent().getBooleanExtra("allkeys", true)) {  // the stock app repeats them on every request
-                if (previewDrop.isEmpty()) stockSessionKeys(pb); else previewKeys(pb);
+                if (rawrKeys) rawrProfileKeys(pb, false);
+                else if (previewDrop.isEmpty()) stockSessionKeys(pb); else previewKeys(pb);
             }
             final Float[] focus = {null};
             final int[] lost = {0};
+            final boolean[] initialPreviewLogged = {false};
             session[0].setRepeatingRequest(pb.build(), new CameraCaptureSession.CaptureCallback() {
                 @Override public void onCaptureCompleted(CameraCaptureSession s, CaptureRequest r, TotalCaptureResult res) {
                     focus[0] = res.get(CaptureResult.LENS_FOCUS_DISTANCE);
+                    if (!initialPreviewLogged[0]) {
+                        initialPreviewLogged[0] = true;
+                        meta.println("initial preview ae=" + res.get(CaptureResult.CONTROL_AE_MODE)
+                                + " iso=" + res.get(CaptureResult.SENSOR_SENSITIVITY)
+                                + " exp=" + res.get(CaptureResult.SENSOR_EXPOSURE_TIME));
+                    }
                 }
                 @Override public void onCaptureBufferLost(CameraCaptureSession s, CaptureRequest r, android.view.Surface t, long f) {
                     if (lost[0]++ < 3) meta.println("preview buffer lost frame " + f + (t == rawBinned.getSurface() ? " (binned RAW)" : ""));
@@ -561,6 +702,84 @@ public final class ProbeActivity extends Activity {
                 }
                 meta.println("af taps " + afTaps + " done error=" + error[0]);
             }
+            final CaptureRequest originalPreview = pb.build();
+            final boolean autoBeforeStill = getIntent().getBooleanExtra("autobeforestill", false);
+            final int prepareIso = getIntent().getIntExtra("prepareiso", -1);
+            final int prepareFrames = getIntent().getIntExtra("prepareframes", 5);
+            final boolean preparePreview = autoBeforeStill || prepareIso > 0;
+            if (preparePreview) {
+                pb.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON);
+                pb.set(CaptureRequest.SENSOR_EXPOSURE_TIME, null);
+                pb.set(CaptureRequest.SENSOR_SENSITIVITY, null);
+                pb.set(CaptureRequest.SENSOR_FRAME_DURATION, null);
+                if (prepareIso > 0) {
+                    pb.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF);
+                    pb.set(CaptureRequest.SENSOR_SENSITIVITY, prepareIso);
+                    pb.set(CaptureRequest.SENSOR_EXPOSURE_TIME, previewExp);
+                    pb.set(CaptureRequest.SENSOR_FRAME_DURATION, Math.max(previewExp, 33_333_333L));
+                }
+                if (getIntent().getBooleanExtra("prepareui", false)) {
+                    setInt(pb, "com.vivo.current_ui_module", 74);
+                    meta.println("preview preparation current_ui_module=74");
+                }
+                if (getIntent().getBooleanExtra("prepareyuv", false)) {
+                    if (rawVf) pb.removeTarget(rawBinned.getSurface());
+                    if (previewYuvOff) pb.addTarget(preview.getSurface());
+                    meta.println("preview preparation target=YUV");
+                }
+                final int[] autoFrames = {0};
+                final boolean[] ready = {false};
+                final long startAuto = SystemClock.elapsedRealtime();
+                session[0].setRepeatingRequest(pb.build(), new CameraCaptureSession.CaptureCallback() {
+                    @Override public void onCaptureCompleted(CameraCaptureSession s, CaptureRequest r, TotalCaptureResult res) {
+                        synchronized (lock) {
+                            focus[0] = res.get(CaptureResult.LENS_FOCUS_DISTANCE);
+                            if (prepareIso > 0
+                                    // match the request: the HAL caps the shutter and raises the gain to compensate
+                                    ? Integer.valueOf(prepareIso).equals(r.get(CaptureRequest.SENSOR_SENSITIVITY))
+                                        && Integer.valueOf(0).equals(res.get(CaptureResult.CONTROL_AE_MODE))
+                                    : Integer.valueOf(1).equals(res.get(CaptureResult.CONTROL_AE_MODE))) {
+                                ++autoFrames[0];
+                                Integer ae = res.get(CaptureResult.CONTROL_AE_STATE);
+                                if (!ready[0])
+                                    meta.println("preview preparation frame=" + autoFrames[0] + " atMs="
+                                            + (SystemClock.elapsedRealtime() - startAuto) + " state=" + ae
+                                            + " iso=" + res.get(CaptureResult.SENSOR_SENSITIVITY)
+                                            + " exp=" + res.get(CaptureResult.SENSOR_EXPOSURE_TIME));
+                                if (autoFrames[0] >= prepareFrames && (prepareIso > 0 || Integer.valueOf(CaptureResult.CONTROL_AE_STATE_CONVERGED).equals(ae)))
+                                    ready[0] = true;
+                            }
+                            lock.notifyAll();
+                        }
+                    }
+                }, h);
+                synchronized (lock) {
+                    long limit = startAuto + 15000;
+                    while (!ready[0] && error[0] == null && SystemClock.elapsedRealtime() < limit)
+                        lock.wait(Math.max(1, limit - SystemClock.elapsedRealtime()));
+                    if (!ready[0]) throw new IllegalStateException("auto preview preparation timed out");
+                }
+                meta.println("preview preparation ready in " + (SystemClock.elapsedRealtime() - startAuto) + "ms");
+                // --ez stopbeforestill: nothing repeats during the still (after the decision frames)
+                if (getIntent().getBooleanExtra("stopbeforestill", false)) {
+                    session[0].stopRepeating();
+                    SystemClock.sleep(300);
+                    meta.println("repeating stopped before the still");
+                }
+                // --ez yuvnoui: the small-YUV-only request keeps repeating through the still, without ui_module 74
+                if (getIntent().getBooleanExtra("yuvnoui", false)) {
+                    pb.set(new CaptureRequest.Key<>("com.vivo.current_ui_module", int[].class), null);
+                    session[0].setRepeatingRequest(pb.build(), null, h);
+                    SystemClock.sleep(500);
+                    meta.println("YUV-only viewfinder without current_ui_module before the still");
+                }
+                // --ez restorebeforestill: the decision is a one-shot; the normal (RAW) viewfinder repeats through the still
+                if (getIntent().getBooleanExtra("restorebeforestill", false)) {
+                    session[0].setRepeatingRequest(originalPreview, null, h);
+                    SystemClock.sleep(500);
+                    meta.println("viewfinder request restored before the still");
+                }
+            }
             meta.println("preview frames before the still: " + previews[0] + " focus=" + focus[0]);
 
             CaptureRequest.Builder still = device[0].createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
@@ -575,7 +794,10 @@ public final class ProbeActivity extends Activity {
             if (fixedFocus >= 0) still.set(CaptureRequest.LENS_FOCUS_DISTANCE, fixedFocus);
             else if (focus[0] != null) still.set(CaptureRequest.LENS_FOCUS_DISTANCE, focus[0]);
             if (!stockMinKeys && stockDrop.isEmpty()) setInt(still, "vivo.control.ultra_highresolution", stockUltra);
-            if (getIntent().getBooleanExtra("allkeys", true)) stockSessionKeys(still);
+            if (rawrKeys) {
+                rawrProfileKeys(still, false);
+                setInt(still, "com.vivo.current_ui_module", 74);
+            } else if (getIntent().getBooleanExtra("allkeys", true)) stockSessionKeys(still);
             // the stock app's still keys (cmd media.camera watch, 2026-10-17): a DNG-only seamless 200 MP capture
             if (getIntent().getBooleanExtra("stillkeys", true)) {
                 long id = System.currentTimeMillis();
@@ -588,6 +810,11 @@ public final class ProbeActivity extends Activity {
                 still.set(new CaptureRequest.Key<>("vivo.control.frameFlag", long[].class), new long[]{id});
                 still.set(new CaptureRequest.Key<>("vivo.control.isPAPNeeded", byte[].class), new byte[]{1});
                 meta.println("still keys: onlyDng 1, isCapture 0, sensorMode 0, isUpscale " + getIntent().getIntExtra("upscale", stockUltra) + ", isPAPNeeded 1, ids " + id);
+            }
+            if (getIntent().getBooleanExtra("stillaf", false)) {
+                still.set(CaptureRequest.CONTROL_AF_MODE, pb.get(CaptureRequest.CONTROL_AF_MODE));
+                still.set(CaptureRequest.LENS_FOCUS_DISTANCE, null);
+                meta.println("still AF mode=" + pb.get(CaptureRequest.CONTROL_AF_MODE));
             }
             final long t0 = SystemClock.elapsedRealtime();
             burstT0[0] = t0;
@@ -607,8 +834,73 @@ public final class ProbeActivity extends Activity {
                 }
                 stills.add(still.build());
             }
+            if (getIntent().getBooleanExtra("dumpreq", false)) {  // --ez dumpreq: every key the viewfinder and still carry
+                dumpRequest(meta, "repeating", pb.build());
+                dumpRequest(meta, "still", stills.get(0));
+            }
+            // --ez decisioninburst: from the normal viewfinder, stop repeating and send
+            // [decision frame (YUV only, ui 74, ISO 50, fps 5-30), stills...] as one burst
+            if (getIntent().getBooleanExtra("decisioninburst", false)) {
+                pb.removeTarget(rawBinned.getSurface());
+                pb.addTarget(preview.getSurface());
+                pb.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF);
+                pb.set(CaptureRequest.SENSOR_SENSITIVITY, 50);
+                pb.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, new android.util.Range<>(5, 30));
+                setInt(pb, "com.vivo.current_ui_module", 74);
+                pb.setTag("decision");
+                session[0].stopRepeating();
+                stills.add(0, pb.build());
+                meta.println("repeating stopped; decision frame first in the still burst");
+            }
+            if (getIntent().getBooleanExtra("holdvf", false)) {
+                // from ~1 s before the press, as an app keeping recent viewfinder frames
+                holdVf[0] = true;
+                meta.println("holding viewfinder buffers from 1 s before the still");
+                SystemClock.sleep(1000);
+            }
+            final boolean resumeAfterExposure = getIntent().getBooleanExtra("resumeafterexposure", false);
             session[0].captureBurst(stills, new CameraCaptureSession.CaptureCallback() {
+                @Override public void onCaptureStarted(CameraCaptureSession s, CaptureRequest r, long timestamp, long frameNumber) {
+                    meta.println("still started frame=" + frameNumber + " sensorTs=" + timestamp
+                            + " at " + (SystemClock.elapsedRealtime() - t0) + "ms");
+                    meta.flush();
+                    if (resumeAfterExposure && r == stills.get(stills.size() - 1)) {
+                        Long exposure = r.get(CaptureRequest.SENSOR_EXPOSURE_TIME);
+                        // Start notification precedes exposure completion; allow exposure plus a readout margin.
+                        h.postDelayed(() -> {
+                            try {
+                                s.setRepeatingRequest(originalPreview, new CameraCaptureSession.CaptureCallback() {
+                                    private boolean logged;
+                                    @Override public void onCaptureCompleted(CameraCaptureSession ps, CaptureRequest pr, TotalCaptureResult result) {
+                                        if (!logged) {
+                                            logged = true;
+                                            meta.println("early preview result at " + (SystemClock.elapsedRealtime() - t0) + "ms");
+                                            meta.flush();
+                                        }
+                                    }
+                                    @Override public void onCaptureFailed(CameraCaptureSession ps, CaptureRequest pr, CaptureFailure failure) {
+                                        if (!logged) {
+                                            logged = true;
+                                            meta.println("early preview failed reason=" + failure.getReason()
+                                                    + " at " + (SystemClock.elapsedRealtime() - t0) + "ms");
+                                            meta.flush();
+                                        }
+                                    }
+                                }, h);
+                                meta.println("early preview submitted at " + (SystemClock.elapsedRealtime() - t0)
+                                        + "ms full buffers received=" + fullFrames.size());
+                            } catch (Exception e) {
+                                meta.println("early preview resume exception=" + e);
+                            }
+                            meta.flush();
+                        }, (exposure == null ? 0 : exposure / 1_000_000L) + 150);
+                    }
+                }
                 @Override public void onCaptureCompleted(CameraCaptureSession s, CaptureRequest r, TotalCaptureResult res) {
+                    if ("decision".equals(r.getTag())) {
+                        meta.println("decision result at " + (SystemClock.elapsedRealtime() - t0) + "ms iso=" + res.get(CaptureResult.SENSOR_SENSITIVITY));
+                        return;
+                    }
                     meta.println("still result at " + (SystemClock.elapsedRealtime() - t0) + "ms exp=" + res.get(CaptureResult.SENSOR_EXPOSURE_TIME)
                             + " iso=" + res.get(CaptureResult.SENSOR_SENSITIVITY) + " focus=" + res.get(CaptureResult.LENS_FOCUS_DISTANCE)
                             + " seamlessMode=" + vendor(res, "vcf.parameter.seamlessMode") + " dngType=" + vendor(res, "vivo.parameter.highResolutionDngType")
@@ -619,13 +911,41 @@ public final class ProbeActivity extends Activity {
                     synchronized (lock) { lock.notifyAll(); }
                 }
             }, h);
-            final long deadline = SystemClock.elapsedRealtime() + 30000;
+            long longestExposureNs = exp;
+            for (String exposure : exps.split(","))
+                if (!exposure.isEmpty()) longestExposureNs = Math.max(longestExposureNs, Long.parseLong(exposure));
+            final long captureBudgetMs = Math.max(30000L, burst * (longestExposureNs / 1_000_000L + 10000L));
+            meta.println("capture wait budget ms=" + captureBudgetMs);
+            final long deadline = SystemClock.elapsedRealtime() + captureBudgetMs;
             synchronized (lock) {
                 while ((saved[0] == null || (saved[1] == null && !rawVf && !rawOnly) || fullFrames.size() < burst) && error[0] == null
                         && SystemClock.elapsedRealtime() < deadline)
                     lock.wait(1000);
             }
             meta.println("full frames " + fullFrames.size() + "/" + burst + " ts=" + fullFrames);
+            if (preparePreview && error[0] == null) {
+                final boolean[] restored = {false};
+                session[0].setRepeatingRequest(originalPreview, new CameraCaptureSession.CaptureCallback() {
+                    @Override public void onCaptureCompleted(CameraCaptureSession s, CaptureRequest r, TotalCaptureResult res) {
+                        synchronized (lock) {
+                            if (!restored[0]) {
+                                restored[0] = true;
+                                meta.println("restored preview ae=" + res.get(CaptureResult.CONTROL_AE_MODE)
+                                        + " iso=" + res.get(CaptureResult.SENSOR_SENSITIVITY)
+                                        + " exp=" + res.get(CaptureResult.SENSOR_EXPOSURE_TIME));
+                            }
+                            lock.notifyAll();
+                        }
+                    }
+                }, h);
+                synchronized (lock) {
+                    long limit = SystemClock.elapsedRealtime() + 3000;
+                    while (!restored[0] && SystemClock.elapsedRealtime() < limit)
+                        lock.wait(Math.max(1, limit - SystemClock.elapsedRealtime()));
+                    if (!restored[0]) meta.println("restore preview result timed out");
+                }
+            }
+
             if (rawVf || rawOnly) {
                 SystemClock.sleep(500);  // viewfinder frames after the burst
                 java.util.List<Long> b = new java.util.ArrayList<>(binnedFrames);

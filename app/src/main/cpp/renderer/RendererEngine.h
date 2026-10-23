@@ -8,6 +8,7 @@
 #include "DngSource.h"
 #include "develop/render/StillImageRenderer.h"
 namespace image_scopes { class ImageScopes; }
+namespace rawr::capsharp { class CaptureSharpening; }
 namespace rawrcam::renderer {
 struct RenderOptions {
     develop::rendered::RenderedStillContext context;
@@ -43,6 +44,12 @@ class RendererEngine {
     void prepareProxy(DngSource& source, const std::string& cachePath, bool shading);
     void prepare(DngSource& source, const std::string& cachePath, const RenderOptions& options);
     std::vector<uint8_t> render(DngSource& source, const std::string& cachePath, const RenderOptions& options);
+    // Capture sharpening for the Renderer: sharpens the full-resolution
+    // demosaic cache (width x height RGBA16F, pre-WB) once per level and
+    // returns the sharpened cache path; previews and exports resample from it,
+    // so the still pipeline's own stage stays off here.
+    std::string captureSharpened(const DngSource& source, const std::string& cachePath, uint32_t width,
+                                 uint32_t height, uint32_t iterations);
     const std::vector<uint32_t>& waveform() const { return waveformPixels_; }
     // Last post-demosaic completion (GPU stage times, setup/gaps/readback).
     // Populated by render(); valid only when render() succeeded. Lets the
@@ -60,6 +67,8 @@ class RendererEngine {
     // demosaic plus render() resample/distortion pre-work. Each stage
     // contributes only the work it actually performed (0 on cache hit).
     double lastDemosaicMs() const { return lastDemosaicMs_; }
+    double lastCaptureSharpenMs() const { return lastCaptureSharpenMs_; }
+    bool lastCaptureSharpenCached() const { return lastCaptureSharpenCached_; }
     std::atomic<bool> cancelled{false};
     std::atomic<int> progress{0};
     // 0 idle, 1 proxy decode, 2 Bayer bin, 3 demosaic, 4 resize, 5 post/tonemap.
@@ -69,6 +78,7 @@ class RendererEngine {
     void check();
     void renderWaveform(uint32_t width, uint32_t height, uint32_t orientation);
     std::unique_ptr<image_scopes::ImageScopes> scopeEngine_;
+    std::unique_ptr<rawr::capsharp::CaptureSharpening> captureSharpening_;
     vulkan::OwnedImage scopeImage_{};
     std::vector<uint32_t> waveformPixels_;
     std::string filesDir_;
@@ -87,5 +97,7 @@ class RendererEngine {
     uint32_t lastGainmapWidth_ = 0;
     uint32_t lastGainmapHeight_ = 0;
     double lastDemosaicMs_ = 0.0;
+    double lastCaptureSharpenMs_ = 0.0;
+    bool lastCaptureSharpenCached_ = false;
 };
 }  // namespace rawrcam::renderer

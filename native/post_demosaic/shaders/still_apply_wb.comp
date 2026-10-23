@@ -15,8 +15,9 @@ layout(push_constant) uniform Push {
     float rGain;
     float gGain;
     float bGain;
-    // Optional geometric undistort (Camera2 LENS_DISTORTION model).
-    // 0 = passthrough (bit-exact imageLoad), 1 = inverse-model resample.
+    // Optional geometric undistort. 0 = passthrough (bit-exact imageLoad),
+    // 1 = Camera2 LENS_DISTORTION inverse-model resample, 2 = OpenCV rational
+    // forward-model resample (lens profile calibration, k4..k6 / fxOut below).
     uint enableDistortion;
     float fx;
     float fy;
@@ -35,6 +36,18 @@ layout(push_constant) uniform Push {
     // 0 = none (colour propagation runs its own pass), 1 = HL off common-ceiling
     // clamp (recover enabled 0), 2 = Inpaint Opposed passthrough (enabled 2).
     uint highlightMode;
+    // Rational model only: denominator k4..k6 and the output focal (fx, fy
+    // scaled to fill the frame); fx/fy above denormalize into the source.
+    float k4;
+    float k5;
+    float k6;
+    float fxOut;
+    float fyOut;
+    // Rational only: this image is a crop of the calibrated frame (video);
+    // image pixel p = frame pixel origin + (p + 0.5) * frameScale - 0.5.
+    float originX;
+    float originY;
+    float frameScale;
 }
 pc;
 
@@ -75,6 +88,19 @@ vec2 undistort(vec2 outUv) {
     return vec2(pc.cx, pc.cy) + x * vec2(pc.fx, pc.fy);
 }
 
+// OpenCV rational model: corrected output pixel -> distorted source pixel.
+vec2 rationalSource(vec2 outPixel) {
+    vec2 origin = vec2(pc.originX, pc.originY);
+    vec2 outUv = origin + (outPixel + 0.5) * pc.frameScale - 0.5;
+    vec2 x = (outUv - vec2(pc.cx, pc.cy)) / vec2(pc.fxOut, pc.fyOut);
+    float r2 = dot(x, x);
+    float radial = (1.0 + r2 * (pc.k1 + r2 * (pc.k2 + r2 * pc.k3))) / (1.0 + r2 * (pc.k4 + r2 * (pc.k5 + r2 * pc.k6)));
+    vec2 d = vec2(x.x * radial + 2.0 * pc.p1 * x.x * x.y + pc.p2 * (r2 + 2.0 * x.x * x.x),
+                  x.y * radial + pc.p1 * (r2 + 2.0 * x.y * x.y) + 2.0 * pc.p2 * x.x * x.y);
+    vec2 source = vec2(pc.cx, pc.cy) + d * vec2(pc.fx, pc.fy);
+    return (source - origin + 0.5) / pc.frameScale - 0.5;
+}
+
 void main() {
     // Shared predicate reduction; every thread in the workgroup must reach
     // both barriers, including threads outside the image extent.
@@ -86,7 +112,8 @@ void main() {
         if (pc.enableDistortion == 0u) {
             s = imageLoad(srcRgb, p);
         } else {
-            s = sampleBilinear(ivec2(pc.width, pc.height), undistort(vec2(p)));
+            vec2 source = pc.enableDistortion == 2u ? rationalSource(vec2(p)) : undistort(vec2(p));
+            s = sampleBilinear(ivec2(pc.width, pc.height), source);
         }
         vec3 wb = s.rgb * vec3(pc.rGain, pc.gGain, pc.bGain);
         vec3 outRgb = wb;

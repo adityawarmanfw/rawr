@@ -8,6 +8,7 @@
 #include <limits>
 #include <string>
 
+#include "geometry/LensDistortion.h"
 #include "geometry/OrientationTransform.h"
 
 namespace rawrcam::encoding::dng {
@@ -98,6 +99,8 @@ void fillDngExif(TinyDngWriteParams& p, const rawrcam::imaging::RawSnapshot& fra
             ex.orientation = 1;
             break;  // TopLeft
     }
+    // The sensor pixels stay as captured; the lens profile mirror rides in Orientation.
+    ex.orientation = rawrcam::geometry::mirroredOrientation(uint16_t(ex.orientation), ctx.profileMirror);
     if (frame.metadata.exposureTimeNs > 0) {
         const uint64_t us = static_cast<uint64_t>(frame.metadata.exposureTimeNs + 500) / 1000u;
         if (us <= std::numeric_limits<uint32_t>::max()) {

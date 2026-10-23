@@ -25,4 +25,7 @@ struct CaptureDevelopInput {
 };
 develop::DevelopSettings readCaptureDevelopSettings(const CaptureDevelopInput& input);
 develop::DevelopSettings readRendererDevelopSettings(Json& json);
+// Recipe keys captureSharpeningEnabled / captureSharpeningLevel (Low, Medium, Sharp,
+// Sharpest) as Richardson-Lucy iterations; 0 = off.
+std::uint32_t captureSharpenIterations(Json& recipe);
 }  // namespace rawrcam::jni

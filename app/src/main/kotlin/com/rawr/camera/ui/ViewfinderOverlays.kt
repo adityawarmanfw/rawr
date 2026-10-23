@@ -283,6 +283,7 @@ internal fun BracketHoldNotice(
     active: Boolean,
     orientation: Orientation,
     modifier: Modifier = Modifier,
+    restoringPreview: Boolean = false,
     fullSizeBinnedStills: Long = 0L,
     fullSizeBurstsToSingle: Long = 0L
 ) {
@@ -301,7 +302,7 @@ internal fun BracketHoldNotice(
         kotlinx.coroutines.delay(FULL_SIZE_FALLBACK_NOTICE_MS)
         fallback = null
     }
-    val text = if (active) "Hold still" else fallback
+    val text = if (active) "Hold still" else if (restoringPreview) "Restoring preview…" else fallback
     // The fade-out keeps the last text: an emptied pill would flash.
     var shown by remember { mutableStateOf("Hold still") }
     if (text != null) shown = text
@@ -333,10 +334,10 @@ internal fun BracketHoldNotice(
  */
 @Composable
 internal fun LongExposureNotice(state: LongExposureUiState, orientation: Orientation, modifier: Modifier = Modifier) {
-    val active = state.startMs >= 0L && state.activeNs > 0L
+    val active = state.active
     var now by remember { mutableLongStateOf(android.os.SystemClock.uptimeMillis()) }
     if (active) {
-        LaunchedEffect(state.startMs) {
+        LaunchedEffect(state.startMs, state.activeNs) {
             while (true) {
                 now = android.os.SystemClock.uptimeMillis()
                 kotlinx.coroutines.delay(100)
@@ -344,10 +345,11 @@ internal fun LongExposureNotice(state: LongExposureUiState, orientation: Orienta
         }
     }
     val text = when {
-        // Until the frame is in: a real long exposure counts down; a short wait
-        // (a full-size still waiting for the sensor switch) asks to hold still.
+        // Until the frame is in: a real long exposure counts down the hold
+        // (queue + exposure + readout); a short wait (a full-size still
+        // waiting for the sensor switch) asks to hold still.
         active -> {
-            val remainingMs = (state.activeNs / 1_000_000L - (now - state.startMs)).coerceAtLeast(0L)
+            val remainingMs = state.remainingMs(now) ?: 0L
             if (state.activeNs >= 1_000_000_000L && remainingMs > 0L) "%.1f s".format(remainingMs / 1000.0)
             else "HOLD STILL"
         }

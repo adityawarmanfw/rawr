@@ -58,6 +58,7 @@ void setHdrPlusHeadroomMaxEv(EngineHandle handle, float maxEv) noexcept;
 void setPersistentEngineEnabled(EngineHandle handle, bool enabled) noexcept;
 void setLensShadingCorrectionEnabled(EngineHandle handle, bool enabled) noexcept;
 void setHighlightReconstructionEnabled(EngineHandle handle, bool enabled) noexcept;
+void setDistortionCorrectionEnabled(EngineHandle handle, bool enabled) noexcept;
 void setMaxAePostGain(EngineHandle handle, float gain) noexcept;
 void setPostGainKneeWidthEv(EngineHandle handle, float widthEv) noexcept;
 void setAutoKeyMode(EngineHandle handle, int mode) noexcept;

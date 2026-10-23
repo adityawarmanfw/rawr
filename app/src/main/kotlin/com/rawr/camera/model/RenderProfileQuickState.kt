@@ -10,6 +10,7 @@ sealed interface RenderProfileSelection {
     data class Log(val profile: VideoLogProfile) : RenderProfileSelection
     /** Each AgX preset is its own picker entry on the AgX render profile. */
     data class Agx(val preset: AgxPreset) : RenderProfileSelection
+    data class SavedAgx(val lookId: String) : RenderProfileSelection
 
     val key: String get() = when (this) {
         is BuiltIn -> when (profile) {
@@ -19,6 +20,7 @@ sealed interface RenderProfileSelection {
         is Imported -> profileId
         is Log -> "log_${profile.name}"
         is Agx -> "agx_${preset.name}"
+        is SavedAgx -> "agx_look_$lookId"
     }
 }
 

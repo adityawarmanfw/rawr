@@ -10,7 +10,7 @@ import kotlin.test.assertEquals
 class VideoEncoderConfigTest {
     @Test fun defaultsMatchThePreviousHardcodedRecorderSettings() {
         val d = VideoEncoderConfig()
-        assertEquals(10, d.bitDepth)
+        assertEquals(8, d.bitDepth)
         assertEquals(12, d.bitrateMbps(VideoResolutionMode.HD1080))
         assertEquals(40, d.bitrateMbps(VideoResolutionMode.UHD4K))
         assertEquals(60, d.bitrateMbps(VideoResolutionMode.OPEN_GATE))

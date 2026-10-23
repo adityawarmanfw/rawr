@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "diagnostics/timing/GpuTimingTracker.h"
+#include "geometry/LensDistortion.h"
 #include "imaging/FrameLimits.h"
 #include "video/VideoOutput.h"
 #include "video/VideoProcessingResources.h"
@@ -99,6 +100,17 @@ class VideoSession final {
                 const tonemap::TonemapParams& params, rawrcam::diagnostics::GpuTimingTracker& timing,
                 bool monitorEnabled = true, const std::function<VkCommandBuffer(VkCommandBuffer)>& splitSubmit = {},
                 const std::function<void(VkCommandBuffer, VkImageView, uint32_t, uint32_t)>& sceneMeter = {});
+    // The lens profile calibration of the frames being recorded (nullopt =
+    // none); undistorts them when the video Distortion correction is on.
+    void setLensDistortion(const std::optional<rawrcam::geometry::LensDistortionModel>& model) {
+        lensDistortion_ = model;
+    }
+    // The lens profile mirror (geometry::kLensMirror* bits) of those frames.
+    void setLensMirror(uint32_t mirror) { lensMirror_ = mirror; }
+    void setDcpProfile(color::DcpProfilePtr profile, float weight1) {
+        dcpProfile_ = std::move(profile);
+        dcpWeight1_ = weight1;
+    }
     VkSemaphore available(uint32_t frameSlot) const { return output_.available(frameSlot); }
     VkSemaphore rendered(uint32_t frameSlot) const { return output_.rendered(frameSlot); }
     VkResult present(VkQueue queue, uint32_t frameSlot, uint32_t imageIndex, uint64_t presentTimeNs);
@@ -111,6 +123,10 @@ class VideoSession final {
     void endMonitorTiming(VkCommandBuffer command, uint32_t frameSlot);
 
    private:
+    std::optional<rawrcam::geometry::LensDistortionModel> lensDistortion_;
+    uint32_t lensMirror_ = 0;
+    color::DcpProfilePtr dcpProfile_;
+    float dcpWeight1_ = 1.0f;
     bool prewarmVideo(uint32_t width, uint32_t height, uint32_t bitDepth);
     void videoPrewarmLoop();
     vulkan::VulkanContext& context_;

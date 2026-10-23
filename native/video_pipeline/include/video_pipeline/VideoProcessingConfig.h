@@ -8,7 +8,9 @@ namespace rawrcam::video {
 // Resource-sized controls (FCC passes and defringe pipeline) are latched when
 // recording starts. Other fields may change at a frame boundary.
 struct VideoProcessingConfig {
-    bool lensShadingEnabled = false;
+    bool lensShadingEnabled = true;
+    // Undistort with the lens profile calibration (app supplies the model per frame).
+    bool distortionEnabled = false;
     bool highlightEnabled = true;
     uint32_t highlightMethod = 0;
     float highlightThreshold = 1.0f;

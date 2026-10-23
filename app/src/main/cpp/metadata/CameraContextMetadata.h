@@ -7,8 +7,13 @@
 #include <string>
 #include <vector>
 
+#include "geometry/LensDistortion.h"
 #include "geometry/RawGeometry.h"
 #include "metadata/MetadataTypes.h"
+
+namespace rawrcam::color {
+struct DcpProfile;
+}
 
 namespace rawrcam::metadata {
 
@@ -66,6 +71,15 @@ struct CameraContextMetadata {
     std::vector<RectI> opticalBlackRegions;
     std::vector<float> lensDistortion;            // float[5] [k1,k2,p1,p2,k3], empty = unknown
     std::vector<float> lensIntrinsicCalibration;  // float[5] [fx,fy,cx,cy,s], empty = unknown
+    // Lens profile calibration (LensRoute::distortion) for a camera that
+    // reports none; wins over lensDistortion for photo undistort and the DNG.
+    std::optional<geometry::LensDistortionModel> profileDistortion;
+    // Lens profile mirror (LensRoute::mirror, geometry::kLensMirror* bits).
+    uint32_t profileMirror = 0;
+    // Lens profile camera profile (LensRoute::dcp). When set, `color` holds
+    // its calibration (color::dcpColorCalibration) instead of the camera's,
+    // and the DNG embeds the profile's own tags.
+    std::shared_ptr<const color::DcpProfile> dcpProfile;
     bool hasFlashInfoAvailable = false;
     bool flashInfoAvailable = false;
     // SENSOR_INFO_TIMESTAMP_SOURCE: REALTIME stamps frames in CLOCK_BOOTTIME,

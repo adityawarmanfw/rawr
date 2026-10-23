@@ -2,13 +2,13 @@
 
 `rawr::post::PostDemosaicProcessor` owns the GPU stages after demosaic:
 optional profiled denoise (`raw_denoise`), white balance, either highlight
-method (`raw_highlight`), false-colour correction, optional defringe, and the
+method (`raw_highlight`), false-colour correction, optional defringe, the lens profile mirror, and the
 SDR Inpaint Opposed tone tap. Still capture, video and the DNG renderer use
 separate instances of this implementation. The app owns session, frame and
 encoder resources; Kotlin passes processing settings and receives status.
 
 Layout: `include/post_demosaic/`, `src/`, and `shaders/` for the stages
-this package owns (white balance, defringe). `CMakeLists.txt` also embeds the
+this package owns (white balance, defringe, mirror). `CMakeLists.txt` also embeds the
 raw_highlight, raw_denoise and false-colour SPIR-V it dispatches.
 
 ## Still chroma cleanup
@@ -37,4 +37,19 @@ Build the production-component file validator with
 UV_CACHE_DIR=$PWD/tmp/uv-cache TMPDIR=$PWD/tmp uv run --no-project --with numpy \
   native/post_demosaic/tests/validate_lab.py \
   tmp/offline_rawr_pipeline/post_demosaic/lab_defringe_validate tmp/lab_checks
+```
+
+## Lens mirror
+
+`StillDistortionCorrection::mirror` flips the corrected image in the sensor
+frame (bit 0 horizontal, bit 1 vertical), independently of distortion being
+enabled. It runs after sensor-aligned processing and before the SDR tone tap.
+The in-place shader swaps each pixel pair once, including odd image sizes.
+
+Build and run the GPU regression check:
+
+```sh
+cmake -S native/post_demosaic -B tmp/mirror-gpu -G Ninja -DPOST_DEMOSAIC_BUILD_TESTS=ON
+cmake --build tmp/mirror-gpu --target mirror_validate --parallel 4
+tmp/mirror-gpu/mirror_validate
 ```

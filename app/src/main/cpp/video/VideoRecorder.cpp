@@ -17,12 +17,47 @@
 #include "video/VideoOutput.h"
 #include "vulkan/VulkanContext.h"
 namespace rawrcam::video {
+rawr::post::StillDistortionCorrection VideoRecorder::distortionFor(const rawrcam::geometry::LensDistortionModel& lens,
+                                                                  uint32_t rawWidth, uint32_t rawHeight) {
+    const auto& demosaic = *resources_.demosaic_;
+    const uint32_t scale = demosaic.sensorScale();
+    const uint32_t cropX = demosaic.cropX(), cropY = demosaic.cropY();
+    const uint32_t cropW = output_.extent_.width * scale, cropH = output_.extent_.height * scale;
+    auto& c = distortionCache_;
+    const bool same = c.valid && c.rawWidth == rawWidth && c.rawHeight == rawHeight && c.cropX == cropX &&
+                      c.cropY == cropY && c.cropW == cropW && c.cropH == cropH && c.lens.k == lens.k &&
+                      c.lens.fx == lens.fx && c.lens.cx == lens.cx && c.lens.outputScale == lens.outputScale &&
+                      c.lens.width == lens.width && c.lens.height == lens.height;
+    if (same) return c.correction;
+    c = {lens, rawWidth, rawHeight, cropX, cropY, cropW, cropH, {}, true};
+    const auto model = rawrcam::geometry::scaledTo(lens, rawWidth, rawHeight);
+    if (!model) return c.correction;  // another aspect: record as is
+    // Only the record crop is demosaiced: zoom just enough that every output
+    // pixel samples inside it. The idle video viewfinder uses the same scale.
+    const double outputScale = rawrcam::geometry::containedOutputScale(*model, cropX, cropY, cropW, cropH);
+    auto& d = c.correction;
+    d.enabled = true;
+    d.model = rawr::post::StillDistortionCorrection::Model::Rational;
+    d.intrinsic = {float(model->fx), float(model->fy), float(model->cx), float(model->cy), 0.0f};
+    d.distortion = {float(model->k[0]), float(model->k[1]), float(model->k[2]), float(model->k[3]),
+                    float(model->k[4])};
+    d.rationalDenominator = {float(model->k[5]), float(model->k[6]), float(model->k[7])};
+    d.outputFocal = {float(model->fx * outputScale), float(model->fy * outputScale)};
+    d.frameOrigin = {float(cropX), float(cropY)};
+    d.frameScale = float(scale);
+    __android_log_print(ANDROID_LOG_INFO, "RawrNativeVideo",
+                        "VIDEO_DISTORTION_CORRECTION raw=%ux%u crop=%u,%u %ux%u scale=%u outputScale=%.5f", rawWidth,
+                        rawHeight, cropX, cropY, cropW, cropH, scale, outputScale);
+    return c.correction;
+}
 void VideoRecorder::record(VkCommandBuffer command, uint32_t frameSlot, uint32_t imageIndex, uint32_t rawWidth,
                            uint32_t rawHeight, const VideoDemosaic::Frame& rawFrame,
                            const std::array<float, 9>& cameraToAp1, const tonemap::TonemapParams& params,
                            rawrcam::diagnostics::GpuTimingTracker& timing, const VideoProcessingConfig& activeConfig,
                            bool monitorEnabled, const std::function<VkCommandBuffer(VkCommandBuffer)>& splitSubmit,
-                           const std::function<void(VkCommandBuffer, VkImageView, uint32_t, uint32_t)>& sceneMeter) {
+                           const std::function<void(VkCommandBuffer, VkImageView, uint32_t, uint32_t)>& sceneMeter,
+                           const rawrcam::geometry::LensDistortionModel* lensDistortion,
+                           const color::DcpProfilePtr& dcp, float dcpWeight1, uint32_t lensMirror) {
     if (!resources_.tonemap_ || imageIndex >= output_.images_.size() || frameSlot >= resources_.monitor_.size() ||
         rawWidth < output_.extent_.width || rawHeight < output_.extent_.height)
         throw std::runtime_error("video output unavailable or RAW geometry invalid");
@@ -102,12 +137,22 @@ void VideoRecorder::record(VkCommandBuffer command, uint32_t frameSlot, uint32_t
     const rawr::highlight::ColoroppSensorGeometry geometry{rawWidth, rawHeight, resources_.demosaic_->cropX(),
                                                            resources_.demosaic_->cropY(),
                                                            resources_.demosaic_->sensorScale()};
+    auto lensCorrection =
+        lensDistortion ? distortionFor(*lensDistortion, rawWidth, rawHeight) : rawr::post::StillDistortionCorrection{};
+    lensCorrection.mirror = lensMirror;
     stage.record(command, resources_.demosaic_->outputImage(frameSlot), resources_.demosaic_->outputView(frameSlot),
                  resources_.demosaic_->clipStateImage(frameSlot), resources_.demosaic_->clipStateView(frameSlot), gains,
-                 activeConfig.highlightEnabled, {}, stagePool, false, activeConfig.highlightMethod,
+                 activeConfig.highlightEnabled, lensCorrection, stagePool, false, activeConfig.highlightMethod,
                  activeConfig.highlightThreshold, activeConfig.highlightCompression,
                  std::max(params.aePostGain * std::exp2(params.exposureEV), 1.0e-6f), shading, rawFrame.cfa, denoise,
                  geometry, rawFrame.cameraToLinearSrgb.data());
+    if (dcp) {
+        auto& processor = resources_.dcp_[frameSlot];
+        if (!processor) processor = std::make_unique<develop::rendered::DcpRenderStage>(
+            resources_.context_.physicalDevice(), resources_.context_.device());
+        processor->record(command, dcp, rawFrame.cameraToLinearSrgb, dcpWeight1,
+            output_.extent_.width, output_.extent_.height, stage.outputView(), stage.sdrOutputView());
+    }
     timing.markVideoPostDone(command, frameSlot);
     vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, stagePool, 14);
     if (splitSubmit) command = splitSubmit(command);

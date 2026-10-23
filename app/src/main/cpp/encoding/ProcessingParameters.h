@@ -16,6 +16,7 @@ struct OutputParameters {
     std::string dualLabel = "n/a";
     std::string chromaDenoiseLabel;  // multiframe burst chroma denoise only
     std::uint32_t fccSteps = 1;
+    std::uint32_t captureSharpenIterations = 0;
     bool lscEnabled = false;
     bool highlightReconstructionEnabled = true;
     std::string highlightMethodLabel;  // "Inpaint Opposed", "color propagation"
@@ -60,6 +61,15 @@ inline std::string formatOutputParameters(const OutputParameters& output) {
         << "- Highlight reconstruction: " << (output.highlightReconstructionEnabled ? "on" : "off");
     if (output.highlightReconstructionEnabled && !output.highlightMethodLabel.empty())
         out << " (" << output.highlightMethodLabel << ')';
+    out << '\n' << "- Capture sharpening: ";
+    const auto iterations = output.captureSharpenIterations;
+    if (iterations == 0) {
+        out << "off";
+    } else {
+        const char* level = iterations == 2 ? "Low" : iterations == 3 ? "Medium" :
+                            iterations == 4 ? "Sharp" : iterations == 6 ? "Sharpest" : "Custom";
+        out << level << " (" << iterations << " iterations)";
+    }
     out << '\n'
         << "- JPEG quality: " << output.jpegQuality << ", " << output.subsampling << '\n'
         << "- Color profile: " << output.colorProfile << '\n';

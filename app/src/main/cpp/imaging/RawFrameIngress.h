@@ -8,6 +8,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <mutex>
 #include <string>
 
 #include "geometry/RawGeometry.h"
@@ -36,12 +37,18 @@ class RawFrameIngress final {
     ANativeWindow* create(uint64_t generation, uint32_t width, uint32_t height, geometry::RawPixelFormat format,
                           uint64_t ahbUsage);
     void destroy();
+    // The full-size capture worker calls this after returning an AImage lease.
+    // Drain on that worker, serialized with arrival callbacks. A retired generation is a no-op.
+    void resumeAfterRelease(uint64_t generation);
     // AHardwareBuffer usage the live reader requested (0 when none).
     [[nodiscard]] uint64_t requestedUsage() const noexcept { return reader_ ? usage_ : 0; }
 
    private:
     static void imageAvailableThunk(void* context, AImageReader* reader);
     void onImageAvailable(AImageReader* reader);
+    void drainLocked(AImageReader* reader);
+    std::mutex drainMutex_;
+    uint64_t acquiredCount_ = 0, releasedCount_ = 0, slotLimitHits_ = 0;
     void logImageDescription(AImage* image);
     // Logs RAW_READER_STATS every 120 frames: reader starvation and sensor drops.
     void recordReaderStats(uint64_t timestampNs);

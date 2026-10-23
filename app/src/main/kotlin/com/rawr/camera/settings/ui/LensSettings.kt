@@ -12,6 +12,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -30,6 +31,8 @@ import com.rawr.camera.settings.architecture.OpenLensEditor
 import com.rawr.camera.settings.architecture.SetLensProfiles
 import com.rawr.camera.settings.architecture.SettingsDispatch
 import com.rawr.camera.settings.model.LensProfile
+import com.rawr.camera.settings.model.LENS_NAME_MAX_LENGTH
+import com.rawr.camera.settings.model.validateLensProfile
 import com.rawr.camera.settings.model.SettingsUiState
 import com.rawr.camera.settings.model.effectiveLensProfiles
 import com.rawr.camera.settings.model.moveLens
@@ -37,6 +40,7 @@ import com.rawr.camera.settings.model.removeLens
 import com.rawr.camera.settings.model.setLensEnabled
 import com.rawr.camera.ui.icons.Icons
 import com.rawr.camera.ui.icons.rounded.Add
+import com.rawr.camera.ui.icons.rounded.ContentCopy
 import com.rawr.camera.ui.icons.rounded.DeleteOutline
 import com.rawr.camera.ui.icons.rounded.DragHandle
 import sh.calvin.reorderable.ReorderableColumn
@@ -47,6 +51,7 @@ internal fun LensSettings(state: SettingsUiState, dispatch: SettingsDispatch) {
     val lenses = state.values.effectiveLensProfiles(hardware.deviceDefaults)
     val usingDefaults = state.values.lensProfiles == null
     var deleteTarget by remember { mutableStateOf<LensProfile?>(null) }
+    var copyTarget by remember { mutableStateOf<LensProfile?>(null) }
     var confirmReset by remember { mutableStateOf(false) }
     val haptics = LocalSettingsHaptics.current
 
@@ -86,6 +91,7 @@ internal fun LensSettings(state: SettingsUiState, dispatch: SettingsDispatch) {
                                         dispatch.invoke(SetLensProfiles(lenses.setLensEnabled(index, enabled)))
                                     },
                                     onOpen = { dispatch.invoke(OpenLensEditor(lens.name)) },
+                                    onCopy = { copyTarget = lens },
                                     onDelete = { deleteTarget = lens }
                                 )
                             }
@@ -111,6 +117,19 @@ internal fun LensSettings(state: SettingsUiState, dispatch: SettingsDispatch) {
         }
     }
 
+    copyTarget?.let { target ->
+        key(target.name) {
+            CopyLensDialog(
+                target = target,
+                lenses = lenses,
+                onDismiss = { copyTarget = null },
+                onCopy = { duplicate ->
+                    dispatch.invoke(SetLensProfiles(lenses + duplicate))
+                    copyTarget = null
+                }
+            )
+        }
+    }
     deleteTarget?.let { target ->
         val lastEnabled = target.enabled && lenses.count { it.enabled } <= 1
         AlertDialog(
@@ -154,6 +173,7 @@ private fun LensRow(
     dragHandle: @Composable () -> Unit,
     onEnabledChange: (Boolean) -> Unit,
     onOpen: () -> Unit,
+    onCopy: () -> Unit,
     onDelete: () -> Unit
 ) {
     Row(
@@ -192,10 +212,47 @@ private fun LensRow(
                 overflow = TextOverflow.Ellipsis
             )
         }
+        IconButton(onClick = onCopy, modifier = Modifier.testTag(SettingsTestTags.row("Lens", "copy_${lens.name}"))) {
+            Icon(Icons.Rounded.ContentCopy, contentDescription = "Copy ${lens.name}")
+        }
         IconButton(onClick = onDelete) {
             Icon(Icons.Rounded.DeleteOutline, contentDescription = "Delete ${lens.name}")
         }
     }
+}
+
+@Composable
+private fun CopyLensDialog(
+    target: LensProfile,
+    lenses: List<LensProfile>,
+    onDismiss: () -> Unit,
+    onCopy: (LensProfile) -> Unit
+) {
+    var name by remember { mutableStateOf("") }
+    val duplicate = target.copy(name = name.trim())
+    val problem = validateLensProfile(duplicate, lenses).firstOrNull()
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Copy lens ${target.name}") },
+        text = {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text("Name") },
+                singleLine = true,
+                isError = name.isNotEmpty() && problem != null,
+                supportingText = {
+                    Text(if (name.isNotEmpty() && problem != null) problem
+                        else "Choose a unique name, up to $LENS_NAME_MAX_LENGTH characters.")
+                },
+                modifier = Modifier.fillMaxWidth().testTag(SettingsTestTags.row("Lens", "copy_name"))
+            )
+        },
+        confirmButton = {
+            TextButton(enabled = problem == null, onClick = { onCopy(duplicate) }) { Text("Copy") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
 }
 
 internal fun lensSummary(lens: LensProfile): String = buildList {

@@ -1,4 +1,5 @@
 #include "camera/NativeCameraController.h"
+#include "capture/BurstLimits.h"
 
 #include <android/log.h>
 #include <camera/NdkCameraMetadataTags.h>
@@ -105,6 +106,13 @@ struct NativeCameraController::Impl final : CameraEventSink {
     bool preparingFocus = false;
     std::optional<float> fullSizeFocusDistance;
     bool retainFullSizeFocus = false;
+    // The decision frame submitted before a full-size still, until its result
+    // (or failure) arrives.
+    enum class FullSizeDecision : uint8_t { None, Waiting, Seen, Failed };
+    FullSizeDecision fullSizeDecision = FullSizeDecision::None;
+    // The viewfinder request is replaced (decision request, then nothing) while
+    // full-size stills are in flight (CameraDeviceSession::repeatFullSizeDecision).
+    bool fullSizeDecisionRepeating = false;
     std::function<void()> pendingFocus;
     std::function<void()> pendingFocusMode;
     // Bounded retire for worker-driven stop/start-failure paths. Healthy
@@ -276,11 +284,26 @@ struct NativeCameraController::Impl final : CameraEventSink {
         const double isoMax = std::max(caps.sensitivityMin, caps.sensitivityMax);
         return std::log2(double(longTimeMax) * isoMax / (double(exposureTimeNs) * sensitivity));
     }
-    // Long exposure in flight: tag, length, CLOCK_MONOTONIC ms the sensor
-    // started it (0 = submitted, not started; -1 = none).
+    // Long exposure in flight: tag, length, CLOCK_MONOTONIC ms the press was
+    // submitted (the ring runs from here; -1 = none).
+    bool fullSizeMoreExposures = false;
+    uint64_t fullSizeCaptureSerial = 0;
+    int64_t fullSizeLastExposureTimestamp = 0;
     std::atomic<uint64_t> longExposureTag{0};
     std::atomic<int64_t> longExposureNs{0};
     std::atomic<int64_t> longExposureStartMs{-1};
+    // MONOTONIC ms the press was submitted; the ring runs from here so the
+    // user holds still through the sensor-switch queue, not just the exposure.
+    std::atomic<int64_t> longExposureSubmitMs{-1};
+    // Predicted hold (queue + exposure + readout) the ring fills over. The
+    // started callback can arrive a full exposure late (HAL reports at
+    // readout), so the total starts as queue-estimate + exposure + readout and
+    // is corrected to the true total once the sensor timestamp is known. The
+    // ring never jumps backwards: only the denominator changes.
+    std::atomic<int64_t> longExposureTotalMs{0};
+    // EMA of submit-to-exposure-start (sensor switch + preview drain, ~0.6 s
+    // at 15 fps on V2562); seeds the predicted total for the next capture.
+    std::atomic<int64_t> longExposureQueueEstMs{600};
     // Tagged frames still to come before the cue ends (a full-size burst has several).
     std::atomic<int32_t> longExposureFramesLeft{0};
     // The cue ends when the sensor is done with the last tagged frame, not at
@@ -295,6 +318,13 @@ struct NativeCameraController::Impl final : CameraEventSink {
         return std::chrono::duration_cast<std::chrono::milliseconds>(
                    std::chrono::steady_clock::now().time_since_epoch())
             .count();
+    }
+    // CLOCK_BOOTTIME (sensor/sensor-timestamp domain) for converting capture
+    // timestamps to the MONOTONIC domain the UI renders.
+    static int64_t bootMs() {
+        struct timespec ts {};
+        clock_gettime(CLOCK_BOOTTIME, &ts);
+        return int64_t(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000;
     }
     std::optional<NativeCameraController::LongExposure> deferredCaptureExposureLocked() const {
         if (!deviceSession.session() || !control.capabilities.manualExposureSupported) return std::nullopt;
@@ -322,15 +352,19 @@ struct NativeCameraController::Impl final : CameraEventSink {
         return deferredCaptureExposureLocked();
     }
     // Full-size stills of a capture-stream route at the viewfinder's exposure.
-    bool captureFullSize(uint64_t requestId, uint32_t count, bool retainFocus) {
+    bool captureFullSize(uint64_t requestId, uint32_t count, bool retainFocus, bool moreExposures) {
         std::unique_lock<std::mutex> lock(mutex);
         // Queue the whole burst as one sequence. Only an unrelated capture is
         // blocked while that sequence remains unresolved.
-        if (requestId == 0 || count == 0 || count > 6 || fullSizeSequence.busy() || fullSizeSequence.failed() ||
+        if (requestId == 0 || count == 0 || count > capture::kMaxBurstFrames || fullSizeSequence.busy() || fullSizeSequence.failed() ||
             !deviceSession.hasCaptureStream())
             return false;
         const auto generation = deviceSession.generation();
         if (!fullSizeSequence.begin(generation, requestId)) return false;
+        fullSizeMoreExposures = moreExposures;
+        ++fullSizeCaptureSerial;
+        fullSizeLastExposureTimestamp = 0;
+        longExposureEndMs.store(-1, std::memory_order_relaxed);
         preparingFocus = true;
         retainFullSizeFocus = retainFocus;
         const auto valid = [&] {
@@ -338,6 +372,9 @@ struct NativeCameraController::Impl final : CameraEventSink {
         };
         const auto abandon = [&] {
             fullSizeSequence.abandonPreparation();
+            fullSizeMoreExposures = false;
+            fullSizeLastExposureTimestamp = 0;
+            restoreViewfinderLocked();
             preparingFocus = false;
             fullSizeFocusDistance.reset();
             retainFullSizeFocus = false;
@@ -346,24 +383,16 @@ struct NativeCameraController::Impl final : CameraEventSink {
         };
         // Observe the existing preview AF. Shutter must not switch repeating
         // requests to MF, issue START/CANCEL, or refocus after the still.
-        // Every request in the burst uses the same focus plan.
+        // Every request in the burst uses the same focus plan. Capture proceeds
+        // without waiting for an AF scan or manual lens movement to settle.
+        if (!valid()) return abandon();
         if (!fullSizeFocusDistance) {
-            if (!captureChanged.wait_for(lock, std::chrono::seconds(4),
-                                         [&] { return !valid() || stillFocusReady(control, monotonicMs()); }) ||
-                !valid()) {
-                diag("CAMERA_FULL_SIZE_FOCUS_FAILED reason=not_settled tag=" + std::to_string(requestId) +
-                     " af=" + std::to_string(control.afState.value_or(255)) +
-                     " afMode=" + std::to_string(control.appliedAfMode.value_or(255)) +
-                     " lensState=" + std::to_string(control.lensState.value_or(255)) +
-                     " distance=" + std::to_string(control.appliedFocusDistance.value_or(-1)) +
-                     " epoch=" + std::to_string(control.focusEpoch) +
-                     " observedEpoch=" + std::to_string(control.focusObservedEpoch) +
-                     " ageMs=" + std::to_string(monotonicMs() - control.focusObservedAtMs));
-                return abandon();
+            if (control.capabilities.manualFocusSupported) {
+                if (control.focusMode == FocusControlMode::Manual)
+                    fullSizeFocusDistance = requestedFocusDiopters(control);
+                else if (control.appliedFocusDistance)
+                    fullSizeFocusDistance = *control.appliedFocusDistance;
             }
-            if (control.capabilities.manualFocusSupported)
-                fullSizeFocusDistance = control.focusMode == FocusControlMode::Manual ? requestedFocusDiopters(control)
-                                                                                      : *control.appliedFocusDistance;
         }
         // This copy belongs only to the still; preview controls remain untouched.
         auto stillControl = control;
@@ -387,16 +416,46 @@ struct NativeCameraController::Impl final : CameraEventSink {
             diag("CAMERA_FULL_SIZE_SUBMIT sent=0 reason=no_exposure tag=" + std::to_string(requestId));
             return abandon();
         }
+        // The HAL keeps its last full-size/binned choice until a decision frame
+        // (see CameraDeviceSession::repeatFullSizeDecision): repeat it until
+        // one is in, then nothing repeats until the stills are in. A missing
+        // result still takes the still: a binned answer is caught when the
+        // frame comes in.
+        if (deviceSession.hasFullSizeDecision()) {
+            fullSizeDecision = FullSizeDecision::Waiting;
+            const bool decisionSent = deviceSession.repeatFullSizeDecision(
+                requests, control, metadata::kFullSizeDecisionRequestId,
+                [this](const std::string& line) { diag(line); });
+            fullSizeDecisionRepeating = decisionSent;
+            const bool answered =
+                decisionSent && captureChanged.wait_for(lock, std::chrono::milliseconds(2000), [&] {
+                    return !valid() || fullSizeDecision != FullSizeDecision::Waiting;
+                });
+            diag("CAMERA_FULL_SIZE_DECISION tag=" + std::to_string(requestId) +
+                 " sent=" + std::to_string(decisionSent ? 1 : 0) +
+                 " result=" + (fullSizeDecision == FullSizeDecision::Seen     ? "seen"
+                               : fullSizeDecision == FullSizeDecision::Failed ? "failed"
+                               : answered                                     ? "invalid"
+                                                                              : "timeout"));
+            fullSizeDecision = FullSizeDecision::None;
+            if (!valid()) return abandon();
+            if (fullSizeDecisionRepeating) (void)deviceSession.stopRepeating([this](const std::string& line) { diag(line); });
+        }
         const std::vector<CameraRequestPipeline::BracketExposure> exposures(count, e);
-        // The still is taken after the press (sensor switch + exposure): show it
-        // as a long exposure, so the shutter ring tells the user to hold still
-        // until the frame is in.
+        // The ring runs from the press over queue + exposure + readout: the
+        // started callback can arrive a full exposure late, so waiting for it
+        // would show a spinner through the whole exposure and flash the ring.
+        const int64_t submitMs = monotonicMs();
         longExposureTag.store(requestId, std::memory_order_relaxed);
         longExposureNs.store(e.exposureTimeNs, std::memory_order_relaxed);
         longExposureFramesLeft.store(int32_t(count), std::memory_order_relaxed);
         longExposureStartsLeft.store(int32_t(count), std::memory_order_relaxed);
         longExposureEndMs.store(-1, std::memory_order_relaxed);
-        longExposureStartMs.store(monotonicMs(), std::memory_order_relaxed);
+        longExposureSubmitMs.store(submitMs, std::memory_order_relaxed);
+        longExposureStartMs.store(submitMs, std::memory_order_relaxed);
+        longExposureTotalMs.store(
+            longExposureQueueEstMs.load(std::memory_order_relaxed) + e.exposureTimeNs / 1000000 + kReadoutMarginMs,
+            std::memory_order_relaxed);
         longExposureSubmitted = std::chrono::steady_clock::now();
         // The still queues behind the in-flight preview requests (~0.6 s at
         // 15 fps on V2562). abortCaptures would skip them, but the camera then
@@ -407,6 +466,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         if (!sent) {
             longExposureTag.store(0, std::memory_order_relaxed);
             longExposureStartMs.store(-1, std::memory_order_relaxed);
+            longExposureSubmitMs.store(-1, std::memory_order_relaxed);
             abandon();
         } else {
             fullSizeSequence.submitted(requests.lastCaptureSequence(), monotonicMs(), e.exposureTimeNs, count);
@@ -436,8 +496,14 @@ struct NativeCameraController::Impl final : CameraEventSink {
         longExposureFramesLeft.store(1, std::memory_order_relaxed);
         longExposureStartsLeft.store(1, std::memory_order_relaxed);
         longExposureEndMs.store(-1, std::memory_order_relaxed);
-        // Submit time until the sensor reports the exposure started.
-        longExposureStartMs.store(monotonicMs(), std::memory_order_relaxed);
+        // Ring runs from the press (see captureFullSize): the started callback
+        // can arrive a full exposure late.
+        const int64_t submitMs = monotonicMs();
+        longExposureSubmitMs.store(submitMs, std::memory_order_relaxed);
+        longExposureStartMs.store(submitMs, std::memory_order_relaxed);
+        longExposureTotalMs.store(
+            longExposureQueueEstMs.load(std::memory_order_relaxed) + pair->exposureTimeNs / 1000000 + kReadoutMarginMs,
+            std::memory_order_relaxed);
         longExposureSubmitted = std::chrono::steady_clock::now();
         const bool sent = requests.captureBracket(deviceSession.session(), deviceSession.request(),
                                                   deviceSession.callbackContext(), control,
@@ -448,6 +514,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         if (!sent) {
             longExposureTag.store(0, std::memory_order_relaxed);
             longExposureStartMs.store(-1, std::memory_order_relaxed);
+            longExposureSubmitMs.store(-1, std::memory_order_relaxed);
             return false;
         }
         if (submitted) *submitted = *pair;
@@ -645,6 +712,13 @@ struct NativeCameraController::Impl final : CameraEventSink {
         return submitted;
     }
 
+    // Back to the normal viewfinder request after full-size stills.
+    void restoreViewfinderLocked() {
+        if (!fullSizeDecisionRepeating) return;
+        fullSizeDecisionRepeating = false;
+        diag(std::string("CAMERA_FULL_SIZE_VIEWFINDER_RESTORED sent=") + (submitRepeatingLocked() ? "1" : "0"));
+    }
+
     CameraMeteringRequest meteringRequestLocked() const {
         return focusControls.request(spotMetering.region(
             control, deviceSession.cameraContext() ? &deviceSession.cameraContext()->geometry : nullptr));
@@ -665,6 +739,9 @@ struct NativeCameraController::Impl final : CameraEventSink {
     void startLocked(std::unique_lock<std::mutex>& lock) {
         if (!active || deviceSession.hasDevice() || starting || shutDown) return;
         fullSizeSequence.reset();
+        fullSizeMoreExposures = false;
+        fullSizeLastExposureTimestamp = 0;
+        fullSizeDecisionRepeating = false;
         if (preferredCameraId.empty() && !routeForLens(profile, lensId) && !profile.lenses.empty()) {
             if (!lensId.empty())
                 diag("CAMERA_LENS_FALLBACK from=" + lensId + " to=" + profile.lenses.front().lensId +
@@ -911,6 +988,9 @@ struct NativeCameraController::Impl final : CameraEventSink {
             return;
         }
         fullSizeSequence.reset();
+        fullSizeMoreExposures = false;
+        fullSizeLastExposureTimestamp = 0;
+        fullSizeDecisionRepeating = false;
         preparingFocus = false;
         retainFullSizeFocus = false;
         pendingFocus = {};
@@ -968,7 +1048,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         std::lock_guard<std::mutex> lock(mutex);
         if (callbackGeneration == deviceSession.generation()) diag(message);
     }
-    void cameraCaptureStarted(uint64_t callbackGeneration, const ACaptureRequest* requestCopy) override {
+    void cameraCaptureStarted(uint64_t callbackGeneration, const ACaptureRequest* requestCopy, int64_t sensorTimestamp) override {
         // Validate before reading borrowed provenance, including late callbacks
         // from a forcibly retired session whose request storage is gone.
         std::lock_guard<std::mutex> lock(mutex);
@@ -978,11 +1058,40 @@ struct NativeCameraController::Impl final : CameraEventSink {
         void* userContext = nullptr;
         if (ACaptureRequest_getUserContext(requestCopy, &userContext) != ACAMERA_OK || !userContext) return;
         if (static_cast<const CameraRequestProvenance*>(userContext)->optimizedStillRequestId != tag) return;
+        if (deviceSession.hasCaptureStream())
+            fullSizeLastExposureTimestamp = sensorTimestamp + longExposureNs.load(std::memory_order_relaxed);
         const int64_t now = monotonicMs();
-        longExposureStartMs.store(now, std::memory_order_relaxed);
+        // The started callback can arrive after the sensor already exposed:
+        // this HAL reports a long/full-size start at readout, ~one exposure
+        // late. The timestamp param is the exposure start (BOOTTIME, like
+        // SENSOR_TIMESTAMP): convert it to the MONOTONIC domain, correct the
+        // predicted total to the true hold, and feed the queue estimate. Only
+        // the total changes, so the ring never jumps backwards.
+        int64_t frameStartMs = now;
+        if (sensorTimestamp > 0) {
+            const int64_t sensorBootMs = sensorTimestamp / 1000000;
+            const int64_t suspendSkewMs = bootMs() - now;
+            const int64_t candidate = sensorBootMs - suspendSkewMs;
+            if (candidate > 0 && candidate <= now) frameStartMs = candidate;
+        }
+        // Ring start stays at the press (first submit wins); only correct the
+        // total to submit-to-true-end. The end is set on the last start of a
+        // burst (see StartsLeft below).
+        const int64_t submitMs = longExposureSubmitMs.load(std::memory_order_relaxed);
+        if (submitMs > 0 && frameStartMs >= submitMs) {
+            const int64_t queueSampleMs = frameStartMs - submitMs;
+            if (queueSampleMs <= 10000) {
+                const int64_t prev = longExposureQueueEstMs.load(std::memory_order_relaxed);
+                longExposureQueueEstMs.store((prev * 7 + queueSampleMs) / 8, std::memory_order_relaxed);
+            }
+            longExposureTotalMs.store(frameStartMs - submitMs +
+                                          longExposureNs.load(std::memory_order_relaxed) / 1000000 + kReadoutMarginMs,
+                                      std::memory_order_relaxed);
+        }
         if (longExposureStartsLeft.fetch_sub(1, std::memory_order_relaxed) <= 1)
-            longExposureEndMs.store(now + longExposureNs.load(std::memory_order_relaxed) / 1'000'000 + kReadoutMarginMs,
-                                    std::memory_order_relaxed);
+            longExposureEndMs.store(
+                frameStartMs + longExposureNs.load(std::memory_order_relaxed) / 1'000'000 + kReadoutMarginMs,
+                std::memory_order_relaxed);
     }
     void cameraCaptureFailed(uint64_t callbackGeneration) override {
         // Set once at construction; the receiver checks the generation.
@@ -997,7 +1106,20 @@ struct NativeCameraController::Impl final : CameraEventSink {
             if (!request || ACaptureRequest_getUserContext(request, &provenance) != ACAMERA_OK || !provenance) return;
             tag = static_cast<const CameraRequestProvenance*>(provenance)->optimizedStillRequestId;
             if (!tag) return;
+            if (tag == metadata::kFullSizeDecisionRequestId) {
+                // Not a capture: the still that follows is still submitted.
+                if (fullSizeDecision == FullSizeDecision::Waiting) fullSizeDecision = FullSizeDecision::Failed;
+                captureChanged.notify_all();
+                return;
+            }
             invalidateFocus(control);
+            // A failed still must not leave the shutter ring spinning: a
+            // pending cue (startMs 0, end -1) would otherwise never expire.
+            if (tag == longExposureTag.load(std::memory_order_relaxed)) {
+                longExposureTag.store(0, std::memory_order_relaxed);
+                longExposureStartMs.store(-1, std::memory_order_relaxed);
+            longExposureSubmitMs.store(-1, std::memory_order_relaxed);
+            }
             captureChanged.notify_all();
         }
         if (callbacks.acquisitionFailed) callbacks.acquisitionFailed(generation, tag);
@@ -1009,6 +1131,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
             fullSizeSequence.fail();
             longExposureTag.store(0, std::memory_order_relaxed);
             longExposureStartMs.store(-1, std::memory_order_relaxed);
+            longExposureSubmitMs.store(-1, std::memory_order_relaxed);
             invalidateFocus(control);
             captureChanged.notify_all();
         }
@@ -1021,7 +1144,17 @@ struct NativeCameraController::Impl final : CameraEventSink {
             if (generation != deviceSession.generation()) return;
             const auto tag = fullSizeSequence.complete(generation, sequence);
             if (!tag) return;
-            if (aborted) failedTag = *tag;
+            if (aborted) {
+                failedTag = *tag;
+                fullSizeMoreExposures = false;
+                fullSizeLastExposureTimestamp = 0;
+                if (*tag == longExposureTag.load(std::memory_order_relaxed)) {
+                    longExposureTag.store(0, std::memory_order_relaxed);
+                    longExposureStartMs.store(-1, std::memory_order_relaxed);
+            longExposureSubmitMs.store(-1, std::memory_order_relaxed);
+                }
+            }
+            restoreViewfinderLocked();
             if (!retainFullSizeFocus || aborted) {
                 fullSizeFocusDistance.reset();
                 retainFullSizeFocus = false;
@@ -1048,6 +1181,15 @@ struct NativeCameraController::Impl final : CameraEventSink {
                                        requests.latestSubmittedSerial());
         captureChanged.notify_all();
         if (!actions.frame) return;
+        // The decision frame only fills the discarded companion: no viewfinder
+        // or capture consumer may see its metadata.
+        if (actions.frame->optimizedStillRequestId == metadata::kFullSizeDecisionRequestId) {
+            diag("CAMERA_FULL_SIZE_DECISION_RESULT iso=" + std::to_string(actions.frame->sensitivity) +
+                 " exposureNs=" + std::to_string(actions.frame->exposureTimeNs));
+            if (fullSizeDecision == FullSizeDecision::Waiting) fullSizeDecision = FullSizeDecision::Seen;
+            captureChanged.notify_all();
+            return;
+        }
         if (actions.optimizedStill && deviceSession.hasCaptureStream()) {
             // What the HAL reports it did with a full-size still: some vendors
             // skip the sensor switch and return the binned readout in the
@@ -1084,6 +1226,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
             lastLongExposureHonored.store(honored ? 1 : 0, std::memory_order_relaxed);
             longExposureTag.store(0, std::memory_order_relaxed);
             longExposureStartMs.store(-1, std::memory_order_relaxed);
+            longExposureSubmitMs.store(-1, std::memory_order_relaxed);
         }
         if (actions.fallbackToAuto) {
             control.exposureMode = ExposureControlMode::Auto;
@@ -1148,8 +1291,15 @@ struct NativeCameraController::Impl final : CameraEventSink {
             const double ratio = results.sensitivityReportedPerRequest().value_or(1.0);
             snapshot.deferredCaptureReportedSensitivity = int32_t(std::llround(deferred->sensitivity * ratio));
         }
+        snapshot.fullSizeCaptureSerial = fullSizeCaptureSerial;
+        snapshot.fullSizeLastExposureTimestamp = fullSizeSequence.failed() ? 0 : fullSizeLastExposureTimestamp;
+        const auto exposureEnd = longExposureEndMs.load(std::memory_order_relaxed);
+        snapshot.fullSizeExposurePending = !fullSizeSequence.failed() &&
+            ((fullSizeSequence.busy() && (exposureEnd < 0 || monotonicMs() < exposureEnd)) ||
+             fullSizeMoreExposures);
         snapshot.longExposureNs = longExposureNs.load(std::memory_order_relaxed);
         snapshot.longExposureStartMs = longExposureStartMs.load(std::memory_order_relaxed);
+        snapshot.longExposureTotalMs = longExposureTotalMs.load(std::memory_order_relaxed);
         // Exposure over: the frame is in the sensor's hands no longer; the
         // result (and the viewfinder freeze) may still be on its way.
         if (const int64_t end = longExposureEndMs.load(std::memory_order_relaxed); end >= 0 && monotonicMs() >= end)
@@ -1635,6 +1785,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
             captureChanged.notify_all();
             longExposureTag.store(0, std::memory_order_relaxed);
             longExposureStartMs.store(-1, std::memory_order_relaxed);
+            longExposureSubmitMs.store(-1, std::memory_order_relaxed);
             const auto generation = deviceSession.generation();
             diag("CAMERA_FULL_SIZE_SEQUENCE_TIMEOUT recovery=session_retirement");
             lock.unlock();
@@ -1736,8 +1887,8 @@ std::optional<double> NativeCameraController::longFrameRoomEv() const { return i
 std::optional<NativeCameraController::LongExposure> NativeCameraController::deferredCaptureExposure() const {
     return impl_->deferredCaptureExposure();
 }
-bool NativeCameraController::captureFullSize(uint64_t requestId, uint32_t count, bool retainFocus) {
-    return impl_->captureFullSize(requestId, count, retainFocus);
+bool NativeCameraController::captureFullSize(uint64_t requestId, uint32_t count, bool retainFocus, bool moreExposures) {
+    return impl_->captureFullSize(requestId, count, retainFocus, moreExposures);
 }
 bool NativeCameraController::waitFullSizeIdle(int64_t timeoutMs) { return impl_->waitFullSizeIdle(timeoutMs); }
 void NativeCameraController::releaseFullSizeFocus() {
@@ -1745,6 +1896,7 @@ void NativeCameraController::releaseFullSizeFocus() {
     // Releasing a software snapshot never changes AF mode or triggers a scan.
     impl_->fullSizeFocusDistance.reset();
     impl_->retainFullSizeFocus = false;
+    impl_->fullSizeMoreExposures = false;
 }
 bool NativeCameraController::hasFullSizeCapture() const { return impl_->hasFullSizeCapture(); }
 uint32_t NativeCameraController::fullSizeBurstLimit() const {

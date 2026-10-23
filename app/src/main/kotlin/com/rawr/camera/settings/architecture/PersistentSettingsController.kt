@@ -77,8 +77,10 @@ class PersistentSettingsController(
             is SetVideoFccEnabled, is SetVideoEncoder,
             is SetPhotoDefringeEnabled, is SetPhotoDefringeStrength, is SetPhotoDefringeEdgeThreshold,
             is SetPhotoDefringeLumaFloor, is SetVideoDefringeEnabled, is SetVideoDefringeStrength,
+            is SetPhotoCaptureSharpeningEnabled, is SetPhotoCaptureSharpeningLevel,
             is SetPhotoLensShadingEnabled,
-            is SetVideoLensShadingEnabled, is SetDistortionCorrectionEnabled, is SetPhotoHighlightEnabled,
+            is SetVideoLensShadingEnabled, is SetDistortionCorrectionEnabled, is SetVideoDistortionCorrectionEnabled,
+            is SetPhotoHighlightEnabled,
             is SetPhotoHighlightMethod, is SetPhotoHighlightThreshold, is SetPhotoHighlightCompression,
             is SetVideoHighlightEnabled, is SetVideoHighlightMethod, is SetVideoHighlightThreshold,
             is SetVideoHighlightCompression -> reduceImageProcessingSettings(state, action)

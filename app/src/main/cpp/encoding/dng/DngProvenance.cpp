@@ -5,6 +5,8 @@
 #include <string>
 #include <utility>
 
+#include "color/DcpProfile.h"
+
 namespace rawrcam::encoding::dng {
 namespace {
 
@@ -136,11 +138,21 @@ std::vector<uint8_t> buildDngProvenance(const rawrcam::imaging::RawSnapshot& fra
                                      std::to_string(*frame.metadata.requestedSensitivity));
     if (ctx.hasLensShadingApplied)
         prov.extensions.emplace_back("com.rawrcam.shading.applied", ctx.lensShadingApplied ? "true" : "false");
-    // HAL-reported flag above; whether this DNG carries the map follows the
-    // app's own render decision (DngMetadataAdapter).
-    if (!frame.metadata.lensShadingMap.empty())
-        prov.extensions.emplace_back("com.rawrcam.shading.gainmap",
-                                     captureContext.appLensShadingCorrection ? "written" : "skipped_app_lsc_off");
+    // The map is always written when the frame has one (DngMetadataAdapter);
+    // the app setting that rendered the capture's JPEG is recorded beside it.
+    if (!frame.metadata.lensShadingMap.empty()) {
+        prov.extensions.emplace_back("com.rawrcam.shading.gainmap", "written");
+        prov.extensions.emplace_back("com.rawrcam.shading.app_applied",
+                                     captureContext.appLensShadingCorrection ? "true" : "false");
+    }
+    if (ctx.profileDistortion) {
+        const bool fits = rawrcam::geometry::scaledTo(*ctx.profileDistortion, frame.width, frame.height).has_value();
+        prov.extensions.emplace_back("com.rawrcam.distortion.warp",
+                                     !captureContext.appDistortionCorrection ? "skipped_app_off"
+                                     : fits                                  ? "written"
+                                                                             : "skipped_size");
+    }
+    if (ctx.dcpProfile) prov.extensions.emplace_back("com.rawrcam.color.dcp", ctx.dcpProfile->name);
     if (ctx.hasGreenSplit)
         prov.extensions.emplace_back("com.rawrcam.sensor.green_split", std::to_string(ctx.greenSplit));
     if (!ctx.opticalBlackRegions.empty())

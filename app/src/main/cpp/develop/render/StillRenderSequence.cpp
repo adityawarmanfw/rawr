@@ -44,13 +44,18 @@ void recordPostDemosaic(RenderResources& resources, RenderCommandSession& comman
         resources.postDemosaic().record(
             commands.command(), sourceImage, sourceView, clipStateImage, clipStateView, rendered.whiteBalanceRgb,
             rendered.highlightReconstructionEnabled,
-            rawr::post::StillDistortionCorrection{rendered.distortionCorrectionEnabled && rendered.hasLensCalibration,
-                                                  rendered.lensIntrinsic, rendered.lensDistortion},
+            rawr::post::StillDistortionCorrection{
+                rendered.distortionCorrectionEnabled && rendered.hasLensCalibration, rendered.lensIntrinsic,
+                rendered.lensDistortion,
+                rendered.rationalLensDistortion ? rawr::post::StillDistortionCorrection::Model::Rational
+                                                : rawr::post::StillDistortionCorrection::Model::Camera2,
+                rendered.lensDistortionDenominator, rendered.lensOutputFocal, {0.0f, 0.0f}, 1.0f, rendered.lensMirror},
             commands.timingPool(), false, rendered.highlightReconstructionMethod, rendered.highlightThreshold,
             rendered.highlightCompression,
             // Film ignores tonemap render exposure; mirror its folded EV.
             rendered.filmEnabled
-                ? std::exp2(rawrcam::color::filmExposureEv(rendered.filmLook, rendered.tonemapParams.aePostGain))
+                ? std::exp2(rawrcam::color::filmExposureEv(rendered.filmLook, rendered.tonemapParams.aePostGain,
+                                                         rendered.tonemapParams.exposureEV))
                 : std::max(rendered.tonemapParams.aePostGain, 1.0e-6f) * std::exp2(rendered.tonemapParams.exposureEV),
             rendered.lensShading.view(), rendered.cfaPattern, denoiseRequest, {}, rendered.sensorToLinearSrgb.data());
     } catch (...) {
@@ -73,6 +78,68 @@ void recordPostDemosaic(RenderResources& resources, RenderCommandSession& comman
     // Bound each submission (post-demosaic, tone/film, gainmap+readback)
     // so the preview queue can run between them.
     commands.submitAndRestart("post-demosaic");
+}
+// RawTherapee capture sharpening on the demosaiced pre-WB image, in place,
+// before post-demosaic (RT's order: before denoise and white balance). The
+// deconvolution runs in bands of tile rows with a submission between them so
+// the viewfinder keeps the GPU; a last submission bounds the stage and makes
+// the GPU-chosen radius/contrast readable for the log.
+constexpr uint32_t kCaptureSharpenBandRows = 16;
+void recordCaptureSharpening(RenderResources& resources, RenderCommandSession& commands,
+                             const RenderedStillContext& rendered, VkImage sourceImage, VkImageView sourceView,
+                             VkImageView clipStateView, const RenderResources::Diagnostic& emit) {
+    if (rendered.captureSharpenIterations == 0) {
+        __android_log_print(ANDROID_LOG_INFO, "RawrCamNative", "CAPTURE_SHARPENING requestId=%llu iterations=0",
+                            static_cast<unsigned long long>(rendered.requestId));
+        return;
+    }
+    resources.ensureCaptureSharpening();
+    auto& sharpening = resources.captureSharpening();
+    VkImageMemoryBarrier written{};
+    written.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    written.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    written.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    written.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    written.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    written.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    written.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    written.image = sourceImage;
+    written.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdPipelineBarrier(commands.command(), VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         0, 0, nullptr, 0, nullptr, 1, &written);
+    rawr::capsharp::RecordInfo info{};
+    info.commandBuffer = commands.command();
+    info.width = rendered.width;
+    info.height = rendered.height;
+    info.image = sourceImage;
+    info.view = sourceView;
+    info.clipState = clipStateView;
+    info.cfaPattern = rendered.cfaPattern;
+    for (int c = 0; c < 3; ++c) info.whiteBalance[c] = rendered.whiteBalanceRgb[c];
+    info.params.iterations = rendered.captureSharpenIterations;
+    info.deconvBandRows = kCaptureSharpenBandRows;
+    const auto begin = std::chrono::steady_clock::now();
+    sharpening.setTileBoundary([&] { commands.submitAndRestart("capture-sharpen"); });
+    bool recorded = false;
+    try {
+        recorded = sharpening.record(info);
+    } catch (...) {
+        sharpening.setTileBoundary({});
+        throw;
+    }
+    sharpening.setTileBoundary({});
+    if (recorded) commands.submitAndRestart("capture-sharpen");
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
+    const auto result = sharpening.lastResult();
+    // Logged directly: capture-side renderers run without a diagnostic sink.
+    const std::string line = "CAPTURE_SHARPENING requestId=" + std::to_string(rendered.requestId) +
+         " iterations=" + std::to_string(rendered.captureSharpenIterations) + " recorded=" + (recorded ? "1" : "0") +
+         " radius=" + std::to_string(result.radius) + " contrast=" + std::to_string(result.contrast) +
+         " strips=" + std::to_string(sharpening.lastStripCount()) + " clip=" + (clipStateView ? "sensor" : "derived") +
+         " dims=" + std::to_string(rendered.width) + "x" + std::to_string(rendered.height) +
+         " scratchBytes=" + std::to_string(sharpening.scratchBytes()) + " wallMs=" + std::to_string(ms);
+    __android_log_print(ANDROID_LOG_INFO, "RawrCamNative", "%s", line.c_str());
+    emit(line);
 }
 void closeSpareTimings(RenderCommandSession& commands) {
     // Timing slots 12-15 have no stage owner: close them as adjacent 0ms
@@ -192,7 +259,8 @@ GainmapRecording recordGainmapAndReadback(RenderResources& resources, RenderComm
                    rendered.height};
         gri.map = {resources.map().view, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_GENERAL,
                    resources.outputView().gainmapWidth, resources.outputView().gainmapHeight};
-        if (clipStateView != VK_NULL_HANDLE && clipStateImage != VK_NULL_HANDLE) {
+        // The sensor clip mask doesn't follow a mirrored HDR tap.
+        if (clipStateView != VK_NULL_HANDLE && clipStateImage != VK_NULL_HANDLE && rendered.lensMirror == 0u) {
             VkImageMemoryBarrier clipRead{};
             clipRead.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
             clipRead.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
@@ -376,8 +444,22 @@ RenderedStillCompletion executeStillRender(RenderResources& resources, RenderCom
 
         commands.create(device);
         commands.begin();
+        double sharpenWaitMs = 0.0;
         if (!rendered.reuseLinearResult) {
+            const auto sharpenBegin = std::chrono::steady_clock::now();
+            const auto waitBefore = commands.chunkWaitMs();
+            recordCaptureSharpening(resources, commands, rendered, sourceImage, sourceView, clipStateView, emit);
+            if (rendered.captureSharpenIterations > 0) {
+                done.captureSharpenMs = std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - sharpenBegin).count();
+                sharpenWaitMs = commands.chunkWaitMs() - waitBefore;
+            }
             recordPostDemosaic(resources, commands, rendered, sourceImage, sourceView, clipStateImage, clipStateView);
+            if (rendered.dcpProfile) {
+                resources.dcpStage().record(commands.command(), rendered.dcpProfile, rendered.sensorToLinearSrgb,
+                    rendered.dcpWeight1, rendered.width, rendered.height,
+                    resources.postDemosaic().outputView(), resources.postDemosaic().sdrOutputView());
+            }
             closeSpareTimings(commands);
             recordLocalTone(resources, commands, rendered, emit);
         } else if (commands.timingPool()) {
@@ -420,8 +502,10 @@ RenderedStillCompletion executeStillRender(RenderResources& resources, RenderCom
         // timestamp ranges plus scheduling and queue gaps, and the
         // residual below attributes exactly that remainder.
         done.renderSetupMs =
-            std::max(0.0, std::chrono::duration<double, std::milli>(tSubmit - t0).count() - commands.chunkWaitMs());
-        done.queueGapsMs = std::chrono::duration<double, std::milli>(tFence - tSubmit).count() + commands.chunkWaitMs();
+            std::max(0.0, std::chrono::duration<double, std::milli>(tSubmit - t0).count() - commands.chunkWaitMs()
+                          - (done.captureSharpenMs - sharpenWaitMs));
+        done.queueGapsMs = std::chrono::duration<double, std::milli>(tFence - tSubmit).count() + commands.chunkWaitMs()
+                          - sharpenWaitMs;
         completeReadback(resources, commands, rendered, sourceImage, filesDir, preWbOk, clipEvidence,
                          gainmap.clipUsed, gainmap.clipBoost, tFence, done, emit);
         done.success = true;

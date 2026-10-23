@@ -52,6 +52,13 @@ void SessionEngine::setLensShadingCorrectionEnabled(bool enabled) {
     appendDiagnostic(line);
 }
 
+void SessionEngine::setDistortionCorrectionEnabled(bool enabled) {
+    realtime_.coordinator().setDistortionCorrectionEnabled(enabled);
+    const std::string line = "DISTORTION_CORRECTION_PREVIEW enabled=" + std::string(enabled ? "true" : "false");
+    LOGI("%s", line.c_str());
+    appendDiagnostic(line);
+}
+
 void SessionEngine::setHighlightReconstructionEnabled(bool enabled) {
     realtime_.coordinator().setHighlightReconstructionEnabled(enabled);
     appendDiagnostic("HIGHLIGHT_RECONSTRUCTION enabled=" + std::string(enabled ? "true" : "false") +

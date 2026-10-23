@@ -6,6 +6,7 @@
 #include <string>
 
 #include "diagnostics/timing/RecentPeak.h"
+#include "develop/render/DcpRenderStage.h"
 #include "imaging/FrameLimits.h"
 #include "post_demosaic/PostDemosaicProcessor.h"
 #include "video_pipeline/VideoDemosaic.h"
@@ -73,6 +74,7 @@ class VideoProcessingResources final {
     std::unique_ptr<tonemap::TonemapEngine> tonemap_;
     std::unique_ptr<VideoDemosaic> demosaic_;
     std::array<std::unique_ptr<rawr::post::PostDemosaicProcessor>, rawrcam::imaging::kRealtimeFramesInFlight> post_{};
+    std::array<std::unique_ptr<develop::rendered::DcpRenderStage>, rawrcam::imaging::kRealtimeFramesInFlight> dcp_{};
     std::array<rawrcam::vulkan::OwnedImage, rawrcam::imaging::kRealtimeFramesInFlight> monitor_{};
     std::array<bool, rawrcam::imaging::kRealtimeFramesInFlight> monitorInitialized_{};
     // Per-slot timestamps: 0-5 and 10-11 are written by PostDemosaicProcessor,
