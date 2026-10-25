@@ -211,6 +211,9 @@ std::optional<LensRoute> CameraDeviceSession::select(const LensRoute& requested,
     parsed->cfaPhotoQuality = route.cfaPhotoQuality;
     parsed->profileDistortion = route.distortion;
     parsed->profileMirror = route.mirror;
+    if (const int repaired = color::repairPlaceholderForwardMatrices(parsed->color); repaired > 0)
+        diag("CAMERA_FORWARD_MATRIX_PLACEHOLDER cameraId=" + route.cameraId + " lens=" + route.lensId +
+             " replaced=" + std::to_string(repaired) + " source=color_matrix");
     if (route.dcp) {
         if (auto calibration = color::dcpColorCalibration(*route.dcp)) {
             parsed->color = *calibration;
