@@ -1332,13 +1332,19 @@ struct NativeCameraController::Impl final : CameraEventSink {
             // Shutter is already in one coordinate. Sensitivity may not be: a
             // vendor sensor mode (e.g. DCG) can report roughly 8x the request coordinate, so convert it through the
             // provenance-learned ratio instead of copying CaptureResult ISO verbatim.
-            if (control.appliedExposureTimeNs) {
+            // An axis the previous mode already owned keeps the user's value:
+            // past the viewfinder cap the applied shutter is the cap, not theirs.
+            const auto previous = control.exposureMode;
+            const bool ownedShutter =
+                previous == ExposureControlMode::Manual || previous == ExposureControlMode::ShutterPriority;
+            const bool ownedIso = previous == ExposureControlMode::Manual || previous == ExposureControlMode::IsoPriority;
+            if (control.appliedExposureTimeNs && !ownedShutter) {
                 control.requestedExposureTimeNs =
                     std::clamp(*control.appliedExposureTimeNs, control.capabilities.exposureTimeMinNs,
                                control.capabilities.exposureTimeMaxNs);
             }
             if ((mode == ExposureControlMode::Manual || mode == ExposureControlMode::IsoPriority) &&
-                control.appliedSensitivity) {
+                control.appliedSensitivity && !ownedIso) {
                 if (sensitivityReportedPerRequest && *sensitivityReportedPerRequest > 0.0) {
                     const auto inferredRequestSensitivity = static_cast<int32_t>(std::llround(
                         static_cast<double>(*control.appliedSensitivity) / *sensitivityReportedPerRequest));
