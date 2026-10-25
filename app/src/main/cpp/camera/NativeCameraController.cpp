@@ -316,7 +316,18 @@ struct NativeCameraController::Impl final : CameraEventSink {
     // exposure (HAL processing), and the user need not hold still for that.
     std::atomic<int32_t> longExposureStartsLeft{0};
     std::atomic<int64_t> longExposureEndMs{-1};
-    static constexpr int64_t kReadoutMarginMs = 150;  // a 200 MP readout
+    static constexpr int64_t kReadoutMarginMs = 150;  // after the last frame's exposure
+    // EMA of the gap a burst leaves between one frame's exposure end and the
+    // next one's start, measured from sensor timestamps: ~20 ms on the
+    // viewfinder stream, 1-2 s between 200 MP stills. [0] viewfinder stream,
+    // [1] capture stream (full size).
+    std::array<std::atomic<int64_t>, 2> longExposureGapEstMs{150, 150};
+    // Exposure start of the burst's previous frame (MONOTONIC ms; -1 none).
+    std::atomic<int64_t> longExposureLastStartMs{-1};
+    std::atomic<int32_t> longExposureGapSlot{0};
+    int64_t burstGapEstMs(bool captureStream) const {
+        return longExposureGapEstMs[captureStream ? 1 : 0].load(std::memory_order_relaxed);
+    }
     std::atomic<int> lastLongExposureHonored{-1};  // -1 none yet, 0 shortened, 1 honored
     std::chrono::steady_clock::time_point longExposureSubmitted{};
     static int64_t monotonicMs() {
@@ -459,13 +470,15 @@ struct NativeCameraController::Impl final : CameraEventSink {
         longExposureFramesLeft.store(int32_t(count), std::memory_order_relaxed);
         longExposureStartsLeft.store(int32_t(count), std::memory_order_relaxed);
         longExposureCount.store(int32_t(count), std::memory_order_relaxed);
+        longExposureLastStartMs.store(-1, std::memory_order_relaxed);
         longExposureHidesPreview.store(true, std::memory_order_relaxed);
+        longExposureGapSlot.store(1, std::memory_order_relaxed);
         longExposureEndMs.store(-1, std::memory_order_relaxed);
         longExposureSubmitMs.store(submitMs, std::memory_order_relaxed);
         longExposureStartMs.store(submitMs, std::memory_order_relaxed);
         longExposureTotalMs.store(
             longExposureQueueEstMs.load(std::memory_order_relaxed) + int64_t(count) * (e.exposureTimeNs / 1000000) +
-                kReadoutMarginMs,
+                int64_t(count - 1) * burstGapEstMs(true) + kReadoutMarginMs,
             std::memory_order_relaxed);
         longExposureSubmitted = std::chrono::steady_clock::now();
         // The still queues behind the in-flight preview requests (~0.6 s at
@@ -508,7 +521,9 @@ struct NativeCameraController::Impl final : CameraEventSink {
         longExposureFramesLeft.store(int32_t(count), std::memory_order_relaxed);
         longExposureStartsLeft.store(int32_t(count), std::memory_order_relaxed);
         longExposureCount.store(int32_t(count), std::memory_order_relaxed);
+        longExposureLastStartMs.store(-1, std::memory_order_relaxed);
         longExposureHidesPreview.store(count == 1, std::memory_order_relaxed);
+        longExposureGapSlot.store(0, std::memory_order_relaxed);
         longExposureEndMs.store(-1, std::memory_order_relaxed);
         // Ring runs from the press (see captureFullSize): the started callback
         // can arrive a full exposure late.
@@ -517,7 +532,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
         longExposureStartMs.store(submitMs, std::memory_order_relaxed);
         longExposureTotalMs.store(
             longExposureQueueEstMs.load(std::memory_order_relaxed) +
-                int64_t(count) * (pair->exposureTimeNs / 1000000) + kReadoutMarginMs,
+                int64_t(count) * (pair->exposureTimeNs / 1000000) + int64_t(count - 1) * burstGapEstMs(false) +
+                kReadoutMarginMs,
             std::memory_order_relaxed);
         longExposureSubmitted = std::chrono::steady_clock::now();
         const std::vector<CameraRequestPipeline::BracketExposure> exposures(
@@ -1097,6 +1113,18 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // Frames of the burst still to expose, this one included.
         const int32_t framesLeft = std::max(1, longExposureStartsLeft.fetch_sub(1, std::memory_order_relaxed));
         const int64_t frameMs = longExposureNs.load(std::memory_order_relaxed) / 1000000;
+        // Measure the burst's gap between frames (start to start, minus the
+        // exposure) for the frames still to come and the next capture.
+        auto& gapEst = longExposureGapEstMs[longExposureGapSlot.load(std::memory_order_relaxed) ? 1 : 0];
+        const int64_t lastStartMs = longExposureLastStartMs.exchange(frameStartMs, std::memory_order_relaxed);
+        if (lastStartMs > 0 && frameStartMs > lastStartMs) {
+            const int64_t gapMs = frameStartMs - lastStartMs - frameMs;
+            if (gapMs >= 0 && gapMs <= 10000) {
+                const int64_t prev = gapEst.load(std::memory_order_relaxed);
+                gapEst.store((prev + gapMs * 3) / 4, std::memory_order_relaxed);
+            }
+        }
+        const int64_t gapMs = gapEst.load(std::memory_order_relaxed);
         const int64_t submitMs = longExposureSubmitMs.load(std::memory_order_relaxed);
         if (submitMs > 0 && frameStartMs >= submitMs) {
             const int64_t queueSampleMs = frameStartMs - submitMs;
@@ -1104,7 +1132,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
                 const int64_t prev = longExposureQueueEstMs.load(std::memory_order_relaxed);
                 longExposureQueueEstMs.store((prev * 7 + queueSampleMs) / 8, std::memory_order_relaxed);
             }
-            longExposureTotalMs.store(frameStartMs - submitMs + framesLeft * frameMs + kReadoutMarginMs,
+            longExposureTotalMs.store(frameStartMs - submitMs + framesLeft * frameMs + (framesLeft - 1) * gapMs +
+                                          kReadoutMarginMs,
                                       std::memory_order_relaxed);
         }
         if (framesLeft <= 1)
