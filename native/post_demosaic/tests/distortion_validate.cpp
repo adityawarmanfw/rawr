@@ -180,7 +180,8 @@ int main(int argc, char** argv) {
         const std::array<float, 5> distortion{-0.051307f, 0.015171f, 0.000123f, 0.000357f, 0.0f};
         const std::array<float, 3> denominator{0.0f, -0.023536f, 0.014256f};
         const Case cases[] = {{"photo", 4096, 3072, false, 0.9758f, {0.0f, 0.0f}, 1.0f},
-                              {"video", 3840, 2160, true, 0.98474f, {128.0f, 456.0f}, 1.0f}};
+                              {"video", 3840, 2160, true, 0.98474f, {128.0f, 456.0f}, 1.0f},
+                              {"samsung_3x", 3648, 2736, false, 1.0f, {0.0f, 0.0f}, 1.0f}};
         for (const Case& cs : cases) {
             const auto bytes = makeSource(cs.width, cs.height);
             writeFile(dir + "/" + cs.name + "_src.f16", bytes.data(), bytes.size());
@@ -197,6 +198,11 @@ int main(int argc, char** argv) {
                     correction.outputFocal = {intrinsic[0] * cs.outputScale, intrinsic[1] * cs.outputScale};
                     correction.frameOrigin = cs.origin;
                     correction.frameScale = cs.frameScale;
+                    if (std::string(cs.name) == "samsung_3x") {
+                        correction.model = rawr::post::StillDistortionCorrection::Model::Camera2;
+                        correction.intrinsic = {6961.56f, 6975.01f, 1813.4f, 1445.27f, 0.0f};
+                        correction.distortion = {-0.416185f, 8.34895f, -47.3359f, 0.0f, 0.0f};
+                    }
                 }
                 std::vector<double> wbMs;
                 for (int i = 0; i < iterations + 3; ++i) {

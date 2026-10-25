@@ -36,7 +36,7 @@ struct StillDistortionCorrection {
     bool enabled = false;
     // [fx, fy, cx, cy, s].
     std::array<float, 5> intrinsic{0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
-    // [k1, k2, p1, p2, k3].
+    // Camera2: [k1, k2, k3, p1, p2]; Rational: [k1, k2, p1, p2, k3].
     std::array<float, 5> distortion{0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
     Model model = Model::Camera2;
     // Rational only: [k4, k5, k6] and the output focal [fx, fy].
