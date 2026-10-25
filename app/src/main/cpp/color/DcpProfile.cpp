@@ -438,6 +438,33 @@ std::optional<std::array<double, 9>> forwardFromColorMatrix(const std::array<dou
     return mul(adapt, mul(*cameraToXyz, diag));
 }
 
+int repairPlaceholderForwardMatrices(metadata::StaticColorCalibration& color) {
+    // sRGB -> XYZ(D50), the DNG-spec / Bradford-adapted primaries.
+    static constexpr std::array<double, 9> kSrgbD50{0.4360747, 0.3850649, 0.1430804, 0.2225045, 0.7168786,
+                                                    0.0606169, 0.0139322, 0.0971045, 0.7141733};
+    // HALs quantise the placeholder to 1/64 steps (max error ~0.004).
+    constexpr double kTolerance = 0.01;
+    const auto isPlaceholder = [&](const metadata::Matrix3x3& m) {
+        if (!m.valid) return false;
+        for (size_t i = 0; i < 9; ++i)
+            if (std::abs(double(m.rowMajor[i]) - kSrgbD50[i]) > kTolerance) return false;
+        return true;
+    };
+    int repaired = 0;
+    const auto repair = [&](metadata::Matrix3x3& forward, const metadata::Matrix3x3& colorTransform, int32_t illuminant) {
+        if (!isPlaceholder(forward) || !colorTransform.valid || illuminant < 0) return;
+        std::array<double, 9> m{};
+        for (size_t i = 0; i < 9; ++i) m[i] = colorTransform.rowMajor[i];
+        if (const auto derived = forwardFromColorMatrix(m, uint16_t(illuminant))) {
+            forward = toMatrix(*derived);
+            ++repaired;
+        }
+    };
+    repair(color.forwardMatrix1, color.colorTransform1, color.referenceIlluminant1);
+    repair(color.forwardMatrix2, color.colorTransform2, color.referenceIlluminant2);
+    return repaired;
+}
+
 std::optional<metadata::StaticColorCalibration> dcpColorCalibration(const DcpProfile& p) {
     const Mat3d identity{1, 0, 0, 0, 1, 0, 0, 0, 1};
     const auto forward1 = p.forwardMatrix1 ? p.forwardMatrix1 : forwardFromColorMatrix(p.colorMatrix1, p.illuminant1);
