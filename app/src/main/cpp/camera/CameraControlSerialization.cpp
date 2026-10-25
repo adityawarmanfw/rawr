@@ -38,7 +38,7 @@ void optFloat(std::ostringstream& s, const std::optional<float>& v) {
 }
 void optDouble(std::ostringstream& s, const std::optional<double>& v) {
     if (v)
-        s << std::setprecision(7) << *v;
+        s << std::setprecision(17) << *v;
     else
         s << "null";
 }
@@ -113,7 +113,7 @@ std::string serializeCameraControlState(const CameraControlState& st) {
     for (size_t i = 0; i < st.shutterAngleChoices.size(); ++i) {
         if (i) s << ',';
         const auto& choice = st.shutterAngleChoices[i];
-        s << "{\"degrees\":" << choice.degrees << ",\"exposureTimeNs\":" << choice.exposureTimeNs << '}';
+        s << "{\"degrees\":" << std::setprecision(17) << choice.degrees << ",\"exposureTimeNs\":" << choice.exposureTimeNs << '}';
     }
     s << ']' << ",\"recordingFps\":" << st.recordingFps
       << ",\"recordingExposureLimitNs\":"
