@@ -306,6 +306,11 @@ struct NativeCameraController::Impl final : CameraEventSink {
     std::atomic<int64_t> longExposureQueueEstMs{600};
     // Tagged frames still to come before the cue ends (a full-size burst has several).
     std::atomic<int32_t> longExposureFramesLeft{0};
+    // A burst's frames go to the ZSL ring through the preview submit, which
+    // drops hidden frames: only a single long frame freezes the viewfinder.
+    std::atomic<bool> longExposureHidesPreview{true};
+    // Frames the long exposure submitted: only the first start samples the queue.
+    std::atomic<int32_t> longExposureCount{0};
     // The cue ends when the sensor is done with the last tagged frame, not at
     // its result: vivo's 200 MP main-camera result comes ~4 s after the
     // exposure (HAL processing), and the user need not hold still for that.
@@ -405,7 +410,10 @@ struct NativeCameraController::Impl final : CameraEventSink {
              " ageMs=" + std::to_string(monotonicMs() - control.focusObservedAtMs));
         preparingFocus = false;
         CameraRequestPipeline::BracketExposure e{};
-        if (control.exposureMode == ExposureControlMode::Manual) {
+        // Past the viewfinder cap, the stills take the capture's own pair.
+        if (const auto deferred = deferredCaptureExposureLocked()) {
+            e = {deferred->exposureTimeNs, deferred->sensitivity};
+        } else if (control.exposureMode == ExposureControlMode::Manual) {
             e = {control.requestedExposureTimeNs, control.requestedSensitivity};
         } else if (control.rawrAeActive && control.rawrAeExposureTimeNs > 0 && control.rawrAeSensitivity > 0) {
             e = {control.rawrAeExposureTimeNs, control.rawrAeSensitivity};
@@ -450,11 +458,14 @@ struct NativeCameraController::Impl final : CameraEventSink {
         longExposureNs.store(e.exposureTimeNs, std::memory_order_relaxed);
         longExposureFramesLeft.store(int32_t(count), std::memory_order_relaxed);
         longExposureStartsLeft.store(int32_t(count), std::memory_order_relaxed);
+        longExposureCount.store(int32_t(count), std::memory_order_relaxed);
+        longExposureHidesPreview.store(true, std::memory_order_relaxed);
         longExposureEndMs.store(-1, std::memory_order_relaxed);
         longExposureSubmitMs.store(submitMs, std::memory_order_relaxed);
         longExposureStartMs.store(submitMs, std::memory_order_relaxed);
         longExposureTotalMs.store(
-            longExposureQueueEstMs.load(std::memory_order_relaxed) + e.exposureTimeNs / 1000000 + kReadoutMarginMs,
+            longExposureQueueEstMs.load(std::memory_order_relaxed) + int64_t(count) * (e.exposureTimeNs / 1000000) +
+                kReadoutMarginMs,
             std::memory_order_relaxed);
         longExposureSubmitted = std::chrono::steady_clock::now();
         // The still queues behind the in-flight preview requests (~0.6 s at
@@ -487,14 +498,17 @@ struct NativeCameraController::Impl final : CameraEventSink {
         return deviceSession.hasCaptureStream();
     }
 
-    bool captureLongExposure(uint64_t requestId, NativeCameraController::LongExposure* submitted) {
+    bool captureLongExposure(uint64_t requestId, NativeCameraController::LongExposure* submitted, uint32_t count) {
         std::lock_guard<std::mutex> lock(mutex);
         const auto pair = deferredCaptureExposureLocked();
-        if (!pair || requestId == 0 || !deviceSession.request()) return false;
+        if (!pair || requestId == 0 || count == 0 || count > capture::kMaxBurstFrames || !deviceSession.request())
+            return false;
         longExposureTag.store(requestId, std::memory_order_relaxed);
         longExposureNs.store(pair->exposureTimeNs, std::memory_order_relaxed);
-        longExposureFramesLeft.store(1, std::memory_order_relaxed);
-        longExposureStartsLeft.store(1, std::memory_order_relaxed);
+        longExposureFramesLeft.store(int32_t(count), std::memory_order_relaxed);
+        longExposureStartsLeft.store(int32_t(count), std::memory_order_relaxed);
+        longExposureCount.store(int32_t(count), std::memory_order_relaxed);
+        longExposureHidesPreview.store(count == 1, std::memory_order_relaxed);
         longExposureEndMs.store(-1, std::memory_order_relaxed);
         // Ring runs from the press (see captureFullSize): the started callback
         // can arrive a full exposure late.
@@ -502,13 +516,16 @@ struct NativeCameraController::Impl final : CameraEventSink {
         longExposureSubmitMs.store(submitMs, std::memory_order_relaxed);
         longExposureStartMs.store(submitMs, std::memory_order_relaxed);
         longExposureTotalMs.store(
-            longExposureQueueEstMs.load(std::memory_order_relaxed) + pair->exposureTimeNs / 1000000 + kReadoutMarginMs,
+            longExposureQueueEstMs.load(std::memory_order_relaxed) +
+                int64_t(count) * (pair->exposureTimeNs / 1000000) + kReadoutMarginMs,
             std::memory_order_relaxed);
         longExposureSubmitted = std::chrono::steady_clock::now();
+        const std::vector<CameraRequestPipeline::BracketExposure> exposures(
+            count, CameraRequestPipeline::BracketExposure{pair->exposureTimeNs, pair->sensitivity});
         const bool sent = requests.captureBracket(deviceSession.session(), deviceSession.request(),
-                                                  deviceSession.callbackContext(), control,
-                                                  {{pair->exposureTimeNs, pair->sensitivity}}, requestId);
+                                                  deviceSession.callbackContext(), control, exposures, requestId);
         diag("CAMERA_LONG_EXPOSURE_SUBMIT sent=" + std::to_string(sent ? 1 : 0) + " tag=" + std::to_string(requestId) +
+             " count=" + std::to_string(count) +
              " exposureNs=" + std::to_string(pair->exposureTimeNs) + " iso=" + std::to_string(pair->sensitivity) +
              " advertisedMaxNs=" + std::to_string(control.capabilities.advertisedExposureTimeMaxNs));
         if (!sent) {
@@ -1077,21 +1094,21 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // Ring start stays at the press (first submit wins); only correct the
         // total to submit-to-true-end. The end is set on the last start of a
         // burst (see StartsLeft below).
+        // Frames of the burst still to expose, this one included.
+        const int32_t framesLeft = std::max(1, longExposureStartsLeft.fetch_sub(1, std::memory_order_relaxed));
+        const int64_t frameMs = longExposureNs.load(std::memory_order_relaxed) / 1000000;
         const int64_t submitMs = longExposureSubmitMs.load(std::memory_order_relaxed);
         if (submitMs > 0 && frameStartMs >= submitMs) {
             const int64_t queueSampleMs = frameStartMs - submitMs;
-            if (queueSampleMs <= 10000) {
+            if (queueSampleMs <= 10000 && framesLeft >= longExposureCount.load(std::memory_order_relaxed)) {
                 const int64_t prev = longExposureQueueEstMs.load(std::memory_order_relaxed);
                 longExposureQueueEstMs.store((prev * 7 + queueSampleMs) / 8, std::memory_order_relaxed);
             }
-            longExposureTotalMs.store(frameStartMs - submitMs +
-                                          longExposureNs.load(std::memory_order_relaxed) / 1000000 + kReadoutMarginMs,
+            longExposureTotalMs.store(frameStartMs - submitMs + framesLeft * frameMs + kReadoutMarginMs,
                                       std::memory_order_relaxed);
         }
-        if (longExposureStartsLeft.fetch_sub(1, std::memory_order_relaxed) <= 1)
-            longExposureEndMs.store(
-                frameStartMs + longExposureNs.load(std::memory_order_relaxed) / 1'000'000 + kReadoutMarginMs,
-                std::memory_order_relaxed);
+        if (framesLeft <= 1)
+            longExposureEndMs.store(frameStartMs + frameMs + kReadoutMarginMs, std::memory_order_relaxed);
     }
     void cameraCaptureFailed(uint64_t callbackGeneration) override {
         // Set once at construction; the receiver checks the generation.
@@ -1206,9 +1223,9 @@ struct NativeCameraController::Impl final : CameraEventSink {
             diag(line);
         }
         const uint64_t longTag = longExposureTag.load(std::memory_order_relaxed);
-        // Freeze the viewfinder on the press until the long frame is in, and
-        // never show the long frame itself.
-        if (longTag != 0) actions.frame->hidePreview = true;
+        // Freeze the viewfinder on the press until a single long frame is in,
+        // and never show it (burst frames must reach the ZSL ring).
+        if (longTag != 0 && longExposureHidesPreview.load(std::memory_order_relaxed)) actions.frame->hidePreview = true;
         if (const uint64_t tag = longTag; tag != 0 && actions.frame->optimizedStillRequestId == tag &&
                                               longExposureFramesLeft.fetch_sub(1, std::memory_order_relaxed) <= 1) {
             // Honored when the sensor reports the shutter and the frame took
@@ -1913,8 +1930,8 @@ bool NativeCameraController::fullSizeBurstSequential() const {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     return impl_->fullSizeBurstSequential;
 }
-bool NativeCameraController::captureLongExposure(uint64_t requestId, LongExposure* submitted) {
-    return impl_->captureLongExposure(requestId, submitted);
+bool NativeCameraController::captureLongExposure(uint64_t requestId, LongExposure* submitted, uint32_t count) {
+    return impl_->captureLongExposure(requestId, submitted, count);
 }
 bool NativeCameraController::longFramesWorthwhile() const {
     const auto room = impl_->longFrameRoomEv();

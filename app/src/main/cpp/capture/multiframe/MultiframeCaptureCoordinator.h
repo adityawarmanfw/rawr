@@ -62,6 +62,10 @@ class MultiframeCaptureCoordinator final {
     }
     // The camera rejected the bracket requests: stop waiting for them.
     void abandonBracket(std::uint64_t bracketRequestId) noexcept;
+    // Long exposure burst (shutter past the viewfinder cap): a collector for
+    // up to maxFrames post-shutter frames tagged with its requestId, sized to
+    // the free ring slots. Null when the ring cannot take a burst.
+    std::shared_ptr<BracketCollector> armLongExposureBurst(std::uint32_t maxFrames) noexcept;
     std::string pollMultiframeDngCompletion();
     std::string pollMultiframeJpegCompletion();
     void setFilmAssetManager(AAssetManager* assets) {
