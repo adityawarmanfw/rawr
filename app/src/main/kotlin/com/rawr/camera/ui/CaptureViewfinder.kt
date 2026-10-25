@@ -196,21 +196,18 @@ internal fun CaptureViewfinder(
                 orientation = state.orientation,
                 modifier = Modifier.align(Alignment.TopCenter).padding(top = 16.dp)
             )
-            BracketHoldNotice(
-                active = state.bracketHoldActive,
+            // One status pill for every capture wait, in one place: moving it
+            // while it fades out left an empty pill behind.
+            CaptureStatusNotice(
+                longExposure = state.longExposure,
+                holdActive = state.bracketHoldActive,
                 restoringPreview = state.restoringPreview,
+                stacked = state.experimentalMultiframeEnabled && state.captureMode == CaptureMode.Photo &&
+                    state.longExposure.deferredNs <= LONG_EXPOSURE_STACK_MAX_NS,
                 orientation = state.orientation,
-                modifier = Modifier.align(Alignment.Center),
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = 56.dp),
                 fullSizeBinnedStills = state.fullSizeBinnedStills,
                 fullSizeBurstsToSingle = state.fullSizeBurstsToSingle
-            )
-            // One place for the notice and its countdown: moving it while it
-            // fades out left an empty pill behind.
-            // Full-size capture has separate exposure and preview-recovery phases in the central notice.
-            if (!state.fullSizeCapture) LongExposureNotice(
-                state = state.longExposure,
-                orientation = state.orientation,
-                modifier = Modifier.align(Alignment.TopCenter).padding(top = 56.dp)
             )
         }
         state.selfTimerRemainingMs?.let { remaining ->
