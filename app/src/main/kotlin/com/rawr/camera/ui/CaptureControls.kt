@@ -500,10 +500,14 @@ internal fun Thumbnail(state: CaptureUiState, imageUri: Uri?, onClick: () -> Uni
     // Layout-stable loader: the outer Box is always exactly Thumbnail size.
     // Processing/failed states only change border drawing + semantics, never
     // add/remove measured children, so the MERGED pill and shutter row can't shift.
+    // A press native has not accepted yet is processing too once its hold
+    // ends: a full-size burst copies its frames after the exposure, before the
+    // capture is registered. Until then the status pill shows the hold.
     val isProcessing =
-        state.pendingCaptures.any {
-            it.phase == CaptureSavePhase.DngProcessing || it.phase == CaptureSavePhase.JpegProcessing
-        }
+        (state.bracketHoldPresses > 0 && !state.bracketHoldActive && !state.longExposure.active) ||
+            state.pendingCaptures.any {
+                it.phase == CaptureSavePhase.DngProcessing || it.phase == CaptureSavePhase.JpegProcessing
+            }
     val hasFailed =
         !isProcessing &&
             state.pendingCaptures.any {
