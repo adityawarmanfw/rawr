@@ -10,6 +10,7 @@ import com.rawr.camera.settings.model.VendorKey
 import com.rawr.camera.settings.model.VendorKeyScope
 import com.rawr.camera.settings.model.VendorKeyType
 import org.json.JSONObject
+import kotlin.test.assertFailsWith
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -206,5 +207,48 @@ class LensProfileCodecTest {
         val decoded = LensProfileCodec.decode(partial)!!
         assertEquals(listOf("ok"), decoded.map { it.name })
         assertEquals(listOf("a"), decoded.single().vendorKeys.map { it.tag })
+    }
+
+    @Test fun backupRejectsMalformedNestedFieldsInsteadOfUsingDefaults() {
+        val fields = listOf(
+            """"dcp":{"file":"bad.dcp"}""",
+            """"dcp":"not an object" """,
+            """"keys":[{"values":[1]}]""",
+            """"keys":[{"tag":"vendor.mode","type":"unknown","values":[1]}]""",
+            """"keys":[{"tag":"vendor.mode","scope":"unknown","values":[1]}]""",
+            """"keys":[{"tag":"vendor.mode","values":[]} ]""",
+            """"keys":[{"tag":"vendor.mode","type":"byte","values":[256]}]""",
+            """"keys":[{"tag":"vendor.mode","values":["1"]}]""",
+            """"keys":"not an array" """,
+            """"dcg":{"keys":[{"values":[1]}]}""",
+            """"levels":{"black":[1,2,3]}""",
+            """"stream":{"format":"unknown"}""",
+            """"captureStream":{"width":0,"height":10}""",
+            """"exposure":{"isoMax":-1}""",
+            """"cfa":{"block":3}"""
+        )
+        for (field in fields) {
+            assertFailsWith<IllegalArgumentException>(field) {
+                LensProfileCodec.decodeBackup("""{"lenses":[{"id":"W","cameraId":"0",$field}]}""")
+            }
+        }
+    }
+
+    @Test fun strictBackupDecoderPreservesValidLegacyDcgAndDefaults() {
+        val raw = """{"lenses":[{"id":"W","cameraId":"0","dcg":{"keys":[{"tag":"vendor.mode","values":[1]}],"levels":{"static":true,"black":[64],"white":1023}}}]}"""
+        assertEquals(LensProfileCodec.decode(raw), LensProfileCodec.decodeBackup(raw))
+        assertEquals(listOf(LensProfile("W", "0")),
+            LensProfileCodec.decodeBackup("""{"lenses":[{"id":"W","cameraId":"0"}]}"""))
+        assertEquals(lenses, LensProfileCodec.decodeBackup(LensProfileCodec.encode(lenses)))
+    }
+
+    @Test fun builtInLensExportsPassStrictValidation() {
+        val directory = java.io.File("src/main/cpp/camera/profiles")
+        val sources = directory.listFiles()!!.filter { it.extension == "json" }
+        assertTrue(sources.isNotEmpty())
+        sources.forEach { source ->
+            val lenses = requireNotNull(LensProfileCodec.decode(source.readText()))
+            assertEquals(lenses, LensProfileCodec.decodeBackup(LensProfileCodec.encode(lenses)), source.name)
+        }
     }
 }

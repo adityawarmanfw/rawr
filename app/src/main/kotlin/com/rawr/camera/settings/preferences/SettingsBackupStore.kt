@@ -15,6 +15,12 @@ import com.rawr.camera.settings.model.ColorRenderProfile
 import com.rawr.camera.settings.model.LensProfile
 import com.rawr.camera.settings.model.SettingsValues
 import java.io.File
+import java.io.InputStream
+import java.io.OutputStream
+import java.io.ByteArrayOutputStream
+import java.util.UUID
+import com.rawr.camera.integration.DeviceLensDefaults
+import com.rawr.camera.settings.model.effectiveLensProfiles
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
@@ -63,12 +69,19 @@ class BackupContents internal constructor(
  * version imports like an upgrade, then applies only the sections the user picks. Device-local
  * state (save folder grant, last lens, GPU driver) is neither exported nor taken from a backup.
  */
-class SettingsBackupStore(context: Context, private val defaults: SettingsValues) {
+class SettingsBackupStore(
+    context: Context,
+    private val defaults: SettingsValues,
+    private val deviceLenses: () -> List<LensProfile> = { DeviceLensDefaults.lenses }
+) {
     private val app = context.applicationContext
     private val repository = SettingsPreferencesRepository(app, defaults)
 
     fun export(values: SettingsValues, sections: Set<BackupSection>, output: java.io.OutputStream) {
         require(sections.isNotEmpty()) { "Nothing selected to back up" }
+        val exported = if (BackupSection.LensProfiles in sections) {
+            values.copy(lensProfiles = values.effectiveLensProfiles(deviceLensesIfNeeded(values)))
+        } else values
         ZipOutputStream(output.buffered()).use { zip ->
             zip.putNextEntry(ZipEntry(MANIFEST))
             zip.write(
@@ -95,15 +108,15 @@ class SettingsBackupStore(context: Context, private val defaults: SettingsValues
             )
             zip.closeEntry()
             zip.putNextEntry(ZipEntry(SETTINGS))
-            val prefs = repository.encodeForBackup(values)
+            val prefs = repository.encodeForBackup(exported)
             zip.write(encodePreferences(prefs) {
                 it == SCHEMA_KEY || (it !in DEVICE_LOCAL_KEYS && BackupSection.sectionOf(it) in sections)
             }.toString(2).toByteArray())
             zip.closeEntry()
             if (BackupSection.LensProfiles in sections) {
-                values.lensProfiles.orEmpty().mapNotNull { it.dcp?.file }.distinct().forEach { name ->
+                exported.lensProfiles.orEmpty().mapNotNull { it.dcp?.file }.distinct().forEach { name ->
                     val file = File(File(app.filesDir, DcpFileStore.DIR), name)
-                    if (!file.isFile) return@forEach
+                    require(file.isFile) { "Backup is incomplete: missing ${file.name}" }
                     zip.putNextEntry(ZipEntry(DCP_DIR + name))
                     file.inputStream().use { it.copyTo(zip) }
                     zip.closeEntry()
@@ -116,7 +129,7 @@ class SettingsBackupStore(context: Context, private val defaults: SettingsValues
                 .distinct()
                 .forEach { path ->
                     val file = File(app.filesDir, path)
-                    if (!file.isFile) return@forEach
+                    require(file.isFile) { "Backup is incomplete: missing ${file.name}" }
                     zip.putNextEntry(ZipEntry(LUT_DIR + file.name))
                     file.inputStream().use { it.copyTo(zip) }
                     zip.closeEntry()
@@ -124,23 +137,34 @@ class SettingsBackupStore(context: Context, private val defaults: SettingsValues
         }
     }
 
-    /** Reads and validates a backup; LUT files are staged until [apply] or [discard]. */
+    /** Reads and validates a backup; LUT files are staged until [prepare] or [discard]. */
     fun read(uri: Uri): BackupContents {
         var settingsJson: JSONObject? = null
         var sections: Set<BackupSection>? = null
-        val staging = File(app.cacheDir, "backup_restore").apply { deleteRecursively(); mkdirs() }
-        val dcpStaging = File(app.cacheDir, "backup_restore_dcp").apply { deleteRecursively(); mkdirs() }
+        val staging = File(app.cacheDir, "backup_restore_${UUID.randomUUID()}").apply { check(mkdirs()) }
+        val dcpStaging = File(staging, "dcp").apply { check(mkdirs()) }
         try {
             app.contentResolver.openInputStream(uri).use { input ->
                 requireNotNull(input) { "Unable to open backup" }
                 ZipInputStream(input.buffered()).use { zip ->
                     var total = 0L
+                    val names = mutableSetOf<String>()
                     while (true) {
                         val entry = zip.nextEntry ?: break
-                        if (entry.isDirectory) continue
+                        require(names.add(entry.name)) { "Duplicate backup entry: ${entry.name}" }
+                        require(names.size <= 4096) { "Too many backup entries" }
+                        fun copyEntry(out: OutputStream, limit: Long) {
+                            total += copyBackupEntry(zip, out, minOf(limit, MAX_LUT_BYTES - total))
+                        }
+                        fun jsonEntry(): JSONObject {
+                            val bytes = ByteArrayOutputStream()
+                            copyEntry(bytes, MAX_JSON_BYTES)
+                            return JSONObject(bytes.toString(Charsets.UTF_8.name()))
+                        }
                         when {
+                            entry.isDirectory -> copyEntry(OutputStream.nullOutputStream(), MAX_LUT_BYTES)
                             entry.name == MANIFEST -> {
-                                val manifest = JSONObject(zip.readBytes().toString(Charsets.UTF_8))
+                                val manifest = jsonEntry()
                                 require(manifest.optInt("format") in 1..FORMAT_VERSION) {
                                     "Backup was made by a newer version of Rawr"
                                 }
@@ -149,35 +173,48 @@ class SettingsBackupStore(context: Context, private val defaults: SettingsValues
                             }
 
                             entry.name == SETTINGS -> {
-                                settingsJson = JSONObject(zip.readBytes().toString(Charsets.UTF_8))
+                                settingsJson = jsonEntry()
                             }
 
                             entry.name.startsWith(LUT_DIR) -> {
                                 val name = entry.name.removePrefix(LUT_DIR)
-                                if (!name.matches(SAFE_NAME) || !name.endsWith(".cube", true)) continue
+                                require(name.matches(SAFE_NAME) && name.endsWith(".cube", true)) { "Invalid LUT filename" }
                                 val out = File(staging, name)
-                                out.outputStream().use { zip.copyTo(it) }
-                                total += out.length()
-                                require(total <= MAX_LUT_BYTES) { "Backup LUTs are too large" }
+                                out.outputStream().use { copyEntry(it, MAX_CUBE_BYTES) }
                             }
 
                             entry.name.startsWith(DCP_DIR) -> {
                                 val name = entry.name.removePrefix(DCP_DIR)
-                                if (!DcpFileStore.isFileName(name)) continue
+                                require(DcpFileStore.isFileName(name)) { "Invalid camera profile filename" }
                                 val out = File(dcpStaging, name)
-                                val bytes = zip.readNBytes(DcpFileStore.MAX_BYTES + 1)
-                                require(bytes.size <= DcpFileStore.MAX_BYTES) { "Camera profile is too large" }
-                                out.writeBytes(bytes)
-                                total += out.length()
-                                require(total <= MAX_LUT_BYTES) { "Backup files are too large" }
+                                out.outputStream().use { copyEntry(it, DcpFileStore.MAX_BYTES.toLong()) }
                             }
+                            else -> copyEntry(OutputStream.nullOutputStream(), MAX_LUT_BYTES)
                         }
                     }
                 }
             }
             val found = requireNotNull(sections) { "Not a Rawr backup" }
             require(found.isNotEmpty()) { "Backup is empty" }
-            val prefs = decodePreferences(requireNotNull(settingsJson) { "Backup has no settings" })
+            val json = requireNotNull(settingsJson) { "Backup has no settings" }
+            require(json.has(SCHEMA_KEY)) { "Backup has no settings schema" }
+            require(json.getJSONObject(SCHEMA_KEY).getInt("value") >= 0) { "Invalid settings schema" }
+            if (BackupSection.Settings in found) {
+                val known = repository.encodeForBackup(defaults).asMap().keys.map { it.name }.toSet()
+                require(json.keys().asSequence().any {
+                    it != SCHEMA_KEY && it !in DEVICE_LOCAL_KEYS &&
+                        it in known && BackupSection.sectionOf(it) == BackupSection.Settings
+                }) { "Backup has no settings values" }
+            }
+            if (BackupSection.Luts in found) require(json.has("user_lut_profiles")) { "Backup has no LUT profiles" }
+            if (BackupSection.Luts in found) {
+                LutProfileCodec.decodeBackup(json.getJSONObject("user_lut_profiles").getString("value"))
+            }
+            if (BackupSection.LensProfiles in found && json.has("lens_profiles")) {
+                val raw = json.getJSONObject("lens_profiles").getString("value")
+                LensProfileCodec.decodeBackup(raw)
+            }
+            val prefs = decodePreferences(json)
             val values =
                 requireNotNull(repository.decodeBackup(prefs)) { "Backup was made by a newer version of Rawr" }
             return BackupContents(found, values, staging, dcpStaging)
@@ -188,56 +225,67 @@ class SettingsBackupStore(context: Context, private val defaults: SettingsValues
         }
     }
 
-    /** Returns [current] with the chosen [sections] taken from the backup. */
-    fun apply(contents: BackupContents, sections: Set<BackupSection>, current: SettingsValues): SettingsValues {
+    private fun deviceLensesIfNeeded(values: SettingsValues): List<LensProfile> =
+        if (values.lensProfiles == null) deviceLenses().also {
+            require(it.isNotEmpty()) { "Device lens profiles are unavailable" }
+        } else emptyList()
+
+    /**
+     * Installs LUTs under fresh names, so failed preparation cannot overwrite live assets.
+     * The returned edit is applied to the latest settings by SettingsEditor.update.
+     */
+    fun prepare(contents: BackupContents, sections: Set<BackupSection>): PreparedBackup {
+        val chosen = sections intersect contents.sections
+        require(chosen.isNotEmpty()) { "Nothing selected to restore" }
+        val installed = mutableListOf<File>()
         try {
-            val backup = contents.values
-            val chosen = sections intersect contents.sections
-            var next =
-                if (BackupSection.Settings in chosen) {
-                    backup.copy(
-                        lensProfiles = current.lensProfiles,
-                        userLutProfiles = current.userLutProfiles,
-                        selectedUserLutProfileId = current.selectedUserLutProfileId,
-                        videoUserLutProfileId = current.videoUserLutProfileId,
-                        saveLocationId = current.saveLocationId,
-                        lastLensId = current.lastLensId,
-                        customGpuDriverEnabled = current.customGpuDriverEnabled,
-                        customGpuDriverName = current.customGpuDriverName
-                    )
-                } else {
-                    current
-                }
-            if (BackupSection.LensProfiles in chosen) next = next.copy(lensProfiles = restoreDcpFiles(contents, backup.lensProfiles))
+            var backup = contents.values
             if (BackupSection.Luts in chosen) {
-                val lutFiles = File(app.filesDir, LUT_FILES_PATH).apply { mkdirs() }
-                contents.lutFiles.listFiles()?.forEach { it.copyTo(File(lutFiles, it.name), overwrite = true) }
-                // Keep only profiles whose LUT files are on this phone now.
-                val profiles =
-                    backup.userLutProfiles.filter { profile ->
-                        profile.stages.all { stage ->
-                            stage.relativePath.startsWith("$LUT_FILES_PATH/") &&
-                                File(app.filesDir, stage.relativePath).isFile
+                val paths = mutableMapOf<String, String>()
+                val profiles = backup.userLutProfiles.map { profile ->
+                    require(profile.id.matches(SAFE_NAME)) { "Invalid LUT profile ID" }
+                    profile.copy(stages = profile.stages.map { stage ->
+                        val path = paths.getOrPut(stage.relativePath) {
+                            val name = stage.relativePath.removePrefix("$LUT_FILES_PATH/")
+                            require(stage.relativePath == "$LUT_FILES_PATH/$name" &&
+                                name.matches(SAFE_NAME) && name.endsWith(".cube", true)) { "Invalid LUT path" }
+                            val source = File(contents.lutFiles, name)
+                            require(source.isFile) { "Backup is incomplete: missing $name" }
+                            val normalized = source.bufferedReader().useLines { CubeNormalizer.normalize(it) }
+                            val dir = File(app.filesDir, LUT_FILES_PATH).apply { check(mkdirs() || isDirectory) }
+                            val target = File(dir, "${UUID.randomUUID()}.cube")
+                            installed += target
+                            target.outputStream().use { output ->
+                                output.bufferedWriter().use { out ->
+                                    normalized.forEach { out.write(it); out.newLine() }
+                                    out.flush()
+                                    output.fd.sync()
+                                }
+                            }
+                            "$LUT_FILES_PATH/${target.name}"
                         }
+                        stage.copy(relativePath = path)
+                    })
+                }
+                backup = backup.copy(userLutProfiles = profiles)
+            }
+            if (BackupSection.LensProfiles in chosen) {
+                // DCP names are content hashes; verify the archive before installing anything.
+                backup.lensProfiles.orEmpty().mapNotNull { it.dcp }.forEach { dcp ->
+                    val file = File(contents.dcpFiles, dcp.file)
+                    require(DcpFileStore.isFileName(dcp.file) && file.isFile &&
+                        file.length() <= DcpFileStore.MAX_BYTES &&
+                        DcpFileStore.fileName(file.readBytes()) == dcp.file) {
+                        "Backup has a missing or damaged camera profile: ${dcp.name}"
                     }
-                next =
-                    next.copy(
-                        userLutProfiles = profiles,
-                        selectedUserLutProfileId = backup.selectedUserLutProfileId,
-                        videoUserLutProfileId = backup.videoUserLutProfileId
-                    )
+                }
+                val lenses = DcpFileStore(app).restore(contents.dcpFiles, backup.lensProfiles)
+                require(lenses == backup.lensProfiles) { "Backup contains an invalid camera profile" }
             }
-            // A render profile restored without its LUT (or a LUT selection without the profile) falls back.
-            val ids = next.userLutProfiles.map { it.id }.toSet()
-            if (next.selectedUserLutProfileId !in ids) next = next.copy(selectedUserLutProfileId = null)
-            if (next.videoUserLutProfileId !in ids) next = next.copy(videoUserLutProfileId = null)
-            if (next.colorRenderProfile == ColorRenderProfile.UserLut && next.selectedUserLutProfileId == null) {
-                next = next.copy(colorRenderProfile = defaults.colorRenderProfile)
-            }
-            if (next.videoColorRenderProfile == ColorRenderProfile.UserLut && next.videoUserLutProfileId == null) {
-                next = next.copy(videoColorRenderProfile = defaults.videoColorRenderProfile)
-            }
-            return next
+            return PreparedBackup(backup, chosen, defaults, installed)
+        } catch (t: Throwable) {
+            installed.forEach { it.delete() }
+            throw t
         } finally {
             discard(contents)
         }
@@ -246,11 +294,6 @@ class SettingsBackupStore(context: Context, private val defaults: SettingsValues
     fun discard(contents: BackupContents) {
         contents.lutFiles.deleteRecursively()
         contents.dcpFiles.deleteRecursively()
-    }
-
-    /** Installs the backup's camera profiles; a lens whose profile didn't come back keeps the camera's colour. */
-    private fun restoreDcpFiles(contents: BackupContents, lenses: List<LensProfile>?): List<LensProfile>? {
-        return DcpFileStore(app).restore(contents.dcpFiles, lenses)
     }
 
     private fun encodePreferences(p: Preferences, include: (String) -> Boolean): JSONObject {
@@ -273,12 +316,13 @@ class SettingsBackupStore(context: Context, private val defaults: SettingsValues
     private fun decodePreferences(json: JSONObject): Preferences {
         val p: MutablePreferences = mutablePreferencesOf()
         json.keys().forEach { name ->
-            val entry = json.optJSONObject(name) ?: return@forEach
+            val entry = requireNotNull(json.optJSONObject(name)) { "Invalid backup preference: $name" }
             when (entry.optString("type")) {
                 "boolean" -> p[booleanPreferencesKey(name)] = entry.getBoolean("value")
                 "int" -> p[intPreferencesKey(name)] = entry.getInt("value")
                 "float" -> p[floatPreferencesKey(name)] = entry.getDouble("value").toFloat()
                 "string" -> p[stringPreferencesKey(name)] = entry.getString("value")
+                else -> error("Unsupported backup preference type")
             }
         }
         return p
@@ -300,7 +344,66 @@ class SettingsBackupStore(context: Context, private val defaults: SettingsValues
         const val LUT_DIR = "luts/"
         const val DCP_DIR = "dcp/"
         const val LUT_FILES_PATH = "lut_profiles/files"
+        const val MAX_JSON_BYTES = 8L * 1024L * 1024L
+        const val MAX_CUBE_BYTES = 32L * 1024L * 1024L
         const val MAX_LUT_BYTES = 512L * 1024L * 1024L
         val SAFE_NAME = Regex("[A-Za-z0-9._-]+")
+    }
+}
+
+
+/** A bounded copy checks before writing, including entries with unknown ZIP sizes. */
+internal fun copyBackupEntry(input: InputStream, output: OutputStream, limit: Long): Long {
+    var count = 0L
+    val buffer = ByteArray(8192)
+    while (true) {
+        val size = input.read(buffer, 0, minOf(buffer.size.toLong(), limit - count + 1).toInt())
+        if (size < 0) return count
+        count += size
+        require(count <= limit) { "Backup entry is too large" }
+        output.write(buffer, 0, size)
+    }
+}
+
+class PreparedBackup internal constructor(
+    private val backup: SettingsValues,
+    private val chosen: Set<BackupSection>,
+    private val defaults: SettingsValues,
+    private val installed: List<File>
+) {
+    /** Remove newly installed LUTs if publishing the settings fails. */
+    fun discard() { installed.forEach { it.delete() } }
+
+    fun merge(current: SettingsValues): SettingsValues {
+        var next = if (BackupSection.Settings in chosen) {
+            backup.copy(
+                lensProfiles = current.lensProfiles,
+                userLutProfiles = current.userLutProfiles,
+                selectedUserLutProfileId = current.selectedUserLutProfileId,
+                videoUserLutProfileId = current.videoUserLutProfileId,
+                saveLocationId = current.saveLocationId,
+                lastLensId = current.lastLensId,
+                customGpuDriverEnabled = current.customGpuDriverEnabled,
+                customGpuDriverName = current.customGpuDriverName
+            )
+        } else current
+        if (BackupSection.LensProfiles in chosen) next = next.copy(lensProfiles = backup.lensProfiles)
+        if (BackupSection.Luts in chosen) next = next.copy(
+            userLutProfiles = backup.userLutProfiles,
+            selectedUserLutProfileId = backup.selectedUserLutProfileId,
+            videoUserLutProfileId = backup.videoUserLutProfileId
+        )
+        if (BackupSection.Settings in chosen || BackupSection.Luts in chosen) {
+            val ids = next.userLutProfiles.map { it.id }.toSet()
+            if (next.selectedUserLutProfileId !in ids) next = next.copy(selectedUserLutProfileId = null)
+            if (next.videoUserLutProfileId !in ids) next = next.copy(videoUserLutProfileId = null)
+            if (next.colorRenderProfile == ColorRenderProfile.UserLut && next.selectedUserLutProfileId == null) {
+                next = next.copy(colorRenderProfile = defaults.colorRenderProfile)
+            }
+            if (next.videoColorRenderProfile == ColorRenderProfile.UserLut && next.videoUserLutProfileId == null) {
+                next = next.copy(videoColorRenderProfile = defaults.videoColorRenderProfile)
+            }
+        }
+        return next
     }
 }
