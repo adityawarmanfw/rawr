@@ -202,8 +202,7 @@ internal fun CaptureViewfinder(
                 longExposure = state.longExposure,
                 holdActive = state.bracketHoldActive,
                 restoringPreview = state.restoringPreview,
-                stacked = state.experimentalMultiframeEnabled && state.captureMode == CaptureMode.Photo &&
-                    state.longExposure.deferredNs <= LONG_EXPOSURE_STACK_MAX_NS,
+                stacked = state.experimentalMultiframeEnabled && state.captureMode == CaptureMode.Photo,
                 orientation = state.orientation,
                 modifier = Modifier.align(Alignment.TopCenter).padding(top = 56.dp),
                 fullSizeBinnedStills = state.fullSizeBinnedStills,

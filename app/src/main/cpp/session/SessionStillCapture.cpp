@@ -11,7 +11,6 @@
 #include "local_tone/ExposureFusion.h"
 // Still + multiframe capture routing.
 #include "camera/NativeCameraController.h"
-#include "camera/ViewfinderExposure.h"
 #include "diagnostics/logging/NativeLog.h"
 #include "session/SessionEngine.h"
 
@@ -204,15 +203,11 @@ uint32_t SessionEngine::prepareExperimentalMultiframe(uint32_t maxFrames, uint32
     // frames too dark to help (they would be skipped), freeze their slots as
     // burst frames instead. Checked outside mu_ like other camera calls.
     // Long exposure (shutter past the viewfinder cap): the ZSL ring holds only
-    // viewfinder frames, so up to kStackShutterMaxNs the merge takes a burst
+    // viewfinder frames, so the merge takes a burst
     // of post-shutter frames at that shutter (full-size stills below on a
-    // capture-stream lens); longer shutters take one frame.
+    // capture-stream lens).
     if (const auto* controller = cameraControls_.controller()) {
         if (const auto exposure = controller->deferredCaptureExposure()) {
-            if (exposure->exposureTimeNs > camera::kStackShutterMaxNs) {
-                LOGI("MULTIFRAME_LONG_EXPOSURE_SINGLE burst=%u", maxFrames + longFrames);
-                return 0u;
-            }
             if (!controller->hasFullSizeCapture())
                 return prepareLongExposureBurst(maxFrames + longFrames, exposure->exposureTimeNs);
         }

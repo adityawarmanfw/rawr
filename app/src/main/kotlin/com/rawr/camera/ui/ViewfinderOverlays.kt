@@ -273,16 +273,12 @@ private const val HDR_BRACKETED_NOTICE_MS = 4_000L
 
 private const val FULL_SIZE_FALLBACK_NOTICE_MS = 3_000L
 
-/** Longest shutter multiframe still stacks (native kStackShutterMaxNs). */
-internal const val LONG_EXPOSURE_STACK_MAX_NS = 1_100_000_000L
-
 /**
  * The one capture status pill, in priority order: a long exposure's countdown
  * (or "Hold still" while untimed), "Hold still" until post-shutter frames are
  * in (felt as a tick at the end), "Restoring preview…", a moment's note when
  * the camera skipped full res (the counters went up), and before the press
- * what a long exposure will be (one frame, or a stacked burst up to
- * [LONG_EXPOSURE_STACK_MAX_NS] with multiframe on).
+ * what a long exposure will be (one frame, or a stacked burst with multiframe on).
  */
 @Composable
 internal fun CaptureStatusNotice(

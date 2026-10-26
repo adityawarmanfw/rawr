@@ -14,11 +14,6 @@ namespace rawrcam::camera {
 // whatever ISO cannot), so it previews the capture's brightness.
 inline constexpr int64_t kViewfinderShutterMaxNs = 200'000'000;  // 1/5 s
 
-// Longest shutter multiframe still merges: past the viewfinder cap the burst
-// is taken after the press at that shutter; longer shutters take one frame.
-// A little over 1 s: shutters the controls show as "1" (e.g. 1.03 s) still stack.
-inline constexpr int64_t kStackShutterMaxNs = 1'100'000'000;  // 1 s
-
 struct SensorExposurePair {
     int64_t exposureTimeNs = 0;
     int32_t sensitivity = 0;
