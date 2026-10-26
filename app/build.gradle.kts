@@ -6,6 +6,13 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// Identify the checked-out source in both CI and local debug builds.
+val debugCommit = providers.exec {
+    workingDir(rootProject.projectDir)
+    commandLine("git", "rev-parse", "--short=8", "HEAD")
+}.standardOutput.asText.map { it.trim() }
+val debugVersionName = debugCommit.map { "debug-$it" }
+
 // The native asset is the canonical input; package it without a second tracked copy.
 abstract class FilmAssetsTask : DefaultTask() {
     @get:InputFile abstract val sourceFile: RegularFileProperty
@@ -22,6 +29,9 @@ val filmAssets = tasks.register<FilmAssetsTask>("generateFilmAssets") {
     outputDirectory.set(layout.buildDirectory.dir("generated/filmAssets"))
 }
 androidComponents {
+    onVariants(selector().withBuildType("debug")) { variant ->
+        variant.outputs.forEach { it.versionName.set(debugVersionName) }
+    }
     onVariants { variant ->
         variant.sources.assets?.addGeneratedSourceDirectory(filmAssets, FilmAssetsTask::outputDirectory)
     }
@@ -99,10 +109,9 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
-            versionNameSuffix = "-debug"
             resValue("string", "app_name", "Rawr Debug")
             // Native EXIF Software tag; must match BuildConfig.VERSION_NAME.
-            externalNativeBuild { cmake { arguments += "-DRAWR_VERSION_NAME=${defaultConfig.versionName}-debug" } }
+            externalNativeBuild { cmake { arguments += "-DRAWR_VERSION_NAME=${debugVersionName.get()}" } }
         }
         release {
             externalNativeBuild { cmake { arguments += "-DRAWR_VERSION_NAME=${defaultConfig.versionName}" } }
