@@ -1067,11 +1067,14 @@ struct NativeCameraController::Impl final : CameraEventSink {
             diag("CAMERA_FACE_AF_REGION cleared reason=no_faces");
             return;
         }
-        const auto& face = control.faceDetections.front();
+        const auto selected = std::find_if(control.faceDetections.begin(), control.faceDetections.end(),
+                                           [](const auto& f) { return f.afTarget; });
+        if (selected == control.faceDetections.end()) return;
+        const auto& face = *selected;
         const auto region = focusControls.request(std::nullopt).afRegion;
         std::ostringstream d;
         d << "CAMERA_FACE_AF_REGION face=" << face.x << ',' << face.y << ',' << face.w << ',' << face.h
-          << " score=" << static_cast<int>(face.score) << " region=" << (*region)[0] << ',' << (*region)[1] << ','
+          << " score=" << static_cast<int>(face.score) << " eye=" << face.afEye.has_value() << " region=" << (*region)[0] << ',' << (*region)[1] << ','
           << (*region)[2] << ',' << (*region)[3];
         diag(d.str());
     }

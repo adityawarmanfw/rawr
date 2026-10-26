@@ -304,6 +304,16 @@ void faceNormalization() {
     assert(faces[0].score == 90 && faces[1].score == 50 && faces[2].score == 20);
     assert(faces[2].x == 0 && faces[2].y == 0 && faces[2].w == 0.5f && faces[2].h == 0.5f);
     assert(faces[0].x == 0.5f && faces[0].y == 0.5f && faces[0].w == 0.5f && faces[0].h == 0.5f);
+    const int32_t landmarks[] = {200, 400, -2000, -2000, 300, 800, 700, 1400, 900, 1400, 800, 1800};
+    const int32_t ids[] = {42, 43};
+    const auto eyes = normalizeCameraFaces(active, rectangles, 8, scores, 2, landmarks, 12, ids, 2);
+    assert(eyes[0].id == 43 && eyes[1].id == 42);  // Metadata follows confidence sorting.
+    assert(eyes[0].eyes[0] && eyes[0].eyes[1]);
+    assert(eyes[1].eyes[0] && !eyes[1].eyes[1]);
+    assert((*eyes[1].eyes[0])[0] == 0.1f && (*eyes[1].eyes[0])[1] == 0.1f);
+    const auto truncated = normalizeCameraFaces(active, rectangles, 8, scores, 2, landmarks, 1, ids, 1);
+    assert(!truncated[0].eyes[0] && truncated[0].id == -1);
+    assert(!faces[0].eyes[0] && !faces[0].eyes[1]);
     assert(normalizeCameraFaces(active, rectangles, 3, nullptr, 0).empty());
     assert(normalizeCameraFaces({}, rectangles, 20, scores, 5).empty());
     assert(normalizeCameraFaces(active, nullptr, 20, scores, 5).empty());

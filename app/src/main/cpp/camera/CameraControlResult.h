@@ -25,6 +25,8 @@ struct CameraControlResult {
 // Camera2 reports face rectangles in the standard active array. Accept packed
 // [left,top,right,bottom] groups and optional scores; clip, normalize and rank.
 std::vector<FaceDetection> normalizeCameraFaces(const metadata::RectI& active, const int32_t* rectangles,
-                                                size_t rectangleValueCount, const uint8_t* scores, size_t scoreCount);
+                                                size_t rectangleValueCount, const uint8_t* scores, size_t scoreCount,
+                                                const int32_t* landmarks = nullptr, size_t landmarkCount = 0,
+                                                const int32_t* ids = nullptr, size_t idCount = 0);
 
 }  // namespace rawrcam::camera

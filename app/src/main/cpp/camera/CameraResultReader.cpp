@@ -61,9 +61,16 @@ CameraControlResult readCameraControlResult(const ACameraMetadata* result,
     if (capabilities.faceDetectSupported) {
         const auto rects = entry(result, ACAMERA_STATISTICS_FACE_RECTANGLES);
         const auto scores = entry(result, ACAMERA_STATISTICS_FACE_SCORES);
+        const auto mode = entry(result, ACAMERA_STATISTICS_FACE_DETECT_MODE);
+        const bool full = mode && mode->data.u8 && mode->count &&
+                          mode->data.u8[0] == ACAMERA_STATISTICS_FACE_DETECT_MODE_FULL;
+        const auto landmarks = full ? entry(result, ACAMERA_STATISTICS_FACE_LANDMARKS) : std::nullopt;
+        const auto ids = full ? entry(result, ACAMERA_STATISTICS_FACE_IDS) : std::nullopt;
         if (rects && rects->data.i32) {
             observation.faces = normalizeCameraFaces(geometry.activeArray, rects->data.i32, rects->count,
-                                                     scores ? scores->data.u8 : nullptr, scores ? scores->count : 0);
+                                                     scores ? scores->data.u8 : nullptr, scores ? scores->count : 0,
+                                                     landmarks ? landmarks->data.i32 : nullptr, landmarks ? landmarks->count : 0,
+                                                     ids ? ids->data.i32 : nullptr, ids ? ids->count : 0);
         }
     }
     return observation;

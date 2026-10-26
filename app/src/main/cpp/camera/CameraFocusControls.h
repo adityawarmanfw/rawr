@@ -32,7 +32,7 @@ class CameraFocusControls {
     void clearTap(CameraControlState& state, bool cancelScan = true);
     bool expireTap(CameraControlState& state, int64_t nowMs);
     bool finishTrigger();
-    FaceFocusChange steerFaces(const CameraControlState& state, const metadata::SensorGeometry* geometry,
+    FaceFocusChange steerFaces(CameraControlState& state, const metadata::SensorGeometry* geometry,
                                bool requestReady);
     CameraMeteringRequest request(std::optional<CameraMeteringRegion> aeRegion) const {
         return {region_, aeRegion, trigger_};
@@ -46,6 +46,7 @@ class CameraFocusControls {
     CameraFocusTrigger trigger_ = CameraFocusTrigger::Idle;
     bool faceSteering_ = false;
     FaceDetection lastFace_;
+    size_t selectedEye_ = 0;
 };
 
 }  // namespace rawrcam::camera

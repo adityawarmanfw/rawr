@@ -7,6 +7,19 @@ import kotlin.test.assertTrue
 
 class FaceDetectionsParseTest {
     @Test
+    fun eyeTargetAndFallbackParse() {
+        val eye = NativeCameraUiSnapshot.parseFaces("[[0.1,0.2,0.3,0.4,80,1,0.2,0.3]]").single()
+        assertTrue(eye.afTarget)
+        assertEquals(.2f, eye.eyeX)
+        assertEquals(.3f, eye.eyeY)
+        for (tail in listOf("1,-1,-1", "1,NaN,0.3", "0,0.2,0.3", "1,0.2,2")) {
+            val face = NativeCameraUiSnapshot.parseFaces("[[0.1,0.2,0.3,0.4,80,$tail]]").single()
+            assertEquals(null, face.eyeX)
+            assertEquals(null, face.eyeY)
+        }
+    }
+
+    @Test
     fun emptyArrayParsesToEmpty() {
         assertEquals(emptyList(), NativeCameraUiSnapshot.parseFaces("[]"))
     }

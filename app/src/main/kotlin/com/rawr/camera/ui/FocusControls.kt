@@ -113,9 +113,8 @@ internal fun AfTarget(state: CaptureUiState, dispatch: CaptureDispatch) {
 }
 
 /**
- * Face-priority boxes. Display-only (no gesture handling — taps pass through
- * to tap-to-focus below): in full auto the primary face also steers the native
- * AF region, so faces genuinely drive focus. A tap overrides until cleared.
+ * Face outlines and the native AF target: highlight the selected eye when
+ * available, otherwise its face. Taps pass through to tap-to-focus below.
  */
 @Composable
 internal fun FaceBoxes(faces: List<com.rawr.camera.model.FaceDetection>) {
@@ -127,8 +126,19 @@ internal fun FaceBoxes(faces: List<com.rawr.camera.model.FaceDetection>) {
             .semantics { contentDescription = "Detected faces, ${faces.size}" }
     ) {
         faces.forEachIndexed { index, face ->
-            val primary = index == 0
-            val color = if (primary) CaptureColors.Success else Color.White.copy(alpha = .6f)
+            val eyeTarget = face.afTarget && face.eyeX != null && face.eyeY != null
+            val color = if (face.afTarget && !eyeTarget) CaptureColors.Success else Color.White.copy(alpha = .6f)
+            if (eyeTarget) {
+                Canvas(Modifier.fillMaxSize()) {
+                    val side = 16.dp.toPx()
+                    drawRect(
+                        color = CaptureColors.Success,
+                        topLeft = Offset(size.width * face.eyeX!! - side / 2, size.height * face.eyeY!! - side / 2),
+                        size = androidx.compose.ui.geometry.Size(side, side),
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx())
+                    )
+                }
+            }
             Box(
                 Modifier
                     .offset(x = maxWidth * face.x, y = maxHeight * face.y)
