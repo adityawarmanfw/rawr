@@ -5,6 +5,17 @@
 - Use `uv` whenever Python or its libraries are needed.
 - Keep temporary work in `./tmp`, not in the root or system `/tmp`.
 
+## UI testing on device
+
+- Drive the debug app with `scripts/ui`, not `uiautomator dump` + coordinates + screenshots.
+  Debug builds publish every `testTag` as a resource-id; chain steps in one call:
+  `scripts/ui seq "app" "tap capture_topbar_settings" "wait section:Image"`.
+- Prefer `ui state` / `ui text <id>` over screenshots. `text:Foo` / `desc:Foo` selectors reach
+  untagged controls and dialogs (popup windows get no resource-ids).
+- `ui open <SettingsSection>` deep-links Settings; `ui audit` lists clickable nodes with no tag.
+- The phone must be unlocked and awake; never enter credentials. End every run with `ui stop`.
+- When adding a control, give it a `testTag` (see `CaptureTestTags`, `SettingsTestTags`).
+
 ## Git workflow
 
 ### Branches

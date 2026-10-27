@@ -169,9 +169,11 @@ def cmd_wait(args):
 
 
 def cmd_open(args):
-    adb("shell", "am", "start", "-n", f"{PKG}/com.rawr.camera.settings.SettingsActivity",
-        "--es", "settings_section", args[0])
-    cmd_wait([f"settings_section_{args[0]}", "-t", "8"])
+    # Clear task: a Settings already on top would just receive the intent, and it reads extras in onCreate only.
+    adb("shell", "am", "start", "-f", "0x10008000",
+        "-n", f"{PKG}/com.rawr.camera.settings.SettingsActivity", "--es", "settings_section", args[0])
+    cmd_wait([f"section:{args[0]}", "-t", "8"])
+    time.sleep(1.2)  # the outgoing page is still animating away; dumping now can mix both
 
 
 def cmd_app(_):
@@ -198,7 +200,10 @@ def cmd_shot(args):
 
 
 def cmd_audit(_):
-    bare = [n for n in dump() if "click" in n.flags and not n.id]
+    nodes = dump()
+    if not nodes:
+        raise UiError(f"no {PKG} nodes on screen (app not in foreground, or device locked?)")
+    bare = [n for n in nodes if "click" in n.flags and not n.id]
     for n in bare:
         print(n.line())
     print(f"{len(bare)} clickable node(s) without a tag")
