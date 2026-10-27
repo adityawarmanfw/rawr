@@ -299,7 +299,11 @@ bool CameraDeviceSession::open(const LensRoute& route, CameraCallbacks& callback
              " attempt=" + std::to_string(attempt));
 
         // The HAL can keep reporting the previous camera as in use for a moment after its close returns.
-        const bool busy = os == ACAMERA_ERROR_MAX_CAMERA_IN_USE || os == ACAMERA_ERROR_CAMERA_IN_USE;
+        // ACameraManager can also briefly drop the id after a close ("Camera ID 0 does not exist!",
+        // reported as ACAMERA_ERROR_UNKNOWN) until the service re-announces it; Samsung hits this
+        // on most lens switches, and without a retry the watchdog restarts the camera 8 s later.
+        const bool busy = os == ACAMERA_ERROR_MAX_CAMERA_IN_USE || os == ACAMERA_ERROR_CAMERA_IN_USE ||
+                          os == ACAMERA_ERROR_UNKNOWN;
         if (!busy || std::chrono::steady_clock::now() + backoff >= deadline) {
             releaseHeldGate();
             return false;
