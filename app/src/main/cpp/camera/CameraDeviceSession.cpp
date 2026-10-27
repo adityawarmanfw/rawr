@@ -583,6 +583,7 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
                                                      CameraKeySetting::Scope::Request, "lens", diag);
         if (!lensKeys.failures.empty())
             return fail("lens_request_keys", "lensId=" + selected->lensId + " failed=" + joined(lensKeys.failures));
+        logCarriedKeys(sessionParameters_, request_, characteristics_, selected->keys, selected->cameraId.c_str(), diag);
     }
     if (!pipeline.submit(session_, request_, callbackContext, control, metering))
         return fail("initial_repeating", "status=control_or_submit_rejected");

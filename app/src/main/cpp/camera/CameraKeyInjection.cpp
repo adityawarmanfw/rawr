@@ -141,7 +141,21 @@ CameraKeyInjectionResult applyCameraKeySettings(ACaptureRequest* request, const 
                                                               : "still")
              << " origin=" << origin
              << " tag=" << key.tag;
-        if (tag) line << " id=0x" << std::hex << *tag << std::dec;
+        if (tag) {
+            line << " id=0x" << std::hex << *tag << std::dec;
+            // Where the HAL lists the tag. A session-only value reaches a HAL that reads it per request
+            // only if the tag is also a request key; the log makes that visible instead of guessable.
+            line << " advertised=";
+            bool any = false;
+            for (const auto& [name, list] : {std::pair{"session", uint32_t(ACAMERA_REQUEST_AVAILABLE_SESSION_KEYS)},
+                                             std::pair{"request", uint32_t(ACAMERA_REQUEST_AVAILABLE_REQUEST_KEYS)},
+                                             std::pair{"result", uint32_t(ACAMERA_REQUEST_AVAILABLE_RESULT_KEYS)}}) {
+                if (!containsI32Tag(characteristics, list, *tag)) continue;
+                line << (any ? "," : "") << name;
+                any = true;
+            }
+            if (!any) line << "none";
+        }
         line << " values=";
         for (size_t i = 0; i < key.values.size(); ++i) line << (i ? "," : "") << key.values[i];
         if (skip.empty()) {
@@ -156,6 +170,23 @@ CameraKeyInjectionResult applyCameraKeySettings(ACaptureRequest* request, const 
         diag(line.str());
     }
     return result;
+}
+
+void logCarriedKeys(const ACaptureRequest* sessionParameters, const ACaptureRequest* repeating,
+                    const ACameraMetadata* characteristics, const std::vector<CameraKeySetting>& keys,
+                    const char* cameraId, const std::function<void(const std::string&)>& diag) {
+    const auto carries = [](const ACaptureRequest* request, uint32_t tag) {
+        ACameraMetadata_const_entry e{};
+        return request && ACaptureRequest_getConstEntry(request, tag, &e) == ACAMERA_OK;
+    };
+    for (const auto& key : keys) {
+        if (!key.enabled) continue;
+        std::string error;
+        const auto tag = resolveTag(characteristics, cameraId, key.tag, &error);
+        if (!tag) continue;
+        diag("CAMERA_KEY_CARRIED tag=" + key.tag + " session=" + (carries(sessionParameters, *tag) ? "yes" : "no") +
+             " repeating=" + (carries(repeating, *tag) ? "yes" : "no"));
+    }
 }
 
 void dumpCaptureRequest(const ACaptureRequest* request, const char* kind,
