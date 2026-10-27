@@ -438,27 +438,40 @@ std::optional<std::array<double, 9>> forwardFromColorMatrix(const std::array<dou
     return mul(adapt, mul(*cameraToXyz, diag));
 }
 
-int repairPlaceholderForwardMatrices(metadata::StaticColorCalibration& color) {
-    // sRGB -> XYZ(D50), the DNG-spec / Bradford-adapted primaries.
-    static constexpr std::array<double, 9> kSrgbD50{0.4360747, 0.3850649, 0.1430804, 0.2225045, 0.7168786,
-                                                    0.0606169, 0.0139322, 0.0971045, 0.7141733};
+namespace {
+// sRGB -> XYZ(D50), the DNG-spec / Bradford-adapted primaries.
+constexpr std::array<double, 9> kSrgbD50{0.4360747, 0.3850649, 0.1430804, 0.2225045, 0.7168786,
+                                         0.0606169, 0.0139322, 0.0971045, 0.7141733};
+}  // namespace
+
+bool isSrgbPlaceholderMatrix(const metadata::Matrix3x3& m) {
     // HALs quantise the placeholder to 1/64 steps (max error ~0.004).
     constexpr double kTolerance = 0.01;
-    const auto isPlaceholder = [&](const metadata::Matrix3x3& m) {
-        if (!m.valid) return false;
-        for (size_t i = 0; i < 9; ++i)
-            if (std::abs(double(m.rowMajor[i]) - kSrgbD50[i]) > kTolerance) return false;
-        return true;
-    };
+    if (!m.valid) return false;
+    for (size_t i = 0; i < 9; ++i)
+        if (std::abs(double(m.rowMajor[i]) - kSrgbD50[i]) > kTolerance) return false;
+    return true;
+}
+
+bool hasPlaceholderForwardMatrix(const metadata::StaticColorCalibration& color) {
+    return isSrgbPlaceholderMatrix(color.forwardMatrix1) || isSrgbPlaceholderMatrix(color.forwardMatrix2);
+}
+
+int repairPlaceholderForwardMatrices(metadata::StaticColorCalibration& color) {
     int repaired = 0;
     const auto repair = [&](metadata::Matrix3x3& forward, const metadata::Matrix3x3& colorTransform, int32_t illuminant) {
-        if (!isPlaceholder(forward) || !colorTransform.valid || illuminant < 0) return;
+        if (!isSrgbPlaceholderMatrix(forward) || !colorTransform.valid || illuminant < 0) return;
         std::array<double, 9> m{};
         for (size_t i = 0; i < 9; ++i) m[i] = colorTransform.rowMajor[i];
-        if (const auto derived = forwardFromColorMatrix(m, uint16_t(illuminant))) {
-            forward = toMatrix(*derived);
-            ++repaired;
-        }
+        const auto derived = forwardFromColorMatrix(m, uint16_t(illuminant));
+        if (!derived) return;
+        const auto candidate = toMatrix(*derived);
+        // Some HALs (OPPO Find X9 Ultra, logical camera) publish a ColorMatrix that is itself the
+        // sRGB primaries with white balance baked in; deriving from it gives the placeholder back.
+        // That is no repair, so leave it for the caller to see as unresolved.
+        if (isSrgbPlaceholderMatrix(candidate)) return;
+        forward = candidate;
+        ++repaired;
     };
     repair(color.forwardMatrix1, color.colorTransform1, color.referenceIlluminant1);
     repair(color.forwardMatrix2, color.colorTransform2, color.referenceIlluminant2);

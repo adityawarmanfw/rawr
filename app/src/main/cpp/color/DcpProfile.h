@@ -78,6 +78,14 @@ using DcpProfilePtr = std::shared_ptr<const DcpProfile>;
 // derived from its ColorMatrix; returns how many were replaced.
 int repairPlaceholderForwardMatrices(metadata::StaticColorCalibration& color);
 
+// True for a matrix that is just the sRGB primaries in D50 XYZ.
+[[nodiscard]] bool isSrgbPlaceholderMatrix(const metadata::Matrix3x3& m);
+
+// True when either ForwardMatrix is still the sRGB placeholder, i.e. the HAL
+// publishes no usable camera colour for this camera (the repair above could not
+// derive one either).
+[[nodiscard]] bool hasPlaceholderForwardMatrix(const metadata::StaticColorCalibration& color);
+
 // The camera calibration the render solves with when the profile is active:
 // the profile's matrices with identity CameraCalibration (a DCP describes the
 // camera it was measured on), a derived ForwardMatrix where the profile has
