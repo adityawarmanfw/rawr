@@ -1,0 +1,234 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.10"
+# ///
+"""Drive the rawr debug app over adb by testTag instead of coordinates.
+
+Debug builds publish every testTag as a uiautomator resource-id (see CaptureTheme), so one
+dump is enough to find, tap and check a control. Commands:
+
+  ui state [-a]            visible tagged/labelled nodes (-a: every node of the app)
+  ui tap <sel>             tap the centre of a node
+  ui text <sel>            print a node's text / description / flags
+  ui wait <sel> [-g] [-t S]  wait until visible (-g: until gone), default 10 s
+  ui open <section>        deep-link Settings, e.g. Image, Capture, FilmSim
+  ui app | stop | back     launch capture / force-stop / system back
+  ui shot [name]           screenshot to tmp/ui/<name>.png, downscaled
+  ui audit                 clickable nodes with no id (the "needs a tag" list)
+  ui seq "tap a" "wait b"  several commands in one call; stops at the first failure
+
+<sel> is a resource-id, or `text:Foo` / `desc:Foo` (exact match) for untagged controls.
+Env: UI_PKG (default com.rawr.camera.debug), ANDROID_SERIAL for multiple devices.
+Always `ui stop` when done: an open camera app drains the battery and heats the phone.
+"""
+import difflib
+import os
+import re
+import shlex
+import subprocess
+import sys
+import time
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+PKG = os.environ.get("UI_PKG", "com.rawr.camera.debug")
+SHOTS = Path(__file__).resolve().parent.parent / "tmp" / "ui"
+BOUNDS = re.compile(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]")
+
+
+class UiError(Exception):
+    pass
+
+
+def adb(*args: str, binary: bool = False, check: bool = True):
+    p = subprocess.run(["adb", *args], capture_output=True, text=not binary)
+    if check and p.returncode != 0:
+        raise UiError(f"adb {' '.join(args)} failed: {(p.stderr or p.stdout).strip()}")
+    return p.stdout
+
+
+class Node:
+    def __init__(self, e: ET.Element):
+        a = e.attrib
+        self.id, self.text, self.desc = a.get("resource-id", ""), a.get("text", ""), a.get("content-desc", "")
+        self.pkg, self.cls = a.get("package", ""), a.get("class", "")
+        self.flags = [n for n, k in (("click", "clickable"), ("scroll", "scrollable"), ("sel", "selected"),
+                                     ("chk", "checked")) if a.get(k) == "true"]
+        if a.get("enabled") == "false":
+            self.flags.append("disabled")
+        m = BOUNDS.match(a.get("bounds", ""))
+        l, t, r, b = map(int, m.groups()) if m else (0, 0, 0, 0)
+        self.bounds, self.center = (l, t, r, b), ((l + r) // 2, (t + b) // 2)
+
+    @property
+    def label(self) -> str:
+        return self.text or self.desc
+
+    def line(self) -> str:
+        parts = [self.id.removeprefix(f"{PKG}:id/") or "-"]
+        if self.label:
+            parts.append(repr(self.label[:60]))
+        parts.append(" ".join(self.flags))
+        parts.append("@%d,%d" % self.center)
+        return "  ".join(p for p in parts if p)
+
+
+def fold_labels(nodes: list[Node]) -> list[Node]:
+    """Compose emits a label as its own id-less node on top of its tagged control: fold it in."""
+    tagged = {n.center: n for n in nodes if n.id}
+    out = []
+    for n in nodes:
+        host = tagged.get(n.center) if not n.id else None
+        if host is None:
+            out.append(n)
+        elif not host.label:
+            host.text, host.desc = n.text, n.desc
+    return out
+
+
+def dump() -> list[Node]:
+    for _ in range(3):
+        raw = adb("exec-out", "uiautomator", "dump", "/dev/tty", check=False)
+        start = raw.find("<?xml")
+        if start >= 0:
+            end = raw.rfind("</hierarchy>") + len("</hierarchy>")
+            nodes = [Node(e) for e in ET.fromstring(raw[start:end]).iter("node")]
+            return [n for n in nodes if n.pkg == PKG]
+        time.sleep(0.4)
+    raise UiError("uiautomator dump failed (device asleep or locked?)")
+
+
+def match(n: Node, sel: str) -> bool:
+    if sel.startswith("text:"):
+        return n.text == sel[5:]
+    if sel.startswith("desc:"):
+        return n.desc == sel[5:]
+    return n.id == sel
+
+
+def find(nodes: list[Node], sel: str) -> Node | None:
+    return next((n for n in nodes if match(n, sel)), None)
+
+
+def require(nodes: list[Node], sel: str) -> Node:
+    if not nodes:
+        raise UiError(f"no {PKG} nodes on screen (app not in foreground, or device locked?)")
+    n = find(nodes, sel)
+    if n:
+        return n
+    needle = sel.split(":", 1)[-1].lower()
+    names = {x.id or x.label: x for x in nodes if x.id or x.label}
+    near = [x for k, x in names.items() if needle in k.lower()]
+    near += [names[k] for k in difflib.get_close_matches(sel.split(":", 1)[-1], names, n=5, cutoff=0.6)
+             if names[k] not in near]
+    near = near[:8]
+    hint = "; close: " + ", ".join(x.id or repr(x.label) for x in near) if near else ""
+    raise UiError(f"not found: {sel}{hint}")
+
+
+def cmd_state(args):
+    nodes = dump()
+    if not nodes:
+        raise UiError(f"no {PKG} nodes on screen (app not in foreground, or device locked?)")
+    for n in nodes if "-a" in args else fold_labels(nodes):
+        if "-a" in args or ((n.id or n.label) and n.id != "android:id/content"):
+            print(n.line())
+
+
+def cmd_tap(args):
+    n = require(dump(), args[0])
+    adb("shell", "input", "tap", str(n.center[0]), str(n.center[1]))
+    print(f"tap {args[0]} @{n.center[0]},{n.center[1]}")
+
+
+def cmd_text(args):
+    n = require(dump(), args[0])
+    print(n.line())
+
+
+def cmd_wait(args):
+    gone, timeout, sel, it = False, 10.0, None, iter(args)
+    for a in it:
+        if a == "-g":
+            gone = True
+        elif a == "-t":
+            timeout = float(next(it))
+        else:
+            sel = a
+    if sel is None:
+        raise UiError("wait needs a selector")
+    end = time.time() + timeout
+    while True:
+        present = find(dump(), sel) is not None
+        if present != gone:
+            print(f"{'gone' if gone else 'visible'}: {sel}")
+            return
+        if time.time() > end:
+            raise UiError(f"timeout after {timeout:g}s waiting for {sel}{' to go' if gone else ''}")
+        time.sleep(0.25)
+
+
+def cmd_open(args):
+    adb("shell", "am", "start", "-n", f"{PKG}/com.rawr.camera.settings.SettingsActivity",
+        "--es", "settings_section", args[0])
+    cmd_wait([f"settings_section_{args[0]}", "-t", "8"])
+
+
+def cmd_app(_):
+    adb("shell", "am", "start", "-n", f"{PKG}/com.rawr.camera.MainActivity")
+    cmd_wait(["capture_viewfinder", "-t", "10"])
+
+
+def cmd_stop(_):
+    adb("shell", "am", "force-stop", PKG)
+    print(f"stopped {PKG}")
+
+
+def cmd_back(_):
+    adb("shell", "input", "keyevent", "KEYCODE_BACK")
+    print("back")
+
+
+def cmd_shot(args):
+    SHOTS.mkdir(parents=True, exist_ok=True)
+    out = SHOTS / f"{args[0] if args else 'shot'}.png"
+    out.write_bytes(adb("exec-out", "screencap", "-p", binary=True))
+    subprocess.run(["sips", "-Z", "720", str(out)], capture_output=True)  # macOS; keeps images cheap
+    print(out)
+
+
+def cmd_audit(_):
+    bare = [n for n in dump() if "click" in n.flags and not n.id]
+    for n in bare:
+        print(n.line())
+    print(f"{len(bare)} clickable node(s) without a tag")
+
+
+COMMANDS = {"state": cmd_state, "tap": cmd_tap, "text": cmd_text, "wait": cmd_wait, "open": cmd_open,
+            "app": cmd_app, "stop": cmd_stop, "back": cmd_back, "shot": cmd_shot, "audit": cmd_audit}
+
+
+def run(argv: list[str]):
+    if not argv or argv[0] not in COMMANDS:
+        raise UiError(f"usage: ui <{'|'.join(COMMANDS)}|seq> ...  (see scripts/ui header)")
+    COMMANDS[argv[0]](argv[1:])
+
+
+def main():
+    argv = sys.argv[1:]
+    try:
+        if argv and argv[0] == "seq":
+            for i, step in enumerate(argv[1:], 1):
+                try:
+                    run(shlex.split(step))
+                except UiError as e:
+                    raise UiError(f"step {i} ({step}): {e}")
+        else:
+            run(argv)
+    except UiError as e:
+        print(f"FAIL: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
