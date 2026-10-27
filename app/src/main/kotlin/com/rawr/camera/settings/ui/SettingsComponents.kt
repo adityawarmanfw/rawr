@@ -92,6 +92,21 @@ internal data class SettingsScrollSession(val key: String, val memory: SettingsS
 
 internal val LocalSettingsScrollSession = compositionLocalOf<SettingsScrollSession?> { null }
 
+/** Tag of the enclosing row or slider, so its ⓘ / −/+ / value children can derive `<tag>_info` etc. */
+internal val LocalSettingsControlTag = compositionLocalOf<String?> { null }
+
+/**
+ * Automation tag for a control whose caller passed none: `settings_<kind>_<page>_<slug(name)>`, e.g.
+ * `settings_row_Denoise_strength`. Explicit tags always win, so existing identifiers never change.
+ */
+@Composable
+internal fun controlTag(kind: String, name: String, explicit: String? = null): String {
+    if (explicit != null) return explicit
+    val page = LocalSettingsScrollSession.current?.key?.substringAfter(':')
+        ?.replace(Regex("[^A-Za-z0-9]+"), "_")?.trim('_').orEmpty().ifBlank { "page" }
+    return "settings_${kind}_${page}_${SettingsTestTags.slug(name)}"
+}
+
 @Composable
 internal fun SettingsPageContainer(
     modifier: Modifier = Modifier,
@@ -173,11 +188,13 @@ internal fun SettingsRow(
     leadingIcon: ImageVector? = null,
     trailing: @Composable (() -> Unit)? = null
 ) {
+    val tag = controlTag("row", title, testTag)
+    CompositionLocalProvider(LocalSettingsControlTag provides tag) {
     Row(
         modifier =
             Modifier
                 .fillMaxWidth()
-                .then(if (testTag != null) Modifier.testTag(testTag) else Modifier)
+                .testTag(tag)
                 .then(if (onClick != null && enabled) Modifier.clickable(onClick = onClick) else Modifier)
                 .heightIn(min = SettingsRowMinHeight)
                 .padding(horizontal = SettingsRowHorizontalPadding, vertical = SettingsRowVerticalPadding),
@@ -237,6 +254,7 @@ internal fun SettingsRow(
                 tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (enabled) .65f else .3f)
             )
         }
+    }
     }
 }
 
@@ -345,9 +363,12 @@ internal fun StandaloneNumericSliderRow(
     fun snapped(v: Float) = (minimum + stepIndex(v) * step).coerceIn(minimum, maximum)
     var lastHapticStep by remember(identity) { mutableIntStateOf(currentStepIndex) }
     LaunchedEffect(currentStepIndex) { lastHapticStep = currentStepIndex }
+    val tag = controlTag("slider", label)
 
+    CompositionLocalProvider(LocalSettingsControlTag provides tag) {
     Column(
         Modifier.fillMaxWidth()
+            .testTag(tag)
             .padding(
                 start = SettingsSliderHorizontalPadding,
                 end = SettingsSliderHorizontalPadding,
@@ -371,7 +392,7 @@ internal fun StandaloneNumericSliderRow(
                             )
                         },
                     modifier =
-                        Modifier.weight(1f, fill = false).combinedClickable(
+                        Modifier.weight(1f, fill = false).testTag("${tag}_label").combinedClickable(
                             enabled = enabled && defaultValue != null,
                             onClick = {},
                             onDoubleClick = { defaultValue?.let(onValueChange) }
@@ -403,6 +424,7 @@ internal fun StandaloneNumericSliderRow(
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = if (modified) FontWeight.SemiBold else null,
                 modifier = Modifier
+                    .testTag("${tag}_value")
                     .clickable(enabled = enabled, onClickLabel = "Enter $label") {
                         entry = if (decimals == 0) value.roundToInt().toString()
                         else String.format(Locale.US, "%.${decimals}f", value)
@@ -425,7 +447,7 @@ internal fun StandaloneNumericSliderRow(
                 maximum = maximum,
                 defaultValue = defaultValue,
                 enabled = enabled,
-                modifier = Modifier.weight(1f).height(32.dp)
+                modifier = Modifier.weight(1f).height(32.dp).testTag("${tag}_track")
             ) { candidate ->
                 val nextStep = stepIndex(candidate)
                 if (nextStep != lastHapticStep) {
@@ -434,15 +456,16 @@ internal fun StandaloneNumericSliderRow(
                 }
                 onValueChange((minimum + nextStep * step).coerceIn(minimum, maximum))
             }
-            SliderNudge("−", enabled && currentStepIndex > 0) {
+            SliderNudge("−", enabled && currentStepIndex > 0, Modifier.testTag("${tag}_minus")) {
                 haptics.sliderTick()
                 onValueChange((minimum + (currentStepIndex - 1) * step).coerceIn(minimum, maximum))
             }
-            SliderNudge("+", enabled && currentStepIndex < stepCount) {
+            SliderNudge("+", enabled && currentStepIndex < stepCount, Modifier.testTag("${tag}_plus")) {
                 haptics.sliderTick()
                 onValueChange((minimum + (currentStepIndex + 1) * step).coerceIn(minimum, maximum))
             }
         }
+    }
     }
     entry?.let { text ->
         val parsed = text.replace(',', '.').toFloatOrNull()?.takeIf { it.isFinite() }
@@ -544,12 +567,12 @@ private fun SettingsSliderTrack(
 
 /** One-step fine adjustment beside a slider. */
 @Composable
-private fun SliderNudge(symbol: String, enabled: Boolean, onClick: () -> Unit) {
+private fun SliderNudge(symbol: String, enabled: Boolean, tag: Modifier, onClick: () -> Unit) {
     TextButton(
         onClick = onClick,
         enabled = enabled,
         contentPadding = PaddingValues(0.dp),
-        modifier = Modifier.size(36.dp, 32.dp)
+        modifier = tag.size(36.dp, 32.dp)
     ) {
         Text(symbol, style = MaterialTheme.typography.titleSmall)
     }
@@ -564,7 +587,9 @@ internal fun CompactSwitch(checked: Boolean, onCheckedChange: ((Boolean) -> Unit
                 checked = checked,
                 onCheckedChange = onCheckedChange,
                 enabled = enabled,
-                modifier = Modifier.scale(.75f)
+                modifier = Modifier
+                    .then(LocalSettingsControlTag.current?.let { Modifier.testTag("${it}_switch") } ?: Modifier)
+                    .scale(.75f)
             )
         }
     }
@@ -589,11 +614,13 @@ internal fun SelectedCheck(selected: Boolean, enabled: Boolean = true) {
 @Composable
 internal fun SettingsInfoButton(title: String, text: String) {
     var open by remember { mutableStateOf(false) }
+    val tag = LocalSettingsControlTag.current ?: controlTag("row", title)
     Text(
         "ⓘ",
         style = MaterialTheme.typography.labelLarge,
         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .7f),
         modifier = Modifier
+            .testTag("${tag}_info")
             .clickable(onClickLabel = "About $title") { open = true }
             .padding(horizontal = 6.dp, vertical = 2.dp)
     )
@@ -645,8 +672,11 @@ internal fun CompactSegments(
 ) {
     val shape = RoundedCornerShape(6.dp)
     val outline = MaterialTheme.colorScheme.outlineVariant
+    // Segment bars have no title of their own, so the group is identified by its labels.
+    val tag = controlTag("seg", labels.joinToString("_"))
     Row(
         modifier
+            .testTag(tag)
             .fillMaxWidth()
             .padding(horizontal = SettingsSliderHorizontalPadding, vertical = SettingsSliderVerticalPadding)
             .height(28.dp)
@@ -655,7 +685,7 @@ internal fun CompactSegments(
     ) {
         labels.forEachIndexed { index, text ->
             if (index > 0) Box(Modifier.width(1.dp).fillMaxHeight().background(outline))
-            CompactSegmentCell(text, isSelected(index), enabled, Modifier.weight(1f)) { onClick(index) }
+            CompactSegmentCell(text, isSelected(index), enabled, Modifier.weight(1f).testTag("${tag}_${SettingsTestTags.slug(text)}")) { onClick(index) }
         }
     }
 }
@@ -669,6 +699,7 @@ internal fun CompactPill(text: String, selected: Boolean, modifier: Modifier = M
         selected,
         true,
         modifier
+            .testTag(controlTag("pill", text))
             .height(28.dp)
             .clip(shape)
             .border(

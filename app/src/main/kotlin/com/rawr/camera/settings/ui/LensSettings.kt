@@ -83,7 +83,7 @@ internal fun LensSettings(state: SettingsUiState, dispatch: SettingsDispatch) {
                                     lens = lens,
                                     canDisable = lenses.count { it.enabled } > 1,
                                     dragHandle = {
-                                        IconButton(onClick = {}, modifier = Modifier.draggableHandle()) {
+                                        IconButton(onClick = {}, modifier = Modifier.draggableHandle().testTag(SettingsTestTags.row("Lens", "reorder_${lens.name}"))) {
                                             Icon(Icons.Rounded.DragHandle, contentDescription = "Reorder ${lens.name}")
                                         }
                                     },
@@ -188,11 +188,13 @@ private fun LensRow(
         Checkbox(
             checked = lens.enabled,
             enabled = !lens.enabled || canDisable,
-            onCheckedChange = onEnabledChange
+            onCheckedChange = onEnabledChange,
+            modifier = Modifier.testTag(SettingsTestTags.row("Lens", "enable_${lens.name}"))
         )
         Column(
             Modifier
                 .weight(1f)
+                .testTag(SettingsTestTags.row("Lens", "open_${lens.name}"))
                 .clickable(onClick = onOpen)
                 .padding(vertical = SettingsRowVerticalPadding, horizontal = 8.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp)
@@ -215,7 +217,7 @@ private fun LensRow(
         IconButton(onClick = onCopy, modifier = Modifier.testTag(SettingsTestTags.row("Lens", "copy_${lens.name}"))) {
             Icon(Icons.Rounded.ContentCopy, contentDescription = "Copy ${lens.name}")
         }
-        IconButton(onClick = onDelete) {
+        IconButton(onClick = onDelete, modifier = Modifier.testTag(SettingsTestTags.row("Lens", "delete_${lens.name}"))) {
             Icon(Icons.Rounded.DeleteOutline, contentDescription = "Delete ${lens.name}")
         }
     }
