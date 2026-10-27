@@ -143,6 +143,34 @@ void MultiframeCaptureCoordinator::abandonBracket(std::uint64_t bracketRequestId
     if (activeBracket_ && activeBracket_->requestId() == bracketRequestId) abandonActiveBracket();
 }
 
+std::shared_ptr<BracketCollector> MultiframeCaptureCoordinator::armLongExposureBurst(std::uint32_t maxFrames) noexcept {
+    if (!experimentalMultiframeEnabled_ || !multiframeFrameRing_ || pendingMultiframeCapture_ || config_.cfa > 3u)
+        return nullptr;
+    // Pinned long frames share the ring with the preview frames in flight.
+    const std::size_t capacity = multiframeRingFrames(config_.rawWidth, config_.rawHeight);
+    const std::size_t free = capacity > rawrcam::imaging::kRealtimeFramesInFlight + 1u
+                                 ? capacity - rawrcam::imaging::kRealtimeFramesInFlight - 1u
+                                 : 0u;
+    const auto frames = static_cast<std::uint32_t>(std::min<std::size_t>(maxFrames, free));
+    if (frames < 2u) {
+        LOGW("MULTIFRAME_LONG_BURST_SKIP freeSlots=%zu", free);
+        return nullptr;
+    }
+    try {
+        abandonActiveBracket();
+        bracketHold_->opened.fetch_add(1, std::memory_order_acq_rel);
+        activeBracket_ = std::make_shared<BracketCollector>(
+            nextBracketRequestId_++, frames,
+            [hold = bracketHold_] { hold->done.fetch_add(1, std::memory_order_acq_rel); });
+        LOGI("MULTIFRAME_LONG_BURST_ARMED request=%llu frames=%u",
+             static_cast<unsigned long long>(activeBracket_->requestId()), frames);
+        return activeBracket_;
+    } catch (...) {
+        activeBracket_.reset();
+        return nullptr;
+    }
+}
+
 uint32_t MultiframeCaptureCoordinator::prepareExperimentalMultiframeOnShutter(uint32_t maxFrames) noexcept {
     auto& trace = rawrcam::diagnostics::RuntimeTraceRecorder::instance();
     if (!experimentalMultiframeEnabled_ || !multiframeFrameRing_ || pendingMultiframeCapture_) {

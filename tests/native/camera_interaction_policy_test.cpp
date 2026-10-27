@@ -17,9 +17,9 @@ void angleIntent() {
     assert(!policy.selectShutterAngle(180, kMinNs, kMaxNs));
     policy.setVideoMode(true, 24);
     const auto choices = policy.shutterChoices(kMinNs, kMaxNs);
-    assert(choices.size() == 6);
-    assert(choices.front().degrees == 45 && choices.back().degrees == 360);
-    assert(choices[3].exposureTimeNs == 20833333);
+    assert(choices.size() == 12);
+    assert(choices.front().exposureTimeNs == kMinNs && choices.back().degrees == 360);
+    assert(choices[9].exposureTimeNs == 20833333);
     assert(choices.back().exposureTimeNs == 41666666);
     assert(policy.selectShutterAngle(270, kMinNs, kMaxNs));
     assert(policy.heldExposure(10000000, kMinNs, kMaxNs) == 31250000);
@@ -53,7 +53,7 @@ void angleLegality() {
     assert(!policy.selectShutterAngle(100, kMinNs, kMaxNs));
     assert(policy.shutterAngle() == 180);  // rejected input keeps accepted intent
     const auto bounded = policy.shutterChoices(10000000, 20000000);
-    assert(bounded.size() == 2 && bounded[0].degrees == 135 && bounded[1].degrees == 180);
+    assert(bounded.size() == 3 && bounded[0].exposureTimeNs == 10000000 && bounded[1].degrees == 135 && bounded[2].degrees == 180);
     assert(!policy.selectShutterAngle(360, 10000000, 20000000));
     assert(!policy.selectShutterAngle(45, 10000000, 20000000));
     assert(policy.shutterChoices(40000000, kMaxNs).empty());  // minimum exceeds frame period
@@ -71,8 +71,26 @@ void angleLegality() {
     assert(policy.selectShutterAngle(180, kMinNs, kMaxNs));
     policy.setVideoMode(true, 60);
     // A held angle outside a new sensor range moves to a legal native choice.
-    assert(policy.resolveHeldExposure(16666666, 10000000, kMaxNs) == 12500000);
-    assert(policy.shutterAngle() == 270);
+    assert(policy.resolveHeldExposure(16666666, 10000000, kMaxNs) == 10000000);
+    assert(policy.shutterAngle() == 216);
+}
+
+void fastAngles() {
+    CameraCadencePolicy policy;
+    policy.setVideoMode(true, 30);
+    for (double angle : {22.5, 11.25, 5.625, 2.8125, 1.40625}) {
+        assert(policy.selectShutterAngle(angle, kMinNs, kMaxNs));
+        assert(policy.heldExposure(0, kMinNs, kMaxNs) ==
+               static_cast<int64_t>((1000000000.0 / 30) * (angle / 360)));
+    }
+    const auto fastest = policy.shutterChoices(123457, kMaxNs).front();
+    assert(policy.selectShutterAngle(fastest.degrees, 123457, kMaxNs));
+    assert(policy.heldExposure(0, 123457, kMaxNs) == 123457);
+    policy.setVideoMode(true, 60);
+    assert(policy.resolveHeldExposure(123457, 123457, kMaxNs) == 123457);
+    const auto duplicate = policy.shutterChoices(520833, kMaxNs);
+    assert(duplicate[0].exposureTimeNs == 520833);
+    assert(duplicate[1].exposureTimeNs > 520833);
 }
 
 void tapFocus() {
@@ -120,6 +138,7 @@ int main(int argc, char** argv) {
     }
     angleIntent();
     angleLegality();
+    fastAngles();
     tapFocus();
     std::cout << "CAMERA_INTERACTION_POLICY_PASS\n";
 }

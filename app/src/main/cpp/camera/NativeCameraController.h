@@ -72,10 +72,10 @@ class NativeCameraController {
         int32_t sensitivity = 0;
     };
     std::optional<LongExposure> deferredCaptureExposure() const;
-    // Submits that exposure as one AE-off one-shot request tagged with
-    // requestId; the viewfinder stalls until it returns. False when not
+    // Submits that exposure as `count` AE-off one-shot requests tagged with
+    // requestId; the viewfinder stalls until the last returns. False when not
     // needed or not submitted.
-    bool captureLongExposure(uint64_t requestId, LongExposure* submitted);
+    bool captureLongExposure(uint64_t requestId, LongExposure* submitted, uint32_t count = 1);
     // Capture-stream routes (LensRoute::captureStream): `count` full-size
     // stills at the viewfinder's exposure, tagged requestId.
     bool captureFullSize(uint64_t requestId, uint32_t count, bool retainFocus = false, bool moreExposures = false);

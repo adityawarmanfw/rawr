@@ -26,6 +26,13 @@ CameraKeyInjectionResult applyCameraKeySettings(ACaptureRequest* request, const 
                                                 CameraKeySetting::Scope scope, const char* origin,
                                                 const std::function<void(const std::string&)>& diag);
 
+// Logs, per enabled key, whether the session parameters and the repeating request carry it
+// ("CAMERA_KEY_CARRIED tag=... session=yes repeating=no"), so a vendor key that seems to do
+// nothing can be told apart from one the HAL never receives (diagnostics only).
+void logCarriedKeys(const ACaptureRequest* sessionParameters, const ACaptureRequest* repeating,
+                    const ACameraMetadata* characteristics, const std::vector<CameraKeySetting>& keys,
+                    const char* cameraId, const std::function<void(const std::string&)>& diag);
+
 // Logs every entry of a request, one line per tag ("CAMERA_REQUEST_DUMP
 // kind=<kind> tag=0x... type=... count=... values=..."), for comparing what a
 // request actually carries (diagnostics only).

@@ -90,8 +90,12 @@ bool CameraFocusControls::finishTrigger() {
     return true;
 }
 
-FaceFocusChange CameraFocusControls::steerFaces(const CameraControlState& state,
+FaceFocusChange CameraFocusControls::steerFaces(CameraControlState& state,
                                                 const metadata::SensorGeometry* geometry, bool requestReady) {
+    for (auto& face : state.faceDetections) {
+        face.afTarget = false;
+        face.afEye.reset();
+    }
     if (state.focusMode != FocusControlMode::Continuous || state.tapAfActive ||
         !state.capabilities.faceDetectSupported || !state.capabilities.faceAfSteering ||
         state.capabilities.maxAfRegions <= 0 || !geometry || !requestReady) {
@@ -104,16 +108,53 @@ FaceFocusChange CameraFocusControls::steerFaces(const CameraControlState& state,
         region_.reset();
         return FaceFocusChange::Cleared;
     }
-    const auto& face = state.faceDetections.front();
-    if (faceSteering_) {
+    auto selected = state.faceDetections.begin();
+    if (faceSteering_ && lastFace_.id >= 0) {
+        const auto same = std::find_if(selected, state.faceDetections.end(),
+                                      [&](const auto& f) { return f.id == lastFace_.id; });
+        if (same != state.faceDetections.end()) selected = same;
+    }
+    auto& face = *selected;
+    const auto previousEye = selectedEye_;
+    if (!faceSteering_ || face.id != lastFace_.id) selectedEye_ = 0;
+    if (!face.eyes[selectedEye_] && face.eyes[1 - selectedEye_]) selectedEye_ = 1 - selectedEye_;
+    const auto eye = face.eyes[selectedEye_];
+    face.afTarget = true;
+    face.afEye = eye;
+    const bool sameTarget = faceSteering_ && face.id == lastFace_.id &&
+                            eye.has_value() == lastFace_.afEye.has_value() && (!eye || selectedEye_ == previousEye);
+    const bool sameSize = lastFace_.w > 0 && lastFace_.h > 0 &&
+                          std::abs(face.w / lastFace_.w - 1.0f) < 0.20f &&
+                          std::abs(face.h / lastFace_.h - 1.0f) < 0.20f;
+    // Stay well inside even a small eye region before suppressing motion.
+    const float eyeMotionThreshold = std::min({0.005f, face.w * 0.045f, face.h * 0.03f});
+    if (sameTarget && sameSize && eye && std::hypot((*eye)[0] - (*lastFace_.afEye)[0],
+                                       (*eye)[1] - (*lastFace_.afEye)[1]) < eyeMotionThreshold) {
+        face.afEye = lastFace_.afEye;
+        return FaceFocusChange::None;
+    }
+    if (sameTarget && !eye) {
         const float dx = std::abs(face.x + face.w * 0.5f - (lastFace_.x + lastFace_.w * 0.5f));
         const float dy = std::abs(face.y + face.h * 0.5f - (lastFace_.y + lastFace_.h * 0.5f));
         const float dw = lastFace_.w > 1e-6f ? std::abs(face.w - lastFace_.w) / lastFace_.w : 1.0f;
         const float dh = lastFace_.h > 1e-6f ? std::abs(face.h - lastFace_.h) / lastFace_.h : 1.0f;
         if (dx < 0.02f && dy < 0.02f && dw < 0.20f && dh < 0.20f) return FaceFocusChange::None;
     }
-    const auto region = faceFocusRegion(*geometry, face);
-    if (!region) return FaceFocusChange::None;
+    // Use a small face-relative area around the eye, retaining the sensor's
+    // minimum metering footprint and the existing coordinate conversion.
+    auto target = face;
+    if (eye) {
+        target.w = face.w * 0.18f;
+        target.h = face.h * 0.12f;
+        target.x = std::max(0.0f, (*eye)[0] - target.w * 0.5f);
+        target.y = std::max(0.0f, (*eye)[1] - target.h * 0.5f);
+    }
+    const auto region = faceFocusRegion(*geometry, target);
+    if (!region) {
+        face.afTarget = false;
+        face.afEye.reset();
+        return FaceFocusChange::None;
+    }
     region_ = region;
     faceSteering_ = true;
     lastFace_ = face;

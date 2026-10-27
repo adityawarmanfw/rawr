@@ -1,5 +1,6 @@
 package com.rawr.camera.settings.preferences
 
+import com.rawr.camera.settings.model.validateVendorKey
 import com.rawr.camera.settings.model.CFA_BLOCKS
 import com.rawr.camera.settings.model.CFA_LIVE_QUALITIES
 import com.rawr.camera.settings.model.CFA_ORDERS
@@ -40,6 +41,106 @@ internal object LensProfileCodec {
         val root = runCatching { JSONObject(raw) }.getOrNull() ?: return null
         val lenses = root.optJSONArray("lenses") ?: return null
         return (0 until lenses.length()).mapNotNull { i -> runCatching { decodeLens(lenses.getJSONObject(i)) }.getOrNull() }
+    }
+
+    /** Backup import must reject damaged nested records rather than dropping them. */
+    fun decodeBackup(raw: String): List<LensProfile> = try {
+        val lenses = JSONObject(raw).getJSONArray("lenses")
+        (0 until lenses.length()).map { index ->
+            val lens = lenses.getJSONObject(index)
+            validateBackupLens(lens)
+            decodeLens(lens)
+        }
+    } catch (failure: Exception) {
+        throw IllegalArgumentException("Backup contains malformed lens profiles", failure)
+    }
+
+    private fun objectField(o: JSONObject, name: String): JSONObject? =
+        if (o.has(name)) o.getJSONObject(name) else null
+
+    private fun number(o: JSONObject, name: String, range: ClosedFloatingPointRange<Double>, integral: Boolean = false) {
+        if (!o.has(name)) return
+        val value = o.get(name)
+        require(value is Number && value.toDouble().isFinite() && value.toDouble() in range &&
+            (!integral || value.toDouble() == Math.rint(value.toDouble()))) { "Invalid $name" }
+    }
+
+    private fun choice(o: JSONObject, name: String, choices: List<String>) {
+        if (o.has(name)) require(o.get(name) is String && o.getString(name) in choices) { "Invalid $name" }
+    }
+
+    private fun validateBackupLens(o: JSONObject) {
+        for (name in listOf("id", "cameraId")) require(o.get(name) is String && o.getString(name).isNotBlank())
+        for (name in listOf("enabled", "captureBurstSequential")) {
+            if (o.has(name)) require(o.get(name) is Boolean)
+        }
+        objectField(o, "dcp")?.let { dcp ->
+            require(dcp.get("file") is String && DcpFileStore.isFileName(dcp.getString("file")))
+            if (dcp.has("name")) require(dcp.get("name") is String)
+        }
+        fun keys(parent: JSONObject) {
+            if (!parent.has("keys")) return
+            val array = parent.getJSONArray("keys")
+            for (i in 0 until array.length()) {
+                val key = array.getJSONObject(i)
+                require(key.get("tag") is String && key.getString("tag").isNotBlank())
+                choice(key, "type", VendorKeyType.entries.map { it.wireName })
+                choice(key, "scope", VendorKeyScope.entries.map { it.wireName })
+                if (key.has("enabled")) require(key.get("enabled") is Boolean)
+                val values = key.getJSONArray("values")
+                require(values.length() > 0)
+                for (j in 0 until values.length()) {
+                    val value = values.get(j)
+                    require(value is Number && value.toDouble().isFinite())
+                }
+                val decoded = decodeKeys(JSONArray().put(key)).single()
+                require(validateVendorKey(decoded) == null)
+            }
+        }
+        fun levels(parent: JSONObject) {
+            objectField(parent, "levels")?.let { levels ->
+                if (levels.has("static")) require(levels.get("static") is Boolean)
+                if (levels.has("black")) {
+                    val black = levels.getJSONArray("black")
+                    require(black.length() == 1 || black.length() == 4)
+                    for (i in 0 until black.length()) {
+                        val value = black.get(i)
+                        require(value is Number && value.toDouble().isFinite() && value.toDouble() >= 0)
+                    }
+                }
+                number(levels, "white", 0.0..Float.MAX_VALUE.toDouble())
+            }
+        }
+        keys(o)
+        levels(o)
+        objectField(o, "dcg")?.let { keys(it); levels(it) }
+        for (field in listOf("stream", "captureStream")) {
+            objectField(o, field)?.let { stream ->
+                choice(stream, "format", RawStreamFormat.entries.map { it.wireName })
+                val min = if (field == "captureStream") 1.0 else 0.0
+                number(stream, "width", min..Int.MAX_VALUE.toDouble(), true)
+                number(stream, "height", min..Int.MAX_VALUE.toDouble(), true)
+                if (field == "captureStream") require(stream.has("width") && stream.has("height"))
+                if (stream.has("unlisted")) require(stream.get("unlisted") is Boolean)
+            }
+        }
+        objectField(o, "exposure")?.let { exposure ->
+            number(exposure, "isoMax", 0.0..EXTENDED_ISO_MAX.toDouble(), true)
+            number(exposure, "shutterMaxNs", 0.0..EXTENDED_SHUTTER_MAX_NS.toDouble(), true)
+            if (exposure.has("extended")) require(exposure.get("extended") is Boolean)
+        }
+        objectField(o, "cfa")?.let { cfa ->
+            if (cfa.has("block")) {
+                number(cfa, "block", 1.0..Int.MAX_VALUE.toDouble(), true)
+                require(cfa.getInt("block") in CFA_BLOCKS)
+            }
+            choice(cfa, "order", CFA_ORDERS.toList())
+            choice(cfa, "live", CFA_LIVE_QUALITIES.toList())
+            choice(cfa, "photo", CFA_PHOTO_QUALITIES.toList())
+        }
+        objectField(o, "distortion")
+        choice(o, "mirror", LensMirror.entries.map { it.wireName })
+        number(o, "captureBurst", 0.0..30.0, true)
     }
 
     private fun encodeLens(lens: LensProfile, dcpDir: java.io.File?): JSONObject = JSONObject()

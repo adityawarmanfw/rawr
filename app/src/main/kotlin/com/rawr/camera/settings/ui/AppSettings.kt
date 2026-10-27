@@ -6,6 +6,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.core.net.toUri
 import com.rawr.camera.BuildConfig
 import com.rawr.camera.settings.architecture.*
@@ -14,6 +15,7 @@ import com.rawr.camera.settings.model.*
 @Composable
 internal fun AboutSettings(onExportBackup: () -> Unit = {}, onImportBackup: () -> Unit = {}) {
     var showLicenses by remember { mutableStateOf(false) }
+    val uriHandler = LocalUriHandler.current
     SettingsPageContainer(testTag = SettingsTestTags.sectionRoot("About")) {
         SettingsGroup {
             SettingsRow(
@@ -23,9 +25,10 @@ internal fun AboutSettings(onExportBackup: () -> Unit = {}, onImportBackup: () -
             )
             SettingDivider()
             SettingsRow(
-                "Renderer",
-                "RAWR NTRL + user-imported LUT profiles",
-                testTag = SettingsTestTags.row("About", "renderer")
+                "Telegram community",
+                "t.me/comrawr",
+                testTag = SettingsTestTags.row("About", "telegram"),
+                onClick = { uriHandler.openUri("https://t.me/comrawr") }
             )
             SettingDivider()
             SettingsRow(

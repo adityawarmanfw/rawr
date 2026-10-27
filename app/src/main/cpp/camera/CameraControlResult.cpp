@@ -5,7 +5,9 @@
 namespace rawrcam::camera {
 
 std::vector<FaceDetection> normalizeCameraFaces(const metadata::RectI& active, const int32_t* rectangles,
-                                                size_t rectangleValueCount, const uint8_t* scores, size_t scoreCount) {
+                                                size_t rectangleValueCount, const uint8_t* scores, size_t scoreCount,
+                                                const int32_t* landmarks, size_t landmarkCount,
+                                                const int32_t* ids, size_t idCount) {
     std::vector<FaceDetection> out;
     if (!active.valid || active.right <= active.left || active.bottom <= active.top || !rectangles) return out;
     const size_t faces = std::min(rectangleValueCount / 4, kMaxFaceDetections);
@@ -23,6 +25,16 @@ std::vector<FaceDetection> normalizeCameraFaces(const metadata::RectI& active, c
         face.w = static_cast<float>(right - left) / width;
         face.h = static_cast<float>(bottom - top) / height;
         face.score = scores && i < scoreCount && scores[i] > 0 ? scores[i] : 50;
+        if (ids && i < idCount && ids[i] >= 0) face.id = ids[i];
+        for (size_t eye = 0; eye < 2; ++eye) {
+            const size_t offset = i * 6 + eye * 2;
+            if (!landmarks || offset + 1 >= landmarkCount) continue;
+            const int32_t ex = landmarks[offset], ey = landmarks[offset + 1];
+            // Missing landmarks (including negative HAL sentinels) are not targets.
+            if (ex < left || ex >= right || ey < top || ey >= bottom) continue;
+            face.eyes[eye] = std::array<float, 2>{float(ex - active.left) / width,
+                                                float(ey - active.top) / height};
+        }
         out.push_back(face);
     }
     std::sort(out.begin(), out.end(), [](const FaceDetection& a, const FaceDetection& b) { return a.score > b.score; });

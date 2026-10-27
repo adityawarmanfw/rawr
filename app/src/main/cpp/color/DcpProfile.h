@@ -71,6 +71,21 @@ using DcpProfilePtr = std::shared_ptr<const DcpProfile>;
 [[nodiscard]] std::optional<std::array<double, 9>> forwardFromColorMatrix(const std::array<double, 9>& colorMatrix,
                                                                           uint16_t illuminant);
 
+// Some HALs (OPPO/OnePlus Snapdragon builds) publish a ForwardMatrix that is
+// just the sRGB primaries in D50 XYZ, i.e. "this camera is already sRGB",
+// next to a real ColorMatrix. Trusting it applies no camera-to-sRGB matrix and
+// leaves the image desaturated. Replaces each such ForwardMatrix with the one
+// derived from its ColorMatrix; returns how many were replaced.
+int repairPlaceholderForwardMatrices(metadata::StaticColorCalibration& color);
+
+// True for a matrix that is just the sRGB primaries in D50 XYZ.
+[[nodiscard]] bool isSrgbPlaceholderMatrix(const metadata::Matrix3x3& m);
+
+// True when either ForwardMatrix is still the sRGB placeholder, i.e. the HAL
+// publishes no usable camera colour for this camera (the repair above could not
+// derive one either).
+[[nodiscard]] bool hasPlaceholderForwardMatrix(const metadata::StaticColorCalibration& color);
+
 // The camera calibration the render solves with when the profile is active:
 // the profile's matrices with identity CameraCalibration (a DCP describes the
 // camera it was measured on), a derived ForwardMatrix where the profile has

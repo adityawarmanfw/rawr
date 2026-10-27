@@ -45,7 +45,10 @@ data class FaceDetection(
     val w: Float,
     val h: Float,
     /** 1..100, higher is more confident. Strongest first. */
-    val score: Int
+    val score: Int,
+    val afTarget: Boolean = false,
+    val eyeX: Float? = null,
+    val eyeY: Float? = null
 )
 
 data class FocusUiState(

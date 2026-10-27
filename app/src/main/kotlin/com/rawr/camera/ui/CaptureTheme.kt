@@ -1,9 +1,24 @@
 package com.rawr.camera.ui
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
+import com.rawr.camera.BuildConfig
+
+/**
+ * Debug builds publish every testTag as a `resource-id`, so `uiautomator dump` and adb scripts can
+ * address controls by tag. Popup windows (dialogs, dropdowns) have their own root and are not covered.
+ */
+@Composable
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+private fun ExposeTestTags(content: @Composable () -> Unit) {
+    if (BuildConfig.DEBUG) Box(Modifier.semantics { testTagsAsResourceId = true }) { content() } else content()
+}
 
 @Composable
 fun CaptureTheme(content: @Composable () -> Unit) {
@@ -36,6 +51,6 @@ fun CaptureTheme(content: @Composable () -> Unit) {
                 labelMedium = MaterialTheme.typography.labelMedium.copy(fontFamily = CaptureMono),
                 bodySmall = MaterialTheme.typography.bodySmall.copy(fontFamily = CaptureMono)
             ),
-        content = content
+        content = { ExposeTestTags(content) }
     )
 }

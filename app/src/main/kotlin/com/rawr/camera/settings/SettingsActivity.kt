@@ -17,6 +17,7 @@ import androidx.core.net.toUri
 import com.rawr.camera.MainActivity
 import com.rawr.camera.integration.InternalTraceNative
 import com.rawr.camera.settings.architecture.ImportLutStage
+import com.rawr.camera.settings.architecture.OpenLensEditor
 import com.rawr.camera.settings.architecture.OpenSection
 import com.rawr.camera.settings.architecture.SetChoice
 import com.rawr.camera.settings.architecture.SetCustomGpuDriverInstalled
@@ -109,11 +110,10 @@ class SettingsActivity : ComponentActivity() {
             pendingLutTargetProfileId = null
         }
 
-    private var pendingExportSections: Set<BackupSection>? = null
+    private val backupExportSelection = BackupExportSelection()
     private val backupExportFolderPicker =
         registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { tree ->
-            val sections = pendingExportSections
-            pendingExportSections = null
+            val sections = backupExportSelection.take()
             if (tree != null && sections != null) exportBackup(tree, sections)
         }
 
@@ -126,11 +126,17 @@ class SettingsActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        backupExportSelection.restore(savedInstanceState)
         enableEdgeToEdge()
         if (savedInstanceState == null) {
             runCatching { SettingsSection.valueOf(intent.getStringExtra(EXTRA_SECTION) ?: "") }
                 .getOrNull()
                 ?.let { viewModel.controller.dispatch(OpenSection(it)) }
+            // A lens editor opens over its section, so back returns to the lens list.
+            intent.getStringExtra(EXTRA_LENS)?.takeIf { it.isNotBlank() }?.let { lens ->
+                viewModel.controller.dispatch(OpenSection(SettingsSection.Lens))
+                viewModel.controller.dispatch(OpenLensEditor(lens))
+            }
         }
         setContent {
             CaptureTheme {
@@ -150,6 +156,11 @@ class SettingsActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        backupExportSelection.save(outState)
+        super.onSaveInstanceState(outState)
     }
 
     override fun onResume() {
@@ -253,7 +264,7 @@ class SettingsActivity : ComponentActivity() {
 
     private fun chooseExportSections() {
         chooseSections("Export backup", "Choose folder", BackupSection.entries) {
-            pendingExportSections = it
+            backupExportSelection.sections = it
             launchFolderPicker(backupExportFolderPicker)
         }
     }
@@ -331,6 +342,10 @@ class SettingsActivity : ComponentActivity() {
                         Toast.makeText(this, it.message ?: "Unable to read backup", Toast.LENGTH_LONG).show()
                         return@runOnUiThread
                     }
+                if (isFinishing || isDestroyed) {
+                    store.discard(contents)
+                    return@runOnUiThread
+                }
                 chooseSections(
                     "Restore $name",
                     "Restore",
@@ -339,17 +354,18 @@ class SettingsActivity : ComponentActivity() {
                 ) { sections ->
                     Thread({
                         // LUT files are installed here, off the main thread.
-                        val result = runCatching { store.apply(contents, sections, viewModel.editor.state.value) }
+                        val result = runCatching {
+                            val restored = store.prepare(contents, sections)
+                            kotlinx.coroutines.runBlocking {
+                                viewModel.editor.updateAndAwaitPersistence(restored::merge)
+                            }
+                        }
                         runOnUiThread {
-                            result
-                                .onSuccess { restored ->
-                                    viewModel.editor.update { live ->
-                                        restored.copy(saveLocationId = live.saveLocationId, lastLensId = live.lastLensId)
-                                    }
-                                    Toast.makeText(this, "Backup restored", Toast.LENGTH_SHORT).show()
-                                }.onFailure {
-                                    Toast.makeText(this, it.message ?: "Unable to restore backup", Toast.LENGTH_LONG).show()
-                                }
+                            result.onSuccess {
+                                Toast.makeText(this, "Backup restored", Toast.LENGTH_SHORT).show()
+                            }.onFailure {
+                                Toast.makeText(this, it.message ?: "Unable to restore backup", Toast.LENGTH_LONG).show()
+                            }
                         }
                     }, "rawr-backup-restore").start()
                 }
@@ -392,10 +408,15 @@ class SettingsActivity : ComponentActivity() {
     companion object {
         const val INTERNAL_TRACE_FILE = "rawrcam_internal_runtime_trace.txt"
         const val EXTRA_SECTION = "settings_section"
+        const val EXTRA_LENS = "settings_lens"
 
         fun openIntent(context: Context, section: SettingsSection? = null): Intent =
             Intent(context, SettingsActivity::class.java).apply {
                 if (section != null) putExtra(EXTRA_SECTION, section.name)
             }
+
+        /** Opens a lens profile's editor (lens names match the capture screen's lens ids). */
+        fun openLensIntent(context: Context, lensName: String): Intent =
+            Intent(context, SettingsActivity::class.java).putExtra(EXTRA_LENS, lensName)
     }
 }

@@ -86,6 +86,7 @@ internal fun CaptureControls(
     onOpenRenderer: () -> Unit = {},
     onOpenFilmSimSettings: () -> Unit = {},
     onOpenMultiframeSettings: () -> Unit = {},
+    onOpenLensSettings: (String) -> Unit = {},
     videoControls: VideoControlState = VideoControlState(),
     onToggleVideoRecording: () -> Unit = {},
     /** Transparent background for floating over the 16:9 bleed (video overlay slot). */
@@ -109,6 +110,7 @@ internal fun CaptureControls(
             LensSelector(
                 state = state,
                 dispatch = dispatch,
+                onOpenLensSettings = onOpenLensSettings,
                 enabled = !recordingLock,
                 modifier = Modifier.padding(top = 2.dp)
             )
@@ -161,6 +163,7 @@ internal fun CaptureControls(
         LensSelector(
             state = state,
             dispatch = dispatch,
+            onOpenLensSettings = onOpenLensSettings,
             modifier = Modifier.align(Alignment.TopCenter).padding(top = 5.dp)
         )
         Shutter(
@@ -248,7 +251,8 @@ internal fun LensSelector(
     state: CaptureUiState,
     dispatch: CaptureDispatch,
     modifier: Modifier,
-    enabled: Boolean = true
+    enabled: Boolean = true,
+    onOpenLensSettings: (String) -> Unit = {}
 ) {
     val haptics = LocalCaptureHaptics.current
     // Scrolls sideways when a long lens list exceeds the screen width.
@@ -265,7 +269,15 @@ internal fun LensSelector(
                     .testTag(CaptureTestTags.lens(lens.id))
                     .then(
                         if (enabled) {
-                            Modifier.captureClickable(shape = CaptureTextRippleShape) {
+                            // Long press opens this lens's profile in settings.
+                            Modifier.captureCombinedClickable(
+                                shape = CaptureTextRippleShape,
+                                onLongClickLabel = "${lens.displayName} lens settings",
+                                onLongClick = {
+                                    haptics.selection()
+                                    onOpenLensSettings(lens.id)
+                                }
+                            ) {
                                 haptics.selection()
                                 dispatch(SelectLens(lens.id))
                             }
@@ -275,7 +287,7 @@ internal fun LensSelector(
                     )
                     .semantics {
                         contentDescription = "Lens ${lens.displayName}" +
-                            if (enabled) "" else " (unavailable while recording)"
+                            if (enabled) ". Long press for settings." else " (unavailable while recording)"
                         role = Role.RadioButton
                         selected = lensSelected
                         if (!enabled) disabled()
@@ -500,10 +512,14 @@ internal fun Thumbnail(state: CaptureUiState, imageUri: Uri?, onClick: () -> Uni
     // Layout-stable loader: the outer Box is always exactly Thumbnail size.
     // Processing/failed states only change border drawing + semantics, never
     // add/remove measured children, so the MERGED pill and shutter row can't shift.
+    // A press native has not accepted yet is processing too once its hold
+    // ends: a full-size burst copies its frames after the exposure, before the
+    // capture is registered. Until then the status pill shows the hold.
     val isProcessing =
-        state.pendingCaptures.any {
-            it.phase == CaptureSavePhase.DngProcessing || it.phase == CaptureSavePhase.JpegProcessing
-        }
+        (state.bracketHoldPresses > 0 && !state.bracketHoldActive && !state.longExposure.active) ||
+            state.pendingCaptures.any {
+                it.phase == CaptureSavePhase.DngProcessing || it.phase == CaptureSavePhase.JpegProcessing
+            }
     val hasFailed =
         !isProcessing &&
             state.pendingCaptures.any {

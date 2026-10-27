@@ -1246,30 +1246,26 @@ object SettingsPreferencesStore {
     fun editor(context: Context, defaults: SettingsValues): com.rawr.camera.settings.architecture.SettingsEditor {
         instance?.let { return it }
         val repository = SettingsPreferencesRepository(context, defaults)
-        val lutFiles = LutProfileFileStore(context.applicationContext)
+        val lutFiles = SettingsLutFiles(LutProfileFileStore(context.applicationContext))
         val gpuFiles = GpuDriverFileStore(context.applicationContext)
         val dcpFiles = DcpFileStore(context.applicationContext)
-        var profiles: List<com.rawr.camera.settings.model.ImportedLutProfile>? = null
-        var lensProfiles: List<com.rawr.camera.settings.model.LensProfile>? = null
         var gpuEnabled: Boolean? = null
         return com.rawr.camera.settings.architecture.SettingsEditor(
             defaults, repository.values, repository::save, scope,
             onChanged = { values ->
                 // Metadata must exist before backend consumers see a newly imported profile.
-                if (profiles != values.userLutProfiles) {
-                    lutFiles.sync(values.userLutProfiles, profiles.orEmpty())
-                    profiles = values.userLutProfiles
-                }
-                if (lensProfiles != values.lensProfiles) {
-                    lensProfiles = values.lensProfiles
-                    dcpFiles.sync(values.lensProfiles)
-                }
+                lutFiles.changed(values)
                 if (gpuEnabled != values.customGpuDriverEnabled) {
                     gpuFiles.setEnabled(values.customGpuDriverEnabled)
                     gpuEnabled = values.customGpuDriverEnabled
                 }
                 com.rawr.camera.integration.LiveTonemapState.publish(values.activeImageTone())
                 com.rawr.camera.integration.LiveTonemapState.publishAgx(values.activeAgxValues())
+            },
+            onPersisted = { saved, live ->
+                // A newer edit may already be visible while this older write finishes.
+                lutFiles.persisted(saved, live)
+                dcpFiles.sync(saved.lensProfiles.orEmpty() + live.lensProfiles.orEmpty())
             }
         ).also { editor ->
             instance = editor

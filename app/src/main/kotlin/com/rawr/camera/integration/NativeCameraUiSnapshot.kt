@@ -243,14 +243,19 @@ internal data class NativeCameraUiSnapshot(
 
         private fun parseFaceEntry(entry: String): FaceDetection? {
             val parts = entry.split(',')
-            if (parts.size != 5) return null
+            if (parts.size != 5 && parts.size != 8) return null
             val x = parts[0].toFloatOrNull() ?: return null
             val y = parts[1].toFloatOrNull() ?: return null
             val w = parts[2].toFloatOrNull() ?: return null
             val h = parts[3].toFloatOrNull() ?: return null
             val score = parts[4].trim().toIntOrNull() ?: return null
             if (x < 0f || x > 1f || y < 0f || y > 1f || w <= 0f || h <= 0f || score <= 0) return null
-            return FaceDetection(x, y, w, h, score.coerceIn(1, 100))
+            val targeted = parts.getOrNull(5)?.toIntOrNull() == 1
+            val ex = parts.getOrNull(6)?.toFloatOrNull()
+            val ey = parts.getOrNull(7)?.toFloatOrNull()
+            val eyeValid = targeted && ex != null && ey != null && ex in 0f..1f && ey in 0f..1f
+            return FaceDetection(x, y, w, h, score.coerceIn(1, 100), targeted,
+                ex.takeIf { eyeValid }, ey.takeIf { eyeValid })
         }
     }
 }

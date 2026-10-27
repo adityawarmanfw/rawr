@@ -101,6 +101,8 @@ uint64_t SessionEngine::requestRawStillCapture(rawrcam::encoding::dng::DngCaptur
                                          kFullSizeUltraPixels)
                 wait = std::chrono::milliseconds(8000);
         }
+        if (const auto exposure = camera->deferredCaptureExposure())
+            wait += std::chrono::milliseconds(exposure->exposureTimeNs / 1'000'000);
         capture_.single().expectOptimizedFrame(requestId, wait);
         // Focus preparation consumes callback results; never wait under mu_.
         lock.unlock();
@@ -200,11 +202,15 @@ uint32_t SessionEngine::prepareExperimentalMultiframe(uint32_t maxFrames, uint32
     // HDR+ Bracketed: when the shutter/gain limits would leave the long
     // frames too dark to help (they would be skipped), freeze their slots as
     // burst frames instead. Checked outside mu_ like other camera calls.
-    // Long exposure (shutter past the viewfinder cap): one frame, captured
-    // single-shot as its own exposure (the ZSL ring holds only viewfinder frames).
-    if (const auto* controller = cameraControls_.controller(); controller && controller->deferredCaptureExposure()) {
-        LOGI("MULTIFRAME_LONG_EXPOSURE_SINGLE burst=%u", maxFrames + longFrames);
-        return 0u;
+    // Long exposure (shutter past the viewfinder cap): the ZSL ring holds only
+    // viewfinder frames, so the merge takes a burst
+    // of post-shutter frames at that shutter (full-size stills below on a
+    // capture-stream lens).
+    if (const auto* controller = cameraControls_.controller()) {
+        if (const auto exposure = controller->deferredCaptureExposure()) {
+            if (!controller->hasFullSizeCapture())
+                return prepareLongExposureBurst(maxFrames + longFrames, exposure->exposureTimeNs);
+        }
     }
     // Capture-stream lens: the ZSL ring holds only binned viewfinder frames;
     // the merge takes a burst of full-size stills requested now.
@@ -231,6 +237,61 @@ uint32_t SessionEngine::prepareExperimentalMultiframe(uint32_t maxFrames, uint32
     uint32_t burst = std::min<uint32_t>(skipLong ? maxFrames + longFrames : maxFrames, capture::kMaxBurstFrames);
     // The streaming RAW ring enforces its own byte budget; do not impose a separate resolution-based count.
     return capture_.multiframe().prepareExperimentalMultiframeOnShutter(burst);
+}
+uint32_t SessionEngine::prepareLongExposureBurst(uint32_t maxFrames, int64_t exposureTimeNs) {
+    auto* controller = cameraControls_.controller();
+    if (!controller) return 0u;
+    std::shared_ptr<rawrcam::capture::multiframe::BracketCollector> collector;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        collector = capture_.multiframe().armLongExposureBurst(std::min<uint32_t>(maxFrames, capture::kMaxBurstFrames));
+    }
+    if (!collector) return 0u;
+    const auto requestId = collector->requestId();
+    const auto abandon = [&] {
+        std::lock_guard<std::mutex> lock(mu_);
+        capture_.multiframe().abandonBracket(requestId);
+    };
+    if (!controller->captureLongExposure(requestId, nullptr, collector->expected())) {
+        abandon();
+        LOGW("MULTIFRAME_LONG_BURST_SUBMIT_FAIL request=%llu", static_cast<unsigned long long>(requestId));
+        return 0u;
+    }
+    // The frames queue behind the preview requests in flight: allow each its
+    // exposure plus a second.
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(int64_t(collector->expected()) * (exposureTimeNs / 1'000'000 + 1000));
+    auto taken = collector->take(deadline);
+    abandon();
+    rawrcam::capture::multiframe::FrozenBurst burst;
+    for (auto& f : taken) {
+        if (f.frames.size() != 1u || f.refs.size() != 1u || f.metadata.size() != 1u || f.colors.size() != 1u ||
+            !f.snapshot)
+            continue;
+        if (!burst.snapshot)
+            burst.snapshot = std::move(f.snapshot);
+        else
+            burst.extraSnapshots.push_back(std::move(f.snapshot));
+        burst.refs.push_back(f.refs.front());
+        burst.frames.push_back(f.frames.front());
+        burst.metadata.push_back(std::move(f.metadata.front()));
+        burst.colors.push_back(std::move(f.colors.front()));
+    }
+    LOGI("MULTIFRAME_LONG_BURST_FRAMES request=%llu expected=%u received=%zu exposureNs=%lld",
+         static_cast<unsigned long long>(requestId), collector->expected(), burst.frames.size(),
+         static_cast<long long>(exposureTimeNs));
+    // Fewer than two frames is no merge: the press falls back to a single still.
+    if (burst.frames.size() < 2u) return 0u;
+    burst.referenceIndex = static_cast<std::uint32_t>(burst.frames.size() / 2u);
+    burst.referenceMetadata = burst.metadata[burst.referenceIndex];
+    burst.referenceColor = burst.colors[burst.referenceIndex];
+    const auto prepared = static_cast<uint32_t>(burst.frames.size());
+    std::lock_guard<std::mutex> lock(mu_);
+    bracketSkippedForPending_ = true;  // the long frames are the burst
+    return capture_.multiframe().adoptPreparedCapture(
+               std::make_unique<rawrcam::capture::multiframe::PendingMultiframeCapture>(std::move(burst)))
+               ? prepared
+               : 0u;
 }
 uint64_t SessionEngine::startPreparedMultiframeCapture(
     rawrcam::encoding::dng::DngCaptureContext baseDng, rawrcam::encoding::dng::DngCaptureContext mergedDng,

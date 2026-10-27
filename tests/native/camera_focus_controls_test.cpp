@@ -225,6 +225,64 @@ void faceHysteresisAndTapOwnership() {
     assert(!focus.request(std::nullopt).afRegion);
 }
 
+void eyeTargetAndFallback() {
+    CameraFocusControls focus;
+    auto state = controls();
+    auto g = geometry();
+    FaceDetection face{0.4f, 0.4f, 0.2f, 0.2f, 80};
+    face.id = 7;
+    face.eyes[0] = std::array<float, 2>{0.45f, 0.46f};
+    face.eyes[1] = std::array<float, 2>{0.55f, 0.46f};
+    state.faceDetections = {face};
+    assert(focus.steerFaces(state, &g, true) == FaceFocusChange::Updated);
+    assert(state.faceDetections[0].afTarget && state.faceDetections[0].afEye == face.eyes[0]);
+    const auto eyeRegion = *focus.afRegion();
+    const auto faceRegion = *faceFocusRegion(g, face);
+    assert(eyeRegion[2] - eyeRegion[0] < faceRegion[2] - faceRegion[0]);
+    // Ranking changes do not switch identities.
+    auto other = face;
+    other.id = 8;
+    other.score = 99;
+    state.faceDetections = {other, face};
+    assert(focus.steerFaces(state, &g, true) == FaceFocusChange::None);
+    assert(!state.faceDetections[0].afTarget && state.faceDetections[1].afTarget);
+    // Eye movement must update even when the face rectangle stays still.
+    state.faceDetections[1].eyes[0] = std::array<float, 2>{0.47f, 0.46f};
+    assert(focus.steerFaces(state, &g, true) == FaceFocusChange::Updated);
+    state.faceDetections[1].eyes[0].reset();
+    assert(focus.steerFaces(state, &g, true) == FaceFocusChange::Updated);
+    assert(state.faceDetections[1].afEye == face.eyes[1]);
+    state.faceDetections[1].eyes = {};
+    assert(focus.steerFaces(state, &g, true) == FaceFocusChange::Updated);
+    assert(!state.faceDetections[1].afEye && state.faceDetections[1].afTarget);
+    assert(focus.afRegion() == faceRegion);
+    const auto tap = focus.planTap(state, g, {0.2f, 0.2f});
+    focus.acceptTap(state, *tap, 100);
+    focus.steerFaces(state, &g, true);
+    assert(!state.faceDetections[1].afTarget && !state.faceDetections[1].afEye);
+    assert(focus.afRegion() == tap->region);
+}
+
+void smallEyeMotionAndSwitch() {
+    CameraFocusControls focus;
+    auto state = controls();
+    auto g = geometry();
+    g.activeArray = g.preCorrectionActiveArray = {0, 0, 8000, 6000, true};
+    FaceDetection face{.4f, .4f, .02f, .03f, 90};
+    face.id = 1;
+    face.eyes[0] = std::array<float, 2>{.405f, .41f};
+    state.faceDetections = {face};
+    assert(focus.steerFaces(state, &g, true) == FaceFocusChange::Updated);
+    state.faceDetections[0].eyes[0] = std::array<float, 2>{.409f, .41f};
+    assert(focus.steerFaces(state, &g, true) == FaceFocusChange::Updated);
+    assert((*focus.afRegion())[2] >= 3272);
+    // A nearby replacement eye must bypass motion hysteresis.
+    state.faceDetections[0].eyes[0].reset();
+    state.faceDetections[0].eyes[1] = std::array<float, 2>{.4091f, .41f};
+    assert(focus.steerFaces(state, &g, true) == FaceFocusChange::Updated);
+    assert(state.faceDetections[0].afEye == state.faceDetections[0].eyes[1]);
+}
+
 void spotMeteringOwnership() {
     CameraSpotMeteringControls spot;
     auto state = controls();
@@ -290,6 +348,8 @@ int main() {
     tapSequenceAndExpiry();
     lockedTapAndModeCleanup();
     faceHysteresisAndTapOwnership();
+    eyeTargetAndFallback();
+    smallEyeMotionAndSwitch();
     spotMeteringOwnership();
     sharedRequestCadence();
     std::cout << "CAMERA_FOCUS_CONTROLS_PASS\n";

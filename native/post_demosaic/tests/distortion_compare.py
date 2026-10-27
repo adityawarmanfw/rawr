@@ -13,7 +13,8 @@ import numpy as np
 GAINS = np.array([1.0, 1.0, 1.0], dtype=np.float64)
 FX, FY, CX, CY = 1698.182744, 1696.500137, 2042.360233, 1548.313918
 K1, K2, P1, P2, K3, K4, K5, K6 = -0.051307, 0.015171, 0.000123, 0.000357, 0.0, 0.0, -0.023536, 0.014256
-CASES = {"photo": (4096, 3072, 0.9758, 0.0, 0.0), "video": (3840, 2160, 0.98474, 128.0, 456.0)}
+CASES = {"photo": (4096, 3072, 0.9758, 0.0, 0.0), "video": (3840, 2160, 0.98474, 128.0, 456.0),
+         "samsung_3x": (3648, 2736, 1.0, 0.0, 0.0)}
 
 
 def load(path, w, h):
@@ -57,12 +58,21 @@ def stats(err, ref):
 def main(dirs):
     for name, (w, h, scale, ox, oy) in CASES.items():
         src = load(f"{dirs[0]}/{name}_src.f16", w, h)
-        sx, sy = source_positions(w, h, scale, ox, oy)
+        if name == "samsung_3x":
+            y, x = np.mgrid[0:h, 0:w].astype(np.float64)
+            xn, yn = (x - 1813.4) / 6961.56, (y - 1445.27) / 6975.01
+            r2 = xn * xn + yn * yn
+            radial = 1 - 0.416185 * r2 + 8.34895 * r2**2 - 47.3359 * r2**3
+            sx, sy = 1813.4 + xn * radial * 6961.56, 1445.27 + yn * radial * 6975.01
+        else:
+            sx, sy = source_positions(w, h, scale, ox, oy)
         ref = reference(src, sx, sy)[..., :3] * GAINS
         print(f"[{name}] {w}x{h}")
         outs = [load(f"{d}/{name}_out.f16", w, h)[..., :3].astype(np.float64) for d in dirs]
         for d, o in zip(dirs, outs):
             print(f"  vs float64 reference  {d:32s} {stats(o - ref, ref)}")
+            assert np.isfinite(o).all(), f"{name}: nonfinite output"
+            assert np.mean(np.abs(o - ref)) < 0.001, f"{name}: incorrect distortion mapping"
         for d, o in zip(dirs[1:], outs[1:]):
             print(f"  vs {dirs[0]} {d:20s} {stats(o - outs[0], ref)}")
 

@@ -352,6 +352,9 @@ class SessionEngine {
     // Merged mode on a capture-stream lens: requests a burst of full-size
     // stills, waits for them, uploads them and prepares the merge. Frames, or 0.
     uint32_t prepareFullSizeBurst(uint32_t maxFrames);
+    // Long shutter on a viewfinder-stream lens: a burst of post-shutter
+    // frames at that shutter, adopted as the prepared merge (0: none).
+    uint32_t prepareLongExposureBurst(uint32_t maxFrames, int64_t exposureTimeNs);
     uint64_t nextFullSizeBurstTag_ = 1ull << 62;  // apart from photo request ids
     // A capture-stream lens: photos come only from its full-size stills, never a binned viewfinder frame.
     bool fullSizeStillsOnly();

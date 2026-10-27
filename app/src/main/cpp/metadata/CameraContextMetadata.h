@@ -69,7 +69,7 @@ struct CameraContextMetadata {
     bool hasGreenSplit = false;
     float greenSplit = 0.0f;
     std::vector<RectI> opticalBlackRegions;
-    std::vector<float> lensDistortion;            // float[5] [k1,k2,p1,p2,k3], empty = unknown
+    std::vector<float> lensDistortion;            // float[5] [k1,k2,k3,p1,p2], empty = unknown
     std::vector<float> lensIntrinsicCalibration;  // float[5] [fx,fy,cx,cy,s], empty = unknown
     // Lens profile calibration (LensRoute::distortion) for a camera that
     // reports none; wins over lensDistortion for photo undistort and the DNG.

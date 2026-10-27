@@ -2,6 +2,7 @@ package com.rawr.camera.settings.architecture
 
 import com.rawr.camera.settings.model.*
 import kotlin.test.*
+import kotlinx.coroutines.async
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flow
@@ -76,5 +77,56 @@ class SettingsEditorTest {
         runCurrent()
         assertEquals(24, editor.state.value.videoFps)
         assertEquals("disk full", editor.saveFailure.value?.message)
+    }
+
+    @Test fun persistenceAcknowledgementWaitsForSave() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val editor = SettingsEditor(defaults, flowOf(defaults), { gate.await() }, backgroundScope)
+        runCurrent()
+        val result = async { editor.updateAndAwaitPersistence { it.copy(videoFps = 24) } }
+        runCurrent()
+        assertEquals(24, editor.state.value.videoFps)
+        assertFalse(result.isCompleted)
+        gate.complete(Unit)
+        runCurrent()
+        result.await()
+    }
+
+    @Test fun failedAcknowledgementCanRetryUnchangedValues() = runTest {
+        var fail = true
+        val editor = SettingsEditor(defaults, flowOf(defaults), {
+            if (fail) error("disk full")
+        }, backgroundScope)
+        runCurrent()
+        val first = async { runCatching { editor.updateAndAwaitPersistence { it.copy(videoFps = 24) } } }
+        runCurrent()
+        assertEquals("disk full", first.await().exceptionOrNull()?.message)
+        fail = false
+        val retry = async { editor.updateAndAwaitPersistence { it } }
+        runCurrent()
+        retry.await()
+        assertNull(editor.saveFailure.value)
+    }
+
+    @Test fun conflatedSaveAcknowledgesRestoreAndProtectsNewerLiveState() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val persisted = mutableListOf<Pair<SettingsValues, SettingsValues>>()
+        var writes = 0
+        val editor = SettingsEditor(defaults, flowOf(defaults), {
+            if (++writes == 1) gate.await()
+        }, backgroundScope, onPersisted = { saved, live -> persisted += saved to live })
+        runCurrent()
+        editor.update { it.copy(videoFps = 24) }
+        runCurrent()
+        val restored = async { editor.updateAndAwaitPersistence { it.copy(locationTagging = true) } }
+        runCurrent()
+        editor.update { it.copy(jpegEnabled = false) }
+        gate.complete(Unit)
+        runCurrent()
+        restored.await()
+        assertEquals(2, writes)
+        assertFalse(persisted.first().first.locationTagging)
+        assertTrue(persisted.first().second.locationTagging)
+        assertFalse(persisted.last().first.jpegEnabled)
     }
 }

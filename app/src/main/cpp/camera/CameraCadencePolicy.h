@@ -37,9 +37,12 @@ class CameraCadencePolicy final {
     std::vector<ShutterAngleChoice> shutterChoices(int64_t minNs, int64_t maxNs) const {
         std::vector<ShutterAngleChoice> choices;
         if (!videoMode_ || minNs <= 0 || maxNs < minNs) return choices;
+        const auto fps = recording() ? recordingFps_ : videoFps_;
+        if (minNs > int64_t{1000000000} / fps) return choices;
+        choices.push_back({(static_cast<double>(minNs) * fps / 1000000000.0) * 360.0, minNs});
         for (const auto angle : kAngles) {
             const auto ns = exposureForAngle(angle);
-            if (ns >= minNs && ns <= maxNs) choices.push_back({angle, ns});
+            if (ns > minNs && ns <= maxNs) choices.push_back({angle, ns});
         }
         return choices;
     }
@@ -67,7 +70,15 @@ class CameraCadencePolicy final {
     void clearShutterAngle() { shutterAngle_.reset(); }
     int64_t heldExposure(int64_t requested, int64_t minNs, int64_t maxNs) const {
         if (minNs <= 0 || maxNs < minNs) return requested;
-        const auto exposure = videoMode_ && shutterAngle_ ? exposureForAngle(*shutterAngle_) : requested;
+        auto exposure = videoMode_ && shutterAngle_ ? exposureForAngle(*shutterAngle_) : requested;
+        if (videoMode_ && shutterAngle_) {
+            for (const auto& choice : shutterChoices(minNs, maxNs)) {
+                if (choice.degrees == *shutterAngle_) {
+                    exposure = choice.exposureTimeNs;
+                    break;
+                }
+            }
+        }
         return std::clamp(capExposure(exposure), minNs, maxNs);
     }
     int64_t resolveHeldExposure(int64_t requested, int64_t minNs, int64_t maxNs) {
@@ -81,7 +92,7 @@ class CameraCadencePolicy final {
         const auto fps = recording() ? recordingFps_ : videoFps_;
         return std::max(int64_t{1}, static_cast<int64_t>((1000000000.0 / fps) * (angle / 360.0)));
     }
-    inline static constexpr std::array<double, 6> kAngles{45, 90, 135, 180, 270, 360};
+    inline static constexpr std::array<double, 11> kAngles{1.40625, 2.8125, 5.625, 11.25, 22.5, 45, 90, 135, 180, 270, 360};
     int photoFloor_ = 15;
     bool videoMode_ = false;
     int videoFps_ = 30;

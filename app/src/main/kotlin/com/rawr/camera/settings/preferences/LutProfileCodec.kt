@@ -62,6 +62,25 @@ internal object LutProfileCodec {
             }.getOrNull()
         }.toList()
 
+    /** A backup must not silently lose records that the normal preference decoder tolerates. */
+    fun decodeBackup(raw: String): List<ImportedLutProfile> {
+        val lines = raw.lineSequence().filter { it.isNotBlank() }.toList()
+        val profiles = decode(raw)
+        require(profiles.size == lines.size) { "Backup contains malformed LUT profiles" }
+        require(profiles.map { it.id }.distinct().size == profiles.size) { "Backup contains duplicate LUT profiles" }
+        lines.forEach { line ->
+            val fields = line.split('|', limit = 9)
+            if (fields.size == 9) {
+                val tone = fields[8].split(',').map { it.toFloatOrNull() }
+                require(tone.size == 9 && tone.withIndex().all { (index, value) ->
+                    value != null && value.isFinite() &&
+                        value in (if (index == 0) -5f..5f else -100f..100f)
+                }) { "Backup contains malformed LUT tone parameters" }
+            }
+        }
+        return profiles
+    }
+
     internal fun encodeTone(tone: ProfileTone): String = listOf(
         tone.renderExposure,
         tone.blacks,

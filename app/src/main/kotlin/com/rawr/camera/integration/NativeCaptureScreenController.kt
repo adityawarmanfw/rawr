@@ -433,6 +433,7 @@ class NativeCaptureScreenController(
                                               state.value.capabilities.dngOnly)
         // Hold starts at the press; the capture serial hands ownership to native when submission begins.
         if (state.value.hdrPlusBracketedActive || state.value.fullSizeCapture) update { it.copy(bracketHoldPresses = it.bracketHoldPresses + 1, fullSizePressSerial = it.fullSizeCaptureSerial) }
+        capturePresentation.pressed()
         try {
             captureQueue.enqueue(format)
         } catch (error: RuntimeException) {

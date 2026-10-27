@@ -22,10 +22,12 @@ class StillCapturePresentationTest {
     @Test
     fun formatsSelectInitialPhaseAndRapidCapturesKeepLatestFlash() = runTest {
         val f = Fixture(this)
+        f.presenter.pressed()
         f.presenter.accepted(1, CaptureOutputFormat.Dng)
         runCurrent()
         assertEquals(CaptureSavePhase.DngProcessing, f.capture(1).phase)
         advanceTimeBy(50)
+        f.presenter.pressed()
         f.presenter.accepted(2, CaptureOutputFormat.Jpeg)
         runCurrent()
         assertEquals(CaptureSavePhase.JpegProcessing, f.capture(2).phase)
@@ -97,6 +99,7 @@ class StillCapturePresentationTest {
     @Test
     fun recoveryRegistrationDoesNotDuplicateOrResetExistingCaptureAndFlash() = runTest {
         val f = Fixture(this)
+        f.presenter.pressed()
         f.presenter.accepted(1, CaptureOutputFormat.Jpeg)
         f.event(1, Artifact.Jpeg)
         f.presenter.completed(listOf(CompletionEvent(1, Artifact.Queued, true, jpegRequested = true),

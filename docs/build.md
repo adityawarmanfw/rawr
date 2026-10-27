@@ -47,6 +47,11 @@ and increase `versionCode`. Publishing is manual.
 
 ## Local tooling
 
+Debug APKs use `debug-<short commit SHA>` as their version name, derived from
+the checked-out Git commit in CI and local builds. Settings > About and native
+photo metadata use the same version. Uncommitted edits do not change this SHA.
+Release versions continue to use `versionName` and `versionCode` in `app/build.gradle.kts`.
+
 Use Gradle directly for APK builds and `adb install -r <apk>` for installation.
 [Offline replay](replay.md) has one launcher: `uv run --no-project tools/replay.py`.
 [Host behavior tests](../tests/README.md) build together with CMake/CTest.

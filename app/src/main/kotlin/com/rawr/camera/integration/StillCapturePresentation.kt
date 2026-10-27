@@ -31,8 +31,15 @@ internal class StillCapturePresentation(
         register(
             PendingCapture(requestId, format.jpeg,
                 if (format.dng) CaptureSavePhase.DngProcessing else CaptureSavePhase.JpegProcessing),
-            flash = true
+            flash = false
         )
+    }
+
+    /** The shutter flash, at the press: acceptance can come seconds later (full-size bursts). */
+    @Synchronized
+    fun pressed() {
+        if (closed) return
+        update { CaptureTransitions.setCaptureFlash(it, true) }
         pulseFlash()
     }
 
@@ -43,9 +50,8 @@ internal class StillCapturePresentation(
         register(
             PendingCapture(id, jpegEnabled,
                 if (jpegEnabled) CaptureSavePhase.JpegFailed else CaptureSavePhase.DngFailed),
-            flash = true
+            flash = false
         )
-        pulseFlash()
         retireAfter(id, REJECTION_MS)
     }
 

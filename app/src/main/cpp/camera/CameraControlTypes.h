@@ -30,6 +30,12 @@ struct FaceDetection {
     float w = 0.0f;
     float h = 0.0f;
     uint8_t score = 0;  // 1..100, higher is more confident
+    // FULL-only metadata; eyes use the same normalized coordinates as the box.
+    int32_t id = -1;
+    std::array<std::optional<std::array<float, 2>>, 2> eyes{};
+    // Published by focus steering, rather than inferred from confidence rank.
+    bool afTarget = false;
+    std::optional<std::array<float, 2>> afEye{};
 };
 inline constexpr size_t kMaxFaceDetections = 4;
 

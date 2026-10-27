@@ -204,6 +204,9 @@ class MainActivity : ComponentActivity() {
                             )
                         )
                     },
+                    onOpenLensSettings = { lensId ->
+                        startActivity(SettingsActivity.openLensIntent(this@MainActivity, lensId))
+                    },
                     onOpenMultiframeSettings = {
                         startActivity(
                             SettingsActivity.openIntent(

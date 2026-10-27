@@ -11,12 +11,12 @@ import kotlin.math.roundToInt
  */
 internal object ExposureFormat {
     fun formatShutterDegree(angleDeg: Double): String {
-        val rounded = kotlin.math.round(angleDeg * 10.0) / 10.0
-        return if (rounded == kotlin.math.floor(rounded)) {
-            "${rounded.toInt()}°"
-        } else {
-            "${"%.1f".format(rounded)}°"
-        }
+        if (angleDeg > 0.0 && angleDeg < 0.001) return "<0.001°"
+        val label = java.math.BigDecimal.valueOf(angleDeg)
+            .setScale(5, java.math.RoundingMode.HALF_UP)
+            .stripTrailingZeros()
+            .toPlainString()
+        return "${label}°"
     }
 
     fun formatShutterNs(ns: Long): String {

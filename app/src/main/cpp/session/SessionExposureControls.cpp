@@ -103,8 +103,9 @@ void SessionEngine::clearTapAf(uint64_t requestId) {
 }
 std::string SessionEngine::faceDetectionsDisplaySnapshot() {
     if (!cameraControls_.controller()) return "[]";
-    const std::vector<rawrcam::camera::FaceDetection> faces =
-        cameraControls_.controller()->controlState().faceDetections;
+    const auto controls = cameraControls_.controller()->controlState();
+    const auto& faces = controls.faceDetections;
+    const bool faceAf = controls.focusMode == camera::FocusControlMode::Continuous && !controls.tapAfActive;
     if (faces.empty()) return "[]";
     std::lock_guard<std::mutex> lock(mu_);
     if (!realtime_.configured() || !swapchainRenderer_.ready()) return "[]";
@@ -142,7 +143,10 @@ std::string SessionEngine::faceDetectionsDisplaySnapshot() {
         const float h = std::abs(b->y - a->y);
         if (!first) s << ',';
         first = false;
-        s << '[' << x << ',' << y << ',' << w << ',' << h << ',' << static_cast<int>(f.score) << ']';
+        const bool targeted = faceAf && f.afTarget;
+        const auto eye = targeted && f.afEye ? corner((*f.afEye)[0], (*f.afEye)[1]) : decltype(a){};
+        s << '[' << x << ',' << y << ',' << w << ',' << h << ',' << static_cast<int>(f.score)
+          << ',' << (targeted ? 1 : 0) << ',' << (eye ? eye->x : -1.0f) << ',' << (eye ? eye->y : -1.0f) << ']';
     }
     s << ']';
     return s.str();

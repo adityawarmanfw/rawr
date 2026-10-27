@@ -38,6 +38,44 @@ int gPendingCloses = 0;
 constexpr std::chrono::milliseconds kOpenBudget{2500};
 constexpr std::chrono::milliseconds kOpenRetryInitial{40};
 constexpr std::chrono::milliseconds kOpenRetryMax{400};
+
+// Cameras that could share this camera's sensor: its logical camera's physical ids, then every listed id.
+std::vector<std::string> sensorSiblingIds(ACameraManager* manager, const ACameraMetadata* chars, const std::string& self) {
+    std::vector<std::string> ids;
+    const auto add = [&](const std::string& id) {
+        if (!id.empty() && id != self && std::find(ids.begin(), ids.end(), id) == ids.end()) ids.push_back(id);
+    };
+    ACameraMetadata_const_entry physical{};
+    if (ACameraMetadata_getConstEntry(chars, ACAMERA_LOGICAL_MULTI_CAMERA_PHYSICAL_IDS, &physical) == ACAMERA_OK &&
+        physical.data.u8) {
+        std::string current;
+        for (uint32_t i = 0; i < physical.count; ++i) {
+            if (physical.data.u8[i] == 0) { add(current); current.clear(); }
+            else current += char(physical.data.u8[i]);
+        }
+        add(current);
+    }
+    ACameraIdList* list = nullptr;
+    if (ACameraManager_getCameraIdList(manager, &list) == ACAMERA_OK && list) {
+        for (int i = 0; i < list->numCameras; ++i) add(list->cameraIds[i]);
+        ACameraManager_deleteCameraIdList(list);
+    }
+    return ids;
+}
+
+// Same sensor: same pixel array, same first focal length (the HAL's own 1x physical camera).
+bool sameSensor(const ACameraMetadata* a, const ACameraMetadata* b) {
+    ACameraMetadata_const_entry pa{}, pb{}, fa{}, fb{};
+    if (ACameraMetadata_getConstEntry(a, ACAMERA_SENSOR_INFO_PIXEL_ARRAY_SIZE, &pa) != ACAMERA_OK ||
+        ACameraMetadata_getConstEntry(b, ACAMERA_SENSOR_INFO_PIXEL_ARRAY_SIZE, &pb) != ACAMERA_OK ||
+        pa.count < 2 || pb.count < 2 || pa.data.i32[0] != pb.data.i32[0] || pa.data.i32[1] != pb.data.i32[1])
+        return false;
+    if (ACameraMetadata_getConstEntry(a, ACAMERA_LENS_INFO_AVAILABLE_FOCAL_LENGTHS, &fa) != ACAMERA_OK ||
+        ACameraMetadata_getConstEntry(b, ACAMERA_LENS_INFO_AVAILABLE_FOCAL_LENGTHS, &fb) != ACAMERA_OK ||
+        fa.count < 1 || fb.count < 1)
+        return false;
+    return std::abs(fa.data.f[0] - fb.data.f[0]) <= 0.01f * std::max(fa.data.f[0], fb.data.f[0]);
+}
 }  // namespace
 CameraDeviceSession::CameraDeviceSession() {
     manager_ = ACameraManager_create();
@@ -211,6 +249,34 @@ std::optional<LensRoute> CameraDeviceSession::select(const LensRoute& requested,
     parsed->cfaPhotoQuality = route.cfaPhotoQuality;
     parsed->profileDistortion = route.distortion;
     parsed->profileMirror = route.mirror;
+    if (const int repaired = color::repairPlaceholderForwardMatrices(parsed->color); repaired > 0)
+        diag("CAMERA_FORWARD_MATRIX_PLACEHOLDER cameraId=" + route.cameraId + " lens=" + route.lensId +
+             " replaced=" + std::to_string(repaired) + " source=color_matrix");
+    // A logical camera can publish no camera colour at all (OPPO Find X9 Ultra 1x: the ColorMatrix is sRGB with
+    // white balance baked in), while the physical camera behind it has the real calibration. Borrow that.
+    if (route.physicalCameraId.empty() && color::hasPlaceholderForwardMatrix(parsed->color)) {
+        bool borrowed = false;
+        for (const auto& id : sensorSiblingIds(manager_, chars, route.cameraId)) {
+            ACameraMetadata* donorChars = nullptr;
+            if (!ok(ACameraManager_getCameraCharacteristics(manager_, id.c_str(), &donorChars)) || !donorChars) continue;
+            std::string donorError;
+            std::optional<metadata::CameraContextMetadata> donor;
+            if (sameSensor(chars, donorChars))
+                donor = metadata::readCameraContextMetadata(donorChars, id, route.lensId, generation_, route.stream.width,
+                                                            route.stream.height, &donorError);
+            ACameraMetadata_free(donorChars);
+            if (!donor) continue;
+            color::repairPlaceholderForwardMatrices(donor->color);
+            if (color::hasPlaceholderForwardMatrix(donor->color)) continue;
+            parsed->color = donor->color;
+            diag("CAMERA_COLOR_BORROWED cameraId=" + route.cameraId + " lens=" + route.lensId + " from=" + id +
+                 " reason=placeholder_forward_matrix");
+            borrowed = true;
+            break;
+        }
+        if (!borrowed)
+            diag("CAMERA_COLOR_PLACEHOLDER_UNRESOLVED cameraId=" + route.cameraId + " lens=" + route.lensId);
+    }
     if (route.dcp) {
         if (auto calibration = color::dcpColorCalibration(*route.dcp)) {
             parsed->color = *calibration;
@@ -296,7 +362,11 @@ bool CameraDeviceSession::open(const LensRoute& route, CameraCallbacks& callback
              " attempt=" + std::to_string(attempt));
 
         // The HAL can keep reporting the previous camera as in use for a moment after its close returns.
-        const bool busy = os == ACAMERA_ERROR_MAX_CAMERA_IN_USE || os == ACAMERA_ERROR_CAMERA_IN_USE;
+        // ACameraManager can also briefly drop the id after a close ("Camera ID 0 does not exist!",
+        // reported as ACAMERA_ERROR_UNKNOWN) until the service re-announces it; Samsung hits this
+        // on most lens switches, and without a retry the watchdog restarts the camera 8 s later.
+        const bool busy = os == ACAMERA_ERROR_MAX_CAMERA_IN_USE || os == ACAMERA_ERROR_CAMERA_IN_USE ||
+                          os == ACAMERA_ERROR_UNKNOWN;
         if (!busy || std::chrono::steady_clock::now() + backoff >= deadline) {
             releaseHeldGate();
             return false;
@@ -513,6 +583,7 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
                                                      CameraKeySetting::Scope::Request, "lens", diag);
         if (!lensKeys.failures.empty())
             return fail("lens_request_keys", "lensId=" + selected->lensId + " failed=" + joined(lensKeys.failures));
+        logCarriedKeys(sessionParameters_, request_, characteristics_, selected->keys, selected->cameraId.c_str(), diag);
     }
     if (!pipeline.submit(session_, request_, callbackContext, control, metering))
         return fail("initial_repeating", "status=control_or_submit_rejected");

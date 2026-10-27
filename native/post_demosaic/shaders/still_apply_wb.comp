@@ -74,18 +74,15 @@ vec4 sampleBilinear(ivec2 extent, vec2 uv) {
     return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
 
-// Fixed-point inverse: find undistorted x with forward(x) == xd.
-vec2 undistort(vec2 outUv) {
-    vec2 xd = (outUv - vec2(pc.cx, pc.cy)) / vec2(pc.fx, pc.fy);
-    vec2 x = xd;
-    for (int i = 0; i < 4; ++i) {
-        float r2 = dot(x, x);
-        float radial = 1.0 + pc.k1 * r2 + pc.k2 * r2 * r2 + pc.k3 * r2 * r2 * r2;
-        vec2 fwd = vec2(x.x * radial + 2.0 * pc.p1 * x.x * x.y + pc.p2 * (r2 + 2.0 * x.x * x.x),
-                        x.y * radial + pc.p1 * (r2 + 2.0 * x.y * x.y) + 2.0 * pc.p2 * x.x * x.y);
-        x += xd - fwd;
-    }
-    return vec2(pc.cx, pc.cy) + x * vec2(pc.fx, pc.fy);
+// Camera2 LENS_DISTORTION maps a corrected output coordinate directly to
+// its source sample. Do not invert it: that reverses the correction.
+vec2 camera2Source(vec2 outPixel) {
+    vec2 x = (outPixel - vec2(pc.cx, pc.cy)) / vec2(pc.fx, pc.fy);
+    float r2 = dot(x, x);
+    float radial = 1.0 + r2 * (pc.k1 + r2 * (pc.k2 + r2 * pc.k3));
+    vec2 source = vec2(x.x * radial + 2.0 * pc.p1 * x.x * x.y + pc.p2 * (r2 + 2.0 * x.x * x.x),
+                       x.y * radial + pc.p1 * (r2 + 2.0 * x.y * x.y) + 2.0 * pc.p2 * x.x * x.y);
+    return vec2(pc.cx, pc.cy) + source * vec2(pc.fx, pc.fy);
 }
 
 // OpenCV rational model: corrected output pixel -> distorted source pixel.
@@ -112,7 +109,7 @@ void main() {
         if (pc.enableDistortion == 0u) {
             s = imageLoad(srcRgb, p);
         } else {
-            vec2 source = pc.enableDistortion == 2u ? rationalSource(vec2(p)) : undistort(vec2(p));
+            vec2 source = pc.enableDistortion == 2u ? rationalSource(vec2(p)) : camera2Source(vec2(p));
             s = sampleBilinear(ivec2(pc.width, pc.height), source);
         }
         vec3 wb = s.rgb * vec3(pc.rGain, pc.gGain, pc.bGain);

@@ -99,7 +99,7 @@ struct RenderedStillContext {
     bool distortionCorrectionEnabled = false;
     // [fx, fy, cx, cy, s] from LENS_INTRINSIC_CALIBRATION.
     std::array<float, 5> lensIntrinsic{0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
-    // [k1, k2, p1, p2, k3] from LENS_DISTORTION.
+    // [k1, k2, k3, p1, p2] from LENS_DISTORTION.
     std::array<float, 5> lensDistortion{0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
     bool hasLensCalibration = false;
     // Lens profile calibration (OpenCV rational) in place of the Camera2

@@ -18,14 +18,30 @@ class SettingsEditor(
     persisted: Flow<SettingsValues>,
     private val save: suspend (SettingsValues) -> Unit,
     scope: CoroutineScope,
-    private val onChanged: (SettingsValues) -> Unit = {}
+    private val onChanged: (SettingsValues) -> Unit = {},
+    private val onPersisted: (SettingsValues, SettingsValues) -> Unit = { _, _ -> }
 ) {
     private val mutableState = MutableStateFlow(defaults)
     val state = mutableState.asStateFlow()
     private val ready = CompletableDeferred<Unit>()
     /** Backend consumers wait for durable initialization instead of applying provisional defaults. */
     val values: Flow<SettingsValues> = flow { ready.await(); emitAll(state) }
-    private val writes = Channel<SettingsValues>(Channel.CONFLATED)
+    private data class Write(val revision: Long, val values: SettingsValues)
+    private val writes = Channel<Write>(Channel.CONFLATED)
+    private var revision = 0L
+    private val acknowledgements = mutableListOf<Pair<Long, CompletableDeferred<Unit>>>()
+
+    private fun enqueue(values: SettingsValues) {
+        writes.trySend(Write(++revision, values))
+    }
+
+    private fun acknowledge(savedRevision: Long, failure: Throwable? = null) {
+        val finished = acknowledgements.filter { it.first <= savedRevision }
+        acknowledgements.removeAll(finished.toSet())
+        finished.forEach { (_, completion) ->
+            if (failure == null) completion.complete(Unit) else completion.completeExceptionally(failure)
+        }
+    }
     private val pending = mutableListOf<(SettingsValues) -> SettingsValues>()
     private var initialized = false
     private val mutableSaveFailure = MutableStateFlow<Throwable?>(null)
@@ -40,7 +56,7 @@ class SettingsEditor(
                     onChanged(next)
                     mutableState.value = next
                     initialized = true
-                    if (pending.isNotEmpty()) writes.trySend(next)
+                    if (pending.isNotEmpty()) enqueue(next)
                     pending.clear()
                     ready.complete(Unit)
                 }
@@ -50,16 +66,41 @@ class SettingsEditor(
             }
         }
         scope.launch {
-            for (values in writes) {
+            for (write in writes) {
                 try {
-                    save(values)
-                    mutableSaveFailure.value = null
+                    save(write.values)
+                    synchronized(this@SettingsEditor) {
+                        onPersisted(write.values, mutableState.value)
+                        mutableSaveFailure.value = null
+                        acknowledge(write.revision)
+                    }
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    mutableSaveFailure.value = e
+                    synchronized(this@SettingsEditor) {
+                        mutableSaveFailure.value = e
+                        acknowledge(write.revision, e)
+                    }
                 }
             }
+        }
+    }
+
+    /** Waits for this edit (or a newer conflated snapshot) to reach durable storage. */
+    suspend fun updateAndAwaitPersistence(edit: (SettingsValues) -> SettingsValues) {
+        ready.await()
+        val completion = CompletableDeferred<Unit>()
+        synchronized(this) {
+            val beforeRevision = revision
+            update(edit)
+            // Also retry a previously failed save when the edit leaves the live values unchanged.
+            if (beforeRevision == revision) enqueue(mutableState.value)
+            acknowledgements += revision to completion
+        }
+        try {
+            completion.await()
+        } finally {
+            synchronized(this) { acknowledgements.removeAll { it.second === completion } }
         }
     }
 
@@ -72,7 +113,7 @@ class SettingsEditor(
         if (next != before) {
             if (initialized) onChanged(next)
             mutableState.value = next
-            if (initialized) writes.trySend(next)
+            if (initialized) enqueue(next)
         }
         return next
     }

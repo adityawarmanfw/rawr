@@ -1,3 +1,4 @@
+#include <array>
 #include <cassert>
 #include <cmath>
 #include <cstring>
@@ -242,11 +243,75 @@ int testCorpus(const std::filesystem::path& dir) {
 
 }  // namespace
 
+// OPPO PKJ110 / CPH2841 HALs publish sRGB-in-D50 as ForwardMatrix1/2 next to a
+// real ColorMatrix (diagnostic bundles 2026-10-24): trusting it left the image
+// with an identity camera-to-sRGB matrix, i.e. desaturated.
+void testPlaceholderForwardRepaired() {
+    using rawrcam::metadata::Matrix3x3;
+    const auto matrix = [](std::array<float, 9> v) { Matrix3x3 m; m.rowMajor = v; m.valid = true; return m; };
+    rawrcam::metadata::StaticColorCalibration c;
+    c.referenceIlluminant1 = 21;
+    c.referenceIlluminant2 = 17;
+    c.colorTransform1 = matrix({0.8085f, -0.3113f, -0.0842f, -0.4945f, 1.2695f, 0.184f, -0.1174f, 0.1895f, 0.539f});
+    c.colorTransform2 = matrix({1.378f, -0.7536f, -0.1868f, -0.5651f, 1.6096f, 0.0316f, -0.0656f, 0.1616f, 0.7307f});
+    const auto placeholder = matrix({0.4375f, 0.382812f, 0.140625f, 0.21875f, 0.71875f, 0.0625f, 0.015625f, 0.09375f, 0.710938f});
+    c.forwardMatrix1 = placeholder;
+    c.forwardMatrix2 = placeholder;
+    assert(rawrcam::color::repairPlaceholderForwardMatrices(c) == 2);
+    // Derived forward maps camera neutral (1,1,1) to D50 and carries real chroma.
+    for (const auto* f : {&c.forwardMatrix1, &c.forwardMatrix2}) {
+        const auto& m = f->rowMajor;
+        assert(std::abs(m[0] + m[1] + m[2] - 0.96422f) < 2e-3f);
+        assert(std::abs(m[3] + m[4] + m[5] - 1.0f) < 2e-3f);
+        assert(std::abs(m[6] + m[7] + m[8] - 0.82521f) < 2e-3f);
+        assert(std::abs(m[1] - placeholder.rowMajor[1]) > 0.01f || std::abs(m[8] - placeholder.rowMajor[8]) > 0.01f);
+    }
+    const auto repaired = c.forwardMatrix1;
+    assert(rawrcam::color::repairPlaceholderForwardMatrices(c) == 0);  // idempotent
+    assert(c.forwardMatrix1.rowMajor == repaired.rowMajor);
+
+    // A real sensor forward matrix is never touched.
+    c.forwardMatrix1 = matrix({0.5623f, 0.3933f, 0.0086f, 0.2147f, 0.9643f, -0.179f, 0.0323f, -0.1861f, 0.9787f});
+    c.forwardMatrix2 = c.forwardMatrix1;
+    assert(rawrcam::color::repairPlaceholderForwardMatrices(c) == 0);
+}
+
+// OPPO Find X9 Ultra logical camera (diagnostic bundle 2026-10-26): the ColorMatrix is the sRGB primaries with
+// white balance baked in, so deriving a ForwardMatrix from it gives the placeholder back. That is no repair;
+// the caller must see the matrix as unresolved so it can borrow the physical camera's calibration.
+void testStandInColorMatrixIsUnresolved() {
+    using rawrcam::metadata::Matrix3x3;
+    const auto matrix = [](std::array<float, 9> v) { Matrix3x3 m; m.rowMajor = v; m.valid = true; return m; };
+    rawrcam::metadata::StaticColorCalibration c;
+    c.referenceIlluminant1 = 21;
+    c.referenceIlluminant2 = 17;
+    c.colorTransform1 = matrix({1.3203125f, -0.625f, -0.203125f, -0.96875f, 1.875f, 0.0390625f, 0.0390625f, -0.1328125f, 0.6875f});
+    c.colorTransform2 = matrix({2.0625f, -1.4296875f, -0.359375f, -1.0703125f, 2.1796875f, -0.0078125f, 0.0546875f, -0.1328125f, 1.21875f});
+    c.forwardMatrix1 = matrix({0.436934f, 0.382942f, 0.144344f, 0.222989f, 0.714561f, 0.0624498f, 0.0126977f, 0.0958227f, 0.71669f});
+    c.forwardMatrix2 = matrix({0.435719f, 0.386112f, 0.142389f, 0.221954f, 0.717797f, 0.0602489f, 0.015548f, 0.0964772f, 0.713185f});
+    assert(rawrcam::color::hasPlaceholderForwardMatrix(c));
+    assert(rawrcam::color::repairPlaceholderForwardMatrices(c) == 0);
+    assert(rawrcam::color::hasPlaceholderForwardMatrix(c));
+
+    // The physical camera's real calibration (same bundle) is not a placeholder.
+    rawrcam::metadata::StaticColorCalibration real;
+    real.referenceIlluminant1 = 21;
+    real.referenceIlluminant2 = 17;
+    real.colorTransform1 = matrix({0.7958f, -0.2931f, -0.0599f, -0.4103f, 1.2298f, 0.1517f, -0.1629f, 0.3132f, 0.4958f});
+    real.colorTransform2 = matrix({1.0717f, -0.4897f, 0.0361f, -0.4242f, 1.3889f, 0.2471f, -0.1003f, 0.262f, 0.6874f});
+    real.forwardMatrix1 = matrix({0.4375f, 0.382812f, 0.140625f, 0.21875f, 0.71875f, 0.0625f, 0.015625f, 0.09375f, 0.710938f});
+    real.forwardMatrix2 = real.forwardMatrix1;
+    assert(rawrcam::color::repairPlaceholderForwardMatrices(real) == 2);
+    assert(!rawrcam::color::hasPlaceholderForwardMatrix(real));
+}
+
 int main(int argc, char** argv) {
     testDualProfile(false);
     testDualProfile(true);
     testSingleIlluminantDerivesForward();
     testRejects();
+    testPlaceholderForwardRepaired();
+    testStandInColorMatrixIsUnresolved();
     for (int i = 1; i < argc; ++i) {
         if (std::filesystem::is_directory(argv[i]))
             std::cout << "corpus " << argv[i] << ": " << testCorpus(argv[i]) << " parsed\n";
