@@ -10,6 +10,7 @@ import com.rawr.camera.settings.model.RawStreamFormat
 import com.rawr.camera.settings.model.VendorKey
 import com.rawr.camera.settings.model.VendorKeyScope
 import com.rawr.camera.settings.model.VendorKeyType
+import com.rawr.camera.settings.model.validateLensProfile
 import org.json.JSONObject
 import kotlin.test.assertFailsWith
 import kotlin.test.Test
@@ -42,6 +43,61 @@ class LensProfileCodecTest {
         assertFailsWith<IllegalArgumentException> {
             LensProfileCodec.encode(listOf(lens.copy(companion = LensOutputSize(640, 480))))
         }
+    }
+
+    @Test
+    fun sessionPolicyFieldsRoundTripAndDefaultToOff() {
+        val key = VendorKey("vendor.mode", VendorKeyScope.SessionAndRequest, VendorKeyType.Int32, listOf(3.0))
+        val lens = LensProfile(
+            "ISZ", "2",
+            vendorKeys = listOf(key.copy(scope = VendorKeyScope.Request)),
+            sessionParams = "none",
+            requestDefaults = "minimal",
+            vendorGate = "g",
+            gateHold = "closed",
+            quirks = listOf("noTapAf", "requireFpsRange")
+        )
+        val encoded = LensProfileCodec.encode(listOf(lens))
+        assertEquals(listOf(lens), LensProfileCodec.decode(encoded))
+        assertEquals(listOf(lens), LensProfileCodec.decodeBackup(encoded))
+        val both = LensProfile("ISZ", "2", vendorKeys = listOf(key))
+        val roundTrip = requireNotNull(LensProfileCodec.decodeBackup(LensProfileCodec.encode(listOf(both)))).single()
+        assertEquals(VendorKeyScope.SessionAndRequest, roundTrip.vendorKeys.single().scope)
+        val json = JSONObject(LensProfileCodec.encode(listOf(LensProfile("T12", "4")))).getJSONArray("lenses").getJSONObject(0)
+        for (field in listOf("session", "request", "gateHold", "quirks")) assertTrue(!json.has(field), field)
+        val plain = requireNotNull(LensProfileCodec.decode("""{"lenses":[{"id":"T12","cameraId":"4"}]}""")).single()
+        assertEquals("cadence", plain.sessionParams)
+        assertEquals("rawr", plain.requestDefaults)
+        assertNull(plain.gateHold)
+        assertEquals(emptyList(), plain.quirks)
+        for (field in listOf(
+            """"session":{"params":"sometimes"}""",
+            """"request":{"defaults":"bare"}""",
+            """"gateHold":"forever"""",
+            """"quirks":["noTapAF"]""",
+            """"quirks":[3]"""
+        )) {
+            assertFailsWith<IllegalArgumentException> {
+                LensProfileCodec.decodeBackup("""{"lenses":[{"id":"T50","cameraId":"4",$field}]}""")
+            }
+        }
+    }
+
+    @Test
+    fun sessionParamsNoneRejectsSessionKeysAndGateHoldNeedsAGate() {
+        val request = VendorKey("vendor.mode", VendorKeyScope.Request, VendorKeyType.Int32, listOf(3.0))
+        val none = LensProfile("ISZ", "2", sessionParams = "none", vendorKeys = listOf(request))
+        assertTrue(validateLensProfile(none, emptyList()).isEmpty())
+        for (scope in listOf(VendorKeyScope.Session, VendorKeyScope.SessionAndRequest)) {
+            val problems = validateLensProfile(none.copy(vendorKeys = listOf(request.copy(scope = scope))), emptyList())
+            assertTrue(problems.any { it.contains("cannot carry the session key") }, problems.toString())
+        }
+        assertTrue(validateLensProfile(
+            none.copy(vendorKeys = listOf(request.copy(scope = VendorKeyScope.Session, enabled = false))), emptyList()
+        ).isEmpty())
+        assertTrue(validateLensProfile(LensProfile("A", "2", gateHold = "closed"), emptyList()).any { it.contains("needs a vendor gate") })
+        assertTrue(validateLensProfile(LensProfile("A", "2", vendorGate = "g", gateHold = "closed"), emptyList()).isEmpty())
+        assertTrue(validateLensProfile(LensProfile("A", "2", quirks = listOf("bogus")), emptyList()).any { it.contains("Unknown quirk") })
     }
 
     @Test

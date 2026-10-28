@@ -56,14 +56,18 @@ import com.rawr.camera.settings.model.CFA_BLOCKS
 import com.rawr.camera.settings.model.CFA_LIVE_QUALITIES
 import com.rawr.camera.settings.model.CFA_ORDERS
 import com.rawr.camera.settings.model.CFA_PHOTO_QUALITIES
+import com.rawr.camera.settings.model.CAMERA_QUIRKS
 import com.rawr.camera.settings.model.EXTENDED_ISO_MAX
 import com.rawr.camera.settings.model.EXTENDED_SHUTTER_MAX_NS
+import com.rawr.camera.settings.model.GATE_HOLDS
 import com.rawr.camera.settings.model.LensExposure
 import com.rawr.camera.settings.model.LensLevels
 import com.rawr.camera.settings.model.LensMirror
 import com.rawr.camera.settings.model.LensProfile
 import com.rawr.camera.settings.model.RawStreamChoice
 import com.rawr.camera.settings.model.RawStreamFormat
+import com.rawr.camera.settings.model.REQUEST_DEFAULTS
+import com.rawr.camera.settings.model.SESSION_PARAMS_POLICIES
 import com.rawr.camera.settings.model.SettingsUiState
 import com.rawr.camera.settings.model.VendorKey
 import com.rawr.camera.settings.model.VendorKeyScope
@@ -170,6 +174,7 @@ internal fun LensEditorScreen(state: SettingsUiState, lensName: String?, dispatc
             )
         }
         FullResolutionGroup(draft) { draft = it }
+        SessionRecipeGroup(draft) { draft = it }
         SettingsGroup(title = "Image") {
             DropdownChoiceRow(
                 title = "Mirror",
@@ -610,6 +615,8 @@ private fun VendorKeyDialog(
                         VendorKeyScope.Still -> "Set only on full-size still requests (capture-stream lenses)."
                         VendorKeyScope.Decision ->
                             "Set only on one low-ISO viewfinder frame sent before full-size stills (capture-stream lenses)."
+                        VendorKeyScope.SessionAndRequest ->
+                            "The same value in the session parameters and on every capture request."
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -763,6 +770,84 @@ private fun streamForCamera(current: RawStreamChoice, camera: ProbedCamera): Raw
     if (usable.any { it.format == current.format && it.width == current.width && it.height == current.height }) return current
     val format = usable.firstOrNull { it.format == RawStreamFormat.Raw16 }?.format ?: usable.firstOrNull()?.format ?: current.format
     return RawStreamChoice(format)
+}
+
+@Composable
+private fun SessionRecipeGroup(lens: LensProfile, onChange: (LensProfile) -> Unit) {
+    SettingsGroup(
+        title = "Session and requests",
+        description = "How this lens configures the camera session and what it asks of every frame. The defaults match the app's normal behaviour."
+    ) {
+        DropdownChoiceRow(
+            title = "Session parameters",
+            selected = lens.sessionParams,
+            values = SESSION_PARAMS_POLICIES,
+            label = {
+                when (it) {
+                    "cadence" -> "Frame rate and session keys"
+                    "none" -> "None (plain session)"
+                    "full" -> "Whole repeating request"
+                    else -> it
+                }
+            },
+            supportingText = "None cannot carry session-scope keys; Whole sends every default and control the viewfinder uses",
+            onSelect = { onChange(lens.copy(sessionParams = it)) }
+        )
+        SettingDivider()
+        DropdownChoiceRow(
+            title = "Request defaults",
+            selected = lens.requestDefaults,
+            values = REQUEST_DEFAULTS,
+            label = { if (it == "minimal") "Minimal" else "App defaults" },
+            supportingText = "Minimal leaves distortion and hot-pixel modes, face detection and the AE priority tag to the camera",
+            onSelect = { onChange(lens.copy(requestDefaults = it)) }
+        )
+        if (lens.vendorGate.isNotEmpty()) {
+            SettingDivider()
+            DropdownChoiceRow(
+                title = "Gate held",
+                selected = lens.gateHold.orEmpty(),
+                values = listOf("") + GATE_HOLDS,
+                label = {
+                    when (it) {
+                        "" -> "Default"
+                        "configured" -> "Until configured"
+                        "closed" -> "Until the camera closes"
+                        else -> it
+                    }
+                },
+                supportingText = "Default keeps it until close on a lens with a separate capture stream",
+                onSelect = { onChange(lens.copy(gateHold = it.ifEmpty { null })) }
+            )
+        }
+        for (quirk in CAMERA_QUIRKS) {
+            SettingDivider()
+            SettingsSwitchRow(
+                title = quirkTitle(quirk),
+                checked = quirk in lens.quirks,
+                supportingText = quirkDescription(quirk),
+                testTag = SettingsTestTags.row("LensEditor", "quirk_$quirk")
+            ) { on -> onChange(lens.copy(quirks = if (on) (lens.quirks + quirk).distinct() else lens.quirks - quirk)) }
+        }
+    }
+}
+
+private fun quirkTitle(quirk: String) = when (quirk) {
+    "afTapHold" -> "Hold tap focus"
+    "noHalPriorityAe" -> "No camera priority AE"
+    "noTapAf" -> "No tap focus"
+    "requireFpsRange" -> "Always send an fps range"
+    "noAutoCompanion" -> "No automatic companion"
+    else -> quirk
+}
+
+private fun quirkDescription(quirk: String) = when (quirk) {
+    "afTapHold" -> "A tap's focus holds until the next tap; returning to continuous focus crashes this camera"
+    "noHalPriorityAe" -> "The camera's own shutter and ISO priority modes crash it; the app's AE handles them"
+    "noTapAf" -> "Changing the focus region crashes this camera, so tap focus and regions are off"
+    "requireFpsRange" -> "Every request carries an AE fps range, even with AE off"
+    "noAutoCompanion" -> "Do not add the small extra stream that unverified devices get"
+    else -> ""
 }
 
 @Composable

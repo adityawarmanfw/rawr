@@ -5,6 +5,10 @@ import com.rawr.camera.settings.model.CFA_BLOCKS
 import com.rawr.camera.settings.model.CFA_LIVE_QUALITIES
 import com.rawr.camera.settings.model.CFA_ORDERS
 import com.rawr.camera.settings.model.CFA_PHOTO_QUALITIES
+import com.rawr.camera.settings.model.CAMERA_QUIRKS
+import com.rawr.camera.settings.model.GATE_HOLDS
+import com.rawr.camera.settings.model.REQUEST_DEFAULTS
+import com.rawr.camera.settings.model.SESSION_PARAMS_POLICIES
 import com.rawr.camera.settings.model.EXTENDED_ISO_MAX
 import com.rawr.camera.settings.model.EXTENDED_SHUTTER_MAX_NS
 import com.rawr.camera.settings.model.LensDcp
@@ -113,6 +117,13 @@ internal object LensProfileCodec {
             }
         }
         choice(o, "template", listOf("preview", "still"))
+        objectField(o, "session")?.let { choice(it, "params", SESSION_PARAMS_POLICIES) }
+        objectField(o, "request")?.let { choice(it, "defaults", REQUEST_DEFAULTS) }
+        choice(o, "gateHold", GATE_HOLDS)
+        if (o.has("quirks")) {
+            val quirks = o.getJSONArray("quirks")
+            for (i in 0 until quirks.length()) require(quirks.get(i) is String && quirks.getString(i) in CAMERA_QUIRKS) { "Invalid quirks" }
+        }
         number(o, "fps", 0.0..240.0, true)
         number(o, "startupDelayMs", 0.0..5000.0, true)
         if (o.has("stopRepeatingForStill")) require(o.get("stopRepeatingForStill") is Boolean)
@@ -190,6 +201,10 @@ internal object LensProfileCodec {
         .apply {
             lens.readerUsage?.let { put("readerUsage", it) }
             if (lens.vendorGate.isNotEmpty()) put("vendorGate", lens.vendorGate)
+            lens.gateHold?.let { put("gateHold", it) }
+            if (lens.sessionParams != "cadence") put("session", JSONObject().put("params", lens.sessionParams))
+            if (lens.requestDefaults != "rawr") put("request", JSONObject().put("defaults", lens.requestDefaults))
+            if (lens.quirks.isNotEmpty()) put("quirks", JSONArray(lens.quirks))
             lens.captureStream?.let {
                 put(
                     "captureStream",
@@ -265,6 +280,11 @@ internal object LensProfileCodec {
             vendorKeys = decodeKeys(o.optJSONArray("keys")) + decodeKeys(legacyDcg?.optJSONArray("keys")),
             readerUsage = o.optString("readerUsage").ifEmpty { null },
             vendorGate = o.optString("vendorGate"),
+            gateHold = o.optString("gateHold").takeIf { it in GATE_HOLDS },
+            sessionParams = o.optJSONObject("session")?.optString("params")?.takeIf { it in SESSION_PARAMS_POLICIES } ?: "cadence",
+            requestDefaults = o.optJSONObject("request")?.optString("defaults")?.takeIf { it in REQUEST_DEFAULTS } ?: "rawr",
+            quirks = o.optJSONArray("quirks")?.let { a -> (0 until a.length()).map { a.getString(it) }.filter { it in CAMERA_QUIRKS } }
+                ?: emptyList(),
             captureStream = o.optJSONObject("captureStream")?.let {
                 RawStreamChoice(RawStreamFormat.fromWire(it.optString("format")), it.optInt("width"), it.optInt("height"))
             }?.takeIf { it.width > 0 && it.height > 0 },
