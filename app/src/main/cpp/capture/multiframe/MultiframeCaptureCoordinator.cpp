@@ -53,10 +53,11 @@ void MultiframeCaptureCoordinator::configureFullSize(uint32_t width, uint32_t he
     configured_ = true;
     fullSizeOnly_ = true;
     resetZsl();
-    // No warm arena for 200 MP: sized to the frame it is several GB, and the
-    // system kills the app seconds after the camera opens.
-    constexpr uint64_t kMaxWarmPixels = 100'000'000;
-    mfsrService_->configure(config_, experimentalMultiframeEnabled_ && uint64_t(width) * height <= kMaxWarmPixels);
+    // The service skips the warm arena when its layout would be several GiB:
+    // a 50 MP frame needs ~3.08 GiB (HDR+ Quality) to ~5.05 GiB (Wronski)
+    // before any input frame, and the system kills the app shortly after the
+    // camera opens. Small (12.5 MP) geometries still warm as before.
+    mfsrService_->configure(config_, experimentalMultiframeEnabled_);
 }
 void MultiframeCaptureCoordinator::configure(uint32_t width, uint32_t height, uint32_t cfa) {
     config_ = {width, height, cfa};

@@ -11,6 +11,7 @@
 #include "capture/CaptureRequest.h"
 #include "capture/multiframe/BracketCollector.h"
 #include "capture/multiframe/BracketExposure.h"
+#include "capture/multiframe/MergeArenaEstimate.h"
 #include "capture/multiframe/mfsr/MfsrCaptureJob.h"
 #include "capture/persistence/AcquiredRawJournal.h"
 #include "capture/persistence/CaptureJob.h"
@@ -64,6 +65,21 @@ void MfsrCaptureService::configure(const Geometry& geometry, bool warmEnabled) {
     burstCoordinator_.reset();
     geometry_ = geometry;
     if (vulkan_.device() == VK_NULL_HANDLE || !warmEnabled) return;
+    // An arena is laid out for the whole frame, not for the tuned 12.5 MP
+    // geometry: Wronski is ~1.26 GiB at 12.5 MP but ~5.05 GiB at 50 MP and
+    // ~20.2 GiB at 200 MP (HDR+ Quality: ~0.77 / ~3.08 / ~12.3 GiB). Reserving
+    // that while the camera is open starves the still render and gets the
+    // process killed, so only warm geometries whose worst-case arena fits.
+    // A shutter before/without warm falls back to cold initialization.
+    constexpr std::uint64_t kMaxWarmArenaBytes = 1536ull * 1024u * 1024u;  // 1.5 GiB
+    const std::uint64_t arenaBytes = estimateMergeArenaBytes(geometry.rawWidth, geometry.rawHeight);
+    LOGI("MULTIFRAME_WARM_PLAN raw=%ux%u arena1xMaxMB=%.0f budgetMB=%.0f", geometry.rawWidth, geometry.rawHeight,
+         double(arenaBytes) / (1024.0 * 1024.0), double(kMaxWarmArenaBytes) / (1024.0 * 1024.0));
+    if (arenaBytes == 0 || arenaBytes > kMaxWarmArenaBytes) {
+        LOGI("MULTIFRAME_WARM_SKIP raw=%ux%u arena1xMaxMB=%.0f reason=%s", geometry.rawWidth, geometry.rawHeight,
+             double(arenaBytes) / (1024.0 * 1024.0), arenaBytes ? "arena_too_large" : "estimate_unavailable");
+        return;
+    }
     stopWarm();
     try {
         // Delayed start: compiling 26 pipelines + allocating the arena

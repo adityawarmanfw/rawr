@@ -1,7 +1,6 @@
 #include "capture/multiframe/mfsr/MfsrCaptureJob.h"
 
 #include <android/log.h>
-#include <sys/sysinfo.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -18,6 +17,7 @@
 #include <utility>
 
 #include "capture/multiframe/BracketExposure.h"
+#include "capture/multiframe/MergeArenaEstimate.h"
 #include "capture/multiframe/MultiframeDescription.h"
 #include "capture/multiframe/MultiframeQueueHelpers.h"
 #include "capture/multiframe/RzslCaptureWriter.h"
@@ -57,7 +57,10 @@
 namespace rawrcam::capture::multiframe {
 namespace {
 constexpr const char* kTag = "RawrCamNative";
-constexpr std::uint64_t kStripMergePixels = 56'000'000;  // a 50 MP merge fits
+// Whole-frame merge window. The arena is laid out for the window, so this
+// threshold bounds the per-window arena (~3.40 GiB HDR+ / ~5.59 GiB Wronski at
+// 56 MP, ~0.77 / ~1.26 GiB at 12.5 MP). It is not a memory budget by itself.
+constexpr std::uint64_t kStripMergePixels = 56'000'000;
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, kTag, __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, kTag, __VA_ARGS__)
 
@@ -65,6 +68,16 @@ void vkCheck(VkResult r, const char* what) {
     if (r != VK_SUCCESS) {
         throw std::runtime_error(std::string(what) + " VkResult=" + std::to_string(r));
     }
+}
+
+// /proc MemAvailable; 0 when unreadable (callers log it, never gate on 0).
+std::uint64_t readMemAvailableBytes() {
+    std::ifstream in("/proc/meminfo");
+    std::string key, unit;
+    std::uint64_t kb = 0;
+    while (in >> key >> kb >> unit)
+        if (key == "MemAvailable:") return kb * 1024u;
+    return 0;
 }
 
 }  // namespace
@@ -113,6 +126,24 @@ void MfsrCaptureJob::runStages(Published& published) {
     const bool stripMode = strips.size() > 1;
     const bool jpegRequested = work->jpegRequested && !stripMode;
     const bool dumpRzslRequested = work->dumpRzslRequested;
+    {
+        // Pre-merge footprint: the arena grows with the window geometry, and
+        // HDR+ Quality/Bracketed keep every journaled frame resident (Wronski
+        // and HDR+ stream one companion). Logged so a device trace shows which
+        // side of the limit a failed burst ran on.
+        const std::uint32_t mergeRows = stripMode ? strips.front().rows : ctx.rawHeight;
+        const std::uint64_t arenaEstimate = estimateMergeArenaBytes(ctx.rawWidth, mergeRows);
+        const std::uint64_t frameBytes = std::uint64_t(ctx.rawWidth) * mergeRows * sizeof(std::uint16_t);
+        const std::size_t residentFrames = work->tuning.mergeAlgorithm == 2u || work->tuning.mergeAlgorithm == 3u
+                                               ? job->frames.size()
+                                               : std::min<std::size_t>(2u, job->frames.size());
+        const std::uint64_t avail = readMemAvailableBytes();
+        LOGI("MULTIFRAME_MEMORY_PLAN raw=%ux%u mergeRows=%u frames=%zu strips=%zu arena1xMaxMB=%.0f "
+             "residentFrameMB=%.0f availMB=%.0f",
+             ctx.rawWidth, ctx.rawHeight, mergeRows, job->frames.size(), strips.size(),
+             double(arenaEstimate) / (1024.0 * 1024.0),
+             double(frameBytes * residentFrames) / (1024.0 * 1024.0), double(avail) / (1024.0 * 1024.0));
+    }
     const auto tuning = [&] {
         // Super-resolution output must stay within the GPU's 2D image limit
         // (large sensors at the 1.386x maximum would exceed it).
@@ -460,12 +491,14 @@ void MfsrCaptureJob::runStages(Published& published) {
             LOGI(
                 "MULTIFRAME_MERGE_TIMING frames=%u noiseMs=%.1f refMs=%.1f prepMs=%.1f alignMs=%.1f "
                 "kernelMs=%.1f robustMs=%.1f accumMs=%.1f finalizeMs=%.1f totalMs=%.1f noiseBurst=%d "
-                "slope=%g offset=%g",
+                "slope=%g offset=%g arenaImgMB=%.0f arenaBufMB=%.0f",
                 mergeResult->frameCount, t.noiseEstimateMs, t.referencePrepareMs + t.referenceStatsMs,
                 t.companionPrepareMs, t.alignmentMs, t.kernelStatsMs, t.robustnessMs, t.accumulationMs, t.finalizeMs,
                 t.totalMs, mergeResult->noiseEstimated ? 1 : 0,
                 .25f * (n.slopeBySite[0] + n.slopeBySite[1] + n.slopeBySite[2] + n.slopeBySite[3]),
-                .25f * (n.offsetBySite[0] + n.offsetBySite[1] + n.offsetBySite[2] + n.offsetBySite[3]));
+                .25f * (n.offsetBySite[0] + n.offsetBySite[1] + n.offsetBySite[2] + n.offsetBySite[3]),
+                double(mergeResult->physicalImageBytes) / (1024.0 * 1024.0),
+                double(mergeResult->physicalBufferBytes) / (1024.0 * 1024.0));
             mfStages.initNote = mergeResult->resourcesReused
                                     ? "pipelines warm"
                                     : (mergeResult->pipelineCacheReused ? "pipeline cache reused" : "cold");
@@ -623,13 +656,20 @@ void MfsrCaptureJob::runStages(Published& published) {
                 (pages > 0 && pageSize > 0)
                     ? static_cast<unsigned long long>(pages) * static_cast<unsigned long long>(pageSize)
                     : 0ull;
-            struct sysinfo memInfo{};
-            const unsigned long long availRam =
-                sysinfo(&memInfo) == 0 ? static_cast<unsigned long long>(memInfo.freeram) * memInfo.mem_unit : 0ull;
-            const bool retainArena =
-                totalRam >= 12ull * 1024ull * 1024ull * 1024ull && availRam >= 8ull * 1024ull * 1024ull * 1024ull;
-            LOGI("MULTIFRAME_ARENA retain=%d totalRamGB=%.1f availRamGB=%.1f", retainArena ? 1 : 0,
-                 double(totalRam) / (1024.0 * 1024.0 * 1024.0), double(availRam) / (1024.0 * 1024.0 * 1024.0));
+            // Retain only what the next burst can use without starving the
+            // still render that follows this one. The old freeram test ignores
+            // reclaimable cache and would keep a multi-GiB 50 MP arena next to
+            // the JPEG render. Arena bytes are the merge run's own report.
+            constexpr std::uint64_t kMaxRetainedArenaBytes = 1536ull * 1024u * 1024u;
+            constexpr std::uint64_t kRetainHeadroomBytes = 4ull * 1024u * 1024u * 1024u;
+            const std::uint64_t arenaBytes = mergeResult->physicalImageBytes + mergeResult->physicalBufferBytes;
+            const std::uint64_t availRam = readMemAvailableBytes();
+            const bool retainArena = totalRam >= 12ull * 1024ull * 1024ull * 1024ull &&
+                                     arenaBytes <= kMaxRetainedArenaBytes &&
+                                     availRam >= arenaBytes + kRetainHeadroomBytes;
+            LOGI("MULTIFRAME_ARENA retain=%d totalRamGB=%.1f availMB=%.0f arenaMB=%.0f", retainArena ? 1 : 0,
+                 double(totalRam) / (1024.0 * 1024.0 * 1024.0), double(availRam) / (1024.0 * 1024.0),
+                 double(arenaBytes) / (1024.0 * 1024.0));
             if (!retainArena) coordinator.releaseScratch();
         }
 
