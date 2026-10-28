@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "imaging/RawPixelSource.h"
+#include "camera/StillExposureGuard.h"
 
 using namespace rawrcam::imaging;
 
@@ -140,6 +141,28 @@ void testBlockUniformity() {
 
 int main() {
     testBlockUniformity();
+    using namespace rawrcam::camera;
+    std::vector<uint16_t> pedestal(64 * 64, 512);
+    RawPixelSource floorSource{reinterpret_cast<const uint8_t*>(pedestal.data()), RawPixelFormat::Raw16, 64, 64, 128};
+    const auto measured = rawBlackFloor(floorSource, 0);
+    assert(measured && (*measured)[0] == 512);
+    assert(!blackFloorAgrees(measured, {64,64,64,64}, 1023));
+    assert(blackFloorAgrees(measured, {512,512,512,512}, 4095));
+    assert(!blackFloorAgrees(std::nullopt, {64,64,64,64}, 1023));
+    assert(!blackFloorAgrees(measured, {512,512,512,512}, 512));
+    StillExposureGuard guard;
+    assert(!guard.checked(1, 100));
+    guard.observe(1, {10000000, 100, false, 1000}, 100, true);
+    assert(guard.checked(1, 101));
+    assert(!guard.checked(2, 101));
+    assert(!guard.checked(1, 3000));
+    guard.observe(1, {200000, 50, false, 2000}, 200, false);
+    assert(!guard.checked(1, 201));
+    guard.observe(1, {10000000, 100, false, 1000}, 201, true); // Stale good frame cannot unlock.
+    assert(!guard.checked(1, 202));
+    guard.observe(2, {10000000, 100, false, 3000}, 300, true);
+    guard.observe(1, {200000, 50, false, 4000}, 301, false); // Old generation cannot poison new lens.
+    assert(guard.checked(2, 302));
     testRaw10Unpack();
     testPackedCopyHonoursStride();
     testStatsSeparateChannels();

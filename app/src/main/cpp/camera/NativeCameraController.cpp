@@ -34,6 +34,7 @@
 #include "camera/FullSizeSequence.h"
 #include "camera/SensitivityProbeStartup.h"
 #include "camera/StillFocus.h"
+#include "camera/StillExposureGuard.h"
 #include "camera/ViewfinderExposure.h"
 #include "geometry/OrientationTransform.h"
 #include "metadata/MetadataDiagnostics.h"
@@ -114,6 +115,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
     // The viewfinder request is replaced (decision request, then nothing) while
     // full-size stills are in flight (CameraDeviceSession::repeatFullSizeDecision).
     bool fullSizeDecisionRepeating = false;
+    StillExposureGuard stillExposureGuard;
     std::function<void()> pendingFocus;
     std::function<void()> pendingFocusMode;
     // Bounded retire for worker-driven stop/start-failure paths. Healthy
@@ -442,6 +444,19 @@ struct NativeCameraController::Impl final : CameraEventSink {
             e = {control.rawrAeExposureTimeNs, control.rawrAeSensitivity};
         } else if (control.appliedExposureTimeNs && control.appliedSensitivity) {
             e = {*control.appliedExposureTimeNs, *control.appliedSensitivity};
+        }
+        if (deviceSession.cameraContext()->guardStillExposure && control.exposureMode != ExposureControlMode::Manual) {
+            const auto checked = stillExposureGuard.checked(generation, monotonicMs());
+            if (!checked) {
+                diag("CAMERA_FULL_SIZE_SUBMIT sent=0 reason=untrusted_viewfinder_levels tag=" + std::to_string(requestId));
+                return abandon();
+            }
+            // Auto borrows exactly the measured frame, never a newer unmeasured AE command.
+            if (control.exposureMode == ExposureControlMode::Auto) {
+                const double ratio = checked->reportedIso ? results.sensitivityReportedPerRequest().value_or(1.0) : 1.0;
+                e = {checked->exposureTimeNs, int32_t(std::max(1.0, std::round(checked->sensitivity / ratio)))};
+            }
+            diag("CAMERA_STILL_EXPOSURE_CHECK timestampNs=" + std::to_string(checked->timestampNs) + " levels=consistent");
         }
         if (e.exposureTimeNs <= 0 || e.sensitivity <= 0) {
             diag("CAMERA_FULL_SIZE_SUBMIT sent=0 reason=no_exposure tag=" + std::to_string(requestId));
@@ -2084,6 +2099,15 @@ void NativeCameraController::setRawrAeConfig(const RawrAeConfig& config) { impl_
 NativeCameraController::RawrAeContext NativeCameraController::rawrAeContext() const {
     std::lock_guard<std::mutex> lock(impl_->rawrAeContextMutex);
     return impl_->rawrAePublished;
+}
+void NativeCameraController::observePreviewBlackFloor(const metadata::FrameMetadataSnapshot& frame,
+                                                       const std::optional<std::array<float, 4>>& floor) {
+    if (!frame.cameraContext || !frame.cameraContext->guardStillExposure || frame.optimizedStillRequestId) return;
+    const bool manualResult = frame.aeMode == 0 && frame.requestedSensitivity && frame.requestedExposureTimeNs;
+    impl_->stillExposureGuard.observe(frame.cameraContext->cameraContextGeneration,
+        {manualResult ? *frame.requestedExposureTimeNs : frame.exposureTimeNs,
+         manualResult ? *frame.requestedSensitivity : frame.sensitivity, !manualResult, frame.timestampNs},
+        Impl::monotonicMs(), blackFloorAgrees(floor, frame.blackLevelPhysicalRggb, frame.effectiveWhiteLevel));
 }
 void NativeCameraController::setRawrAeRequest(int64_t exposureTimeNs, int32_t sensitivity) {
     if (exposureTimeNs <= 0 || exposureTimeNs >= (int64_t(1) << 40) || sensitivity <= 0 || sensitivity > 0xFFFFFF)

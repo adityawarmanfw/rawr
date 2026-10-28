@@ -1030,6 +1030,11 @@ bool FrameSubmitCoordinator::submitAhb(uint64_t timestampNs, rawrcam::imaging::R
     const bool videoReady = videoOutput_ && videoOutput_->ready() && config_.diagnosticMode == 0u;
     if (!configured_ || ((!swapchainRenderer_.ready() || presentationPaused_) && !videoReady)) return false;
 
+    if (metadata.cameraContext && metadata.cameraContext->guardStillExposure && !metadata.optimizedStillRequestId) {
+        lifecyclePort_.observePreviewBlackFloor(metadata, rawrcam::imaging::sampleRawBlackFloor(
+            imageLease, ahb, acquireFenceFd, int(metadata.cameraContext->rawPreviewCfa)));
+    }
+
     // The CPU read below waits on the camera fence and touches the whole RAW
     // buffer; during recording that stall lands in the encoder's frame cadence.
     if (!videoReady && imageLease && metadata.cameraContext &&

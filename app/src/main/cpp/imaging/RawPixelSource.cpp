@@ -51,6 +51,28 @@ bool copyRawToPackedRaw16(const RawPixelSource& source, uint16_t* destination) n
     return true;
 }
 
+std::optional<std::array<float, 4>> rawBlackFloor(const RawPixelSource& source, int cfa) {
+    if (!source.base || source.width < 16 || source.height < 16 || cfa < 0 || cfa > 3 ||
+        source.rowStrideBytes < minimumRowBytes(source.format, source.width)) return std::nullopt;
+    static constexpr int channels[4][4] = {{0, 1, 2, 3}, {1, 0, 3, 2}, {2, 3, 0, 1}, {3, 2, 1, 0}};
+    std::array<std::vector<uint16_t>, 4> values;
+    const uint32_t dx = std::max(2u, source.width / 32 / 2 * 2);
+    const uint32_t dy = std::max(2u, source.height / 32 / 2 * 2);
+    for (uint32_t y = 0; y + 1 < source.height; y += dy)
+        for (uint32_t x = 0; x + 1 < source.width; x += dx)
+            for (uint32_t c = 0; c < 4; ++c)
+                values[channels[cfa][c]].push_back(readRawPixel(source, x + (c & 1), y + (c >> 1)));
+    std::array<float, 4> floor{};
+    for (size_t c = 0; c < 4; ++c) {
+        auto& v = values[c];
+        if (v.size() < 16) return std::nullopt;
+        const auto lower = v.begin() + v.size() / 100;  // Ignore isolated dead pixels.
+        std::nth_element(v.begin(), lower, v.end());
+        floor[c] = *lower;
+    }
+    return floor;
+}
+
 RawBlockUniformity rawBlockUniformity(const RawPixelSource& source, const RawContentStatsInput& input) {
     RawBlockUniformity out;
     if (!source.base || source.rowStrideBytes < minimumRowBytes(source.format, source.width)) return out;

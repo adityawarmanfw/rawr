@@ -175,6 +175,8 @@ class NativeCameraController {
     // Ingress reports every RAW image; the first one of a generation drops the
     // companion stream from the repeating request.
     void rawFrameArrived(uint64_t generation);
+    void observePreviewBlackFloor(const metadata::FrameMetadataSnapshot& frame,
+                                   const std::optional<std::array<float, 4>>& floor);
     // Camera2-native spot metering used only when ordinary Camera2 Auto AE owns
     // exposure. Coordinates are normalized in sensor/source space.
     void setSpotMeteringTargetSensorNormalized(bool active, float x, float y);

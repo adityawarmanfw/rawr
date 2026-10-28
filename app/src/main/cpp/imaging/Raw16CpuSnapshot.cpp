@@ -168,6 +168,28 @@ std::optional<RawPixelFormat> rawPixelFormatOf(AImage* image) noexcept {
     return std::nullopt;
 }
 
+std::optional<std::array<float, 4>> sampleRawBlackFloor(AImage* image, AHardwareBuffer* ahb,
+                                                        int acquireFenceFd, int cfa) {
+    if (!image || !ahb) return std::nullopt;
+    AHardwareBuffer_Desc desc{};
+    AHardwareBuffer_describe(ahb, &desc);
+    const auto format = rawPixelFormatOf(image);
+    int32_t stride = 0;
+    if (!format || !(desc.usage & AHARDWAREBUFFER_USAGE_CPU_READ_MASK) ||
+        AImage_getPlaneRowStride(image, 0, &stride) != AMEDIA_OK || stride <= 0) return std::nullopt;
+    const int fence = acquireFenceFd >= 0 ? dup(acquireFenceFd) : -1;
+    if (acquireFenceFd >= 0 && fence < 0) return std::nullopt;
+    void* address = nullptr;
+    if (AHardwareBuffer_lock(ahb, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN, fence, nullptr, &address) != 0)
+        return std::nullopt;
+    const auto result = rawBlackFloor({static_cast<const uint8_t*>(address), *format, desc.width, desc.height,
+                                      static_cast<size_t>(stride)}, cfa);
+    int releaseFence = -1;
+    const int unlocked = AHardwareBuffer_unlock(ahb, &releaseFence);
+    if (releaseFence >= 0) close(releaseFence);
+    return unlocked == 0 ? result : std::nullopt;
+}
+
 std::string sampleRawContentStats(AImage* image, AHardwareBuffer* ahb, int acquireFenceFd,
                                   const RawContentStatsInput& input) {
     AHardwareBuffer_Desc desc{};

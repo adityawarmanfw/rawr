@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+#include <optional>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -52,6 +54,10 @@ struct RawBlockUniformity {
     const char* verdict = "flat";  // "real", "upscaled2x", "upscaled4x" or "flat"
 };
 [[nodiscard]] RawBlockUniformity rawBlockUniformity(const RawPixelSource& source, const RawContentStatsInput& input);
+
+// Lower-tail sample per physical R,Gr,Gb,B channel. Sparse sampling keeps this
+// cheap on binned viewfinder frames; it never changes the frame's levels.
+[[nodiscard]] std::optional<std::array<float, 4>> rawBlackFloor(const RawPixelSource& source, int cfa);
 
 // One-line summary of the RAW plane content, to tell a black or garbage
 // sensor buffer apart from a development problem in device logs.
