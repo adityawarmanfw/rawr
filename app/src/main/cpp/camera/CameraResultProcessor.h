@@ -4,6 +4,7 @@
 #include <functional>
 #include <optional>
 
+#include "camera/CameraRequest.h"
 #include "camera/CameraResultState.h"
 #include "camera/CameraRouting.h"
 #include "metadata/FrameMetadataSnapshot.h"
@@ -21,7 +22,7 @@ class CameraResultProcessor final {
     explicit CameraResultProcessor(Diagnostic diagnostic) : diagnostic_(std::move(diagnostic)) {}
     void reset();
     void auditCallback(uint64_t callbackGeneration, uint64_t generation, bool active, bool hasContext, bool hasResult);
-    CameraResultActions process(const ACaptureRequest*, const ACameraMetadata*, CameraControlState&,
+    CameraResultActions process(const CameraRequest*, const ACameraMetadata*, CameraControlState&,
                                 const metadata::CameraContextMetadataPtr&, const std::optional<LevelOverride>& staticLevels,
                                 const std::optional<LevelOverride>& captureStaticLevels, bool captureStream,
                                 bool sensorModeOverridden, uint64_t latestSubmittedSerial);

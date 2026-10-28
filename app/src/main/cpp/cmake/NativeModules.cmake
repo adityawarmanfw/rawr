@@ -128,6 +128,9 @@ rawrcam_module(camera
     camera/CameraDeviceSession.cpp
     camera/CameraCallbacks.cpp
     camera/CameraRequestPipeline.cpp
+    camera/CameraRequest.cpp
+    camera/NdkRequest.cpp
+    camera/NdkCameraDriver.cpp
     camera/CameraResultProcessor.cpp
     camera/CameraMetadataTags.cpp
     camera/VendorCameraGate.cpp

@@ -101,6 +101,9 @@ rawr_test(camera_start_ladder_test
   "${RAWR_ROOT}/tests/native/camera_start_ladder_test.cpp")
 rawr_test(session_recipe_log_test
   "${RAWR_ROOT}/tests/native/session_recipe_log_test.cpp")
+rawr_test(camera_request_test
+  "${RAWR_ROOT}/tests/native/camera_request_test.cpp"
+  "${RAWR_ROOT}/app/src/main/cpp/camera/CameraRequest.cpp")
 rawr_test(camera_key_attempts_test
   "${RAWR_ROOT}/tests/native/camera_key_attempts_test.cpp")
 rawr_test(vendor_gate_preset_test

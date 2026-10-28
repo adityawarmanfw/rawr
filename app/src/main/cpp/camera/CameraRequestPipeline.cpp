@@ -10,27 +10,26 @@
 
 namespace rawrcam::camera {
 namespace {
-bool ok(camera_status_t status) { return status == ACAMERA_OK; }
-std::string statusText(camera_status_t status) { return std::to_string(static_cast<int>(status)); }
+bool ok(RequestStatus status) { return status == ACAMERA_OK; }
+std::string statusText(RequestStatus status) { return std::to_string(static_cast<int>(status)); }
 }  // namespace
-const CameraRequestProvenance* CameraRequestPipeline::attach(ACaptureRequest* request,
+const CameraRequestProvenance* CameraRequestPipeline::attach(CameraRequest* request,
                                                              const CameraControlState& control, bool focusStart) {
     if (!request) return nullptr;
     auto provenance =
         std::make_unique<CameraRequestProvenance>(CameraRequestProvenance::from(control, nextRequestSerial_++));
     provenance->focusTriggerStart = focusStart;
     CameraRequestProvenance* const ptr = provenance.get();
-    if (ACaptureRequest_setUserContext(request, ptr) == ACAMERA_OK) {
+    if (request->setUserContext(ptr) == ACAMERA_OK) {
         provenance_.push_back(std::move(provenance));
         return ptr;
     }
     diag("CAMERA_REQUEST_PROVENANCE_FAIL");
     return nullptr;
 }
-bool CameraRequestPipeline::submit(ACameraCaptureSession* session, ACaptureRequest* request,
-                                   CameraSessionCallbackContext* context, const CameraControlState& control,
-                                   const CameraMeteringRequest& metering) {
-    if (!session || !request || !context) return false;
+bool CameraRequestPipeline::submit(CameraSessionDriver* session, CameraRequest* request,
+                                   const CameraControlState& control, const CameraMeteringRequest& metering) {
+    if (!session || !request) return false;
     const auto applyResult = applyCameraControlState(request, control, metering);
     if (applyResult.focusStatus != ACAMERA_OK) {
         diag("CAMERA_FOCUS_REQUEST_FAILED status=" + statusText(applyResult.focusStatus));
@@ -58,14 +57,7 @@ bool CameraRequestPipeline::submit(ACameraCaptureSession* session, ACaptureReque
     const CameraRequestProvenance* const provenance = attach(request, control);
     if (!provenance) return false;
     int sequenceId = 0;
-    camera_status_t s = ACAMERA_OK;
-    if (context->physicalCameraId.empty()) {
-        auto captures = CameraCallbacks::captures(context);
-        s = ACameraCaptureSession_setRepeatingRequest(session, &captures, 1, &request, &sequenceId);
-    } else {
-        auto captures = CameraCallbacks::logicalCaptures(context);
-        s = ACameraCaptureSession_logicalCamera_setRepeatingRequest(session, &captures, 1, &request, &sequenceId);
-    }
+    const RequestStatus s = session->setRepeating(*request, &sequenceId);
     if (!ok(s)) {
         diag("CAMERA_CONTROL_REPEATING_FAILURE status=" + statusText(s));
         return false;
@@ -90,37 +82,25 @@ bool CameraRequestPipeline::submit(ACameraCaptureSession* session, ACaptureReque
     }
     return true;
 }
-bool CameraRequestPipeline::captureBracket(ACameraCaptureSession* session, const ACaptureRequest* repeating,
-                                           CameraSessionCallbackContext* context, const CameraControlState& control,
+bool CameraRequestPipeline::captureBracket(CameraSessionDriver* session, const CameraRequest* repeating,
+                                           const CameraControlState& control,
                                            const std::vector<BracketExposure>& exposures, uint64_t tagId,
                                            const PrepareRequest& prepare) {
-    if (!session || !repeating || !context || exposures.empty() || tagId == 0) return false;
-    std::vector<ACaptureRequest*> requests;
-    struct FreeRequests {
-        std::vector<ACaptureRequest*>& requests;
-        ~FreeRequests() {
-            for (auto* r : requests) ACaptureRequest_free(r);
-        }
-    } freeRequests{requests};
+    if (!session || !repeating || exposures.empty() || tagId == 0) return false;
+    std::vector<std::unique_ptr<CameraRequest>> owned;
+    std::vector<CameraRequest*> requests;
     for (const auto& e : exposures) {
-        ACaptureRequest* request = ACaptureRequest_copy(repeating);
+        auto request = repeating->copy();
         if (!request) {
             diag("CAMERA_BRACKET_COPY_FAIL");
             return false;
         }
-        requests.push_back(request);
-        if (!prepareBracketRequest(request, control, e, tagId, prepare)) return false;
+        requests.push_back(request.get());
+        owned.push_back(std::move(request));
+        if (!prepareBracketRequest(requests.back(), control, e, tagId, prepare)) return false;
     }
     int sequenceId = 0;
-    camera_status_t s = ACAMERA_OK;
-    if (context->physicalCameraId.empty()) {
-        auto captures = CameraCallbacks::captures(context);
-        s = ACameraCaptureSession_capture(session, &captures, int(requests.size()), requests.data(), &sequenceId);
-    } else {
-        auto captures = CameraCallbacks::logicalCaptures(context);
-        s = ACameraCaptureSession_logicalCamera_capture(session, &captures, int(requests.size()), requests.data(),
-                                                        &sequenceId);
-    }
+    const RequestStatus s = session->capture(requests, &sequenceId);
     if (!ok(s)) {
         diag("CAMERA_BRACKET_CAPTURE_FAILURE status=" + statusText(s));
         return false;
@@ -132,30 +112,18 @@ bool CameraRequestPipeline::captureBracket(ACameraCaptureSession* session, const
     diag(line);
     return true;
 }
-bool CameraRequestPipeline::repeatBracket(ACameraCaptureSession* session, const ACaptureRequest* repeating,
-                                          CameraSessionCallbackContext* context, const CameraControlState& control,
-                                          const BracketExposure& exposure, uint64_t tagId,
-                                          const PrepareRequest& prepare) {
-    if (!session || !repeating || !context || tagId == 0) return false;
-    ACaptureRequest* request = ACaptureRequest_copy(repeating);
+bool CameraRequestPipeline::repeatBracket(CameraSessionDriver* session, const CameraRequest* repeating,
+                                          const CameraControlState& control, const BracketExposure& exposure,
+                                          uint64_t tagId, const PrepareRequest& prepare) {
+    if (!session || !repeating || tagId == 0) return false;
+    const auto request = repeating->copy();
     if (!request) {
         diag("CAMERA_BRACKET_COPY_FAIL");
         return false;
     }
-    struct FreeRequest {
-        ACaptureRequest* r;
-        ~FreeRequest() { ACaptureRequest_free(r); }
-    } freeRequest{request};
-    if (!prepareBracketRequest(request, control, exposure, tagId, prepare)) return false;
+    if (!prepareBracketRequest(request.get(), control, exposure, tagId, prepare)) return false;
     int sequenceId = 0;
-    camera_status_t s = ACAMERA_OK;
-    if (context->physicalCameraId.empty()) {
-        auto captures = CameraCallbacks::captures(context);
-        s = ACameraCaptureSession_setRepeatingRequest(session, &captures, 1, &request, &sequenceId);
-    } else {
-        auto captures = CameraCallbacks::logicalCaptures(context);
-        s = ACameraCaptureSession_logicalCamera_setRepeatingRequest(session, &captures, 1, &request, &sequenceId);
-    }
+    const RequestStatus s = session->setRepeating(*request, &sequenceId);
     if (!ok(s)) {
         diag("CAMERA_BRACKET_REPEATING_FAILURE status=" + statusText(s));
         return false;
@@ -164,25 +132,25 @@ bool CameraRequestPipeline::repeatBracket(ACameraCaptureSession* session, const 
          std::to_string(exposure.exposureTimeNs) + "ns@" + std::to_string(exposure.sensitivity));
     return true;
 }
-bool CameraRequestPipeline::prepareBracketRequest(ACaptureRequest* request, const CameraControlState& control,
+bool CameraRequestPipeline::prepareBracketRequest(CameraRequest* request, const CameraControlState& control,
                                                   const BracketExposure& e, uint64_t tagId,
                                                   const PrepareRequest& prepare) {
     const uint8_t aeOff = ACAMERA_CONTROL_AE_MODE_OFF;
     // Bracket frames run at their own exposure but at least the preview
     // cadence, so the repeating stream keeps its timing around them.
     const int64_t frameDuration = cameraBracketFrameDuration(control, e.exposureTimeNs);
-    if (ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AE_MODE, 1, &aeOff) != ACAMERA_OK ||
-        ACaptureRequest_setEntry_i64(request, ACAMERA_SENSOR_EXPOSURE_TIME, 1, &e.exposureTimeNs) != ACAMERA_OK ||
-        ACaptureRequest_setEntry_i32(request, ACAMERA_SENSOR_SENSITIVITY, 1, &e.sensitivity) != ACAMERA_OK ||
-        ACaptureRequest_setEntry_i64(request, ACAMERA_SENSOR_FRAME_DURATION, 1, &frameDuration) != ACAMERA_OK) {
+    if (request->setU8(ACAMERA_CONTROL_AE_MODE, 1, &aeOff) != ACAMERA_OK ||
+        request->setI64(ACAMERA_SENSOR_EXPOSURE_TIME, 1, &e.exposureTimeNs) != ACAMERA_OK ||
+        request->setI32(ACAMERA_SENSOR_SENSITIVITY, 1, &e.sensitivity) != ACAMERA_OK ||
+        request->setI64(ACAMERA_SENSOR_FRAME_DURATION, 1, &frameDuration) != ACAMERA_OK) {
         diag("CAMERA_BRACKET_REQUEST_FAIL");
         return false;
     }
     // Never replay a one-shot AF/AE trigger the repeating request may carry.
     const uint8_t afIdle = ACAMERA_CONTROL_AF_TRIGGER_IDLE;
     const uint8_t precaptureIdle = ACAMERA_CONTROL_AE_PRECAPTURE_TRIGGER_IDLE;
-    (void)ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AF_TRIGGER, 1, &afIdle);
-    (void)ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AE_PRECAPTURE_TRIGGER, 1, &precaptureIdle);
+    (void)request->setU8(ACAMERA_CONTROL_AF_TRIGGER, 1, &afIdle);
+    (void)request->setU8(ACAMERA_CONTROL_AE_PRECAPTURE_TRIGGER, 1, &precaptureIdle);
     if (prepare && !prepare(request)) {
         diag("CAMERA_BRACKET_PREPARE_FAIL");
         return false;
@@ -194,30 +162,26 @@ bool CameraRequestPipeline::prepareBracketRequest(ACaptureRequest* request, cons
     provenance->requestedExposureTimeNs = e.exposureTimeNs;
     provenance->requestedSensitivity = e.sensitivity;
     provenance->optimizedStillRequestId = tagId;
-    if (ACaptureRequest_setUserContext(request, provenance.get()) != ACAMERA_OK) {
+    if (request->setUserContext(provenance.get()) != ACAMERA_OK) {
         diag("CAMERA_REQUEST_PROVENANCE_FAIL");
         return false;
     }
     provenance_.push_back(std::move(provenance));
     return true;
 }
-bool CameraRequestPipeline::captureAfTrigger(ACameraCaptureSession* session, const ACaptureRequest* repeating,
-                                             CameraSessionCallbackContext* context, const CameraControlState& control,
-                                             CameraFocusTrigger trigger) {
-    if (!session || !repeating || !context || trigger == CameraFocusTrigger::Idle) return false;
+bool CameraRequestPipeline::captureAfTrigger(CameraSessionDriver* session, const CameraRequest* repeating,
+                                             const CameraControlState& control, CameraFocusTrigger trigger) {
+    if (!session || !repeating || trigger == CameraFocusTrigger::Idle) return false;
     if (trigger == CameraFocusTrigger::Cancel && control.capabilities.tapAfHoldsUntilNextTap) {
         diag("CAMERA_AF_CANCEL_BLOCKED reason=vendor_driver");
         return false;
     }
-    ACaptureRequest* request = ACaptureRequest_copy(repeating);
+    const auto owned = repeating->copy();
+    CameraRequest* const request = owned.get();
     if (!request) return false;
-    struct FreeRequest {
-        ACaptureRequest* r;
-        ~FreeRequest() { ACaptureRequest_free(r); }
-    } freeRequest{request};
     const uint8_t value = trigger == CameraFocusTrigger::Start ? ACAMERA_CONTROL_AF_TRIGGER_START
                                                                : ACAMERA_CONTROL_AF_TRIGGER_CANCEL;
-    if (ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AF_TRIGGER, 1, &value) != ACAMERA_OK) return false;
+    if (request->setU8(ACAMERA_CONTROL_AF_TRIGGER, 1, &value) != ACAMERA_OK) return false;
     // vivo's camera sequence: the cancel returns to continuous AF without
     // regions; the start carries the tap region for AE as well as AF. A cancel
     // into MF keeps the repeating request's AF off and lens distance: a
@@ -225,40 +189,33 @@ bool CameraRequestPipeline::captureAfTrigger(ACameraCaptureSession* session, con
     if (trigger == CameraFocusTrigger::Cancel) {
         if (control.focusMode != FocusControlMode::Manual) {
             const uint8_t continuous = ACAMERA_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
-            (void)ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AF_MODE, 1, &continuous);
+            (void)request->setU8(ACAMERA_CONTROL_AF_MODE, 1, &continuous);
         }
-        (void)ACaptureRequest_setEntry_i32(request, ACAMERA_CONTROL_AF_REGIONS, 0, nullptr);
+        (void)request->setI32(ACAMERA_CONTROL_AF_REGIONS, 0, nullptr);
     } else {
-        ACameraMetadata_const_entry af{};
-        ACameraMetadata_const_entry ae{};
-        const bool hasAf = ACaptureRequest_getConstEntry(request, ACAMERA_CONTROL_AF_REGIONS, &af) == ACAMERA_OK &&
+        RequestEntry af{};
+        RequestEntry ae{};
+        const bool hasAf = request->get(ACAMERA_CONTROL_AF_REGIONS, &af) == ACAMERA_OK &&
                            af.count == 5;
-        const bool hasAe = ACaptureRequest_getConstEntry(request, ACAMERA_CONTROL_AE_REGIONS, &ae) == ACAMERA_OK &&
+        const bool hasAe = request->get(ACAMERA_CONTROL_AE_REGIONS, &ae) == ACAMERA_OK &&
                            ae.count == 5;
         if (hasAf && !hasAe) {
             const std::array<int32_t, 5> region{af.data.i32[0], af.data.i32[1], af.data.i32[2], af.data.i32[3],
                                                 af.data.i32[4]};
-            (void)ACaptureRequest_setEntry_i32(request, ACAMERA_CONTROL_AE_REGIONS, 5, region.data());
+            (void)request->setI32(ACAMERA_CONTROL_AE_REGIONS, 5, region.data());
         }
     }
     const auto* provenance = attach(request, control, trigger == CameraFocusTrigger::Start);
     if (!provenance) return false;
     int sequenceId = 0;
-    camera_status_t s = ACAMERA_OK;
-    if (context->physicalCameraId.empty()) {
-        auto captures = CameraCallbacks::captures(context);
-        s = ACameraCaptureSession_capture(session, &captures, 1, &request, &sequenceId);
-    } else {
-        auto captures = CameraCallbacks::logicalCaptures(context);
-        s = ACameraCaptureSession_logicalCamera_capture(session, &captures, 1, &request, &sequenceId);
-    }
+    const RequestStatus s = session->capture({request}, &sequenceId);
     if (!ok(s)) {
         diag("CAMERA_AF_TRIGGER_CAPTURE_FAILURE status=" + statusText(s));
         return false;
     }
     return true;
 }
-camera_status_t CameraRequestPipeline::applySessionCadence(ACaptureRequest* sessionRequest,
+RequestStatus CameraRequestPipeline::applySessionCadence(CameraRequest* sessionRequest,
                                                            const CameraControlState& control) {
     const auto result = applyCameraSessionCadence(sessionRequest, control);
     if (!result.fpsRange) return result.status;

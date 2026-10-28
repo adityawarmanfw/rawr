@@ -583,8 +583,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         longExposureSubmitted = std::chrono::steady_clock::now();
         const std::vector<CameraRequestPipeline::BracketExposure> exposures(
             count, CameraRequestPipeline::BracketExposure{pair->exposureTimeNs, pair->sensitivity});
-        const bool sent = requests.captureBracket(deviceSession.session(), deviceSession.request(),
-                                                  deviceSession.callbackContext(), control, exposures, requestId);
+        const bool sent = requests.captureBracket(deviceSession.session(), deviceSession.request(), control, exposures, requestId);
         diag("CAMERA_LONG_EXPOSURE_SUBMIT sent=" + std::to_string(sent ? 1 : 0) + " tag=" + std::to_string(requestId) +
              " count=" + std::to_string(count) +
              " exposureNs=" + std::to_string(pair->exposureTimeNs) + " iso=" + std::to_string(pair->sensitivity) +
@@ -669,8 +668,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
             diag(std::string("CAMERA_BRACKET_SKIPPED longEv=") + gain + " limit=exposure");
             return false;
         }
-        return requests.captureBracket(deviceSession.session(), deviceSession.request(), deviceSession.callbackContext(),
-                                       control, exposures, requestId);
+        return requests.captureBracket(deviceSession.session(), deviceSession.request(), control, exposures, requestId);
     }
 
     // Calibration is part of lens startup, before any preview is published.
@@ -746,8 +744,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // Geometric midpoint avoids the manual endpoints that can be clamped.
         const int32_t probeIso = static_cast<int32_t>(std::llround(
             std::sqrt(double(std::max(1, caps.sensitivityMin)) * double(std::max(1, caps.advertisedSensitivityMax)))));
-        const bool sent = requests.captureBracket(deviceSession.session(), deviceSession.request(),
-                                                  deviceSession.callbackContext(), control,
+        const bool sent = requests.captureBracket(deviceSession.session(), deviceSession.request(), control,
                                                   {{exposure, probeIso}}, metadata::kSensitivityProbeRequestId);
         diag(std::string("CAMERA_SENSITIVITY_PROBE sent=") + (sent ? "1" : "0") + " exposureNs=" +
              std::to_string(exposure) + " iso=" + std::to_string(probeIso));
@@ -777,11 +774,9 @@ struct NativeCameraController::Impl final : CameraEventSink {
         auto metering = meteringRequestLocked();
         const auto trigger = metering.trigger;
         metering.trigger = CameraFocusTrigger::Idle;
-        const bool submitted = requests.submit(deviceSession.session(), deviceSession.request(),
-                                               deviceSession.callbackContext(), control, metering);
+        const bool submitted = requests.submit(deviceSession.session(), deviceSession.request(), control, metering);
         if (submitted && trigger != CameraFocusTrigger::Idle) {
-            if (requests.captureAfTrigger(deviceSession.session(), deviceSession.request(),
-                                          deviceSession.callbackContext(), control, trigger))
+            if (requests.captureAfTrigger(deviceSession.session(), deviceSession.request(), control, trigger))
                 focusControls.finishTrigger();
             else
                 diag(std::string("CAMERA_AF_TRIGGER_FAILED trigger=") +
@@ -1189,7 +1184,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         std::lock_guard<std::mutex> lock(mutex);
         if (callbackGeneration == deviceSession.generation()) diag(message);
     }
-    void cameraCaptureStarted(uint64_t callbackGeneration, const ACaptureRequest* requestCopy, int64_t sensorTimestamp) override {
+    void cameraCaptureStarted(uint64_t callbackGeneration, const CameraRequest* requestCopy, int64_t sensorTimestamp) override {
         // Validate before reading borrowed provenance, including late callbacks
         // from a forcibly retired session whose request storage is gone.
         std::lock_guard<std::mutex> lock(mutex);
@@ -1197,7 +1192,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         const uint64_t tag = longExposureTag.load(std::memory_order_relaxed);
         if (tag == 0) return;
         void* userContext = nullptr;
-        if (ACaptureRequest_getUserContext(requestCopy, &userContext) != ACAMERA_OK || !userContext) return;
+        if (!requestCopy || requestCopy->userContext(&userContext) != ACAMERA_OK || !userContext) return;
         if (static_cast<const CameraRequestProvenance*>(userContext)->optimizedStillRequestId != tag) return;
         if (deviceSession.hasCaptureStream())
             fullSizeLastExposureTimestamp = sensorTimestamp + longExposureNs.load(std::memory_order_relaxed);
@@ -1259,13 +1254,13 @@ struct NativeCameraController::Impl final : CameraEventSink {
         }
         if (restart && callbacks.acquisitionFailed) callbacks.acquisitionFailed(callbackGeneration, 0);
     }
-    void cameraStillFailed(uint64_t generation, const ACaptureRequest* request) override {
+    void cameraStillFailed(uint64_t generation, const CameraRequest* request) override {
         uint64_t tag = 0;
         {
             std::lock_guard<std::mutex> lock(mutex);
             if (generation != deviceSession.generation()) return;
             void* provenance = nullptr;
-            if (!request || ACaptureRequest_getUserContext(request, &provenance) != ACAMERA_OK || !provenance) return;
+            if (!request || request->userContext(&provenance) != ACAMERA_OK || !provenance) return;
             tag = static_cast<const CameraRequestProvenance*>(provenance)->optimizedStillRequestId;
             if (!tag) return;
             if (tag == metadata::kFullSizeDecisionRequestId) {
@@ -1327,12 +1322,12 @@ struct NativeCameraController::Impl final : CameraEventSink {
         }
         if (failedTag && callbacks.acquisitionFailed) callbacks.acquisitionFailed(generation, failedTag);
     }
-    void cameraSessionClosed(uint64_t callbackGeneration, ACameraCaptureSession* session) override {
+    void cameraSessionClosed(uint64_t callbackGeneration, const void* session) override {
         std::lock_guard<std::mutex> lock(mutex);
         diag("CAMERA_NDK_SESSION_CLOSED generation=" + std::to_string(callbackGeneration));
         deviceSession.sessionClosed(callbackGeneration, session);
     }
-    void cameraCaptureCompleted(uint64_t callbackGeneration, const ACaptureRequest* requestCopy,
+    void cameraCaptureCompleted(uint64_t callbackGeneration, const CameraRequest* requestCopy,
                                 const ACameraMetadata* result) override {
         std::unique_lock<std::mutex> lock(mutex);
         results.auditCallback(callbackGeneration, deviceSession.generation(), active,

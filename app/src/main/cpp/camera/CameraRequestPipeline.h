@@ -3,6 +3,7 @@
 #include <memory>
 #include <vector>
 
+#include "camera/CameraBackend.h"
 #include "camera/CameraCallbacks.h"
 #include "camera/CameraRequestControls.h"
 #include "camera/CameraRequestProvenance.h"
@@ -11,9 +12,8 @@ class CameraRequestPipeline final {
    public:
     using Diagnostic = std::function<void(const std::string&)>;
     explicit CameraRequestPipeline(Diagnostic diagnostic) : diagnostic_(std::move(diagnostic)) {}
-    bool submit(ACameraCaptureSession*, ACaptureRequest*, CameraSessionCallbackContext*, const CameraControlState&,
-                const CameraMeteringRequest&);
-    camera_status_t applySessionCadence(ACaptureRequest*, const CameraControlState&);
+    bool submit(CameraSessionDriver*, CameraRequest*, const CameraControlState&, const CameraMeteringRequest&);
+    RequestStatus applySessionCadence(CameraRequest*, const CameraControlState&);
     // One-off burst of AE-off copies of the repeating request (HDR+ bracket
     // dark frames), tagged with optimizedStillRequestId = tagId. The
     // repeating request keeps running and resumes after the burst.
@@ -23,28 +23,26 @@ class CameraRequestPipeline final {
     };
     // prepare (optional) adjusts each copy before submit, e.g. full-size still
     // targets and keys; false aborts the burst.
-    using PrepareRequest = std::function<bool(ACaptureRequest*)>;
-    bool captureBracket(ACameraCaptureSession*, const ACaptureRequest* repeating, CameraSessionCallbackContext*,
-                        const CameraControlState&, const std::vector<BracketExposure>&, uint64_t tagId,
+    using PrepareRequest = std::function<bool(CameraRequest*)>;
+    bool captureBracket(CameraSessionDriver*, const CameraRequest* repeating, const CameraControlState&, const std::vector<BracketExposure>&, uint64_t tagId,
                         const PrepareRequest& prepare = {});
     // The same AE-off copy (one exposure) as the new repeating request, tagged
     // tagId. The caller restores the normal repeating request with submit().
-    bool repeatBracket(ACameraCaptureSession*, const ACaptureRequest* repeating, CameraSessionCallbackContext*,
-                       const CameraControlState&, const BracketExposure&, uint64_t tagId,
+    bool repeatBracket(CameraSessionDriver*, const CameraRequest* repeating, const CameraControlState&, const BracketExposure&, uint64_t tagId,
                        const PrepareRequest& prepare = {});
     // One-shot copy of the repeating request carrying an AF trigger. The
     // repeating request itself stays at IDLE: a trigger left in it repeats on
     // every frame until replaced and restarts the AF scan (vivo X300 Ultra:
     // the provider crashes in the restarted low-light scan).
-    bool captureAfTrigger(ACameraCaptureSession*, const ACaptureRequest* repeating, CameraSessionCallbackContext*,
-                          const CameraControlState&, CameraFocusTrigger trigger);
+    bool captureAfTrigger(CameraSessionDriver*, const CameraRequest* repeating, const CameraControlState&,
+                          CameraFocusTrigger trigger);
     uint64_t latestSubmittedSerial() const noexcept { return latestSubmittedRequestSerial_; }
     int lastCaptureSequence() const noexcept { return lastCaptureSequence_; }
     void retire() noexcept { provenance_.clear(); }
 
    private:
-    const CameraRequestProvenance* attach(ACaptureRequest*, const CameraControlState&, bool focusStart = false);
-    bool prepareBracketRequest(ACaptureRequest*, const CameraControlState&, const BracketExposure&, uint64_t tagId,
+    const CameraRequestProvenance* attach(CameraRequest*, const CameraControlState&, bool focusStart = false);
+    bool prepareBracketRequest(CameraRequest*, const CameraControlState&, const BracketExposure&, uint64_t tagId,
                                const PrepareRequest&);
     void diag(const std::string& line) const {
         if (diagnostic_) diagnostic_(line);
