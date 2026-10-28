@@ -163,6 +163,14 @@ int main() {
     guard.observe(2, {10000000, 100, false, 3000}, 300, true);
     guard.observe(1, {200000, 50, false, 4000}, 301, false); // Old generation cannot poison new lens.
     assert(guard.checked(2, 302));
+    {
+        StillExposureGuard described;
+        assert(described.describe(1, 0) == "observed=none");
+        described.observe(4, {10000000, 100, false, 1000}, 500, false, "floor=150,150,150,150 black=64,64,64,64 white=1023");
+        assert(described.describe(4, 750) ==
+               "agrees=0 sameSession=1 ageMs=250 floor=150,150,150,150 black=64,64,64,64 white=1023");
+        assert(described.describe(5, 750).find("sameSession=0") != std::string::npos);
+    }
     const StillExposureGuard::Exposure sample{10000000, 400, true, 1000};
     const auto automatic = StillExposureGuard::requestExposure(sample, 2.0);
     assert(automatic && automatic->exposureTimeNs == 10000000 && automatic->sensitivity == 200);

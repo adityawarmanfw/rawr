@@ -7,6 +7,7 @@
 #include <mutex>
 #include <limits>
 #include <optional>
+#include <string>
 
 namespace rawrcam::camera {
 
@@ -31,13 +32,22 @@ public:
         bool reportedIso = false;
         uint64_t timestampNs = 0;
     };
-    void observe(uint64_t generation, Exposure exposure, int64_t nowMs, bool agrees) {
+    // levels: what the frame was judged on, for the refusal log ("floor=... black=... white=...").
+    void observe(uint64_t generation, Exposure exposure, int64_t nowMs, bool agrees, std::string levels = {}) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (generation < generation_ || (generation == generation_ && exposure.timestampNs <= exposure_.timestampNs)) return;
         generation_ = generation;
         exposure_ = exposure;
         observedMs_ = nowMs;
         agrees_ = agrees;
+        levels_ = std::move(levels);
+    }
+    // The last observation as log fields, so a refused still says why.
+    std::string describe(uint64_t generation, int64_t nowMs) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!observedMs_) return "observed=none";
+        return std::string("agrees=") + (agrees_ ? "1" : "0") + " sameSession=" + (generation == generation_ ? "1" : "0") +
+               " ageMs=" + std::to_string(nowMs - observedMs_) + (levels_.empty() ? "" : " " + levels_);
     }
     std::optional<Exposure> checked(uint64_t generation, int64_t nowMs) const {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -71,5 +81,6 @@ private:
     int64_t observedMs_ = 0;
     Exposure exposure_;
     bool agrees_ = false;
+    std::string levels_;
 };
 }  // namespace rawrcam::camera

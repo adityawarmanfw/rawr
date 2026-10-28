@@ -484,7 +484,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
         if (deviceSession.cameraContext()->guardStillExposure && control.exposureMode != ExposureControlMode::Manual) {
             const auto checked = stillExposureGuard.checked(generation, monotonicMs());
             if (!checked) {
-                diag("CAMERA_FULL_SIZE_SUBMIT sent=0 reason=untrusted_viewfinder_levels tag=" + std::to_string(requestId));
+                diag("CAMERA_FULL_SIZE_SUBMIT sent=0 reason=untrusted_viewfinder_levels tag=" + std::to_string(requestId) +
+                     " " + stillExposureGuard.describe(generation, monotonicMs()));
                 return abandon();
             }
             const auto measured = StillExposureGuard::requestExposure(*checked,
@@ -2159,10 +2160,19 @@ void NativeCameraController::observePreviewBlackFloor(const metadata::FrameMetad
                                                        const std::optional<std::array<float, 4>>& floor) {
     if (!frame.cameraContext || !frame.cameraContext->guardStillExposure || frame.optimizedStillRequestId) return;
     const bool manualResult = frame.aeMode == 0 && frame.requestedSensitivity && frame.requestedExposureTimeNs;
+    const auto four = [](const std::array<float, 4>& v) {
+        char text[64];
+        std::snprintf(text, sizeof(text), "%.0f,%.0f,%.0f,%.0f", v[0], v[1], v[2], v[3]);
+        return std::string(text);
+    };
+    char white[24];
+    std::snprintf(white, sizeof(white), "%.0f", frame.effectiveWhiteLevel);
     impl_->stillExposureGuard.observe(frame.cameraContext->cameraContextGeneration,
         {manualResult ? *frame.requestedExposureTimeNs : frame.exposureTimeNs,
          manualResult ? *frame.requestedSensitivity : frame.sensitivity, !manualResult, frame.timestampNs},
-        Impl::monotonicMs(), blackFloorAgrees(floor, frame.blackLevelPhysicalRggb, frame.effectiveWhiteLevel));
+        Impl::monotonicMs(), blackFloorAgrees(floor, frame.blackLevelPhysicalRggb, frame.effectiveWhiteLevel),
+        "floor=" + (floor ? four(*floor) : std::string("none")) + " black=" + four(frame.blackLevelPhysicalRggb) +
+            " white=" + white);
 }
 void NativeCameraController::setRawrAeRequest(int64_t exposureTimeNs, int32_t sensitivity) {
     if (exposureTimeNs <= 0 || exposureTimeNs >= (int64_t(1) << 40) || sensitivity <= 0 || sensitivity > 0xFFFFFF)
