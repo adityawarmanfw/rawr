@@ -930,6 +930,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
                                std::memory_order_release);
         if (ladderPlan == CameraStartLadder::Plan::GaveUp) {
             diag("CAMERA_START_LADDER lens=" + route.lensId + " step=gave_up action=not_started");
+            control.capabilities.lensUnavailable = true;
             rollbackCameraStartLocked(lock, "start_ladder_gave_up");
             return;
         }

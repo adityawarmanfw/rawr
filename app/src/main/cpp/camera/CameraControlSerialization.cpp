@@ -64,6 +64,7 @@ std::string serializeCameraControlState(const CameraControlState& st) {
       << ",\"isoPrioritySupported\":" << (c.isoPrioritySupported ? "true" : "false")
        << ",\"tapAfSupported\":" << (c.tapAfSupported ? "true" : "false")
        << ",\"dngOnly\":" << (c.dngOnly ? "true" : "false")
+       << ",\"lensUnavailable\":" << (c.lensUnavailable ? "true" : "false")
        << ",\"faceDetectSupported\":" << (c.faceDetectSupported ? "true" : "false")
       << ",\"manualFocusSupported\":" << (c.manualFocusSupported ? "true" : "false")
       << ",\"focusDistanceReadoutTrustworthy\":" << (c.focusDistanceReadoutTrustworthy ? "true" : "false")

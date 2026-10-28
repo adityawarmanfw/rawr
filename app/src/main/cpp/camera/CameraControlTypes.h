@@ -143,6 +143,9 @@ struct CameraControlCapabilities {
     // Stills save DNG only: a JPEG develop of a 200 MP full-size still
     // doesn't fit in memory.
     bool dngOnly = false;
+    // The lens's session never delivered a frame and recovery gave up; the
+    // camera is stopped until a lens or profile switch.
+    bool lensUnavailable = false;
     bool manualFocusSupported = false;
     // True when the HAL advertises STATISTICS face detection (FULL preferred,
     // SIMPLE accepted). Powers the face boxes + face-steered continuous AF.
