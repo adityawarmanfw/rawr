@@ -1065,7 +1065,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // frame holds each capture result back about a frame behind its RAW
         // image, which starves the preview pairer.
         // A profile companion stays targeted: the mode needs it on every frame.
-        companionDetachGeneration.store(companionStream && !route.companionSize ? deviceSession.generation() : 0,
+        companionDetachGeneration.store(companionStream && recipe.companion->detach ? deviceSession.generation() : 0,
                                         std::memory_order_release);
         diag("CAMERA_START_DONE generation=" + std::to_string(deviceSession.generation()));
     }

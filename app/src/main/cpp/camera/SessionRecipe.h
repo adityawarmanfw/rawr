@@ -36,13 +36,20 @@ struct CompanionRecipe {
     bool privateFormat = false;
     std::optional<std::pair<uint32_t, uint32_t>> size;  // nullopt: the RAW-aspect pick from the advertised sizes
     bool targeted = true;
-    // Set by the profile: part of the sensor mode, never a recovery option and never detached.
+    std::optional<uint64_t> usage;    // absent: PRIVATE asks for GPU sampling, YUV for the reader default
+    uint32_t maxImages = 2;
+    std::optional<bool> physical;     // absent: tied to the route's physical camera, if it has one
+    CompanionFallback fallback = CompanionFallback::Base;
+    // Dropped from the repeating request after the first accepted frame.
+    bool detach = true;
+    // Set by the profile: part of the sensor mode, never a recovery option.
     bool required = false;
     // Why the companion exists: "profile", "capture_stream", "override" or "rule".
     const char* source = "rule";
 
     bool operator==(const CompanionRecipe& o) const {
-        return privateFormat == o.privateFormat && size == o.size && targeted == o.targeted &&
+        return privateFormat == o.privateFormat && size == o.size && targeted == o.targeted && usage == o.usage &&
+               maxImages == o.maxImages && physical == o.physical && fallback == o.fallback && detach == o.detach &&
                required == o.required && std::string(source) == o.source;
     }
 };
@@ -53,6 +60,7 @@ struct SessionRecipe {
     bool captureStillTemplate = true;     // full-size stills are built from the still-capture template
     std::optional<CompanionRecipe> companion;
     std::optional<std::pair<uint32_t, uint32_t>> auxJpeg;
+    std::optional<uint64_t> auxJpegUsage;
     StillStrategy still = StillStrategy::Direct;
     std::string gate;
     GateHold gateHold = GateHold::UntilConfigured;
@@ -90,11 +98,18 @@ struct RecipeInputs {
         c.privateFormat = lens.companionPrivate;
         c.size = lens.companionSize;
         c.targeted = lens.companionTargeted;
+        c.usage = lens.companionUsage;
+        c.maxImages = lens.companionMaxImages ? lens.companionMaxImages : 2;
+        c.physical = lens.companionPhysical;
+        c.fallback = lens.companionFallback;
+        // Only an automatic companion is dropped unless the profile says otherwise.
+        c.detach = lens.companionDetach.value_or(!lens.companionSize.has_value());
         c.required = lens.companionSize.has_value();
         c.source = lens.companionSize ? "profile" : lens.captureStream ? "capture_stream" : in.forcedCompanion ? "override" : "rule";
         r.companion = c;
     }
     r.auxJpeg = lens.auxJpegSize;
+    r.auxJpegUsage = lens.auxJpegUsage;
     r.still = stillStrategyFor(lens, r.companion.has_value());
     r.gate = lens.vendorGate;
     r.gateHold = lens.gateHold.value_or(defaultGateHold(lens));

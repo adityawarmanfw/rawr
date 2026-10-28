@@ -64,6 +64,9 @@ SessionEngine::SessionEngine(std::string filesDir) : filesDir_(std::move(filesDi
         const bool configured = realtime_.configureCamera(generation, metadata);
         lastCameraContext_ = std::make_shared<const rawrcam::metadata::CameraContextMetadata>(metadata);
         profileReaderUsage_ = metadata.rawReaderUsage;
+        profileMaxImages_ = metadata.rawMaxImages;
+        profileReaderProbe_ = metadata.readerProbe;
+        profileReaderDemote_ = metadata.readerDemote;
         // The RAW size may have changed (or become known): rebuild the prewarm.
         if (configured) {
             cameraCapabilities_ = capabilities;
@@ -85,7 +88,7 @@ SessionEngine::SessionEngine(std::string filesDir) : filesDir_(std::move(filesDi
                                            AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT;
             rawReaderUsage_.readerCreated(
                 generation,
-                imaging::RawReaderUsageLadder::watchedUsage(profileReaderUsage_.has_value(),
+                imaging::RawReaderUsageLadder::watchedUsage(profileReaderUsage_.has_value() && !profileReaderDemote_,
                                                             rawFrameIngress_.requestedUsage() & kGpuUsage),
                 steadyMillis());
         }

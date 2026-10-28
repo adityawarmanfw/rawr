@@ -40,6 +40,10 @@ struct CameraContextMetadata {
     geometry::RawPixelFormat rawFormat = geometry::RawPixelFormat::Raw16;
     // The lens profile's RAW reader usage (LensRoute::readerUsage), if any.
     std::optional<uint64_t> rawReaderUsage;
+    // The lens profile's viewfinder reader tuning (LensRoute::rawMaxImages, readerProbe, readerDemote).
+    uint32_t rawMaxImages = 0;
+    bool readerProbe = false;
+    bool readerDemote = false;
     // The lens profile's capture-stream reader usage (LensRoute::captureReaderUsage), if any.
     std::optional<uint64_t> captureReaderUsage;
     // Recipe capture streams require a measured viewfinder floor before borrowing exposure.

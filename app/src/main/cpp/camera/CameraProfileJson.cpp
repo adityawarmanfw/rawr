@@ -566,15 +566,44 @@ std::string serializeCameraProfile(const CameraProfile& profile) {
         if (r.stillTemplate) out += *r.stillTemplate ? ",\"template\":\"still\"" : ",\"template\":\"preview\"";
         if (r.fixedFps > 0) out += ",\"fps\":" + std::to_string(r.fixedFps);
         if (r.disableCompanion) out += ",\"disableCompanion\":true";
-        if (r.companionSize) {
-            appendSize(out, "companion", *r.companionSize);
-            out.pop_back();
-            out += r.companionPrivate ? ",\"format\":\"private\"" : ",\"format\":\"yuv\"";
-            out += r.companionTargeted ? ",\"targeted\":true}" : ",\"targeted\":false}";
+        if (r.companionSize || r.companionUsage || r.companionMaxImages || r.companionPhysical || r.companionDetach ||
+            r.companionFallback != CompanionFallback::Base || r.companionPrivate || !r.companionTargeted) {
+            out += ",\"companion\":{";
+            if (r.companionSize)
+                out += "\"width\":" + std::to_string(r.companionSize->first) +
+                       ",\"height\":" + std::to_string(r.companionSize->second) + ",";
+            out += r.companionPrivate ? "\"format\":\"private\"" : "\"format\":\"yuv\"";
+            out += r.companionTargeted ? ",\"targeted\":true" : ",\"targeted\":false";
+            if (r.companionUsage) out += ",\"usage\":\"" + readerUsageName(*r.companionUsage) + "\"";
+            if (r.companionMaxImages) out += ",\"maxImages\":" + std::to_string(r.companionMaxImages);
+            if (r.companionPhysical) out += *r.companionPhysical ? ",\"physical\":true" : ",\"physical\":false";
+            if (r.companionDetach) out += *r.companionDetach ? ",\"detach\":true" : ",\"detach\":false";
+            if (r.companionFallback != CompanionFallback::Base)
+                out += r.companionFallback == CompanionFallback::Nearest ? ",\"fallback\":\"nearest\"" : ",\"fallback\":\"none\"";
+            out += '}';
         }
         if (r.startupDelayMs) out += ",\"startupDelayMs\":" + std::to_string(r.startupDelayMs);
         if (r.stopRepeatingForStill) out += ",\"stopRepeatingForStill\":true";
-        if (r.auxJpegSize) appendSize(out, "auxJpeg", *r.auxJpegSize);
+        if (r.auxJpegSize) {
+            appendSize(out, "auxJpeg", *r.auxJpegSize);
+            if (r.auxJpegUsage) {
+                out.pop_back();
+                out += ",\"usage\":\"" + readerUsageName(*r.auxJpegUsage) + "\"}";
+            }
+        }
+        if (r.rawMaxImages || r.readerProbe || r.readerDemote) {
+            out += ",\"reader\":{";
+            bool first = true;
+            const auto field = [&](const std::string& text) {
+                if (!first) out += ',';
+                first = false;
+                out += text;
+            };
+            if (r.rawMaxImages) field("\"maxImages\":" + std::to_string(r.rawMaxImages));
+            if (r.readerProbe) field("\"probe\":true");
+            if (r.readerDemote) field("\"demote\":true");
+            out += '}';
+        }
         if (!r.vendorGate.empty()) {
             out += ",\"vendorGate\":";
             appendJsonString(out, r.vendorGate);
@@ -705,10 +734,50 @@ std::optional<CameraProfile> readProfile(const Json& root, std::string* error) {
             }
             r.companionPrivate = format == "private";
             r.companionTargeted = c->flag("targeted", true);
-            r.companionSize = readSize(c);
-            if (!r.companionSize) {
-                if (error) *error = "invalid companion for lens " + r.lensId;
-                return std::nullopt;
+            // No width and height: an automatic size, with this block only tuning the companion the app adds.
+            if (c->get("width") || c->get("height")) {
+                r.companionSize = readSize(c);
+                if (!r.companionSize) {
+                    if (error) *error = "invalid companion for lens " + r.lensId;
+                    return std::nullopt;
+                }
+            }
+            if (const std::string usage = c->str("usage"); !usage.empty()) {
+                r.companionUsage = parseReaderUsage(usage);
+                if (!r.companionUsage) {
+                    if (error) *error = "unknown companion usage " + usage + " for lens " + r.lensId;
+                    return std::nullopt;
+                }
+            }
+            if (c->get("maxImages")) {
+                const double n = c->num("maxImages");
+                if (n < 2.0 || n > 16.0 || std::floor(n) != n) {
+                    if (error) *error = "companion maxImages must be 2 to 16 for lens " + r.lensId;
+                    return std::nullopt;
+                }
+                r.companionMaxImages = uint32_t(n);
+            }
+            for (const auto& [name, field] : {std::pair{"physical", &r.companionPhysical}, std::pair{"detach", &r.companionDetach}}) {
+                if (const Json* v = c->get(name)) {
+                    if (v->kind != Json::Kind::Bool) {
+                        if (error) *error = std::string("companion ") + name + " must be boolean for lens " + r.lensId;
+                        return std::nullopt;
+                    }
+                    *field = v->boolean;
+                }
+            }
+            if (const std::string fallback = c->str("fallback"); !fallback.empty()) {
+                if (fallback != "base" && fallback != "nearest" && fallback != "none") {
+                    if (error) *error = "unknown companion fallback " + fallback + " for lens " + r.lensId;
+                    return std::nullopt;
+                }
+                if (r.companionSize) {
+                    if (error) *error = "companion fallback needs an automatic size for lens " + r.lensId;
+                    return std::nullopt;
+                }
+                r.companionFallback = fallback == "nearest" ? CompanionFallback::Nearest
+                                      : fallback == "none"  ? CompanionFallback::None
+                                                            : CompanionFallback::Base;
             }
         }
         if (const Json* a = l.get("auxJpeg")) {
@@ -717,6 +786,25 @@ std::optional<CameraProfile> readProfile(const Json& root, std::string* error) {
                 if (error) *error = "invalid auxJpeg for lens " + r.lensId;
                 return std::nullopt;
             }
+            if (const std::string usage = a->str("usage"); !usage.empty()) {
+                r.auxJpegUsage = parseReaderUsage(usage);
+                if (!r.auxJpegUsage) {
+                    if (error) *error = "unknown auxJpeg usage " + usage + " for lens " + r.lensId;
+                    return std::nullopt;
+                }
+            }
+        }
+        if (const Json* rd = l.get("reader"); rd && rd->kind == Json::Kind::Object) {
+            if (rd->get("maxImages")) {
+                const double n = rd->num("maxImages");
+                if (n < 6.0 || n > 16.0 || std::floor(n) != n) {
+                    if (error) *error = "reader maxImages must be 6 to 16 for lens " + r.lensId;
+                    return std::nullopt;
+                }
+                r.rawMaxImages = uint32_t(n);
+            }
+            r.readerProbe = rd->flag("probe", false);
+            r.readerDemote = rd->flag("demote", false);
         }
         r.vendorGate = l.str("vendorGate");
         if (const Json* s = l.get("session"); s && s->kind == Json::Kind::Object) {

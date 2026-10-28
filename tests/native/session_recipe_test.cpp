@@ -180,6 +180,36 @@ void testSessionParamsAndRequestDefaults() {
     assert(std::string(requestDefaultsName(RequestDefaults::Minimal)) == "minimal");
 }
 
+// The old rules: an automatic companion is dropped after the first frame, a profile-sized one stays;
+// two images; the route decides the physical camera.
+void testCompanionBlockDefaults() {
+    LensRoute automatic;
+    const auto a = resolveSessionRecipe(automatic, {false, true}).companion;
+    assert(a && a->detach && a->maxImages == 2 && !a->usage && !a->physical && a->fallback == CompanionFallback::Base);
+    LensRoute sized;
+    sized.companionSize = std::make_pair(640u, 480u);
+    const auto b = resolveSessionRecipe(sized, {}).companion;
+    assert(b && !b->detach && b->required && b->maxImages == 2);
+    LensRoute capture;
+    capture.captureStream = rawrcam::geometry::RawStreamPreference{};
+    assert(resolveSessionRecipe(capture, {}).companion->detach);
+
+    LensRoute tuned = sized;
+    tuned.companionDetach = true;
+    tuned.companionUsage = 0x100;
+    tuned.companionMaxImages = 4;
+    tuned.companionPhysical = false;
+    tuned.auxJpegSize = std::make_pair(8192u, 6144u);
+    tuned.auxJpegUsage = 0x3;
+    const auto t = resolveSessionRecipe(tuned, {});
+    assert(t.companion->detach && t.companion->usage == 0x100u && t.companion->maxImages == 4u);
+    assert(t.companion->physical == false && t.companion->required);
+    assert(t.auxJpegUsage == 0x3u);
+    LensRoute keep = automatic;
+    keep.companionDetach = false;
+    assert(!resolveSessionRecipe(keep, {false, true}).companion->detach);
+}
+
 }  // namespace
 
 int main() {
@@ -190,6 +220,7 @@ int main() {
     testVivoStillStrategy();
     testGateHoldJson();
     testSessionParamsAndRequestDefaults();
+    testCompanionBlockDefaults();
     std::cout << "session_recipe_test passed\n";
     return 0;
 }

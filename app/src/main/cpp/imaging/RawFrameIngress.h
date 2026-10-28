@@ -34,8 +34,9 @@ class RawFrameIngress final {
     RawFrameIngress(const RawFrameIngress&) = delete;
     RawFrameIngress& operator=(const RawFrameIngress&) = delete;
 
+    // maxImages: images the reader holds; 0 keeps kRawReaderMaxImages (a profile may ask for up to 16).
     ANativeWindow* create(uint64_t generation, uint32_t width, uint32_t height, geometry::RawPixelFormat format,
-                          uint64_t ahbUsage);
+                          uint64_t ahbUsage, uint32_t maxImages = 0);
     void destroy();
     // The full-size capture worker calls this after returning an AImage lease.
     // Drain on that worker, serialized with arrival callbacks. A retired generation is a no-op.
@@ -66,6 +67,7 @@ class RawFrameIngress final {
     AImageReader* reader_ = nullptr;
     uint64_t generation_ = 0;
     uint64_t usage_ = 0;
+    uint32_t maxImages_ = 0;
     bool imageDescriptionLogged_ = false;
     uint32_t auditImageCount_ = 0;
 };

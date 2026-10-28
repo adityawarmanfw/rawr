@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "camera/CameraQuirks.h"
+#include "camera/CompanionStreamSize.h"
 #include "color/DcpProfile.h"
 #include "geometry/LensDistortion.h"
 #include "geometry/RawGeometry.h"
@@ -152,11 +153,29 @@ struct LensRoute {
     bool disableCompanion = false;
     bool companionPrivate = false;
     bool companionTargeted = true;
+    // The companion's own reader: AHB usage (absent: PRIVATE asks for GPU sampling, YUV for the reader default),
+    // and how many images it holds (0: 2).
+    std::optional<uint64_t> companionUsage;
+    uint32_t companionMaxImages = 0;
+    // Companion output tied to the route's physical camera; absent: it follows the route.
+    std::optional<bool> companionPhysical;
+    // Automatic size only: what to do when the camera has no output with the RAW's shape.
+    CompanionFallback companionFallback = CompanionFallback::Base;
+    // Drop the companion from the repeating request after the first accepted frame; absent: only an
+    // automatic companion is dropped, a profile-sized one stays.
+    std::optional<bool> companionDetach;
     int32_t startupDelayMs = 0;
     // Pause the viewfinder for the still sequence, then restore it.
     bool stopRepeatingForStill = false;
     // Extra JPEG output configured with the session but never targeted.
     std::optional<std::pair<uint32_t, uint32_t>> auxJpegSize;
+    std::optional<uint64_t> auxJpegUsage;  // absent: the reader default
+    // The viewfinder RAW reader: images it holds (0: the app's 6; 6..16 allowed), whether a profile-fixed
+    // usage is checked with AHardwareBuffer_isSupported before the reader is created (CPU-only when it
+    // fails), and whether a fixed reader that stays silent takes part in the usage ladder.
+    uint32_t rawMaxImages = 0;
+    bool readerProbe = false;
+    bool readerDemote = false;
     // Sensor colour layout when the camera reports it wrong. cfaBlock: side of
     // the same-colour blocks the RAW actually holds (1 Bayer, 2 quad, 4 for
     // 4x4); ingress remosaics them to Bayer. cfaOrder: block-level colour
@@ -189,7 +208,10 @@ inline bool carriesRecipe(const LensRoute& route) {
            route.stillTemplate || route.startupDelayMs > 0 || route.disableCompanion || route.companionPrivate ||
            !route.companionTargeted || route.stopRepeatingForStill || route.readerUsage || route.captureReaderUsage ||
            !route.vendorGate.empty() || route.unlistedStream || route.quirks.any() || route.gateHold ||
-           route.sessionParams != SessionParamsPolicy::Cadence || route.requestDefaults != RequestDefaults::Rawr;
+           route.sessionParams != SessionParamsPolicy::Cadence || route.requestDefaults != RequestDefaults::Rawr ||
+           route.companionUsage || route.companionMaxImages || route.companionPhysical || route.companionDetach ||
+           route.companionFallback != CompanionFallback::Base || route.auxJpegUsage || route.rawMaxImages ||
+           route.readerProbe || route.readerDemote;
 }
 
 // What a lens avoids on this device: the device's quirks, the lens's own, and the presets the lens's

@@ -20,14 +20,14 @@ void testPlainLens() {
     f.requestTemplate = "preview";
     f.fpsRange = "12..30";
     f.requestKeys = 1;
-    f.companion = SessionRecipeFacts::Companion{"YUV_420_888", 320, 240, true, "profile", "fallback"};
+    f.companion = SessionRecipeFacts::Companion{"YUV_420_888", 320, 240, true, "profile", "fallback", ":images=4:detach=0:usage=0x100"};
     f.readerUsage = 0x1000003;
     const std::string line = describeSessionRecipe(f);
     assert(line.rfind("CAMERA_SESSION_RECIPE ", 0) == 0);
     assert(has(line, "lens=2x camera=2 physical=none raw=RAW16:4080x3064 aspect=1.332"));
     assert(has(line, "template=preview fps=12..30 sessionParams=cadence requestDefaults=rawr"));
     assert(has(line, "keys=session:0,request:1,still:0,decision:0"));
-    assert(has(line, "companion=YUV_420_888:320x240:targeted:source=profile:shape=fallback"));
+    assert(has(line, "companion=YUV_420_888:320x240:targeted:source=profile:shape=fallback:images=4:detach=0:usage=0x100"));
     assert(has(line, "auxJpeg=none captureStream=none readerUsage=0x1000003 captureReaderUsage=default"));
     assert(has(line, "gate=none still=none stopRepeatingForStill=0"));
 }
@@ -45,7 +45,7 @@ void testFullSizeLens() {
     f.requestDefaults = "minimal";
     f.sessionKeys = 2;
     f.decisionKeys = 1;
-    f.companion = SessionRecipeFacts::Companion{"PRIVATE", 640, 480, false, "profile", "raw"};
+    f.companion = SessionRecipeFacts::Companion{"PRIVATE", 640, 480, false, "profile", "raw", ""};
     f.auxJpeg = std::make_pair(8192u, 6144u);
     f.captureStream = std::make_pair(16320u, 12256u);
     f.captureReaderUsage = 1ull << 24;

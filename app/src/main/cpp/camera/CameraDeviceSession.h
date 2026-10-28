@@ -105,9 +105,9 @@ class CameraDeviceSession final {
     // Adds the companion YUV output and request target; false leaves the session RAW-only.
     // size: the lens profile's companion size; nullopt uses the RAW-aspect companion choice.
     bool addCompanionStream(const std::string& physicalCameraId, uint32_t rawWidth, uint32_t rawHeight,
-                            const std::optional<std::pair<uint32_t, uint32_t>>& size, bool privateFormat, const Diagnostic&);
+                            const CompanionRecipe& companion, const Diagnostic&);
     // Adds an output no request targets (LensRoute::auxJpegSize).
-    bool addAuxJpegStream(const std::pair<uint32_t, uint32_t>& size, const Diagnostic&);
+    bool addAuxJpegStream(const std::pair<uint32_t, uint32_t>& size, std::optional<uint64_t> usage, const Diagnostic&);
     // The configured session as facts for the CAMERA_SESSION_RECIPE line.
     SessionRecipeFacts recipeFacts(const std::optional<LensRoute>& selected, const SessionRecipe& recipe,
                                    ACameraDevice_request_template repeatingTemplate) const;
@@ -135,6 +135,7 @@ class CameraDeviceSession final {
     std::optional<SessionRecipeFacts::Companion> companionFacts_;
     // The lens profile's companion: also targeted by full-size stills.
     bool companionFromProfile_ = false;
+    bool companionDetachable_ = false;
     bool profileCompanionTargeted_ = true;
     bool captureStillTemplate_ = true;
     bool stopRepeatingForStill_ = false;

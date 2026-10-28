@@ -20,6 +20,7 @@ struct SessionRecipeFacts {
         bool targeted = false;
         std::string source;  // "profile" or "automatic"
         std::string shape;   // "raw" (matches the RAW aspect) or "fallback"
+        std::string tuning;  // reader images, usage, physical, detach and fallback, as ":key=value" parts
     };
     std::string lensId;
     std::string cameraId;
@@ -76,7 +77,7 @@ inline std::string describeSessionRecipe(const SessionRecipeFacts& f) {
     if (f.companion) {
         const auto& c = *f.companion;
         line += " companion=" + c.format + ":" + std::to_string(c.width) + "x" + std::to_string(c.height) +
-                (c.targeted ? ":targeted" : ":untargeted") + ":source=" + c.source + ":shape=" + c.shape;
+                (c.targeted ? ":targeted" : ":untargeted") + ":source=" + c.source + ":shape=" + c.shape + c.tuning;
     } else {
         line += " companion=none";
     }
