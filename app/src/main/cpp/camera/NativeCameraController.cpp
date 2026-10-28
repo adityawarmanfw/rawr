@@ -845,8 +845,9 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // Vendor full-size modes: the HAL's S/I priority AE crashes the camera
         // provider once it raises gain (vivo X300 Ultra 50 MP); only rawr AE
         // may own S/I there.
-        halShutterPriority = control.capabilities.shutterPrioritySupported && !route.unlistedStream;
-        halIsoPriority = control.capabilities.isoPrioritySupported && !route.unlistedStream;
+        const CameraQuirks quirks = effectiveQuirks(route, builtInMatch.quirks);
+        halShutterPriority = control.capabilities.shutterPrioritySupported && !quirks.noHalPriorityAe;
+        halIsoPriority = control.capabilities.isoPrioritySupported && !quirks.noHalPriorityAe;
         applyAePriorityPreferenceLocked();
         publishProfileLocked();
         control.focusRequestId = previousControl.focusRequestId;
@@ -914,17 +915,16 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // on a request without a target fps range (AE off). Continuous AF
         // without regions and manual focus stay.
         // Device safety survives imported/user-edited lens profiles.
-        control.capabilities.tapAfHoldsUntilNextTap =
-            builtInMatch.profileId == "vivo_x300_ultra" || !route.vendorGate.empty();
+        control.capabilities.tapAfHoldsUntilNextTap = quirks.afTapHold;
         control.capabilities.faceAfSteering = !control.capabilities.tapAfHoldsUntilNextTap;
         control.capabilities.dngOnly =
             route.captureStream && uint64_t(route.captureStream->width) * route.captureStream->height > kDngOnlyPixels;
         control.capabilities.fixedFps = route.fixedFps;
-        if (route.unlistedStream) {
+        if (quirks.noTapAf) {
             control.capabilities.tapAfSupported = false;
             control.capabilities.maxAfRegions = 0;
-            control.capabilities.targetFpsRangeRequired = true;
         }
+        if (quirks.requireFpsRange) control.capabilities.targetFpsRangeRequired = true;
         diag(describeCameraControlCapabilities(control));
 
         diag(metadata::describe(*deviceSession.cameraContext()));
@@ -941,7 +941,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // The companion the unverified-device rule adds may be dropped by the
         // start ladder; a forced one (override, capture-stream route) may not.
         const bool companionByRule = !route.disableCompanion && companionOverride != "0" &&
-                                     !builtInMatch.verified && !route.unlistedStream;
+                                     !builtInMatch.verified && !quirks.noAutoCompanion;
         const bool ladderEligible = CameraStartLadder::eligible(companionByRule, route.captureStream.has_value(),
                                                                 route.companionSize.has_value(), companionOverride == "1");
         const std::string ladderKey = route.lensId + '|' + describeRoute(route);

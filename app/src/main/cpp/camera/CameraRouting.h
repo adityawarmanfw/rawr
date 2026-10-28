@@ -8,6 +8,7 @@
 #include <utility>
 #include <vector>
 
+#include "camera/CameraQuirks.h"
 #include "color/DcpProfile.h"
 #include "geometry/LensDistortion.h"
 #include "geometry/RawGeometry.h"
@@ -77,6 +78,8 @@ struct LensRoute {
     // AHB usage for the RAW reader instead of the ingress ladder's choice; the
     // vivo full-size modes configure only without CPU-read / sampled-image bits.
     std::optional<uint64_t> readerUsage;
+    // Provider behaviours this lens avoids, on top of the device's (BuiltInProfile::quirks).
+    CameraQuirks quirks;
     // Vendor state the app holds while the device is open (see VendorCameraGate).
     std::string vendorGate;
     // Full-size stills from a second RAW stream that only still requests fill
@@ -138,7 +141,22 @@ inline bool carriesRecipe(const LensRoute& route) {
     return !route.keys.empty() || route.captureStream || route.companionSize || route.auxJpegSize || route.fixedFps > 0 ||
            route.stillTemplate || route.startupDelayMs > 0 || route.disableCompanion || route.companionPrivate ||
            !route.companionTargeted || route.stopRepeatingForStill || route.readerUsage || route.captureReaderUsage ||
-           !route.vendorGate.empty() || route.unlistedStream;
+           !route.vendorGate.empty() || route.unlistedStream || route.quirks.any();
+}
+
+// What a lens avoids on this device: the device's quirks, the lens's own, and the presets the lens's
+// shape implies, so imported and user-edited profiles keep the protection a vendor mode needs.
+// A vendor gate implies afTapHold; an unlisted (vendor full-size) stream implies the rest.
+inline CameraQuirks effectiveQuirks(const LensRoute& lens, const CameraQuirks& device) {
+    CameraQuirks quirks = mergeQuirks(device, lens.quirks);
+    if (!lens.vendorGate.empty()) quirks.afTapHold = true;
+    if (lens.unlistedStream) {
+        quirks.noHalPriorityAe = true;
+        quirks.noTapAf = true;
+        quirks.requireFpsRange = true;
+        quirks.noAutoCompanion = true;
+    }
+    return quirks;
 }
 
 inline bool companionStreamEnabled(const LensRoute& route, bool forced, bool automatic) {
@@ -170,6 +188,8 @@ struct ProfileMatchRules {
 
 struct BuiltInProfile {
     CameraProfile profile;
+    // Provider behaviours every lens on a matching device avoids, user lenses included.
+    CameraQuirks quirks;
     std::string name;  // Marketing name, for logs.
     int version = 1;   // Bumped when the defaults change.
     ProfileMatchRules match;
@@ -180,6 +200,7 @@ struct ProfileMatch {
     std::string profileId = "generic";
     std::string rule = "none";  // "model", "property:<name>", or "none" (generic).
     bool verified = false;      // The device's model is in verifiedModels.
+    CameraQuirks quirks;        // The matched profile's device quirks.
 };
 
 using PropertyReader = std::function<std::string(const std::string& name)>;

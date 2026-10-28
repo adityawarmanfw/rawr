@@ -577,6 +577,16 @@ std::string serializeCameraProfile(const CameraProfile& profile) {
             out += ",\"vendorGate\":";
             appendJsonString(out, r.vendorGate);
         }
+        if (r.quirks.any()) {
+            out += ",\"quirks\":[";
+            bool first = true;
+            for (const auto& name : quirkNames(r.quirks)) {
+                if (!first) out += ',';
+                first = false;
+                appendJsonString(out, name);
+            }
+            out += ']';
+        }
         if (r.captureStream) {
             out += ",\"captureStream\":{\"format\":\"";
             out += geometry::rawPixelFormatName(r.captureStream->format);
@@ -612,6 +622,17 @@ bool parseRoot(const std::string& json, Json& root, std::string* error) {
     if (parser.parse(root) && root.kind == Json::Kind::Object) return true;
     if (error) *error = parser.error.empty() ? "not an object" : parser.error;
     return false;
+}
+
+// Adds the named quirks to `out`; an unknown or non-string entry is an error.
+bool readQuirks(const std::vector<Json>& list, CameraQuirks& out, std::string* error, const std::string& where) {
+    for (const auto& v : list) {
+        if (v.kind != Json::Kind::String || !setQuirk(out, v.text)) {
+            if (error) *error = "unknown quirk " + (v.kind == Json::Kind::String ? v.text : std::string("?")) + " for " + where;
+            return false;
+        }
+    }
+    return true;
 }
 
 std::optional<CameraProfile> readProfile(const Json& root, std::string* error) {
@@ -690,6 +711,7 @@ std::optional<CameraProfile> readProfile(const Json& root, std::string* error) {
             }
         }
         r.vendorGate = l.str("vendorGate");
+        if (!readQuirks(l.array("quirks"), r.quirks, error, "lens " + r.lensId)) return std::nullopt;
         if (const Json* c = l.get("captureStream"); c && c->kind == Json::Kind::Object) {
             geometry::RawStreamPreference capture;
             capture.format =
@@ -784,6 +806,7 @@ std::optional<BuiltInProfile> parseBuiltInProfile(const std::string& json, std::
     out.profile = std::move(*profile);
     out.name = root.str("name", out.profile.id);
     out.version = int(root.num("version", 1));
+    if (!readQuirks(root.array("quirks"), out.quirks, error, "profile " + out.profile.id)) return std::nullopt;
     if (const Json* m = root.get("match"); m && m->kind == Json::Kind::Object) {
         out.match.models = strings(m->array("models"));
         out.match.verifiedModels = strings(m->array("verifiedModels"));
