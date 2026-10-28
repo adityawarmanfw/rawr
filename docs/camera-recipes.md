@@ -162,9 +162,12 @@ The still strategy in the recipe line (`direct`, `decisionFrame`, `stopRepeatThe
 from the capture stream, decision-scope keys, the companion and `stopRepeatingForStill`; it is not
 configurable.
 
-## What is not in the lens editor
+## Where the fields are in the lens editor
 
-The editor has the session policy, request defaults, gate hold, quirks, camera API, operating mode
-and stream use cases ("Session and requests") next to the existing full-resolution group. The
-companion, aux JPEG and RAW reader fields above are carried by profile backups and the codec but have
-no editor controls yet.
+"Session and requests" has the session policy, request defaults, gate hold, quirks, camera API,
+operating mode and stream use cases. "Streams and readers" has the companion (automatic, fixed size or
+off; format, targeting, drop after start, physical camera, images, usage, size fallback), the aux JPEG
+(size, usage) and the RAW reader (usage, images, allocator check, demotion). The full-resolution group
+keeps the vendor gate and the capture stream. The aux JPEG stream use case and `stillTemplate`,
+`fixedFps`, `startupDelayMs` and `stopRepeatingForStill` are carried by profile backups but have no
+control.

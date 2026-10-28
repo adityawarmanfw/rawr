@@ -58,6 +58,9 @@ import com.rawr.camera.settings.model.CFA_ORDERS
 import com.rawr.camera.settings.model.CFA_PHOTO_QUALITIES
 import com.rawr.camera.settings.model.BACKEND_CHOICES
 import com.rawr.camera.settings.model.CAMERA_QUIRKS
+import com.rawr.camera.settings.model.COMPANION_FALLBACKS
+import com.rawr.camera.settings.model.LensOutputSize
+import com.rawr.camera.settings.model.isReaderUsage
 import com.rawr.camera.settings.model.EXTENDED_ISO_MAX
 import com.rawr.camera.settings.model.EXTENDED_SHUTTER_MAX_NS
 import com.rawr.camera.settings.model.GATE_HOLDS
@@ -176,6 +179,7 @@ internal fun LensEditorScreen(state: SettingsUiState, lensName: String?, dispatc
         }
         FullResolutionGroup(draft) { draft = it }
         SessionRecipeGroup(draft) { draft = it }
+        StreamsGroup(draft) { draft = it }
         SettingsGroup(title = "Image") {
             DropdownChoiceRow(
                 title = "Mirror",
@@ -878,6 +882,171 @@ private fun quirkDescription(quirk: String) = when (quirk) {
     "requireFpsRange" -> "Every request carries an AE fps range, even with AE off"
     "noAutoCompanion" -> "Do not add the small extra stream that unverified devices get"
     else -> ""
+}
+
+private fun tag(slug: String) = SettingsTestTags.row("LensEditor", slug)
+
+/** The extra outputs and the RAW reader: the companion stream, the aux JPEG and how the reader is allocated. */
+@Composable
+private fun StreamsGroup(lens: LensProfile, onChange: (LensProfile) -> Unit) {
+    SettingsGroup(title = "Streams and readers") {
+        val companionMode = when {
+            lens.disableCompanion -> "off"
+            lens.companion != null -> "fixed"
+            else -> "auto"
+        }
+        DropdownChoiceRow(
+            title = "Companion stream",
+            selected = companionMode,
+            values = listOf("auto", "fixed", "off"),
+            label = { when (it) { "fixed" -> "Fixed size"; "off" -> "Off"; else -> "Automatic" } },
+            supportingText = "A small extra output beside RAW. Automatic adds it on unverified devices and capture-stream lenses",
+            onSelect = {
+                onChange(
+                    when (it) {
+                        "off" -> lens.copy(disableCompanion = true, companion = null)
+                        "fixed" -> lens.copy(disableCompanion = false, companion = lens.companion ?: LensOutputSize(320, 240),
+                            companionFallback = "base")
+                        else -> lens.copy(disableCompanion = false, companion = null)
+                    }
+                )
+            }
+        )
+        if (!lens.disableCompanion) {
+            lens.companion?.let { size ->
+                Row(Modifier.fillMaxWidth().padding(horizontal = SettingsRowHorizontalPadding, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    CaptureNumberField("Companion width", size.width, Modifier.weight(1f).testTag(tag("companion_width"))) {
+                        onChange(lens.copy(companion = size.copy(width = it)))
+                    }
+                    CaptureNumberField("Companion height", size.height, Modifier.weight(1f).testTag(tag("companion_height"))) {
+                        onChange(lens.copy(companion = size.copy(height = it)))
+                    }
+                }
+            } ?: run {
+                SettingDivider()
+                DropdownChoiceRow(
+                    title = "Companion size fallback",
+                    selected = lens.companionFallback,
+                    values = COMPANION_FALLBACKS,
+                    label = { when (it) { "nearest" -> "Nearest aspect"; "none" -> "None"; else -> "Default pick" } },
+                    supportingText = "When no advertised size matches the RAW aspect",
+                    onSelect = { onChange(lens.copy(companionFallback = it)) }
+                )
+            }
+            SettingDivider()
+            DropdownChoiceRow(
+                title = "Companion format",
+                selected = lens.companionFormat,
+                values = listOf("yuv", "private"),
+                label = { if (it == "private") "PRIVATE" else "YUV 420" },
+                onSelect = { onChange(lens.copy(companionFormat = it)) }
+            )
+            SettingDivider()
+            SettingsSwitchRow(
+                title = "Companion in requests",
+                checked = lens.companionTargeted,
+                supportingText = "Off configures the stream without filling it",
+                testTag = tag("companion_targeted")
+            ) { onChange(lens.copy(companionTargeted = it)) }
+            SettingDivider()
+            DropdownChoiceRow(
+                title = "Drop companion after start",
+                selected = lens.companionDetach,
+                values = listOf(null, true, false),
+                label = { when (it) { true -> "Yes"; false -> "No"; null -> "Default" } },
+                supportingText = "Default drops only an automatic companion, once a frame has paired",
+                onSelect = { onChange(lens.copy(companionDetach = it)) }
+            )
+            SettingDivider()
+            DropdownChoiceRow(
+                title = "Companion camera",
+                selected = lens.companionPhysical,
+                values = listOf(null, true, false),
+                label = { when (it) { true -> "Physical"; false -> "Logical"; null -> "Follow the lens" } },
+                supportingText = "For a lens on a physical camera inside a logical one",
+                onSelect = { onChange(lens.copy(companionPhysical = it)) }
+            )
+            Column(Modifier.fillMaxWidth().padding(horizontal = SettingsRowHorizontalPadding, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                CaptureNumberField("Companion images", lens.companionMaxImages, Modifier.fillMaxWidth().testTag(tag("companion_images")),
+                    "Images its reader holds, 2 to 16. 0 = 2") { onChange(lens.copy(companionMaxImages = it)) }
+                UsageField("Companion usage", lens.companionUsage, Modifier.fillMaxWidth().testTag(tag("companion_usage"))) {
+                    onChange(lens.copy(companionUsage = it))
+                }
+            }
+        }
+        SettingDivider()
+        SettingsSwitchRow(
+            title = "Aux JPEG stream",
+            checked = lens.auxJpeg != null,
+            supportingText = "A JPEG output configured with the session but never filled; some vendor modes need it",
+            testTag = tag("aux_jpeg")
+        ) { onChange(lens.copy(auxJpeg = if (it) lens.auxJpeg ?: LensOutputSize(4096, 3072) else null)) }
+        lens.auxJpeg?.let { size ->
+            Column(Modifier.fillMaxWidth().padding(horizontal = SettingsRowHorizontalPadding, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    CaptureNumberField("JPEG width", size.width, Modifier.weight(1f).testTag(tag("aux_jpeg_width"))) {
+                        onChange(lens.copy(auxJpeg = size.copy(width = it)))
+                    }
+                    CaptureNumberField("JPEG height", size.height, Modifier.weight(1f).testTag(tag("aux_jpeg_height"))) {
+                        onChange(lens.copy(auxJpeg = size.copy(height = it)))
+                    }
+                }
+                UsageField("Aux JPEG usage", lens.auxJpegUsage, Modifier.fillMaxWidth().testTag(tag("aux_jpeg_usage"))) {
+                    onChange(lens.copy(auxJpegUsage = it))
+                }
+            }
+        }
+        SettingDivider()
+        Column(Modifier.fillMaxWidth().padding(horizontal = SettingsRowHorizontalPadding, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            UsageField("RAW reader usage", lens.readerUsage, Modifier.fillMaxWidth().testTag(tag("reader_usage")),
+                "Empty = the app's own choice") { onChange(lens.copy(readerUsage = it)) }
+            CaptureNumberField("RAW reader images", lens.rawMaxImages, Modifier.fillMaxWidth().testTag(tag("reader_images")),
+                "6 to 16. 0 = 6") { onChange(lens.copy(rawMaxImages = it)) }
+        }
+        SettingsSwitchRow(
+            title = "Check reader usage first",
+            checked = lens.readerProbe,
+            supportingText = "Ask the allocator before using a fixed reader usage; fall back to CPU-only if it refuses",
+            enabled = lens.readerUsage != null,
+            testTag = tag("reader_probe")
+        ) { onChange(lens.copy(readerProbe = it)) }
+        SettingDivider()
+        SettingsSwitchRow(
+            title = "Demote a silent reader",
+            checked = lens.readerDemote,
+            supportingText = "Let a fixed reader usage that delivers nothing fall back like the app's own choice",
+            enabled = lens.readerUsage != null,
+            testTag = tag("reader_demote")
+        ) { onChange(lens.copy(readerDemote = it)) }
+    }
+}
+
+/** A reader usage: "gpuDataBuffer", "none" or a 0x hex value; empty means null. */
+@Composable
+private fun UsageField(
+    label: String,
+    value: String?,
+    modifier: Modifier = Modifier,
+    hint: String = "gpuDataBuffer, none or a 0x hex value. Empty = default",
+    onChange: (String?) -> Unit
+) {
+    var text by remember { mutableStateOf(value.orEmpty()) }
+    OutlinedTextField(
+        value = text,
+        onValueChange = { input ->
+            text = input.trim()
+            onChange(text.ifEmpty { null })
+        },
+        label = { Text(label) },
+        supportingText = { Text(if (text.isEmpty() || isReaderUsage(text)) hint else "Not a usage: $hint") },
+        isError = text.isNotEmpty() && !isReaderUsage(text),
+        singleLine = true,
+        modifier = modifier
+    )
 }
 
 @Composable
