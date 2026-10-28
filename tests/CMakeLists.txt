@@ -103,6 +103,8 @@ rawr_test(session_recipe_log_test
   "${RAWR_ROOT}/tests/native/session_recipe_log_test.cpp")
 rawr_test(camera_key_attempts_test
   "${RAWR_ROOT}/tests/native/camera_key_attempts_test.cpp")
+rawr_test(vendor_gate_preset_test
+  "${RAWR_ROOT}/tests/native/vendor_gate_preset_test.cpp")
 rawr_test(companion_stream_size_test
   "${RAWR_ROOT}/tests/native/companion_stream_size_test.cpp")
 rawr_test(camera_video_facts_test

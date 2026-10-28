@@ -33,6 +33,7 @@
 #include "camera/CameraWhiteBalanceControls.h"
 #include "camera/FullSizeSequence.h"
 #include "camera/SessionRecipe.h"
+#include "camera/VendorGatePreset.h"
 #include "camera/SensitivityProbeStartup.h"
 #include "camera/StillFocus.h"
 #include "camera/StillExposureGuard.h"
@@ -1341,11 +1342,10 @@ struct NativeCameraController::Impl final : CameraEventSink {
             std::string line = "CAMERA_FULL_SIZE_RESULT tag=" +
                                std::to_string(actions.frame->optimizedStillRequestId.value_or(0)) +
                                " timestampNs=" + std::to_string(actions.frame->timestampNs);
-            for (const char* name : {"vcf.parameter.seamlessMode", "vivo.parameter.highResolutionDngType",
-                                     "vivo.control.seamless.remosaic.enable", "vivo.control.sensorMode"}) {
-                const auto value = deviceSession.vendorResultValue(result, name);
-                line += std::string(" ") + name + "=" + (value ? std::to_string(*value) : "missing");
-                if (std::string_view(name) == "vcf.parameter.seamlessMode") actions.frame->vendorSeamlessMode = value;
+            for (const auto& probe : gatePreset(deviceSession.stillGate()).resultProbes) {
+                const auto value = deviceSession.vendorResultValue(result, probe.tag);
+                line += " " + probe.tag + "=" + (value ? std::to_string(*value) : "missing");
+                if (probe.alias == "seamlessMode") actions.frame->vendorSeamlessMode = value;
             }
             diag(line);
         }

@@ -60,6 +60,11 @@ struct CameraKeySetting {
     Scope scope = Scope::Session;
     std::vector<double> values;
     bool enabled = true;
+    // A value computed per capture instead of fixed: StampMs is the capture's millisecond stamp plus
+    // generatorOffset. Only gate presets (VendorGatePreset.h) use it; it is not part of the profile JSON.
+    enum class Generator : uint8_t { None, StampMs };
+    Generator generator = Generator::None;
+    double generatorOffset = 0;
 };
 
 // Does a key declared with `declared` go out when the keys of `phase` (Session, Request, Still or

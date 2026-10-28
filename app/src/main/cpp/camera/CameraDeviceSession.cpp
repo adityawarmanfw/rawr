@@ -18,6 +18,7 @@
 #include "camera/CameraDiscovery.h"
 #include "camera/CameraKeyInjection.h"
 #include "camera/CompanionStreamSize.h"
+#include "camera/VendorGatePreset.h"
 #include "diagnostics/logging/RuntimeTraceRecorder.h"
 #include "geometry/CfaPattern.h"
 #include "metadata/CameraMetadataReader.h"
@@ -548,6 +549,7 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
                                         const std::function<bool(int32_t)>& waitForStartup) {
     rawWindow_ = window;
     companionFacts_.reset();
+    stillGate_ = recipe.gate;
 
     if (!device_ || !rawWindow_) {
         return false;
@@ -934,9 +936,7 @@ bool CameraDeviceSession::captureFullSize(CameraRequestPipeline& pipeline, const
                                           uint64_t tagId, const Diagnostic& diag) {
     if (!session_ || !request_ || !captureTarget_ || !sessionContext_) return false;
     bool keysLogged = false;
-    // vivo's per-still ids (its camera app's values: request id = frame flag =
-    // a millisecond stamp, global capture id = stamp + 5); a still without
-    // them crashes the provider's request metadata handling.
+    // Per-still ids some vendors need come from the gate's preset (see VendorGatePreset.h).
     int64_t stamp = std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::system_clock::now().time_since_epoch()).count();
     // Build from the still template, not the repeating request: a copy of the
@@ -953,10 +953,12 @@ bool CameraDeviceSession::captureFullSize(CameraRequestPipeline& pipeline, const
     // A profile companion rides on every request of its mode, stills included.
     if (companionFromProfile_ && profileCompanionTargeted_ && companionTarget_ && !ok(ACaptureRequest_addTarget(base, companionTarget_)))
         return false;
-    // vivo's per-still ids exist only on vivo cameras; elsewhere their lookup fails the still.
-    const bool vivoStillIds = resolveMetadataTagByNameCompat(characteristics_, stillKeysCameraId_.c_str(),
-                                                             "vivo.control.requestId", nullptr)
-                                  .has_value();
+    // A gate's per-still keys exist only on that vendor's cameras; elsewhere their lookup would fail the still.
+    const GatePreset& gate = gatePreset(stillGate_);
+    const bool gateStillKeys =
+        !gate.stillKeys.empty() &&
+        resolveMetadataTagByNameCompat(characteristics_, stillKeysCameraId_.c_str(), gate.stillKeys.front().tag.c_str(), nullptr)
+            .has_value();
     const auto requestKeys = applyCameraKeySettings(base, characteristics_, stillKeys_, stillKeysCameraId_.c_str(),
                                                     CameraKeySetting::Scope::Request, "lens",
                                                     [](const std::string&) {});
@@ -993,16 +995,8 @@ bool CameraDeviceSession::captureFullSize(CameraRequestPipeline& pipeline, const
         }
         auto keys = stillKeys_;
         const double id = double(stamp++);
-        for (const auto& [tag, value] : {std::pair{"vivo.control.requestId", id}, std::pair{"vivo.control.frameFlag", id},
-                                         std::pair{"vivo.control.globalCaptureId", id + 5}}) {
-            if (!vivoStillIds) break;
-            CameraKeySetting k;
-            k.tag = tag;
-            k.type = CameraKeySetting::Type::Int64;
-            k.scope = CameraKeySetting::Scope::Still;
-            k.values = {value};
-            keys.push_back(std::move(k));
-        }
+        if (gateStillKeys)
+            for (auto& k : materializeStillKeys(gate.stillKeys, id)) keys.push_back(std::move(k));
         // Log the still keys once per burst.
         const auto result = applyCameraKeySettings(request, characteristics_, keys, stillKeysCameraId_.c_str(),
                                                    CameraKeySetting::Scope::Still, "lens",

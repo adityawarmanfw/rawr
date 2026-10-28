@@ -94,6 +94,7 @@ class CameraDeviceSession final {
     // Integer value of a vendor result tag, looked up by name once per open
     // camera; nullopt when the camera or this result lacks it.
     std::optional<int64_t> vendorResultValue(const ACameraMetadata* result, const std::string& name);
+    const std::string& stillGate() const noexcept { return stillGate_; }
     // Logs, once per session, what the first capture result returned for each
     // profile key (CAMERA_KEY_RESULT).
     void logKeyResultsOnce(const ACameraMetadata* result, const Diagnostic& diag);
@@ -125,6 +126,7 @@ class CameraDeviceSession final {
     ACameraOutputTarget* captureTarget_ = nullptr;
     std::vector<CameraKeySetting> stillKeys_;
     std::string stillKeysCameraId_;
+    std::string stillGate_;  // the recipe's vendor gate: its preset adds per-still keys and result probes
     AImageReader* companionReader_ = nullptr;
     ACaptureSessionOutput* companionOutput_ = nullptr;
     ACameraOutputTarget* companionTarget_ = nullptr;
