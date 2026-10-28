@@ -561,6 +561,7 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
     sessionContext_ = callbackContext;
     auto sessionCallbacks = CameraCallbacks::sessionState(callbackContext);
     staticLevels_.reset();
+    captureStaticLevels_.reset();
     sessionKeysApplied_ = false;
 
     // Camera2 explicitly recommends supplying a non-template AE target FPS
@@ -593,7 +594,8 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
         if (!lensKeys.failures.empty())
             return fail("lens_session_keys", "lensId=" + selected->lensId + " failed=" + joined(lensKeys.failures));
         sessionKeysApplied_ = lensKeys.applied > 0;
-        if (selected->levels.isStatic) staticLevels_ = selected->levels;
+        staticLevels_ = staticLevelsForStream(*selected, false);
+        captureStaticLevels_ = staticLevelsForStream(*selected, true);
     }
 
     // cameraserver reads the vendor gate (vivo key 40) only while it
@@ -622,9 +624,11 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
 
     const std::string lensDescription = "cameraId=" + (selected ? selected->cameraId : std::string("unknown")) +
                                         " lensId=" + (selected ? selected->lensId : std::string("unknown"));
-    if (staticLevels_) {
-        const auto& l = *staticLevels_;
-        diag("CAMERA_PROFILE_STATIC_LEVELS " + lensDescription +
+    for (const auto& [streamName, levels] : {std::pair{"viewfinder", staticLevels_},
+                                            std::pair{"capture", captureStaticLevels_}}) {
+        if (!levels) continue;
+        const auto& l = *levels;
+        diag("CAMERA_PROFILE_STATIC_LEVELS stream=" + std::string(streamName) + " " + lensDescription +
              " black=" + std::to_string(l.blackRggb[0]) + "," + std::to_string(l.blackRggb[1]) + "," +
              std::to_string(l.blackRggb[2]) + "," + std::to_string(l.blackRggb[3]) +
              " white=" + std::to_string(l.white));
@@ -747,6 +751,7 @@ CameraReaderRetirement CameraDeviceSession::release(const Diagnostic& diag) {
     }
     releaseRequestOutputs(minimal);
     staticLevels_.reset();
+    captureStaticLevels_.reset();
     sessionKeysApplied_ = false;
     if (device_) {
         // ACameraDevice_close() can hang forever on a HAL-wedged device

@@ -98,8 +98,8 @@ internal object LensProfileCodec {
                 require(validateVendorKey(decoded) == null)
             }
         }
-        fun levels(parent: JSONObject) {
-            objectField(parent, "levels")?.let { levels ->
+        fun levels(parent: JSONObject, name: String = "levels") {
+            objectField(parent, name)?.let { levels ->
                 if (levels.has("static")) require(levels.get("static") is Boolean)
                 if (levels.has("black")) {
                     val black = levels.getJSONArray("black")
@@ -129,6 +129,8 @@ internal object LensProfileCodec {
         }
         keys(o)
         levels(o)
+        levels(o, "viewfinderLevels")
+        levels(o, "captureLevels")
         objectField(o, "dcg")?.let { keys(it); levels(it) }
         for (field in listOf("stream", "captureStream")) {
             objectField(o, field)?.let { stream ->
@@ -173,6 +175,10 @@ internal object LensProfileCodec {
                 .apply { if (lens.stream.unlisted) put("unlisted", true) }
         )
         .put("levels", encodeLevels(lens.levels))
+        .apply {
+            lens.viewfinderLevels?.let { put("viewfinderLevels", encodeLevels(it)) }
+            lens.captureLevels?.let { put("captureLevels", encodeLevels(it)) }
+        }
         .put(
             "exposure",
             JSONObject()
@@ -249,6 +255,8 @@ internal object LensProfileCodec {
                     shutterMaxNs = (e?.optLong("shutterMaxNs") ?: 0L).coerceIn(0L, EXTENDED_SHUTTER_MAX_NS)
                 )
             },
+            viewfinderLevels = o.optJSONObject("viewfinderLevels")?.let { decodeLevels(it) },
+            captureLevels = o.optJSONObject("captureLevels")?.let { decodeLevels(it) },
             levels = if (!levels.isStatic && legacyLevels?.isStatic == true) legacyLevels else levels,
             vendorKeys = decodeKeys(o.optJSONArray("keys")) + decodeKeys(legacyDcg?.optJSONArray("keys")),
             readerUsage = o.optString("readerUsage").ifEmpty { null },

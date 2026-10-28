@@ -552,6 +552,8 @@ std::string serializeCameraProfile(const CameraProfile& profile) {
         if (r.unlistedStream) out += ",\"unlisted\":true";
         out += "},\"levels\":";
         appendLevels(out, r.levels);
+        if (r.viewfinderLevels) { out += ",\"viewfinderLevels\":"; appendLevels(out, *r.viewfinderLevels); }
+        if (r.captureLevels) { out += ",\"captureLevels\":"; appendLevels(out, *r.captureLevels); }
         out += ",\"exposure\":";
         appendExposure(out, r.exposure);
         out += ",\"keys\":";
@@ -714,6 +716,17 @@ std::optional<CameraProfile> readProfile(const Json& root, std::string* error) {
         if (!readLevels(l.get("levels"), r.levels)) {
             if (error) *error = "invalid levels for lens " + r.lensId;
             return std::nullopt;
+        }
+        for (const auto& [name, field] : {std::pair{"viewfinderLevels", &r.viewfinderLevels},
+                                         std::pair{"captureLevels", &r.captureLevels}}) {
+            if (const auto* value = l.get(name)) {
+                LevelOverride levels;
+                if (value->kind != Json::Kind::Object || !readLevels(value, levels)) {
+                    if (error) *error = std::string("invalid ") + name + " for lens " + r.lensId;
+                    return std::nullopt;
+                }
+                *field = levels;
+            }
         }
         if (!readDistortion(l.get("distortion"), r.distortion)) {
             if (error) *error = "invalid distortion for lens " + r.lensId;

@@ -31,6 +31,8 @@ class LensProfileCodecTest {
             companionFormat = "private",
             companionTargeted = false,
             startupDelayMs = 500,
+            viewfinderLevels = LensLevels(isStatic = true, blackRggb = listOf(512f, 512f, 512f, 512f), white = 4095f),
+            captureLevels = LensLevels(),
             stopRepeatingForStill = true,
             auxJpeg = LensOutputSize(8160, 6144)
         )

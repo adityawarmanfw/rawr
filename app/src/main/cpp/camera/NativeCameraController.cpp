@@ -1299,7 +1299,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
             return;
         deviceSession.logKeyResultsOnce(result, [this](const std::string& line) { diag(line); });
         auto actions = results.process(requestCopy, result, control, deviceSession.cameraContext(),
-                                       deviceSession.staticLevels(), deviceSession.sensorModeOverridden(),
+                                       deviceSession.staticLevels(), deviceSession.captureStaticLevels(), deviceSession.sensorModeOverridden(),
                                        requests.latestSubmittedSerial());
         captureChanged.notify_all();
         if (!actions.frame) return;

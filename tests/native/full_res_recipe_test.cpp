@@ -46,6 +46,20 @@ void testFullSizeRecipeJson() {
 
 int main() {
     testFullSizeRecipeJson();
+    using namespace rawrcam::camera;
+    const auto levels = parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0",
+        "levels":{"static":true,"black":[64],"white":1023},
+        "viewfinderLevels":{"static":true,"black":[512],"white":4095},
+        "captureLevels":{"static":false}}]})");
+    assert(levels);
+    const auto& route = levels->lenses[0];
+    assert(staticLevelsForStream(route, false)->blackRggb[0] == 512);
+    assert(!staticLevelsForStream(route, true));
+    auto inherited = route;
+    inherited.captureLevels.reset();
+    assert(staticLevelsForStream(inherited, true)->white == 1023);
+    const auto encoded = serializeCameraProfile(*levels);
+    assert(serializeCameraProfile(*parseCameraProfile(encoded)) == encoded);
     using rawrcam::camera::submitCameraKey;
     int calls = 0;
     const auto setter = [&] { ++calls; return 0; };

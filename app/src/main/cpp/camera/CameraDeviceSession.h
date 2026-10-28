@@ -80,6 +80,7 @@ class CameraDeviceSession final {
     const metadata::CameraContextMetadataPtr& cameraContext() const noexcept { return cameraContext_; }
     // Static black/white levels for the running session (from the lens
     // profile); nullopt means dynamic levels.
+    const std::optional<LevelOverride>& captureStaticLevels() const noexcept { return captureStaticLevels_; }
     const std::optional<LevelOverride>& staticLevels() const noexcept { return staticLevels_; }
     // True when profile session keys changed the sensor readout, so reported
     // sensitivity no longer maps 1:1 onto requested sensitivity.
@@ -135,7 +136,7 @@ class CameraDeviceSession final {
     CameraSessionCallbackContext* sessionContext_ = nullptr;
     CameraDeviceCallbackContext* deviceContext_ = nullptr;
     metadata::CameraContextMetadataPtr cameraContext_;
-    std::optional<LevelOverride> staticLevels_;
+    std::optional<LevelOverride> staticLevels_, captureStaticLevels_;
     bool sessionKeysApplied_ = false;
     uint64_t generation_ = 0, readerGeneration_ = 0, closeGeneration_ = 0;
     bool closePending_ = false, forcedRetire_ = false;

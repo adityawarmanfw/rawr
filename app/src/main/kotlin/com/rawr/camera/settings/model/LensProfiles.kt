@@ -108,6 +108,9 @@ data class LensProfile(
     val physicalCameraId: String = "",
     val stream: RawStreamChoice = RawStreamChoice(),
     val levels: LensLevels = LensLevels(),
+    /** Null inherits lens levels; explicit dynamic uses the stream's sensor result. */
+    val viewfinderLevels: LensLevels? = null,
+    val captureLevels: LensLevels? = null,
     val exposure: LensExposure = LensExposure(),
     val vendorKeys: List<VendorKey> = emptyList(),
     /** RAW reader usage the mode needs ("gpuDataBuffer", "none"); null for the app's own choice. */

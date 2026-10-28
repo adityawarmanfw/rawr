@@ -67,6 +67,9 @@ struct LensRoute {
     geometry::RawStreamOption stream;
     std::vector<CameraKeySetting> keys;
     LevelOverride levels;
+    // Absent inherits lens levels; explicit dynamic uses this stream's sensor result.
+    std::optional<LevelOverride> viewfinderLevels;
+    std::optional<LevelOverride> captureLevels;
     ExposureOverride exposure;
     // Full-size vendor modes stream a size the camera doesn't advertise: use
     // preferredStream as is instead of negotiating it against the RAW outputs.
@@ -129,6 +132,12 @@ struct LensRoute {
     color::DcpProfilePtr dcp;
     std::string dcpError;
 };
+
+inline std::optional<LevelOverride> staticLevelsForStream(const LensRoute& route, bool capture) {
+    const auto& override = capture ? route.captureLevels : route.viewfinderLevels;
+    const auto& levels = override ? *override : route.levels;
+    return levels.isStatic ? std::optional<LevelOverride>(levels) : std::nullopt;
+}
 
 struct CameraProfile {
     std::string id;
