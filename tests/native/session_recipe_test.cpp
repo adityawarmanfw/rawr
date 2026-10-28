@@ -1,0 +1,150 @@
+#include <cassert>
+#include <iostream>
+#include <string>
+
+#include "camera/CameraProfileJson.h"
+#include "camera/CameraRouting.h"
+#include "camera/SessionRecipe.h"
+
+using namespace rawrcam::camera;
+
+namespace {
+
+std::vector<LensRoute> allLenses() {
+    std::vector<LensRoute> lenses;
+    for (const auto& p : builtInProfiles()) lenses.insert(lenses.end(), p.profile.lenses.begin(), p.profile.lenses.end());
+    LensRoute plain;
+    LensRoute capture;
+    capture.captureStream = rawrcam::geometry::RawStreamPreference{};
+    LensRoute sized;
+    sized.companionSize = std::make_pair(640u, 480u);
+    LensRoute off;
+    off.disableCompanion = true;
+    LensRoute stop;
+    stop.stopRepeatingForStill = true;
+    lenses.insert(lenses.end(), {plain, capture, sized, off, stop});
+    return lenses;
+}
+
+// The companion decision the controller made before the recipe existed.
+void testCompanionMatchesTheOldDecision() {
+    for (const auto& lens : allLenses()) {
+        for (const bool forced : {false, true}) {
+            for (const bool automatic : {false, true}) {
+                const auto recipe = resolveSessionRecipe(lens, RecipeInputs{forced, automatic});
+                assert(recipe.companion.has_value() == companionStreamEnabled(lens, forced, automatic));
+                if (!recipe.companion) continue;
+                assert(recipe.companion->size == lens.companionSize);
+                assert(recipe.companion->privateFormat == lens.companionPrivate);
+                assert(recipe.companion->targeted == lens.companionTargeted);
+                // Only a profile-set companion is exempt from recovery and from detaching.
+                assert(recipe.companion->required == lens.companionSize.has_value());
+            }
+        }
+    }
+}
+
+void testCompanionSource() {
+    LensRoute plain;
+    assert(!resolveSessionRecipe(plain, {false, false}).companion);
+    assert(std::string(resolveSessionRecipe(plain, {false, true}).companion->source) == "rule");
+    assert(std::string(resolveSessionRecipe(plain, {true, false}).companion->source) == "override");
+    LensRoute capture;
+    capture.captureStream = rawrcam::geometry::RawStreamPreference{};
+    assert(std::string(resolveSessionRecipe(capture, {false, false}).companion->source) == "capture_stream");
+    LensRoute sized;
+    sized.captureStream = rawrcam::geometry::RawStreamPreference{};
+    sized.companionSize = std::make_pair(640u, 480u);
+    assert(std::string(resolveSessionRecipe(sized, {true, true}).companion->source) == "profile");
+    capture.disableCompanion = true;
+    assert(!resolveSessionRecipe(capture, {true, true}).companion);
+}
+
+void testTemplatesAndStructure() {
+    for (const auto& lens : allLenses()) {
+        const auto recipe = resolveSessionRecipe(lens, {});
+        assert(recipe.repeatingStillTemplate == lens.stillTemplate.value_or(false));
+        assert(recipe.captureStillTemplate == lens.stillTemplate.value_or(true));
+        assert(recipe.auxJpeg == lens.auxJpegSize);
+        assert(recipe.startupDelayMs == lens.startupDelayMs);
+        assert(recipe.gate == lens.vendorGate);
+    }
+}
+
+// The gate was released after configuration unless a capture window existed, which it does
+// exactly on capture-stream routes.
+void testGateHoldKeepsTheOldRule() {
+    for (const auto& lens : allLenses()) {
+        const auto recipe = resolveSessionRecipe(lens, {});
+        assert((recipe.gateHold == GateHold::UntilClosed) == lens.captureStream.has_value());
+    }
+    LensRoute lens;
+    lens.vendorGate = "g";
+    lens.captureStream = rawrcam::geometry::RawStreamPreference{};
+    lens.gateHold = GateHold::UntilConfigured;
+    assert(resolveSessionRecipe(lens, {}).gateHold == GateHold::UntilConfigured);
+}
+
+void testVivoStillStrategy() {
+    size_t decision = 0, captureLenses = 0;
+    for (const auto& p : builtInProfiles()) {
+        for (const auto& lens : p.profile.lenses) {
+            bool decisionKey = false;
+            for (const auto& k : lens.keys) decisionKey |= k.enabled && k.scope == CameraKeySetting::Scope::Decision;
+            const auto recipe = resolveSessionRecipe(lens, {false, false});
+            if (lens.captureStream) {
+                ++captureLenses;
+                // A built-in full-size lens with decision keys and a companion decides, as it did.
+                assert((recipe.still == StillStrategy::DecisionFrame) ==
+                       (decisionKey && recipe.companion && lens.companionTargeted));
+                assert(recipe.gateHold == GateHold::UntilClosed || lens.vendorGate.empty());
+            } else {
+                assert(recipe.still == (lens.stopRepeatingForStill ? StillStrategy::StopRepeatThenStill : StillStrategy::Direct));
+            }
+            decision += recipe.still == StillStrategy::DecisionFrame;
+        }
+    }
+    assert(captureLenses >= 3);
+    assert(decision >= 1);  // the vivo full-size lenses do decide
+    LensRoute stop;
+    stop.stopRepeatingForStill = true;
+    assert(resolveSessionRecipe(stop, {}).still == StillStrategy::StopRepeatThenStill);
+    assert(resolveSessionRecipe(LensRoute{}, {}).still == StillStrategy::Direct);
+    assert(std::string(stillStrategyName(StillStrategy::DecisionFrame)) == "decisionFrame");
+    assert(std::string(gateHoldName(GateHold::UntilClosed)) == "closed");
+}
+
+void testGateHoldJson() {
+    std::string error;
+    const auto closed = parseCameraProfile(
+        R"({"lenses":[{"id":"a","cameraId":"0","vendorGate":"g","gateHold":"closed"}]})", &error);
+    assert(closed && closed->lenses[0].gateHold == GateHold::UntilClosed);
+    const auto json = serializeCameraProfile(*closed);
+    assert(json.find(R"("gateHold":"closed")") != std::string::npos);
+    const auto again = parseCameraProfile(json);
+    assert(again && again->lenses[0].gateHold == GateHold::UntilClosed && serializeCameraProfile(*again) == json);
+    const auto configured = parseCameraProfile(
+        R"({"lenses":[{"id":"a","cameraId":"0","vendorGate":"g","gateHold":"configured"}]})");
+    assert(configured && configured->lenses[0].gateHold == GateHold::UntilConfigured);
+    // No field, no explicit hold.
+    const auto none = parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","vendorGate":"g"}]})");
+    assert(none && !none->lenses[0].gateHold);
+    assert(serializeCameraProfile(*none).find("gateHold") == std::string::npos);
+    assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","vendorGate":"g","gateHold":"forever"}]})", &error));
+    assert(error.find("unknown gateHold") != std::string::npos);
+    assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","gateHold":"closed"}]})", &error));
+    assert(error.find("needs a vendorGate") != std::string::npos);
+}
+
+}  // namespace
+
+int main() {
+    testCompanionMatchesTheOldDecision();
+    testCompanionSource();
+    testTemplatesAndStructure();
+    testGateHoldKeepsTheOldRule();
+    testVivoStillStrategy();
+    testGateHoldJson();
+    std::cout << "session_recipe_test passed\n";
+    return 0;
+}

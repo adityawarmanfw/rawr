@@ -495,8 +495,11 @@ bool CameraDeviceSession::detachCompanionTarget(const Diagnostic& diag) {
     return true;
 }
 SessionRecipeFacts CameraDeviceSession::recipeFacts(const std::optional<LensRoute>& selected,
+                                                    const SessionRecipe& recipe,
                                                     ACameraDevice_request_template repeatingTemplate) const {
     SessionRecipeFacts f;
+    f.stillStrategy = stillStrategyName(recipe.still);
+    f.gateHold = gateHoldName(recipe.gateHold);
     f.requestTemplate = repeatingTemplate == TEMPLATE_STILL_CAPTURE ? "still" : "preview";
     f.fpsRange = "none";
     if (ACameraMetadata_const_entry e{};
@@ -536,9 +539,9 @@ SessionRecipeFacts CameraDeviceSession::recipeFacts(const std::optional<LensRout
     return f;
 }
 bool CameraDeviceSession::createSession(ANativeWindow* window, const std::optional<LensRoute>& selected,
-                                        const CameraControlState& control, const CameraMeteringRequest& metering,
-                                        CameraCallbacks& callbacks, CameraRequestPipeline& pipeline,
-                                        const Diagnostic& diag, bool companionStream,
+                                        const SessionRecipe& recipe, const CameraControlState& control,
+                                        const CameraMeteringRequest& metering, CameraCallbacks& callbacks,
+                                        CameraRequestPipeline& pipeline, const Diagnostic& diag,
                                         const std::function<bool(int32_t)>& waitForStartup) {
     rawWindow_ = window;
     companionFacts_.reset();
@@ -568,9 +571,11 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
     const uint32_t rawWidth = selected ? selected->stream.width : 0, rawHeight = selected ? selected->stream.height : 0;
     profileCompanionTargeted_ = !selected || selected->companionTargeted;
     stopRepeatingForStill_ = selected && selected->stopRepeatingForStill;
-    captureStillTemplate_ = selected ? selected->stillTemplate.value_or(true) : true;
-    const auto companionSize = selected ? selected->companionSize : std::nullopt;
-    if (companionStream && !addCompanionStream(physicalCameraId, rawWidth, rawHeight, companionSize, selected && selected->companionPrivate, diag)) {
+    captureStillTemplate_ = recipe.captureStillTemplate;
+    const bool companionStream = recipe.companion.has_value();
+    const auto companionSize = recipe.companion ? recipe.companion->size : std::nullopt;
+    if (companionStream &&
+        !addCompanionStream(physicalCameraId, rawWidth, rawHeight, companionSize, recipe.companion->privateFormat, diag)) {
         // The profile's companion is part of its mode: never run without it.
         if (companionSize) return fail("companion", "reason=profile_companion_unavailable");
         // RAW-only still works on most devices; never block the start on it.
@@ -584,9 +589,9 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
         companionFacts_.reset();
     }
 
-    if (selected && selected->auxJpegSize) {
+    if (recipe.auxJpeg) {
         if (!physicalCameraId.empty()) return fail("aux_jpeg", "reason=physical_camera_unsupported");
-        if (!addAuxJpegStream(*selected->auxJpegSize, diag)) return fail("aux_jpeg", "reason=output");
+        if (!addAuxJpegStream(*recipe.auxJpeg, diag)) return fail("aux_jpeg", "reason=output");
     }
 
     if (captureWindow_) {
@@ -619,7 +624,7 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
     // Build one session-parameter request, then add the lens profile's
     // session keys (e.g. a vendor sensor/readout mode).
     const ACameraDevice_request_template repeatingTemplate =
-        selected && selected->stillTemplate.value_or(false) ? TEMPLATE_STILL_CAPTURE : TEMPLATE_PREVIEW;
+        recipe.repeatingStillTemplate ? TEMPLATE_STILL_CAPTURE : TEMPLATE_PREVIEW;
     s = ACameraDevice_createCaptureRequest(device_, repeatingTemplate, &sessionParameters_);
     if (!ok(s) || !sessionParameters_) {
         return fail("session_request", "status=" + statusText(s));
@@ -658,10 +663,9 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
     }
     s = ACameraDevice_createCaptureSessionWithSessionParameters(device_, outputs_, sessionParameters_,
                                                                 &sessionCallbacks, &session_);
-    // Capture-stream routes keep it until the device closes: the HAL rebuilds
-    // its still pipeline per full-size request and crashes if the client is no
-    // longer vivo's camera by then.
-    if (!heldGate_.empty() && !captureWindow_) {
+    // The recipe says how long the gate is held; capture-stream routes keep it until the device closes
+    // (see defaultGateHold).
+    if (!heldGate_.empty() && recipe.gateHold == GateHold::UntilConfigured) {
         diag("CAMERA_NDK_VENDOR_GATE_RELEASED gate=" + heldGate_ + " after=configure");
         releaseHeldGate();
     }
@@ -682,9 +686,9 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
              " white=" + std::to_string(l.white));
     }
 
-    if (selected && selected->startupDelayMs > 0) {
-        diag("CAMERA_STARTUP_DELAY ms=" + std::to_string(selected->startupDelayMs));
-        if (!waitForStartup(selected->startupDelayMs)) return false;
+    if (recipe.startupDelayMs > 0) {
+        diag("CAMERA_STARTUP_DELAY ms=" + std::to_string(recipe.startupDelayMs));
+        if (!waitForStartup(recipe.startupDelayMs)) return false;
     }
 
     s = ACameraDevice_createCaptureRequest(device_, repeatingTemplate, &request_);
@@ -723,7 +727,7 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
     }
     if (!pipeline.submit(session_, request_, callbackContext, control, metering))
         return fail("initial_repeating", "status=control_or_submit_rejected");
-    diag(describeSessionRecipe(recipeFacts(selected, repeatingTemplate)));
+    diag(describeSessionRecipe(recipeFacts(selected, recipe, repeatingTemplate)));
     // Lenses that carry keys or recipe fields: what the HAL was actually sent, for comparing devices and builds.
     if (selected && carriesRecipe(*selected)) {
         dumpCaptureRequest(sessionParameters_, "session_start", diag);

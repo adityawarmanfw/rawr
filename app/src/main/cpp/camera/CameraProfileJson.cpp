@@ -577,6 +577,8 @@ std::string serializeCameraProfile(const CameraProfile& profile) {
             out += ",\"vendorGate\":";
             appendJsonString(out, r.vendorGate);
         }
+        if (r.gateHold)
+            out += *r.gateHold == GateHold::UntilClosed ? ",\"gateHold\":\"closed\"" : ",\"gateHold\":\"configured\"";
         if (r.quirks.any()) {
             out += ",\"quirks\":[";
             bool first = true;
@@ -711,6 +713,15 @@ std::optional<CameraProfile> readProfile(const Json& root, std::string* error) {
             }
         }
         r.vendorGate = l.str("vendorGate");
+        if (const std::string hold = l.str("gateHold"); !hold.empty()) {
+            if ((hold != "configured" && hold != "closed") || r.vendorGate.empty()) {
+                if (error)
+                    *error = std::string(r.vendorGate.empty() ? "gateHold needs a vendorGate" : "unknown gateHold " + hold) +
+                             " for lens " + r.lensId;
+                return std::nullopt;
+            }
+            r.gateHold = hold == "closed" ? GateHold::UntilClosed : GateHold::UntilConfigured;
+        }
         if (!readQuirks(l.array("quirks"), r.quirks, error, "lens " + r.lensId)) return std::nullopt;
         if (const Json* c = l.get("captureStream"); c && c->kind == Json::Kind::Object) {
             geometry::RawStreamPreference capture;

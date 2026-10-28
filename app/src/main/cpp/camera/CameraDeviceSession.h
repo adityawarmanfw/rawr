@@ -10,6 +10,7 @@
 
 #include "camera/CameraCallbacks.h"
 #include "camera/CameraRequestPipeline.h"
+#include "camera/SessionRecipe.h"
 #include "camera/SessionRecipeLog.h"
 #include "camera/CameraRouting.h"
 #include "metadata/CameraContextMetadata.h"
@@ -33,11 +34,12 @@ class CameraDeviceSession final {
     // that lock held before touching session state after each wait.
     bool open(const LensRoute&, CameraCallbacks&, const Diagnostic&, std::unique_lock<std::mutex>&,
               const std::function<bool()>& stillCurrent);
-    // companionStream adds a small discarded YUV output next to RAW: some HALs
-    // (MediaTek) accept a RAW-only session but never deliver a RAW buffer.
-    bool createSession(ANativeWindow*, const std::optional<LensRoute>&, const CameraControlState&,
+    // The recipe fixes the session's structure: templates, the companion (a small discarded output next to
+    // RAW; some HALs, MediaTek among them, accept a RAW-only session but never deliver a RAW buffer), the
+    // aux JPEG, the startup delay and how long the vendor gate is held.
+    bool createSession(ANativeWindow*, const std::optional<LensRoute>&, const SessionRecipe&, const CameraControlState&,
                        const CameraMeteringRequest&, CameraCallbacks&, CameraRequestPipeline&, const Diagnostic&,
-                       bool companionStream, const std::function<bool(int32_t)>& waitForStartup);
+                       const std::function<bool(int32_t)>& waitForStartup);
     bool retire(std::unique_lock<std::mutex>&, std::optional<std::chrono::milliseconds>, const char*,
                 const Diagnostic&);
     void forceRetire(const char*, const Diagnostic&);
@@ -106,7 +108,7 @@ class CameraDeviceSession final {
     // Adds an output no request targets (LensRoute::auxJpegSize).
     bool addAuxJpegStream(const std::pair<uint32_t, uint32_t>& size, const Diagnostic&);
     // The configured session as facts for the CAMERA_SESSION_RECIPE line.
-    SessionRecipeFacts recipeFacts(const std::optional<LensRoute>& selected,
+    SessionRecipeFacts recipeFacts(const std::optional<LensRoute>& selected, const SessionRecipe& recipe,
                                    ACameraDevice_request_template repeatingTemplate) const;
     void closeDeviceDetached(std::function<void()> afterClose);
     // Releases a vendor gate taken for a device that never opened or is already gone.

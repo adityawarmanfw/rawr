@@ -15,6 +15,12 @@
 
 namespace rawrcam::camera {
 
+// How long the app keeps a vendor gate (LensRoute::vendorGate) held.
+enum class GateHold : uint8_t {
+    UntilConfigured,  // released as soon as the session is configured
+    UntilClosed,      // kept until the device closes
+};
+
 // One Camera2 metadata entry to inject. The tag is a metadata name (public or
 // vendor, e.g. "vivo.control.forceSensorMode") or a numeric id ("0x80020000").
 // Session keys go into the session parameters of every capture session;
@@ -82,6 +88,8 @@ struct LensRoute {
     CameraQuirks quirks;
     // Vendor state the app holds while the device is open (see VendorCameraGate).
     std::string vendorGate;
+    // How long the gate is held; absent: until the device closes on a capture-stream route, else until configured.
+    std::optional<GateHold> gateHold;
     // Full-size stills from a second RAW stream that only still requests fill
     // (vivo seamless route): `stream` is then the binned viewfinder, and the
     // HAL switches the sensor to full size for each still. Unlisted size.
@@ -141,7 +149,7 @@ inline bool carriesRecipe(const LensRoute& route) {
     return !route.keys.empty() || route.captureStream || route.companionSize || route.auxJpegSize || route.fixedFps > 0 ||
            route.stillTemplate || route.startupDelayMs > 0 || route.disableCompanion || route.companionPrivate ||
            !route.companionTargeted || route.stopRepeatingForStill || route.readerUsage || route.captureReaderUsage ||
-           !route.vendorGate.empty() || route.unlistedStream || route.quirks.any();
+           !route.vendorGate.empty() || route.unlistedStream || route.quirks.any() || route.gateHold;
 }
 
 // What a lens avoids on this device: the device's quirks, the lens's own, and the presets the lens's

@@ -29,7 +29,7 @@ void testPlainLens() {
     assert(has(line, "keys=session:0,request:1,still:0,decision:0"));
     assert(has(line, "companion=YUV_420_888:320x240:targeted:source=profile:shape=fallback"));
     assert(has(line, "auxJpeg=none captureStream=none readerUsage=0x1000003 captureReaderUsage=default"));
-    assert(has(line, "gate=none stopRepeatingForStill=0"));
+    assert(has(line, "gate=none still=none stopRepeatingForStill=0"));
 }
 
 void testFullSizeLens() {
@@ -49,6 +49,8 @@ void testFullSizeLens() {
     f.captureStream = std::make_pair(16320u, 12256u);
     f.captureReaderUsage = 1ull << 24;
     f.vendorGate = "vivoFullSize";
+    f.gateHold = "closed";
+    f.stillStrategy = "decisionFrame";
     f.stopRepeatingForStill = true;
     f.startupDelayMs = 500;
     f.fixedFps = 30;
@@ -58,7 +60,7 @@ void testFullSizeLens() {
     assert(has(line, "companion=PRIVATE:640x480:untargeted:source=profile:shape=raw"));
     assert(has(line, "auxJpeg=8192x6144 captureStream=16320x12256"));
     assert(has(line, "readerUsage=ladder captureReaderUsage=0x1000000"));
-    assert(has(line, "startupDelayMs=500 fixedFps=30 gate=vivoFullSize stopRepeatingForStill=1"));
+    assert(has(line, "startupDelayMs=500 fixedFps=30 gate=vivoFullSize:closed still=decisionFrame stopRepeatingForStill=1"));
 }
 
 void testCarriesRecipe() {

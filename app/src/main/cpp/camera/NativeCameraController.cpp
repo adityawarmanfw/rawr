@@ -32,6 +32,7 @@
 #include "camera/CameraStartLadder.h"
 #include "camera/CameraWhiteBalanceControls.h"
 #include "camera/FullSizeSequence.h"
+#include "camera/SessionRecipe.h"
 #include "camera/SensitivityProbeStartup.h"
 #include "camera/StillFocus.h"
 #include "camera/StillExposureGuard.h"
@@ -957,9 +958,11 @@ struct NativeCameraController::Impl final : CameraEventSink {
             rollbackCameraStartLocked(lock, "start_ladder_gave_up");
             return;
         }
-        const bool companionStream = companionStreamEnabled(route, companionOverride == "1",
-            companionByRule && ladderPlan != CameraStartLadder::Plan::RawOnly &&
-            !rawOnlyRoutes.count(companionRouteKey));
+        const SessionRecipe recipe = resolveSessionRecipe(
+            route, RecipeInputs{companionOverride == "1",
+                                companionByRule && ladderPlan != CameraStartLadder::Plan::RawOnly &&
+                                    !rawOnlyRoutes.count(companionRouteKey)});
+        const bool companionStream = recipe.companion.has_value();
         if (route.disableCompanion)
             diag("CAMERA_COMPANION_DISABLED lens=" + route.lensId + " source=profile");
         if (ladderPlan == CameraStartLadder::Plan::RawOnly)
@@ -1027,9 +1030,9 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // A stop or lens switch may have retired this start while open waited.
         // Its teardown owns the old window; do not roll back a newer generation.
         if (!stillCurrent()) return;
-        const bool sessionCreated = opened && deviceSession.createSession(window, selected, control, meteringRequestLocked(),
+        const bool sessionCreated = opened && deviceSession.createSession(window, selected, recipe, control, meteringRequestLocked(),
                                          ndkCallbacks, requests, [this](const std::string& line) { diag(line); },
-                                         companionStream, [&](int32_t delayMs) {
+                                         [&](int32_t delayMs) {
                                              captureChanged.wait_for(lock, std::chrono::milliseconds(delayMs),
                                                                      [&] { return !stillCurrent(); });
                                              return stillCurrent();

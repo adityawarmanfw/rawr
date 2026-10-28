@@ -42,6 +42,8 @@ struct SessionRecipeFacts {
     int32_t startupDelayMs = 0;
     int32_t fixedFps = 0;
     std::string vendorGate;
+    std::string gateHold;       // "configured" or "closed"; meaningful with a gate
+    std::string stillStrategy;  // direct, decisionFrame or stopRepeatThenStill
     bool stopRepeatingForStill = false;
 };
 
@@ -81,7 +83,8 @@ inline std::string describeSessionRecipe(const SessionRecipeFacts& f) {
     line += " readerUsage=" + (f.readerUsage ? hex(*f.readerUsage) : std::string("ladder"));
     line += " captureReaderUsage=" + (f.captureReaderUsage ? hex(*f.captureReaderUsage) : std::string("default"));
     line += " startupDelayMs=" + std::to_string(f.startupDelayMs) + " fixedFps=" + std::to_string(f.fixedFps) +
-            " gate=" + orNone(f.vendorGate) + " stopRepeatingForStill=" + (f.stopRepeatingForStill ? "1" : "0");
+            " gate=" + orNone(f.vendorGate) + (f.vendorGate.empty() ? "" : ":" + orNone(f.gateHold)) +
+            " still=" + orNone(f.stillStrategy) + " stopRepeatingForStill=" + (f.stopRepeatingForStill ? "1" : "0");
     return line;
 }
 
