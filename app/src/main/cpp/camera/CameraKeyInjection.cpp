@@ -12,6 +12,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "camera/CameraKeyAttempts.h"
 #include "camera/CameraKeyResult.h"
 #include "camera/CameraKeySubmission.h"
 #include "camera/CameraMetadataTags.h"
@@ -83,17 +84,20 @@ bool representable(KeyType t, const std::vector<double>& values) {
 // int32, so a key the HAL declares as byte (OPLUS engineercamera tags, ...)
 // fails for no visible reason. Try the declared type first, then the others
 // that can hold the values, and remember what the HAL accepted per tag.
-camera_status_t setEntry(ACaptureRequest* request, uint32_t tag, const CameraKeySetting& key, KeyType* usedType) {
+camera_status_t setEntry(ACaptureRequest* request, uint32_t tag, const CameraKeySetting& key, KeyType* usedType,
+                         std::vector<KeyAttempt>* attempts) {
     static std::mutex mutex;
     static std::unordered_map<uint32_t, KeyType> accepted;
     std::vector<KeyType> order;
     const auto push = [&](KeyType t) {
         if (std::find(order.begin(), order.end(), t) == order.end()) order.push_back(t);
     };
+    std::optional<KeyType> cached;
     {
         std::lock_guard<std::mutex> lock(mutex);
-        if (const auto it = accepted.find(tag); it != accepted.end()) push(it->second);
+        if (const auto it = accepted.find(tag); it != accepted.end()) cached = it->second;
     }
+    if (cached) push(*cached);
     push(key.type);
     for (const KeyType t : {KeyType::Byte, KeyType::Int32, KeyType::Int64, KeyType::Float, KeyType::Double}) push(t);
 
@@ -101,6 +105,7 @@ camera_status_t setEntry(ACaptureRequest* request, uint32_t tag, const CameraKey
     for (const KeyType t : order) {
         if (!representable(t, key.values)) continue;
         const camera_status_t status = setEntryAs(request, tag, t, key.values);
+        if (attempts) attempts->push_back({keyTypeName(t), int(status), cached && *cached == t && attempts->empty()});
         if (status == ACAMERA_OK) {
             *usedType = t;
             std::lock_guard<std::mutex> lock(mutex);
@@ -125,10 +130,11 @@ CameraKeyInjectionResult applyCameraKeySettings(ACaptureRequest* request, const 
         std::string error;
         const auto tag = resolveTag(characteristics, cameraId, key.tag, &error);
         KeyType usedType = key.type;
+        std::vector<KeyAttempt> attempts;
         const auto submission = submitCameraKey(
             tag.has_value(), !key.values.empty(),
             session && tag && !containsI32Tag(characteristics, ACAMERA_REQUEST_AVAILABLE_SESSION_KEYS, *tag),
-            error, [&] { return setEntry(request, *tag, key, &usedType); });
+            error, [&] { return setEntry(request, *tag, key, &usedType, &attempts); });
         const auto& skip = submission.failure;
         std::ostringstream line;
         line << "CAMERA_KEY_INJECTION scope="
@@ -166,6 +172,7 @@ CameraKeyInjectionResult applyCameraKeySettings(ACaptureRequest* request, const 
             result.failures.push_back(key.tag + ":" + skip);
             line << " applied=false reason=" << skip;
         }
+        line << " attempts=" << describeKeyAttempts(attempts);
         diag(line.str());
     }
     return result;
@@ -227,6 +234,20 @@ void logKeyResults(const ACameraMetadata* result, const ACameraMetadata* charact
     }
 }
 
+namespace {
+const char* entryTypeName(uint8_t type) {
+    switch (type) {
+        case ACAMERA_TYPE_BYTE: return "byte";
+        case ACAMERA_TYPE_INT32: return "int32";
+        case ACAMERA_TYPE_FLOAT: return "float";
+        case ACAMERA_TYPE_INT64: return "int64";
+        case ACAMERA_TYPE_DOUBLE: return "double";
+        case ACAMERA_TYPE_RATIONAL: return "rational";
+        default: return "?";
+    }
+}
+}  // namespace
+
 void dumpCaptureRequest(const ACaptureRequest* request, const char* kind,
                         const std::function<void(const std::string&)>& diag) {
     if (!request) return;
@@ -255,6 +276,7 @@ void dumpCaptureRequest(const ACaptureRequest* request, const char* kind,
             }
         }
         if (e.count > shown) line << ",...";
+        line << " typeName=" << entryTypeName(e.type);
         diag(line.str());
     }
 }
