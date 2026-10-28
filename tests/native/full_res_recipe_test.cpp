@@ -29,7 +29,7 @@ void testFullSizeRecipeJson() {
     assert(r.auxJpegSize && r.auxJpegSize->first == 8160 && r.auxJpegSize->second == 6144);
     const auto again = serializeCameraProfile(*parsed);
     assert(serializeCameraProfile(*parseCameraProfile(again)) == again);
-    assert(again.find("\"readerUsage\":\"0x100003\"") != std::string::npos);
+    assert(again.find(R"("reader":{"usage":"0x100003"})") != std::string::npos);
 
     for (const auto* bad : {"0x", "0x-1", "0x 1", "0x10000000000000000"}) {
         assert(!parseCameraProfile(std::string(R"({"lenses":[{"id":"a","cameraId":"0","readerUsage":")") + bad + R"("}]})"));

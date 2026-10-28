@@ -117,8 +117,25 @@ val BACKEND_CHOICES = listOf("auto", "ndk", "java")
 
 /** Operating mode and stream use case exist only on the Java camera API. */
 fun LensProfile.needsJavaBackend(): Boolean =
-    opMode != 0 || rawStreamUseCase != 0 || captureStreamUseCase != 0 || companionStreamUseCase != 0 ||
-        auxJpegStreamUseCase != 0
+    session.opMode != 0 || streams.raw.useCase != 0 || (streams.capture?.useCase ?: 0) != 0 ||
+        streams.companion.useCase != 0 || (streams.auxJpeg?.useCase ?: 0) != 0
+
+/** The camera API this lens runs on, after the derived rule ("auto" picks Java for Java-only options). */
+fun LensProfile.resolvedBackend(): String =
+    if (session.backend != "auto") session.backend else if (needsJavaBackend()) "java" else "ndk"
+
+/** How a lens takes a full-size photo; derived, not set (native stillStrategyFor). */
+enum class StillSequence { Direct, DecisionFrame, PauseViewfinder }
+
+fun LensProfile.stillSequence(): StillSequence {
+    val decisionKey = vendorKeys.any { it.enabled && it.scope == VendorKeyScope.Decision }
+    val companionOn = streams.companion.mode != CompanionMode.Off && streams.companion.targeted
+    return when {
+        streams.capture != null && companionOn && decisionKey -> StillSequence.DecisionFrame
+        session.stopRepeatingForStill -> StillSequence.PauseViewfinder
+        else -> StillSequence.Direct
+    }
+}
 
 /** What an automatic companion size does when the camera has no output with the RAW's shape. */
 val COMPANION_FALLBACKS = listOf("base", "nearest", "none")
@@ -131,98 +148,166 @@ fun isReaderUsage(text: String): Boolean =
 /** Provider behaviours a lens can say it avoids (see the native CameraQuirks). */
 val CAMERA_QUIRKS = listOf("afTapHold", "noHalPriorityAe", "noTapAf", "requireFpsRange", "noAutoCompanion")
 
+/**
+ * One lens, grouped the way profile schema 2 groups it: which camera, its streams, how the session runs, what
+ * requests carry, and how its image is read. [name] is the app's lens id and capture-screen label.
+ */
 data class LensProfile(
     val name: String,
-    val cameraId: String,
+    val camera: LensCamera,
     val enabled: Boolean = true,
-    /** Physical sub-camera of [cameraId] to stream from; empty for none. */
-    val physicalCameraId: String = "",
-    val stream: RawStreamChoice = RawStreamChoice(),
-    val levels: LensLevels = LensLevels(),
-    /** Null inherits lens levels; explicit dynamic uses the stream's sensor result. */
-    val viewfinderLevels: LensLevels? = null,
-    val captureLevels: LensLevels? = null,
-    val exposure: LensExposure = LensExposure(),
+    val streams: LensStreams = LensStreams(),
+    val session: LensSession = LensSession(),
+    val request: LensRequest = LensRequest(),
     val vendorKeys: List<VendorKey> = emptyList(),
-    /** RAW reader usage the mode needs ("gpuDataBuffer", "none"); null for the app's own choice. */
+    val image: LensImage = LensImage()
+) {
+    /** A lens on [cameraId] (and [physicalCameraId] inside it) with every other setting at its default. */
+    constructor(name: String, cameraId: String, physicalCameraId: String = "") :
+        this(name, LensCamera(cameraId, physicalCameraId))
+
+    fun streams(change: LensStreams.() -> LensStreams) = copy(streams = streams.change())
+    fun session(change: LensSession.() -> LensSession) = copy(session = session.change())
+    fun image(change: LensImage.() -> LensImage) = copy(image = image.change())
+    fun raw(change: RawStreamSettings.() -> RawStreamSettings) = streams { copy(raw = raw.change()) }
+    fun companion(change: CompanionSettings.() -> CompanionSettings) = streams { copy(companion = companion.change()) }
+}
+
+/** The Camera2 camera to open, and the physical sub-camera inside it to stream from ("" for none). */
+data class LensCamera(val id: String, val physical: String = "")
+
+data class LensStreams(
+    val raw: RawStreamSettings = RawStreamSettings(),
+    /** Full-size RAW that only still requests fill (vivo seamless 50/200 MP); null for none. */
+    val capture: CaptureStreamSettings? = null,
+    val companion: CompanionSettings = CompanionSettings(),
+    /** Extra JPEG output configured with the session but never targeted; null for none. */
+    val auxJpeg: AuxJpegSettings? = null
+)
+
+/** The viewfinder RAW stream: what to ask for, its use case, its reader, and levels that differ from the lens's. */
+data class RawStreamSettings(
+    val choice: RawStreamChoice = RawStreamChoice(),
+    /** Stream use case; 0 = not set. Needs the Java backend. */
+    val useCase: Int = 0,
+    val reader: ReaderSettings = ReaderSettings(),
+    /** Null inherits the lens levels; explicit dynamic uses the stream's sensor result. */
+    val levels: LensLevels? = null
+)
+
+data class ReaderSettings(
+    /** AHB usage the mode needs ([isReaderUsage]); null for the app's own choice. */
+    val usage: String? = null,
+    /** Images the reader holds; 0 keeps the app's 6, otherwise 6 to 16. */
+    val maxImages: Int = 0,
+    /** Check a fixed [usage] with the allocator first and fall back to CPU-only when refused. */
+    val probe: Boolean = false,
+    /** Let a silent fixed reader fall back to CPU-only like the app's own choice does. */
+    val demote: Boolean = false
+)
+
+data class CaptureStreamSettings(
+    val choice: RawStreamChoice,
+    val useCase: Int = 0,
+    /** Reader usage ([isReaderUsage]); null keeps GPU_DATA_BUFFER. */
     val readerUsage: String? = null,
-    /** Vendor state held while the camera is open ("vivoFullSize"); empty for none. */
-    val vendorGate: String = "",
-    /** "configured" or "closed"; null keeps the default (closed on a capture-stream lens). Needs a [vendorGate]. */
-    val gateHold: String? = null,
+    /** Most full-size stills one merge may request (1 = none); 0 = the app's own cap. */
+    val burstMax: Int = 0,
+    /** Burst stills go in one at a time, each after the previous frame (HAL fails queued ones). */
+    val burstSequential: Boolean = false,
+    val levels: LensLevels? = null
+)
+
+/** The companion: a small output next to RAW that some HALs need before they deliver RAW. */
+enum class CompanionMode(val wireName: String, val label: String) {
+    /** Added by the app on unverified devices and capture-stream lenses. */
+    Auto("auto", "Automatic"),
+
+    /** Always configured at [CompanionSettings.size]: part of the lens's mode. */
+    Fixed("fixed", "Fixed size"),
+
+    /** Never configured, including the automatic capture-stream companion. */
+    Off("off", "Off");
+
+    companion object {
+        fun fromWire(value: String?): CompanionMode? = entries.firstOrNull { it.wireName == value }
+    }
+}
+
+data class CompanionSettings(
+    val mode: CompanionMode = CompanionMode.Auto,
+    /** Used when [mode] is [CompanionMode.Fixed]; kept while another mode is chosen. */
+    val size: LensOutputSize = LensOutputSize(320, 240),
+    /** "yuv" or "private". */
+    val format: String = "yuv",
+    val targeted: Boolean = true,
+    /** Drop it after the first paired frame; null drops only an automatic one. */
+    val detach: Boolean? = null,
+    /** Tied to the route's physical camera; null follows the route. */
+    val physical: Boolean? = null,
+    /** One of [COMPANION_FALLBACKS]; only for an automatic size. */
+    val fallback: String = "base",
+    /** Reader usage ([isReaderUsage]); null keeps the default for its format. */
+    val usage: String? = null,
+    /** Images its reader holds; 0 keeps 2, otherwise 2 to 16. */
+    val maxImages: Int = 0,
+    val useCase: Int = 0
+)
+
+data class AuxJpegSettings(val size: LensOutputSize, val usage: String? = null, val useCase: Int = 0)
+
+data class LensSession(
     /** One of [BACKEND_CHOICES]. */
     val backend: String = "auto",
-    /** Session operating mode (SessionConfiguration type); 0 = normal. Needs the Java backend; 1 and 2 are refused. */
+    /** SessionConfiguration type; 0 = normal. Needs the Java backend; 1 and 2 are refused. */
     val opMode: Int = 0,
-    /** Stream use case per output (0 = not set). Needs the Java backend. */
-    val rawStreamUseCase: Int = 0,
-    val captureStreamUseCase: Int = 0,
-    val companionStreamUseCase: Int = 0,
-    val auxJpegStreamUseCase: Int = 0,
     /** One of [SESSION_PARAMS_POLICIES]; "none" cannot carry session-scope keys. */
-    val sessionParams: String = "cadence",
-    /** One of [REQUEST_DEFAULTS]. */
-    val requestDefaults: String = "rawr",
-    /** Provider behaviours this lens avoids on top of the device's, from [CAMERA_QUIRKS]. */
-    val quirks: List<String> = emptyList(),
-    /** Full-size RAW stream only still requests fill (vivo seamless 50/200 MP); null for none. */
-    val captureStream: RawStreamChoice? = null,
-    /** Most full-size stills one merge may request (1 = none); 0 = the app's own cap. */
-    val captureBurst: Int = 0,
-    /** Burst stills go in one at a time, each after the previous frame (HAL fails queued ones). */
-    val captureBurstSequential: Boolean = false,
-    /** RAW reader usage of the [captureStream] ("gpuDataBuffer", "none", "0x100003"); null keeps GPU_DATA_BUFFER. */
-    val captureReaderUsage: String? = null,
-    /** Session parameters and the repeating request from the still template (Xiaomi full-size modes). */
+    val params: String = "cadence",
+    /** Still template for the session, viewfinder and stills (true), preview for all (false), or the app's mix (null). */
     val stillTemplate: Boolean? = null,
     /** Fixed AE target fps on every request; 0 = the app's cadence. */
     val fixedFps: Int = 0,
-    /** Companion of this size, always configured; null for the app's own choice. */
-    val companion: LensOutputSize? = null,
-    /** Explicitly omit the companion, including the automatic capture-stream companion. */
-    val disableCompanion: Boolean = false,
-    val companionFormat: String = "yuv",
-    val companionTargeted: Boolean = true,
-    /** Companion reader usage ([isReaderUsage]); null keeps the default for its format. */
-    val companionUsage: String? = null,
-    /** Images the companion reader holds; 0 keeps 2, otherwise 2 to 16. */
-    val companionMaxImages: Int = 0,
-    /** Companion tied to the route's physical camera; null follows the route. */
-    val companionPhysical: Boolean? = null,
-    /** One of [COMPANION_FALLBACKS]; only for an automatic companion size. */
-    val companionFallback: String = "base",
-    /** Drop the companion after the first frame; null drops only an automatic one. */
-    val companionDetach: Boolean? = null,
-    /** Delay after configure before submitting the first request. */
+    /** Delay after configure before the first request. */
     val startupDelayMs: Int = 0,
+    /** Vendor state held while the camera is open ("vivoFullSize"); empty for none. */
+    val gate: String = "",
+    /** "configured" or "closed"; null keeps the default (closed on a capture-stream lens). Needs a [gate]. */
+    val gateHold: String? = null,
     val stopRepeatingForStill: Boolean = false,
-    /** Extra JPEG output configured with the session but never targeted; null for none. */
-    val auxJpeg: LensOutputSize? = null,
-    /** Aux JPEG reader usage ([isReaderUsage]); null keeps the default. */
-    val auxJpegUsage: String? = null,
-    /** Images the viewfinder RAW reader holds; 0 keeps the app's 6, otherwise 6 to 16. */
-    val rawMaxImages: Int = 0,
-    /** Check a profile-fixed [readerUsage] with the allocator first and fall back to CPU-only when refused. */
-    val readerProbe: Boolean = false,
-    /** Let a silent profile-fixed reader fall back to CPU-only like the app's own choice does. */
-    val readerDemote: Boolean = false,
-    /**
-     * Same-colour block side the RAW really holds (1 Bayer, 2 quad, 4 for 4x4): blocks are remosaiced to Bayer
-     * for the viewfinder, stills and video. Some sensor modes (in-sensor crops) report Bayer but aren't.
-     */
-    val cfaBlock: Int = 1,
-    /** Block-level colour order ("RGGB", "GRBG", "GBRG", "BGGR") replacing the camera's; null keeps it. */
-    val cfaOrder: String? = null,
-    /** Remosaic for the viewfinder, video and merge frames: "fast" or "standard" (GPU). */
-    val cfaLive: String = "standard",
-    /** Remosaic for single photos: "standard" or "high" (CPU). */
-    val cfaPhoto: String = "high",
+    /** Provider behaviours this lens avoids on top of the device's, from [CAMERA_QUIRKS]. */
+    val quirks: List<String> = emptyList()
+)
+
+data class LensRequest(
+    /** One of [REQUEST_DEFAULTS]. */
+    val defaults: String = "rawr"
+)
+
+data class LensImage(
+    /** Black/white levels of the lens; a stream can override them. */
+    val levels: LensLevels = LensLevels(),
+    val cfa: LensCfa = LensCfa(),
     /** Lens distortion calibration as its profile JSON object (validated natively); null for none. */
     val distortion: String? = null,
     /** Mirror of the image (photo, video, viewfinder; DNG via its orientation). */
     val mirror: LensMirror = LensMirror.None,
     /** Camera profile (.dcp) replacing the camera's colour; null for the camera's own. */
-    val dcp: LensDcp? = null
+    val dcp: LensDcp? = null,
+    val exposure: LensExposure = LensExposure()
+)
+
+data class LensCfa(
+    /**
+     * Same-colour block side the RAW really holds (1 Bayer, 2 quad, 4 for 4x4): blocks are remosaiced to Bayer
+     * for the viewfinder, stills and video. Some sensor modes (in-sensor crops) report Bayer but aren't.
+     */
+    val block: Int = 1,
+    /** Block-level colour order ("RGGB", "GRBG", "GBRG", "BGGR") replacing the camera's; null keeps it. */
+    val order: String? = null,
+    /** Remosaic for the viewfinder, video and merge frames: "fast" or "standard" (GPU). */
+    val live: String = "standard",
+    /** Remosaic for single photos: "standard" or "high" (CPU). */
+    val photo: String = "high"
 )
 
 /** Width x height of an extra camera output of a lens profile. */
@@ -253,36 +338,45 @@ fun validateLensProfile(lens: LensProfile, others: List<LensProfile>): List<Stri
         name.length > LENS_NAME_MAX_LENGTH -> add("Name must be at most $LENS_NAME_MAX_LENGTH characters")
         others.any { it.name.trim().equals(name, ignoreCase = true) } -> add("Another lens is named $name")
     }
-    if (lens.cameraId.isBlank()) add("Choose a camera")
-    lens.captureStream?.let {
-        if (it.width <= 0 || it.height <= 0) add("Capture width and height must be positive whole numbers")
-        if (lens.captureBurst !in 0..30) add("Maximum burst frames must be between 0 and 30")
+    val session = lens.session
+    val streams = lens.streams
+    val companion = streams.companion
+    if (lens.camera.id.isBlank()) add("Choose a camera")
+    streams.capture?.let {
+        if (it.choice.width <= 0 || it.choice.height <= 0) add("Capture width and height must be positive whole numbers")
+        if (it.burstMax !in 0..30) add("Maximum burst frames must be between 0 and 30")
     }
-    validateLevels(lens.levels)?.let { add(it) }
+    validateLevels(lens.image.levels)?.let { add(it) }
     lens.vendorKeys.forEach { key -> validateVendorKey(key)?.let { add(it) } }
-    if (lens.backend !in BACKEND_CHOICES) add("Unknown backend ${lens.backend}")
-    if (lens.backend == "ndk" && lens.needsJavaBackend()) add("An operating mode or stream use case needs the Java backend")
-    if (lens.backend == "java" || (lens.backend == "auto" && lens.needsJavaBackend())) {
-        if (lens.vendorGate.isNotEmpty()) add("The Java backend does not support a vendor gate")
-        if (lens.stopRepeatingForStill) add("The Java backend does not support stop-repeating stills")
+    if (session.backend !in BACKEND_CHOICES) add("Unknown backend ${session.backend}")
+    if (session.backend == "ndk" && lens.needsJavaBackend()) add("An operating mode or stream use case needs the Java backend")
+    if (lens.resolvedBackend() == "java") {
+        if (session.gate.isNotEmpty()) add("The Java backend does not support a vendor gate")
+        if (session.stopRepeatingForStill) add("The Java backend does not support stop-repeating stills")
     }
-    if (lens.opMode < 0 || lens.opMode == 1 || lens.opMode == 2) add("Operating mode must be 0 or 3 and above")
-    if (listOf(lens.rawStreamUseCase, lens.captureStreamUseCase, lens.companionStreamUseCase, lens.auxJpegStreamUseCase)
+    if (session.opMode < 0 || session.opMode == 1 || session.opMode == 2) add("Operating mode must be 0 or 3 and above")
+    if (listOf(streams.raw.useCase, streams.capture?.useCase ?: 0, companion.useCase, streams.auxJpeg?.useCase ?: 0)
             .any { it < 0 }) add("Stream use cases cannot be negative")
-    if (lens.companionFallback !in COMPANION_FALLBACKS) add("Unknown companion fallback ${lens.companionFallback}")
-    if (lens.companionFallback != "base" && lens.companion != null) add("A companion fallback needs an automatic companion size")
-    if (lens.companionMaxImages != 0 && lens.companionMaxImages !in 2..16) add("Companion images must be 2 to 16")
-    if (lens.rawMaxImages != 0 && lens.rawMaxImages !in 6..16) add("RAW reader images must be 6 to 16")
-    for ((label, usage) in listOf("Companion" to lens.companionUsage, "Aux JPEG" to lens.auxJpegUsage,
-        "RAW reader" to lens.readerUsage, "Capture reader" to lens.captureReaderUsage)) {
+    if (companion.fallback !in COMPANION_FALLBACKS) add("Unknown companion fallback ${companion.fallback}")
+    if (companion.fallback != "base" && companion.mode == CompanionMode.Fixed)
+        add("A companion fallback needs an automatic companion size")
+    if (companion.mode == CompanionMode.Fixed && (companion.size.width <= 0 || companion.size.height <= 0))
+        add("Companion width and height must be positive whole numbers")
+    if (companion.maxImages != 0 && companion.maxImages !in 2..16) add("Companion images must be 2 to 16")
+    if (streams.raw.reader.maxImages != 0 && streams.raw.reader.maxImages !in 6..16) add("RAW reader images must be 6 to 16")
+    streams.auxJpeg?.let {
+        if (it.size.width <= 0 || it.size.height <= 0) add("Aux JPEG width and height must be positive whole numbers")
+    }
+    for ((label, usage) in listOf("Companion" to companion.usage, "Aux JPEG" to streams.auxJpeg?.usage,
+        "RAW reader" to streams.raw.reader.usage, "Capture reader" to streams.capture?.readerUsage)) {
         if (usage != null && !isReaderUsage(usage)) add("$label usage must be a name or a 0x hex value")
     }
-    if (lens.sessionParams !in SESSION_PARAMS_POLICIES) add("Unknown session parameters ${lens.sessionParams}")
-    if (lens.requestDefaults !in REQUEST_DEFAULTS) add("Unknown request defaults ${lens.requestDefaults}")
-    if (lens.gateHold != null && lens.gateHold !in GATE_HOLDS) add("Unknown gate hold ${lens.gateHold}")
-    if (lens.gateHold != null && lens.vendorGate.isEmpty()) add("A gate hold needs a vendor gate")
-    lens.quirks.filter { it !in CAMERA_QUIRKS }.forEach { add("Unknown quirk $it") }
-    if (lens.sessionParams == "none") {
+    if (session.params !in SESSION_PARAMS_POLICIES) add("Unknown session parameters ${session.params}")
+    if (lens.request.defaults !in REQUEST_DEFAULTS) add("Unknown request defaults ${lens.request.defaults}")
+    if (session.gateHold != null && session.gateHold !in GATE_HOLDS) add("Unknown gate hold ${session.gateHold}")
+    if (session.gateHold != null && session.gate.isEmpty()) add("A gate hold needs a vendor gate")
+    session.quirks.filter { it !in CAMERA_QUIRKS }.forEach { add("Unknown quirk $it") }
+    if (session.params == "none") {
         lens.vendorKeys
             .firstOrNull { it.enabled && (it.scope == VendorKeyScope.Session || it.scope == VendorKeyScope.SessionAndRequest) }
             ?.let { add("Session parameters \"none\" cannot carry the session key ${it.tag}") }

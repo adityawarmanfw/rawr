@@ -57,11 +57,11 @@ void testJsonRoundTrip() {
     assert(again && serializeCameraProfile(*again) == json);
     assert(again->lenses[0].companionFallback == CompanionFallback::Nearest && again->lenses[0].rawMaxImages == 12u);
 
-    // A sized companion keeps its old JSON shape.
+    // A sized companion is written as a fixed one.
     const auto sized = parseCameraProfile(
         R"({"lenses":[{"id":"a","cameraId":"2","companion":{"width":640,"height":480}}]})");
     assert(sized && sized->lenses[0].companionSize == std::make_pair(640u, 480u));
-    assert(serializeCameraProfile(*sized).find(R"("companion":{"width":640,"height":480,"format":"yuv","targeted":true})") !=
+    assert(serializeCameraProfile(*sized).find(R"("companion":{"mode":"fixed","width":640,"height":480,"format":"yuv","targeted":true})") !=
            std::string::npos);
     // Defaults write nothing.
     const auto plain = serializeCameraProfile(*parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"2"}]})"));

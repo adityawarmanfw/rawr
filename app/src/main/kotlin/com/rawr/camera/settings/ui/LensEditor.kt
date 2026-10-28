@@ -24,6 +24,13 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.border
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -59,7 +66,15 @@ import com.rawr.camera.settings.model.CFA_PHOTO_QUALITIES
 import com.rawr.camera.settings.model.BACKEND_CHOICES
 import com.rawr.camera.settings.model.CAMERA_QUIRKS
 import com.rawr.camera.settings.model.COMPANION_FALLBACKS
+import com.rawr.camera.settings.model.AuxJpegSettings
+import com.rawr.camera.settings.model.CaptureStreamSettings
+import com.rawr.camera.settings.model.CompanionMode
+import com.rawr.camera.settings.model.LensCamera
+import com.rawr.camera.settings.model.LensCfa
 import com.rawr.camera.settings.model.LensOutputSize
+import com.rawr.camera.settings.model.LensSession
+import com.rawr.camera.settings.model.StillSequence
+import com.rawr.camera.settings.model.stillSequence
 import com.rawr.camera.settings.model.isReaderUsage
 import com.rawr.camera.settings.model.EXTENDED_ISO_MAX
 import com.rawr.camera.settings.model.EXTENDED_SHUTTER_MAX_NS
@@ -105,7 +120,7 @@ internal fun LensEditorScreen(state: SettingsUiState, lensName: String?, dispatc
     val initial = remember(lensName) { original ?: LensProfile(name = lenses.newLensName(), cameraId = "") }
     var draft by remember(lensName) { mutableStateOf(initial) }
     val inventory by produceState<CameraInventory?>(null) { value = hardware.cameras() }
-    val camera = inventory?.find(draft.cameraId, draft.physicalCameraId)
+    val camera = inventory?.find(draft.camera.id, draft.camera.physical)
     val others = lenses.filterNot { original != null && it.name.equals(original.name, ignoreCase = true) }
     val problems = validateLensProfile(draft, others)
     val dirty = draft != initial
@@ -121,7 +136,7 @@ internal fun LensEditorScreen(state: SettingsUiState, lensName: String?, dispatc
             scope.launch {
                 try {
                     val profile = withContext(Dispatchers.IO) { dcpFiles.import(uri) }
-                    draft = draft.copy(dcp = profile)
+                    draft = draft.image { copy(dcp = profile) }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -151,7 +166,8 @@ internal fun LensEditorScreen(state: SettingsUiState, lensName: String?, dispatc
     BackHandler(onBack = requestBack)
 
     SettingsPageContainer(testTag = SettingsTestTags.sectionRoot("LensEditor")) {
-        SettingsGroup(title = "Lens") {
+        // Sections follow the profile: lens and camera, streams, session, requests and keys, image.
+        SettingsGroup(title = "Lens and camera") {
             LensNameField(draft.name) { draft = draft.copy(name = it) }
             SettingDivider()
             SettingsSwitchRow(
@@ -159,54 +175,47 @@ internal fun LensEditorScreen(state: SettingsUiState, lensName: String?, dispatc
                 checked = draft.enabled,
                 supportingText = "Shown on the capture screen"
             ) { draft = draft.copy(enabled = it) }
-        }
-        SettingsGroup(title = "Camera") {
-            SettingsRow(
-                title = "Camera",
-                value = cameraLabel(draft.cameraId, draft.physicalCameraId),
-                supportingText = camera?.let(::cameraDetail),
-                testTag = SettingsTestTags.row("LensEditor", "camera"),
-                onClick = { pickCamera = true }
-            )
             SettingDivider()
             SettingsRow(
-                title = if (draft.captureStream != null) "Preview stream" else "RAW stream",
-                value = draft.stream.label,
-                supportingText = "Falls back to the largest usable stream if this one isn't offered",
-                enabled = draft.cameraId.isNotBlank(),
-                onClick = { pickStream = true }
+                title = "Camera",
+                value = cameraLabel(draft.camera.id, draft.camera.physical),
+                supportingText = camera?.let(::cameraDetail),
+                testTag = tag("camera"),
+                onClick = { pickCamera = true }
             )
         }
-        FullResolutionGroup(draft) { draft = it }
-        SessionRecipeGroup(draft) { draft = it }
-        StreamsGroup(draft) { draft = it }
+        RawStreamGroup(draft, onPickStream = { pickStream = true }) { draft = it }
+        CaptureStreamGroup(draft) { draft = it }
+        CompanionGroup(draft) { draft = it }
+        AuxJpegGroup(draft) { draft = it }
+        SessionGroup(draft) { draft = it }
+        RequestsAndKeysGroup(draft, onEditKey = { editKey = it ?: -1 }) { draft = it }
         SettingsGroup(title = "Image") {
             DropdownChoiceRow(
                 title = "Mirror",
-                selected = draft.mirror,
+                selected = draft.image.mirror,
                 values = LensMirror.entries,
                 label = { it.label },
                 supportingText = "Flips photos, video and the viewfinder, e.g. for a lens behind a mirror or prism. " +
                     "DNG files keep the sensor pixels and store the flip in their orientation.",
-                onSelect = { draft = draft.copy(mirror = it) }
+                onSelect = { draft = draft.image { copy(mirror = it) } }
             )
-        }
-        SettingsGroup(title = "Camera profile") {
+            SettingDivider()
             SettingsRow(
                 title = if (importingDcp) "Importing profile…" else "Import DCP file",
-                value = draft.dcp?.name ?: "Camera default",
+                value = draft.image.dcp?.name ?: "Camera default",
                 supportingText = "Applies the profile’s colour and tone before your selected look; embeds it in DNG files",
                 enabled = !importingDcp,
-                testTag = SettingsTestTags.row("LensEditor", "dcp"),
+                testTag = tag("dcp"),
                 onClick = { dcpPicker.launchPicker(context, arrayOf("*/*")) }
             )
-            if (draft.dcp != null) {
+            if (draft.image.dcp != null) {
                 SettingDivider()
                 SettingsRow(
                     title = "Use camera default",
                     enabled = !importingDcp,
-                    testTag = SettingsTestTags.row("LensEditor", "removeDcp"),
-                    onClick = { draft = draft.copy(dcp = null); dcpError = null }
+                    testTag = tag("removeDcp"),
+                    onClick = { draft = draft.image { copy(dcp = null) }; dcpError = null }
                 )
             }
             dcpError?.let {
@@ -218,19 +227,11 @@ internal fun LensEditorScreen(state: SettingsUiState, lensName: String?, dispatc
             title = "Black & white levels",
             description = "Dynamic uses the camera's own levels. Static overrides them on every frame, " +
                 "e.g. for vendor sensor modes with a different bit depth.",
-            levels = draft.levels,
+            levels = draft.image.levels,
             camera = camera
-        ) { draft = draft.copy(levels = it) }
-        SensorLayoutGroup(draft) { draft = it }
-        ExtendedExposureGroup(draft.exposure) { draft = draft.copy(exposure = it) }
-        VendorKeysGroup(
-            title = "Vendor keys",
-            description = "Session keys are set when each capture session starts; request keys on every request " +
-                "(preview, stills, multiframe and video). If an enabled key can't be applied the lens fails to open.",
-            keys = draft.vendorKeys,
-            onChange = { draft = draft.copy(vendorKeys = it) },
-            onEdit = { editKey = it ?: -1 }
-        )
+        ) { draft = draft.image { copy(levels = it) } }
+        SensorLayoutGroup(draft.image.cfa) { draft = draft.image { copy(cfa = it) } }
+        ExtendedExposureGroup(draft.image.exposure) { draft = draft.image { copy(exposure = it) } }
         if (problems.isNotEmpty()) {
             Text(
                 problems.joinToString("\n"),
@@ -251,7 +252,7 @@ internal fun LensEditorScreen(state: SettingsUiState, lensName: String?, dispatc
             OutlinedButton(onClick = requestBack) { Text("Cancel") }
             Button(
                 enabled = canSave,
-                modifier = Modifier.testTag(SettingsTestTags.row("LensEditor", "save")),
+                modifier = Modifier.testTag(tag("save")),
                 onClick = saveAndLeave
             ) { Text("Save") }
         }
@@ -260,15 +261,12 @@ internal fun LensEditorScreen(state: SettingsUiState, lensName: String?, dispatc
     if (pickCamera) {
         CameraPickerDialog(
             inventory = inventory,
-            selectedCameraId = draft.cameraId,
-            selectedPhysicalId = draft.physicalCameraId,
+            selectedCameraId = draft.camera.id,
+            selectedPhysicalId = draft.camera.physical,
             onDismiss = { pickCamera = false },
             onPick = { picked ->
-                draft = draft.copy(
-                    cameraId = picked.openId,
-                    physicalCameraId = picked.physicalId,
-                    stream = streamForCamera(draft.stream, picked)
-                )
+                draft = draft.copy(camera = LensCamera(picked.openId, picked.physicalId))
+                    .raw { copy(choice = streamForCamera(choice, picked)) }
                 pickCamera = false
             }
         )
@@ -276,10 +274,10 @@ internal fun LensEditorScreen(state: SettingsUiState, lensName: String?, dispatc
     if (pickStream) {
         StreamPickerDialog(
             camera = camera,
-            selected = draft.stream,
+            selected = draft.streams.raw.choice,
             onDismiss = { pickStream = false },
             onPick = {
-                draft = draft.copy(stream = it)
+                draft = draft.raw { copy(choice = it) }
                 pickStream = false
             }
         )
@@ -289,8 +287,8 @@ internal fun LensEditorScreen(state: SettingsUiState, lensName: String?, dispatc
         val existing = keys.getOrNull(index)
         VendorKeyDialog(
             initial = existing,
-            cameraId = draft.cameraId,
-            physicalCameraId = draft.physicalCameraId,
+            cameraId = draft.camera.id,
+            physicalCameraId = draft.camera.physical,
             onDismiss = { editKey = null },
             onDelete = existing?.let {
                 {
@@ -401,24 +399,23 @@ private fun LevelsGroup(
                 if (!on) onChange(levels.copy(blackRggb = List(4) { levels.blackRggb.first() }))
             }
             if (perChannel) {
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = SettingsRowHorizontalPadding, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    listOf("R", "Gr", "Gb", "B").forEachIndexed { channel, label ->
-                        LevelField(label, levels.blackRggb[channel], Modifier.weight(1f)) { v ->
-                            onChange(levels.copy(blackRggb = levels.blackRggb.mapIndexed { i, b -> if (i == channel) v else b }))
+                SettingsRow(
+                    title = "Black",
+                    supportingText = "Per channel: R, Gr, Gb, B",
+                    trailing = {
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            listOf("R", "Gr", "Gb", "B").forEachIndexed { channel, label ->
+                                LevelInput(levels.blackRggb[channel], width = 60.dp, placeholder = label) { v ->
+                                    onChange(levels.copy(blackRggb = levels.blackRggb.mapIndexed { i, b -> if (i == channel) v else b }))
+                                }
+                            }
                         }
                     }
-                }
+                )
             } else {
-                LevelField("Black", levels.blackRggb.first(), Modifier.fillMaxWidth().padding(horizontal = SettingsRowHorizontalPadding, vertical = 4.dp)) { v ->
-                    onChange(levels.copy(blackRggb = List(4) { v }))
-                }
+                LevelField("Black", levels.blackRggb.first()) { v -> onChange(levels.copy(blackRggb = List(4) { v })) }
             }
-            LevelField("White", levels.white, Modifier.fillMaxWidth().padding(horizontal = SettingsRowHorizontalPadding, vertical = 4.dp)) { v ->
-                onChange(levels.copy(white = v))
-            }
+            LevelField("White", levels.white) { v -> onChange(levels.copy(white = v)) }
             if (cameraLevels != null && cameraLevels != levels) {
                 TextButton(
                     onClick = {
@@ -435,28 +432,25 @@ private fun LevelsGroup(
 }
 
 @Composable
-private fun LevelField(label: String, value: Float, modifier: Modifier, onValue: (Float) -> Unit) {
+private fun LevelInput(value: Float, modifier: Modifier = Modifier, width: Dp = 104.dp, placeholder: String = "0", onValue: (Float) -> Unit) {
     var text by remember { mutableStateOf(formatLevel(value)) }
     LaunchedEffect(value) { if (text.toFloatOrNull() != value) text = formatLevel(value) }
-    OutlinedTextField(
-        value = text,
-        onValueChange = { t ->
-            text = t
-            t.toFloatOrNull()?.takeIf { it.isFinite() }?.let(onValue)
-        },
-        label = { Text(label) },
-        singleLine = true,
-        isError = text.toFloatOrNull() == null,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-        modifier = modifier
-    )
+    CompactInput(text, { t ->
+        text = t
+        t.toFloatOrNull()?.takeIf { it.isFinite() }?.let(onValue)
+    }, modifier, width = width, placeholder = placeholder, isError = text.toFloatOrNull() == null, keyboard = KeyboardType.Decimal)
+}
+
+@Composable
+private fun LevelField(label: String, value: Float, hint: String? = null, onValue: (Float) -> Unit) {
+    SettingsRow(title = label, supportingText = hint, trailing = { LevelInput(value, onValue = onValue) })
 }
 
 private fun formatLevel(value: Float): String =
     if (value == Math.round(value).toFloat()) Math.round(value).toString() else value.toString()
 
 @Composable
-private fun SensorLayoutGroup(lens: LensProfile, onChange: (LensProfile) -> Unit) {
+private fun SensorLayoutGroup(cfa: LensCfa, onChange: (LensCfa) -> Unit) {
     SettingsGroup(
         title = "Sensor layout",
         description = "For RAW that comes out as coloured blocks or with wrong colours: some sensor modes " +
@@ -464,34 +458,34 @@ private fun SensorLayoutGroup(lens: LensProfile, onChange: (LensProfile) -> Unit
             "remosaiced to Bayer at full resolution. Colour order fixes swapped red/blue or magenta-green " +
             "casts; for quad and 4x4 it is the order of the blocks."
     ) {
-        CompactChoiceRow(CFA_BLOCKS, lens.cfaBlock, ::cfaBlockLabel) { onChange(lens.copy(cfaBlock = it)) }
+        CompactChoiceRow(CFA_BLOCKS, cfa.block, ::cfaBlockLabel) { onChange(cfa.copy(block = it)) }
         SettingDivider()
         DropdownChoiceRow(
             title = "Colour order",
-            selected = lens.cfaOrder,
+            selected = cfa.order,
             values = listOf<String?>(null) + CFA_ORDERS,
             label = { it ?: "Camera's" },
-            onSelect = { onChange(lens.copy(cfaOrder = it)) }
+            onSelect = { onChange(cfa.copy(order = it)) }
         )
-        if (lens.cfaBlock > 1) {
+        if (cfa.block > 1) {
             SettingDivider()
             DropdownChoiceRow(
                 title = "Live remosaic",
-                selected = lens.cfaLive,
+                selected = cfa.live,
                 values = CFA_LIVE_QUALITIES,
                 label = ::cfaQualityLabel,
                 supportingText = "Viewfinder, video and merged photos (their frames come from the live stream). " +
                     "Fast skips green interpolation: about 20% cheaper, softer colour detail.",
-                onSelect = { onChange(lens.copy(cfaLive = it)) }
+                onSelect = { onChange(cfa.copy(live = it)) }
             )
             SettingDivider()
             DropdownChoiceRow(
                 title = "Photo remosaic",
-                selected = lens.cfaPhoto,
+                selected = cfa.photo,
                 values = CFA_PHOTO_QUALITIES,
                 label = ::cfaQualityLabel,
                 supportingText = "Single photos. High searches wider for clean edges; adds ~0.15 s per photo.",
-                onSelect = { onChange(lens.copy(cfaPhoto = it)) }
+                onSelect = { onChange(cfa.copy(photo = it)) }
             )
         }
     }
@@ -521,49 +515,17 @@ private fun ExtendedExposureGroup(exposure: LensExposure, onChange: (LensExposur
             onChange(exposure.copy(extended = it))
         }
         if (exposure.extended) {
-            LevelField(
-                "Highest ISO",
-                exposure.isoMax.toFloat(),
-                Modifier.fillMaxWidth().padding(horizontal = SettingsRowHorizontalPadding, vertical = 4.dp)
-            ) { v -> onChange(exposure.copy(isoMax = v.toInt().coerceIn(0, EXTENDED_ISO_MAX))) }
-            LevelField(
-                "Longest shutter (s, up to 25)",
-                exposure.shutterMaxNs / 1e9f,
-                Modifier.fillMaxWidth().padding(horizontal = SettingsRowHorizontalPadding, vertical = 4.dp)
-            ) { v ->
+            LevelField("Highest ISO", exposure.isoMax.toFloat(), "0 keeps the camera's limit") { v ->
+                onChange(exposure.copy(isoMax = v.toInt().coerceIn(0, EXTENDED_ISO_MAX)))
+            }
+            LevelField("Longest shutter (s)", exposure.shutterMaxNs / 1e9f, "Up to 25 s. 0 keeps the camera's limit") { v ->
                 onChange(exposure.copy(shutterMaxNs = (v.toDouble() * 1e9).toLong().coerceIn(0L, EXTENDED_SHUTTER_MAX_NS)))
             }
         }
     }
 }
 
-@Composable
-private fun VendorKeysGroup(
-    title: String,
-    description: String?,
-    keys: List<VendorKey>,
-    onChange: (List<VendorKey>) -> Unit,
-    onEdit: (Int?) -> Unit
-) {
-    SettingsGroup(title = title, description = description) {
-        keys.forEachIndexed { index, key ->
-            if (index > 0) SettingDivider()
-            SettingsRow(
-                title = key.tag,
-                value = "${key.scope.label} · ${key.type.label} · ${formatVendorKeyValues(key.values, key.type)}",
-                onClick = { onEdit(index) },
-                trailing = {
-                    CompactSwitch(
-                        checked = key.enabled,
-                        onCheckedChange = { on -> onChange(keys.mapIndexed { i, k -> if (i == index) k.copy(enabled = on) else k }) }
-                    )
-                }
-            )
-        }
-        if (keys.isNotEmpty()) SettingDivider()
-        SettingsRow(title = "Add key", leadingIcon = Icons.Rounded.Add, onClick = { onEdit(null) })
-    }
-}
+
 
 @Composable
 private fun VendorKeyDialog(
@@ -777,98 +739,11 @@ private fun streamForCamera(current: RawStreamChoice, camera: ProbedCamera): Raw
     return RawStreamChoice(format)
 }
 
-@Composable
-private fun SessionRecipeGroup(lens: LensProfile, onChange: (LensProfile) -> Unit) {
-    SettingsGroup(
-        title = "Session and requests",
-        description = "How this lens configures the camera session and what it asks of every frame. The defaults match the app's normal behaviour."
-    ) {
-        DropdownChoiceRow(
-            title = "Session parameters",
-            selected = lens.sessionParams,
-            values = SESSION_PARAMS_POLICIES,
-            label = {
-                when (it) {
-                    "cadence" -> "Frame rate and session keys"
-                    "none" -> "None (plain session)"
-                    "full" -> "Whole repeating request"
-                    else -> it
-                }
-            },
-            supportingText = "None cannot carry session-scope keys; Whole sends every default and control the viewfinder uses",
-            onSelect = { onChange(lens.copy(sessionParams = it)) }
-        )
-        SettingDivider()
-        DropdownChoiceRow(
-            title = "Request defaults",
-            selected = lens.requestDefaults,
-            values = REQUEST_DEFAULTS,
-            label = { if (it == "minimal") "Minimal" else "App defaults" },
-            supportingText = "Minimal leaves distortion and hot-pixel modes, face detection and the AE priority tag to the camera",
-            onSelect = { onChange(lens.copy(requestDefaults = it)) }
-        )
-        SettingDivider()
-        DropdownChoiceRow(
-            title = "Camera API",
-            selected = lens.backend,
-            values = BACKEND_CHOICES,
-            label = { when (it) { "auto" -> "Automatic"; "ndk" -> "Native (NDK)"; "java" -> "Java Camera2"; else -> it } },
-            supportingText = "Automatic uses Java Camera2 only when an operating mode or stream use case is set; " +
-                "both need it. Native cannot carry them, so that combination is refused.",
-            onSelect = { onChange(lens.copy(backend = it)) }
-        )
-        Column(Modifier.fillMaxWidth().padding(horizontal = SettingsRowHorizontalPadding, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            CaptureNumberField("Operating mode", lens.opMode, Modifier.fillMaxWidth().testTag(SettingsTestTags.row("LensEditor", "op_mode")),
-                "Session operating mode (vendor modes are usually 0x8000 and above, entered in decimal). 0 = normal; 1 and 2 are refused.") {
-                onChange(lens.copy(opMode = it))
-            }
-            CaptureNumberField("Stream use case: viewfinder RAW", lens.rawStreamUseCase,
-                Modifier.fillMaxWidth().testTag(SettingsTestTags.row("LensEditor", "use_case_raw")),
-                "0 = not set. Standard values 1 to 6, or a vendor value.") { onChange(lens.copy(rawStreamUseCase = it)) }
-            if (lens.captureStream != null)
-                CaptureNumberField("Stream use case: capture RAW", lens.captureStreamUseCase,
-                    Modifier.fillMaxWidth().testTag(SettingsTestTags.row("LensEditor", "use_case_capture"))) {
-                    onChange(lens.copy(captureStreamUseCase = it))
-                }
-            CaptureNumberField("Stream use case: companion", lens.companionStreamUseCase,
-                Modifier.fillMaxWidth().testTag(SettingsTestTags.row("LensEditor", "use_case_companion"))) {
-                onChange(lens.copy(companionStreamUseCase = it))
-            }
-        }
-        if (lens.vendorGate.isNotEmpty()) {
-            SettingDivider()
-            DropdownChoiceRow(
-                title = "Gate held",
-                selected = lens.gateHold.orEmpty(),
-                values = listOf("") + GATE_HOLDS,
-                label = {
-                    when (it) {
-                        "" -> "Default"
-                        "configured" -> "Until configured"
-                        "closed" -> "Until the camera closes"
-                        else -> it
-                    }
-                },
-                supportingText = "Default keeps it until close on a lens with a separate capture stream",
-                onSelect = { onChange(lens.copy(gateHold = it.ifEmpty { null })) }
-            )
-        }
-        for (quirk in CAMERA_QUIRKS) {
-            SettingDivider()
-            SettingsSwitchRow(
-                title = quirkTitle(quirk),
-                checked = quirk in lens.quirks,
-                supportingText = quirkDescription(quirk),
-                testTag = SettingsTestTags.row("LensEditor", "quirk_$quirk")
-            ) { on -> onChange(lens.copy(quirks = if (on) (lens.quirks + quirk).distinct() else lens.quirks - quirk)) }
-        }
-    }
-}
+
 
 private fun quirkTitle(quirk: String) = when (quirk) {
-    "afTapHold" -> "Hold tap focus"
-    "noHalPriorityAe" -> "No camera priority AE"
+    "afTapHold" -> "Keep tap focus until the next tap"
+    "noHalPriorityAe" -> "App AE for shutter and ISO priority"
     "noTapAf" -> "No tap focus"
     "requireFpsRange" -> "Always send an fps range"
     "noAutoCompanion" -> "No automatic companion"
@@ -886,235 +761,463 @@ private fun quirkDescription(quirk: String) = when (quirk) {
 
 private fun tag(slug: String) = SettingsTestTags.row("LensEditor", slug)
 
-/** The extra outputs and the RAW reader: the companion stream, the aux JPEG and how the reader is allocated. */
+/** Input rows stacked inside a group. */
 @Composable
-private fun StreamsGroup(lens: LensProfile, onChange: (LensProfile) -> Unit) {
-    SettingsGroup(title = "Streams and readers") {
-        val companionMode = when {
-            lens.disableCompanion -> "off"
-            lens.companion != null -> "fixed"
-            else -> "auto"
+private fun FieldColumn(content: @Composable () -> Unit) {
+    Column(Modifier.fillMaxWidth()) { content() }
+}
+
+@Composable
+private fun SizeFields(
+    title: String,
+    size: LensOutputSize,
+    tagPrefix: String,
+    hint: String? = null,
+    onChange: (LensOutputSize) -> Unit
+) {
+    var width by remember { mutableStateOf(if (size.width == 0) "" else size.width.toString()) }
+    var height by remember { mutableStateOf(if (size.height == 0) "" else size.height.toString()) }
+    fun number(text: String) = if (text.isEmpty()) 0 else text.toIntOrNull() ?: -1
+    SettingsRow(
+        title = title,
+        supportingText = hint,
+        trailing = {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                CompactInput(width, { t -> if (t.all { it in '0'..'9' }) { width = t; onChange(size.copy(width = number(t))) } },
+                    Modifier.testTag(tag("${tagPrefix}_width")), width = 80.dp, placeholder = "W")
+                Text("×", style = MaterialTheme.typography.bodyMedium)
+                CompactInput(height, { t -> if (t.all { it in '0'..'9' }) { height = t; onChange(size.copy(height = number(t))) } },
+                    Modifier.testTag(tag("${tagPrefix}_height")), width = 80.dp, placeholder = "H")
+            }
         }
+    )
+}
+
+/** The viewfinder RAW stream and its reader. */
+@Composable
+private fun RawStreamGroup(lens: LensProfile, onPickStream: () -> Unit, onChange: (LensProfile) -> Unit) {
+    val raw = lens.streams.raw
+    SettingsGroup(title = "RAW stream", description = "The stream the viewfinder, video and normal photos read.") {
+        SettingsRow(
+            title = if (lens.streams.capture != null) "Preview stream" else "Stream",
+            value = raw.choice.label,
+            supportingText = "Falls back to the largest usable stream if this one isn't offered",
+            enabled = lens.camera.id.isNotBlank(),
+            onClick = onPickStream
+        )
+        FieldColumn {
+            CaptureNumberField("Stream use case", raw.useCase, Modifier.testTag(tag("use_case_raw")),
+                "Java Camera2 only. 0 = not set; standard values are 1 to 6, anything else is the vendor's") {
+                onChange(lens.raw { copy(useCase = it) })
+            }
+            UsageField("Buffer usage", raw.reader.usage, Modifier.testTag(tag("reader_usage")),
+                "Empty: the app chooses (GPU first, CPU if the camera refuses). Or gpuDataBuffer, none, or a 0x hex value") { onChange(lens.raw { copy(reader = reader.copy(usage = it)) }) }
+            CaptureNumberField("Buffers", raw.reader.maxImages, Modifier.testTag(tag("reader_images")),
+                "RAW frames the reader holds, 6 to 16. 0 = 6") { onChange(lens.raw { copy(reader = reader.copy(maxImages = it)) }) }
+        }
+        SettingsSwitchRow(
+            title = "Test the buffer usage first",
+            checked = raw.reader.probe,
+            supportingText = "With a buffer usage set: ask the allocator before using it, and use CPU buffers if it refuses",
+            enabled = raw.reader.usage != null,
+            testTag = tag("reader_probe")
+        ) { onChange(lens.raw { copy(reader = reader.copy(probe = it)) }) }
+        SettingDivider()
+        SettingsSwitchRow(
+            title = "Fall back if no frames arrive",
+            checked = raw.reader.demote,
+            supportingText = "With a buffer usage set: when no frame arrives, retry with the app's own choice",
+            enabled = raw.reader.usage != null,
+            testTag = tag("reader_demote")
+        ) { onChange(lens.raw { copy(reader = reader.copy(demote = it)) }) }
+    }
+}
+
+/** A second RAW stream that only still requests fill (vendor full-size modes). */
+@Composable
+private fun CaptureStreamGroup(lens: LensProfile, onChange: (LensProfile) -> Unit) {
+    var retained by remember { mutableStateOf(lens.streams.capture ?: CaptureStreamSettings(RawStreamChoice())) }
+    val capture = lens.streams.capture
+    val update = { change: CaptureStreamSettings.() -> CaptureStreamSettings ->
+        capture?.let { onChange(lens.streams { copy(capture = it.change()) }) }
+    }
+    SettingsGroup(
+        title = "Full-size capture stream",
+        description = "A second RAW stream that only photos fill, for vendor full-resolution modes (vivo 50 and 200 MP)."
+    ) {
+        SettingsSwitchRow(
+            title = "Capture stream",
+            checked = capture != null,
+            supportingText = "Off: photos come from the RAW stream above",
+            testTag = tag("capture_stream")
+        ) { enabled ->
+            capture?.let { retained = it }
+            onChange(lens.streams { copy(capture = if (enabled) retained else null) })
+        }
+        if (capture != null) {
+            SettingDivider()
+            DropdownChoiceRow(
+                title = "Format",
+                selected = capture.choice.format,
+                values = RawStreamFormat.entries,
+                label = { it.label },
+                onSelect = { update { copy(choice = choice.copy(format = it)) } }
+            )
+            FieldColumn {
+                SizeFields(
+                    if (capture.choice.width > 0 && capture.choice.height > 0)
+                        String.format(Locale.ROOT, "Size · %.1f MP", capture.choice.width.toDouble() * capture.choice.height / 1_000_000)
+                    else "Size",
+                    LensOutputSize(capture.choice.width, capture.choice.height), "capture",
+                    "The sensor mode's full-size dimensions, including sizes the camera doesn't advertise"
+                ) { update { copy(choice = choice.copy(width = it.width, height = it.height)) } }
+                CaptureNumberField("Stream use case", capture.useCase, Modifier.testTag(tag("use_case_capture")),
+                    "Java Camera2 only. 0 = not set") { update { copy(useCase = it) } }
+                UsageField("Buffer usage", capture.readerUsage, Modifier.testTag(tag("capture_reader_usage")),
+                    "Empty: GPU data buffer, the one vivo full-size modes accept") { update { copy(readerUsage = it) } }
+                CaptureNumberField("Most frames per photo", capture.burstMax, Modifier.testTag(tag("capture_burst")),
+                    "Ceiling for this lens. Choose the requested count in Multiframe → Maximum Frames. " +
+                        "0 = app limit (30) · 1 = single frame") { update { copy(burstMax = it) } }
+            }
+            DropdownChoiceRow(
+                title = "Send a multi-frame photo",
+                selected = capture.burstSequential,
+                values = listOf(false, true),
+                label = { if (it) "One frame at a time" else "All frames at once" },
+                supportingText = if (capture.burstSequential) "Each frame is requested after the previous one arrives"
+                else "All frames are requested together; the camera sets the timing",
+                onSelect = { update { copy(burstSequential = it) } }
+            )
+        }
+    }
+}
+
+/** The companion: a small output beside RAW that some HALs need before they deliver RAW. */
+@Composable
+private fun CompanionGroup(lens: LensProfile, onChange: (LensProfile) -> Unit) {
+    val companion = lens.streams.companion
+    SettingsGroup(
+        title = "Companion stream",
+        description = "A small extra output next to RAW. Some cameras deliver no RAW without one."
+    ) {
         DropdownChoiceRow(
-            title = "Companion stream",
-            selected = companionMode,
-            values = listOf("auto", "fixed", "off"),
-            label = { when (it) { "fixed" -> "Fixed size"; "off" -> "Off"; else -> "Automatic" } },
-            supportingText = "A small extra output beside RAW. Automatic adds it on unverified devices and capture-stream lenses",
-            onSelect = {
-                onChange(
-                    when (it) {
-                        "off" -> lens.copy(disableCompanion = true, companion = null)
-                        "fixed" -> lens.copy(disableCompanion = false, companion = lens.companion ?: LensOutputSize(320, 240),
-                            companionFallback = "base")
-                        else -> lens.copy(disableCompanion = false, companion = null)
-                    }
-                )
+            title = "Mode",
+            selected = companion.mode,
+            values = CompanionMode.entries,
+            label = { it.label },
+            supportingText = when (companion.mode) {
+                CompanionMode.Auto -> "Added on unverified devices and lenses with a capture stream, sized to the RAW aspect"
+                CompanionMode.Fixed -> "Always configured, at the size below: part of this lens's mode"
+                CompanionMode.Off -> "Never configured, even where the app would add one"
+            },
+            onSelect = { mode ->
+                onChange(lens.companion { copy(mode = mode, fallback = if (mode == CompanionMode.Fixed) "base" else fallback) })
             }
         )
-        if (!lens.disableCompanion) {
-            lens.companion?.let { size ->
-                Row(Modifier.fillMaxWidth().padding(horizontal = SettingsRowHorizontalPadding, vertical = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    CaptureNumberField("Companion width", size.width, Modifier.weight(1f).testTag(tag("companion_width"))) {
-                        onChange(lens.copy(companion = size.copy(width = it)))
-                    }
-                    CaptureNumberField("Companion height", size.height, Modifier.weight(1f).testTag(tag("companion_height"))) {
-                        onChange(lens.copy(companion = size.copy(height = it)))
-                    }
+        if (companion.mode != CompanionMode.Off) {
+            if (companion.mode == CompanionMode.Fixed) {
+                FieldColumn {
+                    SizeFields("Size", companion.size, "companion") { onChange(lens.companion { copy(size = it) }) }
                 }
-            } ?: run {
+            } else {
                 SettingDivider()
                 DropdownChoiceRow(
-                    title = "Companion size fallback",
-                    selected = lens.companionFallback,
+                    title = "If no size matches the RAW aspect",
+                    selected = companion.fallback,
                     values = COMPANION_FALLBACKS,
-                    label = { when (it) { "nearest" -> "Nearest aspect"; "none" -> "None"; else -> "Default pick" } },
-                    supportingText = "When no advertised size matches the RAW aspect",
-                    onSelect = { onChange(lens.copy(companionFallback = it)) }
+                    label = { when (it) { "nearest" -> "Nearest aspect"; "none" -> "No companion"; else -> "Default size" } },
+                    onSelect = { onChange(lens.companion { copy(fallback = it) }) }
                 )
             }
             SettingDivider()
             DropdownChoiceRow(
-                title = "Companion format",
-                selected = lens.companionFormat,
+                title = "Format",
+                selected = companion.format,
                 values = listOf("yuv", "private"),
-                label = { if (it == "private") "PRIVATE" else "YUV 420" },
-                onSelect = { onChange(lens.copy(companionFormat = it)) }
+                label = { if (it == "private") "PRIVATE (GPU)" else "YUV 420" },
+                onSelect = { onChange(lens.companion { copy(format = it) }) }
             )
             SettingDivider()
             SettingsSwitchRow(
-                title = "Companion in requests",
-                checked = lens.companionTargeted,
-                supportingText = "Off configures the stream without filling it",
+                title = "Fill on every frame",
+                checked = companion.targeted,
+                supportingText = "Off: configured with the session, but no request fills it",
                 testTag = tag("companion_targeted")
-            ) { onChange(lens.copy(companionTargeted = it)) }
+            ) { onChange(lens.companion { copy(targeted = it) }) }
             SettingDivider()
             DropdownChoiceRow(
-                title = "Drop companion after start",
-                selected = lens.companionDetach,
+                title = "Stop filling once RAW arrives",
+                selected = companion.detach,
                 values = listOf(null, true, false),
                 label = { when (it) { true -> "Yes"; false -> "No"; null -> "Default" } },
-                supportingText = "Default drops only an automatic companion, once a frame has paired",
-                onSelect = { onChange(lens.copy(companionDetach = it)) }
+                supportingText = "Default: an automatic companion stops after the first RAW frame with its metadata; a fixed one keeps going",
+                onSelect = { onChange(lens.companion { copy(detach = it) }) }
             )
             SettingDivider()
             DropdownChoiceRow(
-                title = "Companion camera",
-                selected = lens.companionPhysical,
+                title = "On the physical camera",
+                selected = companion.physical,
                 values = listOf(null, true, false),
-                label = { when (it) { true -> "Physical"; false -> "Logical"; null -> "Follow the lens" } },
-                supportingText = "For a lens on a physical camera inside a logical one",
-                onSelect = { onChange(lens.copy(companionPhysical = it)) }
+                label = { when (it) { true -> "Yes"; false -> "No, the logical camera"; null -> "Same as the lens" } },
+                supportingText = "Only matters for a lens on a physical camera inside a logical one",
+                onSelect = { onChange(lens.companion { copy(physical = it) }) }
             )
-            Column(Modifier.fillMaxWidth().padding(horizontal = SettingsRowHorizontalPadding, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                CaptureNumberField("Companion images", lens.companionMaxImages, Modifier.fillMaxWidth().testTag(tag("companion_images")),
-                    "Images its reader holds, 2 to 16. 0 = 2") { onChange(lens.copy(companionMaxImages = it)) }
-                UsageField("Companion usage", lens.companionUsage, Modifier.fillMaxWidth().testTag(tag("companion_usage"))) {
-                    onChange(lens.copy(companionUsage = it))
+            FieldColumn {
+                CaptureNumberField("Buffers", companion.maxImages, Modifier.testTag(tag("companion_images")),
+                    "Frames its reader holds, 2 to 16. 0 = 2") { onChange(lens.companion { copy(maxImages = it) }) }
+                UsageField("Buffer usage", companion.usage, Modifier.testTag(tag("companion_usage")),
+                    "Empty: GPU sampling for PRIVATE, the reader's own for YUV. Or gpuDataBuffer, none, or a 0x hex value") {
+                    onChange(lens.companion { copy(usage = it) })
                 }
+                CaptureNumberField("Stream use case", companion.useCase, Modifier.testTag(tag("use_case_companion")),
+                    "Java Camera2 only. 0 = not set") { onChange(lens.companion { copy(useCase = it) }) }
             }
         }
-        SettingDivider()
+    }
+}
+
+@Composable
+private fun AuxJpegGroup(lens: LensProfile, onChange: (LensProfile) -> Unit) {
+    val aux = lens.streams.auxJpeg
+    val update = { change: AuxJpegSettings.() -> AuxJpegSettings ->
+        aux?.let { onChange(lens.streams { copy(auxJpeg = it.change()) }) }
+    }
+    SettingsGroup(title = "Aux JPEG stream") {
         SettingsSwitchRow(
-            title = "Aux JPEG stream",
-            checked = lens.auxJpeg != null,
-            supportingText = "A JPEG output configured with the session but never filled; some vendor modes need it",
+            title = "Add a JPEG stream",
+            checked = aux != null,
+            supportingText = "Configured with the session but never filled. Some vendor modes only start with one",
             testTag = tag("aux_jpeg")
-        ) { onChange(lens.copy(auxJpeg = if (it) lens.auxJpeg ?: LensOutputSize(4096, 3072) else null)) }
-        lens.auxJpeg?.let { size ->
-            Column(Modifier.fillMaxWidth().padding(horizontal = SettingsRowHorizontalPadding, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    CaptureNumberField("JPEG width", size.width, Modifier.weight(1f).testTag(tag("aux_jpeg_width"))) {
-                        onChange(lens.copy(auxJpeg = size.copy(width = it)))
-                    }
-                    CaptureNumberField("JPEG height", size.height, Modifier.weight(1f).testTag(tag("aux_jpeg_height"))) {
-                        onChange(lens.copy(auxJpeg = size.copy(height = it)))
-                    }
-                }
-                UsageField("Aux JPEG usage", lens.auxJpegUsage, Modifier.fillMaxWidth().testTag(tag("aux_jpeg_usage"))) {
-                    onChange(lens.copy(auxJpegUsage = it))
-                }
+        ) { onChange(lens.streams { copy(auxJpeg = if (it) auxJpeg ?: AuxJpegSettings(LensOutputSize(4096, 3072)) else null) }) }
+        if (aux != null) {
+            FieldColumn {
+                SizeFields("Size", aux.size, "aux_jpeg") { update { copy(size = it) } }
+                UsageField("Buffer usage", aux.usage, Modifier.testTag(tag("aux_jpeg_usage"))) { update { copy(usage = it) } }
+                CaptureNumberField("Stream use case", aux.useCase, Modifier.testTag(tag("use_case_aux_jpeg")),
+                    "Java Camera2 only. 0 = not set") { update { copy(useCase = it) } }
             }
         }
-        SettingDivider()
-        Column(Modifier.fillMaxWidth().padding(horizontal = SettingsRowHorizontalPadding, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            UsageField("RAW reader usage", lens.readerUsage, Modifier.fillMaxWidth().testTag(tag("reader_usage")),
-                "Empty = the app's own choice") { onChange(lens.copy(readerUsage = it)) }
-            CaptureNumberField("RAW reader images", lens.rawMaxImages, Modifier.fillMaxWidth().testTag(tag("reader_images")),
-                "6 to 16. 0 = 6") { onChange(lens.copy(rawMaxImages = it)) }
+    }
+}
+
+/** How the session is opened and configured. */
+@Composable
+private fun SessionGroup(lens: LensProfile, onChange: (LensProfile) -> Unit) {
+    val session = lens.session
+    val update = { change: LensSession.() -> LensSession -> onChange(lens.session(change)) }
+    SettingsGroup(
+        title = "Session",
+        description = "How this lens opens the camera and configures the session. The defaults match the app's normal behaviour."
+    ) {
+        DropdownChoiceRow(
+            title = "Camera API",
+            selected = session.backend,
+            values = BACKEND_CHOICES,
+            label = { when (it) { "auto" -> "Automatic"; "ndk" -> "Native (NDK)"; "java" -> "Java Camera2"; else -> it } },
+            supportingText = "Automatic: Java Camera2 when an operating mode or a stream use case is set (the NDK " +
+                "cannot send them), Native otherwise",
+            onSelect = { update { copy(backend = it) } }
+        )
+        FieldColumn {
+            CaptureNumberField("Operating mode", session.opMode, Modifier.testTag(tag("op_mode")),
+                "Java Camera2 only. 0 = normal. Vendor modes are usually 32768 (0x8000) and above, in decimal. 1 and 2 are refused") {
+                update { copy(opMode = it) }
+            }
         }
-        SettingsSwitchRow(
-            title = "Check reader usage first",
-            checked = lens.readerProbe,
-            supportingText = "Ask the allocator before using a fixed reader usage; fall back to CPU-only if it refuses",
-            enabled = lens.readerUsage != null,
-            testTag = tag("reader_probe")
-        ) { onChange(lens.copy(readerProbe = it)) }
+        DropdownChoiceRow(
+            title = "Session parameters",
+            selected = session.params,
+            values = SESSION_PARAMS_POLICIES,
+            label = {
+                when (it) {
+                    "cadence" -> "Frame rate and session keys"
+                    "none" -> "None"
+                    "full" -> "The whole viewfinder request"
+                    else -> it
+                }
+            },
+            supportingText = "Sent once when the session is configured. None cannot carry session keys",
+            onSelect = { update { copy(params = it) } }
+        )
+        SettingDivider()
+        DropdownChoiceRow(
+            title = "Request template",
+            selected = session.stillTemplate,
+            values = listOf(null, true, false),
+            label = { when (it) { true -> "Still capture"; false -> "Preview"; null -> "Default" } },
+            supportingText = "Default: preview for the viewfinder, still capture for full-size photos. " +
+                "The others use one template for the session, the viewfinder and photos",
+            onSelect = { update { copy(stillTemplate = it) } }
+        )
+        FieldColumn {
+            CaptureNumberField("Fixed frame rate", session.fixedFps, Modifier.testTag(tag("fixed_fps")),
+                "One AE fps range on the session and every request. 0 = the app varies it") { update { copy(fixedFps = it) } }
+            CaptureNumberField("Startup delay (ms)", session.startupDelayMs, Modifier.testTag(tag("startup_delay")),
+                "Wait after the session is configured before the first request, up to 5000") { update { copy(startupDelayMs = it) } }
+        }
+        DropdownChoiceRow(
+            title = "Vendor gate",
+            selected = session.gate,
+            values = (listOf("", "vivoFullSize") + session.gate).distinct(),
+            label = { when (it) { "" -> "None"; "vivoFullSize" -> "vivo full-size"; else -> it } },
+            supportingText = "Vendor state the app sets while it opens the camera; vivo needs it for 50 and 200 MP",
+            onSelect = { update { copy(gate = it, gateHold = if (it.isEmpty()) null else gateHold) } }
+        )
+        if (session.gate.isNotEmpty()) {
+            SettingDivider()
+            DropdownChoiceRow(
+                title = "Keep the gate",
+                selected = session.gateHold.orEmpty(),
+                values = listOf("") + GATE_HOLDS,
+                label = {
+                    when (it) {
+                        "" -> "Default"
+                        "configured" -> "Until the session is configured"
+                        "closed" -> "Until the camera closes"
+                        else -> it
+                    }
+                },
+                supportingText = "Default: until the camera closes on a lens with a capture stream, otherwise until configured",
+                onSelect = { update { copy(gateHold = it.ifEmpty { null }) } }
+            )
+        }
+        SettingDivider()
+        val sequence = lens.stillSequence()
+        SettingsRow(
+            title = "Photo sequence",
+            value = when (sequence) {
+                StillSequence.DecisionFrame -> "Decision frame, then pause"
+                StillSequence.PauseViewfinder -> "Pause, then photo"
+                StillSequence.Direct -> "Beside the viewfinder"
+            },
+            supportingText = when (sequence) {
+                StillSequence.DecisionFrame -> "Set by the decision key with the capture stream and companion: one frame lets the " +
+                    "camera switch to full size, the viewfinder pauses for the photos and comes back"
+                StillSequence.PauseViewfinder -> "The viewfinder pauses for the photo and comes back"
+                StillSequence.Direct -> "Photos are taken while the viewfinder keeps running"
+            },
+            testTag = tag("photo_sequence")
+        )
         SettingDivider()
         SettingsSwitchRow(
-            title = "Demote a silent reader",
-            checked = lens.readerDemote,
-            supportingText = "Let a fixed reader usage that delivers nothing fall back like the app's own choice",
-            enabled = lens.readerUsage != null,
-            testTag = tag("reader_demote")
-        ) { onChange(lens.copy(readerDemote = it)) }
+            title = "Always pause the viewfinder for photos",
+            checked = session.stopRepeatingForStill,
+            supportingText = "Pause, take the photo, restore. A lens with a decision key already pauses for full-size photos",
+            testTag = tag("stop_repeating")
+        ) { update { copy(stopRepeatingForStill = it) } }
+    }
+    SettingsGroup(
+        title = "Camera workarounds",
+        description = "Behaviours this camera crashes or misbehaves on. The device profile may already set some for every lens."
+    ) {
+        CAMERA_QUIRKS.forEachIndexed { index, quirk ->
+            if (index > 0) SettingDivider()
+            SettingsSwitchRow(
+                title = quirkTitle(quirk),
+                checked = quirk in session.quirks,
+                supportingText = quirkDescription(quirk),
+                testTag = tag("quirk_$quirk")
+            ) { on -> update { copy(quirks = if (on) (quirks + quirk).distinct() else quirks - quirk) } }
+        }
+    }
+}
+
+/** What every request carries: the app's defaults and the lens's vendor keys. */
+@Composable
+private fun RequestsAndKeysGroup(lens: LensProfile, onEditKey: (Int?) -> Unit, onChange: (LensProfile) -> Unit) {
+    val keys = lens.vendorKeys
+    SettingsGroup(
+        title = "Requests and keys",
+        description = "Session keys are set when each capture session starts; request keys on every request " +
+            "(preview, stills, multiframe and video). If an enabled key can't be applied the lens fails to open."
+    ) {
+        DropdownChoiceRow(
+            title = "Request defaults",
+            selected = lens.request.defaults,
+            values = REQUEST_DEFAULTS,
+            label = { if (it == "minimal") "Minimal" else "App defaults" },
+            supportingText = "Minimal leaves distortion and hot-pixel modes, face detection and the AE priority tag to the camera",
+            onSelect = { onChange(lens.copy(request = lens.request.copy(defaults = it))) }
+        )
+        keys.forEachIndexed { index, key ->
+            SettingDivider()
+            SettingsRow(
+                title = key.tag,
+                value = "${key.scope.label} · ${key.type.label} · ${formatVendorKeyValues(key.values, key.type)}",
+                onClick = { onEditKey(index) },
+                trailing = {
+                    CompactSwitch(
+                        checked = key.enabled,
+                        onCheckedChange = { on ->
+                            onChange(lens.copy(vendorKeys = keys.mapIndexed { i, k -> if (i == index) k.copy(enabled = on) else k }))
+                        }
+                    )
+                }
+            )
+        }
+        SettingDivider()
+        SettingsRow(title = "Add key", leadingIcon = Icons.Rounded.Add, onClick = { onEditKey(null) })
     }
 }
 
 /** A reader usage: "gpuDataBuffer", "none" or a 0x hex value; empty means null. */
+/** A small boxed text field for the end of a settings row. */
+@Composable
+private fun CompactInput(
+    text: String,
+    onText: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    width: Dp = 104.dp,
+    placeholder: String = "0",
+    isError: Boolean = false,
+    keyboard: KeyboardType = KeyboardType.Number
+) {
+    val colors = MaterialTheme.colorScheme
+    BasicTextField(
+        value = text,
+        onValueChange = onText,
+        singleLine = true,
+        textStyle = MaterialTheme.typography.bodyMedium.copy(color = colors.onSurface, textAlign = TextAlign.End),
+        keyboardOptions = KeyboardOptions(keyboardType = keyboard),
+        cursorBrush = SolidColor(colors.primary),
+        modifier = modifier.width(width),
+        decorationBox = { inner ->
+            Box(
+                Modifier
+                    .border(1.dp, if (isError) colors.error else colors.outline, RoundedCornerShape(8.dp))
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                contentAlignment = Alignment.CenterEnd
+            ) {
+                if (text.isEmpty()) {
+                    Text(placeholder, style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
+                }
+                inner()
+            }
+        }
+    )
+}
+
+/** A reader usage: "gpuDataBuffer", "none" or a 0x hex value; empty means null (the default). */
 @Composable
 private fun UsageField(
     label: String,
     value: String?,
     modifier: Modifier = Modifier,
-    hint: String = "gpuDataBuffer, none or a 0x hex value. Empty = default",
+    hint: String = "Empty: the default. Or gpuDataBuffer, none, or a 0x hex value",
     onChange: (String?) -> Unit
 ) {
     var text by remember { mutableStateOf(value.orEmpty()) }
-    OutlinedTextField(
-        value = text,
-        onValueChange = { input ->
-            text = input.trim()
-            onChange(text.ifEmpty { null })
-        },
-        label = { Text(label) },
-        supportingText = { Text(if (text.isEmpty() || isReaderUsage(text)) hint else "Not a usage: $hint") },
-        isError = text.isNotEmpty() && !isReaderUsage(text),
-        singleLine = true,
-        modifier = modifier
+    val bad = text.isNotEmpty() && !isReaderUsage(text)
+    SettingsRow(
+        title = label,
+        supportingText = if (bad) "Not a usage. $hint" else hint,
+        trailing = {
+            CompactInput(text, { input ->
+                text = input.trim()
+                onChange(text.ifEmpty { null })
+            }, modifier, width = 160.dp, placeholder = "default", isError = bad, keyboard = KeyboardType.Ascii)
+        }
     )
-}
-
-@Composable
-private fun FullResolutionGroup(lens: LensProfile, onChange: (LensProfile) -> Unit) {
-    var retainedStream by remember { mutableStateOf(lens.captureStream ?: RawStreamChoice()) }
-    SettingsGroup(title = "Full-resolution capture") {
-        DropdownChoiceRow(
-            title = "Vendor gate",
-            selected = lens.vendorGate,
-            values = (listOf("", "vivoFullSize") + lens.vendorGate).distinct(),
-            label = { when (it) { "" -> "None"; "vivoFullSize" -> "Vivo full-size"; else -> it } },
-            onSelect = { onChange(lens.copy(vendorGate = it)) }
-        )
-        SettingDivider()
-        SettingsSwitchRow(
-            title = "Separate capture stream",
-            checked = lens.captureStream != null,
-            supportingText = "Use a separate RAW size for photos while the preview uses the main stream"
-        ) { enabled ->
-            lens.captureStream?.let { retainedStream = it }
-            onChange(lens.copy(captureStream = if (enabled) retainedStream else null))
-        }
-        lens.captureStream?.let { capture ->
-            SettingDivider()
-            DropdownChoiceRow(
-                title = "Capture format",
-                selected = capture.format,
-                values = RawStreamFormat.entries,
-                label = { it.label },
-                onSelect = { onChange(lens.copy(captureStream = capture.copy(format = it))) }
-            )
-            Column(
-                Modifier.fillMaxWidth().padding(horizontal = SettingsRowHorizontalPadding, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    CaptureNumberField("Width", capture.width, Modifier.weight(1f)) {
-                        onChange(lens.copy(captureStream = capture.copy(width = it)))
-                    }
-                    CaptureNumberField("Height", capture.height, Modifier.weight(1f)) {
-                        onChange(lens.copy(captureStream = capture.copy(height = it)))
-                    }
-                }
-                Text(
-                    if (capture.width > 0 && capture.height > 0)
-                        String.format(Locale.ROOT, "%.1f MP · Use dimensions supported by the sensor mode, including unadvertised sizes.",
-                            capture.width.toDouble() * capture.height / 1_000_000)
-                    else "Enter the sensor mode’s capture dimensions, including unadvertised sizes.",
-                    style = MaterialTheme.typography.bodySmall
-                )
-                CaptureNumberField("Burst frame limit", lens.captureBurst, Modifier.fillMaxWidth(),
-                    "Ceiling for this lens. Choose the requested count in Multiframe → Maximum Frames. " +
-                        "0 = app limit (30) · 1 = single frame") {
-                    onChange(lens.copy(captureBurst = it))
-                }
-            }
-            DropdownChoiceRow(
-                title = "Burst submission",
-                selected = lens.captureBurstSequential,
-                values = listOf(false, true),
-                label = { if (it) "Sequential" else "Queued" },
-                supportingText = if (lens.captureBurstSequential)
-                    "Submit each frame after the previous RAW arrives"
-                else "Submit all frames together; the camera determines capture timing",
-                onSelect = { onChange(lens.copy(captureBurstSequential = it)) }
-            )
-        }
-    }
 }
 
 @Composable
@@ -1126,19 +1229,17 @@ private fun CaptureNumberField(
     onChange: (Int) -> Unit
 ) {
     var text by remember { mutableStateOf(if (value == 0) "" else value.toString()) }
-    OutlinedTextField(
-        value = text,
-        onValueChange = { input ->
-            if (input.all { it in '0'..'9' }) {
-                text = input
-                onChange(if (input.isEmpty()) 0 else input.toIntOrNull() ?: -1)
-            }
-        },
-        label = { Text(label) },
-        supportingText = hint?.let { { Text(it) } },
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-        singleLine = true,
-        modifier = modifier
+    SettingsRow(
+        title = label,
+        supportingText = hint,
+        trailing = {
+            CompactInput(text, { input ->
+                if (input.all { it in '0'..'9' }) {
+                    text = input
+                    onChange(if (input.isEmpty()) 0 else input.toIntOrNull() ?: -1)
+                }
+            }, modifier)
+        }
     )
 }
 

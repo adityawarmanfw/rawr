@@ -258,11 +258,11 @@ private fun CopyLensDialog(
 }
 
 internal fun lensSummary(lens: LensProfile): String = buildList {
-    add(cameraLabel(lens.cameraId, lens.physicalCameraId))
-    add(lens.stream.label)
-    add(if (lens.levels.isStatic) "Static levels" else "Dynamic levels")
-    if (lens.cfaBlock > 1) add(cfaBlockLabel(lens.cfaBlock))
-    lens.cfaOrder?.let { add(it) }
+    add(cameraLabel(lens.camera.id, lens.camera.physical))
+    add(lens.streams.raw.choice.label)
+    add(if (lens.image.levels.isStatic) "Static levels" else "Dynamic levels")
+    if (lens.image.cfa.block > 1) add(cfaBlockLabel(lens.image.cfa.block))
+    lens.image.cfa.order?.let { add(it) }
     val keys = lens.vendorKeys.count { it.enabled }
     if (keys > 0) add(if (keys == 1) "1 key" else "$keys keys")
 }.joinToString(" · ")

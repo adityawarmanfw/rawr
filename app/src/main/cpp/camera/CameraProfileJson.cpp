@@ -465,11 +465,6 @@ std::optional<std::pair<uint32_t, uint32_t>> readSize(const Json* j) {
     return std::pair<uint32_t, uint32_t>{uint32_t(w), uint32_t(h)};
 }
 
-void appendSize(std::string& out, const char* name, const std::pair<uint32_t, uint32_t>& size) {
-    out += std::string(",\"") + name + "\":{\"width\":" + std::to_string(size.first) +
-           ",\"height\":" + std::to_string(size.second) + "}";
-}
-
 bool readKeys(const std::vector<Json>& list, std::vector<CameraKeySetting>& out, std::string* error) {
     for (const auto& k : list) {
         CameraKeySetting key;
@@ -535,132 +530,180 @@ void appendJsonString(std::string& out, const std::string& value) {
     out += '"';
 }
 
+namespace {
+// Comma-separated members of one JSON object, written in order; empty objects are left out by the caller.
+class ObjectWriter {
+   public:
+    void raw(const char* key, const std::string& value) {
+        out_ += out_.empty() ? "{" : ",";
+        out_ += '"';
+        out_ += key;
+        out_ += "\":" + value;
+    }
+    void number(const char* key, int64_t value) { raw(key, std::to_string(value)); }
+    void flag(const char* key, bool value) { raw(key, value ? "true" : "false"); }
+    void text(const char* key, const std::string& value) {
+        std::string quoted;
+        appendJsonString(quoted, value);
+        raw(key, quoted);
+    }
+    bool empty() const { return out_.empty(); }
+    std::string str() const { return out_.empty() ? "{}" : out_ + "}"; }
+
+   private:
+    std::string out_;
+};
+
+std::string streamJson(const geometry::RawStreamPreference& s) {
+    ObjectWriter w;
+    w.raw("format", std::string("\"") + geometry::rawPixelFormatName(s.format) + "\"");
+    w.number("width", s.width);
+    w.number("height", s.height);
+    return w.str();
+}
+std::string levelsJson(const LevelOverride& l) {
+    std::string out;
+    appendLevels(out, l);
+    return out;
+}
+std::string appendStreamFields(std::string object, const ObjectWriter& extra) {
+    if (extra.empty()) return object;
+    object.pop_back();  // '}'
+    return object + "," + extra.str().substr(1);
+}
+}  // namespace
+
 std::string serializeCameraProfile(const CameraProfile& profile) {
     std::string out = "{\"id\":";
     appendJsonString(out, profile.id);
-    out += ",\"lenses\":[";
+    out += ",\"schema\":2,\"lenses\":[";
     for (size_t i = 0; i < profile.lenses.size(); ++i) {
         const auto& r = profile.lenses[i];
         if (i) out += ',';
-        out += "{\"id\":";
-        appendJsonString(out, r.lensId);
-        out += ",\"cameraId\":";
-        appendJsonString(out, r.cameraId);
-        out += ",\"physicalCameraId\":";
-        appendJsonString(out, r.physicalCameraId);
-        out += ",\"stream\":{\"format\":\"";
-        out += geometry::rawPixelFormatName(r.preferredStream.format);
-        out += "\",\"width\":" + std::to_string(r.preferredStream.width) +
-               ",\"height\":" + std::to_string(r.preferredStream.height);
-        if (r.unlistedStream) out += ",\"unlisted\":true";
-        if (r.rawStreamUseCase) out += ",\"useCase\":" + std::to_string(r.rawStreamUseCase);
-        out += "},\"levels\":";
-        appendLevels(out, r.levels);
-        if (r.viewfinderLevels) { out += ",\"viewfinderLevels\":"; appendLevels(out, *r.viewfinderLevels); }
-        if (r.captureLevels) { out += ",\"captureLevels\":"; appendLevels(out, *r.captureLevels); }
-        out += ",\"exposure\":";
-        appendExposure(out, r.exposure);
-        out += ",\"keys\":";
-        appendKeys(out, r.keys);
-        if (r.readerUsage) out += ",\"readerUsage\":\"" + readerUsageName(*r.readerUsage) + "\"";
-        if (r.captureReaderUsage)
-            out += ",\"captureReaderUsage\":\"" + readerUsageName(*r.captureReaderUsage) + "\"";
-        if (r.stillTemplate) out += *r.stillTemplate ? ",\"template\":\"still\"" : ",\"template\":\"preview\"";
-        if (r.fixedFps > 0) out += ",\"fps\":" + std::to_string(r.fixedFps);
-        if (r.disableCompanion) out += ",\"disableCompanion\":true";
-        if (r.companionSize || r.companionUsage || r.companionMaxImages || r.companionPhysical || r.companionDetach ||
-            r.companionFallback != CompanionFallback::Base || r.companionPrivate || !r.companionTargeted ||
-            r.companionStreamUseCase) {
-            out += ",\"companion\":{";
-            if (r.companionSize)
-                out += "\"width\":" + std::to_string(r.companionSize->first) +
-                       ",\"height\":" + std::to_string(r.companionSize->second) + ",";
-            out += r.companionPrivate ? "\"format\":\"private\"" : "\"format\":\"yuv\"";
-            out += r.companionTargeted ? ",\"targeted\":true" : ",\"targeted\":false";
-            if (r.companionUsage) out += ",\"usage\":\"" + readerUsageName(*r.companionUsage) + "\"";
-            if (r.companionMaxImages) out += ",\"maxImages\":" + std::to_string(r.companionMaxImages);
-            if (r.companionPhysical) out += *r.companionPhysical ? ",\"physical\":true" : ",\"physical\":false";
-            if (r.companionDetach) out += *r.companionDetach ? ",\"detach\":true" : ",\"detach\":false";
-            if (r.companionFallback != CompanionFallback::Base)
-                out += r.companionFallback == CompanionFallback::Nearest ? ",\"fallback\":\"nearest\"" : ",\"fallback\":\"none\"";
-            if (r.companionStreamUseCase) out += ",\"useCase\":" + std::to_string(r.companionStreamUseCase);
-            out += '}';
-        }
-        if (r.startupDelayMs) out += ",\"startupDelayMs\":" + std::to_string(r.startupDelayMs);
-        if (r.stopRepeatingForStill) out += ",\"stopRepeatingForStill\":true";
-        if (r.auxJpegSize) {
-            appendSize(out, "auxJpeg", *r.auxJpegSize);
-            if (r.auxJpegUsage || r.auxJpegStreamUseCase) {
-                out.pop_back();
-                if (r.auxJpegUsage) out += ",\"usage\":\"" + readerUsageName(*r.auxJpegUsage) + "\"";
-                if (r.auxJpegStreamUseCase) out += ",\"useCase\":" + std::to_string(r.auxJpegStreamUseCase);
-                out += '}';
-            }
-        }
-        if (r.rawMaxImages || r.readerProbe || r.readerDemote) {
-            out += ",\"reader\":{";
-            bool first = true;
-            const auto field = [&](const std::string& text) {
-                if (!first) out += ',';
-                first = false;
-                out += text;
-            };
-            if (r.rawMaxImages) field("\"maxImages\":" + std::to_string(r.rawMaxImages));
-            if (r.readerProbe) field("\"probe\":true");
-            if (r.readerDemote) field("\"demote\":true");
-            out += '}';
-        }
-        if (!r.vendorGate.empty()) {
-            out += ",\"vendorGate\":";
-            appendJsonString(out, r.vendorGate);
-        }
-        if (r.sessionParams != SessionParamsPolicy::Cadence || r.opMode) {
-            out += ",\"session\":{";
-            if (r.sessionParams != SessionParamsPolicy::Cadence)
-                out += std::string("\"params\":\"") + sessionParamsName(r.sessionParams) + "\"";
-            if (r.opMode) out += std::string(r.sessionParams != SessionParamsPolicy::Cadence ? "," : "") + "\"opMode\":" + std::to_string(r.opMode);
-            out += '}';
-        }
-        if (r.backend != BackendChoice::Auto) out += std::string(",\"backend\":\"") + backendChoiceName(r.backend) + "\"";
-        if (r.requestDefaults != RequestDefaults::Rawr)
-            out += std::string(",\"request\":{\"defaults\":\"") + requestDefaultsName(r.requestDefaults) + "\"}";
-        if (r.gateHold)
-            out += *r.gateHold == GateHold::UntilClosed ? ",\"gateHold\":\"closed\"" : ",\"gateHold\":\"configured\"";
-        if (r.quirks.any()) {
-            out += ",\"quirks\":[";
-            bool first = true;
-            for (const auto& name : quirkNames(r.quirks)) {
-                if (!first) out += ',';
-                first = false;
-                appendJsonString(out, name);
-            }
-            out += ']';
-        }
+        ObjectWriter lens;
+        lens.text("id", r.lensId);
+        ObjectWriter camera;
+        camera.text("id", r.cameraId);
+        camera.text("physical", r.physicalCameraId);
+        lens.raw("camera", camera.str());
+
+        ObjectWriter streams;
+        ObjectWriter raw;
+        if (r.unlistedStream) raw.flag("unlisted", true);
+        if (r.rawStreamUseCase) raw.number("useCase", r.rawStreamUseCase);
+        ObjectWriter reader;
+        if (r.readerUsage) reader.text("usage", readerUsageName(*r.readerUsage));
+        if (r.rawMaxImages) reader.number("maxImages", r.rawMaxImages);
+        if (r.readerProbe) reader.flag("probe", true);
+        if (r.readerDemote) reader.flag("demote", true);
+        if (!reader.empty()) raw.raw("reader", reader.str());
+        if (r.viewfinderLevels) raw.raw("levels", levelsJson(*r.viewfinderLevels));
+        streams.raw("raw", appendStreamFields(streamJson(r.preferredStream), raw));
         if (r.captureStream) {
-            out += ",\"captureStream\":{\"format\":\"";
-            out += geometry::rawPixelFormatName(r.captureStream->format);
-            out += "\",\"width\":" + std::to_string(r.captureStream->width) +
-                   ",\"height\":" + std::to_string(r.captureStream->height);
-            if (r.captureStreamUseCase) out += ",\"useCase\":" + std::to_string(r.captureStreamUseCase);
-            out += '}';
+            ObjectWriter capture;
+            if (r.captureStreamUseCase) capture.number("useCase", r.captureStreamUseCase);
+            if (r.captureReaderUsage) {
+                ObjectWriter captureReader;
+                captureReader.text("usage", readerUsageName(*r.captureReaderUsage));
+                capture.raw("reader", captureReader.str());
+            }
+            ObjectWriter burst;
+            if (r.captureBurst) burst.number("max", r.captureBurst);
+            if (r.captureBurstSequential) burst.flag("sequential", true);
+            if (!burst.empty()) capture.raw("burst", burst.str());
+            if (r.captureLevels) capture.raw("levels", levelsJson(*r.captureLevels));
+            streams.raw("capture", appendStreamFields(streamJson(*r.captureStream), capture));
         }
-        if (r.captureBurst) out += ",\"captureBurst\":" + std::to_string(r.captureBurst);
-        if (r.captureBurstSequential) out += ",\"captureBurstSequential\":true";
+        if (r.disableCompanion || r.companionSize || r.companionUsage || r.companionMaxImages || r.companionPhysical ||
+            r.companionDetach || r.companionFallback != CompanionFallback::Base || r.companionPrivate ||
+            !r.companionTargeted || r.companionStreamUseCase) {
+            ObjectWriter c;
+            c.text("mode", r.disableCompanion ? "off" : r.companionSize ? "fixed" : "auto");
+            if (!r.disableCompanion) {
+                if (r.companionSize) {
+                    c.number("width", r.companionSize->first);
+                    c.number("height", r.companionSize->second);
+                }
+                c.text("format", r.companionPrivate ? "private" : "yuv");
+                c.flag("targeted", r.companionTargeted);
+                if (r.companionUsage) c.text("usage", readerUsageName(*r.companionUsage));
+                if (r.companionMaxImages) c.number("maxImages", r.companionMaxImages);
+                if (r.companionPhysical) c.flag("physical", *r.companionPhysical);
+                if (r.companionDetach) c.flag("detach", *r.companionDetach);
+                if (r.companionFallback != CompanionFallback::Base)
+                    c.text("fallback", r.companionFallback == CompanionFallback::Nearest ? "nearest" : "none");
+                if (r.companionStreamUseCase) c.number("useCase", r.companionStreamUseCase);
+            }
+            streams.raw("companion", c.str());
+        }
+        if (r.auxJpegSize) {
+            ObjectWriter a;
+            a.number("width", r.auxJpegSize->first);
+            a.number("height", r.auxJpegSize->second);
+            if (r.auxJpegUsage) a.text("usage", readerUsageName(*r.auxJpegUsage));
+            if (r.auxJpegStreamUseCase) a.number("useCase", r.auxJpegStreamUseCase);
+            streams.raw("auxJpeg", a.str());
+        }
+        lens.raw("streams", streams.str());
+
+        ObjectWriter session;
+        if (r.backend != BackendChoice::Auto) session.text("backend", backendChoiceName(r.backend));
+        if (r.opMode) session.number("opMode", r.opMode);
+        if (r.sessionParams != SessionParamsPolicy::Cadence) session.text("params", sessionParamsName(r.sessionParams));
+        if (r.stillTemplate) session.text("template", *r.stillTemplate ? "still" : "preview");
+        if (r.fixedFps > 0) session.number("fps", r.fixedFps);
+        if (r.startupDelayMs) session.number("startupDelayMs", r.startupDelayMs);
+        if (!r.vendorGate.empty() || r.gateHold) {
+            ObjectWriter gate;
+            if (!r.vendorGate.empty()) gate.text("name", r.vendorGate);
+            if (r.gateHold) gate.text("hold", *r.gateHold == GateHold::UntilClosed ? "closed" : "configured");
+            session.raw("gate", gate.str());
+        }
+        if (r.stopRepeatingForStill) session.flag("stopRepeatingForStill", true);
+        if (r.quirks.any()) {
+            std::string list = "[";
+            for (const auto& name : quirkNames(r.quirks)) {
+                if (list.size() > 1) list += ',';
+                appendJsonString(list, name);
+            }
+            session.raw("quirks", list + "]");
+        }
+        if (!session.empty()) lens.raw("session", session.str());
+        if (r.requestDefaults != RequestDefaults::Rawr) {
+            ObjectWriter request;
+            request.text("defaults", requestDefaultsName(r.requestDefaults));
+            lens.raw("request", request.str());
+        }
+        std::string keys;
+        appendKeys(keys, r.keys);
+        lens.raw("keys", keys);
+
+        ObjectWriter image;
+        image.raw("levels", levelsJson(r.levels));
+        std::string exposure;
+        appendExposure(exposure, r.exposure);
+        image.raw("exposure", exposure);
         if (r.cfaBlock > 1 || r.cfaOrder) {
-            out += ",\"cfa\":{\"block\":" + std::to_string(r.cfaBlock);
-            if (r.cfaOrder) out += std::string(",\"order\":\"") + cfaOrderName(*r.cfaOrder) + "\"";
-            out += std::string(",\"live\":\"") + (r.cfaLiveQuality == 0 ? "fast" : "standard") + "\"";
-            out += std::string(",\"photo\":\"") + (r.cfaPhotoQuality == 2 ? "high" : "standard") + "\"";
-            out += '}';
+            ObjectWriter cfa;
+            cfa.number("block", r.cfaBlock);
+            if (r.cfaOrder) cfa.text("order", cfaOrderName(*r.cfaOrder));
+            cfa.text("live", r.cfaLiveQuality == 0 ? "fast" : "standard");
+            cfa.text("photo", r.cfaPhotoQuality == 2 ? "high" : "standard");
+            image.raw("cfa", cfa.str());
         }
-        if (r.distortion) appendDistortion(out, *r.distortion);
-        if (r.mirror) out += std::string(",\"mirror\":\"") + mirrorName(r.mirror) + "\"";
+        if (r.distortion) {
+            std::string distortion;
+            appendDistortion(distortion, *r.distortion);  // ,"distortion":{...}
+            image.raw("distortion", distortion.substr(distortion.find(':') + 1));
+        }
+        if (r.mirror) image.text("mirror", mirrorName(r.mirror));
         if (!r.dcpPath.empty()) {
-            out += ",\"dcp\":{\"path\":";
-            appendJsonString(out, r.dcpPath);
-            out += '}';
+            ObjectWriter dcp;
+            dcp.text("path", r.dcpPath);
+            image.raw("dcp", dcp.str());
         }
-        out += '}';
+        lens.raw("image", image.str());
+        out += lens.str();
     }
     out += "]}";
     return out;

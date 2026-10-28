@@ -120,7 +120,7 @@ void testGateHoldJson() {
         R"({"lenses":[{"id":"a","cameraId":"0","vendorGate":"g","gateHold":"closed"}]})", &error);
     assert(closed && closed->lenses[0].gateHold == GateHold::UntilClosed);
     const auto json = serializeCameraProfile(*closed);
-    assert(json.find(R"("gateHold":"closed")") != std::string::npos);
+    assert(json.find(R"("gate":{"name":"g","hold":"closed"})") != std::string::npos);
     const auto again = parseCameraProfile(json);
     assert(again && again->lenses[0].gateHold == GateHold::UntilClosed && serializeCameraProfile(*again) == json);
     const auto configured = parseCameraProfile(

@@ -114,7 +114,7 @@ class SettingsBackupStore(
             }.toString(2).toByteArray())
             zip.closeEntry()
             if (BackupSection.LensProfiles in sections) {
-                exported.lensProfiles.orEmpty().mapNotNull { it.dcp?.file }.distinct().forEach { name ->
+                exported.lensProfiles.orEmpty().mapNotNull { it.image.dcp?.file }.distinct().forEach { name ->
                     val file = File(File(app.filesDir, DcpFileStore.DIR), name)
                     require(file.isFile) { "Backup is incomplete: missing ${file.name}" }
                     zip.putNextEntry(ZipEntry(DCP_DIR + name))
@@ -271,7 +271,7 @@ class SettingsBackupStore(
             }
             if (BackupSection.LensProfiles in chosen) {
                 // DCP names are content hashes; verify the archive before installing anything.
-                backup.lensProfiles.orEmpty().mapNotNull { it.dcp }.forEach { dcp ->
+                backup.lensProfiles.orEmpty().mapNotNull { it.image.dcp }.forEach { dcp ->
                     val file = File(contents.dcpFiles, dcp.file)
                     require(DcpFileStore.isFileName(dcp.file) && file.isFile &&
                         file.length() <= DcpFileStore.MAX_BYTES &&
