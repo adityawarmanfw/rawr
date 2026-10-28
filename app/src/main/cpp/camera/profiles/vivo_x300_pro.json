@@ -1,80 +1,75 @@
 {
   "id": "vivo_x300_pro",
+  "schema": 2,
   "name": "vivo X300 Pro",
   "version": 1,
   "match": {
-    "models": [
-      "V2514",
-      "V2502A",
-      "V2502DA"
-    ],
-    "verifiedModels": [
-      "V2514"
-    ]
+    "models": ["V2514", "V2502A", "V2502DA"],
+    "verifiedModels": ["V2514"]
   },
   "lenses": [
     {
       "id": "UW",
-      "cameraId": "4",
-      "physicalCameraId": "",
-      "stream": {
-        "format": "RAW16",
-        "width": 4080,
-        "height": 3060
+      "camera": {
+        "id": "4",
+        "physical": ""
       },
-      "levels": {
-        "static": false,
-        "black": [
-          0,
-          0,
-          0,
-          0
-        ],
-        "white": 0
+      "streams": {
+        "raw": {
+          "format": "RAW16",
+          "width": 4080,
+          "height": 3060
+        }
       },
-      "keys": []
+      "image": {
+        "levels": {
+          "static": false,
+          "black": [0, 0, 0, 0],
+          "white": 0
+        }
+      }
     },
     {
       "id": "1x",
-      "cameraId": "2",
-      "physicalCameraId": "",
-      "stream": {
-        "format": "RAW16",
-        "width": 4096,
-        "height": 3072
+      "camera": {
+        "id": "2",
+        "physical": ""
       },
-      "levels": {
-        "static": false,
-        "black": [
-          0,
-          0,
-          0,
-          0
-        ],
-        "white": 0
+      "streams": {
+        "raw": {
+          "format": "RAW16",
+          "width": 4096,
+          "height": 3072
+        }
       },
-      "keys": []
+      "image": {
+        "levels": {
+          "static": false,
+          "black": [0, 0, 0, 0],
+          "white": 0
+        }
+      }
     },
     {
       "id": "3.5x",
-      "cameraId": "3",
-      "physicalCameraId": "",
-      "stream": {
-        "format": "RAW16",
-        "width": 4080,
-        "height": 3072
+      "camera": {
+        "id": "3",
+        "physical": ""
       },
-      "levels": {
-        "static": false,
-        "black": [
-          0,
-          0,
-          0,
-          0
-        ],
-        "white": 0
+      "streams": {
+        "raw": {
+          "format": "RAW16",
+          "width": 4080,
+          "height": 3072
+        }
       },
-      "keys": []
+      "image": {
+        "levels": {
+          "static": false,
+          "black": [0, 0, 0, 0],
+          "white": 0
+        }
+      }
     }
   ]
 }
