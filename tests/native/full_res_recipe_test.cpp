@@ -1,4 +1,7 @@
 #include <cassert>
+#include <fstream>
+#include <iterator>
+#include <iostream>
 #include <string>
 #include "camera/CameraProfileJson.h"
 #include "camera/CameraKeySubmission.h"
@@ -44,7 +47,18 @@ void testFullSizeRecipeJson() {
 }
 
 
-int main() {
+int main(int argc, char** argv) {
+    for (int i = 1; i < argc; ++i) {
+        std::ifstream input(argv[i]);
+        assert(input.good());
+        const std::string json((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+        std::string error;
+        const auto profile = rawrcam::camera::parseCameraProfile(json, &error);
+        if (!profile) std::cerr << argv[i] << ": " << error << '\n';
+        assert(profile);
+        const auto encoded = rawrcam::camera::serializeCameraProfile(*profile);
+        assert(rawrcam::camera::serializeCameraProfile(*rawrcam::camera::parseCameraProfile(encoded)) == encoded);
+    }
     testFullSizeRecipeJson();
     using namespace rawrcam::camera;
     const auto levels = parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0",

@@ -1,5 +1,6 @@
 #include <array>
 #include "camera/CameraRequestPipeline.h"
+#include "camera/CameraRequestCadence.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -169,10 +170,7 @@ bool CameraRequestPipeline::prepareBracketRequest(ACaptureRequest* request, cons
     const uint8_t aeOff = ACAMERA_CONTROL_AE_MODE_OFF;
     // Bracket frames run at their own exposure but at least the preview
     // cadence, so the repeating stream keeps its timing around them.
-    constexpr int64_t kThirtyFpsFrameNs = 33333333LL;
-    int64_t frameDuration = std::max(kThirtyFpsFrameNs, e.exposureTimeNs);
-    if (control.capabilities.maxFrameDurationNs > 0)
-        frameDuration = std::min(frameDuration, control.capabilities.maxFrameDurationNs);
+    const int64_t frameDuration = cameraBracketFrameDuration(control, e.exposureTimeNs);
     if (ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AE_MODE, 1, &aeOff) != ACAMERA_OK ||
         ACaptureRequest_setEntry_i64(request, ACAMERA_SENSOR_EXPOSURE_TIME, 1, &e.exposureTimeNs) != ACAMERA_OK ||
         ACaptureRequest_setEntry_i32(request, ACAMERA_SENSOR_SENSITIVITY, 1, &e.sensitivity) != ACAMERA_OK ||

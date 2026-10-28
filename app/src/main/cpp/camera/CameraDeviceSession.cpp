@@ -860,6 +860,7 @@ bool CameraDeviceSession::captureFullSize(CameraRequestPipeline& pipeline, const
         ACaptureRequest* r;
         ~FreeBase() { ACaptureRequest_free(r); }
     } freeBase{base};
+    if (control.capabilities.fixedFps > 0 && !ok(pipeline.applySessionCadence(base, control))) return false;
     if (!ok(ACaptureRequest_addTarget(base, target_))) return false;
     // A profile companion rides on every request of its mode, stills included.
     if (companionFromProfile_ && profileCompanionTargeted_ && companionTarget_ && !ok(ACaptureRequest_addTarget(base, companionTarget_)))
@@ -875,7 +876,8 @@ bool CameraDeviceSession::captureFullSize(CameraRequestPipeline& pipeline, const
     return pipeline.captureBracket(session_, base, sessionContext_, control, exposures, tagId,
                                    [&](ACaptureRequest* request) {
         if (ACaptureRequest_addTarget(request, captureTarget_) != ACAMERA_OK) return false;
-        const uint8_t intent = ACAMERA_CONTROL_CAPTURE_INTENT_STILL_CAPTURE;
+        const uint8_t intent = captureStillTemplate_ ? ACAMERA_CONTROL_CAPTURE_INTENT_STILL_CAPTURE
+                                                     : ACAMERA_CONTROL_CAPTURE_INTENT_PREVIEW;
         (void)ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_CAPTURE_INTENT, 1, &intent);
         // Preserve the actual preview AF mode and retained tap region. Changing
         // AUTO/CONTINUOUS to OFF for one still resets AF and can move the lens.
