@@ -244,6 +244,13 @@ rawr_test(companion_block_test
   "${APP}/color/DcpProfile.cpp"
   "${APP}/color/ColorMath.cpp"
   "${APP}/geometry/LensDistortion.cpp")
+rawr_test(backend_choice_test
+  "${RAWR_ROOT}/tests/native/backend_choice_test.cpp"
+  "${APP}/camera/CameraRouting.cpp"
+  "${APP}/camera/CameraProfileJson.cpp"
+  "${APP}/color/DcpProfile.cpp"
+  "${APP}/color/ColorMath.cpp"
+  "${APP}/geometry/LensDistortion.cpp")
 # GPU RAW10 ingress vs the CPU fallback unpack (needs a Vulkan device).
 add_subdirectory("${RAWR_ROOT}/native/raw_ingress" "${CMAKE_CURRENT_BINARY_DIR}/raw_ingress")
 rawr_test(raw10_unpack_vulkan_test

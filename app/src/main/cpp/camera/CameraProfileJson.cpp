@@ -552,6 +552,7 @@ std::string serializeCameraProfile(const CameraProfile& profile) {
         out += "\",\"width\":" + std::to_string(r.preferredStream.width) +
                ",\"height\":" + std::to_string(r.preferredStream.height);
         if (r.unlistedStream) out += ",\"unlisted\":true";
+        if (r.rawStreamUseCase) out += ",\"useCase\":" + std::to_string(r.rawStreamUseCase);
         out += "},\"levels\":";
         appendLevels(out, r.levels);
         if (r.viewfinderLevels) { out += ",\"viewfinderLevels\":"; appendLevels(out, *r.viewfinderLevels); }
@@ -567,7 +568,8 @@ std::string serializeCameraProfile(const CameraProfile& profile) {
         if (r.fixedFps > 0) out += ",\"fps\":" + std::to_string(r.fixedFps);
         if (r.disableCompanion) out += ",\"disableCompanion\":true";
         if (r.companionSize || r.companionUsage || r.companionMaxImages || r.companionPhysical || r.companionDetach ||
-            r.companionFallback != CompanionFallback::Base || r.companionPrivate || !r.companionTargeted) {
+            r.companionFallback != CompanionFallback::Base || r.companionPrivate || !r.companionTargeted ||
+            r.companionStreamUseCase) {
             out += ",\"companion\":{";
             if (r.companionSize)
                 out += "\"width\":" + std::to_string(r.companionSize->first) +
@@ -580,15 +582,18 @@ std::string serializeCameraProfile(const CameraProfile& profile) {
             if (r.companionDetach) out += *r.companionDetach ? ",\"detach\":true" : ",\"detach\":false";
             if (r.companionFallback != CompanionFallback::Base)
                 out += r.companionFallback == CompanionFallback::Nearest ? ",\"fallback\":\"nearest\"" : ",\"fallback\":\"none\"";
+            if (r.companionStreamUseCase) out += ",\"useCase\":" + std::to_string(r.companionStreamUseCase);
             out += '}';
         }
         if (r.startupDelayMs) out += ",\"startupDelayMs\":" + std::to_string(r.startupDelayMs);
         if (r.stopRepeatingForStill) out += ",\"stopRepeatingForStill\":true";
         if (r.auxJpegSize) {
             appendSize(out, "auxJpeg", *r.auxJpegSize);
-            if (r.auxJpegUsage) {
+            if (r.auxJpegUsage || r.auxJpegStreamUseCase) {
                 out.pop_back();
-                out += ",\"usage\":\"" + readerUsageName(*r.auxJpegUsage) + "\"}";
+                if (r.auxJpegUsage) out += ",\"usage\":\"" + readerUsageName(*r.auxJpegUsage) + "\"";
+                if (r.auxJpegStreamUseCase) out += ",\"useCase\":" + std::to_string(r.auxJpegStreamUseCase);
+                out += '}';
             }
         }
         if (r.rawMaxImages || r.readerProbe || r.readerDemote) {
@@ -608,8 +613,14 @@ std::string serializeCameraProfile(const CameraProfile& profile) {
             out += ",\"vendorGate\":";
             appendJsonString(out, r.vendorGate);
         }
-        if (r.sessionParams != SessionParamsPolicy::Cadence)
-            out += std::string(",\"session\":{\"params\":\"") + sessionParamsName(r.sessionParams) + "\"}";
+        if (r.sessionParams != SessionParamsPolicy::Cadence || r.opMode) {
+            out += ",\"session\":{";
+            if (r.sessionParams != SessionParamsPolicy::Cadence)
+                out += std::string("\"params\":\"") + sessionParamsName(r.sessionParams) + "\"";
+            if (r.opMode) out += std::string(r.sessionParams != SessionParamsPolicy::Cadence ? "," : "") + "\"opMode\":" + std::to_string(r.opMode);
+            out += '}';
+        }
+        if (r.backend != BackendChoice::Auto) out += std::string(",\"backend\":\"") + backendChoiceName(r.backend) + "\"";
         if (r.requestDefaults != RequestDefaults::Rawr)
             out += std::string(",\"request\":{\"defaults\":\"") + requestDefaultsName(r.requestDefaults) + "\"}";
         if (r.gateHold)
@@ -628,7 +639,9 @@ std::string serializeCameraProfile(const CameraProfile& profile) {
             out += ",\"captureStream\":{\"format\":\"";
             out += geometry::rawPixelFormatName(r.captureStream->format);
             out += "\",\"width\":" + std::to_string(r.captureStream->width) +
-                   ",\"height\":" + std::to_string(r.captureStream->height) + "}";
+                   ",\"height\":" + std::to_string(r.captureStream->height);
+            if (r.captureStreamUseCase) out += ",\"useCase\":" + std::to_string(r.captureStreamUseCase);
+            out += '}';
         }
         if (r.captureBurst) out += ",\"captureBurst\":" + std::to_string(r.captureBurst);
         if (r.captureBurstSequential) out += ",\"captureBurstSequential\":true";
@@ -672,6 +685,18 @@ bool readQuirks(const std::vector<Json>& list, CameraQuirks& out, std::string* e
     return true;
 }
 
+// A stream use case: 0 (not set), a standard value (1 to 6) or a vendor one; a non-integer or negative number is an error.
+bool readUseCase(const Json* object, int64_t& out, std::string* error, const std::string& where) {
+    if (!object || !object->get("useCase")) return true;
+    const double v = object->num("useCase");
+    if (v < 0.0 || v > 9007199254740991.0 || std::floor(v) != v) {
+        if (error) *error = "invalid useCase for " + where;
+        return false;
+    }
+    out = int64_t(v);
+    return true;
+}
+
 std::optional<CameraProfile> readProfile(const Json& root, std::string* error) {
     CameraProfile profile;
     profile.id = root.str("id", "user");
@@ -694,6 +719,7 @@ std::optional<CameraProfile> readProfile(const Json& root, std::string* error) {
             r.preferredStream.width = uint32_t(std::max(0.0, s->num("width")));
             r.preferredStream.height = uint32_t(std::max(0.0, s->num("height")));
             r.unlistedStream = s->flag("unlisted", false);
+            if (!readUseCase(s, r.rawStreamUseCase, error, "stream of lens " + r.lensId)) return std::nullopt;
         }
         for (const auto& [name, field] : {std::pair{"readerUsage", &r.readerUsage},
                                           std::pair{"captureReaderUsage", &r.captureReaderUsage}}) {
@@ -713,7 +739,7 @@ std::optional<CameraProfile> readProfile(const Json& root, std::string* error) {
             r.stillTemplate = t == "still";
         }
         if (l.get("streamUseCase")) {
-            if (error) *error = "streamUseCase is unsupported by the NDK backend for lens " + r.lensId;
+            if (error) *error = "streamUseCase is not a profile field; set useCase on the stream, captureStream, companion or auxJpeg of lens " + r.lensId;
             return std::nullopt;
         }
         r.startupDelayMs = int32_t(std::clamp(l.num("startupDelayMs"), 0.0, 5000.0));
@@ -766,6 +792,7 @@ std::optional<CameraProfile> readProfile(const Json& root, std::string* error) {
                     *field = v->boolean;
                 }
             }
+            if (!readUseCase(c, r.companionStreamUseCase, error, "companion of lens " + r.lensId)) return std::nullopt;
             if (const std::string fallback = c->str("fallback"); !fallback.empty()) {
                 if (fallback != "base" && fallback != "nearest" && fallback != "none") {
                     if (error) *error = "unknown companion fallback " + fallback + " for lens " + r.lensId;
@@ -786,6 +813,7 @@ std::optional<CameraProfile> readProfile(const Json& root, std::string* error) {
                 if (error) *error = "invalid auxJpeg for lens " + r.lensId;
                 return std::nullopt;
             }
+            if (!readUseCase(a, r.auxJpegStreamUseCase, error, "auxJpeg of lens " + r.lensId)) return std::nullopt;
             if (const std::string usage = a->str("usage"); !usage.empty()) {
                 r.auxJpegUsage = parseReaderUsage(usage);
                 if (!r.auxJpegUsage) {
@@ -807,7 +835,23 @@ std::optional<CameraProfile> readProfile(const Json& root, std::string* error) {
             r.readerDemote = rd->flag("demote", false);
         }
         r.vendorGate = l.str("vendorGate");
+        if (const std::string backend = l.str("backend"); !backend.empty()) {
+            if (backend != "auto" && backend != "ndk" && backend != "java") {
+                if (error) *error = "unknown backend " + backend + " for lens " + r.lensId;
+                return std::nullopt;
+            }
+            r.backend = backend == "ndk" ? BackendChoice::Ndk : backend == "java" ? BackendChoice::Java : BackendChoice::Auto;
+        }
         if (const Json* s = l.get("session"); s && s->kind == Json::Kind::Object) {
+            if (s->get("opMode")) {
+                const double mode = s->num("opMode");
+                // 1 is the constrained high-speed mode; 1 and 2 are not accepted as a vendor mode.
+                if (mode < 0.0 || mode > 2147483647.0 || std::floor(mode) != mode || mode == 1.0 || mode == 2.0) {
+                    if (error) *error = "invalid opMode for lens " + r.lensId;
+                    return std::nullopt;
+                }
+                r.opMode = uint32_t(mode);
+            }
             if (const std::string params = s->str("params"); !params.empty()) {
                 if (params != "cadence" && params != "none" && params != "full") {
                     if (error) *error = "unknown session params " + params + " for lens " + r.lensId;
@@ -847,6 +891,7 @@ std::optional<CameraProfile> readProfile(const Json& root, std::string* error) {
                 if (error) *error = "invalid captureStream for lens " + r.lensId;
                 return std::nullopt;
             }
+            if (!readUseCase(c, r.captureStreamUseCase, error, "captureStream of lens " + r.lensId)) return std::nullopt;
             r.captureStream = capture;
         }
         r.captureBurst = uint32_t(std::clamp(l.num("captureBurst"), 0.0, 30.0));
@@ -894,6 +939,10 @@ std::optional<CameraProfile> readProfile(const Json& root, std::string* error) {
         readDcp(l.get("dcp"), r);
         readExposure(l.get("exposure"), r.exposure);
         if (!readKeys(l.array("keys"), r.keys, error)) return std::nullopt;
+        if (r.backend == BackendChoice::Ndk && needsJavaBackend(r)) {
+            if (error) *error = "operating mode and stream use case need the Java backend for lens " + r.lensId;
+            return std::nullopt;
+        }
         if (r.sessionParams == SessionParamsPolicy::None) {
             // A session-scope key travels in the session parameters: without them it would be dropped silently.
             for (const auto& k : r.keys) {

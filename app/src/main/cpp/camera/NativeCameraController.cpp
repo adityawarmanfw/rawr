@@ -950,6 +950,15 @@ struct NativeCameraController::Impl final : CameraEventSink {
         const std::string ladderKey = route.lensId + '|' + describeRoute(route);
         const int64_t viewfinderExposureNs =
             control.exposureMode == ExposureControlMode::Auto ? 0 : control.requestedExposureTimeNs;
+        if (effectiveBackend(route) == BackendChoice::Java) {
+            // Operating mode and stream use case exist only on the Java API, which this build has no backend for.
+            // Fail visibly; running the lens without them would give a different mode with no explanation.
+            diag("CAMERA_BACKEND lens=" + route.lensId + " backend=java available=0 reason=" +
+                 (route.backend == BackendChoice::Java ? "explicit" : route.opMode ? "opMode" : "streamUseCase"));
+            control.capabilities.lensUnavailable = true;
+            rollbackCameraStartLocked(lock, "backend_unavailable");
+            return;
+        }
         const auto ladderPlan =
             startLadder.begin(ladderKey, deviceSession.generation(), monotonicMs(), viewfinderExposureNs, ladderEligible);
         ladderGeneration.store(startLadder.watching(deviceSession.generation()) ? deviceSession.generation() : 0,

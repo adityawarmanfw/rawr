@@ -525,6 +525,7 @@ SessionRecipeFacts CameraDeviceSession::recipeFacts(const std::optional<LensRout
     f.gateHold = gateHoldName(recipe.gateHold);
     f.sessionParams = sessionParamsName(recipe.sessionParams);
     f.requestDefaults = requestDefaultsName(recipe.requestDefaults);
+    f.backend = selected ? backendChoiceName(effectiveBackend(*selected)) : "ndk";
     f.requestTemplate = repeatingTemplate == TEMPLATE_STILL_CAPTURE ? "still" : "preview";
     f.fpsRange = "none";
     if (ACameraMetadata_const_entry e{};

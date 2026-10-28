@@ -32,6 +32,7 @@ struct SessionRecipeFacts {
     std::string fpsRange;         // "12..30", or "none" when the session parameters carry none
     std::string sessionParams = "cadence";  // cadence, none or full
     std::string requestDefaults = "rawr";    // rawr or minimal
+    std::string backend = "ndk";             // the camera API that ran the session
     int sessionKeys = 0;
     int requestKeys = 0;
     int stillKeys = 0;
@@ -71,7 +72,7 @@ inline std::string describeSessionRecipe(const SessionRecipeFacts& f) {
                        " physical=" + orNone(f.physicalCameraId) + " raw=" + orNone(f.rawFormat) + ":" +
                        size(f.rawWidth, f.rawHeight) + " aspect=" + aspect + " template=" + orNone(f.requestTemplate) +
                        " fps=" + orNone(f.fpsRange) + " sessionParams=" + orNone(f.sessionParams) +
-                       " requestDefaults=" + orNone(f.requestDefaults) +
+                       " requestDefaults=" + orNone(f.requestDefaults) + " backend=" + orNone(f.backend) +
                        " keys=session:" + std::to_string(f.sessionKeys) + ",request:" + std::to_string(f.requestKeys) +
                        ",still:" + std::to_string(f.stillKeys) + ",decision:" + std::to_string(f.decisionKeys);
     if (f.companion) {

@@ -22,6 +22,14 @@ enum class GateHold : uint8_t {
     UntilClosed,      // kept until the device closes
 };
 
+// Which camera API runs a lens. Operating mode and stream use case have no NDK equivalent, so a lens that
+// sets either runs on the Java backend; "auto" picks that, anything else stays on the NDK.
+enum class BackendChoice : uint8_t { Auto, Ndk, Java };
+
+[[nodiscard]] constexpr const char* backendChoiceName(BackendChoice b) noexcept {
+    return b == BackendChoice::Ndk ? "ndk" : b == BackendChoice::Java ? "java" : "auto";
+}
+
 // What the session-parameter request carries when the session is created.
 enum class SessionParamsPolicy : uint8_t {
     Cadence,  // the AE target fps range and the session-scope keys (the default)
@@ -121,6 +129,14 @@ struct LensRoute {
     // AHB usage for the RAW reader instead of the ingress ladder's choice; the
     // vivo full-size modes configure only without CPU-read / sampled-image bits.
     std::optional<uint64_t> readerUsage;
+    BackendChoice backend = BackendChoice::Auto;
+    // Camera2 session operating mode (SessionConfiguration type); 0 = the normal mode. Java backend only.
+    uint32_t opMode = 0;
+    // Stream use case per output (OutputConfiguration.setStreamUseCase); 0 = not set. Java backend only.
+    int64_t rawStreamUseCase = 0;
+    int64_t captureStreamUseCase = 0;
+    int64_t companionStreamUseCase = 0;
+    int64_t auxJpegStreamUseCase = 0;
     // What the session parameters carry; None conflicts with session-scope keys, which need them.
     SessionParamsPolicy sessionParams = SessionParamsPolicy::Cadence;
     RequestDefaults requestDefaults = RequestDefaults::Rawr;
@@ -202,6 +218,17 @@ struct LensRoute {
     std::string dcpError;
 };
 
+// Operating mode and stream use case exist only on the Java API.
+[[nodiscard]] inline bool needsJavaBackend(const LensRoute& lens) noexcept {
+    return lens.opMode != 0 || lens.rawStreamUseCase != 0 || lens.captureStreamUseCase != 0 ||
+           lens.companionStreamUseCase != 0 || lens.auxJpegStreamUseCase != 0;
+}
+
+[[nodiscard]] inline BackendChoice effectiveBackend(const LensRoute& lens) noexcept {
+    if (lens.backend != BackendChoice::Auto) return lens.backend;
+    return needsJavaBackend(lens) ? BackendChoice::Java : BackendChoice::Ndk;
+}
+
 // True when the lens carries vendor keys or any recipe field beyond a plain RAW stream.
 inline bool carriesRecipe(const LensRoute& route) {
     return !route.keys.empty() || route.captureStream || route.companionSize || route.auxJpegSize || route.fixedFps > 0 ||
@@ -211,7 +238,7 @@ inline bool carriesRecipe(const LensRoute& route) {
            route.sessionParams != SessionParamsPolicy::Cadence || route.requestDefaults != RequestDefaults::Rawr ||
            route.companionUsage || route.companionMaxImages || route.companionPhysical || route.companionDetach ||
            route.companionFallback != CompanionFallback::Base || route.auxJpegUsage || route.rawMaxImages ||
-           route.readerProbe || route.readerDemote;
+           route.readerProbe || route.readerDemote || route.backend != BackendChoice::Auto || needsJavaBackend(route);
 }
 
 // What a lens avoids on this device: the device's quirks, the lens's own, and the presets the lens's
