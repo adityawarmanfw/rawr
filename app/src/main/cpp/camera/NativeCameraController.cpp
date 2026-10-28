@@ -55,15 +55,30 @@ std::string systemProperty(const char* name) {
     return value;
 }
 
-// `adb shell setprop debug.rawr.camera_profile generic|<built-in id>`
+// `adb shell setprop debug.rawr.camera_profile generic|<built-in id>|file:<absolute path>`
 // overrides the device's matched built-in profile (and any user lens profile)
-// for bring-up on new devices.
+// for bring-up on new devices. A file is a profile JSON the app can read (its own
+// files directory), for running an exact recipe without going through the lens editor.
 const std::string& profileIdFromSetprop() {
     static const std::string overridden = [] {
         const std::string value = systemProperty("debug.rawr.camera_profile");
-        return isBuiltInProfileId(value) ? value : std::string();
+        return isBuiltInProfileId(value) || value.rfind("file:", 0) == 0 ? value : std::string();
     }();
     return overridden;
+}
+
+// The profile named by a file: override; nullopt (with the reason) when it can't be read or parsed.
+std::optional<CameraProfile> profileFromSetpropFile(std::string* error) {
+    const auto& value = profileIdFromSetprop();
+    if (value.rfind("file:", 0) != 0) return std::nullopt;
+    std::ifstream in(value.substr(5));
+    if (!in) {
+        *error = "unreadable " + value.substr(5);
+        return std::nullopt;
+    }
+    std::stringstream text;
+    text << in.rdbuf();
+    return parseCameraProfile(text.str(), error);
 }
 
 ProfileMatch deviceProfileMatch() {
@@ -72,7 +87,14 @@ ProfileMatch deviceProfileMatch() {
 
 const std::string& activeProfileId(const ProfileMatch& match) {
     const auto& overridden = profileIdFromSetprop();
-    return overridden.empty() ? match.profileId : overridden;
+    return isBuiltInProfileId(overridden) ? overridden : match.profileId;
+}
+
+CameraProfile initialProfile(const ProfileMatch& match) {
+    std::string error;
+    if (auto file = profileFromSetpropFile(&error)) return std::move(*file);
+    if (!error.empty()) CAME("CAMERA_PROFILE_FILE_REJECTED %s", error.c_str());
+    return builtInCameraProfile(activeProfileId(match));
 }
 
 std::string describeRoute(const LensRoute& route) { return serializeCameraProfile({"", {route}}); }
@@ -135,7 +157,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
     // user's lens profile (setProfile).
     const std::string deviceModel = systemProperty("ro.product.model");
     const ProfileMatch builtInMatch = deviceProfileMatch();
-    CameraProfile profile = builtInCameraProfile(activeProfileId(builtInMatch));
+    CameraProfile profile = initialProfile(builtInMatch);
     std::string preferredCameraId;
     // cameraId/physicalCameraId routes whose HAL rejected the companion YUV
     // stream; they start RAW-only for the rest of this process.

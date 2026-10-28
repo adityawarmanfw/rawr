@@ -204,7 +204,14 @@ image waiting for its result. On camera 4 over about 30 s of viewfinder this cos
 the NDK dropped 1 of 840 frames and Java 0 of 960, with no `PAIRER_PRESSURE` line on either.
 
 `adb shell setprop debug.rawr.camera_backend java|ndk` runs every lens on one API, for comparing the two
-on the same route (`CAMERA_BACKEND_OVERRIDE` in the log). A gated lens stays on the NDK and a lens with
+on the same route (`CAMERA_BACKEND_OVERRIDE` in the log).
+
+`adb shell setprop debug.rawr.camera_profile file:<path>` runs a profile JSON (schema 1 or 2) from a
+path the app can read, in place of the built-in and the user's lenses, so an exact recipe can be run
+without the lens editor. Put the file in the app's own storage, e.g.
+`adb shell "run-as <package> sh -c 'cat > files/debug_camera_profile.json'" < profile.json` and
+`file:/data/user/0/<package>/files/debug_camera_profile.json`. A file that does not parse is logged
+(`CAMERA_PROFILE_FILE_REJECTED`) and the built-in profile is used. A gated lens stays on the NDK and a lens with
 an operating mode or use case stays on Java. Clear it with `setprop debug.rawr.camera_backend ''`.
 
 Not checked: a vendor operating mode on a lens (only a debug probe session accepted one), session
