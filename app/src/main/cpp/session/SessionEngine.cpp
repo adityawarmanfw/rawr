@@ -83,8 +83,11 @@ SessionEngine::SessionEngine(std::string filesDir) : filesDir_(std::move(filesDi
             constexpr uint64_t kGpuUsage = AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE |
                                            AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER |
                                            AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT;
-            rawReaderUsage_.readerCreated(generation, rawFrameIngress_.requestedUsage() & kGpuUsage,
-                                          steadyMillis());
+            rawReaderUsage_.readerCreated(
+                generation,
+                imaging::RawReaderUsageLadder::watchedUsage(profileReaderUsage_.has_value(),
+                                                            rawFrameIngress_.requestedUsage() & kGpuUsage),
+                steadyMillis());
         }
         return window;
     };

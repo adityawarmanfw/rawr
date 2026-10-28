@@ -22,6 +22,13 @@ class RawReaderUsageLadder final {
     static constexpr int64_t kFirstFrameDeadlineMs = 4000;
     static constexpr uint32_t kFailedCapturesToDemote = 3;
 
+    // The GPU usage bits the ladder watches for a reader. A lens profile that fixes the reader usage is
+    // used as is whatever happens (demoting could not change it), so it is not watched: a silent profile
+    // reader would otherwise flip the process-wide CPU-only latch for every later lens.
+    [[nodiscard]] static constexpr uint64_t watchedUsage(bool profileFixed, uint64_t gpuUsage) noexcept {
+        return profileFixed ? 0 : gpuUsage;
+    }
+
     void readerCreated(uint64_t generation, uint64_t gpuUsage, int64_t nowMs) {
         generation_ = generation;
         createdAtMs_ = nowMs;

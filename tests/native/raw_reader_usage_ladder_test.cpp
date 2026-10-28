@@ -57,6 +57,21 @@ void failedCapturesDemoteEarly() {
     assert(ladder.cpuOnly());
 }
 
+void profileFixedReaderIsNotWatched() {
+    // A profile-fixed reader that stays silent must neither restart the session nor latch CPU-only
+    // for the lenses that follow it.
+    Ladder ladder;
+    ladder.readerCreated(1, Ladder::watchedUsage(true, kBuffer), 0);
+    assert(!ladder.advance(10 * kDeadline));
+    for (uint32_t i = 0; i < 2 * Ladder::kFailedCapturesToDemote; ++i) ladder.captureFailed(1);
+    assert(!ladder.advance(10 * kDeadline));
+    assert(!ladder.cpuOnly());
+    // The next lens, with no fixed usage, is watched as before.
+    ladder.readerCreated(2, Ladder::watchedUsage(false, kBuffer), 20 * kDeadline);
+    assert(ladder.advance(21 * kDeadline));
+    assert(ladder.cpuOnly());
+}
+
 void demoteSkipsTheGpuReader() {
     Ladder ladder;
     ladder.demote();
@@ -95,6 +110,7 @@ int main() {
     deliveringBufferReaderNeverDemotes();
     failedCapturesDemoteEarly();
     demoteSkipsTheGpuReader();
+    profileFixedReaderIsNotWatched();
     silentGpuReaderDemotesOnce();
     deliveringReaderNeverDemotes();
     cpuReaderAndRetiredReaderAreIgnored();
