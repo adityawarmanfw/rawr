@@ -31,6 +31,7 @@ object CaptureTestTags {
     const val HDR_BRACKETED_NOTICE = "hdr_bracketed_notice"
     const val BRACKET_HOLD_NOTICE = "bracket_hold_notice"
     const val LENS_UNAVAILABLE_NOTICE = "capture_lens_unavailable_notice"
+    const val PROFILE_ERROR_NOTICE = "capture_profile_error_notice"
     const val TOPBAR_MONITOR = "capture_topbar_monitor"
     const val TOPBAR_SETTINGS = "capture_topbar_settings"
 

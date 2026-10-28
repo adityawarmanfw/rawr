@@ -151,6 +151,8 @@ struct CameraControlCapabilities {
     // The lens's session never delivered a frame and recovery gave up; the
     // camera is stopped until a lens or profile switch.
     bool lensUnavailable = false;
+    // Why the last lens profile the app sent was refused; the previous profile stays in force. Empty when none.
+    std::string profileError;
     bool manualFocusSupported = false;
     // True when the HAL advertises STATISTICS face detection (FULL preferred,
     // SIMPLE accepted). Powers the face boxes + face-steered continuous AF.

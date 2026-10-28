@@ -193,6 +193,8 @@ internal fun CaptureViewfinder(
         Box(controlFrameModifier.zIndex(3f)) {
             if (state.capabilities.lensUnavailable) {
                 LensUnavailableNotice(state.orientation, Modifier.align(Alignment.Center))
+            } else if (state.capabilities.profileError.isNotEmpty()) {
+                ProfileErrorNotice(state.capabilities.profileError, state.orientation, Modifier.align(Alignment.Center))
             }
             HdrBracketedNotice(
                 active = state.hdrPlusBracketedActive,

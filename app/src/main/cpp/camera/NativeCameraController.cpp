@@ -236,6 +236,16 @@ struct NativeCameraController::Impl final : CameraEventSink {
 
     // Replaces the lens profile. Restarts the camera only when the running
     // lens's route actually changed (or the lens is gone).
+    // A profile the app sent could not be applied. The running profile stays; the reason goes to the log
+    // and, through the control state, to the viewfinder, so the user is never left believing it took effect.
+    void rejectProfile(const std::string& error) {
+        std::lock_guard<std::mutex> lock(mutex);
+        profileError = error.empty() ? "invalid lens profile" : error;
+        diag("CAMERA_PROFILE_REJECTED error=" + profileError + " keeping=" + profile.id);
+        CAME("CAMERA_PROFILE_REJECTED error=%s keeping=%s", profileError.c_str(), profile.id.c_str());
+    }
+    std::string profileError;  // guarded by mutex
+
     bool setProfile(CameraProfile next) {
         std::unique_lock<std::mutex> lock(mutex);
         if (!profileIdFromSetprop().empty()) {
@@ -244,6 +254,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         }
         const auto before = routeForLens(profile, lensId);
         startLadder.resetGivenUp();
+        profileError.clear();
         profile = std::move(next);
         publishProfileLocked();
         auto after = routeForLens(profile, lensId);
@@ -1434,6 +1445,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
     CameraControlState getControlState() const {
         std::lock_guard<std::mutex> lock(mutex);
         CameraControlState snapshot = control;
+        snapshot.capabilities.profileError = profileError;
         if (control.focusObservedEpoch != control.focusEpoch || control.focusObservedAtMs <= 0 ||
             monotonicMs() - control.focusObservedAtMs > 1500)
             snapshot.afState.reset();
@@ -2026,6 +2038,7 @@ void NativeCameraController::setLensId(const std::string& lensId) { impl_->setLe
 const CameraProfile& deviceBuiltInCameraProfile() { return builtInCameraProfile(activeProfileId(deviceProfileMatch())); }
 
 bool NativeCameraController::setProfile(CameraProfile profile) { return impl_->setProfile(std::move(profile)); }
+void NativeCameraController::rejectProfile(const std::string& error) { impl_->rejectProfile(error); }
 void NativeCameraController::setExperimentalZeroCopyEnabled(bool enabled) {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     impl_->experimentalZeroCopyEnabled = enabled;

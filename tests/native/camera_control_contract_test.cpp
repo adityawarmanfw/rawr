@@ -34,5 +34,10 @@ int main() {
     assert(json.find("\"measuredViewfinderFps\":29.85") != std::string::npos);
     assert(json.find("\"tapAfSupported\":true") != std::string::npos);
     assert(json.find("rawAutoExposure") == std::string::npos);
+    // A refused lens profile is reported, quotes and all, and is empty otherwise.
+    assert(json.find("\"profileError\":\"\"") != std::string::npos);
+    s.capabilities.profileError = "invalid \"opMode\" for lens X";
+    const std::string refused = rawrcam::camera::serializeCameraControlState(s);
+    assert(refused.find("\"profileError\":\"invalid \\\"opMode\\\" for lens X\"") != std::string::npos);
     return 0;
 }

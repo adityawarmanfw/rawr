@@ -111,6 +111,14 @@ rawr_test(camera_video_facts_test
   "${RAWR_ROOT}/tests/native/camera_video_facts_test.cpp"
   "${RAWR_ROOT}/app/src/main/cpp/camera/CameraVideoFacts.cpp")
 add_test(NAME camera_video_facts_test_snapshot COMMAND "${UV_EXECUTABLE}" run --no-project --cache-dir "${RAWR_ROOT}/tmp/uv-cache" "${CMAKE_CURRENT_SOURCE_DIR}/native/camera_video_facts_test_snapshot.py" "$<TARGET_FILE:camera_video_facts_test>")
+rawr_test(camera_control_contract_test
+  "${RAWR_ROOT}/tests/native/camera_control_contract_test.cpp"
+  "${RAWR_ROOT}/app/src/main/cpp/camera/CameraControlSerialization.cpp"
+  "${RAWR_ROOT}/app/src/main/cpp/camera/CameraProfileJson.cpp"
+  "${RAWR_ROOT}/app/src/main/cpp/color/DcpProfile.cpp"
+  "${RAWR_ROOT}/app/src/main/cpp/color/ColorMath.cpp"
+  "${RAWR_ROOT}/app/src/main/cpp/geometry/LensDistortion.cpp"
+  "${RAWR_ROOT}/app/src/main/cpp/camera/CameraRouting.cpp")
 rawr_test(camera_white_balance_test
   "${RAWR_ROOT}/tests/native/camera_white_balance_test.cpp"
   "${RAWR_ROOT}/app/src/main/cpp/camera/WhiteBalanceMath.cpp"

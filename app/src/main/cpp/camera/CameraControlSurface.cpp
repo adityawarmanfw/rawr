@@ -140,8 +140,13 @@ void CameraControlSurface::selectLens(const std::string& lensId) {
 }
 bool CameraControlSurface::setCameraProfile(const std::string& json) {
     if (!cameraController_) return false;
-    auto profile = rawrcam::camera::parseCameraProfile(json);
-    return profile && cameraController_->setProfile(std::move(*profile));
+    std::string error;
+    auto profile = rawrcam::camera::parseCameraProfile(json, &error);
+    if (!profile) {
+        cameraController_->rejectProfile(error);
+        return false;
+    }
+    return cameraController_->setProfile(std::move(*profile));
 }
 std::string CameraControlSurface::cameraControlSnapshot() const {
     if (!cameraController_) return "{}";

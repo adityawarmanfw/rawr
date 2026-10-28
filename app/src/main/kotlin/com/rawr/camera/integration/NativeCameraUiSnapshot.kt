@@ -95,7 +95,9 @@ internal data class NativeCameraUiSnapshot(
     /** Full-size (200 MP) lens: stills save DNG only, whatever the output format. */
     val dngOnly: Boolean = false,
     /** The lens never delivered a frame and recovery gave up; switch lens to retry. */
-    val lensUnavailable: Boolean = false
+    val lensUnavailable: Boolean = false,
+    /** Why the last lens profile was refused (the previous one stays in force); empty when none. */
+    val profileError: String = ""
 ) {
     val restoringPreview: Boolean
         get() = fullSizeCapture && fullSizeLastExposureTimestamp > 0 &&
@@ -204,6 +206,7 @@ internal data class NativeCameraUiSnapshot(
                 fullSizeBurstsToSingle = j.optLong("fullSizeBurstsToSingle", 0L),
                 dngOnly = j.optBoolean("dngOnly", false),
                 lensUnavailable = j.optBoolean("lensUnavailable", false),
+                profileError = j.optString("profileError", ""),
                 profileLenses = buildList {
                     val lenses = j.optJSONArray("profileLenses") ?: return@buildList
                     for (index in 0 until lenses.length()) {
