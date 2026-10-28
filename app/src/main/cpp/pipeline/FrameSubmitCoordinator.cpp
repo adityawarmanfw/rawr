@@ -202,6 +202,7 @@ void FrameSubmitCoordinator::onRawFrame(rawrcam::imaging::RawFrameLease frame) {
 void FrameSubmitCoordinator::tryPair(uint64_t timestampNs) {
     rawrcam::imaging::MatchedFrame matched{};
     if (!framePairer_->takeMatched(timestampNs, &matched)) return;
+    pairedGeneration_.store(config_.generation, std::memory_order_release);
     rawrcam::diagnostics::RuntimeTraceRecorder::instance().record(
         rawrcam::diagnostics::RuntimeTraceStage::Paired, matched.timestampNs, matched.metadata.snapshot.frameOrdinal,
         -1, matched.metadata.snapshot.exposureTimeNs, matched.metadata.snapshot.sensitivity, 0, 0,

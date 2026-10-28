@@ -379,25 +379,28 @@ void SessionEngine::consumeIngress(imaging::FrameIngressQueue::Event event, imag
         if (delay > 50 && (++ingressSlowReports_ % 120u) == 1u)
             LOGI("INGRESS_QUEUE_SLOW delayMs=%lld kind=%s", static_cast<long long>(delay), raw ? "raw" : "metadata");
     }
-    // Outside mu_: the controller takes its own lock and must never nest under it.
-    if (raw) cameraControls_.rawFrameArrived(std::get<imaging::RawFrameLease>(event.payload).get().generation);
-    std::lock_guard<std::mutex> lock(mu_);
-    if (raw) rawReaderUsage_.rawArrived(std::get<imaging::RawFrameLease>(event.payload).get().generation);
-    drainFullSizeStills();
-    if (drops.images) realtime_.timing().recordDropped(drops.images);
-    if (drops.images && videoSession_.ready() && realtime_.coordinator().videoSubmitted() > 0)
-        videoIngressDrops_.fetch_add(drops.images, std::memory_order_relaxed);
-    if (drops.images || drops.metadata)
-        LOGI("INGRESS_QUEUE_PRESSURE rawDropped=%llu metadataDropped=%llu",
-             static_cast<unsigned long long>(drops.images), static_cast<unsigned long long>(drops.metadata));
-    if (raw)
-        realtime_.coordinator().onRawFrame(std::move(std::get<imaging::RawFrameLease>(event.payload)));
-    else if (const auto* metadata = std::get_if<metadata::FrameMetadataSnapshot>(&event.payload))
-        (void)realtime_.coordinator().submitMetadata(*metadata);
-    else {
-        realtime_.coordinator().releaseCompletedSlots(false);
-        capture_.single().advance();
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (raw) rawReaderUsage_.rawArrived(std::get<imaging::RawFrameLease>(event.payload).get().generation);
+        drainFullSizeStills();
+        if (drops.images) realtime_.timing().recordDropped(drops.images);
+        if (drops.images && videoSession_.ready() && realtime_.coordinator().videoSubmitted() > 0)
+            videoIngressDrops_.fetch_add(drops.images, std::memory_order_relaxed);
+        if (drops.images || drops.metadata)
+            LOGI("INGRESS_QUEUE_PRESSURE rawDropped=%llu metadataDropped=%llu",
+                 static_cast<unsigned long long>(drops.images), static_cast<unsigned long long>(drops.metadata));
+        if (raw)
+            realtime_.coordinator().onRawFrame(std::move(std::get<imaging::RawFrameLease>(event.payload)));
+        else if (const auto* metadata = std::get_if<metadata::FrameMetadataSnapshot>(&event.payload))
+            (void)realtime_.coordinator().submitMetadata(*metadata);
+        else {
+            realtime_.coordinator().releaseCompletedSlots(false);
+            capture_.single().advance();
+        }
     }
+    // Outside mu_: the controller takes its own lock and must never nest under it. A session has
+    // started when an image and its metadata paired, not when a buffer merely arrived.
+    if (const uint64_t paired = realtime_.coordinator().takePairedGeneration()) cameraControls_.framePaired(paired);
 }
 
 void SessionEngine::shutdown() {

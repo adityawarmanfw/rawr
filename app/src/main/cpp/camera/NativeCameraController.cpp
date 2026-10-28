@@ -2017,7 +2017,7 @@ void NativeCameraController::setExperimentalZeroCopyEnabled(bool enabled) {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     impl_->experimentalZeroCopyEnabled = enabled;
 }
-void NativeCameraController::rawFrameArrived(uint64_t generation) {
+void NativeCameraController::framePaired(uint64_t generation) {
     if (uint64_t watched = generation;
         generation != 0 && impl_->ladderGeneration.compare_exchange_strong(watched, 0, std::memory_order_acq_rel)) {
         std::lock_guard<std::mutex> lock(impl_->mutex);
