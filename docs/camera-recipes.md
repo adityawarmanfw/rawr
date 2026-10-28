@@ -1,65 +1,122 @@
-# Lens profile recipe fields
+# Lens profile fields
 
-A lens profile says three things about a camera: **where** it is (route), **how its session is
-built** (session recipe) and **what every frame asks of it** (request policy). Everything below is
-optional; leaving a field out gives the behaviour the app had before the field existed. Fields are
-JSON in a lens profile (built-in profiles under `app/src/main/cpp/camera/profiles/`, user profiles
-and backups through the lens editor).
+A lens profile says where a lens is, how its streams and session are built, what every request
+carries, and how its image is read. Everything below is optional; leaving a field out gives the app's
+own behaviour. Profiles are JSON: built-in ones under `app/src/main/cpp/camera/profiles/`, user ones
+through the lens editor (stored and backed up in the same form).
 
 Verification status is stated per section. "Host tests" means `tests/native` and the Kotlin unit
-tests; "arm64 build" means the Android native build compiles. Unless a section says otherwise it has
-not run on a phone.
+tests. Unless a section says otherwise it has not run on a phone.
 
-## Route
+## Schema
+
+A profile has `"schema": 2`, and each lens is grouped by what it configures:
+
+```json
+{"id": "user", "schema": 2, "lenses": [{
+  "id": "F35",
+  "camera":  {"id": "3", "physical": ""},
+  "streams": {
+    "raw":       {"format": "RAW16", "width": 4080, "height": 3064, "reader": {...}, "levels": {...}},
+    "capture":   {"format": "RAW16", "width": 16320, "height": 12256, "reader": {...}, "burst": {...}},
+    "companion": {"mode": "auto"},
+    "auxJpeg":   {"width": 4096, "height": 3072}
+  },
+  "session": {"backend": "auto", "gate": {"name": "vivoFullSize"}, "quirks": [...]},
+  "request": {"defaults": "rawr"},
+  "keys":    [{"tag": "...", "type": "int32", "scope": "session", "values": [1], "enabled": true}],
+  "image":   {"levels": {...}, "cfa": {...}, "distortion": {...}, "mirror": "none", "dcp": {...}, "exposure": {...}}
+}]}
+```
+
+A file without `"schema"` is schema 1 (flat fields beside a few blocks, as written before this
+layout). Each schema-1 lens is upgraded into the layout above and then read by the same code, in the
+native parser and in the app, so old settings and backups keep working and are validated the same
+way. The upgrade drops capture-reader usage, burst and capture levels from a lens without a capture
+stream; they only ever applied to that stream. Any other schema number is refused.
+
+Both the app and the native writer write schema 2. `tests/fixtures/camera/builtin_routes.txt` holds
+every field of every built-in lens as parsed; the built-in files must keep producing it.
+
+## Camera
 
 | Field | Meaning |
 |---|---|
-| `cameraId` | Camera2 id to open: a logical camera, or a hidden/physical id opened directly. |
-| `physicalCameraId` | Physical sub-camera of `cameraId` to stream from; outputs are tied to it. |
-| `stream` | Viewfinder RAW: `format` (RAW10/RAW16), `width`/`height` (0 = largest), `unlisted` (use the size as written, do not negotiate it against the advertised sizes), `useCase`. |
+| `camera.id` | Camera2 id to open: a logical camera, or a hidden/physical id opened directly. |
+| `camera.physical` | Physical sub-camera of `camera.id` to stream from; outputs are tied to it. |
 
-## Session recipe
+## Streams
+
+### RAW stream (`streams.raw`)
 
 | Field | Default | Meaning |
 |---|---|---|
-| `template` | `preview` (viewfinder) / `still` (full-size stills) | Request template for the session parameters, the viewfinder and the stills. |
+| `format`, `width`, `height` | RAW16, largest | RAW10/RAW16; a zero size means the largest. |
+| `unlisted` | false | Use the size as written instead of negotiating it against the advertised sizes. |
+| `useCase` | 0 | Stream use case (Java backend only). |
+| `reader.usage` | chosen by the usage ladder | Fixed AHardwareBuffer usage: `gpuDataBuffer`, `none`, or hex such as `0x100003`. Used as written. |
+| `reader.maxImages` | 6 | Images the reader holds, 6–16. |
+| `reader.probe` | false | Check a fixed usage with `AHardwareBuffer_isSupported` first; CPU-only when refused. |
+| `reader.demote` | false | Let a silent fixed reader fall back like the app's own choice. Without it a fixed reader stays out of the usage ladder. |
+| `levels` | the lens's | Black/white levels for this stream only. |
+
+### Capture stream (`streams.capture`)
+
+A second RAW stream that only full-size still requests fill (vendor full-resolution modes); the RAW
+stream is then the binned viewfinder.
+
+| Field | Default | Meaning |
+|---|---|---|
+| `format`, `width`, `height` | required | The full-size readout. |
+| `useCase` | 0 | Stream use case (Java backend only). |
+| `reader.usage` | GPU data buffer | Its reader's usage. |
+| `burst.max` | 0 (the app's cap) | Most full-size stills one multi-frame photo may request (1 = none). |
+| `burst.sequential` | false | Request the stills one at a time, each after the previous arrived. |
+| `levels` | the lens's | Black/white levels for full-size stills. |
+
+### Companion (`streams.companion`)
+
+A small second output next to RAW. Some HALs will not start RAW alone, or will not produce a real
+full-size frame without it.
+
+| Field | Default | Meaning |
+|---|---|---|
+| `mode` | `auto` | `auto`: added by the app's rule (unverified devices, capture-stream lenses), sized to the RAW. `fixed`: always configured at `width`×`height`, part of the mode, never dropped by recovery. `off`: never, including the capture-stream one. |
+| `width`, `height` | — | The size, `fixed` only. |
+| `fallback` | `base` | `auto` only, when no output has the RAW's shape: `base` (smallest of at least 320×240, any shape), `nearest` (closest shape), `none` (no companion). |
+| `format` | `yuv` | `yuv` or `private`. |
+| `targeted` | true | Whether the repeating request writes to it. |
+| `detach` | true for `auto`, false for `fixed` | Stop writing to it after the first frame paired with its metadata. |
+| `usage`, `maxImages` | per format, 2 | Its reader's usage and image count (2–16). |
+| `physical` | follows the route | Tie it to the route's physical camera or not. |
+| `useCase` | 0 | Stream use case (Java backend only). |
+
+### Aux JPEG (`streams.auxJpeg`)
+
+An extra JPEG output configured with the session and never targeted: `width`, `height`, `usage`,
+`useCase`.
+
+## Session (`session`)
+
+| Field | Default | Meaning |
+|---|---|---|
+| `backend` | `auto` | Camera API; see below. |
+| `opMode` | 0 | Camera2 session operating mode (Java backend only). 1 and 2 are refused. |
+| `params` | `cadence` | What the session parameters carry. `cadence`: the fps range and session-scope keys. `none`: a plain session, no parameters; refused with an enabled session-scope key. `full`: the whole repeating request (defaults, request-scope keys, control state); the framework may drop keys the HAL does not list as session keys (`advertised=` in the key log). |
+| `template` | preview viewfinder, still-capture stills | `still` or `preview` for the session parameters, the viewfinder and the stills alike. |
 | `fps` | 0 (the app's cadence) | Fixed AE target fps on the session and every request. |
 | `startupDelayMs` | 0 | Wait after the session is configured before the first request (0–5000). |
-| `session.params` | `cadence` | What the session parameters carry. `cadence`: the fps range and session-scope keys. `none`: a plain `createCaptureSession` with no session parameters. `full`: the whole repeating request (defaults, request-scope keys, control state); the framework may drop keys the HAL does not list as session keys (the `advertised=` field of the key log shows where the HAL lists a key). `none` with an enabled session-scope key is rejected. |
-| `vendorGate`, `gateHold` | none; `closed` on a capture-stream lens, else `configured` | Vendor state the app holds while the device is open. `gateHold` (`configured` or `closed`, needs a gate) says whether it is released once the session is configured or kept until the device closes. |
+| `gate.name`, `gate.hold` | none; `closed` on a capture-stream lens, else `configured` | Vendor state the app holds while the device is open; `hold` says whether it is released once the session is configured or kept until the device closes. |
 | `stopRepeatingForStill` | false | Pause the viewfinder for the still sequence and restore it afterwards. |
-| `captureStream` | none | A second, still-only RAW stream (full-size modes). With `captureBurst` / `captureBurstSequential`. |
+| `quirks` | none | Provider quirks this lens avoids; see below. |
 
-### Companion and aux JPEG
+How a full-size photo is taken is derived, not set: a lens with a capture stream, a companion it
+writes to and an enabled `decision` key uses the decision frame (one low-ISO viewfinder frame lets the
+HAL switch to full size, then the viewfinder pauses for the stills); otherwise `stopRepeatingForStill`
+pauses the viewfinder, and without it the still goes out beside the running viewfinder. The lens
+editor shows the result as "Photo sequence".
 
-A companion is a small second output next to RAW. Some HALs will not start RAW alone, or will not
-produce a real full-size frame without it. `companion` without a size tunes the companion the app
-adds by its own rule and does not force one on; with a size it is part of the mode and is never
-dropped by recovery.
-
-| Field | Default | Meaning |
-|---|---|---|
-| `companion.width`, `height` | automatic | Size. Automatic picks the smallest advertised YUV whose shape matches the RAW's (within 2%), at least 320 wide. |
-| `companion.fallback` | `base` | Automatic size only, when no output has the RAW's shape: `base` (smallest of at least 320×240, any shape), `nearest` (closest shape), `none` (no companion). |
-| `companion.format` | `yuv` | `yuv` or `private`. |
-| `companion.targeted` | true | Whether the repeating request writes to it. |
-| `companion.detach` | true for an automatic companion, false for a sized one | Drop it from the repeating request after the first accepted frame. |
-| `companion.usage`, `maxImages` | per format, 2 | Its reader's AHardwareBuffer usage and image count (2–16). |
-| `companion.physical` | follows the route | Tie it to the route's physical camera or not. |
-| `companion.useCase` | 0 | Stream use case (Java backend only). |
-| `disableCompanion` | false | Never add a companion, including the capture-stream one. |
-| `auxJpeg` | none | An extra JPEG output configured with the session and never targeted. `width`/`height`, `usage`, `useCase`. |
-
-### RAW reader
-
-| Field | Default | Meaning |
-|---|---|---|
-| `readerUsage`, `captureReaderUsage` | chosen by the reader usage ladder / GPU data buffer | Fixed AHardwareBuffer usage (`gpuDataBuffer`, `none`, or hex such as `0x100003`). A fixed usage is used as written. |
-| `reader.maxImages` | 6 | Images the viewfinder RAW reader holds, 6–16. |
-| `reader.probe` | false | Check a fixed usage with `AHardwareBuffer_isSupported` first and fall back to CPU-only when refused. |
-| `reader.demote` | false | Let a silent fixed reader fall back to CPU-only like the app's own choice does. Without it a fixed reader does not take part in the usage ladder. |
-
-## Request policy
+## Requests and keys
 
 | Field | Default | Meaning |
 |---|---|---|
@@ -67,11 +124,17 @@ dropped by recovery.
 | `keys[].scope` | `session` | `session`, `request`, `sessionAndRequest` (the same value in the session parameters and on every request), `still` (full-size stills only), `decision` (the one low-ISO frame sent before full-size stills). |
 | `keys[].type` | `int32` | `byte`, `int32`, `int64`, `float`, `double`. A HAL tag has one type; if the declared one is refused the other types are tried and the one accepted is remembered (see the `attempts=` log field). |
 
+## Image (`image`)
+
+`levels` (static or dynamic black/white), `cfa` (block, order, live and photo remosaic), `distortion`
+(rational model on its own frame size), `mirror`, `dcp` (camera profile file) and `exposure` (requests
+beyond the advertised ISO and shutter ranges).
+
 ## Provider quirks
 
 Behaviours a camera provider needs avoided, named so a profile says why a lens is special.
-`quirks` on a lens adds to the quirks of the device (`quirks` on a built-in profile, which apply to
-every lens on a matching device, user lenses included).
+`session.quirks` on a lens adds to the quirks of the device (`quirks` at the root of a built-in
+profile, which apply to every lens on a matching device, user lenses included).
 
 | Quirk | Effect |
 |---|---|
@@ -82,7 +145,7 @@ every lens on a matching device, user lenses included).
 | `noAutoCompanion` | The rule-based companion is not added. |
 
 Presets keep imported and user-edited profiles safe: a lens with a vendor gate implies `afTapHold`;
-an `unlisted` stream implies the other four.
+an `unlisted` RAW stream implies the other four.
 
 ### Gate presets
 
@@ -98,8 +161,8 @@ still request carries the same tags and the same stamp relation as before they b
 | Field | Meaning |
 |---|---|
 | `session.opMode` | Camera2 session operating mode (`SessionConfiguration` type). 0 = normal; 1 and 2 are refused. |
-| `*.useCase` | Stream use case of an output (`stream`, `captureStream`, `companion`, `auxJpeg`); 0 = not set. Standard values are 1–6; anything else is vendor-defined. |
-| `backend` | `auto`, `ndk` or `java`. |
+| `streams.*.useCase` | Stream use case of an output (`raw`, `capture`, `companion`, `auxJpeg`); 0 = not set. Standard values are 1–6; anything else is vendor-defined. |
+| `session.backend` | `auto`, `ndk` or `java`. |
 
 The NDK has no way to set an operating mode or a stream use case. `auto` therefore resolves to the
 Java camera API exactly when one of them is set, and an explicit `ndk` together with one is rejected
@@ -164,10 +227,8 @@ configurable.
 
 ## Where the fields are in the lens editor
 
-"Session and requests" has the session policy, request defaults, gate hold, quirks, camera API,
-operating mode and stream use cases. "Streams and readers" has the companion (automatic, fixed size or
-off; format, targeting, drop after start, physical camera, images, usage, size fallback), the aux JPEG
-(size, usage) and the RAW reader (usage, images, allocator check, demotion). The full-resolution group
-keeps the vendor gate and the capture stream. The aux JPEG stream use case and `stillTemplate`,
-`fixedFps`, `startupDelayMs` and `stopRepeatingForStill` are carried by profile backups but have no
-control.
+The editor follows the profile: Lens and camera, RAW stream, Full-size capture stream, Companion
+stream, Aux JPEG stream, Session (with the derived photo sequence), Camera workarounds, Requests and
+keys, then Image, Black & white levels, Sensor layout and Exposure range. Every field above has a
+control except the per-stream levels and the distortion model, which come from built-in profiles and
+backups.
