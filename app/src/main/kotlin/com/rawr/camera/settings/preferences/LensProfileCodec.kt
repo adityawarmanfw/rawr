@@ -5,6 +5,7 @@ import com.rawr.camera.settings.model.CFA_BLOCKS
 import com.rawr.camera.settings.model.CFA_LIVE_QUALITIES
 import com.rawr.camera.settings.model.CFA_ORDERS
 import com.rawr.camera.settings.model.CFA_PHOTO_QUALITIES
+import com.rawr.camera.settings.model.BACKEND_CHOICES
 import com.rawr.camera.settings.model.CAMERA_QUIRKS
 import com.rawr.camera.settings.model.COMPANION_FALLBACKS
 import com.rawr.camera.settings.model.isReaderUsage
@@ -119,7 +120,17 @@ internal object LensProfileCodec {
             }
         }
         choice(o, "template", listOf("preview", "still"))
-        objectField(o, "session")?.let { choice(it, "params", SESSION_PARAMS_POLICIES) }
+        choice(o, "backend", BACKEND_CHOICES)
+        objectField(o, "session")?.let { session ->
+            choice(session, "params", SESSION_PARAMS_POLICIES)
+            if (session.has("opMode")) {
+                number(session, "opMode", 0.0..Int.MAX_VALUE.toDouble(), true)
+                require(session.getInt("opMode") != 1 && session.getInt("opMode") != 2) { "Invalid opMode" }
+            }
+        }
+        for (name in listOf("stream", "captureStream", "companion", "auxJpeg")) {
+            objectField(o, name)?.let { number(it, "useCase", 0.0..Int.MAX_VALUE.toDouble(), true) }
+        }
         objectField(o, "request")?.let { choice(it, "defaults", REQUEST_DEFAULTS) }
         choice(o, "gateHold", GATE_HOLDS)
         if (o.has("quirks")) {
@@ -193,7 +204,10 @@ internal object LensProfileCodec {
                 .put("format", lens.stream.format.wireName)
                 .put("width", lens.stream.width.coerceAtLeast(0))
                 .put("height", lens.stream.height.coerceAtLeast(0))
-                .apply { if (lens.stream.unlisted) put("unlisted", true) }
+                .apply {
+                    if (lens.stream.unlisted) put("unlisted", true)
+                    if (lens.rawStreamUseCase != 0) put("useCase", lens.rawStreamUseCase)
+                }
         )
         .put("levels", encodeLevels(lens.levels))
         .apply {
@@ -212,13 +226,20 @@ internal object LensProfileCodec {
             lens.readerUsage?.let { put("readerUsage", it) }
             if (lens.vendorGate.isNotEmpty()) put("vendorGate", lens.vendorGate)
             lens.gateHold?.let { put("gateHold", it) }
-            if (lens.sessionParams != "cadence") put("session", JSONObject().put("params", lens.sessionParams))
+            if (lens.sessionParams != "cadence" || lens.opMode != 0) {
+                put("session", JSONObject().apply {
+                    if (lens.sessionParams != "cadence") put("params", lens.sessionParams)
+                    if (lens.opMode != 0) put("opMode", lens.opMode)
+                })
+            }
+            if (lens.backend != "auto") put("backend", lens.backend)
             if (lens.requestDefaults != "rawr") put("request", JSONObject().put("defaults", lens.requestDefaults))
             if (lens.quirks.isNotEmpty()) put("quirks", JSONArray(lens.quirks))
             lens.captureStream?.let {
                 put(
                     "captureStream",
                     JSONObject().put("format", it.format.wireName).put("width", it.width).put("height", it.height)
+                        .apply { if (lens.captureStreamUseCase != 0) put("useCase", lens.captureStreamUseCase) }
                 )
             }
             if (lens.captureBurst > 0) put("captureBurst", lens.captureBurst)
@@ -230,7 +251,7 @@ internal object LensProfileCodec {
             if (lens.disableCompanion) put("disableCompanion", true)
             val companionTuned = lens.companionUsage != null || lens.companionMaxImages != 0 ||
                 lens.companionPhysical != null || lens.companionFallback != "base" || lens.companionDetach != null ||
-                lens.companionFormat != "yuv" || !lens.companionTargeted
+                lens.companionFormat != "yuv" || !lens.companionTargeted || lens.companionStreamUseCase != 0
             if (lens.companion != null || companionTuned) {
                 put(
                     "companion",
@@ -242,6 +263,7 @@ internal object LensProfileCodec {
                         lens.companionPhysical?.let { put("physical", it) }
                         lens.companionDetach?.let { put("detach", it) }
                         if (lens.companionFallback != "base") put("fallback", lens.companionFallback)
+                        if (lens.companionStreamUseCase != 0) put("useCase", lens.companionStreamUseCase)
                     }
                 )
             }
@@ -249,7 +271,10 @@ internal object LensProfileCodec {
             if (lens.stopRepeatingForStill) put("stopRepeatingForStill", true)
             lens.auxJpeg?.let {
                 put("auxJpeg", JSONObject().put("width", it.width).put("height", it.height)
-                    .apply { lens.auxJpegUsage?.let { usage -> put("usage", usage) } })
+                    .apply {
+                        lens.auxJpegUsage?.let { usage -> put("usage", usage) }
+                        if (lens.auxJpegStreamUseCase != 0) put("useCase", lens.auxJpegStreamUseCase)
+                    })
             }
             if (lens.rawMaxImages != 0 || lens.readerProbe || lens.readerDemote) {
                 put("reader", JSONObject().apply {
@@ -278,7 +303,7 @@ internal object LensProfileCodec {
 
     private fun decodeLens(o: JSONObject): LensProfile {
         val stream = o.optJSONObject("stream")
-        require(!o.has("streamUseCase")) { "streamUseCase is unsupported by the NDK backend" }
+        require(!o.has("streamUseCase")) { "streamUseCase is not a profile field; set useCase on a stream" }
         val companionFormat = o.optJSONObject("companion")?.optString("format", "yuv") ?: "yuv"
         require(companionFormat in setOf("yuv", "private")) { "Invalid companion format" }
         if (o.has("disableCompanion")) require(o.get("disableCompanion") is Boolean) { "Invalid disableCompanion" }
@@ -314,6 +339,12 @@ internal object LensProfileCodec {
             readerUsage = o.optString("readerUsage").ifEmpty { null },
             vendorGate = o.optString("vendorGate"),
             gateHold = o.optString("gateHold").takeIf { it in GATE_HOLDS },
+            backend = o.optString("backend").takeIf { it in BACKEND_CHOICES } ?: "auto",
+            opMode = o.optJSONObject("session")?.optInt("opMode")?.takeIf { it >= 0 } ?: 0,
+            rawStreamUseCase = stream?.optInt("useCase")?.takeIf { it >= 0 } ?: 0,
+            captureStreamUseCase = o.optJSONObject("captureStream")?.optInt("useCase")?.takeIf { it >= 0 } ?: 0,
+            companionStreamUseCase = o.optJSONObject("companion")?.optInt("useCase")?.takeIf { it >= 0 } ?: 0,
+            auxJpegStreamUseCase = o.optJSONObject("auxJpeg")?.optInt("useCase")?.takeIf { it >= 0 } ?: 0,
             sessionParams = o.optJSONObject("session")?.optString("params")?.takeIf { it in SESSION_PARAMS_POLICIES } ?: "cadence",
             requestDefaults = o.optJSONObject("request")?.optString("defaults")?.takeIf { it in REQUEST_DEFAULTS } ?: "rawr",
             quirks = o.optJSONArray("quirks")?.let { a -> (0 until a.length()).map { a.getString(it) }.filter { it in CAMERA_QUIRKS } }
