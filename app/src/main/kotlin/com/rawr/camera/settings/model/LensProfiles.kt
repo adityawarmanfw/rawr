@@ -131,6 +131,8 @@ data class LensProfile(
     val fixedFps: Int = 0,
     /** Companion of this size, always configured; null for the app's own choice. */
     val companion: LensOutputSize? = null,
+    /** Explicitly omit the companion, including the automatic capture-stream companion. */
+    val disableCompanion: Boolean = false,
     val companionFormat: String = "yuv",
     val companionTargeted: Boolean = true,
     /** Delay after configure before submitting the first request. */

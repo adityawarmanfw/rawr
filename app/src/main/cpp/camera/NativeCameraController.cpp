@@ -936,11 +936,12 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // `debug.rawr.companion_stream 0|1` overrides.
         const std::string companionOverride = systemProperty("debug.rawr.companion_stream");
         const std::string companionRouteKey = route.cameraId + '/' + route.physicalCameraId;
-        // A capture-stream route (vivo seamless) needs a YUV output configured or
-        // its full-size stills crash the camera provider.
+        // Capture-stream routes default to a YUV output: vivo seamless stills
+        // require it. Other recipes can explicitly opt out.
         // The companion the unverified-device rule adds may be dropped by the
         // start ladder; a forced one (override, capture-stream route) may not.
-        const bool companionByRule = companionOverride != "0" && !builtInMatch.verified && !route.unlistedStream;
+        const bool companionByRule = !route.disableCompanion && companionOverride != "0" &&
+                                     !builtInMatch.verified && !route.unlistedStream;
         const bool ladderEligible = CameraStartLadder::eligible(companionByRule, route.captureStream.has_value(),
                                                                 route.companionSize.has_value(), companionOverride == "1");
         const std::string ladderKey = route.lensId + '|' + describeRoute(route);
@@ -956,10 +957,11 @@ struct NativeCameraController::Impl final : CameraEventSink {
             rollbackCameraStartLocked(lock, "start_ladder_gave_up");
             return;
         }
-        const bool companionStream =
-            route.captureStream.has_value() || route.companionSize.has_value() || companionOverride == "1" ||
-            (companionByRule && ladderPlan != CameraStartLadder::Plan::RawOnly &&
-             !rawOnlyRoutes.count(companionRouteKey));
+        const bool companionStream = companionStreamEnabled(route, companionOverride == "1",
+            companionByRule && ladderPlan != CameraStartLadder::Plan::RawOnly &&
+            !rawOnlyRoutes.count(companionRouteKey));
+        if (route.disableCompanion)
+            diag("CAMERA_COMPANION_DISABLED lens=" + route.lensId + " source=profile");
         if (ladderPlan == CameraStartLadder::Plan::RawOnly)
             diag("CAMERA_START_LADDER lens=" + route.lensId + " step=raw_only companion=0");
         std::ostringstream selection;

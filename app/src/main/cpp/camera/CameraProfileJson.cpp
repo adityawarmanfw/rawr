@@ -563,6 +563,7 @@ std::string serializeCameraProfile(const CameraProfile& profile) {
             out += ",\"captureReaderUsage\":\"" + readerUsageName(*r.captureReaderUsage) + "\"";
         if (r.stillTemplate) out += *r.stillTemplate ? ",\"template\":\"still\"" : ",\"template\":\"preview\"";
         if (r.fixedFps > 0) out += ",\"fps\":" + std::to_string(r.fixedFps);
+        if (r.disableCompanion) out += ",\"disableCompanion\":true";
         if (r.companionSize) {
             appendSize(out, "companion", *r.companionSize);
             out.pop_back();
@@ -660,6 +661,13 @@ std::optional<CameraProfile> readProfile(const Json& root, std::string* error) {
         r.startupDelayMs = int32_t(std::clamp(l.num("startupDelayMs"), 0.0, 5000.0));
         r.stopRepeatingForStill = l.flag("stopRepeatingForStill", false);
         r.fixedFps = int32_t(std::clamp(l.num("fps"), 0.0, 240.0));
+        if (const Json* disabled = l.get("disableCompanion")) {
+            if (disabled->kind != Json::Kind::Bool || (disabled->boolean && l.get("companion"))) {
+                if (error) *error = "disableCompanion must be boolean and cannot disable a required companion for lens " + r.lensId;
+                return std::nullopt;
+            }
+            r.disableCompanion = disabled->boolean;
+        }
         if (const Json* c = l.get("companion")) {
             const auto format = c->str("format", "yuv");
             if (format != "yuv" && format != "private") {

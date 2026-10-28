@@ -19,6 +19,32 @@ import kotlin.test.assertNull
 
 class LensProfileCodecTest {
     @Test
+    fun companionOptOutSurvivesBackupsAndRejectsConflictingRecipes() {
+        val lens = LensProfile("T50", "4", disableCompanion = true,
+            captureStream = RawStreamChoice(RawStreamFormat.Raw16, 8160, 6144))
+        val encoded = LensProfileCodec.encode(listOf(lens))
+        assertEquals(listOf(lens), LensProfileCodec.decode(encoded))
+        assertEquals(listOf(lens), LensProfileCodec.decodeBackup(encoded))
+        val plain = LensProfile("T12", "4")
+        assertTrue(!JSONObject(LensProfileCodec.encode(listOf(plain)))
+            .getJSONArray("lenses").getJSONObject(0).has("disableCompanion"))
+        assertTrue(!requireNotNull(LensProfileCodec.decode("""{"lenses":[{"id":"T12","cameraId":"4"}]}""")).single().disableCompanion)
+        for (field in listOf(
+            """"disableCompanion":"true"""",
+            """"disableCompanion":1""",
+            """"disableCompanion":null""",
+            """"disableCompanion":true,"companion":{"width":640,"height":480}"""
+        )) {
+            assertFailsWith<IllegalArgumentException> {
+                LensProfileCodec.decodeBackup("""{"lenses":[{"id":"T50","cameraId":"4",$field}]}""")
+            }
+        }
+        assertFailsWith<IllegalArgumentException> {
+            LensProfileCodec.encode(listOf(lens.copy(companion = LensOutputSize(640, 480))))
+        }
+    }
+
+    @Test
     fun fullSizeRecipeFieldsRoundTripAndDefaultToOff() {
         val lens = LensProfile(
             "T50", "4",

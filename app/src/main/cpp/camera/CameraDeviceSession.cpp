@@ -260,7 +260,7 @@ std::optional<LensRoute> CameraDeviceSession::select(const LensRoute& requested,
     parsed->rawFormat = route.stream.format;
     parsed->rawReaderUsage = route.readerUsage;
     parsed->captureReaderUsage = route.captureReaderUsage;
-    parsed->guardStillExposure = route.captureStream && route.companionSize;
+    parsed->guardStillExposure = requiresStillExposureGuard(route);
     parsed->cfaBlock = route.cfaBlock;
     parsed->cfaLiveQuality = route.cfaLiveQuality;
     parsed->cfaPhotoQuality = route.cfaPhotoQuality;

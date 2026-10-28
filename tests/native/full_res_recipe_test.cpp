@@ -6,6 +6,7 @@
 #include "camera/CameraProfileJson.h"
 #include "metadata/FrameMetadataSnapshot.h"
 #include "camera/CameraKeySubmission.h"
+#include "camera/CameraStartLadder.h"
 
 // The Xiaomi full-size recipe fields: template, fixed fps, companion size,
 // auxiliary JPEG, numeric reader usages. They round-trip and reject bad values.
@@ -41,10 +42,54 @@ void testFullSizeRecipeJson() {
     const auto plain = parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0"}]})");
     assert(plain && !plain->lenses[0].stillTemplate && plain->lenses[0].fixedFps == 0);
     assert(!plain->lenses[0].companionSize && !plain->lenses[0].auxJpegSize && !plain->lenses[0].captureReaderUsage);
+    assert(!plain->lenses[0].disableCompanion);
 
     assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","template":"burst"}]})", &error));
     assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","companion":{"width":0,"height":480}}]})", &error));
     assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","readerUsage":"0xZZ"}]})", &error));
+}
+
+void testCompanionOptOut() {
+    using namespace rawrcam::camera;
+    const auto profile = parseCameraProfile(R"({"lenses":[{"id":"T50","cameraId":"4",
+        "disableCompanion":true,"captureStream":{"width":8160,"height":6144}}]})");
+    assert(profile);
+    const auto& route = profile->lenses[0];
+    assert(route.disableCompanion);
+    for (bool forced : {false, true}) {
+        for (bool automatic : {false, true}) assert(!companionStreamEnabled(route, forced, automatic));
+    }
+    assert(requiresStillExposureGuard(route));
+    const auto encoded = serializeCameraProfile(*profile);
+    const auto decoded = parseCameraProfile(encoded);
+    assert(decoded && decoded->lenses[0].disableCompanion);
+    assert(requiresStillExposureGuard(decoded->lenses[0]));
+    assert(serializeCameraProfile(*decoded) == encoded);
+
+    auto legacy = route;
+    legacy.disableCompanion = false;
+    assert(companionStreamEnabled(legacy, false, false)); // Existing vivo capture streams.
+    assert(!requiresStillExposureGuard(legacy));
+    legacy.companionSize = std::pair{640u, 480u};
+    assert(companionStreamEnabled(legacy, false, false));
+    assert(requiresStillExposureGuard(legacy));
+    assert(!CameraStartLadder::eligible(true, false, true, false));
+    legacy.companionSize.reset();
+    legacy.captureStream.reset();
+    assert(!companionStreamEnabled(legacy, false, false));
+    assert(companionStreamEnabled(legacy, false, true));
+    assert(companionStreamEnabled(legacy, true, false));
+    legacy.disableCompanion = true;
+    assert(!companionStreamEnabled(legacy, true, true)); // Full-size reference also stays RAW-only.
+    assert(!requiresStillExposureGuard(legacy));
+
+    for (const auto* fields : {
+             R"("disableCompanion":"true")", R"("disableCompanion":1)", R"("disableCompanion":null)",
+             R"("disableCompanion":true,"companion":{"width":640,"height":480})"}) {
+        std::string error;
+        assert(!parseCameraProfile(std::string(R"({"lenses":[{"id":"a","cameraId":"4",)") + fields + "}]}", &error));
+        assert(error.find("disableCompanion") != std::string::npos);
+    }
 }
 
 
@@ -61,6 +106,7 @@ int main(int argc, char** argv) {
         assert(rawrcam::camera::serializeCameraProfile(*rawrcam::camera::parseCameraProfile(encoded)) == encoded);
     }
     testFullSizeRecipeJson();
+    testCompanionOptOut();
     using rawrcam::metadata::isCaptureStreamStill;
     assert(isCaptureStreamStill(true, 42));
     assert(!isCaptureStreamStill(false, 42));

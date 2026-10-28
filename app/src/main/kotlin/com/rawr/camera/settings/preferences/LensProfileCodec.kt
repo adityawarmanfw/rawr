@@ -72,7 +72,7 @@ internal object LensProfileCodec {
 
     private fun validateBackupLens(o: JSONObject) {
         for (name in listOf("id", "cameraId")) require(o.get(name) is String && o.getString(name).isNotBlank())
-        for (name in listOf("enabled", "captureBurstSequential")) {
+        for (name in listOf("enabled", "captureBurstSequential", "disableCompanion")) {
             if (o.has(name)) require(o.get(name) is Boolean)
         }
         objectField(o, "dcp")?.let { dcp ->
@@ -201,6 +201,8 @@ internal object LensProfileCodec {
             lens.captureReaderUsage?.let { put("captureReaderUsage", it) }
             lens.stillTemplate?.let { put("template", if (it) "still" else "preview") }
             if (lens.fixedFps > 0) put("fps", lens.fixedFps)
+            require(!lens.disableCompanion || lens.companion == null) { "Cannot disable a required companion" }
+            if (lens.disableCompanion) put("disableCompanion", true)
             lens.companion?.let {
                 put("companion", JSONObject().put("width", it.width).put("height", it.height)
                     .put("format", lens.companionFormat).put("targeted", lens.companionTargeted))
@@ -231,6 +233,8 @@ internal object LensProfileCodec {
         require(!o.has("streamUseCase")) { "streamUseCase is unsupported by the NDK backend" }
         val companionFormat = o.optJSONObject("companion")?.optString("format", "yuv") ?: "yuv"
         require(companionFormat in setOf("yuv", "private")) { "Invalid companion format" }
+        if (o.has("disableCompanion")) require(o.get("disableCompanion") is Boolean) { "Invalid disableCompanion" }
+        require(!o.optBoolean("disableCompanion", false) || !o.has("companion")) { "Cannot disable a required companion" }
         val levels = decodeLevels(o.optJSONObject("levels"))
         // Early builds kept DCG keys/levels in a separate "dcg" block; fold
         // them into the lens (its levels win when they are already static).
@@ -270,6 +274,7 @@ internal object LensProfileCodec {
             stillTemplate = when (o.optString("template")) { "still" -> true; "preview" -> false; else -> null },
             fixedFps = o.optInt("fps").coerceIn(0, 240),
             companion = decodeSize(o.optJSONObject("companion")),
+            disableCompanion = o.optBoolean("disableCompanion", false),
             companionFormat = o.optJSONObject("companion")?.optString("format", "yuv") ?: "yuv",
             companionTargeted = o.optJSONObject("companion")?.optBoolean("targeted", true) ?: true,
             startupDelayMs = o.optInt("startupDelayMs").coerceIn(0, 5000),

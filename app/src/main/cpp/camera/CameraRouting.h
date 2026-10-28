@@ -98,6 +98,8 @@ struct LensRoute {
     // Required companion size; the format and request targeting are explicit.
     // Recovery must never remove this output from the recipe.
     std::optional<std::pair<uint32_t, uint32_t>> companionSize;
+    // Explicit recipe opt-out, including the automatic capture-stream companion.
+    bool disableCompanion = false;
     bool companionPrivate = false;
     bool companionTargeted = true;
     int32_t startupDelayMs = 0;
@@ -130,6 +132,14 @@ struct LensRoute {
     color::DcpProfilePtr dcp;
     std::string dcpError;
 };
+
+inline bool companionStreamEnabled(const LensRoute& route, bool forced, bool automatic) {
+    return !route.disableCompanion && (route.captureStream || route.companionSize || forced || automatic);
+}
+
+inline bool requiresStillExposureGuard(const LensRoute& route) {
+    return route.captureStream && (route.companionSize || route.disableCompanion);
+}
 
 inline std::optional<LevelOverride> staticLevelsForStream(const LensRoute& route, bool capture) {
     const auto& override = capture ? route.captureLevels : route.viewfinderLevels;
