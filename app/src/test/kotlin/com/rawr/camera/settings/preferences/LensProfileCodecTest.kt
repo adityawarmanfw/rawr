@@ -28,6 +28,10 @@ class LensProfileCodecTest {
             stillTemplate = true,
             fixedFps = 24,
             companion = LensOutputSize(640, 480),
+            companionFormat = "private",
+            companionTargeted = false,
+            startupDelayMs = 500,
+            stopRepeatingForStill = true,
             auxJpeg = LensOutputSize(8160, 6144)
         )
         val encoded = LensProfileCodec.encode(listOf(lens))
@@ -37,8 +41,10 @@ class LensProfileCodecTest {
         assertEquals(24, json.getInt("fps"))
         assertEquals(480, json.getJSONObject("companion").getInt("height"))
 
+        val preview = lens.copy(stillTemplate = false)
+        assertEquals(listOf(preview), LensProfileCodec.decode(LensProfileCodec.encode(listOf(preview))))
         val plain = requireNotNull(LensProfileCodec.decode("""{"lenses":[{"id":"a","cameraId":"0"}]}""")).single()
-        assertTrue(!plain.stillTemplate && plain.fixedFps == 0)
+        assertTrue(plain.stillTemplate == null && plain.fixedFps == 0)
         assertNull(plain.companion)
         assertNull(plain.auxJpeg)
         assertNull(plain.captureReaderUsage)

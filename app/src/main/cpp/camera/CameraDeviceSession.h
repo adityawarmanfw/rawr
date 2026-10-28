@@ -36,7 +36,7 @@ class CameraDeviceSession final {
     // (MediaTek) accept a RAW-only session but never deliver a RAW buffer.
     bool createSession(ANativeWindow*, const std::optional<LensRoute>&, const CameraControlState&,
                        const CameraMeteringRequest&, CameraCallbacks&, CameraRequestPipeline&, const Diagnostic&,
-                       bool companionStream);
+                       bool companionStream, const std::function<bool(int32_t)>& waitForStartup);
     bool retire(std::unique_lock<std::mutex>&, std::optional<std::chrono::milliseconds>, const char*,
                 const Diagnostic&);
     void forceRetire(const char*, const Diagnostic&);
@@ -49,6 +49,7 @@ class CameraDeviceSession final {
     }
     // Window of LensRoute::captureStream: a session output no repeating request targets.
     void setCaptureWindow(ANativeWindow* window) noexcept { captureWindow_ = window; }
+    bool stopRepeatingForStill() const noexcept { return stopRepeatingForStill_; }
     bool hasCaptureStream() const noexcept { return captureTarget_ != nullptr; }
     // Burst of full-size stills (one per exposure, tagged tagId): copies of the
     // repeating request that also fill the capture stream, with STILL_CAPTURE
@@ -99,7 +100,7 @@ class CameraDeviceSession final {
     // Adds the companion YUV output and request target; false leaves the session RAW-only.
     // size: the lens profile's companion size; nullopt uses the RAW-aspect companion choice.
     bool addCompanionStream(const std::string& physicalCameraId, uint32_t rawWidth, uint32_t rawHeight,
-                            const std::optional<std::pair<uint32_t, uint32_t>>& size, const Diagnostic&);
+                            const std::optional<std::pair<uint32_t, uint32_t>>& size, bool privateFormat, const Diagnostic&);
     // Adds an output no request targets (LensRoute::auxJpegSize).
     bool addAuxJpegStream(const std::pair<uint32_t, uint32_t>& size, const Diagnostic&);
     void closeDeviceDetached(std::function<void()> afterClose);
@@ -123,6 +124,9 @@ class CameraDeviceSession final {
     bool companionTargeted_ = false;
     // The lens profile's companion: also targeted by full-size stills.
     bool companionFromProfile_ = false;
+    bool profileCompanionTargeted_ = true;
+    bool captureStillTemplate_ = true;
+    bool stopRepeatingForStill_ = false;
     AImageReader* auxJpegReader_ = nullptr;
     ACaptureSessionOutput* auxJpegOutput_ = nullptr;
     ACaptureSessionOutputContainer* outputs_ = nullptr;

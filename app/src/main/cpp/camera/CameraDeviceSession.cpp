@@ -396,7 +396,7 @@ bool CameraDeviceSession::open(const LensRoute& route, CameraCallbacks& callback
 bool CameraDeviceSession::addCompanionStream(const std::string& physicalCameraId,
                                              uint32_t rawWidth, uint32_t rawHeight,
                                              const std::optional<std::pair<uint32_t, uint32_t>>& profileSize,
-                                             const Diagnostic& diag) {
+                                             bool privateFormat, const Diagnostic& diag) {
     CompanionSizeChoice size;
     if (profileSize) {
         size = {int32_t(profileSize->first), int32_t(profileSize->second)};
@@ -417,7 +417,10 @@ bool CameraDeviceSession::addCompanionStream(const std::string& physicalCameraId
         return false;
     };
     if (width <= 0 || height <= 0) return fail("size", 0);
-    const media_status_t ms = AImageReader_new(width, height, AIMAGE_FORMAT_YUV_420_888, 2, &companionReader_);
+    const media_status_t ms = privateFormat
+        ? AImageReader_newWithUsage(width, height, AIMAGE_FORMAT_PRIVATE, AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE,
+                                    2, &companionReader_)
+        : AImageReader_new(width, height, AIMAGE_FORMAT_YUV_420_888, 2, &companionReader_);
     if (ms != AMEDIA_OK || !companionReader_) return fail("reader", ms);
     // Frames exist only to keep the HAL streaming; drop each one on arrival.
     AImageReader_ImageListener listener{};
@@ -443,7 +446,7 @@ bool CameraDeviceSession::addCompanionStream(const std::string& physicalCameraId
     if (!ok(s) || !companionTarget_) return fail("target", s);
     companionFromProfile_ = profileSize.has_value();
     diag("CAMERA_COMPANION_STREAM size=" + std::to_string(width) + "x" + std::to_string(height) +
-         " format=YUV_420_888 status=0 source=" + std::string(profileSize ? "profile" : "automatic") +
+         std::string(privateFormat ? " format=PRIVATE" : " format=YUV_420_888") + " status=0 source=" + std::string(profileSize ? "profile" : "automatic") +
          " shape=" + (size.sameShape ? "raw" : "fallback"));
     return true;
 }
@@ -489,7 +492,8 @@ bool CameraDeviceSession::detachCompanionTarget(const Diagnostic& diag) {
 bool CameraDeviceSession::createSession(ANativeWindow* window, const std::optional<LensRoute>& selected,
                                         const CameraControlState& control, const CameraMeteringRequest& metering,
                                         CameraCallbacks& callbacks, CameraRequestPipeline& pipeline,
-                                        const Diagnostic& diag, bool companionStream) {
+                                        const Diagnostic& diag, bool companionStream,
+                                        const std::function<bool(int32_t)>& waitForStartup) {
     rawWindow_ = window;
 
     if (!device_ || !rawWindow_) {
@@ -515,8 +519,11 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
     s = ACaptureSessionOutputContainer_add(outputs_, output_);
     if (!ok(s)) return fail("add_output", "status=" + statusText(s));
     const uint32_t rawWidth = selected ? selected->stream.width : 0, rawHeight = selected ? selected->stream.height : 0;
+    profileCompanionTargeted_ = !selected || selected->companionTargeted;
+    stopRepeatingForStill_ = selected && selected->stopRepeatingForStill;
+    captureStillTemplate_ = selected ? selected->stillTemplate.value_or(true) : true;
     const auto companionSize = selected ? selected->companionSize : std::nullopt;
-    if (companionStream && !addCompanionStream(physicalCameraId, rawWidth, rawHeight, companionSize, diag)) {
+    if (companionStream && !addCompanionStream(physicalCameraId, rawWidth, rawHeight, companionSize, selected && selected->companionPrivate, diag)) {
         // The profile's companion is part of its mode: never run without it.
         if (companionSize) return fail("companion", "reason=profile_companion_unavailable");
         // RAW-only still works on most devices; never block the start on it.
@@ -563,7 +570,7 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
     // Build one session-parameter request, then add the lens profile's
     // session keys (e.g. a vendor sensor/readout mode).
     const ACameraDevice_request_template repeatingTemplate =
-        selected && selected->stillTemplate ? TEMPLATE_STILL_CAPTURE : TEMPLATE_PREVIEW;
+        selected && selected->stillTemplate.value_or(false) ? TEMPLATE_STILL_CAPTURE : TEMPLATE_PREVIEW;
     s = ACameraDevice_createCaptureRequest(device_, repeatingTemplate, &sessionParameters_);
     if (!ok(s) || !sessionParameters_) {
         return fail("session_request", "status=" + statusText(s));
@@ -623,6 +630,11 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
              " white=" + std::to_string(l.white));
     }
 
+    if (selected && selected->startupDelayMs > 0) {
+        diag("CAMERA_STARTUP_DELAY ms=" + std::to_string(selected->startupDelayMs));
+        if (!waitForStartup(selected->startupDelayMs)) return false;
+    }
+
     s = ACameraDevice_createCaptureRequest(device_, repeatingTemplate, &request_);
     if (!ok(s) || !request_) {
         return fail("request", "status=" + statusText(s));
@@ -637,7 +649,7 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
     if (!ok(s)) {
         return fail("add_target", "status=" + statusText(s));
     }
-    if (companionTarget_) {
+    if (companionTarget_ && profileCompanionTargeted_) {
         s = ACaptureRequest_addTarget(request_, companionTarget_);
         if (!ok(s)) return fail("add_companion_target", "status=" + statusText(s));
         companionTargeted_ = true;
@@ -837,14 +849,14 @@ bool CameraDeviceSession::captureFullSize(CameraRequestPipeline& pipeline, const
     // preview request (rawr's statistics / map / region settings) crashes the
     // provider's request metadata handling on these stills.
     ACaptureRequest* base = nullptr;
-    if (!ok(ACameraDevice_createCaptureRequest(device_, TEMPLATE_STILL_CAPTURE, &base)) || !base) return false;
+    if (!ok(ACameraDevice_createCaptureRequest(device_, captureStillTemplate_ ? TEMPLATE_STILL_CAPTURE : TEMPLATE_PREVIEW, &base)) || !base) return false;
     struct FreeBase {
         ACaptureRequest* r;
         ~FreeBase() { ACaptureRequest_free(r); }
     } freeBase{base};
     if (!ok(ACaptureRequest_addTarget(base, target_))) return false;
     // A profile companion rides on every request of its mode, stills included.
-    if (companionFromProfile_ && companionTarget_ && !ok(ACaptureRequest_addTarget(base, companionTarget_)))
+    if (companionFromProfile_ && profileCompanionTargeted_ && companionTarget_ && !ok(ACaptureRequest_addTarget(base, companionTarget_)))
         return false;
     // vivo's per-still ids exist only on vivo cameras; elsewhere their lookup fails the still.
     const bool vivoStillIds = resolveMetadataTagByNameCompat(characteristics_, stillKeysCameraId_.c_str(),

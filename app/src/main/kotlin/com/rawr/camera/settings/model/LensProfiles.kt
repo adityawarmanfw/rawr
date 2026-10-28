@@ -123,11 +123,16 @@ data class LensProfile(
     /** RAW reader usage of the [captureStream] ("gpuDataBuffer", "none", "0x100003"); null keeps GPU_DATA_BUFFER. */
     val captureReaderUsage: String? = null,
     /** Session parameters and the repeating request from the still template (Xiaomi full-size modes). */
-    val stillTemplate: Boolean = false,
+    val stillTemplate: Boolean? = null,
     /** Fixed AE target fps on every request; 0 = the app's cadence. */
     val fixedFps: Int = 0,
-    /** YUV companion of this size, always configured and targeted; null for the app's own choice. */
+    /** Companion of this size, always configured; null for the app's own choice. */
     val companion: LensOutputSize? = null,
+    val companionFormat: String = "yuv",
+    val companionTargeted: Boolean = true,
+    /** Delay after configure before submitting the first request. */
+    val startupDelayMs: Int = 0,
+    val stopRepeatingForStill: Boolean = false,
     /** Extra JPEG output configured with the session but never targeted; null for none. */
     val auxJpeg: LensOutputSize? = null,
     /**

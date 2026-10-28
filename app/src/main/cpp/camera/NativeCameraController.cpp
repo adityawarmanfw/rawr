@@ -472,6 +472,10 @@ struct NativeCameraController::Impl final : CameraEventSink {
             if (!valid()) return abandon();
             if (fullSizeDecisionRepeating) (void)deviceSession.stopRepeating([this](const std::string& line) { diag(line); });
         }
+        if (deviceSession.stopRepeatingForStill() && !fullSizeDecisionRepeating) {
+            if (!deviceSession.stopRepeating([this](const std::string& line) { diag(line); })) return abandon();
+            fullSizeDecisionRepeating = true;  // Existing completion/abandon path restores the viewfinder.
+        }
         const std::vector<CameraRequestPipeline::BracketExposure> exposures(count, e);
         // The ring runs from the press over queue + exposure + readout: the
         // started callback can arrive a full exposure late, so waiting for it
@@ -1005,9 +1009,15 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // A stop or lens switch may have retired this start while open waited.
         // Its teardown owns the old window; do not roll back a newer generation.
         if (!stillCurrent()) return;
-        if (!opened || !deviceSession.createSession(window, selected, control, meteringRequestLocked(),
+        const bool sessionCreated = opened && deviceSession.createSession(window, selected, control, meteringRequestLocked(),
                                          ndkCallbacks, requests, [this](const std::string& line) { diag(line); },
-                                         companionStream)) {
+                                         companionStream, [&](int32_t delayMs) {
+                                             captureChanged.wait_for(lock, std::chrono::milliseconds(delayMs),
+                                                                     [&] { return !stillCurrent(); });
+                                             return stillCurrent();
+                                         });
+        if (!stillCurrent()) return;
+        if (!sessionCreated) {
             // Some HALs reject RAW + YUV at configure time (observed: physical
             // RAW16 + YUV on a Xiaomi logical camera). Retry this route once
             // RAW-only through a full reopen: the failed configure can take

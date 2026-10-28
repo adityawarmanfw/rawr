@@ -91,12 +91,17 @@ struct LensRoute {
     // Session parameters and the repeating request from TEMPLATE_STILL_CAPTURE
     // instead of TEMPLATE_PREVIEW (Xiaomi full-size modes fail every request
     // that carries a companion otherwise).
-    bool stillTemplate = false;
+    std::optional<bool> stillTemplate;  // Absent: preview repeating, still capture (legacy).
     // Fixed AE target fps range on the session and every request; 0 = the app's cadence.
     int32_t fixedFps = 0;
     // YUV companion of this size, always configured and kept targeted (the
     // Xiaomi HAL fills a full-size RAW only from a binned upscale without it).
     std::optional<std::pair<uint32_t, uint32_t>> companionSize;
+    bool companionPrivate = false;
+    bool companionTargeted = true;
+    int32_t startupDelayMs = 0;
+    // Pause the viewfinder for the still sequence, then restore it.
+    bool stopRepeatingForStill = false;
     // Extra JPEG output configured with the session but never targeted.
     std::optional<std::pair<uint32_t, uint32_t>> auxJpegSize;
     // Sensor colour layout when the camera reports it wrong. cfaBlock: side of

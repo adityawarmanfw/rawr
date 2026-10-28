@@ -559,9 +559,16 @@ std::string serializeCameraProfile(const CameraProfile& profile) {
         if (r.readerUsage) out += ",\"readerUsage\":\"" + readerUsageName(*r.readerUsage) + "\"";
         if (r.captureReaderUsage)
             out += ",\"captureReaderUsage\":\"" + readerUsageName(*r.captureReaderUsage) + "\"";
-        if (r.stillTemplate) out += ",\"template\":\"still\"";
+        if (r.stillTemplate) out += *r.stillTemplate ? ",\"template\":\"still\"" : ",\"template\":\"preview\"";
         if (r.fixedFps > 0) out += ",\"fps\":" + std::to_string(r.fixedFps);
-        if (r.companionSize) appendSize(out, "companion", *r.companionSize);
+        if (r.companionSize) {
+            appendSize(out, "companion", *r.companionSize);
+            out.pop_back();
+            out += r.companionPrivate ? ",\"format\":\"private\"" : ",\"format\":\"yuv\"";
+            out += r.companionTargeted ? ",\"targeted\":true}" : ",\"targeted\":false}";
+        }
+        if (r.startupDelayMs) out += ",\"startupDelayMs\":" + std::to_string(r.startupDelayMs);
+        if (r.stopRepeatingForStill) out += ",\"stopRepeatingForStill\":true";
         if (r.auxJpegSize) appendSize(out, "auxJpeg", *r.auxJpegSize);
         if (!r.vendorGate.empty()) {
             out += ",\"vendorGate\":";
@@ -644,8 +651,21 @@ std::optional<CameraProfile> readProfile(const Json& root, std::string* error) {
             }
             r.stillTemplate = t == "still";
         }
+        if (l.get("streamUseCase")) {
+            if (error) *error = "streamUseCase is unsupported by the NDK backend for lens " + r.lensId;
+            return std::nullopt;
+        }
+        r.startupDelayMs = int32_t(std::clamp(l.num("startupDelayMs"), 0.0, 5000.0));
+        r.stopRepeatingForStill = l.flag("stopRepeatingForStill", false);
         r.fixedFps = int32_t(std::clamp(l.num("fps"), 0.0, 240.0));
         if (const Json* c = l.get("companion")) {
+            const auto format = c->str("format", "yuv");
+            if (format != "yuv" && format != "private") {
+                if (error) *error = "invalid companion format for lens " + r.lensId;
+                return std::nullopt;
+            }
+            r.companionPrivate = format == "private";
+            r.companionTargeted = c->flag("targeted", true);
             r.companionSize = readSize(c);
             if (!r.companionSize) {
                 if (error) *error = "invalid companion for lens " + r.lensId;

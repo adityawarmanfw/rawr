@@ -112,6 +112,21 @@ internal object LensProfileCodec {
                 number(levels, "white", 0.0..Float.MAX_VALUE.toDouble())
             }
         }
+        choice(o, "template", listOf("preview", "still"))
+        number(o, "fps", 0.0..240.0, true)
+        number(o, "startupDelayMs", 0.0..5000.0, true)
+        if (o.has("stopRepeatingForStill")) require(o.get("stopRepeatingForStill") is Boolean)
+        for (name in listOf("companion", "auxJpeg")) {
+            objectField(o, name)?.let { size ->
+                require(size.has("width") && size.has("height"))
+                number(size, "width", 1.0..65536.0, true)
+                number(size, "height", 1.0..65536.0, true)
+                if (name == "companion") {
+                    choice(size, "format", listOf("yuv", "private"))
+                    if (size.has("targeted")) require(size.get("targeted") is Boolean)
+                }
+            }
+        }
         keys(o)
         levels(o)
         objectField(o, "dcg")?.let { keys(it); levels(it) }
@@ -178,9 +193,14 @@ internal object LensProfileCodec {
             if (lens.captureBurst > 0) put("captureBurst", lens.captureBurst)
             if (lens.captureBurstSequential) put("captureBurstSequential", true)
             lens.captureReaderUsage?.let { put("captureReaderUsage", it) }
-            if (lens.stillTemplate) put("template", "still")
+            lens.stillTemplate?.let { put("template", if (it) "still" else "preview") }
             if (lens.fixedFps > 0) put("fps", lens.fixedFps)
-            lens.companion?.let { put("companion", JSONObject().put("width", it.width).put("height", it.height)) }
+            lens.companion?.let {
+                put("companion", JSONObject().put("width", it.width).put("height", it.height)
+                    .put("format", lens.companionFormat).put("targeted", lens.companionTargeted))
+            }
+            if (lens.startupDelayMs > 0) put("startupDelayMs", lens.startupDelayMs)
+            if (lens.stopRepeatingForStill) put("stopRepeatingForStill", true)
             lens.auxJpeg?.let { put("auxJpeg", JSONObject().put("width", it.width).put("height", it.height)) }
             if (lens.cfaBlock > 1 || lens.cfaOrder != null) {
                 put(
@@ -202,6 +222,9 @@ internal object LensProfileCodec {
 
     private fun decodeLens(o: JSONObject): LensProfile {
         val stream = o.optJSONObject("stream")
+        require(!o.has("streamUseCase")) { "streamUseCase is unsupported by the NDK backend" }
+        val companionFormat = o.optJSONObject("companion")?.optString("format", "yuv") ?: "yuv"
+        require(companionFormat in setOf("yuv", "private")) { "Invalid companion format" }
         val levels = decodeLevels(o.optJSONObject("levels"))
         // Early builds kept DCG keys/levels in a separate "dcg" block; fold
         // them into the lens (its levels win when they are already static).
@@ -236,9 +259,13 @@ internal object LensProfileCodec {
             captureBurst = o.optInt("captureBurst").coerceIn(0, 30),
             captureBurstSequential = o.optBoolean("captureBurstSequential"),
             captureReaderUsage = o.optString("captureReaderUsage").ifEmpty { null },
-            stillTemplate = o.optString("template") == "still",
+            stillTemplate = when (o.optString("template")) { "still" -> true; "preview" -> false; else -> null },
             fixedFps = o.optInt("fps").coerceIn(0, 240),
             companion = decodeSize(o.optJSONObject("companion")),
+            companionFormat = o.optJSONObject("companion")?.optString("format", "yuv") ?: "yuv",
+            companionTargeted = o.optJSONObject("companion")?.optBoolean("targeted", true) ?: true,
+            startupDelayMs = o.optInt("startupDelayMs").coerceIn(0, 5000),
+            stopRepeatingForStill = o.optBoolean("stopRepeatingForStill"),
             auxJpeg = decodeSize(o.optJSONObject("auxJpeg")),
             cfaBlock = o.optJSONObject("cfa")?.optInt("block", 1)?.takeIf { it in CFA_BLOCKS } ?: 1,
             cfaOrder = o.optJSONObject("cfa")?.optString("order")?.takeIf { it in CFA_ORDERS },
