@@ -224,6 +224,14 @@ struct LensRoute {
            lens.companionStreamUseCase != 0 || lens.auxJpegStreamUseCase != 0;
 }
 
+// What the Java backend does not take on: a vendor gate (app-held vendor state around open and configure) and
+// stop-repeating stills (the vivo decision sequence). Both are proven on the NDK only. nullptr: no conflict.
+[[nodiscard]] inline const char* javaBackendConflict(const LensRoute& lens) noexcept {
+    if (!lens.vendorGate.empty()) return "a vendor gate";
+    if (lens.stopRepeatingForStill) return "stop-repeating stills";
+    return nullptr;
+}
+
 [[nodiscard]] inline BackendChoice effectiveBackend(const LensRoute& lens) noexcept {
     if (lens.backend != BackendChoice::Auto) return lens.backend;
     return needsJavaBackend(lens) ? BackendChoice::Java : BackendChoice::Ndk;

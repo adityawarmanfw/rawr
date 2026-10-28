@@ -106,6 +106,10 @@ Java camera API exactly when one of them is set, and an explicit `ndk` together 
 when the profile is parsed. `java` can also be chosen for a lens without either, to compare the two
 APIs on the same route.
 
+A lens with a vendor gate or with `stopRepeatingForStill` cannot use the Java backend, whether it
+asks for `java` or gets it from an operating mode or use case: the vivo full-size sequence is proven
+on the NDK only. The profile is refused with the reason.
+
 On the Java backend Kotlin opens the camera and configures the session (`SessionConfiguration` with
 the operating mode, `OutputConfiguration.setStreamUseCase` per output, session parameters). Native
 code keeps everything else: the readers (their windows become `Surface`s), the requests, the

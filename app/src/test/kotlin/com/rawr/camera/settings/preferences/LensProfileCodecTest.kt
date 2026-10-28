@@ -203,6 +203,11 @@ class LensProfileCodecTest {
         assertTrue(validateLensProfile(ok.copy(opMode = 2), emptyList()).any { it.contains("Operating mode") })
         assertTrue(validateLensProfile(ok.copy(backend = "gpu"), emptyList()).any { it.contains("Unknown backend") })
         assertTrue(validateLensProfile(ok.copy(captureStreamUseCase = -1), emptyList()).any { it.contains("negative") })
+        // The vivo gate and stop-repeating stills stay on the NDK, whether Java is explicit or derived.
+        assertTrue(validateLensProfile(ok.copy(backend = "java", vendorGate = "vivoFullSize"), emptyList()).any { it.contains("vendor gate") })
+        assertTrue(validateLensProfile(ok.copy(vendorGate = "vivoFullSize", rawStreamUseCase = 1), emptyList()).any { it.contains("vendor gate") })
+        assertTrue(validateLensProfile(ok.copy(backend = "java", stopRepeatingForStill = true), emptyList()).any { it.contains("stop-repeating") })
+        assertTrue(validateLensProfile(ok.copy(vendorGate = "vivoFullSize"), emptyList()).none { it.contains("Java backend") })
     }
 
     @Test

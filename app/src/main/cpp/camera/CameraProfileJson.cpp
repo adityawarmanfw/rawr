@@ -943,6 +943,12 @@ std::optional<CameraProfile> readProfile(const Json& root, std::string* error) {
             if (error) *error = "operating mode and stream use case need the Java backend for lens " + r.lensId;
             return std::nullopt;
         }
+        if (effectiveBackend(r) == BackendChoice::Java) {
+            if (const char* conflict = javaBackendConflict(r)) {
+                if (error) *error = std::string("the Java backend does not support ") + conflict + " for lens " + r.lensId;
+                return std::nullopt;
+            }
+        }
         if (r.sessionParams == SessionParamsPolicy::None) {
             // A session-scope key travels in the session parameters: without them it would be dropped silently.
             for (const auto& k : r.keys) {

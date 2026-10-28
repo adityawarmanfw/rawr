@@ -74,6 +74,11 @@ void testRejections() {
                             R"("auxJpeg":{"width":640,"height":480,"useCase":0.5})"})
         assert(bad(use));
     assert(bad(R"("streamUseCase":524547)") && error.find("not a profile field") != std::string::npos);
+    // The vivo gate and stop-repeating stills stay on the NDK, whether Java is explicit or derived.
+    assert(bad(R"("backend":"java","vendorGate":"vivoFullSize")") && error.find("vendor gate") != std::string::npos);
+    assert(bad(R"("vendorGate":"vivoFullSize","stream":{"useCase":1})") && error.find("vendor gate") != std::string::npos);
+    assert(bad(R"("backend":"java","stopRepeatingForStill":true)") && error.find("stop-repeating") != std::string::npos);
+    assert(!bad(R"("vendorGate":"vivoFullSize")") && !bad(R"("backend":"ndk","stopRepeatingForStill":true)"));
 }
 
 }  // namespace

@@ -262,6 +262,10 @@ fun validateLensProfile(lens: LensProfile, others: List<LensProfile>): List<Stri
     lens.vendorKeys.forEach { key -> validateVendorKey(key)?.let { add(it) } }
     if (lens.backend !in BACKEND_CHOICES) add("Unknown backend ${lens.backend}")
     if (lens.backend == "ndk" && lens.needsJavaBackend()) add("An operating mode or stream use case needs the Java backend")
+    if (lens.backend == "java" || (lens.backend == "auto" && lens.needsJavaBackend())) {
+        if (lens.vendorGate.isNotEmpty()) add("The Java backend does not support a vendor gate")
+        if (lens.stopRepeatingForStill) add("The Java backend does not support stop-repeating stills")
+    }
     if (lens.opMode < 0 || lens.opMode == 1 || lens.opMode == 2) add("Operating mode must be 0 or 3 and above")
     if (listOf(lens.rawStreamUseCase, lens.captureStreamUseCase, lens.companionStreamUseCase, lens.auxJpegStreamUseCase)
             .any { it < 0 }) add("Stream use cases cannot be negative")
