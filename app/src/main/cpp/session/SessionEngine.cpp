@@ -100,9 +100,12 @@ SessionEngine::SessionEngine(std::string filesDir) : filesDir_(std::move(filesDi
         std::lock_guard<std::mutex> lock(mu_);
         if (generation != cameraSetupGeneration_) return static_cast<ANativeWindow*>(nullptr);
         try {
-            // vivo full-size outputs configure only with no usage or GPU_DATA_BUFFER.
-            auto* window = captureFrameIngress_.create(generation, width, height, format,
-                                                       AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER);
+            // vivo full-size outputs configure only with no usage or GPU_DATA_BUFFER;
+            // a lens profile can name another (Xiaomi: CPU read).
+            const uint64_t usage = lastCameraContext_ && lastCameraContext_->captureReaderUsage
+                                       ? *lastCameraContext_->captureReaderUsage
+                                       : uint64_t(AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER);
+            auto* window = captureFrameIngress_.create(generation, width, height, format, usage);
             captureReaderGeneration_ = generation;
             fullSizeFrames_.store(0, std::memory_order_relaxed);
             // Full size is 2x (50 MP) or 4x (200 MP) the binned pixel array; the buffer may be wider

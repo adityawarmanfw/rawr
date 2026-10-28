@@ -899,6 +899,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         control.capabilities.faceAfSteering = !control.capabilities.tapAfHoldsUntilNextTap;
         control.capabilities.dngOnly =
             route.captureStream && uint64_t(route.captureStream->width) * route.captureStream->height > kDngOnlyPixels;
+        control.capabilities.fixedFps = route.fixedFps;
         if (route.unlistedStream) {
             control.capabilities.tapAfSupported = false;
             control.capabilities.maxAfRegions = 0;
@@ -920,7 +921,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // The companion the unverified-device rule adds may be dropped by the
         // start ladder; a forced one (override, capture-stream route) may not.
         const bool companionByRule = companionOverride != "0" && !builtInMatch.verified && !route.unlistedStream;
-        const bool ladderEligible = companionByRule && !route.captureStream && companionOverride != "1";
+        const bool ladderEligible = CameraStartLadder::eligible(companionByRule, route.captureStream.has_value(),
+                                                                route.companionSize.has_value(), companionOverride == "1");
         const std::string ladderKey = route.lensId + '|' + describeRoute(route);
         const int64_t viewfinderExposureNs =
             control.exposureMode == ExposureControlMode::Auto ? 0 : control.requestedExposureTimeNs;
@@ -935,7 +937,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
             return;
         }
         const bool companionStream =
-            route.captureStream.has_value() || companionOverride == "1" ||
+            route.captureStream.has_value() || route.companionSize.has_value() || companionOverride == "1" ||
             (companionByRule && ladderPlan != CameraStartLadder::Plan::RawOnly &&
              !rawOnlyRoutes.count(companionRouteKey));
         if (ladderPlan == CameraStartLadder::Plan::RawOnly)
@@ -1011,7 +1013,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
             // RAW-only through a full reopen: the failed configure can take
             // the device down with it.
             const bool retryRawOnly =
-                opened && companionStream && companionOverride != "1" &&
+                opened && companionStream && companionOverride != "1" && !route.companionSize &&
                 (ladderEligible ? !startLadder.rawOnly(ladderKey) : rawOnlyRoutes.insert(companionRouteKey).second);
             if (retryRawOnly) {
                 if (ladderEligible) startLadder.configureRejected(ladderKey);
@@ -1029,7 +1031,9 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // The companion only has to start the pipeline. Producing it on every
         // frame holds each capture result back about a frame behind its RAW
         // image, which starves the preview pairer.
-        companionDetachGeneration.store(companionStream ? deviceSession.generation() : 0, std::memory_order_release);
+        // A profile companion stays targeted: the mode needs it on every frame.
+        companionDetachGeneration.store(companionStream && !route.companionSize ? deviceSession.generation() : 0,
+                                        std::memory_order_release);
         diag("CAMERA_START_DONE generation=" + std::to_string(deviceSession.generation()));
     }
 

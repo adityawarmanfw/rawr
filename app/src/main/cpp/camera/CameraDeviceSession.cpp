@@ -102,6 +102,9 @@ void CameraDeviceSession::releaseRequestOutputs(bool orphan) noexcept {
         companionOutput_ = nullptr;
         companionTarget_ = nullptr;
         companionTargeted_ = false;
+        companionFromProfile_ = false;
+        auxJpegReader_ = nullptr;
+        auxJpegOutput_ = nullptr;
         return;
     }
     if (request_) ACaptureRequest_free(request_);
@@ -128,6 +131,12 @@ void CameraDeviceSession::releaseRequestOutputs(bool orphan) noexcept {
     companionOutput_ = nullptr;
     if (companionReader_) AImageReader_delete(companionReader_);
     companionReader_ = nullptr;
+    companionFromProfile_ = false;
+    if (outputs_ && auxJpegOutput_) (void)ACaptureSessionOutputContainer_remove(outputs_, auxJpegOutput_);
+    if (auxJpegOutput_) ACaptureSessionOutput_free(auxJpegOutput_);
+    auxJpegOutput_ = nullptr;
+    if (auxJpegReader_) AImageReader_delete(auxJpegReader_);
+    auxJpegReader_ = nullptr;
     if (outputs_) ACaptureSessionOutputContainer_free(outputs_);
     outputs_ = nullptr;
 }
@@ -250,6 +259,7 @@ std::optional<LensRoute> CameraDeviceSession::select(const LensRoute& requested,
     }
     parsed->rawFormat = route.stream.format;
     parsed->rawReaderUsage = route.readerUsage;
+    parsed->captureReaderUsage = route.captureReaderUsage;
     parsed->cfaBlock = route.cfaBlock;
     parsed->cfaLiveQuality = route.cfaLiveQuality;
     parsed->cfaPhotoQuality = route.cfaPhotoQuality;
@@ -383,17 +393,23 @@ bool CameraDeviceSession::open(const LensRoute& route, CameraCallbacks& callback
         backoff = std::min(backoff * 2, kOpenRetryMax);
     }
 }
-bool CameraDeviceSession::addCompanionStream(const std::string& physicalCameraId, uint32_t rawWidth,
-                                             uint32_t rawHeight, const Diagnostic& diag) {
-    // A physical output must use a size the physical camera advertises; the
-    // logical camera's list can differ and the HAL rejects the configure.
-    ACameraMetadata* sizeChars = characteristics_;
-    if (!physicalCameraId.empty() &&
-        !ok(ACameraManager_getCameraCharacteristics(manager_, physicalCameraId.c_str(), &sizeChars)))
-        sizeChars = nullptr;
-    const auto size = sizeChars ? pickCompanionSize(yuvOutputSizes(sizeChars), int32_t(rawWidth), int32_t(rawHeight))
-                                : CompanionSizeChoice{};
-    if (sizeChars && sizeChars != characteristics_) ACameraMetadata_free(sizeChars);
+bool CameraDeviceSession::addCompanionStream(const std::string& physicalCameraId,
+                                             uint32_t rawWidth, uint32_t rawHeight,
+                                             const std::optional<std::pair<uint32_t, uint32_t>>& profileSize,
+                                             const Diagnostic& diag) {
+    CompanionSizeChoice size;
+    if (profileSize) {
+        size = {int32_t(profileSize->first), int32_t(profileSize->second)};
+    } else {
+        // A physical output must use a size the physical camera advertises; the
+        // logical camera's list can differ and the HAL rejects the configure.
+        ACameraMetadata* sizeChars = characteristics_;
+        if (!physicalCameraId.empty() &&
+            !ok(ACameraManager_getCameraCharacteristics(manager_, physicalCameraId.c_str(), &sizeChars)))
+            sizeChars = nullptr;
+        if (sizeChars) size = pickCompanionSize(yuvOutputSizes(sizeChars), int32_t(rawWidth), int32_t(rawHeight));
+        if (sizeChars && sizeChars != characteristics_) ACameraMetadata_free(sizeChars);
+    }
     const int32_t width = size.width, height = size.height;
     const auto fail = [&](const std::string& stage, int status) {
         diag("CAMERA_COMPANION_STREAM size=" + std::to_string(width) + "x" + std::to_string(height) +
@@ -425,13 +441,45 @@ bool CameraDeviceSession::addCompanionStream(const std::string& physicalCameraId
     if (!ok(s)) return fail("add_output", s);
     s = ACameraOutputTarget_create(window, &companionTarget_);
     if (!ok(s) || !companionTarget_) return fail("target", s);
+    companionFromProfile_ = profileSize.has_value();
     diag("CAMERA_COMPANION_STREAM size=" + std::to_string(width) + "x" + std::to_string(height) +
-         " format=YUV_420_888 raw=" + std::to_string(rawWidth) + "x" + std::to_string(rawHeight) +
-         " shape=" + (size.sameShape ? "raw" : "fallback") + " status=0");
+         " format=YUV_420_888 status=0 source=" + std::string(profileSize ? "profile" : "automatic") +
+         " shape=" + (size.sameShape ? "raw" : "fallback"));
+    return true;
+}
+bool CameraDeviceSession::addAuxJpegStream(const std::pair<uint32_t, uint32_t>& size, const Diagnostic& diag) {
+    const auto fail = [&](const std::string& stage, int status) {
+        diag("CAMERA_AUX_JPEG_STREAM size=" + std::to_string(size.first) + "x" + std::to_string(size.second) +
+             " stage=" + stage + " status=" + std::to_string(status));
+        return false;
+    };
+    const media_status_t ms =
+        AImageReader_new(int32_t(size.first), int32_t(size.second), AIMAGE_FORMAT_JPEG, 2, &auxJpegReader_);
+    if (ms != AMEDIA_OK || !auxJpegReader_) return fail("reader", ms);
+    // No request targets it; drop anything the HAL still writes.
+    AImageReader_ImageListener listener{};
+    listener.onImageAvailable = [](void*, AImageReader* reader) {
+        AImage* image = nullptr;
+        while (AImageReader_acquireNextImage(reader, &image) == AMEDIA_OK && image) {
+            AImage_delete(image);
+            image = nullptr;
+        }
+    };
+    if (const auto ls = AImageReader_setImageListener(auxJpegReader_, &listener); ls != AMEDIA_OK)
+        return fail("listener", ls);
+    ANativeWindow* window = nullptr;
+    if (const auto ws = AImageReader_getWindow(auxJpegReader_, &window); ws != AMEDIA_OK || !window)
+        return fail("window", ws);
+    camera_status_t s = ACaptureSessionOutput_create(window, &auxJpegOutput_);
+    if (!ok(s)) return fail("output", s);
+    s = ACaptureSessionOutputContainer_add(outputs_, auxJpegOutput_);
+    if (!ok(s)) return fail("add_output", s);
+    diag("CAMERA_AUX_JPEG_STREAM size=" + std::to_string(size.first) + "x" + std::to_string(size.second) +
+         " status=0 targeted=0");
     return true;
 }
 bool CameraDeviceSession::detachCompanionTarget(const Diagnostic& diag) {
-    if (!companionTargeted_ || !request_ || !companionTarget_) return false;
+    if (companionFromProfile_ || !companionTargeted_ || !request_ || !companionTarget_) return false;
     const camera_status_t s = ACaptureRequest_removeTarget(request_, companionTarget_);
     diag("CAMERA_COMPANION_TARGET_DETACHED status=" + statusText(s));
     if (!ok(s)) return false;
@@ -467,7 +515,10 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
     s = ACaptureSessionOutputContainer_add(outputs_, output_);
     if (!ok(s)) return fail("add_output", "status=" + statusText(s));
     const uint32_t rawWidth = selected ? selected->stream.width : 0, rawHeight = selected ? selected->stream.height : 0;
-    if (companionStream && !addCompanionStream(physicalCameraId, rawWidth, rawHeight, diag)) {
+    const auto companionSize = selected ? selected->companionSize : std::nullopt;
+    if (companionStream && !addCompanionStream(physicalCameraId, rawWidth, rawHeight, companionSize, diag)) {
+        // The profile's companion is part of its mode: never run without it.
+        if (companionSize) return fail("companion", "reason=profile_companion_unavailable");
         // RAW-only still works on most devices; never block the start on it.
         if (outputs_ && companionOutput_) (void)ACaptureSessionOutputContainer_remove(outputs_, companionOutput_);
         if (companionOutput_) ACaptureSessionOutput_free(companionOutput_);
@@ -476,6 +527,11 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
         companionTarget_ = nullptr;
         if (companionReader_) AImageReader_delete(companionReader_);
         companionReader_ = nullptr;
+    }
+
+    if (selected && selected->auxJpegSize) {
+        if (!physicalCameraId.empty()) return fail("aux_jpeg", "reason=physical_camera_unsupported");
+        if (!addAuxJpegStream(*selected->auxJpegSize, diag)) return fail("aux_jpeg", "reason=output");
     }
 
     if (captureWindow_) {
@@ -506,7 +562,9 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
     // TEMPLATE_PREVIEW 30/30 assumption and clamp shutter priority near 1/30.
     // Build one session-parameter request, then add the lens profile's
     // session keys (e.g. a vendor sensor/readout mode).
-    s = ACameraDevice_createCaptureRequest(device_, TEMPLATE_PREVIEW, &sessionParameters_);
+    const ACameraDevice_request_template repeatingTemplate =
+        selected && selected->stillTemplate ? TEMPLATE_STILL_CAPTURE : TEMPLATE_PREVIEW;
+    s = ACameraDevice_createCaptureRequest(device_, repeatingTemplate, &sessionParameters_);
     if (!ok(s) || !sessionParameters_) {
         return fail("session_request", "status=" + statusText(s));
     }
@@ -565,7 +623,7 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
              " white=" + std::to_string(l.white));
     }
 
-    s = ACameraDevice_createCaptureRequest(device_, TEMPLATE_PREVIEW, &request_);
+    s = ACameraDevice_createCaptureRequest(device_, repeatingTemplate, &request_);
     if (!ok(s) || !request_) {
         return fail("request", "status=" + statusText(s));
     }
@@ -602,7 +660,8 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
     if (!pipeline.submit(session_, request_, callbackContext, control, metering))
         return fail("initial_repeating", "status=control_or_submit_rejected");
     diag("CAMERA_NDK_SESSION_RUNNING companion=" + std::string(companionTarget_ ? "1" : "0") +
-         " captureStream=" + (captureTarget_ ? "1" : "0"));
+         " captureStream=" + (captureTarget_ ? "1" : "0") + " auxJpeg=" + (auxJpegOutput_ ? "1" : "0") +
+         " template=" + (repeatingTemplate == TEMPLATE_STILL_CAPTURE ? "still" : "preview"));
     const auto& raw = cameraContext_->geometry;
     diagnostics::RuntimeTraceRecorder::instance().record(
         diagnostics::RuntimeTraceStage::CameraSessionCreated, 0, generation_, -1, 0, 0, companionTarget_ ? 1u : 0u,
@@ -784,6 +843,13 @@ bool CameraDeviceSession::captureFullSize(CameraRequestPipeline& pipeline, const
         ~FreeBase() { ACaptureRequest_free(r); }
     } freeBase{base};
     if (!ok(ACaptureRequest_addTarget(base, target_))) return false;
+    // A profile companion rides on every request of its mode, stills included.
+    if (companionFromProfile_ && companionTarget_ && !ok(ACaptureRequest_addTarget(base, companionTarget_)))
+        return false;
+    // vivo's per-still ids exist only on vivo cameras; elsewhere their lookup fails the still.
+    const bool vivoStillIds = resolveMetadataTagByNameCompat(characteristics_, stillKeysCameraId_.c_str(),
+                                                             "vivo.control.requestId", nullptr)
+                                  .has_value();
     const auto requestKeys = applyCameraKeySettings(base, characteristics_, stillKeys_, stillKeysCameraId_.c_str(),
                                                     CameraKeySetting::Scope::Request, "lens",
                                                     [](const std::string&) {});
@@ -821,6 +887,7 @@ bool CameraDeviceSession::captureFullSize(CameraRequestPipeline& pipeline, const
         const double id = double(stamp++);
         for (const auto& [tag, value] : {std::pair{"vivo.control.requestId", id}, std::pair{"vivo.control.frameFlag", id},
                                          std::pair{"vivo.control.globalCaptureId", id + 5}}) {
+            if (!vivoStillIds) break;
             CameraKeySetting k;
             k.tag = tag;
             k.type = CameraKeySetting::Type::Int64;

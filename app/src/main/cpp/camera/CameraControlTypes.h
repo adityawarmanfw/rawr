@@ -88,6 +88,8 @@ struct CameraControlCapabilities {
     // Every request must carry CONTROL_AE_TARGET_FPS_RANGE, even with AE off: the
     // vivo X300 Ultra provider crashes on a full-size mode request without it.
     bool targetFpsRangeRequired = false;
+    // Lens profile's fixed AE target fps (LensRoute::fixedFps); 0 = the app's cadence.
+    int32_t fixedFps = 0;
     // What the camera advertises; the bounds above may be widened by the
     // lens profile's extended exposure (extendedExposure).
     int32_t advertisedSensitivityMax = 0;

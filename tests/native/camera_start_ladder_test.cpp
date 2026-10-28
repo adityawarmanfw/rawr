@@ -109,6 +109,15 @@ int main() {
     rawOnlyWorksAndSticks();
     lensesAreIndependent();
     ineligibleStartsAreLeftAlone();
+    assert(Ladder::eligible(true, false, false, false));
+    assert(!Ladder::eligible(true, false, true, false));
+    assert(!Ladder::eligible(true, true, false, false));
+    assert(!Ladder::eligible(true, false, false, true));
+    Ladder profile;
+    profile.begin("M50", 1, 0, 0, Ladder::eligible(true, false, true, false));
+    assert(profile.deviceFailed(1) == Outcome::None);
+    assert(profile.tick(1, 100000) == Outcome::None);
+    assert(!profile.rawOnly("M50"));
     deadlineScalesWithExposure();
     failedCapturesCount();
     staleGenerationsAreIgnored();

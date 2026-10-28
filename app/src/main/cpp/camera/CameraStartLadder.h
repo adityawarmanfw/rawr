@@ -32,6 +32,11 @@ class CameraStartLadder final {
     enum class Plan { AsConfigured, RawOnly, GaveUp };
     enum class Outcome { None, Retry, RetryRawOnly, GaveUp };
 
+    // A profile companion is part of the sensor mode, never a recovery option.
+    static bool eligible(bool companionByRule, bool captureStream, bool profileCompanion, bool forced) {
+        return companionByRule && !captureStream && !profileCompanion && !forced;
+    }
+
     // Time a start gets for its first frame: never less than kMinFirstFrameMs,
     // and a long viewfinder exposure gets its full frame time plus a margin.
     static int64_t firstFrameDeadlineMs(int64_t exposureNs) {

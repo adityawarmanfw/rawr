@@ -332,6 +332,11 @@ void sharedRequestCadence() {
     result.targetFpsRange = cameraTargetFpsRange(state, true);
     const auto audit = results.observe(state, frame, result, &request, 2, false);
     assert(audit && !audit->fpsMismatch && !audit->fallbackToAuto);
+    state.capabilities.fixedFps = 30;
+    assert(cameraTargetFpsRange(state, true) == (std::array<int32_t, 2>{30, 30}));
+    request = CameraRequestProvenance::from(state, 3);
+    assert(request.targetFpsMin == 30 && request.targetFpsMax == 30);
+    state.capabilities.fixedFps = 0;
     state.recordingFps = 0;
     state.exposureMode = ExposureControlMode::Manual;
     assert(!cameraTargetFpsRange(state, false));

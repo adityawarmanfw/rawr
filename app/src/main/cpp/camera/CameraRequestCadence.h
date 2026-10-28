@@ -11,6 +11,9 @@ namespace rawrcam::camera {
 // Shared by session parameters, repeating requests and frozen provenance.
 inline std::optional<std::array<int32_t, 2>> cameraTargetFpsRange(const CameraControlState& state,
                                                                   bool priorityRequested) {
+    // A vendor sensor mode that runs at one rate (Xiaomi 75 mm 50 MP: 24 fps) keeps it on every request.
+    if (state.capabilities.fixedFps > 0)
+        return std::array<int32_t, 2>{state.capabilities.fixedFps, state.capabilities.fixedFps};
     if (state.recordingFps > 0) return std::array<int32_t, 2>{state.recordingFps, state.recordingFps};
     const auto& caps = state.capabilities;
     if (priorityRequested && caps.priorityAeTargetFpsMin > 0 &&

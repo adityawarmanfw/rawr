@@ -96,10 +96,12 @@ class CameraDeviceSession final {
    private:
     void releaseRequestOutputs(bool orphan) noexcept;
     void releaseCharacteristics() noexcept;
-    // Adds the companion YUV output and request target, shaped like the RAW stream
-    // when the camera advertises such a size; false leaves the session RAW-only.
+    // Adds the companion YUV output and request target; false leaves the session RAW-only.
+    // size: the lens profile's companion size; nullopt uses the RAW-aspect companion choice.
     bool addCompanionStream(const std::string& physicalCameraId, uint32_t rawWidth, uint32_t rawHeight,
-                            const Diagnostic&);
+                            const std::optional<std::pair<uint32_t, uint32_t>>& size, const Diagnostic&);
+    // Adds an output no request targets (LensRoute::auxJpegSize).
+    bool addAuxJpegStream(const std::pair<uint32_t, uint32_t>& size, const Diagnostic&);
     void closeDeviceDetached(std::function<void()> afterClose);
     // Releases a vendor gate taken for a device that never opened or is already gone.
     void releaseHeldGate() noexcept;
@@ -119,6 +121,10 @@ class CameraDeviceSession final {
     ACaptureSessionOutput* companionOutput_ = nullptr;
     ACameraOutputTarget* companionTarget_ = nullptr;
     bool companionTargeted_ = false;
+    // The lens profile's companion: also targeted by full-size stills.
+    bool companionFromProfile_ = false;
+    AImageReader* auxJpegReader_ = nullptr;
+    ACaptureSessionOutput* auxJpegOutput_ = nullptr;
     ACaptureSessionOutputContainer* outputs_ = nullptr;
     ACameraMetadata* characteristics_ = nullptr;
     ANativeWindow* rawWindow_ = nullptr;

@@ -40,6 +40,8 @@ struct CameraContextMetadata {
     geometry::RawPixelFormat rawFormat = geometry::RawPixelFormat::Raw16;
     // The lens profile's RAW reader usage (LensRoute::readerUsage), if any.
     std::optional<uint64_t> rawReaderUsage;
+    // The lens profile's capture-stream reader usage (LensRoute::captureReaderUsage), if any.
+    std::optional<uint64_t> captureReaderUsage;
     uint32_t rawPreviewCfa = 0;  // RGGB=0, GRBG=1, GBRG=2, BGGR=3.
     int32_t camera2Cfa = -1;
     // Side of the same-colour blocks in the camera's RAW (LensRoute::cfaBlock):
