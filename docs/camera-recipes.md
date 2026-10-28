@@ -126,10 +126,20 @@ Differences to know when comparing bundles:
 - A Java request fails as a whole when it carries a tag with no Camera2 key name (an unlisted vendor
   tag given by number). The NDK would set it. Name such keys instead.
 
-Checked on the V2562 (camera 4 as D14, RAW16 4096×3072): the session runs, frames and results pair,
-a photo is written, lens switches between Java and NDK lenses work, and with a viewfinder use case of
-1 the camera service reports `Stream use case: 1` for the RAW stream. A vendor operating mode was
-accepted by a debug probe session on the same camera but has not been run through a lens yet.
+Checked on the V2562 with the Java backend:
+
+- camera 4 (RAW16 4096×3072): viewfinder, a single JPEG, a forced companion that detaches after the
+  start, a 30-frame multiframe from the viewfinder ring, a 29-frame 0.6 s stack (a burst of submitted
+  requests, each result matched to its request), 4K 24 fps video (193 frames in 8.08 s), and lens
+  switches between Java and NDK lenses with the F35 200 MP still afterwards;
+- camera 0 with physical camera 4: frames pair with the physical camera's results and a JPEG is
+  written;
+- with a viewfinder use case of 1 the camera service reports `Stream use case: 1` on the RAW stream.
+
+Not checked: a vendor operating mode on a lens (only a debug probe session accepted one), session
+params `full` on Java, the aux JPEG, and stills through a separate capture stream. The last one cannot
+be checked on this phone: without the vendor gate a capture-stream still times out on the NDK as well,
+and gated lenses stay on the NDK.
 
 ## Diagnostics
 
