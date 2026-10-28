@@ -1258,7 +1258,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
         }
         if (restart && callbacks.acquisitionFailed) callbacks.acquisitionFailed(callbackGeneration, 0);
     }
-    void cameraStillFailed(uint64_t generation, const CameraRequest* request) override {
+    void cameraStillFailed(uint64_t generation, const CameraRequest* request, const char* kind, int64_t frameNumber,
+                           int reason) override {
         uint64_t tag = 0;
         {
             std::lock_guard<std::mutex> lock(mutex);
@@ -1267,6 +1268,10 @@ struct NativeCameraController::Impl final : CameraEventSink {
             if (!request || request->userContext(&provenance) != ACAMERA_OK || !provenance) return;
             tag = static_cast<const CameraRequestProvenance*>(provenance)->optimizedStillRequestId;
             if (!tag) return;
+            // Every failed still is logged, past the per-session cap on failure lines: it is what the bundle is for.
+            diag(std::string("CAMERA_STILL_FAILED tag=") + std::to_string(tag) + " kind=" + kind +
+                 " frame=" + std::to_string(frameNumber) + " reason=" + std::to_string(reason) +
+                 " lens=" + control.capabilities.lensId);
             if (tag == metadata::kFullSizeDecisionRequestId) {
                 // Not a capture: the still that follows is still submitted.
                 if (fullSizeDecision == FullSizeDecision::Waiting) fullSizeDecision = FullSizeDecision::Failed;

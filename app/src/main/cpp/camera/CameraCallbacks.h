@@ -19,7 +19,10 @@ class CameraEventSink {
     virtual void cameraCaptureStarted(uint64_t /*generation*/, const CameraRequest* /*request*/, int64_t /*timestamp*/) {}
     // Every failed capture or lost buffer, unthrottled. Runs on a camera thread.
     virtual void cameraCaptureFailed(uint64_t /*generation*/) {}
-    virtual void cameraStillFailed(uint64_t /*generation*/, const CameraRequest* /*request*/) {}
+    // A failed capture or lost buffer of any request; the sink decides whether it was a still. kind is
+    // CAMERA_CAPTURE_FAILED or CAMERA_BUFFER_LOST.
+    virtual void cameraStillFailed(uint64_t /*generation*/, const CameraRequest* /*request*/, const char* /*kind*/,
+                                   int64_t /*frameNumber*/, int /*reason*/) {}
     virtual void cameraDeviceFailed(uint64_t /*generation*/) {}
     virtual void cameraSequenceEnded(uint64_t /*generation*/, int /*sequenceId*/, bool /*aborted*/) {}
 };
