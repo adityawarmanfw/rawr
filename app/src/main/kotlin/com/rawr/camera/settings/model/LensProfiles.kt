@@ -120,6 +120,16 @@ data class LensProfile(
     val captureBurst: Int = 0,
     /** Burst stills go in one at a time, each after the previous frame (HAL fails queued ones). */
     val captureBurstSequential: Boolean = false,
+    /** RAW reader usage of the [captureStream] ("gpuDataBuffer", "none", "0x100003"); null keeps GPU_DATA_BUFFER. */
+    val captureReaderUsage: String? = null,
+    /** Session parameters and the repeating request from the still template (Xiaomi full-size modes). */
+    val stillTemplate: Boolean = false,
+    /** Fixed AE target fps on every request; 0 = the app's cadence. */
+    val fixedFps: Int = 0,
+    /** YUV companion of this size, always configured and targeted; null for the app's own choice. */
+    val companion: LensOutputSize? = null,
+    /** Extra JPEG output configured with the session but never targeted; null for none. */
+    val auxJpeg: LensOutputSize? = null,
     /**
      * Same-colour block side the RAW really holds (1 Bayer, 2 quad, 4 for 4x4): blocks are remosaiced to Bayer
      * for the viewfinder, stills and video. Some sensor modes (in-sensor crops) report Bayer but aren't.
@@ -138,6 +148,9 @@ data class LensProfile(
     /** Camera profile (.dcp) replacing the camera's colour; null for the camera's own. */
     val dcp: LensDcp? = null
 )
+
+/** Width x height of an extra camera output of a lens profile. */
+data class LensOutputSize(val width: Int, val height: Int)
 
 /** Lens image mirror in the sensor frame; [wireName] is the profile JSON value. */
 enum class LensMirror(val wireName: String, val label: String) {

@@ -2,8 +2,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <charconv>
 #include <cstdio>
 #include <cstdlib>
+#include <optional>
+#include <utility>
 
 namespace rawrcam::camera {
 namespace {
@@ -430,6 +433,41 @@ void readExposure(const Json* j, ExposureOverride& out) {
     out.shutterMaxNs = int64_t(std::clamp(j->num("shutterMaxNs"), 0.0, double(kExtendedShutterMaxNs)));
 }
 
+// Reader usage as a name or a hex string ("0x100003"): the JSON number type
+// can't carry 64-bit usage bits exactly.
+std::optional<uint64_t> parseReaderUsage(const std::string& text) {
+    if (text == "gpuDataBuffer") return kReaderUsageGpuDataBuffer;
+    if (text == "none") return 0;
+    if (text.size() > 2 && text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
+        uint64_t value = 0;
+        const char* begin = text.data() + 2;
+        const char* end = text.data() + text.size();
+        const auto parsed = std::from_chars(begin, end, value, 16);
+        if (parsed.ec == std::errc{} && parsed.ptr == end) return value;
+    }
+    return std::nullopt;
+}
+
+std::string readerUsageName(uint64_t usage) {
+    if (usage == kReaderUsageGpuDataBuffer) return "gpuDataBuffer";
+    if (usage == 0) return "none";
+    char buf[24];
+    std::snprintf(buf, sizeof(buf), "0x%llx", static_cast<unsigned long long>(usage));
+    return buf;
+}
+
+std::optional<std::pair<uint32_t, uint32_t>> readSize(const Json* j) {
+    if (!j || j->kind != Json::Kind::Object) return std::nullopt;
+    const double w = j->num("width"), h = j->num("height");
+    if (w < 1.0 || h < 1.0 || w > 65536.0 || h > 65536.0 || std::floor(w) != w || std::floor(h) != h) return std::nullopt;
+    return std::pair<uint32_t, uint32_t>{uint32_t(w), uint32_t(h)};
+}
+
+void appendSize(std::string& out, const char* name, const std::pair<uint32_t, uint32_t>& size) {
+    out += std::string(",\"") + name + "\":{\"width\":" + std::to_string(size.first) +
+           ",\"height\":" + std::to_string(size.second) + "}";
+}
+
 bool readKeys(const std::vector<Json>& list, std::vector<CameraKeySetting>& out, std::string* error) {
     for (const auto& k : list) {
         CameraKeySetting key;
@@ -518,9 +556,13 @@ std::string serializeCameraProfile(const CameraProfile& profile) {
         appendExposure(out, r.exposure);
         out += ",\"keys\":";
         appendKeys(out, r.keys);
-        if (r.readerUsage)
-            out += *r.readerUsage == kReaderUsageGpuDataBuffer ? ",\"readerUsage\":\"gpuDataBuffer\""
-                                                                : ",\"readerUsage\":\"none\"";
+        if (r.readerUsage) out += ",\"readerUsage\":\"" + readerUsageName(*r.readerUsage) + "\"";
+        if (r.captureReaderUsage)
+            out += ",\"captureReaderUsage\":\"" + readerUsageName(*r.captureReaderUsage) + "\"";
+        if (r.stillTemplate) out += ",\"template\":\"still\"";
+        if (r.fixedFps > 0) out += ",\"fps\":" + std::to_string(r.fixedFps);
+        if (r.companionSize) appendSize(out, "companion", *r.companionSize);
+        if (r.auxJpegSize) appendSize(out, "auxJpeg", *r.auxJpegSize);
         if (!r.vendorGate.empty()) {
             out += ",\"vendorGate\":";
             appendJsonString(out, r.vendorGate);
@@ -585,12 +627,35 @@ std::optional<CameraProfile> readProfile(const Json& root, std::string* error) {
             r.preferredStream.height = uint32_t(std::max(0.0, s->num("height")));
             r.unlistedStream = s->flag("unlisted", false);
         }
-        if (const Json* u = l.get("readerUsage"); u && u->kind == Json::Kind::String) {
-            // Named, not numeric: the JSON number type can't carry 64-bit usage bits exactly.
-            if (u->text == "gpuDataBuffer") r.readerUsage = kReaderUsageGpuDataBuffer;
-            else if (u->text == "none") r.readerUsage = 0;
-            else {
-                if (error) *error = "unknown readerUsage " + u->text + " for lens " + r.lensId;
+        for (const auto& [name, field] : {std::pair{"readerUsage", &r.readerUsage},
+                                          std::pair{"captureReaderUsage", &r.captureReaderUsage}}) {
+            const Json* u = l.get(name);
+            if (!u || u->kind != Json::Kind::String) continue;
+            *field = parseReaderUsage(u->text);
+            if (!*field) {
+                if (error) *error = std::string("unknown ") + name + " " + u->text + " for lens " + r.lensId;
+                return std::nullopt;
+            }
+        }
+        if (const std::string t = l.str("template"); !t.empty()) {
+            if (t != "still" && t != "preview") {
+                if (error) *error = "unknown template " + t + " for lens " + r.lensId;
+                return std::nullopt;
+            }
+            r.stillTemplate = t == "still";
+        }
+        r.fixedFps = int32_t(std::clamp(l.num("fps"), 0.0, 240.0));
+        if (const Json* c = l.get("companion")) {
+            r.companionSize = readSize(c);
+            if (!r.companionSize) {
+                if (error) *error = "invalid companion for lens " + r.lensId;
+                return std::nullopt;
+            }
+        }
+        if (const Json* a = l.get("auxJpeg")) {
+            r.auxJpegSize = readSize(a);
+            if (!r.auxJpegSize) {
+                if (error) *error = "invalid auxJpeg for lens " + r.lensId;
                 return std::nullopt;
             }
         }

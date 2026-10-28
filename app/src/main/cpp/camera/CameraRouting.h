@@ -86,6 +86,19 @@ struct LensRoute {
     // Submit a burst one still at a time, each after the previous frame is in
     // (the HAL fails queued full-size stills but takes them back to back).
     bool captureBurstSequential = false;
+    // AHB usage for the captureStream reader; nullopt keeps GPU_DATA_BUFFER.
+    std::optional<uint64_t> captureReaderUsage;
+    // Session parameters and the repeating request from TEMPLATE_STILL_CAPTURE
+    // instead of TEMPLATE_PREVIEW (Xiaomi full-size modes fail every request
+    // that carries a companion otherwise).
+    bool stillTemplate = false;
+    // Fixed AE target fps range on the session and every request; 0 = the app's cadence.
+    int32_t fixedFps = 0;
+    // YUV companion of this size, always configured and kept targeted (the
+    // Xiaomi HAL fills a full-size RAW only from a binned upscale without it).
+    std::optional<std::pair<uint32_t, uint32_t>> companionSize;
+    // Extra JPEG output configured with the session but never targeted.
+    std::optional<std::pair<uint32_t, uint32_t>> auxJpegSize;
     // Sensor colour layout when the camera reports it wrong. cfaBlock: side of
     // the same-colour blocks the RAW actually holds (1 Bayer, 2 quad, 4 for
     // 4x4); ingress remosaics them to Bayer. cfaOrder: block-level colour

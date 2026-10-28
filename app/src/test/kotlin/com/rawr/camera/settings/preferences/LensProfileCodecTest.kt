@@ -1,6 +1,7 @@
 package com.rawr.camera.settings.preferences
 
 import com.rawr.camera.settings.model.LensMirror
+import com.rawr.camera.settings.model.LensOutputSize
 import com.rawr.camera.settings.model.LensLevels
 import com.rawr.camera.settings.model.LensDcp
 import com.rawr.camera.settings.model.LensProfile
@@ -17,6 +18,32 @@ import kotlin.test.assertTrue
 import kotlin.test.assertNull
 
 class LensProfileCodecTest {
+    @Test
+    fun fullSizeRecipeFieldsRoundTripAndDefaultToOff() {
+        val lens = LensProfile(
+            "T50", "4",
+            stream = RawStreamChoice(RawStreamFormat.Raw16, 8160, 6144, unlisted = true),
+            readerUsage = "0x100003",
+            captureReaderUsage = "0x100003",
+            stillTemplate = true,
+            fixedFps = 24,
+            companion = LensOutputSize(640, 480),
+            auxJpeg = LensOutputSize(8160, 6144)
+        )
+        val encoded = LensProfileCodec.encode(listOf(lens))
+        assertEquals(listOf(lens), LensProfileCodec.decode(encoded))
+        val json = JSONObject(encoded).getJSONArray("lenses").getJSONObject(0)
+        assertEquals("still", json.getString("template"))
+        assertEquals(24, json.getInt("fps"))
+        assertEquals(480, json.getJSONObject("companion").getInt("height"))
+
+        val plain = requireNotNull(LensProfileCodec.decode("""{"lenses":[{"id":"a","cameraId":"0"}]}""")).single()
+        assertTrue(!plain.stillTemplate && plain.fixedFps == 0)
+        assertNull(plain.companion)
+        assertNull(plain.auxJpeg)
+        assertNull(plain.captureReaderUsage)
+    }
+
     @Test
     fun mirrorRoundTripsForEveryLensAndDefaultsToNone() {
         val lenses = LensMirror.entries.map { LensProfile(it.wireName, "0", mirror = it) }

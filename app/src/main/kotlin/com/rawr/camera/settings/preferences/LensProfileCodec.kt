@@ -11,6 +11,7 @@ import com.rawr.camera.settings.model.LensDcp
 import com.rawr.camera.settings.model.LensExposure
 import com.rawr.camera.settings.model.LensLevels
 import com.rawr.camera.settings.model.LensMirror
+import com.rawr.camera.settings.model.LensOutputSize
 import com.rawr.camera.settings.model.LensProfile
 import com.rawr.camera.settings.model.RawStreamChoice
 import com.rawr.camera.settings.model.RawStreamFormat
@@ -176,6 +177,11 @@ internal object LensProfileCodec {
             }
             if (lens.captureBurst > 0) put("captureBurst", lens.captureBurst)
             if (lens.captureBurstSequential) put("captureBurstSequential", true)
+            lens.captureReaderUsage?.let { put("captureReaderUsage", it) }
+            if (lens.stillTemplate) put("template", "still")
+            if (lens.fixedFps > 0) put("fps", lens.fixedFps)
+            lens.companion?.let { put("companion", JSONObject().put("width", it.width).put("height", it.height)) }
+            lens.auxJpeg?.let { put("auxJpeg", JSONObject().put("width", it.width).put("height", it.height)) }
             if (lens.cfaBlock > 1 || lens.cfaOrder != null) {
                 put(
                     "cfa",
@@ -229,6 +235,11 @@ internal object LensProfileCodec {
             }?.takeIf { it.width > 0 && it.height > 0 },
             captureBurst = o.optInt("captureBurst").coerceIn(0, 30),
             captureBurstSequential = o.optBoolean("captureBurstSequential"),
+            captureReaderUsage = o.optString("captureReaderUsage").ifEmpty { null },
+            stillTemplate = o.optString("template") == "still",
+            fixedFps = o.optInt("fps").coerceIn(0, 240),
+            companion = decodeSize(o.optJSONObject("companion")),
+            auxJpeg = decodeSize(o.optJSONObject("auxJpeg")),
             cfaBlock = o.optJSONObject("cfa")?.optInt("block", 1)?.takeIf { it in CFA_BLOCKS } ?: 1,
             cfaOrder = o.optJSONObject("cfa")?.optString("order")?.takeIf { it in CFA_ORDERS },
             cfaLive = o.optJSONObject("cfa")?.optString("live")?.takeIf { it in CFA_LIVE_QUALITIES } ?: "standard",
@@ -240,6 +251,9 @@ internal object LensProfileCodec {
             }
         )
     }
+
+    private fun decodeSize(o: JSONObject?): LensOutputSize? =
+        o?.let { LensOutputSize(it.optInt("width"), it.optInt("height")) }?.takeIf { it.width > 0 && it.height > 0 }
 
     private fun encodeLevels(levels: LensLevels): JSONObject = JSONObject()
         .put("static", levels.isStatic)
