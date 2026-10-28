@@ -198,12 +198,15 @@ struct NativeCameraController::Impl final : CameraEventSink {
 
         // Reject any late result from the retiring lens while its session drains.
         active = false;
+        // A session that won't close (after a device error) is force-retired, as
+        // a stop does: aborting here dropped the switch and left the old session
+        // holding the camera until the stall watchdog fired.
         if (!retireSessionLocked(lock, std::chrono::seconds(3), "CAMERA_LENS_SWITCH")) {
-            diag("CAMERA_LENS_SWITCH_ABORT from=" + lensId + " to=" + value + " reason=session_close_timeout");
-            return;
+            diag("CAMERA_LENS_SWITCH_FORCED from=" + lensId + " to=" + value + " reason=session_close_timeout");
+            forceRetireSessionLocked(lock, "CAMERA_LENS_SWITCH");
         }
 
-        // Session is now definitively closed. It is safe to release the remaining
+        // Session is now closed or force-retired. It is safe to release the remaining
         // old-camera resources and create an independent vendor-session context.
         teardownCameraResourcesLocked(lock);
         lensId = value;
@@ -241,8 +244,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
         if (!routeChanged || !active || !preferredCameraId.empty()) return true;
         active = false;
         if (!retireSessionLocked(lock, std::chrono::seconds(3), "CAMERA_PROFILE_SWITCH")) {
-            diag("CAMERA_PROFILE_SWITCH_ABORT reason=session_close_timeout");
-            return true;
+            diag("CAMERA_PROFILE_SWITCH_FORCED reason=session_close_timeout");
+            forceRetireSessionLocked(lock, "CAMERA_PROFILE_SWITCH");
         }
         teardownCameraResourcesLocked(lock);
         active = true;
