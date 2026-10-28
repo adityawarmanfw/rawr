@@ -481,20 +481,23 @@ struct NativeCameraController::Impl final : CameraEventSink {
         } else if (control.appliedExposureTimeNs && control.appliedSensitivity) {
             e = {*control.appliedExposureTimeNs, *control.appliedSensitivity};
         }
+        // With levels the viewfinder's black floor confirms, the still takes that checked frame's exposure. Unconfirmed
+        // or mismatched levels never cancel the still: it goes out with the normal exposure and the log says so, since
+        // a full-size frame with a doubtful exposure is still evidence and a cancelled one is none.
         if (deviceSession.cameraContext()->guardStillExposure && control.exposureMode != ExposureControlMode::Manual) {
             const auto checked = stillExposureGuard.checked(generation, monotonicMs());
-            if (!checked) {
-                diag("CAMERA_FULL_SIZE_SUBMIT sent=0 reason=untrusted_viewfinder_levels tag=" + std::to_string(requestId) +
-                     " " + stillExposureGuard.describe(generation, monotonicMs()));
-                return abandon();
-            }
-            const auto measured = StillExposureGuard::requestExposure(*checked,
+            const auto measured = checked ? StillExposureGuard::requestExposure(*checked,
                 results.sensitivityReportedPerRequest().value_or(1.0),
                 control.exposureMode == ExposureControlMode::ShutterPriority ? control.requestedExposureTimeNs : 0,
-                control.exposureMode == ExposureControlMode::IsoPriority ? control.requestedSensitivity : 0);
-            if (!measured) return abandon();
-            e = {measured->exposureTimeNs, measured->sensitivity};
-            diag("CAMERA_STILL_EXPOSURE_CHECK timestampNs=" + std::to_string(checked->timestampNs) + " levels=consistent");
+                control.exposureMode == ExposureControlMode::IsoPriority ? control.requestedSensitivity : 0)
+                                          : std::nullopt;
+            if (measured) {
+                e = {measured->exposureTimeNs, measured->sensitivity};
+                diag("CAMERA_STILL_EXPOSURE_CHECK timestampNs=" + std::to_string(checked->timestampNs) + " levels=consistent");
+            } else {
+                diag("CAMERA_STILL_EXPOSURE_CHECK levels=unverified tag=" + std::to_string(requestId) +
+                     " exposure=normal " + stillExposureGuard.describe(generation, monotonicMs()));
+            }
         }
         if (e.exposureTimeNs <= 0 || e.sensitivity <= 0) {
             diag("CAMERA_FULL_SIZE_SUBMIT sent=0 reason=no_exposure tag=" + std::to_string(requestId));
