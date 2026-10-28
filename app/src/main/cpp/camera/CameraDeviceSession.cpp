@@ -17,6 +17,7 @@
 #include "camera/CameraControlCapabilities.h"
 #include "camera/CameraDiscovery.h"
 #include "camera/CameraKeyInjection.h"
+#include "camera/CompanionStreamSize.h"
 #include "diagnostics/logging/RuntimeTraceRecorder.h"
 #include "geometry/CfaPattern.h"
 #include "metadata/CameraMetadataReader.h"
@@ -377,16 +378,18 @@ bool CameraDeviceSession::open(const LensRoute& route, CameraCallbacks& callback
         backoff = std::min(backoff * 2, kOpenRetryMax);
     }
 }
-bool CameraDeviceSession::addCompanionStream(const std::string& physicalCameraId, const Diagnostic& diag) {
+bool CameraDeviceSession::addCompanionStream(const std::string& physicalCameraId, uint32_t rawWidth,
+                                             uint32_t rawHeight, const Diagnostic& diag) {
     // A physical output must use a size the physical camera advertises; the
     // logical camera's list can differ and the HAL rejects the configure.
     ACameraMetadata* sizeChars = characteristics_;
     if (!physicalCameraId.empty() &&
         !ok(ACameraManager_getCameraCharacteristics(manager_, physicalCameraId.c_str(), &sizeChars)))
         sizeChars = nullptr;
-    const auto size = sizeChars ? smallestYuvOutput(sizeChars, 320, 240) : std::pair<int32_t, int32_t>{0, 0};
+    const auto size = sizeChars ? pickCompanionSize(yuvOutputSizes(sizeChars), int32_t(rawWidth), int32_t(rawHeight))
+                                : CompanionSizeChoice{};
     if (sizeChars && sizeChars != characteristics_) ACameraMetadata_free(sizeChars);
-    const int32_t width = size.first, height = size.second;
+    const int32_t width = size.width, height = size.height;
     const auto fail = [&](const std::string& stage, int status) {
         diag("CAMERA_COMPANION_STREAM size=" + std::to_string(width) + "x" + std::to_string(height) +
              " stage=" + stage + " status=" + std::to_string(status) + " fallback=raw_only");
@@ -418,7 +421,8 @@ bool CameraDeviceSession::addCompanionStream(const std::string& physicalCameraId
     s = ACameraOutputTarget_create(window, &companionTarget_);
     if (!ok(s) || !companionTarget_) return fail("target", s);
     diag("CAMERA_COMPANION_STREAM size=" + std::to_string(width) + "x" + std::to_string(height) +
-         " format=YUV_420_888 status=0");
+         " format=YUV_420_888 raw=" + std::to_string(rawWidth) + "x" + std::to_string(rawHeight) +
+         " shape=" + (size.sameShape ? "raw" : "fallback") + " status=0");
     return true;
 }
 bool CameraDeviceSession::detachCompanionTarget(const Diagnostic& diag) {
@@ -457,7 +461,8 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
 
     s = ACaptureSessionOutputContainer_add(outputs_, output_);
     if (!ok(s)) return fail("add_output", "status=" + statusText(s));
-    if (companionStream && !addCompanionStream(physicalCameraId, diag)) {
+    const uint32_t rawWidth = selected ? selected->stream.width : 0, rawHeight = selected ? selected->stream.height : 0;
+    if (companionStream && !addCompanionStream(physicalCameraId, rawWidth, rawHeight, diag)) {
         // RAW-only still works on most devices; never block the start on it.
         if (outputs_ && companionOutput_) (void)ACaptureSessionOutputContainer_remove(outputs_, companionOutput_);
         if (companionOutput_) ACaptureSessionOutput_free(companionOutput_);

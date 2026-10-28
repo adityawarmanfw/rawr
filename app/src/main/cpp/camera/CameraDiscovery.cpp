@@ -139,20 +139,17 @@ std::vector<geometry::RawStreamOption> rawOutputStreams(const ACameraMetadata* c
     return out;
 }
 
-std::pair<int32_t, int32_t> smallestYuvOutput(const ACameraMetadata* characteristics, int32_t minWidth,
-                                              int32_t minHeight) {
-    std::pair<int32_t, int32_t> best{0, 0};
+std::vector<std::pair<int32_t, int32_t>> yuvOutputSizes(const ACameraMetadata* characteristics) {
+    std::vector<std::pair<int32_t, int32_t>> out;
     const auto e = entry(characteristics, ACAMERA_SCALER_AVAILABLE_STREAM_CONFIGURATIONS);
-    if (!e || !e->data.i32) return best;
+    if (!e || !e->data.i32) return out;
     for (uint32_t i = 0; i + 3 < e->count; i += 4) {
         if (e->data.i32[i] != AIMAGE_FORMAT_YUV_420_888 ||
             e->data.i32[i + 3] != ACAMERA_SCALER_AVAILABLE_STREAM_CONFIGURATIONS_OUTPUT)
             continue;
-        const int32_t w = e->data.i32[i + 1], h = e->data.i32[i + 2];
-        if (w < minWidth || h < minHeight) continue;
-        if (best.first == 0 || int64_t(w) * h < int64_t(best.first) * best.second) best = {w, h};
+        out.emplace_back(e->data.i32[i + 1], e->data.i32[i + 2]);
     }
-    return best;
+    return out;
 }
 
 }  // namespace rawrcam::camera
