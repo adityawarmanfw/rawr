@@ -133,6 +133,14 @@ struct LensRoute {
     std::string dcpError;
 };
 
+// True when the lens carries vendor keys or any recipe field beyond a plain RAW stream.
+inline bool carriesRecipe(const LensRoute& route) {
+    return !route.keys.empty() || route.captureStream || route.companionSize || route.auxJpegSize || route.fixedFps > 0 ||
+           route.stillTemplate || route.startupDelayMs > 0 || route.disableCompanion || route.companionPrivate ||
+           !route.companionTargeted || route.stopRepeatingForStill || route.readerUsage || route.captureReaderUsage ||
+           !route.vendorGate.empty() || route.unlistedStream;
+}
+
 inline bool companionStreamEnabled(const LensRoute& route, bool forced, bool automatic) {
     return !route.disableCompanion && (route.captureStream || route.companionSize || forced || automatic);
 }

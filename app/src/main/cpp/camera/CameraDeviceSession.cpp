@@ -401,6 +401,7 @@ bool CameraDeviceSession::addCompanionStream(const std::string& physicalCameraId
     CompanionSizeChoice size;
     if (profileSize) {
         size = {int32_t(profileSize->first), int32_t(profileSize->second)};
+        size.sameShape = sameAspect(size.width, size.height, int32_t(rawWidth), int32_t(rawHeight));
     } else {
         // A physical output must use a size the physical camera advertises; the
         // logical camera's list can differ and the HAL rejects the configure.
@@ -446,6 +447,9 @@ bool CameraDeviceSession::addCompanionStream(const std::string& physicalCameraId
     s = ACameraOutputTarget_create(window, &companionTarget_);
     if (!ok(s) || !companionTarget_) return fail("target", s);
     companionFromProfile_ = profileSize.has_value();
+    companionFacts_ = SessionRecipeFacts::Companion{privateFormat ? "PRIVATE" : "YUV_420_888", width, height, true,
+                                                    profileSize ? "profile" : "automatic",
+                                                    size.sameShape ? "raw" : "fallback"};
     diag("CAMERA_COMPANION_STREAM size=" + std::to_string(width) + "x" + std::to_string(height) +
          std::string(privateFormat ? " format=PRIVATE" : " format=YUV_420_888") + " status=0 source=" + std::string(profileSize ? "profile" : "automatic") +
          " shape=" + (size.sameShape ? "raw" : "fallback"));
@@ -490,12 +494,54 @@ bool CameraDeviceSession::detachCompanionTarget(const Diagnostic& diag) {
     companionTargeted_ = false;
     return true;
 }
+SessionRecipeFacts CameraDeviceSession::recipeFacts(const std::optional<LensRoute>& selected,
+                                                    ACameraDevice_request_template repeatingTemplate) const {
+    SessionRecipeFacts f;
+    f.requestTemplate = repeatingTemplate == TEMPLATE_STILL_CAPTURE ? "still" : "preview";
+    f.fpsRange = "none";
+    if (ACameraMetadata_const_entry e{};
+        sessionParameters_ && ACaptureRequest_getConstEntry(sessionParameters_, ACAMERA_CONTROL_AE_TARGET_FPS_RANGE, &e) ==
+                                  ACAMERA_OK &&
+        e.count >= 2 && e.data.i32)
+        f.fpsRange = std::to_string(e.data.i32[0]) + ".." + std::to_string(e.data.i32[1]);
+    if (companionFacts_) {
+        f.companion = *companionFacts_;
+        f.companion->targeted = companionTarget_ && companionTargeted_;
+    }
+    if (!selected) return f;
+    f.lensId = selected->lensId;
+    f.cameraId = selected->cameraId;
+    f.physicalCameraId = selected->physicalCameraId;
+    f.rawFormat = geometry::rawPixelFormatName(selected->stream.format);
+    f.rawWidth = selected->stream.width;
+    f.rawHeight = selected->stream.height;
+    for (const auto& key : selected->keys) {
+        if (!key.enabled) continue;
+        switch (key.scope) {
+            case CameraKeySetting::Scope::Session: ++f.sessionKeys; break;
+            case CameraKeySetting::Scope::Request: ++f.requestKeys; break;
+            case CameraKeySetting::Scope::Still: ++f.stillKeys; break;
+            case CameraKeySetting::Scope::Decision: ++f.decisionKeys; break;
+        }
+    }
+    if (auxJpegOutput_ && selected->auxJpegSize) f.auxJpeg = selected->auxJpegSize;
+    if (captureOutput_ && selected->captureStream)
+        f.captureStream = std::make_pair(selected->captureStream->width, selected->captureStream->height);
+    f.readerUsage = selected->readerUsage;
+    f.captureReaderUsage = selected->captureReaderUsage;
+    f.startupDelayMs = selected->startupDelayMs;
+    f.fixedFps = selected->fixedFps;
+    f.vendorGate = selected->vendorGate;
+    f.stopRepeatingForStill = selected->stopRepeatingForStill;
+    return f;
+}
 bool CameraDeviceSession::createSession(ANativeWindow* window, const std::optional<LensRoute>& selected,
                                         const CameraControlState& control, const CameraMeteringRequest& metering,
                                         CameraCallbacks& callbacks, CameraRequestPipeline& pipeline,
                                         const Diagnostic& diag, bool companionStream,
                                         const std::function<bool(int32_t)>& waitForStartup) {
     rawWindow_ = window;
+    companionFacts_.reset();
 
     if (!device_ || !rawWindow_) {
         return false;
@@ -535,6 +581,7 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
         companionTarget_ = nullptr;
         if (companionReader_) AImageReader_delete(companionReader_);
         companionReader_ = nullptr;
+        companionFacts_.reset();
     }
 
     if (selected && selected->auxJpegSize) {
@@ -676,6 +723,12 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
     }
     if (!pipeline.submit(session_, request_, callbackContext, control, metering))
         return fail("initial_repeating", "status=control_or_submit_rejected");
+    diag(describeSessionRecipe(recipeFacts(selected, repeatingTemplate)));
+    // Lenses that carry keys or recipe fields: what the HAL was actually sent, for comparing devices and builds.
+    if (selected && carriesRecipe(*selected)) {
+        dumpCaptureRequest(sessionParameters_, "session_start", diag);
+        dumpCaptureRequest(request_, "repeating_start", diag);
+    }
     diag("CAMERA_NDK_SESSION_RUNNING companion=" + std::string(companionTarget_ ? "1" : "0") +
          " captureStream=" + (captureTarget_ ? "1" : "0") + " auxJpeg=" + (auxJpegOutput_ ? "1" : "0") +
          " template=" + (repeatingTemplate == TEMPLATE_STILL_CAPTURE ? "still" : "preview"));

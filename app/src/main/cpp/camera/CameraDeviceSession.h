@@ -10,6 +10,7 @@
 
 #include "camera/CameraCallbacks.h"
 #include "camera/CameraRequestPipeline.h"
+#include "camera/SessionRecipeLog.h"
 #include "camera/CameraRouting.h"
 #include "metadata/CameraContextMetadata.h"
 namespace rawrcam::camera {
@@ -104,6 +105,9 @@ class CameraDeviceSession final {
                             const std::optional<std::pair<uint32_t, uint32_t>>& size, bool privateFormat, const Diagnostic&);
     // Adds an output no request targets (LensRoute::auxJpegSize).
     bool addAuxJpegStream(const std::pair<uint32_t, uint32_t>& size, const Diagnostic&);
+    // The configured session as facts for the CAMERA_SESSION_RECIPE line.
+    SessionRecipeFacts recipeFacts(const std::optional<LensRoute>& selected,
+                                   ACameraDevice_request_template repeatingTemplate) const;
     void closeDeviceDetached(std::function<void()> afterClose);
     // Releases a vendor gate taken for a device that never opened or is already gone.
     void releaseHeldGate() noexcept;
@@ -123,6 +127,8 @@ class CameraDeviceSession final {
     ACaptureSessionOutput* companionOutput_ = nullptr;
     ACameraOutputTarget* companionTarget_ = nullptr;
     bool companionTargeted_ = false;
+    // What addCompanionStream configured, for the session recipe log line.
+    std::optional<SessionRecipeFacts::Companion> companionFacts_;
     // The lens profile's companion: also targeted by full-size stills.
     bool companionFromProfile_ = false;
     bool profileCompanionTargeted_ = true;
