@@ -6,6 +6,8 @@ import com.rawr.camera.settings.model.CFA_LIVE_QUALITIES
 import com.rawr.camera.settings.model.CFA_ORDERS
 import com.rawr.camera.settings.model.CFA_PHOTO_QUALITIES
 import com.rawr.camera.settings.model.CAMERA_QUIRKS
+import com.rawr.camera.settings.model.COMPANION_FALLBACKS
+import com.rawr.camera.settings.model.isReaderUsage
 import com.rawr.camera.settings.model.GATE_HOLDS
 import com.rawr.camera.settings.model.REQUEST_DEFAULTS
 import com.rawr.camera.settings.model.SESSION_PARAMS_POLICIES
@@ -129,14 +131,22 @@ internal object LensProfileCodec {
         if (o.has("stopRepeatingForStill")) require(o.get("stopRepeatingForStill") is Boolean)
         for (name in listOf("companion", "auxJpeg")) {
             objectField(o, name)?.let { size ->
-                require(size.has("width") && size.has("height"))
+                // A companion block without a size tunes the automatic companion.
+                require(size.has("width") == size.has("height") && (name == "companion" || size.has("width")))
                 number(size, "width", 1.0..65536.0, true)
                 number(size, "height", 1.0..65536.0, true)
+                if (size.has("usage")) require(size.get("usage") is String && isReaderUsage(size.getString("usage"))) { "Invalid usage" }
                 if (name == "companion") {
                     choice(size, "format", listOf("yuv", "private"))
-                    if (size.has("targeted")) require(size.get("targeted") is Boolean)
+                    choice(size, "fallback", COMPANION_FALLBACKS)
+                    for (flag in listOf("targeted", "physical", "detach")) if (size.has(flag)) require(size.get(flag) is Boolean)
+                    if (size.has("maxImages")) number(size, "maxImages", 2.0..16.0, true)
                 }
             }
+        }
+        objectField(o, "reader")?.let { reader ->
+            if (reader.has("maxImages")) number(reader, "maxImages", 6.0..16.0, true)
+            for (flag in listOf("probe", "demote")) if (reader.has(flag)) require(reader.get(flag) is Boolean)
         }
         keys(o)
         levels(o)
@@ -218,13 +228,36 @@ internal object LensProfileCodec {
             if (lens.fixedFps > 0) put("fps", lens.fixedFps)
             require(!lens.disableCompanion || lens.companion == null) { "Cannot disable a required companion" }
             if (lens.disableCompanion) put("disableCompanion", true)
-            lens.companion?.let {
-                put("companion", JSONObject().put("width", it.width).put("height", it.height)
-                    .put("format", lens.companionFormat).put("targeted", lens.companionTargeted))
+            val companionTuned = lens.companionUsage != null || lens.companionMaxImages != 0 ||
+                lens.companionPhysical != null || lens.companionFallback != "base" || lens.companionDetach != null ||
+                lens.companionFormat != "yuv" || !lens.companionTargeted
+            if (lens.companion != null || companionTuned) {
+                put(
+                    "companion",
+                    JSONObject().apply {
+                        lens.companion?.let { put("width", it.width).put("height", it.height) }
+                        put("format", lens.companionFormat).put("targeted", lens.companionTargeted)
+                        lens.companionUsage?.let { put("usage", it) }
+                        if (lens.companionMaxImages != 0) put("maxImages", lens.companionMaxImages)
+                        lens.companionPhysical?.let { put("physical", it) }
+                        lens.companionDetach?.let { put("detach", it) }
+                        if (lens.companionFallback != "base") put("fallback", lens.companionFallback)
+                    }
+                )
             }
             if (lens.startupDelayMs > 0) put("startupDelayMs", lens.startupDelayMs)
             if (lens.stopRepeatingForStill) put("stopRepeatingForStill", true)
-            lens.auxJpeg?.let { put("auxJpeg", JSONObject().put("width", it.width).put("height", it.height)) }
+            lens.auxJpeg?.let {
+                put("auxJpeg", JSONObject().put("width", it.width).put("height", it.height)
+                    .apply { lens.auxJpegUsage?.let { usage -> put("usage", usage) } })
+            }
+            if (lens.rawMaxImages != 0 || lens.readerProbe || lens.readerDemote) {
+                put("reader", JSONObject().apply {
+                    if (lens.rawMaxImages != 0) put("maxImages", lens.rawMaxImages)
+                    if (lens.readerProbe) put("probe", true)
+                    if (lens.readerDemote) put("demote", true)
+                })
+            }
             if (lens.cfaBlock > 1 || lens.cfaOrder != null) {
                 put(
                     "cfa",
@@ -297,9 +330,18 @@ internal object LensProfileCodec {
             disableCompanion = o.optBoolean("disableCompanion", false),
             companionFormat = o.optJSONObject("companion")?.optString("format", "yuv") ?: "yuv",
             companionTargeted = o.optJSONObject("companion")?.optBoolean("targeted", true) ?: true,
+            companionUsage = o.optJSONObject("companion")?.optString("usage")?.takeIf { it.isNotEmpty() },
+            companionMaxImages = o.optJSONObject("companion")?.optInt("maxImages")?.coerceIn(0, 16) ?: 0,
+            companionPhysical = o.optJSONObject("companion")?.takeIf { it.has("physical") }?.optBoolean("physical"),
+            companionFallback = o.optJSONObject("companion")?.optString("fallback")?.takeIf { it in COMPANION_FALLBACKS } ?: "base",
+            companionDetach = o.optJSONObject("companion")?.takeIf { it.has("detach") }?.optBoolean("detach"),
             startupDelayMs = o.optInt("startupDelayMs").coerceIn(0, 5000),
             stopRepeatingForStill = o.optBoolean("stopRepeatingForStill"),
             auxJpeg = decodeSize(o.optJSONObject("auxJpeg")),
+            auxJpegUsage = o.optJSONObject("auxJpeg")?.optString("usage")?.takeIf { it.isNotEmpty() },
+            rawMaxImages = o.optJSONObject("reader")?.optInt("maxImages")?.coerceIn(0, 16) ?: 0,
+            readerProbe = o.optJSONObject("reader")?.optBoolean("probe") ?: false,
+            readerDemote = o.optJSONObject("reader")?.optBoolean("demote") ?: false,
             cfaBlock = o.optJSONObject("cfa")?.optInt("block", 1)?.takeIf { it in CFA_BLOCKS } ?: 1,
             cfaOrder = o.optJSONObject("cfa")?.optString("order")?.takeIf { it in CFA_ORDERS },
             cfaLive = o.optJSONObject("cfa")?.optString("live")?.takeIf { it in CFA_LIVE_QUALITIES } ?: "standard",

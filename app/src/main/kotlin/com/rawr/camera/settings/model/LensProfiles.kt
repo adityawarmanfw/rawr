@@ -112,6 +112,14 @@ val REQUEST_DEFAULTS = listOf("rawr", "minimal")
 /** How long a vendor gate is held: until the session is configured, or until the device closes. */
 val GATE_HOLDS = listOf("configured", "closed")
 
+/** What an automatic companion size does when the camera has no output with the RAW's shape. */
+val COMPANION_FALLBACKS = listOf("base", "nearest", "none")
+
+/** Reader usage as the profile writes it: a name ("gpuDataBuffer", "none") or hex ("0x100003"). */
+fun isReaderUsage(text: String): Boolean =
+    text == "gpuDataBuffer" || text == "none" ||
+        (text.length > 2 && (text.startsWith("0x") || text.startsWith("0X")) && text.drop(2).toULongOrNull(16) != null)
+
 /** Provider behaviours a lens can say it avoids (see the native CameraQuirks). */
 val CAMERA_QUIRKS = listOf("afTapHold", "noHalPriorityAe", "noTapAf", "requireFpsRange", "noAutoCompanion")
 
@@ -158,11 +166,29 @@ data class LensProfile(
     val disableCompanion: Boolean = false,
     val companionFormat: String = "yuv",
     val companionTargeted: Boolean = true,
+    /** Companion reader usage ([isReaderUsage]); null keeps the default for its format. */
+    val companionUsage: String? = null,
+    /** Images the companion reader holds; 0 keeps 2, otherwise 2 to 16. */
+    val companionMaxImages: Int = 0,
+    /** Companion tied to the route's physical camera; null follows the route. */
+    val companionPhysical: Boolean? = null,
+    /** One of [COMPANION_FALLBACKS]; only for an automatic companion size. */
+    val companionFallback: String = "base",
+    /** Drop the companion after the first frame; null drops only an automatic one. */
+    val companionDetach: Boolean? = null,
     /** Delay after configure before submitting the first request. */
     val startupDelayMs: Int = 0,
     val stopRepeatingForStill: Boolean = false,
     /** Extra JPEG output configured with the session but never targeted; null for none. */
     val auxJpeg: LensOutputSize? = null,
+    /** Aux JPEG reader usage ([isReaderUsage]); null keeps the default. */
+    val auxJpegUsage: String? = null,
+    /** Images the viewfinder RAW reader holds; 0 keeps the app's 6, otherwise 6 to 16. */
+    val rawMaxImages: Int = 0,
+    /** Check a profile-fixed [readerUsage] with the allocator first and fall back to CPU-only when refused. */
+    val readerProbe: Boolean = false,
+    /** Let a silent profile-fixed reader fall back to CPU-only like the app's own choice does. */
+    val readerDemote: Boolean = false,
     /**
      * Same-colour block side the RAW really holds (1 Bayer, 2 quad, 4 for 4x4): blocks are remosaiced to Bayer
      * for the viewfinder, stills and video. Some sensor modes (in-sensor crops) report Bayer but aren't.
@@ -217,6 +243,14 @@ fun validateLensProfile(lens: LensProfile, others: List<LensProfile>): List<Stri
     }
     validateLevels(lens.levels)?.let { add(it) }
     lens.vendorKeys.forEach { key -> validateVendorKey(key)?.let { add(it) } }
+    if (lens.companionFallback !in COMPANION_FALLBACKS) add("Unknown companion fallback ${lens.companionFallback}")
+    if (lens.companionFallback != "base" && lens.companion != null) add("A companion fallback needs an automatic companion size")
+    if (lens.companionMaxImages != 0 && lens.companionMaxImages !in 2..16) add("Companion images must be 2 to 16")
+    if (lens.rawMaxImages != 0 && lens.rawMaxImages !in 6..16) add("RAW reader images must be 6 to 16")
+    for ((label, usage) in listOf("Companion" to lens.companionUsage, "Aux JPEG" to lens.auxJpegUsage,
+        "RAW reader" to lens.readerUsage, "Capture reader" to lens.captureReaderUsage)) {
+        if (usage != null && !isReaderUsage(usage)) add("$label usage must be a name or a 0x hex value")
+    }
     if (lens.sessionParams !in SESSION_PARAMS_POLICIES) add("Unknown session parameters ${lens.sessionParams}")
     if (lens.requestDefaults !in REQUEST_DEFAULTS) add("Unknown request defaults ${lens.requestDefaults}")
     if (lens.gateHold != null && lens.gateHold !in GATE_HOLDS) add("Unknown gate hold ${lens.gateHold}")
