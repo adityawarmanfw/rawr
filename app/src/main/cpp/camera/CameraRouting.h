@@ -91,14 +91,12 @@ struct LensRoute {
     bool captureBurstSequential = false;
     // AHB usage for the captureStream reader; nullopt keeps GPU_DATA_BUFFER.
     std::optional<uint64_t> captureReaderUsage;
-    // Session parameters and the repeating request from TEMPLATE_STILL_CAPTURE
-    // instead of TEMPLATE_PREVIEW (Xiaomi full-size modes fail every request
-    // that carries a companion otherwise).
+    // Explicit recipe template shared by session, repeating and still requests.
     std::optional<bool> stillTemplate;  // Absent: preview repeating, still capture (legacy).
     // Fixed AE target fps range on the session and every request; 0 = the app's cadence.
     int32_t fixedFps = 0;
-    // YUV companion of this size, always configured and kept targeted (the
-    // Xiaomi HAL fills a full-size RAW only from a binned upscale without it).
+    // Required companion size; the format and request targeting are explicit.
+    // Recovery must never remove this output from the recipe.
     std::optional<std::pair<uint32_t, uint32_t>> companionSize;
     bool companionPrivate = false;
     bool companionTargeted = true;

@@ -13,6 +13,11 @@ inline constexpr uint64_t kSensitivityProbeRequestId = ~uint64_t{0};
 // One-shot frame before full-size stills (CameraDeviceSession::submitFullSizeDecision).
 inline constexpr uint64_t kFullSizeDecisionRequestId = ~uint64_t{0} - 1;
 
+// Calibration and decision requests are not images from the still-only stream.
+inline bool isCaptureStreamStill(bool captureStream, uint64_t tag) {
+    return captureStream && tag != 0 && tag != kSensitivityProbeRequestId && tag != kFullSizeDecisionRequestId;
+}
+
 enum class EffectiveWhiteLevelSource : std::uint8_t {
     StaticCharacteristics = 0,
     ReportedDynamic = 1,

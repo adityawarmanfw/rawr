@@ -163,6 +163,14 @@ int main() {
     guard.observe(2, {10000000, 100, false, 3000}, 300, true);
     guard.observe(1, {200000, 50, false, 4000}, 301, false); // Old generation cannot poison new lens.
     assert(guard.checked(2, 302));
+    const StillExposureGuard::Exposure sample{10000000, 400, true, 1000};
+    const auto automatic = StillExposureGuard::requestExposure(sample, 2.0);
+    assert(automatic && automatic->exposureTimeNs == 10000000 && automatic->sensitivity == 200);
+    const auto shutter = StillExposureGuard::requestExposure(sample, 2.0, 20000000);
+    assert(shutter && shutter->exposureTimeNs == 20000000 && shutter->sensitivity == 100);
+    const auto iso = StillExposureGuard::requestExposure(sample, 2.0, 0, 400);
+    assert(iso && iso->exposureTimeNs == 5000000 && iso->sensitivity == 400);
+    assert(!StillExposureGuard::requestExposure(sample, 0));
     testRaw10Unpack();
     testPackedCopyHonoursStride();
     testStatsSeparateChannels();

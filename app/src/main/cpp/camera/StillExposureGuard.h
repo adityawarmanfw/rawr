@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <mutex>
+#include <limits>
 #include <optional>
 
 namespace rawrcam::camera {
@@ -44,6 +45,25 @@ public:
         if (!agrees_ || generation != generation_ || nowMs < observedMs_ || nowMs - observedMs_ > maxAge ||
             exposure_.exposureTimeNs <= 0 || exposure_.sensitivity <= 0 || !exposure_.timestampNs) return std::nullopt;
         return exposure_;
+    }
+    // Preserve a user-owned shutter or ISO using only the checked frame's
+    // exposure product; a pending AE command may have come from a bad frame.
+    static std::optional<Exposure> requestExposure(Exposure sample, double reportedPerRequest,
+                                                    int64_t shutterNs = 0, int32_t iso = 0) {
+        const double ratio = sample.reportedIso ? reportedPerRequest : 1.0;
+        if (!(ratio > 0) || !std::isfinite(ratio) || sample.exposureTimeNs <= 0 || sample.sensitivity <= 0)
+            return std::nullopt;
+        double sensitivity = sample.sensitivity / ratio;
+        double exposure = double(sample.exposureTimeNs);
+        const double product = exposure * sensitivity;
+        if (shutterNs > 0) { exposure = double(shutterNs); sensitivity = product / exposure; }
+        else if (iso > 0) { sensitivity = iso; exposure = product / sensitivity; }
+        if (!std::isfinite(exposure) || !std::isfinite(sensitivity) ||
+            exposure >= double(std::numeric_limits<int64_t>::max()) || sensitivity > INT32_MAX) return std::nullopt;
+        sample.exposureTimeNs = int64_t(std::max(1.0, std::round(exposure)));
+        sample.sensitivity = int32_t(std::max(1.0, std::round(sensitivity)));
+        sample.reportedIso = false;
+        return sample;
     }
 private:
     mutable std::mutex mutex_;

@@ -23,7 +23,7 @@ class CameraResultProcessor final {
     void auditCallback(uint64_t callbackGeneration, uint64_t generation, bool active, bool hasContext, bool hasResult);
     CameraResultActions process(const ACaptureRequest*, const ACameraMetadata*, CameraControlState&,
                                 const metadata::CameraContextMetadataPtr&, const std::optional<LevelOverride>& staticLevels,
-                                const std::optional<LevelOverride>& captureStaticLevels,
+                                const std::optional<LevelOverride>& captureStaticLevels, bool captureStream,
                                 bool sensorModeOverridden, uint64_t latestSubmittedSerial);
     std::optional<double> sensitivityReportedPerRequest() const { return resultState_.sensitivityReportedPerRequest(); }
     void seedSensitivityRatio(double ratio) { resultState_.seedSensitivityRatio(ratio); }

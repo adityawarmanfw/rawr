@@ -451,11 +451,12 @@ struct NativeCameraController::Impl final : CameraEventSink {
                 diag("CAMERA_FULL_SIZE_SUBMIT sent=0 reason=untrusted_viewfinder_levels tag=" + std::to_string(requestId));
                 return abandon();
             }
-            // Auto borrows exactly the measured frame, never a newer unmeasured AE command.
-            if (control.exposureMode == ExposureControlMode::Auto) {
-                const double ratio = checked->reportedIso ? results.sensitivityReportedPerRequest().value_or(1.0) : 1.0;
-                e = {checked->exposureTimeNs, int32_t(std::max(1.0, std::round(checked->sensitivity / ratio)))};
-            }
+            const auto measured = StillExposureGuard::requestExposure(*checked,
+                results.sensitivityReportedPerRequest().value_or(1.0),
+                control.exposureMode == ExposureControlMode::ShutterPriority ? control.requestedExposureTimeNs : 0,
+                control.exposureMode == ExposureControlMode::IsoPriority ? control.requestedSensitivity : 0);
+            if (!measured) return abandon();
+            e = {measured->exposureTimeNs, measured->sensitivity};
             diag("CAMERA_STILL_EXPOSURE_CHECK timestampNs=" + std::to_string(checked->timestampNs) + " levels=consistent");
         }
         if (e.exposureTimeNs <= 0 || e.sensitivity <= 0) {
@@ -1314,7 +1315,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
             return;
         deviceSession.logKeyResultsOnce(result, [this](const std::string& line) { diag(line); });
         auto actions = results.process(requestCopy, result, control, deviceSession.cameraContext(),
-                                       deviceSession.staticLevels(), deviceSession.captureStaticLevels(), deviceSession.sensorModeOverridden(),
+                                       deviceSession.staticLevels(), deviceSession.captureStaticLevels(), deviceSession.hasCaptureStream(), deviceSession.sensorModeOverridden(),
                                        requests.latestSubmittedSerial());
         captureChanged.notify_all();
         if (!actions.frame) return;

@@ -807,7 +807,7 @@ void CameraDeviceSession::sessionClosed(uint64_t callbackGeneration, ACameraCapt
 
 namespace rawrcam::camera {
 bool CameraDeviceSession::hasFullSizeDecision() const noexcept {
-    if (!captureTarget_ || !companionTarget_) return false;
+    if (!captureTarget_ || !companionTarget_ || !profileCompanionTargeted_) return false;
     return std::any_of(stillKeys_.begin(), stillKeys_.end(), [](const CameraKeySetting& k) {
         return k.enabled && k.scope == CameraKeySetting::Scope::Decision;
     });

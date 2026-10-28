@@ -4,6 +4,7 @@
 #include <iostream>
 #include <string>
 #include "camera/CameraProfileJson.h"
+#include "metadata/FrameMetadataSnapshot.h"
 #include "camera/CameraKeySubmission.h"
 
 // The Xiaomi full-size recipe fields: template, fixed fps, companion size,
@@ -60,6 +61,12 @@ int main(int argc, char** argv) {
         assert(rawrcam::camera::serializeCameraProfile(*rawrcam::camera::parseCameraProfile(encoded)) == encoded);
     }
     testFullSizeRecipeJson();
+    using rawrcam::metadata::isCaptureStreamStill;
+    assert(isCaptureStreamStill(true, 42));
+    assert(!isCaptureStreamStill(false, 42));
+    assert(!isCaptureStreamStill(true, 0));
+    assert(!isCaptureStreamStill(true, rawrcam::metadata::kSensitivityProbeRequestId));
+    assert(!isCaptureStreamStill(true, rawrcam::metadata::kFullSizeDecisionRequestId));
     using namespace rawrcam::camera;
     const auto levels = parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0",
         "levels":{"static":true,"black":[64],"white":1023},
