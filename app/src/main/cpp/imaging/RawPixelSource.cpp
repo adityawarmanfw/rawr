@@ -51,6 +51,39 @@ bool copyRawToPackedRaw16(const RawPixelSource& source, uint16_t* destination) n
     return true;
 }
 
+RawBlockUniformity rawBlockUniformity(const RawPixelSource& source, const RawContentStatsInput& input) {
+    RawBlockUniformity out;
+    if (!source.base || source.rowStrideBytes < minimumRowBytes(source.format, source.width)) return out;
+    // A centred window: real sensor noise makes equal blocks rare, while a binned
+    // frame upscaled by pixel repetition makes every aligned block equal. Blocks
+    // at black or white are flat either way and are skipped.
+    const auto uniform = [&](uint32_t block, uint64_t* sampled) {
+        const uint32_t span = std::min<uint32_t>(1024u, std::min(source.width, source.height)) / 4u * 4u;
+        const uint32_t x0 = (source.width - span) / 2u / 4u * 4u, y0 = (source.height - span) / 2u / 4u * 4u;
+        uint64_t count = 0, equal = 0;
+        for (uint32_t y = y0; y + block <= y0 + span; y += block) {
+            for (uint32_t x = x0; x + block <= x0 + span; x += block) {
+                const uint16_t first = readRawPixel(source, x, y);
+                if (float(first) <= input.blackLevel || float(first) >= input.whiteLevel) continue;
+                bool same = true;
+                for (uint32_t dy = 0; dy < block && same; ++dy)
+                    for (uint32_t dx = 0; dx < block && same; ++dx) same = readRawPixel(source, x + dx, y + dy) == first;
+                ++count;
+                if (same) ++equal;
+            }
+        }
+        if (sampled) *sampled = count;
+        return count ? double(equal) / double(count) : 0.0;
+    };
+    out.uniform2 = uniform(2u, &out.sampled);
+    out.uniform4 = uniform(4u, nullptr);
+    out.verdict = out.sampled < 64u              ? "flat"
+                  : out.uniform4 > 0.9           ? "upscaled4x"
+                  : out.uniform2 > 0.9           ? "upscaled2x"
+                                                 : "real";
+    return out;
+}
+
 std::string rawContentStatsLine(const RawPixelSource& source, const RawContentStatsInput& input) {
     std::ostringstream out;
     out << "RAW_CONTENT_STATS format=" << rawPixelFormatName(source.format) << " dims=" << source.width << 'x'
@@ -107,6 +140,9 @@ std::string rawContentStatsLine(const RawPixelSource& source, const RawContentSt
     const double denom = total ? static_cast<double>(total) : 1.0;
     out << std::setprecision(4) << " fracAtOrBelowBlack=" << static_cast<double>(atOrBelowBlack) / denom
         << " fracAtOrAboveWhite=" << static_cast<double>(atOrAboveWhite) / denom;
+    const auto blocks = rawBlockUniformity(source, input);
+    out << " block2Uniform=" << blocks.uniform2 << " block4Uniform=" << blocks.uniform4
+        << " blocksSampled=" << blocks.sampled << " detail=" << blocks.verdict;
     return out.str();
 }
 

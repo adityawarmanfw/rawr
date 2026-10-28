@@ -42,6 +42,17 @@ struct RawContentStatsInput {
     uint32_t quadStep = 8;
 };
 
+// Share of aligned 2x2 / 4x4 blocks whose pixels are all equal, in a centred
+// window: a vendor full-size mode can hand over a binned frame upscaled by
+// pixel repetition, which only this tells apart from real full-size detail.
+struct RawBlockUniformity {
+    double uniform2 = 0.0;
+    double uniform4 = 0.0;
+    uint64_t sampled = 0;          // 2x2 blocks counted (not at black or white)
+    const char* verdict = "flat";  // "real", "upscaled2x", "upscaled4x" or "flat"
+};
+[[nodiscard]] RawBlockUniformity rawBlockUniformity(const RawPixelSource& source, const RawContentStatsInput& input);
+
 // One-line summary of the RAW plane content, to tell a black or garbage
 // sensor buffer apart from a development problem in device logs.
 [[nodiscard]] std::string rawContentStatsLine(const RawPixelSource& source, const RawContentStatsInput& input);

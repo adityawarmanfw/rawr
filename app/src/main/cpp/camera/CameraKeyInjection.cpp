@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "camera/CameraKeyResult.h"
+#include "camera/CameraKeySubmission.h"
 #include "camera/CameraMetadataTags.h"
 
 namespace rawrcam::camera {
@@ -123,17 +124,12 @@ CameraKeyInjectionResult applyCameraKeySettings(ACaptureRequest* request, const 
         if (!key.enabled || key.scope != scope) continue;
         std::string error;
         const auto tag = resolveTag(characteristics, cameraId, key.tag, &error);
-        std::string skip;
         KeyType usedType = key.type;
-        if (!tag) {
-            skip = "lookup:" + error;
-        } else if (key.values.empty()) {
-            skip = "no_values";
-        } else if (session && !containsI32Tag(characteristics, ACAMERA_REQUEST_AVAILABLE_SESSION_KEYS, *tag)) {
-            skip = "not_advertised_as_session_key";
-        } else if (const camera_status_t s = setEntry(request, *tag, key, &usedType); s != ACAMERA_OK) {
-            skip = "set_status=" + std::to_string(s);
-        }
+        const auto submission = submitCameraKey(
+            tag.has_value(), !key.values.empty(),
+            session && tag && !containsI32Tag(characteristics, ACAMERA_REQUEST_AVAILABLE_SESSION_KEYS, *tag),
+            error, [&] { return setEntry(request, *tag, key, &usedType); });
+        const auto& skip = submission.failure;
         std::ostringstream line;
         line << "CAMERA_KEY_INJECTION scope="
              << (session                                       ? "session"
@@ -162,6 +158,8 @@ CameraKeyInjectionResult applyCameraKeySettings(ACaptureRequest* request, const 
         if (skip.empty()) {
             ++result.applied;
             line << " applied=true";
+            if (submission.warnUnlistedSession)
+                line << " warning=framework_may_drop_unadvertised_session_key";
             if (usedType != key.type)
                 line << " type=" << keyTypeName(usedType) << " declared=" << keyTypeName(key.type);
         } else {

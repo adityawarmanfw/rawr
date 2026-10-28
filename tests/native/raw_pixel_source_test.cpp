@@ -2,6 +2,7 @@
 #include <cstring>
 #include <iostream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "imaging/RawPixelSource.h"
@@ -101,9 +102,44 @@ void testStatsSeparateChannels() {
     assert(rawContentStatsLine(empty, input).find("error=invalid_source") != std::string::npos);
 }
 
+// A binned frame upscaled by pixel repetition (what the Xiaomi 17 Ultra HAL
+// delivers for an 8192x6144 RAW without its companion) vs real per-pixel noise.
+void testBlockUniformity() {
+    const uint32_t w = 256, h = 256;
+    RawContentStatsInput input;
+    input.blackLevel = 64.0f;
+    input.whiteLevel = 1023.0f;
+    const auto make = [&](uint32_t repeat) {
+        std::vector<uint16_t> raw(w * h);
+        uint32_t seed = 12345;
+        std::vector<uint16_t> binned((w / repeat) * (h / repeat));
+        for (auto& v : binned) {
+            seed = seed * 1664525u + 1013904223u;
+            v = static_cast<uint16_t>(100 + (seed >> 16) % 800);
+        }
+        for (uint32_t y = 0; y < h; ++y)
+            for (uint32_t x = 0; x < w; ++x) raw[y * w + x] = binned[(y / repeat) * (w / repeat) + x / repeat];
+        return raw;
+    };
+    for (const auto& [repeat, verdict] : {std::pair{1u, "real"}, std::pair{2u, "upscaled2x"}, std::pair{4u, "upscaled4x"}}) {
+        const auto raw = make(repeat);
+        RawPixelSource source{reinterpret_cast<const uint8_t*>(raw.data()), RawPixelFormat::Raw16, w, h,
+                              w * sizeof(uint16_t)};
+        const auto u = rawBlockUniformity(source, input);
+        assert(std::string(u.verdict) == verdict);
+        assert(rawContentStatsLine(source, input).find(std::string("detail=") + verdict) != std::string::npos);
+    }
+    // A covered lens (everything at black) is flat, not upscaled.
+    std::vector<uint16_t> dark(w * h, 64);
+    RawPixelSource source{reinterpret_cast<const uint8_t*>(dark.data()), RawPixelFormat::Raw16, w, h,
+                          w * sizeof(uint16_t)};
+    assert(std::string(rawBlockUniformity(source, input).verdict) == "flat");
+}
+
 }  // namespace
 
 int main() {
+    testBlockUniformity();
     testRaw10Unpack();
     testPackedCopyHonoursStride();
     testStatsSeparateChannels();

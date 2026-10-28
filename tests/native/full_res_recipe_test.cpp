@@ -1,6 +1,7 @@
 #include <cassert>
 #include <string>
 #include "camera/CameraProfileJson.h"
+#include "camera/CameraKeySubmission.h"
 
 // The Xiaomi full-size recipe fields: template, fixed fps, companion size,
 // auxiliary JPEG, numeric reader usages. They round-trip and reject bad values.
@@ -37,4 +38,17 @@ void testFullSizeRecipeJson() {
 }
 
 
-int main() { testFullSizeRecipeJson(); }
+int main() {
+    testFullSizeRecipeJson();
+    using rawrcam::camera::submitCameraKey;
+    int calls = 0;
+    const auto setter = [&] { ++calls; return 0; };
+    const auto unlisted = submitCameraKey(true, true, true, "", setter);
+    assert(calls == 1 && unlisted.failure.empty() && unlisted.warnUnlistedSession);
+    const auto listed = submitCameraKey(true, true, false, "", setter);
+    assert(calls == 2 && listed.failure.empty() && !listed.warnUnlistedSession);
+    assert(!submitCameraKey(false, true, true, "missing", setter).failure.empty());
+    assert(!submitCameraKey(true, false, true, "", setter).failure.empty());
+    assert(calls == 2);
+    assert(submitCameraKey(true, true, true, "", [] { return -22; }).failure == "set_status=-22");
+}
