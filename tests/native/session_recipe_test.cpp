@@ -136,6 +136,50 @@ void testGateHoldJson() {
     assert(error.find("needs a vendorGate") != std::string::npos);
 }
 
+void testSessionParamsAndRequestDefaults() {
+    std::string error;
+    const auto lens = parseCameraProfile(
+        R"({"lenses":[{"id":"a","cameraId":"2","session":{"params":"none"},"request":{"defaults":"minimal"},
+            "keys":[{"tag":"vendor.mode","type":"int32","scope":"request","values":[3]}]}]})", &error);
+    assert(lens);
+    assert(lens->lenses[0].sessionParams == SessionParamsPolicy::None);
+    assert(lens->lenses[0].requestDefaults == RequestDefaults::Minimal);
+    const auto recipe = resolveSessionRecipe(lens->lenses[0], {});
+    assert(recipe.sessionParams == SessionParamsPolicy::None && recipe.requestDefaults == RequestDefaults::Minimal);
+    const auto json = serializeCameraProfile(*lens);
+    assert(json.find(R"("session":{"params":"none"})") != std::string::npos);
+    assert(json.find(R"("request":{"defaults":"minimal"})") != std::string::npos);
+    const auto again = parseCameraProfile(json);
+    assert(again && serializeCameraProfile(*again) == json);
+
+    const auto full = parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"2","session":{"params":"full"}}]})");
+    assert(full && full->lenses[0].sessionParams == SessionParamsPolicy::Full && carriesRecipe(full->lenses[0]));
+    assert(serializeCameraProfile(*full).find(R"("params":"full")") != std::string::npos);
+
+    // The defaults are the old behaviour and write nothing.
+    const auto plain = parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"2"}]})");
+    assert(plain && plain->lenses[0].sessionParams == SessionParamsPolicy::Cadence);
+    assert(plain->lenses[0].requestDefaults == RequestDefaults::Rawr && !carriesRecipe(plain->lenses[0]));
+    assert(serializeCameraProfile(*plain).find("\"session\"") == std::string::npos);
+    assert(serializeCameraProfile(*plain).find("\"request\"") == std::string::npos);
+
+    // A session-scope key needs the session parameters; none would drop it silently.
+    assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"2","session":{"params":"none"},
+        "keys":[{"tag":"vendor.mode","scope":"session","values":[3]}]}]})", &error));
+    assert(error.find("conflicts with session key") != std::string::npos);
+    assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"2","session":{"params":"none"},
+        "keys":[{"tag":"vendor.mode","scope":"sessionAndRequest","values":[3]}]}]})", &error));
+    // A disabled session key is not sent, so it does not conflict.
+    assert(parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"2","session":{"params":"none"},
+        "keys":[{"tag":"vendor.mode","scope":"session","values":[3],"enabled":false}]}]})"));
+    assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"2","session":{"params":"sometimes"}}]})", &error));
+    assert(error.find("unknown session params") != std::string::npos);
+    assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"2","request":{"defaults":"bare"}}]})", &error));
+    assert(error.find("unknown request defaults") != std::string::npos);
+    assert(std::string(sessionParamsName(SessionParamsPolicy::Full)) == "full");
+    assert(std::string(requestDefaultsName(RequestDefaults::Minimal)) == "minimal");
+}
+
 }  // namespace
 
 int main() {
@@ -145,6 +189,7 @@ int main() {
     testGateHoldKeepsTheOldRule();
     testVivoStillStrategy();
     testGateHoldJson();
+    testSessionParamsAndRequestDefaults();
     std::cout << "session_recipe_test passed\n";
     return 0;
 }

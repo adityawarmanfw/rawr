@@ -126,7 +126,7 @@ CameraKeyInjectionResult applyCameraKeySettings(ACaptureRequest* request, const 
     CameraKeyInjectionResult result;
     const bool session = scope == CameraKeySetting::Scope::Session;
     for (const auto& key : keys) {
-        if (!key.enabled || key.scope != scope) continue;
+        if (!key.enabled || !keyAppliesIn(key.scope, scope)) continue;
         std::string error;
         const auto tag = resolveTag(characteristics, cameraId, key.tag, &error);
         KeyType usedType = key.type;

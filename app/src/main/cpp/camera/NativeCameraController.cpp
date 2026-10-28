@@ -677,7 +677,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
             std::ostringstream keys;
             keys.precision(17);
             for (const auto& setting : route->keys) {
-                if (!setting.enabled || setting.scope != CameraKeySetting::Scope::Session) continue;
+                if (!setting.enabled || !keyAppliesIn(setting.scope, CameraKeySetting::Scope::Session)) continue;
                 keys << '|' << setting.tag << '=';
                 for (std::size_t i = 0; i < setting.values.size(); ++i) keys << (i ? "," : "") << setting.values[i];
             }
@@ -921,6 +921,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         control.capabilities.dngOnly =
             route.captureStream && uint64_t(route.captureStream->width) * route.captureStream->height > kDngOnlyPixels;
         control.capabilities.fixedFps = route.fixedFps;
+        control.capabilities.minimalRequestDefaults = route.requestDefaults == RequestDefaults::Minimal;
         if (quirks.noTapAf) {
             control.capabilities.tapAfSupported = false;
             control.capabilities.maxAfRegions = 0;

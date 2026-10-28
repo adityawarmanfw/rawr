@@ -500,6 +500,8 @@ SessionRecipeFacts CameraDeviceSession::recipeFacts(const std::optional<LensRout
     SessionRecipeFacts f;
     f.stillStrategy = stillStrategyName(recipe.still);
     f.gateHold = gateHoldName(recipe.gateHold);
+    f.sessionParams = sessionParamsName(recipe.sessionParams);
+    f.requestDefaults = requestDefaultsName(recipe.requestDefaults);
     f.requestTemplate = repeatingTemplate == TEMPLATE_STILL_CAPTURE ? "still" : "preview";
     f.fpsRange = "none";
     if (ACameraMetadata_const_entry e{};
@@ -525,6 +527,7 @@ SessionRecipeFacts CameraDeviceSession::recipeFacts(const std::optional<LensRout
             case CameraKeySetting::Scope::Request: ++f.requestKeys; break;
             case CameraKeySetting::Scope::Still: ++f.stillKeys; break;
             case CameraKeySetting::Scope::Decision: ++f.decisionKeys; break;
+            case CameraKeySetting::Scope::SessionAndRequest: ++f.sessionKeys; ++f.requestKeys; break;
         }
     }
     if (auxJpegOutput_ && selected->auxJpegSize) f.auxJpeg = selected->auxJpegSize;
@@ -625,28 +628,53 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
     // session keys (e.g. a vendor sensor/readout mode).
     const ACameraDevice_request_template repeatingTemplate =
         recipe.repeatingStillTemplate ? TEMPLATE_STILL_CAPTURE : TEMPLATE_PREVIEW;
-    s = ACameraDevice_createCaptureRequest(device_, repeatingTemplate, &sessionParameters_);
-    if (!ok(s) || !sessionParameters_) {
-        return fail("session_request", "status=" + statusText(s));
-    }
-    s = pipeline.applySessionCadence(sessionParameters_, control);
-    if (!ok(s)) {
-        return fail("priority_session_fps", "status=" + statusText(s));
-    }
-
+    const bool minimalDefaults = recipe.requestDefaults == RequestDefaults::Minimal;
     const auto joined = [](const std::vector<std::string>& items) {
         std::string out;
         for (const auto& item : items) out += (out.empty() ? "" : ",") + item;
         return out;
     };
+    if (recipe.sessionParams != SessionParamsPolicy::None) {
+        s = ACameraDevice_createCaptureRequest(device_, repeatingTemplate, &sessionParameters_);
+        if (!ok(s) || !sessionParameters_) {
+            return fail("session_request", "status=" + statusText(s));
+        }
+        s = pipeline.applySessionCadence(sessionParameters_, control);
+        if (!ok(s)) {
+            return fail("priority_session_fps", "status=" + statusText(s));
+        }
+        if (recipe.sessionParams == SessionParamsPolicy::Full) {
+            // The whole repeating request, built the way the repeating request will be: defaults, the lens's
+            // request-scope keys and the control state. The HAL only reads the keys it lists as session keys.
+            applyPreviewRequestDefaults(sessionParameters_, *cameraContext_, minimalDefaults);
+            if (selected) {
+                const auto requestKeys = applyCameraKeySettings(sessionParameters_, characteristics_, selected->keys,
+                                                                selected->cameraId.c_str(),
+                                                                CameraKeySetting::Scope::Request, "lens_in_session", diag);
+                if (!requestKeys.failures.empty())
+                    return fail("lens_request_keys_in_session",
+                                "lensId=" + selected->lensId + " failed=" + joined(requestKeys.failures));
+            }
+            (void)applyCameraControlState(sessionParameters_, control, metering);
+        }
+    } else if (selected) {
+        // Session-scope keys travel in the session parameters; without them the key would be dropped silently.
+        for (const auto& key : selected->keys) {
+            if (key.enabled && keyAppliesIn(key.scope, CameraKeySetting::Scope::Session))
+                return fail("session_params", "reason=none_conflicts_with_session_key tag=" + key.tag);
+        }
+    }
     if (selected) {
         // The user configured these keys; a lens that can't get them (e.g. a
         // crop-readout mode) would produce wrong frames, so fail loudly.
-        const auto lensKeys = applyCameraKeySettings(sessionParameters_, characteristics_, selected->keys, selected->cameraId.c_str(),
-                                                     CameraKeySetting::Scope::Session, "lens", diag);
-        if (!lensKeys.failures.empty())
-            return fail("lens_session_keys", "lensId=" + selected->lensId + " failed=" + joined(lensKeys.failures));
-        sessionKeysApplied_ = lensKeys.applied > 0;
+        if (sessionParameters_) {
+            const auto lensKeys = applyCameraKeySettings(sessionParameters_, characteristics_, selected->keys,
+                                                         selected->cameraId.c_str(), CameraKeySetting::Scope::Session,
+                                                         "lens", diag);
+            if (!lensKeys.failures.empty())
+                return fail("lens_session_keys", "lensId=" + selected->lensId + " failed=" + joined(lensKeys.failures));
+            sessionKeysApplied_ = lensKeys.applied > 0;
+        }
         staticLevels_ = staticLevelsForStream(*selected, false);
         captureStaticLevels_ = staticLevelsForStream(*selected, true);
     }
@@ -661,8 +689,9 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
             return fail("vendor_gate", "gate=" + selected->vendorGate + " reason=" + gateError);
         heldGate_ = selected->vendorGate;
     }
-    s = ACameraDevice_createCaptureSessionWithSessionParameters(device_, outputs_, sessionParameters_,
-                                                                &sessionCallbacks, &session_);
+    s = sessionParameters_ ? ACameraDevice_createCaptureSessionWithSessionParameters(device_, outputs_, sessionParameters_,
+                                                                                    &sessionCallbacks, &session_)
+                           : ACameraDevice_createCaptureSession(device_, outputs_, &sessionCallbacks, &session_);
     // The recipe says how long the gate is held; capture-stream routes keep it until the device closes
     // (see defaultGateHold).
     if (!heldGate_.empty() && recipe.gateHold == GateHold::UntilConfigured) {
@@ -670,7 +699,9 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
         releaseHeldGate();
     }
     if (!ok(s) || !session_) {
-        return fail(sessionKeysApplied_ ? "create_with_session_keys" : "create_standard_with_session_parameters",
+        return fail(sessionKeysApplied_      ? "create_with_session_keys"
+                    : sessionParameters_     ? "create_standard_with_session_parameters"
+                                             : "create_without_session_parameters",
                     "status=" + statusText(s));
     }
 
@@ -711,7 +742,7 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
         companionTargeted_ = true;
     }
 
-    applyPreviewRequestDefaults(request_, *cameraContext_);
+    applyPreviewRequestDefaults(request_, *cameraContext_, minimalDefaults);
     // Stills, multiframe bursts and video all come from this repeating RAW
     // request, so request-scope keys only need to be set here.
     if (selected) {

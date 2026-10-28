@@ -389,10 +389,11 @@ void appendKeys(std::string& out, const std::vector<CameraKeySetting>& keys) {
         out += ",\"type\":\"";
         out += typeName(k.type);
         out += "\",\"scope\":\"";
-        out += k.scope == CameraKeySetting::Scope::Session    ? "session"
-               : k.scope == CameraKeySetting::Scope::Request  ? "request"
-               : k.scope == CameraKeySetting::Scope::Decision ? "decision"
-                                                              : "still";
+        out += k.scope == CameraKeySetting::Scope::Session            ? "session"
+               : k.scope == CameraKeySetting::Scope::Request          ? "request"
+               : k.scope == CameraKeySetting::Scope::Decision         ? "decision"
+               : k.scope == CameraKeySetting::Scope::SessionAndRequest ? "sessionAndRequest"
+                                                                      : "still";
         out += "\",\"values\":[";
         for (size_t v = 0; v < k.values.size(); ++v) {
             if (v) out += ',';
@@ -486,10 +487,11 @@ bool readKeys(const std::vector<Json>& list, std::vector<CameraKeySetting>& out,
         }
         key.type = *type;
         const std::string scope = k.str("scope", "session");
-        key.scope = scope == "request" ? CameraKeySetting::Scope::Request
-                    : scope == "still"    ? CameraKeySetting::Scope::Still
-                    : scope == "decision" ? CameraKeySetting::Scope::Decision
-                                          : CameraKeySetting::Scope::Session;
+        key.scope = scope == "request"             ? CameraKeySetting::Scope::Request
+                    : scope == "still"             ? CameraKeySetting::Scope::Still
+                    : scope == "decision"          ? CameraKeySetting::Scope::Decision
+                    : scope == "sessionAndRequest" ? CameraKeySetting::Scope::SessionAndRequest
+                                                   : CameraKeySetting::Scope::Session;
         for (const auto& v : k.array("values"))
             if (v.kind == Json::Kind::Number) key.values.push_back(v.number);
         key.enabled = k.flag("enabled", true);
@@ -577,6 +579,10 @@ std::string serializeCameraProfile(const CameraProfile& profile) {
             out += ",\"vendorGate\":";
             appendJsonString(out, r.vendorGate);
         }
+        if (r.sessionParams != SessionParamsPolicy::Cadence)
+            out += std::string(",\"session\":{\"params\":\"") + sessionParamsName(r.sessionParams) + "\"}";
+        if (r.requestDefaults != RequestDefaults::Rawr)
+            out += std::string(",\"request\":{\"defaults\":\"") + requestDefaultsName(r.requestDefaults) + "\"}";
         if (r.gateHold)
             out += *r.gateHold == GateHold::UntilClosed ? ",\"gateHold\":\"closed\"" : ",\"gateHold\":\"configured\"";
         if (r.quirks.any()) {
@@ -713,6 +719,26 @@ std::optional<CameraProfile> readProfile(const Json& root, std::string* error) {
             }
         }
         r.vendorGate = l.str("vendorGate");
+        if (const Json* s = l.get("session"); s && s->kind == Json::Kind::Object) {
+            if (const std::string params = s->str("params"); !params.empty()) {
+                if (params != "cadence" && params != "none" && params != "full") {
+                    if (error) *error = "unknown session params " + params + " for lens " + r.lensId;
+                    return std::nullopt;
+                }
+                r.sessionParams = params == "none"   ? SessionParamsPolicy::None
+                                  : params == "full" ? SessionParamsPolicy::Full
+                                                     : SessionParamsPolicy::Cadence;
+            }
+        }
+        if (const Json* q = l.get("request"); q && q->kind == Json::Kind::Object) {
+            if (const std::string defaults = q->str("defaults"); !defaults.empty()) {
+                if (defaults != "rawr" && defaults != "minimal") {
+                    if (error) *error = "unknown request defaults " + defaults + " for lens " + r.lensId;
+                    return std::nullopt;
+                }
+                r.requestDefaults = defaults == "minimal" ? RequestDefaults::Minimal : RequestDefaults::Rawr;
+            }
+        }
         if (const std::string hold = l.str("gateHold"); !hold.empty()) {
             if ((hold != "configured" && hold != "closed") || r.vendorGate.empty()) {
                 if (error)
@@ -780,6 +806,15 @@ std::optional<CameraProfile> readProfile(const Json& root, std::string* error) {
         readDcp(l.get("dcp"), r);
         readExposure(l.get("exposure"), r.exposure);
         if (!readKeys(l.array("keys"), r.keys, error)) return std::nullopt;
+        if (r.sessionParams == SessionParamsPolicy::None) {
+            // A session-scope key travels in the session parameters: without them it would be dropped silently.
+            for (const auto& k : r.keys) {
+                if (k.enabled && keyAppliesIn(k.scope, CameraKeySetting::Scope::Session)) {
+                    if (error) *error = "session params none conflicts with session key " + k.tag + " for lens " + r.lensId;
+                    return std::nullopt;
+                }
+            }
+        }
         profile.lenses.push_back(std::move(r));
     }
     if (profile.lenses.empty()) {

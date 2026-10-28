@@ -21,6 +21,27 @@ enum class GateHold : uint8_t {
     UntilClosed,      // kept until the device closes
 };
 
+// What the session-parameter request carries when the session is created.
+enum class SessionParamsPolicy : uint8_t {
+    Cadence,  // the AE target fps range and the session-scope keys (the default)
+    None,     // no session parameters at all: a plain createCaptureSession
+    Full,     // the whole repeating request: defaults, controls and the keys of both scopes
+};
+
+// Which request defaults the app writes into every frame request.
+enum class RequestDefaults : uint8_t {
+    Rawr,     // the app's defaults (the default)
+    Minimal,  // leaves the processing overrides to the template: distortion and hot-pixel modes, the hot-pixel
+              // map, face detection and the AE priority tag. Controls, shading map and keys stay.
+};
+
+[[nodiscard]] constexpr const char* sessionParamsName(SessionParamsPolicy p) noexcept {
+    return p == SessionParamsPolicy::None ? "none" : p == SessionParamsPolicy::Full ? "full" : "cadence";
+}
+[[nodiscard]] constexpr const char* requestDefaultsName(RequestDefaults d) noexcept {
+    return d == RequestDefaults::Minimal ? "minimal" : "rawr";
+}
+
 // One Camera2 metadata entry to inject. The tag is a metadata name (public or
 // vendor, e.g. "vivo.control.forceSensorMode") or a numeric id ("0x80020000").
 // Session keys go into the session parameters of every capture session;
@@ -31,13 +52,23 @@ struct CameraKeySetting {
     // Still: only on full-size still requests (LensRoute::captureStream), never
     // on the session or the repeating request. Decision: only on the one-shot
     // frame sent before those stills (see CameraDeviceSession::submitFullSizeDecision).
-    enum class Scope : uint8_t { Session, Request, Still, Decision };
+    // SessionAndRequest: the same value in the session parameters and on every capture request, for a
+    // mode whose HAL reads the key when it configures streams and again per request.
+    enum class Scope : uint8_t { Session, Request, Still, Decision, SessionAndRequest };
     std::string tag;
     Type type = Type::Int32;
     Scope scope = Scope::Session;
     std::vector<double> values;
     bool enabled = true;
 };
+
+// Does a key declared with `declared` go out when the keys of `phase` (Session, Request, Still or
+// Decision) are submitted?
+[[nodiscard]] constexpr bool keyAppliesIn(CameraKeySetting::Scope declared, CameraKeySetting::Scope phase) noexcept {
+    using Scope = CameraKeySetting::Scope;
+    return declared == phase ||
+           (declared == Scope::SessionAndRequest && (phase == Scope::Session || phase == Scope::Request));
+}
 
 // Black/white levels for a lens. Dynamic uses the camera's characteristics
 // and per-frame dynamic levels; Static replaces both on every frame (needed
@@ -84,6 +115,9 @@ struct LensRoute {
     // AHB usage for the RAW reader instead of the ingress ladder's choice; the
     // vivo full-size modes configure only without CPU-read / sampled-image bits.
     std::optional<uint64_t> readerUsage;
+    // What the session parameters carry; None conflicts with session-scope keys, which need them.
+    SessionParamsPolicy sessionParams = SessionParamsPolicy::Cadence;
+    RequestDefaults requestDefaults = RequestDefaults::Rawr;
     // Provider behaviours this lens avoids, on top of the device's (BuiltInProfile::quirks).
     CameraQuirks quirks;
     // Vendor state the app holds while the device is open (see VendorCameraGate).
@@ -149,7 +183,8 @@ inline bool carriesRecipe(const LensRoute& route) {
     return !route.keys.empty() || route.captureStream || route.companionSize || route.auxJpegSize || route.fixedFps > 0 ||
            route.stillTemplate || route.startupDelayMs > 0 || route.disableCompanion || route.companionPrivate ||
            !route.companionTargeted || route.stopRepeatingForStill || route.readerUsage || route.captureReaderUsage ||
-           !route.vendorGate.empty() || route.unlistedStream || route.quirks.any() || route.gateHold;
+           !route.vendorGate.empty() || route.unlistedStream || route.quirks.any() || route.gateHold ||
+           route.sessionParams != SessionParamsPolicy::Cadence || route.requestDefaults != RequestDefaults::Rawr;
 }
 
 // What a lens avoids on this device: the device's quirks, the lens's own, and the presets the lens's

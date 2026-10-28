@@ -57,6 +57,8 @@ struct SessionRecipe {
     std::string gate;
     GateHold gateHold = GateHold::UntilConfigured;
     int32_t startupDelayMs = 0;
+    SessionParamsPolicy sessionParams = SessionParamsPolicy::Cadence;
+    RequestDefaults requestDefaults = RequestDefaults::Rawr;
 };
 
 // Per-start facts the lens itself cannot know.
@@ -97,6 +99,8 @@ struct RecipeInputs {
     r.gate = lens.vendorGate;
     r.gateHold = lens.gateHold.value_or(defaultGateHold(lens));
     r.startupDelayMs = lens.startupDelayMs;
+    r.sessionParams = lens.sessionParams;
+    r.requestDefaults = lens.requestDefaults;
     return r;
 }
 

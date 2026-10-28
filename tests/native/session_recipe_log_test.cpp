@@ -25,7 +25,7 @@ void testPlainLens() {
     const std::string line = describeSessionRecipe(f);
     assert(line.rfind("CAMERA_SESSION_RECIPE ", 0) == 0);
     assert(has(line, "lens=2x camera=2 physical=none raw=RAW16:4080x3064 aspect=1.332"));
-    assert(has(line, "template=preview fps=12..30 sessionParameters=1"));
+    assert(has(line, "template=preview fps=12..30 sessionParams=cadence requestDefaults=rawr"));
     assert(has(line, "keys=session:0,request:1,still:0,decision:0"));
     assert(has(line, "companion=YUV_420_888:320x240:targeted:source=profile:shape=fallback"));
     assert(has(line, "auxJpeg=none captureStream=none readerUsage=0x1000003 captureReaderUsage=default"));
@@ -41,7 +41,8 @@ void testFullSizeLens() {
     f.rawHeight = 3064;
     f.requestTemplate = "still";
     f.fpsRange = "none";
-    f.sessionParameters = false;
+    f.sessionParams = "none";
+    f.requestDefaults = "minimal";
     f.sessionKeys = 2;
     f.decisionKeys = 1;
     f.companion = SessionRecipeFacts::Companion{"PRIVATE", 640, 480, false, "profile", "raw"};
@@ -55,7 +56,7 @@ void testFullSizeLens() {
     f.startupDelayMs = 500;
     f.fixedFps = 30;
     const std::string line = describeSessionRecipe(f);
-    assert(has(line, "sessionParameters=0"));
+    assert(has(line, "sessionParams=none requestDefaults=minimal"));
     assert(has(line, "keys=session:2,request:0,still:0,decision:1"));
     assert(has(line, "companion=PRIVATE:640x480:untargeted:source=profile:shape=raw"));
     assert(has(line, "auxJpeg=8192x6144 captureStream=16320x12256"));

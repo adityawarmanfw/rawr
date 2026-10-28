@@ -90,6 +90,9 @@ struct CameraControlCapabilities {
     bool targetFpsRangeRequired = false;
     // Lens profile's fixed AE target fps (LensRoute::fixedFps); 0 = the app's cadence.
     int32_t fixedFps = 0;
+    // Lens profile's request defaults are minimal (LensRoute::requestDefaults): the face-detect and AE priority
+    // entries are left to the template.
+    bool minimalRequestDefaults = false;
     // What the camera advertises; the bounds above may be widened by the
     // lens profile's extended exposure (extendedExposure).
     int32_t advertisedSensitivityMax = 0;
