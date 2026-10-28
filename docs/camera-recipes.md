@@ -103,15 +103,35 @@ still request carries the same tags and the same stamp relation as before they b
 
 The NDK has no way to set an operating mode or a stream use case. `auto` therefore resolves to the
 Java camera API exactly when one of them is set, and an explicit `ndk` together with one is rejected
-when the profile is parsed. **There is no Java backend in this build.** A lens that resolves to it
-does not start: the log says `CAMERA_BACKEND lens=… backend=java available=0` and the viewfinder
-shows the lens-unavailable notice, rather than running the lens without the mode it asked for.
+when the profile is parsed. `java` can also be chosen for a lens without either, to compare the two
+APIs on the same route.
+
+On the Java backend Kotlin opens the camera and configures the session (`SessionConfiguration` with
+the operating mode, `OutputConfiguration.setStreamUseCase` per output, session parameters). Native
+code keeps everything else: the readers (their windows become `Surface`s), the requests, the
+controls, keys and stills. A request is built as data in native code and turned into a
+`CaptureRequest` on each submit; each entry is set by its Camera2 key name with the primitive type of
+the tag (a vendor key by the name it was resolved from). Results come back through
+`ACameraMetadata_fromCameraMetadata`, so result handling is the same on both APIs. The log says
+`CAMERA_BACKEND lens=… backend=java available=1` when a lens opens this way.
+
+Differences to know when comparing bundles:
+
+- `CAMERA_REQUEST_DUMP` of a Java session lists only what the app set. The template defaults are
+  added by Camera2 when the request is built and are not visible to native code.
+- A Java request fails as a whole when it carries a tag with no Camera2 key name (an unlisted vendor
+  tag given by number). The NDK would set it. Name such keys instead.
+
+Checked on the V2562 (camera 4 as D14, RAW16 4096×3072): the session runs, frames and results pair,
+a photo is written, lens switches between Java and NDK lenses work, and with a viewfinder use case of
+1 the camera service reports `Stream use case: 1` for the RAW stream. A vendor operating mode was
+accepted by a debug probe session on the same camera but has not been run through a lens yet.
 
 ## Diagnostics
 
 | Line | Content |
 |---|---|
-| `CAMERA_SESSION_RECIPE` | One line per started session: route, RAW stream and aspect, template, session-parameter fps range, session params policy, request defaults, backend, key counts per scope, companion (format, size, targeting, source, shape, images, detach), aux JPEG, capture stream, reader usage, startup delay, gate and hold, still strategy. |
+| `CAMERA_SESSION_RECIPE` | One line per started session: route, RAW stream and aspect, template, session-parameter fps range, session params policy, request defaults, backend, key counts per scope, companion (format, size, targeting, source, shape, images, detach), aux JPEG, capture stream, reader usage, startup delay, gate and hold, still strategy; `opMode=` and `useCases=` only when set. |
 | `CAMERA_REQUEST_DUMP kind=session_start` / `repeating_start` | Every entry of the session parameters and of the repeating request, right after the first submit, for lenses that carry keys or recipe fields. Fields: tag, type, count, values, `typeName`. Compare two builds or devices with the same lens. |
 | `CAMERA_KEY_INJECTION … attempts=` | Each setter call made for a vendor key, with status; `(cached)` marks a first try from the memory of an earlier success. |
 | `CAMERA_PROFILE_REJECTED` | A lens profile the app sent was refused (reason, and the profile that stays in force). The viewfinder shows "Lens settings not applied". |

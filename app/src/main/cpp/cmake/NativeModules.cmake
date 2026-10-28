@@ -131,6 +131,7 @@ rawrcam_module(camera
     camera/CameraRequest.cpp
     camera/NdkRequest.cpp
     camera/NdkCameraDriver.cpp
+    camera/JavaCameraDriver.cpp
     camera/CameraResultProcessor.cpp
     camera/CameraMetadataTags.cpp
     camera/VendorCameraGate.cpp

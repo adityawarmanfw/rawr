@@ -18,6 +18,7 @@
 #include "camera/CameraDiscovery.h"
 #include "camera/CameraKeyInjection.h"
 #include "camera/CompanionStreamSize.h"
+#include "camera/JavaCameraDriver.h"
 #include "camera/NdkCameraDriver.h"
 #include "camera/VendorGatePreset.h"
 #include "diagnostics/logging/RuntimeTraceRecorder.h"
@@ -343,16 +344,26 @@ bool CameraDeviceSession::open(const LensRoute& route, CameraCallbacks& callback
         diag("CAMERA_NDK_VENDOR_GATE_ACQUIRED gate=" + route.vendorGate + " cameraId=" + route.cameraId);
     }
 
+    const bool java = effectiveBackend(route) == BackendChoice::Java;
     auto backoff = kOpenRetryInitial;
     for (int attempt = 1;; ++attempt) {
         if (!stillCurrent()) return false;
         auto* deviceContext = callbacks.deviceContext(generation_);
         deviceContext_ = deviceContext;
-        auto state = CameraCallbacks::deviceState(deviceContext);
-        ACameraDevice* device = nullptr;
-        const camera_status_t os = ACameraManager_openCamera(manager_, route.cameraId.c_str(), &state, &device);
-        if (ok(os) && device) device_ = std::make_unique<NdkDeviceDriver>(device);
+        int os = ACAMERA_OK;
+        if (java) {
+            std::string error;
+            device_ = openJavaCamera(route.cameraId, deviceContext, &os, &error);
+            if (!device_) diag("CAMERA_JAVA_OPEN_FAILURE cameraId=" + route.cameraId + " status=" + statusText(os) +
+                               " reason=" + error);
+        } else {
+            auto state = CameraCallbacks::deviceState(deviceContext);
+            ACameraDevice* device = nullptr;
+            os = ACameraManager_openCamera(manager_, route.cameraId.c_str(), &state, &device);
+            if (ok(os) && device) device_ = std::make_unique<NdkDeviceDriver>(device);
+        }
         if (ok(os) && device_) {
+            if (java) diag("CAMERA_BACKEND lens=" + route.lensId + " backend=java available=1");
             if (attempt > 1) {
                 diag("CAMERA_NDK_OPEN_RECOVERED cameraId=" + route.cameraId + " attempts=" + std::to_string(attempt));
             }
@@ -502,6 +513,11 @@ SessionRecipeFacts CameraDeviceSession::recipeFacts(const std::optional<LensRout
     f.sessionParams = sessionParamsName(recipe.sessionParams);
     f.requestDefaults = requestDefaultsName(recipe.requestDefaults);
     f.backend = backendName();
+    f.opMode = recipe.opMode;
+    f.rawUseCase = recipe.rawStreamUseCase;
+    f.captureUseCase = recipe.captureStreamUseCase;
+    f.companionUseCase = recipe.companionStreamUseCase;
+    f.auxJpegUseCase = recipe.auxJpegStreamUseCase;
     f.requestTemplate = repeatingTemplate == RequestTemplate::StillCapture ? "still" : "preview";
     f.fpsRange = "none";
     if (RequestEntry e{};

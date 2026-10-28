@@ -30,6 +30,18 @@ void testPlainLens() {
     assert(has(line, "companion=YUV_420_888:320x240:targeted:source=profile:shape=fallback:images=4:detach=0:usage=0x100"));
     assert(has(line, "auxJpeg=none captureStream=none readerUsage=0x1000003 captureReaderUsage=default"));
     assert(has(line, "gate=none still=none stopRepeatingForStill=0"));
+    assert(!has(line, "opMode=") && !has(line, "useCases="));
+}
+
+void testJavaOnlyFields() {
+    SessionRecipeFacts f;
+    f.backend = "java";
+    f.opMode = 32769;
+    f.rawUseCase = 1;
+    f.companionUseCase = 4;
+    const std::string line = describeSessionRecipe(f);
+    assert(has(line, "backend=java"));
+    assert(has(line, " opMode=32769 useCases=raw:1,capture:0,companion:4,auxJpeg:0"));
 }
 
 void testFullSizeLens() {
@@ -93,6 +105,7 @@ int main() {
     testFullSizeLens();
     testMissingFacts();
     testCarriesRecipe();
+    testJavaOnlyFields();
     std::cout << "session_recipe_log_test passed\n";
     return 0;
 }

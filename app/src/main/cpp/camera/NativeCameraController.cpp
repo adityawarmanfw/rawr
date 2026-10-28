@@ -1,4 +1,5 @@
 #include "camera/NativeCameraController.h"
+#include "camera/JavaCameraDriver.h"
 #include "capture/BurstLimits.h"
 
 #include <android/log.h>
@@ -956,11 +957,10 @@ struct NativeCameraController::Impl final : CameraEventSink {
         const std::string ladderKey = route.lensId + '|' + describeRoute(route);
         const int64_t viewfinderExposureNs =
             control.exposureMode == ExposureControlMode::Auto ? 0 : control.requestedExposureTimeNs;
-        if (effectiveBackend(route) == BackendChoice::Java) {
-            // Operating mode and stream use case exist only on the Java API, which this build has no backend for.
-            // Fail visibly; running the lens without them would give a different mode with no explanation.
-            diag("CAMERA_BACKEND lens=" + route.lensId + " backend=java available=0 reason=" +
-                 (route.backend == BackendChoice::Java ? "explicit" : route.opMode ? "opMode" : "streamUseCase"));
+        if (effectiveBackend(route) == BackendChoice::Java && !javaCameraBackendInstalled()) {
+            // Operating mode and stream use case exist only on the Java API. Fail visibly; running the lens without
+            // them would give a different mode with no explanation.
+            diag("CAMERA_BACKEND lens=" + route.lensId + " backend=java available=0 reason=not_installed");
             control.capabilities.lensUnavailable = true;
             rollbackCameraStartLocked(lock, "backend_unavailable");
             return;
