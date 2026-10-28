@@ -89,6 +89,9 @@ class CameraDeviceSession final {
     // Integer value of a vendor result tag, looked up by name once per open
     // camera; nullopt when the camera or this result lacks it.
     std::optional<int64_t> vendorResultValue(const ACameraMetadata* result, const std::string& name);
+    // Logs, once per session, what the first capture result returned for each
+    // profile key (CAMERA_KEY_RESULT).
+    void logKeyResultsOnce(const ACameraMetadata* result, const Diagnostic& diag);
 
    private:
     void releaseRequestOutputs(bool orphan) noexcept;
@@ -128,6 +131,11 @@ class CameraDeviceSession final {
     bool closePending_ = false, forcedRetire_ = false;
     std::string heldGate_;  // LensRoute::vendorGate held for the open device.
     std::map<std::string, std::optional<uint32_t>> vendorTags_;  // name -> tag of the open camera
+    // Profile keys of the running session, read back from its first capture result.
+    std::vector<CameraKeySetting> resultKeys_;
+    std::string resultKeysLensId_;
+    std::string resultKeysCameraId_;
+    bool resultKeysPending_ = false;
     std::condition_variable closed_;
 };
 }  // namespace rawrcam::camera

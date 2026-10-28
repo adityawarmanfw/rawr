@@ -152,6 +152,11 @@ std::optional<int64_t> CameraDeviceSession::vendorResultValue(const ACameraMetad
         default: return std::nullopt;
     }
 }
+void CameraDeviceSession::logKeyResultsOnce(const ACameraMetadata* result, const Diagnostic& diag) {
+    if (!resultKeysPending_ || !result) return;
+    resultKeysPending_ = false;
+    logKeyResults(result, characteristics_, resultKeys_, resultKeysCameraId_.c_str(), resultKeysLensId_, diag);
+}
 void CameraDeviceSession::releaseHeldGate() noexcept {
     if (heldGate_.empty()) return;
     releaseVendorCameraGate(heldGate_);
@@ -589,6 +594,10 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
         if (!lensKeys.failures.empty())
             return fail("lens_request_keys", "lensId=" + selected->lensId + " failed=" + joined(lensKeys.failures));
         logCarriedKeys(sessionParameters_, request_, characteristics_, selected->keys, selected->cameraId.c_str(), diag);
+        resultKeys_ = selected->keys;
+        resultKeysLensId_ = selected->lensId;
+        resultKeysCameraId_ = selected->cameraId;
+        resultKeysPending_ = !resultKeys_.empty();
     }
     if (!pipeline.submit(session_, request_, callbackContext, control, metering))
         return fail("initial_repeating", "status=control_or_submit_rejected");

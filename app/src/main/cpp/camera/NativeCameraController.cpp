@@ -1283,6 +1283,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // Validate before decoding a request's borrowed provenance pointer.
         if (!active || callbackGeneration != deviceSession.generation() || !deviceSession.cameraContext() || !result)
             return;
+        deviceSession.logKeyResultsOnce(result, [this](const std::string& line) { diag(line); });
         auto actions = results.process(requestCopy, result, control, deviceSession.cameraContext(),
                                        deviceSession.staticLevels(), deviceSession.sensorModeOverridden(),
                                        requests.latestSubmittedSerial());

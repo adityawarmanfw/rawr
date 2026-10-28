@@ -95,6 +95,8 @@ rawr_test(camera_session_policy_test
   "${RAWR_ROOT}/tests/native/camera_session_policy_test.cpp")
 rawr_test(raw_reader_usage_ladder_test
   "${RAWR_ROOT}/tests/native/raw_reader_usage_ladder_test.cpp")
+rawr_test(camera_key_result_test
+  "${RAWR_ROOT}/tests/native/camera_key_result_test.cpp")
 rawr_test(camera_start_ladder_test
   "${RAWR_ROOT}/tests/native/camera_start_ladder_test.cpp")
 rawr_test(companion_stream_size_test

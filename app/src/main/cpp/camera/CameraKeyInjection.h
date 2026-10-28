@@ -33,6 +33,14 @@ void logCarriedKeys(const ACaptureRequest* sessionParameters, const ACaptureRequ
                     const ACameraMetadata* characteristics, const std::vector<CameraKeySetting>& keys,
                     const char* cameraId, const std::function<void(const std::string&)>& diag);
 
+// Logs, per enabled key, what a capture result returned for it
+// ("CAMERA_KEY_RESULT lens=... tag=... sent=7 result=7 verdict=match listedAsResult=yes"),
+// so a key that streams without a visible effect can be told apart from one the
+// camera overrides (diagnostics only).
+void logKeyResults(const ACameraMetadata* result, const ACameraMetadata* characteristics,
+                   const std::vector<CameraKeySetting>& keys, const char* cameraId, const std::string& lensId,
+                   const std::function<void(const std::string&)>& diag);
+
 // Logs every entry of a request, one line per tag ("CAMERA_REQUEST_DUMP
 // kind=<kind> tag=0x... type=... count=... values=..."), for comparing what a
 // request actually carries (diagnostics only).

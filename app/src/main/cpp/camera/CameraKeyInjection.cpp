@@ -12,6 +12,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "camera/CameraKeyResult.h"
 #include "camera/CameraMetadataTags.h"
 
 namespace rawrcam::camera {
@@ -186,6 +187,45 @@ void logCarriedKeys(const ACaptureRequest* sessionParameters, const ACaptureRequ
         if (!tag) continue;
         diag("CAMERA_KEY_CARRIED tag=" + key.tag + " session=" + (carries(sessionParameters, *tag) ? "yes" : "no") +
              " repeating=" + (carries(repeating, *tag) ? "yes" : "no"));
+    }
+}
+
+void logKeyResults(const ACameraMetadata* result, const ACameraMetadata* characteristics,
+                   const std::vector<CameraKeySetting>& keys, const char* cameraId, const std::string& lensId,
+                   const std::function<void(const std::string&)>& diag) {
+    if (!result) return;
+    const auto joined = [](const std::vector<double>& values) {
+        std::ostringstream out;
+        for (size_t i = 0; i < values.size(); ++i) out << (i ? "," : "") << values[i];
+        return out.str();
+    };
+    for (const auto& key : keys) {
+        // Still and decision keys never ride the repeating request this result answers.
+        if (!key.enabled || key.values.empty() || key.scope == CameraKeySetting::Scope::Still ||
+            key.scope == CameraKeySetting::Scope::Decision)
+            continue;
+        std::string error;
+        const auto tag = resolveTag(characteristics, cameraId, key.tag, &error);
+        if (!tag) continue;
+        std::optional<std::vector<double>> got;
+        ACameraMetadata_const_entry e{};
+        if (ACameraMetadata_getConstEntry(result, *tag, &e) == ACAMERA_OK && e.count > 0) {
+            got.emplace();
+            for (uint32_t i = 0; i < e.count; ++i) {
+                switch (e.type) {
+                    case ACAMERA_TYPE_BYTE: got->push_back(e.data.u8[i]); break;
+                    case ACAMERA_TYPE_INT32: got->push_back(e.data.i32[i]); break;
+                    case ACAMERA_TYPE_INT64: got->push_back(double(e.data.i64[i])); break;
+                    case ACAMERA_TYPE_FLOAT: got->push_back(e.data.f[i]); break;
+                    case ACAMERA_TYPE_DOUBLE: got->push_back(e.data.d[i]); break;
+                    default: break;
+                }
+            }
+        }
+        diag("CAMERA_KEY_RESULT lens=" + lensId + " tag=" + key.tag + " sent=" + joined(key.values) +
+             " result=" + (got ? joined(*got) : std::string("missing")) + " verdict=" + keyResultVerdict(key.values, got) +
+             " listedAsResult=" +
+             (containsI32Tag(characteristics, ACAMERA_REQUEST_AVAILABLE_RESULT_KEYS, *tag) ? "yes" : "no"));
     }
 }
 
