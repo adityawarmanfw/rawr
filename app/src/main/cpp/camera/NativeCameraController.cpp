@@ -835,8 +835,12 @@ struct NativeCameraController::Impl final : CameraEventSink {
         rawrAePending.store(0, std::memory_order_relaxed);
         focusControls.reset(control);
         starting = true;
+        LensRoute requestedRoute = *requested;
+        if (const auto outcome = applyBackendOverride(requestedRoute, systemProperty("debug.rawr.camera_backend"));
+            !outcome.empty())
+            diag("CAMERA_BACKEND_OVERRIDE lens=" + requestedRoute.lensId + " " + outcome);
         const std::optional<LensRoute> selected =
-            deviceSession.select(*requested, [this](const std::string& line) { diag(line); });
+            deviceSession.select(requestedRoute, [this](const std::string& line) { diag(line); });
         if (!selected) {
             active = false;
             starting = false;

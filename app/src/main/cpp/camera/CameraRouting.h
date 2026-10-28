@@ -232,6 +232,23 @@ struct LensRoute {
     return nullptr;
 }
 
+// `debug.rawr.camera_backend java|ndk`: runs every lens on one API, for comparing the two on the same route.
+// Lenses the forced API can't run keep their own: a gated lens stays on the NDK, a lens with an operating mode
+// or use case stays on Java. Returns what happened for the log ("" when no override is set).
+[[nodiscard]] inline std::string applyBackendOverride(LensRoute& lens, const std::string& value) {
+    if (value == "java") {
+        if (const char* conflict = javaBackendConflict(lens)) return std::string("kept reason=") + conflict;
+        lens.backend = BackendChoice::Java;
+        return "java";
+    }
+    if (value == "ndk") {
+        if (needsJavaBackend(lens)) return "kept reason=operating mode or use case";
+        lens.backend = BackendChoice::Ndk;
+        return "ndk";
+    }
+    return value.empty() ? std::string() : "ignored value=" + value;
+}
+
 [[nodiscard]] inline BackendChoice effectiveBackend(const LensRoute& lens) noexcept {
     if (lens.backend != BackendChoice::Auto) return lens.backend;
     return needsJavaBackend(lens) ? BackendChoice::Java : BackendChoice::Ndk;

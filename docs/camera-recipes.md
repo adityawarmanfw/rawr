@@ -136,6 +136,14 @@ Checked on the V2562 with the Java backend:
   written;
 - with a viewfinder use case of 1 the camera service reports `Stream use case: 1` on the RAW stream.
 
+Results reach native code through JNI and the Camera2 callback thread, and the pairer keeps one
+image waiting for its result. On camera 4 over about 30 s of viewfinder this cost nothing measurable:
+the NDK dropped 1 of 840 frames and Java 0 of 960, with no `PAIRER_PRESSURE` line on either.
+
+`adb shell setprop debug.rawr.camera_backend java|ndk` runs every lens on one API, for comparing the two
+on the same route (`CAMERA_BACKEND_OVERRIDE` in the log). A gated lens stays on the NDK and a lens with
+an operating mode or use case stays on Java. Clear it with `setprop debug.rawr.camera_backend ''`.
+
 Not checked: a vendor operating mode on a lens (only a debug probe session accepted one), session
 params `full` on Java, the aux JPEG, and stills through a separate capture stream. The last one cannot
 be checked on this phone: without the vendor gate a capture-stream still times out on the NDK as well,

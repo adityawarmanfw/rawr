@@ -81,9 +81,23 @@ void testRejections() {
     assert(!bad(R"("vendorGate":"vivoFullSize")") && !bad(R"("backend":"ndk","stopRepeatingForStill":true)"));
 }
 
+void testOverride() {
+    LensRoute plain;
+    assert(applyBackendOverride(plain, "").empty() && plain.backend == BackendChoice::Auto);
+    assert(applyBackendOverride(plain, "java") == "java" && effectiveBackend(plain) == BackendChoice::Java);
+    assert(applyBackendOverride(plain, "ndk") == "ndk" && effectiveBackend(plain) == BackendChoice::Ndk);
+    assert(applyBackendOverride(plain, "gpu") == "ignored value=gpu" && plain.backend == BackendChoice::Ndk);
+    LensRoute gated;
+    gated.vendorGate = "vivoFullSize";
+    assert(applyBackendOverride(gated, "java").find("kept") == 0 && effectiveBackend(gated) == BackendChoice::Ndk);
+    LensRoute moded;
+    moded.opMode = 32769;
+    assert(applyBackendOverride(moded, "ndk").find("kept") == 0 && effectiveBackend(moded) == BackendChoice::Java);
+}
 }  // namespace
 
 int main() {
+    testOverride();
     testDerivedBackend();
     testJsonRoundTrip();
     testRejections();
