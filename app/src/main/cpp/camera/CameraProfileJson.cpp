@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <optional>
+#include <tuple>
 #include <utility>
 
 namespace rawrcam::camera {
@@ -697,268 +698,399 @@ bool readUseCase(const Json* object, int64_t& out, std::string* error, const std
     return true;
 }
 
+// Building blocks for the v1 -> v2 upgrade.
+Json jsonObject() {
+    Json o;
+    o.kind = Json::Kind::Object;
+    return o;
+}
+void put(Json& object, const std::string& key, Json value) {
+    object.keys.push_back(key);
+    object.items.push_back(std::move(value));
+}
+// Copies `from[key]` into `to` (under `as`, default the same key) when present.
+void copy(const Json& from, const char* key, Json& to, const char* as = nullptr) {
+    if (const Json* v = from.get(key)) put(to, as ? as : key, *v);
+}
+void putIfNotEmpty(Json& to, const char* key, Json value) {
+    if (value.kind != Json::Kind::Object || !value.keys.empty()) put(to, key, std::move(value));
+}
+
+// A schema-1 lens (flat fields next to the newer blocks) rewritten into the schema-2 layout, so one reader
+// validates both. Fields schema 1 kept for a capture stream the lens doesn't have are dropped: they had no effect.
+bool upgradeLensV1(const Json& l, Json& out, std::string* error) {
+    out = jsonObject();
+    copy(l, "id", out);
+    Json camera = jsonObject();
+    copy(l, "cameraId", camera, "id");
+    copy(l, "physicalCameraId", camera, "physical");
+    put(out, "camera", camera);
+
+    Json streams = jsonObject();
+    Json raw = jsonObject();
+    if (const Json* s = l.get("stream"); s && s->kind == Json::Kind::Object) raw = *s;
+    Json reader = jsonObject();
+    copy(l, "readerUsage", reader, "usage");
+    if (const Json* rd = l.get("reader"); rd && rd->kind == Json::Kind::Object)
+        for (size_t i = 0; i < rd->keys.size(); ++i) put(reader, rd->keys[i], rd->items[i]);
+    putIfNotEmpty(raw, "reader", reader);
+    copy(l, "viewfinderLevels", raw, "levels");
+    put(streams, "raw", raw);
+    if (const Json* c = l.get("captureStream")) {
+        Json capture = *c;
+        Json captureReader = jsonObject();
+        copy(l, "captureReaderUsage", captureReader, "usage");
+        putIfNotEmpty(capture, "reader", captureReader);
+        Json burst = jsonObject();
+        copy(l, "captureBurst", burst, "max");
+        copy(l, "captureBurstSequential", burst, "sequential");
+        putIfNotEmpty(capture, "burst", burst);
+        copy(l, "captureLevels", capture, "levels");
+        put(streams, "capture", capture);
+    }
+    const Json* disabled = l.get("disableCompanion");
+    if (disabled && (disabled->kind != Json::Kind::Bool || (disabled->boolean && l.get("companion")))) {
+        if (error) *error = "disableCompanion must be boolean and cannot disable a required companion for lens " + l.str("id");
+        return false;
+    }
+    if (disabled && disabled->boolean) {
+        Json companion = jsonObject();
+        Json mode;
+        mode.kind = Json::Kind::String;
+        mode.text = "off";
+        put(companion, "mode", mode);
+        put(streams, "companion", companion);
+    } else if (const Json* c = l.get("companion")) {
+        Json companion = *c;
+        Json mode;
+        mode.kind = Json::Kind::String;
+        mode.text = c->get("width") || c->get("height") ? "fixed" : "auto";
+        put(companion, "mode", mode);
+        put(streams, "companion", companion);
+    }
+    copy(l, "auxJpeg", streams);
+    put(out, "streams", streams);
+
+    Json session = jsonObject();
+    if (const Json* s = l.get("session"); s && s->kind == Json::Kind::Object) session = *s;
+    copy(l, "backend", session);
+    copy(l, "template", session);
+    copy(l, "fps", session);
+    copy(l, "startupDelayMs", session);
+    copy(l, "stopRepeatingForStill", session);
+    copy(l, "quirks", session);
+    Json gate = jsonObject();
+    copy(l, "vendorGate", gate, "name");
+    copy(l, "gateHold", gate, "hold");
+    putIfNotEmpty(session, "gate", gate);
+    put(out, "session", session);
+    copy(l, "request", out);
+    copy(l, "keys", out);
+    copy(l, "streamUseCase", out);  // refused by the reader with its own message
+
+    Json image = jsonObject();
+    copy(l, "levels", image);
+    copy(l, "cfa", image);
+    copy(l, "distortion", image);
+    copy(l, "mirror", image);
+    copy(l, "dcp", image);
+    copy(l, "exposure", image);
+    put(out, "image", image);
+    return true;
+}
+
+bool readUsage(const Json* object, const char* what, std::optional<uint64_t>& out, std::string* error,
+               const std::string& lensId) {
+    if (!object) return true;
+    const Json* u = object->get("usage");
+    if (!u || u->kind != Json::Kind::String || u->text.empty()) return true;
+    out = parseReaderUsage(u->text);
+    if (!out) {
+        if (error) *error = std::string("unknown ") + what + " " + u->text + " for lens " + lensId;
+        return false;
+    }
+    return true;
+}
+
+bool readStreamSize(const Json* s, geometry::RawStreamPreference& out) {
+    if (!s || s->kind != Json::Kind::Object) return false;
+    out.format = s->str("format") == "RAW10" ? geometry::RawPixelFormat::Raw10 : geometry::RawPixelFormat::Raw16;
+    out.width = uint32_t(std::max(0.0, s->num("width")));
+    out.height = uint32_t(std::max(0.0, s->num("height")));
+    return true;
+}
+
+// One schema-2 lens.
+std::optional<LensRoute> readLens(const Json& l, std::string* error) {
+    static const Json kEmpty = jsonObject();
+    const auto object = [](const Json* parent, const char* key) -> const Json& {
+        const Json* v = parent ? parent->get(key) : nullptr;
+        return v && v->kind == Json::Kind::Object ? *v : kEmpty;
+    };
+    LensRoute r;
+    r.lensId = l.str("id");
+    const Json& camera = object(&l, "camera");
+    r.cameraId = camera.str("id");
+    r.physicalCameraId = camera.str("physical");
+    if (r.lensId.empty() || r.cameraId.empty()) {
+        if (error) *error = "lens without id or cameraId";
+        return std::nullopt;
+    }
+    if (l.get("streamUseCase")) {
+        if (error) *error = "streamUseCase is not a profile field; set useCase on the stream, captureStream, companion or auxJpeg of lens " + r.lensId;
+        return std::nullopt;
+    }
+    const Json& streams = object(&l, "streams");
+    const Json& session = object(&l, "session");
+    const Json& image = object(&l, "image");
+
+    // RAW viewfinder stream and its reader.
+    const Json& raw = object(&streams, "raw");
+    readStreamSize(&raw, r.preferredStream);
+    r.unlistedStream = raw.flag("unlisted", false);
+    if (!readUseCase(&raw, r.rawStreamUseCase, error, "stream of lens " + r.lensId)) return std::nullopt;
+    const Json& reader = object(&raw, "reader");
+    if (!readUsage(&reader, "readerUsage", r.readerUsage, error, r.lensId)) return std::nullopt;
+    if (reader.get("maxImages")) {
+        const double n = reader.num("maxImages");
+        if (n < 6.0 || n > 16.0 || std::floor(n) != n) {
+            if (error) *error = "reader maxImages must be 6 to 16 for lens " + r.lensId;
+            return std::nullopt;
+        }
+        r.rawMaxImages = uint32_t(n);
+    }
+    r.readerProbe = reader.flag("probe", false);
+    r.readerDemote = reader.flag("demote", false);
+
+    // Full-size capture stream.
+    if (const Json* c = streams.get("capture")) {
+        geometry::RawStreamPreference capture;
+        if (!readStreamSize(c, capture) || capture.width == 0 || capture.height == 0) {
+            if (error) *error = "invalid captureStream for lens " + r.lensId;
+            return std::nullopt;
+        }
+        if (!readUseCase(c, r.captureStreamUseCase, error, "captureStream of lens " + r.lensId)) return std::nullopt;
+        if (!readUsage(&object(c, "reader"), "captureReaderUsage", r.captureReaderUsage, error, r.lensId))
+            return std::nullopt;
+        const Json& burst = object(c, "burst");
+        r.captureBurst = uint32_t(std::clamp(burst.num("max"), 0.0, 30.0));
+        r.captureBurstSequential = burst.flag("sequential", false);
+        r.captureStream = capture;
+    }
+
+    // Companion.
+    if (const Json* c = streams.get("companion"); c && c->kind == Json::Kind::Object) {
+        const std::string mode = c->str("mode", c->get("width") || c->get("height") ? "fixed" : "auto");
+        if (mode != "auto" && mode != "fixed" && mode != "off") {
+            if (error) *error = "unknown companion mode " + mode + " for lens " + r.lensId;
+            return std::nullopt;
+        }
+        r.disableCompanion = mode == "off";
+        const auto format = c->str("format", "yuv");
+        if (format != "yuv" && format != "private") {
+            if (error) *error = "invalid companion format for lens " + r.lensId;
+            return std::nullopt;
+        }
+        r.companionPrivate = format == "private";
+        r.companionTargeted = c->flag("targeted", true);
+        if (mode == "fixed") {
+            r.companionSize = readSize(c);
+            if (!r.companionSize) {
+                if (error) *error = "invalid companion for lens " + r.lensId;
+                return std::nullopt;
+            }
+        }
+        if (!readUsage(c, "companion usage", r.companionUsage, error, r.lensId)) return std::nullopt;
+        if (c->get("maxImages")) {
+            const double n = c->num("maxImages");
+            if (n < 2.0 || n > 16.0 || std::floor(n) != n) {
+                if (error) *error = "companion maxImages must be 2 to 16 for lens " + r.lensId;
+                return std::nullopt;
+            }
+            r.companionMaxImages = uint32_t(n);
+        }
+        for (const auto& [name, field] : {std::pair{"physical", &r.companionPhysical}, std::pair{"detach", &r.companionDetach}}) {
+            if (const Json* v = c->get(name)) {
+                if (v->kind != Json::Kind::Bool) {
+                    if (error) *error = std::string("companion ") + name + " must be boolean for lens " + r.lensId;
+                    return std::nullopt;
+                }
+                *field = v->boolean;
+            }
+        }
+        if (!readUseCase(c, r.companionStreamUseCase, error, "companion of lens " + r.lensId)) return std::nullopt;
+        if (const std::string fallback = c->str("fallback"); !fallback.empty()) {
+            if (fallback != "base" && fallback != "nearest" && fallback != "none") {
+                if (error) *error = "unknown companion fallback " + fallback + " for lens " + r.lensId;
+                return std::nullopt;
+            }
+            if (r.companionSize) {
+                if (error) *error = "companion fallback needs an automatic size for lens " + r.lensId;
+                return std::nullopt;
+            }
+            r.companionFallback = fallback == "nearest" ? CompanionFallback::Nearest
+                                  : fallback == "none"  ? CompanionFallback::None
+                                                        : CompanionFallback::Base;
+        }
+    }
+
+    // Aux JPEG.
+    if (const Json* a = streams.get("auxJpeg")) {
+        r.auxJpegSize = readSize(a);
+        if (!r.auxJpegSize) {
+            if (error) *error = "invalid auxJpeg for lens " + r.lensId;
+            return std::nullopt;
+        }
+        if (!readUseCase(a, r.auxJpegStreamUseCase, error, "auxJpeg of lens " + r.lensId)) return std::nullopt;
+        if (!readUsage(a, "auxJpeg usage", r.auxJpegUsage, error, r.lensId)) return std::nullopt;
+    }
+
+    // Session.
+    if (const std::string backend = session.str("backend"); !backend.empty()) {
+        if (backend != "auto" && backend != "ndk" && backend != "java") {
+            if (error) *error = "unknown backend " + backend + " for lens " + r.lensId;
+            return std::nullopt;
+        }
+        r.backend = backend == "ndk" ? BackendChoice::Ndk : backend == "java" ? BackendChoice::Java : BackendChoice::Auto;
+    }
+    if (session.get("opMode")) {
+        const double mode = session.num("opMode");
+        // 1 is the constrained high-speed mode; 1 and 2 are not accepted as a vendor mode.
+        if (mode < 0.0 || mode > 2147483647.0 || std::floor(mode) != mode || mode == 1.0 || mode == 2.0) {
+            if (error) *error = "invalid opMode for lens " + r.lensId;
+            return std::nullopt;
+        }
+        r.opMode = uint32_t(mode);
+    }
+    if (const std::string params = session.str("params"); !params.empty()) {
+        if (params != "cadence" && params != "none" && params != "full") {
+            if (error) *error = "unknown session params " + params + " for lens " + r.lensId;
+            return std::nullopt;
+        }
+        r.sessionParams = params == "none"   ? SessionParamsPolicy::None
+                          : params == "full" ? SessionParamsPolicy::Full
+                                             : SessionParamsPolicy::Cadence;
+    }
+    if (const std::string t = session.str("template"); !t.empty()) {
+        if (t != "still" && t != "preview") {
+            if (error) *error = "unknown template " + t + " for lens " + r.lensId;
+            return std::nullopt;
+        }
+        r.stillTemplate = t == "still";
+    }
+    r.fixedFps = int32_t(std::clamp(session.num("fps"), 0.0, 240.0));
+    r.startupDelayMs = int32_t(std::clamp(session.num("startupDelayMs"), 0.0, 5000.0));
+    r.stopRepeatingForStill = session.flag("stopRepeatingForStill", false);
+    if (!readQuirks(session.array("quirks"), r.quirks, error, "lens " + r.lensId)) return std::nullopt;
+    const Json& gate = object(&session, "gate");
+    r.vendorGate = gate.str("name");
+    if (const std::string hold = gate.str("hold"); !hold.empty()) {
+        if ((hold != "configured" && hold != "closed") || r.vendorGate.empty()) {
+            if (error)
+                *error = std::string(r.vendorGate.empty() ? "gateHold needs a vendorGate" : "unknown gateHold " + hold) +
+                         " for lens " + r.lensId;
+            return std::nullopt;
+        }
+        r.gateHold = hold == "closed" ? GateHold::UntilClosed : GateHold::UntilConfigured;
+    }
+
+    // Requests.
+    if (const std::string defaults = object(&l, "request").str("defaults"); !defaults.empty()) {
+        if (defaults != "rawr" && defaults != "minimal") {
+            if (error) *error = "unknown request defaults " + defaults + " for lens " + r.lensId;
+            return std::nullopt;
+        }
+        r.requestDefaults = defaults == "minimal" ? RequestDefaults::Minimal : RequestDefaults::Rawr;
+    }
+    if (!readKeys(l.array("keys"), r.keys, error)) return std::nullopt;
+
+    // Image: levels per lens and per stream, colour layout, distortion, mirror, colour profile, exposure range.
+    if (const Json* c = image.get("cfa"); c && c->kind == Json::Kind::Object) {
+        const double block = c->num("block", 1.0);
+        if (block != 1.0 && block != 2.0 && block != 4.0) {
+            if (error) *error = "invalid cfa block for lens " + r.lensId;
+            return std::nullopt;
+        }
+        r.cfaBlock = uint32_t(block);
+        if (const std::string order = c->str("order"); !order.empty()) {
+            r.cfaOrder = cfaOrderFromName(order);
+            if (!r.cfaOrder) {
+                if (error) *error = "invalid cfa order " + order + " for lens " + r.lensId;
+                return std::nullopt;
+            }
+        }
+        r.cfaLiveQuality = c->str("live", "standard") == "fast" ? 0u : 1u;
+        r.cfaPhotoQuality = c->str("photo", "high") == "standard" ? 1u : 2u;
+    }
+    if (!readLevels(image.get("levels"), r.levels)) {
+        if (error) *error = "invalid levels for lens " + r.lensId;
+        return std::nullopt;
+    }
+    const Json* captureStream = streams.get("capture");
+    for (const auto& [owner, name, field] : {std::tuple{&raw, "viewfinderLevels", &r.viewfinderLevels},
+                                            std::tuple{captureStream, "captureLevels", &r.captureLevels}}) {
+        const Json* value = owner ? owner->get("levels") : nullptr;
+        if (!value) continue;
+        LevelOverride levels;
+        if (value->kind != Json::Kind::Object || !readLevels(value, levels)) {
+            if (error) *error = std::string("invalid ") + name + " for lens " + r.lensId;
+            return std::nullopt;
+        }
+        *field = levels;
+    }
+    if (!readDistortion(image.get("distortion"), r.distortion)) {
+        if (error) *error = "invalid distortion for lens " + r.lensId;
+        return std::nullopt;
+    }
+    if (!readMirror(image.str("mirror"), r.mirror)) {
+        if (error) *error = "invalid mirror for lens " + r.lensId;
+        return std::nullopt;
+    }
+    readDcp(image.get("dcp"), r);
+    readExposure(image.get("exposure"), r.exposure);
+
+    // Rules across sections.
+    if (r.backend == BackendChoice::Ndk && needsJavaBackend(r)) {
+        if (error) *error = "operating mode and stream use case need the Java backend for lens " + r.lensId;
+        return std::nullopt;
+    }
+    if (effectiveBackend(r) == BackendChoice::Java) {
+        if (const char* conflict = javaBackendConflict(r)) {
+            if (error) *error = std::string("the Java backend does not support ") + conflict + " for lens " + r.lensId;
+            return std::nullopt;
+        }
+    }
+    if (r.sessionParams == SessionParamsPolicy::None) {
+        // A session-scope key travels in the session parameters: without them it would be dropped silently.
+        for (const auto& k : r.keys) {
+            if (k.enabled && keyAppliesIn(k.scope, CameraKeySetting::Scope::Session)) {
+                if (error) *error = "session params none conflicts with session key " + k.tag + " for lens " + r.lensId;
+                return std::nullopt;
+            }
+        }
+    }
+    return r;
+}
+
 std::optional<CameraProfile> readProfile(const Json& root, std::string* error) {
     CameraProfile profile;
     profile.id = root.str("id", "user");
-    for (const auto& l : root.array("lenses")) {
-        LensRoute r;
-        r.lensId = l.str("id");
-        r.cameraId = l.str("cameraId");
-        r.physicalCameraId = l.str("physicalCameraId");
-        if (r.lensId.empty() || r.cameraId.empty()) {
-            if (error) *error = "lens without id or cameraId";
+    // Schema 2 groups each lens by what it configures; files without "schema" are schema 1 and are upgraded.
+    const double schema = root.num("schema", 1.0);
+    if (schema != 1.0 && schema != 2.0) {
+        if (error) *error = "unsupported profile schema " + std::to_string(int(schema));
+        return std::nullopt;
+    }
+    for (const auto& entry : root.array("lenses")) {
+        Json upgraded;
+        if (schema == 1.0 && !upgradeLensV1(entry, upgraded, error)) return std::nullopt;
+        auto lens = readLens(schema == 1.0 ? upgraded : entry, error);
+        if (!lens) return std::nullopt;
+        if (routeForLens(profile, lens->lensId)) {
+            if (error) *error = "duplicate lens id " + lens->lensId;
             return std::nullopt;
         }
-        if (routeForLens(profile, r.lensId)) {
-            if (error) *error = "duplicate lens id " + r.lensId;
-            return std::nullopt;
-        }
-        if (const Json* s = l.get("stream"); s && s->kind == Json::Kind::Object) {
-            r.preferredStream.format =
-                s->str("format") == "RAW10" ? geometry::RawPixelFormat::Raw10 : geometry::RawPixelFormat::Raw16;
-            r.preferredStream.width = uint32_t(std::max(0.0, s->num("width")));
-            r.preferredStream.height = uint32_t(std::max(0.0, s->num("height")));
-            r.unlistedStream = s->flag("unlisted", false);
-            if (!readUseCase(s, r.rawStreamUseCase, error, "stream of lens " + r.lensId)) return std::nullopt;
-        }
-        for (const auto& [name, field] : {std::pair{"readerUsage", &r.readerUsage},
-                                          std::pair{"captureReaderUsage", &r.captureReaderUsage}}) {
-            const Json* u = l.get(name);
-            if (!u || u->kind != Json::Kind::String) continue;
-            *field = parseReaderUsage(u->text);
-            if (!*field) {
-                if (error) *error = std::string("unknown ") + name + " " + u->text + " for lens " + r.lensId;
-                return std::nullopt;
-            }
-        }
-        if (const std::string t = l.str("template"); !t.empty()) {
-            if (t != "still" && t != "preview") {
-                if (error) *error = "unknown template " + t + " for lens " + r.lensId;
-                return std::nullopt;
-            }
-            r.stillTemplate = t == "still";
-        }
-        if (l.get("streamUseCase")) {
-            if (error) *error = "streamUseCase is not a profile field; set useCase on the stream, captureStream, companion or auxJpeg of lens " + r.lensId;
-            return std::nullopt;
-        }
-        r.startupDelayMs = int32_t(std::clamp(l.num("startupDelayMs"), 0.0, 5000.0));
-        r.stopRepeatingForStill = l.flag("stopRepeatingForStill", false);
-        r.fixedFps = int32_t(std::clamp(l.num("fps"), 0.0, 240.0));
-        if (const Json* disabled = l.get("disableCompanion")) {
-            if (disabled->kind != Json::Kind::Bool || (disabled->boolean && l.get("companion"))) {
-                if (error) *error = "disableCompanion must be boolean and cannot disable a required companion for lens " + r.lensId;
-                return std::nullopt;
-            }
-            r.disableCompanion = disabled->boolean;
-        }
-        if (const Json* c = l.get("companion")) {
-            const auto format = c->str("format", "yuv");
-            if (format != "yuv" && format != "private") {
-                if (error) *error = "invalid companion format for lens " + r.lensId;
-                return std::nullopt;
-            }
-            r.companionPrivate = format == "private";
-            r.companionTargeted = c->flag("targeted", true);
-            // No width and height: an automatic size, with this block only tuning the companion the app adds.
-            if (c->get("width") || c->get("height")) {
-                r.companionSize = readSize(c);
-                if (!r.companionSize) {
-                    if (error) *error = "invalid companion for lens " + r.lensId;
-                    return std::nullopt;
-                }
-            }
-            if (const std::string usage = c->str("usage"); !usage.empty()) {
-                r.companionUsage = parseReaderUsage(usage);
-                if (!r.companionUsage) {
-                    if (error) *error = "unknown companion usage " + usage + " for lens " + r.lensId;
-                    return std::nullopt;
-                }
-            }
-            if (c->get("maxImages")) {
-                const double n = c->num("maxImages");
-                if (n < 2.0 || n > 16.0 || std::floor(n) != n) {
-                    if (error) *error = "companion maxImages must be 2 to 16 for lens " + r.lensId;
-                    return std::nullopt;
-                }
-                r.companionMaxImages = uint32_t(n);
-            }
-            for (const auto& [name, field] : {std::pair{"physical", &r.companionPhysical}, std::pair{"detach", &r.companionDetach}}) {
-                if (const Json* v = c->get(name)) {
-                    if (v->kind != Json::Kind::Bool) {
-                        if (error) *error = std::string("companion ") + name + " must be boolean for lens " + r.lensId;
-                        return std::nullopt;
-                    }
-                    *field = v->boolean;
-                }
-            }
-            if (!readUseCase(c, r.companionStreamUseCase, error, "companion of lens " + r.lensId)) return std::nullopt;
-            if (const std::string fallback = c->str("fallback"); !fallback.empty()) {
-                if (fallback != "base" && fallback != "nearest" && fallback != "none") {
-                    if (error) *error = "unknown companion fallback " + fallback + " for lens " + r.lensId;
-                    return std::nullopt;
-                }
-                if (r.companionSize) {
-                    if (error) *error = "companion fallback needs an automatic size for lens " + r.lensId;
-                    return std::nullopt;
-                }
-                r.companionFallback = fallback == "nearest" ? CompanionFallback::Nearest
-                                      : fallback == "none"  ? CompanionFallback::None
-                                                            : CompanionFallback::Base;
-            }
-        }
-        if (const Json* a = l.get("auxJpeg")) {
-            r.auxJpegSize = readSize(a);
-            if (!r.auxJpegSize) {
-                if (error) *error = "invalid auxJpeg for lens " + r.lensId;
-                return std::nullopt;
-            }
-            if (!readUseCase(a, r.auxJpegStreamUseCase, error, "auxJpeg of lens " + r.lensId)) return std::nullopt;
-            if (const std::string usage = a->str("usage"); !usage.empty()) {
-                r.auxJpegUsage = parseReaderUsage(usage);
-                if (!r.auxJpegUsage) {
-                    if (error) *error = "unknown auxJpeg usage " + usage + " for lens " + r.lensId;
-                    return std::nullopt;
-                }
-            }
-        }
-        if (const Json* rd = l.get("reader"); rd && rd->kind == Json::Kind::Object) {
-            if (rd->get("maxImages")) {
-                const double n = rd->num("maxImages");
-                if (n < 6.0 || n > 16.0 || std::floor(n) != n) {
-                    if (error) *error = "reader maxImages must be 6 to 16 for lens " + r.lensId;
-                    return std::nullopt;
-                }
-                r.rawMaxImages = uint32_t(n);
-            }
-            r.readerProbe = rd->flag("probe", false);
-            r.readerDemote = rd->flag("demote", false);
-        }
-        r.vendorGate = l.str("vendorGate");
-        if (const std::string backend = l.str("backend"); !backend.empty()) {
-            if (backend != "auto" && backend != "ndk" && backend != "java") {
-                if (error) *error = "unknown backend " + backend + " for lens " + r.lensId;
-                return std::nullopt;
-            }
-            r.backend = backend == "ndk" ? BackendChoice::Ndk : backend == "java" ? BackendChoice::Java : BackendChoice::Auto;
-        }
-        if (const Json* s = l.get("session"); s && s->kind == Json::Kind::Object) {
-            if (s->get("opMode")) {
-                const double mode = s->num("opMode");
-                // 1 is the constrained high-speed mode; 1 and 2 are not accepted as a vendor mode.
-                if (mode < 0.0 || mode > 2147483647.0 || std::floor(mode) != mode || mode == 1.0 || mode == 2.0) {
-                    if (error) *error = "invalid opMode for lens " + r.lensId;
-                    return std::nullopt;
-                }
-                r.opMode = uint32_t(mode);
-            }
-            if (const std::string params = s->str("params"); !params.empty()) {
-                if (params != "cadence" && params != "none" && params != "full") {
-                    if (error) *error = "unknown session params " + params + " for lens " + r.lensId;
-                    return std::nullopt;
-                }
-                r.sessionParams = params == "none"   ? SessionParamsPolicy::None
-                                  : params == "full" ? SessionParamsPolicy::Full
-                                                     : SessionParamsPolicy::Cadence;
-            }
-        }
-        if (const Json* q = l.get("request"); q && q->kind == Json::Kind::Object) {
-            if (const std::string defaults = q->str("defaults"); !defaults.empty()) {
-                if (defaults != "rawr" && defaults != "minimal") {
-                    if (error) *error = "unknown request defaults " + defaults + " for lens " + r.lensId;
-                    return std::nullopt;
-                }
-                r.requestDefaults = defaults == "minimal" ? RequestDefaults::Minimal : RequestDefaults::Rawr;
-            }
-        }
-        if (const std::string hold = l.str("gateHold"); !hold.empty()) {
-            if ((hold != "configured" && hold != "closed") || r.vendorGate.empty()) {
-                if (error)
-                    *error = std::string(r.vendorGate.empty() ? "gateHold needs a vendorGate" : "unknown gateHold " + hold) +
-                             " for lens " + r.lensId;
-                return std::nullopt;
-            }
-            r.gateHold = hold == "closed" ? GateHold::UntilClosed : GateHold::UntilConfigured;
-        }
-        if (!readQuirks(l.array("quirks"), r.quirks, error, "lens " + r.lensId)) return std::nullopt;
-        if (const Json* c = l.get("captureStream"); c && c->kind == Json::Kind::Object) {
-            geometry::RawStreamPreference capture;
-            capture.format =
-                c->str("format") == "RAW10" ? geometry::RawPixelFormat::Raw10 : geometry::RawPixelFormat::Raw16;
-            capture.width = uint32_t(std::max(0.0, c->num("width")));
-            capture.height = uint32_t(std::max(0.0, c->num("height")));
-            if (capture.width == 0 || capture.height == 0) {
-                if (error) *error = "invalid captureStream for lens " + r.lensId;
-                return std::nullopt;
-            }
-            if (!readUseCase(c, r.captureStreamUseCase, error, "captureStream of lens " + r.lensId)) return std::nullopt;
-            r.captureStream = capture;
-        }
-        r.captureBurst = uint32_t(std::clamp(l.num("captureBurst"), 0.0, 30.0));
-        r.captureBurstSequential = l.flag("captureBurstSequential", false);
-        if (const Json* c = l.get("cfa"); c && c->kind == Json::Kind::Object) {
-            const double block = c->num("block", 1.0);
-            if (block != 1.0 && block != 2.0 && block != 4.0) {
-                if (error) *error = "invalid cfa block for lens " + r.lensId;
-                return std::nullopt;
-            }
-            r.cfaBlock = uint32_t(block);
-            if (const std::string order = c->str("order"); !order.empty()) {
-                r.cfaOrder = cfaOrderFromName(order);
-                if (!r.cfaOrder) {
-                    if (error) *error = "invalid cfa order " + order + " for lens " + r.lensId;
-                    return std::nullopt;
-                }
-            }
-            r.cfaLiveQuality = c->str("live", "standard") == "fast" ? 0u : 1u;
-            r.cfaPhotoQuality = c->str("photo", "high") == "standard" ? 1u : 2u;
-        }
-        if (!readLevels(l.get("levels"), r.levels)) {
-            if (error) *error = "invalid levels for lens " + r.lensId;
-            return std::nullopt;
-        }
-        for (const auto& [name, field] : {std::pair{"viewfinderLevels", &r.viewfinderLevels},
-                                         std::pair{"captureLevels", &r.captureLevels}}) {
-            if (const auto* value = l.get(name)) {
-                LevelOverride levels;
-                if (value->kind != Json::Kind::Object || !readLevels(value, levels)) {
-                    if (error) *error = std::string("invalid ") + name + " for lens " + r.lensId;
-                    return std::nullopt;
-                }
-                *field = levels;
-            }
-        }
-        if (!readDistortion(l.get("distortion"), r.distortion)) {
-            if (error) *error = "invalid distortion for lens " + r.lensId;
-            return std::nullopt;
-        }
-        if (!readMirror(l.str("mirror"), r.mirror)) {
-            if (error) *error = "invalid mirror for lens " + r.lensId;
-            return std::nullopt;
-        }
-        readDcp(l.get("dcp"), r);
-        readExposure(l.get("exposure"), r.exposure);
-        if (!readKeys(l.array("keys"), r.keys, error)) return std::nullopt;
-        if (r.backend == BackendChoice::Ndk && needsJavaBackend(r)) {
-            if (error) *error = "operating mode and stream use case need the Java backend for lens " + r.lensId;
-            return std::nullopt;
-        }
-        if (effectiveBackend(r) == BackendChoice::Java) {
-            if (const char* conflict = javaBackendConflict(r)) {
-                if (error) *error = std::string("the Java backend does not support ") + conflict + " for lens " + r.lensId;
-                return std::nullopt;
-            }
-        }
-        if (r.sessionParams == SessionParamsPolicy::None) {
-            // A session-scope key travels in the session parameters: without them it would be dropped silently.
-            for (const auto& k : r.keys) {
-                if (k.enabled && keyAppliesIn(k.scope, CameraKeySetting::Scope::Session)) {
-                    if (error) *error = "session params none conflicts with session key " + k.tag + " for lens " + r.lensId;
-                    return std::nullopt;
-                }
-            }
-        }
-        profile.lenses.push_back(std::move(r));
+        profile.lenses.push_back(std::move(*lens));
     }
     if (profile.lenses.empty()) {
         if (error) *error = "profile has no lenses";

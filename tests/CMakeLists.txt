@@ -222,6 +222,13 @@ rawr_test(camera_profile_test
   "${APP}/color/DcpProfile.cpp"
   "${APP}/color/ColorMath.cpp"
   "${APP}/geometry/LensDistortion.cpp")
+rawr_test(profile_schema_test
+  "${RAWR_ROOT}/tests/native/profile_schema_test.cpp"
+  "${APP}/camera/CameraRouting.cpp"
+  "${APP}/camera/CameraProfileJson.cpp"
+  "${APP}/color/DcpProfile.cpp"
+  "${APP}/color/ColorMath.cpp"
+  "${APP}/geometry/LensDistortion.cpp")
 rawr_test(builtin_route_golden_test
   "${RAWR_ROOT}/tests/native/builtin_route_golden_test.cpp"
   "${APP}/camera/CameraRouting.cpp"
