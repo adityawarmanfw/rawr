@@ -37,9 +37,23 @@ class NativeVideoRecorder(private val context: Context, private val preview: Raw
          * gets its moov rebuilt from the sample index first, keeping everything written.
          */
         fun recoverInterrupted(context: Context) {
-            context.filesDir.listFiles { file ->
+            recoverInterrupted(context, { hasVideoAndAudio(context, it) }) { uri, index, start ->
+                val fd = requireNotNull(context.contentResolver.openFileDescriptor(uri, "rw")).use { it.detachFd() }
+                NativeAvEngine().nativeRecover(fd, index.path, Build.MANUFACTURER.orEmpty(), Build.MODEL.orEmpty(),
+                    "RAWR ${BuildConfig.VERSION_NAME}", start.optString("renderProfile"),
+                    start.optString("metadataGamut", "Rec.709 / sRGB"), start.optString("metadataTransfer", "BT.709"),
+                    start.optInt("bitDepth", 10), start.optString("logProfile").let { it.isNotEmpty() && it != "null" })
+            }
+        }
+
+        internal fun recoverInterrupted(
+            context: Context,
+            playable: (Uri) -> Boolean,
+            reconstruct: (Uri, File, JSONObject) -> Unit
+        ) {
+            listOf(File(context.noBackupFilesDir, "video_jobs"), context.filesDir).flatMap { root -> root.listFiles { file ->
                 file.name.startsWith("rawr_native_video_") && file.name.endsWith(".jsonl")
-            }?.forEach { journal ->
+            }?.toList().orEmpty() }.forEach { journal ->
                 val index = File(journal.path.removeSuffix(".jsonl") + ".idx")
                 runCatching {
                     var first: String? = null
@@ -54,24 +68,21 @@ class NativeVideoRecorder(private val context: Context, private val preview: Raw
                     }
                     if (first == null || last == null) return@runCatching
                     val lastEvent = JSONObject(last).optString("event")
-                    if (lastEvent == "published" || lastEvent == "recovered") return@runCatching
+                    if (lastEvent == "published" || lastEvent == "recovered") {
+                        index.delete()
+                        return@runCatching
+                    }
                     val start = JSONObject(first)
                     val uri = start.getString("uri").toUri()
-                    if (!hasVideoAndAudio(context, uri)) {
+                    if (!playable(uri)) {
                         check(index.exists()) { "unplayable and no sample index" }
-                        val fd = requireNotNull(context.contentResolver.openFileDescriptor(uri, "rw")).use { it.detachFd() }
-                        NativeAvEngine().nativeRecover(fd, index.path, Build.MANUFACTURER.orEmpty(), Build.MODEL.orEmpty(),
-                            "RAWR ${BuildConfig.VERSION_NAME}", start.optString("renderProfile"),
-                            start.optString("metadataGamut", "Rec.709 / sRGB"), start.optString("metadataTransfer", "BT.709"),
-                            start.optInt("bitDepth", 10), start.optString("logProfile").let { it.isNotEmpty() && it != "null" })
-                        check(hasVideoAndAudio(context, uri)) { "recovered file still unplayable" }
+                        reconstruct(uri, index, start)
+                        check(playable(uri)) { "recovered file still unplayable" }
                     }
                     VideoOutputStore(context).publish(uri)
                     journal.appendText(JSONObject().put("event", "recovered").toString() + "\n")
+                    index.delete()
                 }.onFailure { android.util.Log.w("RawrVideo", "Could not recover ${journal.name}", it) }
-                // Published, recovered, or beyond repair: the index has no further use.
-                if (JSONObject(journal.readLines().lastOrNull { it.isNotBlank() } ?: "{}").optString("event") in
-                    setOf("published", "recovered")) index.delete()
             }
         }
 
@@ -119,7 +130,8 @@ class NativeVideoRecorder(private val context: Context, private val preview: Raw
                         val renderProfileId: Int = 0,
                         val logProfile: com.rawr.camera.settings.model.VideoLogProfile? = null,
                         val timestampPolicy: VideoTimestampPolicy = VideoTimestampPolicy.REALTIME,
-                        val saveLocationId: String = "storage.dcim_camera") {
+                        val saveLocationId: String = "storage.dcim_camera",
+                        val gps: com.rawr.camera.location.CaptureGps? = null) {
         /** Rec.709 and AgX (video) write BT.709; other display profiles write sRGB. */
         val rec709: Boolean get() = renderProfileId == com.rawr.camera.settings.model.ColorRenderProfile.Rec709.nativeId ||
             renderProfileId == com.rawr.camera.settings.model.ColorRenderProfile.AGX_REC709_NATIVE_ID
@@ -169,13 +181,15 @@ class NativeVideoRecorder(private val context: Context, private val preview: Raw
             check(preview.beginVideoFps(request.fps)) { "RAW camera could not lock ${request.fps} fps" }
             uri = outputStore.create(request.saveLocationId, displayName, capturedAt,
                 if (request.audioPcmBits > 0) "video/quicktime" else "video/mp4")
+            val recoveryRoot = File(context.noBackupFilesDir, "video_jobs")
+            check(recoveryRoot.isDirectory || recoveryRoot.mkdirs()) { "Could not create video recovery directory" }
             // The detached descriptor is closed by C++, including nativeStart failure paths.
             // Read+write provides the seekable descriptor needed by the muxer and metadata patcher.
             // A provider that cannot supply one fails here; never redirect to another folder.
             val fd = requireNotNull(context.contentResolver.openFileDescriptor(requireNotNull(uri), "rw"))
                 .use { it.detachFd() }
             val stem = "rawr_native_video_${System.currentTimeMillis()}"
-            index = File(context.filesDir, "$stem.idx")
+            index = File(recoveryRoot, "$stem.idx")
             metadataGamut = request.logProfile?.gamut?.label ?: "Rec.709 / sRGB"
             metadataTransfer = request.logProfile?.transfer?.label ?: if (request.rec709) "BT.709" else "sRGB"
             handle = engine.nativeStart(fd, request.width, request.height, request.fps,
@@ -184,13 +198,14 @@ class NativeVideoRecorder(private val context: Context, private val preview: Raw
                 request.audio.gainDb.toFloat(), request.audio.lowCutHz, request.audioPcmBits, request.bitDepth,
                 request.timestampPolicy.nativeId, Build.MANUFACTURER.orEmpty(), Build.MODEL.orEmpty(),
                 "RAWR ${BuildConfig.VERSION_NAME}", request.renderProfile,
-                metadataGamut, metadataTransfer, request.logProfile != null, requireNotNull(index).path)
+                metadataGamut, metadataTransfer, request.logProfile != null, requireNotNull(index).path,
+                request.gps?.nativeValues())
             check(handle != 0L) { "Native recorder did not start" }
             surface = engine.nativeSurface(handle)
             check(preview.setVideoSurface(surface, request.width, request.height, request.bitDepth)) {
                 "GPU encoder surface unavailable at ${request.width}×${request.height}"
             }
-            journal = File(context.filesDir, "$stem.jsonl")
+            journal = File(recoveryRoot, "$stem.jsonl")
             append(JSONObject().put("event", "start").put("uri", uri.toString())
                 .put("displayName", displayName).put("saveLocationId", request.saveLocationId)
                 .put("bootNs", SystemClock.elapsedRealtimeNanos()).put("camera", preview.cameraControlSnapshot())

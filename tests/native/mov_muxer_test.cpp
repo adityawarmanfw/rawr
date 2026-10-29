@@ -9,10 +9,12 @@
 #include <unistd.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <fstream>
 #include <iterator>
+#include <locale>
 #include <memory>
 #include <string>
 #include <vector>
@@ -21,12 +23,45 @@
 
 using rawrcam::video::MovMuxer;
 
+class CommaNumbers : public std::numpunct<char> {
+    char do_decimal_point() const override { return ','; }
+    char do_thousands_sep() const override { return '.'; }
+    std::string do_grouping() const override { return "\3"; }
+};
+
 static std::vector<uint8_t> slurp(const char* path) {
     std::ifstream file(path, std::ios::binary);
     return {std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
 }
 
 int main(int argc, char** argv) {
+    if (std::getenv("LC_ALL")) std::locale::global(std::locale(std::locale::classic(), new CommaNumbers));
+    if (argc == 4 && std::string(argv[1]) == "--recover") {
+        const int movie = open(argv[2], O_RDWR);
+        const int index = open(argv[3], O_RDONLY);
+        try {
+            MovMuxer::recover(movie, index);
+            close(movie);
+            close(index);
+            return 0;
+        } catch (const std::exception& error) {
+            std::fprintf(stderr, "FAIL %s\n", error.what());
+            close(movie);
+            close(index);
+            return 1;
+        }
+    }
+    if (argc == 2 && std::string(argv[1]) == "--check-descriptors") {
+        int descriptors[2];
+        if (pipe(descriptors)) return 2;
+        bool rejected = false;
+        try { MovMuxer muxer(descriptors[1], MovMuxer::Brand::Mp4); }
+        catch (const std::exception&) { rejected = true; }
+        close(descriptors[0]);
+        close(descriptors[1]);
+        if (!rejected) std::fprintf(stderr, "FAIL unseekable descriptor accepted\n");
+        return rejected ? 0 : 1;
+    }
     if (argc != 12 && argc != 14) {
         std::fprintf(stderr, "usage: %s out csd asc samples width height fps rate channels rotation pcm_bits\n", argv[0]);
         return 2;
@@ -38,8 +73,25 @@ int main(int argc, char** argv) {
         const char* indexPath = argc == 14 ? argv[12] : nullptr;
         const long crashAfter = argc == 14 ? std::stol(argv[13]) : 0;
         const int indexFd = indexPath ? open(indexPath, O_WRONLY | O_CREAT | O_TRUNC | O_APPEND, 0644) : -1;
+        std::optional<MovMuxer::Location> location;
+        if (const char* selected = std::getenv("RAWR_TEST_GPS")) {
+            location = MovMuxer::Location{12.345675, -98.765435, std::nullopt, 0.0, 1'700'000'000'123};
+            if (std::string(selected) != "absent") location->altitudeMeters = std::stod(selected);
+            if (const char* accuracy = std::getenv("RAWR_TEST_ACCURACY"))
+                location->horizontalAccuracyMeters = std::stod(accuracy);
+            if (const char* point = std::getenv("RAWR_TEST_POINT")) {
+                if (std::string(point) == "zero") { location->latitude = -0.000004; location->longitude = 0; }
+                if (std::string(point) == "limits") { location->latitude = -90; location->longitude = 180; }
+                if (std::string(point) == "invalid") location->latitude = 91;
+            }
+            if (const char* optionals = std::getenv("RAWR_TEST_OPTIONALS")) {
+                if (std::string(optionals) == "missing") location->horizontalAccuracyMeters.reset();
+                else location->horizontalAccuracyMeters = -1;
+                location->fixTimeMillis = -1;
+            }
+        }
         auto owned = std::make_unique<MovMuxer>(fd, pcmBits > 0 ? MovMuxer::Brand::QuickTime : MovMuxer::Brand::Mp4,
-                                                indexFd);
+                                                indexFd, location);
         MovMuxer& muxer = *owned;
         MovMuxer::Video video;
         video.annexBConfig = slurp(argv[2]);

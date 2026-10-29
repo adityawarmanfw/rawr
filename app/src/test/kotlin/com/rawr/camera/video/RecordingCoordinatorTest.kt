@@ -1,10 +1,15 @@
 package com.rawr.camera.video
 
 import android.net.Uri
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
 import com.rawr.camera.architecture.*
 import com.rawr.camera.fixtures.CaptureFixtures
 import com.rawr.camera.model.CaptureUiState
+import com.rawr.camera.model.CaptureMode
 import com.rawr.camera.settings.model.SelfTimer
+import com.rawr.camera.location.CaptureGps
 import kotlin.test.*
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -15,9 +20,10 @@ import org.json.JSONObject
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class RecordingCoordinatorTest {
-    private class Controller(timer: SelfTimer = SelfTimer.Off) : CaptureScreenController {
-        private val mutable = MutableStateFlow(CaptureUiState(CaptureFixtures.baseline(), selfTimer = timer))
+    private class Controller(timer: SelfTimer = SelfTimer.Off, mode: CaptureMode = CaptureMode.Photo) : CaptureScreenController {
+        private val mutable = MutableStateFlow(CaptureUiState(CaptureFixtures.baseline(), selfTimer = timer, captureMode = mode))
         override val state = mutable.asStateFlow()
+        fun setMode(mode: CaptureMode) { mutable.value = mutable.value.copy(captureMode = mode) }
         override fun dispatch(action: CaptureAction) {
             if (action is PresentationCaptureAction) mutable.value = CaptureReducer.reduce(mutable.value, action)
         }
@@ -37,12 +43,194 @@ class RecordingCoordinatorTest {
     }
     private fun TestScope.coordinator(
         controller: CaptureScreenController = Controller(),
-        start: suspend () -> VideoRecording
+        foreground: () -> Any? = { Unit },
+        validateAccess: suspend () -> Boolean = { true },
+        admitGps: () -> CaptureGps? = { null },
+        start: suspend (CaptureGps?) -> VideoRecording
     ) = RecordingCoordinator(
-        controller, start, { testScheduler.currentTime * 1_000_000 },
+        controller, start, { testScheduler.currentTime * 1_000_000 }, foreground, validateAccess, admitGps,
         dispatcher = StandardTestDispatcher(testScheduler), ioDispatcher = StandardTestDispatcher(testScheduler)
     )
     private fun RecordingCoordinator.release() { closeWhenIdle {} }
+
+    @Test fun permissionValidationCannotStartAfterStopCloseModeCountdownOrBackground() = runTest {
+        for (event in listOf("ready", "failed", "stop", "close", "mode", "roundTrip", "countdown", "background")) {
+            val controller = Controller(mode = CaptureMode.Video)
+            val validation = CompletableDeferred<Boolean>()
+            var token: Any? = Any()
+            val allowed = mutableListOf<Boolean>()
+            val fix = CaptureGps(0.0, 0.0, null, null, 1L)
+            val owner = RecordingCoordinator(controller, { allowed += it != null; Recorder() }, { 0L }, { token },
+                { validation.await() }, { fix }, dispatcher = UnconfinedTestDispatcher(testScheduler),
+                ioDispatcher = StandardTestDispatcher(testScheduler))
+            val ticket = requireNotNull(owner.permissionTicket())
+            owner.startAfterMicrophonePermission(ticket)
+            assertTrue(allowed.isEmpty())
+            assertEquals(RecordingPhase.Starting, owner.state.value.phase)
+            owner.startAfterMicrophonePermission(ticket)
+            when (event) {
+                "stop" -> owner.stop()
+                "close" -> owner.release()
+                "mode" -> controller.setMode(CaptureMode.Photo)
+                "roundTrip" -> {
+                    controller.dispatch(SetCaptureMode(CaptureMode.Photo))
+                    controller.dispatch(SetCaptureMode(CaptureMode.Video))
+                }
+                "countdown" -> controller.dispatch(SetCaptureSelfTimer(SelfTimer.TwoSeconds))
+                "background" -> token = Any()
+            }
+            runCurrent()
+            if (event == "stop" || event == "close") assertEquals(RecordingPhase.Idle, owner.state.value.phase)
+            validation.complete(event != "failed")
+            runCurrent()
+            val expected = when (event) { "ready" -> listOf(true); "failed" -> listOf(false); else -> emptyList() }
+            assertEquals(expected, allowed, event)
+            owner.release()
+            runCurrent()
+        }
+    }
+
+    @Test fun ordinaryRequestsCannotAdmitAfterLeavingForegroundOrReviveOnReturn() = runTest {
+        val controller = Controller(SelfTimer.TwoSeconds, CaptureMode.Video)
+        var token: Any? = Any()
+        var validations = 0
+        var starts = 0
+        val owner = coordinator(controller, { token }, { validations++; true }) { starts++; Recorder() }
+        owner.toggle()
+        advanceTimeBy(1_000)
+        token = Any()
+        advanceTimeBy(1_500)
+        runCurrent()
+        assertEquals(0, starts, "A countdown from before Home cannot revive on return")
+        owner.toggle()
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertEquals(1, starts)
+        assertEquals(0, validations, "Ordinary starts never wait for location validation")
+        owner.release()
+        runCurrent()
+    }
+
+    private class PermissionHost : LifecycleOwner {
+        override val lifecycle = LifecycleRegistry.createUnsafe(this)
+        fun event(event: Lifecycle.Event) = lifecycle.handleLifecycleEvent(event)
+        var launches = 0
+    }
+
+    private fun permission(host: PermissionHost, owner: RecordingCoordinator, canStart: () -> Boolean = { true }) =
+        MicrophoneRecordingPermission(host.lifecycle, canStart, { host.launches++ }, owner::startAfterMicrophonePermission)
+
+    private fun MicrophoneRecordingPermission.press(owner: RecordingCoordinator) =
+        owner.permissionTicket()?.let(::request)
+
+    @Test fun grantContinuesOnceAtResumeOnlyWhileMicrophoneIsStillGranted() = runTest {
+        for (eligible in listOf(true, false)) {
+            val host = PermissionHost()
+            host.event(Lifecycle.Event.ON_CREATE)
+            host.event(Lifecycle.Event.ON_START)
+            host.event(Lifecycle.Event.ON_RESUME)
+            var admissions = 0
+            var granted = true
+            val owner = coordinator(Controller(mode = CaptureMode.Video)) { admissions++; Recorder() }
+            val permission = permission(host, owner) { granted }
+            permission.press(owner)
+            assertEquals(1, host.launches)
+            host.event(Lifecycle.Event.ON_PAUSE)
+            permission.onResult(true)
+            runCurrent()
+            assertEquals(0, admissions, "Permission grant must not admit recording while paused")
+            granted = eligible
+            host.event(Lifecycle.Event.ON_RESUME)
+            runCurrent()
+            host.event(Lifecycle.Event.ON_PAUSE)
+            host.event(Lifecycle.Event.ON_RESUME)
+            runCurrent()
+            assertEquals(if (eligible) 1 else 0, admissions)
+            host.event(Lifecycle.Event.ON_DESTROY)
+            owner.release()
+            runCurrent()
+        }
+    }
+
+    @Test fun cancelledOrStalePermissionLaunchesCannotStartLater() = runTest {
+        for (ending in listOf("denied", "stopped", "destroyed", "resultAfterStop", "staleLaunch", "modeRoundTrip",
+                              "timerChange", "explicitStop")) {
+            val host = PermissionHost()
+            host.event(Lifecycle.Event.ON_CREATE)
+            host.event(Lifecycle.Event.ON_START)
+            var admissions = 0
+            val controller = Controller(mode = CaptureMode.Video)
+            val owner = coordinator(controller) { admissions++; Recorder() }
+            val permission = permission(host, owner)
+            permission.press(owner)
+            when (ending) {
+                "resultAfterStop" -> host.event(Lifecycle.Event.ON_STOP)
+                "staleLaunch" -> {
+                    host.event(Lifecycle.Event.ON_STOP)
+                    host.event(Lifecycle.Event.ON_START)
+                    host.event(Lifecycle.Event.ON_RESUME)
+                    permission.press(owner)
+                    assertEquals(1, host.launches, "At most one outstanding prompt")
+                }
+                "modeRoundTrip" -> {
+                    controller.dispatch(SetCaptureMode(CaptureMode.Photo))
+                    controller.dispatch(SetCaptureMode(CaptureMode.Video))
+                }
+                "timerChange" -> controller.dispatch(SetCaptureSelfTimer(SelfTimer.TwoSeconds))
+                "explicitStop" -> owner.stop()
+            }
+            permission.onResult(ending != "denied")
+            if (ending == "stopped" || ending == "destroyed") host.event(Lifecycle.Event.ON_STOP)
+            if (ending == "destroyed") {
+                host.event(Lifecycle.Event.ON_DESTROY)
+                permission.onResult(true)
+            } else {
+                host.event(Lifecycle.Event.ON_START)
+                host.event(Lifecycle.Event.ON_RESUME)
+            }
+            runCurrent()
+            advanceTimeBy(3_000)
+            runCurrent()
+            assertEquals(0, admissions, ending)
+            owner.release()
+            host.event(Lifecycle.Event.ON_DESTROY)
+            runCurrent()
+        }
+    }
+
+    @Test fun permissionOriginSurvivesCountdownAndDuplicateResultDoesNotCancelIt() = runTest {
+        val host = PermissionHost()
+        host.event(Lifecycle.Event.ON_CREATE)
+        host.event(Lifecycle.Event.ON_START)
+        val controller = Controller(SelfTimer.TwoSeconds, CaptureMode.Video)
+        var admissions = 0
+        var validations = 0
+        val owner = coordinator(controller, validateAccess = { validations++; true }) { admissions++; Recorder() }
+        val permission = permission(host, owner)
+        permission.press(owner)
+        permission.onResult(true)
+        host.event(Lifecycle.Event.ON_RESUME)
+        runCurrent()
+        permission.onResult(true)
+        assertNotNull(controller.state.value.selfTimerRemainingMs)
+        advanceTimeBy(1_999)
+        runCurrent()
+        assertEquals(0, validations, "Validation happens at admission, not countdown start")
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(1, admissions)
+        assertEquals(1, validations)
+        owner.stop()
+        runCurrent()
+        owner.toggle()
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertEquals(2, admissions)
+        assertEquals(1, validations, "A later ordinary start does not inherit the exception")
+        owner.release()
+        host.event(Lifecycle.Event.ON_DESTROY)
+        runCurrent()
+    }
 
     @Test fun backgroundStopWaitsForStartingRecorderAndFinalizesExactlyOnce() = runTest {
         val startGate = CompletableDeferred<Unit>()
@@ -106,6 +294,39 @@ class RecordingCoordinatorTest {
         assertEquals(1, starts)
         assertEquals(RecordingPhase.Recording, owner.state.value.phase)
         assertNull(controller.state.value.selfTimerRemainingMs)
+        owner.release()
+        runCurrent()
+    }
+
+    @Test fun gpsAdmissionFreezesOnceBeforeIoAndSurvivesLongSetupAndStop() = runTest {
+        val controller = Controller(SelfTimer.TwoSeconds)
+        val admitted = CaptureGps(0.0, 0.0, -12.5, 0.0, 1_700_000_000_123)
+        var current: CaptureGps? = null
+        var reads = 0
+        var received: CaptureGps? = null
+        val setup = CompletableDeferred<Unit>()
+        val recorder = Recorder()
+        val owner = coordinator(controller, admitGps = { reads++; current }) { frozen ->
+            setup.await()
+            received = frozen
+            recorder
+        }
+        owner.toggle()
+        advanceTimeBy(1_999)
+        assertEquals(0, reads)
+        current = admitted
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(1, reads)
+        current = CaptureGps(20.0, 30.0, 99.0, 12.0, 1_700_000_050_000)
+        val stopping = owner.stop()
+        advanceTimeBy(60_000)
+        setup.complete(Unit)
+        runCurrent()
+        assertSame(admitted, received)
+        assertTrue(stopping.isCompleted)
+        assertEquals(1, reads)
+        assertEquals(1, recorder.closes)
         owner.release()
         runCurrent()
     }

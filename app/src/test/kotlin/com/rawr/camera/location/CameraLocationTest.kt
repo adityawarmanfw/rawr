@@ -18,20 +18,36 @@ import android.location.LocationRequest
 import android.os.CancellationSignal
 import android.os.Looper
 import android.os.SystemClock
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
+import com.rawr.camera.architecture.CaptureAction
+import com.rawr.camera.architecture.CaptureReducer
+import com.rawr.camera.architecture.CaptureScreenController
+import com.rawr.camera.architecture.PresentationCaptureAction
+import com.rawr.camera.fixtures.CaptureFixtures
 import com.rawr.camera.integration.CaptureForeground
 import com.rawr.camera.integration.StillCaptureDispatchQueue
+import com.rawr.camera.model.CaptureMode
 import com.rawr.camera.model.CaptureOutputFormat
+import com.rawr.camera.model.CaptureUiState
 import com.rawr.camera.settings.architecture.PersistentSettingsController
 import com.rawr.camera.settings.architecture.SetLocationTagging
 import com.rawr.camera.settings.architecture.SettingsEditor
 import com.rawr.camera.settings.model.SettingsCatalog
+import com.rawr.camera.video.MicrophoneRecordingPermission
+import com.rawr.camera.video.RecordingCoordinator
+import com.rawr.camera.video.VideoRecording
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -179,6 +195,11 @@ class CameraLocationTest {
         }
     }
 
+    private class Host : LifecycleOwner {
+        override val lifecycle = LifecycleRegistry.createUnsafe(this)
+        fun event(event: Lifecycle.Event) = lifecycle.handleLifecycleEvent(event)
+    }
+
     private fun fix(provider: String = FUSED_PROVIDER, accuracy: Float? = 0f, latitude: Double = 0.0) = Location(provider).apply {
         this.latitude = latitude
         longitude = 0.0
@@ -212,6 +233,84 @@ class CameraLocationTest {
     }
 
     private fun idle() = shadowOf(Looper.getMainLooper()).idle()
+
+    @Test fun permissionStartReusesRetainedFixAfterForegroundAppOpNotification() = runTest {
+        val tasks = Tasks()
+        val collector = availableCollector(tasks)
+        val host = Host()
+        host.event(Lifecycle.Event.ON_CREATE)
+        host.event(Lifecycle.Event.ON_START)
+        host.event(Lifecycle.Event.ON_RESUME)
+        val foreground = CaptureForeground(collector::setForeground)
+        foreground.resume(host)
+        collector.setEnabled(true)
+        tasks.drain()
+        listener(FUSED_PROVIDER).onLocationChanged(fix().apply { altitude = -12.5 })
+        val prepared = requireNotNull(collector.snapshot())
+        val controller = object : CaptureScreenController {
+            override val state = MutableStateFlow(CaptureUiState(CaptureFixtures.baseline(), captureMode = CaptureMode.Video))
+            override fun dispatch(action: CaptureAction) {
+                if (action is PresentationCaptureAction) state.value = CaptureReducer.reduce(state.value, action)
+            }
+        }
+        var reads = 0
+        var launches = 0
+        var admitted: CaptureGps? = null
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val recording = RecordingCoordinator(controller, { gps ->
+            admitted = gps
+            object : VideoRecording {
+                override val isRecording = true
+                override val outputUri: android.net.Uri? = null
+                override fun stats() = JSONObject()
+                override fun journalSnapshot() = Unit
+                override fun close() = Unit
+            }
+        }, SystemClock::elapsedRealtimeNanos, foreground::token, collector::validateAccess, { reads++; collector.snapshot() },
+            dispatcher = UnconfinedTestDispatcher(testScheduler), ioDispatcher = dispatcher)
+        val permission = MicrophoneRecordingPermission(host.lifecycle, { true }, { launches++ },
+            recording::startAfterMicrophonePermission)
+        try {
+            permission.request(requireNotNull(recording.permissionTicket()))
+            assertEquals(1, launches)
+            host.event(Lifecycle.Event.ON_PAUSE)
+            foreground.pause(host)
+            tasks.drain()
+            ShadowSystemClock.advanceBy(Duration.ofSeconds(5))
+            appOps.setMode(AppOpsManager.OPSTR_FINE_LOCATION, app.applicationInfo.uid, app.packageName, AppOpsManager.MODE_FOREGROUND)
+            idle()
+            tasks.drain()
+            permission.onResult(true)
+            runCurrent()
+            assertEquals(0, reads)
+            foreground.resume(host)
+            host.event(Lifecycle.Event.ON_RESUME)
+            runCurrent()
+            assertEquals("Only the permission request waits for its access check", 0, reads)
+            tasks.drain()
+            runCurrent()
+            assertEquals(1, reads)
+            assertSame("First recording admission must reuse the retained fix without a new callback", prepared, admitted)
+            permission.onResult(true)
+            runCurrent()
+            assertEquals("A duplicate grant must not read or start again", 1, reads)
+            recording.stop()
+            runCurrent()
+            recording.toggle()
+            runCurrent()
+            assertEquals("A later ordinary start does not inherit the validation wait", 2, reads)
+            assertTrue(tasks.pending.isEmpty())
+            assertSame(prepared, admitted)
+            ShadowSystemClock.advanceBy(Duration.ofSeconds(116))
+            assertNull("Return must not refresh measurement age", collector.snapshot())
+        } finally {
+            recording.closeWhenIdle {}
+            runCurrent()
+            collector.setEnabled(false)
+            tasks.drain()
+            host.event(Lifecycle.Event.ON_DESTROY)
+        }
+    }
 
     @Test fun ordinaryAdmissionNeverWaitsForWorkerAndFreezesOnce() = runTest {
         val tasks = Tasks()

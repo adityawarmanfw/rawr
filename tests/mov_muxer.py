@@ -1,15 +1,17 @@
 """MovMuxer output must decode identically to the source streams and carry timing, rotation and colour."""
 from pathlib import Path
 import json
+import os
+import shutil
 import struct
 import subprocess
 import sys
 import tempfile
 
 helper, patch, ffmpeg, ffprobe, build = sys.argv[1:]
-def run(*args):
+def run(*args, **environment):
     try:
-        return subprocess.check_output([str(x) for x in args], stderr=subprocess.PIPE)
+        return subprocess.check_output([str(x) for x in args], stderr=subprocess.PIPE, env=os.environ | environment)
     except subprocess.CalledProcessError as error:
         sys.stderr.buffer.write(error.stderr)
         raise
@@ -42,8 +44,109 @@ def adts_frames(data):
         frames.append(data[i + header:i + length]); i += length
     return asc, frames
 
+def boxes(data, start=0, end=None):
+    end = len(data) if end is None else end
+    while start < end:
+        size, kind = struct.unpack_from('>I4s', data, start)
+        header = 8
+        if size == 1:
+            size, = struct.unpack_from('>Q', data, start + 8)
+            header = 16
+        assert size >= header and start + size <= end, (kind, size)
+        yield kind, data[start + header:start + size]
+        start += size
+
+def gps_metadata(file):
+    movie = next(body for kind, body in boxes(file.read_bytes()) if kind == b'moov')
+    user, keyed, itemlist = [], {}, []
+    for kind, body in boxes(movie):
+        if kind == b'udta':
+            for tag, value in boxes(body):
+                assert tag in (b'\xa9xyz', b'\xa9mak', b'\xa9mod', b'\xa9too', b'meta')
+                if tag == b'\xa9xyz':
+                    length, language = struct.unpack_from('>HH', value)
+                    assert language == 0x15c7 and length == len(value) - 4
+                    user.append(value[4:].decode('ascii'))
+                elif tag == b'meta':
+                    assert value[:4] == bytes(4)
+                    children = list(boxes(value, 4))
+                    assert [child for child, _ in children] == [b'hdlr', b'ilst']
+                    assert children[0][1] == bytes(8) + b'mdirappl' + bytes(9)
+                    items = list(boxes(children[1][1]))
+                    assert len(items) == 1 and items[0][0] == b'\xa9xyz'
+                    values = list(boxes(items[0][1]))
+                    assert len(values) == 1 and values[0][0] == b'data'
+                    assert values[0][1][:8] == struct.pack('>II', 1, 0)
+                    itemlist.append(values[0][1][8:].decode('ascii'))
+        if kind == b'meta':
+            children = dict(boxes(body))
+            assert children[b'hdlr'][8:12] == b'mdta'
+            count, = struct.unpack_from('>I', children[b'keys'], 4)
+            keys = [value.decode('ascii') for _, value in boxes(children[b'keys'], 8)]
+            assert len(keys) == count
+            for index, item in boxes(children[b'ilst']):
+                values = list(boxes(item))
+                assert len(values) == 1 and values[0][0] == b'data'
+                value = values[0][1]
+                assert value[:8] == struct.pack('>II', 1, 0)
+                key = keys[int.from_bytes(index, 'big') - 1]
+                assert key not in keyed
+                keyed[key] = value[8:].decode('ascii')
+    return user, keyed, itemlist
+
+def check_gps(file, horizontal='+12.34568-098.76544', optionals=True, accuracy='0.00', height='0'):
+    user, keyed, itemlist = gps_metadata(file)
+    assert user == [horizontal + '/'], user
+    assert keyed['com.apple.quicktime.location.ISO6709'] == user[0], keyed
+    expected_itemlist = [] if height == 'absent' else [
+        horizontal + f'{float(height):+.2f}' + 'CRS<http://www.opengis.net/def/crs/EPSG/0/4979>/']
+    assert itemlist == expected_itemlist, itemlist
+    expected_location_keys = {'com.apple.quicktime.location.ISO6709'}
+    if optionals:
+        assert keyed['com.apple.quicktime.location.date'] == '2023-11-14T22:13:20.123Z'
+        expected_location_keys.add('com.apple.quicktime.location.date')
+        if accuracy is None:
+            assert 'com.apple.quicktime.location.accuracy.horizontal' not in keyed
+        else:
+            assert keyed['com.apple.quicktime.location.accuracy.horizontal'] == accuracy
+            expected_location_keys.add('com.apple.quicktime.location.accuracy.horizontal')
+    else:
+        assert 'com.apple.quicktime.location.date' not in keyed
+        assert 'com.apple.quicktime.location.accuracy.horizontal' not in keyed
+    assert {key for key in keyed if any(part in key.lower() for part in ('location', 'altitude', 'height'))} == expected_location_keys
+    assert all('CRS<' not in value for value in keyed.values())
+
+def check_index_gps(file, height, latitude=12.345675, longitude=-98.765435, accuracy=0.0, fix_time=1_700_000_000_123):
+    data = file.read_bytes()
+    assert data[:4] == b'RMX2'
+    records, offset = [], 4
+    while offset < len(data):
+        assert offset + 5 <= len(data)
+        kind, length = struct.unpack_from('<BI', data, offset)
+        offset += 5
+        assert offset + length <= len(data)
+        records.append((kind, data[offset:offset + length]))
+        offset += length
+    present_height = height != 'absent'
+    flags = int(present_height) | (2 if accuracy is not None else 0)
+    expected = struct.pack('<Bddddq', flags, latitude, longitude,
+                           float(height) if present_height else 0.0,
+                           accuracy if accuracy is not None else 0.0, fix_time)
+    assert records[0][0] == 0 and records[1] == (5, expected)
+    assert sum(kind == 5 for kind, _ in records) == 1
+    return data
+
+def media_signature(file):
+    top = dict(boxes(file.read_bytes()))
+    tracks = [body for kind, body in boxes(top[b'moov']) if kind == b'trak']
+    return top[b'ftyp'], top[b'mdat'], tracks
+
 with tempfile.TemporaryDirectory(prefix="mov-", dir=build) as directory:
     root = Path(directory)
+    def mux_args(file, bits, index=None, crash_at=0):
+        args = [helper, file, root/'csd', root/'asc', root/'samples', 160, 96, fps, 48000, 2, rotation, bits]
+        return [str(value) for value in args + ([index, crash_at] if index is not None else [])]
+
     for name, x265, rotation, fps in (('ip', 'bframes=0', 0, 30), ('ibbp', 'bframes=2:b-adapt=0', 90, 24)):
         source = root/f'{name}-source.mp4'
         run(ffmpeg, '-y', '-v', 'error', '-f', 'lavfi', '-i', f'testsrc2=size=160x96:rate={fps}:duration=2',
@@ -75,7 +178,8 @@ with tempfile.TemporaryDirectory(prefix="mov-", dir=build) as directory:
                         for _, track, sync, pts, data in sorted(samples, key=lambda s: (s[0], s[1])))
         (root/'csd').write_bytes(config); (root/'asc').write_bytes(asc); (root/'samples').write_bytes(blob)
         out = root/f'{name}.mp4'
-        run(helper, out, root/'csd', root/'asc', root/'samples', 160, 96, fps, 48000, 2, rotation, 0)
+        run(*mux_args(out, 0))
+        assert gps_metadata(out) == ([], {}, [])
         info = probe(out, '-show_streams', '-show_format')
         video = next(s for s in info['streams'] if s['codec_type'] == 'video')
         audio = next(s for s in info['streams'] if s['codec_type'] == 'audio')
@@ -114,7 +218,7 @@ with tempfile.TemporaryDirectory(prefix="mov-", dir=build) as directory:
                         for _, track, sync, pts, data in sorted(samples, key=lambda s: (s[0], s[1])))
         (root/'samples').write_bytes(blob)
         out = root/f'pcm{bits}.mov'
-        run(helper, out, root/'csd', root/'asc', root/'samples', 160, 96, fps, 48000, 2, rotation, bits)
+        run(*mux_args(out, bits))
         info = probe(out, '-show_streams', '-show_format')
         audio = next(s for s in info['streams'] if s['codec_type'] == 'audio')
         assert info['format']['format_name'].startswith('mov'), info['format']['format_name']
@@ -142,7 +246,9 @@ with tempfile.TemporaryDirectory(prefix="mov-", dir=build) as directory:
         blob = b''.join(struct.pack('<BBqI', track, sync, pts, len(data)) + data
                         for _, track, sync, pts, data in sorted(samples, key=lambda s: (s[0], s[1])))
         (root/'samples').write_bytes(blob)
-        run(helper, out, root/'csd', root/'asc', root/'samples', 160, 96, fps, 48000, 2, rotation, bits, root/'index', crash_at)
+        run(*mux_args(out, bits, root/'index', crash_at))
+        assert (root/'index').read_bytes()[:4] == b'RMX1'
+        assert gps_metadata(out) == ([], {}, [])
         info = probe(out, '-show_streams')
         video = next(s for s in info['streams'] if s['codec_type'] == 'video')
         audio = next(s for s in info['streams'] if s['codec_type'] == 'audio')
@@ -151,3 +257,106 @@ with tempfile.TemporaryDirectory(prefix="mov-", dir=build) as directory:
         assert audio['codec_name'] == (f'pcm_s{bits}le' if bits else 'aac'), audio['codec_name']
         run(ffmpeg, '-v', 'error', '-xerror', '-i', out, '-f', 'null', '-')
         print(f'crash{bits} ok: recovered {recovered}/{len(units)} frames, audio {float(audio["duration"]):.2f} s')
+
+    for bits in (0, 16, 24):
+        if bits:
+            pcm = (root/f'pcm{bits}.raw').read_bytes()
+            frame = 2 * bits // 8
+            audio_samples = [(i / frame / 48000, 1, True, i * 1_000_000 // frame // 48000, pcm[i:i + 1024 * frame])
+                             for i in range(0, len(pcm), 1024 * frame)]
+        else:
+            audio_samples = [(i * 1024 / 48000, 1, True, i * 1024 * 1_000_000 // 48000, value)
+                             for i, value in enumerate(frames)]
+        samples = [(float(packet['dts_time']), 0, 'K' in packet['flags'], int(float(packet['pts_time']) * 1e6) + 260_000, unit)
+                   for packet, unit in zip(packets, units)] + audio_samples
+        (root/'samples').write_bytes(b''.join(struct.pack('<BBqI', track, sync, pts, len(value)) + value
+                                            for _, track, sync, pts, value in sorted(samples, key=lambda sample: (sample[0], sample[1]))))
+        references = {}
+        for crash_at in (0, 100):
+            reference = root/f'reference-{bits}-{crash_at}'
+            run(*mux_args(reference, bits, root/'index', crash_at))
+            references[crash_at] = media_signature(reference)
+        for height in ('absent', '0', '-31.25', '123.50'):
+            for crash_at in (0, 100):
+                out = root/f'gps-{bits}-{height}-{crash_at}.{"mov" if bits else "mp4"}'
+                run(*mux_args(out, bits, root/'index', crash_at), RAWR_TEST_GPS=height)
+                check_gps(out, height=height)
+                assert media_signature(out) == references[crash_at], 'GPS changed samples, offsets, timing, rotation or color'
+                full_index = check_index_gps(root/'index', height)
+                run(helper, '--recover', out, root/'index')
+                check_gps(out, height=height)
+                assert media_signature(out) == references[crash_at]
+                assert (root/'index').read_bytes() == full_index, 'Recovery changed the durable GPS input'
+                for _ in range(2):
+                    run(patch, out)
+                    check_gps(out, height=height)
+                    assert media_signature(out) == references[crash_at]
+                run(patch, out, '--log')
+                check_gps(out, height=height)
+                assert media_signature(out)[:2] == references[crash_at][:2], 'LOG patch changed sample bytes'
+                run(ffmpeg, '-v', 'error', '-xerror', '-i', out, '-f', 'null', '-')
+                if exiftool := shutil.which('exiftool'):
+                    decoded = json.loads(run(exiftool, '-j', '-n', '-a', '-G1', '-GPSCoordinates', '-Warning', '-Error', out))[0]
+                    assert 'UserData:GPSCoordinates' in decoded and 'Keys:GPSCoordinates' in decoded
+                    for group in ('UserData', 'Keys'):
+                        assert [float(value) for value in decoded[f'{group}:GPSCoordinates'].split()] == [12.34568, -98.76544]
+                    if height == 'absent':
+                        assert 'ItemList:GPSCoordinates' not in decoded
+                    else:
+                        assert [float(value) for value in decoded['ItemList:GPSCoordinates'].split()] == [12.34568, -98.76544, float(height)]
+                    assert not any(key.rsplit(':', 1)[-1] in ('Warning', 'Error') for key in decoded)
+        print(f'gps{bits} 2D primary tags, qualified ItemList height, full RMX2, repeated patch and recovery ok')
+        for uncertainty in ('50.01', '123.45', '90000000000000', '90000000000001', '-1', 'nan', 'inf'):
+            expected_accuracy = f'{float(uncertainty):.2f}' if uncertainty in ('50.01', '123.45', '90000000000000') else None
+            for crash_at in (0, 100):
+                policy_out = root/f'uncertainty-{bits}-{uncertainty}-{crash_at}'
+                run(*mux_args(policy_out, bits, root/'policy-index', crash_at),
+                    RAWR_TEST_GPS='0', RAWR_TEST_ACCURACY=uncertainty)
+                check_gps(policy_out, accuracy=expected_accuracy)
+                check_index_gps(root/'policy-index', '0', accuracy=float(uncertainty) if expected_accuracy is not None else None)
+                run(patch, policy_out, '--log')
+                check_gps(policy_out, accuracy=expected_accuracy)
+        print(f'gps{bits} uncertainty serialization independent of admission cutoff ok')
+
+    original = out.read_bytes()
+    index_bytes = (root/'index').read_bytes()
+    header_end = 4 + 5 + struct.unpack_from('<I', index_bytes, 5)[0]
+    location_end = header_end + 5 + struct.unpack_from('<I', index_bytes, header_end + 1)[0]
+    location_record = index_bytes[header_end:location_end]
+    malformed = {
+        'unknown-version': b'RMX9' + index_bytes[4:],
+        'missing-location': index_bytes[:header_end] + index_bytes[location_end:],
+        'duplicate-location': index_bytes[:location_end] + location_record + index_bytes[location_end:],
+        'truncated-location': index_bytes[:location_end - 1],
+        'legacy-with-location': b'RMX1' + index_bytes[4:],
+        'late-location': index_bytes[:header_end] + index_bytes[location_end:] + location_record,
+    }
+    for name, damaged in malformed.items():
+        out.write_bytes(original)
+        (root/'bad-index').write_bytes(damaged)
+        result = subprocess.run([helper, '--recover', str(out), str(root/'bad-index')], capture_output=True)
+        assert result.returncode != 0, name
+        assert out.read_bytes() == original, f'{name}: failed recovery changed movie'
+        assert (root/'bad-index').read_bytes() == damaged
+    out.write_bytes(original)
+    (root/'bad-index').write_bytes(index_bytes + b'\x03\x10')
+    run(helper, '--recover', out, root/'bad-index')
+    check_gps(out, height='123.50')
+    print('RMX2 malformed/missing/duplicate/truncated/version rejection and partial sample-tail recovery ok')
+
+    for point, horizontal in (('zero', '+00.00000+000.00000'), ('limits', '-90.00000+180.00000')):
+        for height in ('absent', 'nan', 'inf', '1e100'):
+            for optionals in ('missing', 'invalid'):
+                run(*mux_args(out, 24, root/'index'), RAWR_TEST_GPS=height, RAWR_TEST_POINT=point,
+                    RAWR_TEST_OPTIONALS=optionals, LC_ALL='de_DE.UTF-8')
+                check_gps(out, horizontal, optionals=False, height='absent')
+                latitude, longitude = (-0.000004, 0.0) if point == 'zero' else (-90.0, 180.0)
+                check_index_gps(root/'index', 'absent', latitude, longitude, accuracy=None, fix_time=0)
+    run(*mux_args(out, 24, root/'index'), RAWR_TEST_GPS='12345.67', LC_ALL='de_DE.UTF-8')
+    check_gps(out, height='12345.67')
+    check_index_gps(root/'index', '12345.67')
+    result = subprocess.run(mux_args(out, 24), capture_output=True,
+                            env=os.environ | {'RAWR_TEST_GPS': '0', 'RAWR_TEST_POINT': 'invalid'})
+    assert result.returncode != 0 and b'invalid movie location' in result.stderr
+    run(helper, '--check-descriptors')
+    print('zero/range/locale/invalid optional fields and unseekable output checks ok')

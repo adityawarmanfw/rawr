@@ -4,7 +4,9 @@ import com.rawr.camera.architecture.CancelSelfTimer
 import com.rawr.camera.architecture.CaptureScreenController
 import com.rawr.camera.architecture.StartSelfTimerCountdown
 import com.rawr.camera.architecture.TickSelfTimer
+import com.rawr.camera.location.CaptureGps
 import com.rawr.camera.model.VideoTimingState
+import com.rawr.camera.model.CaptureMode
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -33,12 +35,23 @@ data class RecordingState(
 /** Owns every recording job, including finalization after the screen or ViewModel leaves. */
 class RecordingCoordinator(
     private val controller: CaptureScreenController,
-    private val startRecorder: suspend () -> VideoRecording,
+    private val startRecorder: suspend (CaptureGps?) -> VideoRecording,
     private val clockNs: () -> Long,
+    private val foregroundToken: () -> Any?,
+    private val validateAccess: suspend () -> Boolean,
+    private val admitGps: () -> CaptureGps?,
     private val onSaved: suspend (VideoRecording) -> Unit = {},
     dispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) {
+    /** Created before the microphone prompt; a cancelled ticket can never start or be rebound. */
+    class PermissionTicket internal constructor(internal val runId: Long) {
+        @Volatile internal var cancelled = false
+            private set
+        internal fun cancel() { cancelled = true }
+    }
+    private class Request(val token: Any, val runId: Long, val permissionOrigin: Boolean)
+
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val mutableState = MutableStateFlow(RecordingState())
     val state = mutableState.asStateFlow()
@@ -50,36 +63,82 @@ class RecordingCoordinator(
     private var timerJob: Job? = null
     private var statsJob: Job? = null
     private var closing = false
+    private var admitted = false
+    private var ticket: PermissionTicket? = null
+
+    /** Binds a prompt to the current video mode and timer run; replaces any earlier ticket. */
+    fun permissionTicket(): PermissionTicket? {
+        val capture = controller.state.value
+        if (closing || state.value.busy || state.value.recording || capture.captureMode != CaptureMode.Video ||
+            capture.selfTimerRemainingMs != null) return null
+        ticket?.cancel()
+        return PermissionTicket(capture.selfTimerRunId).also { ticket = it }
+    }
+
+    /** Continues the ticket's request once, under the foreground identity current at RESUMED. */
+    fun startAfterMicrophonePermission(ticket: PermissionTicket) {
+        val capture = controller.state.value
+        if (ticket.cancelled || this.ticket !== ticket) return
+        this.ticket = null
+        ticket.cancel()
+        if (capture.captureMode != CaptureMode.Video || capture.selfTimerRunId != ticket.runId ||
+            state.value.recording || capture.selfTimerRemainingMs != null) return
+        begin(foregroundToken() ?: return, permissionOrigin = true)
+    }
 
     fun toggle() {
         if (closing || state.value.busy) return
         if (state.value.recording) { stop(); return }
         if (controller.state.value.selfTimerRemainingMs != null) { cancelCountdown(); return }
-        if (controller.state.value.selfTimer.seconds <= 0) { start(); return }
+        begin(foregroundToken() ?: return, permissionOrigin = false)
+    }
+
+    private fun begin(token: Any, permissionOrigin: Boolean) {
+        if (closing || state.value.busy) return
+        if (controller.state.value.selfTimer.seconds <= 0) {
+            start(Request(token, controller.state.value.selfTimerRunId, permissionOrigin))
+            return
+        }
         controller.dispatch(StartSelfTimerCountdown)
-        val runId = controller.state.value.selfTimerRunId
-        if (controller.state.value.selfTimerRemainingMs == null) { start(); return }
+        val request = Request(token, controller.state.value.selfTimerRunId, permissionOrigin)
+        if (controller.state.value.selfTimerRemainingMs == null) { start(request); return }
         timerJob = scope.launch {
             while (true) {
                 delay(100)
                 val capture = controller.state.value
                 val remaining = capture.selfTimerRemainingMs ?: return@launch
-                if (capture.selfTimerRunId != runId) return@launch
+                if (capture.selfTimerRunId != request.runId) return@launch
                 val next = remaining - 100
-                controller.dispatch(TickSelfTimer(next, runId))
+                controller.dispatch(TickSelfTimer(next, request.runId))
                 if (next <= 0) break
             }
             timerJob = null
-            if (controller.state.value.selfTimerRunId == runId) start()
+            if (controller.state.value.selfTimerRunId == request.runId) start(request)
         }
     }
 
     fun start(): Job? {
+        val token = foregroundToken() ?: return startJob
+        return start(Request(token, controller.state.value.selfTimerRunId, permissionOrigin = false))
+    }
+
+    private fun start(request: Request): Job? {
         if (closing || state.value.busy || recorder != null) return startJob
+        val requestedMode = controller.state.value.captureMode
+        admitted = false
         mutableState.value = RecordingState(RecordingPhase.Starting, "Starting…")
         startJob = scope.launch {
             try {
-                recorder = startRecorder()
+                // Only a microphone-permission continuation waits, and only for its access check.
+                val gpsAllowed = !request.permissionOrigin || validateAccess()
+                val capture = controller.state.value
+                if (closing || foregroundToken() !== request.token || capture.captureMode != requestedMode ||
+                    capture.selfTimerRunId != request.runId) {
+                    mutableState.value = RecordingState()
+                    return@launch
+                }
+                admitted = true
+                recorder = startRecorder(if (gpsAllowed) admitGps() else null)
                 val active = requireNotNull(recorder)
                 val startedAt = clockNs()
                 mutableState.value = RecordingState(RecordingPhase.Recording, "REC 00:00")
@@ -131,7 +190,13 @@ class RecordingCoordinator(
 
     /** Joins an in-flight start before finalizing; callers can safely release preview afterward. */
     fun stop(): Job {
+        ticket?.cancel()
+        ticket = null
         cancelCountdown()
+        if (state.value.phase == RecordingPhase.Starting && !admitted) {
+            startJob?.cancel()
+            mutableState.value = RecordingState()
+        }
         stopJob?.takeIf { it.isActive }?.let { return it }
         return scope.launch {
             startJob?.join()

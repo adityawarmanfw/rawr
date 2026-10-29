@@ -1,13 +1,21 @@
 #include "video/MovMuxer.h"
 
 #include <unistd.h>
+#include <fcntl.h>
 
 #include <algorithm>
 #include <chrono>
 #include <cerrno>
 #include <cstring>
+#include <cmath>
+#include <ctime>
+#include <iomanip>
+#include <locale>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
+
+#include "video/MovieMetadata.h"
 
 namespace rawrcam::video {
 namespace {
@@ -17,6 +25,49 @@ constexpr size_t kFlushBytes = 1 << 20;
 // encoding instead of growing memory without bound.
 constexpr size_t kMaxQueuedBytes = 96u << 20;
 constexpr uint32_t kMovieTimescale = 1000;
+constexpr double kMaxDecimalMeters = 9e13;
+
+void requireOutputFd(int fd) {
+    const int flags = ::fcntl(fd, F_GETFL);
+    if (flags < 0 || (flags & O_ACCMODE) != O_RDWR || ::lseek(fd, 0, SEEK_CUR) < 0)
+        throw std::invalid_argument("movie output must be readable, writable and seekable");
+}
+
+MovMuxer::Location normalizedLocation(MovMuxer::Location location) {
+    if (!std::isfinite(location.latitude) || std::abs(location.latitude) > 90 ||
+        !std::isfinite(location.longitude) || std::abs(location.longitude) > 180)
+        throw std::invalid_argument("invalid movie location");
+    if (location.altitudeMeters && (!std::isfinite(*location.altitudeMeters) || std::abs(*location.altitudeMeters) > kMaxDecimalMeters))
+        location.altitudeMeters.reset();
+    if (location.horizontalAccuracyMeters && (!std::isfinite(*location.horizontalAccuracyMeters) ||
+        *location.horizontalAccuracyMeters < 0 || *location.horizontalAccuracyMeters > kMaxDecimalMeters))
+        location.horizontalAccuracyMeters.reset();
+    if (location.fixTimeMillis <= 0 || location.fixTimeMillis > 253402300799999LL) location.fixTimeMillis = 0;
+    return location;
+}
+
+std::string decimal(double value, int digits, int integerWidth, bool signedValue) {
+    const int64_t scale = digits == 5 ? 100000 : 100;
+    const int64_t rounded = static_cast<int64_t>(std::round(value * double(scale)));
+    const uint64_t magnitude = rounded < 0 ? uint64_t(-rounded) : uint64_t(rounded);
+    std::ostringstream out;
+    out.imbue(std::locale::classic());
+    if (signedValue) out << (rounded < 0 ? '-' : '+');
+    out << std::setfill('0') << std::setw(integerWidth) << magnitude / scale << '.'
+        << std::setw(digits) << magnitude % scale;
+    return out.str();
+}
+
+std::string fixDate(int64_t millis) {
+    const time_t seconds = static_cast<time_t>(millis / 1000);
+    tm utc{};
+    if (!gmtime_r(&seconds, &utc)) throw std::runtime_error("movie location UTC conversion failed");
+    std::ostringstream out;
+    out.imbue(std::locale::classic());
+    out << std::put_time(&utc, "%Y-%m-%dT%H:%M:%S") << '.' << std::setfill('0') << std::setw(3)
+        << millis % 1000 << 'Z';
+    return out.str();
+}
 
 void put8(Bytes& out, uint32_t v) { out.push_back(static_cast<uint8_t>(v)); }
 void put16(Bytes& out, uint32_t v) {
@@ -351,6 +402,7 @@ Bytes co64(const std::vector<uint64_t>& offsets) {
 // Sample index: "RMX1" then records [u8 type][u32 length][payload], little-endian.
 namespace {
 constexpr uint8_t kIndexHeader = 0, kIndexVideo = 1, kIndexAudio = 2, kIndexVideoSample = 3, kIndexAudioSample = 4;
+constexpr uint8_t kIndexLocation = 5;
 
 void le(Bytes& out, uint64_t v, int bytes) {
     for (int i = 0; i < bytes; ++i) out.push_back(static_cast<uint8_t>(v >> (8 * i)));
@@ -374,10 +426,10 @@ void writeAll(int fd, const uint8_t* data, size_t size, std::string& error) {
 }
 }  // namespace
 
-MovMuxer::MovMuxer(int fd, Brand brand, int indexFd) : fd_(fd), brand_(brand), indexFd_(indexFd) {
-    if (fd_ < 0) throw std::invalid_argument("MovMuxer needs a writable fd");
+MovMuxer::MovMuxer(int fd, Brand brand, int indexFd, std::optional<Location> location)
+    try : fd_(fd), brand_(brand), location_(location ? std::optional<Location>(normalizedLocation(*location)) : std::nullopt), indexFd_(indexFd) {
+    requireOutputFd(fd_);
     buffer_.reserve(kFlushBytes + (1 << 16));
-    writer_ = std::thread([this] { writerLoop(); });
     Bytes ftyp;
     if (brand_ == Brand::QuickTime) {
         putType(ftyp, "qt  ");
@@ -397,16 +449,33 @@ MovMuxer::MovMuxer(int fd, Brand brand, int indexFd) : fd_(fd), brand_(brand), i
     put64(mdat, 0);
     write(mdat.data(), mdat.size());
     if (indexFd_ >= 0) {
-        const uint8_t magic[4] = {'R', 'M', 'X', '1'};
+        const uint8_t magic[4] = {'R', 'M', 'X', uint8_t(location_ ? '2' : '1')};
         indexBuffer_.insert(indexBuffer_.end(), magic, magic + 4);
         Bytes payload;
         le(payload, brand_ == Brand::QuickTime ? 1 : 0, 1);
         le(payload, mdatStart_, 8);
         indexRecord(kIndexHeader, payload);
+        if (location_) {
+            Bytes gps;
+            le(gps, (location_->altitudeMeters ? 1 : 0) | (location_->horizontalAccuracyMeters ? 2 : 0), 1);
+            for (double value : {location_->latitude, location_->longitude, location_->altitudeMeters.value_or(0),
+                                 location_->horizontalAccuracyMeters.value_or(0)}) {
+                uint64_t bits;
+                std::memcpy(&bits, &value, sizeof(bits));
+                le(gps, bits, 8);
+            }
+            le(gps, uint64_t(location_->fixTimeMillis), 8);
+            indexRecord(kIndexLocation, gps);
+        }
     }
+    writer_ = std::thread([this] { writerLoop(); });
+} catch (...) {
+    if (indexFd >= 0) ::close(indexFd);
+    throw;
 }
 
 MovMuxer::MovMuxer(int fd, Brand brand, Recovering) : fd_(fd), brand_(brand), replaying_(true) {
+    requireOutputFd(fd_);
     writer_ = std::thread([this] { writerLoop(); });
 }
 
@@ -589,7 +658,9 @@ void MovMuxer::recover(int fd, int indexFd) {
         if (n == 0) break;
         index.insert(index.end(), chunk, chunk + n);
     }
-    if (index.size() < 4 || std::memcmp(index.data(), "RMX1", 4) != 0) throw std::runtime_error("not a sample index");
+    if (index.size() < 4 || (std::memcmp(index.data(), "RMX1", 4) != 0 && std::memcmp(index.data(), "RMX2", 4) != 0))
+        throw std::runtime_error("unsupported sample index");
+    const bool needsLocation = index[3] == '2';
     std::unique_ptr<MovMuxer> muxer;
     uint64_t end = 0;
     size_t pos = 4;
@@ -606,6 +677,21 @@ void MovMuxer::recover(int fd, int indexFd) {
             continue;
         }
         if (!muxer) throw std::runtime_error("sample index missing header");
+        if (type == kIndexLocation) {
+            if (!needsLocation || muxer->location_ || muxer->hasVideo() || muxer->hasAudio() || length != 41 || (p[0] & ~3))
+                throw std::runtime_error("invalid sample index location");
+            const auto number = [p](int field) {
+                const uint64_t bits = readLe(p + 1 + 8 * field, 8);
+                double value;
+                std::memcpy(&value, &bits, sizeof(value));
+                return value;
+            };
+            Location gps{number(0), number(1), std::nullopt, std::nullopt, static_cast<int64_t>(readLe(p + 33, 8))};
+            if (p[0] & 1) gps.altitudeMeters = number(2);
+            if (p[0] & 2) gps.horizontalAccuracyMeters = number(3);
+            muxer->location_ = normalizedLocation(gps);
+            continue;
+        }
         if ((type == kIndexVideo && length >= 32) || (type == kIndexAudio && length >= 28)) {
             const auto field = [p](int i) { return static_cast<int>(static_cast<int32_t>(readLe(p + 4 * i, 4))); };
             if (type == kIndexVideo) {
@@ -649,6 +735,7 @@ void MovMuxer::recover(int fd, int indexFd) {
         }
     }
     if (!muxer) throw std::runtime_error("sample index missing header");
+    if (needsLocation && !muxer->location_) throw std::runtime_error("sample index missing location");
     if (end <= muxer->mdatStart_) throw std::runtime_error("sample index has no samples");
     // Drop any unindexed tail, then append moov exactly where the indexed media ends.
     if (::ftruncate(fd, static_cast<off_t>(end)) != 0 || ::lseek(fd, static_cast<off_t>(end), SEEK_SET) < 0)
@@ -845,7 +932,34 @@ std::vector<uint8_t> MovMuxer::moov() const {
     putMatrix(mvhd, 0);
     zeros(mvhd, 24);
     put32(mvhd, 3);
-    return container("moov", fullBox("mvhd", 0, 0, mvhd), video, audio);
+    Bytes metadata;
+    if (location_) {
+        const auto& gps = *location_;
+        const std::string coordinates = decimal(gps.latitude, 5, 2, true) + decimal(gps.longitude, 5, 3, true) + '/';
+        Bytes userData;
+        put16(userData, uint32_t(coordinates.size()));
+        put16(userData, 0x15c7);
+        userData.insert(userData.end(), coordinates.begin(), coordinates.end());
+        Bytes userEntries = box("\xA9xyz", userData);
+        if (gps.altitudeMeters) {
+            const std::string qualified = coordinates.substr(0, coordinates.size() - 1) +
+                decimal(*gps.altitudeMeters, 2, 1, true) + "CRS<http://www.opengis.net/def/crs/EPSG/0/4979>/";
+            Bytes handler(8, 0);
+            putType(handler, "mdir");
+            putType(handler, "appl");
+            zeros(handler, 9);
+            Bytes items = box("hdlr", handler);
+            append(items, container("ilst", box("\xA9xyz", utf8Data(qualified))));
+            append(userEntries, fullBox("meta", 0, 0, items));
+        }
+        append(metadata, box("udta", userEntries));
+        MdtaEntries entries{{"com.apple.quicktime.location.ISO6709", utf8Data(coordinates)}};
+        if (gps.fixTimeMillis) entries.emplace_back("com.apple.quicktime.location.date", utf8Data(fixDate(gps.fixTimeMillis)));
+        if (gps.horizontalAccuracyMeters)
+            entries.emplace_back("com.apple.quicktime.location.accuracy.horizontal", utf8Data(decimal(*gps.horizontalAccuracyMeters, 2, 1, false)));
+        append(metadata, mdtaMeta(entries));
+    }
+    return container("moov", fullBox("mvhd", 0, 0, mvhd), video, audio, metadata);
 }
 
 void MovMuxer::finish() {

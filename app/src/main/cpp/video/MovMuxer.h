@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <deque>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -19,6 +20,14 @@ namespace rawrcam::video {
 class MovMuxer final {
 public:
     enum class Brand { Mp4, QuickTime };
+
+    struct Location {
+        double latitude;
+        double longitude;
+        std::optional<double> altitudeMeters;
+        std::optional<double> horizontalAccuracyMeters;
+        int64_t fixTimeMillis = 0;
+    };
 
     struct Video {
         // Encoder csd-0: Annex B VPS, SPS and PPS.
@@ -48,7 +57,7 @@ public:
 
     // indexFd (optional, owned): append-only sample index, written only after the
     // samples it describes reach fd, so recover() can finish an interrupted file.
-    MovMuxer(int fd, Brand brand, int indexFd = -1);
+    MovMuxer(int fd, Brand brand, int indexFd = -1, std::optional<Location> location = std::nullopt);
     ~MovMuxer();
 
     // Rebuilds moov for a file whose recording stopped without finish(), from its
@@ -109,6 +118,7 @@ private:
 
     int fd_ = -1;
     Brand brand_;
+    std::optional<Location> location_;
     Video videoConfig_;
     Audio audioConfig_;
     Track video_;

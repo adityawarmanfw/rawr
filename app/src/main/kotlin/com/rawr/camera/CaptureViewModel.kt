@@ -147,8 +147,11 @@ class CaptureViewModel(application: Application) : AndroidViewModel(application)
     )
     val recording = com.rawr.camera.video.RecordingCoordinator(
         controller = controller,
-        startRecorder = { recordingBackend.start(recordingOptions) },
+        startRecorder = { gps -> recordingBackend.start(recordingOptions, gps) },
         clockNs = android.os.SystemClock::elapsedRealtimeNanos,
+        foregroundToken = foreground::token,
+        validateAccess = cameraLocation::validateAccess,
+        admitGps = { if (latestSettings.locationTagging) cameraLocation.snapshot() else null },
         onSaved = { recorder ->
             if (recordingOptions.inspectOutput) {
                 recordingOptions = recordingOptions.copy(inspectOutput = false)
