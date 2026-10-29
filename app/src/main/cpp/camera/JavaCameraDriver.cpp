@@ -410,12 +410,14 @@ extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_JavaCameraBac
 
 extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_JavaCameraBackend_nativeOnCaptureFailed(
     JNIEnv*, jclass, jlong session, jlong requestId, jlong frameNumber, jint reason, jint sequenceId,
-    jboolean bufferLost) {
+    jboolean bufferLost, jint targetIndex) {
     auto* s = rawrcam::camera::sessionOf(session);
     if (!s) return;
     const auto request = s->find(requestId, !bufferLost);
     CameraCallbacks::captureFailed(s->context(), bufferLost ? "CAMERA_BUFFER_LOST" : "CAMERA_CAPTURE_FAILED",
-                                   frameNumber, bufferLost ? 0 : reason, bufferLost ? -1 : sequenceId, request.get());
+                                   frameNumber, bufferLost ? 0 : reason, bufferLost ? -1 : sequenceId, request.get(),
+                                   bufferLost && targetIndex >= 0 ? s->context()->outputLabel(size_t(targetIndex))
+                                                                  : nullptr);
 }
 
 extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_JavaCameraBackend_nativeOnSequenceEnded(

@@ -618,6 +618,15 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
 
     auto* callbackContext = callbacks.sessionContext(generation_);
     callbackContext->physicalCameraId = physicalCameraId;
+    callbackContext->outputWindows.clear();
+    callbackContext->outputLabels.clear();
+    for (const auto& o : outputs) {
+        callbackContext->outputWindows.push_back(o.window);
+        callbackContext->outputLabels.push_back(o.window == rawWindow_         ? "raw"
+                                                : o.window == companionWindow_ ? "companion"
+                                                : o.window == captureWindow_   ? "capture"
+                                                                               : "aux_jpeg");
+    }
     sessionContext_ = callbackContext;
     staticLevels_.reset();
     captureStaticLevels_.reset();

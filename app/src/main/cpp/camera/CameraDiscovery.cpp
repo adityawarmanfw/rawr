@@ -5,9 +5,12 @@
 #include <media/NdkImage.h>
 
 #include <algorithm>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <sstream>
+
+#include "camera/CameraMetadataTags.h"
 
 namespace rawrcam::camera {
 namespace {
@@ -36,6 +39,54 @@ std::string formatRawSizeList(const ACameraMetadata* characteristics) {
         out << e->data.i32[i + 1] << 'x' << e->data.i32[i + 2] << (format == AIMAGE_FORMAT_RAW10 ? ":RAW10" : "");
     }
     return out.str();
+}
+
+// Vendor characteristics that say which sensor modes and stream sizes a camera really has. They are
+// not in the framework's key list, so they are looked up by name and logged once per camera and process.
+constexpr const char* kVendorCharacteristicKeys[] = {
+    "org.quic.camera2.sensormode.info.SensorModeTable",
+    "org.codeaurora.qcamera3.quadra_cfa.is_qcfa_sensor",
+    "org.codeaurora.qcamera3.quadra_cfa.availableStreamConfigurations",
+    "xiaomi.scaler.availableStreamConfigurations",
+    "xiaomi.scaler.availableLimitStreamConfigurations",
+    "xiaomi.scaler.availableSuperResolutionStreamConfigurations",
+    "com.xiaomi.scaler.availableManualRawStreamConfigurations",
+};
+constexpr uint32_t kVendorKeyValueLimit = 400;
+
+void emitVendorCharacteristics(const ACameraMetadata* characteristics, const std::string& cameraId,
+                               const CameraDiagnostic& diagnostic) {
+    static std::mutex mutex;
+    static std::set<std::string> done;
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (done.count(cameraId)) return;
+    }
+    bool logged = false;
+    for (const char* name : kVendorCharacteristicKeys) {
+        const auto tag = resolveMetadataTagByNameCompat(characteristics, cameraId.c_str(), name, nullptr);
+        if (!tag) continue;
+        const auto e = entry(characteristics, *tag);
+        if (!e) continue;
+        std::ostringstream line;
+        line << "CAMERA_VENDOR_CHARACTERISTIC cameraId=" << cameraId << " name=" << name << " count=" << e->count
+             << " values=";
+        const uint32_t shown = std::min(e->count, kVendorKeyValueLimit);
+        for (uint32_t i = 0; i < shown; ++i) {
+            if (i) line << ',';
+            if (e->type == ACAMERA_TYPE_INT32 && e->data.i32) line << e->data.i32[i];
+            else if (e->type == ACAMERA_TYPE_BYTE && e->data.u8) line << static_cast<int>(e->data.u8[i]);
+            else line << '?';
+        }
+        if (shown < e->count) line << ",...";
+        diagnostic(line.str());
+        logged = true;
+    }
+    // A camera with none of these keys (or a resolver not installed yet) is tried again next time.
+    if (logged) {
+        std::lock_guard<std::mutex> lock(mutex);
+        done.insert(cameraId);
+    }
 }
 
 }  // namespace
@@ -118,6 +169,7 @@ void emitCameraDiscovery(ACameraManager* manager, const CameraDiagnostic& diagno
             line << " pixelArray=" << pixel->data.i32[0] << 'x' << pixel->data.i32[1];
         }
         diagnostic(line.str());
+        emitVendorCharacteristics(characteristics, cameraId, diagnostic);
         ACameraMetadata_free(characteristics);
     }
 }
