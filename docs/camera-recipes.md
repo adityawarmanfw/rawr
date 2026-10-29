@@ -55,7 +55,7 @@ every field of every built-in lens as parsed; the built-in files must keep produ
 | `unlisted` | false | Use the size as written instead of negotiating it against the advertised sizes. |
 | `useCase` | 0 | Stream use case (Java backend only). |
 | `reader.usage` | chosen by the usage ladder | Fixed AHardwareBuffer usage: `gpuDataBuffer`, `none`, or hex such as `0x100003`. Used as written. |
-| `reader.maxImages` | 6 | Images the reader holds, 6–16. |
+| `reader.maxImages` | 6 | Images the reader holds, 2–16. Below 6 the realtime pipeline can starve the reader (the preview drops frames); a smaller count is for a lens probing what the HAL allocates at a full-size stream. |
 | `reader.probe` | false | Check a fixed usage with `AHardwareBuffer_isSupported` first; CPU-only when refused. |
 | `reader.demote` | false | Let a silent fixed reader fall back like the app's own choice. Without it a fixed reader stays out of the usage ladder. |
 | `levels` | the lens's | Black/white levels for this stream only. |
@@ -170,9 +170,10 @@ Java camera API exactly when one of them is set, and an explicit `ndk` together 
 when the profile is parsed. `java` can also be chosen for a lens without either, to compare the two
 APIs on the same route.
 
-A lens with a vendor gate or with `stopRepeatingForStill` cannot use the Java backend, whether it
-asks for `java` or gets it from an operating mode or use case: the vivo full-size sequence is proven
-on the NDK only. The profile is refused with the reason.
+A lens with `stopRepeatingForStill` cannot use the Java backend, whether it asks for `java` or gets
+it from an operating mode or use case: the vivo decision sequence is proven on the NDK only. The
+profile is refused with the reason. A vendor gate works on either API: the native session takes it
+before the camera opens and holds it as the lens asks.
 
 On the Java backend Kotlin opens the camera and configures the session (`SessionConfiguration` with
 the operating mode, `OutputConfiguration.setStreamUseCase` per output, session parameters). Native

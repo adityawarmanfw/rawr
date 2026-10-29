@@ -224,16 +224,15 @@ struct LensRoute {
            lens.companionStreamUseCase != 0 || lens.auxJpegStreamUseCase != 0;
 }
 
-// What the Java backend does not take on: a vendor gate (app-held vendor state around open and configure) and
-// stop-repeating stills (the vivo decision sequence). Both are proven on the NDK only. nullptr: no conflict.
+// What the Java backend does not take on: stop-repeating stills (the vivo decision sequence), proven on the NDK
+// only. A vendor gate is taken by the native session before either API opens the camera. nullptr: no conflict.
 [[nodiscard]] inline const char* javaBackendConflict(const LensRoute& lens) noexcept {
-    if (!lens.vendorGate.empty()) return "a vendor gate";
     if (lens.stopRepeatingForStill) return "stop-repeating stills";
     return nullptr;
 }
 
 // `debug.rawr.camera_backend java|ndk`: runs every lens on one API, for comparing the two on the same route.
-// Lenses the forced API can't run keep their own: a gated lens stays on the NDK, a lens with an operating mode
+// Lenses the forced API can't run keep their own: a lens with stop-repeating stills stays on the NDK, a lens with an operating mode
 // or use case stays on Java. Returns what happened for the log ("" when no override is set).
 [[nodiscard]] inline std::string applyBackendOverride(LensRoute& lens, const std::string& value) {
     if (value == "java") {

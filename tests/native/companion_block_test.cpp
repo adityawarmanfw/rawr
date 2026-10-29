@@ -82,7 +82,7 @@ void testRejections() {
            bad(R"("companion":{"detach":1})"));
     assert(bad(R"("companion":{"width":640})"));  // half a size is not an automatic size
     assert(bad(R"("auxJpeg":{"width":640,"height":480,"usage":"cpu"})"));
-    assert(bad(R"("reader":{"maxImages":5})") && bad(R"("reader":{"maxImages":17})"));
+    assert(bad(R"("reader":{"maxImages":1})") && bad(R"("reader":{"maxImages":17})") && !bad(R"("reader":{"maxImages":4})") && !bad(R"("reader":{"maxImages":2})"));
     assert(!bad(R"("reader":{"maxImages":6})") && !bad(R"("reader":{"maxImages":16})"));
 }
 

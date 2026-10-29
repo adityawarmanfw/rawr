@@ -160,7 +160,7 @@ internal fun RawStreamGroup(lens: LensProfile, onPickStream: () -> Unit, onChang
             UsageField("Buffer usage", raw.reader.usage, Modifier.testTag(lensEditorTag("reader_usage")),
                 "Empty: the app chooses (GPU first, CPU if the camera refuses). Or gpuDataBuffer, none, or a 0x hex value") { onChange(lens.raw { copy(reader = reader.copy(usage = it)) }) }
             CaptureNumberField("Buffers", raw.reader.maxImages, Modifier.testTag(lensEditorTag("reader_images")),
-                "RAW frames the reader holds, 6 to 16. 0 = 6") { onChange(lens.raw { copy(reader = reader.copy(maxImages = it)) }) }
+                "RAW frames the reader holds, 2 to 16 (below 6 the preview can drop frames). 0 = 6") { onChange(lens.raw { copy(reader = reader.copy(maxImages = it)) }) }
         }
         SettingsSwitchRow(
             title = "Test the buffer usage first",
