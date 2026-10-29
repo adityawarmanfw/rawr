@@ -6,6 +6,7 @@
 #include <string>
 
 #include "encoding/OutputFd.h"
+#include "metadata/GpsMetadata.h"
 
 namespace tonemap {
 struct TonemapParams;
@@ -30,6 +31,7 @@ struct DngCaptureContext {
     std::string deviceModel;  // Stable hardware model for UniqueCameraModel.
     std::string deviceDisplayModel;  // Optional friendly EXIF Model, frozen at capture.
     std::string displayName;
+    std::optional<tinydng_gps> gps;
     std::shared_ptr<const tonemap::TonemapParams> captureTone;
     std::shared_ptr<const spektrafilm_native::FilmLook> captureFilm;
     bool captureFilmEnabled = false;

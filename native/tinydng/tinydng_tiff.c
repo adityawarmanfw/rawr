@@ -705,6 +705,99 @@ static void td_parse_metadata_ifd(tinydng_context *ctx, const td_reader *r,
   }
 }
 
+static void td_parse_gps_ifd(const td_reader *reader, uint64_t offset, tinydng_gps *gps) {
+  uint64_t count = 0, start, index;
+  uint32_t seen = 0, present = 0;
+  const size_t stride = reader->bigtiff ? 20 : 12;
+  tinydng_gps candidate;
+  memset(&candidate, 0, sizeof(candidate));
+  if (!offset || offset >= reader->size) return;
+  if (reader->bigtiff) {
+    if (!td_r_u64(reader, offset, &count)) return;
+  } else {
+    uint16_t small_count;
+    if (!td_r_u16(reader, offset, &small_count)) return;
+    count = small_count;
+  }
+  if (count > 64 || !td_safe_add_u64(offset, reader->bigtiff ? 8 : 2, &start) ||
+      start > reader->size || count * stride > reader->size - start) return;
+  for (index = 0; index < count; ++index) {
+    uint8_t row_scratch[20], data_scratch[128];
+    const uint64_t position = start + index * stride;
+    const uint8_t *row = td_io_view(reader->io, reader->size, position, stride, row_scratch, sizeof(row_scratch));
+    const uint8_t *data;
+    td_entry entry;
+    size_t bytes, part;
+    uint32_t (*ratios)[2] = NULL;
+    size_t ratio_count = 0;
+    int valid_entry;
+    if (!row) return;
+    valid_entry = td_parse_entry_row(reader, row, position, &entry);
+    if (entry.tag > 31) continue;
+    if (seen & (1u << entry.tag)) return;
+    seen |= 1u << entry.tag;
+    if (!valid_entry) continue;
+    if (!entry.type_size || entry.count > sizeof(data_scratch) / entry.type_size) continue;
+    bytes = (size_t)entry.count * entry.type_size;
+    data = td_io_view(reader->io, reader->size, entry.data_off, bytes, data_scratch, sizeof(data_scratch));
+    if (!data) continue;
+    if (entry.type == TD_TYPE_RATIONAL) {
+      switch (entry.tag) {
+      case 2: ratios = candidate.latitude; ratio_count = 3; break;
+      case 4: ratios = candidate.longitude; ratio_count = 3; break;
+      case 6: ratios = &candidate.altitude; ratio_count = 1; break;
+      case 7: ratios = candidate.timestamp; ratio_count = 3; break;
+      case 13: ratios = &candidate.speed; ratio_count = 1; break;
+      case 15: ratios = &candidate.track; ratio_count = 1; break;
+      case 31: ratios = &candidate.horizontal_error; ratio_count = 1; break;
+      default: break;
+      }
+      if (!ratios || entry.count != ratio_count) continue;
+      for (part = 0; part < ratio_count; ++part) {
+        ratios[part][0] = td_u32_from_buf(data + part * 8, reader->big_endian);
+        ratios[part][1] = td_u32_from_buf(data + part * 8 + 4, reader->big_endian);
+        if (!ratios[part][1]) break;
+      }
+      if (part == ratio_count) present |= 1u << entry.tag;
+    } else if (entry.type == TD_TYPE_ASCII && bytes && data[bytes - 1] == 0) {
+      if (bytes == 2) {
+        switch (entry.tag) {
+        case 1: candidate.latitude_ref = (char)data[0]; break;
+        case 3: candidate.longitude_ref = (char)data[0]; break;
+        case 12: candidate.speed_ref = (char)data[0]; break;
+        case 14: candidate.track_ref = (char)data[0]; break;
+        default: break;
+        }
+      }
+      if (entry.tag == 18 && bytes <= sizeof(candidate.map_datum)) memcpy(candidate.map_datum, data, bytes);
+      if (entry.tag == 29 && bytes == 11) {
+        memcpy(candidate.datestamp, data, bytes);
+        present |= 1u << 29;
+      }
+    } else if (entry.tag == 0 && entry.type == TD_TYPE_BYTE && bytes == 4) {
+      memcpy(candidate.version, data, 4);
+      candidate.has_version = 1;
+    } else if (entry.tag == 5 && entry.type == TD_TYPE_BYTE && bytes == 1 && data[0] <= 3) {
+      candidate.altitude_ref = data[0];
+      present |= 1u << 5;
+    } else if (entry.tag == 27 && entry.type == TD_TYPE_UNDEFINED && bytes >= 8) {
+      memcpy(candidate.processing_method, data, bytes);
+      candidate.processing_method_size = (uint32_t)bytes;
+    }
+  }
+  candidate.has_coordinates = (present & (1u << 2)) && (present & (1u << 4)) &&
+      (candidate.latitude_ref == 'N' || candidate.latitude_ref == 'S') &&
+      (candidate.longitude_ref == 'E' || candidate.longitude_ref == 'W');
+  candidate.has_altitude = (present & (1u << 5)) && (present & (1u << 6));
+  candidate.has_time = (present & (1u << 7)) && (present & (1u << 29));
+  candidate.has_horizontal_error = !!(present & (1u << 31));
+  candidate.has_speed = (present & (1u << 13)) &&
+      (candidate.speed_ref == 'K' || candidate.speed_ref == 'M' || candidate.speed_ref == 'N');
+  candidate.has_track = (present & (1u << 15)) && (candidate.track_ref == 'T' || candidate.track_ref == 'M');
+  if (!tinydng_gps_method_valid(&candidate)) candidate.processing_method_size = 0;
+  *gps = candidate;
+}
+
 static void td_free_build(tinydng_context *ctx, td_ifd_build *b) {
   td_ctx_free(ctx, b->strip_offsets);
   td_ctx_free(ctx, b->strip_byte_counts);
@@ -790,12 +883,21 @@ static tinydng_status td_parse_ifd(tinydng_context *ctx, const td_reader *r,
       }
       uint32_t sv;
       if (!td_parse_entry_row(r, tbl + i * entry_stride, pos, &e)) {
+        if (e.tag == 34853) {
+          img->has_gps_directory = 1;
+          memset(&img->gps, 0, sizeof(img->gps));
+          continue;
+        }
         td_ctx_free(ctx, owned);
         td_set_error(err, TINYDNG_E_BOUNDS, TINYDNG_STAGE_IFD, ifd_index, 0, pos,
                      "failed reading IFD entry %llu", (unsigned long long)i);
         return TINYDNG_E_BOUNDS;
       }
       if (e.type_size == 0u) {
+        if (e.tag == 34853) {
+          img->has_gps_directory = 1;
+          memset(&img->gps, 0, sizeof(img->gps));
+        }
         continue; /* unknown type: skip defensively */
       }
       switch (e.tag) {
@@ -872,6 +974,18 @@ static tinydng_status td_parse_ifd(tinydng_context *ctx, const td_reader *r,
       case TD_TAG_NEW_SUBFILE_TYPE:
         (void)td_read_scalar_uint(r, &e, &b->new_subfile_type);
         break;
+      case 34853: {
+        uint64_t gps_offset;
+        if (img->has_gps_directory) {
+          memset(&img->gps, 0, sizeof(img->gps));
+          break;
+        }
+        img->has_gps_directory = 1;
+        if (e.count == 1 && (e.type == TD_TYPE_LONG || e.type == TD_TYPE_IFD ||
+          e.type == TD_TYPE_LONG8 || e.type == TD_TYPE_IFD8) && td_read_scalar_uint64(r, &e, &gps_offset))
+          td_parse_gps_ifd(r, gps_offset, &img->gps);
+        break;
+      }
       case TD_TAG_EXIF_IFD: {
         uint64_t exif_off;
         if (td_read_scalar_uint64(r, &e, &exif_off)) {

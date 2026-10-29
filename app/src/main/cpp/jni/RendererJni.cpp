@@ -492,6 +492,8 @@ Java_com_rawr_camera_renderer_RendererNative_render(JNIEnv* e, jobject, jlong id
             // The source DNG's camera wins; the exporting device only fills in
             // for a source that names none.
             const auto& source = s->source.captureExif();
+            c.gps = source.gps;
+            c.sourceExifVersion = source.gpsExifVersion;
             std::string deviceMake = exportJson.text("deviceMake");
             if (deviceMake.empty()) deviceMake = "RAWR";
             std::string deviceModel = exportJson.text("deviceModel");

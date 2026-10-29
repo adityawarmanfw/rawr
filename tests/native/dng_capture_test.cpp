@@ -116,12 +116,19 @@ int main() {
     capture.wallClockUnixMillis = 1787706000123LL;
     capture.utcOffsetMinutes = 420;
     capture.displayName = "RAWR_20260826_01000012.dng";
+    capture.gps = rawrcam::metadata::makeGps(0, 0, 12345.678, std::nullopt, 1793059200123LL);
     capture.baselineExposureEV = 2.0f;
     capture.processingRecipe = R"({"schema":"com.rawrcam.processing-recipe","version":1,"filmSimEnabled":true})";
     capture.resolvedRecipe = R"({"version":1,"aePostGain":4})";
     capture.appLensShadingCorrection = true;
     auto good = makeFrame(true);
     std::string error;
+    {
+        auto withoutGps = capture;
+        withoutGps.gps.reset();
+        auto params = rawrcam::encoding::dng::makeTinyDngWriteParams(good, withoutGps, &error);
+        if (!params || params->gps || params->image.gps) return 80;
+    }
 
     // DNG keeps the sensor raster and composes the mirror before display rotation.
     constexpr uint16_t mirrored[4][4] = {{1, 6, 3, 8}, {2, 7, 4, 5}, {4, 5, 2, 7}, {3, 8, 1, 6}};
@@ -363,6 +370,9 @@ int main() {
         const tinydng_image_info* img = tinydng_image_get(doc, 0);
         const uint16_t wantComp = pass == 0 ? 7 : 1;
         bool ok = img && img->width == 8 && img->height == 6 && img->compression == wantComp &&
+                  img->gps.has_coordinates && img->gps.has_altitude &&
+                  rawrcam::metadata::sameGpsRecord(img->gps, *capture.gps) &&
+                  img->exif.has_exif_version && std::memcmp(img->exif.exif_version, "0300", 4) == 0 &&
                   img->raw.white_level_present && img->raw.white_level[0] == 4095 &&
                   img->raw.has_active_area && img->raw.noise_profile_count == 6 &&
                   img->raw.opcode_count >= 1 && img->raw.gainmap_count == 4 &&

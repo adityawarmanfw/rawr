@@ -2,6 +2,7 @@
 
 #include "convert/BayerResample.h"
 #include "convert/NaturalBin.h"
+#include "metadata/GpsMetadata.h"
 
 #include <algorithm>
 #include <atomic>
@@ -25,6 +26,7 @@ struct Source {
     tinydng_document* doc = nullptr;
     const tinydng_image_info* info = nullptr;
     size_t index = 0;
+    metadata::SourceGps gps;
 
     Source() = default;
     Source(const Source&) = delete;
@@ -61,6 +63,7 @@ struct Source {
             return fail(error, "Only 8-16 bit Bayer DNGs, uncompressed or lossless JPEG, can be converted");
         if (info->width < 16 || info->height < 16 || (info->width & 1u) || (info->height & 1u))
             return fail(error, "DNG dimensions must be even and at least 16");
+        gps = metadata::readSourceGps(*info, tinydng_image_get(doc, 0));
         return true;
     }
 
@@ -72,6 +75,10 @@ struct Source {
         if (!out.orientation && root && root->orientation >= 1 && root->orientation <= 8)
             out.orientation = root->orientation;
         if (!out.orientation) out.orientation = 1;
+        if (gps.gps && gps.exifVersion) {
+            out.has_exif_version = 1;
+            std::memcpy(out.exif_version, gps.exifVersion->data(), 4);
+        }
         if (!options.offsetTime.empty() && out.datetime_original && !out.offset_time_original) {
             char* offset = const_cast<char*>(options.offsetTime.c_str());
             out.offset_time_original = offset;
@@ -500,6 +507,7 @@ ConvertResult recompressDng(const std::string& sourcePath, const std::string& de
     image.cfa = &source.info->cfa;
     image.raw = &raw;
     image.exif = &exif;
+    image.gps = source.gps.gps ? &*source.gps.gps : nullptr;
 
     const uint32_t across = (w + kRecompressTile - 1) / kRecompressTile;
     const uint32_t down = (h + kRecompressTile - 1) / kRecompressTile;
@@ -632,6 +640,7 @@ ConvertResult downscaleDng(const std::string& sourcePath, const std::string& des
     image.cfa = &metadata.back()->cfa();
     image.raw = &metadata.back()->raw();
     image.exif = &exif;
+    image.gps = source.gps.gps ? &*source.gps.gps : nullptr;
 
     const uint32_t across = (ow + kDownscaleTile - 1) / kDownscaleTile;
     const uint32_t down = (oh + kDownscaleTile - 1) / kDownscaleTile;

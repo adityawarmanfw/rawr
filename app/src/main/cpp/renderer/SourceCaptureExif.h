@@ -12,6 +12,8 @@ namespace rawrcam::renderer {
 // the RAW image's IFD first and IFD0 second (the RAW may live in a SubIFD
 // while ExifIFD hangs off IFD0). Empty/absent = the source has no value.
 struct SourceCaptureExif {
+    std::optional<tinydng_gps> gps;
+    std::optional<std::array<uint8_t, 4>> gpsExifVersion;
     std::string make;
     std::string model;
     std::string lensMake;

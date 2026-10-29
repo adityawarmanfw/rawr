@@ -581,7 +581,8 @@ int td_dng_handle_tag(tinydng_context *ctx, const td_reader *r,
       TD_CARRY_SHORT(img->exif.sharpness, img->exif.has_sharpness);
       break;
     case TD_TAG_EXIF_VERSION:
-      TD_CARRY_BYTES4(img->exif.exif_version, img->exif.has_exif_version);
+      if (type == TD_TYPE_UNDEFINED && count == 4)
+        TD_CARRY_BYTES4(img->exif.exif_version, img->exif.has_exif_version);
       break;
     case TD_TAG_DATETIME_ORIGINAL:
       td_set_ascii(ctx, &img->exif.datetime_original, r, data_off, count, err);

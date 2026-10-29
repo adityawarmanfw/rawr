@@ -372,17 +372,7 @@ static void td_add_ascii(td_writer *w, uint16_t tag, const char *s) {
     w->failed = 1;
     return;
   }
-  {
-    uint8_t *tmp = (uint8_t *)malloc(n + 1u);
-    if (!tmp) {
-      w->failed = 1;
-      return;
-    }
-    memcpy(tmp, s, n);
-    tmp[n] = 0;
-    td_add(w, tag, TD_TYPE_ASCII, (uint64_t)(n + 1u), tmp, n + 1u);
-    free(tmp);
-  }
+  td_add(w, tag, TD_TYPE_ASCII, (uint64_t)(n + 1u), (const uint8_t *)s, n + 1u);
 }
 
 static void td_add_undefined(td_writer *w, uint16_t tag, const uint8_t *v,
@@ -951,6 +941,8 @@ struct tinydng_writer {
      offsets resolved at finish). Has its own extras buffer. */
   td_writer exif;
   int has_exif;
+  td_writer gps;
+  uint8_t gps_extras[512];
   /* Cached LZW encoder hash table (reused across tiles). */
   td_lzw_table lzw_tbl;
   /* Scratch buffers reused across tiles (grown on demand):
@@ -960,6 +952,56 @@ struct tinydng_writer {
   uint8_t* scratch_enc;
   size_t scratch_enc_cap;
 };
+
+static void td_gps_ratio(td_writer *writer, uint16_t tag, const uint32_t (*pairs)[2], size_t count) {
+  uint8_t bytes[24];
+  size_t index;
+  for (index = 0; index < count; ++index) {
+    td_put32(bytes + index * 8, pairs[index][0], writer->big_endian);
+    td_put32(bytes + index * 8 + 4, pairs[index][1], writer->big_endian);
+  }
+  td_add(writer, tag, TD_TYPE_RATIONAL, count, bytes, count * 8);
+}
+
+/* Callers pass a record already validated at its input boundary. */
+static void td_stage_gps(tinydng_writer *writer, const tinydng_gps *gps) {
+  td_writer *directory = &writer->gps;
+  const char latitude_ref[2] = {gps ? gps->latitude_ref : 0, 0}, longitude_ref[2] = {gps ? gps->longitude_ref : 0, 0};
+  const char speed_ref[2] = {gps ? gps->speed_ref : 0, 0}, track_ref[2] = {gps ? gps->track_ref : 0, 0};
+  const uint8_t version[4] = {2, 4, 0, 0};
+  if (!gps || !gps->has_coordinates) return;
+  directory->ctx = writer->ctx;
+  directory->big_endian = writer->big_endian;
+  directory->bigtiff = writer->bigtiff;
+  directory->extras = writer->gps_extras;
+  directory->extras_cap = sizeof(writer->gps_extras);
+  td_add(directory, 0, TD_TYPE_BYTE, 4, version, 4);
+  td_add_ascii(directory, 1, latitude_ref);
+  td_gps_ratio(directory, 2, gps->latitude, 3);
+  td_add_ascii(directory, 3, longitude_ref);
+  td_gps_ratio(directory, 4, gps->longitude, 3);
+  if (gps->has_altitude) {
+    td_add(directory, 5, TD_TYPE_BYTE, 1, &gps->altitude_ref, 1);
+    td_gps_ratio(directory, 6, &gps->altitude, 1);
+  }
+  if (gps->has_time) td_gps_ratio(directory, 7, gps->timestamp, 3);
+  if (gps->has_speed) {
+    td_add_ascii(directory, 12, speed_ref);
+    td_gps_ratio(directory, 13, &gps->speed, 1);
+  }
+  if (gps->has_track) {
+    td_add_ascii(directory, 14, track_ref);
+    td_gps_ratio(directory, 15, &gps->track, 1);
+  }
+  if (gps->map_datum[0]) td_add_ascii(directory, 18, gps->map_datum);
+  if (gps->processing_method_size)
+    td_add(directory, 27, TD_TYPE_UNDEFINED, gps->processing_method_size, gps->processing_method, gps->processing_method_size);
+  if (gps->has_time) td_add_ascii(directory, 29, gps->datestamp);
+  if (gps->has_horizontal_error) td_gps_ratio(directory, 31, &gps->horizontal_error, 1);
+  qsort(directory->entries, directory->entry_count, sizeof(td_wentry), td_entry_cmp);
+  if (writer->bigtiff) td_add_long8(&writer->w, 34853, 0);
+  else td_add_long(&writer->w, 34853, 0);
+}
 
 static tinydng_status td_wio_err(tinydng_write_io *sink, uint64_t at,
                                  tinydng_error *err) {
@@ -2141,10 +2183,12 @@ tinydng_status tinydng_writer_create(tinydng_context *ctx,
           } else if (raw && raw->lens_serial) {
             td_add_ascii(e, TD_WTAG_LENS_SERIAL_NUMBER, raw->lens_serial);
           }
-          if (e->entry_count && !e->failed) {
+          if ((e->entry_count || ex->has_exif_version || meta->gps) && !e->failed) {
             uint8_t ever[4] = {'0', '2', '3', '0'};
             td_add(e, TD_WTAG_EXIF_VERSION, TD_TYPE_UNDEFINED, 4,
                    ex->has_exif_version ? ex->exif_version : ever, 4);
+            if (meta->gps && meta->gps->has_coordinates)
+              td_add_short(e, 40961, 65535);
           }
           if (e->failed) {
             w->w.failed = 1;
@@ -2154,6 +2198,8 @@ tinydng_status tinydng_writer_create(tinydng_context *ctx,
     }
   }
 
+  if (meta) td_stage_gps(w, meta->gps);
+  if (w->gps.failed) w->w.failed = 1;
   if (w->w.failed) {
     td_set_error(err, TINYDNG_E_INTERNAL, TINYDNG_STAGE_WRITE, 0, 0, 0,
                  "writer ran out of tag/extras capacity");
@@ -2234,6 +2280,11 @@ tinydng_status tinydng_writer_create(tinydng_context *ctx,
       return st;
     }
     end += w->w.extras_len;
+    if (w->gps.entry_count) {
+      end += w->gps.extras_len;
+      end += end & 1u;
+      end += td_ifd_size(&w->gps);
+    }
     if (w->has_exif) {
       end += w->exif.extras_len;
       end += end & 1u;
@@ -2508,6 +2559,25 @@ tinydng_status tinydng_writer_finish(tinydng_writer *w, tinydng_error *err) {
                  extras_base, "writer IFD offset overflow");
     st = TINYDNG_E_BOUNDS;
     goto cleanup;
+  }
+  if (w->gps.entry_count) {
+    uint64_t gps_base = ifd_off;
+    uint64_t gps_ifd = gps_base + w->gps.extras_len;
+    size_t index;
+    gps_ifd += gps_ifd & 1u;
+    if (w->sink.write(&w->sink, gps_base, w->gps.extras, w->gps.extras_len) != w->gps.extras_len) {
+      st = td_wio_err(&w->sink, gps_base, err);
+      goto cleanup;
+    }
+    st = td_writer_emit_ifd(&w->gps, &w->sink, gps_ifd, gps_base, err);
+    if (st != TINYDNG_OK) goto cleanup;
+    for (index = 0; index < w->w.entry_count; ++index) {
+      if (w->w.entries[index].tag == 34853) {
+        if (w->bigtiff) td_put64(w->w.entries[index].value, gps_ifd, w->big_endian);
+        else td_put32(w->w.entries[index].value, (uint32_t)gps_ifd, w->big_endian);
+      }
+    }
+    ifd_off = gps_ifd + td_ifd_size(&w->gps);
   }
   /* Rawr: emit staged EXIF extras + sub-IFD between main extras and main
      IFD, then patch the main EXIF pointer entry. */

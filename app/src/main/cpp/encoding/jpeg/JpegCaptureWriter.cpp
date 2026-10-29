@@ -1,12 +1,15 @@
 #include "encoding/SoftwareName.h"
 #include "encoding/jpeg/JpegCaptureWriter.h"
+#include "encoding/jpeg/JpegExif.h"
 
+#ifndef RAWR_EXIF_ONLY
 #include <android/log.h>
 #include <gainmap/UltrahdrMux.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/system_properties.h>
 #include <turbojpeg.h>
+#endif
 
 #include "StripJpegEncoder.h"
 #include <unistd.h>
@@ -32,6 +35,7 @@
 namespace rawrcam::encoding::jpeg {
 namespace {
 
+#ifndef RAWR_EXIF_ONLY
 bool writeAll(int fd, const unsigned char* data, std::size_t size) {
     while (size > 0) {
         const ssize_t n = ::write(fd, data, size);
@@ -42,6 +46,7 @@ bool writeAll(int fd, const unsigned char* data, std::size_t size) {
     }
     return true;
 }
+#endif
 
 void put16(std::vector<unsigned char>& out, std::uint16_t v) {
     out.push_back(static_cast<unsigned char>(v & 0xffu));
@@ -114,6 +119,50 @@ std::string exifOffset(std::int16_t offsetMinutes) {
     return std::string(buf);
 }
 
+IfdEntry rationals(std::uint16_t tag, const std::uint32_t (*pairs)[2], std::uint32_t count) {
+    IfdEntry entry{tag, 5, count, {}};
+    for (std::uint32_t i = 0; i < count; ++i) {
+        put32(entry.data, pairs[i][0]);
+        put32(entry.data, pairs[i][1]);
+    }
+    return entry;
+}
+IfdEntry raw(std::uint16_t tag, std::uint16_t type, const void* data, std::uint32_t count) {
+    const auto* begin = static_cast<const unsigned char*>(data);
+    return {tag, type, count, {begin, begin + count}};
+}
+
+std::vector<IfdEntry> gpsIfd(const tinydng_gps& gps) {
+    const char latitudeRef[2]{gps.latitude_ref, 0}, longitudeRef[2]{gps.longitude_ref, 0};
+    const char speedRef[2]{gps.speed_ref, 0}, trackRef[2]{gps.track_ref, 0};
+    std::vector<IfdEntry> ifd;
+    if (gps.has_version) ifd.push_back(raw(0, 1, gps.version, 4));
+    ifd.push_back(raw(1, 2, latitudeRef, 2));
+    ifd.push_back(rationals(2, gps.latitude, 3));
+    ifd.push_back(raw(3, 2, longitudeRef, 2));
+    ifd.push_back(rationals(4, gps.longitude, 3));
+    if (gps.has_altitude) {
+        ifd.push_back(raw(5, 1, &gps.altitude_ref, 1));
+        ifd.push_back(rationals(6, &gps.altitude, 1));
+    }
+    if (gps.has_time) ifd.push_back(rationals(7, gps.timestamp, 3));
+    if (gps.has_speed) {
+        ifd.push_back(raw(12, 2, speedRef, 2));
+        ifd.push_back(rationals(13, &gps.speed, 1));
+    }
+    if (gps.has_track) {
+        ifd.push_back(raw(14, 2, trackRef, 2));
+        ifd.push_back(rationals(15, &gps.track, 1));
+    }
+    if (gps.map_datum[0]) ifd.push_back(raw(18, 2, gps.map_datum, std::uint32_t(std::strlen(gps.map_datum) + 1)));
+    if (gps.processing_method_size) ifd.push_back(raw(27, 7, gps.processing_method, gps.processing_method_size));
+    if (gps.has_time) ifd.push_back(raw(29, 2, gps.datestamp, 11));
+    if (gps.has_horizontal_error) ifd.push_back(rationals(31, &gps.horizontal_error, 1));
+    return ifd;
+}
+
+}  // namespace
+
 // Builds a compact EXIF APP1 payload. TIFF offsets are relative to the TIFF header
 // immediately following the six-byte "Exif\0\0" signature.
 std::vector<unsigned char> buildExif(const JpegCaptureContext& c, std::uint32_t width, std::uint32_t height) {
@@ -132,11 +181,13 @@ std::vector<unsigned char> buildExif(const JpegCaptureContext& c, std::uint32_t 
     if (!c.deviceModel.empty())
         ifd0.push_back({0x0110, 2, static_cast<std::uint32_t>(c.deviceModel.size() + 1), asciiData(c.deviceModel)});
     ifd0.push_back({0x0112, 3, 1, shortData(c.exifOrientation)});
+    ifd0.push_back({0x0213, 3, 1, shortData(1)});
     const std::string software = rawrcam::encoding::kSoftwareName;
     ifd0.push_back({0x0131, 2, static_cast<std::uint32_t>(software.size() + 1), asciiData(software)});
     if (!dateTime.empty()) ifd0.push_back({0x0132, 2, 20, asciiData(dateTime)});
     // ExifIFDPointer placeholder; value is patched after IFD0 layout is known.
     ifd0.push_back({0x8769, 4, 1, longData(0)});
+    if (c.gps) ifd0.push_back({0x8825, 4, 1, longData(0)});
 
     // A re-rendered DNG keeps its source capture time; DateTime stays the
     // render (file modification) time, qualified by OffsetTime.
@@ -155,7 +206,10 @@ std::vector<unsigned char> buildExif(const JpegCaptureContext& c, std::uint32_t 
     if (c.aperture && *c.aperture > 0.0f) exif.push_back({0x829D, 5, 1, rationalData(*c.aperture, 10000u)});
     if (c.sensitivity > 0 && c.sensitivity <= 65535)
         exif.push_back({0x8827, 3, 1, shortData(static_cast<std::uint16_t>(c.sensitivity))});
-    exif.push_back({0x9000, 7, 4, std::vector<unsigned char>{'0', '2', '3', '2'}});
+    const std::array<uint8_t, 4> version = c.sourceExifVersion.value_or(
+        c.gps ? std::array<uint8_t, 4>{'0', '3', '0', '0'} : std::array<uint8_t, 4>{'0', '2', '3', '2'});
+    exif.push_back({0x9000, 7, 4, {version.begin(), version.end()}});
+    exif.push_back({0x9101, 7, 4, {1, 2, 3, 0}});
     if (!original.empty()) {
         exif.push_back(ascii(0x9003, original));
         exif.push_back(ascii(0x9004, digitized));
@@ -177,6 +231,7 @@ std::vector<unsigned char> buildExif(const JpegCaptureContext& c, std::uint32_t 
     if (!c.lensMake.empty()) exif.push_back(ascii(0xA433, c.lensMake));
     if (!c.lensModel.empty()) exif.push_back(ascii(0xA434, c.lensModel));
     exif.push_back({0xA001, 3, 1, shortData(1)});  // sRGB
+    exif.push_back({0xA000, 7, 4, {'0', '1', '0', '0'}});
     exif.push_back({0xA002, 4, 1, longData(width)});
     exif.push_back({0xA003, 4, 1, longData(height)});
 
@@ -217,6 +272,7 @@ std::vector<unsigned char> buildExif(const JpegCaptureContext& c, std::uint32_t 
     std::sort(exif.begin(), exif.end(), [](const IfdEntry& a, const IfdEntry& b) { return a.tag < b.tag; });
     const std::uint32_t ifd0Offset = appendIfd(ifd0);
     const std::uint32_t exifOffset = appendIfd(exif);
+    const std::uint32_t gpsOffset = c.gps ? appendIfd(gpsIfd(*c.gps)) : 0;
     // Locate ExifIFDPointer entry in IFD0 and patch its value.
     const std::size_t countPos = ifd0Offset;
     const std::uint16_t count =
@@ -224,10 +280,8 @@ std::vector<unsigned char> buildExif(const JpegCaptureContext& c, std::uint32_t 
     for (std::uint16_t i = 0; i < count; ++i) {
         const std::size_t p = countPos + 2u + static_cast<std::size_t>(i) * 12u;
         const std::uint16_t tag = static_cast<std::uint16_t>(tiff[p] | (static_cast<std::uint16_t>(tiff[p + 1]) << 8u));
-        if (tag == 0x8769u) {
-            patch32(tiff, p + 8u, exifOffset);
-            break;
-        }
+        if (tag == 0x8769u) patch32(tiff, p + 8u, exifOffset);
+        if (tag == 0x8825u) patch32(tiff, p + 8u, gpsOffset);
     }
 
     std::vector<unsigned char> payload{'E', 'x', 'i', 'f', 0, 0};
@@ -235,6 +289,8 @@ std::vector<unsigned char> buildExif(const JpegCaptureContext& c, std::uint32_t 
     return payload;
 }
 
+#ifndef RAWR_EXIF_ONLY
+namespace {
 std::string xmlEscape(const std::string& text) {
     std::string out;
     out.reserve(text.size() + 64);
@@ -767,4 +823,5 @@ void JpegCaptureWriter::joinWorker() {
     if (worker_.joinable()) worker_.join();
 }
 
+#endif
 }  // namespace rawrcam::encoding::jpeg

@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "renderer/SourceCaptureExif.h"
+#include "metadata/GpsMetadata.h"
 
 namespace {
 int failures = 0;
@@ -26,6 +27,44 @@ tinydng_exif blank() {
 int main() {
     using rawrcam::renderer::exportIdentity;
     using rawrcam::renderer::readSourceCaptureExif;
+    {
+        tinydng_image_info image{}, root{};
+        root.has_gps_directory = 1;
+        root.gps = *rawrcam::metadata::makeGps(0, 0, 0.0, {}, 1793059200123LL);
+        root.exif.has_exif_version = 1;
+        std::memcpy(root.exif.exif_version, "0300", 4);
+        const auto original = rawrcam::metadata::readSourceGps(image, &root);
+        check(original.gps && original.gps->has_altitude && original.gps->altitude[0] == 0, "root GPS zero altitude");
+        check(original.exifVersion && (*original.exifVersion)[1] == '3', "source GPS version context");
+          image = root;
+          std::memcpy(root.exif.exif_version, "0232", 4);
+          check(!rawrcam::metadata::readSourceGps(image, &root).gps, "conflicting altitude version contexts omitted");
+          image = {};
+          const auto legacyGps = rawrcam::metadata::readSourceGps(image, &root);
+          check(legacyGps.gps && legacyGps.gps->has_altitude && legacyGps.exifVersion &&
+              (*legacyGps.exifVersion)[1] == '2', "supported legacy altitude keeps legacy version context");
+          root.exif = {};
+          root.gps.altitude_ref = 2;
+          const auto mslGps = rawrcam::metadata::readSourceGps(image, &root);
+          check(mslGps.gps && mslGps.gps->has_altitude && mslGps.exifVersion &&
+              (*mslGps.exifVersion)[1] == '3', "versionless MSL uses a current output profile");
+          root.gps.altitude_ref = 0;
+          root.exif.has_exif_version = 1;
+          std::memcpy(root.exif.exif_version, "0310", 4);
+          const auto unknownVersion = rawrcam::metadata::readSourceGps(image, &root);
+          check(unknownVersion.gps && !unknownVersion.gps->has_altitude && unknownVersion.exifVersion &&
+              (*unknownVersion.exifVersion)[2] == '0', "unsupported source version does not establish altitude datum");
+          std::memcpy(root.exif.exif_version, "0300", 4);
+        image = root;
+        image.gps.altitude[0] = 100;
+        check(!rawrcam::metadata::readSourceGps(image, &root).gps, "conflicting GPS records omitted");
+        image.gps.latitude[0][1] = 0;
+        check(!rawrcam::metadata::readSourceGps(image, &root).gps, "invalid image GPS not replaced with root fields");
+        image = {};
+        root.gps.altitude_ref = 9;
+        const auto malformed = rawrcam::metadata::readSourceGps(image, &root);
+        check(malformed.gps && !malformed.gps->has_altitude, "malformed optional altitude omitted");
+    }
 
     // RAW in a SubIFD, EXIF on IFD0: every field falls back to the root.
     {

@@ -61,8 +61,10 @@ constexpr uint64_t acquisitionMagicV14 = 0x524157524a4f420eull;
 constexpr uint64_t magicV15 = 0x524157524a4f420full;
 constexpr uint64_t acquisitionMagicV16 = 0x524157524a4f4210ull;
 // v17/v18 append the lens profile's mirror (geometry::LensMirror bits).
-constexpr uint64_t magic = 0x524157524a4f4211ull;
-constexpr uint64_t acquisitionMagic = 0x524157524a4f4212ull;
+constexpr uint64_t magicV17 = 0x524157524a4f4211ull;
+constexpr uint64_t acquisitionMagicV18 = 0x524157524a4f4212ull;
+constexpr uint64_t magic = 0x524157524a4f4213ull;
+constexpr uint64_t acquisitionMagic = 0x524157524a4f4214ull;
 constexpr uint64_t acquisitionPrefixBytes = 2 * (sizeof(uint32_t) + sizeof(uint64_t));
 std::mutex acquisitionMutex;
 constexpr uint64_t footer = 0x434f4d4d49545445ull;
@@ -482,6 +484,7 @@ void writeHeader(Writer& w, CaptureJob& job) {
     w(dcp);
     uint32_t mirror = context ? context->profileMirror : 0u;
     w(mirror);
+    w(job.dng.gps);
 }
 // The context fields predate the lens profile ones; put the job's back on every frame.
 void attachLensProfile(CaptureJob& job, const std::optional<geometry::LensDistortionModel>& distortion,
@@ -651,10 +654,11 @@ CaptureJob loadImpl(const std::string& path,
     RetiredDenoise retired{};
     uint64_t version = 0;
     r(version);
-    const bool acquisition = version == acquisitionMagic || version == acquisitionMagicV16 ||
+    const bool acquisition = version == acquisitionMagic || version == acquisitionMagicV18 || version == acquisitionMagicV16 ||
                              version == acquisitionMagicV14 || version == acquisitionMagicV12 ||
                              version == acquisitionMagicV10;
-    const bool hasMirror = version == magic || version == acquisitionMagic;
+    const bool hasGps = version == magic || version == acquisitionMagic;
+    const bool hasMirror = hasGps || version == magicV17 || version == acquisitionMagicV18;
     const bool hasDcp = hasMirror || version == magicV15 || version == acquisitionMagicV16;
     const bool hasDistortion = hasDcp || version == magicV13 || version == acquisitionMagicV14;
     const bool hasSharpening = hasDistortion || version == magicV11 || version == acquisitionMagicV12;
@@ -709,6 +713,13 @@ CaptureJob loadImpl(const std::string& path,
             uint32_t mirror = 0;
             if (hasMirror) r(mirror);
             attachLensProfile(job, distortion, dcp, mirror & geometry::kLensMirrorMask);
+        }
+        if (hasGps) {
+            std::optional<tinydng_gps> gps;
+            r(gps);
+            job.dng.gps = gps ? metadata::sanitizeGps(*gps) : std::nullopt;
+            job.mergedDng.gps = job.dng.gps;
+            job.jpeg.output.gps = job.dng.gps;
         }
     } else {
         readLegacyJob(r, job);
