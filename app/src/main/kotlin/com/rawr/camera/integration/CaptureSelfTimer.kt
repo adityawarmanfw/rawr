@@ -16,12 +16,14 @@ internal class CaptureSelfTimer(
     private val scope: CoroutineScope,
     private val state: StateFlow<CaptureUiState>,
     private val update: ((CaptureUiState) -> CaptureUiState) -> Unit,
-    private val onExpired: () -> Unit
+    private val onExpired: (Any) -> Unit,
+    private val foregroundToken: () -> Any?
 ) : AutoCloseable {
     private var job: Job? = null
     private var activeRunId: Long? = null
     private var closed = false
 
+    /** The press binds its foreground identity; a countdown carries it to expiry. */
     @Synchronized
     fun trigger() {
         if (closed) return
@@ -29,8 +31,9 @@ internal class CaptureSelfTimer(
             cancel()
             return
         }
+        val token = foregroundToken() ?: return
         if (state.value.selfTimer.seconds <= 0) {
-            onExpired()
+            onExpired(token)
             return
         }
         update { CaptureReducer.reduce(it, StartSelfTimerCountdown) }
@@ -41,7 +44,7 @@ internal class CaptureSelfTimer(
         job = scope.launch {
             while (true) {
                 delay(TICK_MS)
-                if (!tick(current.selfTimerRunId)) return@launch
+                if (!tick(current.selfTimerRunId, token)) return@launch
             }
         }
     }
@@ -60,7 +63,7 @@ internal class CaptureSelfTimer(
     }
 
     @Synchronized
-    private fun tick(runId: Long): Boolean {
+    private fun tick(runId: Long, token: Any): Boolean {
         if (closed || activeRunId != runId) return false
         val current = state.value
         val remaining = current.selfTimerRemainingMs ?: return false
@@ -71,7 +74,7 @@ internal class CaptureSelfTimer(
         activeRunId = null
         job = null
         // Cancellation or a replacement run can race the state transform.
-        if (state.value.selfTimerRunId == runId && state.value.selfTimerRemainingMs == null) onExpired()
+        if (state.value.selfTimerRunId == runId && state.value.selfTimerRemainingMs == null) onExpired(token)
         return false
     }
 

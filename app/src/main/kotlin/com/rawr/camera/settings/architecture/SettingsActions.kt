@@ -409,8 +409,5 @@ data class ReportOisApplication(val contextGeneration: Long, val state: SettingA
 data class ReportAntiFlickerApplication(val contextGeneration: Long, val state: SettingApplicationState<AntiFlicker>) :
     SettingsApplicationAction
 
-data class ReportLocationTaggingApplication(val contextGeneration: Long, val state: SettingApplicationState<Boolean>) :
-    SettingsApplicationAction
-
 data class ReportImageToneApplication(val contextGeneration: Long, val state: SettingApplicationState<ImageToneState>) :
     SettingsApplicationAction

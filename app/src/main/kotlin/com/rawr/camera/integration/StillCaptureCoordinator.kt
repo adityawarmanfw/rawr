@@ -27,7 +27,8 @@ class StillCaptureCoordinator(
     private val preview: RawPreviewCoordinator,
     private val settings: () -> SettingsValues,
     private val onJpegPublished: (Uri) -> Unit = {},
-    private val onDngPublished: () -> Unit = {}
+    private val onDngPublished: () -> Unit = {},
+    private val gpsSnapshot: () -> com.rawr.camera.location.CaptureGps?
 ) {
     data class CompletionEvent(val requestId: Long, val artifact: Artifact, val success: Boolean, val jpegRequested: Boolean = false,
                                 val filmFallbackMemory: Boolean = false, val dngFailed: Boolean = false) {
@@ -61,8 +62,10 @@ class StillCaptureCoordinator(
     private val finishedEvents = mutableListOf<CompletionEvent>()
 
     private var closeWhenDrained: (() -> Unit)? = null
+    private var closing = false
     private data class CaptureInput(val settings: SettingsValues, val wallClockMillis: Long, val releaseAssets: () -> Unit,
-                                    var frozenAssetId: String? = null)
+                                    var frozenAssetId: String? = null,
+                                    val gps: com.rawr.camera.location.CaptureGps? = null)
     private val queuedInputs = java.util.concurrent.ConcurrentLinkedQueue<CaptureInput>()
     private val activeCaptures = java.util.concurrent.atomic.AtomicInteger(0)
 
@@ -70,17 +73,20 @@ class StillCaptureCoordinator(
     // IO to the capture worker. Holds camera/process ownership across immediate Home.
     @Synchronized
     fun enqueueCapture(format: CaptureOutputFormat) {
+        check(!closing) { "Capture coordinator is closing" }
         StillProcessingService.acquire(application, this)
         val snapshot = settings().copy(dngEnabled = format.dng, jpegEnabled = format.jpeg)
         val releaseAssets = com.rawr.camera.settings.preferences.CaptureLutPins.acquire(
             snapshot.userLutProfiles.firstOrNull { it.id == snapshot.selectedUserLutProfileId })
-        queuedInputs.add(CaptureInput(snapshot, System.currentTimeMillis(), releaseAssets))
+        queuedInputs.add(CaptureInput(snapshot, System.currentTimeMillis(), releaseAssets,
+            gps = if (snapshot.locationTagging) gpsSnapshot() else null))
         activeCaptures.incrementAndGet()
         preview.beginStillCapture()
     }
 
     @Synchronized
     fun closeWhenIdle(close: () -> Unit) {
+        closing = true
         closeWhenDrained = close
         closeIfDrained()
     }
@@ -232,6 +238,7 @@ class StillCaptureCoordinator(
                     captureFilmEnabled = current.filmSimEnabled,
                     ultraHdrEnabled = current.ultraHdrEnabled,
                     wallClockMillis = now,
+                    gps = input.gps?.nativeValues(),
                     utcOffsetMinutes = offsetMinutes,
                     deviceMake = Build.MANUFACTURER,
                     deviceModel = DeviceNames.marketingModel(),
@@ -275,6 +282,7 @@ class StillCaptureCoordinator(
                     captureFilmEnabled = current.filmSimEnabled,
                     ultraHdrEnabled = current.ultraHdrEnabled,
                     wallClockMillis = now,
+                    gps = input.gps?.nativeValues(),
                     utcOffsetMinutes = offsetMinutes,
                     deviceMake = Build.MANUFACTURER,
                     deviceModel = DeviceNames.marketingModel(),

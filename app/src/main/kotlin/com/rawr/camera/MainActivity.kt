@@ -340,7 +340,18 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        captureViewModel.foreground.resume(this)
+    }
+
+    override fun onPause() {
+        captureViewModel.foreground.pause(this)
+        super.onPause()
+    }
+
     override fun onStop() {
+        captureViewModel.foreground.pause(this)
         started = false
         startGeneration++
         captureViewModel.stopPreviewAfterRecording()

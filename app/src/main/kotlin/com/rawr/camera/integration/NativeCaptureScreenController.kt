@@ -27,7 +27,8 @@ class NativeCaptureScreenController(
     private val onRawCpuIngress: () -> Unit = {},
     /** A lens switch was accepted (persisted as the next launch's lens). */
     private val onLensSelected: (String) -> Unit = {},
-    dispatcher: CoroutineDispatcher = Dispatchers.Default
+    dispatcher: CoroutineDispatcher = Dispatchers.Default,
+    private val foregroundToken: () -> Any?
 ) : CaptureScreenController {
     private val mutableState =
         MutableStateFlow(
@@ -42,13 +43,18 @@ class NativeCaptureScreenController(
     override val state: StateFlow<CaptureUiState> = mutableState.asStateFlow()
 
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
-    private val captureQueue = StillCaptureDispatchQueue(scope, onCaptureQueued, ::captureStill)
+    private val captureQueue = StillCaptureDispatchQueue(scope, onCaptureQueued, ::captureStill,
+        onRejected = { format, error ->
+            if (error != null) android.util.Log.e("RawrCamCapture", "Could not start photo processing", error)
+            if (state.value.bracketHoldPresses > 0) update { it.copy(bracketHoldPresses = it.bracketHoldPresses - 1) }
+            capturePresentation.rejected(format.jpeg)
+        })
     private val overlayTriggers = OverlayTriggerManager(scope, coordinator::setMonitoringOverlay)
     private val focusRequestIds = java.util.concurrent.atomic.AtomicLong()
     private val snapshotPresentation = NativeCaptureSnapshotPresentation()
     private val whiteBalanceRequestIds = java.util.concurrent.atomic.AtomicLong()
     private val capturePresentation = StillCapturePresentation(scope, ::update)
-    private val selfTimer = CaptureSelfTimer(scope, state, ::update, ::enqueueStillCapture)
+    private val selfTimer = CaptureSelfTimer(scope, state, ::update, ::enqueueStillCapture, foregroundToken)
     // Once per process: the CPU path is a device/stream property, not a per-frame event.
     private var rawCpuIngressNotified = false
 
@@ -428,19 +434,13 @@ class NativeCaptureScreenController(
         overlayTriggers.pulsePeakManual()
     }
 
-    private fun enqueueStillCapture() {
+    private fun enqueueStillCapture(token: Any) {
         val format = CaptureOutputFormat.from(state.value.dngEnabled, state.value.jpegEnabled,
                                               state.value.capabilities.dngOnly)
         // Hold starts at the press; the capture serial hands ownership to native when submission begins.
         if (state.value.hdrPlusBracketedActive || state.value.fullSizeCapture) update { it.copy(bracketHoldPresses = it.bracketHoldPresses + 1, fullSizePressSerial = it.fullSizeCaptureSerial) }
         capturePresentation.pressed()
-        try {
-            captureQueue.enqueue(format)
-        } catch (error: RuntimeException) {
-            android.util.Log.e("RawrCamCapture", "Could not start photo processing", error)
-            if (state.value.bracketHoldPresses > 0) update { it.copy(bracketHoldPresses = it.bracketHoldPresses - 1) }
-            capturePresentation.rejected(format.jpeg)
-        }
+        captureQueue.enqueue(format) { foregroundToken() === token }
     }
 
     private fun captureStill(format: CaptureOutputFormat) {

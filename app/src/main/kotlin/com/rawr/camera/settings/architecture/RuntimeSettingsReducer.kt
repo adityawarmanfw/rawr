@@ -22,10 +22,6 @@ internal fun reduceRuntimeSettings(
         state.acceptReport(action.contextGeneration) { withApplication(antiFlicker = action.state) }
     }
 
-    is ReportLocationTaggingApplication -> {
-        state.acceptReport(action.contextGeneration) { withApplication(locationTagging = action.state) }
-    }
-
     is ReportImageToneApplication -> {
         state.acceptReport(action.contextGeneration) { withApplication(imageTone = action.state) }
     }
@@ -83,11 +79,6 @@ internal fun restorePersistentValues(
                         antiFlicker =
                             SettingApplicationState(
                                 clean.antiFlicker,
-                                SettingApplicationStatus.Applied
-                            ),
-                        locationTagging =
-                            SettingApplicationState(
-                                clean.locationTagging,
                                 SettingApplicationStatus.Applied
                             ),
                         imageTone = SettingApplicationState(

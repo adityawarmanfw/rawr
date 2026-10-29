@@ -672,6 +672,16 @@ static void fillCaptureSharpening(JNIEnv* env, rawrcam::capture::JpegCaptureRequ
     }
     jpeg.develop.captureSharpenIterations = rawrcam::jni::captureSharpenIterations(recipe);
 }
+static std::optional<tinydng_gps> captureGps(JNIEnv* env, jdoubleArray values) {
+    if (!values || env->GetArrayLength(values) != 6) return std::nullopt;
+    jdouble data[6];
+    env->GetDoubleArrayRegion(values, 0, 6, data);
+    if (env->ExceptionCheck()) return std::nullopt;
+    const int64_t time = std::isfinite(data[4]) && data[4] > 0 && data[4] < 253402300800000.0 ? int64_t(data[4]) : 0;
+    const int provider = data[5] >= 1 && data[5] <= 3 && std::floor(data[5]) == data[5] ? int(data[5]) : 0;
+    return rawrcam::metadata::makeGps(data[0], data[1], data[2], data[3], time, provider);
+}
+
 extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_integration_NativePreviewEngine_requestRawStillCapture(
     JNIEnv* env, jobject, jlong h, jint dngFd, jint jpegFd, jint jpegQuality, jint jpegSubsampling,
     jboolean pipelineDiagnosticsEnabled, jint colorRenderProfile, jstring importedLutProfileId,
@@ -682,7 +692,7 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_integration_NativePrevie
     jfloat defringeStrength, jfloat defringeEdgeThreshold, jfloat defringeLumaFloor, jintArray denoiseModes,
     jfloatArray denoiseStrengths, jstring captureRecipe, jfloatArray captureTone, jfloatArray captureFilmValues,
     jintArray captureFilmEnums, jboolean captureFilmEnabled, jboolean ultraHdrEnabled, jint ultraHdrGainmapQuality,
-    jint dngCompression) {
+    jint dngCompression, jdoubleArray gps) {
     const std::string deviceMake = jString(env, make);
     const std::string deviceModel = jString(env, model);
     const DenoiseIntent denoise = parseDenoiseSpec(env, denoiseModes, denoiseStrengths);
@@ -692,6 +702,7 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_integration_NativePrevie
     dng.compression = dngCompression == 1 ? rawrcam::encoding::dng::DngCompression::Uncompressed
                                           : rawrcam::encoding::dng::DngCompression::LosslessJpeg;
     dng.processingRecipe = jString(env, captureRecipe);
+    dng.gps = captureGps(env, gps);
     dng.appLensShadingCorrection = lensShadingCorrectionEnabled == JNI_TRUE;
     dng.appDistortionCorrection = distortionCorrectionEnabled == JNI_TRUE;
     freezeCaptureIntent(env, dng, captureTone, captureFilmValues, captureFilmEnums, captureFilmEnabled == JNI_TRUE);
@@ -705,6 +716,7 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_integration_NativePrevie
                     defringeEdgeThreshold, defringeLumaFloor, denoise, ultraHdrEnabled, ultraHdrGainmapQuality);
     fillHighlightIntent(env, jpeg, captureTone);
     fillCaptureSharpening(env, jpeg, captureRecipe);
+    jpeg.output.gps = dng.gps;
     return static_cast<jlong>(rawrcam::session::requestRawStillCapture(handle(h), std::move(dng), std::move(jpeg)));
 }
 extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_integration_NativePreviewEngine_startPreparedMultiframeCapture(
@@ -718,7 +730,7 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_integration_NativePrevie
     jfloat defringeStrength, jfloat defringeEdgeThreshold, jfloat defringeLumaFloor, jintArray denoiseModes,
     jfloatArray denoiseStrengths, jstring captureRecipe, jfloatArray captureTone, jfloatArray captureFilmValues,
     jintArray captureFilmEnums, jboolean captureFilmEnabled, jboolean ultraHdrEnabled, jint ultraHdrGainmapQuality,
-    jint dngCompression) {
+    jint dngCompression, jdoubleArray gps) {
     const std::string deviceMake = jString(env, make);
     const std::string deviceModel = jString(env, model);
     const DenoiseIntent denoise = parseDenoiseSpec(env, denoiseModes, denoiseStrengths);
@@ -729,6 +741,7 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_integration_NativePrevie
                                            : rawrcam::encoding::dng::DngCompression::LosslessJpeg;
     base.sourceRole = "base";
     base.processingRecipe = jString(env, captureRecipe);
+    base.gps = captureGps(env, gps);
     base.appLensShadingCorrection = lensShadingCorrectionEnabled == JNI_TRUE;
     base.appDistortionCorrection = distortionCorrectionEnabled == JNI_TRUE;
     freezeCaptureIntent(env, base, captureTone, captureFilmValues, captureFilmEnums, captureFilmEnabled == JNI_TRUE);
@@ -747,6 +760,7 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_integration_NativePrevie
     fillHighlightIntent(env, jpeg, captureTone);
     fillCaptureSharpening(env, jpeg, captureRecipe);
     jpeg.develop.multiframeChromaDenoise = multiframeChromaDenoise(env, tuningValues);
+    jpeg.output.gps = base.gps;
     auto baseMode = rawrcam::capture::multiframe::MultiframeBaseFrameMode::Sharpest;
     if (baseFrameMode == 0) baseMode = rawrcam::capture::multiframe::MultiframeBaseFrameMode::Middle;
     return static_cast<jlong>(rawrcam::session::startPreparedMultiframeCapture(

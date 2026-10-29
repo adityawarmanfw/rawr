@@ -12,12 +12,11 @@ internal fun SettingsUiState.withValues(next: SettingsValues): SettingsUiState =
 internal fun SettingsUiState.withApplication(
     ois: SettingApplicationState<Boolean> = runtime.application.ois,
     antiFlicker: SettingApplicationState<AntiFlicker> = runtime.application.antiFlicker,
-    locationTagging: SettingApplicationState<Boolean> = runtime.application.locationTagging,
     imageTone: SettingApplicationState<ImageToneState> = runtime.application.imageTone
 ): SettingsUiState = copy(
     runtime =
         runtime.copy(
-            application = SettingsApplicationState(ois, antiFlicker, locationTagging, imageTone)
+            application = SettingsApplicationState(ois, antiFlicker, imageTone)
         )
 )
 

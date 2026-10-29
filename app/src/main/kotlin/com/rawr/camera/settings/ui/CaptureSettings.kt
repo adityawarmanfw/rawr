@@ -1,18 +1,39 @@
 package com.rawr.camera.settings.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.rawr.camera.settings.architecture.*
 import com.rawr.camera.settings.model.*
 
 @Composable
 internal fun CaptureSettings(state: SettingsUiState, dispatch: SettingsDispatch) {
+    val context = LocalContext.current
+    fun locationPermitted() = listOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+        .any { context.checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
+    var locationGranted by remember(context) { mutableStateOf(locationPermitted()) }
+    LifecycleResumeEffect(context) {
+        locationGranted = locationPermitted()
+        onPauseOrDispose { }
+    }
+    val locationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
+        locationGranted = granted.values.any { it }
+        if (locationGranted) dispatch.invoke(SetLocationTagging(true))
+    }
     val lenses = state.values.effectiveLensProfiles(LocalLensHardware.current.deviceDefaults)
     val enabledLenses = lenses.filter { it.enabled }
     SettingsPageContainer {
@@ -50,6 +71,19 @@ internal fun CaptureSettings(state: SettingsUiState, dispatch: SettingsDispatch)
                 checked = state.values.oisEnabledPreference,
                 enabled = state.capabilities.oisSupported
             ) { dispatch.invoke(SetOisPreference(it)) }
+            SettingDivider()
+            SettingsSwitchRow(
+                title = "Location Tagging",
+                checked = state.values.locationTagging && locationGranted,
+                testTag = SettingsTestTags.row("Capture", "location_tagging")
+            ) { enabled ->
+                locationGranted = locationPermitted()
+                if (!enabled || locationGranted) {
+                    dispatch.invoke(SetLocationTagging(enabled))
+                } else {
+                    locationPermission.launch(arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION))
+                }
+            }
         }
     }
 }

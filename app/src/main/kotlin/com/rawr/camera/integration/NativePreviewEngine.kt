@@ -176,7 +176,8 @@ class NativePreviewEngine {
         // Fixed at 95: no UI setting exists yet, StillCaptureCoordinator never
         // forwards a quality. q95 keeps JPEG contours down in sky gradients.
         ultraHdrGainmapQuality: Int = 95,
-        dngCompression: Int = 0
+        dngCompression: Int = 0,
+        gps: DoubleArray? = null
     ): Long
 
     external fun cancelPreparedMultiframeCapture(handle: Long)
@@ -238,7 +239,8 @@ class NativePreviewEngine {
         // Fixed at 95: no UI setting exists yet, StillCaptureCoordinator never
         // forwards a quality. q95 keeps JPEG contours down in sky gradients.
         ultraHdrGainmapQuality: Int = 95,
-        dngCompression: Int = 0
+        dngCompression: Int = 0,
+        gps: DoubleArray? = null
     ): Long
 
     external fun pollDngWriteCompletion(handle: Long): String
