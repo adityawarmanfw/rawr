@@ -12,11 +12,19 @@ import androidx.annotation.Keep
  */
 @Keep
 class VendorCameraGate internal constructor(private val gates: Map<String, Gate>) {
-    constructor(context: Context) : this(mapOf(VivoFullSizeGate.NAME to VivoFullSizeGate.create(context)))
+    constructor(context: Context) : this(
+        mapOf(
+            VivoFullSizeGate.NAME to VivoFullSizeGate.create(context, vcf = false),
+            VivoFullSizeGate.NAME_VCF to VivoFullSizeGate.create(context, vcf = true)
+        )
+    )
 
     interface Gate {
         fun acquire(): Boolean
         fun release()
+
+        /** The gate's vendor state as the camera service sees it now, for the diagnostics log. */
+        fun describe(): String = ""
     }
 
     @Synchronized
@@ -39,6 +47,13 @@ class VendorCameraGate internal constructor(private val gates: Map<String, Gate>
         }
     }
 
+    @Synchronized
+    fun describe(name: String): String = try {
+        gates[name]?.describe().orEmpty()
+    } catch (e: Exception) {
+        "unreadable"
+    }
+
     private companion object {
         const val TAG = "RawrVendorGate"
     }
@@ -48,40 +63,46 @@ class VendorCameraGate internal constructor(private val gates: Map<String, Gate>
  * vivo's full-size RAW permission: VivoCameraManager key 40 ("useVivoCamera") = 1 while the streams are configured.
  * cameraserver (Camera3Device::setUseVivoCamera) reads it when it configures streams and then classifies the client as vivo's
  * own camera (AppType 1), whose sensor-mode branch holds the 50 / 200 MP modes; without it they fail to
- * configure ("Function not implemented"). Key 33 (VCFAppType) is rewritten by cameraserver at open, so it is
- * left alone. The value is system-wide: the one found is saved before the change and given back on release;
- * a value left by a process that died is given back at the next start, while it is still ours and no camera
- * is open.
+ * configure ("Function not implemented"). Key 33 (VCFAppType) is rewritten by cameraserver at open on the phones
+ * decoded so far, so the plain gate leaves it alone; [vcf] also sets it to 2 (the VCF bypass value vivo's own
+ * camera takes) for firmware where that matters. The values are system-wide: the ones found are saved before the
+ * change and given back on release; values left by a process that died are given back at the next start, while
+ * they are still ours and no camera is open.
  */
 internal class VivoFullSizeGate(
     private val store: Store,
     private val journal: Journal,
     private val pid: Int,
     private val camerasIdle: () -> Boolean,
-    private val settle: () -> Unit = { SystemClock.sleep(SETTLE_MS) }
+    private val settle: () -> Unit = { SystemClock.sleep(SETTLE_MS) },
+    private val vcf: Boolean = false
 ) : VendorCameraGate.Gate {
     interface Store {
         fun get(key: Int): Int
         fun set(key: Int, value: Int)
     }
 
-    /** The key 40 value found before a change: {pid, value}, or null when nothing is held. */
+    /** The values found before a change: {pid, key 40} (plus key 33 for a [vcf] gate), or null when nothing is held. */
     interface Journal {
         fun read(): IntArray?
-        fun write(pid: Int, previous: Int)
+        fun write(pid: Int, previous: Int, previousVcf: Int? = null)
         fun clear()
     }
 
-    private var held: Int? = null
+    private class Held(val key: Int, val vcfKey: Int?)
+
+    private var held: Held? = null
 
     override fun acquire(): Boolean {
         if (held != null) return true
         val previous = store.get(KEY)
-        journal.write(pid, previous)
-        held = previous
+        val previousVcf = if (vcf) store.get(VCF_KEY) else null
+        journal.write(pid, previous, previousVcf)
+        held = Held(previous, previousVcf)
+        if (vcf) store.set(VCF_KEY, VCF_OURS)
         store.set(KEY, OURS)
         settle()  // setValue is a one-way Binder call
-        if (store.get(KEY) == OURS) return true
+        if (store.get(KEY) == OURS && (!vcf || store.get(VCF_KEY) == VCF_OURS)) return true
         release()
         return false
     }
@@ -89,21 +110,31 @@ internal class VivoFullSizeGate(
     override fun release() {
         val previous = held ?: return
         held = null
-        store.set(KEY, previous)
+        previous.vcfKey?.let { store.set(VCF_KEY, it) }
+        store.set(KEY, previous.key)
         settle()
-        if (store.get(KEY) == previous) journal.clear()
-        else Log.w(TAG, "vivo key $KEY not restored; journal kept for the next start")
+        if (store.get(KEY) == previous.key && (previous.vcfKey == null || store.get(VCF_KEY) == previous.vcfKey))
+            journal.clear()
+        else Log.w(TAG, "vivo keys $KEY/$VCF_KEY not restored; journal kept for the next start")
     }
+
+    /** Keys 1 (AppType), 33 (VCFAppType) and 40 (useVivoCamera) as read now; "?" for one the framework refuses. */
+    override fun describe(): String =
+        listOf(APP_TYPE_KEY, VCF_KEY, KEY).joinToString(" ") { key ->
+            "key$key=" + (runCatching { store.get(key).toString() }.getOrNull() ?: "?")
+        }
 
     /** Gives back values a dead process of ours left set. Returns what happened, for the log. */
     fun recoverStale(): String {
         val stale = journal.read() ?: return "none"
         if (stale[0] == pid) return "own"
-        if (store.get(KEY) != OURS) {
+        val vcfPrevious = stale.getOrNull(2)
+        if (store.get(KEY) != OURS || (vcfPrevious != null && store.get(VCF_KEY) != VCF_OURS)) {
             journal.clear()
             return "not ours"
         }
         if (!camerasIdle()) return "busy"
+        vcfPrevious?.let { store.set(VCF_KEY, it) }
         store.set(KEY, stale[1])
         settle()
         journal.clear()
@@ -112,20 +143,29 @@ internal class VivoFullSizeGate(
 
     companion object {
         const val NAME = "vivoFullSize"
+        /** The same gate that also sets key 33 (VCFAppType) to 2, the VCF bypass. */
+        const val NAME_VCF = "vivoFullSizeVcf"
         /** VivoCameraManager key read by cameraserver as "useVivoCamera". */
         const val KEY = 40
         const val OURS = 1
+        /** VCFAppType, and the value vivo's own camera runs with. */
+        const val VCF_KEY = 33
+        const val VCF_OURS = 2
+        /** AppType, written by cameraserver; only read, for the log. */
+        const val APP_TYPE_KEY = 1
         private const val SETTLE_MS = 100L
         private const val TAG = "RawrVendorGate"
 
-        fun create(context: Context): VendorCameraGate.Gate {
+        fun create(context: Context, vcf: Boolean = false): VendorCameraGate.Gate {
             val store = ReflectionStore.open() ?: return Unavailable
             val app = context.applicationContext
+            val journalFile = if (vcf) "rawr_vivo_fullsize_vcf_gate" else "rawr_vivo_fullsize_gate"
             val gate = VivoFullSizeGate(
                 store,
-                PrefsJournal(app.getSharedPreferences("rawr_vivo_fullsize_gate", Context.MODE_PRIVATE)),
+                PrefsJournal(app.getSharedPreferences(journalFile, Context.MODE_PRIVATE)),
                 android.os.Process.myPid(),
-                { CameraIdleCheck.allIdle(app) }
+                { CameraIdleCheck.allIdle(app) },
+                vcf = vcf
             )
             val recovery = gate.recoverStale()
             if (recovery != "none") Log.i(TAG, "vivo full-size values of a previous process: $recovery")
@@ -163,12 +203,18 @@ internal class VivoFullSizeGate(
     }
 
     private class PrefsJournal(private val prefs: SharedPreferences) : Journal {
-        override fun read(): IntArray? =
-            if (!prefs.contains(PID)) null else intArrayOf(prefs.getInt(PID, 0), prefs.getInt(PREVIOUS, 0))
+        override fun read(): IntArray? = when {
+            !prefs.contains(PID) -> null
+            prefs.contains(PREVIOUS_VCF) ->
+                intArrayOf(prefs.getInt(PID, 0), prefs.getInt(PREVIOUS, 0), prefs.getInt(PREVIOUS_VCF, 0))
+            else -> intArrayOf(prefs.getInt(PID, 0), prefs.getInt(PREVIOUS, 0))
+        }
 
         // commit(): the process may die right after the change.
-        override fun write(pid: Int, previous: Int) {
-            prefs.edit().putInt(PID, pid).putInt(PREVIOUS, previous).commit()
+        override fun write(pid: Int, previous: Int, previousVcf: Int?) {
+            prefs.edit().clear().putInt(PID, pid).putInt(PREVIOUS, previous)
+                .apply { if (previousVcf != null) putInt(PREVIOUS_VCF, previousVcf) }
+                .commit()
         }
 
         override fun clear() {
@@ -178,6 +224,7 @@ internal class VivoFullSizeGate(
         private companion object {
             const val PID = "pid"
             const val PREVIOUS = "previous"
+            const val PREVIOUS_VCF = "previous_vcf"
         }
     }
 }

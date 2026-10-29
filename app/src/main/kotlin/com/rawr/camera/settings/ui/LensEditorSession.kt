@@ -172,8 +172,8 @@ internal fun SessionGroup(lens: LensProfile, onChange: (LensProfile) -> Unit) {
         DropdownChoiceRow(
             title = "Vendor gate",
             selected = session.gate,
-            values = (listOf("", "vivoFullSize") + session.gate).distinct(),
-            label = { when (it) { "" -> "None"; "vivoFullSize" -> "vivo full-size"; else -> it } },
+            values = (listOf("", "vivoFullSize", "vivoFullSizeVcf") + session.gate).distinct(),
+            label = { when (it) { "" -> "None"; "vivoFullSize" -> "vivo full-size"; "vivoFullSizeVcf" -> "vivo full-size + VCF bypass"; else -> it } },
             supportingText = "Vendor state the app sets while it opens the camera; vivo needs it for 50 and 200 MP",
             onSelect = { update { copy(gate = it, gateHold = if (it.isEmpty()) null else gateHold) } }
         )

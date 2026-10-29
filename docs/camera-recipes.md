@@ -150,7 +150,7 @@ an `unlisted` RAW stream implies `noHalPriorityAe`, `requireFpsRange` and `noAut
 
 ### Gate presets
 
-A vendor gate can bring per-capture data with it. `vivoFullSize` adds three still-scope keys whose
+A vendor gate can bring per-capture data with it. `vivoFullSize` and `vivoFullSizeVcf` add three still-scope keys whose
 value is the capture's millisecond stamp (`vivo.control.requestId`, `frameFlag`; `globalCaptureId` is
 the stamp plus 5) and four result tags read back after each full-size still, one of which
 (`vcf.parameter.seamlessMode`) is kept on the frame to show whether the HAL really switched sensor

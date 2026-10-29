@@ -341,7 +341,8 @@ bool CameraDeviceSession::open(const LensRoute& route, CameraCallbacks& callback
             return false;
         }
         heldGate_ = route.vendorGate;
-        diag("CAMERA_NDK_VENDOR_GATE_ACQUIRED gate=" + route.vendorGate + " cameraId=" + route.cameraId);
+        diag("CAMERA_NDK_VENDOR_GATE_ACQUIRED gate=" + route.vendorGate + " cameraId=" + route.cameraId +
+             " " + describeVendorCameraGate(route.vendorGate));
     }
 
     const bool java = effectiveBackend(route) == BackendChoice::Java;
@@ -703,6 +704,9 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
     }
     session_ = device_->createSession(outputs, sessionParameters_.get(), int32_t(recipe.opMode), callbackContext, &s);
     captureConfigured_ = session_ && captureWindow_;
+    if (!heldGate_.empty())
+        diag("CAMERA_NDK_VENDOR_GATE_STATE gate=" + heldGate_ + " stage=configured session=" + (session_ ? "yes" : "no") +
+             " " + describeVendorCameraGate(heldGate_));
     // The recipe says how long the gate is held; capture-stream routes keep it until the device closes
     // (see defaultGateHold).
     if (!heldGate_.empty() && recipe.gateHold == GateHold::UntilConfigured) {

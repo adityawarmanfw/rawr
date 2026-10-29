@@ -9,6 +9,7 @@ JavaVM* gateVm = nullptr;
 jobject javaGate = nullptr;
 jmethodID acquireMethod = nullptr;
 jmethodID releaseMethod = nullptr;
+jmethodID describeMethod = nullptr;  // optional: older gates have none
 
 // Calls one of the gate's (String) methods on this thread, attaching it when needed.
 template <typename Call>
@@ -25,7 +26,7 @@ bool withGateEnv(const std::string& gate, Call&& call) {
         return false;
     }
     bool result = false;
-    if (env->PushLocalFrame(2) == JNI_OK) {
+    if (env->PushLocalFrame(4) == JNI_OK) {
         if (jstring name = env->NewStringUTF(gate.c_str()); name && !env->ExceptionCheck())
             result = call(env, name);
         if (env->ExceptionCheck()) {
@@ -48,6 +49,11 @@ void installVendorCameraGate(JNIEnv* env, jobject gate) {
     if (!cls) return;
     jmethodID acquire = env->GetMethodID(cls, "acquire", "(Ljava/lang/String;)Z");
     jmethodID release = env->GetMethodID(cls, "release", "(Ljava/lang/String;)V");
+    jmethodID describe = env->GetMethodID(cls, "describe", "(Ljava/lang/String;)Ljava/lang/String;");
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+        describe = nullptr;
+    }
     env->DeleteLocalRef(cls);
     if (!acquire || !release || env->ExceptionCheck()) {
         env->ExceptionClear();
@@ -59,6 +65,7 @@ void installVendorCameraGate(JNIEnv* env, jobject gate) {
     javaGate = global;
     acquireMethod = acquire;
     releaseMethod = release;
+    describeMethod = describe;
 }
 
 bool acquireVendorCameraGate(const std::string& gate, std::string* error) {
@@ -74,6 +81,21 @@ void releaseVendorCameraGate(const std::string& gate) {
         env->CallVoidMethod(javaGate, releaseMethod, name);
         return true;
     });
+}
+
+std::string describeVendorCameraGate(const std::string& gate) {
+    std::string text;
+    (void)withGateEnv(gate, [&text](JNIEnv* env, jstring name) {
+        if (!describeMethod) return false;
+        auto* result = static_cast<jstring>(env->CallObjectMethod(javaGate, describeMethod, name));
+        if (!result || env->ExceptionCheck()) return false;
+        if (const char* chars = env->GetStringUTFChars(result, nullptr)) {
+            text = chars;
+            env->ReleaseStringUTFChars(result, chars);
+        }
+        return true;
+    });
+    return text;
 }
 
 }  // namespace rawrcam::camera
