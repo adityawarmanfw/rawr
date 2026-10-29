@@ -955,6 +955,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // without regions and manual focus stay.
         // Device safety survives imported/user-edited lens profiles.
         control.capabilities.tapAfHoldsUntilNextTap = quirks.afTapHold;
+        control.capabilities.keepRegions = quirks.keepRegions;
         control.capabilities.faceAfSteering = !control.capabilities.tapAfHoldsUntilNextTap;
         control.capabilities.dngOnly =
             route.captureStream && uint64_t(route.captureStream->width) * route.captureStream->height > kDngOnlyPixels;

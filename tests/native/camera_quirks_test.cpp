@@ -116,6 +116,26 @@ void testJson() {
         R"({"id":"x","match":{"models":["M"]},"quirks":["bogus"],"lenses":[{"id":"a","cameraId":"0"}]})", &error));
 }
 
+void testKeepRegions() {
+    CameraQuirks q;
+    assert(!q.keepRegions && !q.any());
+    assert(setQuirk(q, "keepRegions") && q.keepRegions && q.any());
+    assert(quirkNames(q) == std::vector<std::string>{"keepRegions"});
+    CameraQuirks other;
+    other.noTapAf = true;
+    const auto merged = mergeQuirks(q, other);
+    assert(merged.keepRegions && merged.noTapAf && !(merged == other) && !(merged == q));
+    std::string error;
+    const auto lens = parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","quirks":["keepRegions"]}]})", &error);
+    assert(lens && lens->lenses[0].quirks.keepRegions);
+    const auto json = serializeCameraProfile(*lens);
+    assert(json.find(R"("quirks":["keepRegions"])") != std::string::npos);
+    assert(parseCameraProfile(json) && parseCameraProfile(json)->lenses[0].quirks == lens->lenses[0].quirks);
+    // The request rule: a tap's region is always written; without one the entry is cleared unless the lens keeps the template's.
+    assert(writesRegionEntry(true, false) && writesRegionEntry(true, true));
+    assert(writesRegionEntry(false, false) && !writesRegionEntry(false, true));
+}
+
 void testCarriesRecipe() {
     LensRoute lens;
     assert(!carriesRecipe(lens));
@@ -130,6 +150,7 @@ int main() {
     testVivoUltraDeviceQuirk();
     testPresets();
     testJson();
+    testKeepRegions();
     testCarriesRecipe();
     std::cout << "camera_quirks_test passed\n";
     return 0;

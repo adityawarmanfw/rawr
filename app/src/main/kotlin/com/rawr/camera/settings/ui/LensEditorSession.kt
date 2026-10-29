@@ -242,6 +242,7 @@ internal fun quirkTitle(quirk: String) = when (quirk) {
     "noTapAf" -> "No tap focus"
     "requireFpsRange" -> "Always send an fps range"
     "noAutoCompanion" -> "No automatic companion"
+    "keepRegions" -> "Keep the template's focus regions"
     else -> quirk
 }
 
@@ -251,5 +252,6 @@ internal fun quirkDescription(quirk: String) = when (quirk) {
     "noTapAf" -> "Changing the focus region crashes this camera, so tap focus and regions are off"
     "requireFpsRange" -> "Every request carries an AE fps range, even with AE off"
     "noAutoCompanion" -> "Do not add the small extra stream that unverified devices get"
+    "keepRegions" -> "Without a tap, requests keep the camera's own focus and exposure regions instead of an empty one, which crashes this camera's focus code"
     else -> ""
 }

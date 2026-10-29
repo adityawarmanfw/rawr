@@ -142,6 +142,8 @@ struct CameraControlCapabilities {
     // dim scene crashes the X300 Ultra camera provider (vivo's camera never
     // makes it either).
     bool tapAfHoldsUntilNextTap = false;
+    // Requests without a tap region keep the template's own AF/AE regions (CameraQuirks::keepRegions).
+    bool keepRegions = false;
     // Continuous AF follows the first detected face. Off on vivo-gated routes:
     // moving or clearing the region there crashes the same AF publisher.
     bool faceAfSteering = true;
