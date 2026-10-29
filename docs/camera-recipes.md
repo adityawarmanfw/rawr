@@ -145,7 +145,8 @@ profile, which apply to every lens on a matching device, user lenses included).
 | `noAutoCompanion` | The rule-based companion is not added. |
 
 Presets keep imported and user-edited profiles safe: a lens with a vendor gate implies `afTapHold`;
-an `unlisted` RAW stream implies the other four.
+an `unlisted` RAW stream implies `noHalPriorityAe`, `requireFpsRange` and `noAutoCompanion`
+(not `noTapAf`: add it to the lens when a camera crashes on AF regions).
 
 ### Gate presets
 

@@ -9,12 +9,13 @@ using namespace rawrcam::camera;
 
 namespace {
 
-// The conditions NativeCameraController used before quirks were named, kept as the oracle.
+// The conditions NativeCameraController used before quirks were named, kept as the oracle. Since then an
+// unlisted stream no longer implies noTapAf (Xiaomi full-size lenses focus fine).
 struct Legacy {
     bool tapAfHold, noHalPriorityAe, noTapAf, requireFpsRange, noAutoCompanion;
 };
 Legacy legacy(const std::string& matchedProfileId, const LensRoute& lens) {
-    return {matchedProfileId == "vivo_x300_ultra" || !lens.vendorGate.empty(), lens.unlistedStream, lens.unlistedStream,
+    return {matchedProfileId == "vivo_x300_ultra" || !lens.vendorGate.empty(), lens.unlistedStream, false,
             lens.unlistedStream, lens.unlistedStream};
 }
 
@@ -84,7 +85,9 @@ void testPresets() {
     LensRoute unlisted;
     unlisted.unlistedStream = true;
     const auto u = effectiveQuirks(unlisted, {});
-    assert(!u.afTapHold && u.noHalPriorityAe && u.noTapAf && u.requireFpsRange && u.noAutoCompanion);
+    assert(!u.afTapHold && u.noHalPriorityAe && !u.noTapAf && u.requireFpsRange && u.noAutoCompanion);
+    unlisted.quirks.noTapAf = true;
+    assert(effectiveQuirks(unlisted, {}).noTapAf);
 }
 
 void testJson() {
