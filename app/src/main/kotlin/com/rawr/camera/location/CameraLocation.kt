@@ -103,7 +103,7 @@ class CameraLocation internal constructor(
     }
 
     fun setForeground(value: Boolean) {
-        if (store.setForeground(value)) signal()
+        if (store.setForeground(value) && store.state.enabled) signal()
     }
 
     /** Admission read: atomic, never waits. A candidate missing the refresh target hints a later refresh. */
