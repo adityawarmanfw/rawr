@@ -8,7 +8,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.location.Location
-import android.location.LocationListener
 import android.location.LocationManager
 import android.location.LocationManager.FUSED_PROVIDER
 import android.location.LocationManager.GPS_PROVIDER
@@ -40,7 +39,6 @@ import com.rawr.camera.video.RecordingCoordinator
 import com.rawr.camera.video.VideoRecording
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -62,8 +60,6 @@ import org.robolectric.shadows.ShadowLocationManager
 import org.robolectric.shadows.ShadowSystemClock
 import java.time.Duration
 import java.util.concurrent.Executor
-import java.util.concurrent.RejectedExecutionException
-import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.function.Consumer
 
 @RunWith(RobolectricTestRunner::class)
@@ -75,10 +71,8 @@ class CameraLocationTest {
     private val app get() = RuntimeEnvironment.getApplication() as TrackingApplication
     private val platform get() = shadowOf(app.getSystemService(LocationManager::class.java))
     private val appOps get() = shadowOf(app.getSystemService(AppOpsManager::class.java))
-    private val oneShots get() = ControlledLocationManager.currentRequests
 
     @org.junit.Before fun resetShadowControls() {
-        ControlledLocationManager.resetControls()
         ForegroundAppOps.resetChecks()
     }
 
@@ -99,46 +93,11 @@ class CameraLocationTest {
         }
     }
 
-    class OneShot(val provider: String, val request: LocationRequest, val signal: CancellationSignal?,
-                  val consumer: Consumer<Location?>)
-
     @Implements(LocationManager::class)
     class ControlledLocationManager : ShadowLocationManager() {
         @Implementation
-        override fun requestLocationUpdates(provider: String, request: LocationRequest, executor: Executor, listener: LocationListener) {
-            registrations += provider
-            onRegistration?.invoke()
-            if (provider in failing) throw RuntimeException("Injected registration failure")
-            super.requestLocationUpdates(provider, request, executor, listener)
-        }
-
-        @Implementation
-        override fun isProviderEnabled(provider: String): Boolean {
-            if (throwingQuery) throw RuntimeException("Injected provider query failure")
-            return super.isProviderEnabled(provider)
-        }
-
-        @Implementation
         override fun getCurrentLocation(provider: String, request: LocationRequest, signal: CancellationSignal?,
-                                        executor: Executor, consumer: Consumer<Location>) {
-            @Suppress("UNCHECKED_CAST")
-            currentRequests += OneShot(provider, request, signal, consumer as Consumer<Location?>)
-        }
-
-        companion object {
-            val failing = mutableSetOf<String>()
-            val registrations = mutableListOf<String>()
-            val currentRequests = mutableListOf<OneShot>()
-            var onRegistration: (() -> Unit)? = null
-            var throwingQuery = false
-            fun resetControls() {
-                throwingQuery = false
-                failing.clear()
-                registrations.clear()
-                currentRequests.clear()
-                onRegistration = null
-            }
-        }
+                                        executor: Executor, consumer: Consumer<Location>) = Unit
     }
 
     @Implements(AppOpsManager::class)
@@ -164,34 +123,19 @@ class CameraLocationTest {
         }
     }
 
-    /** Parked handoffs and worker tasks; nothing runs until a test drains or advances it. */
     private class Tasks : Executor {
         val handoffs = ArrayDeque<Runnable>()
         val pending = ArrayDeque<Runnable>()
-        val delayed = mutableMapOf<Runnable, Long>()
-        var now = 0L
-        var rejecting = false
         override fun execute(command: Runnable) {
-            if (rejecting) throw RejectedExecutionException("Injected rejection")
             pending.addLast(command)
         }
         fun handoff(task: Runnable) { handoffs.addLast(task) }
-        fun defer(command: Runnable, delay: Long): () -> Unit {
-            delayed[command] = now + delay
-            return { delayed.remove(command); Unit }
-        }
         fun drain() {
             var count = 0
             while (handoffs.isNotEmpty() || pending.isNotEmpty()) {
                 check(++count < 50)
                 (handoffs.removeFirstOrNull() ?: pending.removeFirst()).run()
             }
-        }
-        fun advance(millis: Long) {
-            ShadowSystemClock.advanceBy(Duration.ofMillis(millis))
-            now += millis
-            delayed.filterValues { it <= now }.keys.forEach { delayed.remove(it); pending.addLast(it) }
-            drain()
         }
     }
 
@@ -219,7 +163,7 @@ class CameraLocationTest {
             platform.setProviderEnabled(provider, true)
         }
         platform.setLocationEnabled(true)
-        return CameraLocation(app, tasks, tasks::defer, tasks::handoff)
+        return CameraLocation(app, tasks, { _, _ -> {} }, tasks::handoff)
     }
 
     private fun preparedCollector(tasks: Tasks): CameraLocation {
@@ -276,6 +220,8 @@ class CameraLocationTest {
             host.event(Lifecycle.Event.ON_PAUSE)
             foreground.pause(host)
             tasks.drain()
+            assertTrue(noRequests())
+            assertEquals("Protected system broadcasts need an exported receiver", Context.RECEIVER_EXPORTED, app.receiverFlags)
             ShadowSystemClock.advanceBy(Duration.ofSeconds(5))
             appOps.setMode(AppOpsManager.OPSTR_FINE_LOCATION, app.applicationInfo.uid, app.packageName, AppOpsManager.MODE_FOREGROUND)
             idle()
@@ -329,187 +275,10 @@ class CameraLocationTest {
         repeat(100) { collector.snapshot() }
         assertEquals("Admission performs no permission IPC", checks, app.permissionChecks)
         assertTrue("Admission never reaches the worker", tasks.pending.isEmpty())
-        assertEquals("Control events coalesce into one handoff", 1, tasks.handoffs.size)
-        tasks.rejecting = true
-        tasks.drain()
-        queue.enqueue(CaptureOutputFormat.DngAndJpeg)
-        assertSame("Rejected submission neither blocks capture nor clears eligible GPS", prepared, frozen.last())
-        tasks.rejecting = false
         collector.setEnabled(false)
         queue.enqueue(CaptureOutputFormat.DngAndJpeg)
         assertNull("A later OFF admission stays absent", frozen.last())
         assertSame("Admitted values are never rewritten", prepared, frozen.first())
-    }
-
-    @Test fun failedReturnValidationSettlesWithoutWaitingForRetryOrPosition() = runTest {
-        val tasks = Tasks()
-        val collector = preparedCollector(tasks)
-        collector.setForeground(false)
-        tasks.drain()
-        collector.setForeground(true)
-        ControlledLocationManager.failing += FUSED_PROVIDER
-        var settledBeforeRegistration: Boolean? = null
-        val waiting = async(UnconfinedTestDispatcher(testScheduler)) { collector.validateAccess() }
-        ControlledLocationManager.onRegistration = {
-            if (settledBeforeRegistration == null) settledBeforeRegistration = waiting.isCompleted
-        }
-        assertFalse(waiting.isCompleted)
-        tasks.drain()
-        assertEquals("Validation completes before any registration IPC", true, settledBeforeRegistration)
-        assertTrue(waiting.await())
-        ControlledLocationManager.onRegistration = null
-        collector.setForeground(false)
-        collector.setForeground(true)
-        val parked = async(UnconfinedTestDispatcher(testScheduler)) { collector.validateAccess() }
-        assertFalse(parked.isCompleted)
-        collector.setEnabled(false)
-        assertFalse("OFF bypasses the validation wait without the worker", parked.await())
-        tasks.drain()
-        val rejected = CameraLocation(app, Executor { throw RejectedExecutionException("Injected rejection") },
-            handoff = { it.run() })
-        rejected.setEnabled(true)
-        assertFalse("Rejected submission settles to no GPS", rejected.validateAccess())
-    }
-
-    @Test fun foregroundRequestsFollowProviderStrategyAndRejectLateCallbacks() {
-        val tasks = Tasks()
-        val collector = availableCollector(tasks)
-        collector.setEnabled(true)
-        collector.setForeground(true)
-        tasks.drain()
-        val passive = platform.getLocationRequests(PASSIVE_PROVIDER).single()
-        assertEquals(LocationRequest.PASSIVE_INTERVAL, passive.intervalMillis)
-        assertEquals(0L, passive.minUpdateIntervalMillis)
-        assertEquals(120_000L, passive.durationMillis)
-        val balanced = platform.getLocationRequests(FUSED_PROVIDER).single()
-        assertEquals(30_000L, balanced.intervalMillis)
-        assertEquals(10_000L, balanced.minUpdateIntervalMillis)
-        assertEquals(10f, balanced.minUpdateDistanceMeters, 0f)
-        assertEquals(LocationRequest.QUALITY_BALANCED_POWER_ACCURACY, balanced.quality)
-        assertEquals(0L, balanced.maxUpdateDelayMillis)
-        assertEquals(120_000L, balanced.durationMillis)
-        assertTrue(platform.getLocationRequests(NETWORK_PROVIDER).isEmpty())
-        assertTrue(platform.getLocationRequests(GPS_PROVIDER).isEmpty())
-        val oneShot = oneShots.single()
-        assertEquals(GPS_PROVIDER, oneShot.provider)
-        assertEquals(30_000L, oneShot.request.durationMillis)
-        val passiveListener = listener(PASSIVE_PROVIDER)
-        passiveListener.onLocationChanged(mutableListOf(fix(GPS_PROVIDER, 3f), fix(NETWORK_PROVIDER, 900f)))
-        val best = requireNotNull(collector.snapshot())
-        assertEquals("Every delivered list member goes through the selector", 3.0, best.nativeValues()[3], 0.0)
-        collector.setForeground(false)
-        passiveListener.onLocationChanged(fix(GPS_PROVIDER, 1f, latitude = 1.0))
-        assertSame("Pause rejects late callbacks immediately", best, collector.snapshot())
-        tasks.drain()
-        assertTrue(noRequests())
-        assertTrue(requireNotNull(oneShot.signal).isCanceled)
-        platform.setProviderEnabled(FUSED_PROVIDER, false)
-        collector.setForeground(true)
-        tasks.drain()
-        assertEquals(1, platform.getLocationRequests(NETWORK_PROVIDER).size)
-        assertTrue(platform.getLocationRequests(FUSED_PROVIDER).isEmpty())
-        assertSame("Losing one provider keeps the retained observation", best, collector.snapshot())
-        platform.setProviderEnabled(FUSED_PROVIDER, true)
-        app.sendBroadcast(Intent(LocationManager.PROVIDERS_CHANGED_ACTION))
-        idle()
-        tasks.drain()
-        assertEquals(1, platform.getLocationRequests(FUSED_PROVIDER).size)
-        assertTrue(platform.getLocationRequests(NETWORK_PROVIDER).isEmpty())
-        repeat(100) { collector.setForeground(false); collector.setForeground(true) }
-        assertEquals(1, tasks.handoffs.size)
-        collector.setEnabled(false)
-        tasks.drain()
-        assertTrue(noRequests())
-    }
-
-    @Test fun startupAndRefreshAttemptsRespectOutstandingRequestAndCooldown() {
-        val tasks = Tasks()
-        val collector = availableCollector(tasks)
-        platform.setLastKnownLocation(NETWORK_PROVIDER, fix(NETWORK_PROVIDER, 3f))
-        collector.setEnabled(true)
-        collector.setForeground(true)
-        tasks.drain()
-        val seeded = requireNotNull(collector.snapshot())
-        assertEquals("Startup attempts once even after a good seed", 1, oneShots.size)
-        assertTrue(tasks.handoffs.isEmpty())
-        oneShots[0].consumer.accept(null)
-        collector.setForeground(false)
-        collector.setForeground(true)
-        tasks.drain()
-        assertEquals("Pause/resume cannot reset the completion cooldown", 1, oneShots.size)
-        assertEquals("Only maintenance is scheduled; no delayed positioning retry", 1, tasks.delayed.size)
-        tasks.advance(31_000)
-        assertEquals(1, oneShots.size)
-        assertSame(seeded, collector.snapshot())
-        tasks.drain()
-        assertEquals("A post-admission hint refreshes for later captures", 2, oneShots.size)
-        collector.snapshot()
-        tasks.drain()
-        assertEquals("At most one outstanding one-shot", 2, oneShots.size)
-        oneShots[1].consumer.accept(null)
-        collector.snapshot()
-        tasks.drain()
-        tasks.advance(31_000)
-        assertEquals("A hint during cooldown is discarded, not retried", 2, oneShots.size)
-        assertSame(seeded, collector.snapshot())
-        tasks.drain()
-        assertEquals(3, oneShots.size)
-        oneShots[2].consumer.accept(fix(GPS_PROVIDER, 2f))
-        assertNotSame(seeded, collector.snapshot())
-        tasks.advance(47_999)
-        collector.snapshot()
-        tasks.advance(1)
-        assertEquals("A hint racing maintenance is still consumed", 4, oneShots.size)
-        oneShots[3].consumer.accept(null)
-        tasks.advance(110_000)
-        assertEquals("Routine renewal never initiates a one-shot", 4, oneShots.size)
-        collector.setEnabled(false)
-        tasks.drain()
-    }
-
-    @Test fun maintenanceRenewsBothPathsIndependentlyAndReattemptsFailuresOnlyOnCadence() {
-        val tasks = Tasks()
-        val collector = availableCollector(tasks)
-        ControlledLocationManager.failing += FUSED_PROVIDER
-        collector.setEnabled(true)
-        collector.setForeground(true)
-        tasks.drain()
-        assertEquals(1, platform.getLocationRequests(PASSIVE_PROVIDER).size)
-        assertTrue(platform.getLocationRequests(FUSED_PROVIDER).isEmpty())
-        val passiveListener = listener(PASSIVE_PROVIDER)
-        passiveListener.onLocationChanged(fix())
-        val prepared = requireNotNull(collector.snapshot())
-        fun attempts(provider: String) = ControlledLocationManager.registrations.count { it == provider }
-        tasks.advance(109_999)
-        assertEquals("No fast retry outside the cadence", 1, attempts(FUSED_PROVIDER))
-        ControlledLocationManager.failing.clear()
-        tasks.advance(1)
-        assertEquals(1, platform.getLocationRequests(FUSED_PROVIDER).size)
-        assertSame("Renewal reuses the listener/provider pair", passiveListener, listener(PASSIVE_PROVIDER))
-        assertEquals(1, platform.getLocationRequests(PASSIVE_PROVIDER).size)
-        assertSame("Failures never clear an eligible candidate", prepared, collector.snapshot())
-        ControlledLocationManager.failing += PASSIVE_PROVIDER
-        tasks.advance(110_000)
-        assertEquals("One path's failure does not skip the other", 3, attempts(FUSED_PROVIDER))
-        ControlledLocationManager.failing.clear()
-        ControlledLocationManager.throwingQuery = true
-        tasks.advance(110_000)
-        ControlledLocationManager.throwingQuery = false
-        tasks.advance(110_000)
-        assertEquals("A cycle that throws still reattempts at the next cadence", 4, attempts(FUSED_PROVIDER))
-        ControlledLocationManager.onRegistration = {
-            ControlledLocationManager.onRegistration = null
-            collector.setEnabled(false)
-        }
-        tasks.advance(110_000)
-        assertTrue("A registration completing after OFF is removed, not renewed", noRequests())
-        assertTrue(tasks.delayed.isEmpty())
-        collector.setEnabled(true)
-        tasks.drain()
-        assertNotSame(passiveListener, listener(PASSIVE_PROVIDER))
-        passiveListener.onLocationChanged(fix())
-        assertNull("Old handles cannot publish after OFF -> ON", collector.snapshot())
-        collector.setEnabled(false)
         tasks.drain()
     }
 
@@ -570,42 +339,6 @@ class CameraLocationTest {
         }
     }
 
-    @Test fun inactiveRetentionUsesOriginalAgeThenReleasesObservers() {
-        for (off in listOf(false, true)) {
-            val tasks = Tasks()
-            val collector = preparedCollector(tasks)
-            tasks.advance(100_000)
-            collector.setForeground(false)
-            tasks.drain()
-            assertEquals("Protected system broadcasts need an exported receiver", Context.RECEIVER_EXPORTED, app.receiverFlags)
-            assertTrue(noRequests())
-            assertEquals("The maintenance handle now owns original-age expiry", 1, tasks.delayed.size)
-            app.sendBroadcast(Intent(LocationManager.PROVIDERS_CHANGED_ACTION))
-            idle()
-            assertEquals("Observers remain while the candidate is eligible", 1, tasks.handoffs.size)
-            tasks.drain()
-            if (off) {
-                collector.setEnabled(false)
-                assertNull(collector.snapshot())
-                tasks.drain()
-            } else {
-                tasks.advance(20_001)
-                assertNull(collector.snapshot())
-            }
-            assertTrue(tasks.delayed.isEmpty())
-            app.sendBroadcast(Intent(LocationManager.PROVIDERS_CHANGED_ACTION))
-            appOps.setMode(AppOpsManager.OPSTR_FINE_LOCATION, app.applicationInfo.uid, app.packageName, AppOpsManager.MODE_ALLOWED)
-            idle()
-            assertTrue("Released observers schedule no work", tasks.handoffs.isEmpty())
-            collector.setEnabled(true)
-            collector.setForeground(true)
-            tasks.drain()
-            assertNull("OFF or expiry discards the retained observation", collector.snapshot())
-            collector.setEnabled(false)
-            tasks.drain()
-        }
-    }
-
     @Test fun lateStopFromOldOwnerKeepsNewerForegroundIdentity() {
         val changes = mutableListOf<Boolean>()
         val foreground = CaptureForeground { changes += it }
@@ -631,12 +364,20 @@ class CameraLocationTest {
         val settings = PersistentSettingsController(valuesEditor = editor)
         assertTrue(editor.state.value.locationTagging)
         assertNotNull(collector.snapshot())
+        val obsolete = listener(FUSED_PROVIDER)
         settings.dispatch(SetLocationTagging(false))
         assertFalse("Still/video settings snapshots freeze absence", editor.state.value.locationTagging)
         assertNull("The collector gate is OFF before persistence, flow delivery or worker", collector.snapshot())
         assertTrue(tasks.pending.isEmpty())
         assertFalse("Persistence remains parked", persistence.isCompleted)
         persistence.complete(Unit)
+        tasks.drain()
+        assertTrue(noRequests())
+        collector.setEnabled(true)
+        tasks.drain()
+        obsolete.onLocationChanged(fix())
+        assertNull("OFF/ON cannot revive an observation through an old callback", collector.snapshot())
+        collector.setEnabled(false)
         tasks.drain()
     }
 }

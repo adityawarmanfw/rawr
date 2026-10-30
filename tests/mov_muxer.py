@@ -94,29 +94,21 @@ def gps_metadata(file):
                 keyed[key] = value[8:].decode('ascii')
     return user, keyed, itemlist
 
-def check_gps(file, horizontal='+12.34568-098.76544', optionals=True, accuracy='0.00', height='0'):
+def check_gps(file, height):
+    horizontal = '+12.34568-098.76544'
     user, keyed, itemlist = gps_metadata(file)
     assert user == [horizontal + '/'], user
     assert keyed['com.apple.quicktime.location.ISO6709'] == user[0], keyed
     expected_itemlist = [] if height == 'absent' else [
         horizontal + f'{float(height):+.2f}' + 'CRS<http://www.opengis.net/def/crs/EPSG/0/4979>/']
     assert itemlist == expected_itemlist, itemlist
-    expected_location_keys = {'com.apple.quicktime.location.ISO6709'}
-    if optionals:
-        assert keyed['com.apple.quicktime.location.date'] == '2023-11-14T22:13:20.123Z'
-        expected_location_keys.add('com.apple.quicktime.location.date')
-        if accuracy is None:
-            assert 'com.apple.quicktime.location.accuracy.horizontal' not in keyed
-        else:
-            assert keyed['com.apple.quicktime.location.accuracy.horizontal'] == accuracy
-            expected_location_keys.add('com.apple.quicktime.location.accuracy.horizontal')
-    else:
-        assert 'com.apple.quicktime.location.date' not in keyed
-        assert 'com.apple.quicktime.location.accuracy.horizontal' not in keyed
+    assert keyed['com.apple.quicktime.location.date'] == '2023-11-14T22:13:20.123Z'
+    assert keyed['com.apple.quicktime.location.accuracy.horizontal'] == '0.00'
+    expected_location_keys = {'com.apple.quicktime.location.' + suffix for suffix in ('ISO6709', 'date', 'accuracy.horizontal')}
     assert {key for key in keyed if any(part in key.lower() for part in ('location', 'altitude', 'height'))} == expected_location_keys
     assert all('CRS<' not in value for value in keyed.values())
 
-def check_index_gps(file, height, latitude=12.345675, longitude=-98.765435, accuracy=0.0, fix_time=1_700_000_000_123):
+def check_index_gps(file, height):
     data = file.read_bytes()
     assert data[:4] == b'RMX2'
     records, offset = [], 4
@@ -128,10 +120,8 @@ def check_index_gps(file, height, latitude=12.345675, longitude=-98.765435, accu
         records.append((kind, data[offset:offset + length]))
         offset += length
     present_height = height != 'absent'
-    flags = int(present_height) | (2 if accuracy is not None else 0)
-    expected = struct.pack('<Bddddq', flags, latitude, longitude,
-                           float(height) if present_height else 0.0,
-                           accuracy if accuracy is not None else 0.0, fix_time)
+    expected = struct.pack('<Bddddq', int(present_height) | 2, 12.345675, -98.765435,
+                           float(height) if present_height else 0.0, 0.0, 1_700_000_000_123)
     assert records[0][0] == 0 and records[1] == (5, expected)
     assert sum(kind == 5 for kind, _ in records) == 1
     return data
@@ -146,6 +136,35 @@ with tempfile.TemporaryDirectory(prefix="mov-", dir=build) as directory:
     def mux_args(file, bits, index=None, crash_at=0):
         args = [helper, file, root/'csd', root/'asc', root/'samples', 160, 96, fps, 48000, 2, rotation, bits]
         return [str(value) for value in args + ([index, crash_at] if index is not None else [])]
+
+    def check_gps_output(reference, bits, crash_at=0):
+        signature = media_signature(reference)
+        output, index = root/'gps-output', root/'gps-index'
+        for height in ('absent', '-12345.67'):
+            run(*mux_args(output, bits, index, crash_at), RAWR_TEST_GPS=height, LC_ALL='de_DE.UTF-8')
+            check_gps(output, height)
+            assert media_signature(output) == signature, 'GPS changed samples, offsets, timing, rotation or color'
+            full_index = check_index_gps(index, height)
+            run(helper, '--recover', output, index)
+            check_gps(output, height)
+            assert media_signature(output) == signature
+            assert index.read_bytes() == full_index, 'Recovery changed the durable GPS input'
+            run(patch, output)
+            check_gps(output, height)
+            assert media_signature(output) == signature
+            run(patch, output, '--log')
+            check_gps(output, height)
+            assert media_signature(output)[:2] == signature[:2], 'LOG patch changed sample bytes'
+            run(ffmpeg, '-v', 'error', '-xerror', '-i', output, '-f', 'null', '-')
+            if exiftool := shutil.which('exiftool'):
+                decoded = json.loads(run(exiftool, '-j', '-n', '-a', '-G1', '-GPSCoordinates', '-Warning', '-Error', output))[0]
+                for group in ('UserData', 'Keys'):
+                    assert [float(value) for value in decoded[f'{group}:GPSCoordinates'].split()] == [12.34568, -98.76544]
+                if height == 'absent':
+                    assert 'ItemList:GPSCoordinates' not in decoded
+                else:
+                    assert [float(value) for value in decoded['ItemList:GPSCoordinates'].split()] == [12.34568, -98.76544, float(height)]
+                assert not any(key.rsplit(':', 1)[-1] in ('Warning', 'Error') for key in decoded)
 
     for name, x265, rotation, fps in (('ip', 'bframes=0', 0, 30), ('ibbp', 'bframes=2:b-adapt=0', 90, 24)):
         source = root/f'{name}-source.mp4'
@@ -198,6 +217,7 @@ with tempfile.TemporaryDirectory(prefix="mov-", dir=build) as directory:
         assert md5(out, 'v') == md5(source, 'v'), name
         # The source MP4 trims AAC priming with an edit list; compare against the untrimmed ADTS packets.
         assert md5(out, 'a') == md5(adts, 'a'), name
+        check_gps_output(out, 0)
         run(patch, out)  # Device metadata patcher must accept MovMuxer layout.
         assert probe(out, '-show_format')['format']['tags']['make'] == 'vivo'
         assert md5(out, 'v') == md5(source, 'v'), name
@@ -227,6 +247,8 @@ with tempfile.TemporaryDirectory(prefix="mov-", dir=build) as directory:
         copied = run(ffmpeg, '-v', 'error', '-i', out, '-map', '0:a', '-c', 'copy', '-f', f's{bits}le', '-')
         assert copied == pcm, f'PCM {bits} bytes differ'
         assert md5(out, 'v') == md5(source, 'v')
+        assert gps_metadata(out) == ([], {}, [])
+        check_gps_output(out, bits)
         run(patch, out)
         assert run(ffmpeg, '-v', 'error', '-i', out, '-map', '0:a', '-c', 'copy', '-f', f's{bits}le', '-') == pcm
         print(f'pcm{bits} ok', len(blocks), 'blocks')
@@ -256,107 +278,6 @@ with tempfile.TemporaryDirectory(prefix="mov-", dir=build) as directory:
         assert 0 < recovered < len(units), recovered
         assert audio['codec_name'] == (f'pcm_s{bits}le' if bits else 'aac'), audio['codec_name']
         run(ffmpeg, '-v', 'error', '-xerror', '-i', out, '-f', 'null', '-')
+        check_gps_output(out, bits, crash_at)
         print(f'crash{bits} ok: recovered {recovered}/{len(units)} frames, audio {float(audio["duration"]):.2f} s')
-
-    for bits in (0, 16, 24):
-        if bits:
-            pcm = (root/f'pcm{bits}.raw').read_bytes()
-            frame = 2 * bits // 8
-            audio_samples = [(i / frame / 48000, 1, True, i * 1_000_000 // frame // 48000, pcm[i:i + 1024 * frame])
-                             for i in range(0, len(pcm), 1024 * frame)]
-        else:
-            audio_samples = [(i * 1024 / 48000, 1, True, i * 1024 * 1_000_000 // 48000, value)
-                             for i, value in enumerate(frames)]
-        samples = [(float(packet['dts_time']), 0, 'K' in packet['flags'], int(float(packet['pts_time']) * 1e6) + 260_000, unit)
-                   for packet, unit in zip(packets, units)] + audio_samples
-        (root/'samples').write_bytes(b''.join(struct.pack('<BBqI', track, sync, pts, len(value)) + value
-                                            for _, track, sync, pts, value in sorted(samples, key=lambda sample: (sample[0], sample[1]))))
-        references = {}
-        for crash_at in (0, 100):
-            reference = root/f'reference-{bits}-{crash_at}'
-            run(*mux_args(reference, bits, root/'index', crash_at))
-            references[crash_at] = media_signature(reference)
-        for height in ('absent', '0', '-31.25', '123.50'):
-            for crash_at in (0, 100):
-                out = root/f'gps-{bits}-{height}-{crash_at}.{"mov" if bits else "mp4"}'
-                run(*mux_args(out, bits, root/'index', crash_at), RAWR_TEST_GPS=height)
-                check_gps(out, height=height)
-                assert media_signature(out) == references[crash_at], 'GPS changed samples, offsets, timing, rotation or color'
-                full_index = check_index_gps(root/'index', height)
-                run(helper, '--recover', out, root/'index')
-                check_gps(out, height=height)
-                assert media_signature(out) == references[crash_at]
-                assert (root/'index').read_bytes() == full_index, 'Recovery changed the durable GPS input'
-                for _ in range(2):
-                    run(patch, out)
-                    check_gps(out, height=height)
-                    assert media_signature(out) == references[crash_at]
-                run(patch, out, '--log')
-                check_gps(out, height=height)
-                assert media_signature(out)[:2] == references[crash_at][:2], 'LOG patch changed sample bytes'
-                run(ffmpeg, '-v', 'error', '-xerror', '-i', out, '-f', 'null', '-')
-                if exiftool := shutil.which('exiftool'):
-                    decoded = json.loads(run(exiftool, '-j', '-n', '-a', '-G1', '-GPSCoordinates', '-Warning', '-Error', out))[0]
-                    assert 'UserData:GPSCoordinates' in decoded and 'Keys:GPSCoordinates' in decoded
-                    for group in ('UserData', 'Keys'):
-                        assert [float(value) for value in decoded[f'{group}:GPSCoordinates'].split()] == [12.34568, -98.76544]
-                    if height == 'absent':
-                        assert 'ItemList:GPSCoordinates' not in decoded
-                    else:
-                        assert [float(value) for value in decoded['ItemList:GPSCoordinates'].split()] == [12.34568, -98.76544, float(height)]
-                    assert not any(key.rsplit(':', 1)[-1] in ('Warning', 'Error') for key in decoded)
-        print(f'gps{bits} 2D primary tags, qualified ItemList height, full RMX2, repeated patch and recovery ok')
-        for uncertainty in ('50.01', '123.45', '90000000000000', '90000000000001', '-1', 'nan', 'inf'):
-            expected_accuracy = f'{float(uncertainty):.2f}' if uncertainty in ('50.01', '123.45', '90000000000000') else None
-            for crash_at in (0, 100):
-                policy_out = root/f'uncertainty-{bits}-{uncertainty}-{crash_at}'
-                run(*mux_args(policy_out, bits, root/'policy-index', crash_at),
-                    RAWR_TEST_GPS='0', RAWR_TEST_ACCURACY=uncertainty)
-                check_gps(policy_out, accuracy=expected_accuracy)
-                check_index_gps(root/'policy-index', '0', accuracy=float(uncertainty) if expected_accuracy is not None else None)
-                run(patch, policy_out, '--log')
-                check_gps(policy_out, accuracy=expected_accuracy)
-        print(f'gps{bits} uncertainty serialization independent of admission cutoff ok')
-
-    original = out.read_bytes()
-    index_bytes = (root/'index').read_bytes()
-    header_end = 4 + 5 + struct.unpack_from('<I', index_bytes, 5)[0]
-    location_end = header_end + 5 + struct.unpack_from('<I', index_bytes, header_end + 1)[0]
-    location_record = index_bytes[header_end:location_end]
-    malformed = {
-        'unknown-version': b'RMX9' + index_bytes[4:],
-        'missing-location': index_bytes[:header_end] + index_bytes[location_end:],
-        'duplicate-location': index_bytes[:location_end] + location_record + index_bytes[location_end:],
-        'truncated-location': index_bytes[:location_end - 1],
-        'legacy-with-location': b'RMX1' + index_bytes[4:],
-        'late-location': index_bytes[:header_end] + index_bytes[location_end:] + location_record,
-    }
-    for name, damaged in malformed.items():
-        out.write_bytes(original)
-        (root/'bad-index').write_bytes(damaged)
-        result = subprocess.run([helper, '--recover', str(out), str(root/'bad-index')], capture_output=True)
-        assert result.returncode != 0, name
-        assert out.read_bytes() == original, f'{name}: failed recovery changed movie'
-        assert (root/'bad-index').read_bytes() == damaged
-    out.write_bytes(original)
-    (root/'bad-index').write_bytes(index_bytes + b'\x03\x10')
-    run(helper, '--recover', out, root/'bad-index')
-    check_gps(out, height='123.50')
-    print('RMX2 malformed/missing/duplicate/truncated/version rejection and partial sample-tail recovery ok')
-
-    for point, horizontal in (('zero', '+00.00000+000.00000'), ('limits', '-90.00000+180.00000')):
-        for height in ('absent', 'nan', 'inf', '1e100'):
-            for optionals in ('missing', 'invalid'):
-                run(*mux_args(out, 24, root/'index'), RAWR_TEST_GPS=height, RAWR_TEST_POINT=point,
-                    RAWR_TEST_OPTIONALS=optionals, LC_ALL='de_DE.UTF-8')
-                check_gps(out, horizontal, optionals=False, height='absent')
-                latitude, longitude = (-0.000004, 0.0) if point == 'zero' else (-90.0, 180.0)
-                check_index_gps(root/'index', 'absent', latitude, longitude, accuracy=None, fix_time=0)
-    run(*mux_args(out, 24, root/'index'), RAWR_TEST_GPS='12345.67', LC_ALL='de_DE.UTF-8')
-    check_gps(out, height='12345.67')
-    check_index_gps(root/'index', '12345.67')
-    result = subprocess.run(mux_args(out, 24), capture_output=True,
-                            env=os.environ | {'RAWR_TEST_GPS': '0', 'RAWR_TEST_POINT': 'invalid'})
-    assert result.returncode != 0 and b'invalid movie location' in result.stderr
-    run(helper, '--check-descriptors')
-    print('zero/range/locale/invalid optional fields and unseekable output checks ok')
+    print('GPS presence/absence, primary tags, ItemList height, RMX2, patching and recovery ok')

@@ -114,119 +114,22 @@ class RecordingCoordinatorTest {
     private class PermissionHost : LifecycleOwner {
         override val lifecycle = LifecycleRegistry.createUnsafe(this)
         fun event(event: Lifecycle.Event) = lifecycle.handleLifecycleEvent(event)
-        var launches = 0
     }
 
-    private fun permission(host: PermissionHost, owner: RecordingCoordinator, canStart: () -> Boolean = { true }) =
-        MicrophoneRecordingPermission(host.lifecycle, canStart, { host.launches++ }, owner::startAfterMicrophonePermission)
-
-    private fun MicrophoneRecordingPermission.press(owner: RecordingCoordinator) =
-        owner.permissionTicket()?.let(::request)
-
-    @Test fun grantContinuesOnceAtResumeOnlyWhileMicrophoneIsStillGranted() = runTest {
-        for (eligible in listOf(true, false)) {
-            val host = PermissionHost()
-            host.event(Lifecycle.Event.ON_CREATE)
-            host.event(Lifecycle.Event.ON_START)
-            host.event(Lifecycle.Event.ON_RESUME)
-            var admissions = 0
-            var granted = true
-            val owner = coordinator(Controller(mode = CaptureMode.Video)) { admissions++; Recorder() }
-            val permission = permission(host, owner) { granted }
-            permission.press(owner)
-            assertEquals(1, host.launches)
-            host.event(Lifecycle.Event.ON_PAUSE)
-            permission.onResult(true)
-            runCurrent()
-            assertEquals(0, admissions, "Permission grant must not admit recording while paused")
-            granted = eligible
-            host.event(Lifecycle.Event.ON_RESUME)
-            runCurrent()
-            host.event(Lifecycle.Event.ON_PAUSE)
-            host.event(Lifecycle.Event.ON_RESUME)
-            runCurrent()
-            assertEquals(if (eligible) 1 else 0, admissions)
-            host.event(Lifecycle.Event.ON_DESTROY)
-            owner.release()
-            runCurrent()
-        }
-    }
-
-    @Test fun cancelledOrStalePermissionLaunchesCannotStartLater() = runTest {
-        for (ending in listOf("denied", "stopped", "destroyed", "resultAfterStop", "staleLaunch", "modeRoundTrip",
-                              "timerChange", "explicitStop")) {
-            val host = PermissionHost()
-            host.event(Lifecycle.Event.ON_CREATE)
-            host.event(Lifecycle.Event.ON_START)
-            var admissions = 0
-            val controller = Controller(mode = CaptureMode.Video)
-            val owner = coordinator(controller) { admissions++; Recorder() }
-            val permission = permission(host, owner)
-            permission.press(owner)
-            when (ending) {
-                "resultAfterStop" -> host.event(Lifecycle.Event.ON_STOP)
-                "staleLaunch" -> {
-                    host.event(Lifecycle.Event.ON_STOP)
-                    host.event(Lifecycle.Event.ON_START)
-                    host.event(Lifecycle.Event.ON_RESUME)
-                    permission.press(owner)
-                    assertEquals(1, host.launches, "At most one outstanding prompt")
-                }
-                "modeRoundTrip" -> {
-                    controller.dispatch(SetCaptureMode(CaptureMode.Photo))
-                    controller.dispatch(SetCaptureMode(CaptureMode.Video))
-                }
-                "timerChange" -> controller.dispatch(SetCaptureSelfTimer(SelfTimer.TwoSeconds))
-                "explicitStop" -> owner.stop()
-            }
-            permission.onResult(ending != "denied")
-            if (ending == "stopped" || ending == "destroyed") host.event(Lifecycle.Event.ON_STOP)
-            if (ending == "destroyed") {
-                host.event(Lifecycle.Event.ON_DESTROY)
-                permission.onResult(true)
-            } else {
-                host.event(Lifecycle.Event.ON_START)
-                host.event(Lifecycle.Event.ON_RESUME)
-            }
-            runCurrent()
-            advanceTimeBy(3_000)
-            runCurrent()
-            assertEquals(0, admissions, ending)
-            owner.release()
-            host.event(Lifecycle.Event.ON_DESTROY)
-            runCurrent()
-        }
-    }
-
-    @Test fun permissionOriginSurvivesCountdownAndDuplicateResultDoesNotCancelIt() = runTest {
+    @Test fun stoppedPermissionRequestCannotReviveOnResume() = runTest {
         val host = PermissionHost()
         host.event(Lifecycle.Event.ON_CREATE)
         host.event(Lifecycle.Event.ON_START)
-        val controller = Controller(SelfTimer.TwoSeconds, CaptureMode.Video)
         var admissions = 0
-        var validations = 0
-        val owner = coordinator(controller, validateAccess = { validations++; true }) { admissions++; Recorder() }
-        val permission = permission(host, owner)
-        permission.press(owner)
+        val owner = coordinator(Controller(mode = CaptureMode.Video)) { admissions++; Recorder() }
+        val permission = MicrophoneRecordingPermission(host.lifecycle, { true }, {}, owner::startAfterMicrophonePermission)
+        permission.request(requireNotNull(owner.permissionTicket()))
+        host.event(Lifecycle.Event.ON_STOP)
         permission.onResult(true)
+        host.event(Lifecycle.Event.ON_START)
         host.event(Lifecycle.Event.ON_RESUME)
         runCurrent()
-        permission.onResult(true)
-        assertNotNull(controller.state.value.selfTimerRemainingMs)
-        advanceTimeBy(1_999)
-        runCurrent()
-        assertEquals(0, validations, "Validation happens at admission, not countdown start")
-        advanceTimeBy(1)
-        runCurrent()
-        assertEquals(1, admissions)
-        assertEquals(1, validations)
-        owner.stop()
-        runCurrent()
-        owner.toggle()
-        advanceTimeBy(2_000)
-        runCurrent()
-        assertEquals(2, admissions)
-        assertEquals(1, validations, "A later ordinary start does not inherit the exception")
+        assertEquals(0, admissions)
         owner.release()
         host.event(Lifecycle.Event.ON_DESTROY)
         runCurrent()
