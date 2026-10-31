@@ -175,7 +175,9 @@ inline void remosaicBlockCfa(uint16_t* raw, uint32_t w, uint32_t h, uint32_t n, 
                     std::lround(cfaFastAt(raw, means.data(), w, bw, bh, n, order, parity, x, y)), 0l, 65535l));
         return;
     }
-    std::vector<float> green(size_t(w) * h);
+    // Whole-DN codes (the GPU keeps pass A as 16-bit too), so half the RAM of
+    // a float plane at 50 MP: this is the largest allocation of the remosaic.
+    std::vector<uint16_t> green(size_t(w) * h);
     std::vector<float> diff(size_t(bw) * bh, 0.0f), blockGreen(size_t(bw) * bh, 0.0f);
     const auto parallelRows = [&](uint32_t rows, auto&& body) {
         threads = std::max(1u, std::min(threads, rows));
@@ -192,7 +194,7 @@ inline void remosaicBlockCfa(uint16_t* raw, uint32_t w, uint32_t h, uint32_t n, 
         for (uint32_t y = y0; y < y1; ++y)
             for (uint32_t x = 0; x < w; ++x)
                 green[size_t(y) * w + x] =
-                    float(std::clamp(std::lround(CfaRemosaicGreen::at(raw, w, h, n, order, x, y)), 0l, 65535l));
+                    uint16_t(std::clamp(std::lround(CfaRemosaicGreen::at(raw, w, h, n, order, x, y)), 0l, 65535l));
     });
     parallelRows(bh, [&](uint32_t b0, uint32_t b1) {
         for (uint32_t by = b0; by < b1; ++by)
@@ -202,8 +204,8 @@ inline void remosaicBlockCfa(uint16_t* raw, uint32_t w, uint32_t h, uint32_t n, 
                 uint32_t count = 0;
                 for (uint32_t y = by * n; y < std::min(h, by * n + n); ++y)
                     for (uint32_t x = bx * n; x < std::min(w, bx * n + n); ++x, ++count) {
-                        sum += float(raw[size_t(y) * w + x]) - green[size_t(y) * w + x];
-                        greenSum += green[size_t(y) * w + x];
+                        sum += float(raw[size_t(y) * w + x]) - float(green[size_t(y) * w + x]);
+                        greenSum += float(green[size_t(y) * w + x]);
                     }
                 diff[size_t(by) * bw + bx] = count ? sum / float(count) : 0.0f;
                 blockGreen[size_t(by) * bw + bx] = count ? greenSum / float(count) : 0.0f;
@@ -222,8 +224,8 @@ inline void remosaicBlockCfa(uint16_t* raw, uint32_t w, uint32_t h, uint32_t n, 
                     uint32_t count = 0;
                     for (uint32_t y = sy * 2; y < std::min(h, sy * 2 + 2); ++y)
                         for (uint32_t x = sx * 2; x < std::min(w, sx * 2 + 2); ++x, ++count) {
-                            d += float(raw[size_t(y) * w + x]) - green[size_t(y) * w + x];
-                            g += green[size_t(y) * w + x];
+                            d += float(raw[size_t(y) * w + x]) - float(green[size_t(y) * w + x]);
+                            g += float(green[size_t(y) * w + x]);
                         }
                     subDiff[size_t(sy) * sw + sx] = d / float(count);
                     subGreen[size_t(sy) * sw + sx] = g / float(count);
@@ -282,16 +284,17 @@ inline void remosaicBlockCfa(uint16_t* raw, uint32_t w, uint32_t h, uint32_t n, 
                 const size_t i = size_t(y) * w + x;
                 const uint32_t want = cfaChannel(order, x, y);
                 float v;
+                const float greenHere = float(green[i]);
                 if (want == 1u) {
-                    v = green[i];
+                    v = greenHere;
                 } else if (cfaChannel(order, x / n, y / n) == want) {
                     continue;  // own site: raw sample stays
                 } else {
                     if (quality == CfaRemosaicQuality::High) {
-                        v = green[i] + highDiff(want, x, y, green[i]);
+                        v = greenHere + highDiff(want, x, y, greenHere);
                     } else {
                         const auto t = cfaBlockTap(n, bw, bh, parity[want][0], parity[want][1], x, y);
-                        v = green[i] + cfaBlendDiff(t, green[i], [&](int32_t bx, int32_t by) {
+                        v = greenHere + cfaBlendDiff(t, greenHere, [&](int32_t bx, int32_t by) {
                                 const size_t b = size_t(by) * bw + size_t(bx);
                                 return std::pair{diff[b], blockGreen[b]};
                             });
