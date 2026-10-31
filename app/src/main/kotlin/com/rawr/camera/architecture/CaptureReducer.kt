@@ -77,12 +77,7 @@ object CaptureReducer {
                 state.copy(
                     captureMode = action.mode,
                     selfTimerRemainingMs = null,
-                    selfTimerRunId =
-                        if (state.selfTimerRemainingMs == null) {
-                            state.selfTimerRunId
-                        } else {
-                            state.selfTimerRunId + 1L
-                        }
+                    selfTimerRunId = state.selfTimerRunId + 1L
                 )
             }
         }

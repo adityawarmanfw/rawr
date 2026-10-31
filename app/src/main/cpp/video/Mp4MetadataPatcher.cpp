@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "video/HevcLogMetadata.h"
+#include "video/MovieMetadata.h"
 
 namespace rawrcam::video {
 namespace {
@@ -98,16 +99,6 @@ Bytes quickTimeString(const char* type, const std::string& value) {
 }
 
 // mdta key name and the contents of its ilst item (normally one data box).
-using MdtaEntries = std::vector<std::pair<std::string, Bytes>>;
-
-Bytes utf8Data(const std::string& value) {
-    Bytes data;
-    put32(data, 1);  // well-known type: UTF-8
-    put32(data, 0);  // default locale
-    data.insert(data.end(), value.begin(), value.end());
-    return box("data", data);
-}
-
 // Reads an existing moov/meta box written with an mdta handler (as
 // MPEG4Writer does for com.android.version). Returns false for any other
 // meta layout, which is then left untouched.
@@ -151,37 +142,6 @@ bool readMdta(const Bytes& file, const Box& meta, MdtaEntries& out) {
                          Bytes(file.begin() + long(item.offset + 8), file.begin() + long(item.offset + item.size)));
     }
     return true;
-}
-
-Bytes mdtaMeta(const MdtaEntries& entries) {
-    Bytes hdlr;
-    put32(hdlr, 0);  // version + flags
-    put32(hdlr, 0);  // pre_defined
-    putType(hdlr, "mdta");
-    put32(hdlr, 0);
-    put32(hdlr, 0);
-    put32(hdlr, 0);
-    hdlr.push_back(0);  // empty name
-    Bytes keys;
-    put32(keys, 0);
-    put32(keys, uint32_t(entries.size()));
-    Bytes ilst;
-    uint32_t index = 1;
-    for (const auto& [key, value] : entries) {
-        put32(keys, uint32_t(8 + key.size()));
-        putType(keys, "mdta");
-        keys.insert(keys.end(), key.begin(), key.end());
-        Bytes wrapped;
-        put32(wrapped, uint32_t(8 + value.size()));
-        put32(wrapped, index++);
-        putBytes(wrapped, value);
-        putBytes(ilst, wrapped);
-    }
-    Bytes meta;
-    putBytes(meta, box("hdlr", hdlr));
-    putBytes(meta, box("keys", keys));
-    putBytes(meta, box("ilst", ilst));
-    return box("meta", meta);
 }
 
 // Rebuild only the HEVC sample-description ancestors. Media data and its

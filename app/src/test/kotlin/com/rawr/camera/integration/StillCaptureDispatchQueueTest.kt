@@ -5,6 +5,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -18,16 +19,26 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 @OptIn(ExperimentalCoroutinesApi::class)
 class StillCaptureDispatchQueueTest {
     @Test
-    fun eightPressesRetainOrderAndTheirOutputFormat() = runTest {
-        var admitted = 0
+    fun foregroundOwnershipRejectsObsoleteRequestsWithoutReorderingAdmittedOnes() = runTest {
+        var token = Any()
+        val admitted = mutableListOf<CaptureOutputFormat>()
         val acquired = mutableListOf<CaptureOutputFormat>()
-        val queue = StillCaptureDispatchQueue(backgroundScope, { admitted++ }, acquired::add)
-        val presses = List(8) { CaptureOutputFormat.entries[it % 3] }
-        presses.forEach(queue::enqueue)
-        assertEquals(8, admitted)
+        var rejected = 0
+        val queue = StillCaptureDispatchQueue(backgroundScope, admitted::add, acquired::add,
+            onRejected = { _, _ -> rejected++ })
+        val formats = List(8) { CaptureOutputFormat.entries[it % 3] }
+        for (format in formats) {
+            val pressed = token
+            assertTrue(queue.enqueue(format) { token === pressed }, "Admission is synchronous at the press")
+            val departed = token
+            token = Any()
+            assertFalse(queue.enqueue(format) { token === departed })
+        }
+        assertEquals(8, rejected)
+        assertEquals(formats, admitted)
         assertTrue(acquired.isEmpty(), "Shutter caller must not execute provider/native work")
         runCurrent()
-        assertEquals(presses, acquired)
+        assertEquals(formats, acquired)
         var published = 0
         queue.poll { published = acquired.size }
         assertEquals(8, published)
@@ -45,7 +56,7 @@ class StillCaptureDispatchQueueTest {
                 entered.countDown()
                 check(finishPreparation.await(5, TimeUnit.SECONDS))
                 captured.countDown()
-            })
+            }, { _, _ -> })
             queue.enqueue(CaptureOutputFormat.DngAndJpeg)
             assertTrue(entered.await(5, TimeUnit.SECONDS))
             repeat(7) { queue.enqueue(CaptureOutputFormat.DngAndJpeg) }

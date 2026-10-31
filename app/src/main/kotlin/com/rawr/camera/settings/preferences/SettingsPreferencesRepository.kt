@@ -1253,6 +1253,8 @@ object SettingsPreferencesStore {
         return com.rawr.camera.settings.architecture.SettingsEditor(
             defaults, repository.values, repository::save, scope,
             onChanged = { values ->
+                // Tagging OFF must gate new admissions before persistence or flow delivery.
+                com.rawr.camera.location.CameraLocation.get(context).setEnabled(values.locationTagging)
                 // Metadata must exist before backend consumers see a newly imported profile.
                 lutFiles.changed(values)
                 if (gpuEnabled != values.customGpuDriverEnabled) {

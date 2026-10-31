@@ -1,5 +1,23 @@
 # Renderer editing pipeline
 
+## Source Location
+
+JPEG development and DNG recompression/downscaling preserve supported GPS from
+one coherent source directory, independently of live Location Tagging. They never
+use the phone's current location. Supported fields are coordinates/references,
+datum, altitude/reference, UTC fix date/time, horizontal error, processing method,
+speed/units and travel track/reference. Source rational pairs and EXIF version
+context are retained; legacy altitude is not guessed or converted. Ambiguous
+records are omitted, and malformed optional groups do not prevent image processing.
+
+JPEG EXIF must fit the 65,533-byte APP1 payload limit. Oversized metadata fails
+the JPEG output; optional text and GPS are not silently trimmed to make it fit.
+
+Recent Rawr DNGs are the primary workflow. No extra media-location permission or
+preservation control is added. External providers can supply redacted bytes, which
+Rawr cannot restore. Owned-media access and actual phone exports still require
+device acceptance testing; host tests cover the native preservation contract.
+
 ## Recipes and resolution
 
 A new imported DNG starts with a snapshot of the user's photo settings and look.

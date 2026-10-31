@@ -196,6 +196,7 @@ void TinyDngWriteParams::rebind() noexcept {
     image.cfa = &cfa;
     image.raw = &raw;
     image.exif = &exif;
+    image.gps = gps ? &*gps : nullptr;
     if (!opcodes.empty()) {
         for (size_t i = 0; i < opcodes.size() && i < opcodeParams.size(); ++i) {
             opcodes[i].params = opcodeParams[i].data();
@@ -431,6 +432,11 @@ std::optional<TinyDngWriteParams> makeTinyDngWriteParams(const rawrcam::imaging:
                                        nullptr);
 
     fillDngExif(p, frame, captureContext);
+    p.gps = captureContext.gps;
+    if (p.gps) {
+        p.exif.has_exif_version = 1;
+        std::memcpy(p.exif.exif_version, "0300", 4);
+    }
 
     p.privateData = buildDngProvenance(frame, captureContext, gm->mode);
     raw.rawr_private_data = reinterpret_cast<char*>(p.privateData.data());

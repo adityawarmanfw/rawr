@@ -23,6 +23,7 @@ int main(int argc, char** argv) {
         assert(legacy.tone.renderTransform == tonemap::RenderTransform::Existing);
         assert(legacy.tone.adaptiveTone.liftEv == 0.0f);
         assert(!legacy.dng.outputFd.valid() && !legacy.jpeg.output.outputFd.valid());
+        assert(!legacy.dng.gps && !legacy.mergedDng.gps && !legacy.jpeg.output.gps);
     }
     std::string directory = (std::filesystem::temp_directory_path() / "rawr-capture-job-XXXXXX").string();
     assert(mkdtemp(directory.data()));
@@ -49,6 +50,9 @@ int main(int argc, char** argv) {
     j.dng.outputFd = rawrcam::encoding::OutputFd(::open("/dev/null", O_WRONLY));
     assert(j.dng.outputFd.valid());
     j.dng.displayName = "capture.dng";
+    j.dng.gps = rawrcam::metadata::makeGps(0, 0, -5432.1, std::nullopt, 1793059200123LL);
+    j.mergedDng.gps = j.dng.gps;
+    j.jpeg.output.gps = j.dng.gps;
     j.dng.deviceModel = "V2562";
     j.dng.deviceDisplayModel = "X300 Ultra";
     j.mergedDng.deviceDisplayModel = "X300 Ultra";
@@ -85,6 +89,11 @@ int main(int argc, char** argv) {
     auto path = jobPath(root, j.dng.displayName);
     save(path, j);
     auto restored = load(path);
+    assert(restored.dng.gps && restored.mergedDng.gps && restored.jpeg.output.gps);
+    assert(restored.dng.gps->altitude[0] == j.dng.gps->altitude[0]);
+    assert(restored.mergedDng.gps->altitude[0] == j.dng.gps->altitude[0]);
+    assert(restored.jpeg.output.gps->altitude[0] == j.dng.gps->altitude[0]);
+    assert(!restored.jpeg.output.gps->has_horizontal_error);
     // Profile-aware jobs written before adaptive tone, and before AgX, used
     // the same POD prefix. Recreate those on-disk layouts and ensure the newer
     // fields keep their defaults.
@@ -291,6 +300,8 @@ int main(int argc, char** argv) {
     assert(!std::filesystem::exists(pendingPath) && std::filesystem::exists(directPath));
     uint64_t directOffset = 0;
     const auto direct = loadHeader(directPath, directOffset);
+    assert(direct.dng.gps && direct.mergedDng.gps && direct.jpeg.output.gps);
+    assert(direct.dng.gps->altitude[0] == j.dng.gps->altitude[0]);
     assert(directOffset == 24 && direct.referenceIndex == j.referenceIndex);
     assert(direct.dng.deviceDisplayModel == "X300 Ultra");
     assert(direct.dng.resolvedRecipe == j.dng.resolvedRecipe);
@@ -336,6 +347,27 @@ int main(int argc, char** argv) {
             constexpr size_t distortionBytes = sizeof(uint32_t) + sizeof(bool);  // absent optional
             constexpr size_t dcpBytes = sizeof(uint32_t) + sizeof(uint64_t);     // empty string
             size_t fieldEnd = acquisition ? bytes.size() - footerBytes : offset;
+            const size_t gpsBytes = sizeof(uint32_t) + sizeof(bool) + sizeof(uint32_t) + sizeof(tinydng_gps);
+            bytes.erase(fieldEnd - gpsBytes, gpsBytes);
+            fieldEnd -= gpsBytes;
+            {
+                auto v17 = bytes;
+                const uint64_t version = acquisition ? 0x524157524a4f4212ull : 0x524157524a4f4211ull;
+                std::memcpy(v17.data() + sizeof(uint32_t), &version, sizeof(version));
+                const auto legacyPath = jobPath(root, "v17-no-gps.dng");
+                {
+                    std::ofstream output(legacyPath, std::ios::binary);
+                    output.write(v17.data(), v17.size());
+                }
+                const auto legacy = loadHeader(legacyPath, offset);
+                assert(!legacy.dng.gps && !legacy.mergedDng.gps && !legacy.jpeg.output.gps);
+                size_t count = 0;
+                (void)load(legacyPath, [&](CaptureJob&, size_t, const std::vector<uint8_t>& pixels) {
+                    assert(pixels == j.frame.raw16);
+                    ++count;
+                });
+                assert(count == 2);
+            }
             constexpr size_t mirrorBytes = 2 * sizeof(uint32_t);
             bytes.erase(fieldEnd - mirrorBytes, mirrorBytes);
             fieldEnd -= mirrorBytes;

@@ -3,6 +3,7 @@ package com.rawr.camera.video
 import android.app.Application
 import com.rawr.camera.architecture.CaptureScreenController
 import com.rawr.camera.integration.RawPreviewCoordinator
+import com.rawr.camera.location.CaptureGps
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -21,7 +22,7 @@ internal class CaptureRecordingBackend(
     private val preview: RawPreviewCoordinator,
     private val settingsSnapshot: () -> com.rawr.camera.settings.model.SettingsValues
 ) {
-    suspend fun start(options: RecordingOptions): VideoRecording {
+    suspend fun start(options: RecordingOptions, gps: CaptureGps?): VideoRecording {
         val captureSnapshot = controller.state.value
         val selectedMode = captureSnapshot.videoResolution
         val selectedFps = captureSnapshot.videoFps
@@ -63,6 +64,7 @@ internal class CaptureRecordingBackend(
                     "LOG requires hardware HEVC 10-bit at ${frameSize.width}×${frameSize.height} / $selectedFps fps"
                 }
                 recorder.start(NativeVideoRecorder.Settings(
+                    gps = gps,
                     saveLocationId = imageSettings.saveLocationId,
                     fps = selectedFps, bitrate = bitrate, intraFrames = intraFrames,
                     width = frameSize.width, height = frameSize.height, mode = selectedMode.label,

@@ -1,8 +1,12 @@
 #include <cstdio>
 #include <cstring>
 #include <vector>
+#include <filesystem>
+#include <cstdlib>
+#include <unistd.h>
 
 #include "convert/DngConverter.h"
+#include "metadata/GpsMetadata.h"
 
 #define CHECK(cond)                                                       \
     do {                                                                  \
@@ -25,7 +29,64 @@ static std::vector<uint8_t> gainMap(uint32_t top, uint32_t left, uint32_t bottom
     return p;
 }
 
+static int gpsConversion() {
+    auto directory = (std::filesystem::temp_directory_path() / "rawr-gps-convert-XXXXXX").string();
+    CHECK(mkdtemp(directory.data()));
+    const auto sourcePath = directory + "/source.dng";
+    tinydng_error error{};
+    auto* context = tinydng_context_create(nullptr, &error);
+    CHECK(context);
+    tinydng_raw_info raw{};
+    raw.white_level_present = 1;
+    raw.white_level[0] = 4095;
+    tinydng_cfa cfa{};
+    cfa.present = 1;
+    cfa.pattern_dim[0] = cfa.pattern_dim[1] = 2;
+    cfa.pattern_size = 4;
+    cfa.pattern[0] = 0; cfa.pattern[1] = cfa.pattern[2] = 1; cfa.pattern[3] = 2;
+    tinydng_exif exif{};
+    exif.has_exif_version = 1;
+    std::memcpy(exif.exif_version, "0300", 4);
+    auto gps = rawrcam::metadata::makeGps(0, 0, -12345.0, {}, 1793059200123LL);
+    std::vector<uint16_t> pixels(64 * 64, 1000);
+    tinydng_write_image image{};
+    image.width = image.height = 64;
+    image.bits_per_sample = 16;
+    image.samples_per_pixel = 1;
+    image.data = reinterpret_cast<const uint8_t*>(pixels.data());
+    image.data_size = pixels.size() * sizeof(uint16_t);
+    image.cfa = &cfa;
+    image.raw = &raw;
+    image.exif = &exif;
+    image.gps = &*gps;
+    tinydng_write_options options{};
+    options.as_dng = 1;
+    for (int sourceProfile = 0; sourceProfile < 3; ++sourceProfile) {
+        image.exif = sourceProfile == 1 ? nullptr : &exif;
+        gps->altitude_ref = sourceProfile == 1 ? 2 : 1;
+        const char* expectedVersion = sourceProfile == 2 ? "0232" : "0300";
+        std::memcpy(exif.exif_version, expectedVersion, 4);
+        CHECK(tinydng_write_file(context, sourcePath.c_str(), &image, &options, &error) == TINYDNG_OK);
+        for (int mode = 0; mode < 4; ++mode) {
+            const auto outputPath = directory + "/output" + std::to_string(mode) + ".dng";
+            const auto result = mode == 0 ? rawrcam::convert::recompressDng(sourcePath, outputPath) :
+                rawrcam::convert::downscaleDng(sourcePath, outputPath, static_cast<rawrcam::convert::DngDownscale>(mode - 1));
+            CHECK(result.ok);
+            tinydng_document* document = nullptr;
+            CHECK(tinydng_open_file(context, outputPath.c_str(), nullptr, &document, &error) == TINYDNG_OK);
+            const auto* loaded = tinydng_image_get(document, 0);
+            CHECK(loaded && rawrcam::metadata::sameGpsRecord(loaded->gps, *gps));
+            CHECK(loaded->exif.has_exif_version && std::memcmp(loaded->exif.exif_version, expectedVersion, 4) == 0);
+            tinydng_document_destroy(context, document);
+        }
+    }
+    tinydng_context_destroy(context);
+    std::filesystem::remove_all(directory);
+    return 0;
+}
+
 int main() {
+    CHECK(gpsConversion() == 0);
     using rawrcam::convert::BinnedRaw;
     tinydng_raw_info raw{};
     raw.black_level_present = 1;

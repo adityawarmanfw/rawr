@@ -10,6 +10,19 @@ MIT; see LICENSE.
 Local changes: retain fractional black levels, default crop, and bounded DNGPrivateData
 in the metadata model. The legacy integer black levels remain ABI-source compatible.
 
+GPS extension: bounded `tinydng_gps` records retain supported unsigned rational
+pairs, references and optional presence. A non-recursive GPS-directory reader
+caps entries and payload lengths. The writer stages GPS in its existing reserved
+header, with a fixed 512-byte value buffer; no pixel rewrite or additional flush.
+GPS output uses version 2.4.0.0. Method identifiers/padding and ASCII bytes are
+validated; malformed optional count overflow does not discard valid coordinates.
+Unknown-type GPS pointers participate in invalid/duplicate-directory detection.
+ExifVersion input requires UNDEFINED/4 before its bytes can supply version context.
+ASCII staging copies directly into owned writer storage without a redundant heap
+temporary.
+Coordinate-rational validation is shared with the application metadata model
+through a C-compatible helper; validation remains at both input boundaries.
+
 Local writer extensions (Rawr full-DNG parity, same MIT file): `tinydng_write.c`
 additionally emits ActiveArea/DefaultCrop/DefaultScale, UniqueCameraModel,
 rational BlackLevel, BackwardVersion, dual-illuminant color + forward +

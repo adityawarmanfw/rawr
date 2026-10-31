@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -16,6 +17,7 @@ struct TinyDngWriteParams {
     tinydng_cfa cfa{};
     tinydng_raw_info raw{};
     tinydng_exif exif{};
+    std::optional<tinydng_gps> gps;
     tinydng_write_image image{};
     tinydng_write_options options{};
     tinydng_tiling tiling{};

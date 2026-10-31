@@ -88,7 +88,7 @@ class PersistentSettingsController(
             is SetNumericValue, is ConfirmReset -> reduceToneSettings(state, action, defaults)
 
             is RestorePersistentSettings, is ApplySettingsCapabilities, is ReportOisApplication,
-            is ReportAntiFlickerApplication, is ReportLocationTaggingApplication,
+            is ReportAntiFlickerApplication,
             is ReportImageToneApplication -> reduceRuntimeSettings(state, action, defaults)
 
             is SetSaveLocationTree, is SetPipelineDiagnosticsEnabled, is SetExperimentalZeroCopyEnabled,

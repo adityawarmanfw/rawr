@@ -48,10 +48,17 @@ class MainActivity : ComponentActivity() {
     private var diagnosticTargetCameraId: String? = null
     private var autoVideoSeconds = 0
 
-    private val microphonePermissionLauncher =
+    private val microphonePermissionLauncher: androidx.activity.result.ActivityResultLauncher<String> =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            if (granted && started) toggleVideoRecording()
+            microphoneRecordingPermission.onResult(granted)
         }
+    private val microphoneRecordingPermission: com.rawr.camera.video.MicrophoneRecordingPermission =
+        com.rawr.camera.video.MicrophoneRecordingPermission(
+        lifecycle,
+        { checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED },
+        { microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO) },
+        { ticket -> captureViewModel.recording.startAfterMicrophonePermission(ticket) }
+    )
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -340,7 +347,18 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        captureViewModel.foreground.resume(this)
+    }
+
+    override fun onPause() {
+        captureViewModel.foreground.pause(this)
+        super.onPause()
+    }
+
     override fun onStop() {
+        captureViewModel.foreground.pause(this)
         started = false
         startGeneration++
         captureViewModel.stopPreviewAfterRecording()
@@ -375,7 +393,7 @@ class MainActivity : ComponentActivity() {
         ) {
             captureViewModel.recording.toggle()
         } else {
-            microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            captureViewModel.recording.permissionTicket()?.let(microphoneRecordingPermission::request)
         }
     }
 

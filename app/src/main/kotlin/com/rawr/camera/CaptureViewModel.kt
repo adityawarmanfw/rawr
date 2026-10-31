@@ -65,6 +65,8 @@ class CaptureViewModel(application: Application) : AndroidViewModel(application)
     private val settingsEditor = SettingsPreferencesStore.editor(application, settingsDefaults)
 
     private val latestSettings: SettingsValues get() = settingsEditor.state.value
+    val cameraLocation = com.rawr.camera.location.CameraLocation.get(application)
+    val foreground = com.rawr.camera.integration.CaptureForeground(cameraLocation::setForeground)
     fun videoImageSettings(): com.rawr.camera.video.VideoImageSettings = latestSettings.toVideoImageSettings()
     fun videoEncoderConfig(): com.rawr.camera.settings.model.VideoEncoderConfig = latestSettings.videoEncoder.sanitized()
     /** Microphone setup for the video-mode meter; follows Settings edits. */
@@ -103,13 +105,15 @@ class CaptureViewModel(application: Application) : AndroidViewModel(application)
             preview = previewCoordinator,
             settings = { latestSettings },
             onJpegPublished = ::onJpegPublished,
-            onDngPublished = ::refreshLatestGalleryImage
+            onDngPublished = ::refreshLatestGalleryImage,
+            gpsSnapshot = cameraLocation::snapshot
         )
     val controller: CaptureScreenController =
         NativeCaptureScreenController(
             previewCoordinator,
             onCaptureQueued = stillCaptureCoordinator::enqueueCapture,
             requestStillCapture = stillCaptureCoordinator::capture,
+            foregroundToken = foreground::token,
             pollStillCompletion = stillCaptureCoordinator::pollCompletion,
             onToneScrubbed = { parameter, value -> persistQuickTone(parameter, value) },
             onRenderExposureScrubbed = ::persistRenderExposure,
@@ -143,8 +147,11 @@ class CaptureViewModel(application: Application) : AndroidViewModel(application)
     )
     val recording = com.rawr.camera.video.RecordingCoordinator(
         controller = controller,
-        startRecorder = { recordingBackend.start(recordingOptions) },
+        startRecorder = { gps -> recordingBackend.start(recordingOptions, gps) },
         clockNs = android.os.SystemClock::elapsedRealtimeNanos,
+        foregroundToken = foreground::token,
+        validateAccess = cameraLocation::validateAccess,
+        admitGps = { if (latestSettings.locationTagging) cameraLocation.snapshot() else null },
         onSaved = { recorder ->
             if (recordingOptions.inspectOutput) {
                 recordingOptions = recordingOptions.copy(inspectOutput = false)

@@ -11,7 +11,8 @@ import kotlinx.coroutines.sync.withLock
 internal class StillCaptureDispatchQueue(
     scope: CoroutineScope,
     private val onQueued: (CaptureOutputFormat) -> Unit,
-    private val capture: (CaptureOutputFormat) -> Unit
+    private val capture: (CaptureOutputFormat) -> Unit,
+    private val onRejected: (CaptureOutputFormat, RuntimeException?) -> Unit
 ) {
     private val requests = Channel<CaptureOutputFormat>(Channel.UNLIMITED)
     private val mutex = Mutex()
@@ -22,10 +23,21 @@ internal class StillCaptureDispatchQueue(
         }
     }
 
-    fun enqueue(format: CaptureOutputFormat) {
-        // Admission runs while the originating activity is still foreground.
-        onQueued(format)
-        check(requests.trySend(format).isSuccess)
+    /** Admits synchronously in press order when [owned] still holds; returns whether the request was queued. */
+    @Synchronized
+    fun enqueue(format: CaptureOutputFormat, owned: () -> Boolean = { true }): Boolean {
+        try {
+            if (!owned()) {
+                onRejected(format, null)
+                return false
+            }
+            onQueued(format)
+            check(requests.trySend(format).isSuccess)
+            return true
+        } catch (error: RuntimeException) {
+            onRejected(format, error)
+            return false
+        }
     }
 
     suspend fun poll(completion: () -> Unit) {

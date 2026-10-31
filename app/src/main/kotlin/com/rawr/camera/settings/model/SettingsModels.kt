@@ -1300,7 +1300,6 @@ data class SettingApplicationState<T>(
 data class SettingsApplicationState(
     val ois: SettingApplicationState<Boolean> = SettingApplicationState(),
     val antiFlicker: SettingApplicationState<AntiFlicker> = SettingApplicationState(),
-    val locationTagging: SettingApplicationState<Boolean> = SettingApplicationState(),
     val imageTone: SettingApplicationState<ImageToneState> = SettingApplicationState()
 )
 

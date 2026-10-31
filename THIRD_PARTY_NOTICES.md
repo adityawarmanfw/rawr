@@ -30,6 +30,7 @@ of this file. The GNU GPL v3 text is the repository `LICENSE`.
 | AndroidX, Jetpack Compose, Media3 | Gradle dependencies | https://developer.android.com/jetpack | Apache-2.0 |
 | Kotlin standard library, kotlinx.coroutines | Gradle dependencies | https://kotlinlang.org | Apache-2.0 |
 | Reorderable (Compose drag-to-reorder) | Gradle dependency | https://github.com/Calvin-LL/Reorderable | Apache-2.0 |
+| PhotonCamera (location-fix selection policy: accuracy-first candidate choice, freshness and refresh thresholds, provider tiers; reimplemented in Kotlin) | `app/src/main/kotlin/com/rawr/camera/location` (`GpsSnapshotStore.kt`, `LocationPolicy.kt`) | https://github.com/bjzhou/PhotonCamera | Apache-2.0 |
 
 Vendored full license texts in this repository:
 
@@ -75,6 +76,8 @@ Legal notices screen: `LICENSE`, `NOTICE`, `THIRD_PARTY_NOTICES.md`,
 - **AndroidX, Jetpack Compose, Media3** — Copyright (c) Google LLC. Apache-2.0.
 - **Kotlin standard library, kotlinx.coroutines** — Copyright (c) JetBrains
   s.r.o. and contributors. Apache-2.0.
+- **PhotonCamera** — Copyright (c) the PhotonCamera authors (bjzhou and
+  contributors). Apache-2.0.
 
 ## 3. Validation tooling (in-repo, not linked into the app)
 

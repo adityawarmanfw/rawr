@@ -112,11 +112,6 @@ object SettingsCatalog {
                                     values.antiFlicker,
                                     SettingApplicationStatus.Applied
                                 ),
-                            locationTagging =
-                                SettingApplicationState(
-                                    values.locationTagging,
-                                    SettingApplicationStatus.Applied
-                                ),
                             imageTone = SettingApplicationState(
                                 values.imageTone,
                                 SettingApplicationStatus.Applied

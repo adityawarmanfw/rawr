@@ -183,6 +183,63 @@ typedef struct tinydng_blob {
   uint8_t present;
 } tinydng_blob;
 
+typedef struct tinydng_gps {
+  uint8_t version[4];
+  uint8_t has_version;
+  uint8_t has_coordinates;
+  char latitude_ref;
+  char longitude_ref;
+  uint32_t latitude[3][2];
+  uint32_t longitude[3][2];
+  uint8_t has_altitude;
+  uint8_t altitude_ref;
+  uint32_t altitude[2];
+  uint8_t has_time;
+  char datestamp[11];
+  uint32_t timestamp[3][2];
+  char map_datum[64];
+  uint8_t has_horizontal_error;
+  uint32_t horizontal_error[2];
+  uint8_t processing_method[128];
+  uint32_t processing_method_size;
+  uint8_t has_speed;
+  char speed_ref;
+  uint32_t speed[2];
+  uint8_t has_track;
+  char track_ref;
+  uint32_t track[2];
+} tinydng_gps;
+
+static inline int tinydng_gps_coordinate_valid(const uint32_t value[3][2], double limit) {
+  double degrees, minutes, seconds;
+  if (!value || !value[0][1] || !value[1][1] || !value[2][1]) return 0;
+  degrees = (double)value[0][0] / value[0][1];
+  minutes = (double)value[1][0] / value[1][1];
+  seconds = (double)value[2][0] / value[2][1];
+  return minutes < 60 && seconds < 60 && degrees + minutes / 60 + seconds / 3600 <= limit;
+}
+
+static inline int tinydng_gps_method_valid(const tinydng_gps *gps) {
+  static const uint8_t ascii_code[8] = {'A', 'S', 'C', 'I', 'I', 0, 0, 0};
+  static const uint8_t jis_code[8] = {'J', 'I', 'S', 0, 0, 0, 0, 0};
+  static const uint8_t unicode_code[8] = {'U', 'N', 'I', 'C', 'O', 'D', 'E', 0};
+  uint32_t index;
+  int ascii = 1, jis = 1, unicode = 1, undefined = 1;
+  if (!gps || gps->processing_method_size < 8 || gps->processing_method_size > sizeof(gps->processing_method)) return 0;
+  for (index = 0; index < 8; ++index) {
+    ascii &= gps->processing_method[index] == ascii_code[index];
+    jis &= gps->processing_method[index] == jis_code[index];
+    unicode &= gps->processing_method[index] == unicode_code[index];
+    undefined &= gps->processing_method[index] == 0;
+  }
+  if (!ascii && !jis && !unicode && !undefined) return 0;
+  if (ascii) {
+    for (index = 8; index < gps->processing_method_size; ++index)
+      if (gps->processing_method[index] > 127) return 0;
+  }
+  return 1;
+}
+
 typedef struct tinydng_exif {
   char *make;
   char *model;
@@ -438,6 +495,8 @@ typedef struct tinydng_image_info {
 
   /* grouped metadata */
   tinydng_exif exif;
+  tinydng_gps gps;
+  uint8_t has_gps_directory;
   tinydng_cfa cfa;
   tinydng_raw_info raw;
   tinydng_field *custom_fields;
@@ -813,6 +872,7 @@ typedef struct tinydng_write_image {
   const tinydng_cfa *cfa;      /* optional */
   const tinydng_raw_info *raw; /* optional DNG metadata */
   const tinydng_exif *exif;    /* optional IFD0 descriptive + EXIF sub-IFD */
+  const tinydng_gps *gps;
 } tinydng_write_image;
 
 /* Serialize `img` to an in-memory TIFF/DNG buffer (allocated via ctx;

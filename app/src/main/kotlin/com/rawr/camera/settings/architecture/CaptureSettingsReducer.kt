@@ -11,9 +11,7 @@ internal fun reduceCaptureSettings(
     }
 
     is SetLocationTagging -> {
-        state.withValues(state.values.copy(locationTagging = action.enabled)).withApplication(
-            locationTagging = SettingApplicationState(action.enabled, SettingApplicationStatus.Applied)
-        )
+        state.withValues(state.values.copy(locationTagging = action.enabled))
     }
 
     is SetOisPreference -> {

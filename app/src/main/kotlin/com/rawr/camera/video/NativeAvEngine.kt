@@ -14,7 +14,7 @@ internal class NativeAvEngine {
                              audioPreset: Int, audioDeviceId: Int, audioGainDb: Float, audioLowCutHz: Int, audioPcmBits: Int,
                              bitDepth: Int, timestampPolicy: Int, deviceMake: String,
                              deviceModel: String, software: String, renderProfile: String,
-                             gamut: String, transfer: String, log: Boolean, indexPath: String): Long
+                             gamut: String, transfer: String, log: Boolean, indexPath: String, gps: DoubleArray?): Long
     /** Finishes an interrupted recording from its sample index; closes [fd]. Throws on failure. */
     external fun nativeRecover(fd: Int, indexPath: String, deviceMake: String, deviceModel: String,
                                software: String, renderProfile: String, gamut: String, transfer: String,

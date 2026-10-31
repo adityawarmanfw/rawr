@@ -1,4 +1,5 @@
 #include "DngSource.h"
+#include "metadata/GpsMetadata.h"
 
 #include <algorithm>
 #include <cmath>
@@ -129,6 +130,9 @@ DngSource::DngSource(const std::string& path) : rawCachePath_(path + ".raw16-v1"
         const auto* root = tinydng_image_get(document_, 0);
         captureExif_ = readSourceCaptureExif(p.exif, exif, p.raw.unique_camera_model ? p.raw.unique_camera_model
                                                                                        : root->raw.unique_camera_model);
+        const auto sourceGps = metadata::readSourceGps(p, root);
+        captureExif_.gps = sourceGps.gps;
+        captureExif_.gpsExifVersion = sourceGps.exifVersion;
         for (int i = 0; i < 4; ++i) {
             black[i] = p.raw.black_level_exact[i];
             if (!std::isfinite(black[i])) throw std::runtime_error("Invalid DNG black level");

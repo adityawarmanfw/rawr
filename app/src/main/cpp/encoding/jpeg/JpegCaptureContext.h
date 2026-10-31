@@ -7,6 +7,7 @@
 
 #include "color/UltraHdrParams.h"
 #include "encoding/OutputFd.h"
+#include "metadata/GpsMetadata.h"
 
 namespace rawrcam::encoding::jpeg {
 
@@ -33,6 +34,8 @@ struct JpegCaptureContext {
     std::string deviceMake;
     std::string deviceModel;
     std::string displayName;
+    std::optional<tinydng_gps> gps;
+    std::optional<std::array<uint8_t, 4>> sourceExifVersion;
     int quality = 98;
     ChromaSubsampling subsampling = ChromaSubsampling::Yuv420;
     rawrcam::color::UltraHdrParams ultraHdr;

@@ -15,7 +15,10 @@ class CaptureSelfTimerTest {
     private class Fixture(scope: TestScope, preference: SelfTimer = SelfTimer.ThreeSeconds) {
         val state = MutableStateFlow(CaptureUiState(NativeCapabilityProjection.pending(), selfTimer = preference))
         var captures = 0
-        val timer = CaptureSelfTimer(scope.backgroundScope, state, { state.update(it) }, { captures++ })
+        var foreground: Any? = Any()
+        val expiredTokens = mutableListOf<Any>()
+        val timer = CaptureSelfTimer(scope.backgroundScope, state, { state.update(it) },
+            { expiredTokens += it; captures++ }, { foreground })
 
         fun dispatch(action: PresentationCaptureAction) {
             state.update { CaptureReducer.reduce(it, action) }
@@ -112,6 +115,22 @@ class CaptureSelfTimerTest {
         runCurrent()
         assertEquals(0, f.captures)
         assertNull(f.state.value.selfTimerRemainingMs)
+    }
+
+    @Test
+    fun expiryCarriesThePressIdentityAndInactivePressesAreIgnored() = runTest {
+        val f = Fixture(this)
+        val pressed = requireNotNull(f.foreground)
+        f.timer.trigger()
+        runCurrent()
+        f.foreground = Any()
+        advanceTimeBy(3_000)
+        runCurrent()
+        assertSame(pressed, f.expiredTokens.single(), "Admission checks the countdown's original identity")
+        f.foreground = null
+        f.timer.trigger()
+        assertNull(f.state.value.selfTimerRemainingMs)
+        assertEquals(1, f.captures)
     }
 
     @Test
