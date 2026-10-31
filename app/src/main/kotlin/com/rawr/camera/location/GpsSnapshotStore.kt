@@ -47,7 +47,10 @@ internal data class LocationState(
     }
 }
 
-/** Photon-style single candidate: known accuracy first, then recency, then tolerated same-provider worsening. */
+/**
+ * Single candidate: known accuracy first, then recency, then tolerated same-provider worsening.
+ * Selection rule adapted from bjzhou/PhotonCamera (Apache-2.0), see THIRD_PARTY_NOTICES.md.
+ */
 internal fun acceptsObservation(current: Observation?, incoming: Observation, nowNanos: Long): Boolean {
     val incumbent = current?.takeIf { it.eligibleAt(nowNanos) } ?: return true
     val next = incoming.uncertainty
