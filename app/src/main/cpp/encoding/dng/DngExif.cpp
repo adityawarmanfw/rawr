@@ -41,12 +41,10 @@ std::string exifOffset(std::int16_t minutes) {
     return std::string(buf);
 }
 
-std::string exifSubseconds(std::uint32_t nanosecond) {
-    char buf[10]{};
-    std::snprintf(buf, sizeof(buf), "%09u", nanosecond);
-    std::string out(buf);
-    while (out.size() > 1 && out.back() == '0') out.pop_back();
-    return out;
+std::string exifSubseconds(std::uint32_t millisecond) {
+    char buf[16]{};
+    std::snprintf(buf, sizeof(buf), "%03u", millisecond);
+    return std::string(buf);
 }
 
 // Quantize a float to {round(v*1e6), 1e6} int32 pair (matches legacy writer).
@@ -177,18 +175,12 @@ void fillDngExif(TinyDngWriteParams& p, const rawrcam::imaging::RawSnapshot& fra
                                       unsigned(local.tm_hour), unsigned(local.tm_min), unsigned(local.tm_sec));
             p.dateOriginal = p.datetime;
             p.dateDigitized = p.datetime;
-            // Legacy writer emits OffsetTime* only when the offset is non-zero.
-            if (captureContext.utcOffsetMinutes) {
-                p.offsetTime = exifOffset(captureContext.utcOffsetMinutes);
-                p.offsetOrig = p.offsetTime;
-                p.offsetDig = p.offsetTime;
-            }
-            const uint32_t ns = uint32_t(captureContext.wallClockUnixMillis % 1000) * 1000000u;
-            if (ns) {
-                p.subsec = exifSubseconds(ns);
-                p.subsecOrig = p.subsec;
-                p.subsecDig = p.subsec;
-            }
+            p.offsetTime = exifOffset(captureContext.utcOffsetMinutes);
+            p.offsetOrig = p.offsetTime;
+            p.offsetDig = p.offsetTime;
+            p.subsec = exifSubseconds(uint32_t(captureContext.wallClockUnixMillis % 1000));
+            p.subsecOrig = p.subsec;
+            p.subsecDig = p.subsec;
         }
     }
     if (!ctx.availableFocalLengthsMm.empty()) {

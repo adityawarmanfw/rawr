@@ -300,7 +300,12 @@ int main() {
                                         : rawrcam::encoding::dng::DngCompression::Uncompressed;
         // The frame recipe is rendered upstream and embedded verbatim; empty is omitted.
         capture.frameRecipe = pass == 0 ? R"({"version":1,"frameMarker":1})" : "";
-        auto params = rawrcam::encoding::dng::makeTinyDngWriteParams(good, capture, &error);
+        auto timed = capture;
+        if (pass == 1) {
+            timed.wallClockUnixMillis -= timed.wallClockUnixMillis % 1000;
+            timed.utcOffsetMinutes = 0;
+        }
+        auto params = rawrcam::encoding::dng::makeTinyDngWriteParams(good, timed, &error);
         if (!params) {
             std::cerr << error << "\n";
             return 1;
@@ -379,6 +384,12 @@ int main() {
                   img->raw.rawr_private_data != nullptr &&
                   std::string(img->raw.rawr_private_data) == "Rawr tinydng provenance" &&
                   img->exif.make && std::string(img->exif.make) == "vivo";
+        if (img) {
+            for (const char* value : {img->exif.offset_time, img->exif.offset_time_original, img->exif.offset_time_digitized})
+                ok &= value && std::string(value) == (pass == 0 ? "+07:00" : "+00:00");
+            for (const char* value : {img->exif.subsec_time, img->exif.subsec_time_original, img->exif.subsec_time_digitized})
+                ok &= value && std::string(value) == (pass == 0 ? "123" : "000");
+        }
         if (ok) {
             tinydng_pixels px{};
             tinydng_decode_options dopts{};
