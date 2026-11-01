@@ -9,7 +9,7 @@
 
 using GpsFields = std::map<uint16_t, std::vector<uint8_t>>;
 
-static GpsFields gpsFields(const uint8_t* bytes, size_t size) {
+static GpsFields ifdFields(const uint8_t* bytes, size_t size, uint16_t pointerTag = 34853) {
     const bool bigEndian = bytes[0] == 'M';
     const auto number = [&](size_t offset, size_t length) {
         assert(offset <= size && length <= size - offset);
@@ -27,7 +27,7 @@ static GpsFields gpsFields(const uint8_t* bytes, size_t size) {
     size_t gpsOffset = 0;
     for (size_t index = 0; index < rootCount; ++index) {
         const size_t entry = root + countSize + index * entrySize;
-        if (number(entry, 2) == 34853) gpsOffset = number(entry + (bigTiff ? 12 : 8), inlineSize);
+        if (number(entry, 2) == pointerTag) gpsOffset = number(entry + (bigTiff ? 12 : 8), inlineSize);
     }
     GpsFields fields;
     if (!gpsOffset) return fields;
@@ -38,8 +38,8 @@ static GpsFields gpsFields(const uint8_t* bytes, size_t size) {
         const auto tag = uint16_t(number(entry, 2));
         const auto type = number(entry + 2, 2);
         const auto values = number(entry + 4, bigTiff ? 8 : 4);
-        assert(type == 1 || type == 2 || type == 5 || type == 7);
-        const size_t length = values * (type == 5 ? 8 : 1);
+        assert(type == 1 || type == 2 || type == 3 || type == 4 || type == 5 || type == 7);
+        const size_t length = values * (type == 5 ? 8 : type == 4 ? 4 : type == 3 ? 2 : 1);
         const size_t data = length > inlineSize ? number(entry + (bigTiff ? 12 : 8), inlineSize)
                                                : entry + (bigTiff ? 12 : 8);
         assert(data <= size && length <= size - data);
@@ -77,10 +77,44 @@ static void roundTrip(const std::optional<tinydng_gps>& gps) {
     jpegContext.gps = gps;
     const auto jpegExif = rawrcam::encoding::jpeg::buildExif(jpegContext, 2, 2);
     assert(jpegExif.size() > 14 && std::memcmp(jpegExif.data(), "Exif\0\0II", 8) == 0);
-    const auto jpegGps = gpsFields(jpegExif.data() + 6, jpegExif.size() - 6);
-    const auto tiffGps = gpsFields(bytes, size);
+    const auto jpegGps = ifdFields(jpegExif.data() + 6, jpegExif.size() - 6);
+    const auto tiffGps = ifdFields(bytes, size);
     assert(tiffGps == jpegGps);
     assert(tiffGps.empty() == !gps.has_value());
+    if (!gps) {
+        jpegContext.wallClockUnixMillis = 1'700'000'000'000;
+        auto read = [&] {
+            const auto data = rawrcam::encoding::jpeg::buildExif(jpegContext, 2, 2);
+            return ifdFields(data.data() + 6, data.size() - 6, 0x8769);
+        };
+        auto fields = read();
+        const auto text = [&](uint16_t tag) {
+            const auto& value = fields.at(tag);
+            return std::string(value.begin() + 2, value.end() - 1);
+        };
+        for (uint16_t tag : {0x9010, 0x9011, 0x9012}) assert(text(tag) == "+00:00");
+        for (uint16_t tag : {0x9290, 0x9291, 0x9292}) assert(text(tag) == "000");
+        jpegContext.dateTimeOriginal = "2026:05:01 12:34:56";
+        jpegContext.dateTimeDigitized = "2026:05:02 01:02:03";
+        jpegContext.offsetTimeOriginal = "+08:00";
+        jpegContext.subsecTimeOriginal = "042";
+        jpegContext.offsetTimeDigitized = "-03:30";
+        jpegContext.subsecTimeDigitized = "567";
+        fields = read();
+        assert(text(0x9003) == jpegContext.dateTimeOriginal && text(0x9004) == jpegContext.dateTimeDigitized);
+        assert(text(0x9010) == "+00:00" && text(0x9290) == "000");
+        assert(text(0x9011) == "+08:00" && text(0x9291) == "042");
+        assert(text(0x9012) == "-03:30" && text(0x9292) == "567");
+        jpegContext.offsetTimeOriginal.clear();
+        jpegContext.subsecTimeOriginal.clear();
+        jpegContext.offsetTimeDigitized.clear();
+        jpegContext.subsecTimeDigitized.clear();
+        fields = read();
+        for (uint16_t tag : {0x9011, 0x9012, 0x9291, 0x9292}) assert(!fields.contains(tag));
+        jpegContext.dateTimeOriginal.clear();
+        fields = read();
+        assert(text(0x9004) == jpegContext.dateTimeDigitized && !fields.contains(0x9012) && !fields.contains(0x9292));
+    }
     tinydng_document* document = nullptr;
     assert(tinydng_open_memory(context, bytes, size, nullptr, &document, &error) == TINYDNG_OK);
     const auto* loaded = tinydng_image_get(document, 0);

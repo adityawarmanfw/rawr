@@ -18,6 +18,19 @@ preservation control is added. External providers can supply redacted bytes, whi
 Rawr cannot restore. Owned-media access and actual phone exports still require
 device acceptance testing; host tests cover the native preservation contract.
 
+## Export time metadata
+
+JPEG exports retain recognized source original and digitized dates with each
+one's own offset and subsecond qualifiers; missing source qualifiers stay
+missing rather than borrowing the other group's values or the export offset.
+A known digitized date is retained even without an original date. DateTime and
+its qualifiers describe the export operation. The existing date fallbacks are
+unchanged: missing DateTimeOriginal uses export time, and missing digitized date
+uses the resulting original date. This does not establish source exposure time.
+Native camera JPEGs use the captured wall clock and offset for all three groups,
+including known UTC and zero millisecond fractions; no extra clock reads or
+capture/recovery schema changes are needed.
+
 ## Recipes and resolution
 
 A new imported DNG starts with a snapshot of the user's photo settings and look.

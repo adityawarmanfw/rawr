@@ -520,6 +520,8 @@ Java_com_rawr_camera_renderer_RendererNative_render(JNIEnv* e, jobject, jlong id
             c.dateTimeDigitized = source.dateTimeDigitized;
             c.offsetTimeOriginal = source.offsetTimeOriginal;
             c.subsecTimeOriginal = source.subsecTimeOriginal;
+            c.offsetTimeDigitized = source.offsetTimeDigitized;
+            c.subsecTimeDigitized = source.subsecTimeDigitized;
             // Stage timings: same attribution as still captures. Demosaic is
             // the renderer pre-work wall time (prepare + resample/warp/upload).
             const auto& completion = engine.lastCompletion();

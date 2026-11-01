@@ -192,10 +192,13 @@ std::vector<unsigned char> buildExif(const JpegCaptureContext& c, std::uint32_t 
     // A re-rendered DNG keeps its source capture time; DateTime stays the
     // render (file modification) time, qualified by OffsetTime.
     const bool sourceTime = !c.dateTimeOriginal.empty();
+    const bool sourceDigitized = !c.dateTimeDigitized.empty();
     const std::string original = sourceTime ? c.dateTimeOriginal : dateTime;
-    const std::string digitized = sourceTime && !c.dateTimeDigitized.empty() ? c.dateTimeDigitized : original;
+    const std::string digitized = sourceDigitized ? c.dateTimeDigitized : original;
     const std::string originalOffset = sourceTime ? c.offsetTimeOriginal : offset;
     const std::string originalSubsec = sourceTime ? c.subsecTimeOriginal : subsec;
+    const std::string digitizedOffset = sourceTime || sourceDigitized ? c.offsetTimeDigitized : offset;
+    const std::string digitizedSubsec = sourceTime || sourceDigitized ? c.subsecTimeDigitized : subsec;
     auto ascii = [](std::uint16_t tag, const std::string& s) {
         return IfdEntry{tag, 2, static_cast<std::uint32_t>(s.size() + 1), asciiData(s)};
     };
@@ -210,13 +213,14 @@ std::vector<unsigned char> buildExif(const JpegCaptureContext& c, std::uint32_t 
         c.gps ? std::array<uint8_t, 4>{'0', '3', '0', '0'} : std::array<uint8_t, 4>{'0', '2', '3', '2'});
     exif.push_back({0x9000, 7, 4, {version.begin(), version.end()}});
     exif.push_back({0x9101, 7, 4, {1, 2, 3, 0}});
-    if (!original.empty()) {
-        exif.push_back(ascii(0x9003, original));
-        exif.push_back(ascii(0x9004, digitized));
-        if (!originalOffset.empty()) exif.push_back(ascii(0x9011, originalOffset));
-    }
-    if (sourceTime && !dateTime.empty()) exif.push_back(ascii(0x9010, offset));
-    if (!originalSubsec.empty()) exif.push_back(ascii(0x9291, originalSubsec));
+    if (!original.empty()) exif.push_back(ascii(0x9003, original));
+    if (!digitized.empty()) exif.push_back(ascii(0x9004, digitized));
+    if (!dateTime.empty()) exif.push_back(ascii(0x9010, offset));
+    if (!original.empty() && !originalOffset.empty()) exif.push_back(ascii(0x9011, originalOffset));
+    if (!digitized.empty() && !digitizedOffset.empty()) exif.push_back(ascii(0x9012, digitizedOffset));
+    if (!dateTime.empty() && !subsec.empty()) exif.push_back(ascii(0x9290, subsec));
+    if (!original.empty() && !originalSubsec.empty()) exif.push_back(ascii(0x9291, originalSubsec));
+    if (!digitized.empty() && !digitizedSubsec.empty()) exif.push_back(ascii(0x9292, digitizedSubsec));
     if (c.focalLengthMm && *c.focalLengthMm > 0.0f)
         exif.push_back({0x920A, 5, 1, rationalData(*c.focalLengthMm, 10000u)});
     if (c.focalLength35mm && *c.focalLength35mm > 0) exif.push_back({0xA405, 3, 1, shortData(*c.focalLength35mm)});

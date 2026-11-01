@@ -60,6 +60,8 @@ struct JpegCaptureContext {
     std::string dateTimeDigitized;
     std::string offsetTimeOriginal;
     std::string subsecTimeOriginal;
+    std::string offsetTimeDigitized;
+    std::string subsecTimeDigitized;
 
     // Frozen public metadata. Keep implementation-specific algorithm names out of this report.
     std::string imageDescription;

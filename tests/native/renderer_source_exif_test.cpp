@@ -96,6 +96,8 @@ int main() {
         root.datetime_digitized = s("2026:05:01 12:34:57");
         root.offset_time_original = s("+08:00");
         root.subsec_time_original = s("042");
+        root.offset_time_digitized = s("-03:30");
+        root.subsec_time_digitized = s("567");
         const auto x = readSourceCaptureExif(image, &root, nullptr);
         check(x.make == "Xiaomi" && x.model == "23078PND5G", "root make/model");
         check(x.lensMake == "Xiaomi" && x.lensModel == "Main 23mm", "root lens");
@@ -109,6 +111,7 @@ int main() {
         check(x.dateTimeDigitized == "2026:05:01 12:34:57", "root datetime digitized");
         check(x.offsetTimeOriginal == "+08:00", "root offset");
         check(x.subsecTimeOriginal == "042", "root subsec");
+        check(x.offsetTimeDigitized == "-03:30" && x.subsecTimeDigitized == "567", "independent digitized qualifiers");
         const auto id = exportIdentity(x, "vivo", "X300 Ultra");
         check(id.make == "Xiaomi" && id.model == "23078PND5G", "source identity beats the exporter");
     }
@@ -127,9 +130,14 @@ int main() {
         root.exposure_time[0] = 1;
         root.exposure_time[1] = 50;
         root.has_exposure_time = 1;
+        image.datetime_digitized = s("2026:05:02 01:02:03");
+        image.offset_time_digitized = s("+00:00");
+        image.subsec_time_digitized = s("000");
         const auto x = readSourceCaptureExif(image, &root, "Unique Model");
         check(x.make == "Root Make" && x.model == "Image Model", "mixed make/model, trimmed");
         check(x.sensitivity == 100 && x.exposureTimeNs == 20'000'000, "mixed numeric fallback");
+        check(x.dateTimeOriginal.empty() && x.dateTimeDigitized == "2026:05:02 01:02:03" &&
+              x.offsetTimeDigitized == "+00:00" && x.subsecTimeDigitized == "000", "digitized group without original");
     }
 
     // FNumber beats APEX ApertureValue; APEX alone still converts.

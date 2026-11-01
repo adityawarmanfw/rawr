@@ -10,7 +10,9 @@ ctest --test-dir tmp/host-tests --output-on-failure
 ```
 
 DNG capture round trips check explicit UTC offsets and millisecond subseconds,
-including known zero values, in all three Exif date groups.
+including known zero values, in all three Exif date groups. The existing JPEG
+Exif serialization and renderer-source tests check native qualifiers, distinct
+source original/digitized groups and preservation of unknown source qualifiers.
 
 For memory checks, configure a separate build with `-DRAWR_SANITIZERS=ON`.
 Native libraries also retain their CMake test targets and reference fixtures;

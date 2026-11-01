@@ -28,6 +28,8 @@ struct SourceCaptureExif {
     std::string dateTimeDigitized;
     std::string offsetTimeOriginal;
     std::string subsecTimeOriginal;
+    std::string offsetTimeDigitized;
+    std::string subsecTimeDigitized;
 };
 
 // root may be null or alias image. uniqueCameraModel (DNG IFD0) stands in

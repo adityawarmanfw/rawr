@@ -115,11 +115,14 @@ SourceCaptureExif readSourceCaptureExif(const tinydng_exif& image, const tinydng
     out.exposureTimeNs = either<std::int64_t>(image, root, exposure);
     out.sensitivity = either<std::int32_t>(image, root, iso);
     out.dateTimeOriginal = dateTime(image.datetime_original, rootText(&tinydng_exif::datetime_original));
-    // The rest of the time group only qualifies an original capture time.
     if (!out.dateTimeOriginal.empty()) {
-        out.dateTimeDigitized = dateTime(image.datetime_digitized, rootText(&tinydng_exif::datetime_digitized));
         out.offsetTimeOriginal = offset(image.offset_time_original, rootText(&tinydng_exif::offset_time_original));
         out.subsecTimeOriginal = digits(image.subsec_time_original, rootText(&tinydng_exif::subsec_time_original));
+    }
+    out.dateTimeDigitized = dateTime(image.datetime_digitized, rootText(&tinydng_exif::datetime_digitized));
+    if (!out.dateTimeDigitized.empty()) {
+        out.offsetTimeDigitized = offset(image.offset_time_digitized, rootText(&tinydng_exif::offset_time_digitized));
+        out.subsecTimeDigitized = digits(image.subsec_time_digitized, rootText(&tinydng_exif::subsec_time_digitized));
     }
     return out;
 }
