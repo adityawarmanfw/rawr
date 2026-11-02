@@ -1,5 +1,6 @@
 {
   "id": "vivo_x300_ultra",
+  "schema": 2,
   "name": "vivo X300 Ultra",
   "version": 8,
   "quirks": ["afTapHold"],
@@ -13,25 +14,16 @@
   "lenses": [
     {
       "id": "L14",
-      "cameraId": "4",
-      "physicalCameraId": "",
-      "distortion": {
-        "model": "rational",
-        "width": 4096,
-        "height": 3072,
-        "intrinsic": [1698.182744, 1696.500137, 2042.360233, 1548.313918],
-        "coefficients": [-0.051307, 0.015171, 0.000123, 0.000357, 0, 0, -0.023536, 0.014256],
-        "outputScale": 0.975811
+      "camera": {
+        "id": "4",
+        "physical": ""
       },
-      "stream": {
-        "format": "RAW10",
-        "width": 4096,
-        "height": 3072
-      },
-      "levels": {
-        "static": false,
-        "black": [0, 0, 0, 0],
-        "white": 0
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 4096,
+          "height": 3072
+        }
       },
       "keys": [
         {
@@ -41,29 +33,35 @@
           "values": [17],
           "enabled": true
         }
-      ]
+      ],
+      "image": {
+        "levels": {
+          "static": false,
+          "black": [0, 0, 0, 0],
+          "white": 0
+        },
+        "distortion": {
+          "model": "rational",
+          "width": 4096,
+          "height": 3072,
+          "intrinsic": [1698.182744, 1696.500137, 2042.360233, 1548.313918],
+          "coefficients": [-0.051307, 0.015171, 0.000123, 0.000357, 0, 0, -0.023536, 0.014256],
+          "outputScale": 0.975811
+        }
+      }
     },
     {
       "id": "D14",
-      "cameraId": "4",
-      "physicalCameraId": "",
-      "distortion": {
-        "model": "rational",
-        "width": 4096,
-        "height": 3072,
-        "intrinsic": [1698.182744, 1696.500137, 2042.360233, 1548.313918],
-        "coefficients": [-0.051307, 0.015171, 0.000123, 0.000357, 0, 0, -0.023536, 0.014256],
-        "outputScale": 0.975811
+      "camera": {
+        "id": "4",
+        "physical": ""
       },
-      "stream": {
-        "format": "RAW16",
-        "width": 4096,
-        "height": 3072
-      },
-      "levels": {
-        "static": true,
-        "black": [1024, 1024, 1024, 1024],
-        "white": 8712
+      "streams": {
+        "raw": {
+          "format": "RAW16",
+          "width": 4096,
+          "height": 3072
+        }
       },
       "keys": [
         {
@@ -73,21 +71,35 @@
           "values": [23],
           "enabled": true
         }
-      ]
+      ],
+      "image": {
+        "levels": {
+          "static": true,
+          "black": [1024, 1024, 1024, 1024],
+          "white": 8712
+        },
+        "distortion": {
+          "model": "rational",
+          "width": 4096,
+          "height": 3072,
+          "intrinsic": [1698.182744, 1696.500137, 2042.360233, 1548.313918],
+          "coefficients": [-0.051307, 0.015171, 0.000123, 0.000357, 0, 0, -0.023536, 0.014256],
+          "outputScale": 0.975811
+        }
+      }
     },
     {
       "id": "L35",
-      "cameraId": "3",
-      "physicalCameraId": "",
-      "stream": {
-        "format": "RAW10",
-        "width": 4080,
-        "height": 3064
+      "camera": {
+        "id": "3",
+        "physical": ""
       },
-      "levels": {
-        "static": false,
-        "black": [0, 0, 0, 0],
-        "white": 0
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 4080,
+          "height": 3064
+        }
       },
       "keys": [
         {
@@ -97,21 +109,27 @@
           "values": [31],
           "enabled": true
         }
-      ]
+      ],
+      "image": {
+        "levels": {
+          "static": false,
+          "black": [0, 0, 0, 0],
+          "white": 0
+        }
+      }
     },
     {
       "id": "D35",
-      "cameraId": "3",
-      "physicalCameraId": "",
-      "stream": {
-        "format": "RAW16",
-        "width": 4080,
-        "height": 3064
+      "camera": {
+        "id": "3",
+        "physical": ""
       },
-      "levels": {
-        "static": true,
-        "black": [1024, 1024, 1024, 1024],
-        "white": 8712
+      "streams": {
+        "raw": {
+          "format": "RAW16",
+          "width": 4080,
+          "height": 3064
+        }
       },
       "keys": [
         {
@@ -121,21 +139,27 @@
           "values": [17],
           "enabled": true
         }
-      ]
+      ],
+      "image": {
+        "levels": {
+          "static": true,
+          "black": [1024, 1024, 1024, 1024],
+          "white": 8712
+        }
+      }
     },
     {
       "id": "L85",
-      "cameraId": "5",
-      "physicalCameraId": "",
-      "stream": {
-        "format": "RAW10",
-        "width": 4080,
-        "height": 3072
+      "camera": {
+        "id": "5",
+        "physical": ""
       },
-      "levels": {
-        "static": false,
-        "black": [0, 0, 0, 0],
-        "white": 0
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 4080,
+          "height": 3072
+        }
       },
       "keys": [
         {
@@ -145,21 +169,27 @@
           "values": [23],
           "enabled": true
         }
-      ]
+      ],
+      "image": {
+        "levels": {
+          "static": false,
+          "black": [0, 0, 0, 0],
+          "white": 0
+        }
+      }
     },
     {
       "id": "D85",
-      "cameraId": "5",
-      "physicalCameraId": "",
-      "stream": {
-        "format": "RAW16",
-        "width": 4080,
-        "height": 3072
+      "camera": {
+        "id": "5",
+        "physical": ""
       },
-      "levels": {
-        "static": true,
-        "black": [1024, 1024, 1024, 1024],
-        "white": 16383
+      "streams": {
+        "raw": {
+          "format": "RAW16",
+          "width": 4080,
+          "height": 3072
+        }
       },
       "keys": [
         {
@@ -169,21 +199,27 @@
           "values": [19],
           "enabled": true
         }
-      ]
+      ],
+      "image": {
+        "levels": {
+          "static": true,
+          "black": [1024, 1024, 1024, 1024],
+          "white": 16383
+        }
+      }
     },
     {
       "id": "Z170",
-      "cameraId": "5",
-      "physicalCameraId": "",
-      "stream": {
-        "format": "RAW10",
-        "width": 4080,
-        "height": 3072
+      "camera": {
+        "id": "5",
+        "physical": ""
       },
-      "levels": {
-        "static": true,
-        "black": [64, 64, 64, 64],
-        "white": 1023
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 4080,
+          "height": 3072
+        }
       },
       "keys": [
         {
@@ -193,21 +229,27 @@
           "values": [31],
           "enabled": true
         }
-      ]
+      ],
+      "image": {
+        "levels": {
+          "static": true,
+          "black": [64, 64, 64, 64],
+          "white": 1023
+        }
+      }
     },
     {
       "id": "Z340",
-      "cameraId": "5",
-      "physicalCameraId": "",
-      "stream": {
-        "format": "RAW10",
-        "width": 4080,
-        "height": 3072
+      "camera": {
+        "id": "5",
+        "physical": ""
       },
-      "levels": {
-        "static": true,
-        "black": [64, 64, 64, 64],
-        "white": 1023
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 4080,
+          "height": 3072
+        }
       },
       "keys": [
         {
@@ -217,85 +259,79 @@
           "values": [6],
           "enabled": true
         }
-      ]
+      ],
+      "image": {
+        "levels": {
+          "static": true,
+          "black": [64, 64, 64, 64],
+          "white": 1023
+        }
+      }
     },
     {
       "id": "H14",
-      "cameraId": "4",
-      "physicalCameraId": "",
-      "distortion": {
-        "model": "rational",
-        "width": 4096,
-        "height": 3072,
-        "intrinsic": [1698.182744, 1696.500137, 2042.360233, 1548.313918],
-        "coefficients": [-0.051307, 0.015171, 0.000123, 0.000357, 0, 0, -0.023536, 0.014256],
-        "outputScale": 0.975811
+      "camera": {
+        "id": "4",
+        "physical": ""
       },
-      "stream": {
-        "format": "RAW16",
-        "width": 4096,
-        "height": 3072
+      "streams": {
+        "raw": {
+          "format": "RAW16",
+          "width": 4096,
+          "height": 3072
+        },
+        "capture": {
+          "format": "RAW16",
+          "width": 8192,
+          "height": 6144
+        }
       },
-      "levels": {
-        "static": true,
-        "black": [64, 64, 64, 64],
-        "white": 1023
+      "session": {
+        "gate": {
+          "name": "vivoFullSize"
+        }
       },
       "keys": [
         {
           "tag": "vivo.control.ai_highresolution",
           "type": "int32",
-          "scope": "session",
+          "scope": "sessionAndRequest",
           "values": [1],
           "enabled": true
         },
         {
           "tag": "vivo.control.ultra_highresolution",
           "type": "int32",
-          "scope": "session",
+          "scope": "sessionAndRequest",
           "values": [0],
           "enabled": true
         },
         {
           "tag": "vivo.control.is_ProRaw_on",
           "type": "int32",
-          "scope": "session",
+          "scope": "sessionAndRequest",
           "values": [2],
           "enabled": true
         },
         {
           "tag": "vivo.control.echo.mode",
           "type": "int32",
-          "scope": "session",
+          "scope": "sessionAndRequest",
           "values": [2],
           "enabled": true
         },
         {
           "tag": "vivo.control.scenery.subfunction",
           "type": "int32",
-          "scope": "session",
+          "scope": "sessionAndRequest",
           "values": [5],
           "enabled": true
         },
         {
           "tag": "vivo.control.session.uiSwitch_state",
           "type": "int32",
-          "scope": "session",
+          "scope": "sessionAndRequest",
           "values": [2],
-          "enabled": true
-        },
-        {
-          "tag": "vivo.control.ai_highresolution",
-          "type": "int32",
-          "scope": "request",
-          "values": [1],
-          "enabled": true
-        },
-        {
-          "tag": "vivo.control.ultra_highresolution",
-          "type": "int32",
-          "scope": "request",
-          "values": [0],
           "enabled": true
         },
         {
@@ -306,38 +342,10 @@
           "enabled": true
         },
         {
-          "tag": "vivo.control.is_ProRaw_on",
-          "type": "int32",
-          "scope": "request",
-          "values": [2],
-          "enabled": true
-        },
-        {
-          "tag": "vivo.control.echo.mode",
-          "type": "int32",
-          "scope": "request",
-          "values": [2],
-          "enabled": true
-        },
-        {
           "tag": "vivo.control.camera_scenery_pro",
           "type": "byte",
           "scope": "request",
           "values": [1],
-          "enabled": true
-        },
-        {
-          "tag": "vivo.control.scenery.subfunction",
-          "type": "int32",
-          "scope": "request",
-          "values": [5],
-          "enabled": true
-        },
-        {
-          "tag": "vivo.control.session.uiSwitch_state",
-          "type": "int32",
-          "scope": "request",
-          "values": [2],
           "enabled": true
         },
         {
@@ -390,82 +398,86 @@
           "enabled": true
         }
       ],
-      "vendorGate": "vivoFullSize",
-      "captureStream": {
-        "format": "RAW16",
-        "width": 8192,
-        "height": 6144
+      "image": {
+        "levels": {
+          "static": true,
+          "black": [64, 64, 64, 64],
+          "white": 1023
+        },
+        "distortion": {
+          "model": "rational",
+          "width": 4096,
+          "height": 3072,
+          "intrinsic": [1698.182744, 1696.500137, 2042.360233, 1548.313918],
+          "coefficients": [-0.051307, 0.015171, 0.000123, 0.000357, 0, 0, -0.023536, 0.014256],
+          "outputScale": 0.975811
+        }
       }
     },
     {
       "id": "H35",
-      "cameraId": "3",
-      "physicalCameraId": "",
-      "stream": {
-        "format": "RAW16",
-        "width": 4080,
-        "height": 3064
+      "camera": {
+        "id": "3",
+        "physical": ""
       },
-      "levels": {
-        "static": true,
-        "black": [64, 64, 64, 64],
-        "white": 1023
+      "streams": {
+        "raw": {
+          "format": "RAW16",
+          "width": 4080,
+          "height": 3064
+        },
+        "capture": {
+          "format": "RAW16",
+          "width": 8192,
+          "height": 6144
+        }
+      },
+      "session": {
+        "gate": {
+          "name": "vivoFullSize"
+        }
       },
       "keys": [
         {
           "tag": "vivo.control.ai_highresolution",
           "type": "int32",
-          "scope": "session",
+          "scope": "sessionAndRequest",
           "values": [1],
           "enabled": true
         },
         {
           "tag": "vivo.control.ultra_highresolution",
           "type": "int32",
-          "scope": "session",
+          "scope": "sessionAndRequest",
           "values": [0],
           "enabled": true
         },
         {
           "tag": "vivo.control.is_ProRaw_on",
           "type": "int32",
-          "scope": "session",
+          "scope": "sessionAndRequest",
           "values": [2],
           "enabled": true
         },
         {
           "tag": "vivo.control.echo.mode",
           "type": "int32",
-          "scope": "session",
+          "scope": "sessionAndRequest",
           "values": [2],
           "enabled": true
         },
         {
           "tag": "vivo.control.scenery.subfunction",
           "type": "int32",
-          "scope": "session",
+          "scope": "sessionAndRequest",
           "values": [5],
           "enabled": true
         },
         {
           "tag": "vivo.control.session.uiSwitch_state",
           "type": "int32",
-          "scope": "session",
+          "scope": "sessionAndRequest",
           "values": [2],
-          "enabled": true
-        },
-        {
-          "tag": "vivo.control.ai_highresolution",
-          "type": "int32",
-          "scope": "request",
-          "values": [1],
-          "enabled": true
-        },
-        {
-          "tag": "vivo.control.ultra_highresolution",
-          "type": "int32",
-          "scope": "request",
-          "values": [0],
           "enabled": true
         },
         {
@@ -476,38 +488,10 @@
           "enabled": true
         },
         {
-          "tag": "vivo.control.is_ProRaw_on",
-          "type": "int32",
-          "scope": "request",
-          "values": [2],
-          "enabled": true
-        },
-        {
-          "tag": "vivo.control.echo.mode",
-          "type": "int32",
-          "scope": "request",
-          "values": [2],
-          "enabled": true
-        },
-        {
           "tag": "vivo.control.camera_scenery_pro",
           "type": "byte",
           "scope": "request",
           "values": [1],
-          "enabled": true
-        },
-        {
-          "tag": "vivo.control.scenery.subfunction",
-          "type": "int32",
-          "scope": "request",
-          "values": [5],
-          "enabled": true
-        },
-        {
-          "tag": "vivo.control.session.uiSwitch_state",
-          "type": "int32",
-          "scope": "request",
-          "values": [2],
           "enabled": true
         },
         {
@@ -560,82 +544,78 @@
           "enabled": true
         }
       ],
-      "vendorGate": "vivoFullSize",
-      "captureStream": {
-        "format": "RAW16",
-        "width": 8192,
-        "height": 6144
+      "image": {
+        "levels": {
+          "static": true,
+          "black": [64, 64, 64, 64],
+          "white": 1023
+        }
       }
     },
     {
       "id": "H85",
-      "cameraId": "5",
-      "physicalCameraId": "",
-      "stream": {
-        "format": "RAW16",
-        "width": 4080,
-        "height": 3072
+      "camera": {
+        "id": "5",
+        "physical": ""
       },
-      "levels": {
-        "static": true,
-        "black": [64, 64, 64, 64],
-        "white": 1023
+      "streams": {
+        "raw": {
+          "format": "RAW16",
+          "width": 4080,
+          "height": 3072
+        },
+        "capture": {
+          "format": "RAW16",
+          "width": 8192,
+          "height": 6144
+        }
+      },
+      "session": {
+        "gate": {
+          "name": "vivoFullSize"
+        }
       },
       "keys": [
         {
           "tag": "vivo.control.ai_highresolution",
           "type": "int32",
-          "scope": "session",
+          "scope": "sessionAndRequest",
           "values": [1],
           "enabled": true
         },
         {
           "tag": "vivo.control.ultra_highresolution",
           "type": "int32",
-          "scope": "session",
+          "scope": "sessionAndRequest",
           "values": [0],
           "enabled": true
         },
         {
           "tag": "vivo.control.is_ProRaw_on",
           "type": "int32",
-          "scope": "session",
+          "scope": "sessionAndRequest",
           "values": [2],
           "enabled": true
         },
         {
           "tag": "vivo.control.echo.mode",
           "type": "int32",
-          "scope": "session",
+          "scope": "sessionAndRequest",
           "values": [2],
           "enabled": true
         },
         {
           "tag": "vivo.control.scenery.subfunction",
           "type": "int32",
-          "scope": "session",
+          "scope": "sessionAndRequest",
           "values": [5],
           "enabled": true
         },
         {
           "tag": "vivo.control.session.uiSwitch_state",
           "type": "int32",
-          "scope": "session",
+          "scope": "sessionAndRequest",
           "values": [2],
-          "enabled": true
-        },
-        {
-          "tag": "vivo.control.ai_highresolution",
-          "type": "int32",
-          "scope": "request",
-          "values": [1],
-          "enabled": true
-        },
-        {
-          "tag": "vivo.control.ultra_highresolution",
-          "type": "int32",
-          "scope": "request",
-          "values": [0],
           "enabled": true
         },
         {
@@ -646,38 +626,10 @@
           "enabled": true
         },
         {
-          "tag": "vivo.control.is_ProRaw_on",
-          "type": "int32",
-          "scope": "request",
-          "values": [2],
-          "enabled": true
-        },
-        {
-          "tag": "vivo.control.echo.mode",
-          "type": "int32",
-          "scope": "request",
-          "values": [2],
-          "enabled": true
-        },
-        {
           "tag": "vivo.control.camera_scenery_pro",
           "type": "byte",
           "scope": "request",
           "values": [1],
-          "enabled": true
-        },
-        {
-          "tag": "vivo.control.scenery.subfunction",
-          "type": "int32",
-          "scope": "request",
-          "values": [5],
-          "enabled": true
-        },
-        {
-          "tag": "vivo.control.session.uiSwitch_state",
-          "type": "int32",
-          "scope": "request",
-          "values": [2],
           "enabled": true
         },
         {
@@ -730,68 +682,75 @@
           "enabled": true
         }
       ],
-      "vendorGate": "vivoFullSize",
-      "captureStream": {
-        "format": "RAW16",
-        "width": 8192,
-        "height": 6144
+      "image": {
+        "levels": {
+          "static": true,
+          "black": [64, 64, 64, 64],
+          "white": 1023
+        }
       }
     },
     {
       "id": "F35",
-      "cameraId": "3",
-      "physicalCameraId": "",
-      "stream": {
-        "format": "RAW16",
-        "width": 4080,
-        "height": 3064
+      "camera": {
+        "id": "3",
+        "physical": ""
       },
-      "levels": {
-        "static": true,
-        "black": [64, 64, 64, 64],
-        "white": 1023
+      "streams": {
+        "raw": {
+          "format": "RAW16",
+          "width": 4080,
+          "height": 3064
+        },
+        "capture": {
+          "format": "RAW16",
+          "width": 16320,
+          "height": 12256,
+          "burst": {
+            "max": 3,
+            "sequential": false
+          }
+        }
+      },
+      "session": {
+        "gate": {
+          "name": "vivoFullSize"
+        }
       },
       "keys": [
         {
           "tag": "vivo.control.ultra_highresolution",
           "type": "int32",
-          "scope": "session",
+          "scope": "sessionAndRequest",
           "values": [1],
           "enabled": true
         },
         {
           "tag": "vivo.control.is_ProRaw_on",
           "type": "int32",
-          "scope": "session",
+          "scope": "sessionAndRequest",
           "values": [2],
           "enabled": true
         },
         {
           "tag": "vivo.control.echo.mode",
           "type": "int32",
-          "scope": "session",
+          "scope": "sessionAndRequest",
           "values": [2],
           "enabled": true
         },
         {
           "tag": "vivo.control.scenery.subfunction",
           "type": "int32",
-          "scope": "session",
+          "scope": "sessionAndRequest",
           "values": [5],
           "enabled": true
         },
         {
           "tag": "vivo.control.session.uiSwitch_state",
           "type": "int32",
-          "scope": "session",
+          "scope": "sessionAndRequest",
           "values": [2],
-          "enabled": true
-        },
-        {
-          "tag": "vivo.control.ultra_highresolution",
-          "type": "int32",
-          "scope": "request",
-          "values": [1],
           "enabled": true
         },
         {
@@ -802,38 +761,10 @@
           "enabled": true
         },
         {
-          "tag": "vivo.control.is_ProRaw_on",
-          "type": "int32",
-          "scope": "request",
-          "values": [2],
-          "enabled": true
-        },
-        {
-          "tag": "vivo.control.echo.mode",
-          "type": "int32",
-          "scope": "request",
-          "values": [2],
-          "enabled": true
-        },
-        {
           "tag": "vivo.control.camera_scenery_pro",
           "type": "byte",
           "scope": "request",
           "values": [1],
-          "enabled": true
-        },
-        {
-          "tag": "vivo.control.scenery.subfunction",
-          "type": "int32",
-          "scope": "request",
-          "values": [5],
-          "enabled": true
-        },
-        {
-          "tag": "vivo.control.session.uiSwitch_state",
-          "type": "int32",
-          "scope": "request",
-          "values": [2],
           "enabled": true
         },
         {
@@ -886,70 +817,74 @@
           "enabled": true
         }
       ],
-      "vendorGate": "vivoFullSize",
-      "captureStream": {
-        "format": "RAW16",
-        "width": 16320,
-        "height": 12256
-      },
-      "captureBurst": 3,
-      "captureBurstSequential": false
+      "image": {
+        "levels": {
+          "static": true,
+          "black": [64, 64, 64, 64],
+          "white": 1023
+        }
+      }
     },
     {
       "id": "F85",
-      "cameraId": "5",
-      "physicalCameraId": "",
-      "stream": {
-        "format": "RAW16",
-        "width": 4080,
-        "height": 3072
+      "camera": {
+        "id": "5",
+        "physical": ""
       },
-      "levels": {
-        "static": true,
-        "black": [64, 64, 64, 64],
-        "white": 1023
+      "streams": {
+        "raw": {
+          "format": "RAW16",
+          "width": 4080,
+          "height": 3072
+        },
+        "capture": {
+          "format": "RAW16",
+          "width": 16320,
+          "height": 12288,
+          "burst": {
+            "max": 3
+          }
+        }
+      },
+      "session": {
+        "gate": {
+          "name": "vivoFullSize"
+        }
       },
       "keys": [
         {
           "tag": "vivo.control.ultra_highresolution",
           "type": "int32",
-          "scope": "session",
+          "scope": "sessionAndRequest",
           "values": [1],
           "enabled": true
         },
         {
           "tag": "vivo.control.is_ProRaw_on",
           "type": "int32",
-          "scope": "session",
+          "scope": "sessionAndRequest",
           "values": [2],
           "enabled": true
         },
         {
           "tag": "vivo.control.echo.mode",
           "type": "int32",
-          "scope": "session",
+          "scope": "sessionAndRequest",
           "values": [2],
           "enabled": true
         },
         {
           "tag": "vivo.control.scenery.subfunction",
           "type": "int32",
-          "scope": "session",
+          "scope": "sessionAndRequest",
           "values": [5],
           "enabled": true
         },
         {
           "tag": "vivo.control.session.uiSwitch_state",
           "type": "int32",
-          "scope": "session",
+          "scope": "sessionAndRequest",
           "values": [2],
-          "enabled": true
-        },
-        {
-          "tag": "vivo.control.ultra_highresolution",
-          "type": "int32",
-          "scope": "request",
-          "values": [1],
           "enabled": true
         },
         {
@@ -960,38 +895,10 @@
           "enabled": true
         },
         {
-          "tag": "vivo.control.is_ProRaw_on",
-          "type": "int32",
-          "scope": "request",
-          "values": [2],
-          "enabled": true
-        },
-        {
-          "tag": "vivo.control.echo.mode",
-          "type": "int32",
-          "scope": "request",
-          "values": [2],
-          "enabled": true
-        },
-        {
           "tag": "vivo.control.camera_scenery_pro",
           "type": "byte",
           "scope": "request",
           "values": [1],
-          "enabled": true
-        },
-        {
-          "tag": "vivo.control.scenery.subfunction",
-          "type": "int32",
-          "scope": "request",
-          "values": [5],
-          "enabled": true
-        },
-        {
-          "tag": "vivo.control.session.uiSwitch_state",
-          "type": "int32",
-          "scope": "request",
-          "values": [2],
           "enabled": true
         },
         {
@@ -1044,13 +951,13 @@
           "enabled": true
         }
       ],
-      "vendorGate": "vivoFullSize",
-      "captureStream": {
-        "format": "RAW16",
-        "width": 16320,
-        "height": 12288
-      },
-      "captureBurst": 3
+      "image": {
+        "levels": {
+          "static": true,
+          "black": [64, 64, 64, 64],
+          "white": 1023
+        }
+      }
     }
   ]
 }

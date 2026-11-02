@@ -15,6 +15,7 @@ void testFullSizeRecipeJson() {
     const std::string json = R"({"id":"user","lenses":[{"id":"T50","cameraId":"4",
         "stream":{"format":"RAW16","width":8160,"height":6144,"unlisted":true},
         "readerUsage":"0x100003","captureReaderUsage":"gpuDataBuffer","template":"still","fps":24,
+        "captureStream":{"format":"RAW16","width":8160,"height":6144},
         "companion":{"width":640,"height":480,"format":"private","targeted":false},"startupDelayMs":500,"stopRepeatingForStill":true,"auxJpeg":{"width":8160,"height":6144}}]})";
     std::string error;
     const auto parsed = parseCameraProfile(json, &error);
@@ -28,7 +29,7 @@ void testFullSizeRecipeJson() {
     assert(r.auxJpegSize && r.auxJpegSize->first == 8160 && r.auxJpegSize->second == 6144);
     const auto again = serializeCameraProfile(*parsed);
     assert(serializeCameraProfile(*parseCameraProfile(again)) == again);
-    assert(again.find("\"readerUsage\":\"0x100003\"") != std::string::npos);
+    assert(again.find(R"("reader":{"usage":"0x100003"})") != std::string::npos);
 
     for (const auto* bad : {"0x", "0x-1", "0x 1", "0x10000000000000000"}) {
         assert(!parseCameraProfile(std::string(R"({"lenses":[{"id":"a","cameraId":"0","readerUsage":")") + bad + R"("}]})"));
@@ -117,6 +118,7 @@ int main(int argc, char** argv) {
     const auto levels = parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0",
         "levels":{"static":true,"black":[64],"white":1023},
         "viewfinderLevels":{"static":true,"black":[512],"white":4095},
+        "captureStream":{"format":"RAW16","width":8160,"height":6144},
         "captureLevels":{"static":false}}]})");
     assert(levels);
     const auto& route = levels->lenses[0];

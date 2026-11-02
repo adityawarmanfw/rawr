@@ -106,8 +106,8 @@ class SettingsBackupStoreTest {
             export(defaults.copy(userLutProfiles = listOf(profile("absent"))), setOf(BackupSection.Luts))
         }
         assertFailsWith<IllegalArgumentException> {
-            export(defaults.copy(lensProfiles = listOf(builtIn.first().copy(
-                dcp = LensDcp("0".repeat(32) + ".dcp", "Missing")))), setOf(BackupSection.LensProfiles))
+            export(defaults.copy(lensProfiles = listOf(builtIn.first().image {
+                copy(dcp = LensDcp("0".repeat(32) + ".dcp", "Missing")) })), setOf(BackupSection.LensProfiles))
         }
     }
 
@@ -216,7 +216,7 @@ class SettingsBackupStoreTest {
 
     @Test fun damagedDcpCannotSilentlyDisappearDuringRestore() {
         val dcp = LensDcp("0".repeat(32) + ".dcp", "Damaged")
-        val contents = staged(defaults.copy(lensProfiles = listOf(builtIn.first().copy(dcp = dcp))), emptyMap())
+        val contents = staged(defaults.copy(lensProfiles = listOf(builtIn.first().image { copy(dcp = dcp) })), emptyMap())
         File(contents.dcpFiles, dcp.file).writeText("bad")
         assertFailsWith<IllegalArgumentException> { store.prepare(contents, setOf(BackupSection.LensProfiles)) }
     }

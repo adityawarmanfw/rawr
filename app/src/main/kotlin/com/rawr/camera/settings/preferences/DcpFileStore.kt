@@ -55,14 +55,14 @@ class DcpFileStore internal constructor(
 
     /** Deletes stored profiles no lens references, except recent imports a lens editor may still save. */
     fun sync(lenses: List<LensProfile>?) {
-        val used = lenses.orEmpty().mapNotNull { it.dcp?.file }.toSet()
+        val used = lenses.orEmpty().mapNotNull { it.image.dcp?.file }.toSet()
         val cutoff = System.currentTimeMillis() - UNSAVED_GRACE_MS
         dir.listFiles()?.forEach { file -> if (file.name !in used && file.lastModified() < cutoff) file.delete() }
     }
 
     /** Restore only referenced, intact, usable profiles; missing profiles fall back to camera colour. */
     internal fun restore(staging: File, lenses: List<LensProfile>?): List<LensProfile>? {
-        lenses.orEmpty().mapNotNull { it.dcp?.file }.distinct().forEach { name ->
+        lenses.orEmpty().mapNotNull { it.image.dcp?.file }.distinct().forEach { name ->
             if (!isFileName(name)) return@forEach
             val file = File(staging, name)
             if (!file.isFile || file.length() > MAX_BYTES) return@forEach
@@ -75,8 +75,8 @@ class DcpFileStore internal constructor(
             }
         }
         return lenses?.map { lens ->
-            val dcp = lens.dcp
-            if (dcp != null && (!isFileName(dcp.file) || !File(dir, dcp.file).isFile)) lens.copy(dcp = null) else lens
+            val dcp = lens.image.dcp
+            if (dcp != null && (!isFileName(dcp.file) || !File(dir, dcp.file).isFile)) lens.image { copy(dcp = null) } else lens
         }
     }
 

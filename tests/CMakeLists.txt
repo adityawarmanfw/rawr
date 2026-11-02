@@ -24,6 +24,8 @@ function(rawr_test name)
   target_compile_options(${name} PRIVATE -Wall -Wextra -Werror -UNDEBUG)
   if(name STREQUAL "capture_job_test")
     add_test(NAME ${name} COMMAND ${name} "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/capture_job_v1.job")
+  elseif(name STREQUAL "builtin_route_golden_test")
+    add_test(NAME ${name} COMMAND ${name} "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/camera/builtin_routes.txt")
   else()
     add_test(NAME ${name} COMMAND ${name})
   endif()
@@ -220,6 +222,21 @@ rawr_test(camera_profile_test
   "${APP}/color/DcpProfile.cpp"
   "${APP}/color/ColorMath.cpp"
   "${APP}/geometry/LensDistortion.cpp")
+rawr_test(profile_schema_test
+  "${RAWR_ROOT}/tests/native/profile_schema_test.cpp"
+  "${APP}/camera/CameraRouting.cpp"
+  "${APP}/camera/CameraProfileJson.cpp"
+  "${APP}/color/DcpProfile.cpp"
+  "${APP}/color/ColorMath.cpp"
+  "${APP}/geometry/LensDistortion.cpp")
+rawr_test(builtin_route_golden_test
+  "${RAWR_ROOT}/tests/native/builtin_route_golden_test.cpp"
+  "${APP}/camera/CameraRouting.cpp"
+  "${APP}/camera/CameraProfileJson.cpp"
+  "${APP}/color/DcpProfile.cpp"
+  "${APP}/color/ColorMath.cpp"
+  "${APP}/geometry/LensDistortion.cpp")
+set_tests_properties(builtin_route_golden_test PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 rawr_test(full_res_recipe_test
   "${RAWR_ROOT}/tests/native/full_res_recipe_test.cpp"
   "${APP}/camera/CameraRouting.cpp"
