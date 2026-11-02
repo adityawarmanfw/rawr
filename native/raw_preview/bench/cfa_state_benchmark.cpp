@@ -104,6 +104,8 @@ static void makeSyntheticLsc(uint32_t gw, uint32_t gh) {
 }
 // --method: 0 colour propagation, 1 Inpaint Opposed.
 static uint32_t g_highlightMethod = 0;
+static bool g_bypassTone = false;
+static bool g_toggleTone = false;
 static void run(Ctx& c, const std::string& shader, const std::string& maskShader, uint32_t W, uint32_t H,
                 uint32_t frames, double fps, bool stress) {
     Slot s[3];
@@ -173,6 +175,7 @@ static void run(Ctx& c, const std::string& shader, const std::string& maskShader
     rp.edgeStrength = 8;
     rp.chromaBlend = .2f;
     rp.highlightMethod = g_highlightMethod;
+    rp.bypassHighlightTone = g_bypassTone;
     const uint32_t warm = 60, total = warm + frames;
     std::vector<uint64_t> pf(3, UINT64_MAX);
     std::vector<double> ms;
@@ -206,6 +209,9 @@ static void run(Ctx& c, const std::string& shader, const std::string& maskShader
         ri.width = W;
         ri.height = H;
         ri.parameters = rp;
+        // Exercise both directions on every in-flight slot, beginning with
+        // bypass so lazy tone allocation is covered after the slot is warm.
+        if (g_toggleTone) ri.parameters.bypassHighlightTone = ((f / 3) % 2) == 0;
         if (!g_lsc.empty()) {
             ri.lensShadingMapWidth = g_lscW;
             ri.lensShadingMapHeight = g_lscH;
@@ -287,6 +293,11 @@ static void run(Ctx& c, const std::string& shader, const std::string& maskShader
     }
 }
 int main(int argc, char** argv) {
+    // The instrumentation bridge invokes this entry more than once/process.
+    g_bypassTone = g_toggleTone = false;
+    g_highlightMethod = 0;
+    g_dump.clear();
+    g_lsc.clear();
     std::cout.setf(std::ios::unitbuf);
     std::string shader = "./raw_preview.comp.spv", maskShader = "./raw_preview_cfa_state.comp.spv";
     uint32_t frames = 600, W = 4080, H = 3064;
@@ -307,6 +318,8 @@ int main(int argc, char** argv) {
         }
         else if (a == "--method" && i + 1 < argc)
             g_highlightMethod = std::stoul(argv[++i]);
+        else if (a == "--bypass-tone") g_bypassTone = true;
+        else if (a == "--toggle-tone") g_toggleTone = true;
         else if (a == "--dump" && i + 1 < argc)
             g_dump = argv[++i];
         else if (a == "--frames" && i + 1 < argc)

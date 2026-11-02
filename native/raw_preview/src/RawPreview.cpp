@@ -261,11 +261,6 @@ RawPreview::ColoroppResources& RawPreview::coloroppResourcesFor(VkImageView outp
     ColoroppResources r{rawr::vk::DeviceObjects(device_)};
     r.demosaiced = r.objects.adoptOwnedImage(rawr::vk::createOwnedImage(
         physicalDevice_, device_, width, height, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT));
-    // Same usage as the caller's linear image: the display path samples,
-    // blits (film) and stores to it.
-    r.sdr = r.objects.adoptOwnedImage(rawr::vk::createOwnedImage(
-        physicalDevice_, device_, width, height, VK_FORMAT_R16G16B16A16_SFLOAT,
-        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT));
     VkDescriptorSetLayout layouts[2]{coloroppDsl_, coloroppToneDsl_};
     VkDescriptorSet sets[2]{};
     VkDescriptorSetAllocateInfo ai{};
@@ -507,19 +502,16 @@ RawPreviewRecordResult RawPreview::record(const RawPreviewRecordInfo& recordInfo
     ColoroppResources* coloropp =
         useColoropp ? &coloroppResourcesFor(recordInfo.outputLinearRgba16fView, outputWidth, outputHeight) : nullptr;
     if (coloropp && !coloropp->initialized) {
-        VkImageMemoryBarrier init[2]{};
-        VkImage images[2]{coloropp->demosaiced.image, coloropp->sdr.image};
-        for (uint32_t i = 0; i < 2; ++i) {
-            init[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            init[i].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            init[i].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-            init[i].srcQueueFamilyIndex = init[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            init[i].image = images[i];
-            init[i].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            init[i].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        }
+        VkImageMemoryBarrier init{};
+        init.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        init.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        init.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        init.srcQueueFamilyIndex = init.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        init.image = coloropp->demosaiced.image;
+        init.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        init.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
         vkCmdPipelineBarrier(recordInfo.commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 2, init);
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &init);
         coloropp->initialized = true;
     }
     // The CFA-state pass writes the Inpaint Opposed source image instead of the
@@ -735,6 +727,25 @@ void RawPreview::recordColoropp(const RawPreviewRecordInfo& recordInfo, Coloropp
     computeToCompute();
 
     if (p.bypassHighlightTone) return;
+
+    // Direct output profiles apply tone downstream and never use this SDR
+    // image. Allocate only on the first frame that actually needs it. Keep
+    // it thereafter so profile switches cannot retire in-flight resources.
+    if (!r.sdr.image) {
+        r.sdr = r.objects.adoptOwnedImage(rawr::vk::createOwnedImage(
+            physicalDevice_, device_, width, height, VK_FORMAT_R16G16B16A16_SFLOAT,
+            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT));
+        VkImageMemoryBarrier init{};
+        init.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        init.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        init.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        init.srcQueueFamilyIndex = init.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        init.image = r.sdr.image;
+        init.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        init.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             0, 0, nullptr, 0, nullptr, 1, &init);
+    }
 
     VkDescriptorImageInfo toneImages[2]{{VK_NULL_HANDLE, recordInfo.outputLinearRgba16fView, VK_IMAGE_LAYOUT_GENERAL},
                                         {VK_NULL_HANDLE, r.sdr.view, VK_IMAGE_LAYOUT_GENERAL}};

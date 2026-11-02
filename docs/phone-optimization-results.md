@@ -1,5 +1,133 @@
 # Phone optimization results: first measured change
 
+## Single-frame optimization continuation
+
+Scope now excludes HDR+ and MFSR. No resolution, image arithmetic, quality,
+chroma subsampling, cleanup setting or durability guarantee was reduced.
+
+Implemented in separate commits:
+
+* Renderer tile/waveform readback prefers compatible cached host memory, with
+  coherent fallback, transfer-to-host dependency, fence and noncoherent
+  invalidation. Upload allocations keep their coherent write path.
+* Direct preview output profiles do not allocate the separate Inpaint Opposed
+  tone image until needed. Three slots at the native 4080×3064 benchmark size
+  avoid 71.5 MiB of logical RGBA16F storage before alignment. This is an image
+  allocation estimate, not measured resident PSS. Switching to a profile that
+  needs the image allocates it and retains it safely thereafter.
+* OFF/opposed post-demosaic processing defers colour-propagation guide images
+  and recovery/guide pipelines until that method is actually used.
+* Single-frame surface detachment releases preview engines, images, scopes and
+  import caches after camera retirement and GPU completion. Active capture
+  work keeps the existing deferred-detach policy; enabled multiframe bypasses
+  this new release. Capture workers and the Vulkan device/cache are preserved.
+
+### Fixed-input pixel checks and replay measurements
+
+Cold replay uses a copied captured 4080×3060 DNG and an empty linear cache for
+each sample, RCD, FCC2, defringe, JPEG98 4:2:2. Full decoded ARGB SHA-256 and JPEG
+sizes match across APKs for RawrBase/opposed (three samples), sRGB/propagation
+(two) and AgX/opposed (one). These sample counts do not establish all-scene
+quality or every cleanup/profile combination. They do verify exact decoded
+output for the fixed cases; no production shader arithmetic changed.
+
+| Cold replay stage | Before median | After median | Samples per APK |
+| --- | ---: | ---: | ---: |
+| RawrBase/opposed, cached readback only | 6199 ms | 6138 ms | 3 |
+| RawrBase/opposed, including lazy guide resources | 6199 ms | 5889 ms | 3 |
+| sRGB/propagation, lazy guides vs eager guides | 5831 ms | 5787 ms | 2 |
+| AgX/opposed, lazy guides vs eager guides | 5886 ms | 5766 ms | 1 |
+
+Timing includes open/render/fsync/close, excludes fixture copying and decoded
+hash calculation, and ran under competing foreground workloads. Small noisy
+samples are exploratory; do not present them as a proven percentage improvement
+or capture-to-gallery timing. Compare reports with
+`uv run --no-project python tools/phone-performance/compare_replay.py BEFORE AFTER`.
+
+The optimized headless native GPU suite passed **7/7 in 74.611 s**, including
+exact recovered linear-byte parity across bidirectional preview tone switches
+on all three slots. JVM tests and the actual benchmark app APK build passed.
+
+### Production native preview lifecycle, no Activity
+
+The new headless test drives RAWR's actual Camera2/Vulkan engine into a
+SurfaceTexture drained by an offscreen EGL consumer. It uses CAMERA permission
+and a camera foreground service, the built-in camera profile and shipped
+zero-copy setting. It does not open the app UI. The initial generic/default-native
+setup failed every frame with `bridge copy requested without owned image`;
+the app's shipped zero-copy setting succeeds. This exposed the legacy-copy
+allocation defect for separate correction. ImageReader and EGL attempts alone
+did not fix that configuration difference.
+
+Measured stopped PSS after surface detach and a one-second drain:
+
+| Native lifecycle cycle | Before preview release | After preview release |
+| --- | ---: | ---: |
+| 0 | 644702 KiB (629.6 MiB) | 113107 KiB (110.5 MiB) |
+| 1 | 694943 KiB (678.7 MiB) | 112137 KiB (109.5 MiB) |
+
+Both cycles resumed, with zero late frames during the subsequent one-second
+observation. Six sRGB cycles and two cycles each RawrBase, Rec709 and AgX also
+passed. Background CPU before the idle-poll follow-up was about 5–9 ms per
+one-second observation. PSS includes the test/EGL consumer; this is **not** an
+Activity/Home-gesture benchmark, a power measurement, or validation of capture
+or recording during background transitions. Keep those acceptance gates open.
+
+Final follow-ups passed: the corrected legacy-copy path presented 30+ buffers
+in both start/stop/resume cycles (previously zero), and a six-cycle zero-copy
+stress run retained 109921–112921 KiB after detachment, with zero late frames.
+Empty ingress polling now slows from 10 ms to 100 ms only after idle teardown;
+real events, lifecycle changes and shutdown wake immediately. Surface attach
+restores normal polling before activation. Observed idle process CPU was 3–5 ms
+per one-second interval (includes harness/EGL overhead, not a direct power
+measurement). The legacy path intentionally retains its required R16 image;
+the normal zero-copy path keeps its prior allocation policy. Final benchmark
+APK build and JVM suite passed.
+
+Reports remain under ignored `tmp/phone-performance/`; production preview
+reports are in the test package's `files/gpu-results/native-preview-*` folders.
+See [headless commands and limitations](../gpu-tests/README.md). Physical Adreno,
+film/LUT/denoise coverage, live UI pacing and full single-frame capture-to-gallery
+validation remain pending. MR publication still requires GitHub authentication.
+
+## Headless APK continuation, 2026-11-01
+
+Added `gpu-tests`, an Android instrumentation target with no Activity/launcher.
+It embeds existing native GPU tests and stages the actual production benchmark
+renderer JNI library and assets. See [commands and coverage](../gpu-tests/README.md).
+The user explicitly authorized headless camera use/permission; opening the app
+UI is still not authorized.
+
+Built and installed target/test APKs on the connected Mali-G615 phone. The real
+camera test passed: three public RAW_SENSOR 4080×3060 acquisitions, matching
+metadata timestamps, fsynced DNG files, production RCD/opposed/FCC2/defringe
+JPEG98 4:2:2 replay, full-size JPEG bounds and sampled decode. The provider test
+passed pending -> copy/fsync -> publish -> size/decode -> delete-own-row checks.
+This run took 9.367 s overall; production replay was 6977.32 ms for a 12,703,392
+byte JPEG, followed by 273.06 ms for provider copy/publication. These separate
+stages are **not** production capture-coordinator end-to-end measurements or
+a controlled optimization A/B. Scene was dark, ISO12923, exposure30.0ms.
+
+Afterward CameraService reported no active camera clients; Stremio remained the
+foreground Activity. No app UI was opened. DNG/JPEG fixtures and raw reports live
+under ignored `tmp/phone-performance/headless-apk-results/`.
+
+The initial tone CPU parity assertion failed. The existing runner documentation
+states that oracle models legacy controls; it cannot establish current renderer
+parity. The harness now compares current GPU output with the original CST shader
+arithmetic, with matching 16×8 compile/dispatch geometry. No production shader or
+quality tolerance was changed to hide the obsolete oracle failure.
+
+The final GPU instrumentation suite passed all six tests in 80.962 s, including
+the original-CST comparison, Bayer/CFA checks and exact cached readback.
+GPU timings ran alongside the user's foreground workload and while charging;
+they do not establish idle power or an isolated performance baseline. Initial
+full-resolution preview medians were about 49.95 ms for method0 and 29.36 ms for
+method1; inspect native timing targets separately from JUnit results. All-profile
+quality/stability, live VF pacing, production background lifecycle and physical
+Adreno validation remain pending. Home-swipe lag and background memory/power are
+now explicit priority gates in the plan.
+
 Status: local draft MR branch; native JPEG memory improvement implemented and tested. See
 the continuation below for successful APK builds, app tests, and subsequent findings. The full
 RAW-VF-to-published-JPEG optimization plan is **not complete**. APK/lifecycle,

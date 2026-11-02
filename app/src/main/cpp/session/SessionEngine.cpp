@@ -194,6 +194,7 @@ SessionEngine::SessionEngine(std::string filesDir) : filesDir_(std::move(filesDi
 SessionEngine::~SessionEngine() { shutdown(); }
 
 bool SessionEngine::setSurface(JNIEnv* env, jobject surfaceObj, int displayRotationDegrees) {
+    if (surfaceObj) ingressQueue_.setLowPowerIdle(false);
     // Retire before detaching presentation, unless a still owns the session.
     // Activation callbacks acquire mu_, so reconcile outside that lock.
     if (!surfaceObj) cameraControls_.setSurfaceReady(false);

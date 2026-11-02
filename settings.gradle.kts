@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "RawrCam"
 include(":app")
+include(":gpu-tests")

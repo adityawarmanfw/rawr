@@ -1,6 +1,38 @@
 # Phone performance optimization plan
 
+## Priority: whole-phone responsiveness and background cost
+
+User reports Home swipe makes the whole phone lag, with high power and memory
+cost. Treat foreground/background transitions as a primary acceptance gate,
+alongside image quality and throughput. Baseline before changing lifecycle code:
+
+* Measure preview CPU/GPU time, RSS/PSS and GPU allocation by profile; record
+  thermal state and competing workloads. No idle-power claim during GPU tests.
+* Trace foreground -> Home -> idle -> resume, including a pending still and
+  active recording. Log last camera frame, last GPU submit, drain completion,
+  allocation retirement and camera disconnect. Verify saved work survives.
+* Check that preview work stops when hidden, queues remain bounded, callbacks
+  cannot restart a retired session, and retirement never blocks the UI thread.
+* Measure steady hidden CPU, memory retained and frame pacing after resume.
+  Reduce unnecessary bandwidth, redundant passes and stale queued work before
+  considering changes to image arithmetic or quality.
+
+Headless camera/GPU fixtures can validate components but cannot reproduce the
+Home gesture through the production Activity. Do not open the app for that test
+until the user gives go-ahead. Current source already signals preview foreground
+false from `onStop` via `stopPreviewAfterRecording`; investigate drain/scheduling
+before assuming missing lifecycle handling is the cause.
+
+References: [Android lifecycle resource release](https://developer.android.com/guide/components/activities/activity-lifecycle),
+[Arm Mali-G615 GPU activity and bandwidth](https://support.arm.com/documentation/107775/0102/GPU-activity?lang=en).
+
 ## Scope and constraints
+
+Current user scope (2026-11-01): optimize the whole app's single-frame path,
+live RAW viewfinder, profiles, cleanup, export and lifecycle without lowering
+image quality. **HDR+ and MFSR are excluded.** Earlier multiframe matrix items
+below are historical scope and are no longer acceptance requirements for this
+work. Do not modify their algorithms or add multiframe benchmark runs.
 
 Target: RAWR, starting at commit `4c64cb1f5eb553bf61ca9a459c5a2c94964732e4`.
 Connected device reports Xiaomi `25080RABDG`, device `lapis`, SoC `MT6878`.
@@ -8,7 +40,7 @@ Use this device's actual Vulkan capabilities, memory headroom, and thermal behav
 do not assume an Adreno GPU or copy RawLens hardware tuning blindly.
 
 Order: plan, measured baseline, optimization, paired verification.
-Cover live RAW viewfinder, single-frame and enabled multiframe still processing,
+Cover live RAW viewfinder and single-frame still processing,
 highlight recovery, denoise, false-color cleanup, defringe, sharpening, color/tone,
 JPEG encoding and durable publication. Implementation references authorized by
 the user are RawLens (local), [PhotonCamera](https://github.com/eszdman/PhotonCamera),
@@ -38,8 +70,10 @@ acquire/release fences and GPU resource lifetimes through completion. FP16 or
 lossy/compressed intermediates are not permitted as an unmeasured quality shortcut.
 
 Run analysis, compilation, CPU tests, stored-input comparisons, and benchmark
-reporting headlessly. Actual camera/VF tests require the app in the foreground on
-an awake unlocked device, driven by `scripts/ui`; no manual taps should be needed.
+reporting headlessly. Production-native camera/VF components can run through
+the separate headless test APK and offscreen EGL consumer. Activity/Home-gesture
+and displayed camera/VF tests require the app in the foreground on an awake
+unlocked device, driven by `scripts/ui`; no manual taps should be needed.
 Record permission dialogs or locked-device limitations without entering credentials.
 Treat unavailable GPU devices as untested, never as passing. Require physical
 Mali and Adreno smoke/quality/performance results before declaring GPU portability

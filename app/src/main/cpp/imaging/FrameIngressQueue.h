@@ -28,6 +28,7 @@ class FrameIngressQueue final {
     FrameIngressQueue& operator=(const FrameIngressQueue&) = delete;
     void start();
     void stop();
+    void setLowPowerIdle(bool idle);
     void enqueue(AcquiredRawFrame frame);
     bool enqueue(const metadata::FrameMetadataSnapshot& metadata);
     uint64_t latestTimestamp(uint64_t generation) const;
@@ -41,6 +42,7 @@ class FrameIngressQueue final {
     Drops drops_;
     uint64_t latestTimestamp_ = 0, generation_ = 0;
     bool stopped_ = false;
+    bool lowPowerIdle_ = false;
     std::thread worker_;
 };
 }  // namespace rawrcam::imaging

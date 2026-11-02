@@ -122,6 +122,9 @@ void RealtimePipeline::releaseProcessingResourcesForFrozenReplay() noexcept {
     if (vulkanContext_.device()) destroyCameraResources(false, false);
     if (rawAhbImporter_) rawAhbImporter_->clear();
 }
+void RealtimePipeline::releaseIdlePreviewResources() noexcept {
+    if (vulkanContext_.device()) destroyCameraResources(true);
+}
 void RealtimePipeline::shutdown() noexcept {
     if (vulkanContext_.device()) destroyCameraResources();
     realtime_.shutdownDeviceResources();
@@ -283,7 +286,8 @@ bool RealtimePipeline::configureGeometry(uint64_t generation, uint32_t width, ui
         const bool bufferImportCapable =
             (vulkanContext_.ahbExternalBufferFeatures() & VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT) != 0;
         const uint32_t diagMode = realtime_.diagnosticMode();
-        const bool bridgeNeeded = !bufferImportCapable || capturePort_.multiframeEnabled() || diagMode == 6u ||
+        const bool bridgeNeeded = !realtime_.experimentalZeroCopy() || !bufferImportCapable ||
+                                  capturePort_.multiframeEnabled() || diagMode == 6u ||
                                   diagMode == 9u || (diagMode >= 11u && diagMode <= 16u);
         if (audit_) {
             audit_(std::string("FRAME_SLOTS_BRIDGE_COPY ") + (bridgeNeeded ? "retained" : "released") +
