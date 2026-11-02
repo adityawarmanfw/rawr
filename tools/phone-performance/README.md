@@ -1,5 +1,17 @@
 # Headless phone performance checks
 
+Live VF telemetry (opens the app; only run when the user allows foreground use):
+
+```sh
+uv run --no-project tools/phone-performance/app_preview_benchmark.py \
+  --seconds 25 --output tmp/phone-performance/live-preview
+```
+
+This preserves image settings, captures native GPU timing intervals and saves
+UI/gfx/thermal/memory reports. It stops the app in `finally`. A run without a
+complete interval is rejected. Compare matching recipes/scenes; native GPU
+timestamps and UI gfx counters do not measure sensor-to-display latency.
+
 ## Actual app benchmark (opens the camera: obtain user go-ahead first)
 
 Build `:app:assembleBenchmark` for an R8-optimized, non-debuggable, debug-signed

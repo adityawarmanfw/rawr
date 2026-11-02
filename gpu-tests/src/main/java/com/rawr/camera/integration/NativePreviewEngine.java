@@ -21,5 +21,6 @@ public final class NativePreviewEngine {
     public native void setViewfinderDivisor(long handle, int divisor);
     public native void setExperimentalZeroCopy(long handle, boolean enabled);
     public native void setColorRenderProfile(long handle, int profile, String importedLut);
+    public native void setScopePresentationState(long handle, int[] types, int[] modes, int[] rotations, float[] rects);
     public native String cameraControlSnapshot(long handle);
 }

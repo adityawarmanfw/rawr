@@ -17,6 +17,7 @@ struct Slot {
     VkFence f{};
     VkQueryPool qp{};
     Img raw{}, out{}, state{};
+    Buf imported{};
 };
 static std::vector<uint16_t> pattern(uint32_t W, uint32_t H, bool stress) {
     std::vector<uint16_t> r(size_t(W) * H);
@@ -106,6 +107,7 @@ static void makeSyntheticLsc(uint32_t gw, uint32_t gh) {
 static uint32_t g_highlightMethod = 0;
 static bool g_bypassTone = false;
 static bool g_toggleTone = false;
+static uint32_t g_stride = 0;
 static void run(Ctx& c, const std::string& shader, const std::string& maskShader, uint32_t W, uint32_t H,
                 uint32_t frames, double fps, bool stress) {
     Slot s[3];
@@ -136,6 +138,19 @@ static void run(Ctx& c, const std::string& shader, const std::string& maskShader
         s[k].state = mkImg(c.pd, c.dev, W / 2, H / 2, VK_FORMAT_R16_UINT, VK_IMAGE_USAGE_STORAGE_BIT);
         auto raw = pattern(W, H, stress);
         upload(c, s[k].cmd, s[k].raw, raw, W, H);
+        if (g_stride) {
+            if (g_stride < W) throw std::runtime_error("buffer stride smaller than RAW width");
+            const VkDeviceSize bytes = (VkDeviceSize(g_stride) * H * 2u + 3u) & ~VkDeviceSize(3u);
+            s[k].imported = mkBuf(c.pd, c.dev, bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+            void* mapped = nullptr;
+            ck(vkMapMemory(c.dev, s[k].imported.m, 0, bytes, 0, &mapped), "import fixture map");
+            std::memset(mapped, 0xa5, size_t(bytes));
+            for (uint32_t y = 0; y < H; ++y)
+                std::memcpy(static_cast<uint16_t*>(mapped) + size_t(y) * g_stride,
+                            raw.data() + size_t(y) * W, size_t(W) * 2u);
+            vkUnmapMemory(c.dev, s[k].imported.m);
+        }
         VkCommandBufferBeginInfo bi{};
         bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         vkBeginCommandBuffer(s[k].cmd, &bi);
@@ -204,6 +219,8 @@ static void run(Ctx& c, const std::string& shader, const std::string& maskShader
         raw_preview::RawPreviewRecordInfo ri{};
         ri.commandBuffer = s[k].cmd;
         ri.inputRawR16UintView = s[k].raw.v;
+        ri.inputRawImportBuffer = s[k].imported.b;
+        ri.inputRawStridePixels = g_stride;
         ri.outputLinearRgba16fView = s[k].out.v;
         ri.outputCfaStateR16UintView = s[k].state.v;
         ri.width = W;
@@ -289,6 +306,7 @@ static void run(Ctx& c, const std::string& shader, const std::string& maskShader
         delImg(c.dev, s[k].state);
         delImg(c.dev, s[k].out);
         delImg(c.dev, s[k].raw);
+        delBuf(c.dev, s[k].imported);
         vkDestroyCommandPool(c.dev, s[k].pool, nullptr);
     }
 }
@@ -296,6 +314,7 @@ int main(int argc, char** argv) {
     // The instrumentation bridge invokes this entry more than once/process.
     g_bypassTone = g_toggleTone = false;
     g_highlightMethod = 0;
+    g_stride = 0;
     g_dump.clear();
     g_lsc.clear();
     std::cout.setf(std::ios::unitbuf);
@@ -319,6 +338,7 @@ int main(int argc, char** argv) {
         else if (a == "--method" && i + 1 < argc)
             g_highlightMethod = std::stoul(argv[++i]);
         else if (a == "--bypass-tone") g_bypassTone = true;
+        else if (a == "--buffer-stride" && i + 1 < argc) g_stride = std::stoul(argv[++i]);
         else if (a == "--toggle-tone") g_toggleTone = true;
         else if (a == "--dump" && i + 1 < argc)
             g_dump = argv[++i];

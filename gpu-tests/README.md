@@ -130,3 +130,17 @@ SurfaceFlinger display latency, active recording or still-during-background
 behaviour. Callback counts can coalesce and are not sensor-to-display latency.
 PSS includes test/EGL overhead. Logs/reports use unique `native-preview-*`
 directories. HDR+ and MFSR are not enabled by this test.
+
+For longer production-camera profiling, add `-e frames 240 -e waveform true
+-e profile 0`. `frames` accepts 30–600 consumed buffers per cycle; the per-cycle
+deadline is 60 seconds. `waveform` enables the RGB waveform using the real scope
+engine. Frame counts include consumer callback coalescing; the reported
+`startToTargetFramesMs` includes setup and is not a steady display FPS estimate.
+GPU timing checkpoints appear in the native diagnostic file (`CHECKPOINT`) and
+logcat (`PREVIEW_GPU_BREAKDOWN`). Keep all device GPU benchmark runs serial.
+
+`HeadlessGpuTest#optimizedPreviewCompilerParity` compares an optional `glslc -O`
+test shader to the reference with both highlight methods and synthetic lens
+shading. `optimizedStridedBufferParity` additionally checks even padded and odd
+RAW16 row strides against image input, with exact recovered RGBA16F bytes.
+These diagnostic compiler variants do not change the production shader build.

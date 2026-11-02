@@ -29,6 +29,9 @@ public final class NativePreviewTest {
         int profile = Integer.parseInt(InstrumentationRegistry.getArguments().getString("profile", "2"));
         boolean zeroCopy = Boolean.parseBoolean(InstrumentationRegistry.getArguments().getString("zeroCopy", "true"));
         boolean testUiPause = Boolean.parseBoolean(InstrumentationRegistry.getArguments().getString("testUiPause", "false"));
+        int targetFrames = Integer.parseInt(InstrumentationRegistry.getArguments().getString("frames", "30"));
+        boolean waveform = Boolean.parseBoolean(InstrumentationRegistry.getArguments().getString("waveform", "false"));
+        assertTrue(targetFrames >= 30 && targetFrames <= 600);
         assertTrue(cycles >= 2 && cycles <= 10);
         assertTrue(profile >= 0 && profile <= 10 && profile != 1); // Imported LUT needs a separate fixture.
         assertEquals(PackageManager.PERMISSION_GRANTED, context.checkSelfPermission(Manifest.permission.CAMERA));
@@ -54,6 +57,8 @@ public final class NativePreviewTest {
             engine.setPreferredCameraId(handle, "0");
             engine.setViewfinderDivisor(handle, 2);
             engine.setColorRenderProfile(handle, profile, "");
+            if (waveform) engine.setScopePresentationState(handle, new int[]{1, 0, 0}, new int[]{1, 0, 0},
+                new int[]{0, 0, 0}, new float[]{.65f, .05f, .30f, .20f, .04f, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
             assertTrue("Offscreen presentation surface rejected", engine.setSurface(handle, consumer.surface(), 0));
             engine.setInitialConfigReady(handle);
             for (int cycle = 0; cycle < cycles; ++cycle) {
@@ -62,18 +67,19 @@ public final class NativePreviewTest {
                 int first = frames.get();
                 long start = SystemClock.elapsedRealtime();
                 engine.setPreviewForeground(handle, true);
-                while (frames.get() - first < 30 && SystemClock.elapsedRealtime() - start < 20_000) {
+                while (frames.get() - first < targetFrames && SystemClock.elapsedRealtime() - start < 60_000) {
                     engine.tickCameraSession(handle);
                     Thread.sleep(50);
                 }
                 JSONObject row = new JSONObject().put("cycle", cycle).put("frames", frames.get() - first)
                     .put("profile", profile)
                     .put("zeroCopy", zeroCopy)
-                    .put("startTo30FramesMs", SystemClock.elapsedRealtime() - start)
+                    .put("targetFrames", targetFrames).put("waveform", waveform)
+                    .put("startToTargetFramesMs", SystemClock.elapsedRealtime() - start)
                     .put("runningPssKiB", Debug.getPss()).put("cameraSnapshot", engine.cameraControlSnapshot(handle));
                 rows.put(row);
                 Files.write(new File(dir, "lifecycle.json").toPath(), rows.toString(2).getBytes(StandardCharsets.UTF_8));
-                assertTrue("No production preview frames; inspect native diagnostics", frames.get() - first >= 30);
+                assertTrue("Too few production preview frames; inspect native diagnostics", frames.get() - first >= targetFrames);
                 assertNull("EGL presentation consumer failed", consumer.failure.get());
                 if (testUiPause) {
                     engine.setUiPresentationActive(handle, false);

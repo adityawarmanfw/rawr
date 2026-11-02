@@ -65,4 +65,35 @@ public class HeadlessGpuTest {
             Files.readAllBytes(new File(root, "tone-bypass/linear.rgba16f").toPath()),
             Files.readAllBytes(new File(root, "tone-switch/linear.rgba16f").toPath()));
     }
+    @Test public void optimizedPreviewCompilerParity() throws Exception {
+        for (int method = 0; method < 2; ++method) {
+            for (int variant = 0; variant < 2; ++variant) {
+                run("preview", "compiler-" + method + "-" + variant, "--method", Integer.toString(method),
+                    "--mask-shader", variant == 0 ? "raw_preview_cfa_state.comp.spv" : "raw_preview_cfa_optimized.comp.spv",
+                    "--frames", "30", "--fps", "30", "--width", "4080", "--height", "3064",
+                    "--normal-only", "--lsc", "17x13", "--dump", "linear.rgba16f");
+            }
+            File root = new File(InstrumentationRegistry.getInstrumentation().getTargetContext().getFilesDir(), "gpu-results");
+            org.junit.Assert.assertArrayEquals("Compiler optimization must preserve recovered linear bytes",
+                Files.readAllBytes(new File(root, "compiler-" + method + "-0/linear.rgba16f").toPath()),
+                Files.readAllBytes(new File(root, "compiler-" + method + "-1/linear.rgba16f").toPath()));
+        }
+        run("cfa", "compiler-cfa", "--mask-shader", "raw_preview_cfa_optimized.comp.spv", "--width", "512", "--height", "384");
+    }
+    @Test public void optimizedStridedBufferParity() throws Exception {
+        File root = new File(InstrumentationRegistry.getInstrumentation().getTargetContext().getFilesDir(), "gpu-results");
+        byte[] reference = null;
+        for (int stride : new int[]{0, 4096, 4081}) {
+            for (int variant = 0; variant < 2; ++variant) {
+                String label = "buffer-" + stride + "-" + variant;
+                run("preview", label, "--method", "1", "--buffer-stride", Integer.toString(stride),
+                    "--mask-shader", variant == 0 ? "raw_preview_cfa_state.comp.spv" : "raw_preview_cfa_optimized.comp.spv",
+                    "--frames", "30", "--fps", "30", "--width", "4080", "--height", "3064",
+                    "--normal-only", "--lsc", "17x13", "--dump", "linear.rgba16f");
+                byte[] actual = Files.readAllBytes(new File(root, label + "/linear.rgba16f").toPath());
+                if (reference == null) reference = actual;
+                else org.junit.Assert.assertArrayEquals("Strided buffer/compiler output differs from image input", reference, actual);
+            }
+        }
+    }
 }

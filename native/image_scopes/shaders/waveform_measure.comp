@@ -21,7 +21,6 @@ layout(push_constant) uniform PC {
 pc;
 
 shared uint sh[768];
-shared uint red[256];
 
 void main() {
     uint li = gl_LocalInvocationIndex;
@@ -76,16 +75,22 @@ void main() {
         outb.density[262144u + li * 512u + xb] = sh[512u + li];
     }
 
-    // Only 512 global atomicMax operations per active plane remain.
-    for (uint ch = 0u; ch < planes; ++ch) {
-        red[li] = sh[ch * 256u + li];
-        barrier();
-        for (uint step = 128u; step != 0u; step >>= 1u) {
-            if (li < step) red[li] = max(red[li], red[li + step]);
-            barrier();
+    // Every lane has stored its exact density bins. Reuse those shared bins
+    // for the maxima, reducing all active channels at each barrier rather
+    // than serializing three independent reduction trees. Integer max is
+    // exact; no histogram samples or bins change. No extra reduction scratch.
+    barrier();
+    for (uint step = 128u; step != 0u; step >>= 1u) {
+        if (li < step) {
+            for (uint ch = 0u; ch < planes; ++ch) {
+                uint i = ch * 256u + li;
+                sh[i] = max(sh[i], sh[i + step]);
+            }
         }
-        if (li == 0u) atomicMax(outb.density[pc.maxOffset + ch], red[0]);
         barrier();
     }
+    if (li == 0u)
+        for (uint ch = 0u; ch < planes; ++ch)
+            atomicMax(outb.density[pc.maxOffset + ch], sh[ch * 256u]);
     if (xb == 0u && li == 0u) outb.density[pc.sampledCountOffset] = pc.sampledPixelCount;
 }
