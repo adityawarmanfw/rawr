@@ -93,6 +93,13 @@ struct RawPreviewCreateInfo {
 
 struct RawPreviewRecordInfo {
     VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+    // Optional timestamp after CFA development, before highlight processing.
+    // Caller resets the query pool and reads it after frame completion.
+    VkQueryPool cfaTimingPool = VK_NULL_HANDLE;
+    uint32_t cfaTimingQuery = 0;
+    uint32_t highlightPrepareTimingQuery = UINT32_MAX;
+    uint32_t guideSeedTimingQuery = UINT32_MAX;
+    uint32_t guidePropagationTimingQuery = UINT32_MAX;
     VkImageView inputRawR16UintView = VK_NULL_HANDLE;
     VkImageView outputLinearRgba16fView = VK_NULL_HANDLE;
     VkImageView outputCfaStateR16UintView = VK_NULL_HANDLE; // optional, half-resolution VK_FORMAT_R16_UINT

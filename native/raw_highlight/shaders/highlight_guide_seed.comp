@@ -3,7 +3,14 @@
 // Colour-propagation seed: one guide cell per 4 (preview) or 8 (still) working
 // pixels. Only bright, unclipped, locally smooth pixels may describe
 // highlight colour; dark edges and silhouettes cannot seed it.
-layout(local_size_x = 16, local_size_y = 16) in;
+#ifndef RAWR_HL_SEED_GROUP_SIZE
+#if RAWR_HL_SCALE == 1
+#define RAWR_HL_SEED_GROUP_SIZE 8
+#else
+#define RAWR_HL_SEED_GROUP_SIZE 16
+#endif
+#endif
+layout(local_size_x = RAWR_HL_SEED_GROUP_SIZE, local_size_y = RAWR_HL_SEED_GROUP_SIZE) in;
 layout(binding = 0, rgba16f) uniform readonly image2D rgbImage;
 layout(binding = 1, r16ui) uniform readonly uimage2D clipStateImage;
 layout(binding = 2, rgba16f) uniform writeonly image2D guideImage;
@@ -17,6 +24,13 @@ layout(push_constant) uniform Pc {
 pc;
 
 #include "raw_highlight_post_rgb.glsl"
+#ifndef RAWR_HL_SEED_EARLY_REJECT
+#if RAWR_HL_SCALE == 1
+#define RAWR_HL_SEED_EARLY_REJECT 1
+#else
+#define RAWR_HL_SEED_EARLY_REJECT 0
+#endif
+#endif
 #if !defined(RAWR_HL_SCALE) || (RAWR_HL_SCALE != 1 && RAWR_HL_SCALE != 2)
 #error "RAWR_HL_SCALE must be 1 (preview) or 2 (still)"
 #endif
@@ -40,6 +54,10 @@ void main() {
     vec3 chromaSum = vec3(0.0);
     float weightSum = 0.0;
     vec3 observedSum = vec3(0.0);
+#if RAWR_HL_SEED_EARLY_REJECT
+    vec3 ceilings = max(pc.channelCeilings.rgb, vec3(1e-4));
+    float darkSeedCeiling = 0.5 * min(ceilings.r, min(ceilings.g, ceilings.b));
+#endif
     // Sixteen spatially distributed samples per cell.
     for (int y = kStep - 1; y < 4 * kStep; y += kStep) {
         for (int x = kStep - 1; x < 4 * kStep; x += kStep) {
@@ -48,6 +66,13 @@ void main() {
             vec3 rgb = rawrHighlightSanitize(imageLoad(rgbImage, p).rgb);
             observedSum += rgb;
             if (state != 0u) continue;
+#if RAWR_HL_SEED_EARLY_REJECT
+            // This conservative bound implies every channel is below 0.5 of
+            // its ceiling, safely below the existing 0.52 eligibility test.
+            // Avoid neighbour loads for dark pixels without moving the more
+            // expensive per-channel divisions ahead of neighbour rejection.
+            if (rawrHighlightMaximum(rgb) < darkSeedCeiling) continue;
+#endif
             ivec2 px0 = clamp(p - ivec2(kStep, 0), ivec2(0), extent - ivec2(1));
             ivec2 px1 = clamp(p + ivec2(kStep, 0), ivec2(0), extent - ivec2(1));
             ivec2 py0 = clamp(p - ivec2(0, kStep), ivec2(0), extent - ivec2(1));

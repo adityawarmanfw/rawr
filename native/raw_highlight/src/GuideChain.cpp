@@ -1,4 +1,5 @@
 #include "raw_highlight/GuideChain.hpp"
+#include "raw_highlight/SpirvLocalSize.hpp"
 
 #include <algorithm>
 #include <stdexcept>
@@ -92,6 +93,9 @@ static_assert(sizeof(PassPush) == 16);
 
 GuideChainPipelines::GuideChainPipelines(VkDevice device, const GuideChainShaders& shaders) : device_(device) {
     try {
+        seedSize_ = literalLocalSize2D(shaders.seed);
+        propagateSize_ = literalLocalSize2D(shaders.propagate);
+        smoothSize_ = literalLocalSize2D(shaders.smooth);
         seedSetLayout_ = makeImageSetLayout(device_, 3);
         seedLayout_ = makePipelineLayout(device_, seedSetLayout_, sizeof(SeedPush));
         seed_ = makePipeline(device_, shaders.seed, seedLayout_, "seed pipeline");
@@ -192,12 +196,12 @@ void GuideChain::recordInitialize(VkCommandBuffer command) {
 
 VkImageView GuideChain::record(VkCommandBuffer command, VkImageView rgbView, VkImageView clipStateView,
                                uint32_t width, uint32_t height, const float channelCeilings[3],
-                               const Conditional* conditional) {
+                               const Conditional* conditional, const Timing* timing) {
     recordInitialize(command);
     const bool predicated = conditional && conditional->begin && conditional->end && conditional->info;
-    auto dispatch = [&]() {
+    auto dispatch = [&](const std::array<uint32_t, 2>& local) {
         if (predicated) conditional->begin(command, conditional->info);
-        vkCmdDispatch(command, (guideWidth_ + 15u) / 16u, (guideHeight_ + 15u) / 16u, 1);
+        vkCmdDispatch(command, (guideWidth_ + local[0] - 1u) / local[0], (guideHeight_ + local[1] - 1u) / local[1], 1);
         if (predicated) conditional->end(command);
     };
     VkImageMemoryBarrier sync[2]{
@@ -231,7 +235,9 @@ VkImageView GuideChain::record(VkCommandBuffer command, VkImageView rgbView, VkI
     vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines_.seedLayout_, 0, 1, &seedSet_, 0,
                             nullptr);
     vkCmdPushConstants(command, pipelines_.seedLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(seedPush), &seedPush);
-    dispatch();
+    dispatch(pipelines_.seedSize_);
+    if (timing && timing->pool != VK_NULL_HANDLE)
+        vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, timing->pool, timing->seedQuery);
     guideSync();
 
     // Jump flood from the largest power of two below the guide extent down to 1.
@@ -247,12 +253,14 @@ VkImageView GuideChain::record(VkCommandBuffer command, VkImageView rgbView, VkI
                                 nullptr);
         vkCmdPushConstants(command, pipelines_.passLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(passPush),
                            &passPush);
-        dispatch();
+        dispatch(pipelines_.propagateSize_);
         guideSync();
         sourceA = !sourceA;
         if (step == 1u) break;
         step >>= 1u;
     }
+    if (timing && timing->pool != VK_NULL_HANDLE)
+        vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, timing->pool, timing->propagationQuery);
     // A broad low-resolution blur removes seed-cell colour contours while
     // leaving full-resolution luminance texture to the surviving channels.
     for (uint32_t pass = 0; pass < 4u; ++pass) {
@@ -263,7 +271,7 @@ VkImageView GuideChain::record(VkCommandBuffer command, VkImageView rgbView, VkI
                                 nullptr);
         vkCmdPushConstants(command, pipelines_.passLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(passPush),
                            &passPush);
-        dispatch();
+        dispatch(pipelines_.smoothSize_);
         guideSync();
         sourceA = !sourceA;
     }

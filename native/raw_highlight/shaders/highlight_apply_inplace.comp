@@ -17,13 +17,21 @@ layout(push_constant) uniform Pc {
 pc;
 #include "raw_highlight_post_rgb.glsl"
 #include "highlight_guide_sample.glsl"
+#ifndef RAWR_HL_EARLY_RGB_READ
+#define RAWR_HL_EARLY_RGB_READ 0
+#endif
 void main() {
     ivec2 p = ivec2(gl_GlobalInvocationID.xy);
     if (p.x >= int(pc.width) || p.y >= int(pc.height)) return;
+#if RAWR_HL_EARLY_RGB_READ
     vec4 original = imageLoad(rgbImage, p);
+#endif
     vec3 repair = rawrHighlightSensorRepair(p);
     bool needs = pc.enabled != 0u && rawrHighlightMaximum(repair) > 0.0;
     if (!needs) return;
+#if !RAWR_HL_EARLY_RGB_READ
+    vec4 original = imageLoad(rgbImage, p);
+#endif
     vec4 guide = rawrHighlightGuideAt(p);
     bool normalizedValid;
     vec3 normalizedGuide = rawrHighlightNormalizeGuide(guide.rgb, normalizedValid);

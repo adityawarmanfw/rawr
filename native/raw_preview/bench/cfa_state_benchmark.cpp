@@ -105,6 +105,8 @@ static void makeSyntheticLsc(uint32_t gw, uint32_t gh) {
 }
 // --method: 0 colour propagation, 1 Inpaint Opposed.
 static uint32_t g_highlightMethod = 0;
+static std::string g_seedShader, g_applyShader;
+static float g_redWb = 1.0f, g_blueWb = 1.0f;
 static bool g_bypassTone = false;
 static bool g_toggleTone = false;
 static uint32_t g_stride = 0;
@@ -182,10 +184,22 @@ static void run(Ctx& c, const std::string& shader, const std::string& maskShader
     ci.device = c.dev;
     ci.shaderPath = shader;
     ci.cfaStateShaderPath = maskShader;
+    ci.highlightGuideSeedShaderPath = g_seedShader;
+    ci.highlightApplyShaderPath = g_applyShader;
+    if (!g_seedShader.empty() || !g_applyShader.empty()) {
+        const size_t slash = maskShader.find_last_of("/\\");
+        const std::string dir = slash == std::string::npos ? "" : maskShader.substr(0, slash + 1);
+        if (g_seedShader.empty()) ci.highlightGuideSeedShaderPath = dir + "raw_preview_highlight_guide_seed.comp.spv";
+        if (g_applyShader.empty()) ci.highlightApplyShaderPath = dir + "raw_preview_highlight_apply.comp.spv";
+        ci.highlightGuidePropagateShaderPath = dir + "raw_preview_highlight_guide_propagate.comp.spv";
+        ci.highlightGuideSmoothShaderPath = dir + "raw_preview_highlight_guide_smooth.comp.spv";
+    }
     raw_preview::RawPreview pr(ci);
     raw_preview::RawFrameParameters rp{};
     rp.blackLevel[0] = rp.blackLevel[1] = rp.blackLevel[2] = rp.blackLevel[3] = 64;
     rp.whiteLevel = 4095;
+    rp.whiteBalance[0] = g_redWb;
+    rp.whiteBalance[3] = g_blueWb;
     rp.clipThreshold = .995f;
     rp.edgeStrength = 8;
     rp.chromaBlend = .2f;
@@ -314,6 +328,9 @@ int main(int argc, char** argv) {
     // The instrumentation bridge invokes this entry more than once/process.
     g_bypassTone = g_toggleTone = false;
     g_highlightMethod = 0;
+    g_seedShader.clear();
+    g_applyShader.clear();
+    g_redWb = g_blueWb = 1.0f;
     g_stride = 0;
     g_dump.clear();
     g_lsc.clear();
@@ -325,7 +342,11 @@ int main(int argc, char** argv) {
     uint32_t lscW = 0, lscH = 0;
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
-        if (a == "--shader" && i + 1 < argc)
+        if (a == "--seed-shader" && i + 1 < argc) g_seedShader = argv[++i];
+        else if (a == "--apply-shader" && i + 1 < argc) g_applyShader = argv[++i];
+        else if (a == "--wb-r" && i + 1 < argc) g_redWb = std::stof(argv[++i]);
+        else if (a == "--wb-b" && i + 1 < argc) g_blueWb = std::stof(argv[++i]);
+        else if (a == "--shader" && i + 1 < argc)
             shader = argv[++i];
         else if (a == "--mask-shader" && i + 1 < argc)
             maskShader = argv[++i];

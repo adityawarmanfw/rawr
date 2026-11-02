@@ -598,14 +598,35 @@ RawPreviewRecordResult RawPreview::record(const RawPreviewRecordInfo& recordInfo
                             &descriptorSet, 0, nullptr);
     vkCmdPushConstants(recordInfo.commandBuffer, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
     vkCmdDispatch(recordInfo.commandBuffer, (outputWidth + 7) / 8, (outputHeight + 7) / 8, 1);
+    if (recordInfo.cfaTimingPool != VK_NULL_HANDLE)
+        vkCmdWriteTimestamp(recordInfo.commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                            recordInfo.cfaTimingPool, recordInfo.cfaTimingQuery);
+    bool guideRecorded = false;
+    auto markHighlightPrepared = [&]() {
+        if (!guideRecorded && recordInfo.cfaTimingPool != VK_NULL_HANDLE) {
+            if (recordInfo.guideSeedTimingQuery != UINT32_MAX)
+                vkCmdWriteTimestamp(recordInfo.commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                    recordInfo.cfaTimingPool, recordInfo.guideSeedTimingQuery);
+            if (recordInfo.guidePropagationTimingQuery != UINT32_MAX)
+                vkCmdWriteTimestamp(recordInfo.commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                    recordInfo.cfaTimingPool, recordInfo.guidePropagationTimingQuery);
+        }
+        if (recordInfo.cfaTimingPool != VK_NULL_HANDLE && recordInfo.highlightPrepareTimingQuery != UINT32_MAX)
+            vkCmdWriteTimestamp(recordInfo.commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                recordInfo.cfaTimingPool, recordInfo.highlightPrepareTimingQuery);
+    };
 
     if (coloropp) {
         recordColoropp(recordInfo, *coloropp, lsc.buffer, lscValid);
+        markHighlightPrepared();
         if (recordInfo.parameters.bypassHighlightTone)
             return {};
         return {coloropp->sdr.image, coloropp->sdr.view};
     }
-    if (!usePropagatedHighlight) return {};
+    if (!usePropagatedHighlight) {
+        markHighlightPrepared();
+        return {};
+    }
 
     HighlightResources& hr = highlightResourcesFor(recordInfo.outputLinearRgba16fView, outputWidth, outputHeight);
     VkMemoryBarrier rgbReady{};
@@ -632,9 +653,16 @@ RawPreviewRecordResult RawPreview::record(const RawPreviewRecordInfo& recordInfo
                              VK_PIPELINE_STAGE_CONDITIONAL_RENDERING_BIT_EXT, 0, 0, nullptr, 1, &flagReady, 0,
                              nullptr);
     }
+    const rawr::highlight::GuideChain::Timing guideTiming{recordInfo.cfaTimingPool, recordInfo.guideSeedTimingQuery,
+                                                         recordInfo.guidePropagationTimingQuery};
+    const bool timeGuide = guideTiming.pool != VK_NULL_HANDLE && guideTiming.seedQuery != UINT32_MAX &&
+                           guideTiming.propagationQuery != UINT32_MAX;
     VkImageView finalGuide = hr.chain->record(recordInfo.commandBuffer, recordInfo.outputLinearRgba16fView,
                                               recordInfo.outputCfaStateR16UintView, outputWidth, outputHeight,
-                                              ceilings, predicatedHighlight ? &conditional : nullptr);
+                                              ceilings, predicatedHighlight ? &conditional : nullptr,
+                                              timeGuide ? &guideTiming : nullptr);
+    guideRecorded = timeGuide;
+    markHighlightPrepared();
     VkDescriptorImageInfo applyInfo[3]{{VK_NULL_HANDLE, recordInfo.outputLinearRgba16fView, VK_IMAGE_LAYOUT_GENERAL},
                                        {VK_NULL_HANDLE, recordInfo.outputCfaStateR16UintView, VK_IMAGE_LAYOUT_GENERAL},
                                        {VK_NULL_HANDLE, finalGuide, VK_IMAGE_LAYOUT_GENERAL}};

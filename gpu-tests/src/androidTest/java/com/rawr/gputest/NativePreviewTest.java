@@ -32,6 +32,7 @@ public final class NativePreviewTest {
         int targetFrames = Integer.parseInt(InstrumentationRegistry.getArguments().getString("frames", "30"));
         boolean waveform = Boolean.parseBoolean(InstrumentationRegistry.getArguments().getString("waveform", "false"));
         boolean trace = Boolean.parseBoolean(InstrumentationRegistry.getArguments().getString("trace", "false"));
+        boolean highlightReference = Boolean.parseBoolean(InstrumentationRegistry.getArguments().getString("highlightReference", "false"));
         assertTrue(targetFrames >= 30 && targetFrames <= 600);
         assertTrue(cycles >= 2 && cycles <= 10);
         assertTrue(profile >= 0 && profile <= 10 && profile != 1); // Imported LUT needs a separate fixture.
@@ -50,6 +51,17 @@ public final class NativePreviewTest {
             assertTrue(HeadlessCameraService.awaitReady());
             handle = engine.create(dir.getAbsolutePath(), context.getApplicationInfo().nativeLibraryDir, "");
             assertTrue(handle != 0);
+            if (highlightReference) {
+                // Run HeadlessGpuTest#highlightControlFlowParity first to stage
+                // the pre-change shaders. Override only this test engine's files.
+                File reference = new File(context.getFilesDir(), "gpu-results/seed-0");
+                Files.copy(new File(reference, "highlight_guide_seed_reference.comp.spv").toPath(),
+                    new File(dir, "raw_preview_highlight_guide_seed.comp.spv").toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                Files.copy(new File(reference, "highlight_apply_reference.comp.spv").toPath(),
+                    new File(dir, "raw_preview_highlight_apply.comp.spv").toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            }
             engine.setAssetManager(handle, context.getAssets());
             engine.setPersistentDiagnosticsEnabled(handle, true);
             engine.setInternalTraceCaptureEnabled(handle, trace);
@@ -76,6 +88,7 @@ public final class NativePreviewTest {
                 JSONObject row = new JSONObject().put("cycle", cycle).put("frames", frames.get() - first)
                     .put("profile", profile)
                     .put("zeroCopy", zeroCopy)
+                    .put("highlightReference", highlightReference)
                     .put("targetFrames", targetFrames).put("waveform", waveform)
                     .put("startToTargetFramesMs", SystemClock.elapsedRealtime() - start)
                     .put("runningPssKiB", Debug.getPss()).put("cameraSnapshot", engine.cameraControlSnapshot(handle));
@@ -97,6 +110,8 @@ public final class NativePreviewTest {
                     while (frames.get() - pausedFrames < 3 && SystemClock.elapsedRealtime() - resume < 5000)
                         Thread.sleep(50);
                     row.put("uiResumeFrames", frames.get() - pausedFrames);
+                    row.put("uiResumeWaitMs", SystemClock.elapsedRealtime() - resume);
+                    Files.write(new File(dir, "lifecycle.json").toPath(), rows.toString(2).getBytes(StandardCharsets.UTF_8));
                     assertTrue("Presentation did not resume", frames.get() - pausedFrames >= 3);
                 }
                 long stopBegin = SystemClock.elapsedRealtime();

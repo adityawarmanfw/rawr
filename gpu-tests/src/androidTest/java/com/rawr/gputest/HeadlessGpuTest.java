@@ -65,6 +65,25 @@ public class HeadlessGpuTest {
             Files.readAllBytes(new File(root, "tone-bypass/linear.rgba16f").toPath()),
             Files.readAllBytes(new File(root, "tone-switch/linear.rgba16f").toPath()));
     }
+    @Test public void highlightControlFlowParity() throws Exception {
+        File root = new File(InstrumentationRegistry.getInstrumentation().getTargetContext().getFilesDir(), "gpu-results");
+        int sceneCount = Integer.parseInt(InstrumentationRegistry.getArguments().getString("highlightScenes", "3"));
+        org.junit.Assert.assertTrue(sceneCount >= 1 && sceneCount <= 3);
+        for (int scene = 0; scene < sceneCount; ++scene) {
+            for (int variant = 0; variant < 2; ++variant) {
+                run("preview", "seed-" + (scene * 2 + variant), "--method", "0",
+                    "--seed-shader", variant == 0 ? "highlight_guide_seed_reference.comp.spv" : "raw_preview_highlight_guide_seed.comp.spv",
+                    "--apply-shader", variant == 0 ? "highlight_apply_reference.comp.spv" : "raw_preview_highlight_apply.comp.spv",
+                    "--frames", "60", "--fps", "30", "--width", scene == 2 ? "638" : "4080",
+                    "--height", scene == 2 ? "514" : "3064", scene == 1 ? "--stress-only" : "--normal-only",
+                    "--wb-r", scene == 0 ? "1" : "2.1", "--wb-b", scene == 0 ? "1" : "0.8",
+                    "--lsc", "17x13", "--dump", "linear.rgba16f");
+            }
+            org.junit.Assert.assertArrayEquals("Guide changes must preserve recovered image bytes, scene=" + scene,
+                Files.readAllBytes(new File(root, "seed-" + (scene * 2) + "/linear.rgba16f").toPath()),
+                Files.readAllBytes(new File(root, "seed-" + (scene * 2 + 1) + "/linear.rgba16f").toPath()));
+        }
+    }
     @Test public void haloClassificationParity() throws Exception {
         File root = new File(InstrumentationRegistry.getInstrumentation().getTargetContext().getFilesDir(), "gpu-results");
         for (int method = 0; method < 2; ++method) {

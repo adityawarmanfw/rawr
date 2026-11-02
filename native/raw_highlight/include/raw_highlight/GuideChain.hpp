@@ -1,6 +1,7 @@
 #pragma once
 #include <vulkan/vulkan.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 
@@ -36,6 +37,7 @@ class GuideChainPipelines {
     VkPipelineLayout passLayout_ = VK_NULL_HANDLE;
     VkPipeline propagate_ = VK_NULL_HANDLE;
     VkPipeline smooth_ = VK_NULL_HANDLE;
+    std::array<uint32_t, 2> seedSize_{16, 16}, propagateSize_{16, 16}, smoothSize_{16, 16};
 };
 
 // Low-resolution colour guide for one working image: seed from bright valid
@@ -58,6 +60,11 @@ class GuideChain {
         PFN_vkCmdEndConditionalRenderingEXT end = nullptr;
         const VkConditionalRenderingBeginInfoEXT* info = nullptr;
     };
+    struct Timing {
+        VkQueryPool pool = VK_NULL_HANDLE;
+        uint32_t seedQuery = 0;
+        uint32_t propagationQuery = 0;
+    };
 
     // Transitions the guide images to GENERAL once; record() calls it too.
     void recordInitialize(VkCommandBuffer command);
@@ -67,7 +74,8 @@ class GuideChain {
     // working image size; channelCeilings are the post-WB channel ceilings.
     // Returns the view holding the final guide.
     VkImageView record(VkCommandBuffer command, VkImageView rgbView, VkImageView clipStateView, uint32_t width,
-                       uint32_t height, const float channelCeilings[3], const Conditional* conditional = nullptr);
+                       uint32_t height, const float channelCeilings[3], const Conditional* conditional = nullptr,
+                       const Timing* timing = nullptr);
 
     // Guide view to bind when reconstruction is off and record() is skipped.
     VkImageView idleGuideView() const noexcept { return guideA_.view; }

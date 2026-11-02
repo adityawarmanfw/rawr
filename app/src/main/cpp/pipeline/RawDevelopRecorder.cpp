@@ -332,6 +332,13 @@ RawDevelopRecordResult RawDevelopRecorder::record(const RawDevelopRecordInput& i
                 : std::max(in.tonemapParams.aePostGain * std::exp2(in.tonemapParams.exposureEV), 1.0e-6f);
     raw_preview::RawPreviewRecordInfo rawRecord{};
     rawRecord.commandBuffer = slot.command;
+    if (const auto pool = performance_.rawCfaQueryPool(); pool != VK_NULL_HANDLE) {
+        rawRecord.cfaTimingPool = pool;
+        rawRecord.cfaTimingQuery = performance_.rawCfaQueryIndex(in.slotIndex);
+        rawRecord.highlightPrepareTimingQuery = performance_.rawHighlightPrepareQueryIndex(in.slotIndex);
+        rawRecord.guideSeedTimingQuery = performance_.rawGuideSeedQueryIndex(in.slotIndex);
+        rawRecord.guidePropagationTimingQuery = performance_.rawGuidePropagationQueryIndex(in.slotIndex);
+    }
     rawRecord.inputRawR16UintView = rawPreviewInputView;
     rawRecord.inputRawImportBuffer = useBufferDirect ? in.raw.importBuffer : VK_NULL_HANDLE;
     rawRecord.inputRawStridePixels = useBufferDirect ? in.raw.importBufferStridePixels : 0u;

@@ -144,3 +144,27 @@ test shader to the reference with both highlight methods and synthetic lens
 shading. `optimizedStridedBufferParity` additionally checks even padded and odd
 RAW16 row strides against image input, with exact recovered RGBA16F bytes.
 These diagnostic compiler variants do not change the production shader build.
+
+### RAW highlight guide comparison
+
+`HeadlessGpuTest#highlightControlFlowParity` compares the preceding seed/apply
+shaders with the current preview path, requiring exact recovered RGBA16F bytes.
+It covers normal and highlight-stress input, unequal white balance, 17×13 lens
+shading and partial workgroups. The optional `-e highlightScenes 1` selects only
+the normal fixture for exploration; final validation uses the default three.
+Reference shaders are staged in `files/gpu-results/seed-0` by this test.
+
+After that test, `NativePreviewTest -e highlightReference true` loads those old
+seed/apply modules into that test engine's private directory before camera
+configuration. Without the flag it uses the current modules. The guide backend
+reads literal workgroup sizes from SPIR-V, so old 16×16 and new 8×8 modules use
+matching dispatch geometry. Run comparisons serially with identical arguments,
+for example `-e frames 120 -e waveform true -e profile 0 -e detachSurface true
+-e testUiPause true -e trace true`. This does not alter the main app's files.
+
+Detailed GPU checkpoints can split CFA, highlight preparation/apply, guide seed,
+propagation and smoothing. Enable `debug.rawr.vf_stage_timing=1` **before** engine
+creation. Extra timestamp queries are disabled by default; inspect these stage
+fields only when the checkpoint says `rawStageTiming=1`. Repeat lifecycle tests
+with the property cleared to cover the normal query layout. Restore the empty
+property and stop the headless package after the device session.

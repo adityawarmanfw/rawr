@@ -1,5 +1,149 @@
 # Phone optimization results
 
+## 2026-11-03: rebased headless device validation
+
+Rebased the six optimization commits onto upstream `e7c8441` (lens editor,
+schema-2 profiles, Camera2 backend/recipe and startup changes). The ingress
+conflict preserves upstream's paired-frame startup notification outside the
+session lock and our completed-buffer retirement inside that lock.
+
+The rebased benchmark and headless APKs built successfully, all **484 Android
+unit tests** passed, and the host workgroup-parser test passed. The full headless
+GPU suite passed **11/11** in 267.141 s, including exact recovered-pixel checks
+for normal, highlight-stress, unequal-white-balance and odd-size fixtures.
+The GPU test library's SHA-256 is identical before and after rebasing, so the
+completed GPU run exercises the same binary. Camera tests below use the rebuilt
+production JNI library from the new upstream base.
+
+The first Camera2 attempt was denied because RawLens recording-check owned the
+rear camera. Android's camera-service log identifies that client explicitly.
+After the user released it, all reference/candidate and lifecycle checks passed.
+The initial busy-camera attempt is not counted as a rendering failure or timing
+sample.
+
+Reference → candidate → reference runs used RawrBase, RGB waveform, divisor 2,
+two 120-buffer cycles, and the same rebuilt APK. The following warmed-window
+means are derived from cumulative checkpoints: `(240 * mean240 - 120 * mean120)
+/ 120`, covering GPU samples 121–240.
+
+| Stage | Reference before | Candidate | Reference after |
+| --- | ---: | ---: | ---: |
+| Bayer reconstruction | 12.429 ms | 12.390 ms | 12.472 ms |
+| Guide seeds | 9.553 ms | 4.911 ms | 9.535 ms |
+| Guide propagation | 3.989 ms | 3.922 ms | 3.984 ms |
+| Guide smoothing | 7.214 ms | 7.225 ms | 7.170 ms |
+| Total highlight work | 21.797 ms | 17.080 ms | 21.725 ms |
+| Tonemap | 6.415 ms | 6.357 ms | 6.450 ms |
+| Total GPU frame | 48.678 ms | 43.826 ms | 48.636 ms |
+
+The complete 240-sample means were 48.715, 50.952 and 51.068 ms respectively:
+the candidate's first window had higher costs, particularly in tonemapping.
+This establishes a warmed-window improvement in these runs, not a startup
+improvement or a guarantee under every scene/load. Scene and clocks were not
+locked. CPU `PRESENT_END` median interval was 55.08 → 50.39 → 55.17 ms; paired
+ingress to CPU-observed fence median was 108.29 → 98.89 → 108.38 ms. These are
+offscreen trace measurements, not physical display FPS. **Stable 30 fps remains
+unachieved.**
+
+All **20 native camera cycles** passed pause/drain, resume, stop/drain and surface
+reattachment checks: six comparison cycles, six default-timing RawrBase cycles,
+two each for sRGB/AgX/Rec.709, and two with the legacy-copy ingress path. No
+presentations arrived after either drain window. Idle CPU was 2–12 ms per
+second; stopped PSS was 106127–117588 KiB including test/EGL overhead. The normal
+15-query timing layout was exercised with detailed timing disabled. These runs
+do not prove the earlier intermittent pause stall is eliminated in every case.
+
+A cold single-frame RCD/sRGB/colour-propagation replay with FCC2, defringe,
+JPEG98 4:2:2 produced exactly the same decoded ARGB SHA-256 as the earlier stored
+fixture runs. The compressed JPEG scan is also byte-identical. File size grew
+by 36 bytes; differences are confined to APP1 header segments, not image data.
+This validates the fixed still fixture, not capture-to-gallery latency.
+
+The new benchmark APK is installed. No app Activity was opened. Detailed timing
+was cleared, the headless package stopped, and CameraService showed no active
+clients at the end. Artifacts and the reproducible window calculation are under
+ignored `tmp/phone-performance/vf-validation/`, including `summary.json`,
+`jpeg-comparison.json`, instrumentation logs and native traces. Adreno hardware,
+sustained thermal performance and actual Home animation remain unvalidated.
+
+## Earlier local preparation (superseded by the device results above)
+
+Work continues toward sustained 30 fps; this candidate does **not** meet the
+33.3 ms frame budget. No ADB commands were run during the local-only continuation.
+The new app APK has been built locally, not installed or validated on the phone.
+
+The retained changes are:
+
+* Preview guide seeds use 8×8 workgroups. Dispatch reads each generated module's
+  literal workgroup dimensions once at pipeline creation, covering the entire
+  guide for both new 8×8 and reference/still 16×16 shaders.
+* A conservative dark-pixel bound rejects guide samples before reading their
+  neighbours. It only skips samples below 0.5 of every channel ceiling; the
+  existing eligibility threshold remains 0.52. Observed brightness accumulation,
+  sample positions, recovery math and precision are preserved.
+* The preview apply shader reads RGB only after establishing that the pixel
+  needs recovery. Unclipped pixels retain their existing contents.
+* Completed frame leases retire on metadata events as well as raw/idle events,
+  so paused presentation does not rely on an idle ingress poll for retirement.
+* Extra GPU stage timestamps are opt-in via `debug.rawr.vf_stage_timing=1`.
+  The normal path retains the original 15 queries per slot and adds no GPU
+  timestamps. Stage fields are meaningful only when `rawStageTiming=1`.
+
+Before device testing was stopped, sequential production Camera2/offscreen runs
+in the same test APK compared the old seed/apply modules with the candidate.
+RawrBase, RGB waveform, divisor 2, two 120-buffer cycles; cumulative GPU timing
+checkpoint at 240 samples:
+
+| Stage | Old shader reference | Seed/apply candidate |
+| --- | ---: | ---: |
+| Bayer reconstruction | 16.685 ms | 14.940 ms |
+| Guide seed generation | 12.544 ms | 6.367 ms |
+| Guide propagation | 6.324 ms | 5.940 ms |
+| Guide smoothing, unchanged shader | 9.473 ms | 8.259 ms |
+| Total highlight processing | 29.782 ms | 21.783 ms |
+| Total GPU frame | 67.013 ms | 55.994 ms |
+
+Clocks and scene were not locked; variation in unchanged stages shows why the
+whole measured reduction cannot be attributed solely to shader edits. Median
+CPU `PRESENT_END` interval was 72.63 ms versus 64.32 ms, and ingress-to-observed-
+fence median was 142.78 ms versus 126.84 ms. These are offscreen trace timings,
+not physical display FPS or proof of smooth Home animation. Artifacts:
+`tmp/phone-performance/vf-stages/files/gpu-results/native-preview-946705458`
+(reference) and `native-preview-946544133` (candidate).
+
+The retained seed/apply candidate passed exact recovered RGBA16F comparison on
+the normal 4080×3064 synthetic fixture with 17×13 lens shading. Broader stress,
+unequal-white-balance and odd-geometry checks are implemented and need to run on
+the final retained build. Smoothing experiments were set aside; production
+smoothing retains the preceding shader. No compression-table experiment was
+retained. The default highlight mode is colour propagation (method 0); Inpaint
+Opposed is method 1 and was not substituted to obtain faster timings.
+
+One earlier headless pause/resume run failed to resume presentation within five
+seconds. Six repeated cycles passed before and after the retirement change;
+the failure is intermittent and has not been proven fixed. The harness now
+writes resume counts and wait duration before asserting, preserving evidence
+when a run fails.
+
+Local verification:
+
+* Benchmark app, headless target APK and instrumentation APK build successfully;
+  all 453 Android unit tests pass (55 suites, no failures or skips).
+* Host parser tests cover malformed/truncated modules, unsupported dynamic local
+  sizes, invalid dimensions and mismatched entry points; ASan/UBSan also pass.
+* The parser reads actual compiled preview 8×8 and reference/still 16×16 modules.
+* The still seed shader is byte-identical to its preceding SPIR-V. The benchmark
+  reference seed/apply modules are byte-identical to their preceding shaders
+  when compiled with the same pinned NDK compiler.
+
+Next device gate: install the final APKs, rerun the full GPU suite (including all
+three guide parity fixtures), compare reference/candidate Camera2 runs, test all
+profiles with detailed timing both enabled and disabled, and repeat lifecycle
+checks. Clear `debug.rawr.vf_stage_timing` afterward; it was enabled at the device
+interruption. Adreno validation, sustained thermal tests, foreground Home traces
+and stable 30 fps remain pending. Literal workgroup interpretation follows the
+[Khronos SPIR-V guide](https://github.com/KhronosGroup/SPIRV-Guide/blob/main/chapters/local_size_and_workgroup_size.md).
+
 ## RAW viewfinder continuation (2026-11-02)
 
 Headless only; no RAWR Activity was opened. Rebuilt both the target debug APK

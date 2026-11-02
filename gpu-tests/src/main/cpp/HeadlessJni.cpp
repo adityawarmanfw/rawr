@@ -15,6 +15,8 @@
 #include "raw_preview_cfa_optimized.h"
 #include "raw_preview_cfa_full_halo.h"
 #include "highlight_guide_seed.h"
+#include "highlight_guide_seed_reference.h"
+#include "highlight_apply_reference.h"
 #include "highlight_guide_propagate.h"
 #include "highlight_guide_smooth.h"
 #include "highlight_apply_inplace.h"
@@ -64,6 +66,8 @@ extern "C" JNIEXPORT jint JNICALL Java_com_rawr_gputest_HeadlessGpuTest_runNativ
         SHADER(raw_preview_cfa_optimized, "raw_preview_cfa_optimized.comp.spv");
         SHADER(raw_preview_cfa_full_halo, "raw_preview_cfa_full_halo.comp.spv");
         SHADER(highlight_guide_seed, "raw_preview_highlight_guide_seed.comp.spv");
+        SHADER(highlight_guide_seed_reference, "highlight_guide_seed_reference.comp.spv");
+        SHADER(highlight_apply_reference, "highlight_apply_reference.comp.spv");
         SHADER(highlight_guide_propagate, "raw_preview_highlight_guide_propagate.comp.spv");
         SHADER(highlight_guide_smooth, "raw_preview_highlight_guide_smooth.comp.spv");
         SHADER(highlight_apply_inplace, "raw_preview_highlight_apply.comp.spv");

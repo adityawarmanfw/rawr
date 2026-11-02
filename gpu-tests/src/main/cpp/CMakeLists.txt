@@ -27,6 +27,12 @@ foreach(NAME highlight_guide_seed highlight_guide_propagate highlight_guide_smoo
     FLAGS -DRAWR_HL_SCALE=1 -DRAWR_COLOROPP_POST_WB=1 -I${HL} -I${COMMON}
     DEPENDS ${SHADER_DEPS} HEADERS_VAR HEADERS)
 endforeach()
+embed_spirv(highlight_guide_seed_reference "${HL}/highlight_guide_seed.comp" highlight_guide_seed_reference_bytes
+  FLAGS -DRAWR_HL_SCALE=1 -DRAWR_HL_SEED_EARLY_REJECT=0 -DRAWR_HL_SEED_GROUP_SIZE=16 -I${HL} -I${COMMON}
+  DEPENDS ${SHADER_DEPS} HEADERS_VAR HEADERS)
+embed_spirv(highlight_apply_reference "${HL}/highlight_apply_inplace.comp" highlight_apply_reference_bytes
+  FLAGS -DRAWR_HL_SCALE=1 -DRAWR_HL_EARLY_RGB_READ=1 -I${HL} -I${COMMON}
+  DEPENDS ${SHADER_DEPS} HEADERS_VAR HEADERS)
 embed_spirv(tonemap "${ROOT}/native/tonemap_engine/shaders/tonemap.comp" tonemap_bytes
   FLAGS -DLOCAL_X=16 -DLOCAL_Y=8 -I${ROOT}/native/tonemap_engine/shaders -I${COMMON}
   DEPENDS ${SHADER_DEPS} "${ROOT}/native/tonemap_engine/shaders/agx.glsl" HEADERS_VAR HEADERS)
