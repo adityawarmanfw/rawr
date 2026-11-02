@@ -2,6 +2,7 @@
 
 #include <android/asset_manager.h>
 #include <android/log.h>
+#include <sys/system_properties.h>
 #include <film_boost_milestone.h>
 #include <film_develop.h>
 #include <film_diffusion.h>
@@ -62,6 +63,10 @@ std::uint64_t readMemAvailableBytes() noexcept {
 }
 }  // namespace
 void RenderResources::createPixels(const RenderedStillContext& rendered) {
+    VkPhysicalDeviceMemoryProperties memoryProperties{};
+    vkGetPhysicalDeviceMemoryProperties(physicalDevice_, &memoryProperties);
+    char cachedProp[PROP_VALUE_MAX] = {};
+    const bool preferCached = __system_property_get("debug.rawr.cached_readback", cachedProp) <= 0 || cachedProp[0] != '0';
     output_ = rawrcam::vulkan::createOwnedImage(physicalDevice_, device_, rendered.width, rendered.height,
                                                 VK_FORMAT_R8G8B8A8_UNORM,
                                                 VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
@@ -79,10 +84,14 @@ void RenderResources::createPixels(const RenderedStillContext& rendered) {
     VkMemoryAllocateInfo ai{};
     ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     ai.allocationSize = req.size;
-    ai.memoryTypeIndex = vulkan::findCoherentHostMemoryType(physicalDevice_, req.memoryTypeBits);
+    const auto readbackType = vulkan::selectReadbackMemoryType(memoryProperties, req.memoryTypeBits, preferCached);
+    ai.memoryTypeIndex = readbackType.index;
+    readbackCoherent_ = readbackType.coherent;
     vkCheck(vkAllocateMemory(device_, &ai, nullptr, &readbackMemory_), "rendered allocate readback memory");
     vkCheck(vkBindBufferMemory(device_, readback_, readbackMemory_, 0), "rendered bind readback memory");
-    vkCheck(vkMapMemory(device_, readbackMemory_, 0, readbackBytes_, 0, &mapped_), "rendered map readback memory");
+    vkCheck(vkMapMemory(device_, readbackMemory_, 0, VK_WHOLE_SIZE, 0, &mapped_), "rendered map readback memory");
+    __android_log_print(ANDROID_LOG_INFO, "RawrCamNative", "STILL_READBACK_MEMORY type=%u coherent=%d bytes=%llu",
+                        readbackType.index, readbackCoherent_ ? 1 : 0, static_cast<unsigned long long>(readbackBytes_));
     if (rendered.ultraHdrEnabled) {
         const char* paramReason = nullptr;
         if (!gainmap::GainmapCompute::validateParams(rendered.gainmapParams, &paramReason))
@@ -116,10 +125,12 @@ void RenderResources::createPixels(const RenderedStillContext& rendered) {
         VkMemoryAllocateInfo mai{};
         mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         mai.allocationSize = mreq.size;
-        mai.memoryTypeIndex = vulkan::findCoherentHostMemoryType(physicalDevice_, mreq.memoryTypeBits);
+        const auto mapType = vulkan::selectReadbackMemoryType(memoryProperties, mreq.memoryTypeBits, preferCached);
+        mai.memoryTypeIndex = mapType.index;
+        mapReadbackCoherent_ = mapType.coherent;
         vkCheck(vkAllocateMemory(device_, &mai, nullptr, &mapReadbackMemory_), "gainmap allocate memory");
         vkCheck(vkBindBufferMemory(device_, mapReadback_, mapReadbackMemory_, 0), "gainmap bind memory");
-        vkCheck(vkMapMemory(device_, mapReadbackMemory_, 0, mapReadbackBytes_, 0, &mapMapped_), "gainmap map memory");
+        vkCheck(vkMapMemory(device_, mapReadbackMemory_, 0, VK_WHOLE_SIZE, 0, &mapMapped_), "gainmap map memory");
         if (!gainmap_ || gainmapDevice_ != device_) {
             gainmap_.reset();
             gainmap::GainmapCreateInfo gci{};
@@ -429,6 +440,36 @@ bool RenderResources::ensureFilm(const RenderedStillContext& rendered) {
     __android_log_print(ANDROID_LOG_INFO, "RawrCamNative", "STILL_FILM_CREATED film=%d paper=%d method=%d arena=%ux%u",
                         look.film, look.paper, look.rgbToRawMethod, fullW, fullH);
     return true;
+}
+void RenderResources::invalidateReadback() {
+    VkMappedMemoryRange ranges[2]{};
+    uint32_t count = 0;
+    const auto append = [&](VkDeviceMemory memory, bool coherent) {
+        if (!memory || coherent) return;
+        auto& range = ranges[count++];
+        range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+        range.memory = memory;
+        range.offset = 0;
+        // Entire allocations are mapped: WHOLE_SIZE meets atom-size alignment.
+        range.size = VK_WHOLE_SIZE;
+    };
+    append(readbackMemory_, readbackCoherent_);
+    append(mapReadbackMemory_, mapReadbackCoherent_);
+    if (count) vkCheck(vkInvalidateMappedMemoryRanges(device_, count, ranges), "invalidate still readback");
+}
+void RenderResources::releaseCompletedProcessing() {
+    // Final render fence and diagnostics/readback have completed. The JPEG
+    // writer only needs mapped output bytes, not these GPU scratch arenas.
+    // Renderer sessions explicitly requesting engine persistence retain them.
+    if (enginePersistenceEnabled_.load(std::memory_order_relaxed)) return;
+    tonemap_.reset();
+    postDemosaic_.reset();
+    localTone_.reset();
+    localToneDevice_ = VK_NULL_HANDLE;
+    captureSharpening_.reset();
+    captureSharpeningDevice_ = VK_NULL_HANDLE;
+    dcpStage_.reset();
+    rawrcam::vulkan::destroyOwnedImage(device_, glowGain_);
 }
 void RenderResources::releasePixels() noexcept {
     // Engine persistence toggle: with it off (default) engines are rebuilt

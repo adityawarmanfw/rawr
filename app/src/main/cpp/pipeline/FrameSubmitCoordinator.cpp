@@ -1038,7 +1038,10 @@ bool FrameSubmitCoordinator::submitAhb(uint64_t timestampNs, rawrcam::imaging::R
 
     // The CPU read below waits on the camera fence and touches the whole RAW
     // buffer; during recording that stall lands in the encoder's frame cadence.
-    if (!videoReady && imageLease && metadata.cameraContext &&
+    char rawStatsProperty[PROP_VALUE_MAX] = {};
+    const bool rawStatsEnabled = __system_property_get("debug.rawr.raw_content_stats", rawStatsProperty) > 0 &&
+                                 rawStatsProperty[0] == '1';
+    if (rawStatsEnabled && !videoReady && imageLease && metadata.cameraContext &&
         (lastRawContentStatsNs_ == 0 || timestampNs < lastRawContentStatsNs_ ||
          timestampNs - lastRawContentStatsNs_ >= 1'000'000'000ull)) {
         lastRawContentStatsNs_ = timestampNs;

@@ -43,7 +43,8 @@ class StillCaptureCoordinator(
         var fallback: Boolean = false,
         var jpegSuccessful: Boolean = !jpegRequested,
         val completedDngNames: MutableSet<String> = mutableSetOf(),
-        var jpegDone: Boolean = !jpegRequested
+        var jpegDone: Boolean = !jpegRequested,
+        val requestedAtNs: Long? = null
     )
 
     private val outputs = StillOutputStore(application)
@@ -65,7 +66,8 @@ class StillCaptureCoordinator(
     private var closing = false
     private data class CaptureInput(val settings: SettingsValues, val wallClockMillis: Long, val releaseAssets: () -> Unit,
                                     var frozenAssetId: String? = null,
-                                    val gps: com.rawr.camera.location.CaptureGps? = null)
+                                    val gps: com.rawr.camera.location.CaptureGps? = null,
+                                    val requestedAtNs: Long = android.os.SystemClock.elapsedRealtimeNanos())
     private val queuedInputs = java.util.concurrent.ConcurrentLinkedQueue<CaptureInput>()
     private val activeCaptures = java.util.concurrent.atomic.AtomicInteger(0)
 
@@ -74,12 +76,13 @@ class StillCaptureCoordinator(
     @Synchronized
     fun enqueueCapture(format: CaptureOutputFormat) {
         check(!closing) { "Capture coordinator is closing" }
+        val requestedAtNs = android.os.SystemClock.elapsedRealtimeNanos()
         StillProcessingService.acquire(application, this)
         val snapshot = settings().copy(dngEnabled = format.dng, jpegEnabled = format.jpeg)
         val releaseAssets = com.rawr.camera.settings.preferences.CaptureLutPins.acquire(
             snapshot.userLutProfiles.firstOrNull { it.id == snapshot.selectedUserLutProfileId })
         queuedInputs.add(CaptureInput(snapshot, System.currentTimeMillis(), releaseAssets,
-            gps = if (snapshot.locationTagging) gpsSnapshot() else null))
+            gps = if (snapshot.locationTagging) gpsSnapshot() else null, requestedAtNs = requestedAtNs))
         activeCaptures.incrementAndGet()
         preview.beginStillCapture()
     }
@@ -301,8 +304,10 @@ class StillCaptureCoordinator(
                 RequestState(
                     jpegRequested = output.jpeg != null,
                     remainingDngs = output.requestedDngCount,
-                    jpegDone = jpegFd < 0
+                    jpegDone = jpegFd < 0,
+                    requestedAtNs = input.requestedAtNs
                 )
+            Log.i(TAG, "CAPTURE_ACCEPTED requestId=$requestId requestedNs=${input.requestedAtNs} jpeg=${output.jpeg != null}")
             if (zslPersistRequested) {
                 val baseName = output.jobName.removeSuffix(".dng")
                 ContextCompat.startForegroundService(
@@ -425,6 +430,11 @@ class StillCaptureCoordinator(
                 outputs.completeJpeg(requestId, false) // Skipped JPEG is terminal, not retryable.
             } else {
                 val publication = outputs.completeJpeg(requestId, success)
+                state.requestedAtNs?.let { requested ->
+                    val publishedAtNs = android.os.SystemClock.elapsedRealtimeNanos()
+                    Log.i(TAG, "CAPTURE_JPEG_PUBLISHED requestId=$requestId success=${publication.success} " +
+                        "requestedNs=$requested publishedNs=$publishedAtNs elapsedMs=${(publishedAtNs - requested) / 1_000_000.0}")
+                }
                 publication.uri?.let(onJpegPublished)
                 state.jpegDone = true
                 state.jpegSuccessful = !state.jpegRequested || publication.success

@@ -92,6 +92,10 @@ rawr_test(camera_result_state_test
   "${RAWR_ROOT}/app/src/main/cpp/color/ColorMath.cpp")
 rawr_test(sensitivity_probe_startup_test
   "${RAWR_ROOT}/tests/native/sensitivity_probe_startup_test.cpp")
+rawr_test(queue_priority_policy_test
+  "${RAWR_ROOT}/tests/native/queue_priority_policy_test.cpp")
+rawr_test(readback_memory_policy_test
+  "${RAWR_ROOT}/tests/native/readback_memory_policy_test.cpp")
 
 rawr_test(camera_session_policy_test
   "${RAWR_ROOT}/tests/native/camera_session_policy_test.cpp")

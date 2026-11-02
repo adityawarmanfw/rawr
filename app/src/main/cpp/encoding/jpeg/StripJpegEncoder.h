@@ -1,9 +1,35 @@
 #pragma once
 
 #include <cstddef>
+#include <functional>
+#include <memory>
 #include <string>
 
 namespace rawrcam::encoding::jpeg {
+
+// Owns the compressed strips and a small joined header, without allocating a
+// second image-sized JPEG. Sinks consume borrowed chunks synchronously.
+// writeTo stops at the first failed chunk; callers must not retry another
+// encoder into a destination after a partial write. No GPU-specific behavior.
+class StripJpeg final {
+   public:
+    using Sink = std::function<bool(const unsigned char*, std::size_t)>;
+    StripJpeg();
+    ~StripJpeg();
+    StripJpeg(const StripJpeg&) = delete;
+    StripJpeg& operator=(const StripJpeg&) = delete;
+
+    bool encodeRgba8(const unsigned char* rgba, int width, int height, int quality, int tjSubsamp,
+                     std::string* error);
+    bool writeTo(const Sink& sink) const;
+    std::size_t byteSize() const noexcept;
+    int stripsUsed() const noexcept;
+    void reset() noexcept;
+
+   private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
 
 // Baseline JPEG of an RGBA8 image, encoded as horizontal strips on several threads.
 //

@@ -394,6 +394,12 @@ GainmapRecording recordGainmapAndReadback(RenderResources& resources, RenderComm
                                resources.gainmapReadbackBuffer(), 1, &mbc);
     }
 
+    VkMemoryBarrier hostRead{};
+    hostRead.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    hostRead.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    hostRead.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+    vkCmdPipelineBarrier(commands.command(), VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+                         0, 1, &hostRead, 0, nullptr, 0, nullptr);
     return {gainmapClipUsed, gainmapClipBoost};
 }
 }  // namespace
@@ -497,6 +503,7 @@ RenderedStillCompletion executeStillRender(RenderResources& resources, RenderCom
         __android_log_print(ANDROID_LOG_INFO, "RawrCamNative", "STILL_RENDER_FENCE_DONE requestId=%llu",
                             (unsigned long long)rendered.requestId);
         const auto tFence = std::chrono::steady_clock::now();
+        resources.invalidateReadback();
         // Setup is CPU-side only (resources, engines, recording); every
         // fence wait (intermediate chunks + final) covers the GPU
         // timestamp ranges plus scheduling and queue gaps, and the
@@ -508,6 +515,7 @@ RenderedStillCompletion executeStillRender(RenderResources& resources, RenderCom
                           - sharpenWaitMs;
         completeReadback(resources, commands, rendered, sourceImage, filesDir, preWbOk, clipEvidence,
                          gainmap.clipUsed, gainmap.clipBoost, tFence, done, emit);
+        resources.releaseCompletedProcessing();
         done.success = true;
 
     } catch (const std::exception& e) {

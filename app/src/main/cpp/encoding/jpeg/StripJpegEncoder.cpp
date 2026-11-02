@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <thread>
 #include <vector>
 
@@ -106,12 +107,28 @@ void encodeStrip(const unsigned char* rgba, int width, int quality, int subsamp,
 
 }  // namespace
 
-bool encodeStripsRgba8(const unsigned char* rgba, int width, int height, int quality, int tjSubsamp,
-                       unsigned char** jpeg, std::size_t* jpegSize, int* stripsUsed, std::string* error) {
-    *jpeg = nullptr;
-    *jpegSize = 0;
-    if (stripsUsed) *stripsUsed = 1;
-    if (!rgba || width <= 0 || height <= 0 || tjSubsamp < 0 || tjSubsamp >= TJ_NUMSAMP) {
+struct StripJpeg::Impl {
+    std::vector<Strip> strips;
+    std::vector<Layout> layouts;
+    std::vector<unsigned char> header;
+    std::size_t bytes = 0;
+    ~Impl() {
+        for (auto& strip : strips)
+            if (strip.jpeg) tj3Free(strip.jpeg);
+    }
+};
+
+StripJpeg::StripJpeg() = default;
+StripJpeg::~StripJpeg() = default;
+void StripJpeg::reset() noexcept { impl_.reset(); }
+std::size_t StripJpeg::byteSize() const noexcept { return impl_ ? impl_->bytes : 0; }
+int StripJpeg::stripsUsed() const noexcept { return impl_ ? static_cast<int>(impl_->strips.size()) : 0; }
+
+bool StripJpeg::encodeRgba8(const unsigned char* rgba, int width, int height, int quality, int tjSubsamp,
+                           std::string* error) {
+    reset();
+    if (!rgba || width <= 0 || height <= 0 || width > 65535 || height > 65535 ||
+        quality < 1 || quality > 100 || tjSubsamp < 0 || tjSubsamp >= TJ_NUMSAMP) {
         *error = "invalid arguments";
         return false;
     }
@@ -136,7 +153,9 @@ bool encodeStripsRgba8(const unsigned char* rgba, int width, int height, int qua
         return false;
     }
 
-    std::vector<Strip> strips(static_cast<std::size_t>(stripCount));
+    auto encoded = std::make_unique<Impl>();
+    auto& strips = encoded->strips;
+    strips.resize(static_cast<std::size_t>(stripCount));
     for (int i = 0; i < stripCount; ++i) {
         strips[i].y = i * stripMcuRows * mcuH;
         strips[i].rows = std::min(stripMcuRows * mcuH, height - strips[i].y);
@@ -162,7 +181,8 @@ bool encodeStripsRgba8(const unsigned char* rgba, int width, int height, int qua
     }
 
     bool ok = true;
-    std::vector<Layout> layouts(strips.size());
+    auto& layouts = encoded->layouts;
+    layouts.resize(strips.size());
     for (std::size_t i = 0; ok && i < strips.size(); ++i) {
         if (!strips[i].error.empty() || !strips[i].jpeg) {
             *error = "strip " + std::to_string(i) + ": " + (strips[i].error.empty() ? "no output" : strips[i].error);
@@ -178,14 +198,18 @@ bool encodeStripsRgba8(const unsigned char* rgba, int width, int height, int qua
     if (ok) {
         const Layout& l0 = layouts[0];
         std::size_t total = l0.scanStart + 6u + 2u;  // headers + DRI + EOI
-        for (std::size_t i = 0; i < strips.size(); ++i)
-            total += (strips[i].size - 2u - layouts[i].scanStart) + (i > 0 ? 2u : 0u);
-        auto* out = static_cast<unsigned char*>(tj3Alloc(total));
-        if (!out) {
-            *error = "tj3Alloc failed";
-            ok = false;
-        } else {
-            unsigned char* w = out;
+        for (std::size_t i = 0; i < strips.size(); ++i) {
+            const auto bytes = (strips[i].size - 2u - layouts[i].scanStart) + (i > 0 ? 2u : 0u);
+            if (bytes > std::numeric_limits<std::size_t>::max() - total) {
+                *error = "JPEG size overflow";
+                return false;
+            }
+            total += bytes;
+        }
+        encoded->bytes = total;
+        encoded->header.resize(l0.scanStart + 6u);
+        {
+            unsigned char* w = encoded->header.data();
             const unsigned char* s0 = strips[0].jpeg;
             std::memcpy(w, s0, l0.sosStart);
             w[l0.sofHeight] = static_cast<unsigned char>((height >> 8) & 0xFF);
@@ -197,26 +221,54 @@ bool encodeStripsRgba8(const unsigned char* rgba, int width, int height, int qua
             std::memcpy(w, dri, sizeof(dri));
             w += sizeof(dri);
             std::memcpy(w, s0 + l0.sosStart, l0.scanStart - l0.sosStart);
-            w += l0.scanStart - l0.sosStart;
-            for (std::size_t i = 0; i < strips.size(); ++i) {
-                if (i > 0) {
-                    *w++ = 0xFF;
-                    *w++ = static_cast<unsigned char>(0xD0 + ((i - 1) & 7u));
-                }
-                const std::size_t scan = strips[i].size - 2u - layouts[i].scanStart;
-                std::memcpy(w, strips[i].jpeg + layouts[i].scanStart, scan);
-                w += scan;
-            }
-            *w++ = 0xFF;
-            *w++ = 0xD9;
-            *jpeg = out;
-            *jpegSize = static_cast<std::size_t>(w - out);
-            if (stripsUsed) *stripsUsed = stripCount;
+        }
+        // Headers have been checked and strip 0's copied. Reuse two dead
+        // header bytes before each later scan for its restart marker, so a
+        // file sink receives one large chunk per strip rather than tiny writes.
+        for (std::size_t i = 1; i < strips.size(); ++i) {
+            auto* restart = strips[i].jpeg + layouts[i].scanStart - 2u;
+            restart[0] = 0xFF;
+            restart[1] = static_cast<unsigned char>(0xD0 + ((i - 1) & 7u));
         }
     }
-    for (auto& s : strips)
-        if (s.jpeg) tj3Free(s.jpeg);
+    if (ok) impl_ = std::move(encoded);
     return ok;
+}
+
+bool StripJpeg::writeTo(const Sink& sink) const {
+    if (!impl_ || !sink || !sink(impl_->header.data(), impl_->header.size())) return false;
+    for (std::size_t i = 0; i < impl_->strips.size(); ++i) {
+        const auto& strip = impl_->strips[i];
+        const auto begin = impl_->layouts[i].scanStart - (i > 0 ? 2u : 0u);
+        // Keep the final strip's original EOI; earlier ones are replaced by RST.
+        const auto end = strip.size - (i + 1u < impl_->strips.size() ? 2u : 0u);
+        if (!sink(strip.jpeg + begin, end - begin)) return false;
+    }
+    return true;
+}
+
+bool encodeStripsRgba8(const unsigned char* rgba, int width, int height, int quality, int tjSubsamp,
+                       unsigned char** jpeg, std::size_t* jpegSize, int* stripsUsed, std::string* error) {
+    *jpeg = nullptr;
+    *jpegSize = 0;
+    if (stripsUsed) *stripsUsed = 1;
+    StripJpeg encoded;
+    if (!encoded.encodeRgba8(rgba, width, height, quality, tjSubsamp, error)) return false;
+    auto* output = static_cast<unsigned char*>(tj3Alloc(encoded.byteSize()));
+    if (!output) {
+        *error = "tj3Alloc failed";
+        return false;
+    }
+    auto* cursor = output;
+    encoded.writeTo([&](const unsigned char* data, std::size_t size) {
+        std::memcpy(cursor, data, size);
+        cursor += size;
+        return true;
+    });
+    *jpeg = output;
+    *jpegSize = encoded.byteSize();
+    if (stripsUsed) *stripsUsed = encoded.stripsUsed();
+    return true;
 }
 
 }  // namespace rawrcam::encoding::jpeg
