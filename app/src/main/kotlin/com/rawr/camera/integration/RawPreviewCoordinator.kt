@@ -161,6 +161,12 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
         startSessionClock()
     }
 
+    /** Atomic native intent: do not queue behind Camera2 retirement or GPU waits. */
+    @Synchronized
+    fun setUiPresentationActive(active: Boolean) {
+        if (!closed) native.setUiPresentationActive(nativeHandle, active)
+    }
+
     @Synchronized
     fun stop() {
         if (closed) return

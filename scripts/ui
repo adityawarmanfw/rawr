@@ -13,7 +13,7 @@ dump is enough to find, tap and check a control. Commands:
   ui text <sel>            print a node's text / description / flags
   ui wait <sel> [-g] [-t S]  wait until visible (-g: until gone), default 10 s
   ui open <section>        deep-link Settings, e.g. Image, Capture, FilmSim
-  ui app | stop | back     launch capture / force-stop / system back
+  ui app | stop | back | home [--gesture]  launch / stop / Back / system Home
   ui shot [name]           screenshot to tmp/ui/<name>.png, downscaled
   ui audit                 clickable nodes with no id (the "needs a tag" list)
   ui seq "tap a" "wait b"  several commands in one call; stops at the first failure
@@ -207,6 +207,24 @@ def cmd_back(_):
     print("back")
 
 
+def cmd_home(args):
+    if args == ["--gesture"]:
+        # System navigation has no app testTag. Derive its edge gesture from
+        # the current display size; never use coordinates to select app controls.
+        sizes = re.findall(r"(\d+)x(\d+)", adb("shell", "wm", "size"))
+        if not sizes:
+            raise UiError("cannot determine display size for system Home gesture")
+        width, height = map(int, sizes[-1])
+        adb("shell", "input", "swipe", str(width // 2), str(height - 2),
+            str(width // 2), str(height * 55 // 100), "250")
+        print("home gesture")
+    elif not args:
+        adb("shell", "input", "keyevent", "KEYCODE_HOME")
+        print("home")
+    else:
+        raise UiError("usage: ui home [--gesture]")
+
+
 def cmd_shot(args):
     SHOTS.mkdir(parents=True, exist_ok=True)
     out = SHOTS / f"{args[0] if args else 'shot'}.png"
@@ -226,7 +244,7 @@ def cmd_audit(_):
 
 
 COMMANDS = {"state": cmd_state, "tap": cmd_tap, "text": cmd_text, "scroll": cmd_scroll, "wait": cmd_wait, "open": cmd_open,
-            "app": cmd_app, "stop": cmd_stop, "back": cmd_back, "shot": cmd_shot, "audit": cmd_audit}
+            "app": cmd_app, "stop": cmd_stop, "back": cmd_back, "home": cmd_home, "shot": cmd_shot, "audit": cmd_audit}
 
 
 def run(argv: list[str]):

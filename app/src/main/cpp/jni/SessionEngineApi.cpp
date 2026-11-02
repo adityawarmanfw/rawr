@@ -173,6 +173,9 @@ bool setRecordingFps(EngineHandle h, int fps) noexcept { return h && engine(h)->
 void setPreviewForeground(EngineHandle h, bool foreground) noexcept {
     if (h) engine(h)->cameraControls().setForeground(foreground);
 }
+void setUiPresentationActive(EngineHandle h, bool active) noexcept {
+    if (h) engine(h)->setUiPresentationActive(active);
+}
 void setInitialConfigReady(EngineHandle h) noexcept {
     if (h) engine(h)->cameraControls().setInitialConfigReady();
 }

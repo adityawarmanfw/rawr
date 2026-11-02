@@ -15,6 +15,7 @@ public final class NativePreviewEngine {
     public native boolean setCameraProfile(long handle, String json);
     public native void setPersistentDiagnosticsEnabled(long handle, boolean enabled);
     public native void setPreviewForeground(long handle, boolean foreground);
+    public native void setUiPresentationActive(long handle, boolean active);
     public native void setInitialConfigReady(long handle);
     public native void tickCameraSession(long handle);
     public native void setViewfinderDivisor(long handle, int divisor);

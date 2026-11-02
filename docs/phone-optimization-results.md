@@ -1,5 +1,54 @@
 # Phone optimization results: first measured change
 
+## Foreground validation and Home lag investigation
+
+User authorized Activity/UI testing. Actual UltraHDR captures with the opt-in
+`debug.rawr.single_primary_queue=1` completed while preview remained foreground:
+13 successful captures including one warmup, 12 measured median12875.67ms,
+p95/max15759.91ms, min11499.04ms. The initial secondary-queue run published after
+55848.54ms and a Home transition; this is not a controlled A/B. Scene/exposure
+changed. UltraHDR is distinct from excluded HDR+ multiframe processing and stayed
+enabled. Primary queue selection remains opt-in; no Adreno validation.
+
+Three actual Activity Home/resume cycles passed with the same process and camera
+closed: foreground PSS570592–603252KiB, Home PSS120634–126221KiB. A subsequent
+capture/post-publication Home check retained122497KiB. Shutter immediately
+followed by swipe Home also published successfully in7213.51ms after the atomic
+UI-presentation gate was introduced. These tests do not prove animation smoothness.
+
+User reports Home improved but still laggy. Launcher gfx counters were noisy;
+neither a two-frame preview backlog nor a750ms resource-reclamation delay showed
+a clear win. Both experiments were removed, settings restored to three frames
+and zero delay. No rejected experiment is enabled in production.
+
+A12-second Perfetto frame-timeline trace captured the issue: around the Home
+gesture, launcher RenderThread blocked199.21ms in dequeueBuffer, RAWR presentation
+waited119.20ms and GPU completion waited122.19ms. Window focus changed at trace
+4.775s; Activity pause was6.688s. RAWR continued presenting throughout that gap.
+This supports gating preview on focus loss earlier than Activity pause. It does
+not isolate all GPU cost or prove a complete fix. Trace and query artifacts are
+under ignored `tmp/phone-performance/perfetto/`.
+
+The focus-loss APK then showed its last QueuePresentKHR starting at6.714s,
+focus change6.727s, Activity pause7.331s, with no later presentation calls.
+The launcher max dequeueBuffer wait in that trace was70.40ms versus199.21ms
+in the preceding trace. This is a single trace pair with different timing and
+scene, not a percentage-performance claim or proof of completely smooth Home.
+CameraService showed no active client afterward; Home PSS97709KiB. The final
+APK contains neither the rejected backlog limit nor resource-release delay.
+Final focus-gated Activity validation passed three swipe-Home/resume cycles,
+with Home PSS111075–111445KiB and camera closed in every cycle. Gesture-window
+framestats contained only1–3 eligible frames per cycle; zero missed deadlines
+there is insufficient coverage to certify smoothness. Final shutter-then-Home
+test published successfully in6061.67ms with the primary-queue experiment on,
+and closed the camera afterward. The benchmark APK was left installed and the
+app stopped. The experimental queue property is restored off after testing.
+
+Native telemetry still reports roughly70.7ms per processed VF frame, including
+51.1ms RAW and9.4ms scopes, with ingress drops. The UI's sensor FPS readout does
+not establish presentation FPS. Whole-app optimization remains incomplete.
+Frame-timeline interpretation follows [Perfetto documentation](https://perfetto.dev/docs/data-sources/frametimeline).
+
 ## Single-frame optimization continuation
 
 Scope now excludes HDR+ and MFSR. No resolution, image arithmetic, quality,

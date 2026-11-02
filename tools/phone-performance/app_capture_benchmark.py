@@ -31,9 +31,15 @@ def main() -> None:
     parser.add_argument("--samples", type=int, default=20)
     parser.add_argument("--warmups", type=int, default=3)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--home-after-last", action="store_true",
+                        help="After publication, check camera closure and memory four seconds after Home")
+    parser.add_argument("--home-during-capture", action="store_true",
+                        help="Send the system Home gesture after shutter; requires exactly one capture")
     args = parser.parse_args()
     if not re.fullmatch(r"[a-zA-Z0-9_.]+", args.package) or args.samples < 1 or args.warmups < 0:
         parser.error("invalid package or sample count")
+    if args.home_during_capture and (args.samples != 1 or args.warmups != 0):
+        parser.error("--home-during-capture requires --samples 1 --warmups 0")
     args.output.mkdir(parents=True, exist_ok=False)
     env = dict(os.environ, UI_PKG=args.package)
 
@@ -57,6 +63,10 @@ def main() -> None:
         (args.output / "thermal-before.txt").write_text(shell("dumpsys", "thermalservice"))
         (args.output / "memory-before.txt").write_text(shell("dumpsys", "meminfo", args.package))
         (args.output / "package.txt").write_text(shell("dumpsys", "package", args.package))
+        properties = ("debug.rawr.single_primary_queue", "debug.rawr.preview_inflight",
+                      "debug.rawr.mali_fair_queue", "debug.rawr.cached_readback")
+        (args.output / "debug-properties.json").write_text(json.dumps(
+            {name: shell("getprop", name).strip() for name in properties}, indent=2))
         pid = shell("pidof", args.package).strip()
         if not re.fullmatch(r"\d+", pid):
             raise RuntimeError("expected exactly one foreground app process")
@@ -81,6 +91,8 @@ def main() -> None:
         seen: set[int] = set()
         for index in range(args.warmups + args.samples):
             ui("tap", "capture_shutter")
+            if args.home_during_capture:
+                ui("home", "--gesture")
             deadline = time.monotonic() + 120
             while True:
                 try:
@@ -102,11 +114,22 @@ def main() -> None:
             records.append(event)
             (args.output / "captures.json").write_text(json.dumps(records, indent=2) + "\n")
             print(json.dumps(event), flush=True)
-        (args.output / "ui-after.txt").write_text(ui("state"))
+        if not args.home_during_capture:
+            (args.output / "ui-after.txt").write_text(ui("state"))
         (args.output / "thermal-after.txt").write_text(shell("dumpsys", "thermalservice"))
         (args.output / "memory-after.txt").write_text(shell("dumpsys", "meminfo", args.package))
+        if args.home_after_last:
+            ui("home")
+            time.sleep(4)
+            (args.output / "memory-home.txt").write_text(shell("dumpsys", "meminfo", args.package))
+            camera = shell("dumpsys", "media.camera")
+            (args.output / "camera-home.txt").write_text(camera)
+            active = camera.split("Active Camera Clients:", 1)[1].split("Allowed user IDs:", 1)[0]
+            if args.package in active:
+                raise RuntimeError("Camera remains active four seconds after Home")
         times = sorted(row["elapsedMs"] for row in records if not row["warmup"])
         report = dict(package=args.package, variant=args.variant, samples=len(times), warmups=args.warmups,
+                      homeDuringCapture=args.home_during_capture, homeAfterLast=args.home_after_last,
                       medianMs=statistics.median(times), p95Ms=times[math.ceil(0.95 * len(times)) - 1],
                       minMs=min(times), maxMs=max(times))
         (args.output / "summary.json").write_text(json.dumps(report, indent=2) + "\n")

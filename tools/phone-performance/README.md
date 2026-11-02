@@ -31,6 +31,32 @@ Debug A/B controls (restore after testing):
 * `debug.rawr.raw_content_stats=1` enables the expensive once-per-second live RAW
   CPU-lock diagnostic. Normal preview skips it; RAW capture/statistics algorithms
   used for image processing remain unchanged.
+* `debug.rawr.single_primary_queue=1` opts single-frame demosaic/render work into
+  preview's primary queue and matching mutex, frozen per capture. It remains an
+  experiment, defaults off and does not change HDR+/MFSR scheduling. Restore the
+  original property after a paired run. Initial Mali foreground captures passed;
+  physical Adreno and a controlled same-input queue A/B remain pending.
+
+Actual Home/resume validation (opens the app; always stops it on exit):
+
+```sh
+uv run --no-project tools/phone-performance/app_lifecycle_benchmark.py \
+  --cycles 3 --gesture-home --output tmp/phone-performance/home-run
+```
+
+It uses `scripts/ui home --gesture` for system navigation and tagged controls
+for the app. Reports include same-process resume, camera closure four seconds
+after Home, foreground/Home PSS, launcher gfx/framestats and optional per-surface
+presentation data. Whole-run launcher jank percentages can include unrelated
+frames; use frame-timeline traces to attribute stalls. UI-ready observations
+include automation overhead and are not animation latency. Launcher gfx collection
+currently targets this phone's `com.miui.home`.
+
+`app_capture_benchmark.py --home-during-capture --samples 1 --warmups 0` tests
+publication after shutter immediately followed by the Home gesture.
+`--home-after-last` checks memory and camera closure after completed publication.
+Both flags are recorded so background runs cannot be mistaken for foreground
+capture benchmarks. These tests create normal gallery captures and retain them.
 
 Headless cached-readback visibility/performance check, with an installed Android
 NDK compiler (API 33, ARM64):

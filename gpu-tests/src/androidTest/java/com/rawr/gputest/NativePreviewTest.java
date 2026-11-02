@@ -28,6 +28,7 @@ public final class NativePreviewTest {
         int cycles = Integer.parseInt(InstrumentationRegistry.getArguments().getString("cycles", "2"));
         int profile = Integer.parseInt(InstrumentationRegistry.getArguments().getString("profile", "2"));
         boolean zeroCopy = Boolean.parseBoolean(InstrumentationRegistry.getArguments().getString("zeroCopy", "true"));
+        boolean testUiPause = Boolean.parseBoolean(InstrumentationRegistry.getArguments().getString("testUiPause", "false"));
         assertTrue(cycles >= 2 && cycles <= 10);
         assertTrue(profile >= 0 && profile <= 10 && profile != 1); // Imported LUT needs a separate fixture.
         assertEquals(PackageManager.PERMISSION_GRANTED, context.checkSelfPermission(Manifest.permission.CAMERA));
@@ -74,6 +75,20 @@ public final class NativePreviewTest {
                 Files.write(new File(dir, "lifecycle.json").toPath(), rows.toString(2).getBytes(StandardCharsets.UTF_8));
                 assertTrue("No production preview frames; inspect native diagnostics", frames.get() - first >= 30);
                 assertNull("EGL presentation consumer failed", consumer.failure.get());
+                if (testUiPause) {
+                    engine.setUiPresentationActive(handle, false);
+                    Thread.sleep(1000);
+                    int pausedFrames = frames.get();
+                    Thread.sleep(1000);
+                    row.put("uiPauseLateFrames", frames.get() - pausedFrames);
+                    assertEquals("Presentation continues after UI pause/drain", pausedFrames, frames.get());
+                    engine.setUiPresentationActive(handle, true);
+                    long resume = SystemClock.elapsedRealtime();
+                    while (frames.get() - pausedFrames < 3 && SystemClock.elapsedRealtime() - resume < 5000)
+                        Thread.sleep(50);
+                    row.put("uiResumeFrames", frames.get() - pausedFrames);
+                    assertTrue("Presentation did not resume", frames.get() - pausedFrames >= 3);
+                }
                 long stopBegin = SystemClock.elapsedRealtime();
                 engine.setPreviewForeground(handle, false);
                 engine.tickCameraSession(handle);

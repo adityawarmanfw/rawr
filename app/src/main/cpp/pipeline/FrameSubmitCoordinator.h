@@ -99,6 +99,7 @@ class FrameSubmitCoordinator final {
 
     void setDisplayRotationDegrees(int value) noexcept { displayRotationDegrees_ = value; }
     void setPresentationPaused(bool value) noexcept { presentationPaused_ = value; }
+    void setUiPresentationActive(bool value) noexcept { uiPresentationActive_.store(value, std::memory_order_relaxed); }
     void setVideoOutput(rawrcam::video::VideoSession* value) noexcept { videoOutput_ = value; }
     // Where recording frames are lost. Only counted while the encoder Surface is attached.
     struct VideoDropReasons {
@@ -281,6 +282,7 @@ class FrameSubmitCoordinator final {
     FrameSubmitConfiguration config_{};
     bool configured_ = false;
     bool presentationPaused_ = true;
+    std::atomic<bool> uiPresentationActive_{true};
     rawrcam::video::VideoSession* videoOutput_ = nullptr;
     uint64_t videoSubmitted_ = 0;
     uint64_t videoDrops_ = 0;

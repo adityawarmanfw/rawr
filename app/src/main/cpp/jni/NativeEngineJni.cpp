@@ -266,6 +266,10 @@ extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreview
                                                                                                              jlong h) {
     rawrcam::session::setInitialConfigReady(handle(h));
 }
+extern "C" JNIEXPORT void JNICALL
+Java_com_rawr_camera_integration_NativePreviewEngine_setUiPresentationActive(JNIEnv*, jobject, jlong h, jboolean v) {
+    rawrcam::session::setUiPresentationActive(handle(h), v == JNI_TRUE);
+}
 extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreviewEngine_setStillCaptureInFlight(
     JNIEnv*, jobject, jlong h, jboolean begin) {
     rawrcam::session::setStillCaptureInFlight(handle(h), begin == JNI_TRUE);
