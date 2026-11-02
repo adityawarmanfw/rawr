@@ -163,6 +163,12 @@ class FrameSubmitCoordinator final {
     [[nodiscard]] bool lensShadingCorrectionEnabled() const noexcept { return lensShadingCorrectionEnabled_; }
 
     bool submitMetadata(const rawrcam::metadata::FrameMetadataSnapshot& metadata);
+    // The generation of the newest image+metadata pair accepted since the last call, or 0. A buffer that
+    // arrives without usable results never counts, so it cannot mark a session as started.
+    [[nodiscard]] uint64_t takePairedGeneration() noexcept {
+        return pairedGeneration_.exchange(0, std::memory_order_acq_rel);
+    }
+
     void onRawFrame(rawrcam::imaging::RawFrameLease frame);
     void releaseCompletedSlots(bool force);
 
@@ -270,6 +276,8 @@ class FrameSubmitCoordinator final {
     std::string filesDir_;
 
     std::unique_ptr<rawrcam::imaging::FramePairer> framePairer_;
+    // Generation of the latest accepted image+metadata pair; read once by takePairedGeneration().
+    std::atomic<uint64_t> pairedGeneration_{0};
     FrameSubmitConfiguration config_{};
     bool configured_ = false;
     bool presentationPaused_ = true;

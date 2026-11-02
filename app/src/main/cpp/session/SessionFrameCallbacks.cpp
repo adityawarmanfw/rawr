@@ -19,6 +19,10 @@ namespace rawrcam::session {
 SessionFrameCallbacks::SessionFrameCallbacks(SessionEngine* engine) : engine_(engine) {}
 
 void SessionFrameCallbacks::postDiagnostic(const std::string& line) { engine_->appendDiagnostic(line); }
+void SessionFrameCallbacks::observePreviewBlackFloor(const metadata::FrameMetadataSnapshot& frame,
+                                                       const std::optional<std::array<float, 4>>& floor) {
+    if (auto* controller = engine_->cameraControls_.controller()) controller->observePreviewBlackFloor(frame, floor);
+}
 void SessionFrameCallbacks::postAudit(const std::string& line) { engine_->recordPipelineAuditLine(line); }
 void SessionFrameCallbacks::notifySwapchainOutOfDate() {
     {

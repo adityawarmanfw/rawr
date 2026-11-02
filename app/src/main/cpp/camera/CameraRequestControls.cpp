@@ -26,7 +26,8 @@ bool awbModeAdvertised(const CameraControlState& state, uint8_t awb) {
 
 }  // namespace
 
-void applyPreviewRequestDefaults(ACaptureRequest* request, const metadata::CameraContextMetadata& context) {
+void applyPreviewRequestDefaults(ACaptureRequest* request, const metadata::CameraContextMetadata& context,
+                                 bool minimal) {
     if (!request) return;
     const uint8_t shadingMap = context.lensShadingMapWidth >= 2 && context.lensShadingMapHeight >= 2
                                    ? ACAMERA_STATISTICS_LENS_SHADING_MAP_MODE_ON
@@ -36,6 +37,7 @@ void applyPreviewRequestDefaults(ACaptureRequest* request, const metadata::Camer
     const uint8_t hotPixelMap = ACAMERA_STATISTICS_HOT_PIXEL_MAP_MODE_ON;
     // Keep metadata enabled for every RAW frame without request swaps during bursts.
     (void)ACaptureRequest_setEntry_u8(request, ACAMERA_STATISTICS_LENS_SHADING_MAP_MODE, 1, &shadingMap);
+    if (minimal) return;
     (void)ACaptureRequest_setEntry_u8(request, ACAMERA_DISTORTION_CORRECTION_MODE, 1, &distortion);
     (void)ACaptureRequest_setEntry_u8(request, ACAMERA_HOT_PIXEL_MODE, 1, &hotPixel);
     (void)ACaptureRequest_setEntry_u8(request, ACAMERA_STATISTICS_HOT_PIXEL_MAP_MODE, 1, &hotPixelMap);
@@ -86,9 +88,14 @@ CameraControlApplyResult applyCameraControlState(ACaptureRequest* request, const
     }
     result.halPriorityMode = aePriority != camera2_priority::kOff;
     if (state.capabilities.aePriorityTagAvailable) {
-        result.aePriorityRequested = true;
-        result.aePriorityStatus =
-            ACaptureRequest_setEntry_u8(request, camera2_priority::kAePriorityModeTag, 1, &aePriority);
+        if (state.capabilities.minimalRequestDefaults && aePriority == camera2_priority::kOff) {
+            // Not asking for HAL priority AE: leave the tag to the template (and clear one set earlier).
+            (void)ACaptureRequest_setEntry_u8(request, camera2_priority::kAePriorityModeTag, 0, nullptr);
+        } else {
+            result.aePriorityRequested = true;
+            result.aePriorityStatus =
+                ACaptureRequest_setEntry_u8(request, camera2_priority::kAePriorityModeTag, 1, &aePriority);
+        }
     }
 
     // Priority AE still obeys CONTROL_AE_TARGET_FPS_RANGE. TEMPLATE_PREVIEW can
@@ -255,7 +262,10 @@ CameraControlApplyResult applyCameraControlState(ACaptureRequest* request, const
                                    : (state.capabilities.faceDetectFullMode
                                           ? ACAMERA_STATISTICS_FACE_DETECT_MODE_FULL
                                           : ACAMERA_STATISTICS_FACE_DETECT_MODE_SIMPLE);
-    (void)ACaptureRequest_setEntry_u8(request, ACAMERA_STATISTICS_FACE_DETECT_MODE, 1, &faceDetect);
+    if (state.capabilities.minimalRequestDefaults)
+        (void)ACaptureRequest_setEntry_u8(request, ACAMERA_STATISTICS_FACE_DETECT_MODE, 0, nullptr);
+    else
+        (void)ACaptureRequest_setEntry_u8(request, ACAMERA_STATISTICS_FACE_DETECT_MODE, 1, &faceDetect);
 
     const uint8_t ois = (state.capabilities.oisSupported && state.oisEnabled)
                             ? ACAMERA_LENS_OPTICAL_STABILIZATION_MODE_ON

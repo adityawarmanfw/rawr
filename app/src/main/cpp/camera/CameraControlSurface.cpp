@@ -102,10 +102,10 @@ void CameraControlSurface::setZeroCopy(bool enabled) {
     if (cameraController_) cameraController_->setExperimentalZeroCopyEnabled(enabled);
     sessionPolicy_.setZeroCopy(enabled, monotonicMillis());
 }
-void CameraControlSurface::rawFrameArrived(uint64_t generation) {
+void CameraControlSurface::framePaired(uint64_t generation) {
     // Ingress outlives the controller during shutdown.
     std::lock_guard<std::mutex> lock(rawFrameMutex_);
-    if (cameraController_) cameraController_->rawFrameArrived(generation);
+    if (cameraController_) cameraController_->framePaired(generation);
 }
 void CameraControlSurface::setInternalTraceCaptureEnabled(bool enabled) {
     rawrcam::diagnostics::RuntimeTraceRecorder::instance().setEnabled(enabled);

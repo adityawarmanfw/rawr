@@ -2,6 +2,7 @@
   "id": "vivo_x300_ultra",
   "name": "vivo X300 Ultra",
   "version": 8,
+  "quirks": ["afTapHold"],
   "match": {
     "models": ["V2562", "V2547A", "V2547DA"],
     "verifiedModels": ["V2562"],

@@ -226,6 +226,11 @@ class SessionEngine {
     imaging::RawReaderUsageLadder rawReaderUsage_;  // guarded by mu_
     // LensRoute::readerUsage of the configured camera; overrides the ladder. Guarded by mu_.
     std::optional<uint64_t> profileReaderUsage_;
+    uint32_t profileMaxImages_ = 0;  // LensRoute::rawMaxImages: 0 keeps the app's own count
+    bool profileReaderProbe_ = false;
+    bool profileReaderDemote_ = false;
+    ANativeWindow* createRawReader(uint64_t generation, uint32_t width, uint32_t height,
+                                   rawrcam::geometry::RawPixelFormat format, uint64_t usage);
     ANativeWindow* createRawInputWindow(uint64_t generation, uint32_t width, uint32_t height,
                                         rawrcam::geometry::RawPixelFormat format);
     void destroyRawInput();

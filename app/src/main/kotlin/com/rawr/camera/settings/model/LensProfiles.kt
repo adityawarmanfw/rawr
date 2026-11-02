@@ -22,7 +22,10 @@ enum class VendorKeyScope(val wireName: String, val label: String) {
      * full-size stills of a capture-stream lens: the vivo 200 MP HAL re-decides full size vs
      * binned only on such a frame.
      */
-    Decision("decision", "Decision");
+    Decision("decision", "Decision"),
+
+    /** The same value in the session parameters and on every request (HALs that read it at configure and per frame). */
+    SessionAndRequest("sessionAndRequest", "Session + request");
 
     companion object {
         fun fromWire(value: String?): VendorKeyScope = entries.firstOrNull { it.wireName == value } ?: Session
@@ -100,6 +103,26 @@ data class RawStreamChoice(
  */
 data class LensDcp(val file: String, val name: String)
 
+/** What the session parameters carry: the fps range and session keys, nothing at all, or the whole repeating request. */
+val SESSION_PARAMS_POLICIES = listOf("cadence", "none", "full")
+
+/** Request defaults the app writes: its own, or a minimal set that leaves processing overrides to the template. */
+val REQUEST_DEFAULTS = listOf("rawr", "minimal")
+
+/** How long a vendor gate is held: until the session is configured, or until the device closes. */
+val GATE_HOLDS = listOf("configured", "closed")
+
+/** What an automatic companion size does when the camera has no output with the RAW's shape. */
+val COMPANION_FALLBACKS = listOf("base", "nearest", "none")
+
+/** Reader usage as the profile writes it: a name ("gpuDataBuffer", "none") or hex ("0x100003"). */
+fun isReaderUsage(text: String): Boolean =
+    text == "gpuDataBuffer" || text == "none" ||
+        (text.length > 2 && (text.startsWith("0x") || text.startsWith("0X")) && text.drop(2).toULongOrNull(16) != null)
+
+/** Provider behaviours a lens can say it avoids (see the native CameraQuirks). */
+val CAMERA_QUIRKS = listOf("afTapHold", "noHalPriorityAe", "noTapAf", "requireFpsRange", "noAutoCompanion")
+
 data class LensProfile(
     val name: String,
     val cameraId: String,
@@ -108,18 +131,64 @@ data class LensProfile(
     val physicalCameraId: String = "",
     val stream: RawStreamChoice = RawStreamChoice(),
     val levels: LensLevels = LensLevels(),
+    /** Null inherits lens levels; explicit dynamic uses the stream's sensor result. */
+    val viewfinderLevels: LensLevels? = null,
+    val captureLevels: LensLevels? = null,
     val exposure: LensExposure = LensExposure(),
     val vendorKeys: List<VendorKey> = emptyList(),
     /** RAW reader usage the mode needs ("gpuDataBuffer", "none"); null for the app's own choice. */
     val readerUsage: String? = null,
     /** Vendor state held while the camera is open ("vivoFullSize"); empty for none. */
     val vendorGate: String = "",
+    /** "configured" or "closed"; null keeps the default (closed on a capture-stream lens). Needs a [vendorGate]. */
+    val gateHold: String? = null,
+    /** One of [SESSION_PARAMS_POLICIES]; "none" cannot carry session-scope keys. */
+    val sessionParams: String = "cadence",
+    /** One of [REQUEST_DEFAULTS]. */
+    val requestDefaults: String = "rawr",
+    /** Provider behaviours this lens avoids on top of the device's, from [CAMERA_QUIRKS]. */
+    val quirks: List<String> = emptyList(),
     /** Full-size RAW stream only still requests fill (vivo seamless 50/200 MP); null for none. */
     val captureStream: RawStreamChoice? = null,
     /** Most full-size stills one merge may request (1 = none); 0 = the app's own cap. */
     val captureBurst: Int = 0,
     /** Burst stills go in one at a time, each after the previous frame (HAL fails queued ones). */
     val captureBurstSequential: Boolean = false,
+    /** RAW reader usage of the [captureStream] ("gpuDataBuffer", "none", "0x100003"); null keeps GPU_DATA_BUFFER. */
+    val captureReaderUsage: String? = null,
+    /** Session parameters and the repeating request from the still template (Xiaomi full-size modes). */
+    val stillTemplate: Boolean? = null,
+    /** Fixed AE target fps on every request; 0 = the app's cadence. */
+    val fixedFps: Int = 0,
+    /** Companion of this size, always configured; null for the app's own choice. */
+    val companion: LensOutputSize? = null,
+    /** Explicitly omit the companion, including the automatic capture-stream companion. */
+    val disableCompanion: Boolean = false,
+    val companionFormat: String = "yuv",
+    val companionTargeted: Boolean = true,
+    /** Companion reader usage ([isReaderUsage]); null keeps the default for its format. */
+    val companionUsage: String? = null,
+    /** Images the companion reader holds; 0 keeps 2, otherwise 2 to 16. */
+    val companionMaxImages: Int = 0,
+    /** Companion tied to the route's physical camera; null follows the route. */
+    val companionPhysical: Boolean? = null,
+    /** One of [COMPANION_FALLBACKS]; only for an automatic companion size. */
+    val companionFallback: String = "base",
+    /** Drop the companion after the first frame; null drops only an automatic one. */
+    val companionDetach: Boolean? = null,
+    /** Delay after configure before submitting the first request. */
+    val startupDelayMs: Int = 0,
+    val stopRepeatingForStill: Boolean = false,
+    /** Extra JPEG output configured with the session but never targeted; null for none. */
+    val auxJpeg: LensOutputSize? = null,
+    /** Aux JPEG reader usage ([isReaderUsage]); null keeps the default. */
+    val auxJpegUsage: String? = null,
+    /** Images the viewfinder RAW reader holds; 0 keeps the app's 6, otherwise 6 to 16. */
+    val rawMaxImages: Int = 0,
+    /** Check a profile-fixed [readerUsage] with the allocator first and fall back to CPU-only when refused. */
+    val readerProbe: Boolean = false,
+    /** Let a silent profile-fixed reader fall back to CPU-only like the app's own choice does. */
+    val readerDemote: Boolean = false,
     /**
      * Same-colour block side the RAW really holds (1 Bayer, 2 quad, 4 for 4x4): blocks are remosaiced to Bayer
      * for the viewfinder, stills and video. Some sensor modes (in-sensor crops) report Bayer but aren't.
@@ -138,6 +207,9 @@ data class LensProfile(
     /** Camera profile (.dcp) replacing the camera's colour; null for the camera's own. */
     val dcp: LensDcp? = null
 )
+
+/** Width x height of an extra camera output of a lens profile. */
+data class LensOutputSize(val width: Int, val height: Int)
 
 /** Lens image mirror in the sensor frame; [wireName] is the profile JSON value. */
 enum class LensMirror(val wireName: String, val label: String) {
@@ -171,6 +243,24 @@ fun validateLensProfile(lens: LensProfile, others: List<LensProfile>): List<Stri
     }
     validateLevels(lens.levels)?.let { add(it) }
     lens.vendorKeys.forEach { key -> validateVendorKey(key)?.let { add(it) } }
+    if (lens.companionFallback !in COMPANION_FALLBACKS) add("Unknown companion fallback ${lens.companionFallback}")
+    if (lens.companionFallback != "base" && lens.companion != null) add("A companion fallback needs an automatic companion size")
+    if (lens.companionMaxImages != 0 && lens.companionMaxImages !in 2..16) add("Companion images must be 2 to 16")
+    if (lens.rawMaxImages != 0 && lens.rawMaxImages !in 6..16) add("RAW reader images must be 6 to 16")
+    for ((label, usage) in listOf("Companion" to lens.companionUsage, "Aux JPEG" to lens.auxJpegUsage,
+        "RAW reader" to lens.readerUsage, "Capture reader" to lens.captureReaderUsage)) {
+        if (usage != null && !isReaderUsage(usage)) add("$label usage must be a name or a 0x hex value")
+    }
+    if (lens.sessionParams !in SESSION_PARAMS_POLICIES) add("Unknown session parameters ${lens.sessionParams}")
+    if (lens.requestDefaults !in REQUEST_DEFAULTS) add("Unknown request defaults ${lens.requestDefaults}")
+    if (lens.gateHold != null && lens.gateHold !in GATE_HOLDS) add("Unknown gate hold ${lens.gateHold}")
+    if (lens.gateHold != null && lens.vendorGate.isEmpty()) add("A gate hold needs a vendor gate")
+    lens.quirks.filter { it !in CAMERA_QUIRKS }.forEach { add("Unknown quirk $it") }
+    if (lens.sessionParams == "none") {
+        lens.vendorKeys
+            .firstOrNull { it.enabled && (it.scope == VendorKeyScope.Session || it.scope == VendorKeyScope.SessionAndRequest) }
+            ?.let { add("Session parameters \"none\" cannot carry the session key ${it.tag}") }
+    }
 }
 
 /** Problems with the whole list (per-lens problems included). */

@@ -12,6 +12,9 @@
 #include <unordered_map>
 #include <vector>
 
+#include "camera/CameraKeyAttempts.h"
+#include "camera/CameraKeyResult.h"
+#include "camera/CameraKeySubmission.h"
 #include "camera/CameraMetadataTags.h"
 
 namespace rawrcam::camera {
@@ -81,17 +84,20 @@ bool representable(KeyType t, const std::vector<double>& values) {
 // int32, so a key the HAL declares as byte (OPLUS engineercamera tags, ...)
 // fails for no visible reason. Try the declared type first, then the others
 // that can hold the values, and remember what the HAL accepted per tag.
-camera_status_t setEntry(ACaptureRequest* request, uint32_t tag, const CameraKeySetting& key, KeyType* usedType) {
+camera_status_t setEntry(ACaptureRequest* request, uint32_t tag, const CameraKeySetting& key, KeyType* usedType,
+                         std::vector<KeyAttempt>* attempts) {
     static std::mutex mutex;
     static std::unordered_map<uint32_t, KeyType> accepted;
     std::vector<KeyType> order;
     const auto push = [&](KeyType t) {
         if (std::find(order.begin(), order.end(), t) == order.end()) order.push_back(t);
     };
+    std::optional<KeyType> cached;
     {
         std::lock_guard<std::mutex> lock(mutex);
-        if (const auto it = accepted.find(tag); it != accepted.end()) push(it->second);
+        if (const auto it = accepted.find(tag); it != accepted.end()) cached = it->second;
     }
+    if (cached) push(*cached);
     push(key.type);
     for (const KeyType t : {KeyType::Byte, KeyType::Int32, KeyType::Int64, KeyType::Float, KeyType::Double}) push(t);
 
@@ -99,6 +105,7 @@ camera_status_t setEntry(ACaptureRequest* request, uint32_t tag, const CameraKey
     for (const KeyType t : order) {
         if (!representable(t, key.values)) continue;
         const camera_status_t status = setEntryAs(request, tag, t, key.values);
+        if (attempts) attempts->push_back({keyTypeName(t), int(status), cached && *cached == t && attempts->empty()});
         if (status == ACAMERA_OK) {
             *usedType = t;
             std::lock_guard<std::mutex> lock(mutex);
@@ -119,20 +126,16 @@ CameraKeyInjectionResult applyCameraKeySettings(ACaptureRequest* request, const 
     CameraKeyInjectionResult result;
     const bool session = scope == CameraKeySetting::Scope::Session;
     for (const auto& key : keys) {
-        if (!key.enabled || key.scope != scope) continue;
+        if (!key.enabled || !keyAppliesIn(key.scope, scope)) continue;
         std::string error;
         const auto tag = resolveTag(characteristics, cameraId, key.tag, &error);
-        std::string skip;
         KeyType usedType = key.type;
-        if (!tag) {
-            skip = "lookup:" + error;
-        } else if (key.values.empty()) {
-            skip = "no_values";
-        } else if (session && !containsI32Tag(characteristics, ACAMERA_REQUEST_AVAILABLE_SESSION_KEYS, *tag)) {
-            skip = "not_advertised_as_session_key";
-        } else if (const camera_status_t s = setEntry(request, *tag, key, &usedType); s != ACAMERA_OK) {
-            skip = "set_status=" + std::to_string(s);
-        }
+        std::vector<KeyAttempt> attempts;
+        const auto submission = submitCameraKey(
+            tag.has_value(), !key.values.empty(),
+            session && tag && !containsI32Tag(characteristics, ACAMERA_REQUEST_AVAILABLE_SESSION_KEYS, *tag),
+            error, [&] { return setEntry(request, *tag, key, &usedType, &attempts); });
+        const auto& skip = submission.failure;
         std::ostringstream line;
         line << "CAMERA_KEY_INJECTION scope="
              << (session                                       ? "session"
@@ -161,12 +164,15 @@ CameraKeyInjectionResult applyCameraKeySettings(ACaptureRequest* request, const 
         if (skip.empty()) {
             ++result.applied;
             line << " applied=true";
+            if (submission.warnUnlistedSession)
+                line << " warning=framework_may_drop_unadvertised_session_key";
             if (usedType != key.type)
                 line << " type=" << keyTypeName(usedType) << " declared=" << keyTypeName(key.type);
         } else {
             result.failures.push_back(key.tag + ":" + skip);
             line << " applied=false reason=" << skip;
         }
+        line << " attempts=" << describeKeyAttempts(attempts);
         diag(line.str());
     }
     return result;
@@ -188,6 +194,59 @@ void logCarriedKeys(const ACaptureRequest* sessionParameters, const ACaptureRequ
              " repeating=" + (carries(repeating, *tag) ? "yes" : "no"));
     }
 }
+
+void logKeyResults(const ACameraMetadata* result, const ACameraMetadata* characteristics,
+                   const std::vector<CameraKeySetting>& keys, const char* cameraId, const std::string& lensId,
+                   const std::function<void(const std::string&)>& diag) {
+    if (!result) return;
+    const auto joined = [](const std::vector<double>& values) {
+        std::ostringstream out;
+        for (size_t i = 0; i < values.size(); ++i) out << (i ? "," : "") << values[i];
+        return out.str();
+    };
+    for (const auto& key : keys) {
+        // Still and decision keys never ride the repeating request this result answers.
+        if (!key.enabled || key.values.empty() || key.scope == CameraKeySetting::Scope::Still ||
+            key.scope == CameraKeySetting::Scope::Decision)
+            continue;
+        std::string error;
+        const auto tag = resolveTag(characteristics, cameraId, key.tag, &error);
+        if (!tag) continue;
+        std::optional<std::vector<double>> got;
+        ACameraMetadata_const_entry e{};
+        if (ACameraMetadata_getConstEntry(result, *tag, &e) == ACAMERA_OK && e.count > 0) {
+            got.emplace();
+            for (uint32_t i = 0; i < e.count; ++i) {
+                switch (e.type) {
+                    case ACAMERA_TYPE_BYTE: got->push_back(e.data.u8[i]); break;
+                    case ACAMERA_TYPE_INT32: got->push_back(e.data.i32[i]); break;
+                    case ACAMERA_TYPE_INT64: got->push_back(double(e.data.i64[i])); break;
+                    case ACAMERA_TYPE_FLOAT: got->push_back(e.data.f[i]); break;
+                    case ACAMERA_TYPE_DOUBLE: got->push_back(e.data.d[i]); break;
+                    default: break;
+                }
+            }
+        }
+        diag("CAMERA_KEY_RESULT lens=" + lensId + " tag=" + key.tag + " sent=" + joined(key.values) +
+             " result=" + (got ? joined(*got) : std::string("missing")) + " verdict=" + keyResultVerdict(key.values, got) +
+             " listedAsResult=" +
+             (containsI32Tag(characteristics, ACAMERA_REQUEST_AVAILABLE_RESULT_KEYS, *tag) ? "yes" : "no"));
+    }
+}
+
+namespace {
+const char* entryTypeName(uint8_t type) {
+    switch (type) {
+        case ACAMERA_TYPE_BYTE: return "byte";
+        case ACAMERA_TYPE_INT32: return "int32";
+        case ACAMERA_TYPE_FLOAT: return "float";
+        case ACAMERA_TYPE_INT64: return "int64";
+        case ACAMERA_TYPE_DOUBLE: return "double";
+        case ACAMERA_TYPE_RATIONAL: return "rational";
+        default: return "?";
+    }
+}
+}  // namespace
 
 void dumpCaptureRequest(const ACaptureRequest* request, const char* kind,
                         const std::function<void(const std::string&)>& diag) {
@@ -217,6 +276,7 @@ void dumpCaptureRequest(const ACaptureRequest* request, const char* kind,
             }
         }
         if (e.count > shown) line << ",...";
+        line << " typeName=" << entryTypeName(e.type);
         diag(line.str());
     }
 }

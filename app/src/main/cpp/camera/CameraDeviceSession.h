@@ -10,6 +10,8 @@
 
 #include "camera/CameraCallbacks.h"
 #include "camera/CameraRequestPipeline.h"
+#include "camera/SessionRecipe.h"
+#include "camera/SessionRecipeLog.h"
 #include "camera/CameraRouting.h"
 #include "metadata/CameraContextMetadata.h"
 namespace rawrcam::camera {
@@ -32,11 +34,12 @@ class CameraDeviceSession final {
     // that lock held before touching session state after each wait.
     bool open(const LensRoute&, CameraCallbacks&, const Diagnostic&, std::unique_lock<std::mutex>&,
               const std::function<bool()>& stillCurrent);
-    // companionStream adds a small discarded YUV output next to RAW: some HALs
-    // (MediaTek) accept a RAW-only session but never deliver a RAW buffer.
-    bool createSession(ANativeWindow*, const std::optional<LensRoute>&, const CameraControlState&,
+    // The recipe fixes the session's structure: templates, the companion (a small discarded output next to
+    // RAW; some HALs, MediaTek among them, accept a RAW-only session but never deliver a RAW buffer), the
+    // aux JPEG, the startup delay and how long the vendor gate is held.
+    bool createSession(ANativeWindow*, const std::optional<LensRoute>&, const SessionRecipe&, const CameraControlState&,
                        const CameraMeteringRequest&, CameraCallbacks&, CameraRequestPipeline&, const Diagnostic&,
-                       bool companionStream);
+                       const std::function<bool(int32_t)>& waitForStartup);
     bool retire(std::unique_lock<std::mutex>&, std::optional<std::chrono::milliseconds>, const char*,
                 const Diagnostic&);
     void forceRetire(const char*, const Diagnostic&);
@@ -49,6 +52,7 @@ class CameraDeviceSession final {
     }
     // Window of LensRoute::captureStream: a session output no repeating request targets.
     void setCaptureWindow(ANativeWindow* window) noexcept { captureWindow_ = window; }
+    bool stopRepeatingForStill() const noexcept { return stopRepeatingForStill_; }
     bool hasCaptureStream() const noexcept { return captureTarget_ != nullptr; }
     // Burst of full-size stills (one per exposure, tagged tagId): copies of the
     // repeating request that also fill the capture stream, with STILL_CAPTURE
@@ -79,6 +83,7 @@ class CameraDeviceSession final {
     const metadata::CameraContextMetadataPtr& cameraContext() const noexcept { return cameraContext_; }
     // Static black/white levels for the running session (from the lens
     // profile); nullopt means dynamic levels.
+    const std::optional<LevelOverride>& captureStaticLevels() const noexcept { return captureStaticLevels_; }
     const std::optional<LevelOverride>& staticLevels() const noexcept { return staticLevels_; }
     // True when profile session keys changed the sensor readout, so reported
     // sensitivity no longer maps 1:1 onto requested sensitivity.
@@ -89,14 +94,23 @@ class CameraDeviceSession final {
     // Integer value of a vendor result tag, looked up by name once per open
     // camera; nullopt when the camera or this result lacks it.
     std::optional<int64_t> vendorResultValue(const ACameraMetadata* result, const std::string& name);
+    const std::string& stillGate() const noexcept { return stillGate_; }
+    // Logs, once per session, what the first capture result returned for each
+    // profile key (CAMERA_KEY_RESULT).
+    void logKeyResultsOnce(const ACameraMetadata* result, const Diagnostic& diag);
 
    private:
     void releaseRequestOutputs(bool orphan) noexcept;
     void releaseCharacteristics() noexcept;
-    // Adds the companion YUV output and request target, shaped like the RAW stream
-    // when the camera advertises such a size; false leaves the session RAW-only.
+    // Adds the companion YUV output and request target; false leaves the session RAW-only.
+    // size: the lens profile's companion size; nullopt uses the RAW-aspect companion choice.
     bool addCompanionStream(const std::string& physicalCameraId, uint32_t rawWidth, uint32_t rawHeight,
-                            const Diagnostic&);
+                            const CompanionRecipe& companion, const Diagnostic&);
+    // Adds an output no request targets (LensRoute::auxJpegSize).
+    bool addAuxJpegStream(const std::pair<uint32_t, uint32_t>& size, std::optional<uint64_t> usage, const Diagnostic&);
+    // The configured session as facts for the CAMERA_SESSION_RECIPE line.
+    SessionRecipeFacts recipeFacts(const std::optional<LensRoute>& selected, const SessionRecipe& recipe,
+                                   ACameraDevice_request_template repeatingTemplate) const;
     void closeDeviceDetached(std::function<void()> afterClose);
     // Releases a vendor gate taken for a device that never opened or is already gone.
     void releaseHeldGate() noexcept;
@@ -112,22 +126,38 @@ class CameraDeviceSession final {
     ACameraOutputTarget* captureTarget_ = nullptr;
     std::vector<CameraKeySetting> stillKeys_;
     std::string stillKeysCameraId_;
+    std::string stillGate_;  // the recipe's vendor gate: its preset adds per-still keys and result probes
     AImageReader* companionReader_ = nullptr;
     ACaptureSessionOutput* companionOutput_ = nullptr;
     ACameraOutputTarget* companionTarget_ = nullptr;
     bool companionTargeted_ = false;
+    // What addCompanionStream configured, for the session recipe log line.
+    std::optional<SessionRecipeFacts::Companion> companionFacts_;
+    // The lens profile's companion: also targeted by full-size stills.
+    bool companionFromProfile_ = false;
+    bool companionDetachable_ = false;
+    bool profileCompanionTargeted_ = true;
+    bool captureStillTemplate_ = true;
+    bool stopRepeatingForStill_ = false;
+    AImageReader* auxJpegReader_ = nullptr;
+    ACaptureSessionOutput* auxJpegOutput_ = nullptr;
     ACaptureSessionOutputContainer* outputs_ = nullptr;
     ACameraMetadata* characteristics_ = nullptr;
     ANativeWindow* rawWindow_ = nullptr;
     CameraSessionCallbackContext* sessionContext_ = nullptr;
     CameraDeviceCallbackContext* deviceContext_ = nullptr;
     metadata::CameraContextMetadataPtr cameraContext_;
-    std::optional<LevelOverride> staticLevels_;
+    std::optional<LevelOverride> staticLevels_, captureStaticLevels_;
     bool sessionKeysApplied_ = false;
     uint64_t generation_ = 0, readerGeneration_ = 0, closeGeneration_ = 0;
     bool closePending_ = false, forcedRetire_ = false;
     std::string heldGate_;  // LensRoute::vendorGate held for the open device.
     std::map<std::string, std::optional<uint32_t>> vendorTags_;  // name -> tag of the open camera
+    // Profile keys of the running session, read back from its first capture result.
+    std::vector<CameraKeySetting> resultKeys_;
+    std::string resultKeysLensId_;
+    std::string resultKeysCameraId_;
+    bool resultKeysPending_ = false;
     std::condition_variable closed_;
 };
 }  // namespace rawrcam::camera

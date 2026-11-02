@@ -2,8 +2,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <charconv>
 #include <cstdio>
 #include <cstdlib>
+#include <optional>
+#include <utility>
 
 namespace rawrcam::camera {
 namespace {
@@ -386,10 +389,11 @@ void appendKeys(std::string& out, const std::vector<CameraKeySetting>& keys) {
         out += ",\"type\":\"";
         out += typeName(k.type);
         out += "\",\"scope\":\"";
-        out += k.scope == CameraKeySetting::Scope::Session    ? "session"
-               : k.scope == CameraKeySetting::Scope::Request  ? "request"
-               : k.scope == CameraKeySetting::Scope::Decision ? "decision"
-                                                              : "still";
+        out += k.scope == CameraKeySetting::Scope::Session            ? "session"
+               : k.scope == CameraKeySetting::Scope::Request          ? "request"
+               : k.scope == CameraKeySetting::Scope::Decision         ? "decision"
+               : k.scope == CameraKeySetting::Scope::SessionAndRequest ? "sessionAndRequest"
+                                                                      : "still";
         out += "\",\"values\":[";
         for (size_t v = 0; v < k.values.size(); ++v) {
             if (v) out += ',';
@@ -430,6 +434,41 @@ void readExposure(const Json* j, ExposureOverride& out) {
     out.shutterMaxNs = int64_t(std::clamp(j->num("shutterMaxNs"), 0.0, double(kExtendedShutterMaxNs)));
 }
 
+// Reader usage as a name or a hex string ("0x100003"): the JSON number type
+// can't carry 64-bit usage bits exactly.
+std::optional<uint64_t> parseReaderUsage(const std::string& text) {
+    if (text == "gpuDataBuffer") return kReaderUsageGpuDataBuffer;
+    if (text == "none") return 0;
+    if (text.size() > 2 && text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
+        uint64_t value = 0;
+        const char* begin = text.data() + 2;
+        const char* end = text.data() + text.size();
+        const auto parsed = std::from_chars(begin, end, value, 16);
+        if (parsed.ec == std::errc{} && parsed.ptr == end) return value;
+    }
+    return std::nullopt;
+}
+
+std::string readerUsageName(uint64_t usage) {
+    if (usage == kReaderUsageGpuDataBuffer) return "gpuDataBuffer";
+    if (usage == 0) return "none";
+    char buf[24];
+    std::snprintf(buf, sizeof(buf), "0x%llx", static_cast<unsigned long long>(usage));
+    return buf;
+}
+
+std::optional<std::pair<uint32_t, uint32_t>> readSize(const Json* j) {
+    if (!j || j->kind != Json::Kind::Object) return std::nullopt;
+    const double w = j->num("width"), h = j->num("height");
+    if (w < 1.0 || h < 1.0 || w > 65536.0 || h > 65536.0 || std::floor(w) != w || std::floor(h) != h) return std::nullopt;
+    return std::pair<uint32_t, uint32_t>{uint32_t(w), uint32_t(h)};
+}
+
+void appendSize(std::string& out, const char* name, const std::pair<uint32_t, uint32_t>& size) {
+    out += std::string(",\"") + name + "\":{\"width\":" + std::to_string(size.first) +
+           ",\"height\":" + std::to_string(size.second) + "}";
+}
+
 bool readKeys(const std::vector<Json>& list, std::vector<CameraKeySetting>& out, std::string* error) {
     for (const auto& k : list) {
         CameraKeySetting key;
@@ -448,10 +487,11 @@ bool readKeys(const std::vector<Json>& list, std::vector<CameraKeySetting>& out,
         }
         key.type = *type;
         const std::string scope = k.str("scope", "session");
-        key.scope = scope == "request" ? CameraKeySetting::Scope::Request
-                    : scope == "still"    ? CameraKeySetting::Scope::Still
-                    : scope == "decision" ? CameraKeySetting::Scope::Decision
-                                          : CameraKeySetting::Scope::Session;
+        key.scope = scope == "request"             ? CameraKeySetting::Scope::Request
+                    : scope == "still"             ? CameraKeySetting::Scope::Still
+                    : scope == "decision"          ? CameraKeySetting::Scope::Decision
+                    : scope == "sessionAndRequest" ? CameraKeySetting::Scope::SessionAndRequest
+                                                   : CameraKeySetting::Scope::Session;
         for (const auto& v : k.array("values"))
             if (v.kind == Json::Kind::Number) key.values.push_back(v.number);
         key.enabled = k.flag("enabled", true);
@@ -514,16 +554,75 @@ std::string serializeCameraProfile(const CameraProfile& profile) {
         if (r.unlistedStream) out += ",\"unlisted\":true";
         out += "},\"levels\":";
         appendLevels(out, r.levels);
+        if (r.viewfinderLevels) { out += ",\"viewfinderLevels\":"; appendLevels(out, *r.viewfinderLevels); }
+        if (r.captureLevels) { out += ",\"captureLevels\":"; appendLevels(out, *r.captureLevels); }
         out += ",\"exposure\":";
         appendExposure(out, r.exposure);
         out += ",\"keys\":";
         appendKeys(out, r.keys);
-        if (r.readerUsage)
-            out += *r.readerUsage == kReaderUsageGpuDataBuffer ? ",\"readerUsage\":\"gpuDataBuffer\""
-                                                                : ",\"readerUsage\":\"none\"";
+        if (r.readerUsage) out += ",\"readerUsage\":\"" + readerUsageName(*r.readerUsage) + "\"";
+        if (r.captureReaderUsage)
+            out += ",\"captureReaderUsage\":\"" + readerUsageName(*r.captureReaderUsage) + "\"";
+        if (r.stillTemplate) out += *r.stillTemplate ? ",\"template\":\"still\"" : ",\"template\":\"preview\"";
+        if (r.fixedFps > 0) out += ",\"fps\":" + std::to_string(r.fixedFps);
+        if (r.disableCompanion) out += ",\"disableCompanion\":true";
+        if (r.companionSize || r.companionUsage || r.companionMaxImages || r.companionPhysical || r.companionDetach ||
+            r.companionFallback != CompanionFallback::Base || r.companionPrivate || !r.companionTargeted) {
+            out += ",\"companion\":{";
+            if (r.companionSize)
+                out += "\"width\":" + std::to_string(r.companionSize->first) +
+                       ",\"height\":" + std::to_string(r.companionSize->second) + ",";
+            out += r.companionPrivate ? "\"format\":\"private\"" : "\"format\":\"yuv\"";
+            out += r.companionTargeted ? ",\"targeted\":true" : ",\"targeted\":false";
+            if (r.companionUsage) out += ",\"usage\":\"" + readerUsageName(*r.companionUsage) + "\"";
+            if (r.companionMaxImages) out += ",\"maxImages\":" + std::to_string(r.companionMaxImages);
+            if (r.companionPhysical) out += *r.companionPhysical ? ",\"physical\":true" : ",\"physical\":false";
+            if (r.companionDetach) out += *r.companionDetach ? ",\"detach\":true" : ",\"detach\":false";
+            if (r.companionFallback != CompanionFallback::Base)
+                out += r.companionFallback == CompanionFallback::Nearest ? ",\"fallback\":\"nearest\"" : ",\"fallback\":\"none\"";
+            out += '}';
+        }
+        if (r.startupDelayMs) out += ",\"startupDelayMs\":" + std::to_string(r.startupDelayMs);
+        if (r.stopRepeatingForStill) out += ",\"stopRepeatingForStill\":true";
+        if (r.auxJpegSize) {
+            appendSize(out, "auxJpeg", *r.auxJpegSize);
+            if (r.auxJpegUsage) {
+                out.pop_back();
+                out += ",\"usage\":\"" + readerUsageName(*r.auxJpegUsage) + "\"}";
+            }
+        }
+        if (r.rawMaxImages || r.readerProbe || r.readerDemote) {
+            out += ",\"reader\":{";
+            bool first = true;
+            const auto field = [&](const std::string& text) {
+                if (!first) out += ',';
+                first = false;
+                out += text;
+            };
+            if (r.rawMaxImages) field("\"maxImages\":" + std::to_string(r.rawMaxImages));
+            if (r.readerProbe) field("\"probe\":true");
+            if (r.readerDemote) field("\"demote\":true");
+            out += '}';
+        }
         if (!r.vendorGate.empty()) {
             out += ",\"vendorGate\":";
             appendJsonString(out, r.vendorGate);
+        }
+        if (r.sessionParams != SessionParamsPolicy::Cadence)
+            out += std::string(",\"session\":{\"params\":\"") + sessionParamsName(r.sessionParams) + "\"}";
+        if (r.requestDefaults != RequestDefaults::Rawr)
+            out += std::string(",\"request\":{\"defaults\":\"") + requestDefaultsName(r.requestDefaults) + "\"}";
+        if (r.gateHold)
+            out += *r.gateHold == GateHold::UntilClosed ? ",\"gateHold\":\"closed\"" : ",\"gateHold\":\"configured\"";
+        if (r.quirks.any()) {
+            out += ",\"quirks\":[";
+            bool first = true;
+            for (const auto& name : quirkNames(r.quirks)) {
+                if (!first) out += ',';
+                first = false;
+                appendJsonString(out, name);
+            }
+            out += ']';
         }
         if (r.captureStream) {
             out += ",\"captureStream\":{\"format\":\"";
@@ -562,6 +661,17 @@ bool parseRoot(const std::string& json, Json& root, std::string* error) {
     return false;
 }
 
+// Adds the named quirks to `out`; an unknown or non-string entry is an error.
+bool readQuirks(const std::vector<Json>& list, CameraQuirks& out, std::string* error, const std::string& where) {
+    for (const auto& v : list) {
+        if (v.kind != Json::Kind::String || !setQuirk(out, v.text)) {
+            if (error) *error = "unknown quirk " + (v.kind == Json::Kind::String ? v.text : std::string("?")) + " for " + where;
+            return false;
+        }
+    }
+    return true;
+}
+
 std::optional<CameraProfile> readProfile(const Json& root, std::string* error) {
     CameraProfile profile;
     profile.id = root.str("id", "user");
@@ -585,16 +695,148 @@ std::optional<CameraProfile> readProfile(const Json& root, std::string* error) {
             r.preferredStream.height = uint32_t(std::max(0.0, s->num("height")));
             r.unlistedStream = s->flag("unlisted", false);
         }
-        if (const Json* u = l.get("readerUsage"); u && u->kind == Json::Kind::String) {
-            // Named, not numeric: the JSON number type can't carry 64-bit usage bits exactly.
-            if (u->text == "gpuDataBuffer") r.readerUsage = kReaderUsageGpuDataBuffer;
-            else if (u->text == "none") r.readerUsage = 0;
-            else {
-                if (error) *error = "unknown readerUsage " + u->text + " for lens " + r.lensId;
+        for (const auto& [name, field] : {std::pair{"readerUsage", &r.readerUsage},
+                                          std::pair{"captureReaderUsage", &r.captureReaderUsage}}) {
+            const Json* u = l.get(name);
+            if (!u || u->kind != Json::Kind::String) continue;
+            *field = parseReaderUsage(u->text);
+            if (!*field) {
+                if (error) *error = std::string("unknown ") + name + " " + u->text + " for lens " + r.lensId;
                 return std::nullopt;
             }
         }
+        if (const std::string t = l.str("template"); !t.empty()) {
+            if (t != "still" && t != "preview") {
+                if (error) *error = "unknown template " + t + " for lens " + r.lensId;
+                return std::nullopt;
+            }
+            r.stillTemplate = t == "still";
+        }
+        if (l.get("streamUseCase")) {
+            if (error) *error = "streamUseCase is unsupported by the NDK backend for lens " + r.lensId;
+            return std::nullopt;
+        }
+        r.startupDelayMs = int32_t(std::clamp(l.num("startupDelayMs"), 0.0, 5000.0));
+        r.stopRepeatingForStill = l.flag("stopRepeatingForStill", false);
+        r.fixedFps = int32_t(std::clamp(l.num("fps"), 0.0, 240.0));
+        if (const Json* disabled = l.get("disableCompanion")) {
+            if (disabled->kind != Json::Kind::Bool || (disabled->boolean && l.get("companion"))) {
+                if (error) *error = "disableCompanion must be boolean and cannot disable a required companion for lens " + r.lensId;
+                return std::nullopt;
+            }
+            r.disableCompanion = disabled->boolean;
+        }
+        if (const Json* c = l.get("companion")) {
+            const auto format = c->str("format", "yuv");
+            if (format != "yuv" && format != "private") {
+                if (error) *error = "invalid companion format for lens " + r.lensId;
+                return std::nullopt;
+            }
+            r.companionPrivate = format == "private";
+            r.companionTargeted = c->flag("targeted", true);
+            // No width and height: an automatic size, with this block only tuning the companion the app adds.
+            if (c->get("width") || c->get("height")) {
+                r.companionSize = readSize(c);
+                if (!r.companionSize) {
+                    if (error) *error = "invalid companion for lens " + r.lensId;
+                    return std::nullopt;
+                }
+            }
+            if (const std::string usage = c->str("usage"); !usage.empty()) {
+                r.companionUsage = parseReaderUsage(usage);
+                if (!r.companionUsage) {
+                    if (error) *error = "unknown companion usage " + usage + " for lens " + r.lensId;
+                    return std::nullopt;
+                }
+            }
+            if (c->get("maxImages")) {
+                const double n = c->num("maxImages");
+                if (n < 2.0 || n > 16.0 || std::floor(n) != n) {
+                    if (error) *error = "companion maxImages must be 2 to 16 for lens " + r.lensId;
+                    return std::nullopt;
+                }
+                r.companionMaxImages = uint32_t(n);
+            }
+            for (const auto& [name, field] : {std::pair{"physical", &r.companionPhysical}, std::pair{"detach", &r.companionDetach}}) {
+                if (const Json* v = c->get(name)) {
+                    if (v->kind != Json::Kind::Bool) {
+                        if (error) *error = std::string("companion ") + name + " must be boolean for lens " + r.lensId;
+                        return std::nullopt;
+                    }
+                    *field = v->boolean;
+                }
+            }
+            if (const std::string fallback = c->str("fallback"); !fallback.empty()) {
+                if (fallback != "base" && fallback != "nearest" && fallback != "none") {
+                    if (error) *error = "unknown companion fallback " + fallback + " for lens " + r.lensId;
+                    return std::nullopt;
+                }
+                if (r.companionSize) {
+                    if (error) *error = "companion fallback needs an automatic size for lens " + r.lensId;
+                    return std::nullopt;
+                }
+                r.companionFallback = fallback == "nearest" ? CompanionFallback::Nearest
+                                      : fallback == "none"  ? CompanionFallback::None
+                                                            : CompanionFallback::Base;
+            }
+        }
+        if (const Json* a = l.get("auxJpeg")) {
+            r.auxJpegSize = readSize(a);
+            if (!r.auxJpegSize) {
+                if (error) *error = "invalid auxJpeg for lens " + r.lensId;
+                return std::nullopt;
+            }
+            if (const std::string usage = a->str("usage"); !usage.empty()) {
+                r.auxJpegUsage = parseReaderUsage(usage);
+                if (!r.auxJpegUsage) {
+                    if (error) *error = "unknown auxJpeg usage " + usage + " for lens " + r.lensId;
+                    return std::nullopt;
+                }
+            }
+        }
+        if (const Json* rd = l.get("reader"); rd && rd->kind == Json::Kind::Object) {
+            if (rd->get("maxImages")) {
+                const double n = rd->num("maxImages");
+                if (n < 6.0 || n > 16.0 || std::floor(n) != n) {
+                    if (error) *error = "reader maxImages must be 6 to 16 for lens " + r.lensId;
+                    return std::nullopt;
+                }
+                r.rawMaxImages = uint32_t(n);
+            }
+            r.readerProbe = rd->flag("probe", false);
+            r.readerDemote = rd->flag("demote", false);
+        }
         r.vendorGate = l.str("vendorGate");
+        if (const Json* s = l.get("session"); s && s->kind == Json::Kind::Object) {
+            if (const std::string params = s->str("params"); !params.empty()) {
+                if (params != "cadence" && params != "none" && params != "full") {
+                    if (error) *error = "unknown session params " + params + " for lens " + r.lensId;
+                    return std::nullopt;
+                }
+                r.sessionParams = params == "none"   ? SessionParamsPolicy::None
+                                  : params == "full" ? SessionParamsPolicy::Full
+                                                     : SessionParamsPolicy::Cadence;
+            }
+        }
+        if (const Json* q = l.get("request"); q && q->kind == Json::Kind::Object) {
+            if (const std::string defaults = q->str("defaults"); !defaults.empty()) {
+                if (defaults != "rawr" && defaults != "minimal") {
+                    if (error) *error = "unknown request defaults " + defaults + " for lens " + r.lensId;
+                    return std::nullopt;
+                }
+                r.requestDefaults = defaults == "minimal" ? RequestDefaults::Minimal : RequestDefaults::Rawr;
+            }
+        }
+        if (const std::string hold = l.str("gateHold"); !hold.empty()) {
+            if ((hold != "configured" && hold != "closed") || r.vendorGate.empty()) {
+                if (error)
+                    *error = std::string(r.vendorGate.empty() ? "gateHold needs a vendorGate" : "unknown gateHold " + hold) +
+                             " for lens " + r.lensId;
+                return std::nullopt;
+            }
+            r.gateHold = hold == "closed" ? GateHold::UntilClosed : GateHold::UntilConfigured;
+        }
+        if (!readQuirks(l.array("quirks"), r.quirks, error, "lens " + r.lensId)) return std::nullopt;
         if (const Json* c = l.get("captureStream"); c && c->kind == Json::Kind::Object) {
             geometry::RawStreamPreference capture;
             capture.format =
@@ -630,6 +872,17 @@ std::optional<CameraProfile> readProfile(const Json& root, std::string* error) {
             if (error) *error = "invalid levels for lens " + r.lensId;
             return std::nullopt;
         }
+        for (const auto& [name, field] : {std::pair{"viewfinderLevels", &r.viewfinderLevels},
+                                         std::pair{"captureLevels", &r.captureLevels}}) {
+            if (const auto* value = l.get(name)) {
+                LevelOverride levels;
+                if (value->kind != Json::Kind::Object || !readLevels(value, levels)) {
+                    if (error) *error = std::string("invalid ") + name + " for lens " + r.lensId;
+                    return std::nullopt;
+                }
+                *field = levels;
+            }
+        }
         if (!readDistortion(l.get("distortion"), r.distortion)) {
             if (error) *error = "invalid distortion for lens " + r.lensId;
             return std::nullopt;
@@ -641,6 +894,15 @@ std::optional<CameraProfile> readProfile(const Json& root, std::string* error) {
         readDcp(l.get("dcp"), r);
         readExposure(l.get("exposure"), r.exposure);
         if (!readKeys(l.array("keys"), r.keys, error)) return std::nullopt;
+        if (r.sessionParams == SessionParamsPolicy::None) {
+            // A session-scope key travels in the session parameters: without them it would be dropped silently.
+            for (const auto& k : r.keys) {
+                if (k.enabled && keyAppliesIn(k.scope, CameraKeySetting::Scope::Session)) {
+                    if (error) *error = "session params none conflicts with session key " + k.tag + " for lens " + r.lensId;
+                    return std::nullopt;
+                }
+            }
+        }
         profile.lenses.push_back(std::move(r));
     }
     if (profile.lenses.empty()) {
@@ -678,6 +940,7 @@ std::optional<BuiltInProfile> parseBuiltInProfile(const std::string& json, std::
     out.profile = std::move(*profile);
     out.name = root.str("name", out.profile.id);
     out.version = int(root.num("version", 1));
+    if (!readQuirks(root.array("quirks"), out.quirks, error, "profile " + out.profile.id)) return std::nullopt;
     if (const Json* m = root.get("match"); m && m->kind == Json::Kind::Object) {
         out.match.models = strings(m->array("models"));
         out.match.verifiedModels = strings(m->array("verifiedModels"));

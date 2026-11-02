@@ -32,8 +32,11 @@
 #include "camera/CameraStartLadder.h"
 #include "camera/CameraWhiteBalanceControls.h"
 #include "camera/FullSizeSequence.h"
+#include "camera/SessionRecipe.h"
+#include "camera/VendorGatePreset.h"
 #include "camera/SensitivityProbeStartup.h"
 #include "camera/StillFocus.h"
+#include "camera/StillExposureGuard.h"
 #include "camera/ViewfinderExposure.h"
 #include "geometry/OrientationTransform.h"
 #include "metadata/MetadataDiagnostics.h"
@@ -114,6 +117,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
     // The viewfinder request is replaced (decision request, then nothing) while
     // full-size stills are in flight (CameraDeviceSession::repeatFullSizeDecision).
     bool fullSizeDecisionRepeating = false;
+    StillExposureGuard stillExposureGuard;
     std::function<void()> pendingFocus;
     std::function<void()> pendingFocusMode;
     // Bounded retire for worker-driven stop/start-failure paths. Healthy
@@ -443,6 +447,20 @@ struct NativeCameraController::Impl final : CameraEventSink {
         } else if (control.appliedExposureTimeNs && control.appliedSensitivity) {
             e = {*control.appliedExposureTimeNs, *control.appliedSensitivity};
         }
+        if (deviceSession.cameraContext()->guardStillExposure && control.exposureMode != ExposureControlMode::Manual) {
+            const auto checked = stillExposureGuard.checked(generation, monotonicMs());
+            if (!checked) {
+                diag("CAMERA_FULL_SIZE_SUBMIT sent=0 reason=untrusted_viewfinder_levels tag=" + std::to_string(requestId));
+                return abandon();
+            }
+            const auto measured = StillExposureGuard::requestExposure(*checked,
+                results.sensitivityReportedPerRequest().value_or(1.0),
+                control.exposureMode == ExposureControlMode::ShutterPriority ? control.requestedExposureTimeNs : 0,
+                control.exposureMode == ExposureControlMode::IsoPriority ? control.requestedSensitivity : 0);
+            if (!measured) return abandon();
+            e = {measured->exposureTimeNs, measured->sensitivity};
+            diag("CAMERA_STILL_EXPOSURE_CHECK timestampNs=" + std::to_string(checked->timestampNs) + " levels=consistent");
+        }
         if (e.exposureTimeNs <= 0 || e.sensitivity <= 0) {
             diag("CAMERA_FULL_SIZE_SUBMIT sent=0 reason=no_exposure tag=" + std::to_string(requestId));
             return abandon();
@@ -471,6 +489,10 @@ struct NativeCameraController::Impl final : CameraEventSink {
             fullSizeDecision = FullSizeDecision::None;
             if (!valid()) return abandon();
             if (fullSizeDecisionRepeating) (void)deviceSession.stopRepeating([this](const std::string& line) { diag(line); });
+        }
+        if (deviceSession.stopRepeatingForStill() && !fullSizeDecisionRepeating) {
+            if (!deviceSession.stopRepeating([this](const std::string& line) { diag(line); })) return abandon();
+            fullSizeDecisionRepeating = true;  // Existing completion/abandon path restores the viewfinder.
         }
         const std::vector<CameraRequestPipeline::BracketExposure> exposures(count, e);
         // The ring runs from the press over queue + exposure + readout: the
@@ -656,7 +678,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
             std::ostringstream keys;
             keys.precision(17);
             for (const auto& setting : route->keys) {
-                if (!setting.enabled || setting.scope != CameraKeySetting::Scope::Session) continue;
+                if (!setting.enabled || !keyAppliesIn(setting.scope, CameraKeySetting::Scope::Session)) continue;
                 keys << '|' << setting.tag << '=';
                 for (std::size_t i = 0; i < setting.values.size(); ++i) keys << (i ? "," : "") << setting.values[i];
             }
@@ -825,8 +847,9 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // Vendor full-size modes: the HAL's S/I priority AE crashes the camera
         // provider once it raises gain (vivo X300 Ultra 50 MP); only rawr AE
         // may own S/I there.
-        halShutterPriority = control.capabilities.shutterPrioritySupported && !route.unlistedStream;
-        halIsoPriority = control.capabilities.isoPrioritySupported && !route.unlistedStream;
+        const CameraQuirks quirks = effectiveQuirks(route, builtInMatch.quirks);
+        halShutterPriority = control.capabilities.shutterPrioritySupported && !quirks.noHalPriorityAe;
+        halIsoPriority = control.capabilities.isoPrioritySupported && !quirks.noHalPriorityAe;
         applyAePriorityPreferenceLocked();
         publishProfileLocked();
         control.focusRequestId = previousControl.focusRequestId;
@@ -894,16 +917,17 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // on a request without a target fps range (AE off). Continuous AF
         // without regions and manual focus stay.
         // Device safety survives imported/user-edited lens profiles.
-        control.capabilities.tapAfHoldsUntilNextTap =
-            builtInMatch.profileId == "vivo_x300_ultra" || !route.vendorGate.empty();
+        control.capabilities.tapAfHoldsUntilNextTap = quirks.afTapHold;
         control.capabilities.faceAfSteering = !control.capabilities.tapAfHoldsUntilNextTap;
         control.capabilities.dngOnly =
             route.captureStream && uint64_t(route.captureStream->width) * route.captureStream->height > kDngOnlyPixels;
-        if (route.unlistedStream) {
+        control.capabilities.fixedFps = route.fixedFps;
+        control.capabilities.minimalRequestDefaults = route.requestDefaults == RequestDefaults::Minimal;
+        if (quirks.noTapAf) {
             control.capabilities.tapAfSupported = false;
             control.capabilities.maxAfRegions = 0;
-            control.capabilities.targetFpsRangeRequired = true;
         }
+        if (quirks.requireFpsRange) control.capabilities.targetFpsRangeRequired = true;
         diag(describeCameraControlCapabilities(control));
 
         diag(metadata::describe(*deviceSession.cameraContext()));
@@ -915,12 +939,14 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // `debug.rawr.companion_stream 0|1` overrides.
         const std::string companionOverride = systemProperty("debug.rawr.companion_stream");
         const std::string companionRouteKey = route.cameraId + '/' + route.physicalCameraId;
-        // A capture-stream route (vivo seamless) needs a YUV output configured or
-        // its full-size stills crash the camera provider.
+        // Capture-stream routes default to a YUV output: vivo seamless stills
+        // require it. Other recipes can explicitly opt out.
         // The companion the unverified-device rule adds may be dropped by the
         // start ladder; a forced one (override, capture-stream route) may not.
-        const bool companionByRule = companionOverride != "0" && !builtInMatch.verified && !route.unlistedStream;
-        const bool ladderEligible = companionByRule && !route.captureStream && companionOverride != "1";
+        const bool companionByRule = !route.disableCompanion && companionOverride != "0" &&
+                                     !builtInMatch.verified && !quirks.noAutoCompanion;
+        const bool ladderEligible = CameraStartLadder::eligible(companionByRule, route.captureStream.has_value(),
+                                                                route.companionSize.has_value(), companionOverride == "1");
         const std::string ladderKey = route.lensId + '|' + describeRoute(route);
         const int64_t viewfinderExposureNs =
             control.exposureMode == ExposureControlMode::Auto ? 0 : control.requestedExposureTimeNs;
@@ -934,10 +960,13 @@ struct NativeCameraController::Impl final : CameraEventSink {
             rollbackCameraStartLocked(lock, "start_ladder_gave_up");
             return;
         }
-        const bool companionStream =
-            route.captureStream.has_value() || companionOverride == "1" ||
-            (companionByRule && ladderPlan != CameraStartLadder::Plan::RawOnly &&
-             !rawOnlyRoutes.count(companionRouteKey));
+        const SessionRecipe recipe = resolveSessionRecipe(
+            route, RecipeInputs{companionOverride == "1",
+                                companionByRule && ladderPlan != CameraStartLadder::Plan::RawOnly &&
+                                    !rawOnlyRoutes.count(companionRouteKey)});
+        const bool companionStream = recipe.companion.has_value();
+        if (route.disableCompanion)
+            diag("CAMERA_COMPANION_DISABLED lens=" + route.lensId + " source=profile");
         if (ladderPlan == CameraStartLadder::Plan::RawOnly)
             diag("CAMERA_START_LADDER lens=" + route.lensId + " step=raw_only companion=0");
         std::ostringstream selection;
@@ -1003,15 +1032,21 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // A stop or lens switch may have retired this start while open waited.
         // Its teardown owns the old window; do not roll back a newer generation.
         if (!stillCurrent()) return;
-        if (!opened || !deviceSession.createSession(window, selected, control, meteringRequestLocked(),
+        const bool sessionCreated = opened && deviceSession.createSession(window, selected, recipe, control, meteringRequestLocked(),
                                          ndkCallbacks, requests, [this](const std::string& line) { diag(line); },
-                                         companionStream)) {
+                                         [&](int32_t delayMs) {
+                                             captureChanged.wait_for(lock, std::chrono::milliseconds(delayMs),
+                                                                     [&] { return !stillCurrent(); });
+                                             return stillCurrent();
+                                         });
+        if (!stillCurrent()) return;
+        if (!sessionCreated) {
             // Some HALs reject RAW + YUV at configure time (observed: physical
             // RAW16 + YUV on a Xiaomi logical camera). Retry this route once
             // RAW-only through a full reopen: the failed configure can take
             // the device down with it.
             const bool retryRawOnly =
-                opened && companionStream && companionOverride != "1" &&
+                opened && companionStream && companionOverride != "1" && !route.companionSize &&
                 (ladderEligible ? !startLadder.rawOnly(ladderKey) : rawOnlyRoutes.insert(companionRouteKey).second);
             if (retryRawOnly) {
                 if (ladderEligible) startLadder.configureRejected(ladderKey);
@@ -1029,7 +1064,9 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // The companion only has to start the pipeline. Producing it on every
         // frame holds each capture result back about a frame behind its RAW
         // image, which starves the preview pairer.
-        companionDetachGeneration.store(companionStream ? deviceSession.generation() : 0, std::memory_order_release);
+        // A profile companion stays targeted: the mode needs it on every frame.
+        companionDetachGeneration.store(companionStream && recipe.companion->detach ? deviceSession.generation() : 0,
+                                        std::memory_order_release);
         diag("CAMERA_START_DONE generation=" + std::to_string(deviceSession.generation()));
     }
 
@@ -1283,8 +1320,9 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // Validate before decoding a request's borrowed provenance pointer.
         if (!active || callbackGeneration != deviceSession.generation() || !deviceSession.cameraContext() || !result)
             return;
+        deviceSession.logKeyResultsOnce(result, [this](const std::string& line) { diag(line); });
         auto actions = results.process(requestCopy, result, control, deviceSession.cameraContext(),
-                                       deviceSession.staticLevels(), deviceSession.sensorModeOverridden(),
+                                       deviceSession.staticLevels(), deviceSession.captureStaticLevels(), deviceSession.hasCaptureStream(), deviceSession.sensorModeOverridden(),
                                        requests.latestSubmittedSerial());
         captureChanged.notify_all();
         if (!actions.frame) return;
@@ -1304,11 +1342,10 @@ struct NativeCameraController::Impl final : CameraEventSink {
             std::string line = "CAMERA_FULL_SIZE_RESULT tag=" +
                                std::to_string(actions.frame->optimizedStillRequestId.value_or(0)) +
                                " timestampNs=" + std::to_string(actions.frame->timestampNs);
-            for (const char* name : {"vcf.parameter.seamlessMode", "vivo.parameter.highResolutionDngType",
-                                     "vivo.control.seamless.remosaic.enable", "vivo.control.sensorMode"}) {
-                const auto value = deviceSession.vendorResultValue(result, name);
-                line += std::string(" ") + name + "=" + (value ? std::to_string(*value) : "missing");
-                if (std::string_view(name) == "vcf.parameter.seamlessMode") actions.frame->vendorSeamlessMode = value;
+            for (const auto& probe : gatePreset(deviceSession.stillGate()).resultProbes) {
+                const auto value = deviceSession.vendorResultValue(result, probe.tag);
+                line += " " + probe.tag + "=" + (value ? std::to_string(*value) : "missing");
+                if (probe.alias == "seamlessMode") actions.frame->vendorSeamlessMode = value;
             }
             diag(line);
         }
@@ -1984,7 +2021,7 @@ void NativeCameraController::setExperimentalZeroCopyEnabled(bool enabled) {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     impl_->experimentalZeroCopyEnabled = enabled;
 }
-void NativeCameraController::rawFrameArrived(uint64_t generation) {
+void NativeCameraController::framePaired(uint64_t generation) {
     if (uint64_t watched = generation;
         generation != 0 && impl_->ladderGeneration.compare_exchange_strong(watched, 0, std::memory_order_acq_rel)) {
         std::lock_guard<std::mutex> lock(impl_->mutex);
@@ -2069,6 +2106,15 @@ void NativeCameraController::setRawrAeConfig(const RawrAeConfig& config) { impl_
 NativeCameraController::RawrAeContext NativeCameraController::rawrAeContext() const {
     std::lock_guard<std::mutex> lock(impl_->rawrAeContextMutex);
     return impl_->rawrAePublished;
+}
+void NativeCameraController::observePreviewBlackFloor(const metadata::FrameMetadataSnapshot& frame,
+                                                       const std::optional<std::array<float, 4>>& floor) {
+    if (!frame.cameraContext || !frame.cameraContext->guardStillExposure || frame.optimizedStillRequestId) return;
+    const bool manualResult = frame.aeMode == 0 && frame.requestedSensitivity && frame.requestedExposureTimeNs;
+    impl_->stillExposureGuard.observe(frame.cameraContext->cameraContextGeneration,
+        {manualResult ? *frame.requestedExposureTimeNs : frame.exposureTimeNs,
+         manualResult ? *frame.requestedSensitivity : frame.sensitivity, !manualResult, frame.timestampNs},
+        Impl::monotonicMs(), blackFloorAgrees(floor, frame.blackLevelPhysicalRggb, frame.effectiveWhiteLevel));
 }
 void NativeCameraController::setRawrAeRequest(int64_t exposureTimeNs, int32_t sensitivity) {
     if (exposureTimeNs <= 0 || exposureTimeNs >= (int64_t(1) << 40) || sensitivity <= 0 || sensitivity > 0xFFFFFF)

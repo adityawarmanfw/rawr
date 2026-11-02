@@ -5,12 +5,19 @@ import com.rawr.camera.settings.model.CFA_BLOCKS
 import com.rawr.camera.settings.model.CFA_LIVE_QUALITIES
 import com.rawr.camera.settings.model.CFA_ORDERS
 import com.rawr.camera.settings.model.CFA_PHOTO_QUALITIES
+import com.rawr.camera.settings.model.CAMERA_QUIRKS
+import com.rawr.camera.settings.model.COMPANION_FALLBACKS
+import com.rawr.camera.settings.model.isReaderUsage
+import com.rawr.camera.settings.model.GATE_HOLDS
+import com.rawr.camera.settings.model.REQUEST_DEFAULTS
+import com.rawr.camera.settings.model.SESSION_PARAMS_POLICIES
 import com.rawr.camera.settings.model.EXTENDED_ISO_MAX
 import com.rawr.camera.settings.model.EXTENDED_SHUTTER_MAX_NS
 import com.rawr.camera.settings.model.LensDcp
 import com.rawr.camera.settings.model.LensExposure
 import com.rawr.camera.settings.model.LensLevels
 import com.rawr.camera.settings.model.LensMirror
+import com.rawr.camera.settings.model.LensOutputSize
 import com.rawr.camera.settings.model.LensProfile
 import com.rawr.camera.settings.model.RawStreamChoice
 import com.rawr.camera.settings.model.RawStreamFormat
@@ -71,7 +78,7 @@ internal object LensProfileCodec {
 
     private fun validateBackupLens(o: JSONObject) {
         for (name in listOf("id", "cameraId")) require(o.get(name) is String && o.getString(name).isNotBlank())
-        for (name in listOf("enabled", "captureBurstSequential")) {
+        for (name in listOf("enabled", "captureBurstSequential", "disableCompanion")) {
             if (o.has(name)) require(o.get(name) is Boolean)
         }
         objectField(o, "dcp")?.let { dcp ->
@@ -97,8 +104,8 @@ internal object LensProfileCodec {
                 require(validateVendorKey(decoded) == null)
             }
         }
-        fun levels(parent: JSONObject) {
-            objectField(parent, "levels")?.let { levels ->
+        fun levels(parent: JSONObject, name: String = "levels") {
+            objectField(parent, name)?.let { levels ->
                 if (levels.has("static")) require(levels.get("static") is Boolean)
                 if (levels.has("black")) {
                     val black = levels.getJSONArray("black")
@@ -111,8 +118,40 @@ internal object LensProfileCodec {
                 number(levels, "white", 0.0..Float.MAX_VALUE.toDouble())
             }
         }
+        choice(o, "template", listOf("preview", "still"))
+        objectField(o, "session")?.let { choice(it, "params", SESSION_PARAMS_POLICIES) }
+        objectField(o, "request")?.let { choice(it, "defaults", REQUEST_DEFAULTS) }
+        choice(o, "gateHold", GATE_HOLDS)
+        if (o.has("quirks")) {
+            val quirks = o.getJSONArray("quirks")
+            for (i in 0 until quirks.length()) require(quirks.get(i) is String && quirks.getString(i) in CAMERA_QUIRKS) { "Invalid quirks" }
+        }
+        number(o, "fps", 0.0..240.0, true)
+        number(o, "startupDelayMs", 0.0..5000.0, true)
+        if (o.has("stopRepeatingForStill")) require(o.get("stopRepeatingForStill") is Boolean)
+        for (name in listOf("companion", "auxJpeg")) {
+            objectField(o, name)?.let { size ->
+                // A companion block without a size tunes the automatic companion.
+                require(size.has("width") == size.has("height") && (name == "companion" || size.has("width")))
+                number(size, "width", 1.0..65536.0, true)
+                number(size, "height", 1.0..65536.0, true)
+                if (size.has("usage")) require(size.get("usage") is String && isReaderUsage(size.getString("usage"))) { "Invalid usage" }
+                if (name == "companion") {
+                    choice(size, "format", listOf("yuv", "private"))
+                    choice(size, "fallback", COMPANION_FALLBACKS)
+                    for (flag in listOf("targeted", "physical", "detach")) if (size.has(flag)) require(size.get(flag) is Boolean)
+                    if (size.has("maxImages")) number(size, "maxImages", 2.0..16.0, true)
+                }
+            }
+        }
+        objectField(o, "reader")?.let { reader ->
+            if (reader.has("maxImages")) number(reader, "maxImages", 6.0..16.0, true)
+            for (flag in listOf("probe", "demote")) if (reader.has(flag)) require(reader.get(flag) is Boolean)
+        }
         keys(o)
         levels(o)
+        levels(o, "viewfinderLevels")
+        levels(o, "captureLevels")
         objectField(o, "dcg")?.let { keys(it); levels(it) }
         for (field in listOf("stream", "captureStream")) {
             objectField(o, field)?.let { stream ->
@@ -157,6 +196,10 @@ internal object LensProfileCodec {
                 .apply { if (lens.stream.unlisted) put("unlisted", true) }
         )
         .put("levels", encodeLevels(lens.levels))
+        .apply {
+            lens.viewfinderLevels?.let { put("viewfinderLevels", encodeLevels(it)) }
+            lens.captureLevels?.let { put("captureLevels", encodeLevels(it)) }
+        }
         .put(
             "exposure",
             JSONObject()
@@ -168,6 +211,10 @@ internal object LensProfileCodec {
         .apply {
             lens.readerUsage?.let { put("readerUsage", it) }
             if (lens.vendorGate.isNotEmpty()) put("vendorGate", lens.vendorGate)
+            lens.gateHold?.let { put("gateHold", it) }
+            if (lens.sessionParams != "cadence") put("session", JSONObject().put("params", lens.sessionParams))
+            if (lens.requestDefaults != "rawr") put("request", JSONObject().put("defaults", lens.requestDefaults))
+            if (lens.quirks.isNotEmpty()) put("quirks", JSONArray(lens.quirks))
             lens.captureStream?.let {
                 put(
                     "captureStream",
@@ -176,6 +223,41 @@ internal object LensProfileCodec {
             }
             if (lens.captureBurst > 0) put("captureBurst", lens.captureBurst)
             if (lens.captureBurstSequential) put("captureBurstSequential", true)
+            lens.captureReaderUsage?.let { put("captureReaderUsage", it) }
+            lens.stillTemplate?.let { put("template", if (it) "still" else "preview") }
+            if (lens.fixedFps > 0) put("fps", lens.fixedFps)
+            require(!lens.disableCompanion || lens.companion == null) { "Cannot disable a required companion" }
+            if (lens.disableCompanion) put("disableCompanion", true)
+            val companionTuned = lens.companionUsage != null || lens.companionMaxImages != 0 ||
+                lens.companionPhysical != null || lens.companionFallback != "base" || lens.companionDetach != null ||
+                lens.companionFormat != "yuv" || !lens.companionTargeted
+            if (lens.companion != null || companionTuned) {
+                put(
+                    "companion",
+                    JSONObject().apply {
+                        lens.companion?.let { put("width", it.width).put("height", it.height) }
+                        put("format", lens.companionFormat).put("targeted", lens.companionTargeted)
+                        lens.companionUsage?.let { put("usage", it) }
+                        if (lens.companionMaxImages != 0) put("maxImages", lens.companionMaxImages)
+                        lens.companionPhysical?.let { put("physical", it) }
+                        lens.companionDetach?.let { put("detach", it) }
+                        if (lens.companionFallback != "base") put("fallback", lens.companionFallback)
+                    }
+                )
+            }
+            if (lens.startupDelayMs > 0) put("startupDelayMs", lens.startupDelayMs)
+            if (lens.stopRepeatingForStill) put("stopRepeatingForStill", true)
+            lens.auxJpeg?.let {
+                put("auxJpeg", JSONObject().put("width", it.width).put("height", it.height)
+                    .apply { lens.auxJpegUsage?.let { usage -> put("usage", usage) } })
+            }
+            if (lens.rawMaxImages != 0 || lens.readerProbe || lens.readerDemote) {
+                put("reader", JSONObject().apply {
+                    if (lens.rawMaxImages != 0) put("maxImages", lens.rawMaxImages)
+                    if (lens.readerProbe) put("probe", true)
+                    if (lens.readerDemote) put("demote", true)
+                })
+            }
             if (lens.cfaBlock > 1 || lens.cfaOrder != null) {
                 put(
                     "cfa",
@@ -196,6 +278,11 @@ internal object LensProfileCodec {
 
     private fun decodeLens(o: JSONObject): LensProfile {
         val stream = o.optJSONObject("stream")
+        require(!o.has("streamUseCase")) { "streamUseCase is unsupported by the NDK backend" }
+        val companionFormat = o.optJSONObject("companion")?.optString("format", "yuv") ?: "yuv"
+        require(companionFormat in setOf("yuv", "private")) { "Invalid companion format" }
+        if (o.has("disableCompanion")) require(o.get("disableCompanion") is Boolean) { "Invalid disableCompanion" }
+        require(!o.optBoolean("disableCompanion", false) || !o.has("companion")) { "Cannot disable a required companion" }
         val levels = decodeLevels(o.optJSONObject("levels"))
         // Early builds kept DCG keys/levels in a separate "dcg" block; fold
         // them into the lens (its levels win when they are already static).
@@ -220,15 +307,41 @@ internal object LensProfileCodec {
                     shutterMaxNs = (e?.optLong("shutterMaxNs") ?: 0L).coerceIn(0L, EXTENDED_SHUTTER_MAX_NS)
                 )
             },
+            viewfinderLevels = o.optJSONObject("viewfinderLevels")?.let { decodeLevels(it) },
+            captureLevels = o.optJSONObject("captureLevels")?.let { decodeLevels(it) },
             levels = if (!levels.isStatic && legacyLevels?.isStatic == true) legacyLevels else levels,
             vendorKeys = decodeKeys(o.optJSONArray("keys")) + decodeKeys(legacyDcg?.optJSONArray("keys")),
             readerUsage = o.optString("readerUsage").ifEmpty { null },
             vendorGate = o.optString("vendorGate"),
+            gateHold = o.optString("gateHold").takeIf { it in GATE_HOLDS },
+            sessionParams = o.optJSONObject("session")?.optString("params")?.takeIf { it in SESSION_PARAMS_POLICIES } ?: "cadence",
+            requestDefaults = o.optJSONObject("request")?.optString("defaults")?.takeIf { it in REQUEST_DEFAULTS } ?: "rawr",
+            quirks = o.optJSONArray("quirks")?.let { a -> (0 until a.length()).map { a.getString(it) }.filter { it in CAMERA_QUIRKS } }
+                ?: emptyList(),
             captureStream = o.optJSONObject("captureStream")?.let {
                 RawStreamChoice(RawStreamFormat.fromWire(it.optString("format")), it.optInt("width"), it.optInt("height"))
             }?.takeIf { it.width > 0 && it.height > 0 },
             captureBurst = o.optInt("captureBurst").coerceIn(0, 30),
             captureBurstSequential = o.optBoolean("captureBurstSequential"),
+            captureReaderUsage = o.optString("captureReaderUsage").ifEmpty { null },
+            stillTemplate = when (o.optString("template")) { "still" -> true; "preview" -> false; else -> null },
+            fixedFps = o.optInt("fps").coerceIn(0, 240),
+            companion = decodeSize(o.optJSONObject("companion")),
+            disableCompanion = o.optBoolean("disableCompanion", false),
+            companionFormat = o.optJSONObject("companion")?.optString("format", "yuv") ?: "yuv",
+            companionTargeted = o.optJSONObject("companion")?.optBoolean("targeted", true) ?: true,
+            companionUsage = o.optJSONObject("companion")?.optString("usage")?.takeIf { it.isNotEmpty() },
+            companionMaxImages = o.optJSONObject("companion")?.optInt("maxImages")?.coerceIn(0, 16) ?: 0,
+            companionPhysical = o.optJSONObject("companion")?.takeIf { it.has("physical") }?.optBoolean("physical"),
+            companionFallback = o.optJSONObject("companion")?.optString("fallback")?.takeIf { it in COMPANION_FALLBACKS } ?: "base",
+            companionDetach = o.optJSONObject("companion")?.takeIf { it.has("detach") }?.optBoolean("detach"),
+            startupDelayMs = o.optInt("startupDelayMs").coerceIn(0, 5000),
+            stopRepeatingForStill = o.optBoolean("stopRepeatingForStill"),
+            auxJpeg = decodeSize(o.optJSONObject("auxJpeg")),
+            auxJpegUsage = o.optJSONObject("auxJpeg")?.optString("usage")?.takeIf { it.isNotEmpty() },
+            rawMaxImages = o.optJSONObject("reader")?.optInt("maxImages")?.coerceIn(0, 16) ?: 0,
+            readerProbe = o.optJSONObject("reader")?.optBoolean("probe") ?: false,
+            readerDemote = o.optJSONObject("reader")?.optBoolean("demote") ?: false,
             cfaBlock = o.optJSONObject("cfa")?.optInt("block", 1)?.takeIf { it in CFA_BLOCKS } ?: 1,
             cfaOrder = o.optJSONObject("cfa")?.optString("order")?.takeIf { it in CFA_ORDERS },
             cfaLive = o.optJSONObject("cfa")?.optString("live")?.takeIf { it in CFA_LIVE_QUALITIES } ?: "standard",
@@ -240,6 +353,9 @@ internal object LensProfileCodec {
             }
         )
     }
+
+    private fun decodeSize(o: JSONObject?): LensOutputSize? =
+        o?.let { LensOutputSize(it.optInt("width"), it.optInt("height")) }?.takeIf { it.width > 0 && it.height > 0 }
 
     private fun encodeLevels(levels: LensLevels): JSONObject = JSONObject()
         .put("static", levels.isStatic)

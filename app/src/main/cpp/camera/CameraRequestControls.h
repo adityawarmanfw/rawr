@@ -33,7 +33,10 @@ struct CameraSessionCadenceApplyResult {
 // Serializes RawrCam control state into an existing Camera2 request.
 // Focus/metering intent comes from CameraFocusControls/CameraSpotMeteringControls.
 // Session submission, diagnostics and resource lifetime remain in the controller.
-void applyPreviewRequestDefaults(ACaptureRequest* request, const metadata::CameraContextMetadata& context);
+// minimal: leave distortion correction, hot-pixel mode and the hot-pixel map to the template. The lens shading
+// map stays on when the camera offers one: the app's shading correction reads it.
+void applyPreviewRequestDefaults(ACaptureRequest* request, const metadata::CameraContextMetadata& context,
+                                 bool minimal = false);
 CameraSessionCadenceApplyResult applyCameraSessionCadence(ACaptureRequest* request, const CameraControlState& state);
 CameraControlApplyResult applyCameraControlState(ACaptureRequest* request, const CameraControlState& state,
                                                  const CameraMeteringRequest& metering);

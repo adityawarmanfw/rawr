@@ -1,6 +1,7 @@
 package com.rawr.camera.settings.preferences
 
 import com.rawr.camera.settings.model.LensMirror
+import com.rawr.camera.settings.model.LensOutputSize
 import com.rawr.camera.settings.model.LensLevels
 import com.rawr.camera.settings.model.LensDcp
 import com.rawr.camera.settings.model.LensProfile
@@ -9,6 +10,7 @@ import com.rawr.camera.settings.model.RawStreamFormat
 import com.rawr.camera.settings.model.VendorKey
 import com.rawr.camera.settings.model.VendorKeyScope
 import com.rawr.camera.settings.model.VendorKeyType
+import com.rawr.camera.settings.model.validateLensProfile
 import org.json.JSONObject
 import kotlin.test.assertFailsWith
 import kotlin.test.Test
@@ -17,6 +19,180 @@ import kotlin.test.assertTrue
 import kotlin.test.assertNull
 
 class LensProfileCodecTest {
+    @Test
+    fun companionOptOutSurvivesBackupsAndRejectsConflictingRecipes() {
+        val lens = LensProfile("T50", "4", disableCompanion = true,
+            captureStream = RawStreamChoice(RawStreamFormat.Raw16, 8160, 6144))
+        val encoded = LensProfileCodec.encode(listOf(lens))
+        assertEquals(listOf(lens), LensProfileCodec.decode(encoded))
+        assertEquals(listOf(lens), LensProfileCodec.decodeBackup(encoded))
+        val plain = LensProfile("T12", "4")
+        assertTrue(!JSONObject(LensProfileCodec.encode(listOf(plain)))
+            .getJSONArray("lenses").getJSONObject(0).has("disableCompanion"))
+        assertTrue(!requireNotNull(LensProfileCodec.decode("""{"lenses":[{"id":"T12","cameraId":"4"}]}""")).single().disableCompanion)
+        for (field in listOf(
+            """"disableCompanion":"true"""",
+            """"disableCompanion":1""",
+            """"disableCompanion":null""",
+            """"disableCompanion":true,"companion":{"width":640,"height":480}"""
+        )) {
+            assertFailsWith<IllegalArgumentException> {
+                LensProfileCodec.decodeBackup("""{"lenses":[{"id":"T50","cameraId":"4",$field}]}""")
+            }
+        }
+        assertFailsWith<IllegalArgumentException> {
+            LensProfileCodec.encode(listOf(lens.copy(companion = LensOutputSize(640, 480))))
+        }
+    }
+
+    @Test
+    fun sessionPolicyFieldsRoundTripAndDefaultToOff() {
+        val key = VendorKey("vendor.mode", VendorKeyScope.SessionAndRequest, VendorKeyType.Int32, listOf(3.0))
+        val lens = LensProfile(
+            "ISZ", "2",
+            vendorKeys = listOf(key.copy(scope = VendorKeyScope.Request)),
+            sessionParams = "none",
+            requestDefaults = "minimal",
+            vendorGate = "g",
+            gateHold = "closed",
+            quirks = listOf("noTapAf", "requireFpsRange")
+        )
+        val encoded = LensProfileCodec.encode(listOf(lens))
+        assertEquals(listOf(lens), LensProfileCodec.decode(encoded))
+        assertEquals(listOf(lens), LensProfileCodec.decodeBackup(encoded))
+        val both = LensProfile("ISZ", "2", vendorKeys = listOf(key))
+        val roundTrip = requireNotNull(LensProfileCodec.decodeBackup(LensProfileCodec.encode(listOf(both)))).single()
+        assertEquals(VendorKeyScope.SessionAndRequest, roundTrip.vendorKeys.single().scope)
+        val json = JSONObject(LensProfileCodec.encode(listOf(LensProfile("T12", "4")))).getJSONArray("lenses").getJSONObject(0)
+        for (field in listOf("session", "request", "gateHold", "quirks")) assertTrue(!json.has(field), field)
+        val plain = requireNotNull(LensProfileCodec.decode("""{"lenses":[{"id":"T12","cameraId":"4"}]}""")).single()
+        assertEquals("cadence", plain.sessionParams)
+        assertEquals("rawr", plain.requestDefaults)
+        assertNull(plain.gateHold)
+        assertEquals(emptyList(), plain.quirks)
+        for (field in listOf(
+            """"session":{"params":"sometimes"}""",
+            """"request":{"defaults":"bare"}""",
+            """"gateHold":"forever"""",
+            """"quirks":["noTapAF"]""",
+            """"quirks":[3]"""
+        )) {
+            assertFailsWith<IllegalArgumentException> {
+                LensProfileCodec.decodeBackup("""{"lenses":[{"id":"T50","cameraId":"4",$field}]}""")
+            }
+        }
+    }
+
+    @Test
+    fun companionAuxAndReaderTuningRoundTripAndDefaultToOff() {
+        val tuned = LensProfile(
+            "T50", "4",
+            companionFormat = "private",
+            companionTargeted = false,
+            companionUsage = "0x100",
+            companionMaxImages = 4,
+            companionPhysical = false,
+            companionFallback = "nearest",
+            companionDetach = true,
+            auxJpeg = LensOutputSize(8192, 6144),
+            auxJpegUsage = "0x3",
+            rawMaxImages = 12,
+            readerProbe = true,
+            readerDemote = true
+        )
+        val encoded = LensProfileCodec.encode(listOf(tuned))
+        assertEquals(listOf(tuned), LensProfileCodec.decode(encoded))
+        assertEquals(listOf(tuned), LensProfileCodec.decodeBackup(encoded))
+        val companion = JSONObject(encoded).getJSONArray("lenses").getJSONObject(0).getJSONObject("companion")
+        assertTrue(!companion.has("width"), "an automatic companion writes no size")
+        val sized = LensProfile("T51", "4", companion = LensOutputSize(640, 480))
+        assertEquals(listOf(sized), LensProfileCodec.decodeBackup(LensProfileCodec.encode(listOf(sized))))
+        val plain = JSONObject(LensProfileCodec.encode(listOf(LensProfile("T12", "4")))).getJSONArray("lenses").getJSONObject(0)
+        for (field in listOf("companion", "auxJpeg", "reader")) assertTrue(!plain.has(field), field)
+        for (field in listOf(
+            """"companion":{"fallback":"sideways"}""",
+            """"companion":{"maxImages":1}""",
+            """"companion":{"width":640}""",
+            """"companion":{"usage":"cpu"}""",
+            """"companion":{"physical":"no"}""",
+            """"auxJpeg":{"width":640,"height":480,"usage":"cpu"}""",
+            """"auxJpeg":{"usage":"0x3"}""",
+            """"reader":{"maxImages":5}""",
+            """"reader":{"probe":"yes"}"""
+        )) {
+            assertFailsWith<IllegalArgumentException>(field) {
+                LensProfileCodec.decodeBackup("""{"lenses":[{"id":"T50","cameraId":"4",$field}]}""")
+            }
+        }
+    }
+
+    @Test
+    fun tuningValidationRejectsConflictsAndBadValues() {
+        val ok = LensProfile("A", "2")
+        assertTrue(validateLensProfile(ok, emptyList()).isEmpty())
+        assertTrue(validateLensProfile(ok.copy(companionFallback = "nearest"), emptyList()).isEmpty())
+        assertTrue(validateLensProfile(
+            ok.copy(companion = LensOutputSize(640, 480), companionFallback = "nearest"), emptyList()
+        ).any { it.contains("automatic companion size") })
+        assertTrue(validateLensProfile(ok.copy(companionFallback = "x"), emptyList()).any { it.contains("fallback") })
+        assertTrue(validateLensProfile(ok.copy(companionMaxImages = 1), emptyList()).any { it.contains("2 to 16") })
+        assertTrue(validateLensProfile(ok.copy(rawMaxImages = 5), emptyList()).any { it.contains("6 to 16") })
+        assertTrue(validateLensProfile(ok.copy(rawMaxImages = 16, companionMaxImages = 16), emptyList()).isEmpty())
+        assertTrue(validateLensProfile(ok.copy(readerUsage = "cpu"), emptyList()).any { it.contains("usage") })
+        assertTrue(validateLensProfile(ok.copy(readerUsage = "0x100003", captureReaderUsage = "gpuDataBuffer"), emptyList()).isEmpty())
+    }
+
+    @Test
+    fun sessionParamsNoneRejectsSessionKeysAndGateHoldNeedsAGate() {
+        val request = VendorKey("vendor.mode", VendorKeyScope.Request, VendorKeyType.Int32, listOf(3.0))
+        val none = LensProfile("ISZ", "2", sessionParams = "none", vendorKeys = listOf(request))
+        assertTrue(validateLensProfile(none, emptyList()).isEmpty())
+        for (scope in listOf(VendorKeyScope.Session, VendorKeyScope.SessionAndRequest)) {
+            val problems = validateLensProfile(none.copy(vendorKeys = listOf(request.copy(scope = scope))), emptyList())
+            assertTrue(problems.any { it.contains("cannot carry the session key") }, problems.toString())
+        }
+        assertTrue(validateLensProfile(
+            none.copy(vendorKeys = listOf(request.copy(scope = VendorKeyScope.Session, enabled = false))), emptyList()
+        ).isEmpty())
+        assertTrue(validateLensProfile(LensProfile("A", "2", gateHold = "closed"), emptyList()).any { it.contains("needs a vendor gate") })
+        assertTrue(validateLensProfile(LensProfile("A", "2", vendorGate = "g", gateHold = "closed"), emptyList()).isEmpty())
+        assertTrue(validateLensProfile(LensProfile("A", "2", quirks = listOf("bogus")), emptyList()).any { it.contains("Unknown quirk") })
+    }
+
+    @Test
+    fun fullSizeRecipeFieldsRoundTripAndDefaultToOff() {
+        val lens = LensProfile(
+            "T50", "4",
+            stream = RawStreamChoice(RawStreamFormat.Raw16, 8160, 6144, unlisted = true),
+            readerUsage = "0x100003",
+            captureReaderUsage = "0x100003",
+            stillTemplate = true,
+            fixedFps = 24,
+            companion = LensOutputSize(640, 480),
+            companionFormat = "private",
+            companionTargeted = false,
+            startupDelayMs = 500,
+            viewfinderLevels = LensLevels(isStatic = true, blackRggb = listOf(512f, 512f, 512f, 512f), white = 4095f),
+            captureLevels = LensLevels(),
+            stopRepeatingForStill = true,
+            auxJpeg = LensOutputSize(8160, 6144)
+        )
+        val encoded = LensProfileCodec.encode(listOf(lens))
+        assertEquals(listOf(lens), LensProfileCodec.decode(encoded))
+        val json = JSONObject(encoded).getJSONArray("lenses").getJSONObject(0)
+        assertEquals("still", json.getString("template"))
+        assertEquals(24, json.getInt("fps"))
+        assertEquals(480, json.getJSONObject("companion").getInt("height"))
+
+        val preview = lens.copy(stillTemplate = false)
+        assertEquals(listOf(preview), LensProfileCodec.decode(LensProfileCodec.encode(listOf(preview))))
+        val plain = requireNotNull(LensProfileCodec.decode("""{"lenses":[{"id":"a","cameraId":"0"}]}""")).single()
+        assertTrue(plain.stillTemplate == null && plain.fixedFps == 0)
+        assertNull(plain.companion)
+        assertNull(plain.auxJpeg)
+        assertNull(plain.captureReaderUsage)
+    }
+
     @Test
     fun mirrorRoundTripsForEveryLensAndDefaultsToNone() {
         val lenses = LensMirror.entries.map { LensProfile(it.wireName, "0", mirror = it) }

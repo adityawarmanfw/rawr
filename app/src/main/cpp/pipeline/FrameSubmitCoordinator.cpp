@@ -202,6 +202,7 @@ void FrameSubmitCoordinator::onRawFrame(rawrcam::imaging::RawFrameLease frame) {
 void FrameSubmitCoordinator::tryPair(uint64_t timestampNs) {
     rawrcam::imaging::MatchedFrame matched{};
     if (!framePairer_->takeMatched(timestampNs, &matched)) return;
+    pairedGeneration_.store(config_.generation, std::memory_order_release);
     rawrcam::diagnostics::RuntimeTraceRecorder::instance().record(
         rawrcam::diagnostics::RuntimeTraceStage::Paired, matched.timestampNs, matched.metadata.snapshot.frameOrdinal,
         -1, matched.metadata.snapshot.exposureTimeNs, matched.metadata.snapshot.sensitivity, 0, 0,
@@ -1029,6 +1030,11 @@ bool FrameSubmitCoordinator::submitAhb(uint64_t timestampNs, rawrcam::imaging::R
     const int acquireFenceFd = lease.fence();
     const bool videoReady = videoOutput_ && videoOutput_->ready() && config_.diagnosticMode == 0u;
     if (!configured_ || ((!swapchainRenderer_.ready() || presentationPaused_) && !videoReady)) return false;
+
+    if (metadata.cameraContext && metadata.cameraContext->guardStillExposure && !metadata.optimizedStillRequestId) {
+        lifecyclePort_.observePreviewBlackFloor(metadata, rawrcam::imaging::sampleRawBlackFloor(
+            imageLease, ahb, acquireFenceFd, int(metadata.cameraContext->rawPreviewCfa)));
+    }
 
     // The CPU read below waits on the camera fence and touches the whole RAW
     // buffer; during recording that stall lands in the encoder's frame cadence.

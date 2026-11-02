@@ -172,9 +172,12 @@ class NativeCameraController {
     // Diagnostic mirror of the SessionEngine ingress toggle so SELECTION logs
     // the effective per-session value. CameraSessionPolicy owns restarts.
     void setExperimentalZeroCopyEnabled(bool enabled);
-    // Ingress reports every RAW image; the first one of a generation drops the
-    // companion stream from the repeating request.
-    void rawFrameArrived(uint64_t generation);
+    // The pipeline reports each accepted image+metadata pair. The first one of a generation marks the
+    // start as proven and drops an automatic companion from the repeating request; a buffer that
+    // arrives without usable results does neither.
+    void framePaired(uint64_t generation);
+    void observePreviewBlackFloor(const metadata::FrameMetadataSnapshot& frame,
+                                   const std::optional<std::array<float, 4>>& floor);
     // Camera2-native spot metering used only when ordinary Camera2 Auto AE owns
     // exposure. Coordinates are normalized in sensor/source space.
     void setSpotMeteringTargetSensorNormalized(bool active, float x, float y);
