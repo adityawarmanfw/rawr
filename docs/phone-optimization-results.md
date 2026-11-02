@@ -1,4 +1,74 @@
-# Phone optimization results: first measured change
+# Phone optimization results
+
+## RAW viewfinder continuation (2026-11-02)
+
+Headless only; no RAWR Activity was opened. Rebuilt both the target debug APK
+(`:gpu-tests:assembleDebug`) and instrumentation APK, then installed both. Building
+only `assembleDebugAndroidTest` does not refresh the target APK's native library.
+
+The CFA shader now assigns each lane an output centre and loads only the 32
+edge neighbours used by the cross-shaped chroma filter. The four unused corners
+are omitted. Halo samples retain identical RGB and channel validity, but skip
+warning-mask classification; the full warning state is still generated for every
+output pixel. No resolution, highlight algorithm, precision or sample count for
+an output cell changed. The test-only `RAWR_PREVIEW_CLASSIFY_HALO=1` path retains
+the preceding tile layout and full halo classification as a comparison.
+
+Fixed synthetic 4080×3064 input, 17×13 lens shading, three slots, 60 warmup +
+60 measured frames, Mali-G615 MC2:
+
+| Highlight method | Original median | Centre-first median |
+| --- | ---: | ---: |
+| 0 | 56.809 ms | 53.736 ms |
+| 1 | 31.978 ms | 28.486 ms |
+
+Recovered RGBA16F bytes matched exactly in both methods, including partial edge
+workgroups; the CFA integer oracle passed all four Bayer patterns. The full
+headless GPU suite passed **10/10** in 202.79 s, including strided input,
+profile rendering, switching, readback and the new tile equivalence check.
+These are fixed-input timings, not an end-to-end FPS improvement claim. An initial
+version merely branched around halo classification inside the old tile loop;
+it passed parity but was slower and was discarded.
+
+Production Camera2/offscreen VF with waveform, RawrBase, divisor 2, two 240-frame
+cycles remained slow: original cumulative RAW/total GPU 53.418/77.510 ms,
+centre-first 53.112/78.411 ms. Startup and scene/load differed, so this does not
+establish a full-pipeline gain. Both pause/resume cycles had zero late
+presentations after drain, and both cameras stopped successfully. Centre-first
+idle CPU was 2–4 ms/s and stopped PSS 96858–112722 KiB. Home animation smoothness
+requires a later foreground trace; Adreno hardware validation remains pending.
+The final APK also passed two headless pause/stop/resume cycles each with sRGB,
+AgX and Rec.709, waveform enabled. The rebuilt benchmark app APK was installed
+without launching its Activity. The headless test package was stopped afterward.
+
+Measurement and keeping the shared-memory workload small follow
+[Arm's compute-shading guidance](https://support.arm.com/documentation/101897/0304/Compute-shading).
+All new device artifacts are under ignored `tmp/phone-performance/vf-halo/`.
+
+### Preview queue latency experiment
+
+Instrumented production Camera2 runs, RawrBase/waveform, 120 frames per cycle,
+two cycles each, in order 3 → 1 → 3 → 2 allowed pending slots:
+
+| Pending limit | Paired-to-observed-fence median | Presentation interval median |
+| --- | ---: | ---: |
+| 3, first control | 163.75 ms | 81.42 ms |
+| 1 | 92.14 ms | 110.81 ms |
+| 3, second control | 160.21 ms | 79.64 ms |
+| 2 | 154.21 ms | 77.33 ms |
+
+Trace matching uses the same camera timestamp at `PAIRED` and `FENCE_COMPLETE`.
+This measures CPU-observed ingress-to-retirement delay, including fence polling,
+not sensor-to-display latency. Long stop/resume gaps are excluded from the
+presentation-interval median. Scene and GPU frequency were not locked.
+
+One slot improved delay but lost throughput; two slots showed too little change
+against the controls to justify a new default. The temporary limiter was removed
+and `debug.rawr.preview_inflight` cleared. Production retains its three-slot pool.
+The headless harness now optionally records the existing runtime trace with
+`-e trace true` and reports frames that arrive during the first pause/drain second.
+These additions allow subsequent latency fixes to be compared without opening
+the Activity. All four queue runs passed stop/resume and pause checks.
 
 ## Foreground validation and Home lag investigation
 

@@ -65,6 +65,21 @@ public class HeadlessGpuTest {
             Files.readAllBytes(new File(root, "tone-bypass/linear.rgba16f").toPath()),
             Files.readAllBytes(new File(root, "tone-switch/linear.rgba16f").toPath()));
     }
+    @Test public void haloClassificationParity() throws Exception {
+        File root = new File(InstrumentationRegistry.getInstrumentation().getTargetContext().getFilesDir(), "gpu-results");
+        for (int method = 0; method < 2; ++method) {
+            for (int variant = 0; variant < 2; ++variant) {
+                run("preview", "halo-" + method + "-" + variant, "--method", Integer.toString(method),
+                    "--mask-shader", variant == 0 ? "raw_preview_cfa_full_halo.comp.spv" : "raw_preview_cfa_state.comp.spv",
+                    "--frames", "60", "--fps", "30", "--width", "4080", "--height", "3064",
+                    "--normal-only", "--lsc", "17x13", "--dump", "linear.rgba16f");
+            }
+            org.junit.Assert.assertArrayEquals("Skipping halo warning classification must preserve recovered pixels",
+                Files.readAllBytes(new File(root, "halo-" + method + "-0/linear.rgba16f").toPath()),
+                Files.readAllBytes(new File(root, "halo-" + method + "-1/linear.rgba16f").toPath()));
+        }
+        run("cfa", "halo-cfa", "--mask-shader", "raw_preview_cfa_state.comp.spv", "--width", "512", "--height", "384");
+    }
     @Test public void optimizedPreviewCompilerParity() throws Exception {
         for (int method = 0; method < 2; ++method) {
             for (int variant = 0; variant < 2; ++variant) {

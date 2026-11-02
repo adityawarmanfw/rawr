@@ -9,6 +9,9 @@
 #ifndef RAWR_BENCH_MINIMAL_DIRECT
 #define RAWR_BENCH_MINIMAL_DIRECT 0
 #endif
+#ifndef RAWR_PREVIEW_CLASSIFY_HALO
+#define RAWR_PREVIEW_CLASSIFY_HALO 0
+#endif
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout(set = 0, binding = 0, r16ui) uniform readonly uimage2D rawImage;
 layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D outImage;
@@ -73,7 +76,7 @@ uint stateForSample(float rawValue, float normalized, int c) {
     return state;
 }
 
-BayerCell loadBayerCell(ivec2 cell) {
+BayerCell loadBayerCell(ivec2 cell, bool classifyState) {
     cell = clamp(cell, ivec2(0), outputExtent() - ivec2(1));
     // Average cellScale x cellScale Bayer cells; a channel stays valid only if
     // every one of its samples is below the clip threshold, and the CFA state
@@ -98,8 +101,10 @@ BayerCell loadBayerCell(ivec2 cell) {
             v1 = v1 && g1 < pc.clipThreshold;
             v2 = v2 && g2 < pc.clipThreshold;
             vb = vb && b < pc.clipThreshold;
-            cfaState |= stateForSample(rawR, r, 0) | stateForSample(rawG1, g1, 1) | stateForSample(rawG2, g2, 2) |
-                        stateForSample(rawB, b, 3);
+            if (classifyState) {
+                cfaState |= stateForSample(rawR, r, 0) | stateForSample(rawG1, g1, 1) | stateForSample(rawG2, g2, 2) |
+                            stateForSample(rawB, b, 3);
+            }
             // One lookup per cell at its centre; greens pick the map channel from
             // their sensor-row parity, as lensShadingGain does.
             vec4 shading = lensShadingGainsAt(vec2(min(min(qr, qg1), min(qg2, qb))) + vec2(0.5));
@@ -140,7 +145,7 @@ void main() {
     ivec2 os = outputExtent();
 #if RAWR_BENCH_MINIMAL_DIRECT
     if (any(greaterThanEqual(o, os))) return;
-    BayerCell packedDirect = loadBayerCell(o);
+    BayerCell packedDirect = loadBayerCell(o, true);
     uint directCfaState = packedDirect.validMask >> 3;
     packedDirect.validMask &= 7u;
     float directGwb = 0.5 * (pc.wb.y + pc.wb.z);
@@ -151,11 +156,28 @@ void main() {
 #else
     uint lid = gl_LocalInvocationIndex;
     ivec2 groupOrigin = ivec2(gl_WorkGroupID.xy) * 8 - ivec2(1);
+#if RAWR_PREVIEW_CLASSIFY_HALO
     for (uint i = lid; i < 100u; i += 64u) {
         ivec2 t = ivec2(int(i % 10u), int(i / 10u));
-        BayerCell c = loadBayerCell(groupOrigin + t);
+        BayerCell c = loadBayerCell(groupOrigin + t, true);
         sCell[i] = vec4(c.rgb, float(c.validMask));
     }
+#else
+    // Every lane computes an output centre. Only the first 32 lanes load the
+    // four edges; corners are never sampled by the cross-shaped chroma filter.
+    // Separate calls keep warning classification out of the entire halo path.
+    ivec2 centerPos = ivec2(gl_LocalInvocationID.xy) + ivec2(1);
+    BayerCell center = loadBayerCell(groupOrigin + centerPos, true);
+    sCell[centerPos.y * 10 + centerPos.x] = vec4(center.rgb, float(center.validMask));
+    if (lid < 32u) {
+        int edge = int(lid / 8u);
+        int along = int(lid % 8u) + 1;
+        ivec2 t = edge == 0 ? ivec2(along, 0) : edge == 1 ? ivec2(along, 9) :
+                  edge == 2 ? ivec2(0, along) : ivec2(9, along);
+        BayerCell halo = loadBayerCell(groupOrigin + t, false);
+        sCell[t.y * 10 + t.x] = vec4(halo.rgb, float(halo.validMask));
+    }
+#endif
     barrier();
     if (any(greaterThanEqual(o, os))) return;
 

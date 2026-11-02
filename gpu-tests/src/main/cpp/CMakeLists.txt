@@ -20,6 +20,8 @@ foreach(NAME raw_preview raw_preview_cfa_state)
 endforeach()
 embed_spirv(raw_preview_cfa_optimized "${ROOT}/native/raw_preview/shaders/raw_preview_cfa_state.comp" raw_preview_cfa_optimized_bytes
   FLAGS -O -I${HL} -I${COMMON} DEPENDS ${SHADER_DEPS} HEADERS_VAR HEADERS)
+embed_spirv(raw_preview_cfa_full_halo "${ROOT}/native/raw_preview/shaders/raw_preview_cfa_state.comp" raw_preview_cfa_full_halo_bytes
+  FLAGS -DRAWR_PREVIEW_CLASSIFY_HALO=1 -I${HL} -I${COMMON} DEPENDS ${SHADER_DEPS} HEADERS_VAR HEADERS)
 foreach(NAME highlight_guide_seed highlight_guide_propagate highlight_guide_smooth highlight_apply_inplace coloropp coloropp_tone)
   embed_spirv(${NAME} "${HL}/${NAME}.comp" ${NAME}_bytes
     FLAGS -DRAWR_HL_SCALE=1 -DRAWR_COLOROPP_POST_WB=1 -I${HL} -I${COMMON}

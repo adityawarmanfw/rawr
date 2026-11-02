@@ -31,6 +31,7 @@ public final class NativePreviewTest {
         boolean testUiPause = Boolean.parseBoolean(InstrumentationRegistry.getArguments().getString("testUiPause", "false"));
         int targetFrames = Integer.parseInt(InstrumentationRegistry.getArguments().getString("frames", "30"));
         boolean waveform = Boolean.parseBoolean(InstrumentationRegistry.getArguments().getString("waveform", "false"));
+        boolean trace = Boolean.parseBoolean(InstrumentationRegistry.getArguments().getString("trace", "false"));
         assertTrue(targetFrames >= 30 && targetFrames <= 600);
         assertTrue(cycles >= 2 && cycles <= 10);
         assertTrue(profile >= 0 && profile <= 10 && profile != 1); // Imported LUT needs a separate fixture.
@@ -51,6 +52,7 @@ public final class NativePreviewTest {
             assertTrue(handle != 0);
             engine.setAssetManager(handle, context.getAssets());
             engine.setPersistentDiagnosticsEnabled(handle, true);
+            engine.setInternalTraceCaptureEnabled(handle, trace);
             assertTrue(engine.setCameraProfile(handle, engine.builtInCameraProfile()));
             // Match SettingsValues' shipped default before camera configuration.
             engine.setExperimentalZeroCopy(handle, zeroCopy);
@@ -82,9 +84,11 @@ public final class NativePreviewTest {
                 assertTrue("Too few production preview frames; inspect native diagnostics", frames.get() - first >= targetFrames);
                 assertNull("EGL presentation consumer failed", consumer.failure.get());
                 if (testUiPause) {
+                    int pauseBeginFrames = frames.get();
                     engine.setUiPresentationActive(handle, false);
                     Thread.sleep(1000);
                     int pausedFrames = frames.get();
+                    row.put("uiPauseDrainFrames", pausedFrames - pauseBeginFrames);
                     Thread.sleep(1000);
                     row.put("uiPauseLateFrames", frames.get() - pausedFrames);
                     assertEquals("Presentation continues after UI pause/drain", pausedFrames, frames.get());
