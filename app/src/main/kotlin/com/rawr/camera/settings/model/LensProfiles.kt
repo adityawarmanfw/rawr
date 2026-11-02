@@ -112,6 +112,14 @@ val REQUEST_DEFAULTS = listOf("rawr", "minimal")
 /** How long a vendor gate is held: until the session is configured, or until the device closes. */
 val GATE_HOLDS = listOf("configured", "closed")
 
+/** Which camera API runs a lens: "auto" picks the Java one when an operating mode or stream use case is set. */
+val BACKEND_CHOICES = listOf("auto", "ndk", "java")
+
+/** Operating mode and stream use case exist only on the Java camera API. */
+fun LensProfile.needsJavaBackend(): Boolean =
+    opMode != 0 || rawStreamUseCase != 0 || captureStreamUseCase != 0 || companionStreamUseCase != 0 ||
+        auxJpegStreamUseCase != 0
+
 /** What an automatic companion size does when the camera has no output with the RAW's shape. */
 val COMPANION_FALLBACKS = listOf("base", "nearest", "none")
 
@@ -142,6 +150,15 @@ data class LensProfile(
     val vendorGate: String = "",
     /** "configured" or "closed"; null keeps the default (closed on a capture-stream lens). Needs a [vendorGate]. */
     val gateHold: String? = null,
+    /** One of [BACKEND_CHOICES]. */
+    val backend: String = "auto",
+    /** Session operating mode (SessionConfiguration type); 0 = normal. Needs the Java backend; 1 and 2 are refused. */
+    val opMode: Int = 0,
+    /** Stream use case per output (0 = not set). Needs the Java backend. */
+    val rawStreamUseCase: Int = 0,
+    val captureStreamUseCase: Int = 0,
+    val companionStreamUseCase: Int = 0,
+    val auxJpegStreamUseCase: Int = 0,
     /** One of [SESSION_PARAMS_POLICIES]; "none" cannot carry session-scope keys. */
     val sessionParams: String = "cadence",
     /** One of [REQUEST_DEFAULTS]. */
@@ -243,6 +260,15 @@ fun validateLensProfile(lens: LensProfile, others: List<LensProfile>): List<Stri
     }
     validateLevels(lens.levels)?.let { add(it) }
     lens.vendorKeys.forEach { key -> validateVendorKey(key)?.let { add(it) } }
+    if (lens.backend !in BACKEND_CHOICES) add("Unknown backend ${lens.backend}")
+    if (lens.backend == "ndk" && lens.needsJavaBackend()) add("An operating mode or stream use case needs the Java backend")
+    if (lens.backend == "java" || (lens.backend == "auto" && lens.needsJavaBackend())) {
+        if (lens.vendorGate.isNotEmpty()) add("The Java backend does not support a vendor gate")
+        if (lens.stopRepeatingForStill) add("The Java backend does not support stop-repeating stills")
+    }
+    if (lens.opMode < 0 || lens.opMode == 1 || lens.opMode == 2) add("Operating mode must be 0 or 3 and above")
+    if (listOf(lens.rawStreamUseCase, lens.captureStreamUseCase, lens.companionStreamUseCase, lens.auxJpegStreamUseCase)
+            .any { it < 0 }) add("Stream use cases cannot be negative")
     if (lens.companionFallback !in COMPANION_FALLBACKS) add("Unknown companion fallback ${lens.companionFallback}")
     if (lens.companionFallback != "base" && lens.companion != null) add("A companion fallback needs an automatic companion size")
     if (lens.companionMaxImages != 0 && lens.companionMaxImages !in 2..16) add("Companion images must be 2 to 16")

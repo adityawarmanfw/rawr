@@ -33,29 +33,29 @@ std::optional<uint32_t> resolveTag(const ACameraMetadata* characteristics, const
 
 using KeyType = CameraKeySetting::Type;
 
-camera_status_t setEntryAs(ACaptureRequest* request, uint32_t tag, KeyType type, const std::vector<double>& values) {
+RequestStatus setEntryAs(CameraRequest* request, uint32_t tag, KeyType type, const std::vector<double>& values) {
     const auto n = static_cast<uint32_t>(values.size());
     switch (type) {
         case KeyType::Byte: {
             std::vector<uint8_t> v(values.begin(), values.end());
-            return ACaptureRequest_setEntry_u8(request, tag, n, v.data());
+            return request->setU8(tag, n, v.data());
         }
         case KeyType::Int32: {
             std::vector<int32_t> v(values.begin(), values.end());
-            return ACaptureRequest_setEntry_i32(request, tag, n, v.data());
+            return request->setI32(tag, n, v.data());
         }
         case KeyType::Int64: {
             std::vector<int64_t> v(values.begin(), values.end());
-            return ACaptureRequest_setEntry_i64(request, tag, n, v.data());
+            return request->setI64(tag, n, v.data());
         }
         case KeyType::Float: {
             std::vector<float> v(values.begin(), values.end());
-            return ACaptureRequest_setEntry_float(request, tag, n, v.data());
+            return request->setFloat(tag, n, v.data());
         }
         case KeyType::Double:
-            return ACaptureRequest_setEntry_double(request, tag, n, values.data());
+            return request->setDouble(tag, n, values.data());
     }
-    return ACAMERA_ERROR_INVALID_PARAMETER;
+    return kRequestInvalidParameter;
 }
 
 const char* keyTypeName(KeyType t) {
@@ -84,7 +84,7 @@ bool representable(KeyType t, const std::vector<double>& values) {
 // int32, so a key the HAL declares as byte (OPLUS engineercamera tags, ...)
 // fails for no visible reason. Try the declared type first, then the others
 // that can hold the values, and remember what the HAL accepted per tag.
-camera_status_t setEntry(ACaptureRequest* request, uint32_t tag, const CameraKeySetting& key, KeyType* usedType,
+RequestStatus setEntry(CameraRequest* request, uint32_t tag, const CameraKeySetting& key, KeyType* usedType,
                          std::vector<KeyAttempt>* attempts) {
     static std::mutex mutex;
     static std::unordered_map<uint32_t, KeyType> accepted;
@@ -101,10 +101,10 @@ camera_status_t setEntry(ACaptureRequest* request, uint32_t tag, const CameraKey
     push(key.type);
     for (const KeyType t : {KeyType::Byte, KeyType::Int32, KeyType::Int64, KeyType::Float, KeyType::Double}) push(t);
 
-    camera_status_t first = ACAMERA_OK;
+    RequestStatus first = ACAMERA_OK;
     for (const KeyType t : order) {
         if (!representable(t, key.values)) continue;
-        const camera_status_t status = setEntryAs(request, tag, t, key.values);
+        const RequestStatus status = setEntryAs(request, tag, t, key.values);
         if (attempts) attempts->push_back({keyTypeName(t), int(status), cached && *cached == t && attempts->empty()});
         if (status == ACAMERA_OK) {
             *usedType = t;
@@ -114,12 +114,12 @@ camera_status_t setEntry(ACaptureRequest* request, uint32_t tag, const CameraKey
         }
         if (first == ACAMERA_OK) first = status;
     }
-    return first == ACAMERA_OK ? ACAMERA_ERROR_INVALID_PARAMETER : first;
+    return first == ACAMERA_OK ? kRequestInvalidParameter : first;
 }
 
 }  // namespace
 
-CameraKeyInjectionResult applyCameraKeySettings(ACaptureRequest* request, const ACameraMetadata* characteristics,
+CameraKeyInjectionResult applyCameraKeySettings(CameraRequest* request, const ACameraMetadata* characteristics,
                                                 const std::vector<CameraKeySetting>& keys, const char* cameraId,
                                                 CameraKeySetting::Scope scope, const char* origin,
                                                 const std::function<void(const std::string&)>& diag) {
@@ -134,7 +134,10 @@ CameraKeyInjectionResult applyCameraKeySettings(ACaptureRequest* request, const 
         const auto submission = submitCameraKey(
             tag.has_value(), !key.values.empty(),
             session && tag && !containsI32Tag(characteristics, ACAMERA_REQUEST_AVAILABLE_SESSION_KEYS, *tag),
-            error, [&] { return setEntry(request, *tag, key, &usedType, &attempts); });
+            error, [&] {
+                if (!key.tag.empty() && !(key.tag[0] >= '0' && key.tag[0] <= '9')) request->noteTagName(*tag, key.tag);
+                return setEntry(request, *tag, key, &usedType, &attempts);
+            });
         const auto& skip = submission.failure;
         std::ostringstream line;
         line << "CAMERA_KEY_INJECTION scope="
@@ -178,12 +181,12 @@ CameraKeyInjectionResult applyCameraKeySettings(ACaptureRequest* request, const 
     return result;
 }
 
-void logCarriedKeys(const ACaptureRequest* sessionParameters, const ACaptureRequest* repeating,
+void logCarriedKeys(const CameraRequest* sessionParameters, const CameraRequest* repeating,
                     const ACameraMetadata* characteristics, const std::vector<CameraKeySetting>& keys,
                     const char* cameraId, const std::function<void(const std::string&)>& diag) {
-    const auto carries = [](const ACaptureRequest* request, uint32_t tag) {
-        ACameraMetadata_const_entry e{};
-        return request && ACaptureRequest_getConstEntry(request, tag, &e) == ACAMERA_OK;
+    const auto carries = [](const CameraRequest* request, uint32_t tag) {
+        RequestEntry e{};
+        return request && request->get(tag, &e) == ACAMERA_OK;
     };
     for (const auto& key : keys) {
         if (!key.enabled) continue;
@@ -235,30 +238,30 @@ void logKeyResults(const ACameraMetadata* result, const ACameraMetadata* charact
 }
 
 namespace {
-const char* entryTypeName(uint8_t type) {
+const char* entryTypeName(RequestType type) {
     switch (type) {
-        case ACAMERA_TYPE_BYTE: return "byte";
-        case ACAMERA_TYPE_INT32: return "int32";
-        case ACAMERA_TYPE_FLOAT: return "float";
-        case ACAMERA_TYPE_INT64: return "int64";
-        case ACAMERA_TYPE_DOUBLE: return "double";
-        case ACAMERA_TYPE_RATIONAL: return "rational";
+        case RequestType::Byte: return "byte";
+        case RequestType::Int32: return "int32";
+        case RequestType::Float: return "float";
+        case RequestType::Int64: return "int64";
+        case RequestType::Double: return "double";
+        case RequestType::Rational: return "rational";
         default: return "?";
     }
 }
 }  // namespace
 
-void dumpCaptureRequest(const ACaptureRequest* request, const char* kind,
+void dumpCaptureRequest(const CameraRequest* request, const char* kind,
                         const std::function<void(const std::string&)>& diag) {
     if (!request) return;
     int32_t count = 0;
     const uint32_t* tags = nullptr;
-    if (ACaptureRequest_getAllTags(request, &count, &tags) != ACAMERA_OK || !tags) return;
+    if (request->tags(&count, &tags) != ACAMERA_OK || !tags) return;
     std::vector<uint32_t> sorted(tags, tags + count);
     std::sort(sorted.begin(), sorted.end());
     for (const uint32_t tag : sorted) {
-        ACameraMetadata_const_entry e{};
-        if (ACaptureRequest_getConstEntry(request, tag, &e) != ACAMERA_OK) continue;
+        RequestEntry e{};
+        if (request->get(tag, &e) != ACAMERA_OK) continue;
         std::ostringstream line;
         line << "CAMERA_REQUEST_DUMP kind=" << kind << " tag=0x" << std::hex << tag << std::dec
              << " type=" << int(e.type) << " count=" << e.count << " values=";
@@ -266,13 +269,12 @@ void dumpCaptureRequest(const ACaptureRequest* request, const char* kind,
         for (uint32_t i = 0; i < shown; ++i) {
             if (i) line << ',';
             switch (e.type) {
-                case ACAMERA_TYPE_BYTE: line << int(e.data.u8[i]); break;
-                case ACAMERA_TYPE_INT32: line << e.data.i32[i]; break;
-                case ACAMERA_TYPE_INT64: line << e.data.i64[i]; break;
-                case ACAMERA_TYPE_FLOAT: line << e.data.f[i]; break;
-                case ACAMERA_TYPE_DOUBLE: line << e.data.d[i]; break;
-                case ACAMERA_TYPE_RATIONAL: line << e.data.r[i].numerator << '/' << e.data.r[i].denominator; break;
-                default: line << '?';
+                case RequestType::Byte: line << int(e.data.u8[i]); break;
+                case RequestType::Int32: line << e.data.i32[i]; break;
+                case RequestType::Int64: line << e.data.i64[i]; break;
+                case RequestType::Float: line << e.data.f[i]; break;
+                case RequestType::Double: line << e.data.d[i]; break;
+                case RequestType::Rational: line << e.data.r[i].numerator << '/' << e.data.r[i].denominator; break;
             }
         }
         if (e.count > shown) line << ",...";

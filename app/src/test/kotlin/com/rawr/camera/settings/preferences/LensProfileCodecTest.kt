@@ -10,6 +10,7 @@ import com.rawr.camera.settings.model.RawStreamFormat
 import com.rawr.camera.settings.model.VendorKey
 import com.rawr.camera.settings.model.VendorKeyScope
 import com.rawr.camera.settings.model.VendorKeyType
+import com.rawr.camera.settings.model.needsJavaBackend
 import com.rawr.camera.settings.model.validateLensProfile
 import org.json.JSONObject
 import kotlin.test.assertFailsWith
@@ -140,6 +141,73 @@ class LensProfileCodecTest {
         assertTrue(validateLensProfile(ok.copy(rawMaxImages = 16, companionMaxImages = 16), emptyList()).isEmpty())
         assertTrue(validateLensProfile(ok.copy(readerUsage = "cpu"), emptyList()).any { it.contains("usage") })
         assertTrue(validateLensProfile(ok.copy(readerUsage = "0x100003", captureReaderUsage = "gpuDataBuffer"), emptyList()).isEmpty())
+    }
+
+    @Test
+    fun backendOpModeAndStreamUseCasesRoundTripAndDefaultToOff() {
+        val lens = LensProfile(
+            "M50", "2",
+            stream = RawStreamChoice(RawStreamFormat.Raw16, 8192, 6144, unlisted = true),
+            captureStream = RawStreamChoice(RawStreamFormat.Raw16, 8192, 6144),
+            companion = LensOutputSize(640, 480),
+            auxJpeg = LensOutputSize(8192, 6144),
+            backend = "java",
+            opMode = 32769,
+            rawStreamUseCase = 524547,
+            captureStreamUseCase = 6,
+            companionStreamUseCase = 3,
+            auxJpegStreamUseCase = 2
+        )
+        val encoded = LensProfileCodec.encode(listOf(lens))
+        assertEquals(listOf(lens), LensProfileCodec.decode(encoded))
+        assertEquals(listOf(lens), LensProfileCodec.decodeBackup(encoded))
+        val json = JSONObject(encoded).getJSONArray("lenses").getJSONObject(0)
+        assertEquals(32769, json.getJSONObject("session").getInt("opMode"))
+        assertEquals(524547, json.getJSONObject("stream").getInt("useCase"))
+        assertTrue(lens.needsJavaBackend())
+        val plain = JSONObject(LensProfileCodec.encode(listOf(LensProfile("T12", "4")))).getJSONArray("lenses").getJSONObject(0)
+        for (field in listOf("backend", "session", "quirks")) assertTrue(!plain.has(field), field)
+        assertTrue(!plain.getJSONObject("stream").has("useCase"))
+        assertTrue(!LensProfile("T12", "4").needsJavaBackend())
+        for (field in listOf(
+            """"backend":"gpu"""",
+            """"session":{"opMode":1}""",
+            """"session":{"opMode":2}""",
+            """"session":{"opMode":-3}""",
+            """"stream":{"useCase":-1}""",
+            """"companion":{"width":640,"height":480,"useCase":1.5}"""
+        )) {
+            assertFailsWith<IllegalArgumentException>(field) {
+                LensProfileCodec.decodeBackup("""{"lenses":[{"id":"T50","cameraId":"4",$field}]}""")
+            }
+        }
+        val legacy = """{"lenses":[{"id":"T50","cameraId":"4","streamUseCase":524547}]}"""
+        assertFailsWith<IllegalArgumentException> { LensProfileCodec.decodeBackup(legacy) }
+        assertEquals(emptyList(), LensProfileCodec.decode(legacy))  // the lenient reader drops the lens
+    }
+
+    @Test
+    fun javaOnlyOptionsConflictWithAnExplicitNdkBackend() {
+        val ok = LensProfile("A", "2")
+        assertTrue(validateLensProfile(ok.copy(opMode = 32769), emptyList()).isEmpty())
+        assertTrue(validateLensProfile(ok.copy(backend = "ndk"), emptyList()).isEmpty())
+        for (lens in listOf(
+            ok.copy(backend = "ndk", opMode = 32769),
+            ok.copy(backend = "ndk", rawStreamUseCase = 6),
+            ok.copy(backend = "ndk", auxJpegStreamUseCase = 2)
+        )) {
+            assertTrue(validateLensProfile(lens, emptyList()).any { it.contains("needs the Java backend") }, lens.toString())
+        }
+        assertTrue(validateLensProfile(ok.copy(backend = "java", opMode = 32769), emptyList()).isEmpty())
+        assertTrue(validateLensProfile(ok.copy(opMode = 1), emptyList()).any { it.contains("Operating mode") })
+        assertTrue(validateLensProfile(ok.copy(opMode = 2), emptyList()).any { it.contains("Operating mode") })
+        assertTrue(validateLensProfile(ok.copy(backend = "gpu"), emptyList()).any { it.contains("Unknown backend") })
+        assertTrue(validateLensProfile(ok.copy(captureStreamUseCase = -1), emptyList()).any { it.contains("negative") })
+        // The vivo gate and stop-repeating stills stay on the NDK, whether Java is explicit or derived.
+        assertTrue(validateLensProfile(ok.copy(backend = "java", vendorGate = "vivoFullSize"), emptyList()).any { it.contains("vendor gate") })
+        assertTrue(validateLensProfile(ok.copy(vendorGate = "vivoFullSize", rawStreamUseCase = 1), emptyList()).any { it.contains("vendor gate") })
+        assertTrue(validateLensProfile(ok.copy(backend = "java", stopRepeatingForStill = true), emptyList()).any { it.contains("stop-repeating") })
+        assertTrue(validateLensProfile(ok.copy(vendorGate = "vivoFullSize"), emptyList()).none { it.contains("Java backend") })
     }
 
     @Test

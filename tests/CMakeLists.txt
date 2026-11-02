@@ -101,6 +101,9 @@ rawr_test(camera_start_ladder_test
   "${RAWR_ROOT}/tests/native/camera_start_ladder_test.cpp")
 rawr_test(session_recipe_log_test
   "${RAWR_ROOT}/tests/native/session_recipe_log_test.cpp")
+rawr_test(camera_request_test
+  "${RAWR_ROOT}/tests/native/camera_request_test.cpp"
+  "${RAWR_ROOT}/app/src/main/cpp/camera/CameraRequest.cpp")
 rawr_test(camera_key_attempts_test
   "${RAWR_ROOT}/tests/native/camera_key_attempts_test.cpp")
 rawr_test(vendor_gate_preset_test
@@ -111,6 +114,14 @@ rawr_test(camera_video_facts_test
   "${RAWR_ROOT}/tests/native/camera_video_facts_test.cpp"
   "${RAWR_ROOT}/app/src/main/cpp/camera/CameraVideoFacts.cpp")
 add_test(NAME camera_video_facts_test_snapshot COMMAND "${UV_EXECUTABLE}" run --no-project --cache-dir "${RAWR_ROOT}/tmp/uv-cache" "${CMAKE_CURRENT_SOURCE_DIR}/native/camera_video_facts_test_snapshot.py" "$<TARGET_FILE:camera_video_facts_test>")
+rawr_test(camera_control_contract_test
+  "${RAWR_ROOT}/tests/native/camera_control_contract_test.cpp"
+  "${RAWR_ROOT}/app/src/main/cpp/camera/CameraControlSerialization.cpp"
+  "${RAWR_ROOT}/app/src/main/cpp/camera/CameraProfileJson.cpp"
+  "${RAWR_ROOT}/app/src/main/cpp/color/DcpProfile.cpp"
+  "${RAWR_ROOT}/app/src/main/cpp/color/ColorMath.cpp"
+  "${RAWR_ROOT}/app/src/main/cpp/geometry/LensDistortion.cpp"
+  "${RAWR_ROOT}/app/src/main/cpp/camera/CameraRouting.cpp")
 rawr_test(camera_white_balance_test
   "${RAWR_ROOT}/tests/native/camera_white_balance_test.cpp"
   "${RAWR_ROOT}/app/src/main/cpp/camera/WhiteBalanceMath.cpp"
@@ -239,6 +250,13 @@ rawr_test(camera_key_scope_test
   "${APP}/geometry/LensDistortion.cpp")
 rawr_test(companion_block_test
   "${RAWR_ROOT}/tests/native/companion_block_test.cpp"
+  "${APP}/camera/CameraRouting.cpp"
+  "${APP}/camera/CameraProfileJson.cpp"
+  "${APP}/color/DcpProfile.cpp"
+  "${APP}/color/ColorMath.cpp"
+  "${APP}/geometry/LensDistortion.cpp")
+rawr_test(backend_choice_test
+  "${RAWR_ROOT}/tests/native/backend_choice_test.cpp"
   "${APP}/camera/CameraRouting.cpp"
   "${APP}/camera/CameraProfileJson.cpp"
   "${APP}/color/DcpProfile.cpp"

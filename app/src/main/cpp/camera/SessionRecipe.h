@@ -67,6 +67,13 @@ struct SessionRecipe {
     int32_t startupDelayMs = 0;
     SessionParamsPolicy sessionParams = SessionParamsPolicy::Cadence;
     RequestDefaults requestDefaults = RequestDefaults::Rawr;
+    // The camera API that runs the session, and what only the Java one can carry.
+    BackendChoice backend = BackendChoice::Ndk;
+    uint32_t opMode = 0;
+    int64_t rawStreamUseCase = 0;
+    int64_t captureStreamUseCase = 0;
+    int64_t companionStreamUseCase = 0;
+    int64_t auxJpegStreamUseCase = 0;
 };
 
 // Per-start facts the lens itself cannot know.
@@ -116,6 +123,12 @@ struct RecipeInputs {
     r.startupDelayMs = lens.startupDelayMs;
     r.sessionParams = lens.sessionParams;
     r.requestDefaults = lens.requestDefaults;
+    r.backend = effectiveBackend(lens);
+    r.opMode = lens.opMode;
+    r.rawStreamUseCase = lens.rawStreamUseCase;
+    r.captureStreamUseCase = lens.captureStreamUseCase;
+    r.companionStreamUseCase = lens.companionStreamUseCase;
+    r.auxJpegStreamUseCase = lens.auxJpegStreamUseCase;
     return r;
 }
 

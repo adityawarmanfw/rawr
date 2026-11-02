@@ -32,6 +32,10 @@ struct SessionRecipeFacts {
     std::string fpsRange;         // "12..30", or "none" when the session parameters carry none
     std::string sessionParams = "cadence";  // cadence, none or full
     std::string requestDefaults = "rawr";    // rawr or minimal
+    std::string backend = "ndk";             // the camera API that ran the session
+    uint32_t opMode = 0;                     // Java backend only
+    // Per output stream use case (Java backend only): raw, capture, companion, aux JPEG.
+    int64_t rawUseCase = 0, captureUseCase = 0, companionUseCase = 0, auxJpegUseCase = 0;
     int sessionKeys = 0;
     int requestKeys = 0;
     int stillKeys = 0;
@@ -71,7 +75,7 @@ inline std::string describeSessionRecipe(const SessionRecipeFacts& f) {
                        " physical=" + orNone(f.physicalCameraId) + " raw=" + orNone(f.rawFormat) + ":" +
                        size(f.rawWidth, f.rawHeight) + " aspect=" + aspect + " template=" + orNone(f.requestTemplate) +
                        " fps=" + orNone(f.fpsRange) + " sessionParams=" + orNone(f.sessionParams) +
-                       " requestDefaults=" + orNone(f.requestDefaults) +
+                       " requestDefaults=" + orNone(f.requestDefaults) + " backend=" + orNone(f.backend) +
                        " keys=session:" + std::to_string(f.sessionKeys) + ",request:" + std::to_string(f.requestKeys) +
                        ",still:" + std::to_string(f.stillKeys) + ",decision:" + std::to_string(f.decisionKeys);
     if (f.companion) {
@@ -88,6 +92,11 @@ inline std::string describeSessionRecipe(const SessionRecipeFacts& f) {
     line += " startupDelayMs=" + std::to_string(f.startupDelayMs) + " fixedFps=" + std::to_string(f.fixedFps) +
             " gate=" + orNone(f.vendorGate) + (f.vendorGate.empty() ? "" : ":" + orNone(f.gateHold)) +
             " still=" + orNone(f.stillStrategy) + " stopRepeatingForStill=" + (f.stopRepeatingForStill ? "1" : "0");
+    // Only when set, so lines of sessions without them stay comparable with older bundles.
+    if (f.opMode) line += " opMode=" + std::to_string(f.opMode);
+    if (f.rawUseCase || f.captureUseCase || f.companionUseCase || f.auxJpegUseCase)
+        line += " useCases=raw:" + std::to_string(f.rawUseCase) + ",capture:" + std::to_string(f.captureUseCase) +
+                ",companion:" + std::to_string(f.companionUseCase) + ",auxJpeg:" + std::to_string(f.auxJpegUseCase);
     return line;
 }
 

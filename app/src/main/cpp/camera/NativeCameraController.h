@@ -47,6 +47,8 @@ class NativeCameraController {
     // Replaces the lens profile (user configuration). Returns false when a
     // debug setprop pins a built-in profile.
     bool setProfile(CameraProfile profile);
+    // Records why a profile was refused (log and control state); the running profile is kept.
+    void rejectProfile(const std::string& error);
     void setPreferredCameraId(const std::string& cameraId);
     void setAccessRoute(const std::string& route);
 

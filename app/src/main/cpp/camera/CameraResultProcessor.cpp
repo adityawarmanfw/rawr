@@ -21,7 +21,7 @@ void CameraResultProcessor::auditCallback(uint64_t callbackGeneration, uint64_t 
          " currentGeneration=" + std::to_string(generation) + " active=" + (active ? "true" : "false") +
          " hasCameraContext=" + (hasContext ? "true" : "false") + " hasResult=" + (hasResult ? "true" : "false"));
 }
-CameraResultActions CameraResultProcessor::process(const ACaptureRequest* requestCopy, const ACameraMetadata* result,
+CameraResultActions CameraResultProcessor::process(const CameraRequest* requestCopy, const ACameraMetadata* result,
                                                    CameraControlState& control,
                                                    const metadata::CameraContextMetadataPtr& cameraContext,
                                                    const std::optional<LevelOverride>& viewfinderLevels,

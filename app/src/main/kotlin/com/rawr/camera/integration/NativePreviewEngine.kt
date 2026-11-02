@@ -21,6 +21,9 @@ class NativePreviewEngine {
     /** Installed once per process, before any camera opens. */
     external fun installVendorCameraGate(gate: VendorCameraGate)
 
+    /** Installed once per process, before any camera opens: runs lenses that need Camera2-only features. */
+    external fun installJavaCameraBackend(backend: JavaCameraBackend)
+
     external fun create(filesDir: String, nativeLibraryDir: String, customDriverPath: String): Long
 
     external fun destroy(handle: Long)

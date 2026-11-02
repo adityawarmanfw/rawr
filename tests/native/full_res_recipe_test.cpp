@@ -37,7 +37,7 @@ void testFullSizeRecipeJson() {
     assert(preview && preview->lenses[0].stillTemplate == false);
     assert(serializeCameraProfile(*preview).find("preview") != std::string::npos);
     assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","streamUseCase":524547}]})", &error));
-    assert(error.find("NDK") != std::string::npos);
+    assert(error.find("not a profile field") != std::string::npos);
     // Defaults keep today's behaviour.
     const auto plain = parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0"}]})");
     assert(plain && !plain->lenses[0].stillTemplate && plain->lenses[0].fixedFps == 0);

@@ -25,11 +25,23 @@ void testPlainLens() {
     const std::string line = describeSessionRecipe(f);
     assert(line.rfind("CAMERA_SESSION_RECIPE ", 0) == 0);
     assert(has(line, "lens=2x camera=2 physical=none raw=RAW16:4080x3064 aspect=1.332"));
-    assert(has(line, "template=preview fps=12..30 sessionParams=cadence requestDefaults=rawr"));
+    assert(has(line, "template=preview fps=12..30 sessionParams=cadence requestDefaults=rawr backend=ndk"));
     assert(has(line, "keys=session:0,request:1,still:0,decision:0"));
     assert(has(line, "companion=YUV_420_888:320x240:targeted:source=profile:shape=fallback:images=4:detach=0:usage=0x100"));
     assert(has(line, "auxJpeg=none captureStream=none readerUsage=0x1000003 captureReaderUsage=default"));
     assert(has(line, "gate=none still=none stopRepeatingForStill=0"));
+    assert(!has(line, "opMode=") && !has(line, "useCases="));
+}
+
+void testJavaOnlyFields() {
+    SessionRecipeFacts f;
+    f.backend = "java";
+    f.opMode = 32769;
+    f.rawUseCase = 1;
+    f.companionUseCase = 4;
+    const std::string line = describeSessionRecipe(f);
+    assert(has(line, "backend=java"));
+    assert(has(line, " opMode=32769 useCases=raw:1,capture:0,companion:4,auxJpeg:0"));
 }
 
 void testFullSizeLens() {
@@ -56,7 +68,7 @@ void testFullSizeLens() {
     f.startupDelayMs = 500;
     f.fixedFps = 30;
     const std::string line = describeSessionRecipe(f);
-    assert(has(line, "sessionParams=none requestDefaults=minimal"));
+    assert(has(line, "sessionParams=none requestDefaults=minimal backend=ndk"));
     assert(has(line, "keys=session:2,request:0,still:0,decision:1"));
     assert(has(line, "companion=PRIVATE:640x480:untargeted:source=profile:shape=raw"));
     assert(has(line, "auxJpeg=8192x6144 captureStream=16320x12256"));
@@ -93,6 +105,7 @@ int main() {
     testFullSizeLens();
     testMissingFacts();
     testCarriesRecipe();
+    testJavaOnlyFields();
     std::cout << "session_recipe_log_test passed\n";
     return 0;
 }

@@ -70,6 +70,7 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
     init {
         native.installCameraTagResolver(CameraTagResolver(application))
         native.installVendorCameraGate(VendorCameraGate(application))
+        native.installJavaCameraBackend(JavaCameraBackend(application))
         nativeHandle =
             native.create(
                 application.filesDir.absolutePath,

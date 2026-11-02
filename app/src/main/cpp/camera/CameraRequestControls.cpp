@@ -26,7 +26,7 @@ bool awbModeAdvertised(const CameraControlState& state, uint8_t awb) {
 
 }  // namespace
 
-void applyPreviewRequestDefaults(ACaptureRequest* request, const metadata::CameraContextMetadata& context,
+void applyPreviewRequestDefaults(CameraRequest* request, const metadata::CameraContextMetadata& context,
                                  bool minimal) {
     if (!request) return;
     const uint8_t shadingMap = context.lensShadingMapWidth >= 2 && context.lensShadingMapHeight >= 2
@@ -36,17 +36,17 @@ void applyPreviewRequestDefaults(ACaptureRequest* request, const metadata::Camer
     const uint8_t hotPixel = ACAMERA_HOT_PIXEL_MODE_OFF;
     const uint8_t hotPixelMap = ACAMERA_STATISTICS_HOT_PIXEL_MAP_MODE_ON;
     // Keep metadata enabled for every RAW frame without request swaps during bursts.
-    (void)ACaptureRequest_setEntry_u8(request, ACAMERA_STATISTICS_LENS_SHADING_MAP_MODE, 1, &shadingMap);
+    (void)request->setU8(ACAMERA_STATISTICS_LENS_SHADING_MAP_MODE, 1, &shadingMap);
     if (minimal) return;
-    (void)ACaptureRequest_setEntry_u8(request, ACAMERA_DISTORTION_CORRECTION_MODE, 1, &distortion);
-    (void)ACaptureRequest_setEntry_u8(request, ACAMERA_HOT_PIXEL_MODE, 1, &hotPixel);
-    (void)ACaptureRequest_setEntry_u8(request, ACAMERA_STATISTICS_HOT_PIXEL_MAP_MODE, 1, &hotPixelMap);
+    (void)request->setU8(ACAMERA_DISTORTION_CORRECTION_MODE, 1, &distortion);
+    (void)request->setU8(ACAMERA_HOT_PIXEL_MODE, 1, &hotPixel);
+    (void)request->setU8(ACAMERA_STATISTICS_HOT_PIXEL_MAP_MODE, 1, &hotPixelMap);
 }
 
-CameraSessionCadenceApplyResult applyCameraSessionCadence(ACaptureRequest* request, const CameraControlState& state) {
+CameraSessionCadenceApplyResult applyCameraSessionCadence(CameraRequest* request, const CameraControlState& state) {
     CameraSessionCadenceApplyResult result;
     if (!request) {
-        result.status = ACAMERA_ERROR_INVALID_PARAMETER;
+        result.status = kRequestInvalidParameter;
         return result;
     }
     const bool priority = state.exposureMode == ExposureControlMode::ShutterPriority ||
@@ -54,25 +54,25 @@ CameraSessionCadenceApplyResult applyCameraSessionCadence(ACaptureRequest* reque
     result.fpsRange = cameraTargetFpsRange(state, priority);
     if (result.fpsRange) {
         result.status =
-            ACaptureRequest_setEntry_i32(request, ACAMERA_CONTROL_AE_TARGET_FPS_RANGE, 2, result.fpsRange->data());
+            request->setI32(ACAMERA_CONTROL_AE_TARGET_FPS_RANGE, 2, result.fpsRange->data());
     }
     return result;
 }
 
-CameraControlApplyResult applyCameraControlState(ACaptureRequest* request, const CameraControlState& state,
+CameraControlApplyResult applyCameraControlState(CameraRequest* request, const CameraControlState& state,
                                                  const CameraMeteringRequest& metering) {
     CameraControlApplyResult result{};
     if (!request) return result;
 
     const uint8_t controlMode = ACAMERA_CONTROL_MODE_AUTO;
-    (void)ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_MODE, 1, &controlMode);
+    (void)request->setU8(ACAMERA_CONTROL_MODE, 1, &controlMode);
 
     const bool rawrAe = state.exposureMode != ExposureControlMode::Manual && state.rawrAeActive &&
                         state.rawrAeExposureTimeNs > 0 && state.rawrAeSensitivity > 0;
     // rawr AE is AE OFF with the app-solved pair: the same sensor ownership as M.
     const bool manual = state.exposureMode == ExposureControlMode::Manual || rawrAe;
     const uint8_t ae = manual ? ACAMERA_CONTROL_AE_MODE_OFF : ACAMERA_CONTROL_AE_MODE_ON;
-    (void)ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AE_MODE, 1, &ae);
+    (void)request->setU8(ACAMERA_CONTROL_AE_MODE, 1, &ae);
 
     // AE priority is a distinct Camera2 mode (API 36). Explicitly write OFF for
     // ordinary Auto/Manual requests because this ACaptureRequest object is reused.
@@ -90,11 +90,11 @@ CameraControlApplyResult applyCameraControlState(ACaptureRequest* request, const
     if (state.capabilities.aePriorityTagAvailable) {
         if (state.capabilities.minimalRequestDefaults && aePriority == camera2_priority::kOff) {
             // Not asking for HAL priority AE: leave the tag to the template (and clear one set earlier).
-            (void)ACaptureRequest_setEntry_u8(request, camera2_priority::kAePriorityModeTag, 0, nullptr);
+            (void)request->setU8(camera2_priority::kAePriorityModeTag, 0, nullptr);
         } else {
             result.aePriorityRequested = true;
             result.aePriorityStatus =
-                ACaptureRequest_setEntry_u8(request, camera2_priority::kAePriorityModeTag, 1, &aePriority);
+                request->setU8(camera2_priority::kAePriorityModeTag, 1, &aePriority);
         }
     }
 
@@ -107,9 +107,9 @@ CameraControlApplyResult applyCameraControlState(ACaptureRequest* request, const
     if (const auto fps = cameraTargetFpsRange(state, aePriority != camera2_priority::kOff)) {
         result.aeTargetFpsRequested = true;
         result.aeTargetFpsStatus =
-            ACaptureRequest_setEntry_i32(request, ACAMERA_CONTROL_AE_TARGET_FPS_RANGE, 2, fps->data());
+            request->setI32(ACAMERA_CONTROL_AE_TARGET_FPS_RANGE, 2, fps->data());
     } else {
-        (void)ACaptureRequest_setEntry_i32(request, ACAMERA_CONTROL_AE_TARGET_FPS_RANGE, 0, nullptr);
+        (void)request->setI32(ACAMERA_CONTROL_AE_TARGET_FPS_RANGE, 0, nullptr);
     }
 
     // rawr AE in video mode holds the video preview cadence, as recording does.
@@ -137,30 +137,30 @@ CameraControlApplyResult applyCameraControlState(ACaptureRequest* request, const
     // every mode so stale values from M/S/I cannot leak into a different AE mode.
     // Camera2 NDK removes an entry when count=0 and data=nullptr.
     if (manual) {
-        (void)ACaptureRequest_setEntry_i64(request, ACAMERA_SENSOR_EXPOSURE_TIME, 1, &exposure);
-        (void)ACaptureRequest_setEntry_i32(request, ACAMERA_SENSOR_SENSITIVITY, 1, &sensitivity);
+        (void)request->setI64(ACAMERA_SENSOR_EXPOSURE_TIME, 1, &exposure);
+        (void)request->setI32(ACAMERA_SENSOR_SENSITIVITY, 1, &sensitivity);
 
         if (state.capabilities.maxFrameDurationNs > 0) {
             constexpr int64_t kThirtyFpsFrameNs = 33333333LL;
             const int64_t frameDuration = framePeriodNs > 0 ? framePeriodNs :
                 std::min(state.capabilities.maxFrameDurationNs, std::max(kThirtyFpsFrameNs, exposure));
-            (void)ACaptureRequest_setEntry_i64(request, ACAMERA_SENSOR_FRAME_DURATION, 1, &frameDuration);
+            (void)request->setI64(ACAMERA_SENSOR_FRAME_DURATION, 1, &frameDuration);
         }
     } else if (aePriority == camera2_priority::kSensorExposureTimePriority) {
         // S: app owns shutter; AE owns ISO + frame duration.
-        (void)ACaptureRequest_setEntry_i64(request, ACAMERA_SENSOR_EXPOSURE_TIME, 1, &exposure);
-        (void)ACaptureRequest_setEntry_i32(request, ACAMERA_SENSOR_SENSITIVITY, 0, nullptr);
-        (void)ACaptureRequest_setEntry_i64(request, ACAMERA_SENSOR_FRAME_DURATION, 0, nullptr);
+        (void)request->setI64(ACAMERA_SENSOR_EXPOSURE_TIME, 1, &exposure);
+        (void)request->setI32(ACAMERA_SENSOR_SENSITIVITY, 0, nullptr);
+        (void)request->setI64(ACAMERA_SENSOR_FRAME_DURATION, 0, nullptr);
     } else if (aePriority == camera2_priority::kSensorSensitivityPriority) {
         // I: app owns ISO; AE owns shutter + frame duration.
-        (void)ACaptureRequest_setEntry_i32(request, ACAMERA_SENSOR_SENSITIVITY, 1, &sensitivity);
-        (void)ACaptureRequest_setEntry_i64(request, ACAMERA_SENSOR_EXPOSURE_TIME, 0, nullptr);
-        (void)ACaptureRequest_setEntry_i64(request, ACAMERA_SENSOR_FRAME_DURATION, 0, nullptr);
+        (void)request->setI32(ACAMERA_SENSOR_SENSITIVITY, 1, &sensitivity);
+        (void)request->setI64(ACAMERA_SENSOR_EXPOSURE_TIME, 0, nullptr);
+        (void)request->setI64(ACAMERA_SENSOR_FRAME_DURATION, 0, nullptr);
     } else {
         // A: return all sensor exposure ownership to Camera2 AE.
-        (void)ACaptureRequest_setEntry_i64(request, ACAMERA_SENSOR_EXPOSURE_TIME, 0, nullptr);
-        (void)ACaptureRequest_setEntry_i32(request, ACAMERA_SENSOR_SENSITIVITY, 0, nullptr);
-        (void)ACaptureRequest_setEntry_i64(request, ACAMERA_SENSOR_FRAME_DURATION, 0, nullptr);
+        (void)request->setI64(ACAMERA_SENSOR_EXPOSURE_TIME, 0, nullptr);
+        (void)request->setI32(ACAMERA_SENSOR_SENSITIVITY, 0, nullptr);
+        (void)request->setI64(ACAMERA_SENSOR_FRAME_DURATION, 0, nullptr);
     }
 
     // AE antibanding. The repeating request is reused so normalize every
@@ -175,16 +175,16 @@ CameraControlApplyResult applyCameraControlState(ACaptureRequest* request, const
                                           static_cast<uint8_t>(ACAMERA_CONTROL_AE_ANTIBANDING_MODE_AUTO));
             banding = autoIt != supported.end() ? *autoIt : supported.front();
         }
-        (void)ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AE_ANTIBANDING_MODE, 1, &banding);
+        (void)request->setU8(ACAMERA_CONTROL_AE_ANTIBANDING_MODE, 1, &banding);
     }
 
     if (!manual) {
         const uint8_t aeLock = ACAMERA_CONTROL_AE_LOCK_OFF;
-        (void)ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AE_LOCK, 1, &aeLock);
+        (void)request->setU8(ACAMERA_CONTROL_AE_LOCK, 1, &aeLock);
 
         const int32_t ev = std::clamp(state.requestedEvSteps + std::min(0, state.hdrHeadroomSteps),
                                       state.capabilities.evMinSteps, state.capabilities.evMaxSteps);
-        (void)ACaptureRequest_setEntry_i32(request, ACAMERA_CONTROL_AE_EXPOSURE_COMPENSATION, 1, &ev);
+        (void)request->setI32(ACAMERA_CONTROL_AE_EXPOSURE_COMPENSATION, 1, &ev);
     }
 
     // White balance. The repeating ACaptureRequest is reused, so every branch
@@ -204,8 +204,8 @@ CameraControlApplyResult applyCameraControlState(ACaptureRequest* request, const
         state.hasManualWhiteBalanceTransformSeed) {
         const uint8_t awb = ACAMERA_CONTROL_AWB_MODE_OFF;
         const uint8_t color = ACAMERA_COLOR_CORRECTION_MODE_TRANSFORM_MATRIX;
-        result.wbStatus = ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AWB_MODE, 1, &awb);
-        (void)ACaptureRequest_setEntry_u8(request, ACAMERA_COLOR_CORRECTION_MODE, 1, &color);
+        result.wbStatus = request->setU8(ACAMERA_CONTROL_AWB_MODE, 1, &awb);
+        (void)request->setU8(ACAMERA_COLOR_CORRECTION_MODE, 1, &color);
         const std::array<float, 4> fwdNew =
             whiteBalanceGainsForTempTint(state.requestedWhiteBalanceTemperatureK, state.requestedWhiteBalanceTint);
         std::array<float, 4> gains = fwdNew;
@@ -224,15 +224,15 @@ CameraControlApplyResult applyCameraControlState(ACaptureRequest* request, const
                          clampGain(entryB * fwdNew[3] / fwdEntry[3])};
             }
         }
-        (void)ACaptureRequest_setEntry_float(request, ACAMERA_COLOR_CORRECTION_GAINS, 4, gains.data());
+        (void)request->setFloat(ACAMERA_COLOR_CORRECTION_GAINS, 4, gains.data());
         // COLOR_CORRECTION_TRANSFORM is rational[9]; carry the HAL seed at
         // 1e-4 precision (magnitude stays within [-1.5, 3.0], fitting int32).
-        ACameraMetadata_rational transform[9];
+        RequestRational transform[9];
         for (size_t i = 0; i < 9; ++i) {
             transform[i].numerator = static_cast<int32_t>(std::lround(state.manualWhiteBalanceTransformSeed[i] * 10000.0f));
             transform[i].denominator = 10000;
         }
-        (void)ACaptureRequest_setEntry_rational(request, ACAMERA_COLOR_CORRECTION_TRANSFORM, 9, transform);
+        (void)request->setRational(ACAMERA_COLOR_CORRECTION_TRANSFORM, 9, transform);
     } else {
         if (result.wbManualRequested) result.wbManualFallbackToAuto = true;
         uint8_t awb = static_cast<uint8_t>(state.whiteBalanceMode);
@@ -240,10 +240,10 @@ CameraControlApplyResult applyCameraControlState(ACaptureRequest* request, const
             awb = ACAMERA_CONTROL_AWB_MODE_AUTO;
         }
         const uint8_t color = ACAMERA_COLOR_CORRECTION_MODE_HIGH_QUALITY;
-        result.wbStatus = ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AWB_MODE, 1, &awb);
-        (void)ACaptureRequest_setEntry_u8(request, ACAMERA_COLOR_CORRECTION_MODE, 1, &color);
-        (void)ACaptureRequest_setEntry_float(request, ACAMERA_COLOR_CORRECTION_GAINS, 0, nullptr);
-        (void)ACaptureRequest_setEntry_rational(request, ACAMERA_COLOR_CORRECTION_TRANSFORM, 0, nullptr);
+        result.wbStatus = request->setU8(ACAMERA_CONTROL_AWB_MODE, 1, &awb);
+        (void)request->setU8(ACAMERA_COLOR_CORRECTION_MODE, 1, &color);
+        (void)request->setFloat(ACAMERA_COLOR_CORRECTION_GAINS, 0, nullptr);
+        (void)request->setRational(ACAMERA_COLOR_CORRECTION_TRANSFORM, 0, nullptr);
     }
 
     uint8_t af = ACAMERA_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
@@ -252,7 +252,7 @@ CameraControlApplyResult applyCameraControlState(ACaptureRequest* request, const
     } else if (state.focusMode == FocusControlMode::LockedAuto || state.tapAfActive) {
         af = ACAMERA_CONTROL_AF_MODE_AUTO;
     }
-    result.focusStatus = ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AF_MODE, 1, &af);
+    result.focusStatus = request->setU8(ACAMERA_CONTROL_AF_MODE, 1, &af);
 
     // Face detection feeds the face boxes + face-steered continuous AF. FULL
     // carries per-face scores; fall back to SIMPLE. The repeating request is
@@ -263,30 +263,30 @@ CameraControlApplyResult applyCameraControlState(ACaptureRequest* request, const
                                           ? ACAMERA_STATISTICS_FACE_DETECT_MODE_FULL
                                           : ACAMERA_STATISTICS_FACE_DETECT_MODE_SIMPLE);
     if (state.capabilities.minimalRequestDefaults)
-        (void)ACaptureRequest_setEntry_u8(request, ACAMERA_STATISTICS_FACE_DETECT_MODE, 0, nullptr);
+        (void)request->setU8(ACAMERA_STATISTICS_FACE_DETECT_MODE, 0, nullptr);
     else
-        (void)ACaptureRequest_setEntry_u8(request, ACAMERA_STATISTICS_FACE_DETECT_MODE, 1, &faceDetect);
+        (void)request->setU8(ACAMERA_STATISTICS_FACE_DETECT_MODE, 1, &faceDetect);
 
     const uint8_t ois = (state.capabilities.oisSupported && state.oisEnabled)
                             ? ACAMERA_LENS_OPTICAL_STABILIZATION_MODE_ON
                             : ACAMERA_LENS_OPTICAL_STABILIZATION_MODE_OFF;
-    (void)ACaptureRequest_setEntry_u8(request, ACAMERA_LENS_OPTICAL_STABILIZATION_MODE, 1, &ois);
+    (void)request->setU8(ACAMERA_LENS_OPTICAL_STABILIZATION_MODE, 1, &ois);
 
     if ((state.focusMode == FocusControlMode::Manual) && state.capabilities.manualFocusSupported) {
         const float diopters = requestedFocusDiopters(state);
-        const auto status = ACaptureRequest_setEntry_float(request, ACAMERA_LENS_FOCUS_DISTANCE, 1, &diopters);
-        if (status != ACAMERA_OK) result.focusStatus = status;
+        const auto status = request->setFloat(ACAMERA_LENS_FOCUS_DISTANCE, 1, &diopters);
+        if (status != kRequestOk) result.focusStatus = status;
     }
-    (void)ACaptureRequest_setEntry_i32(request, ACAMERA_CONTROL_AF_REGIONS, metering.afRegion ? 5 : 0,
+    (void)request->setI32(ACAMERA_CONTROL_AF_REGIONS, metering.afRegion ? 5 : 0,
                                        metering.afRegion ? metering.afRegion->data() : nullptr);
-    (void)ACaptureRequest_setEntry_i32(request, ACAMERA_CONTROL_AE_REGIONS, metering.aeRegion ? 5 : 0,
+    (void)request->setI32(ACAMERA_CONTROL_AE_REGIONS, metering.aeRegion ? 5 : 0,
                                        metering.aeRegion ? metering.aeRegion->data() : nullptr);
     const uint8_t trigger =
         metering.trigger == CameraFocusTrigger::Start ? ACAMERA_CONTROL_AF_TRIGGER_START
         : metering.trigger == CameraFocusTrigger::Cancel && !state.capabilities.tapAfHoldsUntilNextTap
             ? ACAMERA_CONTROL_AF_TRIGGER_CANCEL
             : ACAMERA_CONTROL_AF_TRIGGER_IDLE;
-    (void)ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AF_TRIGGER, 1, &trigger);
+    (void)request->setU8(ACAMERA_CONTROL_AF_TRIGGER, 1, &trigger);
     return result;
 }
 

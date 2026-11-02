@@ -16,23 +16,23 @@ std::optional<ACameraMetadata_const_entry> entry(const ACameraMetadata* metadata
 
 }  // namespace
 
-CameraRequestObservation readCameraRequestObservation(const ACaptureRequest* requestCopy) {
+CameraRequestObservation readCameraRequestObservation(const CameraRequest* requestCopy) {
     CameraRequestObservation observation;
     if (!requestCopy) return observation;
-    ACameraMetadata_const_entry value{};
-    if (ACaptureRequest_getConstEntry(requestCopy, ACAMERA_SENSOR_EXPOSURE_TIME, &value) == ACAMERA_OK &&
+    RequestEntry value{};
+    if (requestCopy->get(ACAMERA_SENSOR_EXPOSURE_TIME, &value) == ACAMERA_OK &&
         value.data.i64 && value.count >= 1)
         observation.exposureTimeNs = value.data.i64[0];
     value = {};
-    if (ACaptureRequest_getConstEntry(requestCopy, ACAMERA_SENSOR_SENSITIVITY, &value) == ACAMERA_OK &&
+    if (requestCopy->get(ACAMERA_SENSOR_SENSITIVITY, &value) == ACAMERA_OK &&
         value.data.i32 && value.count >= 1)
         observation.sensitivity = value.data.i32[0];
     value = {};
-    if (ACaptureRequest_getConstEntry(requestCopy, ACAMERA_CONTROL_AF_MODE, &value) == ACAMERA_OK && value.data.u8 &&
+    if (requestCopy->get(ACAMERA_CONTROL_AF_MODE, &value) == ACAMERA_OK && value.data.u8 &&
         value.count >= 1)
         observation.afMode = value.data.u8[0];
     void* userContext = nullptr;
-    if (ACaptureRequest_getUserContext(requestCopy, &userContext) == ACAMERA_OK && userContext) {
+    if (requestCopy->userContext(&userContext) == ACAMERA_OK && userContext) {
         observation.provenance = *static_cast<const CameraRequestProvenance*>(userContext);
     }
     return observation;

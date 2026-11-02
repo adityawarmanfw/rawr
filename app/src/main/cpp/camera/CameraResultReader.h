@@ -4,6 +4,7 @@
 #include <camera/NdkCaptureRequest.h>
 
 #include "camera/CameraControlResult.h"
+#include "camera/CameraRequest.h"
 #include "camera/CameraRequestProvenance.h"
 
 namespace rawrcam::camera {
@@ -17,7 +18,7 @@ struct CameraRequestObservation {
 
 // Thin NDK decoding. The caller first validates callback/session generation and
 // retains the controller lock while copying the request's provenance context.
-CameraRequestObservation readCameraRequestObservation(const ACaptureRequest* requestCopy);
+CameraRequestObservation readCameraRequestObservation(const CameraRequest* requestCopy);
 CameraControlResult readCameraControlResult(const ACameraMetadata* result,
                                             const CameraControlCapabilities& capabilities,
                                             const metadata::SensorGeometry& geometry);

@@ -289,6 +289,24 @@ internal fun LensUnavailableNotice(orientation: Orientation, modifier: Modifier 
     )
 }
 
+/** Shown when the lens profile the app sent was refused; the previous profile is still in use. */
+@Composable
+internal fun ProfileErrorNotice(error: String, orientation: Orientation, modifier: Modifier = Modifier) {
+    Text(
+        "Lens settings not applied: $error",
+        color = Color.White,
+        fontSize = 13.sp,
+        textAlign = TextAlign.Center,
+        style = ViewfinderTextStyle,
+        modifier = modifier
+            .uprightInLandscape(orientation)
+            .widthIn(max = 320.dp)
+            .background(Color.Black.copy(alpha = .45f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 14.dp, vertical = 8.dp)
+            .testTag(CaptureTestTags.PROFILE_ERROR_NOTICE)
+    )
+}
+
 private const val FULL_SIZE_FALLBACK_NOTICE_MS = 3_000L
 
 /**

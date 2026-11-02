@@ -5,19 +5,21 @@
 #include <string>
 
 #include "camera/CameraCallbackLifetime.h"
+#include "camera/CameraRequest.h"
 namespace rawrcam::camera {
 class CameraEventSink {
    public:
     virtual ~CameraEventSink() = default;
     virtual void cameraDeviceEvent(uint64_t generation, const std::string& message) = 0;
-    virtual void cameraSessionClosed(uint64_t generation, ACameraCaptureSession* session) = 0;
-    virtual void cameraCaptureCompleted(uint64_t generation, const ACaptureRequest* request,
+    // session: CameraSessionDriver::identity() of the closed session.
+    virtual void cameraSessionClosed(uint64_t generation, const void* session) = 0;
+    virtual void cameraCaptureCompleted(uint64_t generation, const CameraRequest* request,
                                         const ACameraMetadata* result) = 0;
     // The sensor started exposing a request. Runs on a camera thread.
-    virtual void cameraCaptureStarted(uint64_t /*generation*/, const ACaptureRequest* /*request*/, int64_t /*timestamp*/) {}
+    virtual void cameraCaptureStarted(uint64_t /*generation*/, const CameraRequest* /*request*/, int64_t /*timestamp*/) {}
     // Every failed capture or lost buffer, unthrottled. Runs on a camera thread.
     virtual void cameraCaptureFailed(uint64_t /*generation*/) {}
-    virtual void cameraStillFailed(uint64_t /*generation*/, const ACaptureRequest* /*request*/) {}
+    virtual void cameraStillFailed(uint64_t /*generation*/, const CameraRequest* /*request*/) {}
     virtual void cameraDeviceFailed(uint64_t /*generation*/) {}
     virtual void cameraSequenceEnded(uint64_t /*generation*/, int /*sequenceId*/, bool /*aborted*/) {}
 };
@@ -47,6 +49,15 @@ class CameraCallbacks final {
     static ACameraCaptureSession_stateCallbacks sessionState(CameraSessionCallbackContext*);
     static ACameraCaptureSession_captureCallbacks captures(CameraSessionCallbackContext*);
     static ACameraCaptureSession_logicalCamera_captureCallbacks logicalCaptures(CameraSessionCallbackContext*);
+    // The same events for a backend that isn't the NDK (the Java bridge): same guard, same sink calls.
+    static void deviceDisconnected(CameraDeviceCallbackContext*);
+    static void deviceError(CameraDeviceCallbackContext*, int error);
+    static void sessionClosed(CameraSessionCallbackContext*, const void* session);  // deletes the context
+    static void captureStarted(CameraSessionCallbackContext*, const CameraRequest*, int64_t timestamp);
+    static void captureCompleted(CameraSessionCallbackContext*, const CameraRequest*, const ACameraMetadata*);
+    static void captureFailed(CameraSessionCallbackContext*, const char* kind, int64_t frameNumber, int reason,
+                              int sequenceId, const CameraRequest*);
+    static void sequenceEnded(CameraSessionCallbackContext*, int sequenceId, bool aborted);
 
    private:
     static void onDisconnected(void*, ACameraDevice*);

@@ -56,6 +56,7 @@ import com.rawr.camera.settings.model.CFA_BLOCKS
 import com.rawr.camera.settings.model.CFA_LIVE_QUALITIES
 import com.rawr.camera.settings.model.CFA_ORDERS
 import com.rawr.camera.settings.model.CFA_PHOTO_QUALITIES
+import com.rawr.camera.settings.model.BACKEND_CHOICES
 import com.rawr.camera.settings.model.CAMERA_QUIRKS
 import com.rawr.camera.settings.model.EXTENDED_ISO_MAX
 import com.rawr.camera.settings.model.EXTENDED_SHUTTER_MAX_NS
@@ -802,6 +803,35 @@ private fun SessionRecipeGroup(lens: LensProfile, onChange: (LensProfile) -> Uni
             supportingText = "Minimal leaves distortion and hot-pixel modes, face detection and the AE priority tag to the camera",
             onSelect = { onChange(lens.copy(requestDefaults = it)) }
         )
+        SettingDivider()
+        DropdownChoiceRow(
+            title = "Camera API",
+            selected = lens.backend,
+            values = BACKEND_CHOICES,
+            label = { when (it) { "auto" -> "Automatic"; "ndk" -> "Native (NDK)"; "java" -> "Java Camera2"; else -> it } },
+            supportingText = "Automatic uses Java Camera2 only when an operating mode or stream use case is set; " +
+                "both need it. Native cannot carry them, so that combination is refused.",
+            onSelect = { onChange(lens.copy(backend = it)) }
+        )
+        Column(Modifier.fillMaxWidth().padding(horizontal = SettingsRowHorizontalPadding, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            CaptureNumberField("Operating mode", lens.opMode, Modifier.fillMaxWidth().testTag(SettingsTestTags.row("LensEditor", "op_mode")),
+                "Session operating mode (vendor modes are usually 0x8000 and above, entered in decimal). 0 = normal; 1 and 2 are refused.") {
+                onChange(lens.copy(opMode = it))
+            }
+            CaptureNumberField("Stream use case: viewfinder RAW", lens.rawStreamUseCase,
+                Modifier.fillMaxWidth().testTag(SettingsTestTags.row("LensEditor", "use_case_raw")),
+                "0 = not set. Standard values 1 to 6, or a vendor value.") { onChange(lens.copy(rawStreamUseCase = it)) }
+            if (lens.captureStream != null)
+                CaptureNumberField("Stream use case: capture RAW", lens.captureStreamUseCase,
+                    Modifier.fillMaxWidth().testTag(SettingsTestTags.row("LensEditor", "use_case_capture"))) {
+                    onChange(lens.copy(captureStreamUseCase = it))
+                }
+            CaptureNumberField("Stream use case: companion", lens.companionStreamUseCase,
+                Modifier.fillMaxWidth().testTag(SettingsTestTags.row("LensEditor", "use_case_companion"))) {
+                onChange(lens.copy(companionStreamUseCase = it))
+            }
+        }
         if (lens.vendorGate.isNotEmpty()) {
             SettingDivider()
             DropdownChoiceRow(
