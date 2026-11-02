@@ -5,7 +5,7 @@
 #include <string>
 #include <utility>
 
-#include "camera/CameraQuirks.h"
+#include "camera/CameraWorkarounds.h"
 #include "camera/CameraRouting.h"
 
 namespace rawrcam::camera {
@@ -60,7 +60,7 @@ struct SessionRecipe {
     bool captureStillTemplate = true;     // full-size stills are built from the still-capture template
     std::optional<CompanionRecipe> companion;
     std::optional<std::pair<uint32_t, uint32_t>> auxJpeg;
-    std::optional<uint64_t> auxJpegUsage;
+    std::optional<uint64_t> auxJpegBufferUsage;
     StillStrategy still = StillStrategy::Direct;
     std::string gate;
     GateHold gateHold = GateHold::UntilConfigured;
@@ -68,10 +68,10 @@ struct SessionRecipe {
     SessionParamsPolicy sessionParams = SessionParamsPolicy::Cadence;
     RequestDefaults requestDefaults = RequestDefaults::Rawr;
     // The camera API that runs the session, and what only the Java one can carry.
-    BackendChoice backend = BackendChoice::Ndk;
+    CameraApi cameraApi = CameraApi::Native;
     uint32_t opMode = 0;
     int64_t rawStreamUseCase = 0;
-    int64_t captureStreamUseCase = 0;
+    int64_t photoStreamUseCase = 0;
     int64_t companionStreamUseCase = 0;
     int64_t auxJpegStreamUseCase = 0;
 };
@@ -85,15 +85,15 @@ struct RecipeInputs {
 [[nodiscard]] inline GateHold defaultGateHold(const LensRoute& lens) noexcept {
     // A capture-stream route keeps the gate until the device closes: the HAL rebuilds its still
     // pipeline per full-size request and crashes if the client is no longer the vendor's camera.
-    return lens.captureStream ? GateHold::UntilClosed : GateHold::UntilConfigured;
+    return lens.photoStream ? GateHold::UntilClosed : GateHold::UntilConfigured;
 }
 
 [[nodiscard]] inline StillStrategy stillStrategyFor(const LensRoute& lens, bool companionConfigured) noexcept {
     bool decisionKeys = false;
-    for (const auto& k : lens.keys) decisionKeys |= k.enabled && k.scope == CameraKeySetting::Scope::Decision;
-    if (lens.captureStream && companionConfigured && lens.companionTargeted && decisionKeys)
+    for (const auto& k : lens.vendorKeys) decisionKeys |= k.enabled && k.scope == CameraKeySetting::Scope::Decision;
+    if (lens.photoStream && companionConfigured && lens.companionTargeted && decisionKeys)
         return StillStrategy::DecisionFrame;
-    return lens.stopRepeatingForStill ? StillStrategy::StopRepeatThenStill : StillStrategy::Direct;
+    return lens.stopViewfinderForPhotos ? StillStrategy::StopRepeatThenStill : StillStrategy::Direct;
 }
 
 [[nodiscard]] inline SessionRecipe resolveSessionRecipe(const LensRoute& lens, const RecipeInputs& in) {
@@ -105,28 +105,28 @@ struct RecipeInputs {
         c.privateFormat = lens.companionPrivate;
         c.size = lens.companionSize;
         c.targeted = lens.companionTargeted;
-        c.usage = lens.companionUsage;
-        c.maxImages = lens.companionMaxImages ? lens.companionMaxImages : 2;
+        c.usage = lens.companionBufferUsage;
+        c.maxImages = lens.companionBufferCount ? lens.companionBufferCount : 2;
         c.physical = lens.companionPhysical;
         c.fallback = lens.companionFallback;
         // Only an automatic companion is dropped unless the profile says otherwise.
         c.detach = lens.companionDetach.value_or(!lens.companionSize.has_value());
         c.required = lens.companionSize.has_value();
-        c.source = lens.companionSize ? "profile" : lens.captureStream ? "capture_stream" : in.forcedCompanion ? "override" : "rule";
+        c.source = lens.companionSize ? "profile" : lens.photoStream ? "capture_stream" : in.forcedCompanion ? "override" : "rule";
         r.companion = c;
     }
     r.auxJpeg = lens.auxJpegSize;
-    r.auxJpegUsage = lens.auxJpegUsage;
+    r.auxJpegBufferUsage = lens.auxJpegBufferUsage;
     r.still = stillStrategyFor(lens, r.companion.has_value());
     r.gate = lens.vendorGate;
     r.gateHold = lens.gateHold.value_or(defaultGateHold(lens));
     r.startupDelayMs = lens.startupDelayMs;
     r.sessionParams = lens.sessionParams;
     r.requestDefaults = lens.requestDefaults;
-    r.backend = effectiveBackend(lens);
+    r.cameraApi = effectiveCameraApi(lens);
     r.opMode = lens.opMode;
     r.rawStreamUseCase = lens.rawStreamUseCase;
-    r.captureStreamUseCase = lens.captureStreamUseCase;
+    r.photoStreamUseCase = lens.photoStreamUseCase;
     r.companionStreamUseCase = lens.companionStreamUseCase;
     r.auxJpegStreamUseCase = lens.auxJpegStreamUseCase;
     return r;

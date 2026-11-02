@@ -15,13 +15,13 @@ std::vector<LensRoute> allLenses() {
     for (const auto& p : builtInProfiles()) lenses.insert(lenses.end(), p.profile.lenses.begin(), p.profile.lenses.end());
     LensRoute plain;
     LensRoute capture;
-    capture.captureStream = rawrcam::geometry::RawStreamPreference{};
+    capture.photoStream = rawrcam::geometry::RawStreamPreference{};
     LensRoute sized;
     sized.companionSize = std::make_pair(640u, 480u);
     LensRoute off;
     off.disableCompanion = true;
     LensRoute stop;
-    stop.stopRepeatingForStill = true;
+    stop.stopViewfinderForPhotos = true;
     lenses.insert(lenses.end(), {plain, capture, sized, off, stop});
     return lenses;
 }
@@ -50,10 +50,10 @@ void testCompanionSource() {
     assert(std::string(resolveSessionRecipe(plain, {false, true}).companion->source) == "rule");
     assert(std::string(resolveSessionRecipe(plain, {true, false}).companion->source) == "override");
     LensRoute capture;
-    capture.captureStream = rawrcam::geometry::RawStreamPreference{};
+    capture.photoStream = rawrcam::geometry::RawStreamPreference{};
     assert(std::string(resolveSessionRecipe(capture, {false, false}).companion->source) == "capture_stream");
     LensRoute sized;
-    sized.captureStream = rawrcam::geometry::RawStreamPreference{};
+    sized.photoStream = rawrcam::geometry::RawStreamPreference{};
     sized.companionSize = std::make_pair(640u, 480u);
     assert(std::string(resolveSessionRecipe(sized, {true, true}).companion->source) == "profile");
     capture.disableCompanion = true;
@@ -76,11 +76,11 @@ void testTemplatesAndStructure() {
 void testGateHoldKeepsTheOldRule() {
     for (const auto& lens : allLenses()) {
         const auto recipe = resolveSessionRecipe(lens, {});
-        assert((recipe.gateHold == GateHold::UntilClosed) == lens.captureStream.has_value());
+        assert((recipe.gateHold == GateHold::UntilClosed) == lens.photoStream.has_value());
     }
     LensRoute lens;
     lens.vendorGate = "g";
-    lens.captureStream = rawrcam::geometry::RawStreamPreference{};
+    lens.photoStream = rawrcam::geometry::RawStreamPreference{};
     lens.gateHold = GateHold::UntilConfigured;
     assert(resolveSessionRecipe(lens, {}).gateHold == GateHold::UntilConfigured);
 }
@@ -90,16 +90,16 @@ void testVivoStillStrategy() {
     for (const auto& p : builtInProfiles()) {
         for (const auto& lens : p.profile.lenses) {
             bool decisionKey = false;
-            for (const auto& k : lens.keys) decisionKey |= k.enabled && k.scope == CameraKeySetting::Scope::Decision;
+            for (const auto& k : lens.vendorKeys) decisionKey |= k.enabled && k.scope == CameraKeySetting::Scope::Decision;
             const auto recipe = resolveSessionRecipe(lens, {false, false});
-            if (lens.captureStream) {
+            if (lens.photoStream) {
                 ++captureLenses;
                 // A built-in full-size lens with decision keys and a companion decides, as it did.
                 assert((recipe.still == StillStrategy::DecisionFrame) ==
                        (decisionKey && recipe.companion && lens.companionTargeted));
                 assert(recipe.gateHold == GateHold::UntilClosed || lens.vendorGate.empty());
             } else {
-                assert(recipe.still == (lens.stopRepeatingForStill ? StillStrategy::StopRepeatThenStill : StillStrategy::Direct));
+                assert(recipe.still == (lens.stopViewfinderForPhotos ? StillStrategy::StopRepeatThenStill : StillStrategy::Direct));
             }
             decision += recipe.still == StillStrategy::DecisionFrame;
         }
@@ -107,7 +107,7 @@ void testVivoStillStrategy() {
     assert(captureLenses >= 3);
     assert(decision >= 1);  // the vivo full-size lenses do decide
     LensRoute stop;
-    stop.stopRepeatingForStill = true;
+    stop.stopViewfinderForPhotos = true;
     assert(resolveSessionRecipe(stop, {}).still == StillStrategy::StopRepeatThenStill);
     assert(resolveSessionRecipe(LensRoute{}, {}).still == StillStrategy::Direct);
     assert(std::string(stillStrategyName(StillStrategy::DecisionFrame)) == "decisionFrame");
@@ -191,20 +191,20 @@ void testCompanionBlockDefaults() {
     const auto b = resolveSessionRecipe(sized, {}).companion;
     assert(b && !b->detach && b->required && b->maxImages == 2);
     LensRoute capture;
-    capture.captureStream = rawrcam::geometry::RawStreamPreference{};
+    capture.photoStream = rawrcam::geometry::RawStreamPreference{};
     assert(resolveSessionRecipe(capture, {}).companion->detach);
 
     LensRoute tuned = sized;
     tuned.companionDetach = true;
-    tuned.companionUsage = 0x100;
-    tuned.companionMaxImages = 4;
+    tuned.companionBufferUsage = 0x100;
+    tuned.companionBufferCount = 4;
     tuned.companionPhysical = false;
     tuned.auxJpegSize = std::make_pair(8192u, 6144u);
-    tuned.auxJpegUsage = 0x3;
+    tuned.auxJpegBufferUsage = 0x3;
     const auto t = resolveSessionRecipe(tuned, {});
     assert(t.companion->detach && t.companion->usage == 0x100u && t.companion->maxImages == 4u);
     assert(t.companion->physical == false && t.companion->required);
-    assert(t.auxJpegUsage == 0x3u);
+    assert(t.auxJpegBufferUsage == 0x3u);
     LensRoute keep = automatic;
     keep.companionDetach = false;
     assert(!resolveSessionRecipe(keep, {false, true}).companion->detach);

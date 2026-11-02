@@ -33,8 +33,8 @@ class CameraStartLadder final {
     enum class Outcome { None, Retry, RetryRawOnly, GaveUp };
 
     // A profile companion is part of the sensor mode, never a recovery option.
-    static bool eligible(bool companionByRule, bool captureStream, bool profileCompanion, bool forced) {
-        return companionByRule && !captureStream && !profileCompanion && !forced;
+    static bool eligible(bool companionByRule, bool photoStream, bool profileCompanion, bool forced) {
+        return companionByRule && !photoStream && !profileCompanion && !forced;
     }
 
     // Time a start gets for its first frame: never less than kMinFirstFrameMs,

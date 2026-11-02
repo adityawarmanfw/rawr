@@ -25,11 +25,11 @@ int main() {
     const auto parsed = parseCameraProfile(
         R"({"lenses":[{"id":"a","cameraId":"0","keys":[{"tag":"vendor.mode","type":"int32","scope":"sessionAndRequest","values":[3]}]}]})",
         &error);
-    assert(parsed && parsed->lenses[0].keys.size() == 1 && parsed->lenses[0].keys[0].scope == Scope::SessionAndRequest);
+    assert(parsed && parsed->lenses[0].vendorKeys.size() == 1 && parsed->lenses[0].vendorKeys[0].scope == Scope::SessionAndRequest);
     const auto json = serializeCameraProfile(*parsed);
     assert(json.find(R"("scope":"sessionAndRequest")") != std::string::npos);
     const auto again = parseCameraProfile(json);
-    assert(again && again->lenses[0].keys[0].scope == Scope::SessionAndRequest && serializeCameraProfile(*again) == json);
+    assert(again && again->lenses[0].vendorKeys[0].scope == Scope::SessionAndRequest && serializeCameraProfile(*again) == json);
     LensRoute lens = parsed->lenses[0];
     assert(carriesRecipe(lens));
     std::cout << "camera_key_scope_test passed\n";

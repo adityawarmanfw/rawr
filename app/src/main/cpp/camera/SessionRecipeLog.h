@@ -32,25 +32,25 @@ struct SessionRecipeFacts {
     std::string fpsRange;         // "12..30", or "none" when the session parameters carry none
     std::string sessionParams = "cadence";  // cadence, none or full
     std::string requestDefaults = "rawr";    // rawr or minimal
-    std::string backend = "ndk";             // the camera API that ran the session
+    std::string cameraApi = "native";        // the camera API that ran the session
     uint32_t opMode = 0;                     // Java backend only
-    // Per output stream use case (Java backend only): raw, capture, companion, aux JPEG.
-    int64_t rawUseCase = 0, captureUseCase = 0, companionUseCase = 0, auxJpegUseCase = 0;
+    // Per output stream use case (Java Camera2 only): raw, photo, companion, aux JPEG.
+    int64_t rawUseCase = 0, photoUseCase = 0, companionUseCase = 0, auxJpegUseCase = 0;
     int sessionKeys = 0;
     int requestKeys = 0;
     int stillKeys = 0;
     int decisionKeys = 0;
     std::optional<Companion> companion;
     std::optional<std::pair<uint32_t, uint32_t>> auxJpeg;
-    std::optional<std::pair<uint32_t, uint32_t>> captureStream;
-    std::optional<uint64_t> readerUsage;         // profile-fixed; nullopt = chosen by the ingress ladder
-    std::optional<uint64_t> captureReaderUsage;  // profile-fixed; nullopt = the app default
+    std::optional<std::pair<uint32_t, uint32_t>> photoStream;
+    std::optional<uint64_t> rawBufferUsage;         // profile-fixed; nullopt = chosen by the ingress ladder
+    std::optional<uint64_t> photoBufferUsage;  // profile-fixed; nullopt = the app default
     int32_t startupDelayMs = 0;
-    int32_t fixedFps = 0;
+    int32_t frameRate = 0;
     std::string vendorGate;
     std::string gateHold;       // "configured" or "closed"; meaningful with a gate
     std::string stillStrategy;  // direct, decisionFrame or stopRepeatThenStill
-    bool stopRepeatingForStill = false;
+    bool stopViewfinderForPhotos = false;
 };
 
 namespace detail {
@@ -75,7 +75,7 @@ inline std::string describeSessionRecipe(const SessionRecipeFacts& f) {
                        " physical=" + orNone(f.physicalCameraId) + " raw=" + orNone(f.rawFormat) + ":" +
                        size(f.rawWidth, f.rawHeight) + " aspect=" + aspect + " template=" + orNone(f.requestTemplate) +
                        " fps=" + orNone(f.fpsRange) + " sessionParams=" + orNone(f.sessionParams) +
-                       " requestDefaults=" + orNone(f.requestDefaults) + " backend=" + orNone(f.backend) +
+                       " requestDefaults=" + orNone(f.requestDefaults) + " cameraApi=" + orNone(f.cameraApi) +
                        " keys=session:" + std::to_string(f.sessionKeys) + ",request:" + std::to_string(f.requestKeys) +
                        ",still:" + std::to_string(f.stillKeys) + ",decision:" + std::to_string(f.decisionKeys);
     if (f.companion) {
@@ -86,16 +86,16 @@ inline std::string describeSessionRecipe(const SessionRecipeFacts& f) {
         line += " companion=none";
     }
     line += " auxJpeg=" + (f.auxJpeg ? size(f.auxJpeg->first, f.auxJpeg->second) : std::string("none"));
-    line += " captureStream=" + (f.captureStream ? size(f.captureStream->first, f.captureStream->second) : "none");
-    line += " readerUsage=" + (f.readerUsage ? hex(*f.readerUsage) : std::string("ladder"));
-    line += " captureReaderUsage=" + (f.captureReaderUsage ? hex(*f.captureReaderUsage) : std::string("default"));
-    line += " startupDelayMs=" + std::to_string(f.startupDelayMs) + " fixedFps=" + std::to_string(f.fixedFps) +
+    line += " photoStream=" + (f.photoStream ? size(f.photoStream->first, f.photoStream->second) : "none");
+    line += " rawBufferUsage=" + (f.rawBufferUsage ? hex(*f.rawBufferUsage) : std::string("ladder"));
+    line += " photoBufferUsage=" + (f.photoBufferUsage ? hex(*f.photoBufferUsage) : std::string("default"));
+    line += " startupDelayMs=" + std::to_string(f.startupDelayMs) + " frameRate=" + std::to_string(f.frameRate) +
             " gate=" + orNone(f.vendorGate) + (f.vendorGate.empty() ? "" : ":" + orNone(f.gateHold)) +
-            " still=" + orNone(f.stillStrategy) + " stopRepeatingForStill=" + (f.stopRepeatingForStill ? "1" : "0");
+            " still=" + orNone(f.stillStrategy) + " stopViewfinderForPhotos=" + (f.stopViewfinderForPhotos ? "1" : "0");
     // Only when set, so lines of sessions without them stay comparable with older bundles.
     if (f.opMode) line += " opMode=" + std::to_string(f.opMode);
-    if (f.rawUseCase || f.captureUseCase || f.companionUseCase || f.auxJpegUseCase)
-        line += " useCases=raw:" + std::to_string(f.rawUseCase) + ",capture:" + std::to_string(f.captureUseCase) +
+    if (f.rawUseCase || f.photoUseCase || f.companionUseCase || f.auxJpegUseCase)
+        line += " useCases=raw:" + std::to_string(f.rawUseCase) + ",photo:" + std::to_string(f.photoUseCase) +
                 ",companion:" + std::to_string(f.companionUseCase) + ",auxJpeg:" + std::to_string(f.auxJpegUseCase);
     return line;
 }

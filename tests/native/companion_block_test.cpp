@@ -43,11 +43,11 @@ void testJsonRoundTrip() {
     assert(parsed);
     const auto& r = parsed->lenses[0];
     assert(!r.companionSize && r.companionPrivate && !r.companionTargeted);
-    assert(r.companionUsage == 0x100u && r.companionMaxImages == 4u);
+    assert(r.companionBufferUsage == 0x100u && r.companionBufferCount == 4u);
     assert(r.companionPhysical == false && r.companionDetach == true);
     assert(r.companionFallback == CompanionFallback::Nearest);
-    assert(r.auxJpegSize == std::make_pair(8192u, 6144u) && r.auxJpegUsage == 0x3u);
-    assert(r.rawMaxImages == 12u && r.readerProbe && r.readerDemote);
+    assert(r.auxJpegSize == std::make_pair(8192u, 6144u) && r.auxJpegBufferUsage == 0x3u);
+    assert(r.rawBufferCount == 12u && r.rawBufferTestFirst && r.rawBufferFallBack);
     assert(carriesRecipe(r));
     // A companion block without a size does not force a companion on.
     assert(!companionStreamEnabled(r, false, false));
@@ -55,7 +55,7 @@ void testJsonRoundTrip() {
     const auto json = serializeCameraProfile(*parsed);
     const auto again = parseCameraProfile(json, &error);
     assert(again && serializeCameraProfile(*again) == json);
-    assert(again->lenses[0].companionFallback == CompanionFallback::Nearest && again->lenses[0].rawMaxImages == 12u);
+    assert(again->lenses[0].companionFallback == CompanionFallback::Nearest && again->lenses[0].rawBufferCount == 12u);
 
     // A sized companion is written as a fixed one.
     const auto sized = parseCameraProfile(

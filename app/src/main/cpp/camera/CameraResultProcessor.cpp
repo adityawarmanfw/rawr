@@ -25,7 +25,7 @@ CameraResultActions CameraResultProcessor::process(const CameraRequest* requestC
                                                    CameraControlState& control,
                                                    const metadata::CameraContextMetadataPtr& cameraContext,
                                                    const std::optional<LevelOverride>& viewfinderLevels,
-                                                   const std::optional<LevelOverride>& captureLevels, bool captureStream,
+                                                   const std::optional<LevelOverride>& photoLevels, bool photoStream,
                                                    bool sensorModeOverridden, uint64_t latestSubmittedRequestSerial) {
     CameraResultActions actions{};
     const auto requestObservation = readCameraRequestObservation(requestCopy);
@@ -36,8 +36,8 @@ CameraResultActions CameraResultProcessor::process(const CameraRequest* requestC
     const bool fallbackUsable = lastColor_ && lastColor_->cameraContext == cameraContext;
     auto frame = metadata::readFrameMetadataSnapshot(result, cameraContext, frameOrdinal_ + 1, &error,
                                                      fallbackUsable ? &*lastColor_ : nullptr);
-    const auto& staticLevels = metadata::isCaptureStreamStill(captureStream, provenance ? provenance->optimizedStillRequestId : 0)
-                                   ? captureLevels : viewfinderLevels;
+    const auto& staticLevels = metadata::isCaptureStreamStill(photoStream, provenance ? provenance->optimizedStillRequestId : 0)
+                                   ? photoLevels : viewfinderLevels;
     if (frame && staticLevels) {
         frame->blackLevelPhysicalRggb = staticLevels->blackRggb;
         frame->effectiveWhiteLevel = staticLevels->white;

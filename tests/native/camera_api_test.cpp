@@ -11,21 +11,21 @@ namespace {
 
 void testDerivedBackend() {
     LensRoute plain;
-    assert(!needsJavaBackend(plain) && effectiveBackend(plain) == BackendChoice::Ndk);
+    assert(!needsJavaCameraApi(plain) && effectiveCameraApi(plain) == CameraApi::Native);
     LensRoute mode;
     mode.opMode = 0x8001;
-    assert(needsJavaBackend(mode) && effectiveBackend(mode) == BackendChoice::Java);
-    for (int64_t LensRoute::*field : {&LensRoute::rawStreamUseCase, &LensRoute::captureStreamUseCase,
+    assert(needsJavaCameraApi(mode) && effectiveCameraApi(mode) == CameraApi::Java);
+    for (int64_t LensRoute::*field : {&LensRoute::rawStreamUseCase, &LensRoute::photoStreamUseCase,
                                        &LensRoute::companionStreamUseCase, &LensRoute::auxJpegStreamUseCase}) {
         LensRoute r;
         r.*field = 524547;
-        assert(needsJavaBackend(r) && effectiveBackend(r) == BackendChoice::Java && carriesRecipe(r));
+        assert(needsJavaCameraApi(r) && effectiveCameraApi(r) == CameraApi::Java && carriesRecipe(r));
     }
     // An explicit choice wins over the derived one.
     LensRoute java;
-    java.backend = BackendChoice::Java;
-    assert(effectiveBackend(java) == BackendChoice::Java && carriesRecipe(java));
-    assert(std::string(backendChoiceName(BackendChoice::Auto)) == "auto");
+    java.cameraApi = CameraApi::Java;
+    assert(effectiveCameraApi(java) == CameraApi::Java && carriesRecipe(java));
+    assert(std::string(cameraApiName(CameraApi::Auto)) == "auto");
 }
 
 void testJsonRoundTrip() {
@@ -38,19 +38,19 @@ void testJsonRoundTrip() {
         "auxJpeg":{"width":8192,"height":6144,"useCase":2}}]})", &error);
     assert(parsed);
     const auto& r = parsed->lenses[0];
-    assert(r.backend == BackendChoice::Java && r.opMode == 32769u && r.sessionParams == SessionParamsPolicy::Full);
-    assert(r.rawStreamUseCase == 524547 && r.captureStreamUseCase == 6 && r.companionStreamUseCase == 3 &&
+    assert(r.cameraApi == CameraApi::Java && r.opMode == 32769u && r.sessionParams == SessionParamsPolicy::Full);
+    assert(r.rawStreamUseCase == 524547 && r.photoStreamUseCase == 6 && r.companionStreamUseCase == 3 &&
            r.auxJpegStreamUseCase == 2);
-    assert(r.preferredStream.width == 8192 && r.captureStream && r.companionSize && r.auxJpegSize);
+    assert(r.preferredStream.width == 8192 && r.photoStream && r.companionSize && r.auxJpegSize);
     const auto json = serializeCameraProfile(*parsed);
     const auto again = parseCameraProfile(json, &error);
     assert(again && serializeCameraProfile(*again) == json);
     assert(again->lenses[0].opMode == 32769u && again->lenses[0].rawStreamUseCase == 524547);
-    assert(json.find(R"("backend":"java")") != std::string::npos);
+    assert(json.find(R"("cameraApi":"java")") != std::string::npos);
 
     // Opt-in: nothing is written for a plain lens.
     const auto plain = serializeCameraProfile(*parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"2"}]})"));
-    for (const char* field : {"backend", "opMode", "useCase"}) assert(plain.find(field) == std::string::npos);
+    for (const char* field : {"cameraApi", "opMode", "useCase"}) assert(plain.find(field) == std::string::npos);
     // opMode alone inside the session block keeps the other session fields default.
     const auto onlyMode = parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"2","session":{"opMode":40000}}]})");
     assert(onlyMode && onlyMode->lenses[0].sessionParams == SessionParamsPolicy::Cadence);
@@ -62,8 +62,8 @@ void testRejections() {
     const auto bad = [&](const char* fields) {
         return !parseCameraProfile(std::string(R"({"lenses":[{"id":"a","cameraId":"2",)") + fields + "}]}", &error);
     };
-    assert(bad(R"("backend":"gpu")") && error.find("unknown backend") != std::string::npos);
-    assert(bad(R"("backend":"ndk","session":{"opMode":32769})") && error.find("Java backend") != std::string::npos);
+    assert(bad(R"("backend":"gpu")") && error.find("unknown cameraApi") != std::string::npos);
+    assert(bad(R"("backend":"ndk","session":{"opMode":32769})") && error.find("cameraApi java") != std::string::npos);
     assert(bad(R"("backend":"ndk","stream":{"useCase":3})"));
     assert(!bad(R"("backend":"java")") && !bad(R"("backend":"ndk")") && !bad(R"("backend":"auto","session":{"opMode":40000})"));
     for (const char* mode : {R"("session":{"opMode":1})", R"("session":{"opMode":2})", R"("session":{"opMode":-1})",
@@ -76,25 +76,25 @@ void testRejections() {
     assert(bad(R"("streamUseCase":524547)") && error.find("not a profile field") != std::string::npos);
     // Stop-repeating stills stay on the NDK, whether Java is explicit or derived; the vivo gate runs on either API.
     assert(!bad(R"("backend":"java","vendorGate":"vivoFullSize")") && !bad(R"("vendorGate":"vivoFullSize","stream":{"useCase":1})"));
-    assert(bad(R"("backend":"java","stopRepeatingForStill":true)") && error.find("stop-repeating") != std::string::npos);
+    assert(bad(R"("backend":"java","stopRepeatingForStill":true)") && error.find("stopViewfinderForPhotos") != std::string::npos);
     assert(!bad(R"("vendorGate":"vivoFullSize")") && !bad(R"("backend":"ndk","stopRepeatingForStill":true)"));
 }
 
 void testOverride() {
     LensRoute plain;
-    assert(applyBackendOverride(plain, "").empty() && plain.backend == BackendChoice::Auto);
-    assert(applyBackendOverride(plain, "java") == "java" && effectiveBackend(plain) == BackendChoice::Java);
-    assert(applyBackendOverride(plain, "ndk") == "ndk" && effectiveBackend(plain) == BackendChoice::Ndk);
-    assert(applyBackendOverride(plain, "gpu") == "ignored value=gpu" && plain.backend == BackendChoice::Ndk);
+    assert(applyCameraApiOverride(plain, "").empty() && plain.cameraApi == CameraApi::Auto);
+    assert(applyCameraApiOverride(plain, "java") == "java" && effectiveCameraApi(plain) == CameraApi::Java);
+    assert(applyCameraApiOverride(plain, "native") == "native" && effectiveCameraApi(plain) == CameraApi::Native);
+    assert(applyCameraApiOverride(plain, "gpu") == "ignored value=gpu" && plain.cameraApi == CameraApi::Native);
     LensRoute gated;
     gated.vendorGate = "vivoFullSize";
-    assert(applyBackendOverride(gated, "java") == "java" && effectiveBackend(gated) == BackendChoice::Java);
+    assert(applyCameraApiOverride(gated, "java") == "java" && effectiveCameraApi(gated) == CameraApi::Java);
     LensRoute decision;
-    decision.stopRepeatingForStill = true;
-    assert(applyBackendOverride(decision, "java").find("kept") == 0 && effectiveBackend(decision) == BackendChoice::Ndk);
+    decision.stopViewfinderForPhotos = true;
+    assert(applyCameraApiOverride(decision, "java").find("kept") == 0 && effectiveCameraApi(decision) == CameraApi::Native);
     LensRoute moded;
     moded.opMode = 32769;
-    assert(applyBackendOverride(moded, "ndk").find("kept") == 0 && effectiveBackend(moded) == BackendChoice::Java);
+    assert(applyCameraApiOverride(moded, "native").find("kept") == 0 && effectiveCameraApi(moded) == CameraApi::Java);
 }
 }  // namespace
 
@@ -103,6 +103,6 @@ int main() {
     testDerivedBackend();
     testJsonRoundTrip();
     testRejections();
-    std::cout << "backend_choice_test passed\n";
+    std::cout << "camera_api_test passed\n";
     return 0;
 }

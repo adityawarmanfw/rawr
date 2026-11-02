@@ -64,9 +64,9 @@ SessionEngine::SessionEngine(std::string filesDir) : filesDir_(std::move(filesDi
         const bool configured = realtime_.configureCamera(generation, metadata);
         lastCameraContext_ = std::make_shared<const rawrcam::metadata::CameraContextMetadata>(metadata);
         profileReaderUsage_ = metadata.rawReaderUsage;
-        profileMaxImages_ = metadata.rawMaxImages;
-        profileReaderProbe_ = metadata.readerProbe;
-        profileReaderDemote_ = metadata.readerDemote;
+        profileMaxImages_ = metadata.rawBufferCount;
+        profileReaderProbe_ = metadata.rawBufferTestFirst;
+        profileReaderDemote_ = metadata.rawBufferFallBack;
         // The RAW size may have changed (or become known): rebuild the prewarm.
         if (configured) {
             cameraCapabilities_ = capabilities;
@@ -108,8 +108,8 @@ SessionEngine::SessionEngine(std::string filesDir) : filesDir_(std::move(filesDi
         try {
             // vivo full-size outputs configure only with no usage or GPU_DATA_BUFFER;
             // a lens profile can name another (Xiaomi: CPU read).
-            const uint64_t usage = lastCameraContext_ && lastCameraContext_->captureReaderUsage
-                                       ? *lastCameraContext_->captureReaderUsage
+            const uint64_t usage = lastCameraContext_ && lastCameraContext_->photoBufferUsage
+                                       ? *lastCameraContext_->photoBufferUsage
                                        : uint64_t(AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER);
             auto* window = captureFrameIngress_.create(generation, width, height, format, usage);
             captureReaderGeneration_ = generation;

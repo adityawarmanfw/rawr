@@ -261,8 +261,8 @@ internal fun lensSummary(lens: LensProfile): String = buildList {
     add(cameraLabel(lens.camera.id, lens.camera.physical))
     add(lens.streams.raw.choice.label)
     add(if (lens.image.levels.isStatic) "Static levels" else "Dynamic levels")
-    if (lens.image.cfa.block > 1) add(cfaBlockLabel(lens.image.cfa.block))
-    lens.image.cfa.order?.let { add(it) }
+    if (lens.image.sensorLayout.block > 1) add(sensorLayoutBlockLabel(lens.image.sensorLayout.block))
+    lens.image.sensorLayout.colourOrder?.let { add(it) }
     val keys = lens.vendorKeys.count { it.enabled }
     if (keys > 0) add(if (keys == 1) "1 key" else "$keys keys")
 }.joinToString(" · ")

@@ -181,9 +181,9 @@ void testProfiles() {
         assert(r.lensId == e.lens && r.cameraId == e.camera && r.physicalCameraId.empty());
         assert(r.preferredStream.format == e.format);
         assert(r.preferredStream.width == e.width && r.preferredStream.height == e.height);
-        assert(r.keys.size() == 1 && r.keys[0].tag == "vivo.control.forceSensorMode");
-        assert(r.keys[0].type == CameraKeySetting::Type::Int32 && r.keys[0].scope == CameraKeySetting::Scope::Session);
-        assert(r.keys[0].values == std::vector<double>{double(e.mode)} && r.keys[0].enabled);
+        assert(r.vendorKeys.size() == 1 && r.vendorKeys[0].tag == "vivo.control.forceSensorMode");
+        assert(r.vendorKeys[0].type == CameraKeySetting::Type::Int32 && r.vendorKeys[0].scope == CameraKeySetting::Scope::Session);
+        assert(r.vendorKeys[0].values == std::vector<double>{double(e.mode)} && r.vendorKeys[0].enabled);
         assert(r.levels.isStatic == e.isStatic && r.levels.white == e.white);
         for (float b : r.levels.blackRggb) assert(b == e.black);
     }
@@ -191,7 +191,7 @@ void testProfiles() {
     const auto& generic = builtInCameraProfile("generic");
     assert(generic.lenses.size() == 1);
     const auto only = routeForLens(generic, "1x");
-    assert(only && only->cameraId == "0" && only->keys.empty() && !only->levels.isStatic);
+    assert(only && only->cameraId == "0" && only->vendorKeys.empty() && !only->levels.isStatic);
     assert(only->preferredStream.width == 0 && only->preferredStream.height == 0);
     // Unknown ids fall back to the generic profile.
     assert(builtInCameraProfile("nope").id == "generic");
@@ -199,7 +199,7 @@ void testProfiles() {
     // Camera-id override: known id keeps its first tuned route, unknown id gets a negotiated one.
     assert(routeForCameraId(dev, "5").lensId == "L85");
     const auto adHoc = routeForCameraId(dev, "7");
-    assert(adHoc.cameraId == "7" && adHoc.keys.empty() && adHoc.preferredStream.width == 0);
+    assert(adHoc.cameraId == "7" && adHoc.vendorKeys.empty() && adHoc.preferredStream.width == 0);
 }
 
 void testProfileJson() {
@@ -228,14 +228,14 @@ void testProfileJson() {
     assert(r.lensId == "W\"1" && r.cameraId == "2" && r.physicalCameraId == "5");
     assert(r.preferredStream.format == RawPixelFormat::Raw10 && r.preferredStream.width == 4000);
     assert(r.levels.isStatic && r.levels.white == 1023 && r.levels.blackRggb[3] == 64);
-    assert(r.keys.size() == 2 && !r.keys[0].enabled && r.keys[0].scope == CameraKeySetting::Scope::Request);
-    assert(r.keys[0].type == CameraKeySetting::Type::Int64 && r.keys[0].values.size() == 2);
-    assert(r.keys[1].enabled && r.keys[1].scope == CameraKeySetting::Scope::Session);
+    assert(r.vendorKeys.size() == 2 && !r.vendorKeys[0].enabled && r.vendorKeys[0].scope == CameraKeySetting::Scope::Request);
+    assert(r.vendorKeys[0].type == CameraKeySetting::Type::Int64 && r.vendorKeys[0].values.size() == 2);
+    assert(r.vendorKeys[1].enabled && r.vendorKeys[1].scope == CameraKeySetting::Scope::Session);
     // The escaped name survives a second round trip.
     assert(parseCameraProfile(serializeCameraProfile(*parsed))->lenses[0].lensId == "W\"1");
 
     const auto trimmed = parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","keys":[{"tag":" \tvendor.mode\n","values":[7]}]}]})");
-    assert(trimmed && trimmed->lenses[0].keys[0].tag == "vendor.mode");
+    assert(trimmed && trimmed->lenses[0].vendorKeys[0].tag == "vendor.mode");
     assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","keys":[{"tag":"vendor.mode\nInt32\n7","values":[7]}]}]})", &error));
     assert(error == "Key name cannot contain whitespace; enter type and value in their separate fields");
 
@@ -335,37 +335,35 @@ void testProfileJson() {
     // vivo 50 MP lenses (seamless route): binned viewfinder stream, full-size capture stream, still-only keys.
     {
         const auto& x300 = builtInCameraProfile("vivo_x300_ultra");
-        for (const auto& [lensId, cameraId, w, h, mode] :
-             {std::tuple{"H14", "4", 4096u, 3072u, 0.0}, std::tuple{"H35", "3", 4080u, 3064u, 2.0},
-              std::tuple{"H85", "5", 4080u, 3072u, 14.0}}) {
+        for (const auto& [lensId, cameraId, w, h] :
+             {std::tuple{"H14", "4", 4096u, 3072u}, std::tuple{"H35", "3", 4080u, 3064u},
+              std::tuple{"H85", "5", 4080u, 3072u}}) {
             const auto s = routeForLens(x300, lensId);
-            assert(s && s->cameraId == cameraId && !s->unlistedStream && !s->readerUsage);
+            assert(s && s->cameraId == cameraId && !s->highResLive && !s->rawBufferUsage);
             assert(s->preferredStream.width == w && s->preferredStream.height == h);
-            assert(s->captureStream && s->captureStream->width == 8192 && s->captureStream->height == 6144);
-            assert(s->captureStream->format == RawPixelFormat::Raw16 && s->vendorGate == "vivoFullSize");
-            bool stillUiModule = false, sessionUiModule = false, forced = false, stillMode = false;
-            for (const auto& k : s->keys) {
-                // The full-size mode only on stills: it forces the switch where the AI would stay binned.
-                forced |= k.tag == "vivo.control.forceSensorMode" && k.scope != CameraKeySetting::Scope::Still;
-                stillMode |= k.tag == "vivo.control.forceSensorMode" && k.scope == CameraKeySetting::Scope::Still &&
-                             k.values == std::vector<double>{mode};
+            assert(s->photoStream && s->photoStream->width == 8192 && s->photoStream->height == 6144);
+            assert(s->photoStream->format == RawPixelFormat::Raw16 && s->vendorGate == "vivoFullSize");
+            bool stillUiModule = false, sessionUiModule = false, forced = false;
+            for (const auto& k : s->vendorKeys) {
+                // No forced sensor mode, not even on stills: forcing it gave soft DNGs; the HAL switches by itself.
+                forced |= k.tag == "vivo.control.forceSensorMode";
                 if (k.tag != "com.vivo.current_ui_module") continue;
                 stillUiModule |= k.scope == CameraKeySetting::Scope::Still;
                 sessionUiModule |= k.scope != CameraKeySetting::Scope::Still;
             }
             // ui_module 74 on the session or repeating request silences the RAW viewfinder.
-            assert(stillUiModule && !sessionUiModule && !forced && stillMode);
+            assert(stillUiModule && !sessionUiModule && !forced);
         }
         // vivo 200 MP lenses: the same route with the ultra flag and no forced mode (the HAL switches by itself).
         // Both default to queued submission (the reader retry drains stranded images).
         for (const auto& [lensId, cameraId, h, sequential] :
              {std::tuple{"F35", "3", 12256u, false}, std::tuple{"F85", "5", 12288u, false}}) {
             const auto s = routeForLens(x300, lensId);
-            assert(s && s->cameraId == cameraId && s->vendorGate == "vivoFullSize" && s->captureBurst == 3 &&
-                   s->captureBurstSequential == sequential);
-            assert(s->captureStream && s->captureStream->width == 16320 && s->captureStream->height == h);
+            assert(s && s->cameraId == cameraId && s->vendorGate == "vivoFullSize" && s->mergeFrameLimit == 3 &&
+                   s->mergeFramesOneByOne == sequential);
+            assert(s->photoStream && s->photoStream->width == 16320 && s->photoStream->height == h);
             bool ultra = false, aiHighRes = false, forced = false, decisionUiModule = false;
-            for (const auto& k : s->keys) {
+            for (const auto& k : s->vendorKeys) {
                 ultra |= k.tag == "vivo.control.ultra_highresolution" && k.values == std::vector<double>{1.0};
                 aiHighRes |= k.tag == "vivo.control.ai_highresolution";
                 forced |= k.tag == "vivo.control.forceSensorMode";
@@ -379,36 +377,36 @@ void testProfileJson() {
             "captureStream":{"format":"RAW16","width":8,"height":6},"captureBurst":2,
             "captureBurstSequential":true,"keys":[{"tag":"vendor.still","scope":"still","values":[1]},
             {"tag":"vendor.decision","scope":"decision","values":[2]}]}]})");
-        assert(still && still->lenses[0].captureStream && still->lenses[0].captureStream->height == 6);
-        assert(still->lenses[0].captureBurst == 2 && still->lenses[0].captureBurstSequential);
+        assert(still && still->lenses[0].photoStream && still->lenses[0].photoStream->height == 6);
+        assert(still->lenses[0].mergeFrameLimit == 2 && still->lenses[0].mergeFramesOneByOne);
         // Block CFA layout and colour order override.
         const auto cfa = parseCameraProfile(R"({"lenses":[{"id":"q","cameraId":"5","cfa":{"block":4,"order":"GRBG","live":"fast","photo":"standard"}},
             {"id":"o","cameraId":"0","cfa":{"order":"BGGR"}}]})");
-        assert(cfa && cfa->lenses[0].cfaBlock == 4 && cfa->lenses[0].cfaOrder == 1u);
-        assert(cfa->lenses[0].cfaLiveQuality == 0u && cfa->lenses[0].cfaPhotoQuality == 1u);
-        assert(cfa->lenses[1].cfaBlock == 1 && cfa->lenses[1].cfaOrder == 3u);
-        assert(cfa->lenses[1].cfaLiveQuality == 1u && cfa->lenses[1].cfaPhotoQuality == 2u);  // defaults
+        assert(cfa && cfa->lenses[0].sensorLayoutBlock == 4 && cfa->lenses[0].colourOrder == 1u);
+        assert(cfa->lenses[0].liveRemosaic == 0u && cfa->lenses[0].photoRemosaic == 1u);
+        assert(cfa->lenses[1].sensorLayoutBlock == 1 && cfa->lenses[1].colourOrder == 3u);
+        assert(cfa->lenses[1].liveRemosaic == 1u && cfa->lenses[1].photoRemosaic == 2u);  // defaults
         assert(serializeCameraProfile(*parseCameraProfile(serializeCameraProfile(*cfa))) == serializeCameraProfile(*cfa));
         assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","cfa":{"block":3}}]})"));
         assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","cfa":{"order":"RGBG"}}]})"));
-        assert(still->lenses[0].keys[0].scope == CameraKeySetting::Scope::Still);
-        assert(still->lenses[0].keys[1].scope == CameraKeySetting::Scope::Decision);
+        assert(still->lenses[0].vendorKeys[0].scope == CameraKeySetting::Scope::Still);
+        assert(still->lenses[0].vendorKeys[1].scope == CameraKeySetting::Scope::Decision);
         assert(serializeCameraProfile(*still).find("\"scope\":\"decision\"") != std::string::npos);
         assert(serializeCameraProfile(*parseCameraProfile(serializeCameraProfile(*still))) ==
                serializeCameraProfile(*still));
         assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","captureStream":{"width":0}}]})"));
         // Binned lenses keep the ladder's reader usage and no gate.
         const auto l35 = routeForLens(x300, "L35");
-        assert(l35 && !l35->unlistedStream && !l35->readerUsage && l35->vendorGate.empty());
+        assert(l35 && !l35->highResLive && !l35->rawBufferUsage && l35->vendorGate.empty());
 
         const auto custom = parseCameraProfile(R"({"lenses":[{"id":"X","cameraId":"5",
             "stream":{"format":"RAW16","width":8160,"height":6144,"unlisted":true},
             "readerUsage":"none","vendorGate":"vivoFullSize"}]})", &error);
-        assert(custom && custom->lenses[0].unlistedStream && custom->lenses[0].readerUsage == 0u);
+        assert(custom && custom->lenses[0].highResLive && custom->lenses[0].rawBufferUsage == 0u);
         const auto again = parseCameraProfile(serializeCameraProfile(*custom));
-        assert(again && again->lenses[0].readerUsage == 0u && again->lenses[0].vendorGate == "vivoFullSize");
+        assert(again && again->lenses[0].rawBufferUsage == 0u && again->lenses[0].vendorGate == "vivoFullSize");
         assert(!parseCameraProfile(R"({"lenses":[{"id":"X","cameraId":"5","readerUsage":"cpu"}]})", &error));
-        assert(error == "unknown readerUsage cpu for lens X");
+        assert(error == "unknown raw buffer usage cpu for lens X");
     }
 
     // Rejected: malformed JSON, no lenses, duplicate ids, unknown key type, static levels without white.
