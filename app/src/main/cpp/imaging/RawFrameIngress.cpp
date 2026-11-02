@@ -29,7 +29,7 @@ ANativeWindow* RawFrameIngress::create(uint64_t generation, uint32_t width, uint
     std::unique_lock<std::mutex> lock(drainMutex_);
     generation_ = generation;
     usage_ = ahbUsage;
-    maxImages_ = maxImages ? std::max<uint32_t>(maxImages, uint32_t(kRawReaderMaxImages)) : uint32_t(kRawReaderMaxImages);
+    maxImages_ = maxImages ? maxImages : uint32_t(kRawReaderMaxImages);
     imageDescriptionLogged_ = false;
     auditImageCount_ = 0;
     readerStats_ = {};

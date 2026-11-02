@@ -74,9 +74,8 @@ void testRejections() {
                             R"("auxJpeg":{"width":640,"height":480,"useCase":0.5})"})
         assert(bad(use));
     assert(bad(R"("streamUseCase":524547)") && error.find("not a profile field") != std::string::npos);
-    // The vivo gate and stop-repeating stills stay on the NDK, whether Java is explicit or derived.
-    assert(bad(R"("backend":"java","vendorGate":"vivoFullSize")") && error.find("vendor gate") != std::string::npos);
-    assert(bad(R"("vendorGate":"vivoFullSize","stream":{"useCase":1})") && error.find("vendor gate") != std::string::npos);
+    // Stop-repeating stills stay on the NDK, whether Java is explicit or derived; the vivo gate runs on either API.
+    assert(!bad(R"("backend":"java","vendorGate":"vivoFullSize")") && !bad(R"("vendorGate":"vivoFullSize","stream":{"useCase":1})"));
     assert(bad(R"("backend":"java","stopRepeatingForStill":true)") && error.find("stop-repeating") != std::string::npos);
     assert(!bad(R"("vendorGate":"vivoFullSize")") && !bad(R"("backend":"ndk","stopRepeatingForStill":true)"));
 }
@@ -89,7 +88,10 @@ void testOverride() {
     assert(applyBackendOverride(plain, "gpu") == "ignored value=gpu" && plain.backend == BackendChoice::Ndk);
     LensRoute gated;
     gated.vendorGate = "vivoFullSize";
-    assert(applyBackendOverride(gated, "java").find("kept") == 0 && effectiveBackend(gated) == BackendChoice::Ndk);
+    assert(applyBackendOverride(gated, "java") == "java" && effectiveBackend(gated) == BackendChoice::Java);
+    LensRoute decision;
+    decision.stopRepeatingForStill = true;
+    assert(applyBackendOverride(decision, "java").find("kept") == 0 && effectiveBackend(decision) == BackendChoice::Ndk);
     LensRoute moded;
     moded.opMode = 32769;
     assert(applyBackendOverride(moded, "ndk").find("kept") == 0 && effectiveBackend(moded) == BackendChoice::Java);

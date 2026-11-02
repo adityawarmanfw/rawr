@@ -44,8 +44,18 @@ later restore the previous value. rawr does not directly look up a Binder servic
 or implement forwarding to the vendor provider.
 
 Key 33 appears in the pseudocode because it is an output of cameraserver's
-classification decision. The current app changes only key 40; it does not write
-key 1 or key 33.
+classification decision. The `vivoFullSize` gate changes only key 40; it never
+writes key 1 or key 33. `vivoFullSizeVcf` is the same gate that also sets key 33 to
+2 (the VCF bypass value vivo's own camera runs with), saving and restoring both
+values and journaling both for crash recovery. It exists for firmware where key 33
+turns out to matter; the decoded firmware rewrites it at open.
+
+Both gates log the vendor state: `CAMERA_NDK_VENDOR_GATE_ACQUIRED` right after the
+gate is taken and `CAMERA_NDK_VENDOR_GATE_STATE stage=configured` right after the
+session configures (or fails to), each ending in `key1=<AppType> key33=<VCFAppType>
+key40=<useVivoCamera>` as the camera service reports them (`?` for a key the
+framework refuses to read). Comparing the two lines shows what cameraserver
+rewrote at open and configure.
 
 On the tested firmware, the HAL's sensor-mode selector
 (`/vendor/etc/camera/sensormode-selector/PD2547.json`) keeps the full-size modes
@@ -432,7 +442,7 @@ The lens editor exposes:
 |---|---|
 | Camera and physical camera IDs | Select the sensor/route. |
 | Preview RAW stream | Format and dimensions used for the live viewfinder. |
-| Vendor gate | Select `vivoFullSize` for the tested vivo override. |
+| Vendor gate | Select `vivoFullSize` (key 40) or `vivoFullSizeVcf` (key 40 and key 33 = 2) for the vivo override. |
 | Separate capture stream | Enable an additional still output and set its format, width, and height. |
 | Burst frame limit | Per-lens ceiling, independent of the requested multiframe count. |
 | Burst submission | Queued or sequential. |

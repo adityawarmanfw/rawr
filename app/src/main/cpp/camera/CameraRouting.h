@@ -224,16 +224,15 @@ struct LensRoute {
            lens.companionStreamUseCase != 0 || lens.auxJpegStreamUseCase != 0;
 }
 
-// What the Java backend does not take on: a vendor gate (app-held vendor state around open and configure) and
-// stop-repeating stills (the vivo decision sequence). Both are proven on the NDK only. nullptr: no conflict.
+// What the Java backend does not take on: stop-repeating stills (the vivo decision sequence), proven on the NDK
+// only. A vendor gate is taken by the native session before either API opens the camera. nullptr: no conflict.
 [[nodiscard]] inline const char* javaBackendConflict(const LensRoute& lens) noexcept {
-    if (!lens.vendorGate.empty()) return "a vendor gate";
     if (lens.stopRepeatingForStill) return "stop-repeating stills";
     return nullptr;
 }
 
 // `debug.rawr.camera_backend java|ndk`: runs every lens on one API, for comparing the two on the same route.
-// Lenses the forced API can't run keep their own: a gated lens stays on the NDK, a lens with an operating mode
+// Lenses the forced API can't run keep their own: a lens with stop-repeating stills stays on the NDK, a lens with an operating mode
 // or use case stays on Java. Returns what happened for the log ("" when no override is set).
 [[nodiscard]] inline std::string applyBackendOverride(LensRoute& lens, const std::string& value) {
     if (value == "java") {
@@ -268,13 +267,13 @@ inline bool carriesRecipe(const LensRoute& route) {
 
 // What a lens avoids on this device: the device's quirks, the lens's own, and the presets the lens's
 // shape implies, so imported and user-edited profiles keep the protection a vendor mode needs.
-// A vendor gate implies afTapHold; an unlisted (vendor full-size) stream implies the rest.
+// A vendor gate implies afTapHold; an unlisted (vendor full-size) stream implies the rest except noTapAf:
+// Xiaomi full-size lenses focus fine, and tap AF is a lens decision (add the noTapAf quirk to opt out).
 inline CameraQuirks effectiveQuirks(const LensRoute& lens, const CameraQuirks& device) {
     CameraQuirks quirks = mergeQuirks(device, lens.quirks);
     if (!lens.vendorGate.empty()) quirks.afTapHold = true;
     if (lens.unlistedStream) {
         quirks.noHalPriorityAe = true;
-        quirks.noTapAf = true;
         quirks.requireFpsRange = true;
         quirks.noAutoCompanion = true;
     }

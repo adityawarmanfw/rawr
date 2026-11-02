@@ -341,7 +341,8 @@ bool CameraDeviceSession::open(const LensRoute& route, CameraCallbacks& callback
             return false;
         }
         heldGate_ = route.vendorGate;
-        diag("CAMERA_NDK_VENDOR_GATE_ACQUIRED gate=" + route.vendorGate + " cameraId=" + route.cameraId);
+        diag("CAMERA_NDK_VENDOR_GATE_ACQUIRED gate=" + route.vendorGate + " cameraId=" + route.cameraId +
+             " " + describeVendorCameraGate(route.vendorGate));
     }
 
     const bool java = effectiveBackend(route) == BackendChoice::Java;
@@ -618,6 +619,15 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
 
     auto* callbackContext = callbacks.sessionContext(generation_);
     callbackContext->physicalCameraId = physicalCameraId;
+    callbackContext->outputWindows.clear();
+    callbackContext->outputLabels.clear();
+    for (const auto& o : outputs) {
+        callbackContext->outputWindows.push_back(o.window);
+        callbackContext->outputLabels.push_back(o.window == rawWindow_         ? "raw"
+                                                : o.window == companionWindow_ ? "companion"
+                                                : o.window == captureWindow_   ? "capture"
+                                                                               : "aux_jpeg");
+    }
     sessionContext_ = callbackContext;
     staticLevels_.reset();
     captureStaticLevels_.reset();
@@ -694,6 +704,9 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
     }
     session_ = device_->createSession(outputs, sessionParameters_.get(), int32_t(recipe.opMode), callbackContext, &s);
     captureConfigured_ = session_ && captureWindow_;
+    if (!heldGate_.empty())
+        diag("CAMERA_NDK_VENDOR_GATE_STATE gate=" + heldGate_ + " stage=configured session=" + (session_ ? "yes" : "no") +
+             " " + describeVendorCameraGate(heldGate_));
     // The recipe says how long the gate is held; capture-stream routes keep it until the device closes
     // (see defaultGateHold).
     if (!heldGate_.empty() && recipe.gateHold == GateHold::UntilConfigured) {

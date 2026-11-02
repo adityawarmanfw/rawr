@@ -70,6 +70,7 @@ class JavaCameraBackend(context: Context) {
         @JvmStatic external fun nativeOnCaptureCompleted(session: Long, requestId: Long, result: Any)
         @JvmStatic external fun nativeOnCaptureFailed(
             session: Long, requestId: Long, frameNumber: Long, reason: Int, sequenceId: Int, bufferLost: Boolean,
+            targetIndex: Int,
         )
         @JvmStatic external fun nativeOnSequenceEnded(session: Long, sequenceId: Int, aborted: Boolean)
     }
@@ -278,13 +279,16 @@ class JavaCameraSession internal constructor(
         override fun onCaptureFailed(s: CameraCaptureSession, request: CaptureRequest, failure: CaptureFailure) {
             if (!owner.closed) {
                 JavaCameraBackend.nativeOnCaptureFailed(
-                    handle, idOf(request), failure.frameNumber, failure.reason, failure.sequenceId, false,
+                    handle, idOf(request), failure.frameNumber, failure.reason, failure.sequenceId, false, -1,
                 )
             }
         }
 
         override fun onCaptureBufferLost(s: CameraCaptureSession, request: CaptureRequest, target: Surface, frameNumber: Long) {
-            if (!owner.closed) JavaCameraBackend.nativeOnCaptureFailed(handle, idOf(request), frameNumber, 0, -1, true)
+            if (!owner.closed) {
+                // The index into the session's outputs (same order as the native labels).
+                JavaCameraBackend.nativeOnCaptureFailed(handle, idOf(request), frameNumber, 0, -1, true, surfaces.indexOf(target))
+            }
         }
 
         override fun onCaptureSequenceCompleted(s: CameraCaptureSession, sequenceId: Int, frameNumber: Long) {

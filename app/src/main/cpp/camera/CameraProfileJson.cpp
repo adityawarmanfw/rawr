@@ -896,8 +896,8 @@ std::optional<LensRoute> readLens(const Json& l, std::string* error) {
     if (!readUsage(&reader, "readerUsage", r.readerUsage, error, r.lensId)) return std::nullopt;
     if (reader.get("maxImages")) {
         const double n = reader.num("maxImages");
-        if (n < 6.0 || n > 16.0 || std::floor(n) != n) {
-            if (error) *error = "reader maxImages must be 6 to 16 for lens " + r.lensId;
+        if (n < 2.0 || n > 16.0 || std::floor(n) != n) {
+            if (error) *error = "reader maxImages must be 2 to 16 for lens " + r.lensId;
             return std::nullopt;
         }
         r.rawMaxImages = uint32_t(n);

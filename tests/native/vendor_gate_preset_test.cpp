@@ -53,6 +53,13 @@ void testOtherGatesBringNothing() {
     }
 }
 
+void testTheVcfGateBringsTheSameStillKeysAndProbes() {
+    const auto& plain = gatePreset("vivoFullSize");
+    const auto& vcf = gatePreset("vivoFullSizeVcf");
+    assert(vcf.stillKeys.size() == plain.stillKeys.size() && vcf.stillKeys.size() == 3);
+    assert(vcf.resultProbes.size() == plain.resultProbes.size());
+}
+
 void testFixedKeysAreUntouched() {
     CameraKeySetting fixed;
     fixed.tag = "vendor.mode";
@@ -67,6 +74,7 @@ int main() {
     testVivoStillIdsMatchTheOldInlineCode();
     testResultProbes();
     testOtherGatesBringNothing();
+    testTheVcfGateBringsTheSameStillKeysAndProbes();
     testFixedKeysAreUntouched();
     std::cout << "vendor_gate_preset_test passed\n";
     return 0;

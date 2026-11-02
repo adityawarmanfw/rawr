@@ -23,19 +23,31 @@ struct CameraQuirks {
     // The companion the unverified-device rule would add is not added: the HAL cannot scale
     // the readout down to it.
     bool noAutoCompanion = false;
+    // A request without a tap leaves the template's own AF and AE regions alone instead of writing an
+    // empty one. The vivo X200 Ultra's AF node takes an emptied region as a null ROI and kills the
+    // provider (SIGSEGV in convertAPPROIToCoreROI) on its first full-size request.
+    bool keepRegions = false;
 
     [[nodiscard]] bool any() const noexcept {
-        return afTapHold || noHalPriorityAe || noTapAf || requireFpsRange || noAutoCompanion;
+        return afTapHold || noHalPriorityAe || noTapAf || requireFpsRange || noAutoCompanion || keepRegions;
     }
     bool operator==(const CameraQuirks& o) const noexcept {
         return afTapHold == o.afTapHold && noHalPriorityAe == o.noHalPriorityAe && noTapAf == o.noTapAf &&
-               requireFpsRange == o.requireFpsRange && noAutoCompanion == o.noAutoCompanion;
+               requireFpsRange == o.requireFpsRange && noAutoCompanion == o.noAutoCompanion &&
+               keepRegions == o.keepRegions;
     }
 };
 
 [[nodiscard]] inline CameraQuirks mergeQuirks(const CameraQuirks& a, const CameraQuirks& b) noexcept {
     return {a.afTapHold || b.afTapHold, a.noHalPriorityAe || b.noHalPriorityAe, a.noTapAf || b.noTapAf,
-            a.requireFpsRange || b.requireFpsRange, a.noAutoCompanion || b.noAutoCompanion};
+            a.requireFpsRange || b.requireFpsRange, a.noAutoCompanion || b.noAutoCompanion,
+            a.keepRegions || b.keepRegions};
+}
+
+// Whether a request writes its AF / AE region entry: a tap's region always; otherwise it clears the entry
+// (an empty region) unless the lens keeps the template's own (keepRegions).
+[[nodiscard]] inline bool writesRegionEntry(bool hasRegion, bool keepRegions) noexcept {
+    return hasRegion || !keepRegions;
 }
 
 // False for an unknown name.
@@ -45,6 +57,7 @@ struct CameraQuirks {
     else if (name == "noTapAf") quirks.noTapAf = true;
     else if (name == "requireFpsRange") quirks.requireFpsRange = true;
     else if (name == "noAutoCompanion") quirks.noAutoCompanion = true;
+    else if (name == "keepRegions") quirks.keepRegions = true;
     else return false;
     return true;
 }
@@ -56,6 +69,7 @@ struct CameraQuirks {
     if (quirks.noTapAf) names.push_back("noTapAf");
     if (quirks.requireFpsRange) names.push_back("requireFpsRange");
     if (quirks.noAutoCompanion) names.push_back("noAutoCompanion");
+    if (quirks.keepRegions) names.push_back("keepRegions");
     return names;
 }
 

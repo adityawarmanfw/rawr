@@ -55,7 +55,7 @@ every field of every built-in lens as parsed; the built-in files must keep produ
 | `unlisted` | false | Use the size as written instead of negotiating it against the advertised sizes. |
 | `useCase` | 0 | Stream use case (Java backend only). |
 | `reader.usage` | chosen by the usage ladder | Fixed AHardwareBuffer usage: `gpuDataBuffer`, `none`, or hex such as `0x100003`. Used as written. |
-| `reader.maxImages` | 6 | Images the reader holds, 6–16. |
+| `reader.maxImages` | 6 | Images the reader holds, 2–16. Below 6 the realtime pipeline can starve the reader (the preview drops frames); a smaller count is for a lens probing what the HAL allocates at a full-size stream. |
 | `reader.probe` | false | Check a fixed usage with `AHardwareBuffer_isSupported` first; CPU-only when refused. |
 | `reader.demote` | false | Let a silent fixed reader fall back like the app's own choice. Without it a fixed reader stays out of the usage ladder. |
 | `levels` | the lens's | Black/white levels for this stream only. |
@@ -143,13 +143,15 @@ profile, which apply to every lens on a matching device, user lenses included).
 | `noTapAf` | Tap AF and AF regions are unavailable. |
 | `requireFpsRange` | Every request carries an AE fps range, even with AE off. |
 | `noAutoCompanion` | The rule-based companion is not added. |
+| `keepRegions` | A request without a tap region leaves the template's own AF and AE regions alone instead of writing an empty one (the vivo X200 Ultra's AF node dereferences a null ROI otherwise and the provider crashes on the first full-size request). |
 
 Presets keep imported and user-edited profiles safe: a lens with a vendor gate implies `afTapHold`;
-an `unlisted` RAW stream implies the other four.
+an `unlisted` RAW stream implies `noHalPriorityAe`, `requireFpsRange` and `noAutoCompanion`
+(not `noTapAf`: add it to the lens when a camera crashes on AF regions).
 
 ### Gate presets
 
-A vendor gate can bring per-capture data with it. `vivoFullSize` adds three still-scope keys whose
+A vendor gate can bring per-capture data with it. `vivoFullSize` and `vivoFullSizeVcf` add three still-scope keys whose
 value is the capture's millisecond stamp (`vivo.control.requestId`, `frameFlag`; `globalCaptureId` is
 the stamp plus 5) and four result tags read back after each full-size still, one of which
 (`vcf.parameter.seamlessMode`) is kept on the frame to show whether the HAL really switched sensor
@@ -169,9 +171,10 @@ Java camera API exactly when one of them is set, and an explicit `ndk` together 
 when the profile is parsed. `java` can also be chosen for a lens without either, to compare the two
 APIs on the same route.
 
-A lens with a vendor gate or with `stopRepeatingForStill` cannot use the Java backend, whether it
-asks for `java` or gets it from an operating mode or use case: the vivo full-size sequence is proven
-on the NDK only. The profile is refused with the reason.
+A lens with `stopRepeatingForStill` cannot use the Java backend, whether it asks for `java` or gets
+it from an operating mode or use case: the vivo decision sequence is proven on the NDK only. The
+profile is refused with the reason. A vendor gate works on either API: the native session takes it
+before the camera opens and holds it as the lens asks.
 
 On the Java backend Kotlin opens the camera and configures the session (`SessionConfiguration` with
 the operating mode, `OutputConfiguration.setStreamUseCase` per output, session parameters). Native
@@ -204,7 +207,14 @@ image waiting for its result. On camera 4 over about 30 s of viewfinder this cos
 the NDK dropped 1 of 840 frames and Java 0 of 960, with no `PAIRER_PRESSURE` line on either.
 
 `adb shell setprop debug.rawr.camera_backend java|ndk` runs every lens on one API, for comparing the two
-on the same route (`CAMERA_BACKEND_OVERRIDE` in the log). A gated lens stays on the NDK and a lens with
+on the same route (`CAMERA_BACKEND_OVERRIDE` in the log).
+
+`adb shell setprop debug.rawr.camera_profile file:<path>` runs a profile JSON (schema 1 or 2) from a
+path the app can read, in place of the built-in and the user's lenses, so an exact recipe can be run
+without the lens editor. Put the file in the app's own storage, e.g.
+`adb shell "run-as <package> sh -c 'cat > files/debug_camera_profile.json'" < profile.json` and
+`file:/data/user/0/<package>/files/debug_camera_profile.json`. A file that does not parse is logged
+(`CAMERA_PROFILE_FILE_REJECTED`) and the built-in profile is used. A gated lens stays on the NDK and a lens with
 an operating mode or use case stays on Java. Clear it with `setprop debug.rawr.camera_backend ''`.
 
 Not checked: a vendor operating mode on a lens (only a debug probe session accepted one), session

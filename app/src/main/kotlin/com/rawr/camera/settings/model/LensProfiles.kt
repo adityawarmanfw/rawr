@@ -146,7 +146,7 @@ fun isReaderUsage(text: String): Boolean =
         (text.length > 2 && (text.startsWith("0x") || text.startsWith("0X")) && text.drop(2).toULongOrNull(16) != null)
 
 /** Provider behaviours a lens can say it avoids (see the native CameraQuirks). */
-val CAMERA_QUIRKS = listOf("afTapHold", "noHalPriorityAe", "noTapAf", "requireFpsRange", "noAutoCompanion")
+val CAMERA_QUIRKS = listOf("afTapHold", "noHalPriorityAe", "noTapAf", "requireFpsRange", "noAutoCompanion", "keepRegions")
 
 /**
  * One lens, grouped the way profile schema 2 groups it: which camera, its streams, how the session runs, what
@@ -198,7 +198,7 @@ data class RawStreamSettings(
 data class ReaderSettings(
     /** AHB usage the mode needs ([isReaderUsage]); null for the app's own choice. */
     val usage: String? = null,
-    /** Images the reader holds; 0 keeps the app's 6, otherwise 6 to 16. */
+    /** Images the reader holds; 0 keeps the app's 6, otherwise 2 to 16 (below 6 the preview can drop frames). */
     val maxImages: Int = 0,
     /** Check a fixed [usage] with the allocator first and fall back to CPU-only when refused. */
     val probe: Boolean = false,
@@ -351,7 +351,6 @@ fun validateLensProfile(lens: LensProfile, others: List<LensProfile>): List<Stri
     if (session.backend !in BACKEND_CHOICES) add("Unknown backend ${session.backend}")
     if (session.backend == "ndk" && lens.needsJavaBackend()) add("An operating mode or stream use case needs the Java backend")
     if (lens.resolvedBackend() == "java") {
-        if (session.gate.isNotEmpty()) add("The Java backend does not support a vendor gate")
         if (session.stopRepeatingForStill) add("The Java backend does not support stop-repeating stills")
     }
     if (session.opMode < 0 || session.opMode == 1 || session.opMode == 2) add("Operating mode must be 0 or 3 and above")
@@ -363,7 +362,7 @@ fun validateLensProfile(lens: LensProfile, others: List<LensProfile>): List<Stri
     if (companion.mode == CompanionMode.Fixed && (companion.size.width <= 0 || companion.size.height <= 0))
         add("Companion width and height must be positive whole numbers")
     if (companion.maxImages != 0 && companion.maxImages !in 2..16) add("Companion images must be 2 to 16")
-    if (streams.raw.reader.maxImages != 0 && streams.raw.reader.maxImages !in 6..16) add("RAW reader images must be 6 to 16")
+    if (streams.raw.reader.maxImages != 0 && streams.raw.reader.maxImages !in 2..16) add("RAW reader images must be 2 to 16")
     streams.auxJpeg?.let {
         if (it.size.width <= 0 || it.size.height <= 0) add("Aux JPEG width and height must be positive whole numbers")
     }

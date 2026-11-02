@@ -45,7 +45,7 @@ struct GatePreset {
                           {"vivo.control.sensorMode", ""}};
         return p;
     }();
-    return gate == "vivoFullSize" ? vivoFullSize : none;
+    return gate == "vivoFullSize" || gate == "vivoFullSizeVcf" ? vivoFullSize : none;
 }
 
 // The keys with their per-capture values filled in from the capture's stamp.

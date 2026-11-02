@@ -157,7 +157,7 @@ class LensProfileCodecTest {
             """"companion":{"physical":"no"}""",
             """"auxJpeg":{"width":640,"height":480,"usage":"cpu"}""",
             """"auxJpeg":{"usage":"0x3"}""",
-            """"reader":{"maxImages":5}""",
+            """"reader":{"maxImages":1}""",
             """"reader":{"probe":"yes"}"""
         )) rejectedV1(field)
     }
@@ -172,7 +172,8 @@ class LensProfileCodecTest {
         ).any { it.contains("automatic companion size") })
         assertTrue(validateLensProfile(ok.companion { copy(fallback = "x") }, emptyList()).any { it.contains("fallback") })
         assertTrue(validateLensProfile(ok.companion { copy(maxImages = 1) }, emptyList()).any { it.contains("2 to 16") })
-        assertTrue(validateLensProfile(ok.raw { copy(reader = reader.copy(maxImages = 5)) }, emptyList()).any { it.contains("6 to 16") })
+        assertTrue(validateLensProfile(ok.raw { copy(reader = reader.copy(maxImages = 1)) }, emptyList()).any { it.contains("2 to 16") })
+        assertTrue(validateLensProfile(ok.raw { copy(reader = reader.copy(maxImages = 4)) }, emptyList()).isEmpty())
         assertTrue(validateLensProfile(
             ok.raw { copy(reader = reader.copy(maxImages = 16)) }.companion { copy(maxImages = 16) }, emptyList()).isEmpty())
         assertTrue(validateLensProfile(ok.raw { copy(reader = reader.copy(usage = "cpu")) }, emptyList()).any { it.contains("usage") })
@@ -236,11 +237,11 @@ class LensProfileCodecTest {
         assertTrue(validateLensProfile(ok.session { copy(backend = "gpu") }, emptyList()).any { it.contains("Unknown backend") })
         assertTrue(validateLensProfile(
             ok.streams { copy(capture = capture8160.copy(useCase = -1)) }, emptyList()).any { it.contains("negative") })
-        // The vivo gate and stop-repeating stills stay on the NDK, whether Java is explicit or derived.
+        // Stop-repeating stills stay on the NDK, whether Java is explicit or derived; the vivo gate runs on either API.
         assertTrue(validateLensProfile(ok.session { copy(backend = "java", gate = "vivoFullSize") }, emptyList())
-            .any { it.contains("vendor gate") })
+            .none { it.contains("vendor gate") })
         assertTrue(validateLensProfile(ok.session { copy(gate = "vivoFullSize") }.raw { copy(useCase = 1) }, emptyList())
-            .any { it.contains("vendor gate") })
+            .none { it.contains("vendor gate") })
         assertTrue(validateLensProfile(ok.session { copy(backend = "java", stopRepeatingForStill = true) }, emptyList())
             .any { it.contains("stop-repeating") })
         assertTrue(validateLensProfile(ok.session { copy(gate = "vivoFullSize") }, emptyList()).none { it.contains("Java backend") })
@@ -494,7 +495,7 @@ class LensProfileCodecTest {
             }
         }
         for (field in listOf(
-            """"streams":{"raw":{"reader":{"maxImages":5}}}""",
+            """"streams":{"raw":{"reader":{"maxImages":1}}}""",
             """"streams":{"capture":{"format":"RAW16","width":0,"height":10}}""",
             """"streams":{"auxJpeg":{"width":640}}""",
             """"image":{"cfa":{"block":3}}""",

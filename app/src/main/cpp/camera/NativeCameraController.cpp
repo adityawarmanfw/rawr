@@ -55,15 +55,30 @@ std::string systemProperty(const char* name) {
     return value;
 }
 
-// `adb shell setprop debug.rawr.camera_profile generic|<built-in id>`
+// `adb shell setprop debug.rawr.camera_profile generic|<built-in id>|file:<absolute path>`
 // overrides the device's matched built-in profile (and any user lens profile)
-// for bring-up on new devices.
+// for bring-up on new devices. A file is a profile JSON the app can read (its own
+// files directory), for running an exact recipe without going through the lens editor.
 const std::string& profileIdFromSetprop() {
     static const std::string overridden = [] {
         const std::string value = systemProperty("debug.rawr.camera_profile");
-        return isBuiltInProfileId(value) ? value : std::string();
+        return isBuiltInProfileId(value) || value.rfind("file:", 0) == 0 ? value : std::string();
     }();
     return overridden;
+}
+
+// The profile named by a file: override; nullopt (with the reason) when it can't be read or parsed.
+std::optional<CameraProfile> profileFromSetpropFile(std::string* error) {
+    const auto& value = profileIdFromSetprop();
+    if (value.rfind("file:", 0) != 0) return std::nullopt;
+    std::ifstream in(value.substr(5));
+    if (!in) {
+        *error = "unreadable " + value.substr(5);
+        return std::nullopt;
+    }
+    std::stringstream text;
+    text << in.rdbuf();
+    return parseCameraProfile(text.str(), error);
 }
 
 ProfileMatch deviceProfileMatch() {
@@ -72,7 +87,14 @@ ProfileMatch deviceProfileMatch() {
 
 const std::string& activeProfileId(const ProfileMatch& match) {
     const auto& overridden = profileIdFromSetprop();
-    return overridden.empty() ? match.profileId : overridden;
+    return isBuiltInProfileId(overridden) ? overridden : match.profileId;
+}
+
+CameraProfile initialProfile(const ProfileMatch& match) {
+    std::string error;
+    if (auto file = profileFromSetpropFile(&error)) return std::move(*file);
+    if (!error.empty()) CAME("CAMERA_PROFILE_FILE_REJECTED %s", error.c_str());
+    return builtInCameraProfile(activeProfileId(match));
 }
 
 std::string describeRoute(const LensRoute& route) { return serializeCameraProfile({"", {route}}); }
@@ -135,7 +157,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
     // user's lens profile (setProfile).
     const std::string deviceModel = systemProperty("ro.product.model");
     const ProfileMatch builtInMatch = deviceProfileMatch();
-    CameraProfile profile = builtInCameraProfile(activeProfileId(builtInMatch));
+    CameraProfile profile = initialProfile(builtInMatch);
     std::string preferredCameraId;
     // cameraId/physicalCameraId routes whose HAL rejected the companion YUV
     // stream; they start RAW-only for the rest of this process.
@@ -459,19 +481,23 @@ struct NativeCameraController::Impl final : CameraEventSink {
         } else if (control.appliedExposureTimeNs && control.appliedSensitivity) {
             e = {*control.appliedExposureTimeNs, *control.appliedSensitivity};
         }
+        // With levels the viewfinder's black floor confirms, the still takes that checked frame's exposure. Unconfirmed
+        // or mismatched levels never cancel the still: it goes out with the normal exposure and the log says so, since
+        // a full-size frame with a doubtful exposure is still evidence and a cancelled one is none.
         if (deviceSession.cameraContext()->guardStillExposure && control.exposureMode != ExposureControlMode::Manual) {
             const auto checked = stillExposureGuard.checked(generation, monotonicMs());
-            if (!checked) {
-                diag("CAMERA_FULL_SIZE_SUBMIT sent=0 reason=untrusted_viewfinder_levels tag=" + std::to_string(requestId));
-                return abandon();
-            }
-            const auto measured = StillExposureGuard::requestExposure(*checked,
+            const auto measured = checked ? StillExposureGuard::requestExposure(*checked,
                 results.sensitivityReportedPerRequest().value_or(1.0),
                 control.exposureMode == ExposureControlMode::ShutterPriority ? control.requestedExposureTimeNs : 0,
-                control.exposureMode == ExposureControlMode::IsoPriority ? control.requestedSensitivity : 0);
-            if (!measured) return abandon();
-            e = {measured->exposureTimeNs, measured->sensitivity};
-            diag("CAMERA_STILL_EXPOSURE_CHECK timestampNs=" + std::to_string(checked->timestampNs) + " levels=consistent");
+                control.exposureMode == ExposureControlMode::IsoPriority ? control.requestedSensitivity : 0)
+                                          : std::nullopt;
+            if (measured) {
+                e = {measured->exposureTimeNs, measured->sensitivity};
+                diag("CAMERA_STILL_EXPOSURE_CHECK timestampNs=" + std::to_string(checked->timestampNs) + " levels=consistent");
+            } else {
+                diag("CAMERA_STILL_EXPOSURE_CHECK levels=unverified tag=" + std::to_string(requestId) +
+                     " exposure=normal " + stillExposureGuard.describe(generation, monotonicMs()));
+            }
         }
         if (e.exposureTimeNs <= 0 || e.sensitivity <= 0) {
             diag("CAMERA_FULL_SIZE_SUBMIT sent=0 reason=no_exposure tag=" + std::to_string(requestId));
@@ -929,6 +955,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // without regions and manual focus stay.
         // Device safety survives imported/user-edited lens profiles.
         control.capabilities.tapAfHoldsUntilNextTap = quirks.afTapHold;
+        control.capabilities.keepRegions = quirks.keepRegions;
         control.capabilities.faceAfSteering = !control.capabilities.tapAfHoldsUntilNextTap;
         control.capabilities.dngOnly =
             route.captureStream && uint64_t(route.captureStream->width) * route.captureStream->height > kDngOnlyPixels;
@@ -1258,7 +1285,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
         }
         if (restart && callbacks.acquisitionFailed) callbacks.acquisitionFailed(callbackGeneration, 0);
     }
-    void cameraStillFailed(uint64_t generation, const CameraRequest* request) override {
+    void cameraStillFailed(uint64_t generation, const CameraRequest* request, const char* kind, int64_t frameNumber,
+                           int reason) override {
         uint64_t tag = 0;
         {
             std::lock_guard<std::mutex> lock(mutex);
@@ -1267,6 +1295,10 @@ struct NativeCameraController::Impl final : CameraEventSink {
             if (!request || request->userContext(&provenance) != ACAMERA_OK || !provenance) return;
             tag = static_cast<const CameraRequestProvenance*>(provenance)->optimizedStillRequestId;
             if (!tag) return;
+            // Every failed still is logged, past the per-session cap on failure lines: it is what the bundle is for.
+            diag(std::string("CAMERA_STILL_FAILED tag=") + std::to_string(tag) + " kind=" + kind +
+                 " frame=" + std::to_string(frameNumber) + " reason=" + std::to_string(reason) +
+                 " lens=" + control.capabilities.lensId);
             if (tag == metadata::kFullSizeDecisionRequestId) {
                 // Not a capture: the still that follows is still submitted.
                 if (fullSizeDecision == FullSizeDecision::Waiting) fullSizeDecision = FullSizeDecision::Failed;
@@ -2132,10 +2164,19 @@ void NativeCameraController::observePreviewBlackFloor(const metadata::FrameMetad
                                                        const std::optional<std::array<float, 4>>& floor) {
     if (!frame.cameraContext || !frame.cameraContext->guardStillExposure || frame.optimizedStillRequestId) return;
     const bool manualResult = frame.aeMode == 0 && frame.requestedSensitivity && frame.requestedExposureTimeNs;
+    const auto four = [](const std::array<float, 4>& v) {
+        char text[64];
+        std::snprintf(text, sizeof(text), "%.0f,%.0f,%.0f,%.0f", v[0], v[1], v[2], v[3]);
+        return std::string(text);
+    };
+    char white[24];
+    std::snprintf(white, sizeof(white), "%.0f", frame.effectiveWhiteLevel);
     impl_->stillExposureGuard.observe(frame.cameraContext->cameraContextGeneration,
         {manualResult ? *frame.requestedExposureTimeNs : frame.exposureTimeNs,
          manualResult ? *frame.requestedSensitivity : frame.sensitivity, !manualResult, frame.timestampNs},
-        Impl::monotonicMs(), blackFloorAgrees(floor, frame.blackLevelPhysicalRggb, frame.effectiveWhiteLevel));
+        Impl::monotonicMs(), blackFloorAgrees(floor, frame.blackLevelPhysicalRggb, frame.effectiveWhiteLevel),
+        "floor=" + (floor ? four(*floor) : std::string("none")) + " black=" + four(frame.blackLevelPhysicalRggb) +
+            " white=" + white);
 }
 void NativeCameraController::setRawrAeRequest(int64_t exposureTimeNs, int32_t sensitivity) {
     if (exposureTimeNs <= 0 || exposureTimeNs >= (int64_t(1) << 40) || sensitivity <= 0 || sensitivity > 0xFFFFFF)

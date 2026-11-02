@@ -172,8 +172,8 @@ internal fun SessionGroup(lens: LensProfile, onChange: (LensProfile) -> Unit) {
         DropdownChoiceRow(
             title = "Vendor gate",
             selected = session.gate,
-            values = (listOf("", "vivoFullSize") + session.gate).distinct(),
-            label = { when (it) { "" -> "None"; "vivoFullSize" -> "vivo full-size"; else -> it } },
+            values = (listOf("", "vivoFullSize", "vivoFullSizeVcf") + session.gate).distinct(),
+            label = { when (it) { "" -> "None"; "vivoFullSize" -> "vivo full-size"; "vivoFullSizeVcf" -> "vivo full-size + VCF bypass"; else -> it } },
             supportingText = "Vendor state the app sets while it opens the camera; vivo needs it for 50 and 200 MP",
             onSelect = { update { copy(gate = it, gateHold = if (it.isEmpty()) null else gateHold) } }
         )
@@ -242,6 +242,7 @@ internal fun quirkTitle(quirk: String) = when (quirk) {
     "noTapAf" -> "No tap focus"
     "requireFpsRange" -> "Always send an fps range"
     "noAutoCompanion" -> "No automatic companion"
+    "keepRegions" -> "Keep the template's focus regions"
     else -> quirk
 }
 
@@ -251,5 +252,6 @@ internal fun quirkDescription(quirk: String) = when (quirk) {
     "noTapAf" -> "Changing the focus region crashes this camera, so tap focus and regions are off"
     "requireFpsRange" -> "Every request carries an AE fps range, even with AE off"
     "noAutoCompanion" -> "Do not add the small extra stream that unverified devices get"
+    "keepRegions" -> "Without a tap, requests keep the camera's own focus and exposure regions instead of an empty one, which crashes this camera's focus code"
     else -> ""
 }

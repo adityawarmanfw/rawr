@@ -209,7 +209,7 @@ internal object LensProfileCodec {
                 flags(raw, "unlisted")
                 objectField(raw, "reader")?.let { reader ->
                     usage(reader)
-                    if (reader.has("maxImages")) number(reader, "maxImages", 6.0..16.0, true)
+                    if (reader.has("maxImages")) number(reader, "maxImages", 2.0..16.0, true)
                     flags(reader, "probe", "demote")
                 }
                 levels(raw)
