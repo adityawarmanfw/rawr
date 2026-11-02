@@ -335,26 +335,24 @@ void testProfileJson() {
     // vivo 50 MP lenses (seamless route): binned viewfinder stream, full-size capture stream, still-only keys.
     {
         const auto& x300 = builtInCameraProfile("vivo_x300_ultra");
-        for (const auto& [lensId, cameraId, w, h, mode] :
-             {std::tuple{"H14", "4", 4096u, 3072u, 0.0}, std::tuple{"H35", "3", 4080u, 3064u, 2.0},
-              std::tuple{"H85", "5", 4080u, 3072u, 14.0}}) {
+        for (const auto& [lensId, cameraId, w, h] :
+             {std::tuple{"H14", "4", 4096u, 3072u}, std::tuple{"H35", "3", 4080u, 3064u},
+              std::tuple{"H85", "5", 4080u, 3072u}}) {
             const auto s = routeForLens(x300, lensId);
             assert(s && s->cameraId == cameraId && !s->highResLive && !s->rawBufferUsage);
             assert(s->preferredStream.width == w && s->preferredStream.height == h);
             assert(s->photoStream && s->photoStream->width == 8192 && s->photoStream->height == 6144);
             assert(s->photoStream->format == RawPixelFormat::Raw16 && s->vendorGate == "vivoFullSize");
-            bool stillUiModule = false, sessionUiModule = false, forced = false, stillMode = false;
+            bool stillUiModule = false, sessionUiModule = false, forced = false;
             for (const auto& k : s->vendorKeys) {
-                // The full-size mode only on stills: it forces the switch where the AI would stay binned.
-                forced |= k.tag == "vivo.control.forceSensorMode" && k.scope != CameraKeySetting::Scope::Still;
-                stillMode |= k.tag == "vivo.control.forceSensorMode" && k.scope == CameraKeySetting::Scope::Still &&
-                             k.values == std::vector<double>{mode};
+                // No forced sensor mode, not even on stills: forcing it gave soft DNGs; the HAL switches by itself.
+                forced |= k.tag == "vivo.control.forceSensorMode";
                 if (k.tag != "com.vivo.current_ui_module") continue;
                 stillUiModule |= k.scope == CameraKeySetting::Scope::Still;
                 sessionUiModule |= k.scope != CameraKeySetting::Scope::Still;
             }
             // ui_module 74 on the session or repeating request silences the RAW viewfinder.
-            assert(stillUiModule && !sessionUiModule && !forced && stillMode);
+            assert(stillUiModule && !sessionUiModule && !forced);
         }
         // vivo 200 MP lenses: the same route with the ultra flag and no forced mode (the HAL switches by itself).
         // Both default to queued submission (the reader retry drains stranded images).

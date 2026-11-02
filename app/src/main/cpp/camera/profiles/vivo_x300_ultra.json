@@ -413,13 +413,6 @@
           "scope": "still",
           "values": [1],
           "enabled": true
-        },
-        {
-          "tag": "vivo.control.forceSensorMode",
-          "type": "int32",
-          "scope": "still",
-          "values": [0],
-          "enabled": true
         }
       ],
       "image": {
@@ -560,13 +553,6 @@
           "scope": "still",
           "values": [1],
           "enabled": true
-        },
-        {
-          "tag": "vivo.control.forceSensorMode",
-          "type": "int32",
-          "scope": "still",
-          "values": [2],
-          "enabled": true
         }
       ],
       "image": {
@@ -698,13 +684,6 @@
           "type": "byte",
           "scope": "still",
           "values": [1],
-          "enabled": true
-        },
-        {
-          "tag": "vivo.control.forceSensorMode",
-          "type": "int32",
-          "scope": "still",
-          "values": [14],
           "enabled": true
         }
       ],
