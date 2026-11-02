@@ -9,7 +9,7 @@
 
 #include "camera/Camera2PriorityCompat.h"
 #include "camera/CameraAePriority.h"
-#include "camera/CameraQuirks.h"
+#include "camera/CameraWorkarounds.h"
 #include "camera/CameraRequestCadence.h"
 #include "camera/StillFocus.h"
 #include "camera/ViewfinderExposure.h"
@@ -278,11 +278,11 @@ CameraControlApplyResult applyCameraControlState(CameraRequest* request, const C
         const auto status = request->setFloat(ACAMERA_LENS_FOCUS_DISTANCE, 1, &diopters);
         if (status != kRequestOk) result.focusStatus = status;
     }
-    // keepRegions: with no tap region the request keeps the template's own, never an emptied one.
-    if (writesRegionEntry(metering.afRegion.has_value(), state.capabilities.keepRegions))
+    // keepTemplateRegions: with no tap region the request keeps the template's own, never an emptied one.
+    if (writesRegionEntry(metering.afRegion.has_value(), state.capabilities.keepTemplateRegions))
         (void)request->setI32(ACAMERA_CONTROL_AF_REGIONS, metering.afRegion ? 5 : 0,
                                            metering.afRegion ? metering.afRegion->data() : nullptr);
-    if (writesRegionEntry(metering.aeRegion.has_value(), state.capabilities.keepRegions))
+    if (writesRegionEntry(metering.aeRegion.has_value(), state.capabilities.keepTemplateRegions))
         (void)request->setI32(ACAMERA_CONTROL_AE_REGIONS, metering.aeRegion ? 5 : 0,
                                            metering.aeRegion ? metering.aeRegion->data() : nullptr);
     const uint8_t trigger =

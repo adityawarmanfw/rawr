@@ -59,23 +59,23 @@ import com.rawr.camera.settings.architecture.NavigateBack
 import com.rawr.camera.settings.architecture.SetLensProfiles
 import com.rawr.camera.settings.architecture.SettingsDispatch
 import com.rawr.camera.settings.model.LENS_NAME_MAX_LENGTH
-import com.rawr.camera.settings.model.CFA_BLOCKS
-import com.rawr.camera.settings.model.CFA_LIVE_QUALITIES
-import com.rawr.camera.settings.model.CFA_ORDERS
-import com.rawr.camera.settings.model.CFA_PHOTO_QUALITIES
-import com.rawr.camera.settings.model.BACKEND_CHOICES
-import com.rawr.camera.settings.model.CAMERA_QUIRKS
+import com.rawr.camera.settings.model.SENSOR_LAYOUT_BLOCKS
+import com.rawr.camera.settings.model.LIVE_REMOSAIC_QUALITIES
+import com.rawr.camera.settings.model.COLOUR_ORDERS
+import com.rawr.camera.settings.model.PHOTO_REMOSAIC_QUALITIES
+import com.rawr.camera.settings.model.CAMERA_API_CHOICES
+import com.rawr.camera.settings.model.CAMERA_WORKAROUNDS
 import com.rawr.camera.settings.model.COMPANION_FALLBACKS
 import com.rawr.camera.settings.model.AuxJpegSettings
-import com.rawr.camera.settings.model.CaptureStreamSettings
+import com.rawr.camera.settings.model.PhotoStreamSettings
 import com.rawr.camera.settings.model.CompanionMode
 import com.rawr.camera.settings.model.LensCamera
-import com.rawr.camera.settings.model.LensCfa
+import com.rawr.camera.settings.model.LensSensorLayout
 import com.rawr.camera.settings.model.LensOutputSize
 import com.rawr.camera.settings.model.LensSession
 import com.rawr.camera.settings.model.StillSequence
 import com.rawr.camera.settings.model.stillSequence
-import com.rawr.camera.settings.model.isReaderUsage
+import com.rawr.camera.settings.model.isBufferUsage
 import com.rawr.camera.settings.model.EXTENDED_ISO_MAX
 import com.rawr.camera.settings.model.EXTENDED_SHUTTER_MAX_NS
 import com.rawr.camera.settings.model.GATE_HOLDS
@@ -111,33 +111,28 @@ import com.rawr.camera.ui.icons.rounded.Add
 import com.rawr.camera.ui.icons.rounded.Check
 import com.rawr.camera.ui.icons.rounded.Close
 import java.util.Locale
+import com.rawr.camera.settings.model.needsJavaCameraApi
+import com.rawr.camera.settings.model.resolvedCameraApi
 
-// Lens editor: how the session is opened and configured, and the camera workarounds.
 
-/** How the session is opened and configured. */
+// Lens editor: the Advanced page's session settings and camera workarounds.
+
+/** How the session is opened and configured, past the app's automatic choices. */
 @Composable
-internal fun SessionGroup(lens: LensProfile, onChange: (LensProfile) -> Unit) {
+internal fun SessionAdvancedGroup(lens: LensProfile, onChange: (LensProfile) -> Unit) {
     val session = lens.session
     val update = { change: LensSession.() -> LensSession -> onChange(lens.session(change)) }
-    SettingsGroup(
-        title = "Session",
-        description = "How this lens opens the camera and configures the session. The defaults match the app's normal behaviour."
-    ) {
+    SettingsGroup(title = "Session") {
         DropdownChoiceRow(
             title = "Camera API",
-            selected = session.backend,
-            values = BACKEND_CHOICES,
-            label = { when (it) { "auto" -> "Automatic"; "ndk" -> "Native (NDK)"; "java" -> "Java Camera2"; else -> it } },
-            supportingText = "Automatic: Java Camera2 when an operating mode or a stream use case is set (the NDK " +
-                "cannot send them), Native otherwise",
-            onSelect = { update { copy(backend = it) } }
+            selected = session.cameraApi,
+            values = CAMERA_API_CHOICES.filter { it != "native" || !lens.needsJavaCameraApi() || session.cameraApi == "native" },
+            label = { when (it) { "auto" -> "Automatic"; "native" -> "Native"; "java" -> "Java Camera2"; else -> it } },
+            supportingText = if (lens.needsJavaCameraApi()) "Automatic runs this lens on Java Camera2: it has an operating mode or a stream use case"
+            else "Automatic runs this lens on the native API",
+            onSelect = { update { copy(cameraApi = it) } }
         )
-        FieldColumn {
-            CaptureNumberField("Operating mode", session.opMode, Modifier.testTag(lensEditorTag("op_mode")),
-                "Java Camera2 only. 0 = normal. Vendor modes are usually 32768 (0x8000) and above, in decimal. 1 and 2 are refused") {
-                update { copy(opMode = it) }
-            }
-        }
+        SettingDivider()
         DropdownChoiceRow(
             title = "Session parameters",
             selected = session.params,
@@ -158,100 +153,113 @@ internal fun SessionGroup(lens: LensProfile, onChange: (LensProfile) -> Unit) {
             title = "Request template",
             selected = session.stillTemplate,
             values = listOf(null, true, false),
-            label = { when (it) { true -> "Still capture"; false -> "Preview"; null -> "Default" } },
-            supportingText = "Default: preview for the viewfinder, still capture for full-size photos. " +
+            label = { when (it) { true -> "Still capture"; false -> "Preview"; null -> "Automatic" } },
+            supportingText = "Automatic: preview for the viewfinder, still capture for full-size photos. " +
                 "The others use one template for the session, the viewfinder and photos",
             onSelect = { update { copy(stillTemplate = it) } }
         )
+        SettingDivider()
+        DropdownChoiceRow(
+            title = "Request defaults",
+            selected = lens.request.defaults,
+            values = REQUEST_DEFAULTS,
+            label = { if (it == "minimal") "Minimal" else "App defaults" },
+            supportingText = "Minimal leaves distortion and hot-pixel modes, face detection and the AE priority tag to the camera",
+            onSelect = { onChange(lens.copy(request = lens.request.copy(defaults = it))) }
+        )
+        if (lens.streams.photo != null || lens.session.stopViewfinderForPhotos) {
+            SettingDivider()
+            StreamDuringPhotosRow(lens, onChange)
+        }
         FieldColumn {
-            CaptureNumberField("Fixed frame rate", session.fixedFps, Modifier.testTag(lensEditorTag("fixed_fps")),
-                "One AE fps range on the session and every request. 0 = the app varies it") { update { copy(fixedFps = it) } }
             CaptureNumberField("Startup delay (ms)", session.startupDelayMs, Modifier.testTag(lensEditorTag("startup_delay")),
                 "Wait after the session is configured before the first request, up to 5000") { update { copy(startupDelayMs = it) } }
         }
-        DropdownChoiceRow(
-            title = "Vendor gate",
-            selected = session.gate,
-            values = (listOf("", "vivoFullSize", "vivoFullSizeVcf") + session.gate).distinct(),
-            label = { when (it) { "" -> "None"; "vivoFullSize" -> "vivo full-size"; "vivoFullSizeVcf" -> "vivo full-size + VCF bypass"; else -> it } },
-            supportingText = "Vendor state the app sets while it opens the camera; vivo needs it for 50 and 200 MP",
-            onSelect = { update { copy(gate = it, gateHold = if (it.isEmpty()) null else gateHold) } }
-        )
-        if (session.gate.isNotEmpty()) {
-            SettingDivider()
-            DropdownChoiceRow(
-                title = "Keep the gate",
-                selected = session.gateHold.orEmpty(),
-                values = listOf("") + GATE_HOLDS,
-                label = {
-                    when (it) {
-                        "" -> "Default"
-                        "configured" -> "Until the session is configured"
-                        "closed" -> "Until the camera closes"
-                        else -> it
-                    }
-                },
-                supportingText = "Default: until the camera closes on a lens with a capture stream, otherwise until configured",
-                onSelect = { update { copy(gateHold = it.ifEmpty { null }) } }
-            )
-        }
-        SettingDivider()
-        val sequence = lens.stillSequence()
+    }
+}
+
+/**
+ * Whether the camera's viewfinder stream stops for a full-size photo (stopRepeating, then restored). The screen
+ * freezes for every full-size photo either way; this is a camera workaround. A decision key always stops it.
+ */
+@Composable
+private fun StreamDuringPhotosRow(lens: LensProfile, onChange: (LensProfile) -> Unit) {
+    val stops = lens.session.stopViewfinderForPhotos
+    val java = lens.resolvedCameraApi() == "java"
+    if (lens.stillSequence() == StillSequence.DecisionFrame) {
         SettingsRow(
-            title = "Photo sequence",
-            value = when (sequence) {
-                StillSequence.DecisionFrame -> "Decision frame, then pause"
-                StillSequence.PauseViewfinder -> "Pause, then photo"
-                StillSequence.Direct -> "Beside the viewfinder"
-            },
-            supportingText = when (sequence) {
-                StillSequence.DecisionFrame -> "Set by the decision key with the capture stream and companion: one frame lets the " +
-                    "camera switch to full size, the viewfinder pauses for the photos and comes back"
-                StillSequence.PauseViewfinder -> "The viewfinder pauses for the photo and comes back"
-                StillSequence.Direct -> "Photos are taken while the viewfinder keeps running"
-            },
+            title = "Viewfinder stream for photos",
+            value = "Stops (decision key)",
+            supportingText = "The decision key sends one viewfinder frame so the camera switches to full size, then the " +
+                "stream stops for the photos and comes back",
             testTag = lensEditorTag("photo_sequence")
         )
-        SettingDivider()
-        SettingsSwitchRow(
-            title = "Always pause the viewfinder for photos",
-            checked = session.stopRepeatingForStill,
-            supportingText = "Pause, take the photo, restore. A lens with a decision key already pauses for full-size photos",
-            testTag = lensEditorTag("stop_repeating")
-        ) { update { copy(stopRepeatingForStill = it) } }
+        return
     }
+    DropdownChoiceRow(
+        title = "Viewfinder stream for photos",
+        selected = stops,
+        values = if (java && !stops) listOf(false) else listOf(false, true),
+        label = { if (it) "Stops" else "Keeps running" },
+        supportingText = when {
+            java && stops -> "Java Camera2 can't stop it; choose Keeps running"
+            java -> "Java Camera2 keeps the stream running"
+            else -> "Stops: the camera's stream stops before a full-size photo and restarts after it, for cameras that " +
+                "only switch to full size with it stopped. The screen freezes for full-size photos either way"
+        },
+        onSelect = { onChange(lens.session { copy(stopViewfinderForPhotos = it) }) }
+    )
+}
+
+/** Workarounds the lens's own settings already imply (native effectiveQuirks), with the reason. */
+internal fun impliedWorkarounds(lens: LensProfile): Map<String, String> = buildMap {
+    if (lens.session.gate.isNotEmpty()) put("holdTapFocus", "on with a vendor gate")
+    if (lens.streams.raw.choice.highResLive) {
+        put("appPriorityAe", "on with high-res live")
+        put("alwaysSendFrameRate", "on with high-res live")
+        put("noAutoCompanion", "on with high-res live")
+    }
+}
+
+@Composable
+internal fun WorkaroundsGroup(lens: LensProfile, onChange: (LensProfile) -> Unit) {
+    val session = lens.session
+    val implied = impliedWorkarounds(lens)
     SettingsGroup(
         title = "Camera workarounds",
-        description = "Behaviours this camera crashes or misbehaves on. The device profile may already set some for every lens."
+        description = "Behaviours a camera crashes or misbehaves on. The device profile can turn some on for every lens."
     ) {
-        CAMERA_QUIRKS.forEachIndexed { index, quirk ->
+        CAMERA_WORKAROUNDS.forEachIndexed { index, workaround ->
             if (index > 0) SettingDivider()
+            val reason = implied[workaround]
             SettingsSwitchRow(
-                title = quirkTitle(quirk),
-                checked = quirk in session.quirks,
-                supportingText = quirkDescription(quirk),
-                testTag = lensEditorTag("quirk_$quirk")
-            ) { on -> update { copy(quirks = if (on) (quirks + quirk).distinct() else quirks - quirk) } }
+                title = workaroundTitle(workaround),
+                checked = workaround in session.workarounds || reason != null,
+                value = reason?.let { "Automatic" },
+                supportingText = reason?.let { "${workaroundDescription(workaround)}. Automatically $it" } ?: workaroundDescription(workaround),
+                enabled = reason == null,
+                testTag = lensEditorTag("workaround_$workaround")
+            ) { on -> onChange(lens.session { copy(workarounds = if (on) (workarounds + workaround).distinct() else workarounds - workaround) }) }
         }
     }
 }
 
-internal fun quirkTitle(quirk: String) = when (quirk) {
-    "afTapHold" -> "Keep tap focus until the next tap"
-    "noHalPriorityAe" -> "App AE for shutter and ISO priority"
-    "noTapAf" -> "No tap focus"
-    "requireFpsRange" -> "Always send an fps range"
+internal fun workaroundTitle(workaround: String) = when (workaround) {
+    "holdTapFocus" -> "Keep tap focus until the next tap"
+    "appPriorityAe" -> "App AE for shutter and ISO priority"
+    "noTapFocus" -> "No tap focus"
+    "alwaysSendFrameRate" -> "Always send an fps range"
     "noAutoCompanion" -> "No automatic companion"
-    "keepRegions" -> "Keep the template's focus regions"
-    else -> quirk
+    "keepTemplateRegions" -> "Keep the template's focus regions"
+    else -> workaround
 }
 
-internal fun quirkDescription(quirk: String) = when (quirk) {
-    "afTapHold" -> "A tap's focus holds until the next tap; returning to continuous focus crashes this camera"
-    "noHalPriorityAe" -> "The camera's own shutter and ISO priority modes crash it; the app's AE handles them"
-    "noTapAf" -> "Changing the focus region crashes this camera, so tap focus and regions are off"
-    "requireFpsRange" -> "Every request carries an AE fps range, even with AE off"
+internal fun workaroundDescription(workaround: String) = when (workaround) {
+    "holdTapFocus" -> "A tap's focus holds until the next tap; returning to continuous focus crashes this camera"
+    "appPriorityAe" -> "The camera's own shutter and ISO priority modes crash it; the app's AE handles them"
+    "noTapFocus" -> "Changing the focus region crashes this camera, so tap focus and regions are off"
+    "alwaysSendFrameRate" -> "Every request carries an AE fps range, even with AE off"
     "noAutoCompanion" -> "Do not add the small extra stream that unverified devices get"
-    "keepRegions" -> "Without a tap, requests keep the camera's own focus and exposure regions instead of an empty one, which crashes this camera's focus code"
+    "keepTemplateRegions" -> "Without a tap, requests keep the camera's own focus and exposure regions instead of an empty one, which crashes this camera's focus code"
     else -> ""
 }

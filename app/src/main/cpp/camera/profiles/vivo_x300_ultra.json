@@ -2,8 +2,7 @@
   "id": "vivo_x300_ultra",
   "schema": 2,
   "name": "vivo X300 Ultra",
-  "version": 8,
-  "quirks": ["afTapHold"],
+  "version": 9,
   "match": {
     "models": ["V2562", "V2547A", "V2547DA"],
     "verifiedModels": ["V2562"],
@@ -25,7 +24,10 @@
           "height": 3072
         }
       },
-      "keys": [
+      "session": {
+        "workarounds": ["holdTapFocus"]
+      },
+      "vendorKeys": [
         {
           "tag": "vivo.control.forceSensorMode",
           "type": "int32",
@@ -63,7 +65,10 @@
           "height": 3072
         }
       },
-      "keys": [
+      "session": {
+        "workarounds": ["holdTapFocus"]
+      },
+      "vendorKeys": [
         {
           "tag": "vivo.control.forceSensorMode",
           "type": "int32",
@@ -101,7 +106,10 @@
           "height": 3064
         }
       },
-      "keys": [
+      "session": {
+        "workarounds": ["holdTapFocus"]
+      },
+      "vendorKeys": [
         {
           "tag": "vivo.control.forceSensorMode",
           "type": "int32",
@@ -131,7 +139,10 @@
           "height": 3064
         }
       },
-      "keys": [
+      "session": {
+        "workarounds": ["holdTapFocus"]
+      },
+      "vendorKeys": [
         {
           "tag": "vivo.control.forceSensorMode",
           "type": "int32",
@@ -161,7 +172,10 @@
           "height": 3072
         }
       },
-      "keys": [
+      "session": {
+        "workarounds": ["holdTapFocus"]
+      },
+      "vendorKeys": [
         {
           "tag": "vivo.control.forceSensorMode",
           "type": "int32",
@@ -191,7 +205,10 @@
           "height": 3072
         }
       },
-      "keys": [
+      "session": {
+        "workarounds": ["holdTapFocus"]
+      },
+      "vendorKeys": [
         {
           "tag": "vivo.control.forceSensorMode",
           "type": "int32",
@@ -221,7 +238,10 @@
           "height": 3072
         }
       },
-      "keys": [
+      "session": {
+        "workarounds": ["holdTapFocus"]
+      },
+      "vendorKeys": [
         {
           "tag": "vivo.control.forceSensorMode",
           "type": "int32",
@@ -251,7 +271,10 @@
           "height": 3072
         }
       },
-      "keys": [
+      "session": {
+        "workarounds": ["holdTapFocus"]
+      },
+      "vendorKeys": [
         {
           "tag": "vivo.control.forceSensorMode",
           "type": "int32",
@@ -280,7 +303,7 @@
           "width": 4096,
           "height": 3072
         },
-        "capture": {
+        "photo": {
           "format": "RAW16",
           "width": 8192,
           "height": 6144
@@ -289,9 +312,10 @@
       "session": {
         "gate": {
           "name": "vivoFullSize"
-        }
+        },
+        "workarounds": ["holdTapFocus"]
       },
-      "keys": [
+      "vendorKeys": [
         {
           "tag": "vivo.control.ai_highresolution",
           "type": "int32",
@@ -426,7 +450,7 @@
           "width": 4080,
           "height": 3064
         },
-        "capture": {
+        "photo": {
           "format": "RAW16",
           "width": 8192,
           "height": 6144
@@ -435,9 +459,10 @@
       "session": {
         "gate": {
           "name": "vivoFullSize"
-        }
+        },
+        "workarounds": ["holdTapFocus"]
       },
-      "keys": [
+      "vendorKeys": [
         {
           "tag": "vivo.control.ai_highresolution",
           "type": "int32",
@@ -564,7 +589,7 @@
           "width": 4080,
           "height": 3072
         },
-        "capture": {
+        "photo": {
           "format": "RAW16",
           "width": 8192,
           "height": 6144
@@ -573,9 +598,10 @@
       "session": {
         "gate": {
           "name": "vivoFullSize"
-        }
+        },
+        "workarounds": ["holdTapFocus"]
       },
-      "keys": [
+      "vendorKeys": [
         {
           "tag": "vivo.control.ai_highresolution",
           "type": "int32",
@@ -702,22 +728,21 @@
           "width": 4080,
           "height": 3064
         },
-        "capture": {
+        "photo": {
           "format": "RAW16",
           "width": 16320,
           "height": 12256,
-          "burst": {
-            "max": 3,
-            "sequential": false
-          }
+          "mergeFrameLimit": 3,
+          "mergeFramesOneByOne": false
         }
       },
       "session": {
         "gate": {
           "name": "vivoFullSize"
-        }
+        },
+        "workarounds": ["holdTapFocus"]
       },
-      "keys": [
+      "vendorKeys": [
         {
           "tag": "vivo.control.ultra_highresolution",
           "type": "int32",
@@ -837,21 +862,20 @@
           "width": 4080,
           "height": 3072
         },
-        "capture": {
+        "photo": {
           "format": "RAW16",
           "width": 16320,
           "height": 12288,
-          "burst": {
-            "max": 3
-          }
+          "mergeFrameLimit": 3
         }
       },
       "session": {
         "gate": {
           "name": "vivoFullSize"
-        }
+        },
+        "workarounds": ["holdTapFocus"]
       },
-      "keys": [
+      "vendorKeys": [
         {
           "tag": "vivo.control.ultra_highresolution",
           "type": "int32",

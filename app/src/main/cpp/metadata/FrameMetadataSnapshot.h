@@ -14,8 +14,8 @@ inline constexpr uint64_t kSensitivityProbeRequestId = ~uint64_t{0};
 inline constexpr uint64_t kFullSizeDecisionRequestId = ~uint64_t{0} - 1;
 
 // Calibration and decision requests are not images from the still-only stream.
-inline bool isCaptureStreamStill(bool captureStream, uint64_t tag) {
-    return captureStream && tag != 0 && tag != kSensitivityProbeRequestId && tag != kFullSizeDecisionRequestId;
+inline bool isCaptureStreamStill(bool photoStream, uint64_t tag) {
+    return photoStream && tag != 0 && tag != kSensitivityProbeRequestId && tag != kFullSizeDecisionRequestId;
 }
 
 enum class EffectiveWhiteLevelSource : std::uint8_t {

@@ -31,7 +31,7 @@ class NdkDeviceDriver final : public CameraDeviceDriver {
    public:
     explicit NdkDeviceDriver(ACameraDevice* device) : device_(device) {}
     ~NdkDeviceDriver() override { close(); }
-    const char* backendName() const override { return "ndk"; }
+    const char* backendName() const override { return "native"; }
     std::unique_ptr<CameraRequest> createRequest(RequestTemplate, RequestStatus* status) override;
     std::unique_ptr<CameraSessionDriver> createSession(const std::vector<SessionOutput>& outputs,
                                                        const CameraRequest* sessionParameters, int32_t opMode,

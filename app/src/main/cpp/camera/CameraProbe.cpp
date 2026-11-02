@@ -214,7 +214,12 @@ void appendCamera(std::string& out, const std::string& id, const std::string& pa
     out += ",\"black\":";
     appendNumbers(out, black ? black->data.i32 : static_cast<const int32_t*>(nullptr), black ? black->count : 0);
     const auto white = entry(chars, ACAMERA_SENSOR_INFO_WHITE_LEVEL);
-    out += ",\"white\":" + std::to_string(white && white->data.i32 ? white->data.i32[0] : 0) + ",";
+    out += ",\"white\":" + std::to_string(white && white->data.i32 ? white->data.i32[0] : 0);
+    // AE target fps ranges as flat [min, max] pairs, for the lens editor's fixed frame rate.
+    const auto fps = entry(chars, ACAMERA_CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES);
+    out += ",\"fpsRanges\":";
+    appendNumbers(out, fps ? fps->data.i32 : static_cast<const int32_t*>(nullptr), fps ? fps->count : 0);
+    out += ',';
     appendSessionKeys(out, chars);
     out += '}';
 }

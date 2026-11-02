@@ -59,23 +59,24 @@ import com.rawr.camera.settings.architecture.NavigateBack
 import com.rawr.camera.settings.architecture.SetLensProfiles
 import com.rawr.camera.settings.architecture.SettingsDispatch
 import com.rawr.camera.settings.model.LENS_NAME_MAX_LENGTH
-import com.rawr.camera.settings.model.CFA_BLOCKS
-import com.rawr.camera.settings.model.CFA_LIVE_QUALITIES
-import com.rawr.camera.settings.model.CFA_ORDERS
-import com.rawr.camera.settings.model.CFA_PHOTO_QUALITIES
-import com.rawr.camera.settings.model.BACKEND_CHOICES
-import com.rawr.camera.settings.model.CAMERA_QUIRKS
+import com.rawr.camera.settings.model.MAX_FRAME_RATE
+import com.rawr.camera.settings.model.SENSOR_LAYOUT_BLOCKS
+import com.rawr.camera.settings.model.LIVE_REMOSAIC_QUALITIES
+import com.rawr.camera.settings.model.COLOUR_ORDERS
+import com.rawr.camera.settings.model.PHOTO_REMOSAIC_QUALITIES
+import com.rawr.camera.settings.model.CAMERA_API_CHOICES
+import com.rawr.camera.settings.model.CAMERA_WORKAROUNDS
 import com.rawr.camera.settings.model.COMPANION_FALLBACKS
 import com.rawr.camera.settings.model.AuxJpegSettings
-import com.rawr.camera.settings.model.CaptureStreamSettings
+import com.rawr.camera.settings.model.PhotoStreamSettings
 import com.rawr.camera.settings.model.CompanionMode
 import com.rawr.camera.settings.model.LensCamera
-import com.rawr.camera.settings.model.LensCfa
+import com.rawr.camera.settings.model.LensSensorLayout
 import com.rawr.camera.settings.model.LensOutputSize
 import com.rawr.camera.settings.model.LensSession
 import com.rawr.camera.settings.model.StillSequence
 import com.rawr.camera.settings.model.stillSequence
-import com.rawr.camera.settings.model.isReaderUsage
+import com.rawr.camera.settings.model.isBufferUsage
 import com.rawr.camera.settings.model.EXTENDED_ISO_MAX
 import com.rawr.camera.settings.model.EXTENDED_SHUTTER_MAX_NS
 import com.rawr.camera.settings.model.GATE_HOLDS
@@ -112,25 +113,71 @@ import com.rawr.camera.ui.icons.rounded.Check
 import com.rawr.camera.ui.icons.rounded.Close
 import java.util.Locale
 
-// Lens editor: request defaults and the vendor keys, with their editing dialogs.
+// Lens editor: the vendor mode (operating mode, frame rate, vendor keys), with the key dialogs.
 
-/** What every request carries: the app's defaults and the lens's vendor keys. */
+/** The scopes a key can use on this lens: Still and Decision need high-res photos, session scopes need session parameters. */
+internal fun LensProfile.vendorKeyScopes(): List<VendorKeyScope> = VendorKeyScope.entries.filter { scope ->
+    when (scope) {
+        VendorKeyScope.Still, VendorKeyScope.Decision -> streams.photo != null
+        VendorKeyScope.Session, VendorKeyScope.SessionAndRequest -> session.params != "none"
+        VendorKeyScope.Request -> true
+    }
+}
+
+private const val OTHER_RATE = -1
+
+/** The camera's own AE fps ranges, fixed ones first, for the frame rate row. */
+private fun listedRates(camera: ProbedCamera?): String {
+    if (camera == null) return ""
+    val fixed = camera.fixedFrameRates
+    val ranges = camera.fpsRanges.filter { it.first != it.last }.map { "${it.first}–${it.last}" }.distinct()
+    return when {
+        fixed.isEmpty() && ranges.isEmpty() -> "This camera lists no frame rates."
+        fixed.isEmpty() -> "This camera lists only ranges (${ranges.joinToString(", ")}); a fixed rate needs Other."
+        else -> "This camera lists fixed ${fixed.joinToString(", ")} fps" +
+            (if (ranges.isEmpty()) "." else " and ranges ${ranges.joinToString(", ")}.")
+    }
+}
+
+/** What unlocks a vendor sensor mode: an operating mode, a fixed frame rate and vendor keys. */
 @Composable
-internal fun RequestsAndKeysGroup(lens: LensProfile, onEditKey: (Int?) -> Unit, onChange: (LensProfile) -> Unit) {
+internal fun VendorModeGroup(lens: LensProfile, camera: ProbedCamera?, onEditKey: (Int?) -> Unit, onChange: (LensProfile) -> Unit) {
     val keys = lens.vendorKeys
+    val session = lens.session
+    val rates = camera?.fixedFrameRates.orEmpty()
+    // "Other" shows a number field for a rate the camera doesn't list (vendor modes often run one).
+    var otherRate by remember { mutableStateOf(session.frameRate != 0 && session.frameRate !in rates) }
     SettingsGroup(
-        title = "Requests and keys",
-        description = "Session keys are set when each capture session starts; request keys on every request " +
-            "(preview, stills, multiframe and video). If an enabled key can't be applied the lens fails to open."
+        title = "Vendor mode",
+        description = "For vendor sensor modes. Session keys are set when each capture session starts, request keys on " +
+            "every request. If an enabled key can't be applied the lens fails to open."
     ) {
+        FieldColumn {
+            CaptureNumberField("Operating mode", session.opMode, Modifier.testTag(lensEditorTag("op_mode")),
+                if (session.opMode != 0) "Runs this lens on Java Camera2. Vendor modes are usually 32768 (0x8000) and above, in decimal"
+                else "0 = normal. Vendor modes are usually 32768 (0x8000) and above, in decimal; setting one runs the lens on Java Camera2") {
+                onChange(lens.session { copy(opMode = it) })
+            }
+        }
+        SettingDivider()
         DropdownChoiceRow(
-            title = "Request defaults",
-            selected = lens.request.defaults,
-            values = REQUEST_DEFAULTS,
-            label = { if (it == "minimal") "Minimal" else "App defaults" },
-            supportingText = "Minimal leaves distortion and hot-pixel modes, face detection and the AE priority tag to the camera",
-            onSelect = { onChange(lens.copy(request = lens.request.copy(defaults = it))) }
+            title = "Frame rate",
+            selected = if (otherRate) OTHER_RATE else session.frameRate,
+            values = listOf(0) + rates + OTHER_RATE,
+            label = { when (it) { 0 -> "Automatic"; OTHER_RATE -> "Other"; else -> "$it fps" } },
+            supportingText = "Automatic: the app picks the rate (up to 30 fps, slower for long shutters). A fixed rate " +
+                "pins the session and every request to it, e.g. 60 for a vendor HDR mode. " + listedRates(camera),
+            onSelect = { v ->
+                otherRate = v == OTHER_RATE
+                if (v != OTHER_RATE) onChange(lens.session { copy(frameRate = v) })
+            }
         )
+        if (otherRate) {
+            CaptureNumberField("Frame rate (fps)", session.frameRate, Modifier.testTag(lensEditorTag("frame_rate")),
+                "1 to $MAX_FRAME_RATE. A rate the camera doesn't list works only if the vendor mode accepts it") {
+                onChange(lens.session { copy(frameRate = it) })
+            }
+        }
         keys.forEachIndexed { index, key ->
             SettingDivider()
             SettingsRow(
@@ -148,7 +195,7 @@ internal fun RequestsAndKeysGroup(lens: LensProfile, onEditKey: (Int?) -> Unit, 
             )
         }
         SettingDivider()
-        SettingsRow(title = "Add key", leadingIcon = Icons.Rounded.Add, onClick = { onEditKey(null) })
+        SettingsRow(title = "Add key", leadingIcon = Icons.Rounded.Add, testTag = lensEditorTag("add_key"), onClick = { onEditKey(null) })
     }
 }
 
@@ -157,13 +204,16 @@ internal fun VendorKeyDialog(
     initial: VendorKey?,
     cameraId: String,
     physicalCameraId: String,
+    scopes: List<VendorKeyScope>,
     onDismiss: () -> Unit,
     onDelete: (() -> Unit)?,
     onSave: (VendorKey) -> Unit
 ) {
     val hardware = LocalLensHardware.current
     var tag by remember { mutableStateOf(initial?.tag.orEmpty()) }
-    var scope by remember { mutableStateOf(initial?.scope ?: VendorKeyScope.Session) }
+    var scope by remember { mutableStateOf(initial?.scope ?: scopes.first()) }
+    // A key keeps its scope even where the lens no longer offers it, so editing never changes it silently.
+    val offered = VendorKeyScope.entries.filter { it in scopes || it == initial?.scope }
     var type by remember { mutableStateOf(initial?.type ?: VendorKeyType.Int32) }
     var valuesText by remember { mutableStateOf(initial?.let { formatVendorKeyValues(it.values, it.type) }.orEmpty()) }
     var enabled by remember { mutableStateOf(initial?.enabled ?: true) }
@@ -199,14 +249,14 @@ internal fun VendorKeyDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Text("Applied", style = MaterialTheme.typography.labelLarge)
-                CompactChoiceRow(VendorKeyScope.entries, scope, { it.label }) { scope = it }
+                CompactChoiceRow(offered, scope, { it.label }) { scope = it }
                 Text(
                     when (scope) {
                         VendorKeyScope.Session -> "Set when each capture session starts (photo or video)."
                         VendorKeyScope.Request -> "Set on every capture request (preview, stills, multiframe, video)."
-                        VendorKeyScope.Still -> "Set only on full-size still requests (capture-stream lenses)."
+                        VendorKeyScope.Still -> "Set only on full-size still requests (High-res photos)."
                         VendorKeyScope.Decision ->
-                            "Set only on one low-ISO viewfinder frame sent before full-size stills (capture-stream lenses)."
+                            "Set only on one low-ISO viewfinder frame sent before full-size stills (High-res photos)."
                         VendorKeyScope.SessionAndRequest ->
                             "The same value in the session parameters and on every capture request."
                     },
@@ -252,7 +302,7 @@ internal fun VendorKeyDialog(
             onPick = { picked ->
                 tag = picked.reference
                 picked.type?.let { type = it }
-                scope = if (picked.sessionKey) VendorKeyScope.Session else VendorKeyScope.Request
+                scope = if (picked.sessionKey && VendorKeyScope.Session in offered) VendorKeyScope.Session else VendorKeyScope.Request
                 if (valuesText.isBlank() && picked.defaults.isNotEmpty()) {
                     valuesText = formatVendorKeyValues(picked.defaults, picked.type ?: type)
                 }

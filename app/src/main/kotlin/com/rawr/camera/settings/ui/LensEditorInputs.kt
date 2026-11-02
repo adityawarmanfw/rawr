@@ -59,23 +59,23 @@ import com.rawr.camera.settings.architecture.NavigateBack
 import com.rawr.camera.settings.architecture.SetLensProfiles
 import com.rawr.camera.settings.architecture.SettingsDispatch
 import com.rawr.camera.settings.model.LENS_NAME_MAX_LENGTH
-import com.rawr.camera.settings.model.CFA_BLOCKS
-import com.rawr.camera.settings.model.CFA_LIVE_QUALITIES
-import com.rawr.camera.settings.model.CFA_ORDERS
-import com.rawr.camera.settings.model.CFA_PHOTO_QUALITIES
-import com.rawr.camera.settings.model.BACKEND_CHOICES
-import com.rawr.camera.settings.model.CAMERA_QUIRKS
+import com.rawr.camera.settings.model.SENSOR_LAYOUT_BLOCKS
+import com.rawr.camera.settings.model.LIVE_REMOSAIC_QUALITIES
+import com.rawr.camera.settings.model.COLOUR_ORDERS
+import com.rawr.camera.settings.model.PHOTO_REMOSAIC_QUALITIES
+import com.rawr.camera.settings.model.CAMERA_API_CHOICES
+import com.rawr.camera.settings.model.CAMERA_WORKAROUNDS
 import com.rawr.camera.settings.model.COMPANION_FALLBACKS
 import com.rawr.camera.settings.model.AuxJpegSettings
-import com.rawr.camera.settings.model.CaptureStreamSettings
+import com.rawr.camera.settings.model.PhotoStreamSettings
 import com.rawr.camera.settings.model.CompanionMode
 import com.rawr.camera.settings.model.LensCamera
-import com.rawr.camera.settings.model.LensCfa
+import com.rawr.camera.settings.model.LensSensorLayout
 import com.rawr.camera.settings.model.LensOutputSize
 import com.rawr.camera.settings.model.LensSession
 import com.rawr.camera.settings.model.StillSequence
 import com.rawr.camera.settings.model.stillSequence
-import com.rawr.camera.settings.model.isReaderUsage
+import com.rawr.camera.settings.model.isBufferUsage
 import com.rawr.camera.settings.model.EXTENDED_ISO_MAX
 import com.rawr.camera.settings.model.EXTENDED_SHUTTER_MAX_NS
 import com.rawr.camera.settings.model.GATE_HOLDS
@@ -169,7 +169,7 @@ internal fun UsageField(
     onChange: (String?) -> Unit
 ) {
     var text by remember { mutableStateOf(value.orEmpty()) }
-    val bad = text.isNotEmpty() && !isReaderUsage(text)
+    val bad = text.isNotEmpty() && !isBufferUsage(text)
     SettingsRow(
         title = label,
         supportingText = if (bad) "Not a usage. $hint" else hint,

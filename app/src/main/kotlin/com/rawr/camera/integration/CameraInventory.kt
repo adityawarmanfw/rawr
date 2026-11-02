@@ -53,8 +53,13 @@ data class ProbedCamera(
     val rawStreams: List<ProbedRawStream>,
     val blackLevels: List<Int>,
     val whiteLevel: Int,
-    val sessionKeyTags: Set<Long>
+    val sessionKeyTags: Set<Long>,
+    /** AE target fps ranges the camera lists, as min to max. */
+    val fpsRanges: List<IntRange> = emptyList()
 ) {
+    /** Frame rates the camera lists as a fixed range (min = max), ascending. */
+    val fixedFrameRates: List<Int> get() = fpsRanges.filter { it.first == it.last }.map { it.first }.distinct().sorted()
+
     /** Id to open: the logical parent for physical sub-cameras. */
     val openId: String get() = parentId ?: id
     val physicalId: String get() = if (parentId != null) id else ""
@@ -140,7 +145,9 @@ object CameraInventoryParser {
                 },
                 blackLevels = c.optJSONArray("black").doubles().map { it.toInt() },
                 whiteLevel = c.optInt("white"),
-                sessionKeyTags = c.optJSONArray("sessionKeys").doubles().map { it.toLong() }.toSet()
+                sessionKeyTags = c.optJSONArray("sessionKeys").doubles().map { it.toLong() }.toSet(),
+                fpsRanges = c.optJSONArray("fpsRanges").doubles().map { it.toInt() }.chunked(2)
+                    .filter { it.size == 2 && it[0] > 0 && it[1] >= it[0] }.map { it[0]..it[1] }
             )
         }
         CameraInventory(cameras, root.optString("error").ifEmpty { null })

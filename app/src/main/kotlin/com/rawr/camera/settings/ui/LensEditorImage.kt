@@ -59,23 +59,23 @@ import com.rawr.camera.settings.architecture.NavigateBack
 import com.rawr.camera.settings.architecture.SetLensProfiles
 import com.rawr.camera.settings.architecture.SettingsDispatch
 import com.rawr.camera.settings.model.LENS_NAME_MAX_LENGTH
-import com.rawr.camera.settings.model.CFA_BLOCKS
-import com.rawr.camera.settings.model.CFA_LIVE_QUALITIES
-import com.rawr.camera.settings.model.CFA_ORDERS
-import com.rawr.camera.settings.model.CFA_PHOTO_QUALITIES
-import com.rawr.camera.settings.model.BACKEND_CHOICES
-import com.rawr.camera.settings.model.CAMERA_QUIRKS
+import com.rawr.camera.settings.model.SENSOR_LAYOUT_BLOCKS
+import com.rawr.camera.settings.model.LIVE_REMOSAIC_QUALITIES
+import com.rawr.camera.settings.model.COLOUR_ORDERS
+import com.rawr.camera.settings.model.PHOTO_REMOSAIC_QUALITIES
+import com.rawr.camera.settings.model.CAMERA_API_CHOICES
+import com.rawr.camera.settings.model.CAMERA_WORKAROUNDS
 import com.rawr.camera.settings.model.COMPANION_FALLBACKS
 import com.rawr.camera.settings.model.AuxJpegSettings
-import com.rawr.camera.settings.model.CaptureStreamSettings
+import com.rawr.camera.settings.model.PhotoStreamSettings
 import com.rawr.camera.settings.model.CompanionMode
 import com.rawr.camera.settings.model.LensCamera
-import com.rawr.camera.settings.model.LensCfa
+import com.rawr.camera.settings.model.LensSensorLayout
 import com.rawr.camera.settings.model.LensOutputSize
 import com.rawr.camera.settings.model.LensSession
 import com.rawr.camera.settings.model.StillSequence
 import com.rawr.camera.settings.model.stillSequence
-import com.rawr.camera.settings.model.isReaderUsage
+import com.rawr.camera.settings.model.isBufferUsage
 import com.rawr.camera.settings.model.EXTENDED_ISO_MAX
 import com.rawr.camera.settings.model.EXTENDED_SHUTTER_MAX_NS
 import com.rawr.camera.settings.model.GATE_HOLDS
@@ -122,12 +122,18 @@ internal fun LevelsGroup(
     camera: ProbedCamera?,
     onChange: (LensLevels) -> Unit
 ) {
+    SettingsGroup(title = title, description = description) { LevelsRows(levels, camera, "levels", onChange) }
+}
+
+/** Dynamic/static choice and the static values; shared by the lens, photo-stream and viewfinder levels. */
+@Composable
+internal fun LevelsRows(levels: LensLevels, camera: ProbedCamera?, tagPrefix: String, onChange: (LensLevels) -> Unit) {
     val cameraLevels = camera?.let { c ->
         c.blackLevels.takeIf { it.size == 4 && c.whiteLevel > 0 }?.let { black ->
             LensLevels(true, black.map { it.toFloat() }, c.whiteLevel.toFloat())
         }
     }
-    SettingsGroup(title = title, description = description) {
+    Column(Modifier.fillMaxWidth().testTag(lensEditorTag(tagPrefix))) {
         CompactChoiceRow(listOf(false, true), levels.isStatic, { if (it) "Static" else "Dynamic" }) { static ->
             onChange(
                 when {
@@ -196,7 +202,7 @@ internal fun formatLevel(value: Float): String =
     if (value == Math.round(value).toFloat()) Math.round(value).toString() else value.toString()
 
 @Composable
-internal fun SensorLayoutGroup(cfa: LensCfa, onChange: (LensCfa) -> Unit) {
+internal fun SensorLayoutGroup(layout: LensSensorLayout, onChange: (LensSensorLayout) -> Unit) {
     SettingsGroup(
         title = "Sensor layout",
         description = "For RAW that comes out as coloured blocks or with wrong colours: some sensor modes " +
@@ -204,46 +210,46 @@ internal fun SensorLayoutGroup(cfa: LensCfa, onChange: (LensCfa) -> Unit) {
             "remosaiced to Bayer at full resolution. Colour order fixes swapped red/blue or magenta-green " +
             "casts; for quad and 4x4 it is the order of the blocks."
     ) {
-        CompactChoiceRow(CFA_BLOCKS, cfa.block, ::cfaBlockLabel) { onChange(cfa.copy(block = it)) }
+        CompactChoiceRow(SENSOR_LAYOUT_BLOCKS, layout.block, ::sensorLayoutBlockLabel) { onChange(layout.copy(block = it)) }
         SettingDivider()
         DropdownChoiceRow(
             title = "Colour order",
-            selected = cfa.order,
-            values = listOf<String?>(null) + CFA_ORDERS,
+            selected = layout.colourOrder,
+            values = listOf<String?>(null) + COLOUR_ORDERS,
             label = { it ?: "Camera's" },
-            onSelect = { onChange(cfa.copy(order = it)) }
+            onSelect = { onChange(layout.copy(colourOrder = it)) }
         )
-        if (cfa.block > 1) {
+        if (layout.block > 1) {
             SettingDivider()
             DropdownChoiceRow(
                 title = "Live remosaic",
-                selected = cfa.live,
-                values = CFA_LIVE_QUALITIES,
-                label = ::cfaQualityLabel,
+                selected = layout.liveRemosaic,
+                values = LIVE_REMOSAIC_QUALITIES,
+                label = ::remosaicQualityLabel,
                 supportingText = "Viewfinder, video and merged photos (their frames come from the live stream). " +
                     "Fast skips green interpolation: about 20% cheaper, softer colour detail.",
-                onSelect = { onChange(cfa.copy(live = it)) }
+                onSelect = { onChange(layout.copy(liveRemosaic = it)) }
             )
             SettingDivider()
             DropdownChoiceRow(
                 title = "Photo remosaic",
-                selected = cfa.photo,
-                values = CFA_PHOTO_QUALITIES,
-                label = ::cfaQualityLabel,
+                selected = layout.photoRemosaic,
+                values = PHOTO_REMOSAIC_QUALITIES,
+                label = ::remosaicQualityLabel,
                 supportingText = "Single photos. High searches wider for clean edges; adds ~0.15 s per photo.",
-                onSelect = { onChange(cfa.copy(photo = it)) }
+                onSelect = { onChange(layout.copy(photoRemosaic = it)) }
             )
         }
     }
 }
 
-internal fun cfaQualityLabel(quality: String): String = when (quality) {
+internal fun remosaicQualityLabel(quality: String): String = when (quality) {
     "fast" -> "Fast"
     "high" -> "High"
     else -> "Standard"
 }
 
-internal fun cfaBlockLabel(block: Int): String = when (block) {
+internal fun sensorLayoutBlockLabel(block: Int): String = when (block) {
     2 -> "Quad 2×2"
     4 -> "4×4"
     else -> "Bayer"

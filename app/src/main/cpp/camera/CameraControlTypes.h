@@ -88,8 +88,8 @@ struct CameraControlCapabilities {
     // Every request must carry CONTROL_AE_TARGET_FPS_RANGE, even with AE off: the
     // vivo X300 Ultra provider crashes on a full-size mode request without it.
     bool targetFpsRangeRequired = false;
-    // Lens profile's fixed AE target fps (LensRoute::fixedFps); 0 = the app's cadence.
-    int32_t fixedFps = 0;
+    // Lens profile's fixed AE target fps (LensRoute::frameRate); 0 = the app's cadence.
+    int32_t frameRate = 0;
     // Lens profile's request defaults are minimal (LensRoute::requestDefaults): the face-detect and AE priority
     // entries are left to the template.
     bool minimalRequestDefaults = false;
@@ -142,8 +142,8 @@ struct CameraControlCapabilities {
     // dim scene crashes the X300 Ultra camera provider (vivo's camera never
     // makes it either).
     bool tapAfHoldsUntilNextTap = false;
-    // Requests without a tap region keep the template's own AF/AE regions (CameraQuirks::keepRegions).
-    bool keepRegions = false;
+    // Requests without a tap region keep the template's own AF/AE regions (CameraWorkarounds::keepTemplateRegions).
+    bool keepTemplateRegions = false;
     // Continuous AF follows the first detected face. Off on vivo-gated routes:
     // moving or clearing the region there crashes the same AF publisher.
     bool faceAfSteering = true;

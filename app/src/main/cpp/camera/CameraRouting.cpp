@@ -56,11 +56,11 @@ ProfileMatch matchBuiltInProfile(const PropertyReader& property) {
     const std::string model = property("ro.product.model");
     for (const auto& p : builtInProfiles())
         if (!model.empty() && contains(p.match.models, model))
-            return {p.profile.id, "model", contains(p.match.verifiedModels, model), p.quirks};
+            return {p.profile.id, "model", contains(p.match.verifiedModels, model)};
     for (const auto& p : builtInProfiles())
         for (const auto& [name, prefix] : p.match.propertyPrefixes)
             if (property(name).rfind(prefix, 0) == 0)
-                return {p.profile.id, "property:" + name, contains(p.match.verifiedModels, model), p.quirks};
+                return {p.profile.id, "property:" + name, contains(p.match.verifiedModels, model)};
     return {};
 }
 

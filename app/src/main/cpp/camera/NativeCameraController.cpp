@@ -375,8 +375,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
     // Exposure start of the burst's previous frame (MONOTONIC ms; -1 none).
     std::atomic<int64_t> longExposureLastStartMs{-1};
     std::atomic<int32_t> longExposureGapSlot{0};
-    int64_t burstGapEstMs(bool captureStream) const {
-        return longExposureGapEstMs[captureStream ? 1 : 0].load(std::memory_order_relaxed);
+    int64_t burstGapEstMs(bool photoStream) const {
+        return longExposureGapEstMs[photoStream ? 1 : 0].load(std::memory_order_relaxed);
     }
     std::atomic<int> lastLongExposureHonored{-1};  // -1 none yet, 0 shortened, 1 honored
     std::chrono::steady_clock::time_point longExposureSubmitted{};
@@ -528,7 +528,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
             if (!valid()) return abandon();
             if (fullSizeDecisionRepeating) (void)deviceSession.stopRepeating([this](const std::string& line) { diag(line); });
         }
-        if (deviceSession.stopRepeatingForStill() && !fullSizeDecisionRepeating) {
+        if (deviceSession.stopViewfinderForPhotos() && !fullSizeDecisionRepeating) {
             if (!deviceSession.stopRepeating([this](const std::string& line) { diag(line); })) return abandon();
             fullSizeDecisionRepeating = true;  // Existing completion/abandon path restores the viewfinder.
         }
@@ -713,7 +713,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         if (const auto route = selectedRouteLocked()) {
             std::ostringstream keys;
             keys.precision(17);
-            for (const auto& setting : route->keys) {
+            for (const auto& setting : route->vendorKeys) {
                 if (!setting.enabled || !keyAppliesIn(setting.scope, CameraKeySetting::Scope::Session)) continue;
                 keys << '|' << setting.tag << '=';
                 for (std::size_t i = 0; i < setting.values.size(); ++i) keys << (i ? "," : "") << setting.values[i];
@@ -862,9 +862,9 @@ struct NativeCameraController::Impl final : CameraEventSink {
         focusControls.reset(control);
         starting = true;
         LensRoute requestedRoute = *requested;
-        if (const auto outcome = applyBackendOverride(requestedRoute, systemProperty("debug.rawr.camera_backend"));
+        if (const auto outcome = applyCameraApiOverride(requestedRoute, systemProperty("debug.rawr.camera_api"));
             !outcome.empty())
-            diag("CAMERA_BACKEND_OVERRIDE lens=" + requestedRoute.lensId + " " + outcome);
+            diag("CAMERA_API_OVERRIDE lens=" + requestedRoute.lensId + " " + outcome);
         const std::optional<LensRoute> selected =
             deviceSession.select(requestedRoute, [this](const std::string& line) { diag(line); });
         if (!selected) {
@@ -884,9 +884,9 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // Vendor full-size modes: the HAL's S/I priority AE crashes the camera
         // provider once it raises gain (vivo X300 Ultra 50 MP); only rawr AE
         // may own S/I there.
-        const CameraQuirks quirks = effectiveQuirks(route, builtInMatch.quirks);
-        halShutterPriority = control.capabilities.shutterPrioritySupported && !quirks.noHalPriorityAe;
-        halIsoPriority = control.capabilities.isoPrioritySupported && !quirks.noHalPriorityAe;
+        const CameraWorkarounds workarounds = effectiveWorkarounds(route);
+        halShutterPriority = control.capabilities.shutterPrioritySupported && !workarounds.appPriorityAe;
+        halIsoPriority = control.capabilities.isoPrioritySupported && !workarounds.appPriorityAe;
         applyAePriorityPreferenceLocked();
         publishProfileLocked();
         control.focusRequestId = previousControl.focusRequestId;
@@ -954,18 +954,18 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // on a request without a target fps range (AE off). Continuous AF
         // without regions and manual focus stay.
         // Device safety survives imported/user-edited lens profiles.
-        control.capabilities.tapAfHoldsUntilNextTap = quirks.afTapHold;
-        control.capabilities.keepRegions = quirks.keepRegions;
+        control.capabilities.tapAfHoldsUntilNextTap = workarounds.holdTapFocus;
+        control.capabilities.keepTemplateRegions = workarounds.keepTemplateRegions;
         control.capabilities.faceAfSteering = !control.capabilities.tapAfHoldsUntilNextTap;
         control.capabilities.dngOnly =
-            route.captureStream && uint64_t(route.captureStream->width) * route.captureStream->height > kDngOnlyPixels;
-        control.capabilities.fixedFps = route.fixedFps;
+            route.photoStream && uint64_t(route.photoStream->width) * route.photoStream->height > kDngOnlyPixels;
+        control.capabilities.frameRate = route.frameRate;
         control.capabilities.minimalRequestDefaults = route.requestDefaults == RequestDefaults::Minimal;
-        if (quirks.noTapAf) {
+        if (workarounds.noTapFocus) {
             control.capabilities.tapAfSupported = false;
             control.capabilities.maxAfRegions = 0;
         }
-        if (quirks.requireFpsRange) control.capabilities.targetFpsRangeRequired = true;
+        if (workarounds.alwaysSendFrameRate) control.capabilities.targetFpsRangeRequired = true;
         diag(describeCameraControlCapabilities(control));
 
         diag(metadata::describe(*deviceSession.cameraContext()));
@@ -982,16 +982,16 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // The companion the unverified-device rule adds may be dropped by the
         // start ladder; a forced one (override, capture-stream route) may not.
         const bool companionByRule = !route.disableCompanion && companionOverride != "0" &&
-                                     !builtInMatch.verified && !quirks.noAutoCompanion;
-        const bool ladderEligible = CameraStartLadder::eligible(companionByRule, route.captureStream.has_value(),
+                                     !builtInMatch.verified && !workarounds.noAutoCompanion;
+        const bool ladderEligible = CameraStartLadder::eligible(companionByRule, route.photoStream.has_value(),
                                                                 route.companionSize.has_value(), companionOverride == "1");
         const std::string ladderKey = route.lensId + '|' + describeRoute(route);
         const int64_t viewfinderExposureNs =
             control.exposureMode == ExposureControlMode::Auto ? 0 : control.requestedExposureTimeNs;
-        if (effectiveBackend(route) == BackendChoice::Java && !javaCameraBackendInstalled()) {
+        if (effectiveCameraApi(route) == CameraApi::Java && !javaCameraBackendInstalled()) {
             // Operating mode and stream use case exist only on the Java API. Fail visibly; running the lens without
             // them would give a different mode with no explanation.
-            diag("CAMERA_BACKEND lens=" + route.lensId + " backend=java available=0 reason=not_installed");
+            diag("CAMERA_API lens=" + route.lensId + " cameraApi=java available=0 reason=not_installed");
             control.capabilities.lensUnavailable = true;
             rollbackCameraStartLocked(lock, "backend_unavailable");
             return;
@@ -1040,10 +1040,10 @@ struct NativeCameraController::Impl final : CameraEventSink {
             if (configured && callbacks.createRawWindow)
                 window = callbacks.createRawWindow(setupGeneration, route.stream.width, route.stream.height,
                                                    route.stream.format);
-            if (configured && window && route.captureStream && callbacks.createCaptureWindow)
-                captureWindow = callbacks.createCaptureWindow(setupGeneration, route.captureStream->width,
-                                                              route.captureStream->height,
-                                                              route.captureStream->format);
+            if (configured && window && route.photoStream && callbacks.createCaptureWindow)
+                captureWindow = callbacks.createCaptureWindow(setupGeneration, route.photoStream->width,
+                                                              route.photoStream->height,
+                                                              route.photoStream->format);
         } catch (...) {
             configured = false;
         }
@@ -1055,7 +1055,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
             lock.lock();
             return;
         }
-        if (!configured || !window || (route.captureStream && !captureWindow)) {
+        if (!configured || !window || (route.photoStream && !captureWindow)) {
             // Not handed to the device session yet: nothing else owns them.
             lock.unlock();
             if (configured && window && callbacks.destroyRawWindow) callbacks.destroyRawWindow(setupGeneration);
@@ -1068,8 +1068,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
         }
         deviceSession.setRawWindow(window);
         deviceSession.setCaptureWindow(captureWindow);
-        fullSizeBurstLimit = route.captureBurst;
-        fullSizeBurstSequential = route.captureBurstSequential;
+        fullSizeBurstLimit = route.mergeFrameLimit;
+        fullSizeBurstSequential = route.mergeFramesOneByOne;
         const auto stillCurrent = [&] {
             return active && !shutDown && setupGeneration == deviceSession.generation();
         };

@@ -22,9 +22,7 @@ std::string describeAll() {
         const auto parsed = parseBuiltInProfile(source, &error);
         if (!parsed) std::cerr << "built-in profile rejected: " << error << '\n';
         assert(parsed);
-        out += "# profile " + parsed->profile.id + " quirks=";
-        for (const auto& q : quirkNames(parsed->quirks)) out += q + ' ';
-        out += '\n';
+        out += "# profile " + parsed->profile.id + '\n';
         for (const auto& lens : parsed->profile.lenses) out += testing::describeRouteForGolden(lens) + '\n';
         // The profile must also survive its own serialization unchanged.
         const auto reparsed = parseCameraProfile(serializeCameraProfile(parsed->profile), &error);

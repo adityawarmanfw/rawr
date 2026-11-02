@@ -21,15 +21,15 @@ void testFullSizeRecipeJson() {
     const auto parsed = parseCameraProfile(json, &error);
     assert(parsed && error.empty());
     const auto& r = parsed->lenses[0];
-    assert(r.readerUsage && *r.readerUsage == 0x100003u);
-    assert(r.captureReaderUsage && *r.captureReaderUsage == kReaderUsageGpuDataBuffer);
-    assert(r.stillTemplate == true && r.fixedFps == 24);
-    assert(r.companionPrivate && !r.companionTargeted && r.startupDelayMs == 500 && r.stopRepeatingForStill);
+    assert(r.rawBufferUsage && *r.rawBufferUsage == 0x100003u);
+    assert(r.photoBufferUsage && *r.photoBufferUsage == kReaderUsageGpuDataBuffer);
+    assert(r.stillTemplate == true && r.frameRate == 24);
+    assert(r.companionPrivate && !r.companionTargeted && r.startupDelayMs == 500 && r.stopViewfinderForPhotos);
     assert(r.companionSize && r.companionSize->first == 640 && r.companionSize->second == 480);
     assert(r.auxJpegSize && r.auxJpegSize->first == 8160 && r.auxJpegSize->second == 6144);
     const auto again = serializeCameraProfile(*parsed);
     assert(serializeCameraProfile(*parseCameraProfile(again)) == again);
-    assert(again.find(R"("reader":{"usage":"0x100003"})") != std::string::npos);
+    assert(again.find(R"("buffers":{"usage":"0x100003"})") != std::string::npos);
 
     for (const auto* bad : {"0x", "0x-1", "0x 1", "0x10000000000000000"}) {
         assert(!parseCameraProfile(std::string(R"({"lenses":[{"id":"a","cameraId":"0","readerUsage":")") + bad + R"("}]})"));
@@ -41,8 +41,8 @@ void testFullSizeRecipeJson() {
     assert(error.find("not a profile field") != std::string::npos);
     // Defaults keep today's behaviour.
     const auto plain = parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0"}]})");
-    assert(plain && !plain->lenses[0].stillTemplate && plain->lenses[0].fixedFps == 0);
-    assert(!plain->lenses[0].companionSize && !plain->lenses[0].auxJpegSize && !plain->lenses[0].captureReaderUsage);
+    assert(plain && !plain->lenses[0].stillTemplate && plain->lenses[0].frameRate == 0);
+    assert(!plain->lenses[0].companionSize && !plain->lenses[0].auxJpegSize && !plain->lenses[0].photoBufferUsage);
     assert(!plain->lenses[0].disableCompanion);
 
     assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","template":"burst"}]})", &error));
@@ -76,7 +76,7 @@ void testCompanionOptOut() {
     assert(requiresStillExposureGuard(legacy));
     assert(!CameraStartLadder::eligible(true, false, true, false));
     legacy.companionSize.reset();
-    legacy.captureStream.reset();
+    legacy.photoStream.reset();
     assert(!companionStreamEnabled(legacy, false, false));
     assert(companionStreamEnabled(legacy, false, true));
     assert(companionStreamEnabled(legacy, true, false));
@@ -125,7 +125,7 @@ int main(int argc, char** argv) {
     assert(staticLevelsForStream(route, false)->blackRggb[0] == 512);
     assert(!staticLevelsForStream(route, true));
     auto inherited = route;
-    inherited.captureLevels.reset();
+    inherited.photoLevels.reset();
     assert(staticLevelsForStream(inherited, true)->white == 1023);
     const auto encoded = serializeCameraProfile(*levels);
     assert(serializeCameraProfile(*parseCameraProfile(encoded)) == encoded);

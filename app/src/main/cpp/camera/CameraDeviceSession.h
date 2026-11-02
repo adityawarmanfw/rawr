@@ -51,9 +51,9 @@ class CameraDeviceSession final {
         rawWindow_ = window;
         readerGeneration_ = generation_;
     }
-    // Window of LensRoute::captureStream: a session output no repeating request targets.
+    // Window of LensRoute::photoStream: a session output no repeating request targets.
     void setCaptureWindow(ANativeWindow* window) noexcept { captureWindow_ = window; }
-    bool stopRepeatingForStill() const noexcept { return stopRepeatingForStill_; }
+    bool stopViewfinderForPhotos() const noexcept { return stopViewfinderForPhotos_; }
     bool hasCaptureStream() const noexcept { return captureConfigured_; }
     // Burst of full-size stills (one per exposure, tagged tagId): copies of the
     // repeating request that also fill the capture stream, with STILL_CAPTURE
@@ -79,7 +79,7 @@ class CameraDeviceSession final {
     bool hasSession() const noexcept { return session_ != nullptr; }
     CameraRequest* request() const noexcept { return request_.get(); }
     CameraSessionDriver* session() const noexcept { return session_.get(); }
-    // The camera API of the open device ("ndk" or "java").
+    // The camera API of the open device ("native" or "java").
     const char* backendName() const noexcept { return device_ ? device_->backendName() : "none"; }
     CameraSessionCallbackContext* callbackContext() const noexcept { return sessionContext_; }
     uint64_t generation() const noexcept { return generation_; }
@@ -141,7 +141,7 @@ class CameraDeviceSession final {
     bool companionDetachable_ = false;
     bool profileCompanionTargeted_ = true;
     bool captureStillTemplate_ = true;
-    bool stopRepeatingForStill_ = false;
+    bool stopViewfinderForPhotos_ = false;
     AImageReader* auxJpegReader_ = nullptr;
     bool auxJpegConfigured_ = false;
     ACameraMetadata* characteristics_ = nullptr;

@@ -10,7 +10,7 @@ namespace rawrcam::camera {
 // JSON form of a camera profile, shared with the app's lens settings (schema 2, docs/camera-recipes.md):
 // {"id":"user","schema":2,"lenses":[{"id":"35","camera":{"id":"3","physical":""},
 //   "streams":{"raw":{"format":"RAW16","width":4080,"height":3064}},
-//   "keys":[{"tag":"vivo.control.forceSensorMode","type":"int32","scope":"session","values":[31],"enabled":true}],
+//   "vendorKeys":[{"tag":"vivo.control.forceSensorMode","type":"int32","scope":"session","values":[31],"enabled":true}],
 //   "image":{"levels":{"static":true,"black":[64,64,64,64],"white":1023},
 //            "exposure":{"extended":true,"isoMax":12800,"shutterMaxNs":25000000000}}}]}
 // Writes schema 2. Reads schema 2, and schema 1 (no "schema" field) by upgrading each lens first.

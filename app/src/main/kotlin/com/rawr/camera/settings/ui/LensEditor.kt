@@ -59,23 +59,23 @@ import com.rawr.camera.settings.architecture.NavigateBack
 import com.rawr.camera.settings.architecture.SetLensProfiles
 import com.rawr.camera.settings.architecture.SettingsDispatch
 import com.rawr.camera.settings.model.LENS_NAME_MAX_LENGTH
-import com.rawr.camera.settings.model.CFA_BLOCKS
-import com.rawr.camera.settings.model.CFA_LIVE_QUALITIES
-import com.rawr.camera.settings.model.CFA_ORDERS
-import com.rawr.camera.settings.model.CFA_PHOTO_QUALITIES
-import com.rawr.camera.settings.model.BACKEND_CHOICES
-import com.rawr.camera.settings.model.CAMERA_QUIRKS
+import com.rawr.camera.settings.model.SENSOR_LAYOUT_BLOCKS
+import com.rawr.camera.settings.model.LIVE_REMOSAIC_QUALITIES
+import com.rawr.camera.settings.model.COLOUR_ORDERS
+import com.rawr.camera.settings.model.PHOTO_REMOSAIC_QUALITIES
+import com.rawr.camera.settings.model.CAMERA_API_CHOICES
+import com.rawr.camera.settings.model.CAMERA_WORKAROUNDS
 import com.rawr.camera.settings.model.COMPANION_FALLBACKS
 import com.rawr.camera.settings.model.AuxJpegSettings
-import com.rawr.camera.settings.model.CaptureStreamSettings
+import com.rawr.camera.settings.model.PhotoStreamSettings
 import com.rawr.camera.settings.model.CompanionMode
 import com.rawr.camera.settings.model.LensCamera
-import com.rawr.camera.settings.model.LensCfa
+import com.rawr.camera.settings.model.LensSensorLayout
 import com.rawr.camera.settings.model.LensOutputSize
 import com.rawr.camera.settings.model.LensSession
 import com.rawr.camera.settings.model.StillSequence
 import com.rawr.camera.settings.model.stillSequence
-import com.rawr.camera.settings.model.isReaderUsage
+import com.rawr.camera.settings.model.isBufferUsage
 import com.rawr.camera.settings.model.EXTENDED_ISO_MAX
 import com.rawr.camera.settings.model.EXTENDED_SHUTTER_MAX_NS
 import com.rawr.camera.settings.model.GATE_HOLDS
@@ -154,6 +154,8 @@ internal fun LensEditorScreen(state: SettingsUiState, lensName: String?, dispatc
     var editKey by remember { mutableStateOf<Int?>(null) }
     var confirmDiscard by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
+    // The Advanced page opens inside the editor so it edits the same unsaved draft.
+    var showAdvanced by remember { mutableStateOf(false) }
 
     val canSave = !importingDcp && problems.isEmpty() && (dirty || original == null)
     val saveAndLeave = {
@@ -164,10 +166,40 @@ internal fun LensEditorScreen(state: SettingsUiState, lensName: String?, dispatc
         if (dirty || importingDcp) confirmDiscard = true else dispatch.invoke(NavigateBack)
     }
     BackHandler(onBack = requestBack)
+    BackHandler(enabled = showAdvanced) { showAdvanced = false }
 
-    SettingsPageContainer(testTag = SettingsTestTags.sectionRoot("LensEditor")) {
-        // Sections follow the profile: lens and camera, streams, session, requests and keys, image.
-        SettingsGroup(title = "Lens and camera") {
+    if (showAdvanced) {
+        SettingsPageContainer(testTag = SettingsTestTags.sectionRoot("LensAdvanced")) {
+            SettingsGroup(
+                title = "Advanced · ${draft.name}",
+                description = "The app sets these by itself. Change them only to work around a camera; " +
+                    "Save on the lens page keeps them."
+            ) {
+                SettingsRow(
+                    title = "Reset to automatic",
+                    enabled = draft.advancedSummary().isNotEmpty(),
+                    testTag = lensEditorTag("advanced_reset"),
+                    onClick = { draft = draft.withAutomaticAdvanced() }
+                )
+            }
+            CompanionGroup(draft) { draft = it }
+            AuxJpegGroup(draft) { draft = it }
+            BuffersGroup(draft, camera) { draft = it }
+            UseCasesGroup(draft) { draft = it }
+            SessionAdvancedGroup(draft) { draft = it }
+            WorkaroundsGroup(draft) { draft = it }
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = SettingsRowHorizontalPadding),
+                horizontalArrangement = Arrangement.End
+            ) {
+                Button(onClick = { showAdvanced = false }, modifier = Modifier.testTag(lensEditorTag("advanced_done"))) {
+                    Text("Done")
+                }
+            }
+        }
+    } else SettingsPageContainer(testTag = SettingsTestTags.sectionRoot("LensEditor")) {
+        // Most used first; what the app sets by itself is on the Advanced page.
+        SettingsGroup(title = "Lens") {
             LensNameField(draft.name) { draft = draft.copy(name = it) }
             SettingDivider()
             SettingsSwitchRow(
@@ -183,14 +215,7 @@ internal fun LensEditorScreen(state: SettingsUiState, lensName: String?, dispatc
                 testTag = lensEditorTag("camera"),
                 onClick = { pickCamera = true }
             )
-        }
-        RawStreamGroup(draft, onPickStream = { pickStream = true }) { draft = it }
-        CaptureStreamGroup(draft) { draft = it }
-        CompanionGroup(draft) { draft = it }
-        AuxJpegGroup(draft) { draft = it }
-        SessionGroup(draft) { draft = it }
-        RequestsAndKeysGroup(draft, onEditKey = { editKey = it ?: -1 }) { draft = it }
-        SettingsGroup(title = "Image") {
+            SettingDivider()
             DropdownChoiceRow(
                 title = "Mirror",
                 selected = draft.image.mirror,
@@ -200,7 +225,19 @@ internal fun LensEditorScreen(state: SettingsUiState, lensName: String?, dispatc
                     "DNG files keep the sensor pixels and store the flip in their orientation.",
                 onSelect = { draft = draft.image { copy(mirror = it) } }
             )
-            SettingDivider()
+        }
+        CaptureGroup(draft, camera, onPickStream = { pickStream = true }) { draft = it }
+        ExtendedExposureGroup(draft.image.exposure) { draft = draft.image { copy(exposure = it) } }
+        VendorModeGroup(draft, camera, onEditKey = { editKey = it ?: -1 }) { draft = it }
+        LevelsGroup(
+            title = "Black & white levels",
+            description = "Dynamic uses the camera's own levels. Static overrides them on every frame, " +
+                "e.g. for vendor sensor modes with a different bit depth.",
+            levels = draft.image.levels,
+            camera = camera
+        ) { draft = draft.image { copy(levels = it) } }
+        SensorLayoutGroup(draft.image.sensorLayout) { draft = draft.image { copy(sensorLayout = it) } }
+        SettingsGroup(title = "Colour") {
             SettingsRow(
                 title = if (importingDcp) "Importing profile…" else "Import DCP file",
                 value = draft.image.dcp?.name ?: "Camera default",
@@ -223,15 +260,17 @@ internal fun LensEditorScreen(state: SettingsUiState, lensName: String?, dispatc
                     modifier = Modifier.padding(horizontal = SettingsRowHorizontalPadding, vertical = 12.dp))
             }
         }
-        LevelsGroup(
-            title = "Black & white levels",
-            description = "Dynamic uses the camera's own levels. Static overrides them on every frame, " +
-                "e.g. for vendor sensor modes with a different bit depth.",
-            levels = draft.image.levels,
-            camera = camera
-        ) { draft = draft.image { copy(levels = it) } }
-        SensorLayoutGroup(draft.image.cfa) { draft = draft.image { copy(cfa = it) } }
-        ExtendedExposureGroup(draft.image.exposure) { draft = draft.image { copy(exposure = it) } }
+        SettingsGroup(title = "Advanced") {
+            val changed = draft.advancedSummary()
+            SettingsRow(
+                title = "Advanced settings",
+                value = if (changed.isEmpty()) "All automatic" else changed.joinToString(" · "),
+                supportingText = "What the app sets by itself: extra streams, buffers, use cases, session and camera " +
+                    "workarounds. Change them only to work around a camera",
+                testTag = lensEditorTag("advanced"),
+                onClick = { showAdvanced = true }
+            )
+        }
         if (problems.isNotEmpty()) {
             Text(
                 problems.joinToString("\n"),
@@ -289,6 +328,7 @@ internal fun LensEditorScreen(state: SettingsUiState, lensName: String?, dispatc
             initial = existing,
             cameraId = draft.camera.id,
             physicalCameraId = draft.camera.physical,
+            scopes = draft.vendorKeyScopes(),
             onDismiss = { editKey = null },
             onDelete = existing?.let {
                 {

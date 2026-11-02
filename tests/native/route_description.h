@@ -28,43 +28,43 @@ inline std::string describeRouteForGolden(const LensRoute& r) {
     };
     o << "lens=" << r.lensId << "\ncamera=" << r.cameraId << "\nphysical=" << r.physicalCameraId << '\n';
     o << "stream=" << int(r.preferredStream.format) << ':' << r.preferredStream.width << 'x' << r.preferredStream.height
-      << " unlisted:" << r.unlistedStream << " useCase:" << r.rawStreamUseCase << '\n';
+      << " highResLive:" << r.highResLive << " useCase:" << r.rawStreamUseCase << '\n';
     levels("levels", r.levels);
     if (r.viewfinderLevels) levels("viewfinderLevels", *r.viewfinderLevels); else o << "viewfinderLevels=none\n";
-    if (r.captureLevels) levels("captureLevels", *r.captureLevels); else o << "captureLevels=none\n";
+    if (r.photoLevels) levels("photoLevels", *r.photoLevels); else o << "photoLevels=none\n";
     o << "exposure=extended:" << r.exposure.extended << " isoMax:" << r.exposure.isoMax
       << " shutterMaxNs:" << r.exposure.shutterMaxNs << '\n';
-    opt("readerUsage", r.readerUsage);
-    o << "reader=maxImages:" << r.rawMaxImages << " probe:" << r.readerProbe << " demote:" << r.readerDemote << '\n';
-    o << "backend=" << backendChoiceName(r.backend) << " opMode=" << r.opMode << '\n';
+    opt("rawBufferUsage", r.rawBufferUsage);
+    o << "rawBuffers=count:" << r.rawBufferCount << " testFirst:" << r.rawBufferTestFirst << " fallBack:" << r.rawBufferFallBack << '\n';
+    o << "cameraApi=" << cameraApiName(r.cameraApi) << " opMode=" << r.opMode << '\n';
     o << "session=params:" << sessionParamsName(r.sessionParams) << " requestDefaults:" << requestDefaultsName(r.requestDefaults)
-      << " fps:" << r.fixedFps << " startupDelayMs:" << r.startupDelayMs << '\n';
+      << " frameRate:" << r.frameRate << " startupDelayMs:" << r.startupDelayMs << '\n';
     o << "template=" << (r.stillTemplate ? (*r.stillTemplate ? "still" : "preview") : "default") << '\n';
-    o << "quirks=";
-    for (const auto& q : quirkNames(r.quirks)) o << q << ' ';
+    o << "workarounds=";
+    for (const auto& q : workaroundNames(r.workarounds)) o << q << ' ';
     o << "\ngate=" << r.vendorGate << " hold:"
       << (r.gateHold ? (*r.gateHold == GateHold::UntilClosed ? "closed" : "configured") : "default")
-      << " stopRepeatingForStill:" << r.stopRepeatingForStill << '\n';
-    o << "captureStream=";
-    if (r.captureStream)
-        o << int(r.captureStream->format) << ':' << r.captureStream->width << 'x' << r.captureStream->height;
+      << " stopViewfinderForPhotos:" << r.stopViewfinderForPhotos << '\n';
+    o << "photoStream=";
+    if (r.photoStream)
+        o << int(r.photoStream->format) << ':' << r.photoStream->width << 'x' << r.photoStream->height;
     else
         o << "none";
-    o << " useCase:" << r.captureStreamUseCase << " burst:" << r.captureBurst << " sequential:" << r.captureBurstSequential
+    o << " useCase:" << r.photoStreamUseCase << " mergeFrameLimit:" << r.mergeFrameLimit << " mergeFramesOneByOne:" << r.mergeFramesOneByOne
       << '\n';
-    opt("captureReaderUsage", r.captureReaderUsage);
+    opt("photoBufferUsage", r.photoBufferUsage);
     size("companionSize", r.companionSize);
     o << "companion=disabled:" << r.disableCompanion << " private:" << r.companionPrivate
-      << " targeted:" << r.companionTargeted << " maxImages:" << r.companionMaxImages
+      << " targeted:" << r.companionTargeted << " bufferCount:" << r.companionBufferCount
       << " fallback:" << int(r.companionFallback) << " useCase:" << r.companionStreamUseCase << '\n';
-    opt("companionUsage", r.companionUsage);
+    opt("companionBufferUsage", r.companionBufferUsage);
     opt("companionPhysical", r.companionPhysical);
     opt("companionDetach", r.companionDetach);
     size("auxJpeg", r.auxJpegSize);
-    opt("auxJpegUsage", r.auxJpegUsage);
+    opt("auxJpegBufferUsage", r.auxJpegBufferUsage);
     o << "auxJpegUseCase=" << r.auxJpegStreamUseCase << '\n';
-    o << "cfa=block:" << r.cfaBlock << " live:" << r.cfaLiveQuality << " photo:" << r.cfaPhotoQuality << '\n';
-    opt("cfaOrder", r.cfaOrder);
+    o << "sensorLayout=block:" << r.sensorLayoutBlock << " liveRemosaic:" << r.liveRemosaic << " photoRemosaic:" << r.photoRemosaic << '\n';
+    opt("colourOrder", r.colourOrder);
     o << "distortion=";
     if (r.distortion) {
         const auto& d = *r.distortion;
@@ -81,7 +81,7 @@ inline std::string describeRouteForGolden(const LensRoute& r) {
     for (const auto& [phase, name] : {std::pair{Scope::Session, "session"}, std::pair{Scope::Request, "request"},
                                       std::pair{Scope::Still, "still"}, std::pair{Scope::Decision, "decision"}}) {
         std::vector<std::string> lines;
-        for (const auto& k : r.keys) {
+        for (const auto& k : r.vendorKeys) {
             if (!keyAppliesIn(k.scope, phase)) continue;
             std::ostringstream line;
             line.precision(17);

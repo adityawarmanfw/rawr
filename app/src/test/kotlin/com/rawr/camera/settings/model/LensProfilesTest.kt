@@ -32,6 +32,15 @@ class LensProfilesTest {
     }
 
     @Test
+    fun fixedFrameRateStaysWithinWhatNativeAccepts() {
+        assertEquals(emptyList(), validateLensProfile(lens.session { copy(frameRate = MAX_FRAME_RATE) }, emptyList()))
+        assertEquals(
+            listOf("Fixed frame rate must be 0 to $MAX_FRAME_RATE"),
+            validateLensProfile(lens.session { copy(frameRate = MAX_FRAME_RATE + 1) }, emptyList())
+        )
+    }
+
+    @Test
     fun vendorKeysCheckValuesAgainstType() {
         assertNull(validateVendorKey(VendorKey("a", values = listOf(31.0))))
         assertEquals("a: enter at least one value", validateVendorKey(VendorKey("a")))
