@@ -357,9 +357,9 @@ void testProfileJson() {
             assert(stillUiModule && !sessionUiModule && !forced && stillMode);
         }
         // vivo 200 MP lenses: the same route with the ultra flag and no forced mode (the HAL switches by itself).
-        // The main camera's HAL fails queued 200 MP stills: its burst goes in one still at a time.
+        // Both default to queued submission (the reader retry drains stranded images).
         for (const auto& [lensId, cameraId, h, sequential] :
-             {std::tuple{"F35", "3", 12256u, true}, std::tuple{"F85", "5", 12288u, false}}) {
+             {std::tuple{"F35", "3", 12256u, false}, std::tuple{"F85", "5", 12288u, false}}) {
             const auto s = routeForLens(x300, lensId);
             assert(s && s->cameraId == cameraId && s->vendorGate == "vivoFullSize" && s->captureBurst == 3 &&
                    s->captureBurstSequential == sequential);

@@ -93,8 +93,10 @@ class CameraDeviceSession final {
    private:
     void releaseRequestOutputs(bool orphan) noexcept;
     void releaseCharacteristics() noexcept;
-    // Adds the companion YUV output and request target; false leaves the session RAW-only.
-    bool addCompanionStream(const std::string& physicalCameraId, const Diagnostic&);
+    // Adds the companion YUV output and request target, shaped like the RAW stream
+    // when the camera advertises such a size; false leaves the session RAW-only.
+    bool addCompanionStream(const std::string& physicalCameraId, uint32_t rawWidth, uint32_t rawHeight,
+                            const Diagnostic&);
     void closeDeviceDetached(std::function<void()> afterClose);
     // Releases a vendor gate taken for a device that never opened or is already gone.
     void releaseHeldGate() noexcept;

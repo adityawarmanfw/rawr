@@ -29,6 +29,7 @@
 #include "camera/CameraProfileJson.h"
 #include "camera/CameraRequestPipeline.h"
 #include "camera/CameraResultProcessor.h"
+#include "camera/CameraStartLadder.h"
 #include "camera/CameraWhiteBalanceControls.h"
 #include "camera/FullSizeSequence.h"
 #include "camera/SensitivityProbeStartup.h"
@@ -133,7 +134,13 @@ struct NativeCameraController::Impl final : CameraEventSink {
     std::string preferredCameraId;
     // cameraId/physicalCameraId routes whose HAL rejected the companion YUV
     // stream; they start RAW-only for the rest of this process.
+    // Configure-time RAW-only retry for routes the start ladder doesn't cover
+    // (capture-stream routes, whose companion is required).
     std::set<std::string> rawOnlyRoutes;
+    CameraStartLadder startLadder;
+    // Generation the start ladder watches for its first frame; 0 = none. Lets
+    // per-frame and capture-failure callbacks skip the mutex.
+    std::atomic<uint64_t> ladderGeneration{0};
     std::string accessRoute = "direct";
     uint32_t fullSizeBurstLimit = 0;
     bool fullSizeBurstSequential = false;
@@ -189,6 +196,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
     void setLens(const std::string& value) {
         std::unique_lock<std::mutex> lock(mutex);
         if (lensId == value) return;
+        startLadder.resetGivenUp();
 
         const bool restart = active;
         if (!restart) {
@@ -198,12 +206,15 @@ struct NativeCameraController::Impl final : CameraEventSink {
 
         // Reject any late result from the retiring lens while its session drains.
         active = false;
+        // A session that won't close (after a device error) is force-retired, as
+        // a stop does: aborting here dropped the switch and left the old session
+        // holding the camera until the stall watchdog fired.
         if (!retireSessionLocked(lock, std::chrono::seconds(3), "CAMERA_LENS_SWITCH")) {
-            diag("CAMERA_LENS_SWITCH_ABORT from=" + lensId + " to=" + value + " reason=session_close_timeout");
-            return;
+            diag("CAMERA_LENS_SWITCH_FORCED from=" + lensId + " to=" + value + " reason=session_close_timeout");
+            forceRetireSessionLocked(lock, "CAMERA_LENS_SWITCH");
         }
 
-        // Session is now definitively closed. It is safe to release the remaining
+        // Session is now closed or force-retired. It is safe to release the remaining
         // old-camera resources and create an independent vendor-session context.
         teardownCameraResourcesLocked(lock);
         lensId = value;
@@ -228,6 +239,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
             return false;
         }
         const auto before = routeForLens(profile, lensId);
+        startLadder.resetGivenUp();
         profile = std::move(next);
         publishProfileLocked();
         auto after = routeForLens(profile, lensId);
@@ -241,8 +253,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
         if (!routeChanged || !active || !preferredCameraId.empty()) return true;
         active = false;
         if (!retireSessionLocked(lock, std::chrono::seconds(3), "CAMERA_PROFILE_SWITCH")) {
-            diag("CAMERA_PROFILE_SWITCH_ABORT reason=session_close_timeout");
-            return true;
+            diag("CAMERA_PROFILE_SWITCH_FORCED reason=session_close_timeout");
+            forceRetireSessionLocked(lock, "CAMERA_PROFILE_SWITCH");
         }
         teardownCameraResourcesLocked(lock);
         active = true;
@@ -905,10 +917,29 @@ struct NativeCameraController::Impl final : CameraEventSink {
         const std::string companionRouteKey = route.cameraId + '/' + route.physicalCameraId;
         // A capture-stream route (vivo seamless) needs a YUV output configured or
         // its full-size stills crash the camera provider.
+        // The companion the unverified-device rule adds may be dropped by the
+        // start ladder; a forced one (override, capture-stream route) may not.
+        const bool companionByRule = companionOverride != "0" && !builtInMatch.verified && !route.unlistedStream;
+        const bool ladderEligible = companionByRule && !route.captureStream && companionOverride != "1";
+        const std::string ladderKey = route.lensId + '|' + describeRoute(route);
+        const int64_t viewfinderExposureNs =
+            control.exposureMode == ExposureControlMode::Auto ? 0 : control.requestedExposureTimeNs;
+        const auto ladderPlan =
+            startLadder.begin(ladderKey, deviceSession.generation(), monotonicMs(), viewfinderExposureNs, ladderEligible);
+        ladderGeneration.store(startLadder.watching(deviceSession.generation()) ? deviceSession.generation() : 0,
+                               std::memory_order_release);
+        if (ladderPlan == CameraStartLadder::Plan::GaveUp) {
+            diag("CAMERA_START_LADDER lens=" + route.lensId + " step=gave_up action=not_started");
+            control.capabilities.lensUnavailable = true;
+            rollbackCameraStartLocked(lock, "start_ladder_gave_up");
+            return;
+        }
         const bool companionStream =
             route.captureStream.has_value() || companionOverride == "1" ||
-            (companionOverride != "0" && !builtInMatch.verified && !route.unlistedStream &&
+            (companionByRule && ladderPlan != CameraStartLadder::Plan::RawOnly &&
              !rawOnlyRoutes.count(companionRouteKey));
+        if (ladderPlan == CameraStartLadder::Plan::RawOnly)
+            diag("CAMERA_START_LADDER lens=" + route.lensId + " step=raw_only companion=0");
         std::ostringstream selection;
         selection << "CAMERA_NDK_SELECTION profile=" << profile.id << " model=" << deviceModel
                   << " lensId=" << route.lensId << " cameraId=" << route.cameraId
@@ -979,8 +1010,11 @@ struct NativeCameraController::Impl final : CameraEventSink {
             // RAW16 + YUV on a Xiaomi logical camera). Retry this route once
             // RAW-only through a full reopen: the failed configure can take
             // the device down with it.
-            if (opened && companionStream && companionOverride != "1" &&
-                rawOnlyRoutes.insert(companionRouteKey).second) {
+            const bool retryRawOnly =
+                opened && companionStream && companionOverride != "1" &&
+                (ladderEligible ? !startLadder.rawOnly(ladderKey) : rawOnlyRoutes.insert(companionRouteKey).second);
+            if (retryRawOnly) {
+                if (ladderEligible) startLadder.configureRejected(ladderKey);
                 rollbackCameraStartLocked(lock, "companion_session_rejected");
                 if (shutDown) return;
                 diag("CAMERA_COMPANION_FALLBACK route=" + companionRouteKey + " retry=raw_only");
@@ -1011,6 +1045,20 @@ struct NativeCameraController::Impl final : CameraEventSink {
     // leaked context is bounded to one small struct per wedge. Must be
     // followed by teardownCameraResourcesLocked() so the next start reopens
     // the device instead of no-op'ing on the leaked handle.
+    // Logs a start-ladder step. Returns true when the start failed and the
+    // caller must request a restart (a device error restarts on its own).
+    bool noteLadderOutcomeLocked(CameraStartLadder::Outcome outcome, const char* reason) {
+        using Outcome = CameraStartLadder::Outcome;
+        if (outcome == Outcome::None) return false;
+        ladderGeneration.store(0, std::memory_order_release);
+        const char* step = outcome == Outcome::Retry          ? "retry"
+                           : outcome == Outcome::RetryRawOnly ? "raw_only"
+                                                              : "gave_up";
+        diag("CAMERA_START_LADDER lens=" + lensId + " step=" + step + " reason=" + reason +
+             " generation=" + std::to_string(deviceSession.generation()));
+        return true;
+    }
+
     void forceRetireSessionLocked(std::unique_lock<std::mutex>&, const char* prefix) {
         deviceSession.forceRetire(prefix, [this](const std::string& line) { diag(line); });
     }
@@ -1145,6 +1193,14 @@ struct NativeCameraController::Impl final : CameraEventSink {
     void cameraCaptureFailed(uint64_t callbackGeneration) override {
         // Set once at construction; the receiver checks the generation.
         if (callbacks.captureFailed) callbacks.captureFailed(callbackGeneration);
+        if (ladderGeneration.load(std::memory_order_acquire) != callbackGeneration) return;
+        bool restart = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (callbackGeneration != deviceSession.generation()) return;
+            restart = noteLadderOutcomeLocked(startLadder.captureFailed(callbackGeneration), "capture_failed");
+        }
+        if (restart && callbacks.acquisitionFailed) callbacks.acquisitionFailed(callbackGeneration, 0);
     }
     void cameraStillFailed(uint64_t generation, const ACaptureRequest* request) override {
         uint64_t tag = 0;
@@ -1177,6 +1233,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
         {
             std::lock_guard<std::mutex> lock(mutex);
             if (generation != deviceSession.generation()) return;
+            // The restart that follows (acquisitionFailed below) uses the new step.
+            (void)noteLadderOutcomeLocked(startLadder.deviceFailed(generation), "device_error");
             fullSizeSequence.fail();
             longExposureTag.store(0, std::memory_order_relaxed);
             longExposureStartMs.store(-1, std::memory_order_relaxed);
@@ -1834,6 +1892,13 @@ struct NativeCameraController::Impl final : CameraEventSink {
     }
     void tickControls(int64_t nowMs) {
         std::unique_lock<std::mutex> lock(mutex);
+        if (const auto watched = ladderGeneration.load(std::memory_order_acquire);
+            watched != 0 && watched == deviceSession.generation() &&
+            noteLadderOutcomeLocked(startLadder.tick(watched, nowMs), "no_first_frame")) {
+            lock.unlock();
+            if (callbacks.acquisitionFailed) callbacks.acquisitionFailed(watched, 0);
+            return;
+        }
         if (fullSizeSequence.failed()) return;
         if (fullSizeSequence.expire(nowMs)) {
             invalidateFocus(control);
@@ -1920,6 +1985,11 @@ void NativeCameraController::setExperimentalZeroCopyEnabled(bool enabled) {
     impl_->experimentalZeroCopyEnabled = enabled;
 }
 void NativeCameraController::rawFrameArrived(uint64_t generation) {
+    if (uint64_t watched = generation;
+        generation != 0 && impl_->ladderGeneration.compare_exchange_strong(watched, 0, std::memory_order_acq_rel)) {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        impl_->startLadder.firstFrame(generation);
+    }
     uint64_t expected = generation;
     if (generation == 0 || impl_->companionDetachGeneration.load(std::memory_order_acquire) != generation ||
         !impl_->companionDetachGeneration.compare_exchange_strong(expected, 0, std::memory_order_acq_rel))

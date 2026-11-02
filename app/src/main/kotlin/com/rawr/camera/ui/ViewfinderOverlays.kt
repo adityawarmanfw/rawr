@@ -271,6 +271,24 @@ internal fun HdrBracketedNotice(active: Boolean, orientation: Orientation, modif
 
 private const val HDR_BRACKETED_NOTICE_MS = 4_000L
 
+/** Shown while the lens's camera never produced a frame and recovery gave up. */
+@Composable
+internal fun LensUnavailableNotice(orientation: Orientation, modifier: Modifier = Modifier) {
+    Text(
+        "This lens didn't start. Its camera settings may not work on this phone. Switch lens to try again.",
+        color = Color.White,
+        fontSize = 13.sp,
+        textAlign = TextAlign.Center,
+        style = ViewfinderTextStyle,
+        modifier = modifier
+            .uprightInLandscape(orientation)
+            .widthIn(max = 320.dp)
+            .background(Color.Black.copy(alpha = .45f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 14.dp, vertical = 8.dp)
+            .testTag(CaptureTestTags.LENS_UNAVAILABLE_NOTICE)
+    )
+}
+
 private const val FULL_SIZE_FALLBACK_NOTICE_MS = 3_000L
 
 /**
