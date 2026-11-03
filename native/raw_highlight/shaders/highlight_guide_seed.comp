@@ -31,6 +31,20 @@ pc;
 #define RAWR_HL_SEED_EARLY_REJECT 0
 #endif
 #endif
+#ifndef RAWR_HL_SEED_CHANNEL_BOUND
+#if RAWR_HL_SCALE == 1
+#define RAWR_HL_SEED_CHANNEL_BOUND 1
+#else
+#define RAWR_HL_SEED_CHANNEL_BOUND 0
+#endif
+#endif
+#ifndef RAWR_HL_SEED_DEFER_STATE
+#if RAWR_HL_SCALE == 1
+#define RAWR_HL_SEED_DEFER_STATE 1
+#else
+#define RAWR_HL_SEED_DEFER_STATE 0
+#endif
+#endif
 #if !defined(RAWR_HL_SCALE) || (RAWR_HL_SCALE != 1 && RAWR_HL_SCALE != 2)
 #error "RAWR_HL_SCALE must be 1 (preview) or 2 (still)"
 #endif
@@ -56,22 +70,38 @@ void main() {
     vec3 observedSum = vec3(0.0);
 #if RAWR_HL_SEED_EARLY_REJECT
     vec3 ceilings = max(pc.channelCeilings.rgb, vec3(1e-4));
+#if RAWR_HL_SEED_CHANNEL_BOUND
+    vec3 darkSeedCeiling = 0.5 * ceilings;
+#else
     float darkSeedCeiling = 0.5 * min(ceilings.r, min(ceilings.g, ceilings.b));
+#endif
 #endif
     // Sixteen spatially distributed samples per cell.
     for (int y = kStep - 1; y < 4 * kStep; y += kStep) {
         for (int x = kStep - 1; x < 4 * kStep; x += kStep) {
             ivec2 p = clamp(origin + ivec2(x, y), ivec2(0), extent - ivec2(1));
+#if !RAWR_HL_SEED_DEFER_STATE
             uint state = clipState(p);
+#endif
             vec3 rgb = rawrHighlightSanitize(imageLoad(rgbImage, p).rgb);
             observedSum += rgb;
+#if !RAWR_HL_SEED_DEFER_STATE
             if (state != 0u) continue;
+#endif
 #if RAWR_HL_SEED_EARLY_REJECT
-            // This conservative bound implies every channel is below 0.5 of
-            // its ceiling, safely below the existing 0.52 eligibility test.
+            // Component-wise half-ceiling rejection is strictly inside the
+            // existing 0.52 eligibility bound, including unequal white balance.
+            // It avoids the scalar minimum's unnecessarily weak red/blue test.
             // Avoid neighbour loads for dark pixels without moving the more
             // expensive per-channel divisions ahead of neighbour rejection.
+#if RAWR_HL_SEED_CHANNEL_BOUND
+            if (all(lessThan(rgb, darkSeedCeiling))) continue;
+#else
             if (rawrHighlightMaximum(rgb) < darkSeedCeiling) continue;
+#endif
+#endif
+#if RAWR_HL_SEED_DEFER_STATE
+            if (clipState(p) != 0u) continue;
 #endif
             ivec2 px0 = clamp(p - ivec2(kStep, 0), ivec2(0), extent - ivec2(1));
             ivec2 px1 = clamp(p + ivec2(kStep, 0), ivec2(0), extent - ivec2(1));

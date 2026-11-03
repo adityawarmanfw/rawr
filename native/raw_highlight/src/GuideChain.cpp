@@ -60,7 +60,8 @@ VkPipelineLayout makePipelineLayout(VkDevice device, VkDescriptorSetLayout setLa
     return layout;
 }
 
-VkPipeline makePipeline(VkDevice device, SpirvWords spirv, VkPipelineLayout layout, const char* what) {
+VkPipeline makePipeline(VkDevice device, SpirvWords spirv, VkPipelineLayout layout, const char* what,
+                        bool denseGuide = false) {
     if (!spirv.words || !spirv.count) throw std::invalid_argument(std::string("highlight guide: missing ") + what);
     VkShaderModuleCreateInfo moduleInfo{};
     moduleInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -74,6 +75,10 @@ VkPipeline makePipeline(VkDevice device, SpirvWords spirv, VkPipelineLayout layo
     info.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
     info.stage.module = module;
     info.stage.pName = "main";
+    const uint32_t dense = 1;
+    const VkSpecializationMapEntry entry{0, 0, sizeof(dense)};
+    const VkSpecializationInfo specialization{1, &entry, sizeof(dense), &dense};
+    if (denseGuide) info.stage.pSpecializationInfo = &specialization;
     info.layout = layout;
     VkPipeline pipeline = VK_NULL_HANDLE;
     const VkResult result = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline);
@@ -125,6 +130,7 @@ GuideChainPipelines::GuideChainPipelines(VkDevice device, const GuideChainShader
         propagate_ = makePipeline(device_, shaders.propagate, passLayout_, "propagate pipeline");
         smooth_ = makePipeline(device_, shaders.smooth, passLayout_, "smooth pipeline");
         if (shaders.control.words && shaders.control.count) {
+            smoothDense_ = makePipeline(device_, shaders.smooth, passLayout_, "dense smooth pipeline", true);
             controlSetLayout_ = makeControlSetLayout(device_);
             controlLayout_ = makePipelineLayout(device_, controlSetLayout_, sizeof(ControlPush));
             control_ = makePipeline(device_, shaders.control, controlLayout_, "guide control pipeline");
@@ -138,6 +144,8 @@ GuideChainPipelines::GuideChainPipelines(VkDevice device, const GuideChainShader
 GuideChainPipelines::~GuideChainPipelines() { destroy(); }
 
 void GuideChainPipelines::destroy() noexcept {
+    if (smoothDense_) vkDestroyPipeline(device_, smoothDense_, nullptr);
+    smoothDense_ = VK_NULL_HANDLE;
     if (control_) vkDestroyPipeline(device_, control_, nullptr);
     if (controlLayout_) vkDestroyPipelineLayout(device_, controlLayout_, nullptr);
     if (controlSetLayout_) vkDestroyDescriptorSetLayout(device_, controlSetLayout_, nullptr);
@@ -380,10 +388,10 @@ VkImageView GuideChain::record(VkCommandBuffer command, VkImageView rgbView, VkI
     uint32_t step = 1u;
     while ((step << 1u) < std::max(guideWidth_, guideHeight_)) step <<= 1u;
     bool sourceA = true;
+    vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines_.propagate_);
     for (;;) {
         passPush.step = step;
         VkDescriptorSet set = sourceA ? aToBSet_ : bToASet_;
-        vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines_.propagate_);
         vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines_.passLayout_, 0, 1, &set, 0,
                                 nullptr);
         vkCmdPushConstants(command, pipelines_.passLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(passPush),
@@ -398,10 +406,16 @@ VkImageView GuideChain::record(VkCommandBuffer command, VkImageView rgbView, VkI
         vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, timing->pool, timing->propagationQuery);
     // A broad low-resolution blur removes seed-cell colour contours while
     // leaving full-resolution luminance texture to the surviving channels.
+    // A seed can reach every cell by the signed binary steps of its XY
+    // distance, staying inside the image. All seed RGB sums are near one;
+    // positive weighted averages retain that property. After all steps,
+    // an actually executed indirect smoothing pass therefore has no empty
+    // RGB cells. Empty-seed frames have groupCountX=0 and never run it.
+    vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE,
+                       indirectActive_ ? pipelines_.smoothDense_ : pipelines_.smooth_);
     for (uint32_t pass = 0; pass < 4u; ++pass) {
         passPush.step = 0u;
         VkDescriptorSet set = sourceA ? aToBSet_ : bToASet_;
-        vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines_.smooth_);
         vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines_.passLayout_, 0, 1, &set, 0,
                                 nullptr);
         vkCmdPushConstants(command, pipelines_.passLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(passPush),

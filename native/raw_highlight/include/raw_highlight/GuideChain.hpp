@@ -38,6 +38,7 @@ class GuideChainPipelines {
     VkPipelineLayout passLayout_ = VK_NULL_HANDLE;
     VkPipeline propagate_ = VK_NULL_HANDLE;
     VkPipeline smooth_ = VK_NULL_HANDLE;
+    VkPipeline smoothDense_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout controlSetLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout controlLayout_ = VK_NULL_HANDLE;
     VkPipeline control_ = VK_NULL_HANDLE;

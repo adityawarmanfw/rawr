@@ -1,5 +1,104 @@
 # Phone optimization results
 
+## 2026-11-03: deeper headless seeded-guide optimization
+
+Rebased the seven MR commits onto upstream `f063a4c` (multi-DCP / AgX looks).
+The only conflict was in `scripts/ui` command registration: both upstream scroll
+and the existing Home command are retained. The paired-generation startup
+notification remains outside the session lock and buffer retirement inside it.
+No app Activity was opened in this round. **Stable 30 fps remains unmet.**
+
+The retained preview changes tighten dark-seed rejection to half of each channel's
+own ceiling and defer clip-state loads until after that rejection. The bound stays
+strictly below the existing 0.52 eligibility test. Original seed arithmetic,
+observed brightness accumulation and sample order remain intact. The scale-2
+still seed SPIR-V is byte-identical to the preceding version; test switches also
+reproduce the preceding preview seed SPIR-V byte-for-byte.
+
+Preview smoothing uses a specialization only when the GPU seed controller is
+active. If it dispatches smoothing, at least one authoritative seed exists and
+all original jump-flood steps have completed. Signed binary XY steps propagate
+colour from that seed to every cell while staying in bounds. Positive weighted
+averages preserve nonempty RGB. Each smoothing pixel therefore uses all original
+25 taps, with weight sum exactly 256. The specialization removes per-tap empty
+checks, weight accumulation and the fallback center read, retaining float32 tap
+order and all four RGBA16F smoothing boundaries. Generic smoothing remains the
+still/legacy default. This adds one pipeline per preview guide backend; it adds
+no images, buffers, dispatches or CPU readback. Repeated pipeline bindings were
+also moved out of the propagation/smoothing loops.
+
+Fixed large input: 4080×3064 RAW, 17×13 lens shading, WB R=2.1/B=0.8, forced
+clipping and valid seeds, 60 warmup + 90 measured frames. The same indirect
+controller is active in every variant; the reference uses frozen preceding
+smoothing and the byte-identical preceding seed shader.
+
+| Variant in execution order | Total median | Total p95 | Seed median | Smoothing median |
+| --- | ---: | ---: | ---: | ---: |
+| Reference before | 39.266 ms | 48.262 ms | 13.914 ms | 7.205 ms |
+| Per-channel bound | 37.735 ms | 47.856 ms | 12.580 ms | 7.155 ms |
+| Bound + deferred state | 35.939 ms | 42.813 ms | 11.806 ms | 6.900 ms |
+| Plus dense smoothing | 35.752 ms | 36.509 ms | 11.771 ms | 6.896 ms |
+| Reference after | 38.235 ms | 44.668 ms | 13.789 ms | 7.096 ms |
+
+These are RAW-preview GPU times, excluding tonemap, scopes and display. The final
+candidate is 2.48–3.51 ms faster in median than the two reference windows. Clocks
+and external device load were not locked; reference tail latency is noisier.
+Most of the saving comes from seed reads/rejection. The dense-smoothing-only
+saving is small; it is not a 30 fps solution or an independent tail-latency claim.
+Per-stage timings are diagnostic, enabled only by benchmark `--stage-timing`.
+
+The controlled seven-scene/four-variant test passed all 29 exact RGBA16F cases
+(122.300 s). Cases include partial groups, highlight stress, alternating seeded/
+empty frame slots, an empty guide, a single-cell guide and long one-cell-wide
+fields. GPU arguments assert that positive fixtures actually execute smoothing.
+The final rebased full GPU suite passed all 14 tests in 440.225 s. Rebased Android
+unit tests pass **507/507**. Both guide host tests pass; exhaustive single-seed
+coverage in all rectangles up to 12×12, plus selected large/thin cases, also passes
+ASan/UBSan. Seed and smoothing SPIR-V validation passes.
+
+Rejected experiments are retained only under ignored `tmp/phone-performance/
+vf-deeper/`: explicit loop unrolling (no meaningful gain), 16-lane cooperative
+seed evaluation (~16.2 ms seed vs ~14.1 ms), four-lane evaluation (~15.2 ms), and
+packed shared-memory seed tiling (no reliable gain, worse tails). All passed exact
+pixels, but none remains in production or changes the workgroup parser contract.
+The Vulkan specialization API follows the [Khronos specification](https://docs.vulkan.org/refpages/latest/refpages/source/VkSpecializationMapEntry.html).
+[Arm's compiler guidance](https://developer.arm.com/Tools%20and%20Software/Mali%20Offline%20Compiler)
+and [Khronos compute guidance](https://docs.vulkan.org/guide/latest/compute_shaders.html)
+informed the experiments; device measurements determine which changes are kept.
+
+All **14 offscreen production camera cycles** passed UI-pause drain, resume,
+stop drain and surface reattachment. This includes an exploratory RawrBase pair,
+reference/candidate/reference RawrBase pairs with detailed stage timing, and
+sRGB, Rec.709 and AgX pairs with detailed timing cleared. Every pause/stop late
+frame count was zero; idle CPU was 3–5 ms per second and stopped PSS was
+101566–123390 KiB including test/EGL overhead.
+
+The live-camera 240-sample GPU means were 59.208 → 40.820 → 48.778 ms. This is
+**not** a controlled speedup: the reference before had valid guide seeds, the
+candidate had no seeds, and the reference after changed between both states.
+The shader references were copied only into each test engine's private directory.
+Only the fixed-input comparison above establishes this round's performance gain.
+No physical display FPS or Home smoothness claim follows from offscreen results.
+
+Stored RAW replay with the exact baseline RCD/**SRgb**/colour-propagation recipe,
+FCC2, defringe and JPEG98 4:2:2 passed. Input DNG SHA-256 remains
+`5385bde3de5d7cea1ec9a333d5b329a0b88cdbf86ee82cf63c0198f4c976c6bd`.
+Decoded ARGB retains SHA-256
+`3a29fa9d0c1f31a4c2f23d64bdd61bbd5841dc50afd4fd12934dc4a4ddeef96f`;
+the compressed JPEG scan is byte-identical and size remains 12,344,969 bytes.
+One exploratory replay used the wrong case-sensitive profile spelling and was
+excluded from comparison. The replay harness now rejects invalid built-in profile
+names before rendering, preventing silent fallback in future measurements.
+
+Final benchmark/test APK builds and unit tests passed on upstream `f063a4c`.
+The benchmark APK is installed without opening an Activity. Diagnostic properties
+are cleared, the app and test package are stopped, and the camera is released.
+Ignored `tmp/phone-performance/vf-deeper/` holds raw logs, fixed-window reports,
+camera summaries, JPEG comparison, rejected patches and sanitizer results.
+
+Actual display pacing, Home animation, sustained thermals, capture-to-gallery and
+physical Adreno validation remain open; headless checks cannot clear those items.
+
 ## 2026-11-03: GPU-driven empty-guide skipping and real UI checks
 
 **The 33.3 ms / stable 30 fps target is still unmet. Home animation is not

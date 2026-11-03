@@ -147,6 +147,37 @@ These diagnostic compiler variants do not change the production shader build.
 
 ### RAW highlight guide comparison
 
+`HeadlessGpuTest#guideDenseFieldParity` compares the preceding seed bound and
+frozen smoothing shader with the per-channel bound, deferred clip-state read,
+and nonempty-field smoothing specialization. The existing indirect controller
+is enabled on every variant. The large scene runs reference → bound-only →
+deferred-read → dense-smooth → reference, with 60 warmup/90 measured frames.
+Exact recovered RGBA16F comparisons also cover clipped stress input, alternating
+seeded/empty frames, no seeds, a one-cell guide and long one-cell-wide guides.
+Dispatch arguments must show that the positive fixtures actually run smoothing.
+
+The dense specialization is selected only for the optional preview controller.
+Every jump-flood step is retained. From any seed, the signed binary steps of an
+XY distance can reach every guide cell while remaining in bounds. Positive
+weighted averages of the near-unit seed RGB sums cannot become empty. All 25
+smoothing taps therefore contribute, with exact integer weight sum 256. Tap and
+accumulation order, float32 arithmetic and RGBA16F pass boundaries are preserved.
+The ordinary still/legacy pipeline keeps generic smoothing. The host
+`guide_dense_reach_test` exercises coverage from every single seed in all small
+rectangles, plus corner/center seeds in large, thin and non-power-of-two fields.
+
+`--stage-timing` on the native preview benchmark adds four timestamps and prints
+per-stage median/mean/p95/p99 for CFA, seed, propagation, smoothing and apply.
+Without that option, the benchmark retains its two-query timing layout.
+These fixed-input GPU times exclude the production scopes, look and display.
+
+After the fixed comparison, `NativePreviewTest -e guideReference true` replaces
+only that test engine's seed/smoothing modules with the immediately preceding
+ones staged in `guide-dense-0-0`; its indirect controller stays enabled. Do not
+combine this with `highlightReference`. Run reference/candidate/reference
+serially, then clear `debug.rawr.vf_stage_timing` and repeat lifecycle checks on
+the normal query layout. No app Activity is needed.
+
 `HeadlessGpuTest#indirectGuideParity` checks the optional core-Vulkan indirect
 guide controller against the preceding CFA shader and unconditional guide chain.
 Six exact RGBA16F comparisons cover no clipping, clipped pixels without seeds,

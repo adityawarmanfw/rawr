@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <fstream>
@@ -20,6 +21,8 @@ struct Slot {
     Buf imported{};
 };
 static bool g_noClip = false, g_emptyGuide = false, g_toggleGuide = false, g_forceClip = false;
+static bool g_stageTiming = false;
+static bool g_flatGuide = false;
 static std::vector<uint16_t> pattern(uint32_t W, uint32_t H, bool stress) {
     std::vector<uint16_t> r(size_t(W) * H);
     if (g_noClip || g_emptyGuide || g_toggleGuide) {
@@ -34,7 +37,7 @@ static std::vector<uint16_t> pattern(uint32_t W, uint32_t H, bool stress) {
     for (uint32_t y = 0; y < H; y++)
         for (uint32_t x = 0; x < W; x++) {
             float fx = float(x) / W, fy = float(y) / H;
-            float v = stress ? (.55f + 1.15f * fx + .35f * std::sin(fy * 20.f)) : (.15f + .65f * fx);
+            float v = g_flatGuide ? .73f : stress ? (.55f + 1.15f * fx + .35f * std::sin(fy * 20.f)) : (.15f + .65f * fx);
             if (stress && fx > .60f && fy > .18f && fy < .82f) v += .65f;
             v = std::max(0.f, std::min(1.f, v));
             r[size_t(y) * W + x] = (uint16_t)std::lround(64 + v * (4095 - 64));
@@ -148,7 +151,7 @@ static void run(Ctx& c, const std::string& shader, const std::string& maskShader
         VkQueryPoolCreateInfo qi{};
         qi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
         qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
-        qi.queryCount = 2;
+        qi.queryCount = g_stageTiming ? 6 : 2;
         ck(vkCreateQueryPool(c.dev, &qi, nullptr, &s[k].qp), "qp");
         s[k].raw =
             mkImg(c.pd, c.dev, W, H, VK_FORMAT_R16_UINT, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_STORAGE_BIT);
@@ -240,14 +243,21 @@ static void run(Ctx& c, const std::string& shader, const std::string& maskShader
     const uint32_t warm = 60, total = warm + frames;
     std::vector<uint64_t> pf(3, UINT64_MAX);
     std::vector<double> ms;
+    std::array<std::vector<double>, 5> stageMs;
     ms.reserve(frames);
     auto harvest = [&](int k) {
         if (pf[k] == UINT64_MAX) return;
         vkWaitForFences(c.dev, 1, &s[k].f, VK_TRUE, UINT64_MAX);
-        uint64_t t[2];
-        vkGetQueryPoolResults(c.dev, s[k].qp, 0, 2, sizeof(t), t, sizeof(uint64_t),
-                              VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
-        if (pf[k] >= warm) ms.push_back(double(t[1] - t[0]) * c.prop.limits.timestampPeriod / 1e6);
+        uint64_t t[6]{};
+        const uint32_t count = g_stageTiming ? 6 : 2;
+        ck(vkGetQueryPoolResults(c.dev, s[k].qp, 0, count, count * sizeof(uint64_t), t, sizeof(uint64_t),
+                              VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT), "timing queries");
+        if (pf[k] >= warm) {
+            ms.push_back(double(t[count - 1] - t[0]) * c.prop.limits.timestampPeriod / 1e6);
+            if (g_stageTiming)
+                for (size_t stage = 0; stage < stageMs.size(); ++stage)
+                    stageMs[stage].push_back(double(t[stage + 1] - t[stage]) * c.prop.limits.timestampPeriod / 1e6);
+        }
         pf[k] = UINT64_MAX;
     };
     auto start = std::chrono::steady_clock::now();
@@ -260,7 +270,7 @@ static void run(Ctx& c, const std::string& shader, const std::string& maskShader
         VkCommandBufferBeginInfo bi{};
         bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         vkBeginCommandBuffer(s[k].cmd, &bi);
-        vkCmdResetQueryPool(s[k].cmd, s[k].qp, 0, 2);
+        vkCmdResetQueryPool(s[k].cmd, s[k].qp, 0, g_stageTiming ? 6 : 2);
         if (g_toggleGuide) {
             VkImageMemoryBarrier patch{};
             patch.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -294,6 +304,13 @@ static void run(Ctx& c, const std::string& shader, const std::string& maskShader
         ri.width = W;
         ri.height = H;
         ri.parameters = rp;
+        if (g_stageTiming) {
+            ri.cfaTimingPool = s[k].qp;
+            ri.cfaTimingQuery = 1;
+            ri.guideSeedTimingQuery = 2;
+            ri.guidePropagationTimingQuery = 3;
+            ri.highlightPrepareTimingQuery = 4;
+        }
         // Exercise both directions on every in-flight slot, beginning with
         // bypass so lazy tone allocation is covered after the slot is warm.
         if (g_toggleTone) ri.parameters.bypassHighlightTone = ((f / 3) % 2) == 0;
@@ -304,7 +321,7 @@ static void run(Ctx& c, const std::string& shader, const std::string& maskShader
             ri.lensShadingMapFloatCount = g_lsc.size();
         }
         guideArgs[k] = pr.record(ri).guideDispatchArgs;
-        vkCmdWriteTimestamp(s[k].cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, s[k].qp, 1);
+        vkCmdWriteTimestamp(s[k].cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, s[k].qp, g_stageTiming ? 5 : 1);
         vkEndCommandBuffer(s[k].cmd);
         VkSubmitInfo si{};
         si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -324,6 +341,16 @@ static void run(Ctx& c, const std::string& shader, const std::string& maskShader
     std::cout << "RAW_PREVIEW_MS stress=" << (stress ? 1 : 0) << " width=" << W << " height=" << H
               << " best=" << ms.front() << " median=" << pct(ms, .5) << " mean=" << mean << " p95=" << pct(ms, .95)
               << " p99=" << pct(ms, .99) << " worst=" << ms.back() << "\n";
+    if (g_stageTiming) {
+        const char* names[]{"cfa", "seed", "propagation", "smooth", "apply"};
+        for (size_t i = 0; i < stageMs.size(); ++i) {
+            auto& values = stageMs[i];
+            std::sort(values.begin(), values.end());
+            std::cout << "RAW_PREVIEW_STAGE name=" << names[i] << " median=" << pct(values, .5)
+                      << " mean=" << std::accumulate(values.begin(), values.end(), 0.0) / values.size()
+                      << " p95=" << pct(values, .95) << " p99=" << pct(values, .99) << "\n";
+        }
+    }
     if (!g_dump.empty()) {
         // Dump the most recent frame's RGB output (bench-only equivalence check).
         int k = int((warm + frames - 1) % 3);
@@ -416,6 +443,8 @@ int main(int argc, char** argv) {
     g_propagateShader.clear();
     g_smoothShader.clear();
     g_noClip = g_emptyGuide = g_toggleGuide = g_forceClip = false;
+    g_stageTiming = false;
+    g_flatGuide = false;
     g_redWb = g_blueWb = 1.0f;
     g_stride = 0;
     g_dump.clear();
@@ -436,6 +465,8 @@ int main(int argc, char** argv) {
         else if (a == "--empty-guide") g_emptyGuide = true;
         else if (a == "--toggle-guide") g_toggleGuide = true;
         else if (a == "--force-clip") g_forceClip = true;
+        else if (a == "--stage-timing") g_stageTiming = true;
+        else if (a == "--flat-guide") g_flatGuide = true;
         else if (a == "--apply-shader" && i + 1 < argc) g_applyShader = argv[++i];
         else if (a == "--wb-r" && i + 1 < argc) g_redWb = std::stof(argv[++i]);
         else if (a == "--wb-b" && i + 1 < argc) g_blueWb = std::stof(argv[++i]);

@@ -36,8 +36,16 @@ foreach(NAME highlight_guide_seed highlight_guide_propagate highlight_guide_smoo
     DEPENDS ${SHADER_DEPS} HEADERS_VAR HEADERS)
 endforeach()
 embed_spirv(highlight_guide_seed_reference "${HL}/highlight_guide_seed.comp" highlight_guide_seed_reference_bytes
-  FLAGS -DRAWR_HL_SCALE=1 -DRAWR_HL_SEED_EARLY_REJECT=0 -DRAWR_HL_SEED_GROUP_SIZE=16 -I${HL} -I${COMMON}
+  FLAGS -DRAWR_HL_SCALE=1 -DRAWR_HL_SEED_EARLY_REJECT=0 -DRAWR_HL_SEED_GROUP_SIZE=16 -DRAWR_HL_SEED_DEFER_STATE=0 -I${HL} -I${COMMON}
   DEPENDS ${SHADER_DEPS} HEADERS_VAR HEADERS)
+embed_spirv(highlight_guide_seed_bound_reference "${HL}/highlight_guide_seed.comp" highlight_guide_seed_bound_reference_bytes
+  FLAGS -DRAWR_HL_SCALE=1 -DRAWR_HL_SEED_CHANNEL_BOUND=0 -DRAWR_HL_SEED_DEFER_STATE=0 -I${HL} -I${COMMON}
+  DEPENDS ${SHADER_DEPS} HEADERS_VAR HEADERS)
+embed_spirv(highlight_guide_seed_channel_only "${HL}/highlight_guide_seed.comp" highlight_guide_seed_channel_only_bytes
+  FLAGS -DRAWR_HL_SCALE=1 -DRAWR_HL_SEED_CHANNEL_BOUND=1 -DRAWR_HL_SEED_DEFER_STATE=0 -I${HL} -I${COMMON}
+  DEPENDS ${SHADER_DEPS} HEADERS_VAR HEADERS)
+embed_spirv(highlight_guide_smooth_reference "${CMAKE_CURRENT_SOURCE_DIR}/../shaders/highlight_guide_smooth_reference.comp" highlight_guide_smooth_reference_bytes
+  HEADERS_VAR HEADERS)
 embed_spirv(highlight_apply_reference "${HL}/highlight_apply_inplace.comp" highlight_apply_reference_bytes
   FLAGS -DRAWR_HL_SCALE=1 -DRAWR_HL_EARLY_RGB_READ=1 -I${HL} -I${COMMON}
   DEPENDS ${SHADER_DEPS} HEADERS_VAR HEADERS)

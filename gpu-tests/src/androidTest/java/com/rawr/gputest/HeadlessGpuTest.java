@@ -65,6 +65,43 @@ public class HeadlessGpuTest {
             Files.readAllBytes(new File(root, "tone-bypass/linear.rgba16f").toPath()),
             Files.readAllBytes(new File(root, "tone-switch/linear.rgba16f").toPath()));
     }
+    @Test public void guideDenseFieldParity() throws Exception {
+        File root = new File(InstrumentationRegistry.getInstrumentation().getTargetContext().getFilesDir(), "gpu-results");
+        for (int scene = 0; scene < 7; ++scene) {
+            for (int variant = 0; variant < (scene == 0 ? 5 : 4); ++variant) {
+                java.util.ArrayList<String> args = new java.util.ArrayList<>(java.util.Arrays.asList(
+                    "--method", "0", "--frames", scene == 0 ? "90" : "21", "--fps", "30",
+                    "--width", scene == 0 ? "4080" : scene == 1 || scene == 4 ? "638" : scene == 3 || scene == 5 ? "8" : scene == 6 ? "258" : "514",
+                    "--height", scene == 0 ? "3064" : scene == 1 || scene == 4 ? "514" : scene == 3 || scene == 6 ? "8" : scene == 5 ? "258" : "386",
+                    scene == 1 ? "--stress-only" : "--normal-only", scene == 4 ? "--empty-guide" : "--force-clip", "--stage-timing",
+                    "--wb-r", "2.1", "--wb-b", "0.8", "--dump", "linear.rgba16f"));
+                if (scene == 0 || scene == 1 || scene == 2 || scene == 4) {
+                    args.add("--lsc"); args.add("17x13");
+                }
+                if (scene == 2) args.add("--toggle-guide");
+                if (scene == 3 || scene == 5 || scene == 6) args.add("--flat-guide");
+                if (variant == 0 || variant == 4) {
+                    args.add("--seed-shader"); args.add("highlight_guide_seed_bound_reference.comp.spv");
+                }
+                if (variant == 1) { args.add("--seed-shader"); args.add("highlight_guide_seed_channel_only.comp.spv"); }
+                // Hold the existing indirect controller constant. The frozen
+                // generic shader has no specialization ID, so it remains the
+                // preceding smoothing kernel even when the fast pipeline binds.
+                args.add("--guide-control"); args.add("highlight_guide_control.comp.spv");
+                if (variant != 3) { args.add("--smooth-shader"); args.add("highlight_guide_smooth_reference.comp.spv"); }
+                run("preview", "guide-dense-" + scene + "-" + variant, args.toArray(new String[0]));
+                org.junit.Assert.assertArrayEquals("Dense guide must preserve pixels, scene=" + scene + " variant=" + variant,
+                    Files.readAllBytes(new File(root, "guide-dense-" + scene + "-0/linear.rgba16f").toPath()),
+                    Files.readAllBytes(new File(root, "guide-dense-" + scene + "-" + variant + "/linear.rgba16f").toPath()));
+                if (variant == 3) {
+                    String log = new String(Files.readAllBytes(new File(root, "guide-dense-" + scene + "-3/native.txt").toPath()), StandardCharsets.UTF_8);
+                    org.junit.Assert.assertTrue(log.contains("GUIDE_INDIRECT_ARGS"));
+                    if (scene == 4) org.junit.Assert.assertTrue(log.contains("propagateX=0 smoothX=0"));
+                    else org.junit.Assert.assertFalse("Fixture must exercise dense smoothing, scene=" + scene, log.contains("propagateX=0"));
+                }
+            }
+        }
+    }
     @Test public void optimizedGuideCompilerParity() throws Exception {
         File root = new File(InstrumentationRegistry.getInstrumentation().getTargetContext().getFilesDir(), "gpu-results");
         for (int variant = 0; variant < 4; ++variant) {

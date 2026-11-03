@@ -1,0 +1,34 @@
+#version 450
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(binding = 0, rgba16f) uniform readonly image2D srcGuide;
+layout(binding = 1, rgba16f) uniform writeonly image2D dstGuide;
+layout(push_constant) uniform Pc {
+    uint width;
+    uint height;
+    uint pad0;
+    uint pad1;
+}
+pc;
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= int(pc.width) || p.y >= int(pc.height)) return;
+    const float k[5] = float[5](1.0, 4.0, 6.0, 4.0, 1.0);
+    vec3 sum = vec3(0.0);
+    float weight = 0.0;
+    vec4 center = imageLoad(srcGuide, p);
+    float levelSum = 0.0;
+    for (int y = -2; y <= 2; ++y) {
+        for (int x = -2; x <= 2; ++x) {
+            ivec2 q = clamp(p + ivec2(x, y), ivec2(0), ivec2(int(pc.width) - 1, int(pc.height) - 1));
+            vec4 v = imageLoad(srcGuide, q);
+            float w = k[x + 2] * k[y + 2];
+            if (dot(v.rgb, vec3(1.0)) <= 1e-6) continue;
+            sum += v.rgb * w;
+            float level = v.a < 0.0 ? -v.a - 1.0 : v.a;
+            levelSum += max(level, 0.0) * w;
+            weight += w;
+        }
+    }
+    imageStore(dstGuide, p, weight > 0.0 ? vec4(sum / weight, levelSum / weight) : center);
+}

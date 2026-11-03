@@ -30,6 +30,11 @@ public final class RendererReplayTest {
         assertTrue(label.matches("[A-Za-z0-9_-]+"));
         int samples = Integer.parseInt(args.getString("samples", "3"));
         assertTrue(samples > 0 && samples <= 30);
+        // Recipes use case-sensitive enum names. Fail the benchmark rather
+        // than silently measuring the renderer's unknown-profile fallback.
+        String profile = args.getString("profile", "RawrBase");
+        assertTrue("Use an exact built-in recipe profile name", java.util.Arrays.asList(
+            "RawrBase", "SRgb", "Rec709", "AgX").contains(profile));
         File source = new File(context.getFilesDir(), "gpu-results/camera-0/capture-0.dng");
         assertTrue("Run HeadlessCameraTest first", source.isFile());
         File root = new File(context.getFilesDir(), "gpu-results/" + label);
@@ -43,7 +48,7 @@ public final class RendererReplayTest {
             // path gives the production renderer an empty linear-cache key.
             Files.copy(source.toPath(), input.toPath(), StandardCopyOption.REPLACE_EXISTING);
             String recipe = new JSONObject().put("demosaicAlgorithm", args.getString("demosaic", "Rcd"))
-                .put("colorRenderProfile", args.getString("profile", "RawrBase"))
+                .put("colorRenderProfile", profile)
                 .put("highlightReconstructionEnabled", true)
                 .put("highlightReconstructionMethod", Integer.parseInt(args.getString("highlightMethod", "1")))
                 .put("fccSteps", 2).put("defringeEnabled", true)

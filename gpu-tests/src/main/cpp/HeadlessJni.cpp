@@ -23,6 +23,9 @@
 #include "highlight_guide_smooth.h"
 #include "highlight_guide_propagate_optimized.h"
 #include "highlight_guide_smooth_optimized.h"
+#include "highlight_guide_seed_bound_reference.h"
+#include "highlight_guide_seed_channel_only.h"
+#include "highlight_guide_smooth_reference.h"
 #include "highlight_apply_inplace.h"
 #include "coloropp.h"
 #include "coloropp_tone.h"
@@ -78,6 +81,9 @@ extern "C" JNIEXPORT jint JNICALL Java_com_rawr_gputest_HeadlessGpuTest_runNativ
         SHADER(highlight_guide_smooth, "raw_preview_highlight_guide_smooth.comp.spv");
         SHADER(highlight_guide_propagate_optimized, "highlight_guide_propagate_optimized.comp.spv");
         SHADER(highlight_guide_smooth_optimized, "highlight_guide_smooth_optimized.comp.spv");
+        SHADER(highlight_guide_seed_bound_reference, "highlight_guide_seed_bound_reference.comp.spv");
+        SHADER(highlight_guide_seed_channel_only, "highlight_guide_seed_channel_only.comp.spv");
+        SHADER(highlight_guide_smooth_reference, "highlight_guide_smooth_reference.comp.spv");
         SHADER(highlight_apply_inplace, "raw_preview_highlight_apply.comp.spv");
         SHADER(coloropp, "raw_preview_coloropp.comp.spv");
         SHADER(coloropp_tone, "raw_preview_coloropp_tone.comp.spv");

@@ -33,6 +33,8 @@ public final class NativePreviewTest {
         boolean waveform = Boolean.parseBoolean(InstrumentationRegistry.getArguments().getString("waveform", "false"));
         boolean trace = Boolean.parseBoolean(InstrumentationRegistry.getArguments().getString("trace", "false"));
         boolean highlightReference = Boolean.parseBoolean(InstrumentationRegistry.getArguments().getString("highlightReference", "false"));
+        boolean guideReference = Boolean.parseBoolean(InstrumentationRegistry.getArguments().getString("guideReference", "false"));
+        assertFalse("Choose one shader reference", highlightReference && guideReference);
         assertTrue(targetFrames >= 30 && targetFrames <= 600);
         assertTrue(cycles >= 2 && cycles <= 10);
         assertTrue(profile >= 0 && profile <= 10 && profile != 1); // Imported LUT needs a separate fixture.
@@ -62,6 +64,17 @@ public final class NativePreviewTest {
                     new File(dir, "raw_preview_highlight_apply.comp.spv").toPath(),
                     java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             }
+            if (guideReference) {
+                // guideDenseFieldParity stages the immediately preceding seed
+                // and frozen smoothing shader. Keep indirect skipping enabled.
+                File reference = new File(context.getFilesDir(), "gpu-results/guide-dense-0-0");
+                Files.copy(new File(reference, "highlight_guide_seed_bound_reference.comp.spv").toPath(),
+                    new File(dir, "raw_preview_highlight_guide_seed.comp.spv").toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                Files.copy(new File(reference, "highlight_guide_smooth_reference.comp.spv").toPath(),
+                    new File(dir, "raw_preview_highlight_guide_smooth.comp.spv").toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            }
             engine.setAssetManager(handle, context.getAssets());
             engine.setPersistentDiagnosticsEnabled(handle, true);
             engine.setInternalTraceCaptureEnabled(handle, trace);
@@ -89,6 +102,7 @@ public final class NativePreviewTest {
                     .put("profile", profile)
                     .put("zeroCopy", zeroCopy)
                     .put("highlightReference", highlightReference)
+                    .put("guideReference", guideReference)
                     .put("targetFrames", targetFrames).put("waveform", waveform)
                     .put("startToTargetFramesMs", SystemClock.elapsedRealtime() - start)
                     .put("runningPssKiB", Debug.getPss()).put("cameraSnapshot", engine.cameraControlSnapshot(handle));
