@@ -6,6 +6,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <type_traits>
+#include <sys/system_properties.h>
 
 #include "develop/HotPixelConceal.h"
 #include "develop/render/DenoiseProfile.h"
@@ -13,6 +14,13 @@
 #include "vulkan/VulkanDispatch.h"
 
 namespace rawrcam::capture {
+namespace {
+bool useSecondaryQueue(const vulkan::VulkanContext& context) {
+    char value[PROP_VALUE_MAX] = {};
+    const bool primary = __system_property_get("debug.rawr.single_primary_queue", value) > 0 && value[0] == '1';
+    return context.hasMultiframeQueue() && !primary;
+}
+}  // namespace
 SingleFrameCaptureDevelop::SingleFrameCaptureDevelop(const vulkan::VulkanContext& vk, std::mutex& mutex,
                                                      std::string filesDir, CaptureDiagnostic diagnostic)
     : vulkanContext_(vk),
@@ -30,6 +38,8 @@ bool SingleFrameCaptureDevelop::start(const std::shared_ptr<const rawrcam::imagi
     if (busy()) return false;
     requestId_ = capturedHandle->requestId;
     diagnostics_ = request.develop.pipelineDiagnosticsEnabled;
+    // Freeze queue and mutex selection for every stage of this capture.
+    secondaryQueue_ = useSecondaryQueue(vulkanContext_);
     demosaicMs_ = demosaicSetupMs_ = 0.0;
     const rawrcam::imaging::RawSnapshot& captured = *capturedHandle;
     try {
@@ -59,15 +69,15 @@ bool SingleFrameCaptureDevelop::start(const std::shared_ptr<const rawrcam::imagi
         }
 
         switch (jpegContext.develop.demosaicAlgorithm) {
-            // Demosaic on the multiframe queue when present (same
-            // rationale as the rendered still chain): keep queue0 for
-            // preview. CPU fence-waits order the handoff.
+            // Default to the secondary queue when present. The opt-in primary
+            // queue experiment shares preview's submission lane and mutex;
+            // bounded processor submissions and CPU fences still order work.
             case develop::DemosaicAlgorithm::Amaze:
                 amaze_.configure(vulkanContext_, queueSubmitMutex_, camera.cameraContextGeneration, camera.cameraId,
                                  captured.width, captured.height, camera.rawPreviewCfa,
                                  rawrcam::develop::StillDemosaicGeometry::SensorNative,
-                                 vulkanContext_.hasMultiframeQueue() ? vulkanContext_.multiframeQueue() : VK_NULL_HANDLE,
-                                 vulkanContext_.hasMultiframeQueue() ? &vulkanContext_.mfSubmitMutex() : nullptr);
+                                 secondaryQueue_ ? vulkanContext_.multiframeQueue() : VK_NULL_HANDLE,
+                                 secondaryQueue_ ? &vulkanContext_.mfSubmitMutex() : nullptr);
                 if (!amaze_.start(captured, demosaicRaw, jpegContext.develop.lensShadingCorrectionEnabled,
                                   jpegContext.develop.highlightReconstructionEnabled))
                     throw std::runtime_error("AMaZE start rejected");
@@ -77,8 +87,8 @@ bool SingleFrameCaptureDevelop::start(const std::shared_ptr<const rawrcam::imagi
                                captured.width, captured.height, camera.rawPreviewCfa,
                                develop::demosaic::rcd::RcdStillInputMode::SharedHighlightPacked,
                                rawrcam::develop::StillDemosaicGeometry::SensorNative,
-                               vulkanContext_.hasMultiframeQueue() ? vulkanContext_.multiframeQueue() : VK_NULL_HANDLE,
-                               vulkanContext_.hasMultiframeQueue() ? &vulkanContext_.mfSubmitMutex() : nullptr);
+                               secondaryQueue_ ? vulkanContext_.multiframeQueue() : VK_NULL_HANDLE,
+                               secondaryQueue_ ? &vulkanContext_.mfSubmitMutex() : nullptr);
                 if (!rcd_.start(captured, demosaicRaw, jpegContext.develop.lensShadingCorrectionEnabled,
                                 jpegContext.develop.highlightReconstructionEnabled))
                     throw std::runtime_error("RCD start rejected");
@@ -88,8 +98,8 @@ bool SingleFrameCaptureDevelop::start(const std::shared_ptr<const rawrcam::imagi
                                captured.width, captured.height, camera.rawPreviewCfa,
                                jpegContext.develop.pipelineDiagnosticsEnabled,
                                rawrcam::develop::StillDemosaicGeometry::SensorNative,
-                               vulkanContext_.hasMultiframeQueue() ? vulkanContext_.multiframeQueue() : VK_NULL_HANDLE,
-                               vulkanContext_.hasMultiframeQueue() ? &vulkanContext_.mfSubmitMutex() : nullptr);
+                               secondaryQueue_ ? vulkanContext_.multiframeQueue() : VK_NULL_HANDLE,
+                               secondaryQueue_ ? &vulkanContext_.mfSubmitMutex() : nullptr);
                 if (!vng_.start(captured, demosaicRaw, jpegContext.develop.lensShadingCorrectionEnabled,
                                 jpegContext.develop.highlightReconstructionEnabled))
                     throw std::runtime_error(
@@ -103,8 +113,8 @@ bool SingleFrameCaptureDevelop::start(const std::shared_ptr<const rawrcam::imagi
                                 jpegContext.develop.dualAutoContrast, jpegContext.develop.dualContrastPercent,
                                 jpegContext.develop.pipelineDiagnosticsEnabled,
                                 rawrcam::develop::StillDemosaicGeometry::SensorNative,
-                                vulkanContext_.hasMultiframeQueue() ? vulkanContext_.multiframeQueue() : VK_NULL_HANDLE,
-                                vulkanContext_.hasMultiframeQueue() ? &vulkanContext_.mfSubmitMutex() : nullptr,
+                                secondaryQueue_ ? vulkanContext_.multiframeQueue() : VK_NULL_HANDLE,
+                                secondaryQueue_ ? &vulkanContext_.mfSubmitMutex() : nullptr,
                                 /*externalPackedInput=*/false,
                                 jpegContext.develop.demosaicAlgorithm == develop::DemosaicAlgorithm::DualAmazeVng4
                                     ? ::dual::Primary::Amaze
@@ -178,8 +188,8 @@ void SingleFrameCaptureDevelop::advanceDemosaic(Processor& processor, const char
     processor.releaseWorkspaceKeepOutput();
     if (!renderer_.start(vulkanContext_, queueSubmitMutex_, *context_, processor.outputImage(), processor.outputView(),
                          processor.clipStateImage(), processor.clipStateView(),
-                         vulkanContext_.hasMultiframeQueue() ? vulkanContext_.multiframeQueue() : VK_NULL_HANDLE,
-                         vulkanContext_.hasMultiframeQueue() ? &vulkanContext_.mfSubmitMutex() : nullptr)) {
+                         secondaryQueue_ ? vulkanContext_.multiframeQueue() : VK_NULL_HANDLE,
+                         secondaryQueue_ ? &vulkanContext_.mfSubmitMutex() : nullptr)) {
         failPendingJpeg(completed->requestId, "rendered_tonemap_start_rejected");
         processor.reset();
     } else {

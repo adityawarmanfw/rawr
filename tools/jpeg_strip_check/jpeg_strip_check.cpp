@@ -14,6 +14,7 @@
 #include <vector>
 
 using rawrcam::encoding::jpeg::encodeStripsRgba8;
+using rawrcam::encoding::jpeg::StripJpeg;
 
 static double ms(std::chrono::steady_clock::time_point a, std::chrono::steady_clock::time_point b) {
     return std::chrono::duration<double, std::milli>(b - a).count();
@@ -78,10 +79,30 @@ static int check(const char* name, const unsigned char* rgba, int w, int h, int 
         int w1, h1, w2, h2;
         auto a = decode(one, oneN, &w1, &h1), b = decode(par, parN, &w2, &h2);
         bool same = !a.empty() && a.size() == b.size() && w1 == w2 && h1 == h2 && std::memcmp(a.data(), b.data(), a.size()) == 0;
+        StripJpeg segmented;
+        const bool segmentedOk = segmented.encodeRgba8(rgba, w, h, q, ss, &err);
+        std::vector<unsigned char> joined;
+        const bool written = segmentedOk && segmented.writeTo([&](const unsigned char* data, size_t size) {
+            joined.insert(joined.end(), data, data + size);
+            return true;
+        });
+        const bool bytesSame = written && segmented.byteSize() == parN && joined.size() == parN &&
+            std::memcmp(joined.data(), par, parN) == 0;
+        if (!bytesSame) ++fails;
+        // Every possible failed sink call must stop output immediately.
+        const int chunks = segmented.stripsUsed() + 1;
+        for (int failAt = 1; failAt <= chunks; ++failAt) {
+            int calls = 0;
+            if (segmented.writeTo([&](const unsigned char*, size_t) { return ++calls != failAt; }) || calls != failAt)
+                ++fails;
+        }
+        segmented.reset();
+        if (segmented.byteSize() || segmented.stripsUsed() ||
+            segmented.writeTo([](const unsigned char*, size_t) { return true; })) ++fails;
         if (!same) ++fails;
-        std::printf("%-34s %dx%d q%d ss%d strips=%2d  single %7.1f ms  strips %7.1f ms (x%.1f)  bytes %+lld  pixels %s\n",
+        std::printf("%-34s %dx%d q%d ss%d strips=%2d  single %7.1f ms  strips %7.1f ms (x%.1f)  bytes %+lld  pixels %s segmented_bytes %s\n",
                     name, w, h, q, ss, strips, ms(t0, t1), ms(t1, t2), ms(t0, t1) / ms(t1, t2),
-                    (long long)parN - (long long)oneN, same ? "IDENTICAL" : "DIFFER");
+                    (long long)parN - (long long)oneN, same ? "IDENTICAL" : "DIFFER", bytesSame ? "IDENTICAL" : "DIFFER");
         tj3Free(par);
     }
     tj3Free(one);
@@ -96,7 +117,7 @@ int main(int argc, char** argv) {
     for (auto& s : sizes) {
         auto img = synthetic(s[0], s[1]);
         for (int ss : subs)
-            for (int q : {95, 100}) fails += check("synthetic", img.data(), s[0], s[1], q, ss);
+            for (int q : {95, 98, 100}) fails += check("synthetic", img.data(), s[0], s[1], q, ss);
     }
     if (argc > 1) {
         FILE* f = std::fopen(argv[1], "rb");

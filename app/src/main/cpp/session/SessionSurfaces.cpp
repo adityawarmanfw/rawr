@@ -318,6 +318,21 @@ void SessionEngine::detachPresentationSurface() noexcept {
         vulkanContext_.waitIdle();
     }
     swapchainRenderer_.destroySwapchain();
+    // Surface retirement already follows Camera2 retirement and the GPU idle
+    // wait above. A detached still defers this entire function until done.
+    // Keep multiframe lifecycle outside this single-frame optimization.
+    if (!hqStillDetachedWorkActive() && !capture_.multiframe().experimentalMultiframeEnabled()) {
+        try {
+            realtime_.coordinator().releaseCompletedSlots(true);
+            realtime_.releaseIdlePreviewResources();
+            ingressQueue_.setLowPowerIdle(true);
+            appendDiagnostic("PREVIEW_BACKGROUND_RESOURCES_RELEASED");
+        } catch (const std::exception& error) {
+            // Detachment is noexcept. Device loss must not turn this optional
+            // memory release into an exception escaping the lifecycle path.
+            SESSION_LOGE("Background preview release deferred: %s", error.what());
+        }
+    }
     presentationSurface_.reset();
     deferredSurfaceDetach_ = false;
 }

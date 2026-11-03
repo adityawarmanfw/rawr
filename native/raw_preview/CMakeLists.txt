@@ -101,11 +101,12 @@ if(RAW_PREVIEW_BUILD_STANDALONE)
     set(HL_SRC_highlight_guide_seed ${RAW_HIGHLIGHT_SHADER_DIR}/highlight_guide_seed.comp)
     set(HL_SRC_highlight_guide_propagate ${RAW_HIGHLIGHT_SHADER_DIR}/highlight_guide_propagate.comp)
     set(HL_SRC_highlight_guide_smooth ${RAW_HIGHLIGHT_SHADER_DIR}/highlight_guide_smooth.comp)
+    set(HL_SRC_highlight_guide_control ${RAW_HIGHLIGHT_SHADER_DIR}/highlight_guide_control.comp)
     set(HL_SRC_highlight_apply ${RAW_HIGHLIGHT_SHADER_DIR}/highlight_apply_inplace.comp)
     set(HL_SRC_coloropp ${RAW_HIGHLIGHT_SHADER_DIR}/coloropp.comp)
     set(HL_SRC_coloropp_tone ${RAW_HIGHLIGHT_SHADER_DIR}/coloropp_tone.comp)
     set(HL_DEFS_coloropp -DRAWR_COLOROPP_POST_WB=1)
-    foreach(HL_NAME highlight_guide_seed highlight_guide_propagate highlight_guide_smooth highlight_apply
+    foreach(HL_NAME highlight_guide_seed highlight_guide_propagate highlight_guide_smooth highlight_guide_control highlight_apply
                     coloropp coloropp_tone)
         set(HL_SRC ${HL_SRC_${HL_NAME}})
         set(HL_SPV ${CMAKE_BINARY_DIR}/raw_preview_${HL_NAME}.comp.spv)
@@ -123,7 +124,8 @@ if(RAW_PREVIEW_BUILD_STANDALONE)
     endforeach()
 
     add_custom_target(raw_preview_shader ALL DEPENDS ${SHADER_SPV} ${CFA_STATE_SHADER_SPV} ${HL_SEED_SHADER_SPV} ${HL_PROPAGATE_SHADER_SPV} ${HL_SMOOTH_SHADER_SPV} ${HL_APPLY_SHADER_SPV}
-        ${CMAKE_BINARY_DIR}/raw_preview_coloropp.comp.spv ${CMAKE_BINARY_DIR}/raw_preview_coloropp_tone.comp.spv)
+        ${CMAKE_BINARY_DIR}/raw_preview_coloropp.comp.spv ${CMAKE_BINARY_DIR}/raw_preview_coloropp_tone.comp.spv
+        ${CMAKE_BINARY_DIR}/raw_preview_highlight_guide_control.comp.spv)
 
     add_executable(raw_preview_validate
         validation/raw_preview_validation.cpp

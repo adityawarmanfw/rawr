@@ -69,6 +69,7 @@ void setAutoMinFps(EngineHandle handle, int fps) noexcept;
 void setAePriorityDisabled(EngineHandle handle, bool disabled) noexcept;
 bool setRecordingFps(EngineHandle handle, int fps) noexcept;
 void setPreviewForeground(EngineHandle handle, bool foreground) noexcept;
+void setUiPresentationActive(EngineHandle handle, bool active) noexcept;
 void setInitialConfigReady(EngineHandle handle) noexcept;
 void setStillCaptureInFlight(EngineHandle handle, bool begin) noexcept;
 void tickCameraSession(EngineHandle handle) noexcept;

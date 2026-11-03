@@ -5,8 +5,11 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <android/log.h>
+#include <sys/system_properties.h>
 
 #include "VulkanDispatch.h"
+#include "QueuePriorityPolicy.h"
 
 namespace rawrcam::vulkan {
 namespace {
@@ -141,10 +144,17 @@ void VulkanContext::createDeviceForSurface(VkSurfaceKHR surface) {
     samplerYcbcrConversionEnabled_ = ycbcrSupported.samplerYcbcrConversion == VK_TRUE;
     storageImageExtendedFormats_ = features2.features.shaderStorageImageExtendedFormats == VK_TRUE;
 
-    // Queue 0 runs the viewfinder; queue 1 runs multiframe merges and still
-    // renders. A 50 MP merge or render at equal priority stalls the preview.
-    float priorities[2] = {1.0f, 0.0f};
-    const uint32_t wantedQueues = familyQueueCount_ >= 2 ? 2u : 1u;
+    VkPhysicalDeviceProperties properties{};
+    vkGetPhysicalDeviceProperties(physical_, &properties);
+    // Queue 0 runs the viewfinder; queue 1 runs still/merge work. Retain the
+    // existing Adreno policy and avoid low-priority starvation on Mali.
+    // Keep the scheduling experiment opt-in until long-run device-loss checks
+    // pass. The original priority policy remains the production default.
+    char fairPriority[PROP_VALUE_MAX] = {};
+    const bool legacyMali = __system_property_get("debug.rawr.mali_fair_queue", fairPriority) <= 0 ||
+                            fairPriority[0] != '1';
+    const auto queuePolicy = queuePriorityPolicy(properties.vendorID, familyQueueCount_, legacyMali);
+    const uint32_t wantedQueues = queuePolicy.queueCount;
     std::vector<const char*> enabledExtensions(std::begin(requiredExtensions), std::end(requiredExtensions));
     if (float16ComputeEnabled_) {
         // Core Vulkan 1.2 carries the f16 structs; on 1.1 drivers they ride
@@ -188,7 +198,7 @@ void VulkanContext::createDeviceForSurface(VkSurfaceKHR surface) {
     queueInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
     queueInfo.queueFamilyIndex = queueFamily_;
     queueInfo.queueCount = wantedQueues;
-    queueInfo.pQueuePriorities = priorities;
+    queueInfo.pQueuePriorities = queuePolicy.priorities.data();
 
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -215,7 +225,10 @@ void VulkanContext::createDeviceForSurface(VkSurfaceKHR surface) {
         multiframeSubmission_.bind(mfQueue_);
         hasMultiframeQueue_ = mfQueue_ != VK_NULL_HANDLE;
     }
-    mfLowPriority_ = hasMultiframeQueue_;
+    mfLowPriority_ = hasMultiframeQueue_ && queuePolicy.stillQueueLowPriority();
+    __android_log_print(ANDROID_LOG_INFO, "RawrCamNative",
+                        "GPU_QUEUE_POLICY vendor=0x%x queues=%u previewPriority=%.1f stillPriority=%.1f",
+                        properties.vendorID, createdQueues, queuePolicy.priorities[0], queuePolicy.priorities[1]);
 
     getAhbProps_ = reinterpret_cast<PFN_vkGetAndroidHardwareBufferPropertiesANDROID>(
         vkGetDeviceProcAddr(device_, "vkGetAndroidHardwareBufferPropertiesANDROID"));
@@ -225,8 +238,6 @@ void VulkanContext::createDeviceForSurface(VkSurfaceKHR surface) {
         throw std::runtime_error("Required Vulkan extension functions unavailable");
     }
 
-    VkPhysicalDeviceProperties properties{};
-    vkGetPhysicalDeviceProperties(physical_, &properties);
     gpuName_ = properties.deviceName;
     vendorId_ = properties.vendorID;
     deviceId_ = properties.deviceID;

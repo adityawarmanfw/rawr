@@ -194,6 +194,7 @@ SessionEngine::SessionEngine(std::string filesDir) : filesDir_(std::move(filesDi
 SessionEngine::~SessionEngine() { shutdown(); }
 
 bool SessionEngine::setSurface(JNIEnv* env, jobject surfaceObj, int displayRotationDegrees) {
+    if (surfaceObj) ingressQueue_.setLowPowerIdle(false);
     // Retire before detaching presentation, unless a still owns the session.
     // Activation callbacks acquire mu_, so reconcile outside that lock.
     if (!surfaceObj) cameraControls_.setSurfaceReady(false);
@@ -392,12 +393,14 @@ void SessionEngine::consumeIngress(imaging::FrameIngressQueue::Event event, imag
         if (drops.images || drops.metadata)
             LOGI("INGRESS_QUEUE_PRESSURE rawDropped=%llu metadataDropped=%llu",
                  static_cast<unsigned long long>(drops.images), static_cast<unsigned long long>(drops.metadata));
+        // Paused presentation still receives metadata. Retire completed image
+        // leases on those events rather than depending on an idle ingress poll.
+        realtime_.coordinator().releaseCompletedSlots(false);
         if (raw)
             realtime_.coordinator().onRawFrame(std::move(std::get<imaging::RawFrameLease>(event.payload)));
         else if (const auto* metadata = std::get_if<metadata::FrameMetadataSnapshot>(&event.payload))
             (void)realtime_.coordinator().submitMetadata(*metadata);
         else {
-            realtime_.coordinator().releaseCompletedSlots(false);
             capture_.single().advance();
         }
     }

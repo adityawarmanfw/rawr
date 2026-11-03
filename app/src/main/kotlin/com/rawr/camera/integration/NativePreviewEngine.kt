@@ -45,6 +45,7 @@ class NativePreviewEngine {
 
     external fun setCameraActive(handle: Long, active: Boolean)
     external fun setPreviewForeground(handle: Long, foreground: Boolean)
+    external fun setUiPresentationActive(handle: Long, active: Boolean)
     external fun setInitialConfigReady(handle: Long)
     external fun setStillCaptureInFlight(handle: Long, begin: Boolean)
     external fun tickCameraSession(handle: Long)

@@ -11,13 +11,15 @@ import androidx.compose.ui.semantics.testTagsAsResourceId
 import com.rawr.camera.BuildConfig
 
 /**
- * Debug builds publish every testTag as a `resource-id`, so `uiautomator dump` and adb scripts can
+ * Debug and release-optimized benchmark builds publish every testTag as a `resource-id`, so adb scripts can
  * address controls by tag. Popup windows (dialogs, dropdowns) have their own root and are not covered.
  */
 @Composable
 @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 private fun ExposeTestTags(content: @Composable () -> Unit) {
-    if (BuildConfig.DEBUG) Box(Modifier.semantics { testTagsAsResourceId = true }) { content() } else content()
+    if (BuildConfig.DEBUG || BuildConfig.BUILD_TYPE == "benchmark") {
+        Box(Modifier.semantics { testTagsAsResourceId = true }) { content() }
+    } else content()
 }
 
 @Composable

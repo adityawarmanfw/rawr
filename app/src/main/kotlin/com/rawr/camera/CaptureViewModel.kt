@@ -172,6 +172,8 @@ class CaptureViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun setUiPresentationActive(active: Boolean) = previewCoordinator.setUiPresentationActive(active)
+
     fun stopPreviewAfterRecording() {
         captureVisible = false
         val stopping = recording.stop()

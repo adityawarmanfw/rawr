@@ -60,6 +60,9 @@ class RenderResources final {
     }
     void ensureCaptureSharpening();
     void createPixels(const RenderedStillContext& rendered);
+    // After the transfer fence and before CPU reads.
+    void invalidateReadback();
+    void releaseCompletedProcessing();
 
    private:
     void closeFilmAssets() noexcept;
@@ -79,6 +82,7 @@ class RenderResources final {
     VkDeviceMemory readbackMemory_ = VK_NULL_HANDLE;
     void* mapped_ = nullptr;
     VkDeviceSize readbackBytes_ = 0;
+    bool readbackCoherent_ = true;
     // Film glow-factor tap (full-res RGBA16F quotient, transient): written
     // by SpektraFilm when film+UltraHDR run with a linear scatter path
     // (halation/camera diffusion); consumed as the gain-map glow input so
@@ -91,6 +95,7 @@ class RenderResources final {
     VkDeviceMemory mapReadbackMemory_ = VK_NULL_HANDLE;
     void* mapMapped_ = nullptr;
     VkDeviceSize mapReadbackBytes_ = 0;
+    bool mapReadbackCoherent_ = true;
     uint32_t mapWidth_ = 0;
     uint32_t mapHeight_ = 0;
     std::unique_ptr<gainmap::GainmapCompute> gainmap_;

@@ -1,6 +1,7 @@
 #pragma once
 #include <vulkan/vulkan.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 
@@ -15,6 +16,7 @@ struct GuideChainShaders {
     SpirvWords seed;
     SpirvWords propagate;
     SpirvWords smooth;
+    SpirvWords control{};  // optional preview-only indirect-dispatch controller
 };
 
 // Colour-propagation guide pipelines, shared by every GuideChain on a device.
@@ -36,6 +38,11 @@ class GuideChainPipelines {
     VkPipelineLayout passLayout_ = VK_NULL_HANDLE;
     VkPipeline propagate_ = VK_NULL_HANDLE;
     VkPipeline smooth_ = VK_NULL_HANDLE;
+    VkPipeline smoothDense_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout controlSetLayout_ = VK_NULL_HANDLE;
+    VkPipelineLayout controlLayout_ = VK_NULL_HANDLE;
+    VkPipeline control_ = VK_NULL_HANDLE;
+    std::array<uint32_t, 2> seedSize_{16, 16}, propagateSize_{16, 16}, smoothSize_{16, 16};
 };
 
 // Low-resolution colour guide for one working image: seed from bright valid
@@ -58,6 +65,11 @@ class GuideChain {
         PFN_vkCmdEndConditionalRenderingEXT end = nullptr;
         const VkConditionalRenderingBeginInfoEXT* info = nullptr;
     };
+    struct Timing {
+        VkQueryPool pool = VK_NULL_HANDLE;
+        uint32_t seedQuery = 0;
+        uint32_t propagationQuery = 0;
+    };
 
     // Transitions the guide images to GENERAL once; record() calls it too.
     void recordInitialize(VkCommandBuffer command);
@@ -67,7 +79,11 @@ class GuideChain {
     // working image size; channelCeilings are the post-WB channel ceilings.
     // Returns the view holding the final guide.
     VkImageView record(VkCommandBuffer command, VkImageView rgbView, VkImageView clipStateView, uint32_t width,
-                       uint32_t height, const float channelCeilings[3], const Conditional* conditional = nullptr);
+                       uint32_t height, const float channelCeilings[3], const Conditional* conditional = nullptr,
+                       const Timing* timing = nullptr, VkBuffer clipPredicate = VK_NULL_HANDLE);
+    // Written by record(); read only after its submission completes.
+    VkBuffer indirectArguments() const noexcept { return indirectActive_ ? arguments_ : VK_NULL_HANDLE; }
+    static constexpr VkDeviceSize kApplyDispatchOffset = 3 * sizeof(VkDispatchIndirectCommand);
 
     // Guide view to bind when reconstruction is off and record() is skipped.
     VkImageView idleGuideView() const noexcept { return guideA_.view; }
@@ -86,6 +102,10 @@ class GuideChain {
     VkDescriptorSet seedSet_ = VK_NULL_HANDLE;
     VkDescriptorSet aToBSet_ = VK_NULL_HANDLE;
     VkDescriptorSet bToASet_ = VK_NULL_HANDLE;
+    VkDescriptorSet controlSet_ = VK_NULL_HANDLE;
+    VkBuffer arguments_ = VK_NULL_HANDLE;
+    VkDeviceMemory argumentsMemory_ = VK_NULL_HANDLE;
+    bool indirectActive_ = false;
 };
 
 }  // namespace rawr::highlight

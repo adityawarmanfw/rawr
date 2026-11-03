@@ -52,8 +52,8 @@ void save(const std::filesystem::path& p, std::uint32_t w, std::uint32_t h, cons
     for (size_t i = 0; i < size_t(w) * h; ++i) f.write(reinterpret_cast<const char*>(&rgba[i * 4]), 3);
 }
 void renderMode(VulkanTestContext& vk, ImageScopes& scopes, const DisplayImageView& iv,
-                const std::filesystem::path& out, const std::string& base, WaveformMode mode, const char* name) {
-    constexpr std::uint32_t OW = 768, OH = 512;
+                const std::filesystem::path& out, const std::string& base, WaveformMode mode, const char* name,
+                std::uint32_t OW, std::uint32_t OH) {
     auto dst = vk.createRgbaImage(OW, OH);
     std::vector<std::uint8_t> zero(size_t(OW) * OH * 4u, 0);
     vk.uploadRgba(dst, zero);
@@ -92,10 +92,14 @@ void renderMode(VulkanTestContext& vk, ImageScopes& scopes, const DisplayImageVi
 }  // namespace
 int main(int argc, char** argv) {
     try {
-        if (argc != 4)
-            throw std::invalid_argument("usage: image_scopes_waveform_photo_artifacts FIXTURE_DIR OUT_DIR basename");
+        if (argc != 4 && argc != 6)
+            throw std::invalid_argument("usage: image_scopes_waveform_photo_artifacts FIXTURE_DIR OUT_DIR basename [WIDTH HEIGHT]");
         const std::filesystem::path fixtures = argv[1], out = argv[2];
         const std::string base = argv[3];
+        const auto width = argc == 6 ? std::stoul(argv[4]) : 768u;
+        const auto height = argc == 6 ? std::stoul(argv[5]) : 512u;
+        if (!width || !height || width > 2048u || height > 2048u)
+            throw std::invalid_argument("output extent must be 1..2048");
         std::filesystem::create_directories(out);
         const auto px = ppm(fixtures / (base + ".ppm"));
         VulkanTestContext vk;
@@ -103,8 +107,8 @@ int main(int argc, char** argv) {
         auto in = vk.createRgbaImage(px.w, px.h);
         vk.uploadRgba(in, px.rgba);
         DisplayImageView iv{in.view, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_GENERAL, px.w, px.h};
-        renderMode(vk, scopes, iv, out, base, WaveformMode::RgbOverlay, "rgb");
-        renderMode(vk, scopes, iv, out, base, WaveformMode::Luma, "luma");
+        renderMode(vk, scopes, iv, out, base, WaveformMode::RgbOverlay, "rgb", width, height);
+        renderMode(vk, scopes, iv, out, base, WaveformMode::Luma, "luma", width, height);
         vk.destroyRgbaImage(in);
         std::cout << "WAVEFORM_E_PHOTO_ARTIFACT_PASS " << base << "\n";
         return 0;

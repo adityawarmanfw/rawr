@@ -109,8 +109,6 @@ PostDemosaicProcessor::PostDemosaicProcessor(VkPhysicalDevice pd, VkDevice devic
     derivedClipState_ = rawr::vk::createOwnedImage(pd, device, width / 2u, height / 2u, VK_FORMAT_R16_UINT,
                                                           VK_IMAGE_USAGE_STORAGE_BIT);
     createWbPipeline();
-    createHighlightPipeline();
-    createHighlightGuidePipelines();
     createDeriveClipPipeline();
     createPredicateBuffer(pd);
     // Optional: predicated guide chain via VK_EXT_conditional_rendering when
@@ -710,6 +708,20 @@ void PostDemosaicProcessor::record(VkCommandBuffer cmd, VkImage sourceImage, VkI
     // Colour propagation keeps its own pass because it needs the guide chain.
     const uint32_t highlightStage = preserveReconstructedHighlights ? 2u : (highlightRecoveryEnabled ? 1u : 0u);
     const bool highlightFused = highlightStage != 1u;
+    // OFF and Inpaint Opposed execute in WB. They never sample a guide or
+    // dispatch the separate recovery pipeline, so do not compile/allocate it.
+    // Retain the resources once built: switching methods cannot invalidate
+    // descriptors or images referenced by a previously recorded frame.
+    if (!highlightFused && !guideChain_) {
+        try {
+            createHighlightPipeline();
+            createHighlightGuidePipelines();
+        } catch (...) {
+            destroyHighlightGuidePipelines();
+            destroyHighlightPipeline();
+            throw;
+        }
+    }
     struct Pc {
         uint32_t width, height;
         float r, g, b;
@@ -782,7 +794,7 @@ void PostDemosaicProcessor::record(VkCommandBuffer cmd, VkImage sourceImage, VkI
     condBegin.buffer = predBuffer_;
     condBegin.offset = 0;
     condBegin.flags = 0;
-    guideChain_->recordInitialize(cmd);
+    if (!highlightFused) guideChain_->recordInitialize(cmd);
 
     if (highlightFused) {
         // Nothing to dispatch: WB already wrote the highlight-stage result.

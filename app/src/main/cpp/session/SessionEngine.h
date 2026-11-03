@@ -207,6 +207,7 @@ class SessionEngine {
                                 : autoKeyCurve_;
     }
     void setExperimentalZeroCopy(bool enabled);
+    void setUiPresentationActive(bool active) noexcept { realtime_.coordinator().setUiPresentationActive(active); }
     void setPipelineDiagnostic(uint32_t mode);
     bool submitMetadata(const rawrcam::metadata::FrameMetadataSnapshot& metadata);
     void recordPipelineAuditLine(const std::string& line);

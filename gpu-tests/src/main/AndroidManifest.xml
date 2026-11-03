@@ -1,0 +1,11 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-feature android:name="android.hardware.vulkan.level" android:version="1" android:required="true" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- No activity or launcher. Only explicitly requested instrumentation opens Camera2. -->
+    <application android:label="RAWR Headless GPU Tests" android:allowBackup="false">
+        <service android:name=".HeadlessCameraService" android:exported="false" android:foregroundServiceType="camera" />
+    </application>
+</manifest>

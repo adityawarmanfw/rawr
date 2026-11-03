@@ -1,6 +1,7 @@
 #include "diagnostics/timing/GpuTimingTracker.h"
 
 #include <android/log.h>
+#include <sys/system_properties.h>
 
 #include <algorithm>
 #include <array>
@@ -11,7 +12,7 @@
 namespace rawrcam::diagnostics {
 namespace {
 constexpr const char* kTag = "RawrCamNative";
-constexpr uint32_t kQueriesPerSlot = 15;
+constexpr uint32_t kMaxQueriesPerSlot = 19;
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, kTag, __VA_ARGS__)
 
 void vkCheck(VkResult result, const char* what) {
@@ -27,10 +28,13 @@ void GpuTimingTracker::initialize(VkDevice device, float timestampPeriodNs, uint
     device_ = device;
     timestampPeriodNs_ = timestampPeriodNs;
     frameSlotCount_ = frameSlotCount;
+    char property[PROP_VALUE_MAX]{};
+    stageTimingEnabled_ = __system_property_get("debug.rawr.vf_stage_timing", property) > 0 && property[0] == '1';
+    queriesPerSlot_ = stageTimingEnabled_ ? kMaxQueriesPerSlot : 15u;
     VkQueryPoolCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
     info.queryType = VK_QUERY_TYPE_TIMESTAMP;
-    info.queryCount = frameSlotCount_ * kQueriesPerSlot;
+    info.queryCount = frameSlotCount_ * queriesPerSlot_;
     vkCheck(vkCreateQueryPool(device_, &info, nullptr, &queryPool_), "vkCreateQueryPool");
 }
 
@@ -42,64 +46,84 @@ void GpuTimingTracker::destroy() {
 }
 
 void GpuTimingTracker::beginFrame(VkCommandBuffer command, uint32_t slotIndex, bool probeRepeat) {
-    vkCmdResetQueryPool(command, queryPool_, slotIndex * kQueriesPerSlot, kQueriesPerSlot);
+    vkCmdResetQueryPool(command, queryPool_, slotIndex * queriesPerSlot_, queriesPerSlot_);
     probeRepeat_[slotIndex] = probeRepeat;
     videoActive_[slotIndex] = false;
-    vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, queryPool_, slotIndex * kQueriesPerSlot);
+    rawCfaActive_[slotIndex] = false;
+    vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, queryPool_, slotIndex * queriesPerSlot_);
 }
 void GpuTimingTracker::markRawInputReady(VkCommandBuffer command, uint32_t slotIndex) const {
-    vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, queryPool_, slotIndex * kQueriesPerSlot + 1);
+    vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, queryPool_, slotIndex * queriesPerSlot_ + 1);
 }
 void GpuTimingTracker::markVideoProcessBegin(VkCommandBuffer command, uint32_t slotIndex, bool active) {
     videoActive_[slotIndex] = active;
-    vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, queryPool_, slotIndex * kQueriesPerSlot + 11);
+    vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, queryPool_, slotIndex * queriesPerSlot_ + 11);
 }
 void GpuTimingTracker::markVideoProcessDone(VkCommandBuffer command, uint32_t slotIndex) const {
-    vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, queryPool_, slotIndex * kQueriesPerSlot + 12);
+    vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, queryPool_, slotIndex * queriesPerSlot_ + 12);
 }
 void GpuTimingTracker::markVideoDemosaicDone(VkCommandBuffer command, uint32_t slotIndex) const {
-    vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, queryPool_, slotIndex * kQueriesPerSlot + 13);
+    vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, queryPool_, slotIndex * queriesPerSlot_ + 13);
 }
 void GpuTimingTracker::markVideoPostDone(VkCommandBuffer command, uint32_t slotIndex) const {
-    vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, queryPool_, slotIndex * kQueriesPerSlot + 14);
+    vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, queryPool_, slotIndex * queriesPerSlot_ + 14);
 }
 void GpuTimingTracker::markRawDone(VkCommandBuffer command, uint32_t slotIndex) const {
-    vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, queryPool_, slotIndex * kQueriesPerSlot + 2);
+    if (stageTimingEnabled_ && !rawCfaActive_[slotIndex]) {
+        vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, queryPool_, slotIndex * queriesPerSlot_ + 15);
+        vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, queryPool_, slotIndex * queriesPerSlot_ + 16);
+        vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, queryPool_, slotIndex * queriesPerSlot_ + 17);
+        vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, queryPool_, slotIndex * queriesPerSlot_ + 18);
+    }
+    vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, queryPool_, slotIndex * queriesPerSlot_ + 2);
+}
+uint32_t GpuTimingTracker::rawCfaQueryIndex(uint32_t slotIndex) noexcept {
+    rawCfaActive_[slotIndex] = stageTimingEnabled_;
+    return slotIndex * queriesPerSlot_ + 15;
+}
+uint32_t GpuTimingTracker::rawHighlightPrepareQueryIndex(uint32_t slotIndex) const noexcept {
+    return slotIndex * queriesPerSlot_ + 16;
+}
+uint32_t GpuTimingTracker::rawGuideSeedQueryIndex(uint32_t slotIndex) const noexcept {
+    return slotIndex * queriesPerSlot_ + 17;
+}
+uint32_t GpuTimingTracker::rawGuidePropagationQueryIndex(uint32_t slotIndex) const noexcept {
+    return slotIndex * queriesPerSlot_ + 18;
 }
 void GpuTimingTracker::markTonemapInputReady(VkCommandBuffer command, uint32_t slotIndex) const {
-    vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, queryPool_, slotIndex * kQueriesPerSlot + 3);
+    vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, queryPool_, slotIndex * queriesPerSlot_ + 3);
 }
 void GpuTimingTracker::markTonemapDone(VkCommandBuffer command, uint32_t slotIndex) const {
-    vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, queryPool_, slotIndex * kQueriesPerSlot + 4);
+    vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, queryPool_, slotIndex * queriesPerSlot_ + 4);
 }
 void GpuTimingTracker::markTonemapRepeatInputReady(VkCommandBuffer command, uint32_t slotIndex) const {
-    vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, queryPool_, slotIndex * kQueriesPerSlot + 5);
+    vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, queryPool_, slotIndex * queriesPerSlot_ + 5);
 }
 void GpuTimingTracker::markTonemapRepeatDone(VkCommandBuffer command, uint32_t slotIndex) const {
-    vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, queryPool_, slotIndex * kQueriesPerSlot + 6);
+    vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, queryPool_, slotIndex * queriesPerSlot_ + 6);
 }
 void GpuTimingTracker::markScopesDone(VkCommandBuffer command, uint32_t slotIndex) const {
-    vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, queryPool_, slotIndex * kQueriesPerSlot + 7);
+    vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, queryPool_, slotIndex * queriesPerSlot_ + 7);
 }
 void GpuTimingTracker::markOverlayDone(VkCommandBuffer command, uint32_t slotIndex) const {
-    vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, queryPool_, slotIndex * kQueriesPerSlot + 8);
+    vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, queryPool_, slotIndex * queriesPerSlot_ + 8);
 }
 void GpuTimingTracker::markPresentationDone(VkCommandBuffer command, uint32_t slotIndex) const {
-    vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPool_, slotIndex * kQueriesPerSlot + 9);
+    vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPool_, slotIndex * queriesPerSlot_ + 9);
 }
 void GpuTimingTracker::markFrameDone(VkCommandBuffer command, uint32_t slotIndex) const {
     if (!videoActive_[slotIndex]) {
         markVideoDemosaicDone(command, slotIndex);
         markVideoPostDone(command, slotIndex);
     }
-    vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPool_, slotIndex * kQueriesPerSlot + 10);
+    vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPool_, slotIndex * queriesPerSlot_ + 10);
 }
 
 void GpuTimingTracker::consumeCompleted(uint32_t slotIndex, std::size_t importedCount, std::size_t descriptorCount,
                                         bool rawStateEnabled) {
     if (!device_ || !queryPool_) return;
-    std::array<uint64_t, kQueriesPerSlot> q{};
-    if (vkGetQueryPoolResults(device_, queryPool_, slotIndex * kQueriesPerSlot, kQueriesPerSlot, sizeof(q), q.data(),
+    std::array<uint64_t, kMaxQueriesPerSlot> q{};
+    if (vkGetQueryPoolResults(device_, queryPool_, slotIndex * queriesPerSlot_, queriesPerSlot_, sizeof(q), q.data(),
                               sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) != VK_SUCCESS)
         return;
     auto ns = [&](int a, int b) { return static_cast<double>(q[b] - q[a]) * timestampPeriodNs_; };
@@ -108,6 +132,16 @@ void GpuTimingTracker::consumeCompleted(uint32_t slotIndex, std::size_t imported
                  tone1 = ns(3, 4), toneRepeatBarrier = ns(4, 5), tone2 = ns(5, 6);
     rawPrepNs_ += rawPrep;
     rawShaderNs_ += rawShader;
+    if (rawCfaActive_[slotIndex]) {
+        rawCfaNs_ += ns(1, 15);
+        rawHighlightNs_ += ns(15, 2);
+        rawHighlightPrepareNs_ += ns(15, 16);
+        rawHighlightApplyNs_ += ns(16, 2);
+        rawGuideSeedNs_ += ns(15, 17);
+        rawGuidePropagationNs_ += ns(17, 18);
+        rawGuideSmoothNs_ += ns(18, 16);
+        ++rawCfaSamples_;
+    }
     if (videoActive_[slotIndex]) {
         videoProcessNs_ += videoProcess;
         videoDemosaicNs_ += ns(11, 13);
@@ -146,6 +180,14 @@ void GpuTimingTracker::consumeCompleted(uint32_t slotIndex, std::size_t imported
     if (diagnostic_) {
         std::ostringstream d;
         d << "CHECKPOINT frames=" << s.timingSamples << " rawPrepMs=" << prep << " rawShaderMs=" << shader
+          << " rawStageTiming=" << (stageTimingEnabled_ ? 1 : 0)
+          << " rawCfaMs=" << avgMs(rawCfaNs_, rawCfaSamples_)
+          << " rawHighlightMs=" << avgMs(rawHighlightNs_, rawCfaSamples_)
+          << " rawHighlightPrepareMs=" << avgMs(rawHighlightPrepareNs_, rawCfaSamples_)
+          << " rawHighlightApplyMs=" << avgMs(rawHighlightApplyNs_, rawCfaSamples_)
+          << " rawGuideSeedMs=" << avgMs(rawGuideSeedNs_, rawCfaSamples_)
+          << " rawGuidePropagationMs=" << avgMs(rawGuidePropagationNs_, rawCfaSamples_)
+          << " rawGuideSmoothMs=" << avgMs(rawGuideSmoothNs_, rawCfaSamples_)
           << " rawMs=" << s.avgRawMs << " toneHandoffMs=" << hand << " tonemapMs=" << s.avgTonemapMs
           << " videoProcessMs=" << s.avgVideoProcessMs << " totalGpuMs=" << s.avgTotalGpuMs
           << " rawState=" << (rawStateEnabled ? 1 : 0);

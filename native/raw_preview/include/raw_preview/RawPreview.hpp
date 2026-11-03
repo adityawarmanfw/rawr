@@ -79,6 +79,7 @@ struct RawPreviewCreateInfo {
     std::string highlightGuidePropagateShaderPath;
     std::string highlightGuideSmoothShaderPath;
     std::string highlightApplyShaderPath;
+    std::string highlightGuideControlShaderPath;  // optional core indirect guide dispatch
     // Inpaint Opposed: coloropp.comp built with RAWR_COLOROPP_POST_WB=1, and
     // coloropp_tone.comp. Empty paths default to the CFA-state shader dir.
     std::string coloroppShaderPath;
@@ -93,6 +94,13 @@ struct RawPreviewCreateInfo {
 
 struct RawPreviewRecordInfo {
     VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+    // Optional timestamp after CFA development, before highlight processing.
+    // Caller resets the query pool and reads it after frame completion.
+    VkQueryPool cfaTimingPool = VK_NULL_HANDLE;
+    uint32_t cfaTimingQuery = 0;
+    uint32_t highlightPrepareTimingQuery = UINT32_MAX;
+    uint32_t guideSeedTimingQuery = UINT32_MAX;
+    uint32_t guidePropagationTimingQuery = UINT32_MAX;
     VkImageView inputRawR16UintView = VK_NULL_HANDLE;
     VkImageView outputLinearRgba16fView = VK_NULL_HANDLE;
     VkImageView outputCfaStateR16UintView = VK_NULL_HANDLE; // optional, half-resolution VK_FORMAT_R16_UINT
@@ -120,6 +128,7 @@ struct RawPreviewRecordInfo {
 struct RawPreviewRecordResult {
     VkImage sdrImage = VK_NULL_HANDLE;    // VK_NULL_HANDLE: use the linear output
     VkImageView sdrView = VK_NULL_HANDLE;
+    VkBuffer guideDispatchArgs = VK_NULL_HANDLE;  // optional diagnostic; wait for frame fence
 };
 
 class RawPreview {

@@ -36,6 +36,9 @@ class RealtimePipeline final : public RealtimeResources {
     bool setColorRenderProfile(tonemap_integration::ColorRenderProfile profile, std::string importedProfileId);
     void setScopeDeviceRotationDegrees(int rotation);
     void ensureMultiframeBridge();
+    // Camera retired, GPU idle and slots fenced by the caller. Keep capture
+    // workers independent while dropping viewfinder-only allocations.
+    void releaseIdlePreviewResources() noexcept;
     void releaseProcessingResourcesForFrozenReplay() noexcept;
     void shutdown() noexcept;
     diagnostics::GpuTimingTracker& timing() noexcept { return performanceTracker_; }

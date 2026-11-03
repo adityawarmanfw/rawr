@@ -415,7 +415,7 @@ bool writeUltraHdrFallback(int fd, const unsigned char* baseJpeg, std::size_t ba
 // The strip-parallel encoder (pixels identical to one tj3Compress8 with these settings); false = encode on one
 // thread as before. The output, like tj3Compress8's, is released with tj3Free.
 bool encodeParallel(const unsigned char* pixels, std::uint32_t width, std::uint32_t height, int quality, int subsamp,
-                    std::uint64_t requestId, unsigned char** jpeg, std::size_t* size) {
+                    std::uint64_t requestId, unsigned char** jpeg, std::size_t* size, StripJpeg* segmented = nullptr) {
     // `adb shell setprop debug.rawr.jpeg_strips 0` encodes on one thread (A/B checks of the strip encoder).
     char prop[PROP_VALUE_MAX] = {};
     if (__system_property_get("debug.rawr.jpeg_strips", prop) > 0 && prop[0] == '0') {
@@ -425,8 +425,15 @@ bool encodeParallel(const unsigned char* pixels, std::uint32_t width, std::uint3
     }
     int strips = 0;
     std::string why;
-    if (encodeStripsRgba8(pixels, static_cast<int>(width), static_cast<int>(height), quality, subsamp, jpeg, size,
-                          &strips, &why)) {
+    const bool encoded = segmented
+        ? segmented->encodeRgba8(pixels, static_cast<int>(width), static_cast<int>(height), quality, subsamp, &why)
+        : encodeStripsRgba8(pixels, static_cast<int>(width), static_cast<int>(height), quality, subsamp, jpeg, size,
+                            &strips, &why);
+    if (encoded) {
+        if (segmented) {
+            strips = segmented->stripsUsed();
+            *size = segmented->byteSize();
+        }
         __android_log_print(ANDROID_LOG_INFO, "RawrCamNative", "JPEG_STRIPS requestId=%llu strips=%d",
                             (unsigned long long)requestId, strips);
         return true;
@@ -483,6 +490,12 @@ bool JpegCaptureWriter::start(std::uint64_t requestId, const void* rgba8, std::s
             tjhandle handle = tj3Init(TJINIT_COMPRESS);
             unsigned char* jpegBuf = nullptr;
             std::size_t jpegSize = 0;
+            StripJpeg segmented;
+            // A/B the allocation change in the same APK, with identical pixels,
+            // encoder settings and GPU work. Default remains the segmented path.
+            char streamProp[PROP_VALUE_MAX] = {};
+            const bool streamStrips = __system_property_get("debug.rawr.jpeg_stream", streamProp) <= 0 ||
+                                      streamProp[0] != '0';
             try {
                 if (!handle) {
                     done.error = "tj3Init failed";
@@ -494,11 +507,12 @@ bool JpegCaptureWriter::start(std::uint64_t requestId, const void* rgba8, std::s
                            tj3Set(handle, TJPARAM_FASTDCT, 0) != 0) {
                     done.error = tj3GetErrorStr(handle);
                 } else if (!encodeParallel(pixels, width, height, context.quality, tjSubsampling(context.subsampling),
-                                           requestId, &jpegBuf, &jpegSize) &&
+                                           requestId, &jpegBuf, &jpegSize, streamStrips ? &segmented : nullptr) &&
                            tj3Compress8(handle, pixels, static_cast<int>(width), 0, static_cast<int>(height), TJPF_RGBA,
                                         &jpegBuf, &jpegSize) != 0) {
                     done.error = tj3GetErrorStr(handle);
-                } else if (jpegSize < 2 || jpegBuf[0] != 0xFFu || jpegBuf[1] != 0xD8u) {
+                } else if (jpegSize < 2 || (!segmented.byteSize() &&
+                           (!jpegBuf || jpegBuf[0] != 0xFFu || jpegBuf[1] != 0xD8u))) {
                     done.error = "libjpeg-turbo returned invalid JPEG SOI";
                 } else {
                     const auto encodedAt = std::chrono::steady_clock::now();
@@ -521,9 +535,24 @@ bool JpegCaptureWriter::start(std::uint64_t requestId, const void* rgba8, std::s
                             static_cast<unsigned char>(((xmp.size() + 2u) >> 8u) & 0xffu),
                             static_cast<unsigned char>((xmp.size() + 2u) & 0xffu),
                         };
-                        if (!writeAll(fd, jpegBuf, 2u) || !writeAll(fd, exifHeader, sizeof(exifHeader)) ||
+                        const unsigned char soi[] = {0xFFu, 0xD8u};
+                        // Metadata is inserted after SOI as before. The strip path writes the same
+                        // joined JPEG as bounded chunks, avoiding a full compressed-image copy.
+                        bool firstChunk = true;
+                        const auto writeBody = [&] {
+                            if (!segmented.byteSize()) return writeAll(fd, jpegBuf + 2u, jpegSize - 2u);
+                            return segmented.writeTo([&](const unsigned char* data, std::size_t size) {
+                                if (firstChunk) {
+                                    data += 2u;
+                                    size -= 2u;
+                                    firstChunk = false;
+                                }
+                                return writeAll(fd, data, size);
+                            });
+                        };
+                        if (!writeAll(fd, soi, sizeof(soi)) || !writeAll(fd, exifHeader, sizeof(exifHeader)) ||
                             !writeAll(fd, exif.data(), exif.size()) || !writeAll(fd, xmpHeader, sizeof(xmpHeader)) ||
-                            !writeAll(fd, xmp.data(), xmp.size()) || !writeAll(fd, jpegBuf + 2u, jpegSize - 2u)) {
+                            !writeAll(fd, xmp.data(), xmp.size()) || !writeBody()) {
                             done.error = "JPEG write failed: " + std::string(std::strerror(errno));
                         }
                     }
@@ -534,6 +563,7 @@ bool JpegCaptureWriter::start(std::uint64_t requestId, const void* rgba8, std::s
                 done.error = "jpeg_encoding_failed";
             }
             if (jpegBuf) tj3Free(jpegBuf);
+            segmented.reset();
             if (handle) tj3Destroy(handle);
             if (done.error.empty()) {
                 const auto fs0 = std::chrono::steady_clock::now();
