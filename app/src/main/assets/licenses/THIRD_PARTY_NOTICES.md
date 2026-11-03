@@ -43,6 +43,18 @@ Legal notices screen: `LICENSE`, `NOTICE`, `THIRD_PARTY_NOTICES.md`,
 `Apache-2.0.txt`, `libjpeg-turbo-LICENSE.md`,
 `libjpeg-turbo-README.ijg`, `tinydng-LICENSE.txt`.
 
+### Bundled camera profiles
+
+The vivo X300 Ultra DCP profiles in
+`app/src/main/assets/dcp_profiles/maze_x300u/` are by **MaZe** and are
+redistributed with the author's permission. The permission conversation is dated
+1 November 2026 (Jakarta time, WIB, UTC+07:00):
+https://t.me/comrawr/3586. The full supplied transcript is recorded in
+`docs/permissions/maze-x300u.md`.
+
+These original DCP files have not been modified. No Creative Commons license
+is assigned to them; their permission notice is separate from rawr's code license.
+
 ## 2. Copyright notices
 
 - **darktable** — Copyright (C) the darktable developers. GPL-3.0-or-later.

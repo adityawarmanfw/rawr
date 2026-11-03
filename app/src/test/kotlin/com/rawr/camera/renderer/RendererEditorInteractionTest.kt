@@ -1,5 +1,6 @@
 package com.rawr.camera.renderer
 
+import com.rawr.camera.registerComposeTestActivity
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -8,9 +9,13 @@ import org.robolectric.annotation.LooperMode
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w412dp-h892dp")
 @LooperMode(LooperMode.Mode.PAUSED)
-class RendererEditorInteractionTest : RendererEditorInteractionChecks()
+class RendererEditorInteractionTest : RendererEditorInteractionChecks() {
+    init { registerComposeTestActivity() }
+}
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w892dp-h412dp-land")
 @LooperMode(LooperMode.Mode.PAUSED)
-class RendererEditorLandscapeInteractionTest : RendererEditorInteractionChecks()
+class RendererEditorLandscapeInteractionTest : RendererEditorInteractionChecks() {
+    init { registerComposeTestActivity() }
+}

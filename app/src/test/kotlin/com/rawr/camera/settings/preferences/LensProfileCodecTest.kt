@@ -543,4 +543,21 @@ class LensProfileCodecTest {
         assertEquals(StillSequence.Direct, f85.companion { copy(mode = CompanionMode.Off) }.stillSequence())
         assertEquals(StillSequence.PauseViewfinder, byName.getValue("L14").session { copy(stopViewfinderForPhotos = true) }.stillSequence())
     }
+    @Test fun multipleDcpsRoundTripIncludingCameraDefaultAndNativeSelection() {
+        val first = LensDcp("0".repeat(32) + ".dcp", "Daylight")
+        val second = LensDcp("1".repeat(32) + ".dcp", "Tungsten")
+        val lens = LensProfile("35", "3").image { importDcp(first).importDcp(second) }
+        roundTrips(lens, lens.image { selectDcp(null) })
+        val native = lensJson(LensProfileCodec.encode(listOf(lens), dcpDir = java.io.File("/profiles")))
+            .getJSONObject("image")
+        assertEquals(second.file, native.getJSONObject("dcp").getString("file"))
+        assertTrue(!native.has("dcpProfiles"))
+    }
+
+    @Test fun backupRejectsMalformedInactiveDcpProfiles() {
+        for (profiles in listOf("{}", "[null]", "[{\"file\":\"../escape.dcp\"}]")) {
+            rejectedV2("\"image\":{\"dcpProfiles\":$profiles}")
+        }
+    }
+
 }
