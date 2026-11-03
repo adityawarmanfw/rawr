@@ -1,5 +1,87 @@
 # Phone optimization results
 
+## 2026-11-03: GPU-driven empty-guide skipping and real UI checks
+
+**The 33.3 ms / stable 30 fps target is still unmet. Home animation is not
+cleared.** This work enables a useful scene-dependent saving, not universal 30 fps.
+No resolution, profile, highlight method, recovery quality or saved-image setting
+was reduced. HDR+ and MFSR algorithms are untouched.
+
+The preview now uses core Vulkan indirect dispatch instead of relying on optional
+conditional rendering (unavailable on this Mali). A GPU clip flag skips the guide
+and apply work for unclipped frames. For clipped frames, a parallel seed scan also
+initializes the second guide image; propagation and smoothing run only if an
+authoritative seed exists. With no seeds these passes preserve the original seed
+field exactly. Initializing both ping-pong images prevents stale guides when a
+frame slot changes between seeded and empty scenes. Seeded frames retain every
+original propagation and smoothing pass and the original arithmetic.
+
+CFA flag writes now use atomic OR from row leaders instead of racing plain writes.
+The controller adds one 64-byte GPU argument buffer and one descriptor set per
+allocated guide, plus its pipeline, without an additional image or CPU readback.
+Shader-write/indirect-read and atomic read/write barriers protect the commands.
+Still rendering does not opt into the controller. The app enables it by default;
+`debug.rawr.guide_indirect=0` selects the legacy path before engine creation.
+This uses core Vulkan available to both Mali and Adreno; physical Adreno validation
+remains pending.
+
+Final fused-controller headless fixtures (4080×3064 RAW input, unequal WB, 17×13
+lens shading, 60 warmup and 30 measured frames) produced:
+
+| Fixed scene | Legacy median | Candidate median | Candidate p95 |
+| --- | ---: | ---: | ---: |
+| No clipping | 37.442 ms | 20.493 ms | 21.614 ms |
+| Clipped, no authoritative seeds | 37.051 ms | 25.391 ms | 30.336 ms |
+| Clipped, valid bright seeds | 47.669 ms | 47.789 ms | 48.164 ms |
+
+These are synthetic RAW-preview timings, excluding production scopes, presentation
+and the rest of the app. Device clocks were not locked. They establish the saving
+for skipped work, not a sustained display-FPS guarantee. All six exact RGBA16F
+comparisons passed, including partial groups and alternating seeded/empty frames
+across all three slots; dispatch arguments were checked after GPU completion.
+
+The preceding parallel controller passed the full 12-test GPU suite in 314.192 s;
+the final fused controller passed the affected six-scene test in 50.926 s.
+All 484 Android unit tests passed. SPIR-V validation passed for the controller.
+The final default-enabled build also passed two 120-buffer offscreen camera
+cycles, including UI pause/drain, resume, stop/drain and surface reattachment,
+with both diagnostic properties cleared (23.768 s instrumentation run).
+
+Actual Activity preview was opened through `scripts/ui`. Baseline GPU interval
+means were about 46 ms. The initial controller run varied from 32.781 to 41.913 ms;
+its partial-window SurfaceFlinger collection observed 21.658 fps. The final fused
+run collected a full 30-second SurfaceFlinger window and observed **17.454 fps**,
+with GPU interval means of 47.176–49.514 ms. Auto ISO changed from roughly 7180
+at baseline to 1539 and 1330 in the candidate runs; these are not controlled
+before/after speedup measurements. They clearly do not establish stable 30 fps.
+The benchmark tool now offers `--surface-stats` so presentation intervals are
+collected before app shutdown, independently of native GPU timing.
+
+Three final real app/Home/resume cycles closed the camera and retained the same
+process. Foreground PSS was 591619 / 562418 / 557917 KiB and Home PSS fell to
+113093 / 112122 / 111805 KiB. Launcher gfx counters reported 2 / 3 / 5 janky frames;
+these counters do not isolate the gesture animation. Two other gesture attempts
+failed the four-second camera-release check, and an additional run was interrupted
+by an ADB connection error. Those failures are retained, not counted as passes.
+A 30-second Perfetto run captured a 125.9 ms launcher main-thread frame, including
+104.5 ms traversal. It did not establish the cause of all gesture failures or
+prove zero app-induced contention; further controlled Home tracing is required.
+
+Two further seeded-path experiments were rejected for production. `glslc -O`
+propagation/smoothing variants passed exact output comparison, but medians were
+47.936–48.139 ms versus 47.947 ms reference. A shared 20×20 smoothing input tile
+also passed exact output comparison but measured 48.237 ms median / 97.682 ms p95
+and was removed. Compiler variants remain diagnostic tests, with explicit
+`--propagate-shader` / `--smooth-shader` benchmark overrides; normal shader builds
+are unchanged.
+
+Artifacts: ignored `tmp/phone-performance/vf-target30/` contains instrumentation
+logs, fixed-fixture timing reports, real preview SurfaceFlinger reports, failed
+and successful lifecycle runs, Perfetto trace/queries and rejected tile patch.
+MR remains https://github.com/adityawarmanfw/rawr/pull/80. Seeded guide cost,
+production scopes, displayed pacing, reliable Home animation, sustained thermals,
+capture-to-gallery and physical Adreno checks remain open acceptance items.
+
 ## 2026-11-03: rebased headless device validation
 
 Rebased the six optimization commits onto upstream `e7c8441` (lens editor,

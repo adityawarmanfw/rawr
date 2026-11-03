@@ -79,6 +79,7 @@ struct RawPreviewCreateInfo {
     std::string highlightGuidePropagateShaderPath;
     std::string highlightGuideSmoothShaderPath;
     std::string highlightApplyShaderPath;
+    std::string highlightGuideControlShaderPath;  // optional core indirect guide dispatch
     // Inpaint Opposed: coloropp.comp built with RAWR_COLOROPP_POST_WB=1, and
     // coloropp_tone.comp. Empty paths default to the CFA-state shader dir.
     std::string coloroppShaderPath;
@@ -127,6 +128,7 @@ struct RawPreviewRecordInfo {
 struct RawPreviewRecordResult {
     VkImage sdrImage = VK_NULL_HANDLE;    // VK_NULL_HANDLE: use the linear output
     VkImageView sdrView = VK_NULL_HANDLE;
+    VkBuffer guideDispatchArgs = VK_NULL_HANDLE;  // optional diagnostic; wait for frame fence
 };
 
 class RawPreview {

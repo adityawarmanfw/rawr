@@ -147,6 +147,38 @@ These diagnostic compiler variants do not change the production shader build.
 
 ### RAW highlight guide comparison
 
+`HeadlessGpuTest#indirectGuideParity` checks the optional core-Vulkan indirect
+guide controller against the preceding CFA shader and unconditional guide chain.
+Six exact RGBA16F comparisons cover no clipping, clipped pixels without seeds,
+valid bright seeds, alternating empty/seeded frames on all three frame slots,
+unequal white balance, lens shading and partial workgroups. The test also checks
+GPU-written dispatch arguments after fence completion, so a fixture that never
+actually exercises recovery/propagation cannot silently pass.
+
+The app enables this path by default. Select the legacy path before engine
+creation with `adb shell setprop debug.rawr.guide_indirect 0`; clear the property
+after comparisons.
+It does not disable recovery: unclipped frames skip the guide/apply work and
+clipped frames with no authoritative seeds skip only propagation/smoothing.
+Seeded frames retain every original pass. There is no CPU predicate readback.
+The implementation uses core `vkCmdDispatchIndirect`, with compute shader writes
+made visible to `DRAW_INDIRECT` / `INDIRECT_COMMAND_READ`; it does not depend on
+`VK_EXT_conditional_rendering`. The optional controller is not used by stills.
+Synchronization follows the Vulkan specification's
+[indirect dispatch requirements](https://docs.vulkan.org/refpages/latest/refpages/source/vkCmdDispatchIndirect.html)
+and [dispatch chapter](https://docs.vulkan.org/spec/latest/chapters/dispatch.html).
+
+For actual displayed pacing, run `app_preview_benchmark.py --surface-stats`
+through `uv` in addition to native GPU timings. Read the SurfaceView layer's
+`averageFPS` and `present2present` histogram in `surface-timestats.txt`.
+Activity/UI frame counts and average GPU time do not establish stable 30 fps.
+Run camera/UI and synthetic GPU measurements serially.
+
+`HeadlessGpuTest#optimizedGuideCompilerParity` compares normal, propagation-only,
+smoothing-only and combined `glslc -O` variants on a seeded large fixture. These
+are diagnostic variants: exact output passed on Mali, but no meaningful speedup
+was measured, so production compiler flags are unchanged.
+
 `HeadlessGpuTest#highlightControlFlowParity` compares the preceding seed/apply
 shaders with the current preview path, requiring exact recovered RGBA16F bytes.
 It covers normal and highlight-stress input, unequal white balance, 17×13 lens

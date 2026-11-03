@@ -65,6 +65,56 @@ public class HeadlessGpuTest {
             Files.readAllBytes(new File(root, "tone-bypass/linear.rgba16f").toPath()),
             Files.readAllBytes(new File(root, "tone-switch/linear.rgba16f").toPath()));
     }
+    @Test public void optimizedGuideCompilerParity() throws Exception {
+        File root = new File(InstrumentationRegistry.getInstrumentation().getTargetContext().getFilesDir(), "gpu-results");
+        for (int variant = 0; variant < 4; ++variant) {
+            java.util.ArrayList<String> args = new java.util.ArrayList<>(java.util.Arrays.asList(
+                "--method", "0", "--frames", "60", "--fps", "30", "--width", "4080", "--height", "3064",
+                "--normal-only", "--force-clip", "--lsc", "17x13", "--wb-r", "2.1", "--wb-b", "0.8",
+                "--dump", "linear.rgba16f"));
+            if ((variant & 1) != 0) {
+                args.add("--propagate-shader"); args.add("highlight_guide_propagate_optimized.comp.spv");
+            }
+            if ((variant & 2) != 0) {
+                args.add("--smooth-shader"); args.add("highlight_guide_smooth_optimized.comp.spv");
+            }
+            run("preview", "guide-compiler-" + variant, args.toArray(new String[0]));
+            org.junit.Assert.assertArrayEquals("Compiler variant must preserve recovered pixels, variant=" + variant,
+                Files.readAllBytes(new File(root, "guide-compiler-0/linear.rgba16f").toPath()),
+                Files.readAllBytes(new File(root, "guide-compiler-" + variant + "/linear.rgba16f").toPath()));
+        }
+    }
+    @Test public void indirectGuideParity() throws Exception {
+        File root = new File(InstrumentationRegistry.getInstrumentation().getTargetContext().getFilesDir(), "gpu-results");
+        for (int scene = 0; scene < 6; ++scene) {
+            for (int variant = 0; variant < 2; ++variant) {
+                java.util.ArrayList<String> args = new java.util.ArrayList<>(java.util.Arrays.asList(
+                    "--method", "0", "--mask-shader", variant == 0 ? "raw_preview_cfa_reference.comp.spv" : "raw_preview_cfa_state.comp.spv",
+                    "--frames", scene == 3 ? "12" : scene == 4 ? "15" : "30", "--fps", "30",
+                    "--width", scene == 3 || scene == 4 ? "512" : scene == 5 ? "638" : "4080",
+                    "--height", scene == 3 || scene == 4 ? "386" : scene == 5 ? "514" : "3064",
+                    scene == 5 ? "--stress-only" : "--normal-only", "--lsc", "17x13",
+                    "--wb-r", "2.1", "--wb-b", "0.8", "--dump", "linear.rgba16f"));
+                if (scene == 0) args.add("--no-clip");
+                if (scene == 1) args.add("--empty-guide");
+                if (scene == 2) args.add("--force-clip");
+                if (scene == 3 || scene == 4) args.add("--toggle-guide");
+                if (variant == 1) {
+                    args.add("--guide-control");
+                    args.add("highlight_guide_control.comp.spv");
+                }
+                run("preview", "indirect-" + scene + "-" + variant, args.toArray(new String[0]));
+            }
+            org.junit.Assert.assertArrayEquals("Indirect guide must preserve recovered image, scene=" + scene,
+                Files.readAllBytes(new File(root, "indirect-" + scene + "-0/linear.rgba16f").toPath()),
+                Files.readAllBytes(new File(root, "indirect-" + scene + "-1/linear.rgba16f").toPath()));
+            String log = new String(Files.readAllBytes(new File(root, "indirect-" + scene + "-1/native.txt").toPath()), StandardCharsets.UTF_8);
+            if (scene == 0) org.junit.Assert.assertTrue(log.contains("seedX=0 propagateX=0 smoothX=0 applyX=0"));
+            if (scene == 1 || scene == 3) org.junit.Assert.assertTrue(log.contains("propagateX=0 smoothX=0"));
+            if (scene == 1 || scene == 3) org.junit.Assert.assertFalse("Clipped fixture did not exercise recovery", log.contains("applyX=0"));
+            if (scene == 2 || scene == 4) org.junit.Assert.assertFalse("Seeded fixture did not exercise propagation", log.contains("propagateX=0"));
+        }
+    }
     @Test public void highlightControlFlowParity() throws Exception {
         File root = new File(InstrumentationRegistry.getInstrumentation().getTargetContext().getFilesDir(), "gpu-results");
         int sceneCount = Integer.parseInt(InstrumentationRegistry.getArguments().getString("highlightScenes", "3"));

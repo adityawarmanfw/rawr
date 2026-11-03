@@ -12,6 +12,9 @@
 #ifndef RAWR_PREVIEW_CLASSIFY_HALO
 #define RAWR_PREVIEW_CLASSIFY_HALO 0
 #endif
+#ifndef RAWR_PREVIEW_ROW_CLIP_FLAG
+#define RAWR_PREVIEW_ROW_CLIP_FLAG 1
+#endif
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout(set = 0, binding = 0, r16ui) uniform readonly uimage2D rawImage;
 layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D outImage;
@@ -151,7 +154,7 @@ void main() {
     float directGwb = 0.5 * (pc.wb.y + pc.wb.z);
     imageStore(outImage, o, vec4(max(packedDirect.rgb, vec3(0.0)) * vec3(pc.wb.x, directGwb, pc.wb.w), 1.0));
     imageStore(cfaStateImage, o, uvec4(directCfaState, 0u, 0u, 0u));
-    if ((directCfaState & 15u) != 0u) clipFlag.anyClipped = 1u;
+    if ((directCfaState & 15u) != 0u) atomicOr(clipFlag.anyClipped, 1u);
     return;
 #else
     uint lid = gl_LocalInvocationIndex;
@@ -179,6 +182,17 @@ void main() {
     }
 #endif
     barrier();
+#if RAWR_PREVIEW_ROW_CLIP_FLAG
+    // One atomic OR per clipped tile row, rather than racing per-pixel writes.
+    // Partial tiles repeat clamped boundary cells, so their OR is unchanged.
+    if (gl_LocalInvocationID.x == 0u) {
+        uint clipped = 0u;
+        uint row = (gl_LocalInvocationID.y + 1u) * 10u;
+        for (uint x = 1u; x <= 8u; ++x)
+            clipped |= (uint(sCell[row + x].a + 0.5) >> 3u) & 15u;
+        if (clipped != 0u) atomicOr(clipFlag.anyClipped, 1u);
+    }
+#endif
     if (any(greaterThanEqual(o, os))) return;
 
     uint centerIndex = (gl_LocalInvocationID.y + 1u) * 10u + (gl_LocalInvocationID.x + 1u);
@@ -225,6 +239,8 @@ void main() {
 #endif
     imageStore(outImage, o, vec4(rgb, 1.0));
     imageStore(cfaStateImage, o, uvec4(centerCfaState, 0u, 0u, 0u));
+#if !RAWR_PREVIEW_ROW_CLIP_FLAG
     if ((centerCfaState & 15u) != 0u) clipFlag.anyClipped = 1u;
+#endif
 #endif
 }

@@ -15,6 +15,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--seconds", type=int, default=25)
+    parser.add_argument("--surface-stats", action="store_true",
+                        help="Collect SurfaceFlinger presentation intervals as well as GPU timings")
     args = parser.parse_args()
     if not 15 <= args.seconds <= 120:
         parser.error("seconds must be 15–120")
@@ -31,6 +33,7 @@ def main():
 
     log = None
     process = None
+    surface_stats = False
     try:
         ui("stop")
         ui("app")
@@ -40,11 +43,17 @@ def main():
             raise RuntimeError("App did not start")
         (args.output / "thermal-before.txt").write_text(shell("dumpsys", "thermalservice"))
         (args.output / "memory-before.txt").write_text(shell("dumpsys", "meminfo", package))
+        if args.surface_stats:
+            shell("dumpsys", "SurfaceFlinger", "--timestats", "-clear", "-enable")
+            surface_stats = True
         log = (args.output / "logcat.txt").open("w")
         process = subprocess.Popen(["adb", "logcat", "--pid", pid, "-T", "1", "-v", "monotonic"], stdout=log, stderr=subprocess.STDOUT)
         time.sleep(args.seconds)
         if shell("pidof", package).strip() != pid:
             raise RuntimeError("App process exited during preview measurement")
+        if surface_stats:
+            (args.output / "surface-timestats.txt").write_text(
+                shell("dumpsys", "SurfaceFlinger", "--timestats", "-dump"))
         process.terminate(); process.wait(timeout=5); process = None
         log.close(); log = None
         (args.output / "gfx.txt").write_text(shell("dumpsys", "gfxinfo", package))
@@ -64,7 +73,11 @@ def main():
             process.terminate(); process.wait(timeout=5)
         if log is not None:
             log.close()
-        ui("stop")
+        try:
+            if surface_stats:
+                shell("dumpsys", "SurfaceFlinger", "--timestats", "-disable")
+        finally:
+            ui("stop")
 
 
 if __name__ == "__main__":

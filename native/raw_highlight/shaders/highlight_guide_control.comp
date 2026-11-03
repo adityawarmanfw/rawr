@@ -1,0 +1,57 @@
+#version 450
+// Core Vulkan indirect dispatch, without a CPU readback or optional extensions.
+layout(local_size_x = 256) in;
+layout(binding = 0, rgba16f) uniform readonly image2D seedGuide;
+layout(std430, binding = 1) buffer Commands { uint args[16]; } commands;
+layout(std430, binding = 2) readonly buffer ClipFlag { uint anyClipped; } clipFlag;
+layout(binding = 3, rgba16f) uniform writeonly image2D copiedGuide;
+layout(push_constant) uniform Pc {
+    uint width, height;
+    uint seedX, seedY, propagateX, propagateY, smoothX, smoothY;
+    uint applyX, applyY, phase;
+} pc;
+shared uint present[256];
+void main() {
+    uint lane = gl_LocalInvocationIndex;
+    if (pc.phase == 0u) {
+        if (lane == 0u) {
+            bool clipped = clipFlag.anyClipped != 0u;
+            commands.args[0] = clipped ? pc.seedX : 0u;
+            commands.args[1] = pc.seedY;
+            commands.args[2] = 1u;
+            commands.args[3] = 0u;
+            commands.args[4] = pc.propagateY;
+            commands.args[5] = 1u;
+            commands.args[6] = 0u;
+            commands.args[7] = pc.smoothY;
+            commands.args[8] = 1u;
+            commands.args[9] = clipped ? pc.applyX : 0u;
+            commands.args[10] = pc.applyY;
+            commands.args[11] = 1u;
+            commands.args[12] = clipped ? min(256u, (pc.width * pc.height + 255u) / 256u) : 0u;
+            commands.args[13] = commands.args[14] = 1u;
+            commands.args[15] = uint(clipped);
+        }
+        return;
+    }
+    bool found = false;
+    for (uint index = gl_GlobalInvocationID.x; index < pc.width * pc.height;
+         index += gl_NumWorkGroups.x * 256u) {
+        ivec2 p = ivec2(int(index % pc.width), int(index / pc.width));
+        // Negative alpha marks an authoritative, nonempty seed.
+        vec4 seed = imageLoad(seedGuide, p);
+        imageStore(copiedGuide, p, seed);
+        found = found || seed.a < 0.0;
+    }
+    present[lane] = uint(found);
+    barrier();
+    for (uint step = 128u; step > 0u; step >>= 1u) {
+        if (lane < step) present[lane] |= present[lane + step];
+        barrier();
+    }
+    if (lane == 0u && present[0] != 0u) {
+        // Phase zero cleared these fields. Every group publishes the same bits.
+        atomicOr(commands.args[3], pc.propagateX);
+        atomicOr(commands.args[6], pc.smoothX);
+    }
+}

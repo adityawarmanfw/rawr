@@ -19,8 +19,18 @@ struct Slot {
     Img raw{}, out{}, state{};
     Buf imported{};
 };
+static bool g_noClip = false, g_emptyGuide = false, g_toggleGuide = false, g_forceClip = false;
 static std::vector<uint16_t> pattern(uint32_t W, uint32_t H, bool stress) {
     std::vector<uint16_t> r(size_t(W) * H);
+    if (g_noClip || g_emptyGuide || g_toggleGuide) {
+        std::fill(r.begin(), r.end(), uint16_t(65));
+        if (!g_noClip) {
+            const uint32_t cx = (W / 2u) & ~1u, cy = (H / 2u) & ~1u;
+            for (uint32_t y = cy; y < cy + 2; ++y)
+                for (uint32_t x = cx; x < cx + 2; ++x) r[size_t(y) * W + x] = 4095;
+        }
+        return r;
+    }
     for (uint32_t y = 0; y < H; y++)
         for (uint32_t x = 0; x < W; x++) {
             float fx = float(x) / W, fy = float(y) / H;
@@ -29,6 +39,11 @@ static std::vector<uint16_t> pattern(uint32_t W, uint32_t H, bool stress) {
             v = std::max(0.f, std::min(1.f, v));
             r[size_t(y) * W + x] = (uint16_t)std::lround(64 + v * (4095 - 64));
         }
+    if (g_forceClip) {
+        const uint32_t cx = (W / 2u) & ~1u, cy = (H / 2u) & ~1u;
+        for (uint32_t y = cy; y < cy + 2; ++y)
+            for (uint32_t x = cx; x < cx + 2; ++x) r[size_t(y) * W + x] = 4095;
+    }
     return r;
 }
 static void upload(Ctx& c, VkCommandBuffer cmd, Img& im, const std::vector<uint16_t>& raw, uint32_t W, uint32_t H) {
@@ -105,7 +120,8 @@ static void makeSyntheticLsc(uint32_t gw, uint32_t gh) {
 }
 // --method: 0 colour propagation, 1 Inpaint Opposed.
 static uint32_t g_highlightMethod = 0;
-static std::string g_seedShader, g_applyShader;
+static std::string g_seedShader, g_applyShader, g_propagateShader, g_smoothShader;
+static std::string g_controlShader;
 static float g_redWb = 1.0f, g_blueWb = 1.0f;
 static bool g_bypassTone = false;
 static bool g_toggleTone = false;
@@ -184,6 +200,7 @@ static void run(Ctx& c, const std::string& shader, const std::string& maskShader
     ci.device = c.dev;
     ci.shaderPath = shader;
     ci.cfaStateShaderPath = maskShader;
+    ci.highlightGuideControlShaderPath = g_controlShader;
     ci.highlightGuideSeedShaderPath = g_seedShader;
     ci.highlightApplyShaderPath = g_applyShader;
     if (!g_seedShader.empty() || !g_applyShader.empty()) {
@@ -194,6 +211,8 @@ static void run(Ctx& c, const std::string& shader, const std::string& maskShader
         ci.highlightGuidePropagateShaderPath = dir + "raw_preview_highlight_guide_propagate.comp.spv";
         ci.highlightGuideSmoothShaderPath = dir + "raw_preview_highlight_guide_smooth.comp.spv";
     }
+    if (!g_propagateShader.empty()) ci.highlightGuidePropagateShaderPath = g_propagateShader;
+    if (!g_smoothShader.empty()) ci.highlightGuideSmoothShaderPath = g_smoothShader;
     raw_preview::RawPreview pr(ci);
     raw_preview::RawFrameParameters rp{};
     rp.blackLevel[0] = rp.blackLevel[1] = rp.blackLevel[2] = rp.blackLevel[3] = 64;
@@ -205,6 +224,19 @@ static void run(Ctx& c, const std::string& shader, const std::string& maskShader
     rp.chromaBlend = .2f;
     rp.highlightMethod = g_highlightMethod;
     rp.bypassHighlightTone = g_bypassTone;
+    Buf patches[2]{};
+    if (g_toggleGuide) {
+        if (g_stride != 0) throw std::runtime_error("Guide toggle fixture requires image input");
+        for (int i = 0; i < 2; ++i) {
+            patches[i] = mkBuf(c.pd, c.dev, 128, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+            void* mapped = nullptr;
+            ck(vkMapMemory(c.dev, patches[i].m, 0, 128, 0, &mapped), "patch map");
+            std::fill_n(static_cast<uint16_t*>(mapped), 64, uint16_t(i == 0 ? 3000 : 65));
+            vkUnmapMemory(c.dev, patches[i].m);
+        }
+    }
+    VkBuffer guideArgs[3]{};
     const uint32_t warm = 60, total = warm + frames;
     std::vector<uint64_t> pf(3, UINT64_MAX);
     std::vector<double> ms;
@@ -229,6 +261,28 @@ static void run(Ctx& c, const std::string& shader, const std::string& maskShader
         bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         vkBeginCommandBuffer(s[k].cmd, &bi);
         vkCmdResetQueryPool(s[k].cmd, s[k].qp, 0, 2);
+        if (g_toggleGuide) {
+            VkImageMemoryBarrier patch{};
+            patch.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            patch.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            patch.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            patch.oldLayout = patch.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            patch.srcQueueFamilyIndex = patch.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            patch.image = s[k].raw.i;
+            patch.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(s[k].cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &patch);
+            VkBufferImageCopy copy{};
+            copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            copy.imageOffset = {16, 16, 0};
+            copy.imageExtent = {8, 8, 1};
+            vkCmdCopyBufferToImage(s[k].cmd, patches[(f / 3u) % 2u].b, s[k].raw.i,
+                                   VK_IMAGE_LAYOUT_GENERAL, 1, &copy);
+            patch.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            patch.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            vkCmdPipelineBarrier(s[k].cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &patch);
+        }
         vkCmdWriteTimestamp(s[k].cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, s[k].qp, 0);
         raw_preview::RawPreviewRecordInfo ri{};
         ri.commandBuffer = s[k].cmd;
@@ -249,7 +303,7 @@ static void run(Ctx& c, const std::string& shader, const std::string& maskShader
             ri.lensShadingMap = g_lsc.data();
             ri.lensShadingMapFloatCount = g_lsc.size();
         }
-        pr.record(ri);
+        guideArgs[k] = pr.record(ri).guideDispatchArgs;
         vkCmdWriteTimestamp(s[k].cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, s[k].qp, 1);
         vkEndCommandBuffer(s[k].cmd);
         VkSubmitInfo si{};
@@ -274,7 +328,7 @@ static void run(Ctx& c, const std::string& shader, const std::string& maskShader
         // Dump the most recent frame's RGB output (bench-only equivalence check).
         int k = int((warm + frames - 1) % 3);
         VkDeviceSize n = VkDeviceSize(size_t(W / 2) * (H / 2) * 8);
-        Buf db = mkBuf(c.pd, c.dev, n, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        Buf db = mkBuf(c.pd, c.dev, n + (guideArgs[k] ? 64 : 0), VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
         vkResetFences(c.dev, 1, &s[k].f);
         vkResetCommandBuffer(s[k].cmd, 0);
@@ -297,6 +351,28 @@ static void run(Ctx& c, const std::string& shader, const std::string& maskShader
         dcp.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         dcp.imageExtent = {W / 2, H / 2, 1};
         vkCmdCopyImageToBuffer(s[k].cmd, s[k].out.i, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, db.b, 1, &dcp);
+        if (guideArgs[k]) {
+            VkBufferMemoryBarrier ready{};
+            ready.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+            ready.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+            ready.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            ready.srcQueueFamilyIndex = ready.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            ready.buffer = guideArgs[k];
+            ready.size = VK_WHOLE_SIZE;
+            vkCmdPipelineBarrier(s[k].cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 1, &ready, 0, nullptr);
+            VkBufferCopy copy{0, n, 64};
+            vkCmdCopyBuffer(s[k].cmd, guideArgs[k], db.b, 1, &copy);
+        }
+        VkBufferMemoryBarrier host{};
+        host.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+        host.srcQueueFamilyIndex = host.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        host.buffer = db.b;
+        host.size = VK_WHOLE_SIZE;
+        vkCmdPipelineBarrier(s[k].cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+                             0, 0, nullptr, 1, &host, 0, nullptr);
         vkEndCommandBuffer(s[k].cmd);
         VkSubmitInfo dsi{};
         dsi.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -305,7 +381,12 @@ static void run(Ctx& c, const std::string& shader, const std::string& maskShader
         vkQueueSubmit(c.q, 1, &dsi, s[k].f);
         vkWaitForFences(c.dev, 1, &s[k].f, VK_TRUE, UINT64_MAX);
         void* m = nullptr;
-        ck(vkMapMemory(c.dev, db.m, 0, n, 0, &m), "dump map");
+        ck(vkMapMemory(c.dev, db.m, 0, VK_WHOLE_SIZE, 0, &m), "dump map");
+        if (guideArgs[k]) {
+            const auto* args = reinterpret_cast<const uint32_t*>(static_cast<const char*>(m) + n);
+            std::cout << "GUIDE_INDIRECT_ARGS seedX=" << args[0] << " propagateX=" << args[3]
+                      << " smoothX=" << args[6] << " applyX=" << args[9] << "\n";
+        }
         std::ofstream f(g_dump, std::ios::binary | std::ios::trunc);
         f.write(static_cast<const char*>(m), static_cast<std::streamsize>(n));
         f.close();
@@ -323,6 +404,7 @@ static void run(Ctx& c, const std::string& shader, const std::string& maskShader
         delBuf(c.dev, s[k].imported);
         vkDestroyCommandPool(c.dev, s[k].pool, nullptr);
     }
+    for (auto& patch : patches) delBuf(c.dev, patch);
 }
 int main(int argc, char** argv) {
     // The instrumentation bridge invokes this entry more than once/process.
@@ -330,6 +412,10 @@ int main(int argc, char** argv) {
     g_highlightMethod = 0;
     g_seedShader.clear();
     g_applyShader.clear();
+    g_controlShader.clear();
+    g_propagateShader.clear();
+    g_smoothShader.clear();
+    g_noClip = g_emptyGuide = g_toggleGuide = g_forceClip = false;
     g_redWb = g_blueWb = 1.0f;
     g_stride = 0;
     g_dump.clear();
@@ -343,6 +429,13 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
         if (a == "--seed-shader" && i + 1 < argc) g_seedShader = argv[++i];
+        else if (a == "--guide-control" && i + 1 < argc) g_controlShader = argv[++i];
+        else if (a == "--propagate-shader" && i + 1 < argc) g_propagateShader = argv[++i];
+        else if (a == "--smooth-shader" && i + 1 < argc) g_smoothShader = argv[++i];
+        else if (a == "--no-clip") g_noClip = true;
+        else if (a == "--empty-guide") g_emptyGuide = true;
+        else if (a == "--toggle-guide") g_toggleGuide = true;
+        else if (a == "--force-clip") g_forceClip = true;
         else if (a == "--apply-shader" && i + 1 < argc) g_applyShader = argv[++i];
         else if (a == "--wb-r" && i + 1 < argc) g_redWb = std::stof(argv[++i]);
         else if (a == "--wb-b" && i + 1 < argc) g_blueWb = std::stof(argv[++i]);

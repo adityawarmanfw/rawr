@@ -208,10 +208,13 @@ RawPreview::RawPreview(const RawPreviewCreateInfo& ci)
         throw std::runtime_error("RawPreview: highlight guide shaders missing next to " + ci.cfaStateShaderPath);
     if (allHighlightShaders) {
         const auto seed = readSpirv(seedPath), propagate = readSpirv(propagatePath), smooth = readSpirv(smoothPath);
+        const auto control = ci.highlightGuideControlShaderPath.empty() ? std::vector<uint32_t>{}
+                                                                      : readSpirv(ci.highlightGuideControlShaderPath);
         guidePipelines_ = std::make_unique<rawr::highlight::GuideChainPipelines>(
             device_, rawr::highlight::GuideChainShaders{{seed.data(), seed.size()},
                                                         {propagate.data(), propagate.size()},
-                                                        {smooth.data(), smooth.size()}});
+                                                        {smooth.data(), smooth.size()},
+                                                        {control.data(), control.size()}});
         createImagePipeline(3, 32, applyPath, highlightApplyDsl_, highlightApplyLayout_, highlightApplyPipeline_);
     }
     if (!ci.cfaStateShaderPath.empty() && readable(coloroppPath) && readable(coloroppTonePath)) {
@@ -546,7 +549,7 @@ RawPreviewRecordResult RawPreview::record(const RawPreviewRecordInfo& recordInfo
         VkBufferMemoryBarrier cleared{};
         cleared.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
         cleared.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        cleared.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        cleared.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
         cleared.srcQueueFamilyIndex = cleared.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         cleared.buffer = clipFlag->buffer;
         cleared.size = VK_WHOLE_SIZE;
@@ -660,7 +663,8 @@ RawPreviewRecordResult RawPreview::record(const RawPreviewRecordInfo& recordInfo
     VkImageView finalGuide = hr.chain->record(recordInfo.commandBuffer, recordInfo.outputLinearRgba16fView,
                                               recordInfo.outputCfaStateR16UintView, outputWidth, outputHeight,
                                               ceilings, predicatedHighlight ? &conditional : nullptr,
-                                              timeGuide ? &guideTiming : nullptr);
+                                              timeGuide ? &guideTiming : nullptr,
+                                              clipFlag ? clipFlag->buffer : VK_NULL_HANDLE);
     guideRecorded = timeGuide;
     markHighlightPrepared();
     VkDescriptorImageInfo applyInfo[3]{{VK_NULL_HANDLE, recordInfo.outputLinearRgba16fView, VK_IMAGE_LAYOUT_GENERAL},
@@ -693,10 +697,14 @@ RawPreviewRecordResult RawPreview::record(const RawPreviewRecordInfo& recordInfo
                             &hr.applySet, 0, nullptr);
     vkCmdPushConstants(recordInfo.commandBuffer, highlightApplyLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ap),
                        &ap);
-    if (predicatedHighlight) beginConditional_(recordInfo.commandBuffer, &condBegin);
-    vkCmdDispatch(recordInfo.commandBuffer, (outputWidth + 15u) / 16u, (outputHeight + 15u) / 16u, 1);
-    if (predicatedHighlight) endConditional_(recordInfo.commandBuffer);
-    return {};
+    const VkBuffer indirect = hr.chain->indirectArguments();
+    if (predicatedHighlight && !indirect) beginConditional_(recordInfo.commandBuffer, &condBegin);
+    if (indirect)
+        vkCmdDispatchIndirect(recordInfo.commandBuffer, indirect, rawr::highlight::GuideChain::kApplyDispatchOffset);
+    else
+        vkCmdDispatch(recordInfo.commandBuffer, (outputWidth + 15u) / 16u, (outputHeight + 15u) / 16u, 1);
+    if (predicatedHighlight && !indirect) endConditional_(recordInfo.commandBuffer);
+    return {VK_NULL_HANDLE, VK_NULL_HANDLE, indirect};
 }
 
 void RawPreview::recordColoropp(const RawPreviewRecordInfo& recordInfo, ColoroppResources& r, VkBuffer lscBuffer,

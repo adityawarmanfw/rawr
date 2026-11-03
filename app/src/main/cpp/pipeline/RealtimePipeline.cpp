@@ -30,6 +30,7 @@
 #include "raw_preview.h"
 #include "raw_preview/RawPreview.hpp"
 #include "raw_preview_cfa_state.h"
+#include "raw_preview_highlight_guide_control.h"
 #include "raw_preview_coloropp.h"
 #include "raw_preview_coloropp_tone.h"
 #include "raw_preview_highlight_apply.h"
@@ -98,6 +99,8 @@ RealtimePipeline::RealtimePipeline(std::string rawShaderPath, std::string rawCfa
     };
     writeShader("raw_preview_highlight_guide_seed.comp.spv", raw_preview_highlight_guide_seed_spv,
                 raw_preview_highlight_guide_seed_spv_size);
+    writeShader("raw_preview_highlight_guide_control.comp.spv", raw_preview_highlight_guide_control_spv,
+                raw_preview_highlight_guide_control_spv_size);
     writeShader("raw_preview_highlight_guide_propagate.comp.spv", raw_preview_highlight_guide_propagate_spv,
                 raw_preview_highlight_guide_propagate_spv_size);
     writeShader("raw_preview_highlight_guide_smooth.comp.spv", raw_preview_highlight_guide_smooth_spv,
@@ -237,6 +240,13 @@ bool RealtimePipeline::configureGeometry(uint64_t generation, uint32_t width, ui
         rawCreate.highlightGuidePropagateShaderPath = filesDir_ + "/raw_preview_highlight_guide_propagate.comp.spv";
         rawCreate.highlightGuideSmoothShaderPath = filesDir_ + "/raw_preview_highlight_guide_smooth.comp.spv";
         rawCreate.highlightApplyShaderPath = filesDir_ + "/raw_preview_highlight_apply.comp.spv";
+        {
+            char value[PROP_VALUE_MAX]{};
+            // Core Vulkan on both Mali and Adreno. Keep a diagnostic legacy
+            // switch for driver comparisons; no CPU readback is needed.
+            if (!(__system_property_get("debug.rawr.guide_indirect", value) > 0 && value[0] == '0'))
+                rawCreate.highlightGuideControlShaderPath = filesDir_ + "/raw_preview_highlight_guide_control.comp.spv";
+        }
         rawCreate.coloroppShaderPath = filesDir_ + "/raw_preview_coloropp.comp.spv";
         rawCreate.coloroppToneShaderPath = filesDir_ + "/raw_preview_coloropp_tone.comp.spv";
         rawCreate.workgroupX = 8;
