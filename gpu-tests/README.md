@@ -13,7 +13,7 @@ library. No generated SPIR-V or APK belongs in Git. Native code uses release
 optimization even though the instrumentable target is a debug-signed APK.
 
 ```sh
-./gradlew :gpu-tests:assembleDebug :gpu-tests:assembleDebugAndroidTest
+./gradlew -Prawr.gpuTests=true :gpu-tests:assembleDebug :gpu-tests:assembleDebugAndroidTest
 adb install -r gpu-tests/build/outputs/apk/debug/gpu-tests-debug.apk
 adb install -r gpu-tests/build/outputs/apk/androidTest/debug/gpu-tests-debug-androidTest.apk
 adb shell am instrument -w -r \
