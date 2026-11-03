@@ -100,7 +100,7 @@ data class SetExposureCandidate(val parameter: ExposureParameter, val candidateI
 
 data class ScrubTone(val target: ToneParameter, val delta: Int) : ApplicationCaptureAction
 
-/** Sets an AgX control of the active AgX preset; null restores the preset default. */
+/** Sets an active AgX control; null restores the selected saved look or built-in preset default. */
 data class SetAgxControl(
     val parameter: com.rawr.camera.settings.model.AgxParameter,
     val value: Float?

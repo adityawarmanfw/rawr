@@ -301,6 +301,11 @@ internal object RendererRecipe {
                 acc.with(spec.parameter, a.optDouble(spec.jsonKey, acc.valueOf(spec.parameter).toDouble()).toFloat())
             }, preset.defaults)
         }
+        val agxLook = agx?.let { (preset, values) ->
+            val a = j.getJSONObject("agx")
+            if (a.has("lookId")) library.agxLooks.firstOrNull { it.id == a.optString("lookId") && it.base == preset }
+            else library.agxLooks.firstOrNull { it.base == preset && it.values == values }
+        }
         val profile = when {
             j.optString("colorRenderProfile") == ColorRenderProfile.SRgb.name -> ColorRenderProfile.SRgb
             j.optString("colorRenderProfile") == ColorRenderProfile.Rec709.name -> ColorRenderProfile.Rec709
@@ -318,6 +323,7 @@ internal object RendererRecipe {
             rec709Tone = if (profile == ColorRenderProfile.Rec709) profileTone else d.rec709Tone,
             agxTone = if (profile == ColorRenderProfile.AgX) profileTone else d.agxTone,
             agxPreset = agx?.first ?: d.agxPreset,
+            selectedAgxLookId = agxLook?.id,
             agxValues = agx?.let { d.agxValues + it } ?: d.agxValues,
             rawrBaseTone = if (profile == ColorRenderProfile.RawrBase) profileTone else d.rawrBaseTone,
             filmSimEnabled = j.optBoolean("filmSimEnabled"), filmSimLook = film,

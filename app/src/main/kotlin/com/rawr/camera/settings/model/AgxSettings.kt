@@ -201,9 +201,21 @@ data class AgxLook(
     val values: AgxValues
 )
 
-/** The saved look matching the active AgX base and controls, if any. */
-fun SettingsValues.matchingAgxLook(): AgxLook? {
-    val base = regularAgxPreset()
+/** The selected saved look remains the reset baseline when its controls are edited. */
+fun SettingsValues.selectedAgxLook(): AgxLook? {
+    val id = if (isVideo) videoAgxLookId else selectedAgxLookId
+    return agxLooks.firstOrNull { it.id == id && it.base == regularAgxPreset() }
+}
+
+fun SettingsValues.activeAgxDefaults(): AgxValues = selectedAgxLook()?.values ?: regularAgxPreset().defaults
+
+fun SettingsValues.isAgxModified(): Boolean {
     val values = activeAgxValues()
-    return agxLooks.firstOrNull { it.base == base && it.values == values }
+    val defaults = activeAgxDefaults()
+    return AgxCatalog.all.any { !it.isDefault(values.valueOf(it.parameter), defaults.valueOf(it.parameter)) }
+}
+
+/** The selected saved look, only when its controls have not been edited. */
+fun SettingsValues.matchingAgxLook(): AgxLook? {
+    return selectedAgxLook()?.takeIf { it.values == activeAgxValues() }
 }

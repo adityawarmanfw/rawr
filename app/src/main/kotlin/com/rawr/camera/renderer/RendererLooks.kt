@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.dp
 import com.rawr.camera.ui.CaptureColors
@@ -58,25 +57,21 @@ internal fun RendererFilmPresetActions(v: SettingsValues, dispatch: SettingsDisp
 /**
  * Editor-side AgX looks: one Look list (built-in then saved), a selected saved look
  * that reads "Modified" once its controls drift, and quick Save / Update / Revert.
- * The selection is editor-local; it starts from the saved look matching the values.
+ * The selected saved look and its reset baseline live in SettingsValues and the recipe.
  */
 @Composable
 internal fun RendererAgxLookControls(v: SettingsValues, dispatch: SettingsDispatch) {
     val files = rememberLookFiles(dispatch)
     var dialog by remember { mutableStateOf<String?>(null) }
-    var picked by rememberSaveable { mutableStateOf<String?>(null) }
-    val matching = v.matchingAgxLook()
-    val selected = v.agxLooks.firstOrNull { it.id == picked } ?: matching
-    val modified = selected != null && matching?.id != selected.id
+    val selected = v.selectedAgxLook()
+    val modified = v.isAgxModified()
     val builtIn = AgxPreset.entries
     EditorChoice("Look", selected?.let { if (modified) "${it.name} · Modified" else it.name } ?: v.regularAgxPreset().lookLabel,
         builtIn.map { it.lookLabel } + v.agxLooks.map { it.name }) {
         if (it < builtIn.size) {
-            picked = null
             dispatch.invoke(SetAgxPreset(builtIn[it]))
         } else {
             val look = v.agxLooks[it - builtIn.size]
-            picked = look.id
             dispatch.invoke(ApplyAgxLook(look.id))
         }
     }
@@ -102,13 +97,13 @@ internal fun RendererAgxLookControls(v: SettingsValues, dispatch: SettingsDispat
         EditorChoice("More", "…", extra.map { it.first }) { extra[it].second() }
     }
     when (dialog) {
-        "save" -> LookNameDialog("Save AgX look", "", "Save", { dialog = null }) { dispatch.invoke(SaveAgxLook(it)); picked = null }
+        "save" -> LookNameDialog("Save AgX look", "", "Save", { dialog = null }) { dispatch.invoke(SaveAgxLook(it)) }
         "rename" -> if (selected != null) LookNameDialog("Rename look", selected.name, "Save", { dialog = null }) {
             dispatch.invoke(RenameAgxLook(selected.id, it))
         }
         "update" -> if (selected != null) LookConfirmDialog("Update look?", "Overwrite '${selected.name}' with the current AgX look?",
             "Update", { dialog = null }) { dispatch.invoke(UpdateAgxLook(selected.id)) }
         "delete" -> if (selected != null) LookConfirmDialog("Delete look?", "Delete '${selected.name}'? The current adjustments are kept.",
-            "Delete", { dialog = null }) { picked = null; dispatch.invoke(DeleteAgxLook(selected.id)) }
+            "Delete", { dialog = null }) { dispatch.invoke(DeleteAgxLook(selected.id)) }
     }
 }

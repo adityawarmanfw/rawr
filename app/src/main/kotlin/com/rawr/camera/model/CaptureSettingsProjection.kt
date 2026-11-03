@@ -17,10 +17,10 @@ internal fun SettingsValues.toRenderProfileQuickState(): RenderProfileQuickState
             builtIns.drop(1).map { RenderProfileQuickOption(RenderProfileSelection.BuiltIn(it), it.label) } +
             usable.map { RenderProfileQuickOption(RenderProfileSelection.Imported(it.id), it.name) },
         selectedId = selected?.let { RenderProfileSelection.Imported(it) }
-            ?: matchingAgxLook()?.let { RenderProfileSelection.SavedAgx(it.id) }.takeIf { isAgxActive() }
+            ?: selectedAgxLook()?.let { RenderProfileSelection.SavedAgx(it.id) }.takeIf { isAgxActive() }
             ?: RenderProfileSelection.Agx(regularAgxPreset()).takeIf { regularRenderProfile() == ColorRenderProfile.AgX }
             ?: RenderProfileSelection.BuiltIn(regularRenderProfile().takeIf { it in builtIns } ?: ColorRenderProfile.RawrBase),
-        agx = if (isAgxActive()) AgxQuickState(activeAgxValues(), regularAgxPreset().defaults) else null
+        agx = if (isAgxActive()) AgxQuickState(activeAgxValues(), activeAgxDefaults()) else null
     )
 }
 

@@ -1097,6 +1097,9 @@ data class SettingsValues(
     val agxTone: ProfileTone = ProfileTone.Neutral,
     val agxPreset: AgxPreset = AgxPreset.Rawr,
     val videoAgxPreset: AgxPreset = AgxPreset.Rawr,
+    /** Saved look origins survive edits; photo and video remember their own selection. */
+    val selectedAgxLookId: String? = null,
+    val videoAgxLookId: String? = null,
     /** Edited AgX controls per preset; a missing preset uses its defaults. */
     val agxValues: Map<AgxPreset, AgxValues> = emptyMap(),
     /** User-saved AgX looks; applying one writes its values into its base look. */
@@ -1224,7 +1227,7 @@ data class SettingsValues(
 
     fun activeProfileLabel(): String = when {
         isLogActive -> videoLogProfile.label
-        isAgxActive() -> regularAgxPreset().label
+        isAgxActive() -> selectedAgxLook()?.name ?: regularAgxPreset().label
         else -> selectedLutProfile()?.name?.takeIf { it.isNotBlank() } ?: regularRenderProfile().label
     }
 
