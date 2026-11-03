@@ -62,6 +62,10 @@ class RenderResources final {
     void createPixels(const RenderedStillContext& rendered);
     // After the transfer fence and before CPU reads.
     void invalidateReadback();
+    // Called by executeStillRender after the final fence, for every StillImageRenderer user (single-frame stills and
+    // their recovery path, MFSR/HDR+ jobs, the RZSL writer), not only single-frame. Frees the tone, post-demosaic,
+    // local-tone, capture-sharpening and glow resources and, unlike releasePixels(), the DCP stage, so it is rebuilt
+    // on the next render. No-op while engine persistence is on, which is the app default.
     void releaseCompletedProcessing();
 
    private:

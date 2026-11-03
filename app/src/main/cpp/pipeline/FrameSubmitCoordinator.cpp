@@ -1040,9 +1040,12 @@ bool FrameSubmitCoordinator::submitAhb(uint64_t timestampNs, rawrcam::imaging::R
 
     // The CPU read below waits on the camera fence and touches the whole RAW
     // buffer; during recording that stall lands in the encoder's frame cadence.
-    char rawStatsProperty[PROP_VALUE_MAX] = {};
-    const bool rawStatsEnabled = __system_property_get("debug.rawr.raw_content_stats", rawStatsProperty) > 0 &&
-                                 rawStatsProperty[0] == '1';
+    // On by default (bring-up logs rely on RAW_CONTENT_STATS); `setprop debug.rawr.raw_content_stats 0` before
+    // launch turns it off. Read once per process, not per frame.
+    static const bool rawStatsEnabled = [] {
+        char value[PROP_VALUE_MAX] = {};
+        return !(__system_property_get("debug.rawr.raw_content_stats", value) > 0 && value[0] == '0');
+    }();
     if (rawStatsEnabled && !videoReady && imageLease && metadata.cameraContext &&
         (lastRawContentStatsNs_ == 0 || timestampNs < lastRawContentStatsNs_ ||
          timestampNs - lastRawContentStatsNs_ >= 1'000'000'000ull)) {
