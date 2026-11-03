@@ -136,7 +136,7 @@ internal fun LensEditorScreen(state: SettingsUiState, lensName: String?, dispatc
             scope.launch {
                 try {
                     val profile = withContext(Dispatchers.IO) { dcpFiles.import(uri) }
-                    draft = draft.image { copy(dcp = profile) }
+                    draft = draft.image { importDcp(profile) }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -237,29 +237,16 @@ internal fun LensEditorScreen(state: SettingsUiState, lensName: String?, dispatc
             camera = camera
         ) { draft = draft.image { copy(levels = it) } }
         SensorLayoutGroup(draft.image.sensorLayout) { draft = draft.image { copy(sensorLayout = it) } }
-        SettingsGroup(title = "Colour") {
-            SettingsRow(
-                title = if (importingDcp) "Importing profile…" else "Import DCP file",
-                value = draft.image.dcp?.name ?: "Camera default",
-                supportingText = "Applies the profile’s colour and tone before your selected look; embeds it in DNG files",
-                enabled = !importingDcp,
-                testTag = lensEditorTag("dcp"),
-                onClick = { dcpPicker.launchPicker(context, arrayOf("*/*")) }
-            )
-            if (draft.image.dcp != null) {
-                SettingDivider()
-                SettingsRow(
-                    title = "Use camera default",
-                    enabled = !importingDcp,
-                    testTag = lensEditorTag("removeDcp"),
-                    onClick = { draft = draft.image { copy(dcp = null) }; dcpError = null }
-                )
-            }
-            dcpError?.let {
-                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(horizontal = SettingsRowHorizontalPadding, vertical = 12.dp))
-            }
-        }
+        LensDcpProfiles(
+            image = draft.image,
+            importing = importingDcp,
+            error = dcpError,
+            onSelect = { file -> draft = draft.image { selectDcp(file) }; dcpError = null },
+            onRemove = { file -> draft = draft.image { removeDcp(file) }; dcpError = null },
+            onImport = { dcpPicker.launchPicker(context, arrayOf("*/*")) },
+            onMove = { from, to -> draft = draft.image { moveDcp(from, to) } },
+            onSort = { descending -> draft = draft.image { sortDcps(descending) } }
+        )
         SettingsGroup(title = "Advanced") {
             val changed = draft.advancedSummary()
             SettingsRow(

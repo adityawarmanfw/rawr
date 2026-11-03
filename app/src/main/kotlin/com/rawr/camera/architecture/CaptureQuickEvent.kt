@@ -8,6 +8,7 @@ import com.rawr.camera.settings.model.RawrMetering
  * photo or video set, whichever the current capture mode renders with.
  */
 sealed interface CaptureQuickEvent {
+    data class SelectDcp(val lensId: String, val file: String?) : CaptureQuickEvent
     data object ToggleRawrAe : CaptureQuickEvent
     data class SetMetering(val metering: RawrMetering) : CaptureQuickEvent
     data class SetHighlightMode(val mode: HighlightQuickMode) : CaptureQuickEvent

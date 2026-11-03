@@ -87,6 +87,8 @@ internal fun CaptureControls(
     onOpenFilmSimSettings: () -> Unit = {},
     onOpenMultiframeSettings: () -> Unit = {},
     onOpenLensSettings: (String) -> Unit = {},
+    dcp: com.rawr.camera.model.DcpQuickState? = null,
+    onSelectDcp: (String?) -> Unit = {},
     videoControls: VideoControlState = VideoControlState(),
     onToggleVideoRecording: () -> Unit = {},
     /** Transparent background for floating over the 16:9 bleed (video overlay slot). */
@@ -95,7 +97,7 @@ internal fun CaptureControls(
     val isVideo = state.captureMode == CaptureMode.Video
     // Lens switching and mode switching are disabled while a video recording
     // is active; the native session must not bounce mid-record.
-    val recordingLock = isVideo && videoControls.recording
+    val recordingLock = isVideo && (videoControls.recording || videoControls.busy)
     if (isVideo || state.captureLayout == CaptureControlLayout.Compact) {
         // Shared bottom cluster: identical heights and element positions in
         // both modes. The center swaps photo shutter <-> 70dp record button;
@@ -107,7 +109,9 @@ internal fun CaptureControls(
                 .padding(horizontal = 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            LensSelector(
+            LensAndDcpSelector(
+                dcp = dcp,
+                onSelectDcp = onSelectDcp,
                 state = state,
                 dispatch = dispatch,
                 onOpenLensSettings = onOpenLensSettings,
@@ -160,7 +164,9 @@ internal fun CaptureControls(
         return
     }
     Box(modifier.background(CaptureColors.Surface)) {
-        LensSelector(
+        LensAndDcpSelector(
+            dcp = dcp,
+            onSelectDcp = onSelectDcp,
             state = state,
             dispatch = dispatch,
             onOpenLensSettings = onOpenLensSettings,

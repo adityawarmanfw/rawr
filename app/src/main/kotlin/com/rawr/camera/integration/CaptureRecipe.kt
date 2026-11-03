@@ -87,6 +87,7 @@ internal object CaptureRecipe {
         if (v.colorRenderProfile == com.rawr.camera.settings.model.ColorRenderProfile.AgX) put("agx", JSONObject().apply {
             val values = v.agxValuesFor(v.agxPreset)
             put("preset", v.agxPreset.name)
+            put("lookId", v.agxLooks.firstOrNull { it.id == v.selectedAgxLookId && it.base == v.agxPreset }?.id ?: JSONObject.NULL)
             com.rawr.camera.settings.model.AgxCatalog.all.forEach { put(it.jsonKey, values.valueOf(it.parameter).toDouble()) }
         })
         put("multiframeBaseFrameMode", v.multiframeBaseFrameMode.name)

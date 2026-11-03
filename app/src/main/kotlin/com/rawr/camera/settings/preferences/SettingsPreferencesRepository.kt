@@ -44,6 +44,9 @@ import kotlin.math.abs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.emitAll
+import com.rawr.camera.integration.DeviceLensDefaults
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
@@ -63,6 +66,23 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
                 android.util.Log.e("RawrSettings", "Unable to read saved settings", error)
                 if (error is IOException) emit(emptyPreferences()) else throw error
             }.map(::decode)
+
+    /** One-time addition to existing lens lists; removals made after this update stay removed. */
+    internal suspend fun seedBundledDcps(deviceDefaults: List<com.rawr.camera.settings.model.LensProfile>) {
+        if (deviceDefaults.none { it.image.availableDcps.isNotEmpty() }) return
+        dataStore.edit { seedBundledDcps(it, deviceDefaults) }
+    }
+
+    internal fun seedBundledDcps(p: MutablePreferences, deviceDefaults: List<com.rawr.camera.settings.model.LensProfile>) {
+        if ((p[Keys.schemaVersion] ?: LEGACY_SCHEMA_VERSION) > CURRENT_SCHEMA_VERSION ||
+            (p[Keys.bundledDcpVersion] ?: 0) >= BundledDcpProfiles.VERSION ||
+            deviceDefaults.none { it.image.availableDcps.isNotEmpty() }) return
+        // Leave null as "use device defaults". Custom routes keep all their fields and selection.
+        LensProfileCodec.decode(p[Keys.lensProfiles])?.let { lenses ->
+            p[Keys.lensProfiles] = LensProfileCodec.encode(BundledDcpProfiles.merge(lenses, deviceDefaults))
+        }
+        p[Keys.bundledDcpVersion] = BundledDcpProfiles.VERSION
+    }
 
     suspend fun save(values: SettingsValues) {
         try {
@@ -465,6 +485,15 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
                     vibrance = legacyTone.vibrance
                 )
             }
+        val agxPreset = enumOrDefault(p[Keys.agxPreset], d.agxPreset)
+        val videoAgxPreset = enumOrDefault(p[Keys.videoAgxPreset], d.videoAgxPreset)
+        val agxValues = decodeAgxValues(p[Keys.agxValues])
+        val agxLooks = LookFileCodec.decodeAgxLooks(p[Keys.agxLooks])
+        // Older installs inferred selection from equal controls. Infer it only
+        // when the identity key is absent; an empty key explicitly selects a built-in.
+        fun savedAgxId(key: Preferences.Key<String>, preset: AgxPreset): String? =
+            if (p[key] != null) p[key]?.takeIf { it.isNotEmpty() }
+            else agxLooks.firstOrNull { it.base == preset && it.values == (agxValues[preset] ?: preset.defaults) }?.id
         return SettingsValues(
             saveLocationId = p[Keys.saveLocationId] ?: d.saveLocationId,
             falseColorPresetId = p[Keys.falseColorPresetId] ?: d.falseColorPresetId,
@@ -526,10 +555,12 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
                 saturation = p[Keys.agxToneSaturation] ?: 0f,
                 vibrance = p[Keys.agxToneVibrance] ?: 0f
             ),
-            agxPreset = enumOrDefault(p[Keys.agxPreset], d.agxPreset),
-            videoAgxPreset = enumOrDefault(p[Keys.videoAgxPreset], d.videoAgxPreset),
-            agxValues = decodeAgxValues(p[Keys.agxValues]),
-            agxLooks = LookFileCodec.decodeAgxLooks(p[Keys.agxLooks]),
+            agxPreset = agxPreset,
+            videoAgxPreset = videoAgxPreset,
+            selectedAgxLookId = savedAgxId(Keys.selectedAgxLookId, agxPreset),
+            videoAgxLookId = savedAgxId(Keys.videoAgxLookId, videoAgxPreset),
+            agxValues = agxValues,
+            agxLooks = agxLooks,
             srgbTone = ProfileTone(
                 renderExposure = p[Keys.srgbToneRenderExposure] ?: 0f,
                 blacks = p[Keys.srgbToneBlacks] ?: 0f,
@@ -776,6 +807,8 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.agxToneVibrance] = v.agxTone.vibrance
         p[Keys.agxPreset] = v.agxPreset.name
         p[Keys.videoAgxPreset] = v.videoAgxPreset.name
+        p[Keys.selectedAgxLookId] = v.selectedAgxLookId.orEmpty()
+        p[Keys.videoAgxLookId] = v.videoAgxLookId.orEmpty()
         p[Keys.agxValues] = encodeAgxValues(v.agxValues)
         p[Keys.agxLooks] = LookFileCodec.encodeAgxLooks(v.agxLooks)
         p[Keys.srgbToneRenderExposure] = v.srgbTone.renderExposure
@@ -1082,6 +1115,8 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val agxToneVibrance = floatPreferencesKey("agxTone_vibrance")
         val agxPreset = stringPreferencesKey("agx_preset")
         val videoAgxPreset = stringPreferencesKey("video_agx_preset")
+        val selectedAgxLookId = stringPreferencesKey("selected_agx_look_id")
+        val videoAgxLookId = stringPreferencesKey("video_agx_look_id")
         val agxValues = stringPreferencesKey("agx_values")
         val videoColorRenderProfile = stringPreferencesKey("video_color_render_profile")
         val videoUserLutProfileId = stringPreferencesKey("video_user_lut_profile_id")
@@ -1090,6 +1125,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val colorRenderProfile = stringPreferencesKey("color_render_profile")
         val selectedUserLutProfileId = stringPreferencesKey("selected_user_lut_profile_id")
         val userLutProfiles = stringPreferencesKey("user_lut_profiles")
+        val bundledDcpVersion = intPreferencesKey("bundled_dcp_version")
         val lensProfiles = stringPreferencesKey("lens_profiles")
         val lastLensId = stringPreferencesKey("last_lens_id")
         val rawrToneRenderExposure = floatPreferencesKey("profile_tone_rawr_render_exposure")
@@ -1251,7 +1287,12 @@ object SettingsPreferencesStore {
         val dcpFiles = DcpFileStore(context.applicationContext)
         var gpuEnabled: Boolean? = null
         return com.rawr.camera.settings.architecture.SettingsEditor(
-            defaults, repository.values, repository::save, scope,
+            defaults, flow {
+                val deviceDefaults = DeviceLensDefaults.lenses
+                BundledDcpProfiles.install(context.applicationContext, deviceDefaults)
+                repository.seedBundledDcps(deviceDefaults)
+                emitAll(repository.values)
+            }, repository::save, scope,
             onChanged = { values ->
                 // Tagging OFF must gate new admissions before persistence or flow delivery.
                 com.rawr.camera.location.CameraLocation.get(context).setEnabled(values.locationTagging)
@@ -1267,7 +1308,7 @@ object SettingsPreferencesStore {
             onPersisted = { saved, live ->
                 // A newer edit may already be visible while this older write finishes.
                 lutFiles.persisted(saved, live)
-                dcpFiles.sync(saved.lensProfiles.orEmpty() + live.lensProfiles.orEmpty())
+                dcpFiles.sync(saved.lensProfiles.orEmpty() + live.lensProfiles.orEmpty() + DeviceLensDefaults.lenses)
             }
         ).also { editor ->
             instance = editor

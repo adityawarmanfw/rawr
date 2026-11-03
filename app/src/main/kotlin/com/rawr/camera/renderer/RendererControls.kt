@@ -421,9 +421,9 @@ internal fun RendererControls(stage: RendererStage, v: SettingsValues, dispatch:
                                 @Composable fun parameters() {
                                     AgxCatalog.all.filter { it.group == group }.forEach { spec ->
                                         EditorNumber(spec.shortLabel,
-                                            (v.agxValues[v.agxPreset] ?: v.agxPreset.defaults).valueOf(spec.parameter),
+                                            v.activeAgxValues().valueOf(spec.parameter),
                                             spec.minimum, spec.maximum, spec.step,
-                                            v.agxPreset.defaults.valueOf(spec.parameter)) { send(SetAgxValue(spec.parameter, it)) }
+                                            v.activeAgxDefaults().valueOf(spec.parameter)) { send(SetAgxValue(spec.parameter, it)) }
                                     }
                                 }
                                 if (groups.size == 1) parameters()

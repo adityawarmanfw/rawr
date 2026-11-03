@@ -7,6 +7,8 @@ import androidx.lifecycle.viewModelScope
 import com.rawr.camera.architecture.CaptureQuickEvent
 import com.rawr.camera.architecture.CaptureScreenController
 import com.rawr.camera.architecture.SyncToneControls
+import com.rawr.camera.integration.DeviceLensDefaults
+import com.rawr.camera.settings.model.effectiveLensProfiles
 import com.rawr.camera.integration.NativeCaptureScreenController
 import com.rawr.camera.integration.RawPreviewCoordinator
 import com.rawr.camera.integration.StillCaptureCoordinator
@@ -91,10 +93,10 @@ class CaptureViewModel(application: Application) : AndroidViewModel(application)
     private val mutableFilmSimQuick = MutableStateFlow(settingsDefaults.toFilmSimQuickState())
     val filmSimQuick: StateFlow<FilmSimQuickState> = mutableFilmSimQuick.asStateFlow()
     val viewfinderQuick: StateFlow<ViewfinderQuickState> = settingsEditor.state
-        .map { it.toViewfinderQuickState() }
+        .map { it.toViewfinderQuickState(DeviceLensDefaults.lenses) }
         .distinctUntilChanged()
         .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly,
-            latestSettings.toViewfinderQuickState())
+            latestSettings.toViewfinderQuickState(DeviceLensDefaults.lenses))
     private val galleryMediaStore = GalleryMediaStore(application)
     private val mutableLatestGalleryImage = MutableStateFlow<Uri?>(null)
     val latestGalleryImage: StateFlow<Uri?> = mutableLatestGalleryImage.asStateFlow()
@@ -256,6 +258,10 @@ class CaptureViewModel(application: Application) : AndroidViewModel(application)
         settingsEditor.update { c ->
             val video = c.isVideo
             when (event) {
+                is CaptureQuickEvent.SelectDcp -> if (controller.state.value.selectedLensId != event.lensId) c else
+                    c.copy(lensProfiles = c.effectiveLensProfiles(DeviceLensDefaults.lenses).map { lens ->
+                        if (lens.name == event.lensId) lens.image { selectDcp(event.file) } else lens
+                    })
                 CaptureQuickEvent.ToggleRawrAe -> c.copy(rawrAe = c.rawrAe.copy(enabled = !c.rawrAe.enabled))
                 is CaptureQuickEvent.SetMetering -> c.copy(rawrAe = c.rawrAe.copy(metering = event.metering))
                 is CaptureQuickEvent.SetHighlightMode -> {

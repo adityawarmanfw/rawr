@@ -4,6 +4,27 @@ import com.rawr.camera.settings.model.*
 import kotlin.test.*
 
 class RendererRecipeTest {
+    @Test fun modifiedSavedAgxLookKeepsItsIdentityAndResetBaselineAcrossRecipes() {
+        val base = AgxPreset.Rawr
+        val look = AgxLook("custom", "Custom", base, base.defaults.with(AgxParameter.Contrast, 2.2f))
+        val library = SettingsCatalog.initialState().values.copy(agxLooks = listOf(look))
+        val values = library.withRenderProfile(com.rawr.camera.model.RenderProfileSelection.SavedAgx(look.id))
+        val edited = values.copy(agxValues = values.agxValues + (base to look.values.with(AgxParameter.Contrast, 2.6f)))
+        for (recipe in listOf(RendererRecipe.encode(edited), com.rawr.camera.integration.CaptureRecipe.encode(edited))) {
+            val restored = RendererRecipe.decode(recipe, library)
+            assertEquals(look, restored.selectedAgxLook())
+            assertEquals("Custom", restored.activeProfileLabel())
+            assertTrue(restored.isAgxModified())
+            assertEquals(2.2f, restored.activeAgxDefaults().valueOf(AgxParameter.Contrast))
+            assertEquals(2.6f, restored.activeAgxValues().valueOf(AgxParameter.Contrast))
+            val deleted = RendererRecipe.decode(recipe, library.copy(agxLooks = emptyList()))
+            assertNull(deleted.selectedAgxLook())
+            assertEquals(base.defaults, deleted.activeAgxDefaults())
+        }
+        val builtIn = values.withRenderProfile(com.rawr.camera.model.RenderProfileSelection.Agx(base))
+        assertNull(RendererRecipe.decode(RendererRecipe.encode(builtIn), library).selectedAgxLook())
+    }
+
     @Test fun localTuningSurvivesCaptureEditingAndLegacyDefaults() {
         val library = SettingsCatalog.initialState().values
         val tuned = library.copy(localToneTuning = LocalToneTuning(1.2f, 3.7f, 8, true))

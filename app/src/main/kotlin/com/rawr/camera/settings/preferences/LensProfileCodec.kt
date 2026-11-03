@@ -21,7 +21,6 @@ import com.rawr.camera.settings.model.CompanionMode
 import com.rawr.camera.settings.model.CompanionSettings
 import com.rawr.camera.settings.model.LensCamera
 import com.rawr.camera.settings.model.LensSensorLayout
-import com.rawr.camera.settings.model.LensDcp
 import com.rawr.camera.settings.model.LensImage
 import com.rawr.camera.settings.model.LensRequest
 import com.rawr.camera.settings.model.LensSession
@@ -338,6 +337,16 @@ internal object LensProfileCodec {
                 require(dcp.get("file") is String && DcpFileStore.isFileName(dcp.getString("file")))
                 if (dcp.has("name")) require(dcp.get("name") is String)
             }
+            if (image.has("dcpProfiles")) {
+                val profiles = image.getJSONArray("dcpProfiles")
+                val files = mutableSetOf<String>()
+                for (index in 0 until profiles.length()) {
+                    val profile = profiles.getJSONObject(index)
+                    require(profile.get("file") is String && DcpFileStore.isFileName(profile.getString("file")))
+                    require(files.add(profile.getString("file")))
+                    if (profile.has("name")) require(profile.get("name") is String)
+                }
+            }
             objectField(image, "exposure")?.let { exposure ->
                 number(exposure, "isoMax", 0.0..EXTENDED_ISO_MAX.toDouble(), true)
                 number(exposure, "shutterMaxNs", 0.0..EXTENDED_SHUTTER_MAX_NS.toDouble(), true)
@@ -439,6 +448,11 @@ internal object LensProfileCodec {
                 }
                 i.distortion?.let { put("distortion", JSONObject(it)) }
                 if (i.mirror != LensMirror.None) put("mirror", i.mirror.wireName)
+                if (i.dcpProfiles.isNotEmpty() && dcpDir == null) {
+                    put("dcpProfiles", JSONArray().apply {
+                        i.dcpProfiles.distinctBy { it.file }.forEach { put(JSONObject().put("file", it.file).put("name", it.name)) }
+                    })
+                }
                 i.dcp?.let { dcp ->
                     put("dcp", JSONObject().put("file", dcp.file).put("name", dcp.name)
                         .apply { dcpDir?.let { put("path", java.io.File(it, dcp.file).absolutePath) } })
@@ -563,8 +577,15 @@ internal object LensProfileCodec {
                 distortion = image?.optJSONObject("distortion")?.toString(),
                 mirror = LensMirror.fromWire(image?.optString("mirror")),
                 dcp = image?.optJSONObject("dcp")?.let { d ->
-                    d.optString("file").takeIf { DcpFileStore.isFileName(it) }?.let { LensDcp(it, d.optString("name")) }
+                    d.optString("file").takeIf { DcpFileStore.isFileName(it) }?.let { BundledDcpProfiles.reference(it, d.optString("name")) }
                 },
+                dcpProfiles = image?.optJSONArray("dcpProfiles")?.let { profiles ->
+                    (0 until profiles.length()).mapNotNull { index ->
+                        profiles.optJSONObject(index)?.let { d ->
+                            d.optString("file").takeIf { DcpFileStore.isFileName(it) }?.let { BundledDcpProfiles.reference(it, d.optString("name")) }
+                        }
+                    }.distinctBy { it.file }
+                }.orEmpty(),
                 exposure = image?.optJSONObject("exposure").let { e ->
                     LensExposure(
                         extended = e?.optBoolean("extended") ?: false,

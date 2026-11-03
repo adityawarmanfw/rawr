@@ -78,4 +78,22 @@ class DcpFileStoreTest {
         }
         assertEquals(listOf(lenses[0].image.dcp!!.file), dir.list()!!.toList())
     }
+    @Test fun cleanupAndRestoreKeepInactiveProfiles() {
+        val files = store()
+        val first = files.add(byteArrayOf(10))
+        val second = files.add(byteArrayOf(11))
+        val lens = LensProfile("35", "3").image { importDcp(first).importDcp(second).selectDcp(null) }
+        for (profile in listOf(first, second)) File(files.dir, profile.file).setLastModified(1)
+        files.sync(listOf(lens))
+        assertTrue(File(files.dir, first.file).exists())
+        assertTrue(File(files.dir, second.file).exists())
+        val restoredStore = DcpFileStore(temporary.newFolder("restored"), { arrayOf("", "Test profile", "") }) { null }
+        assertEquals(listOf(lens), restoredStore.restore(files.dir, listOf(lens)))
+        File(restoredStore.dir, second.file).delete()
+        File(files.dir, second.file).delete()
+        val partial = restoredStore.restore(files.dir, listOf(lens))!!.single()
+        assertEquals(listOf(first), partial.image.availableDcps)
+        assertNull(partial.image.dcp)
+    }
+
 }

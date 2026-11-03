@@ -95,7 +95,7 @@ internal fun newPresetId(taken: List<String>): String {
     return "user-" + stamp.toString(36)
 }
 
-/** Saved AgX looks: a look is applied by selecting its base and writing its values there. */
+/** Saved AgX looks retain their selected identity while their working controls are edited. */
 internal fun reduceAgxLooks(state: SettingsUiState, action: SettingsApplicationAction): SettingsUiState {
     val v = state.values
     fun rename(name: String) = name.trim().take(48)
@@ -103,8 +103,11 @@ internal fun reduceAgxLooks(state: SettingsUiState, action: SettingsApplicationA
         is SaveAgxLook -> {
             val name = rename(action.name)
             if (name.isEmpty() || !v.isAgxActive()) state
-            else state.withValues(v.copy(agxLooks = v.agxLooks +
-                AgxLook(newPresetId(v.agxLooks.map { it.id }), name, v.regularAgxPreset(), v.activeAgxValues())))
+            else {
+                val look = AgxLook(newPresetId(v.agxLooks.map { it.id }), name, v.regularAgxPreset(), v.activeAgxValues())
+                state.withValues(v.copy(agxLooks = v.agxLooks + look).withRenderProfile(
+                    com.rawr.camera.model.RenderProfileSelection.SavedAgx(look.id)))
+            }
         }
         is ImportAgxLook -> {
             val name = rename(action.name)
@@ -120,10 +123,12 @@ internal fun reduceAgxLooks(state: SettingsUiState, action: SettingsApplicationA
             if (name.isEmpty()) state
             else state.withValues(v.copy(agxLooks = v.agxLooks.map { if (it.id == action.id) it.copy(name = name) else it }))
         }
-        is DeleteAgxLook -> state.withValues(v.copy(agxLooks = v.agxLooks.filterNot { it.id == action.id }))
+        is DeleteAgxLook -> state.withValues(v.copy(agxLooks = v.agxLooks.filterNot { it.id == action.id },
+            selectedAgxLookId = v.selectedAgxLookId?.takeUnless { it == action.id },
+            videoAgxLookId = v.videoAgxLookId?.takeUnless { it == action.id }))
         is UpdateAgxLook -> if (!v.isAgxActive()) state else state.withValues(v.copy(agxLooks = v.agxLooks.map {
             if (it.id == action.id) it.copy(base = v.regularAgxPreset(), values = v.activeAgxValues()) else it
-        }))
+        }).withRenderProfile(com.rawr.camera.model.RenderProfileSelection.SavedAgx(action.id)))
         else -> error("Unsupported AgX look action: $action")
     }
 }

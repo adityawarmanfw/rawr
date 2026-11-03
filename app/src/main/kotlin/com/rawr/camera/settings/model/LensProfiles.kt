@@ -296,8 +296,37 @@ data class LensImage(
     val mirror: LensMirror = LensMirror.None,
     /** Camera profile (.dcp) replacing the camera's colour; null for the camera's own. */
     val dcp: LensDcp? = null,
-    val exposure: LensExposure = LensExposure()
-)
+    val exposure: LensExposure = LensExposure(),
+    /** Imported choices retained even while camera colour is selected. */
+    val dcpProfiles: List<LensDcp> = emptyList()
+) {
+    /** Includes the selection from older settings that stored only one profile. */
+    val availableDcps: List<LensDcp> get() = (dcpProfiles + listOfNotNull(dcp)).distinctBy { it.file }
+
+    fun importDcp(profile: LensDcp): LensImage =
+        copy(dcp = profile, dcpProfiles = (availableDcps + profile).distinctBy { it.file })
+
+    fun selectDcp(file: String?): LensImage = when {
+        file == null -> copy(dcpProfiles = availableDcps, dcp = null)
+        else -> availableDcps.firstOrNull { it.file == file }?.let { copy(dcp = it) } ?: this
+    }
+
+    fun moveDcp(from: Int, to: Int): LensImage {
+        val profiles = availableDcps
+        if (from !in profiles.indices || to !in profiles.indices || from == to) return this
+        return copy(dcpProfiles = profiles.toMutableList().apply { add(to, removeAt(from)) })
+    }
+
+    fun sortDcps(descending: Boolean = false): LensImage {
+        val order = compareBy<LensDcp, String>(String.CASE_INSENSITIVE_ORDER) { it.name }
+        return copy(dcpProfiles = availableDcps.sortedWith(if (descending) order.reversed() else order))
+    }
+
+    fun removeDcp(file: String): LensImage = copy(
+        dcpProfiles = availableDcps.filterNot { it.file == file },
+        dcp = dcp?.takeUnless { it.file == file }
+    )
+}
 
 data class LensSensorLayout(
     /**

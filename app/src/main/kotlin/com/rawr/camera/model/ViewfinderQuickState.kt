@@ -14,11 +14,18 @@ data class HighlightQuickState(
     val compressionDefault: Float = PHOTO_HIGHLIGHT_COMPRESSION_DEFAULT
 )
 
+data class DcpQuickState(
+    val lensId: String,
+    val profiles: List<com.rawr.camera.settings.model.LensDcp>,
+    val selectedFile: String?
+)
+
 /** Capture-screen projection of the settings the compact viewfinder rail edits. */
 data class ViewfinderQuickState(
     val rawrAeEnabled: Boolean = false,
     val metering: RawrMetering = RawrMetering.Matrix,
     val highlight: HighlightQuickState = HighlightQuickState(),
+    val dcps: List<DcpQuickState> = emptyList(),
     /** Recording locks the rail like it locks the render profile. */
     val locked: Boolean = false
 )
@@ -27,12 +34,15 @@ internal const val HIGHLIGHT_THRESHOLD_DEFAULT = 1f
 internal const val PHOTO_HIGHLIGHT_COMPRESSION_DEFAULT = 45f
 internal const val VIDEO_HIGHLIGHT_COMPRESSION_DEFAULT = 100f
 
-internal fun SettingsValues.toViewfinderQuickState(): ViewfinderQuickState {
+internal fun SettingsValues.toViewfinderQuickState(
+    deviceDefaults: List<com.rawr.camera.settings.model.LensProfile> = emptyList()
+): ViewfinderQuickState {
     val enabled = if (isVideo) videoHighlightEnabled else photoHighlightEnabled
     val method = if (isVideo) videoHighlightMethod else photoHighlightMethod
     val compressionDefault =
         if (isVideo) VIDEO_HIGHLIGHT_COMPRESSION_DEFAULT else PHOTO_HIGHLIGHT_COMPRESSION_DEFAULT
     return ViewfinderQuickState(
+        dcps = (lensProfiles ?: deviceDefaults).map { DcpQuickState(it.name, it.image.availableDcps, it.image.dcp?.file) },
         rawrAeEnabled = rawrAe.enabled,
         metering = rawrAe.metering,
         highlight = HighlightQuickState(
