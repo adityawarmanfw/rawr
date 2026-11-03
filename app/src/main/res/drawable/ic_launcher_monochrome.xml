@@ -1,6 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
-<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
-  <path android:fillColor="#FFFFFFFF" android:pathData="M35,25 Q35,20 40,20 L73,20 Q78,20 78,25 L78,33 L55,33 Q48,33 48,40 L48,82 L35,82 Z"/>
-  <path android:fillColor="#FFFFFFFF" android:fillType="evenOdd" android:pathData="M66,36 A20,20 0,1 1,65.99,36 M66,43 A13,13 0,1 0,66.01,69 A13,13 0,1 0,66,43"/>
-  <path android:fillColor="#FFFFFFFF" android:pathData="M27,35 L34,39 L27,43 Q23,39 27,35 Z M25,49 L34,53 L25,57 Q21,53 25,49 Z M27,63 L34,67 L27,71 Q23,67 27,63 Z"/>
+<!-- Themed-icon silhouette traced from ic_launcher_foreground.png (same 1024 grid):
+     solid "r" stem + spikes, hollow lens ring with its highlight arc.
+     The group shrinks it to 64% and centres it, matching ic_launcher_foreground_inset. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="1024" android:viewportHeight="1024">
+  <group android:pivotX="523" android:pivotY="531" android:scaleX="0.64" android:scaleY="0.64" android:translateX="-11" android:translateY="-19">
+    <!-- r: stem + top bar with rounded ends -->
+    <path android:fillColor="#FFFFFFFF" android:pathData="M336,427 A260,260 0,0 1,596,167 L837,167 Q859,167 859,189 L859,292 Q859,318 833,318 L680,318 C560,318 494,390 494,500 L494,870 Q494,896 468,896 L362,896 Q336,896 336,870 Z"/>
+    <!-- lens ring -->
+    <path android:fillColor="#FFFFFFFF" android:fillType="evenOdd" android:pathData="M689,356 A166,166 0,1 1,688.99,356 Z M689,386 A136,136 0,1 0,689.01,386 Z"/>
+    <!-- lens highlight -->
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="32" android:strokeLineCap="round" android:pathData="M599,492 A95,95 0,0 1,660,431"/>
+    <!-- spikes: rounded triangles pointing left -->
+    <path android:fillColor="#FFFFFFFF" android:strokeColor="#FFFFFFFF" android:strokeWidth="40" android:strokeLineJoin="round" android:pathData="M218,394 L304,348 L288,440 Z M206,561 L288,517 L288,608 Z M207,728 L288,685 L286,777 Z"/>
+  </group>
 </vector>
