@@ -187,7 +187,7 @@ rawrcam::renderer::RenderOptions options(JNIEnv* env, jstring recipe, int workin
         // override its control row, so older recipes fill in from the preset.
         Json agx(env, json.child("agx"));
         static constexpr const char* kPresets[tonemap::kAgxPresetCount] = {"Default", "BlenderBase", "BlenderPunchy",
-                                                                           "Sigmoid", "Smooth"};
+                                                                           "Sigmoid", "Smooth", "Rawr"};
         const std::string name = agx.text("preset");
         uint32_t preset = 0;
         for (uint32_t i = 0; i < tonemap::kAgxPresetCount; ++i)

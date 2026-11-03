@@ -48,8 +48,14 @@ data class AgxValues(val values: List<Float>) {
 
 private fun agx(vararg v: Float) = AgxValues(v.toList())
 
-/** Native also has Blender base (id 1); the app does not offer it. Saved selections fall back to [Default]. */
+/** Native also has Blender base (id 1); the app does not offer it. */
 enum class AgxPreset(val label: String, val nativeId: Int, val defaults: AgxValues) {
+    Rawr("AgX RAWR", 5, agx(
+        6.5f, -10.0f,
+        2.66f, 1.41f, 1.15f, 0.0f, 0.182f, 0.0f, 0.0f, 1.0f, 0.0f, 2.2f,
+        1.0f, 0.0f, 0.70f, 1.18f, 0.0f,
+        0.1f, 0.034906585f, 0.1f, -0.017453292f, 0.15f, -0.05235988f,
+        0.0f, 1.0f, 0.1f, 0.034906585f, 0.1f, -0.017453292f, 0.15f, -0.05235988f)),
     Default("AgX", 0, agx(
         6.5f, -10.0f,
         3.0f, 3.3f, 1.5f, 0.0f, 0.18f, 0.0f, 0.0f, 1.0f, 0.0f, 2.2f,
