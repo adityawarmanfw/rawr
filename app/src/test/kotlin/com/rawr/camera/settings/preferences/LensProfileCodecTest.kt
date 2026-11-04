@@ -532,12 +532,12 @@ class LensProfileCodecTest {
     }
 
     @Test fun photoSequenceMatchesTheNativeRecipeForBuiltInLenses() {
-        // The native recipe log on the V2562: F35 still=decisionFrame, H14 still=direct.
+        // The native recipe log on the V2562: F35 and H14 still=decisionFrame (the HAL latches its
+        // full-size/binned choice until a decision frame), L14 still=direct.
         val lenses = requireNotNull(LensProfileCodec.decode(java.io.File("src/main/cpp/camera/profiles/vivo_x300_ultra.json").readText()))
         val byName = lenses.associateBy { it.name }
-        assertEquals(StillSequence.DecisionFrame, byName.getValue("F35").stillSequence())
-        assertEquals(StillSequence.DecisionFrame, byName.getValue("F85").stillSequence())
-        assertEquals(StillSequence.Direct, byName.getValue("H14").stillSequence())
+        for (lens in listOf("F35", "F85", "H14", "H35", "H85"))
+            assertEquals(StillSequence.DecisionFrame, byName.getValue(lens).stillSequence(), lens)
         assertEquals(StillSequence.Direct, byName.getValue("L14").stillSequence())
         val f85 = byName.getValue("F85")
         assertEquals(StillSequence.Direct, f85.companion { copy(mode = CompanionMode.Off) }.stillSequence())

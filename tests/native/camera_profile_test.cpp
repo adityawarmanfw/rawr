@@ -343,16 +343,19 @@ void testProfileJson() {
             assert(s->preferredStream.width == w && s->preferredStream.height == h);
             assert(s->photoStream && s->photoStream->width == 8192 && s->photoStream->height == 6144);
             assert(s->photoStream->format == RawPixelFormat::Raw16 && s->vendorGate == "vivoFullSize");
-            bool stillUiModule = false, sessionUiModule = false, forced = false;
+            bool stillUiModule = false, decisionUiModule = false, sessionUiModule = false, forced = false;
             for (const auto& k : s->vendorKeys) {
                 // No forced sensor mode, not even on stills: forcing it gave soft DNGs; the HAL switches by itself.
                 forced |= k.tag == "vivo.control.forceSensorMode";
                 if (k.tag != "com.vivo.current_ui_module") continue;
                 stillUiModule |= k.scope == CameraKeySetting::Scope::Still;
-                sessionUiModule |= k.scope != CameraKeySetting::Scope::Still;
+                // The HAL keeps its last full-size/binned choice (e.g. the stock app's binned one) until a frame
+                // with this key, so the H lenses send the same decision frame as F35/F85.
+                decisionUiModule |= k.scope == CameraKeySetting::Scope::Decision;
+                sessionUiModule |= k.scope != CameraKeySetting::Scope::Still && k.scope != CameraKeySetting::Scope::Decision;
             }
             // ui_module 74 on the session or repeating request silences the RAW viewfinder.
-            assert(stillUiModule && !sessionUiModule && !forced);
+            assert(stillUiModule && decisionUiModule && !sessionUiModule && !forced);
         }
         // vivo 200 MP lenses: the same route with the ultra flag and no forced mode (the HAL switches by itself).
         // Both default to queued submission (the reader retry drains stranded images).

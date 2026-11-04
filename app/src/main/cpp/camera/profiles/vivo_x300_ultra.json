@@ -2,7 +2,7 @@
   "id": "vivo_x300_ultra",
   "schema": 2,
   "name": "vivo X300 Ultra",
-  "version": 9,
+  "version": 10,
   "match": {
     "models": ["V2562", "V2547A", "V2547DA"],
     "verifiedModels": ["V2562"],
@@ -380,6 +380,13 @@
           "enabled": true
         },
         {
+          "tag": "com.vivo.current_ui_module",
+          "type": "int32",
+          "scope": "decision",
+          "values": [74],
+          "enabled": true
+        },
+        {
           "tag": "vivo.control.onlyDng",
           "type": "int32",
           "scope": "still",
@@ -520,6 +527,13 @@
           "enabled": true
         },
         {
+          "tag": "com.vivo.current_ui_module",
+          "type": "int32",
+          "scope": "decision",
+          "values": [74],
+          "enabled": true
+        },
+        {
           "tag": "vivo.control.onlyDng",
           "type": "int32",
           "scope": "still",
@@ -648,6 +662,13 @@
           "tag": "com.vivo.current_ui_module",
           "type": "int32",
           "scope": "still",
+          "values": [74],
+          "enabled": true
+        },
+        {
+          "tag": "com.vivo.current_ui_module",
+          "type": "int32",
+          "scope": "decision",
           "values": [74],
           "enabled": true
         },
