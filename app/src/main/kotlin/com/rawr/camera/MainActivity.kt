@@ -353,14 +353,6 @@ class MainActivity : ComponentActivity() {
         captureViewModel.setUiPresentationActive(true)
     }
 
-    override fun onWindowFocusChanged(hasFocus: Boolean) {
-        super.onWindowFocusChanged(hasFocus)
-        if (started) {
-            captureViewModel.setUiPresentationActive(hasFocus && lifecycle.currentState.isAtLeast(
-                androidx.lifecycle.Lifecycle.State.RESUMED))
-        }
-    }
-
     override fun onUserLeaveHint() {
         captureViewModel.setUiPresentationActive(false)
         super.onUserLeaveHint()
