@@ -178,6 +178,7 @@ class ArtifactDiagnosticExporter(private val context: Context) {
                     "android=${android.os.Build.VERSION.RELEASE} sdk=${android.os.Build.VERSION.SDK_INT} soc=${android.os.Build.SOC_MODEL} " +
                     "fingerprint=${android.os.Build.FINGERPRINT}"
             )
+            appendLine("current_pid=${android.os.Process.myPid()} (logcat also holds earlier launches still in the buffer)")
             appendLine("files:")
             if (files.isEmpty()) appendLine("  (none: the camera has not run since install or data was cleared)")
             for (f in files) appendLine("  ${f.name} bytes=${f.length()} modified=${time.format(java.util.Date(f.lastModified()))}")
@@ -191,15 +192,21 @@ class ArtifactDiagnosticExporter(private val context: Context) {
         }
     }
 
-    private fun ownLogcat(): ByteArray? =
+    /**
+     * This app's logcat. Android only lets an app read its own lines, so no pid
+     * filter: earlier launches still in the ring buffer come along, and with the
+     * crash buffer a bundle exported after a crash carries the stack trace.
+     */
+    private fun ownLogcat(): ByteArray? = readLogcat("-b", "main,system,crash") ?: readLogcat()
+
+    private fun readLogcat(vararg buffers: String): ByteArray? =
         runCatching {
             val process =
-                ProcessBuilder("logcat", "-d", "-v", "threadtime", "--pid=${android.os.Process.myPid()}")
-                    .redirectErrorStream(true)
+                ProcessBuilder(listOf("logcat", "-d", "-v", "threadtime") + buffers)
+                    .redirectError(ProcessBuilder.Redirect.to(File("/dev/null")))
                     .start()
             val bytes = process.inputStream.use { it.readBytes() }
-            process.waitFor()
-            bytes.takeIf { it.isNotEmpty() }
+            bytes.takeIf { process.waitFor() == 0 && it.isNotEmpty() }
         }.getOrNull()
 
     private fun deviceHeader(): String =
