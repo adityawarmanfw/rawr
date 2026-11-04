@@ -89,6 +89,8 @@ class SingleFrameCoordinator final {
     std::string pollJpegCompletion();
 
     [[nodiscard]] bool detachedHqWorkActive() const noexcept;
+    // A capture still needs the camera: its frame hasn't arrived or is still being copied out.
+    [[nodiscard]] bool holdsCameraFrame() const noexcept;
 
     // Mirrors the previous SessionEngine lifecycle semantics.
     void cancelPendingDngBeforeIngressDestroy();

@@ -70,6 +70,13 @@ class StillCaptureCoordinator(
                                     val requestedAtNs: Long = android.os.SystemClock.elapsedRealtimeNanos())
     private val queuedInputs = java.util.concurrent.ConcurrentLinkedQueue<CaptureInput>()
     private val activeCaptures = java.util.concurrent.atomic.AtomicInteger(0)
+    // Camera-session leases (native still leases), apart from process ownership (activeCaptures,
+    // StillProcessingService). A press holds the camera until native accepts it; then until native
+    // no longer needs the camera for it (frames in and copied out, bursts saved). Development and
+    // saving run with the camera closed, so Home closes it within about a second of the shot: a
+    // session left open gets evicted by the next camera app, and vivo's HAL crashes on that.
+    private var pressCameraLeases = 0  // guarded by this
+    private var acceptedCameraLeases = 0  // guarded by this
 
     // Called directly by the foreground shutter event, before dispatching provider
     // IO to the capture worker. Holds camera/process ownership across immediate Home.
@@ -84,7 +91,25 @@ class StillCaptureCoordinator(
         queuedInputs.add(CaptureInput(snapshot, CaptureTime.snapshot(), releaseAssets,
             gps = if (snapshot.locationTagging) gpsSnapshot() else null, requestedAtNs = requestedAtNs))
         activeCaptures.incrementAndGet()
+        pressCameraLeases += 1
         preview.beginStillCapture()
+    }
+
+    /** Native took the press: its lease waits for [releaseIdleCameraLeases]; a refused press gives it back. */
+    @Synchronized
+    private fun pressHandled(accepted: Boolean) {
+        if (pressCameraLeases > 0) pressCameraLeases -= 1
+        if (accepted) acceptedCameraLeases += 1 else preview.endStillCapture()
+    }
+
+    /** Polled: once no accepted still needs the camera, its leases go back and the session may close. */
+    private fun releaseIdleCameraLeases() {
+        // The native query takes the session lock; never hold this monitor (the shutter's) across it.
+        val held = synchronized(this) { acceptedCameraLeases }
+        if (held == 0 || preview.stillCaptureHoldsCamera()) return
+        // Only leases counted before the query: a still accepted since then keeps its own.
+        val released = synchronized(this) { minOf(held, acceptedCameraLeases).also { acceptedCameraLeases -= it } }
+        repeat(released) { preview.endStillCapture() }
     }
 
     @Synchronized
@@ -96,8 +121,11 @@ class StillCaptureCoordinator(
 
     @Synchronized
     private fun releaseCapture() {
-        activeCaptures.decrementAndGet()
-        preview.endStillCapture()
+        // The last capture finished: nothing can still need the camera (polling may have stopped).
+        if (activeCaptures.decrementAndGet() == 0) {
+            repeat(acceptedCameraLeases) { preview.endStillCapture() }
+            acceptedCameraLeases = 0
+        }
         StillProcessingService.release(this)
         closeIfDrained()
     }
@@ -116,6 +144,7 @@ class StillCaptureCoordinator(
             return id
         } finally {
             input.releaseAssets()
+            pressHandled(accepted)
             if (!accepted) {
                 preview.cancelPreparedMultiframeCapture()
                 input.frozenAssetId?.let { com.rawr.camera.storage.releaseCaptureAssets(application.filesDir, it) }
@@ -349,10 +378,12 @@ class StillCaptureCoordinator(
                 return
             }
             activeCaptures.incrementAndGet()
+            synchronized(this) { pressCameraLeases += 1 }
             preview.beginStillCapture()
             val id = preview.recoverStill(output.jobName, output.multiframe,
                 if (output.conditionalDng) -1 else output.dng?.fd ?: -1,
                 if (output.conditionalDng) -1 else output.mergedDng?.fd ?: -1, output.jpeg?.fd ?: -1)
+            pressHandled(id != 0L)
             if (id == 0L) { outputs.releaseRecovery(output); releaseCapture(); return }
             outputs.register(id, output)
             requestStates[id] = RequestState(output.jpeg != null, remainingDngs = output.requestedDngCount, fallback = output.fallback)
@@ -362,6 +393,7 @@ class StillCaptureCoordinator(
     }
 
     fun pollCompletion(): List<CompletionEvent> {
+        runCatching { releaseIdleCameraLeases() }.onFailure { Log.e(TAG, "Camera lease release failed", it) }
         runCatching { recoverPending() }.onFailure { Log.e(TAG, "Capture recovery unavailable", it) }
         val events = recoveredEvents.toMutableList()
         recoveredEvents.clear()

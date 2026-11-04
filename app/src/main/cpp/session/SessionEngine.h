@@ -113,6 +113,8 @@ class SessionEngine {
     uint64_t recoverStill(const std::string& name, bool multiframe, int dng, int merged, int jpeg);
     std::string runHighlightReplay(const std::string& inputPath);
     std::string pollDngWriteCompletion();
+    // Some accepted still still needs the camera session (see CaptureCoordinator::holdsCameraFrames).
+    bool stillCaptureHoldsCamera();
     std::string pollJpegWriteCompletion();
     void setPersistZslRingEnabled(bool enabled);
     void setExperimentalMultiframeEnabled(bool enabled);

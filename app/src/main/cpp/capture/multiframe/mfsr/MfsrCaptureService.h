@@ -52,6 +52,9 @@ class MfsrCaptureService {
     void reset() noexcept;
 
     bool isWorkerActive() const noexcept { return workerActive_; }
+    // Bursts not yet saved: they may still pin camera images (full-size bursts) or wait for
+    // post-shutter bracket frames. Once saved, merging needs no camera.
+    bool spoolingActive() const noexcept { return spooling_.load(std::memory_order_acquire) != 0; }
 
     // Enqueue frozen capture for background processing. Returns request id,
     // or 0 when storage admission fails. The service closes FDs on rejection.
@@ -114,6 +117,7 @@ class MfsrCaptureService {
     std::mutex spoolMutex_;
     std::condition_variable spoolChanged_;
     bool spoolStopped_ = false;
+    std::atomic<std::uint32_t> spooling_{0};
     std::thread spoolThread_;
     StringMailbox dngBox_;
     StringMailbox jpegBox_;
