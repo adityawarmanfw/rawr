@@ -184,7 +184,13 @@ class ArtifactDiagnosticExporter(private val context: Context) {
             for (f in files) appendLine("  ${f.name} bytes=${f.length()} modified=${time.format(java.util.Date(f.lastModified()))}")
             appendLine(
                 if (logcat != null) {
-                    "  logcat.txt bytes=${logcat.size} lines=${logcat.count { it == '\n'.code.toByte() }}"
+                    // threadtime lines carry the pid as their third field. Some vendors
+                    // (vivo) mute a camera app's log for a whole launch: 0 here is that.
+                    val pid = android.os.Process.myPid().toString()
+                    val lines = String(logcat).lineSequence()
+                    val current = lines.count { it.split(Regex(" +"), 4).getOrNull(2) == pid }
+                    "  logcat.txt bytes=${logcat.size} lines=${lines.count()} current_launch_lines=$current" +
+                        if (current == 0) " (this launch's log was muted or empty)" else ""
                 } else {
                     "  logcat.txt missing (logcat unreadable)"
                 }
