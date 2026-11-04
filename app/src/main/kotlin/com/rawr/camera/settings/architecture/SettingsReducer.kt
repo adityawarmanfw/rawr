@@ -112,10 +112,6 @@ object SettingsReducer {
             )
         }
 
-        SettingsSection.InternalLogging -> {
-            SettingsDestination.Section(SettingsSection.Debug)
-        }
-
         else -> {
             SettingsDestination.Home
         }

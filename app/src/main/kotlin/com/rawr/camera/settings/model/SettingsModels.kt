@@ -43,7 +43,6 @@ enum class SettingsSection(val title: String) {
     Multiframe("Multiframe"),
     FilmSim("Film Simulation"),
     Debug("Debug"),
-    InternalLogging("Internal Logging"),
     About("About"),
 
     // Kept only for compatibility with older persisted/navigation tests; no longer exposed.
@@ -1123,11 +1122,8 @@ data class SettingsValues(
     val multiframeTuning: MultiframeTuning = MultiframeTuning(),
     val customGpuDriverEnabled: Boolean = false,
     val customGpuDriverName: String? = null,
-    val persistentDiagnosticsEnabled: Boolean = false,
     val persistZslRingEnabled: Boolean = false,
     val persistZslRingOnShutterEnabled: Boolean = false,
-    val internalTraceCaptureEnabled: Boolean = false,
-    val internalTraceRetainedRows: Int = 8192,
     val demosaicAlgorithm: DemosaicAlgorithm = DemosaicAlgorithm.Amaze,
     val dualAutoContrast: Boolean = true,
     val dualContrastPercent: Float = 20f,

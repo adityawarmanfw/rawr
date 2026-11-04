@@ -322,15 +322,9 @@ data class SetCustomGpuDriverEnabled(val enabled: Boolean) : SettingsApplication
 
 data class SetCustomGpuDriverInstalled(val displayName: String) : SettingsApplicationAction
 
-data class SetPersistentDiagnosticsEnabled(val enabled: Boolean) : SettingsApplicationAction
-
 data class SetPersistZslRingEnabled(val enabled: Boolean) : SettingsApplicationAction
 
 data class SetPersistZslRingOnShutterEnabled(val enabled: Boolean) : SettingsApplicationAction
-
-data class SetInternalTraceCaptureEnabled(val enabled: Boolean) : SettingsApplicationAction
-
-data class SetInternalTraceRetainedRows(val rows: Int) : SettingsApplicationAction
 
 data class SetDemosaicAlgorithm(val value: DemosaicAlgorithm) : SettingsApplicationAction
 

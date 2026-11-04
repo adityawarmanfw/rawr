@@ -108,8 +108,6 @@ class RuntimeTraceRecorder {
 
     void configureOutputPath(std::string path);
     void setEnabled(bool enabled) noexcept;
-    void clear() noexcept;
-    void setRetainedRows(uint32_t rows) noexcept;
     void setCurrentCameraId(int32_t cameraId) noexcept { currentCameraId_.store(cameraId, std::memory_order_release); }
     [[nodiscard]] bool enabled() const noexcept { return enabled_.load(std::memory_order_relaxed); }
     void record(RuntimeTraceStage stage, uint64_t cameraTimestampNs = 0, uint64_t frameOrdinal = 0, int32_t slot = -1,

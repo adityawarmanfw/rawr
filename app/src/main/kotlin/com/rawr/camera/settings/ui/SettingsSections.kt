@@ -13,8 +13,6 @@ internal fun SettingsSectionContent(
     onImportLut: (String?) -> Unit = {},
     onImportGpuDriver: () -> Unit = {},
     onPickSaveDirectory: () -> Unit = {},
-    onDumpInternalTrace: () -> Unit = {},
-    onClearInternalTrace: () -> Unit = {},
     onExportDiagnosticsBundle: () -> Unit = {},
     onExportBackup: () -> Unit = {},
     onImportBackup: () -> Unit = {},
@@ -126,17 +124,7 @@ internal fun SettingsSectionContent(
         }
 
         SettingsSection.Debug -> {
-            DebugSettings(state, dispatch, onRequestSaveNotificationPermission)
-        }
-
-        SettingsSection.InternalLogging -> {
-            InternalLoggingSettings(
-                state,
-                dispatch,
-                onDumpInternalTrace,
-                onClearInternalTrace,
-                onExportDiagnosticsBundle
-            )
+            DebugSettings(state, dispatch, onRequestSaveNotificationPermission, onExportDiagnosticsBundle)
         }
 
         SettingsSection.About -> {

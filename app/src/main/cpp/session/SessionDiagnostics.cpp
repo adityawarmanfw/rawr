@@ -18,4 +18,9 @@ void SessionEngine::appendDiagnostic(const std::string& line) {
     if (diagnosticSink_) diagnosticSink_->appendValidation(line);
 }
 
+void SessionEngine::flushDiagnostics() {
+    if (diagnosticSink_) diagnosticSink_->flush();
+    if (frameAuditWriter_) frameAuditWriter_->flush();
+}
+
 }  // namespace rawrcam::session
