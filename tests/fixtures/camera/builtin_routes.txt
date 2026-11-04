@@ -399,6 +399,7 @@ key.still=vivo.control.isPAPNeeded type:0 enabled:1 values:1,
 key.still=vivo.control.isUpscale type:1 enabled:1 values:0,
 key.still=vivo.control.onlyDng type:1 enabled:1 values:1,
 key.still=vivo.control.sensorMode type:1 enabled:1 values:0,
+key.decision=com.vivo.current_ui_module type:1 enabled:1 values:74,
 
 lens=H35
 camera=3
@@ -450,6 +451,7 @@ key.still=vivo.control.isPAPNeeded type:0 enabled:1 values:1,
 key.still=vivo.control.isUpscale type:1 enabled:1 values:0,
 key.still=vivo.control.onlyDng type:1 enabled:1 values:1,
 key.still=vivo.control.sensorMode type:1 enabled:1 values:0,
+key.decision=com.vivo.current_ui_module type:1 enabled:1 values:74,
 
 lens=H85
 camera=5
@@ -501,6 +503,7 @@ key.still=vivo.control.isPAPNeeded type:0 enabled:1 values:1,
 key.still=vivo.control.isUpscale type:1 enabled:1 values:0,
 key.still=vivo.control.onlyDng type:1 enabled:1 values:1,
 key.still=vivo.control.sensorMode type:1 enabled:1 values:0,
+key.decision=com.vivo.current_ui_module type:1 enabled:1 values:74,
 
 lens=F35
 camera=3
