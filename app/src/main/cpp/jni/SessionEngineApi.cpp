@@ -66,7 +66,7 @@ void setRawrAutoExposure(EngineHandle h, bool enabled, int nightLook, int isoMin
     c.shutterStartNs = std::max<int64_t>(0, shutterStartNs);
     c.shutterMaxNs = std::max<int64_t>(0, shutterMaxNs);
     c.balanceEv = std::isfinite(balanceEv) ? std::clamp(balanceEv, -2.0f, 2.0f) : 0.0f;
-    c.maxDigitalGainEv = std::isfinite(maxDigitalGainEv) ? std::clamp(maxDigitalGainEv, 0.0f, 4.0f) : 2.0f;
+    c.maxDigitalGainEv = std::isfinite(maxDigitalGainEv) ? std::clamp(maxDigitalGainEv, 0.0f, 16.0f) : 2.0f;
     c.speed = std::clamp(speed, 0, 2);
     c.metering = std::clamp(metering, 0, 3);
     engine(h)->cameraControls().setRawrAeConfig(c);
