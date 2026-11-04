@@ -200,6 +200,7 @@ std::uint64_t MfsrCaptureService::start(std::unique_ptr<PendingMultiframeCapture
     {
         std::lock_guard<std::mutex> lock(spoolMutex_);
         spoolQueue_.push_back(pending);
+        spooling_.fetch_add(1, std::memory_order_acq_rel);
     }
     spoolChanged_.notify_one();
     {
@@ -437,6 +438,7 @@ void MfsrCaptureService::spoolLoop() {
         }
         pending->work->capture.reset();  // Release live ring pins immediately after durable readback.
         pending->reservation.reset();
+        spooling_.fetch_sub(1, std::memory_order_acq_rel);
         {
             std::lock_guard<std::mutex> lock(pending->mutex);
             pending->ready = true;

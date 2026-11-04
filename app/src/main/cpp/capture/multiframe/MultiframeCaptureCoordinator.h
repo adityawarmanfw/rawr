@@ -32,6 +32,8 @@ class MultiframeCaptureCoordinator final {
     void setExperimentalMultiframeEnabled(bool enabled) noexcept;
     bool experimentalMultiframeEnabled() const noexcept { return experimentalMultiframeEnabled_; }
     bool multiframeWorkActive() const noexcept { return mfsrService_ && mfsrService_->isWorkerActive(); }
+    // A started burst not yet saved still needs the camera (see MfsrCaptureService::spoolingActive).
+    bool holdsCameraFrames() const noexcept { return mfsrService_ && mfsrService_->spoolingActive(); }
     uint32_t prepareExperimentalMultiframeOnShutter(uint32_t maxFrames = 30u) noexcept;
     uint64_t startPreparedMultiframeCapture(encoding::dng::DngCaptureContext baseDng,
                                             encoding::dng::DngCaptureContext mergedDng,

@@ -291,6 +291,16 @@ class SingleFrameCoordinator::Impl {
         std::lock_guard<std::mutex> lock(mutex_);
         return !queue_.empty();
     }
+    // A job still waiting for its frame, or copying it out of the camera's image.
+    // Development after that needs no camera, so the session may close.
+    bool holdsCameraFrame() const noexcept {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (const auto& entry : queue_) {
+            if (!entry->handedOff.load()) return true;
+            if (entry->shot && entry->shot->copyingCameraImage()) return true;
+        }
+        return false;
+    }
     void cancelAcquisition(const std::string& reason, uint64_t requestId = 0) {
         for (const auto& entry : entries()) {
             if (requestId && entry->id != requestId) continue;
@@ -380,7 +390,11 @@ class SingleFrameCoordinator::Impl {
                         continue;
                     }
                     auto saved = persistence::load(entry->recoveryPath);
-                    entry->shot = std::make_unique<SingleFrameCaptureJob>(vulkan_, submitMutex_, filesDir_, diagnostic_);
+                    auto job = std::make_unique<SingleFrameCaptureJob>(vulkan_, submitMutex_, filesDir_, diagnostic_);
+                    {
+                        std::lock_guard<std::mutex> lock(mutex_);  // holdsCameraFrame reads entry->shot
+                        entry->shot = std::move(job);
+                    }
                     auto& shot = *entry->shot;
                     shot.recover(std::move(saved), entry->recoveryPath, entry->id, std::move(entry->recoveryDng),
                                  std::move(entry->recoveryJpeg),
@@ -428,7 +442,13 @@ class SingleFrameCoordinator::Impl {
             if (!jpegPublished)
                 jpegBox_.push(std::to_string(entry->id) + "\t0\t" + entry->jpegName + "\t" + failure + "\t0");
             // Destroy allocations on this worker before allowing the next job to start.
-            entry->shot.reset();
+            {
+                std::unique_ptr<SingleFrameCaptureJob> finished;
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);  // holdsCameraFrame reads entry->shot
+                    finished = std::move(entry->shot);
+                }
+            }
             if (diagnostic_) diagnostic_("STILL_QUEUE_JOB_FINISHED requestId=" + std::to_string(entry->id));
             {
                 std::lock_guard<std::mutex> lock(mutex_);
@@ -498,6 +518,7 @@ void SingleFrameCoordinator::advanceHq() { impl_->advanceHq(); }
 std::string SingleFrameCoordinator::pollDngCompletion() { return impl_->pollDngCompletion(); }
 std::string SingleFrameCoordinator::pollJpegCompletion() { return impl_->pollJpegCompletion(); }
 bool SingleFrameCoordinator::detachedHqWorkActive() const noexcept { return impl_->detachedHqWorkActive(); }
+bool SingleFrameCoordinator::holdsCameraFrame() const noexcept { return impl_->holdsCameraFrame(); }
 void SingleFrameCoordinator::cancelPendingDngBeforeIngressDestroy() { impl_->cancelPendingDngBeforeIngressDestroy(); }
 void SingleFrameCoordinator::failAcquisition(uint64_t id, const std::string& reason) {
     impl_->cancelAcquisition(reason, id);

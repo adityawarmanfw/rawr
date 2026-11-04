@@ -635,6 +635,9 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
 
     fun pollDngWriteCompletion(): String = native.pollDngWriteCompletion(nativeHandle)
 
+    /** An accepted still still needs the camera session (frames due or not yet copied out). */
+    fun stillCaptureHoldsCamera(): Boolean = native.stillCaptureHoldsCamera(nativeHandle)
+
     fun pollJpegWriteCompletion(): String = native.pollJpegWriteCompletion(nativeHandle)
 
     @Synchronized

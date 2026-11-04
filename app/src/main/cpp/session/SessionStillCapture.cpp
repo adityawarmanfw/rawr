@@ -128,6 +128,11 @@ uint64_t SessionEngine::requestRawStillCapture(rawrcam::encoding::dng::DngCaptur
     return requestId;
 }
 
+bool SessionEngine::stillCaptureHoldsCamera() {
+    std::lock_guard<std::mutex> lock(mu_);
+    return capture_.holdsCameraFrames();
+}
+
 std::string SessionEngine::pollDngWriteCompletion() {
     std::lock_guard<std::mutex> lock(mu_);
     return capture_.pollDng();

@@ -775,6 +775,10 @@ Java_com_rawr_camera_integration_NativePreviewEngine_pollDngWriteCompletion(JNIE
     auto s = rawrcam::session::pollDngWriteCompletion(handle(h));
     return env->NewStringUTF(s.c_str());
 }
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_rawr_camera_integration_NativePreviewEngine_stillCaptureHoldsCamera(JNIEnv*, jobject, jlong h) {
+    return rawrcam::session::stillCaptureHoldsCamera(handle(h)) ? JNI_TRUE : JNI_FALSE;
+}
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_rawr_camera_integration_NativePreviewEngine_pollJpegWriteCompletion(JNIEnv* env, jobject, jlong h) {
     auto s = rawrcam::session::pollJpegWriteCompletion(handle(h));

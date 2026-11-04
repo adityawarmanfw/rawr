@@ -250,6 +250,8 @@ class NativePreviewEngine {
 
     external fun pollDngWriteCompletion(handle: Long): String
 
+    external fun stillCaptureHoldsCamera(handle: Long): Boolean
+
     external fun pollJpegWriteCompletion(handle: Long): String
 
     external fun recoverStill(handle: Long, name: String, multiframe: Boolean, dng: Int, merged: Int, jpeg: Int): Long
