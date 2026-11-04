@@ -277,7 +277,7 @@ bool FrameSubmitCoordinator::submitMatchedFrame(rawrcam::imaging::MatchedFrame& 
         }
         lifecyclePort_.finalizeDetachedStill();
     }
-    if (pipelineAuditSubmitCount_ < 6) {
+    if (pipelineAuditSubmitCount_ < kPipelineAuditFrames) {
         ++pipelineAuditSubmitCount_;
         lifecyclePort_.postAudit(std::string("PIPELINE_GPU_SUBMIT_RESULT generation=") +
                                  std::to_string(config_.generation) + " timestampNs=" + std::to_string(timestampNs) +

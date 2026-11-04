@@ -114,6 +114,10 @@ struct RawDevelopRecordResult {
     VkPipelineStageFlags rawWaitStage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
 };
 
+// Per-session pipeline audit lines cover only the first frames: the submit
+// counter saturates here, so every check must be "count < kPipelineAuditFrames".
+inline constexpr uint32_t kPipelineAuditFrames = 6;
+
 class RawDevelopRecorder final {
    public:
     using Audit = std::function<void(const std::string&)>;

@@ -19,6 +19,7 @@ void SessionEngine::appendDiagnostic(const std::string& line) {
 }
 
 void SessionEngine::flushDiagnostics() {
+    if (diagnosticSink_) diagnosticSink_->flush();
     if (frameAuditWriter_) frameAuditWriter_->flush();
 }
 
