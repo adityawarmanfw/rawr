@@ -179,6 +179,8 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
         sessionClock?.cancel(false)
         sessionClock = null
         postNative { native.tickCameraSession(nativeHandle) }
+        // Leaving the viewfinder (e.g. for Settings > Export) completes the buffered frame audit.
+        postNative { native.flushDiagnostics(nativeHandle) }
     }
 
     /** Submitted after the initial persisted settings in the same FIFO lane. */

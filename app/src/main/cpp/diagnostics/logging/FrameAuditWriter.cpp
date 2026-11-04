@@ -1,5 +1,7 @@
 #include "diagnostics/logging/FrameAuditWriter.h"
 
+#include "diagnostics/logging/DiagnosticFileRotation.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -94,14 +96,21 @@ void FrameAuditWriter::setEnabled(bool enabled) {
         if (stream_.is_open()) stream_.close();
         return;
     }
+    if (!startFile()) enabled_ = false;
+}
+
+// Keeps the previous file as "<path>.1" (last session, or the part past the cap).
+bool FrameAuditWriter::startFile() {
+    if (stream_.is_open()) stream_.close();
+    rotateDiagnosticFile(path_);
     stream_.open(path_, std::ios::out | std::ios::trunc);
-    if (!stream_) {
-        enabled_ = false;
-        return;
-    }
-    stream_ << "{\"record\":\"session\",\"schemaVersion\":2,\"cameraOwner\":\"NDK_CPP\",\"purpose\":\"sparse_frame_"
-               "audit\"}\n";
+    if (!stream_) return false;
+    static constexpr char kHeader[] =
+        "{\"record\":\"session\",\"schemaVersion\":2,\"cameraOwner\":\"NDK_CPP\",\"purpose\":\"sparse_frame_audit\"}\n";
+    stream_ << kHeader;
     stream_.flush();
+    bytesWritten_ = sizeof(kHeader) - 1;
+    return true;
 }
 
 void FrameAuditWriter::recordCameraContext(const metadata::CameraContextMetadata& c) {
@@ -240,6 +249,11 @@ void FrameAuditWriter::writeEvidence(const CompletedEvidence& e, const char* aud
     appendLine(out.str());
 }
 
+void FrameAuditWriter::flush() {
+    std::lock_guard<std::mutex> lock(streamMutex_);
+    if (stream_.is_open()) stream_.flush();
+}
+
 void FrameAuditWriter::appendLine(const std::string& line) {
     std::lock_guard<std::mutex> lock(streamMutex_);
     if (!stream_) return;
@@ -247,7 +261,9 @@ void FrameAuditWriter::appendLine(const std::string& line) {
     // realtime frame-retirement path. The stream buffer is flushed on close;
     // losing the newest diagnostic lines on a process crash is preferable to
     // stalling the live preview pipeline.
+    if (bytesWritten_ >= kDiagnosticFileCapBytes && !startFile()) return;
     stream_ << line << '\n';
+    bytesWritten_ += line.size() + 1;
 }
 
 void FrameAuditWriter::resetGeneration(std::uint64_t generation) {

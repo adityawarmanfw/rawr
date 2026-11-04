@@ -2,6 +2,8 @@
 
 #include <fstream>
 
+#include "diagnostics/logging/DiagnosticFileRotation.h"
+
 namespace rawrcam::diagnostics {
 namespace {
 std::string escapeJson(const std::string& value) {
@@ -31,10 +33,27 @@ std::string escapeJson(const std::string& value) {
     }
     return out;
 }
-void appendJson(const std::string& path, const char* type, const std::string& line) {
+// Appends one line, rotating first once the file has reached the cap.
+void appendCapped(const std::string& path, const std::string& text) {
     std::ofstream out(path, std::ios::app);
     if (!out) return;
-    out << "{\"type\":\"" << type << "\",\"message\":\"" << escapeJson(line) << "\"}\n";
+    out.seekp(0, std::ios::end);
+    if (static_cast<std::uint64_t>(out.tellp()) >= kDiagnosticFileCapBytes) {
+        out.close();
+        rotateDiagnosticFile(path);
+        out.open(path, std::ios::trunc);
+        if (!out) return;
+    }
+    out << text;
+}
+std::string jsonLine(const char* type, const std::string& line) {
+    return std::string("{\"type\":\"") + type + "\",\"message\":\"" + escapeJson(line) + "\"}\n";
+}
+// A new session keeps the previous one as "<path>.1" and starts the file fresh.
+void startFile(const std::string& path, const char* header) {
+    rotateDiagnosticFile(path);
+    std::ofstream out(path, std::ios::trunc);
+    if (out) out << header;
 }
 }  // namespace
 DiagnosticSink::DiagnosticSink(std::string filesDir)
@@ -42,53 +61,30 @@ DiagnosticSink::DiagnosticSink(std::string filesDir)
       dcgPath_(filesDir + "/rawrcam_dcg_session_audit.jsonl"),
       pipelinePath_(filesDir + "/rawrcam_post_session_pipeline_audit.jsonl") {}
 void DiagnosticSink::initialize() {
-    if (!enabled_) return;
-    {
-        std::ofstream out(dcgPath_, std::ios::trunc);
-        if (out) out << "{\"type\":\"dcgAuditStart\",\"version\":1}\n";
-    }
-    {
-        std::ofstream out(pipelinePath_, std::ios::trunc);
-        if (out) out << "{\"type\":\"postSessionPipelineAuditStart\",\"version\":1}\n";
-    }
-    {
-        std::ofstream out(validationPath_, std::ios::trunc);
-        if (out) {
-            out << "RAWRCAM_DIAGNOSTICS_VERSION=8\n";
-            out << "camera_owner=NDK_CPP\n";
-            out << "raw_ingress=vkCmdCopyImage_non_zero_copy\n";
-            out << "purpose=event_triggered_transient_highlight_validation_before_stability\n";
-        }
-    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (enabled_) startFiles();
 }
 void DiagnosticSink::setEnabled(bool enabled) {
-    std::lock_guard<std::mutex> lock(validationMutex_);
+    std::lock_guard<std::mutex> lock(mutex_);
     if (enabled_ == enabled) return;
     enabled_ = enabled;
-    if (!enabled_) return;
-    {
-        std::ofstream out(dcgPath_, std::ios::trunc);
-        if (out) out << "{\"type\":\"dcgAuditStart\",\"version\":1}\n";
-    }
-    {
-        std::ofstream out(pipelinePath_, std::ios::trunc);
-        if (out) out << "{\"type\":\"postSessionPipelineAuditStart\",\"version\":1}\n";
-    }
-    {
-        std::ofstream out(validationPath_, std::ios::trunc);
-        if (out) out << "RAWRCAM_DIAGNOSTICS_VERSION=9\npersistent_diagnostics=enabled\n";
-    }
+    if (enabled_) startFiles();
+}
+void DiagnosticSink::startFiles() const {
+    startFile(dcgPath_, "{\"type\":\"dcgAuditStart\",\"version\":1}\n");
+    startFile(pipelinePath_, "{\"type\":\"postSessionPipelineAuditStart\",\"version\":1}\n");
+    startFile(validationPath_, "RAWRCAM_DIAGNOSTICS_VERSION=9\npersistent_diagnostics=enabled\n");
 }
 void DiagnosticSink::appendValidation(const std::string& line) const {
-    if (!enabled_) return;
-    std::lock_guard<std::mutex> lock(validationMutex_);
-    std::ofstream out(validationPath_, std::ios::app);
-    if (out) out << line << "\n";
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (enabled_) appendCapped(validationPath_, line + "\n");
 }
 void DiagnosticSink::appendDcgSession(const std::string& line) const {
-    if (enabled_) appendJson(dcgPath_, "cameraSessionDiagnostic", line);
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (enabled_) appendCapped(dcgPath_, jsonLine("cameraSessionDiagnostic", line));
 }
 void DiagnosticSink::appendPipelineAudit(const std::string& line) const {
-    if (enabled_) appendJson(pipelinePath_, "postSessionPipelineAudit", line);
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (enabled_) appendCapped(pipelinePath_, jsonLine("postSessionPipelineAudit", line));
 }
 }  // namespace rawrcam::diagnostics

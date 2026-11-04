@@ -50,6 +50,8 @@ class NativePreviewEngine {
     external fun setInitialConfigReady(handle: Long)
     external fun setStillCaptureInFlight(handle: Long, begin: Boolean)
     external fun tickCameraSession(handle: Long)
+
+    external fun flushDiagnostics(handle: Long)
     external fun canRecoverStills(handle: Long): Boolean
     external fun setVideoMode(handle: Long, video: Boolean, fps: Int)
 

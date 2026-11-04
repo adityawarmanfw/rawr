@@ -116,37 +116,78 @@ class ArtifactDiagnosticExporter(private val context: Context) {
      * `<save>/debug/`, mirroring the capture save location. Returns the published
      * display name, or null when there is nothing to export or no usable target.
      */
-    fun exportDiagnosticsBundle(saveLocationId: String, stamp: String): String? {
+    /**
+     * Zips the always-on diagnostics (native audit files, their rotated `.1`
+     * halves, the runtime trace and this process's logcat) plus a
+     * `bundle_info.txt` summary into [tree]. Returns the file name; throws
+     * with a user-facing message on failure.
+     */
+    fun exportDiagnosticsBundle(tree: Uri, stamp: String): String {
         val present =
             DIAGNOSTIC_BUNDLE_FILES
-                .map { File(privateFiles, it) }
+                .flatMap { listOf(File(privateFiles, it), File(privateFiles, "$it.1")) }
                 .filter { it.isFile && it.length() > 0L }
         // Testers on other devices usually have no adb, so the bundle carries
         // this process's own logcat (readable without any permission).
         val logcat = ownLogcat()
-        if (present.isEmpty() && logcat == null) return null
-        val zip = File.createTempFile("rawr-diagnostics-", ".zip", context.cacheDir)
+        val resolver = context.contentResolver
+        val displayName = "RAWR_diagnostics_$stamp.zip"
+        val parent = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
+        val target =
+            checkNotNull(DocumentsContract.createDocument(resolver, parent, "application/zip", displayName)) {
+                "Unable to create the zip in that folder"
+            }
         try {
-            java.util.zip.ZipOutputStream(zip.outputStream().buffered()).use { z ->
-                for (file in present) {
-                    z.putNextEntry(java.util.zip.ZipEntry(file.name))
-                    file.inputStream().buffered().use { it.copyTo(z) }
+            checkNotNull(resolver.openOutputStream(target, "wt")) { "Unable to write the zip" }.use { output ->
+                java.util.zip.ZipOutputStream(output.buffered()).use { z ->
+                    z.putNextEntry(java.util.zip.ZipEntry("bundle_info.txt"))
+                    z.write(bundleInfo(stamp, present, logcat).toByteArray())
                     z.closeEntry()
-                }
-                if (logcat != null) {
-                    z.putNextEntry(java.util.zip.ZipEntry("logcat.txt"))
-                    z.write(deviceHeader().toByteArray())
-                    z.write(logcat)
-                    z.closeEntry()
+                    for (file in present) {
+                        z.putNextEntry(java.util.zip.ZipEntry(file.name))
+                        file.inputStream().buffered().use { it.copyTo(z) }
+                        z.closeEntry()
+                    }
+                    if (logcat != null) {
+                        z.putNextEntry(java.util.zip.ZipEntry("logcat.txt"))
+                        z.write(deviceHeader().toByteArray())
+                        z.write(logcat)
+                        z.closeEntry()
+                    }
                 }
             }
-            val target = resolveTarget(saveLocationId, stamp) ?: return null
-            val displayName = "RAWR_diagnostics_$stamp.zip"
-            return if (target.publish(zip, displayName, "application/zip")) displayName else null
-        } catch (_: Exception) {
-            return null
-        } finally {
-            zip.delete()
+        } catch (t: Throwable) {
+            runCatching { DocumentsContract.deleteDocument(resolver, target) }
+            throw t
+        }
+        return displayName
+    }
+
+    /** First file in the zip: what is in it and where it came from, so a thin bundle is obvious. */
+    private fun bundleInfo(stamp: String, files: List<File>, logcat: ByteArray?): String {
+        val time = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z", java.util.Locale.US)
+        return buildString {
+            appendLine("RAWR diagnostic bundle $stamp")
+            appendLine("exported=${time.format(java.util.Date())}")
+            appendLine(
+                "app=${com.rawr.camera.BuildConfig.APPLICATION_ID} version=${com.rawr.camera.BuildConfig.VERSION_NAME} " +
+                    "code=${com.rawr.camera.BuildConfig.VERSION_CODE} build=${com.rawr.camera.BuildConfig.BUILD_TYPE}"
+            )
+            appendLine(
+                "device=${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL} (${android.os.Build.DEVICE}) " +
+                    "android=${android.os.Build.VERSION.RELEASE} sdk=${android.os.Build.VERSION.SDK_INT} soc=${android.os.Build.SOC_MODEL} " +
+                    "fingerprint=${android.os.Build.FINGERPRINT}"
+            )
+            appendLine("files:")
+            if (files.isEmpty()) appendLine("  (none: the camera has not run since install or data was cleared)")
+            for (f in files) appendLine("  ${f.name} bytes=${f.length()} modified=${time.format(java.util.Date(f.lastModified()))}")
+            appendLine(
+                if (logcat != null) {
+                    "  logcat.txt bytes=${logcat.size} lines=${logcat.count { it == '\n'.code.toByte() }}"
+                } else {
+                    "  logcat.txt missing (logcat unreadable)"
+                }
+            )
         }
     }
 

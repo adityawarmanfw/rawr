@@ -275,6 +275,11 @@ extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreview
     JNIEnv*, jobject, jlong h, jboolean begin) {
     rawrcam::session::setStillCaptureInFlight(handle(h), begin == JNI_TRUE);
 }
+extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreviewEngine_flushDiagnostics(JNIEnv*,
+                                                                                                        jobject,
+                                                                                                        jlong h) {
+    rawrcam::session::flushDiagnostics(handle(h));
+}
 extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreviewEngine_tickCameraSession(JNIEnv*,
                                                                                                          jobject,
                                                                                                          jlong h) {
@@ -979,13 +984,6 @@ extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreview
     }
 }
 
-extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_InternalTraceNative_clear(JNIEnv*, jobject) {
-    rawrcam::diagnostics::RuntimeTraceRecorder::instance().clear();
-}
-extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_InternalTraceNative_setRetainedRows(JNIEnv*, jobject,
-                                                                                                       jint rows) {
-    rawrcam::diagnostics::RuntimeTraceRecorder::instance().setRetainedRows(static_cast<uint32_t>(std::max(rows, 0)));
-}
 extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_InternalTraceNative_recordZslArtifactPublished(
     JNIEnv*, jobject, jboolean success, jlong bytes) {
     rawrcam::diagnostics::RuntimeTraceRecorder::instance().record(

@@ -187,6 +187,9 @@ void tickCameraSession(EngineHandle h) noexcept {
     engine(h)->tickRawReaderUsage();
     engine(h)->cameraControls().tickSession();
 }
+void flushDiagnostics(EngineHandle h) noexcept {
+    if (h) engine(h)->flushDiagnostics();
+}
 bool canRecoverStills(EngineHandle h) noexcept { return h && engine(h)->cameraControls().canRecoverStills(); }
 void setVideoMode(EngineHandle h, bool video, int fps) noexcept {
     if (h) engine(h)->cameraControls().setVideoMode(video, fps);

@@ -638,16 +638,8 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
                 ).sanitized(d.multiframeTuning),
             customGpuDriverEnabled = p[Keys.customGpuDriverEnabled] ?: d.customGpuDriverEnabled,
             customGpuDriverName = p[Keys.customGpuDriverName] ?: d.customGpuDriverName,
-            persistentDiagnosticsEnabled = p[Keys.persistentDiagnosticsEnabled] ?: d.persistentDiagnosticsEnabled,
             persistZslRingEnabled = p[Keys.persistZslRingEnabled] ?: d.persistZslRingEnabled,
             persistZslRingOnShutterEnabled = p[Keys.persistZslRingOnShutterEnabled] ?: d.persistZslRingOnShutterEnabled,
-            internalTraceCaptureEnabled = p[Keys.internalTraceCaptureEnabled] ?: d.internalTraceCaptureEnabled,
-            internalTraceRetainedRows =
-                (p[Keys.internalTraceRetainedRows] ?: d.internalTraceRetainedRows).takeIf {
-                    it in
-                        setOf(4096, 8192, 16384, 32768)
-                }
-                    ?: 8192,
             demosaicAlgorithm = enumOrDefault(p[Keys.demosaicAlgorithm], d.demosaicAlgorithm),
             dualAutoContrast = p[Keys.dualAutoContrast] ?: d.dualAutoContrast,
             dualContrastPercent = (p[Keys.dualContrastPercent] ?: d.dualContrastPercent).coerceIn(0f, 100f),
@@ -897,11 +889,12 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         } else {
             p[Keys.customGpuDriverName] = v.customGpuDriverName
         }
-        p[Keys.persistentDiagnosticsEnabled] = v.persistentDiagnosticsEnabled
+        // Diagnostics always record now; drop the retired switches.
+        p.remove(Keys.retiredPersistentDiagnosticsEnabled)
+        p.remove(Keys.retiredInternalTraceCaptureEnabled)
+        p.remove(Keys.retiredInternalTraceRetainedRows)
         p[Keys.persistZslRingEnabled] = v.persistZslRingEnabled
         p[Keys.persistZslRingOnShutterEnabled] = v.persistZslRingOnShutterEnabled
-        p[Keys.internalTraceCaptureEnabled] = v.internalTraceCaptureEnabled
-        p[Keys.internalTraceRetainedRows] = v.internalTraceRetainedRows
         p[Keys.demosaicAlgorithm] = v.demosaicAlgorithm.name
         p[Keys.dualAutoContrast] = v.dualAutoContrast
         p[Keys.dualContrastPercent] = v.dualContrastPercent.coerceIn(0f, 100f)
@@ -1182,11 +1175,11 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val multiframeFallbackLuma = floatPreferencesKey("multiframe_fallback_luma")
         val customGpuDriverEnabled = booleanPreferencesKey("debug_custom_gpu_driver_enabled")
         val customGpuDriverName = stringPreferencesKey("debug_custom_gpu_driver_name")
-        val persistentDiagnosticsEnabled = booleanPreferencesKey("debug_persistent_diagnostics_enabled")
+        val retiredPersistentDiagnosticsEnabled = booleanPreferencesKey("debug_persistent_diagnostics_enabled")
         val persistZslRingEnabled = booleanPreferencesKey("debug_persist_zsl_ring_enabled")
         val persistZslRingOnShutterEnabled = booleanPreferencesKey("debug_persist_zsl_ring_on_shutter_enabled")
-        val internalTraceCaptureEnabled = booleanPreferencesKey("debug_internal_trace_capture_enabled")
-        val internalTraceRetainedRows = intPreferencesKey("debug_internal_trace_retained_rows")
+        val retiredInternalTraceCaptureEnabled = booleanPreferencesKey("debug_internal_trace_capture_enabled")
+        val retiredInternalTraceRetainedRows = intPreferencesKey("debug_internal_trace_retained_rows")
         val demosaicAlgorithm = stringPreferencesKey("capture_demosaic_algorithm")
         val dualAutoContrast = booleanPreferencesKey("dual_auto_contrast")
         val dualContrastPercent = floatPreferencesKey("dual_contrast_percent")

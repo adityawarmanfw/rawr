@@ -73,6 +73,7 @@ void setUiPresentationActive(EngineHandle handle, bool active) noexcept;
 void setInitialConfigReady(EngineHandle handle) noexcept;
 void setStillCaptureInFlight(EngineHandle handle, bool begin) noexcept;
 void tickCameraSession(EngineHandle handle) noexcept;
+void flushDiagnostics(EngineHandle handle) noexcept;
 bool canRecoverStills(EngineHandle handle) noexcept;
 void setVideoMode(EngineHandle handle, bool video, int fps) noexcept;
 void setShutterAngleDegrees(EngineHandle handle, double degrees) noexcept;

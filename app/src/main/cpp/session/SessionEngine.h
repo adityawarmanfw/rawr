@@ -141,6 +141,7 @@ class SessionEngine {
                                                 rawrcam::capture::multiframe::MultiframeBaseFrameMode::Sharpest);
     void cancelPreparedMultiframeCapture();
     void setPersistentDiagnosticsEnabled(bool enabled);
+    void flushDiagnostics();
     void setLensShadingCorrectionEnabled(bool enabled);
     void setHighlightReconstructionEnabled(bool enabled);
     void setDistortionCorrectionEnabled(bool enabled);
