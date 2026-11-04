@@ -11,6 +11,7 @@ import androidx.test.platform.app.InstrumentationRegistry;
 import com.rawr.camera.renderer.RendererNative;
 import java.io.File;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
@@ -29,6 +30,7 @@ public final class RendererReplayTest {
         String label = args.getString("label", "replay");
         assertTrue(label.matches("[A-Za-z0-9_-]+"));
         int samples = Integer.parseInt(args.getString("samples", "3"));
+        boolean ultraHdr = Boolean.parseBoolean(args.getString("ultraHdr", "false"));
         assertTrue(samples > 0 && samples <= 30);
         // Recipes use case-sensitive enum names. Fail the benchmark rather
         // than silently measuring the renderer's unknown-profile fallback.
@@ -47,13 +49,14 @@ public final class RendererReplayTest {
             // Fixture copy is outside measured render time. Each unique source
             // path gives the production renderer an empty linear-cache key.
             Files.copy(source.toPath(), input.toPath(), StandardCopyOption.REPLACE_EXISTING);
-            String recipe = new JSONObject().put("demosaicAlgorithm", args.getString("demosaic", "Rcd"))
+            JSONObject recipeJson = new JSONObject().put("demosaicAlgorithm", args.getString("demosaic", "Rcd"))
                 .put("colorRenderProfile", profile)
                 .put("highlightReconstructionEnabled", true)
                 .put("highlightReconstructionMethod", Integer.parseInt(args.getString("highlightMethod", "1")))
                 .put("fccSteps", 2).put("defringeEnabled", true)
-                .put("tone", new JSONObject().put("jpegQuality", 98).put("jpegChromaSubsamplingId", "jpeg.422"))
-                .toString();
+                .put("tone", new JSONObject().put("jpegQuality", 98).put("jpegChromaSubsamplingId", "jpeg.422"));
+            if (ultraHdr) recipeJson.put("ultraHdrEnabled", true);
+            String recipe = recipeJson.toString();
             RendererNative renderer = new RendererNative();
             File jpeg = new File(dir, "output.jpg");
             long begin = SystemClock.elapsedRealtimeNanos();
@@ -70,6 +73,16 @@ public final class RendererReplayTest {
             Bitmap bitmap = BitmapFactory.decodeFile(jpeg.getAbsolutePath());
             assertNotNull(bitmap);
             assertEquals(4080, bitmap.getWidth()); assertEquals(3060, bitmap.getHeight());
+            if (ultraHdr) {
+                byte[] header = new byte[8192];
+                try (java.io.FileInputStream stream = new java.io.FileInputStream(jpeg)) {
+                    int count = stream.read(header);
+                    assertTrue(count > 0);
+                    String markers = new String(header, 0, count, StandardCharsets.ISO_8859_1);
+                    assertTrue("UltraHDR export must retain MPF", markers.contains("MPF\u0000"));
+                    assertTrue("UltraHDR export must retain ISO gain-map metadata", markers.contains("urn:iso:std:iso:ts:21496:-1"));
+                }
+            }
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             int[] row = new int[bitmap.getWidth()];
             ByteBuffer bytes = ByteBuffer.allocate(row.length * 4);

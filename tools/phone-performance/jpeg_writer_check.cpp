@@ -4,9 +4,11 @@
 #include "encoding/jpeg/StripJpegEncoder.h"
 #include <turbojpeg.h>
 #include <fcntl.h>
+#include <dlfcn.h>
 #include <unistd.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <cerrno>
 #include <chrono>
@@ -19,6 +21,27 @@
 #include <vector>
 
 using namespace rawrcam::encoding::jpeg;
+
+// Interpose only in this executable; production code still calls POSIX write.
+// A one-shot error allows a mistaken SDR fallback after a partial write to
+// succeed, so the test detects the corrupt-file behavior rather than ENOSPC.
+static std::atomic<int> faultFd{-1};
+static std::size_t bytesBeforeFault = 0;
+static bool faultFired = false;
+extern "C" ssize_t write(int fd, const void* data, size_t size) {
+    using Write = ssize_t (*)(int, const void*, size_t);
+    static const auto realWrite = reinterpret_cast<Write>(dlsym(RTLD_NEXT, "write"));
+    if (!realWrite) { errno = ENOSYS; return -1; }
+    if (fd != faultFd.load() || faultFired) return realWrite(fd, data, size);
+    if (bytesBeforeFault == 0) {
+        faultFired = true;
+        errno = ENOSPC;
+        return -1;
+    }
+    const auto count = realWrite(fd, data, std::min(size, bytesBeforeFault));
+    if (count > 0) bytesBeforeFault -= static_cast<std::size_t>(count);
+    return count;
+}
 
 struct File {
     std::string path;
@@ -133,13 +156,72 @@ int main() {
     assert(writer.start(5, rgba.data(), rgba.size(), 1920, 1080, context(cancelled.take(), ChromaSubsampling::Yuv422)));
     writer.reset();
     assert(!writer.busy() && !writer.pollCompletion());
-    // The shared contiguous wrapper still serves UltraHDR muxing.
+    // UltraHDR writes metadata and both encoded payloads as borrowed segments.
     File hdr;
     auto hdrContext = context(hdr.take(), ChromaSubsampling::Yuv422);
     hdrContext.ultraHdr.enabled = true;
     std::vector<unsigned char> map(64 * 48 * 4, 127);
     assert(writer.startUltraHdr(6, rgba.data(), rgba.size(), 1920, 1080, map.data(), map.size(), 64, 48, std::move(hdrContext)));
     assert(wait(writer).success);
-    assert(contains(hdr.bytes(), "MPF"));
+    const auto hdrBytes = hdr.bytes();
+    assert(contains(hdrBytes, "MPF"));
+    const auto expectedBase = reference(rgba, 1920, 1080, TJSAMP_422);
+    tjhandle decoder = tj3Init(TJINIT_DECOMPRESS);
+    assert(decoder);
+    std::vector<unsigned char> hdrDecoded(rgba.size()), expectedDecoded(rgba.size());
+    assert(tj3DecompressHeader(decoder, hdrBytes.data(), hdrBytes.size()) == 0);
+    assert(tj3Get(decoder, TJPARAM_JPEGWIDTH) == 1920 && tj3Get(decoder, TJPARAM_JPEGHEIGHT) == 1080);
+    assert(tj3Decompress8(decoder, hdrBytes.data(), hdrBytes.size(), hdrDecoded.data(), 0, TJPF_RGBA) == 0);
+    assert(tj3Decompress8(decoder, expectedBase.data(), expectedBase.size(), expectedDecoded.data(), 0, TJPF_RGBA) == 0);
+    assert(hdrDecoded == expectedDecoded);
+    tj3Destroy(decoder);
+    for (const std::size_t prefix : {std::size_t(0), std::size_t(7), hdrBytes.size() - 16}) {
+        File file;
+        const int fd = file.take();
+        bytesBeforeFault = prefix;
+        faultFired = false;
+        faultFd.store(fd);
+        auto request = context(fd, ChromaSubsampling::Yuv422);
+        request.ultraHdr.enabled = true;
+        assert(writer.startUltraHdr(9, rgba.data(), rgba.size(), 1920, 1080,
+                                   map.data(), map.size(), 64, 48, std::move(request)));
+        const auto done = wait(writer);
+        faultFd.store(-1);
+        assert(faultFired);
+        const auto bytes = file.bytes();
+        if (prefix == 0) {
+            assert(done.success && done.fileBytes == bytes.size());
+            assert(!contains(bytes, "MPF"));
+            decoder = tj3Init(TJINIT_DECOMPRESS);
+            assert(decoder);
+            assert(tj3DecompressHeader(decoder, bytes.data(), bytes.size()) == 0);
+            assert(tj3Decompress8(decoder, bytes.data(), bytes.size(), hdrDecoded.data(), 0, TJPF_RGBA) == 0);
+            assert(hdrDecoded == expectedDecoded);
+            tj3Destroy(decoder);
+        } else {
+            assert(!done.success && done.error.find("write failed") != std::string::npos);
+            assert(bytes.size() == prefix);  // No appended SDR after any partial segment.
+        }
+        assert(::fcntl(fd, F_GETFD) == -1 && errno == EBADF);
+    }
+    File hdrUnwritable;
+    const int hdrReadFd = ::open(hdrUnwritable.path.c_str(), O_RDONLY);
+    assert(hdrReadFd >= 0);
+    auto hdrFailure = context(hdrReadFd, ChromaSubsampling::Yuv422);
+    hdrFailure.ultraHdr.enabled = true;
+    assert(writer.startUltraHdr(7, rgba.data(), rgba.size(), 1920, 1080, map.data(), map.size(), 64, 48, std::move(hdrFailure)));
+    const auto hdrFailed = wait(writer);
+    assert(!hdrFailed.success && hdrFailed.error.find("write failed") != std::string::npos);
+    assert(hdrUnwritable.bytes().empty());
+    assert(::fcntl(hdrReadFd, F_GETFD) == -1 && errno == EBADF);
+    File hdrFallback;
+    auto fallbackContext = context(hdrFallback.take(), ChromaSubsampling::Yuv422);
+    fallbackContext.ultraHdr.enabled = true;
+    fallbackContext.ultraHdr.gamma = 0;  // Invalid mux metadata, before any write.
+    assert(writer.startUltraHdr(8, rgba.data(), rgba.size(), 1920, 1080, map.data(), map.size(), 64, 48, std::move(fallbackContext)));
+    const auto fallbackDone = wait(writer);
+    assert(fallbackDone.success && fallbackDone.fileBytes == hdrFallback.bytes().size());
+    assert(!contains(hdrFallback.bytes(), "MPF"));
+    assert(contains(hdrFallback.bytes(), "rawr writer quality fixture"));
     std::puts("PASS: writer metadata/entropy, fallback, reuse, rejected destinations, write failure, oversize metadata, reset, UltraHDR");
 }

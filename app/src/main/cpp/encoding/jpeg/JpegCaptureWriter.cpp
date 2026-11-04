@@ -29,11 +29,12 @@
 namespace rawrcam::encoding::jpeg {
 namespace {
 
-bool writeAll(int fd, const unsigned char* data, std::size_t size) {
+bool writeAll(int fd, const unsigned char* data, std::size_t size, std::size_t* written = nullptr) {
     while (size > 0) {
         const ssize_t n = ::write(fd, data, size);
         if (n < 0 && errno == EINTR) continue;
         if (n <= 0) return false;
+        if (written) *written += static_cast<std::size_t>(n);
         data += static_cast<std::size_t>(n);
         size -= static_cast<std::size_t>(n);
     }
@@ -106,7 +107,7 @@ namespace {
 // live in gainmap::UltrahdrMux.
  bool assembleUltraHdr(const unsigned char* baseJpeg, std::size_t baseSize, const unsigned char* mapJpeg,
                        std::size_t mapSize, const std::vector<unsigned char>& exif, const JpegCaptureContext& context,
-                       std::vector<unsigned char>& out, std::string& error) {
+                       gainmap::UltrahdrMuxParts& out, std::string& error) {
      gainmap::UltrahdrMuxParams params;
      params.gainMapMinLog2 = context.ultraHdr.gainMapMinLog2;
      params.gainMapMaxLog2 = context.ultraHdr.gainMapMaxLog2;
@@ -116,7 +117,7 @@ namespace {
      params.hdrCapacityMinLog2 = context.ultraHdr.hdrCapacityMinLog2;
      params.hdrCapacityMaxLog2 = context.ultraHdr.hdrCapacityMaxLog2;
      params.multiChannel = context.ultraHdr.multiChannelMap;
-    gainmap::UltrahdrMuxResult result = gainmap::UltrahdrMux::assemble(
+    gainmap::UltrahdrMuxResult result = gainmap::UltrahdrMux::assembleParts(
         baseJpeg, baseSize, mapJpeg, mapSize, exif.empty() ? nullptr : exif.data(), exif.size(), params, out);
     if (!result.ok) {
         error = result.error.empty() ? "ultrahdr_mux_failed" : result.error;
@@ -507,15 +508,25 @@ bool JpegCaptureWriter::startUltraHdr(std::uint64_t requestId, const void* rgba8
                         if (exif.size() + 2u > 65535u) {
                             uhError = "metadata APP1 payload too large";
                         } else {
-                            std::vector<unsigned char> file;
+                            gainmap::UltrahdrMuxParts file;
                             std::string muxError;
                             if (!assembleUltraHdr(baseBuf, baseSize, mapBuf, mapSize, exif, context, file, muxError)) {
                                 uhError = muxError;
                             } else {
                                 const auto encodedAt = std::chrono::steady_clock::now();
                                 done.encodeMs = std::chrono::duration<double, std::milli>(encodedAt - t0).count();
-                                if (!writeAll(fd, file.data(), file.size())) {
-                                    uhError = "JPEG write failed: " + std::string(std::strerror(errno));
+                                // Encoded input buffers remain alive until after these writes.
+                                // Only metadata is owned by the mux; avoid a full-file copy.
+                                std::size_t written = 0;
+                                if (!writeAll(fd, file.primaryHeader.data(), file.primaryHeader.size(), &written) ||
+                                    !writeAll(fd, file.primaryScan, file.primaryScanSize, &written) ||
+                                    !writeAll(fd, file.secondaryHeader.data(), file.secondaryHeader.size(), &written) ||
+                                    !writeAll(fd, file.secondaryBody, file.secondaryBodySize, &written)) {
+                                    const auto error = "JPEG write failed: " + std::string(std::strerror(errno));
+                                    // Fallback appends to the same destination. It is safe only
+                                    // when no successful write has advanced it, even on pipes.
+                                    if (written == 0) uhError = error;
+                                    else done.error = error;
                                 }
                             }
                         }
