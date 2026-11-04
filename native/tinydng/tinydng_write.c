@@ -354,6 +354,8 @@ static void td_add_rationals(td_writer *w, uint16_t tag, const double *v,
     } else {
       num = (uint32_t)d;
     }
+    if (i >= 2u && v[i] == 0.0 &&
+        (tag == TD_WTAG_LENS_INFO || tag == TD_WTAG_LENS_SPECIFICATION)) den = 0u;
     td_put32(tmp + i * 8u, num, w->big_endian);
     td_put32(tmp + i * 8u + 4u, den, w->big_endian);
   }

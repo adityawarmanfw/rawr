@@ -3,6 +3,7 @@
 #include "convert/BayerResample.h"
 #include "convert/NaturalBin.h"
 #include "metadata/GpsMetadata.h"
+#include "renderer/SourceCaptureExif.h"
 
 #include <algorithm>
 #include <atomic>
@@ -72,6 +73,8 @@ struct Source {
         tinydng_exif out = info->exif;
         const tinydng_exif* root = tinydng_document_exif(doc);
         if (root && !out.make && !out.model && !out.datetime_original) out = *root;
+        const auto* rootImage = tinydng_image_get(doc, 0);
+        renderer::preserveSourceLensExif(out, info->exif, root, rootImage ? &rootImage->raw : nullptr);
         if (!out.orientation && root && root->orientation >= 1 && root->orientation <= 8)
             out.orientation = root->orientation;
         if (!out.orientation) out.orientation = 1;
@@ -86,6 +89,14 @@ struct Source {
             if (out.datetime_digitized && !out.offset_time_digitized) out.offset_time_digitized = offset;
         }
         return out;
+    }
+
+    void preserveLensInfo(tinydng_raw_info& raw) const {
+        const auto* root = tinydng_image_get(doc, 0);
+        if (!raw.has_lens_info && root && root->raw.has_lens_info) {
+            std::copy_n(root->raw.lens_info, 4, raw.lens_info);
+            raw.has_lens_info = 1;
+        }
     }
 
     static bool fail(std::string* error, const char* message) {
@@ -494,6 +505,7 @@ ConvertResult recompressDng(const std::string& sourcePath, const std::string& de
     if (!source.open(sourcePath, &result.error)) return result;
     const uint32_t w = source.info->width, h = source.info->height;
     tinydng_raw_info raw = source.info->raw;
+    source.preserveLensInfo(raw);
     double black[4];
     if (!blackByPhase(raw, black, &result.error)) return result;
     if (raw.black_level_present) ensureExactBlack(raw, black);
@@ -631,6 +643,8 @@ ConvertResult downscaleDng(const std::string& sourcePath, const std::string& des
 
     const uint32_t ow = stage->width, oh = stage->height;
     tinydng_exif exif = source.exif(options);
+    tinydng_raw_info outputRaw = metadata.back()->raw();
+    source.preserveLensInfo(outputRaw);
     tinydng_write_image image{};
     image.width = ow;
     image.height = oh;
@@ -638,7 +652,7 @@ ConvertResult downscaleDng(const std::string& sourcePath, const std::string& des
     image.bits_per_sample = 16;
     image.sample_format = 1;
     image.cfa = &metadata.back()->cfa();
-    image.raw = &metadata.back()->raw();
+    image.raw = &outputRaw;
     image.exif = &exif;
     image.gps = source.gps.gps ? &*source.gps.gps : nullptr;
 

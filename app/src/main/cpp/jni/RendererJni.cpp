@@ -487,18 +487,11 @@ Java_com_rawr_camera_renderer_RendererNative_render(JNIEnv* e, jobject, jlong id
                                       : s->source.orientation == 8 ? 270
                                       : s->source.orientation == 3 ? 180
                                                                    : 0;
-            // Export identity (Kotlin-built, still-capture format). Absent on
-            // recipes predating the export block: fall back to the legacy values.
-            // The source DNG's camera wins; the exporting device only fills in
-            // for a source that names none.
+            // Export camera identity stays with the source DNG, including unknown values.
             const auto& source = s->source.captureExif();
             c.gps = source.gps;
             c.sourceExifVersion = source.gpsExifVersion;
-            std::string deviceMake = exportJson.text("deviceMake");
-            if (deviceMake.empty()) deviceMake = "RAWR";
-            std::string deviceModel = exportJson.text("deviceModel");
-            if (deviceModel == "null") deviceModel.clear();
-            auto identity = rawrcam::renderer::exportIdentity(source, deviceMake, deviceModel);
+            auto identity = rawrcam::renderer::exportIdentity(source);
             c.deviceMake = std::move(identity.make);
             c.deviceModel = std::move(identity.model);
             c.wallClockUnixMillis = std::int64_t(exportJson.number("wallClockMillis", 0));
@@ -514,8 +507,11 @@ Java_com_rawr_camera_renderer_RendererNative_render(JNIEnv* e, jobject, jlong id
             c.focalLengthMm = source.focalLengthMm;
             c.focalLength35mm = source.focalLength35mm;
             c.lensSpecification = source.lensSpecification;
+            c.apertureValue = source.apertureValue;
+            c.maxApertureValue = source.maxApertureValue;
             c.lensMake = source.lensMake;
             c.lensModel = source.lensModel;
+            c.lensSerial = source.lensSerial;
             c.dateTimeOriginal = source.dateTimeOriginal;
             c.dateTimeDigitized = source.dateTimeDigitized;
             c.offsetTimeOriginal = source.offsetTimeOriginal;

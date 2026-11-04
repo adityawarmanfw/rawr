@@ -158,6 +158,11 @@ void applySingleFrameCaptureMetadata(encoding::jpeg::JpegCaptureContext& output,
     output.sensitivity = captured.metadata.sensitivity;
     output.aperture = captured.metadata.aperture;
     output.focalLengthMm = captured.metadata.focalLengthMm;
+    output.captureSensorSizeMm = camera.sensorPhysicalSizeMm;
+    const auto widestAperture = encoding::widestLensAperture(camera.availableApertures);
+    output.captureLensOptics = encoding::lensIdentityOptics(camera.availableFocalLengthsMm, widestAperture);
+    output.lensSpecification = encoding::lensSpecification(camera.availableFocalLengthsMm, widestAperture);
+    output.maxApertureValue = encoding::lensApertureValue(widestAperture);
 }
 
 }  // namespace rawrcam::capture

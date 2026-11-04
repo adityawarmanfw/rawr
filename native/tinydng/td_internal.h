@@ -314,6 +314,7 @@ size_t td_reals_from_buf(const uint8_t* p, uint16_t type, int big_endian,
 #define TD_TAG_LENS_MODEL 42036u
 #define TD_TAG_LENS_SERIAL 42037u
 #define TD_TAG_UNIQUE_CAMERA_MODEL 50708u
+#define TD_TAG_LENS_INFO 50736u
 #define TD_TAG_BASELINE_EXPOSURE 50730u
 #define TD_BLOB_MAX_BYTES (2u * 1024u * 1024u)
 

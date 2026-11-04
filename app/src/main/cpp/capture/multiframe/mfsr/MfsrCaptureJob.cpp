@@ -696,6 +696,13 @@ void MfsrCaptureJob::runStages(Published& published) {
                 mergedJpeg.output.sensitivity = job->referenceMetadata.sensitivity;
                 mergedJpeg.output.aperture = job->referenceMetadata.aperture;
                 mergedJpeg.output.focalLengthMm = job->referenceMetadata.focalLengthMm;
+                mergedJpeg.output.captureSensorSizeMm = camera.sensorPhysicalSizeMm;
+                const auto widestAperture = rawrcam::encoding::widestLensAperture(camera.availableApertures);
+                mergedJpeg.output.captureLensOptics =
+                    rawrcam::encoding::lensIdentityOptics(camera.availableFocalLengthsMm, widestAperture);
+                mergedJpeg.output.lensSpecification =
+                    rawrcam::encoding::lensSpecification(camera.availableFocalLengthsMm, widestAperture);
+                mergedJpeg.output.maxApertureValue = rawrcam::encoding::lensApertureValue(widestAperture);
                 if (rgbPrepareFailed) {
                     throw std::runtime_error("merged_rgb_prepare_failed");
                 }

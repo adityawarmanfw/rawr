@@ -7,6 +7,7 @@
 #include <sstream>
 #include <vector>
 
+#include "encoding/LensMetadata.h"
 #include "encoding/dng/DngExif.h"
 #include "encoding/dng/DngGainMapOpcode.h"
 #include "encoding/dng/DngProvenance.h"
@@ -358,19 +359,8 @@ std::optional<TinyDngWriteParams> makeTinyDngWriteParams(const rawrcam::imaging:
     }
 
     // Lens (IFD0 LensInfo; the EXIF LensSpecification lives in DngExif).
-    if (!ctx.availableFocalLengthsMm.empty()) {
-        const auto [fminIt, fmaxIt] =
-            std::minmax_element(ctx.availableFocalLengthsMm.begin(), ctx.availableFocalLengthsMm.end());
-        const float amin = ctx.availableApertures.empty()
-                               ? 0.0f
-                               : *std::min_element(ctx.availableApertures.begin(), ctx.availableApertures.end());
-        const float amax = ctx.availableApertures.empty()
-                               ? 0.0f
-                               : *std::max_element(ctx.availableApertures.begin(), ctx.availableApertures.end());
-        raw.lens_info[0] = *fminIt;
-        raw.lens_info[1] = *fmaxIt;
-        raw.lens_info[2] = amin > 0 ? amin : 0;
-        raw.lens_info[3] = amax > 0 ? amax : 0;
+    if (const auto specification = lensSpecification(ctx.availableFocalLengthsMm, widestLensAperture(ctx.availableApertures))) {
+        std::copy(specification->begin(), specification->end(), raw.lens_info);
         raw.has_lens_info = 1;
     }
 
