@@ -304,6 +304,7 @@ int main() {
         if (pass == 1) {
             timed.wallClockUnixMillis -= timed.wallClockUnixMillis % 1000;
             timed.utcOffsetMinutes = 0;
+            timed.gps.reset();
         }
         auto params = rawrcam::encoding::dng::makeTinyDngWriteParams(good, timed, &error);
         if (!params) {
@@ -375,9 +376,8 @@ int main() {
         const tinydng_image_info* img = tinydng_image_get(doc, 0);
         const uint16_t wantComp = pass == 0 ? 7 : 1;
         bool ok = img && img->width == 8 && img->height == 6 && img->compression == wantComp &&
-                  img->gps.has_coordinates && img->gps.has_altitude &&
-                  rawrcam::metadata::sameGpsRecord(img->gps, *capture.gps) &&
-                  img->exif.has_exif_version && std::memcmp(img->exif.exif_version, "0300", 4) == 0 &&
+                  (timed.gps ? rawrcam::metadata::sameGpsRecord(img->gps, *timed.gps) : !img->has_gps_directory) &&
+                  img->exif.has_exif_version && std::memcmp(img->exif.exif_version, pass == 0 ? "0300" : "0231", 4) == 0 &&
                   img->raw.white_level_present && img->raw.white_level[0] == 4095 &&
                   img->raw.has_active_area && img->raw.noise_profile_count == 6 &&
                   img->raw.opcode_count >= 1 && img->raw.gainmap_count == 4 &&

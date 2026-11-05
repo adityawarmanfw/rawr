@@ -4,6 +4,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.net.Uri
 import android.provider.MediaStore
+import com.rawr.camera.storage.CaptureTime
 import kotlinx.coroutines.CancellationException
 
 /**
@@ -17,6 +18,7 @@ class DngConvertPublisher(private val context: Context) {
     /** Blocking; [job] comes from [ConvertNative.newJob] and can be cancelled from another thread. */
     fun convert(entry: DngEntry, conversion: DngConversion, job: Long): Uri {
         require(entry.convertible) { entry.error.ifBlank { "This DNG cannot be converted" } }
+        val operationTime = CaptureTime.snapshot()
         val resolver = context.contentResolver
         val name = DngLibrary.outputName(entry, conversion)
         val output = checkNotNull(resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, ContentValues().apply {
@@ -30,7 +32,7 @@ class DngConvertPublisher(private val context: Context) {
             val error = checkNotNull(resolver.openFileDescriptor(entry.uri, "r")) { "Cannot open ${entry.name}" }.use { source ->
                 checkNotNull(resolver.openFileDescriptor(output, "rw")) { "Cannot write $name" }.use { target ->
                     ConvertNative.convert(job, "/proc/self/fd/${source.fd}", "/proc/self/fd/${target.fd}", conversion.nativeMode,
-                        offsetTime(entry))
+                        operationTime.wallClockUnixMillis, operationTime.utcOffsetMinutes)
                 }
             }
             if (error == "cancelled") throw CancellationException("Conversion cancelled")
@@ -56,25 +58,6 @@ class DngConvertPublisher(private val context: Context) {
         DngConversion.Quarter -> value / 2
         DngConversion.Sixteenth -> value / 4
         DngConversion.Eighth -> ((value / 2) / Math.sqrt(2.0)).toInt() and 1.inv()
-    }
-
-    /**
-     * EXIF offset recovered from the source's MediaStore capture time and its
-     * local DateTimeOriginal, when the source has no offset of its own. The
-     * scanner trusts an offset-less date only while the file's modification
-     * time matches the capture, which a later conversion never does.
-     */
-    private fun offsetTime(entry: DngEntry): String {
-        if (entry.offsetTimeOriginal.isNotBlank() || entry.taken <= 0) return ""
-        val local = runCatching {
-            java.text.SimpleDateFormat("yyyy:MM:dd HH:mm:ss", java.util.Locale.US)
-                .apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }
-                .parse(entry.dateTimeOriginal.trim())?.time
-        }.getOrNull() ?: return ""
-        val minutes = Math.round((local - entry.taken) / 60_000.0 / 15.0) * 15
-        if (Math.abs(minutes) > 14 * 60) return ""
-        val sign = if (minutes < 0) '-' else '+'
-        return "%c%02d:%02d".format(sign, Math.abs(minutes) / 60, Math.abs(minutes) % 60)
     }
 
     private fun degrees(orientation: Int): Int = when (orientation) {

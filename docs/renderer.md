@@ -25,16 +25,31 @@ device acceptance testing; host tests cover the native preservation contract.
 
 ## Export time metadata
 
-JPEG exports retain recognized source original and digitized dates with each
-one's own offset and subsecond qualifiers; missing source qualifiers stay
-missing rather than borrowing the other group's values or the export offset.
-A known digitized date is retained even without an original date. DateTime and
-its qualifiers describe the export operation. The existing date fallbacks are
-unchanged: missing DateTimeOriginal uses export time, and missing digitized date
-uses the resulting original date. This does not establish source exposure time.
-Native camera JPEGs use the captured wall clock and offset for all three groups,
-including known UTC and zero millisecond fractions; no extra clock reads or
-capture/recovery schema changes are needed.
+JPEG development and DNG recompression/downscaling retain recognized source
+original and digitized dates independently, each with its own known offset and
+subsecond qualifiers. Missing or unrecognized source dates remain absent, even
+when both are missing. Missing qualifiers are not inferred from another group,
+MediaStore, filesystem dates or the exporting phone's zone.
+
+The shared source-time reader trims whitespace and retains a valid 19-character
+Exif date prefix, ignoring any suffix. Calendar and clock values must be valid;
+fractions and offsets come only from their separate source tags. It prefers the
+RAW directory's recognized date, then the root date. Qualifiers from the other directory can fill gaps only when the
+dates match and known qualifiers do not conflict. DNG conversion uses this
+selection independently of the existing whole-Exif fallback for other fields.
+
+DateTime, OffsetTime and SubSecTime always describe the export/conversion
+operation, replacing any source modification group. JPEG uses the saved export
+recipe's instant/offset; DNG conversion snapshots CaptureTime once before output
+creation. Publishing an already encoded JPEG after interruption reuses its bytes;
+a rerender samples a new operation. Source files and filesystem dates are not
+rewritten. These facts do not establish source exposure time.
+
+Offset-bearing exports declare at least Exif 2.31 without lowering newer source
+versions or changing GPS altitude semantics. Native DNG declares 2.31 without GPS
+and 3.0 with GPS. Native camera JPEG/DNG dates keep the existing software-press
+wall clock and offset, including known UTC and zero millisecond fractions. No
+new shutter/per-frame work or capture/recovery schema is introduced.
 
 ## Recipes and resolution
 

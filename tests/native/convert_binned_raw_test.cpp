@@ -3,6 +3,7 @@
 #include <vector>
 #include <filesystem>
 #include <cstdlib>
+#include <fstream>
 #include <unistd.h>
 
 #include "convert/DngConverter.h"
@@ -47,6 +48,14 @@ static int gpsConversion() {
     tinydng_exif exif{};
     exif.has_exif_version = 1;
     std::memcpy(exif.exif_version, "0300", 4);
+    exif.datetime = const_cast<char*>("2026:05:03 04:05:06");
+    exif.offset_time = const_cast<char*>("-03:30");
+    exif.subsec_time = const_cast<char*>("999");
+    exif.datetime_original = const_cast<char*>("2026:05:01 12:34:56");
+    exif.subsec_time_original = const_cast<char*>("042");
+    exif.datetime_digitized = const_cast<char*>("2026:05:02 01:02:03");
+    exif.offset_time_digitized = const_cast<char*>("-03:30");
+    exif.subsec_time_digitized = const_cast<char*>("567");
     auto gps = rawrcam::metadata::makeGps(0, 0, -12345.0, {}, 1793059200123LL);
     std::vector<uint16_t> pixels(64 * 64, 1000);
     tinydng_write_image image{};
@@ -64,22 +73,108 @@ static int gpsConversion() {
     for (int sourceProfile = 0; sourceProfile < 3; ++sourceProfile) {
         image.exif = sourceProfile == 1 ? nullptr : &exif;
         gps->altitude_ref = sourceProfile == 1 ? 2 : 1;
-        const char* expectedVersion = sourceProfile == 2 ? "0232" : "0300";
-        std::memcpy(exif.exif_version, expectedVersion, 4);
+        const char* expectedVersion = sourceProfile == 2 ? "0231" : "0300";
+        std::memcpy(exif.exif_version, sourceProfile == 2 ? "0230" : "0300", 4);
         CHECK(tinydng_write_file(context, sourcePath.c_str(), &image, &options, &error) == TINYDNG_OK);
         for (int mode = 0; mode < 4; ++mode) {
             const auto outputPath = directory + "/output" + std::to_string(mode) + ".dng";
-            const auto result = mode == 0 ? rawrcam::convert::recompressDng(sourcePath, outputPath) :
-                rawrcam::convert::downscaleDng(sourcePath, outputPath, static_cast<rawrcam::convert::DngDownscale>(mode - 1));
+            rawrcam::convert::ConvertOptions convertOptions;
+            convertOptions.wallClockUnixMillis = 1'700'000'000'123;
+            convertOptions.utcOffsetMinutes = 420;
+            const auto result = mode == 0 ? rawrcam::convert::recompressDng(sourcePath, outputPath, {}, {}, convertOptions) :
+                rawrcam::convert::downscaleDng(sourcePath, outputPath, static_cast<rawrcam::convert::DngDownscale>(mode - 1),
+                                             {}, {}, convertOptions);
             CHECK(result.ok);
             tinydng_document* document = nullptr;
             CHECK(tinydng_open_file(context, outputPath.c_str(), nullptr, &document, &error) == TINYDNG_OK);
             const auto* loaded = tinydng_image_get(document, 0);
             CHECK(loaded && rawrcam::metadata::sameGpsRecord(loaded->gps, *gps));
             CHECK(loaded->exif.has_exif_version && std::memcmp(loaded->exif.exif_version, expectedVersion, 4) == 0);
+            CHECK(loaded->exif.datetime && std::strcmp(loaded->exif.datetime, "2023:11:15 05:13:20") == 0);
+            CHECK(loaded->exif.offset_time && std::strcmp(loaded->exif.offset_time, "+07:00") == 0);
+            CHECK(loaded->exif.subsec_time && std::strcmp(loaded->exif.subsec_time, "123") == 0);
+            if (image.exif) {
+                CHECK(std::strcmp(loaded->exif.datetime_original, exif.datetime_original) == 0);
+                CHECK(!loaded->exif.offset_time_original);
+                CHECK(std::strcmp(loaded->exif.subsec_time_original, "042") == 0);
+                CHECK(std::strcmp(loaded->exif.datetime_digitized, exif.datetime_digitized) == 0);
+                CHECK(std::strcmp(loaded->exif.offset_time_digitized, "-03:30") == 0);
+                CHECK(std::strcmp(loaded->exif.subsec_time_digitized, "567") == 0);
+            } else {
+                CHECK(!loaded->exif.datetime_original && !loaded->exif.datetime_digitized);
+                CHECK(!loaded->exif.offset_time_original && !loaded->exif.offset_time_digitized);
+                CHECK(!loaded->exif.subsec_time_original && !loaded->exif.subsec_time_digitized);
+            }
             tinydng_document_destroy(context, document);
         }
     }
+
+    image.gps = nullptr;
+    image.exif = &exif;
+    exif.model = const_cast<char*>("RAW camera");
+    exif.datetime_original = nullptr;
+    exif.subsec_time_original = nullptr;
+    uint8_t* data = nullptr;
+    size_t size = 0;
+    CHECK(tinydng_write_memory(context, &image, &options, &data, &size, &error) == TINYDNG_OK);
+    std::vector<uint8_t> split(data, data + size);
+    tinydng_buffer_free(context, data);
+    const uint32_t rawIfd = uint32_t(split[4]) | (uint32_t(split[5]) << 8) |
+                            (uint32_t(split[6]) << 16) | (uint32_t(split[7]) << 24);
+    const uint32_t rootIfd = uint32_t(split.size());
+    const uint32_t rootExif = rootIfd + 2 + 8 * 12 + 4;
+    const uint32_t rootDate = rootExif + 2 + 3 * 12 + 4;
+    const auto put = [&](uint32_t value, int length) {
+        for (int byte = 0; byte < length; ++byte) split.push_back(uint8_t(value >> (byte * 8)));
+    };
+    const auto entry = [&](uint16_t tag, uint16_t type, uint32_t count, uint32_t value) {
+        put(tag, 2); put(type, 2); put(count, 4); put(value, 4);
+    };
+    put(8, 2);
+    entry(256, 4, 1, 1);
+    entry(257, 4, 1, 1);
+    entry(258, 3, 1, 8);
+    entry(262, 3, 1, 1);
+    entry(273, 4, 1, rootDate + 27);
+    entry(279, 4, 1, 1);
+    entry(330, 4, 1, rawIfd);
+    entry(34665, 4, 1, rootExif);
+    put(0, 4);
+    put(3, 2);
+    entry(0x9003, 2, 20, rootDate);
+    entry(0x9011, 2, 7, rootDate + 20);
+    entry(0x9291, 2, 4, 0x00323430);
+    put(0, 4);
+    for (const char* value : {"2026:05:01 12:34:56", "+00:00"})
+        split.insert(split.end(), value, value + std::strlen(value) + 1);
+    split.push_back(0);
+    for (int byte = 0; byte < 4; ++byte) split[4 + byte] = uint8_t(rootIfd >> (byte * 8));
+    {
+        std::ofstream file(sourcePath, std::ios::binary);
+        file.write(reinterpret_cast<const char*>(split.data()), std::streamsize(split.size()));
+        CHECK(file.good());
+    }
+    rawrcam::convert::ConvertOptions operation;
+    operation.wallClockUnixMillis = 1'700'000'000'000;
+    const auto splitPath = directory + "/split.dng";
+    const auto converted = rawrcam::convert::downscaleDng(sourcePath, splitPath, rawrcam::convert::DngDownscale::Quarter,
+                                                        {}, {}, operation);
+    if (!converted.ok) std::fprintf(stderr, "%s\n", converted.error.c_str());
+    CHECK(converted.ok);
+    tinydng_document* document = nullptr;
+    CHECK(tinydng_open_file(context, splitPath.c_str(), nullptr, &document, &error) == TINYDNG_OK);
+    const auto& preserved = tinydng_image_get(document, 0)->exif;
+    CHECK(preserved.datetime_original && std::strcmp(preserved.datetime_original, "2026:05:01 12:34:56") == 0);
+    CHECK(preserved.offset_time_original && std::strcmp(preserved.offset_time_original, "+00:00") == 0);
+    CHECK(preserved.subsec_time_original && std::strcmp(preserved.subsec_time_original, "042") == 0);
+    CHECK(preserved.datetime_digitized && std::strcmp(preserved.datetime_digitized, exif.datetime_digitized) == 0);
+    CHECK(preserved.offset_time_digitized && std::strcmp(preserved.offset_time_digitized, "-03:30") == 0);
+    CHECK(preserved.subsec_time_digitized && std::strcmp(preserved.subsec_time_digitized, "567") == 0);
+    CHECK(preserved.datetime && std::strcmp(preserved.datetime, "2023:11:14 22:13:20") == 0);
+    CHECK(preserved.offset_time && std::strcmp(preserved.offset_time, "+00:00") == 0);
+    CHECK(preserved.subsec_time && std::strcmp(preserved.subsec_time, "000") == 0);
+    CHECK(preserved.has_exif_version && std::memcmp(preserved.exif_version, "0231", 4) == 0);
+    tinydng_document_destroy(context, document);
     tinydng_context_destroy(context);
     std::filesystem::remove_all(directory);
     return 0;

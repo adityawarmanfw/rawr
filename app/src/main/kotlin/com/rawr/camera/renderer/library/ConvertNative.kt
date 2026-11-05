@@ -18,7 +18,7 @@ internal object ConvertNative {
 
     /**
      * Blocks; "" on success, "cancelled", or an error message. Mode: see [DngConversion.nativeMode].
-     * [offsetTime] ("+07:00" or "") is written when the source has no OffsetTimeOriginal.
      */
-    external fun convert(job: Long, source: String, destination: String, mode: Int, offsetTime: String): String
+    external fun convert(job: Long, source: String, destination: String, mode: Int,
+                         wallClockUnixMillis: Long, utcOffsetMinutes: Int): String
 }

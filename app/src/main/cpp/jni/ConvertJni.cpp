@@ -98,7 +98,8 @@ extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_renderer_library_ConvertN
 // mode: 0 = 200MP lossless, 1 = 50MP, 2 = 25MP, 3 = 12.5MP (of the source pixel count).
 // Returns "" on success, "cancelled", or an error message.
 extern "C" JNIEXPORT jstring JNICALL Java_com_rawr_camera_renderer_library_ConvertNative_convert(
-    JNIEnv* e, jobject, jlong handle, jstring source, jstring destination, jint mode, jstring offsetTime) {
+    JNIEnv* e, jobject, jlong handle, jstring source, jstring destination, jint mode,
+    jlong wallClockUnixMillis, jint utcOffsetMinutes) {
     using namespace rawrcam::convert;
     ConvertJob* j = job(handle);
     j->permille = 0;
@@ -106,7 +107,8 @@ extern "C" JNIEXPORT jstring JNICALL Java_com_rawr_camera_renderer_library_Conve
     const auto cancelled = [j] { return j->cancelled.load(); };
     const std::string src = str(e, source), dst = str(e, destination);
     ConvertOptions options;
-    options.offsetTime = str(e, offsetTime);
+    options.wallClockUnixMillis = wallClockUnixMillis;
+    options.utcOffsetMinutes = std::int16_t(utcOffsetMinutes);
     ConvertResult result;
     switch (mode) {
         case 0: result = recompressDng(src, dst, progress, cancelled, options); break;

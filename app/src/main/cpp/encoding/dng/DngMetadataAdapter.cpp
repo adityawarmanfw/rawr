@@ -433,10 +433,8 @@ std::optional<TinyDngWriteParams> makeTinyDngWriteParams(const rawrcam::imaging:
 
     fillDngExif(p, frame, captureContext);
     p.gps = captureContext.gps;
-    if (p.gps) {
-        p.exif.has_exif_version = 1;
-        std::memcpy(p.exif.exif_version, "0300", 4);
-    }
+    p.exif.has_exif_version = 1;
+    std::memcpy(p.exif.exif_version, p.gps ? "0300" : "0231", 4);
 
     p.privateData = buildDngProvenance(frame, captureContext, gm->mode);
     raw.rawr_private_data = reinterpret_cast<char*>(p.privateData.data());

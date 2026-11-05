@@ -24,7 +24,7 @@ static GpsFields ifdFields(const uint8_t* bytes, size_t size, uint16_t pointerTa
     const size_t inlineSize = bigTiff ? 8 : 4;
     const size_t root = number(bigTiff ? 8 : 4, inlineSize);
     const auto rootCount = number(root, countSize);
-    size_t gpsOffset = 0;
+    size_t gpsOffset = pointerTag ? 0 : root;
     for (size_t index = 0; index < rootCount; ++index) {
         const size_t entry = root + countSize + index * entrySize;
         if (number(entry, 2) == pointerTag) gpsOffset = number(entry + (bigTiff ? 12 : 8), inlineSize);
@@ -51,7 +51,7 @@ static GpsFields ifdFields(const uint8_t* bytes, size_t size, uint16_t pointerTa
     return fields;
 }
 
-static void roundTrip(const std::optional<tinydng_gps>& gps) {
+static void roundTrip(const std::optional<tinydng_gps>& gps, bool legacyVersion = false) {
     tinydng_error error{};
     auto* context = tinydng_context_create(nullptr, &error);
     assert(context);
@@ -66,7 +66,7 @@ static void roundTrip(const std::optional<tinydng_gps>& gps) {
     image.gps = gps ? &*gps : nullptr;
     tinydng_exif exif{};
     exif.has_exif_version = 1;
-    std::memcpy(exif.exif_version, "0300", 4);
+    std::memcpy(exif.exif_version, legacyVersion ? "0230" : "0300", 4);
     image.exif = &exif;
     tinydng_write_options options{};
     options.as_dng = 1;
@@ -75,16 +75,23 @@ static void roundTrip(const std::optional<tinydng_gps>& gps) {
     assert(tinydng_write_memory(context, &image, &options, &bytes, &size, &error) == TINYDNG_OK);
     rawrcam::encoding::jpeg::JpegCaptureContext jpegContext;
     jpegContext.gps = gps;
+    jpegContext.wallClockUnixMillis = 1'700'000'000'000;
+    jpegContext.preserveSourceTime = legacyVersion;
+    if (legacyVersion) jpegContext.sourceExifVersion = std::array<uint8_t, 4>{'0', '2', '3', '0'};
     const auto jpegExif = rawrcam::encoding::jpeg::buildExif(jpegContext, 2, 2);
     assert(jpegExif.size() > 14 && std::memcmp(jpegExif.data(), "Exif\0\0II", 8) == 0);
     const auto jpegGps = ifdFields(jpegExif.data() + 6, jpegExif.size() - 6);
     const auto tiffGps = ifdFields(bytes, size);
     assert(tiffGps == jpegGps);
     assert(tiffGps.empty() == !gps.has_value());
+    const auto jpegFields = ifdFields(jpegExif.data() + 6, jpegExif.size() - 6, 0x8769);
+    const auto& version = jpegFields.at(0x9000);
+    assert(std::string(version.begin() + 2, version.end()) == (legacyVersion ? "0231" : gps ? "0300" : "0232"));
     if (!gps) {
-        jpegContext.wallClockUnixMillis = 1'700'000'000'000;
+        GpsFields rootFields;
         auto read = [&] {
             const auto data = rawrcam::encoding::jpeg::buildExif(jpegContext, 2, 2);
+            rootFields = ifdFields(data.data() + 6, data.size() - 6, 0);
             return ifdFields(data.data() + 6, data.size() - 6, 0x8769);
         };
         auto fields = read();
@@ -94,6 +101,8 @@ static void roundTrip(const std::optional<tinydng_gps>& gps) {
         };
         for (uint16_t tag : {0x9010, 0x9011, 0x9012}) assert(text(tag) == "+00:00");
         for (uint16_t tag : {0x9290, 0x9291, 0x9292}) assert(text(tag) == "000");
+        jpegContext.preserveSourceTime = true;
+        jpegContext.sourceExifVersion = std::array<uint8_t, 4>{'0', '2', '3', '0'};
         jpegContext.dateTimeOriginal = "2026:05:01 12:34:56";
         jpegContext.dateTimeDigitized = "2026:05:02 01:02:03";
         jpegContext.offsetTimeOriginal = "+08:00";
@@ -102,6 +111,9 @@ static void roundTrip(const std::optional<tinydng_gps>& gps) {
         jpegContext.subsecTimeDigitized = "567";
         fields = read();
         assert(text(0x9003) == jpegContext.dateTimeOriginal && text(0x9004) == jpegContext.dateTimeDigitized);
+        const auto& modified = rootFields.at(0x0132);
+        assert(std::string(modified.begin() + 2, modified.end() - 1) == "2023:11:14 22:13:20");
+        assert((fields.at(0x9000) == std::vector<uint8_t>{7, 4, '0', '2', '3', '1'}));
         assert(text(0x9010) == "+00:00" && text(0x9290) == "000");
         assert(text(0x9011) == "+08:00" && text(0x9291) == "042");
         assert(text(0x9012) == "-03:30" && text(0x9292) == "567");
@@ -111,9 +123,19 @@ static void roundTrip(const std::optional<tinydng_gps>& gps) {
         jpegContext.subsecTimeDigitized.clear();
         fields = read();
         for (uint16_t tag : {0x9011, 0x9012, 0x9291, 0x9292}) assert(!fields.contains(tag));
+        jpegContext.dateTimeDigitized.clear();
+        fields = read();
+        assert(text(0x9003) == jpegContext.dateTimeOriginal);
+        for (uint16_t tag : {0x9004, 0x9012, 0x9292}) assert(!fields.contains(tag));
+        jpegContext.dateTimeDigitized = "2026:05:02 01:02:03";
         jpegContext.dateTimeOriginal.clear();
         fields = read();
         assert(text(0x9004) == jpegContext.dateTimeDigitized && !fields.contains(0x9012) && !fields.contains(0x9292));
+        assert(!fields.contains(0x9003) && !fields.contains(0x9011) && !fields.contains(0x9291));
+        jpegContext.dateTimeDigitized.clear();
+        fields = read();
+        for (uint16_t tag : {0x9003, 0x9004, 0x9011, 0x9012, 0x9291, 0x9292}) assert(!fields.contains(tag));
+        assert(text(0x9010) == "+00:00" && text(0x9290) == "000");
     }
     tinydng_document* document = nullptr;
     assert(tinydng_open_memory(context, bytes, size, nullptr, &document, &error) == TINYDNG_OK);
@@ -145,7 +167,7 @@ int main() {
     assert(std::abs(double(high->altitude[0]) / high->altitude[1] - 12345.678) < 0.001);
     assert(high->has_time && high->timestamp[2][0] == 123 && high->timestamp[2][1] == 1000);
     assert(validGps(*high));
-    roundTrip(*high);
+    roundTrip(*high, true);
     roundTrip(*zero);
 
     auto absent = makeGps(12, 34, std::nullopt, std::nullopt, 0);

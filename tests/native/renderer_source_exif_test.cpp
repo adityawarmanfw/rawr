@@ -138,6 +138,20 @@ int main() {
         check(x.sensitivity == 100 && x.exposureTimeNs == 20'000'000, "mixed numeric fallback");
         check(x.dateTimeOriginal.empty() && x.dateTimeDigitized == "2026:05:02 01:02:03" &&
               x.offsetTimeDigitized == "+00:00" && x.subsecTimeDigitized == "000", "digitized group without original");
+          image.offset_time_digitized = nullptr;
+          image.subsec_time_digitized = nullptr;
+          root.datetime_digitized = s("2025:12:31 23:59:59");
+          root.offset_time_digitized = s("-03:30");
+          root.subsec_time_digitized = s("567");
+          const auto distinct = readSourceCaptureExif(image, &root, nullptr);
+          check(distinct.dateTimeDigitized == "2026:05:02 01:02:03" &&
+              distinct.offsetTimeDigitized.empty() && distinct.subsecTimeDigitized.empty(),
+              "qualifiers from a different root date are not borrowed");
+          root.datetime_digitized = image.datetime_digitized;
+          image.offset_time_digitized = s("+00:00");
+          const auto conflicting = readSourceCaptureExif(image, &root, nullptr);
+          check(conflicting.offsetTimeDigitized == "+00:00" && conflicting.subsecTimeDigitized.empty(),
+              "matching wall-clock dates with conflicting offsets do not share fractions");
     }
 
     // FNumber beats APEX ApertureValue; APEX alone still converts.
@@ -156,8 +170,7 @@ int main() {
         check(x.fNumber && std::abs(*x.fNumber - 2.0f) < 1e-4f, "apex fallback");
     }
 
-    // A tagless source: nothing invented, the exporter's identity fills in
-    // and the writer falls back to the export time (empty dateTimeOriginal).
+    // A tagless source: capture time stays unknown; identity uses the existing fallback.
     {
         auto image = blank();
         image.datetime_original = s("    :  :     :  :  ");
@@ -181,17 +194,25 @@ int main() {
         check(x.dateTimeOriginal.empty(), "zeroed date is absent");
         const auto id = exportIdentity(x, "vivo", "X300 Ultra");
         check(id.make.empty() && id.model == "Some Camera", "no mixed identity");
+        for (const char* unknown : {"2026:00:00 00:00:00", "2025:02:31 15:13:00"}) {
+            image.datetime_original = s(unknown);
+            check(readSourceCaptureExif(image, nullptr, nullptr).dateTimeOriginal.empty(),
+                  "unrecognised external source date stays unknown");
+        }
     }
 
     // Malformed time qualifiers are dropped; the date itself is kept.
     {
         auto image = blank();
-        image.datetime_original = s("2025:12:31 23:59:59");
+        image.datetime_original = s("2025:12:31 23:59:59.123");
         image.offset_time_original = s("GMT+1");
         image.subsec_time_original = s("12a");
         const auto x = readSourceCaptureExif(image, nullptr, nullptr);
-        check(x.dateTimeOriginal == "2025:12:31 23:59:59" && x.dateTimeDigitized.empty(), "date kept");
+        check(x.dateTimeOriginal == "2025:12:31 23:59:59" && x.dateTimeDigitized.empty(), "whole-second prefix kept");
         check(x.offsetTimeOriginal.empty() && x.subsecTimeOriginal.empty(), "bad qualifiers dropped");
+          image.offset_time_original = s("+07:60");
+          check(readSourceCaptureExif(image, nullptr, nullptr).offsetTimeOriginal.empty(),
+              "out-of-range external offset stays unknown");
     }
 
     if (failures == 0) std::printf("renderer_source_exif_test: ok\n");
