@@ -52,7 +52,7 @@ internal fun ImageToneSettings(
                         title = "AgX",
                         selected = state.values.isAgxActive(),
                         testTag = SettingsTestTags.row("ImageTone", "profile_agx"),
-                        onClick = { dispatch.invoke(SetAgxPreset(state.values.regularAgxPreset())) }
+                        onClick = { dispatch.invoke(SetColorRenderProfile(ColorRenderProfile.AgX)) }
                     )
                     val display = if (state.values.isVideo) ColorRenderProfile.Rec709 else ColorRenderProfile.SRgb
                     SettingsSelectionRow(
@@ -92,7 +92,7 @@ internal fun ImageToneSettings(
                         if (index > 0) SettingDivider()
                         SettingsSelectionRow(
                             title = preset.lookLabel,
-                            selected = state.values.regularAgxPreset() == preset,
+                            selected = state.values.selectedAgxLook() == null && state.values.regularAgxPreset() == preset,
                             testTag = SettingsTestTags.row("ImageTone", "profile_agx_${preset.name}"),
                             onClick = { dispatch.invoke(SetAgxPreset(preset)) }
                         )
@@ -104,14 +104,14 @@ internal fun ImageToneSettings(
             item(key = "agx_saved_looks") { AgxSavedLooksGroup(state.values, dispatch) }
         }
         if (state.values.isAgxActive()) {
-            val preset = state.values.regularAgxPreset()
             val values = state.values.activeAgxValues()
+            val defaults = state.values.activeAgxDefaults()
             AgxGroup.entries.forEach { group ->
                 item(key = "agx_${group.name}") {
                     SettingsGroup(
                         title = group.title,
                         description = if (group == AgxGroup.Range)
-                            "${preset.lookLabel} look: stored per look. AgX replaces the display tone controls." else null
+                            "$profileLabel look: stored per look. AgX replaces the display tone controls." else null
                     ) {
                         if (group == AgxGroup.Range) {
                             ToneSlider(ImageToneSpecs.renderExposure, tone.renderExposure, dispatch)
@@ -127,7 +127,7 @@ internal fun ImageToneSettings(
                                 step = spec.step,
                                 decimals = spec.valueDecimals,
                                 value = values.valueOf(spec.parameter),
-                                defaultValue = preset.defaults.valueOf(spec.parameter),
+                                defaultValue = defaults.valueOf(spec.parameter),
                                 valueFormatter = { spec.format(it) },
                                 dimDisabledText = false,
                                 onValueChange = { dispatch.invoke(SetAgxValue(spec.parameter, it)) }

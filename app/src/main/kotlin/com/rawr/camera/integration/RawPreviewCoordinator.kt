@@ -3,6 +3,7 @@ package com.rawr.camera.integration
 import android.app.Application
 import android.util.Log
 import android.view.Surface
+import com.rawr.camera.location.CaptureGps
 import com.rawr.camera.settings.model.ColorRenderProfile
 import com.rawr.camera.settings.model.DemosaicAlgorithm
 import com.rawr.camera.settings.model.LensProfile
@@ -70,6 +71,7 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
     init {
         native.installCameraTagResolver(CameraTagResolver(application))
         native.installVendorCameraGate(VendorCameraGate(application))
+        native.installJavaCameraBackend(JavaCameraBackend(application))
         nativeHandle =
             native.create(
                 application.filesDir.absolutePath,
@@ -160,6 +162,15 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
         startSessionClock()
     }
 
+    /**
+     * Atomic native intent: called directly, not posted to the camera worker lane, so it does not queue behind
+     * Camera2 retirement or GPU waits running there. The lock is only held briefly (by [postNative], to enqueue).
+     */
+    @Synchronized
+    fun setUiPresentationActive(active: Boolean) {
+        if (!closed) native.setUiPresentationActive(nativeHandle, active)
+    }
+
     @Synchronized
     fun stop() {
         if (closed) return
@@ -168,6 +179,8 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
         sessionClock?.cancel(false)
         sessionClock = null
         postNative { native.tickCameraSession(nativeHandle) }
+        // Leaving the viewfinder (e.g. for Settings > Export) writes out the buffered audit files.
+        postNative { native.flushDiagnostics(nativeHandle) }
     }
 
     /** Submitted after the initial persisted settings in the same FIFO lane. */
@@ -279,7 +292,7 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
     fun setAePriorityDisabled(disabled: Boolean) = postNative { native.setAePriorityDisabled(nativeHandle, disabled) }
     fun setRawrAutoExposure(s: com.rawr.camera.settings.model.RawrAeSettings) = postNative {
         native.setRawrAutoExposure(
-            nativeHandle, s.enabled, s.nightLook.nativeId, 0, 0, s.minShutter.ns,
+            nativeHandle, s.enabled, s.nightLook.nativeId, 0, 0, 0L,
             s.maxShutter.ns, s.balance.ev, s.digitalGain.ev, s.speed.nativeId, s.metering.nativeId
         )
     }
@@ -487,7 +500,7 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
         captureFilmEnabled: Boolean = false,
         ultraHdrEnabled: Boolean = false,
         ultraHdrGainmapQuality: Int = 95,
-        gps: DoubleArray? = null
+        gps: CaptureGps? = null
     ): Long {
         val subsampling = subsamplingCode(jpegChromaSubsamplingId)
         val demosaic = demosaicCode(demosaicAlgorithm)
@@ -573,7 +586,7 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
         captureFilmEnabled: Boolean = false,
         ultraHdrEnabled: Boolean = false,
         ultraHdrGainmapQuality: Int = 95,
-        gps: DoubleArray? = null
+        gps: CaptureGps? = null
     ): Long {
         val subsampling = subsamplingCode(jpegChromaSubsamplingId)
         val demosaic = demosaicCode(demosaicAlgorithm)
@@ -623,6 +636,9 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
     }
 
     fun pollDngWriteCompletion(): String = native.pollDngWriteCompletion(nativeHandle)
+
+    /** An accepted still still needs the camera session (frames due or not yet copied out). */
+    fun stillCaptureHoldsCamera(): Boolean = native.stillCaptureHoldsCamera(nativeHandle)
 
     fun pollJpegWriteCompletion(): String = native.pollJpegWriteCompletion(nativeHandle)
 

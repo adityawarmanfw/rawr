@@ -202,6 +202,7 @@ void FrameSubmitCoordinator::onRawFrame(rawrcam::imaging::RawFrameLease frame) {
 void FrameSubmitCoordinator::tryPair(uint64_t timestampNs) {
     rawrcam::imaging::MatchedFrame matched{};
     if (!framePairer_->takeMatched(timestampNs, &matched)) return;
+    pairedGeneration_.store(config_.generation, std::memory_order_release);
     rawrcam::diagnostics::RuntimeTraceRecorder::instance().record(
         rawrcam::diagnostics::RuntimeTraceStage::Paired, matched.timestampNs, matched.metadata.snapshot.frameOrdinal,
         -1, matched.metadata.snapshot.exposureTimeNs, matched.metadata.snapshot.sensitivity, 0, 0,
@@ -276,7 +277,7 @@ bool FrameSubmitCoordinator::submitMatchedFrame(rawrcam::imaging::MatchedFrame& 
         }
         lifecyclePort_.finalizeDetachedStill();
     }
-    if (pipelineAuditSubmitCount_ < 6) {
+    if (pipelineAuditSubmitCount_ < kPipelineAuditFrames) {
         ++pipelineAuditSubmitCount_;
         lifecyclePort_.postAudit(std::string("PIPELINE_GPU_SUBMIT_RESULT generation=") +
                                  std::to_string(config_.generation) + " timestampNs=" + std::to_string(timestampNs) +
@@ -324,7 +325,8 @@ std::optional<FrameSubmitCoordinator::AcquiredSubmit> FrameSubmitCoordinator::ac
         else if (preview != VK_NOT_READY)
             vkCheck(preview, "video preview fence status");
     }
-    if (!presentationPaused_ && !metadata.hidePreview && swapchainRenderer_.ready() && !slot->previewSubmitted) {
+    const bool uiActive = uiPresentationActive_.load(std::memory_order_relaxed) || capturePort_.multiframeEnabled();
+    if (uiActive && !presentationPaused_ && !metadata.hidePreview && swapchainRenderer_.ready() && !slot->previewSubmitted) {
         uint32_t index = 0;
         const VkResult acquire = swapchainRenderer_.acquireNextImage(slot->imageAvailable, &index);
         trace.record(rawrcam::diagnostics::RuntimeTraceStage::SwapAcquire, params.timestampNs, metadata.frameOrdinal,
@@ -1028,11 +1030,23 @@ bool FrameSubmitCoordinator::submitAhb(uint64_t timestampNs, rawrcam::imaging::R
     AHardwareBuffer* const ahb = lease.ahb();
     const int acquireFenceFd = lease.fence();
     const bool videoReady = videoOutput_ && videoOutput_->ready() && config_.diagnosticMode == 0u;
-    if (!configured_ || ((!swapchainRenderer_.ready() || presentationPaused_) && !videoReady)) return false;
+    const bool uiActive = uiPresentationActive_.load(std::memory_order_relaxed) || capturePort_.multiframeEnabled();
+    if (!configured_ || ((!uiActive || !swapchainRenderer_.ready() || presentationPaused_) && !videoReady)) return false;
+
+    if (metadata.cameraContext && metadata.cameraContext->guardStillExposure && !metadata.optimizedStillRequestId) {
+        lifecyclePort_.observePreviewBlackFloor(metadata, rawrcam::imaging::sampleRawBlackFloor(
+            imageLease, ahb, acquireFenceFd, int(metadata.cameraContext->rawPreviewCfa)));
+    }
 
     // The CPU read below waits on the camera fence and touches the whole RAW
     // buffer; during recording that stall lands in the encoder's frame cadence.
-    if (!videoReady && imageLease && metadata.cameraContext &&
+    // On by default (bring-up logs rely on RAW_CONTENT_STATS); `setprop debug.rawr.raw_content_stats 0` before
+    // launch turns it off. Read once per process, not per frame.
+    static const bool rawStatsEnabled = [] {
+        char value[PROP_VALUE_MAX] = {};
+        return !(__system_property_get("debug.rawr.raw_content_stats", value) > 0 && value[0] == '0');
+    }();
+    if (rawStatsEnabled && !videoReady && imageLease && metadata.cameraContext &&
         (lastRawContentStatsNs_ == 0 || timestampNs < lastRawContentStatsNs_ ||
          timestampNs - lastRawContentStatsNs_ >= 1'000'000'000ull)) {
         lastRawContentStatsNs_ = timestampNs;

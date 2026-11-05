@@ -106,8 +106,8 @@ class SettingsBackupStoreTest {
             export(defaults.copy(userLutProfiles = listOf(profile("absent"))), setOf(BackupSection.Luts))
         }
         assertFailsWith<IllegalArgumentException> {
-            export(defaults.copy(lensProfiles = listOf(builtIn.first().copy(
-                dcp = LensDcp("0".repeat(32) + ".dcp", "Missing")))), setOf(BackupSection.LensProfiles))
+            export(defaults.copy(lensProfiles = listOf(builtIn.first().image {
+                copy(dcp = LensDcp("0".repeat(32) + ".dcp", "Missing")) })), setOf(BackupSection.LensProfiles))
         }
     }
 
@@ -216,7 +216,7 @@ class SettingsBackupStoreTest {
 
     @Test fun damagedDcpCannotSilentlyDisappearDuringRestore() {
         val dcp = LensDcp("0".repeat(32) + ".dcp", "Damaged")
-        val contents = staged(defaults.copy(lensProfiles = listOf(builtIn.first().copy(dcp = dcp))), emptyMap())
+        val contents = staged(defaults.copy(lensProfiles = listOf(builtIn.first().image { copy(dcp = dcp) })), emptyMap())
         File(contents.dcpFiles, dcp.file).writeText("bad")
         assertFailsWith<IllegalArgumentException> { store.prepare(contents, setOf(BackupSection.LensProfiles)) }
     }
@@ -396,4 +396,24 @@ class SettingsBackupStoreTest {
             assertFailsWith<IllegalArgumentException> { store.read(archive(""""lens_profiles"""", settings)) }
         }
     }
+    @Test fun backupIncludesEveryInactiveDcpAndRejectsMissingOnes() {
+        val bytes = listOf(byteArrayOf(41, 42), byteArrayOf(43, 44))
+        val profiles = bytes.mapIndexed { index, content -> LensDcp(DcpFileStore.fileName(content), "Profile $index") }
+        val dir = File(app.filesDir, DcpFileStore.DIR).apply { mkdirs() }
+        try {
+            profiles.zip(bytes).forEach { (profile, content) -> File(dir, profile.file).writeBytes(content) }
+            val lens = builtIn.single().image { importDcp(profiles[0]).importDcp(profiles[1]).selectDcp(null) }
+            val values = defaults.copy(lensProfiles = listOf(lens))
+            val contents = store.read(export(values, setOf(BackupSection.LensProfiles)))
+            assertEquals(listOf(lens), contents.values.lensProfiles)
+            profiles.zip(bytes).forEach { (profile, content) ->
+                assertContentEquals(content, File(contents.dcpFiles, profile.file).readBytes())
+            }
+            File(dir, profiles[0].file).delete()
+            assertFailsWith<IllegalArgumentException> { export(values, setOf(BackupSection.LensProfiles)) }
+        } finally {
+            profiles.forEach { File(dir, it.file).delete() }
+        }
+    }
+
 }

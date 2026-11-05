@@ -19,5 +19,8 @@ void installVendorCameraGate(JNIEnv* env, jobject gate);
 [[nodiscard]] bool acquireVendorCameraGate(const std::string& gate, std::string* error);
 // Safe from any thread (device closes run detached).
 void releaseVendorCameraGate(const std::string& gate);
+// The gate's vendor state as the camera service sees it now (for vivo: keys 1, 33 and 40), for the log; empty when
+// there is no gate or it cannot say.
+[[nodiscard]] std::string describeVendorCameraGate(const std::string& gate);
 
 }  // namespace rawrcam::camera

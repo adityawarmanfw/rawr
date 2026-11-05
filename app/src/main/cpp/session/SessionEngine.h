@@ -113,6 +113,8 @@ class SessionEngine {
     uint64_t recoverStill(const std::string& name, bool multiframe, int dng, int merged, int jpeg);
     std::string runHighlightReplay(const std::string& inputPath);
     std::string pollDngWriteCompletion();
+    // Some accepted still still needs the camera session (see CaptureCoordinator::holdsCameraFrames).
+    bool stillCaptureHoldsCamera();
     std::string pollJpegWriteCompletion();
     void setPersistZslRingEnabled(bool enabled);
     void setExperimentalMultiframeEnabled(bool enabled);
@@ -139,6 +141,7 @@ class SessionEngine {
                                                 rawrcam::capture::multiframe::MultiframeBaseFrameMode::Sharpest);
     void cancelPreparedMultiframeCapture();
     void setPersistentDiagnosticsEnabled(bool enabled);
+    void flushDiagnostics();
     void setLensShadingCorrectionEnabled(bool enabled);
     void setHighlightReconstructionEnabled(bool enabled);
     void setDistortionCorrectionEnabled(bool enabled);
@@ -207,6 +210,7 @@ class SessionEngine {
                                 : autoKeyCurve_;
     }
     void setExperimentalZeroCopy(bool enabled);
+    void setUiPresentationActive(bool active) noexcept { realtime_.coordinator().setUiPresentationActive(active); }
     void setPipelineDiagnostic(uint32_t mode);
     bool submitMetadata(const rawrcam::metadata::FrameMetadataSnapshot& metadata);
     void recordPipelineAuditLine(const std::string& line);
@@ -224,8 +228,13 @@ class SessionEngine {
     uint64_t cameraSetupGeneration_ = 0;
     uint64_t cameraReaderGeneration_ = 0;
     imaging::RawReaderUsageLadder rawReaderUsage_;  // guarded by mu_
-    // LensRoute::readerUsage of the configured camera; overrides the ladder. Guarded by mu_.
+    // LensRoute::rawBufferUsage of the configured camera; overrides the ladder. Guarded by mu_.
     std::optional<uint64_t> profileReaderUsage_;
+    uint32_t profileMaxImages_ = 0;  // LensRoute::rawBufferCount: 0 keeps the app's own count
+    bool profileReaderProbe_ = false;
+    bool profileReaderDemote_ = false;
+    ANativeWindow* createRawReader(uint64_t generation, uint32_t width, uint32_t height,
+                                   rawrcam::geometry::RawPixelFormat format, uint64_t usage);
     ANativeWindow* createRawInputWindow(uint64_t generation, uint32_t width, uint32_t height,
                                         rawrcam::geometry::RawPixelFormat format);
     void destroyRawInput();

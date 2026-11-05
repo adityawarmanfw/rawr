@@ -88,6 +88,11 @@ struct CameraControlCapabilities {
     // Every request must carry CONTROL_AE_TARGET_FPS_RANGE, even with AE off: the
     // vivo X300 Ultra provider crashes on a full-size mode request without it.
     bool targetFpsRangeRequired = false;
+    // Lens profile's fixed AE target fps (LensRoute::frameRate); 0 = the app's cadence.
+    int32_t frameRate = 0;
+    // Lens profile's request defaults are minimal (LensRoute::requestDefaults): the face-detect and AE priority
+    // entries are left to the template.
+    bool minimalRequestDefaults = false;
     // What the camera advertises; the bounds above may be widened by the
     // lens profile's extended exposure (extendedExposure).
     int32_t advertisedSensitivityMax = 0;
@@ -137,12 +142,19 @@ struct CameraControlCapabilities {
     // dim scene crashes the X300 Ultra camera provider (vivo's camera never
     // makes it either).
     bool tapAfHoldsUntilNextTap = false;
+    // Requests without a tap region keep the template's own AF/AE regions (CameraWorkarounds::keepTemplateRegions).
+    bool keepTemplateRegions = false;
     // Continuous AF follows the first detected face. Off on vivo-gated routes:
     // moving or clearing the region there crashes the same AF publisher.
     bool faceAfSteering = true;
     // Stills save DNG only: a JPEG develop of a 200 MP full-size still
     // doesn't fit in memory.
     bool dngOnly = false;
+    // The lens's session never delivered a frame and recovery gave up; the
+    // camera is stopped until a lens or profile switch.
+    bool lensUnavailable = false;
+    // Why the last lens profile the app sent was refused; the previous profile stays in force. Empty when none.
+    std::string profileError;
     bool manualFocusSupported = false;
     // True when the HAL advertises STATISTICS face detection (FULL preferred,
     // SIMPLE accepted). Powers the face boxes + face-steered continuous AF.

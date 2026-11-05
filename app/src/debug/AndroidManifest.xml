@@ -9,6 +9,7 @@
             tools:replace="android:exported" />
         <activity android:name=".renderer.RendererValidationActivity" android:exported="true" />
         <activity android:name=".renderer.RendererDngReplayActivity" android:exported="true" />
+        <activity android:name=".integration.JavaBackendSpikeActivity" android:exported="true" />
         <activity android:name=".video.EncoderAbProbeActivity" android:exported="true" />
         <activity android:name=".video.VideoDownscaleProbeActivity" android:exported="true" />
     </application>

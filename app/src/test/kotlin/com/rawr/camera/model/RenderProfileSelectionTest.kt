@@ -15,9 +15,9 @@ class RenderProfileSelectionTest {
 
     @Test fun catalogsAndSelectionsAreIndependent() {
         val photo = defaults.withRenderProfile(builtIn(ColorRenderProfile.SRgb))
-        assertEquals(listOf("RAWR NTRL", "AgX", "AgX Punchy", "AgX Sigmoid", "AgX Smooth", "sRGB"), photo.toRenderProfileQuickState().options.map { it.label })
+        assertEquals(listOf("RAWR NTRL", "AgX RAWR", "AgX", "AgX Punchy", "AgX Sigmoid", "AgX Smooth", "sRGB"), photo.toRenderProfileQuickState().options.map { it.label })
         val video = photo.copy(captureModeId = "video").withRenderProfile(builtIn(ColorRenderProfile.Rec709))
-        assertEquals(listOf("RAWR NTRL", "AgX", "AgX Punchy", "AgX Sigmoid", "AgX Smooth", "Rec.709"), video.toRenderProfileQuickState().options.map { it.label })
+        assertEquals(listOf("RAWR NTRL", "AgX RAWR", "AgX", "AgX Punchy", "AgX Sigmoid", "AgX Smooth", "Rec.709"), video.toRenderProfileQuickState().options.map { it.label })
         assertEquals(ColorRenderProfile.SRgb, video.copy(captureModeId = "photo").regularRenderProfile())
         assertEquals(video, video.withRenderProfile(builtIn(ColorRenderProfile.SRgb)))
         assertEquals(photo, photo.withRenderProfile(builtIn(ColorRenderProfile.Rec709)))
@@ -83,13 +83,40 @@ class RenderProfileSelectionTest {
             assertEquals(edited.activeAgxValues(), selected.activeAgxValues())
             assertEquals(selection, selected.toRenderProfileQuickState().selectedId)
             assertEquals(look.values, selected.toRenderProfileQuickState().agx?.values)
-            assertEquals(RenderProfileSelection.Agx(look.base),
-                selected.withAgxValue(AgxParameter.MasterOutset, 0.25f).toRenderProfileQuickState().selectedId)
+            assertFalse(selected.toRenderProfileQuickState().agx!!.modified)
+            val editedLook = selected.withAgxValue(AgxParameter.MasterOutset, 0.25f)
+            val quick = editedLook.toRenderProfileQuickState()
+            assertEquals(selection, quick.selectedId)
+            assertEquals("My AgX", editedLook.activeProfileLabel())
+            assertEquals(look.values, quick.agx!!.defaults)
+            assertTrue(quick.agx.modified)
+            val strip = agxStripState(quick.agx, 0, editedLook.activeProfileLabel())
+            assertEquals("My AgX", strip.activePresetName)
+            assertTrue(strip.modified)
+            assertEquals(0.5f, strip.params.getValue("purity").defaultValue)
+            val reset = editedLook.withAgxDefault(AgxParameter.MasterOutset)
+            assertEquals(look.values, reset.activeAgxValues())
+            assertEquals(selection, reset.toRenderProfileQuickState().selectedId)
+            assertFalse(reset.toRenderProfileQuickState().agx!!.modified)
         }
         val log = reloaded.copy(captureModeId = "video", videoLogEnabled = true)
         assertEquals(log, log.withRenderProfile(selection))
         assertTrue(log.toRenderProfileQuickState().options.none { it.id is RenderProfileSelection.SavedAgx })
         assertEquals(reloaded, reloaded.withRenderProfile(RenderProfileSelection.SavedAgx("deleted")))
+    }
+
+    @Test fun savedLookIdentityDoesNotDependOnMatchingAnotherLooksValues() {
+        val look = AgxLook("first", "First", AgxPreset.Smooth, AgxPreset.Smooth.defaults)
+        val other = look.copy(id = "second", name = "Second")
+        val library = defaults.copy(agxLooks = listOf(look, other))
+        val selected = library.withRenderProfile(RenderProfileSelection.SavedAgx(other.id))
+        assertEquals(other, selected.selectedAgxLook())
+        assertEquals("Second", selected.activeProfileLabel())
+        assertFalse(selected.toRenderProfileQuickState().agx!!.modified)
+        val builtIn = selected.withRenderProfile(RenderProfileSelection.Agx(look.base))
+        assertNull(builtIn.selectedAgxLook())
+        assertEquals(RenderProfileSelection.Agx(look.base), builtIn.toRenderProfileQuickState().selectedId)
+        assertEquals(look.base.defaults, builtIn.activeAgxDefaults())
     }
 
     @Test fun logCatalogAndRememberedSelection() {

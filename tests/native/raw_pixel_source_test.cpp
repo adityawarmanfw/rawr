@@ -2,9 +2,11 @@
 #include <cstring>
 #include <iostream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "imaging/RawPixelSource.h"
+#include "camera/StillExposureGuard.h"
 
 using namespace rawrcam::imaging;
 
@@ -101,9 +103,82 @@ void testStatsSeparateChannels() {
     assert(rawContentStatsLine(empty, input).find("error=invalid_source") != std::string::npos);
 }
 
+// A binned frame upscaled by pixel repetition (what the Xiaomi 17 Ultra HAL
+// delivers for an 8192x6144 RAW without its companion) vs real per-pixel noise.
+void testBlockUniformity() {
+    const uint32_t w = 256, h = 256;
+    RawContentStatsInput input;
+    input.blackLevel = 64.0f;
+    input.whiteLevel = 1023.0f;
+    const auto make = [&](uint32_t repeat) {
+        std::vector<uint16_t> raw(w * h);
+        uint32_t seed = 12345;
+        std::vector<uint16_t> binned((w / repeat) * (h / repeat));
+        for (auto& v : binned) {
+            seed = seed * 1664525u + 1013904223u;
+            v = static_cast<uint16_t>(100 + (seed >> 16) % 800);
+        }
+        for (uint32_t y = 0; y < h; ++y)
+            for (uint32_t x = 0; x < w; ++x) raw[y * w + x] = binned[(y / repeat) * (w / repeat) + x / repeat];
+        return raw;
+    };
+    for (const auto& [repeat, verdict] : {std::pair{1u, "real"}, std::pair{2u, "upscaled2x"}, std::pair{4u, "upscaled4x"}}) {
+        const auto raw = make(repeat);
+        RawPixelSource source{reinterpret_cast<const uint8_t*>(raw.data()), RawPixelFormat::Raw16, w, h,
+                              w * sizeof(uint16_t)};
+        const auto u = rawBlockUniformity(source, input);
+        assert(std::string(u.verdict) == verdict);
+        assert(rawContentStatsLine(source, input).find(std::string("detail=") + verdict) != std::string::npos);
+    }
+    // A covered lens (everything at black) is flat, not upscaled.
+    std::vector<uint16_t> dark(w * h, 64);
+    RawPixelSource source{reinterpret_cast<const uint8_t*>(dark.data()), RawPixelFormat::Raw16, w, h,
+                          w * sizeof(uint16_t)};
+    assert(std::string(rawBlockUniformity(source, input).verdict) == "flat");
+}
+
 }  // namespace
 
 int main() {
+    testBlockUniformity();
+    using namespace rawrcam::camera;
+    std::vector<uint16_t> pedestal(64 * 64, 512);
+    RawPixelSource floorSource{reinterpret_cast<const uint8_t*>(pedestal.data()), RawPixelFormat::Raw16, 64, 64, 128};
+    const auto measured = rawBlackFloor(floorSource, 0);
+    assert(measured && (*measured)[0] == 512);
+    assert(!blackFloorAgrees(measured, {64,64,64,64}, 1023));
+    assert(blackFloorAgrees(measured, {512,512,512,512}, 4095));
+    assert(!blackFloorAgrees(std::nullopt, {64,64,64,64}, 1023));
+    assert(!blackFloorAgrees(measured, {512,512,512,512}, 512));
+    StillExposureGuard guard;
+    assert(!guard.checked(1, 100));
+    guard.observe(1, {10000000, 100, false, 1000}, 100, true);
+    assert(guard.checked(1, 101));
+    assert(!guard.checked(2, 101));
+    assert(!guard.checked(1, 3000));
+    guard.observe(1, {200000, 50, false, 2000}, 200, false);
+    assert(!guard.checked(1, 201));
+    guard.observe(1, {10000000, 100, false, 1000}, 201, true); // Stale good frame cannot unlock.
+    assert(!guard.checked(1, 202));
+    guard.observe(2, {10000000, 100, false, 3000}, 300, true);
+    guard.observe(1, {200000, 50, false, 4000}, 301, false); // Old generation cannot poison new lens.
+    assert(guard.checked(2, 302));
+    {
+        StillExposureGuard described;
+        assert(described.describe(1, 0) == "observed=none");
+        described.observe(4, {10000000, 100, false, 1000}, 500, false, "floor=150,150,150,150 black=64,64,64,64 white=1023");
+        assert(described.describe(4, 750) ==
+               "agrees=0 sameSession=1 ageMs=250 floor=150,150,150,150 black=64,64,64,64 white=1023");
+        assert(described.describe(5, 750).find("sameSession=0") != std::string::npos);
+    }
+    const StillExposureGuard::Exposure sample{10000000, 400, true, 1000};
+    const auto automatic = StillExposureGuard::requestExposure(sample, 2.0);
+    assert(automatic && automatic->exposureTimeNs == 10000000 && automatic->sensitivity == 200);
+    const auto shutter = StillExposureGuard::requestExposure(sample, 2.0, 20000000);
+    assert(shutter && shutter->exposureTimeNs == 20000000 && shutter->sensitivity == 100);
+    const auto iso = StillExposureGuard::requestExposure(sample, 2.0, 0, 400);
+    assert(iso && iso->exposureTimeNs == 5000000 && iso->sensitivity == 400);
+    assert(!StillExposureGuard::requestExposure(sample, 0));
     testRaw10Unpack();
     testPackedCopyHonoursStride();
     testStatsSeparateChannels();

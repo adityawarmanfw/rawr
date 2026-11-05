@@ -85,6 +85,26 @@ bool SessionEngine::setPresentationSurface(JNIEnv* env, jobject surfaceObj, int 
         return false;
     }
 }
+ANativeWindow* SessionEngine::createRawReader(uint64_t generation, uint32_t width, uint32_t height,
+                                              rawrcam::geometry::RawPixelFormat format, uint64_t usage) {
+    return rawFrameIngress_.create(generation, width, height, format, usage, profileMaxImages_);
+}
+
+// Whether the allocator takes a RAW buffer of this size with the given usage plus what the camera adds.
+static bool rawReaderUsageSupported(uint32_t width, uint32_t height, rawrcam::geometry::RawPixelFormat format,
+                                    uint64_t usage) {
+    constexpr uint32_t kHalPixelFormatRaw16 = 0x20;
+    constexpr uint32_t kHalPixelFormatRaw10 = 0x25;
+    constexpr uint64_t kCameraWrite = 1ull << 17;  // GRALLOC_USAGE_HW_CAMERA_WRITE
+    AHardwareBuffer_Desc desc{};
+    desc.width = width;
+    desc.height = height;
+    desc.layers = 1;
+    desc.format = format == rawrcam::geometry::RawPixelFormat::Raw10 ? kHalPixelFormatRaw10 : kHalPixelFormatRaw16;
+    desc.usage = usage | kCameraWrite;
+    return AHardwareBuffer_isSupported(&desc) != 0;
+}
+
 ANativeWindow* SessionEngine::createRawInputWindow(uint64_t generation, uint32_t width, uint32_t height,
                                                    rawrcam::geometry::RawPixelFormat format) {
     try {
@@ -108,7 +128,21 @@ ANativeWindow* SessionEngine::createRawInputWindow(uint64_t generation, uint32_t
                 << std::hex << *profileReaderUsage_;
             SESSION_LOGI("%s", out.str().c_str());
             appendDiagnostic(out.str());
-            return rawFrameIngress_.create(generation, width, height, format, *profileReaderUsage_);
+            uint64_t usage = *profileReaderUsage_;
+            // A fixed usage the lens allows to give way: a silent reader already demoted the ladder, or the
+            // allocator will not take the usage at all.
+            const char* fallbackReason = nullptr;
+            if (profileReaderDemote_ && rawReaderUsage_.cpuOnly()) fallbackReason = "demoted";
+            else if (profileReaderProbe_ && !rawReaderUsageSupported(width, height, format, usage))
+                fallbackReason = "unsupported";
+            if (fallbackReason) {
+                usage = AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN;
+                const std::string line = std::string("RAW_READER_PROFILE_USAGE_FALLBACK reason=") + fallbackReason +
+                                         " usage=0x3";
+                SESSION_LOGI("%s", line.c_str());
+                appendDiagnostic(line);
+            }
+            return createRawReader(generation, width, height, format, usage);
         }
 
         // A GPU-usage reader never delivered a frame on this HAL: request CPU
@@ -120,7 +154,7 @@ ANativeWindow* SessionEngine::createRawInputWindow(uint64_t generation, uint32_t
                                      rawrcam::geometry::rawPixelFormatName(format) + " reason=gpu_usage_starved";
             SESSION_LOGI("%s", line.c_str());
             appendDiagnostic(line);
-            return rawFrameIngress_.create(generation, width, height, format, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN);
+            return createRawReader(generation, width, height, format, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN);
         }
 
         // RAW10 can't be imported as R16 and a latched CPU ingress never imports
@@ -139,7 +173,7 @@ ANativeWindow* SessionEngine::createRawInputWindow(uint64_t generation, uint32_t
             uint64_t usage = AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN;
             if (format == rawrcam::geometry::RawPixelFormat::Raw10 && !realtime_.coordinator().cpuIngressRequired())
                 usage |= AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER;
-            return rawFrameIngress_.create(generation, width, height, format, usage);
+            return createRawReader(generation, width, height, format, usage);
         }
 
         // RAW16 whose image import this driver rejected goes through the GPU
@@ -162,19 +196,19 @@ ANativeWindow* SessionEngine::createRawInputWindow(uint64_t generation, uint32_t
                     << desc.usage;
                 SESSION_LOGI("%s", out.str().c_str());
                 appendDiagnostic(out.str());
-                return rawFrameIngress_.create(generation, width, height, format, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN);
+                return createRawReader(generation, width, height, format, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN);
             }
             const std::string line = "RAW_READER_GPU_BUFFER_INGRESS format=RAW16";
             SESSION_LOGI("%s", line.c_str());
             appendDiagnostic(line);
             try {
-                return rawFrameIngress_.create(generation, width, height, format,
+                return createRawReader(generation, width, height, format,
                                                AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN |
                                                    AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER);
             } catch (const std::exception& e) {
                 // The buffer copy then fails per frame and the CPU upload takes over.
                 appendDiagnostic(std::string("RAW_READER_GPU_BUFFER_INGRESS_FALLBACK reason=") + e.what());
-                return rawFrameIngress_.create(generation, width, height, format,
+                return createRawReader(generation, width, height, format,
                                                AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN);
             }
         }
@@ -214,7 +248,7 @@ ANativeWindow* SessionEngine::createRawInputWindow(uint64_t generation, uint32_t
                     << desc.usage;
                 SESSION_LOGI("%s", out.str().c_str());
                 appendDiagnostic(out.str());
-                return rawFrameIngress_.create(generation, width, height, format, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN);
+                return createRawReader(generation, width, height, format, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN);
             }
         }
         const bool sweepCpuReader = diagnosticMode == 11u || diagnosticMode == 13u || diagnosticMode == 15u;
@@ -239,7 +273,7 @@ ANativeWindow* SessionEngine::createRawInputWindow(uint64_t generation, uint32_t
                 appendDiagnostic(out.str());
             }
             try {
-                return rawFrameIngress_.create(generation, width, height, format, cpuReaderUsage);
+                return createRawReader(generation, width, height, format, cpuReaderUsage);
             } catch (const std::exception& e) {
                 if (zeroCopySweep) {
                     appendDiagnostic(std::string("RAW_ZERO_COPY_SWEEP_READER_FAILURE reason=") + e.what());
@@ -248,11 +282,11 @@ ANativeWindow* SessionEngine::createRawInputWindow(uint64_t generation, uint32_t
                 appendDiagnostic(std::string("RAW_STILL_CAPTURE_READER_USAGE_FALLBACK reason=") + e.what());
                 capture_.single().disableRawSnapshot("cpu_readable_reader_configuration_failed");
                 rawCpuCopyProbe_.disable("cpu_readable_reader_configuration_failed");
-                return rawFrameIngress_.create(generation, width, height, format, baselineReaderUsage);
+                return createRawReader(generation, width, height, format, baselineReaderUsage);
             }
         }
 
-        return rawFrameIngress_.create(generation, width, height, format, baselineReaderUsage);
+        return createRawReader(generation, width, height, format, baselineReaderUsage);
     } catch (const std::exception& e) {
         SESSION_LOGE("createRawInputWindow failed: %s", e.what());
         appendDiagnostic(std::string("RAW_READER_FAILURE ") + e.what());
@@ -284,6 +318,21 @@ void SessionEngine::detachPresentationSurface() noexcept {
         vulkanContext_.waitIdle();
     }
     swapchainRenderer_.destroySwapchain();
+    // Surface retirement already follows Camera2 retirement and the GPU idle
+    // wait above. A detached still defers this entire function until done.
+    // Keep multiframe lifecycle outside this single-frame optimization.
+    if (!hqStillDetachedWorkActive() && !capture_.multiframe().experimentalMultiframeEnabled()) {
+        try {
+            realtime_.coordinator().releaseCompletedSlots(true);
+            realtime_.releaseIdlePreviewResources();
+            ingressQueue_.setLowPowerIdle(true);
+            appendDiagnostic("PREVIEW_BACKGROUND_RESOURCES_RELEASED");
+        } catch (const std::exception& error) {
+            // Detachment is noexcept. Device loss must not turn this optional
+            // memory release into an exception escaping the lifecycle path.
+            SESSION_LOGE("Background preview release deferred: %s", error.what());
+        }
+    }
     presentationSurface_.reset();
     deferredSurfaceDetach_ = false;
 }

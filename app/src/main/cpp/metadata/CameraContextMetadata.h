@@ -38,8 +38,16 @@ struct CameraContextMetadata {
     // Layout of the configured RAW stream; downstream consumers always see
     // unpacked RAW16 after ingress, but CPU readers must decode RAW10 groups.
     geometry::RawPixelFormat rawFormat = geometry::RawPixelFormat::Raw16;
-    // The lens profile's RAW reader usage (LensRoute::readerUsage), if any.
+    // The lens profile's RAW reader usage (LensRoute::rawBufferUsage), if any.
     std::optional<uint64_t> rawReaderUsage;
+    // The lens profile's viewfinder reader tuning (LensRoute::rawBufferCount, rawBufferTestFirst, rawBufferFallBack).
+    uint32_t rawBufferCount = 0;
+    bool rawBufferTestFirst = false;
+    bool rawBufferFallBack = false;
+    // The lens profile's capture-stream reader usage (LensRoute::photoBufferUsage), if any.
+    std::optional<uint64_t> photoBufferUsage;
+    // Recipe capture streams require a measured viewfinder floor before borrowing exposure.
+    bool guardStillExposure = false;
     uint32_t rawPreviewCfa = 0;  // RGGB=0, GRBG=1, GBRG=2, BGGR=3.
     int32_t camera2Cfa = -1;
     // Side of the same-colour blocks in the camera's RAW (LensRoute::cfaBlock):

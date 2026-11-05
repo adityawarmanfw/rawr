@@ -22,7 +22,7 @@ struct PreviewCallbacks {
         configurePreview;
     std::function<ANativeWindow*(uint64_t, uint32_t, uint32_t, geometry::RawPixelFormat)> createRawWindow;
     std::function<void(uint64_t)> destroyRawWindow;
-    // Full-size still reader of a LensRoute::captureStream route (same
+    // Full-size still reader of a LensRoute::photoStream route (same
     // generation lifecycle as the RAW window).
     std::function<ANativeWindow*(uint64_t, uint32_t, uint32_t, geometry::RawPixelFormat)> createCaptureWindow;
     std::function<void(uint64_t)> destroyCaptureWindow;
@@ -47,6 +47,8 @@ class NativeCameraController {
     // Replaces the lens profile (user configuration). Returns false when a
     // debug setprop pins a built-in profile.
     bool setProfile(CameraProfile profile);
+    // Records why a profile was refused (log and control state); the running profile is kept.
+    void rejectProfile(const std::string& error);
     void setPreferredCameraId(const std::string& cameraId);
     void setAccessRoute(const std::string& route);
 
@@ -76,15 +78,15 @@ class NativeCameraController {
     // requestId; the viewfinder stalls until the last returns. False when not
     // needed or not submitted.
     bool captureLongExposure(uint64_t requestId, LongExposure* submitted, uint32_t count = 1);
-    // Capture-stream routes (LensRoute::captureStream): `count` full-size
+    // Capture-stream routes (LensRoute::photoStream): `count` full-size
     // stills at the viewfinder's exposure, tagged requestId.
     bool captureFullSize(uint64_t requestId, uint32_t count, bool retainFocus = false, bool moreExposures = false);
     bool waitFullSizeIdle(int64_t timeoutMs);
     void releaseFullSizeFocus();
     bool hasFullSizeCapture() const;
-    // LensRoute::captureBurst of the open route (0 = no profile limit).
+    // LensRoute::mergeFrameLimit of the open route (0 = no profile limit).
     uint32_t fullSizeBurstLimit() const;
-    // LensRoute::captureBurstSequential of the open route.
+    // LensRoute::mergeFramesOneByOne of the open route.
     bool fullSizeBurstSequential() const;
     // Most a positive-EV long frame can gain over the current repeating
     // exposure (EV); nullopt when unknown.
@@ -172,9 +174,12 @@ class NativeCameraController {
     // Diagnostic mirror of the SessionEngine ingress toggle so SELECTION logs
     // the effective per-session value. CameraSessionPolicy owns restarts.
     void setExperimentalZeroCopyEnabled(bool enabled);
-    // Ingress reports every RAW image; the first one of a generation drops the
-    // companion stream from the repeating request.
-    void rawFrameArrived(uint64_t generation);
+    // The pipeline reports each accepted image+metadata pair. The first one of a generation marks the
+    // start as proven and drops an automatic companion from the repeating request; a buffer that
+    // arrives without usable results does neither.
+    void framePaired(uint64_t generation);
+    void observePreviewBlackFloor(const metadata::FrameMetadataSnapshot& frame,
+                                   const std::optional<std::array<float, 4>>& floor);
     // Camera2-native spot metering used only when ordinary Camera2 Auto AE owns
     // exposure. Coordinates are normalized in sensor/source space.
     void setSpotMeteringTargetSensorNormalized(bool active, float x, float y);

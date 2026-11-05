@@ -33,6 +33,7 @@
 #include "color/ColorMath.h"
 #include "raw_demosaic/EmbeddedShaders.hpp"
 #include "vulkan/VulkanDispatch.h"
+#include "vulkan/HostMemory.h"
 
 namespace rawrcam::renderer {
 namespace {
@@ -119,7 +120,8 @@ struct Buffer {
     VkBuffer buffer{};
     VkDeviceMemory memory{};
     void* data = nullptr;
-    Buffer(const vulkan::VulkanContext& v, size_t size) : device(v.device()) {
+    bool coherent = true;
+    Buffer(const vulkan::VulkanContext& v, size_t size, bool cpuReadback = false) : device(v.device()) {
         try {
             VkBufferCreateInfo b{};
             b.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -131,28 +133,43 @@ struct Buffer {
             vkGetBufferMemoryRequirements(device, buffer, &r);
             VkPhysicalDeviceMemoryProperties props{};
             vkGetPhysicalDeviceMemoryProperties(v.physicalDevice(), &props);
-            uint32_t index = props.memoryTypeCount;
-            for (uint32_t i = 0; i < props.memoryTypeCount; ++i)
-                if ((r.memoryTypeBits & (1u << i)) &&
-                    (props.memoryTypes[i].propertyFlags &
-                     (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) ==
-                        (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
-                    index = i;
-                    break;
-                }
-            if (index == props.memoryTypeCount) throw std::runtime_error("No coherent renderer memory");
+            // Upload-only allocations keep their coherent write path. CPU
+            // readback prefers cached memory, with a coherent portable fallback.
+            const auto selected = vulkan::selectReadbackMemoryType(props, r.memoryTypeBits, cpuReadback);
+            coherent = selected.coherent;
             VkMemoryAllocateInfo a{};
             a.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
             a.allocationSize = r.size;
-            a.memoryTypeIndex = index;
+            a.memoryTypeIndex = selected.index;
             vkOk(vkAllocateMemory(device, &a, nullptr, &memory));
             vkOk(vkBindBufferMemory(device, buffer, memory, 0));
-            vkOk(vkMapMemory(device, memory, 0, size, 0, &data));
+            vkOk(vkMapMemory(device, memory, 0, VK_WHOLE_SIZE, 0, &data));
         } catch (...) {
             vkDestroyBuffer(device, buffer, nullptr);
             vkFreeMemory(device, memory, nullptr);
             throw;
         }
+    }
+    void prepareHostRead(VkCommandBuffer command) const {
+        VkBufferMemoryBarrier host{};
+        host.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+        host.srcQueueFamilyIndex = host.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        host.buffer = buffer;
+        host.size = VK_WHOLE_SIZE;
+        vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+                             0, 0, nullptr, 1, &host, 0, nullptr);
+    }
+    // Call only after the submission fence has completed. Mapping the entire
+    // dedicated allocation permits WHOLE_SIZE without atom-size rounding.
+    void invalidate() const {
+        if (coherent) return;
+        VkMappedMemoryRange range{};
+        range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+        range.memory = memory;
+        range.size = VK_WHOLE_SIZE;
+        vkOk(vkInvalidateMappedMemoryRanges(device, 1, &range));
     }
     ~Buffer() {
         if (data) vkUnmapMemory(device, memory);
@@ -226,7 +243,7 @@ void RendererEngine::renderWaveform(uint32_t width, uint32_t height, uint32_t or
     if (newTarget) scopeImage_ = vulkan::createOwnedImage(vulkan_.physicalDevice(), vulkan_.device(), scopeWidth,
         scopeHeight, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
     Commands commands(vulkan_);
-    Buffer readback(vulkan_, scopeWidth * scopeHeight * 4);
+    Buffer readback(vulkan_, scopeWidth * scopeHeight * 4, true);
     const auto inputLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     commands.begin();
     barrier(commands.command, processor_.outputImage(), inputLayout, VK_IMAGE_LAYOUT_GENERAL);
@@ -262,6 +279,7 @@ void RendererEngine::renderWaveform(uint32_t width, uint32_t height, uint32_t or
     host.size = VK_WHOLE_SIZE;
     vkCmdPipelineBarrier(commands.command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &host, 0, nullptr);
     commands.submit();  // Waits for the fence before this slot can be reused.
+    readback.invalidate();
     scopeEngine_->retireFrameSlot(0);
     pendingFrame.retired = true;
     const auto* rgba = static_cast<const uint8_t*>(readback.data);
@@ -409,7 +427,7 @@ void RendererEngine::prepare(DngSource& source, const std::string& path, const R
                 // image borders are padded with same-CFA-color samples.
                 const bool quad = options.quadfix && !dualFiltered && !dualDemosaic;
                 const VkDeviceSize bayerBytes = VkDeviceSize(size_t(tw) * th * 4);
-                Buffer upload(vulkan_, size_t(bayerBytes)), download(vulkan_, size_t(tw) * th * 8);
+                Buffer upload(vulkan_, size_t(bayerBytes)), download(vulkan_, size_t(tw) * th * 8, true);
                 Image output(vulkan_, tw, th);
                 commands.begin();
                 if (quad) {
@@ -537,7 +555,9 @@ void RendererEngine::prepare(DngSource& source, const std::string& path, const R
                 region.imageExtent = {tw, th, 1};
                 vkCmdCopyImageToBuffer(commands.command, output.value.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                        download.buffer, 1, &region);
+                download.prepareHostRead(commands.command);
                 commands.submit();
+                download.invalidate();
                 quadBuffers.clear();
                 auto* pixels = static_cast<uint16_t*>(download.data);
                 for (uint32_t yy = 0; yy < ch; ++yy)

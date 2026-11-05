@@ -54,8 +54,8 @@ struct AgxParams {
     AgxPrimaries primaries{};
 };
 
-enum class AgxPreset : uint32_t { Default = 0, BlenderBase = 1, BlenderPunchy = 2, Sigmoid = 3, Smooth = 4 };
-inline constexpr uint32_t kAgxPresetCount = 5;
+enum class AgxPreset : uint32_t { Default = 0, BlenderBase = 1, BlenderPunchy = 2, Sigmoid = 3, Smooth = 4, Rawr = 5 };
+inline constexpr uint32_t kAgxPresetCount = 6;
 
 namespace agx_detail {
 inline constexpr double kEpsilon = 1e-6;
@@ -200,7 +200,7 @@ inline constexpr const char* kAgxControlKeys[kAgxControlCount] = {
 };
 // AGX_CONTROL_KEYS_END
 
-// darktable's presets as control rows, in AgxPreset order. Blender contrast
+// Built-in presets as control rows, in AgxPreset order. Blender contrast
 // is its 2.4 at gamma 2.4, expressed relative to the 2.2-gamma slope
 // compensation; Punchy adds Blender's look (brightness 1/1.35^2, sat 1.4).
 // AGX_PRESET_CONTROLS_BEGIN
@@ -233,6 +233,12 @@ inline constexpr float kAgxPresetControls[kAgxPresetCount][kAgxControlCount] = {
     {6.5f, -10.0f,
      2.98f, 3.02f, 1.61f, 0.0f, 0.18f, 0.0f, 0.0f, 1.0f, 0.0f, 2.2f,
      1.0f, 0.0f, 1.0f, 1.0f, 0.0f,
+     0.1f, 0.034906585f, 0.1f, -0.017453292f, 0.15f, -0.05235988f,
+     0.0f, 1.0f, 0.1f, 0.034906585f, 0.1f, -0.017453292f, 0.15f, -0.05235988f},
+    // Rawr
+    {6.5f, -10.0f,
+     2.66f, 1.41f, 1.15f, 0.0f, 0.182f, 0.0f, 0.0f, 1.0f, 0.0f, 2.2f,
+     1.0f, 0.0f, 0.70f, 1.18f, 0.0f,
      0.1f, 0.034906585f, 0.1f, -0.017453292f, 0.15f, -0.05235988f,
      0.0f, 1.0f, 0.1f, 0.034906585f, 0.1f, -0.017453292f, 0.15f, -0.05235988f},
 };

@@ -6,7 +6,7 @@ import kotlin.test.*
 /**
  * [AgxPreset] defaults and [AgxCatalog] keys mirror kAgxPresetControls and
  * kAgxControlKeys in native Agx.h. Native renders whatever controls the app
- * sends, so a drift would make a preset's "default" differ from darktable's
+ * sends, so a drift would make a preset's "default" differ between implementations
  * and break recipe keys.
  */
 class AgxPresetSyncTest {
@@ -29,7 +29,7 @@ class AgxPresetSyncTest {
 
     @Test fun presetDefaultsMatchNative() {
         val rows = nativeTable()
-        assertEquals(5, rows.size)  // native keeps all five darktable presets
+        assertEquals(6, rows.size)  // Five darktable presets plus the RAWR look.
         assertEquals(AgxPreset.entries.size, AgxPreset.entries.map { it.nativeId }.distinct().size)
         AgxPreset.entries.forEach { preset ->
             assertEquals(rows[preset.nativeId], preset.defaults.toNativeArray().toList(), "preset ${preset.name}")

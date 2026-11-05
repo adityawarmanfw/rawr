@@ -15,11 +15,11 @@ import com.rawr.camera.settings.model.resolve
 import com.rawr.camera.settings.model.toModesArray
 import com.rawr.camera.settings.model.toStrengthsArray
 import com.rawr.camera.storage.ArtifactDiagnosticExporter
+import com.rawr.camera.storage.CaptureTime
 import com.rawr.camera.storage.StillProcessingService
 import com.rawr.camera.storage.StillOutputStore
 import com.rawr.camera.storage.ZslBundleExportService
 import java.io.File
-import java.util.TimeZone
 import java.util.concurrent.ConcurrentHashMap
 
 class StillCaptureCoordinator(
@@ -43,7 +43,8 @@ class StillCaptureCoordinator(
         var fallback: Boolean = false,
         var jpegSuccessful: Boolean = !jpegRequested,
         val completedDngNames: MutableSet<String> = mutableSetOf(),
-        var jpegDone: Boolean = !jpegRequested
+        var jpegDone: Boolean = !jpegRequested,
+        val requestedAtNs: Long? = null
     )
 
     private val outputs = StillOutputStore(application)
@@ -63,25 +64,52 @@ class StillCaptureCoordinator(
 
     private var closeWhenDrained: (() -> Unit)? = null
     private var closing = false
-    private data class CaptureInput(val settings: SettingsValues, val wallClockMillis: Long, val releaseAssets: () -> Unit,
+    private data class CaptureInput(val settings: SettingsValues, val captureTime: CaptureTime, val releaseAssets: () -> Unit,
                                     var frozenAssetId: String? = null,
-                                    val gps: com.rawr.camera.location.CaptureGps? = null)
+                                    val gps: com.rawr.camera.location.CaptureGps? = null,
+                                    val requestedAtNs: Long = android.os.SystemClock.elapsedRealtimeNanos())
     private val queuedInputs = java.util.concurrent.ConcurrentLinkedQueue<CaptureInput>()
     private val activeCaptures = java.util.concurrent.atomic.AtomicInteger(0)
+    // Camera-session leases (native still leases), apart from process ownership (activeCaptures,
+    // StillProcessingService). A press holds the camera until native accepts it; then until native
+    // no longer needs the camera for it (frames in and copied out, bursts saved). Development and
+    // saving run with the camera closed, so Home closes it within about a second of the shot: a
+    // session left open gets evicted by the next camera app, and vivo's HAL crashes on that.
+    private var pressCameraLeases = 0  // guarded by this
+    private var acceptedCameraLeases = 0  // guarded by this
 
     // Called directly by the foreground shutter event, before dispatching provider
     // IO to the capture worker. Holds camera/process ownership across immediate Home.
     @Synchronized
     fun enqueueCapture(format: CaptureOutputFormat) {
         check(!closing) { "Capture coordinator is closing" }
+        val requestedAtNs = android.os.SystemClock.elapsedRealtimeNanos()
         StillProcessingService.acquire(application, this)
         val snapshot = settings().copy(dngEnabled = format.dng, jpegEnabled = format.jpeg)
         val releaseAssets = com.rawr.camera.settings.preferences.CaptureLutPins.acquire(
             snapshot.userLutProfiles.firstOrNull { it.id == snapshot.selectedUserLutProfileId })
-        queuedInputs.add(CaptureInput(snapshot, System.currentTimeMillis(), releaseAssets,
-            gps = if (snapshot.locationTagging) gpsSnapshot() else null))
+        queuedInputs.add(CaptureInput(snapshot, CaptureTime.snapshot(), releaseAssets,
+            gps = if (snapshot.locationTagging) gpsSnapshot() else null, requestedAtNs = requestedAtNs))
         activeCaptures.incrementAndGet()
+        pressCameraLeases += 1
         preview.beginStillCapture()
+    }
+
+    /** Native took the press: its lease waits for [releaseIdleCameraLeases]; a refused press gives it back. */
+    @Synchronized
+    private fun pressHandled(accepted: Boolean) {
+        if (pressCameraLeases > 0) pressCameraLeases -= 1
+        if (accepted) acceptedCameraLeases += 1 else preview.endStillCapture()
+    }
+
+    /** Polled: once no accepted still needs the camera, its leases go back and the session may close. */
+    private fun releaseIdleCameraLeases() {
+        // The native query takes the session lock; never hold this monitor (the shutter's) across it.
+        val held = synchronized(this) { acceptedCameraLeases }
+        if (held == 0 || preview.stillCaptureHoldsCamera()) return
+        // Only leases counted before the query: a still accepted since then keeps its own.
+        val released = synchronized(this) { minOf(held, acceptedCameraLeases).also { acceptedCameraLeases -= it } }
+        repeat(released) { preview.endStillCapture() }
     }
 
     @Synchronized
@@ -93,8 +121,11 @@ class StillCaptureCoordinator(
 
     @Synchronized
     private fun releaseCapture() {
-        activeCaptures.decrementAndGet()
-        preview.endStillCapture()
+        // The last capture finished: nothing can still need the camera (polling may have stopped).
+        if (activeCaptures.decrementAndGet() == 0) {
+            repeat(acceptedCameraLeases) { preview.endStillCapture() }
+            acceptedCameraLeases = 0
+        }
         StillProcessingService.release(this)
         closeIfDrained()
     }
@@ -113,6 +144,7 @@ class StillCaptureCoordinator(
             return id
         } finally {
             input.releaseAssets()
+            pressHandled(accepted)
             if (!accepted) {
                 preview.cancelPreparedMultiframeCapture()
                 input.frozenAssetId?.let { com.rawr.camera.storage.releaseCaptureAssets(application.filesDir, it) }
@@ -122,7 +154,7 @@ class StillCaptureCoordinator(
     }
 
     private fun captureInternal(jpegEnabled: Boolean, input: CaptureInput): Long {
-        val now = input.wallClockMillis
+        val now = input.captureTime.wallClockUnixMillis
         val current = try { CaptureRecipe.freezeAssets(application, input.settings) }
             finally { input.releaseAssets() }
         input.frozenAssetId = current.selectedUserLutProfileId
@@ -192,7 +224,7 @@ class StillCaptureCoordinator(
         val jpegDisplayName =
             output.jpeg?.displayName ?: output.jobName.removeSuffix(".dng") + ".diagnostic.jpg"
         val rendererDisplayName = current.captureRendererDisplayName()
-        val offsetMinutes = TimeZone.getDefault().getOffset(now) / 60_000
+        val offsetMinutes = input.captureTime.utcOffsetMinutes
         // Single path arbitration point: the sealed config resolves to
         // exactly what the still pipeline may run (RAW only here; wavelet
         // only here). Multiframe resolves separately below. Native keeps its
@@ -238,7 +270,7 @@ class StillCaptureCoordinator(
                     captureFilmEnabled = current.filmSimEnabled,
                     ultraHdrEnabled = current.ultraHdrEnabled,
                     wallClockMillis = now,
-                    gps = input.gps?.nativeValues(),
+                    gps = input.gps,
                     utcOffsetMinutes = offsetMinutes,
                     deviceMake = Build.MANUFACTURER,
                     deviceModel = DeviceNames.marketingModel(),
@@ -282,7 +314,7 @@ class StillCaptureCoordinator(
                     captureFilmEnabled = current.filmSimEnabled,
                     ultraHdrEnabled = current.ultraHdrEnabled,
                     wallClockMillis = now,
-                    gps = input.gps?.nativeValues(),
+                    gps = input.gps,
                     utcOffsetMinutes = offsetMinutes,
                     deviceMake = Build.MANUFACTURER,
                     deviceModel = DeviceNames.marketingModel(),
@@ -301,8 +333,10 @@ class StillCaptureCoordinator(
                 RequestState(
                     jpegRequested = output.jpeg != null,
                     remainingDngs = output.requestedDngCount,
-                    jpegDone = jpegFd < 0
+                    jpegDone = jpegFd < 0,
+                    requestedAtNs = input.requestedAtNs
                 )
+            Log.i(TAG, "CAPTURE_ACCEPTED requestId=$requestId requestedNs=${input.requestedAtNs} jpeg=${output.jpeg != null}")
             if (zslPersistRequested) {
                 val baseName = output.jobName.removeSuffix(".dng")
                 ContextCompat.startForegroundService(
@@ -344,10 +378,12 @@ class StillCaptureCoordinator(
                 return
             }
             activeCaptures.incrementAndGet()
+            synchronized(this) { pressCameraLeases += 1 }
             preview.beginStillCapture()
             val id = preview.recoverStill(output.jobName, output.multiframe,
                 if (output.conditionalDng) -1 else output.dng?.fd ?: -1,
                 if (output.conditionalDng) -1 else output.mergedDng?.fd ?: -1, output.jpeg?.fd ?: -1)
+            pressHandled(id != 0L)
             if (id == 0L) { outputs.releaseRecovery(output); releaseCapture(); return }
             outputs.register(id, output)
             requestStates[id] = RequestState(output.jpeg != null, remainingDngs = output.requestedDngCount, fallback = output.fallback)
@@ -357,6 +393,7 @@ class StillCaptureCoordinator(
     }
 
     fun pollCompletion(): List<CompletionEvent> {
+        runCatching { releaseIdleCameraLeases() }.onFailure { Log.e(TAG, "Camera lease release failed", it) }
         runCatching { recoverPending() }.onFailure { Log.e(TAG, "Capture recovery unavailable", it) }
         val events = recoveredEvents.toMutableList()
         recoveredEvents.clear()
@@ -425,6 +462,11 @@ class StillCaptureCoordinator(
                 outputs.completeJpeg(requestId, false) // Skipped JPEG is terminal, not retryable.
             } else {
                 val publication = outputs.completeJpeg(requestId, success)
+                state.requestedAtNs?.let { requested ->
+                    val publishedAtNs = android.os.SystemClock.elapsedRealtimeNanos()
+                    Log.i(TAG, "CAPTURE_JPEG_PUBLISHED requestId=$requestId success=${publication.success} " +
+                        "requestedNs=$requested publishedNs=$publishedAtNs elapsedMs=${(publishedAtNs - requested) / 1_000_000.0}")
+                }
                 publication.uri?.let(onJpegPublished)
                 state.jpegDone = true
                 state.jpegSuccessful = !state.jpegRequested || publication.success

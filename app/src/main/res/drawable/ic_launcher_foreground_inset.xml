@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Adaptive-icon foreground. Launchers show only the centre 72 of 108 dp, and the
+     glyph in ic_launcher_foreground.png fills that window edge to edge, so the mask
+     clipped it. Shrinks the PNG to 64% and centres the glyph (bbox centre 523,531 px).
+     Keep in step with the group transform in ic_launcher_monochrome.xml. -->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:drawable="@drawable/ic_launcher_foreground"
+    android:insetLeft="18.70dp"
+    android:insetTop="18.16dp"
+    android:insetRight="20.18dp"
+    android:insetBottom="20.71dp" />

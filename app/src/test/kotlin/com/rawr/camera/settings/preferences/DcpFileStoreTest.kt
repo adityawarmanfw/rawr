@@ -46,7 +46,7 @@ class DcpFileStoreTest {
         val fresh = files.add(byteArrayOf(3))
         File(files.dir, used.file).setLastModified(1)
         File(files.dir, old.file).setLastModified(1)
-        files.sync(listOf(LensProfile("35", "3", dcp = used)))
+        files.sync(listOf(LensProfile("35", "3").image { copy(dcp = used) }))
         assertTrue(File(files.dir, used.file).exists())
         assertFalse(File(files.dir, old.file).exists())
         assertTrue(File(files.dir, fresh.file).exists())
@@ -68,14 +68,32 @@ class DcpFileStoreTest {
             val bytes = byteArrayOf(value.toByte())
             val name = DcpFileStore.fileName(bytes)
             if (value != 4) File(staging, name).writeBytes(if (value == 2) byteArrayOf(0) else bytes)
-            LensProfile("Lens $value", "$value", dcp = LensDcp(name, "Profile"))
+            LensProfile("Lens $value", "$value").image { copy(dcp = LensDcp(name, "Profile")) }
         }
         val restored = requireNotNull(files.restore(staging, lenses))
         assertEquals(lenses[0], restored[0])
         for (index in 1..3) {
             assertEquals(lenses[index].name, restored[index].name)
-            assertNull(restored[index].dcp)
+            assertNull(restored[index].image.dcp)
         }
-        assertEquals(listOf(lenses[0].dcp!!.file), dir.list()!!.toList())
+        assertEquals(listOf(lenses[0].image.dcp!!.file), dir.list()!!.toList())
     }
+    @Test fun cleanupAndRestoreKeepInactiveProfiles() {
+        val files = store()
+        val first = files.add(byteArrayOf(10))
+        val second = files.add(byteArrayOf(11))
+        val lens = LensProfile("35", "3").image { importDcp(first).importDcp(second).selectDcp(null) }
+        for (profile in listOf(first, second)) File(files.dir, profile.file).setLastModified(1)
+        files.sync(listOf(lens))
+        assertTrue(File(files.dir, first.file).exists())
+        assertTrue(File(files.dir, second.file).exists())
+        val restoredStore = DcpFileStore(temporary.newFolder("restored"), { arrayOf("", "Test profile", "") }) { null }
+        assertEquals(listOf(lens), restoredStore.restore(files.dir, listOf(lens)))
+        File(restoredStore.dir, second.file).delete()
+        File(files.dir, second.file).delete()
+        val partial = restoredStore.restore(files.dir, listOf(lens))!!.single()
+        assertEquals(listOf(first), partial.image.availableDcps)
+        assertNull(partial.image.dcp)
+    }
+
 }

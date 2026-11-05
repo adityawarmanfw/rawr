@@ -21,10 +21,11 @@ void CameraResultProcessor::auditCallback(uint64_t callbackGeneration, uint64_t 
          " currentGeneration=" + std::to_string(generation) + " active=" + (active ? "true" : "false") +
          " hasCameraContext=" + (hasContext ? "true" : "false") + " hasResult=" + (hasResult ? "true" : "false"));
 }
-CameraResultActions CameraResultProcessor::process(const ACaptureRequest* requestCopy, const ACameraMetadata* result,
+CameraResultActions CameraResultProcessor::process(const CameraRequest* requestCopy, const ACameraMetadata* result,
                                                    CameraControlState& control,
                                                    const metadata::CameraContextMetadataPtr& cameraContext,
-                                                   const std::optional<LevelOverride>& staticLevels,
+                                                   const std::optional<LevelOverride>& viewfinderLevels,
+                                                   const std::optional<LevelOverride>& photoLevels, bool photoStream,
                                                    bool sensorModeOverridden, uint64_t latestSubmittedRequestSerial) {
     CameraResultActions actions{};
     const auto requestObservation = readCameraRequestObservation(requestCopy);
@@ -35,6 +36,8 @@ CameraResultActions CameraResultProcessor::process(const ACaptureRequest* reques
     const bool fallbackUsable = lastColor_ && lastColor_->cameraContext == cameraContext;
     auto frame = metadata::readFrameMetadataSnapshot(result, cameraContext, frameOrdinal_ + 1, &error,
                                                      fallbackUsable ? &*lastColor_ : nullptr);
+    const auto& staticLevels = metadata::isCaptureStreamStill(photoStream, provenance ? provenance->optimizedStillRequestId : 0)
+                                   ? photoLevels : viewfinderLevels;
     if (frame && staticLevels) {
         frame->blackLevelPhysicalRggb = staticLevels->blackRggb;
         frame->effectiveWhiteLevel = staticLevels->white;

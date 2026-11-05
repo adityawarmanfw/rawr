@@ -53,6 +53,21 @@ class CameraInventoryParserTest {
     }
 
     @Test
+    fun fpsRangesParseAsPairsAndListFixedRates() {
+        val json = """
+            {"cameras":[{"id":"0","parentId":"","enumerated":true,"logical":false,"physicalIds":[],"facing":1,
+             "focalLengths":[],"equivalentFocalMm":0,"rawStreams":[],"black":[],"white":0,
+             "fpsRanges":[15,30,30,30,60,60,24,24,30,30,0,10,20,15,7],"sessionKeys":[]}],"error":""}
+        """.trimIndent()
+        val camera = CameraInventoryParser.parseCameras(json).cameras.single()
+        // Invalid pairs (a zero minimum, max below min) and the odd trailing value are dropped.
+        assertEquals(listOf(15..30, 30..30, 60..60, 24..24, 30..30), camera.fpsRanges)
+        assertEquals(listOf(24, 30, 60), camera.fixedFrameRates)
+        // Older probes without the field parse with no ranges.
+        assertEquals(emptyList(), CameraInventoryParser.parseCameras(camerasJson).cameras.first().fpsRanges)
+    }
+
+    @Test
     fun malformedJsonReportsError() {
         val inventory = CameraInventoryParser.parseCameras("{")
         assertTrue(inventory.cameras.isEmpty())

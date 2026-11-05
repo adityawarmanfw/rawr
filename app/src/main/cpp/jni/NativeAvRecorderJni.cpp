@@ -4,11 +4,11 @@
 #include <unistd.h>
 
 #include <cstdint>
-#include <cmath>
 #include <exception>
 #include <memory>
 #include <string>
 
+#include "jni/CaptureGps.h"
 #include "video/MovMuxer.h"
 #include "video/Mp4MetadataPatcher.h"
 #include "video/NativeAvRecorder.h"
@@ -28,6 +28,20 @@ std::string javaString(JNIEnv* env, jstring value) {
     return out;
 }
 
+rawrcam::video::MovMuxer::CaptureTime readCaptureTime(JNIEnv* env, jobject value) {
+    if (!value) throw std::invalid_argument("movie capture time is required");
+    const jclass cls = env->GetObjectClass(value);
+    if (!cls) throw std::runtime_error("movie capture time transport failed");
+    const jfieldID millis = env->GetFieldID(cls, "wallClockUnixMillis", "J");
+    const jfieldID offset = millis ? env->GetFieldID(cls, "utcOffsetMinutes", "I") : nullptr;
+    env->DeleteLocalRef(cls);
+    if (!millis || !offset) throw std::runtime_error("movie capture time transport failed");
+    const rawrcam::video::MovMuxer::CaptureTime result{
+        env->GetLongField(value, millis), env->GetIntField(value, offset)};
+    if (env->ExceptionCheck()) throw std::runtime_error("movie capture time transport failed");
+    return result;
+}
+
 void throwJava(JNIEnv* env, const char* message) {
     jclass type = env->FindClass("java/lang/IllegalStateException");
     if (type) env->ThrowNew(type, message);
@@ -38,7 +52,8 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_video_NativeAvEngine_nat
     JNIEnv* env, jobject, jint fd, jint width, jint height, jint fps, jint bitrate, jint intraFrames,
     jint rotationDegrees, jint bitrateMode, jint maxBFrames, jint audioChannels, jint audioBitrate, jint audioPreset,
     jint audioDeviceId, jfloat audioGainDb, jint audioLowCutHz, jint audioPcmBits, jint bitDepth,
-    jint timestampPolicy, jstring deviceMake, jstring deviceModel, jstring software, jstring renderProfile, jstring gamut, jstring transfer, jboolean log, jstring indexPath, jdoubleArray gps) {
+    jint timestampPolicy, jstring deviceMake, jstring deviceModel, jstring software, jstring renderProfile, jstring gamut, jstring transfer, jboolean log, jstring indexPath, jobject gps,
+    jobject captureTime) {
     bool ownsFd = false;
     try {
         NativeAvRecorder::Settings settings{};
@@ -66,17 +81,13 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_video_NativeAvEngine_nat
         settings.transfer = javaString(env, transfer);
         settings.log = log;
         settings.indexPath = javaString(env, indexPath);
+        settings.captureTime = readCaptureTime(env, captureTime);
         if (gps) {
-            if (env->GetArrayLength(gps) != 6) throw std::invalid_argument("invalid movie location payload");
-            jdouble values[5];
-            env->GetDoubleArrayRegion(gps, 0, 5, values);
-            if (env->ExceptionCheck()) throw std::runtime_error("movie location transport failed");
-            rawrcam::video::MovMuxer::Location location{values[0], values[1], std::nullopt, std::nullopt, 0};
-            if (!std::isnan(values[2])) location.altitudeMeters = values[2];
-            if (!std::isnan(values[3])) location.horizontalAccuracyMeters = values[3];
-            if (std::isfinite(values[4]) && values[4] > 0 && values[4] <= 253402300799999.0)
-                location.fixTimeMillis = static_cast<int64_t>(values[4]);
-            settings.location = location;
+            const auto location = rawrcam::jni::readCaptureGps(env, gps);
+            if (!location) throw std::runtime_error("movie location transport failed");
+            settings.location = rawrcam::video::MovMuxer::Location{
+                location->latitude, location->longitude, location->altitude, location->accuracy,
+                location->fixTimeMillis};
         }
         settings.timestampPolicy = static_cast<NativeAvRecorder::TimestampPolicy>(timestampPolicy);
         auto instance = std::make_unique<NativeAvRecorder>(fd, settings);
@@ -85,7 +96,7 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_video_NativeAvEngine_nat
         return static_cast<jlong>(reinterpret_cast<intptr_t>(instance.release()));
     } catch (const std::exception& error) {
         if (!ownsFd && fd >= 0) close(fd);
-        throwJava(env, error.what());
+        if (!env->ExceptionCheck()) throwJava(env, error.what());
         return 0;
     }
 }

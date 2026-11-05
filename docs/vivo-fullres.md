@@ -44,8 +44,18 @@ later restore the previous value. rawr does not directly look up a Binder servic
 or implement forwarding to the vendor provider.
 
 Key 33 appears in the pseudocode because it is an output of cameraserver's
-classification decision. The current app changes only key 40; it does not write
-key 1 or key 33.
+classification decision. The `vivoFullSize` gate changes only key 40; it never
+writes key 1 or key 33. `vivoFullSizeVcf` is the same gate that also sets key 33 to
+2 (the VCF bypass value vivo's own camera runs with), saving and restoring both
+values and journaling both for crash recovery. It exists for firmware where key 33
+turns out to matter; the decoded firmware rewrites it at open.
+
+Both gates log the vendor state: `CAMERA_NDK_VENDOR_GATE_ACQUIRED` right after the
+gate is taken and `CAMERA_NDK_VENDOR_GATE_STATE stage=configured` right after the
+session configures (or fails to), each ending in `key1=<AppType> key33=<VCFAppType>
+key40=<useVivoCamera>` as the camera service reports them (`?` for a key the
+framework refuses to read). Comparing the two lines shows what cameraserver
+rewrote at open and configure.
 
 On the tested firmware, the HAL's sensor-mode selector
 (`/vendor/etc/camera/sensormode-selector/PD2547.json`) keeps the full-size modes
@@ -55,13 +65,13 @@ reported full-size stream configuration failing without that classification
 
 Current rawr gate lifetime:
 
-- A lens with `vendorGate: "vivoFullSize"` acquires key 40 before opening the camera.
+- A lens with `session.gate: {"name": "vivoFullSize"}` acquires key 40 before opening the camera.
   The app saves the previous value, sets `1`, waits for the asynchronous write,
   and verifies it. If the hidden API is unavailable or acquisition fails, the
   lens does not open.
 - Routes without a separate capture stream release the gate after session
   configuration; a later session configuration acquires it again.
-- Routes with a `captureStream` (the current H/F lenses) keep the gate until the
+- Routes with a `streams.photo` (the current H/F lenses) keep the gate until the
   device closes. The implementation records that the HAL rebuilds its still
   pipeline for full-size requests and can crash if the gate was released after
   configuration. The earlier configure-only lifetime does not apply to these routes.
@@ -72,15 +82,15 @@ when the value is still `1` and no camera is in use.
 
 ## 50 MP (H lenses: binned viewfinder, Bayer still capture)
 
-The current built-in X300 Ultra profile configures a binned RAW16 `stream` for the
-viewfinder and a separate RAW16 `captureStream` filled on shutter press. All three
-H lenses use `vendorGate: "vivoFullSize"`, held until the camera closes.
+The current built-in X300 Ultra profile configures a binned RAW16 `streams.raw` for the
+viewfinder and a separate RAW16 `streams.photo` filled on shutter press. All three
+H lenses use `session.gate: {"name": "vivoFullSize"}`, held until the camera closes.
 
-| Lens | Camera ID | Viewfinder `stream` | Still `captureStream` buffer | Still `vivo.control.forceSensorMode` |
-|---|---|---|---|---|
-| H14 (ultrawide) | 4 | 4096×3072 | 8192×6144 | 0 |
-| H35 (main) | 3 | 4080×3064 | 8192×6144 | 2 |
-| H85 (tele) | 5 | 4080×3072 | 8192×6144 | 14 |
+| Lens | Camera ID | Viewfinder `streams.raw` | Still `streams.photo` buffer |
+|---|---|---|---|
+| H14 (ultrawide) | 4 | 4096×3072 | 8192×6144 |
+| H35 (main) | 3 | 4080×3064 | 8192×6144 |
+| H85 (tele) | 5 | 4080×3072 | 8192×6144 |
 
 These are configured buffer sizes. Capture geometry is derived from the camera's
 pixel array and trims padding: the 8192-wide buffer can contain only 8160 useful
@@ -96,9 +106,11 @@ The current H profiles assign keys to these scopes (names below use the
   `session.uiSwitch_state = 2`.
 - **Request only:** `is_pro_mode = 1`, `camera_scenery_pro = 1` (byte).
 - **Still only:** `com.vivo.current_ui_module = 74`, `onlyDng = 1`,
-  `isCapture = 0`, `sensorMode = 0`, `isUpscale = 0`, `isPAPNeeded = 1` (byte),
-  and the lens-specific `forceSensorMode` from the table. Other listed profile
-  keys are `int32`.
+  `isCapture = 0`, `sensorMode = 0`, `isUpscale = 0`, `isPAPNeeded = 1` (byte).
+  Other listed profile keys are `int32`. The stills used to also force the lens's
+  full-size sensor mode (`forceSensorMode` 0 / 2 / 14 for H14 / H35 / H85); that
+  gave soft DNGs and was removed, so the HAL picks the mode as it does for the
+  200 MP lenses.
 
 Request-scope keys are applied to the repeating preview and to the fresh
 `TEMPLATE_STILL_CAPTURE` request. On shutter press, the still targets both the
@@ -116,7 +128,7 @@ still interrupt preview delivery.
 For this separate full-size capture route, a small YUV output must remain
 configured alongside the two RAW outputs. The recorded reason is that full-size
 stills can crash the vivo camera provider without it. rawr therefore requests the
-companion whenever a lens has a `captureStream`, even if the companion debug
+companion whenever a lens has a `streams.photo`, even if the companion debug
 override is set to off. It needs no extra field in the lens profile.
 
 Being **configured in the session** and being **targeted by a request** are
@@ -166,11 +178,11 @@ stream/mode validation.
 
 F35 and F85 use a binned RAW16 viewfinder, a separate 200 MP RAW16 capture output,
 and the required small YUV companion described above. Both profiles use
-`vendorGate: "vivoFullSize"`, held until the camera closes. The full-size reader
+`session.gate: {"name": "vivoFullSize"}`, held until the camera closes. The full-size reader
 uses `GPU_DATA_BUFFER`; the HAL supplies Bayer data, with static black levels
 `[64, 64, 64, 64]` and white level `1023`.
 
-| Lens | Camera ID | Viewfinder `stream` | Still `captureStream` |
+| Lens | Camera ID | Viewfinder `streams.raw` | Still `streams.photo` |
 |---|---|---|---|
 | F35 (main) | 3 | 4080×3064 | 16320×12256 |
 | F85 (tele) | 5 | 4080×3072 | 16320×12288 |
@@ -420,7 +432,7 @@ for admission.
 
 ## Configuring another device or a custom lens
 
-`vendorGate: "vivoFullSize"` selects the vivo key-40 gate. That code does not check
+`session.gate: {"name": "vivoFullSize"}` selects the vivo key-40 gate. That code does not check
 for an X300 Ultra model name. It does not by itself choose a high-resolution size,
 sensor mode, or still request sequence. An X200 Ultra profile can select the same
 mechanism, but its hidden API, camera IDs, sizes, vendor keys, and HAL behavior
@@ -432,7 +444,7 @@ The lens editor exposes:
 |---|---|
 | Camera and physical camera IDs | Select the sensor/route. |
 | Preview RAW stream | Format and dimensions used for the live viewfinder. |
-| Vendor gate | Select `vivoFullSize` for the tested vivo override. |
+| Vendor gate | Select `vivoFullSize` (key 40) or `vivoFullSizeVcf` (key 40 and key 33 = 2) for the vivo override. |
 | Separate capture stream | Enable an additional still output and set its format, width, and height. |
 | Burst frame limit | Per-lens ceiling, independent of the requested multiframe count. |
 | Burst submission | Queued or sequential. |

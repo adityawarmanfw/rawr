@@ -84,6 +84,7 @@ android {
         // tests compile the same sources directly because they do not inherit the debug variant.
         getByName("debug").java.srcDir("src/fixtures/kotlin")
         getByName("testRelease").java.srcDir("src/fixtures/kotlin")
+        maybeCreate("testBenchmark").java.srcDir("src/fixtures/kotlin")
     }
 
     // Lowest precedence: the git-ignored signing/release.properties (keystore path relative to the repo root).
@@ -121,6 +122,13 @@ android {
             ndk.debugSymbolLevel = "SYMBOL_TABLE"
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.findByName("release")
+        }
+        create("benchmark") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".benchmark"
+            resValue("string", "app_name", "Rawr Benchmark")
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += "release"
         }
     }
 

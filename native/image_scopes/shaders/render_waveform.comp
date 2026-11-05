@@ -30,30 +30,37 @@ float rawBilinear(uint plane, vec2 q) {
     return mix(a, b, t.y);
 }
 
-float microPop(uint plane, vec2 q) {
+float horizontalPop(uint plane, vec2 q, float offset, vec4 bins) {
+    vec2 shifted = clamp(q + vec2(offset, 0), vec2(0), vec2(511, 255));
+    if (floor(shifted.x) != floor(q.x)) return rawBilinear(plane, shifted);
+    vec2 t = fract(shifted);
+    return mix(mix(bins.x, bins.y, t.x), mix(bins.z, bins.w, t.x), t.y);
+}
+
+float microPop(uint plane, vec2 q, float center, vec4 bins) {
     // Waveform X is source-image X. Keep horizontal reconstruction much
     // tighter than vertical reconstruction to preserve spatial topology.
     const float vy = .52;
     const float hx = .20;
-    float c = rawBilinear(plane, q) * .44;
+    float c = center * .44;
     c += (rawBilinear(plane, q + vec2(0, vy)) + rawBilinear(plane, q - vec2(0, vy))) * .18;
-    c += (rawBilinear(plane, q + vec2(hx, 0)) + rawBilinear(plane, q - vec2(hx, 0))) * .10;
+    c += (horizontalPop(plane, q, hx, bins) + horizontalPop(plane, q, -hx, bins)) * .10;
     return c;
 }
-float mesoPop(uint plane, vec2 q) {
+float mesoPop(uint plane, vec2 q, float center, vec4 bins) {
     const float vy = 1.10;
     const float hx = .28;
-    float c = rawBilinear(plane, q) * .48;
+    float c = center * .48;
     c += (rawBilinear(plane, q + vec2(0, vy)) + rawBilinear(plane, q - vec2(0, vy))) * .18;
-    c += (rawBilinear(plane, q + vec2(hx, 0)) + rawBilinear(plane, q - vec2(hx, 0))) * .08;
+    c += (horizontalPop(plane, q, hx, bins) + horizontalPop(plane, q, -hx, bins)) * .08;
     return c;
 }
-float macroPop(uint plane, vec2 q) {
+float macroPop(uint plane, vec2 q, float center, vec4 bins) {
     const float vy = 1.85;
     const float hx = .38;
-    float c = rawBilinear(plane, q) * .56;
+    float c = center * .56;
     c += (rawBilinear(plane, q + vec2(0, vy)) + rawBilinear(plane, q - vec2(0, vy))) * .16;
-    c += (rawBilinear(plane, q + vec2(hx, 0)) + rawBilinear(plane, q - vec2(hx, 0))) * .06;
+    c += (horizontalPop(plane, q, hx, bins) + horizontalPop(plane, q, -hx, bins)) * .06;
     return c;
 }
 
@@ -63,9 +70,18 @@ float expResponse(float count, float scale) {
 }
 
 float renderPlane(uint plane, vec2 q) {
-    float micro = microPop(plane, q);
-    float meso = mesoPop(plane, q);
-    float macro = macroPop(plane, q);
+    ivec2 i0 = ivec2(floor(q));
+    ivec2 i1 = min(i0 + ivec2(1), ivec2(511, 255));
+    uint base = plane * PLANE_STRIDE;
+    vec4 bins = vec4(w.density[base + uint(i0.y) * 512u + uint(i0.x)],
+                     w.density[base + uint(i0.y) * 512u + uint(i1.x)],
+                     w.density[base + uint(i1.y) * 512u + uint(i0.x)],
+                     w.density[base + uint(i1.y) * 512u + uint(i1.x)]);
+    vec2 t = fract(q);
+    float center = mix(mix(bins.x, bins.y, t.x), mix(bins.z, bins.w, t.x), t.y);
+    float micro = microPop(plane, q, center, bins);
+    float meso = mesoPop(plane, q, center, bins);
+    float macro = macroPop(plane, q, center, bins);
 
     // Normalize density by expected selected samples per source-X column rather
     // than by a scene-global peak. This lets sparse/medium/dense populations

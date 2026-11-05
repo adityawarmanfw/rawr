@@ -50,9 +50,9 @@ internal fun SettingsValues.withAgxValue(parameter: AgxParameter, value: Float):
     return copy(agxValues = agxValues + (preset to next))
 }
 
-/** Restores the active AgX preset's control to the preset default. */
+/** Restores the control to the selected saved look, or the built-in preset default. */
 internal fun SettingsValues.withAgxDefault(parameter: AgxParameter): SettingsValues =
-    withAgxValue(parameter, regularAgxPreset().defaults.valueOf(parameter))
+    withAgxValue(parameter, activeAgxDefaults().valueOf(parameter))
 
 /** Commits only changed capture fields; unrelated settings edited by another screen are retained. */
 internal fun SettingsValues.withCapturePreferenceChanges(

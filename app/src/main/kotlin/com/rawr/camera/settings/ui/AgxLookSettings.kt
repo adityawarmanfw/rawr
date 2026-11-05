@@ -22,7 +22,7 @@ internal fun AgxSavedLooksGroup(values: SettingsValues, dispatch: SettingsDispat
     var renaming by remember { mutableStateOf<AgxLook?>(null) }
     var deleting by remember { mutableStateOf<AgxLook?>(null) }
     var updating by remember { mutableStateOf<AgxLook?>(null) }
-    val current = values.matchingAgxLook()
+    val current = values.selectedAgxLook()
     SettingsGroup(
         title = "Saved looks",
         description = "A saved look keeps its base look and every AgX control. Applying one replaces that base look's adjustments."
@@ -30,12 +30,12 @@ internal fun AgxSavedLooksGroup(values: SettingsValues, dispatch: SettingsDispat
         values.agxLooks.forEach { look ->
             SettingsRow(
                 title = look.name,
-                value = look.base.lookLabel,
+                value = look.base.lookLabel + if (look.id == current?.id && values.isAgxModified()) " · Modified" else "",
                 onClick = { dispatch.invoke(ApplyAgxLook(look.id)) },
                 trailing = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         LookActionsMenu("Edit", listOfNotNull(
-                            ("Update with current" to { updating = look }).takeIf { look.id != current?.id },
+                            ("Update with current" to { updating = look }).takeIf { look.id != current?.id || values.isAgxModified() },
                             "Rename" to { renaming = look },
                             "Export" to { files.export(look.name, LookFileCodec.exportAgx(look)) },
                             "Delete" to { deleting = look }

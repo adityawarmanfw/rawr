@@ -17,6 +17,10 @@
 #include "camera/CameraControlCapabilities.h"
 #include "camera/CameraDiscovery.h"
 #include "camera/CameraKeyInjection.h"
+#include "camera/CompanionStreamSize.h"
+#include "camera/JavaCameraDriver.h"
+#include "camera/NdkCameraDriver.h"
+#include "camera/VendorGatePreset.h"
 #include "diagnostics/logging/RuntimeTraceRecorder.h"
 #include "geometry/CfaPattern.h"
 #include "metadata/CameraMetadataReader.h"
@@ -24,8 +28,8 @@
 
 namespace rawrcam::camera {
 namespace {
-bool ok(camera_status_t status) { return status == ACAMERA_OK; }
-std::string statusText(camera_status_t status) { return std::to_string(static_cast<int>(status)); }
+bool ok(int status) { return status == ACAMERA_OK; }
+std::string statusText(int status) { return std::to_string(status); }
 
 // Detached device closes still in flight. ACameraDevice_close runs on its own thread so a wedged HAL cannot
 // stall teardown, but opening the next camera while one is still closing makes some HALs (MediaTek) refuse with
@@ -88,47 +92,34 @@ CameraDeviceSession::~CameraDeviceSession() {
 }
 void CameraDeviceSession::releaseRequestOutputs(bool orphan) noexcept {
     if (orphan) {
-        request_ = nullptr;
-        sessionParameters_ = nullptr;
-        target_ = nullptr;
-        output_ = nullptr;
-        outputs_ = nullptr;
-        // The orphaned session may still write to the companion and capture windows.
+        // The orphaned session may still write to the companion and capture windows and use its outputs.
+        (void)request_.release();
+        (void)sessionParameters_.release();
+        (void)closedSession_.release();
         captureWindow_ = nullptr;
-        captureOutput_ = nullptr;
-        captureTarget_ = nullptr;
+        captureConfigured_ = false;
         companionReader_ = nullptr;
-        companionOutput_ = nullptr;
-        companionTarget_ = nullptr;
+        companionWindow_ = nullptr;
         companionTargeted_ = false;
+        companionFromProfile_ = false;
+        auxJpegReader_ = nullptr;
+        auxJpegConfigured_ = false;
         return;
     }
-    if (request_) ACaptureRequest_free(request_);
-    request_ = nullptr;
-    if (sessionParameters_) ACaptureRequest_free(sessionParameters_);
-    sessionParameters_ = nullptr;
-    if (target_) ACameraOutputTarget_free(target_);
-    target_ = nullptr;
-    if (outputs_ && output_) (void)ACaptureSessionOutputContainer_remove(outputs_, output_);
-    if (output_) ACaptureSessionOutput_free(output_);
-    output_ = nullptr;
-    if (captureTarget_) ACameraOutputTarget_free(captureTarget_);
-    captureTarget_ = nullptr;
-    if (outputs_ && captureOutput_) (void)ACaptureSessionOutputContainer_remove(outputs_, captureOutput_);
-    if (captureOutput_) ACaptureSessionOutput_free(captureOutput_);
-    captureOutput_ = nullptr;
+    request_.reset();
+    sessionParameters_.reset();
+    closedSession_.reset();
     captureWindow_ = nullptr;
+    captureConfigured_ = false;
     stillKeys_.clear();
-    if (companionTarget_) ACameraOutputTarget_free(companionTarget_);
-    companionTarget_ = nullptr;
+    companionWindow_ = nullptr;
     companionTargeted_ = false;
-    if (outputs_ && companionOutput_) (void)ACaptureSessionOutputContainer_remove(outputs_, companionOutput_);
-    if (companionOutput_) ACaptureSessionOutput_free(companionOutput_);
-    companionOutput_ = nullptr;
     if (companionReader_) AImageReader_delete(companionReader_);
     companionReader_ = nullptr;
-    if (outputs_) ACaptureSessionOutputContainer_free(outputs_);
-    outputs_ = nullptr;
+    companionFromProfile_ = false;
+    auxJpegConfigured_ = false;
+    if (auxJpegReader_) AImageReader_delete(auxJpegReader_);
+    auxJpegReader_ = nullptr;
 }
 void CameraDeviceSession::releaseCharacteristics() noexcept {
     if (characteristics_) ACameraMetadata_free(characteristics_);
@@ -151,19 +142,25 @@ std::optional<int64_t> CameraDeviceSession::vendorResultValue(const ACameraMetad
         default: return std::nullopt;
     }
 }
+void CameraDeviceSession::logKeyResultsOnce(const ACameraMetadata* result, const Diagnostic& diag) {
+    if (!resultKeysPending_ || !result) return;
+    resultKeysPending_ = false;
+    logKeyResults(result, characteristics_, resultKeys_, resultKeysCameraId_.c_str(), resultKeysLensId_, diag);
+}
 void CameraDeviceSession::releaseHeldGate() noexcept {
     if (heldGate_.empty()) return;
     releaseVendorCameraGate(heldGate_);
     heldGate_.clear();
 }
 void CameraDeviceSession::closeDeviceDetached(std::function<void()> afterClose) {
-    ACameraDevice* closing = std::exchange(device_, nullptr);
+    std::unique_ptr<CameraDeviceDriver> closing = std::move(device_);
     {
         std::lock_guard<std::mutex> lock(gPendingCloseMutex);
         ++gPendingCloses;
     }
-    std::thread([closing, afterClose = std::move(afterClose)] {
-        if (closing) ACameraDevice_close(closing);
+    std::thread([closing = std::move(closing), afterClose = std::move(afterClose)]() mutable {
+        if (closing) closing->close();
+        closing.reset();
         if (afterClose) afterClose();
         {
             std::lock_guard<std::mutex> lock(gPendingCloseMutex);
@@ -207,7 +204,7 @@ std::optional<LensRoute> CameraDeviceSession::select(const LensRoute& requested,
 
     // An unlisted (vendor full-size) stream is configured as the profile says; the HAL decides at configure time.
     const auto negotiated =
-        requested.unlistedStream && requested.preferredStream.width && requested.preferredStream.height
+        requested.highResLive && requested.preferredStream.width && requested.preferredStream.height
             ? std::optional<geometry::RawStreamOption>(geometry::RawStreamOption{requested.preferredStream.format,
                                                                                 requested.preferredStream.width,
                                                                                 requested.preferredStream.height})
@@ -243,10 +240,15 @@ std::optional<LensRoute> CameraDeviceSession::select(const LensRoute& requested,
         return std::nullopt;
     }
     parsed->rawFormat = route.stream.format;
-    parsed->rawReaderUsage = route.readerUsage;
-    parsed->cfaBlock = route.cfaBlock;
-    parsed->cfaLiveQuality = route.cfaLiveQuality;
-    parsed->cfaPhotoQuality = route.cfaPhotoQuality;
+    parsed->rawReaderUsage = route.rawBufferUsage;
+    parsed->rawBufferCount = route.rawBufferCount;
+    parsed->rawBufferTestFirst = route.rawBufferTestFirst;
+    parsed->rawBufferFallBack = route.rawBufferFallBack;
+    parsed->photoBufferUsage = route.photoBufferUsage;
+    parsed->guardStillExposure = requiresStillExposureGuard(route);
+    parsed->cfaBlock = route.sensorLayoutBlock;
+    parsed->cfaLiveQuality = route.liveRemosaic;
+    parsed->cfaPhotoQuality = route.photoRemosaic;
     parsed->profileDistortion = route.distortion;
     parsed->profileMirror = route.mirror;
     if (const int repaired = color::repairPlaceholderForwardMatrices(parsed->color); repaired > 0)
@@ -286,17 +288,17 @@ std::optional<LensRoute> CameraDeviceSession::select(const LensRoute& requested,
     } else if (!route.dcpPath.empty()) {
         diag("DCP_PROFILE_SKIP lens=" + route.lensId + " error=" + route.dcpError);
     }
-    if (route.cfaOrder && int32_t(*route.cfaOrder) != parsed->camera2Cfa) {
+    if (route.colourOrder && int32_t(*route.colourOrder) != parsed->camera2Cfa) {
         // The black pattern is per sensor position: undo the reported order, apply the profile's.
         const auto pattern = geometry::reorderRggbByCode(parsed->baselineBlackLevelPhysicalRggb, parsed->camera2Cfa);
-        parsed->baselineBlackLevelPhysicalRggb = geometry::reorderRggbByCode(pattern, *route.cfaOrder);
-        parsed->camera2Cfa = int32_t(*route.cfaOrder);
-        parsed->rawPreviewCfa = *route.cfaOrder;
+        parsed->baselineBlackLevelPhysicalRggb = geometry::reorderRggbByCode(pattern, *route.colourOrder);
+        parsed->camera2Cfa = int32_t(*route.colourOrder);
+        parsed->rawPreviewCfa = *route.colourOrder;
     }
-    if (route.cfaBlock > 1 || route.cfaOrder)
-        diag("CAMERA_CFA_OVERRIDE lens=" + route.lensId + " block=" + std::to_string(route.cfaBlock) +
-             " order=" + std::to_string(parsed->rawPreviewCfa) + " live=" + std::to_string(route.cfaLiveQuality) +
-             " photo=" + std::to_string(route.cfaPhotoQuality));
+    if (route.sensorLayoutBlock > 1 || route.colourOrder)
+        diag("CAMERA_CFA_OVERRIDE lens=" + route.lensId + " block=" + std::to_string(route.sensorLayoutBlock) +
+             " order=" + std::to_string(parsed->rawPreviewCfa) + " live=" + std::to_string(route.liveRemosaic) +
+             " photo=" + std::to_string(route.photoRemosaic));
 
     cameraContext_ = std::make_shared<const metadata::CameraContextMetadata>(std::move(*parsed));
     characteristics_ = chars;
@@ -339,17 +341,30 @@ bool CameraDeviceSession::open(const LensRoute& route, CameraCallbacks& callback
             return false;
         }
         heldGate_ = route.vendorGate;
-        diag("CAMERA_NDK_VENDOR_GATE_ACQUIRED gate=" + route.vendorGate + " cameraId=" + route.cameraId);
+        diag("CAMERA_NDK_VENDOR_GATE_ACQUIRED gate=" + route.vendorGate + " cameraId=" + route.cameraId +
+             " " + describeVendorCameraGate(route.vendorGate));
     }
 
+    const bool java = effectiveCameraApi(route) == CameraApi::Java;
     auto backoff = kOpenRetryInitial;
     for (int attempt = 1;; ++attempt) {
         if (!stillCurrent()) return false;
         auto* deviceContext = callbacks.deviceContext(generation_);
         deviceContext_ = deviceContext;
-        auto state = CameraCallbacks::deviceState(deviceContext);
-        const camera_status_t os = ACameraManager_openCamera(manager_, route.cameraId.c_str(), &state, &device_);
+        int os = ACAMERA_OK;
+        if (java) {
+            std::string error;
+            device_ = openJavaCamera(route.cameraId, deviceContext, &os, &error);
+            if (!device_) diag("CAMERA_JAVA_OPEN_FAILURE cameraId=" + route.cameraId + " status=" + statusText(os) +
+                               " reason=" + error);
+        } else {
+            auto state = CameraCallbacks::deviceState(deviceContext);
+            ACameraDevice* device = nullptr;
+            os = ACameraManager_openCamera(manager_, route.cameraId.c_str(), &state, &device);
+            if (ok(os) && device) device_ = std::make_unique<NdkDeviceDriver>(device);
+        }
         if (ok(os) && device_) {
+            if (java) diag("CAMERA_API lens=" + route.lensId + " cameraApi=java available=1");
             if (attempt > 1) {
                 diag("CAMERA_NDK_OPEN_RECOVERED cameraId=" + route.cameraId + " attempts=" + std::to_string(attempt));
             }
@@ -377,23 +392,42 @@ bool CameraDeviceSession::open(const LensRoute& route, CameraCallbacks& callback
         backoff = std::min(backoff * 2, kOpenRetryMax);
     }
 }
-bool CameraDeviceSession::addCompanionStream(const std::string& physicalCameraId, const Diagnostic& diag) {
-    // A physical output must use a size the physical camera advertises; the
-    // logical camera's list can differ and the HAL rejects the configure.
-    ACameraMetadata* sizeChars = characteristics_;
-    if (!physicalCameraId.empty() &&
-        !ok(ACameraManager_getCameraCharacteristics(manager_, physicalCameraId.c_str(), &sizeChars)))
-        sizeChars = nullptr;
-    const auto size = sizeChars ? smallestYuvOutput(sizeChars, 320, 240) : std::pair<int32_t, int32_t>{0, 0};
-    if (sizeChars && sizeChars != characteristics_) ACameraMetadata_free(sizeChars);
-    const int32_t width = size.first, height = size.second;
+bool CameraDeviceSession::addCompanionStream(const std::string& physicalCameraId,
+                                             uint32_t rawWidth, uint32_t rawHeight,
+                                             const CompanionRecipe& companion, int64_t streamUseCase,
+                                             std::vector<SessionOutput>& outputs, const Diagnostic& diag) {
+    const auto& profileSize = companion.size;
+    const bool privateFormat = companion.privateFormat;
+    CompanionSizeChoice size;
+    if (profileSize) {
+        size = {int32_t(profileSize->first), int32_t(profileSize->second)};
+        size.sameShape = sameAspect(size.width, size.height, int32_t(rawWidth), int32_t(rawHeight));
+    } else {
+        // A physical output must use a size the physical camera advertises; the
+        // logical camera's list can differ and the HAL rejects the configure.
+        ACameraMetadata* sizeChars = characteristics_;
+        if (!physicalCameraId.empty() &&
+            !ok(ACameraManager_getCameraCharacteristics(manager_, physicalCameraId.c_str(), &sizeChars)))
+            sizeChars = nullptr;
+        if (sizeChars)
+            size = pickCompanionSize(yuvOutputSizes(sizeChars), int32_t(rawWidth), int32_t(rawHeight), companion.fallback);
+        if (sizeChars && sizeChars != characteristics_) ACameraMetadata_free(sizeChars);
+    }
+    const int32_t width = size.width, height = size.height;
     const auto fail = [&](const std::string& stage, int status) {
         diag("CAMERA_COMPANION_STREAM size=" + std::to_string(width) + "x" + std::to_string(height) +
              " stage=" + stage + " status=" + std::to_string(status) + " fallback=raw_only");
         return false;
     };
     if (width <= 0 || height <= 0) return fail("size", 0);
-    const media_status_t ms = AImageReader_new(width, height, AIMAGE_FORMAT_YUV_420_888, 2, &companionReader_);
+    const int32_t maxImages = int32_t(companion.maxImages);
+    // The defaults reproduce the old readers: PRIVATE samples on the GPU, YUV keeps the reader's own usage.
+    const media_status_t ms =
+        companion.usage ? AImageReader_newWithUsage(width, height, privateFormat ? AIMAGE_FORMAT_PRIVATE : AIMAGE_FORMAT_YUV_420_888,
+                                                    *companion.usage, maxImages, &companionReader_)
+        : privateFormat ? AImageReader_newWithUsage(width, height, AIMAGE_FORMAT_PRIVATE,
+                                                    AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE, maxImages, &companionReader_)
+                        : AImageReader_new(width, height, AIMAGE_FORMAT_YUV_420_888, maxImages, &companionReader_);
     if (ms != AMEDIA_OK || !companionReader_) return fail("reader", ms);
     // Frames exist only to keep the HAL streaming; drop each one on arrival.
     AImageReader_ImageListener listener{};
@@ -409,31 +443,129 @@ bool CameraDeviceSession::addCompanionStream(const std::string& physicalCameraId
     ANativeWindow* window = nullptr;
     if (const auto ws = AImageReader_getWindow(companionReader_, &window); ws != AMEDIA_OK || !window)
         return fail("window", ws);
-    camera_status_t s = physicalCameraId.empty()
-                            ? ACaptureSessionOutput_create(window, &companionOutput_)
-                            : ACaptureSessionPhysicalOutput_create(window, physicalCameraId.c_str(), &companionOutput_);
-    if (!ok(s)) return fail("output", s);
-    s = ACaptureSessionOutputContainer_add(outputs_, companionOutput_);
-    if (!ok(s)) return fail("add_output", s);
-    s = ACameraOutputTarget_create(window, &companionTarget_);
-    if (!ok(s) || !companionTarget_) return fail("target", s);
+    outputs.push_back({window, physicalCameraId, streamUseCase});
+    companionWindow_ = window;
+    companionFromProfile_ = profileSize.has_value();
+    companionDetachable_ = companion.detach;
+    std::string tuning = ":images=" + std::to_string(maxImages) + ":detach=" + (companion.detach ? "1" : "0");
+    if (companion.usage) {
+        char usageText[24];
+        std::snprintf(usageText, sizeof(usageText), "0x%llx", static_cast<unsigned long long>(*companion.usage));
+        tuning += std::string(":usage=") + usageText;
+    }
+    if (companion.physical) tuning += *companion.physical ? ":physical=1" : ":physical=0";
+    if (companion.fallback != CompanionFallback::Base)
+        tuning += companion.fallback == CompanionFallback::Nearest ? ":fallback=nearest" : ":fallback=none";
+    companionFacts_ = SessionRecipeFacts::Companion{privateFormat ? "PRIVATE" : "YUV_420_888", width, height, true,
+                                                    profileSize ? "profile" : "automatic",
+                                                    size.sameShape ? "raw" : "fallback", tuning};
     diag("CAMERA_COMPANION_STREAM size=" + std::to_string(width) + "x" + std::to_string(height) +
-         " format=YUV_420_888 status=0");
+         std::string(privateFormat ? " format=PRIVATE" : " format=YUV_420_888") + " status=0 source=" + std::string(profileSize ? "profile" : "automatic") +
+         " shape=" + (size.sameShape ? "raw" : "fallback"));
+    return true;
+}
+bool CameraDeviceSession::addAuxJpegStream(const std::pair<uint32_t, uint32_t>& size, std::optional<uint64_t> usage,
+                                           int64_t streamUseCase, std::vector<SessionOutput>& outputs,
+                                           const Diagnostic& diag) {
+    const auto fail = [&](const std::string& stage, int status) {
+        diag("CAMERA_AUX_JPEG_STREAM size=" + std::to_string(size.first) + "x" + std::to_string(size.second) +
+             " stage=" + stage + " status=" + std::to_string(status));
+        return false;
+    };
+    const media_status_t ms =
+        usage ? AImageReader_newWithUsage(int32_t(size.first), int32_t(size.second), AIMAGE_FORMAT_JPEG, *usage, 2,
+                                          &auxJpegReader_)
+              : AImageReader_new(int32_t(size.first), int32_t(size.second), AIMAGE_FORMAT_JPEG, 2, &auxJpegReader_);
+    if (ms != AMEDIA_OK || !auxJpegReader_) return fail("reader", ms);
+    // No request targets it; drop anything the HAL still writes.
+    AImageReader_ImageListener listener{};
+    listener.onImageAvailable = [](void*, AImageReader* reader) {
+        AImage* image = nullptr;
+        while (AImageReader_acquireNextImage(reader, &image) == AMEDIA_OK && image) {
+            AImage_delete(image);
+            image = nullptr;
+        }
+    };
+    if (const auto ls = AImageReader_setImageListener(auxJpegReader_, &listener); ls != AMEDIA_OK)
+        return fail("listener", ls);
+    ANativeWindow* window = nullptr;
+    if (const auto ws = AImageReader_getWindow(auxJpegReader_, &window); ws != AMEDIA_OK || !window)
+        return fail("window", ws);
+    outputs.push_back({window, std::string(), streamUseCase});
+    auxJpegConfigured_ = true;
+    diag("CAMERA_AUX_JPEG_STREAM size=" + std::to_string(size.first) + "x" + std::to_string(size.second) +
+         " status=0 targeted=0");
     return true;
 }
 bool CameraDeviceSession::detachCompanionTarget(const Diagnostic& diag) {
-    if (!companionTargeted_ || !request_ || !companionTarget_) return false;
-    const camera_status_t s = ACaptureRequest_removeTarget(request_, companionTarget_);
+    if (!companionDetachable_ || !companionTargeted_ || !request_ || !companionWindow_) return false;
+    const RequestStatus s = request_->removeTarget(companionWindow_);
     diag("CAMERA_COMPANION_TARGET_DETACHED status=" + statusText(s));
     if (!ok(s)) return false;
     companionTargeted_ = false;
     return true;
 }
+SessionRecipeFacts CameraDeviceSession::recipeFacts(const std::optional<LensRoute>& selected,
+                                                    const SessionRecipe& recipe,
+                                                    RequestTemplate repeatingTemplate) const {
+    SessionRecipeFacts f;
+    f.stillStrategy = stillStrategyName(recipe.still);
+    f.gateHold = gateHoldName(recipe.gateHold);
+    f.sessionParams = sessionParamsName(recipe.sessionParams);
+    f.requestDefaults = requestDefaultsName(recipe.requestDefaults);
+    f.cameraApi = backendName();
+    f.opMode = recipe.opMode;
+    f.rawUseCase = recipe.rawStreamUseCase;
+    f.photoUseCase = recipe.photoStreamUseCase;
+    f.companionUseCase = recipe.companionStreamUseCase;
+    f.auxJpegUseCase = recipe.auxJpegStreamUseCase;
+    f.requestTemplate = repeatingTemplate == RequestTemplate::StillCapture ? "still" : "preview";
+    f.fpsRange = "none";
+    if (RequestEntry e{};
+        sessionParameters_ && sessionParameters_->get(ACAMERA_CONTROL_AE_TARGET_FPS_RANGE, &e) == ACAMERA_OK &&
+        e.count >= 2 && e.data.i32)
+        f.fpsRange = std::to_string(e.data.i32[0]) + ".." + std::to_string(e.data.i32[1]);
+    if (companionFacts_) {
+        f.companion = *companionFacts_;
+        f.companion->targeted = companionWindow_ && companionTargeted_;
+    }
+    if (!selected) return f;
+    f.lensId = selected->lensId;
+    f.cameraId = selected->cameraId;
+    f.physicalCameraId = selected->physicalCameraId;
+    f.rawFormat = geometry::rawPixelFormatName(selected->stream.format);
+    f.rawWidth = selected->stream.width;
+    f.rawHeight = selected->stream.height;
+    for (const auto& key : selected->vendorKeys) {
+        if (!key.enabled) continue;
+        switch (key.scope) {
+            case CameraKeySetting::Scope::Session: ++f.sessionKeys; break;
+            case CameraKeySetting::Scope::Request: ++f.requestKeys; break;
+            case CameraKeySetting::Scope::Still: ++f.stillKeys; break;
+            case CameraKeySetting::Scope::Decision: ++f.decisionKeys; break;
+            case CameraKeySetting::Scope::SessionAndRequest: ++f.sessionKeys; ++f.requestKeys; break;
+        }
+    }
+    if (auxJpegConfigured_ && selected->auxJpegSize) f.auxJpeg = selected->auxJpegSize;
+    if (captureConfigured_ && selected->photoStream)
+        f.photoStream = std::make_pair(selected->photoStream->width, selected->photoStream->height);
+    f.rawBufferUsage = selected->rawBufferUsage;
+    f.photoBufferUsage = selected->photoBufferUsage;
+    f.startupDelayMs = selected->startupDelayMs;
+    f.frameRate = selected->frameRate;
+    f.vendorGate = selected->vendorGate;
+    f.stopViewfinderForPhotos = selected->stopViewfinderForPhotos;
+    return f;
+}
 bool CameraDeviceSession::createSession(ANativeWindow* window, const std::optional<LensRoute>& selected,
-                                        const CameraControlState& control, const CameraMeteringRequest& metering,
-                                        CameraCallbacks& callbacks, CameraRequestPipeline& pipeline,
-                                        const Diagnostic& diag, bool companionStream) {
+                                        const SessionRecipe& recipe, const CameraControlState& control,
+                                        const CameraMeteringRequest& metering, CameraCallbacks& callbacks,
+                                        CameraRequestPipeline& pipeline, const Diagnostic& diag,
+                                        const std::function<bool(int32_t)>& waitForStartup) {
     rawWindow_ = window;
+    companionFacts_.reset();
+    companionDetachable_ = false;
+    stillGate_ = recipe.gate;
 
     if (!device_ || !rawWindow_) {
         return false;
@@ -445,49 +577,60 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
         return false;
     };
 
-    camera_status_t s = ACaptureSessionOutputContainer_create(&outputs_);
-    if (!ok(s)) return fail("container", "status=" + statusText(s));
-
+    RequestStatus s = ACAMERA_OK;
     const std::string physicalCameraId = selected ? selected->physicalCameraId : std::string();
-    s = physicalCameraId.empty() ? ACaptureSessionOutput_create(rawWindow_, &output_)
-                                 : ACaptureSessionPhysicalOutput_create(rawWindow_, physicalCameraId.c_str(), &output_);
-    if (!ok(s))
-        return fail(physicalCameraId.empty() ? "output" : "physical_output",
-                    "physicalCameraId=" + physicalCameraId + " status=" + statusText(s));
-
-    s = ACaptureSessionOutputContainer_add(outputs_, output_);
-    if (!ok(s)) return fail("add_output", "status=" + statusText(s));
-    if (companionStream && !addCompanionStream(physicalCameraId, diag)) {
+    std::vector<SessionOutput> outputs;
+    outputs.push_back({rawWindow_, physicalCameraId, recipe.rawStreamUseCase});
+    const uint32_t rawWidth = selected ? selected->stream.width : 0, rawHeight = selected ? selected->stream.height : 0;
+    profileCompanionTargeted_ = !selected || selected->companionTargeted;
+    stopViewfinderForPhotos_ = selected && selected->stopViewfinderForPhotos;
+    captureStillTemplate_ = recipe.captureStillTemplate;
+    const bool companionStream = recipe.companion.has_value();
+    const auto companionSize = recipe.companion ? recipe.companion->size : std::nullopt;
+    // The companion follows the route's physical camera unless the recipe says otherwise.
+    const std::string companionPhysicalId =
+        companionStream && !recipe.companion->physical.value_or(true) ? std::string() : physicalCameraId;
+    if (companionStream && !addCompanionStream(companionPhysicalId, rawWidth, rawHeight, *recipe.companion,
+                                               recipe.companionStreamUseCase, outputs, diag)) {
+        // The profile's companion is part of its mode: never run without it.
+        if (companionSize) return fail("companion", "reason=profile_companion_unavailable");
         // RAW-only still works on most devices; never block the start on it.
-        if (outputs_ && companionOutput_) (void)ACaptureSessionOutputContainer_remove(outputs_, companionOutput_);
-        if (companionOutput_) ACaptureSessionOutput_free(companionOutput_);
-        companionOutput_ = nullptr;
-        if (companionTarget_) ACameraOutputTarget_free(companionTarget_);
-        companionTarget_ = nullptr;
+        companionWindow_ = nullptr;
         if (companionReader_) AImageReader_delete(companionReader_);
         companionReader_ = nullptr;
+        companionFacts_.reset();
+    }
+
+    if (recipe.auxJpeg) {
+        if (!physicalCameraId.empty()) return fail("aux_jpeg", "reason=physical_camera_unsupported");
+        if (!addAuxJpegStream(*recipe.auxJpeg, recipe.auxJpegBufferUsage, recipe.auxJpegStreamUseCase, outputs, diag))
+            return fail("aux_jpeg", "reason=output");
     }
 
     if (captureWindow_) {
         // Physical outputs would need the physical camera's sizes; capture routes name a camera directly.
         if (!physicalCameraId.empty()) return fail("capture_output", "reason=physical_camera_unsupported");
-        s = ACaptureSessionOutput_create(captureWindow_, &captureOutput_);
-        if (!ok(s)) return fail("capture_output", "status=" + statusText(s));
-        s = ACaptureSessionOutputContainer_add(outputs_, captureOutput_);
-        if (!ok(s)) return fail("add_capture_output", "status=" + statusText(s));
-        s = ACameraOutputTarget_create(captureWindow_, &captureTarget_);
-        if (!ok(s) || !captureTarget_) return fail("capture_target", "status=" + statusText(s));
+        outputs.push_back({captureWindow_, std::string(), recipe.photoStreamUseCase});
         if (selected) {
-            stillKeys_ = selected->keys;
+            stillKeys_ = selected->vendorKeys;
             stillKeysCameraId_ = selected->cameraId;
         }
     }
 
     auto* callbackContext = callbacks.sessionContext(generation_);
     callbackContext->physicalCameraId = physicalCameraId;
+    callbackContext->outputWindows.clear();
+    callbackContext->outputLabels.clear();
+    for (const auto& o : outputs) {
+        callbackContext->outputWindows.push_back(o.window);
+        callbackContext->outputLabels.push_back(o.window == rawWindow_         ? "raw"
+                                                : o.window == companionWindow_ ? "companion"
+                                                : o.window == captureWindow_   ? "capture"
+                                                                               : "aux_jpeg");
+    }
     sessionContext_ = callbackContext;
-    auto sessionCallbacks = CameraCallbacks::sessionState(callbackContext);
     staticLevels_.reset();
+    captureStaticLevels_.reset();
     sessionKeysApplied_ = false;
 
     // Camera2 explicitly recommends supplying a non-template AE target FPS
@@ -496,29 +639,57 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
     // TEMPLATE_PREVIEW 30/30 assumption and clamp shutter priority near 1/30.
     // Build one session-parameter request, then add the lens profile's
     // session keys (e.g. a vendor sensor/readout mode).
-    s = ACameraDevice_createCaptureRequest(device_, TEMPLATE_PREVIEW, &sessionParameters_);
-    if (!ok(s) || !sessionParameters_) {
-        return fail("session_request", "status=" + statusText(s));
-    }
-    s = pipeline.applySessionCadence(sessionParameters_, control);
-    if (!ok(s)) {
-        return fail("priority_session_fps", "status=" + statusText(s));
-    }
-
+    const RequestTemplate repeatingTemplate =
+        recipe.repeatingStillTemplate ? RequestTemplate::StillCapture : RequestTemplate::Preview;
+    const bool minimalDefaults = recipe.requestDefaults == RequestDefaults::Minimal;
     const auto joined = [](const std::vector<std::string>& items) {
         std::string out;
         for (const auto& item : items) out += (out.empty() ? "" : ",") + item;
         return out;
     };
+    if (recipe.sessionParams != SessionParamsPolicy::None) {
+        sessionParameters_ = device_->createRequest(repeatingTemplate, &s);
+        if (!ok(s) || !sessionParameters_) {
+            return fail("session_request", "status=" + statusText(s));
+        }
+        s = pipeline.applySessionCadence(sessionParameters_.get(), control);
+        if (!ok(s)) {
+            return fail("priority_session_fps", "status=" + statusText(s));
+        }
+        if (recipe.sessionParams == SessionParamsPolicy::Full) {
+            // The whole repeating request, built the way the repeating request will be: defaults, the lens's
+            // request-scope keys and the control state. The HAL only reads the keys it lists as session keys.
+            applyPreviewRequestDefaults(sessionParameters_.get(), *cameraContext_, minimalDefaults);
+            if (selected) {
+                const auto requestKeys = applyCameraKeySettings(sessionParameters_.get(), characteristics_, selected->vendorKeys,
+                                                                selected->cameraId.c_str(),
+                                                                CameraKeySetting::Scope::Request, "lens_in_session", diag);
+                if (!requestKeys.failures.empty())
+                    return fail("lens_request_keys_in_session",
+                                "lensId=" + selected->lensId + " failed=" + joined(requestKeys.failures));
+            }
+            (void)applyCameraControlState(sessionParameters_.get(), control, metering);
+        }
+    } else if (selected) {
+        // Session-scope keys travel in the session parameters; without them the key would be dropped silently.
+        for (const auto& key : selected->vendorKeys) {
+            if (key.enabled && keyAppliesIn(key.scope, CameraKeySetting::Scope::Session))
+                return fail("session_params", "reason=none_conflicts_with_session_key tag=" + key.tag);
+        }
+    }
     if (selected) {
         // The user configured these keys; a lens that can't get them (e.g. a
         // crop-readout mode) would produce wrong frames, so fail loudly.
-        const auto lensKeys = applyCameraKeySettings(sessionParameters_, characteristics_, selected->keys, selected->cameraId.c_str(),
-                                                     CameraKeySetting::Scope::Session, "lens", diag);
-        if (!lensKeys.failures.empty())
-            return fail("lens_session_keys", "lensId=" + selected->lensId + " failed=" + joined(lensKeys.failures));
-        sessionKeysApplied_ = lensKeys.applied > 0;
-        if (selected->levels.isStatic) staticLevels_ = selected->levels;
+        if (sessionParameters_) {
+            const auto lensKeys = applyCameraKeySettings(sessionParameters_.get(), characteristics_, selected->vendorKeys,
+                                                         selected->cameraId.c_str(), CameraKeySetting::Scope::Session,
+                                                         "lens", diag);
+            if (!lensKeys.failures.empty())
+                return fail("lens_session_keys", "lensId=" + selected->lensId + " failed=" + joined(lensKeys.failures));
+            sessionKeysApplied_ = lensKeys.applied > 0;
+        }
+        staticLevels_ = staticLevelsForStream(*selected, false);
+        captureStaticLevels_ = staticLevelsForStream(*selected, true);
     }
 
     // cameraserver reads the vendor gate (vivo key 40) only while it
@@ -531,67 +702,84 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
             return fail("vendor_gate", "gate=" + selected->vendorGate + " reason=" + gateError);
         heldGate_ = selected->vendorGate;
     }
-    s = ACameraDevice_createCaptureSessionWithSessionParameters(device_, outputs_, sessionParameters_,
-                                                                &sessionCallbacks, &session_);
-    // Capture-stream routes keep it until the device closes: the HAL rebuilds
-    // its still pipeline per full-size request and crashes if the client is no
-    // longer vivo's camera by then.
-    if (!heldGate_.empty() && !captureWindow_) {
+    session_ = device_->createSession(outputs, sessionParameters_.get(), int32_t(recipe.opMode), callbackContext, &s);
+    captureConfigured_ = session_ && captureWindow_;
+    if (!heldGate_.empty())
+        diag("CAMERA_NDK_VENDOR_GATE_STATE gate=" + heldGate_ + " stage=configured session=" + (session_ ? "yes" : "no") +
+             " " + describeVendorCameraGate(heldGate_));
+    // The recipe says how long the gate is held; capture-stream routes keep it until the device closes
+    // (see defaultGateHold).
+    if (!heldGate_.empty() && recipe.gateHold == GateHold::UntilConfigured) {
         diag("CAMERA_NDK_VENDOR_GATE_RELEASED gate=" + heldGate_ + " after=configure");
         releaseHeldGate();
     }
     if (!ok(s) || !session_) {
-        return fail(sessionKeysApplied_ ? "create_with_session_keys" : "create_standard_with_session_parameters",
+        return fail(sessionKeysApplied_      ? "create_with_session_keys"
+                    : sessionParameters_     ? "create_standard_with_session_parameters"
+                                             : "create_without_session_parameters",
                     "status=" + statusText(s));
     }
 
     const std::string lensDescription = "cameraId=" + (selected ? selected->cameraId : std::string("unknown")) +
                                         " lensId=" + (selected ? selected->lensId : std::string("unknown"));
-    if (staticLevels_) {
-        const auto& l = *staticLevels_;
-        diag("CAMERA_PROFILE_STATIC_LEVELS " + lensDescription +
+    for (const auto& [streamName, levels] : {std::pair{"viewfinder", staticLevels_},
+                                            std::pair{"capture", captureStaticLevels_}}) {
+        if (!levels) continue;
+        const auto& l = *levels;
+        diag("CAMERA_PROFILE_STATIC_LEVELS stream=" + std::string(streamName) + " " + lensDescription +
              " black=" + std::to_string(l.blackRggb[0]) + "," + std::to_string(l.blackRggb[1]) + "," +
              std::to_string(l.blackRggb[2]) + "," + std::to_string(l.blackRggb[3]) +
              " white=" + std::to_string(l.white));
     }
 
-    s = ACameraDevice_createCaptureRequest(device_, TEMPLATE_PREVIEW, &request_);
+    if (recipe.startupDelayMs > 0) {
+        diag("CAMERA_STARTUP_DELAY ms=" + std::to_string(recipe.startupDelayMs));
+        if (!waitForStartup(recipe.startupDelayMs)) return false;
+    }
+
+    request_ = device_->createRequest(repeatingTemplate, &s);
     if (!ok(s) || !request_) {
         return fail("request", "status=" + statusText(s));
     }
 
-    s = ACameraOutputTarget_create(rawWindow_, &target_);
-    if (!ok(s) || !target_) {
-        return fail("target", "status=" + statusText(s));
-    }
-
-    s = ACaptureRequest_addTarget(request_, target_);
+    s = request_->addTarget(rawWindow_);
     if (!ok(s)) {
         return fail("add_target", "status=" + statusText(s));
     }
-    if (companionTarget_) {
-        s = ACaptureRequest_addTarget(request_, companionTarget_);
+    if (companionWindow_ && profileCompanionTargeted_) {
+        s = request_->addTarget(companionWindow_);
         if (!ok(s)) return fail("add_companion_target", "status=" + statusText(s));
         companionTargeted_ = true;
     }
 
-    applyPreviewRequestDefaults(request_, *cameraContext_);
+    applyPreviewRequestDefaults(request_.get(), *cameraContext_, minimalDefaults);
     // Stills, multiframe bursts and video all come from this repeating RAW
     // request, so request-scope keys only need to be set here.
     if (selected) {
-        const auto lensKeys = applyCameraKeySettings(request_, characteristics_, selected->keys, selected->cameraId.c_str(),
+        const auto lensKeys = applyCameraKeySettings(request_.get(), characteristics_, selected->vendorKeys, selected->cameraId.c_str(),
                                                      CameraKeySetting::Scope::Request, "lens", diag);
         if (!lensKeys.failures.empty())
             return fail("lens_request_keys", "lensId=" + selected->lensId + " failed=" + joined(lensKeys.failures));
-        logCarriedKeys(sessionParameters_, request_, characteristics_, selected->keys, selected->cameraId.c_str(), diag);
+        logCarriedKeys(sessionParameters_.get(), request_.get(), characteristics_, selected->vendorKeys, selected->cameraId.c_str(), diag);
+        resultKeys_ = selected->vendorKeys;
+        resultKeysLensId_ = selected->lensId;
+        resultKeysCameraId_ = selected->cameraId;
+        resultKeysPending_ = !resultKeys_.empty();
     }
-    if (!pipeline.submit(session_, request_, callbackContext, control, metering))
+    if (!pipeline.submit(session_.get(), request_.get(), control, metering))
         return fail("initial_repeating", "status=control_or_submit_rejected");
-    diag("CAMERA_NDK_SESSION_RUNNING companion=" + std::string(companionTarget_ ? "1" : "0") +
-         " captureStream=" + (captureTarget_ ? "1" : "0"));
+    diag(describeSessionRecipe(recipeFacts(selected, recipe, repeatingTemplate)));
+    // Lenses that carry keys or recipe fields: what the HAL was actually sent, for comparing devices and builds.
+    if (selected && carriesRecipe(*selected)) {
+        dumpCaptureRequest(sessionParameters_.get(), "session_start", diag);
+        dumpCaptureRequest(request_.get(), "repeating_start", diag);
+    }
+    diag("CAMERA_NDK_SESSION_RUNNING companion=" + std::string(companionWindow_ ? "1" : "0") +
+         " photoStream=" + (captureConfigured_ ? "1" : "0") + " auxJpeg=" + (auxJpegConfigured_ ? "1" : "0") +
+         " template=" + (repeatingTemplate == RequestTemplate::StillCapture ? "still" : "preview"));
     const auto& raw = cameraContext_->geometry;
     diagnostics::RuntimeTraceRecorder::instance().record(
-        diagnostics::RuntimeTraceStage::CameraSessionCreated, 0, generation_, -1, 0, 0, companionTarget_ ? 1u : 0u,
+        diagnostics::RuntimeTraceStage::CameraSessionCreated, 0, generation_, -1, 0, 0, companionWindow_ ? 1u : 0u,
         (static_cast<int64_t>(raw.rawBufferWidth) << 32) | static_cast<int64_t>(raw.rawBufferHeight),
         std::atoi(control.capabilities.cameraId.c_str()));
     return true;
@@ -600,16 +788,16 @@ bool CameraDeviceSession::retire(std::unique_lock<std::mutex>& lock, std::option
                                  const char* diagnosticPrefix, const Diagnostic& diag) {
     if (!session_) return true;
 
-    ACameraCaptureSession* const retiringSession = session_;
+    CameraSessionDriver* const retiringSession = session_.get();
     const uint64_t retiringGeneration = generation_;
     closePending_ = true;
     closeGeneration_ = retiringGeneration;
 
-    const camera_status_t stopStatus = ACameraCaptureSession_stopRepeating(retiringSession);
+    const RequestStatus stopStatus = retiringSession->stopRepeating();
     diag(std::string(diagnosticPrefix) + "_RETIRE generation=" + std::to_string(retiringGeneration) +
          " stopRepeatingStatus=" + statusText(stopStatus));
 
-    ACameraCaptureSession_close(retiringSession);
+    retiringSession->close();
 
     const auto closedPredicate = [this, retiringGeneration] {
         return !closePending_ || closeGeneration_ != retiringGeneration;
@@ -629,7 +817,7 @@ bool CameraDeviceSession::retire(std::unique_lock<std::mutex>& lock, std::option
     // onClosed owns/deletes its callback context and signals only after its
     // final access to the event sink. Once the predicate is satisfied there can be no
     // late session-state callback dereference through this context.
-    session_ = nullptr;
+    if (session_) closedSession_ = std::move(session_);
     sessionContext_ = nullptr;
     diag(std::string(diagnosticPrefix) + "_CLOSED generation=" + std::to_string(retiringGeneration));
     return true;
@@ -637,7 +825,8 @@ bool CameraDeviceSession::retire(std::unique_lock<std::mutex>& lock, std::option
 void CameraDeviceSession::forceRetire(const char* diagnosticPrefix, const Diagnostic& diag) {
     if (!session_ && !closePending_) return;
     diag(std::string(diagnosticPrefix) + "_CLOSE_FORCED generation=" + std::to_string(generation_));
-    session_ = nullptr;
+    // A session that never reported closed may still call back and write to its outputs: leak it.
+    (void)session_.release();
     sessionContext_ = nullptr;
     closePending_ = false;
     closed_.notify_all();
@@ -662,6 +851,7 @@ CameraReaderRetirement CameraDeviceSession::release(const Diagnostic& diag) {
     }
     releaseRequestOutputs(minimal);
     staticLevels_.reset();
+    captureStaticLevels_.reset();
     sessionKeysApplied_ = false;
     if (device_) {
         // ACameraDevice_close() can hang forever on a HAL-wedged device
@@ -701,9 +891,9 @@ void CameraDeviceSession::rollbackUnacceptedContext() noexcept {
         sessionContext_ = nullptr;
     }
 }
-void CameraDeviceSession::sessionClosed(uint64_t callbackGeneration, ACameraCaptureSession* closedSession) {
-    if (session_ == closedSession && callbackGeneration == generation_) {
-        session_ = nullptr;
+void CameraDeviceSession::sessionClosed(uint64_t callbackGeneration, const void* closedSession) {
+    if (session_ && session_->identity() == closedSession && callbackGeneration == generation_) {
+        closedSession_ = std::move(session_);
         sessionContext_ = nullptr;
     }
     if (closePending_ && closeGeneration_ == callbackGeneration) {
@@ -716,7 +906,7 @@ void CameraDeviceSession::sessionClosed(uint64_t callbackGeneration, ACameraCapt
 
 namespace rawrcam::camera {
 bool CameraDeviceSession::hasFullSizeDecision() const noexcept {
-    if (!captureTarget_ || !companionTarget_) return false;
+    if (!captureConfigured_ || !companionWindow_ || !profileCompanionTargeted_) return false;
     return std::any_of(stillKeys_.begin(), stillKeys_.end(), [](const CameraKeySetting& k) {
         return k.enabled && k.scope == CameraKeySetting::Scope::Decision;
     });
@@ -727,16 +917,16 @@ bool CameraDeviceSession::repeatFullSizeDecision(CameraRequestPipeline& pipeline
     // The viewfinder's own shutter keeps the stream cadence; only the gain decides.
     const int64_t exposureNs = control.appliedExposureTimeNs.value_or(33'333'333);
     const int32_t sensitivity = std::max(1, control.capabilities.sensitivityMin);
-    return pipeline.repeatBracket(session_, request_, sessionContext_, control, {exposureNs, sensitivity}, tagId,
-                                  [&](ACaptureRequest* request) {
-        if (ACaptureRequest_removeTarget(request, target_) != ACAMERA_OK) return false;
-        if (!companionTargeted_ && ACaptureRequest_addTarget(request, companionTarget_) != ACAMERA_OK) return false;
+    return pipeline.repeatBracket(session_.get(), request_.get(), control, {exposureNs, sensitivity}, tagId,
+                                  [&](CameraRequest* request) {
+        if (request->removeTarget(rawWindow_) != ACAMERA_OK) return false;
+        if (!companionTargeted_ && request->addTarget(companionWindow_) != ACAMERA_OK) return false;
         // Long stills also need the widest advertised fps range on these frames
         // (none, or a narrower one, fails the same way).
         const auto& caps = control.capabilities;
         if (caps.priorityAeTargetFpsMin > 0 && caps.priorityAeTargetFpsMax >= caps.priorityAeTargetFpsMin) {
             const int32_t fps[2] = {caps.priorityAeTargetFpsMin, caps.priorityAeTargetFpsMax};
-            if (ACaptureRequest_setEntry_i32(request, ACAMERA_CONTROL_AE_TARGET_FPS_RANGE, 2, fps) != ACAMERA_OK)
+            if (request->setI32(ACAMERA_CONTROL_AE_TARGET_FPS_RANGE, 2, fps) != ACAMERA_OK)
                 return false;
         }
         const auto keys = applyCameraKeySettings(request, characteristics_, stillKeys_, stillKeysCameraId_.c_str(),
@@ -746,53 +936,61 @@ bool CameraDeviceSession::repeatFullSizeDecision(CameraRequestPipeline& pipeline
 }
 bool CameraDeviceSession::stopRepeating(const Diagnostic& diag) {
     if (!session_) return false;
-    const camera_status_t s = ACameraCaptureSession_stopRepeating(session_);
+    const RequestStatus s = session_->stopRepeating();
     diag("CAMERA_REPEATING_STOPPED status=" + statusText(s));
     return ok(s);
 }
 bool CameraDeviceSession::captureFullSize(CameraRequestPipeline& pipeline, const CameraControlState& control,
                                           const std::vector<CameraRequestPipeline::BracketExposure>& exposures,
                                           uint64_t tagId, const Diagnostic& diag) {
-    if (!session_ || !request_ || !captureTarget_ || !sessionContext_) return false;
+    if (!session_ || !request_ || !captureConfigured_ || !sessionContext_) return false;
     bool keysLogged = false;
-    // vivo's per-still ids (its camera app's values: request id = frame flag =
-    // a millisecond stamp, global capture id = stamp + 5); a still without
-    // them crashes the provider's request metadata handling.
+    // Per-still ids some vendors need come from the gate's preset (see VendorGatePreset.h).
     int64_t stamp = std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::system_clock::now().time_since_epoch()).count();
     // Build from the still template, not the repeating request: a copy of the
     // preview request (rawr's statistics / map / region settings) crashes the
     // provider's request metadata handling on these stills.
-    ACaptureRequest* base = nullptr;
-    if (!ok(ACameraDevice_createCaptureRequest(device_, TEMPLATE_STILL_CAPTURE, &base)) || !base) return false;
-    struct FreeBase {
-        ACaptureRequest* r;
-        ~FreeBase() { ACaptureRequest_free(r); }
-    } freeBase{base};
-    if (!ok(ACaptureRequest_addTarget(base, target_))) return false;
+    RequestStatus created = ACAMERA_OK;
+    const auto owned = device_->createRequest(
+        captureStillTemplate_ ? RequestTemplate::StillCapture : RequestTemplate::Preview, &created);
+    CameraRequest* const base = owned.get();
+    if (!ok(created) || !base) return false;
+    if (control.capabilities.frameRate > 0 && !ok(pipeline.applySessionCadence(base, control))) return false;
+    if (!ok(base->addTarget(rawWindow_))) return false;
+    // A profile companion rides on every request of its mode, stills included.
+    if (companionFromProfile_ && profileCompanionTargeted_ && companionWindow_ && !ok(base->addTarget(companionWindow_)))
+        return false;
+    // A gate's per-still keys exist only on that vendor's cameras; elsewhere their lookup would fail the still.
+    const GatePreset& gate = gatePreset(stillGate_);
+    const bool gateStillKeys =
+        !gate.stillKeys.empty() &&
+        resolveMetadataTagByNameCompat(characteristics_, stillKeysCameraId_.c_str(), gate.stillKeys.front().tag.c_str(), nullptr)
+            .has_value();
     const auto requestKeys = applyCameraKeySettings(base, characteristics_, stillKeys_, stillKeysCameraId_.c_str(),
                                                     CameraKeySetting::Scope::Request, "lens",
                                                     [](const std::string&) {});
     if (!requestKeys.failures.empty()) return false;
-    return pipeline.captureBracket(session_, base, sessionContext_, control, exposures, tagId,
-                                   [&](ACaptureRequest* request) {
-        if (ACaptureRequest_addTarget(request, captureTarget_) != ACAMERA_OK) return false;
-        const uint8_t intent = ACAMERA_CONTROL_CAPTURE_INTENT_STILL_CAPTURE;
-        (void)ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_CAPTURE_INTENT, 1, &intent);
+    return pipeline.captureBracket(session_.get(), base, control, exposures, tagId,
+                                   [&](CameraRequest* request) {
+        if (request->addTarget(captureWindow_) != ACAMERA_OK) return false;
+        const uint8_t intent = captureStillTemplate_ ? ACAMERA_CONTROL_CAPTURE_INTENT_STILL_CAPTURE
+                                                     : ACAMERA_CONTROL_CAPTURE_INTENT_PREVIEW;
+        (void)request->setU8(ACAMERA_CONTROL_CAPTURE_INTENT, 1, &intent);
         // Preserve the actual preview AF mode and retained tap region. Changing
         // AUTO/CONTINUOUS to OFF for one still resets AF and can move the lens.
         // Copy only these focus keys onto the fresh template: cloning the whole
         // preview request is unsafe on this vendor's full-size path.
-        ACameraMetadata_const_entry af{};
-        if (ACaptureRequest_getConstEntry(request_, ACAMERA_CONTROL_AF_MODE, &af) != ACAMERA_OK || af.count != 1 ||
+        RequestEntry af{};
+        if (request_->get(ACAMERA_CONTROL_AF_MODE, &af) != ACAMERA_OK || af.count != 1 ||
             !af.data.u8)
             return false;
         const uint8_t afMode = af.data.u8[0];
-        if (ACaptureRequest_setEntry_u8(request, ACAMERA_CONTROL_AF_MODE, 1, &afMode) != ACAMERA_OK) return false;
-        ACameraMetadata_const_entry region{};
-        if (ACaptureRequest_getConstEntry(request_, ACAMERA_CONTROL_AF_REGIONS, &region) == ACAMERA_OK &&
+        if (request->setU8(ACAMERA_CONTROL_AF_MODE, 1, &afMode) != ACAMERA_OK) return false;
+        RequestEntry region{};
+        if (request_->get(ACAMERA_CONTROL_AF_REGIONS, &region) == ACAMERA_OK &&
             region.count == 5 && region.data.i32) {
-            if (ACaptureRequest_setEntry_i32(request, ACAMERA_CONTROL_AF_REGIONS, 5, region.data.i32) != ACAMERA_OK)
+            if (request->setI32(ACAMERA_CONTROL_AF_REGIONS, 5, region.data.i32) != ACAMERA_OK)
                 return false;
         }
         // Only the user's MF mode owns a lens-distance request. An AF result's
@@ -800,20 +998,13 @@ bool CameraDeviceSession::captureFullSize(CameraRequestPipeline& pipeline, const
         if (afMode == ACAMERA_CONTROL_AF_MODE_OFF && control.capabilities.manualFocusSupported) {
             if (!control.stillFocusDistance || !std::isfinite(*control.stillFocusDistance)) return false;
             const float distance = *control.stillFocusDistance;
-            if (ACaptureRequest_setEntry_float(request, ACAMERA_LENS_FOCUS_DISTANCE, 1, &distance) != ACAMERA_OK)
+            if (request->setFloat(ACAMERA_LENS_FOCUS_DISTANCE, 1, &distance) != ACAMERA_OK)
                 return false;
         }
         auto keys = stillKeys_;
         const double id = double(stamp++);
-        for (const auto& [tag, value] : {std::pair{"vivo.control.requestId", id}, std::pair{"vivo.control.frameFlag", id},
-                                         std::pair{"vivo.control.globalCaptureId", id + 5}}) {
-            CameraKeySetting k;
-            k.tag = tag;
-            k.type = CameraKeySetting::Type::Int64;
-            k.scope = CameraKeySetting::Scope::Still;
-            k.values = {value};
-            keys.push_back(std::move(k));
-        }
+        if (gateStillKeys)
+            for (auto& k : materializeStillKeys(gate.stillKeys, id)) keys.push_back(std::move(k));
         // Log the still keys once per burst.
         const auto result = applyCameraKeySettings(request, characteristics_, keys, stillKeysCameraId_.c_str(),
                                                    CameraKeySetting::Scope::Still, "lens",
@@ -821,8 +1012,8 @@ bool CameraDeviceSession::captureFullSize(CameraRequestPipeline& pipeline, const
         // Every entry the session, the viewfinder and the first still carry
         // (diagnostics: comparing full-size stills with a known-good request).
         if (!keysLogged) {
-            dumpCaptureRequest(sessionParameters_, "session", diag);
-            dumpCaptureRequest(request_, "repeating", diag);
+            dumpCaptureRequest(sessionParameters_.get(), "session", diag);
+            dumpCaptureRequest(request_.get(), "repeating", diag);
             dumpCaptureRequest(request, "still", diag);
         }
         keysLogged = true;

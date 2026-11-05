@@ -44,6 +44,9 @@ import kotlin.math.abs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.emitAll
+import com.rawr.camera.integration.DeviceLensDefaults
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
@@ -63,6 +66,23 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
                 android.util.Log.e("RawrSettings", "Unable to read saved settings", error)
                 if (error is IOException) emit(emptyPreferences()) else throw error
             }.map(::decode)
+
+    /** One-time addition to existing lens lists; removals made after this update stay removed. */
+    internal suspend fun seedBundledDcps(deviceDefaults: List<com.rawr.camera.settings.model.LensProfile>) {
+        if (deviceDefaults.none { it.image.availableDcps.isNotEmpty() }) return
+        dataStore.edit { seedBundledDcps(it, deviceDefaults) }
+    }
+
+    internal fun seedBundledDcps(p: MutablePreferences, deviceDefaults: List<com.rawr.camera.settings.model.LensProfile>) {
+        if ((p[Keys.schemaVersion] ?: LEGACY_SCHEMA_VERSION) > CURRENT_SCHEMA_VERSION ||
+            (p[Keys.bundledDcpVersion] ?: 0) >= BundledDcpProfiles.VERSION ||
+            deviceDefaults.none { it.image.availableDcps.isNotEmpty() }) return
+        // Leave null as "use device defaults". Custom routes keep all their fields and selection.
+        LensProfileCodec.decode(p[Keys.lensProfiles])?.let { lenses ->
+            p[Keys.lensProfiles] = LensProfileCodec.encode(BundledDcpProfiles.merge(lenses, deviceDefaults))
+        }
+        p[Keys.bundledDcpVersion] = BundledDcpProfiles.VERSION
+    }
 
     suspend fun save(values: SettingsValues) {
         try {
@@ -465,6 +485,15 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
                     vibrance = legacyTone.vibrance
                 )
             }
+        val agxPreset = enumOrDefault(p[Keys.agxPreset], d.agxPreset)
+        val videoAgxPreset = enumOrDefault(p[Keys.videoAgxPreset], d.videoAgxPreset)
+        val agxValues = decodeAgxValues(p[Keys.agxValues])
+        val agxLooks = LookFileCodec.decodeAgxLooks(p[Keys.agxLooks])
+        // Older installs inferred selection from equal controls. Infer it only
+        // when the identity key is absent; an empty key explicitly selects a built-in.
+        fun savedAgxId(key: Preferences.Key<String>, preset: AgxPreset): String? =
+            if (p[key] != null) p[key]?.takeIf { it.isNotEmpty() }
+            else agxLooks.firstOrNull { it.base == preset && it.values == (agxValues[preset] ?: preset.defaults) }?.id
         return SettingsValues(
             saveLocationId = p[Keys.saveLocationId] ?: d.saveLocationId,
             falseColorPresetId = p[Keys.falseColorPresetId] ?: d.falseColorPresetId,
@@ -526,10 +555,12 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
                 saturation = p[Keys.agxToneSaturation] ?: 0f,
                 vibrance = p[Keys.agxToneVibrance] ?: 0f
             ),
-            agxPreset = enumOrDefault(p[Keys.agxPreset], d.agxPreset),
-            videoAgxPreset = enumOrDefault(p[Keys.videoAgxPreset], d.videoAgxPreset),
-            agxValues = decodeAgxValues(p[Keys.agxValues]),
-            agxLooks = LookFileCodec.decodeAgxLooks(p[Keys.agxLooks]),
+            agxPreset = agxPreset,
+            videoAgxPreset = videoAgxPreset,
+            selectedAgxLookId = savedAgxId(Keys.selectedAgxLookId, agxPreset),
+            videoAgxLookId = savedAgxId(Keys.videoAgxLookId, videoAgxPreset),
+            agxValues = agxValues,
+            agxLooks = agxLooks,
             srgbTone = ProfileTone(
                 renderExposure = p[Keys.srgbToneRenderExposure] ?: 0f,
                 blacks = p[Keys.srgbToneBlacks] ?: 0f,
@@ -607,16 +638,8 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
                 ).sanitized(d.multiframeTuning),
             customGpuDriverEnabled = p[Keys.customGpuDriverEnabled] ?: d.customGpuDriverEnabled,
             customGpuDriverName = p[Keys.customGpuDriverName] ?: d.customGpuDriverName,
-            persistentDiagnosticsEnabled = p[Keys.persistentDiagnosticsEnabled] ?: d.persistentDiagnosticsEnabled,
             persistZslRingEnabled = p[Keys.persistZslRingEnabled] ?: d.persistZslRingEnabled,
             persistZslRingOnShutterEnabled = p[Keys.persistZslRingOnShutterEnabled] ?: d.persistZslRingOnShutterEnabled,
-            internalTraceCaptureEnabled = p[Keys.internalTraceCaptureEnabled] ?: d.internalTraceCaptureEnabled,
-            internalTraceRetainedRows =
-                (p[Keys.internalTraceRetainedRows] ?: d.internalTraceRetainedRows).takeIf {
-                    it in
-                        setOf(4096, 8192, 16384, 32768)
-                }
-                    ?: 8192,
             demosaicAlgorithm = enumOrDefault(p[Keys.demosaicAlgorithm], d.demosaicAlgorithm),
             dualAutoContrast = p[Keys.dualAutoContrast] ?: d.dualAutoContrast,
             dualContrastPercent = (p[Keys.dualContrastPercent] ?: d.dualContrastPercent).coerceIn(0f, 100f),
@@ -689,7 +712,6 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
             rawrAe = RawrAeSettings(
                 enabled = p[Keys.rawrAeEnabled] ?: d.rawrAe.enabled,
                 nightLook = enumOrDefault(p[Keys.rawrAeNightLook], d.rawrAe.nightLook),
-                minShutter = enumOrDefault(p[Keys.rawrAeMinShutter], d.rawrAe.minShutter),
                 // 1/4 became 1/5 (the viewfinder's shutter cap); keep that choice.
                 maxShutter = enumOrDefault(p[Keys.rawrAeMaxShutter]?.let { if (it == "S4") "S5" else it }, d.rawrAe.maxShutter),
                 balance = enumOrDefault(p[Keys.rawrAeBalance], d.rawrAe.balance),
@@ -776,6 +798,8 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.agxToneVibrance] = v.agxTone.vibrance
         p[Keys.agxPreset] = v.agxPreset.name
         p[Keys.videoAgxPreset] = v.videoAgxPreset.name
+        p[Keys.selectedAgxLookId] = v.selectedAgxLookId.orEmpty()
+        p[Keys.videoAgxLookId] = v.videoAgxLookId.orEmpty()
         p[Keys.agxValues] = encodeAgxValues(v.agxValues)
         p[Keys.agxLooks] = LookFileCodec.encodeAgxLooks(v.agxLooks)
         p[Keys.srgbToneRenderExposure] = v.srgbTone.renderExposure
@@ -865,11 +889,12 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         } else {
             p[Keys.customGpuDriverName] = v.customGpuDriverName
         }
-        p[Keys.persistentDiagnosticsEnabled] = v.persistentDiagnosticsEnabled
+        // Diagnostics always record now; drop the retired switches.
+        p.remove(Keys.retiredPersistentDiagnosticsEnabled)
+        p.remove(Keys.retiredInternalTraceCaptureEnabled)
+        p.remove(Keys.retiredInternalTraceRetainedRows)
         p[Keys.persistZslRingEnabled] = v.persistZslRingEnabled
         p[Keys.persistZslRingOnShutterEnabled] = v.persistZslRingOnShutterEnabled
-        p[Keys.internalTraceCaptureEnabled] = v.internalTraceCaptureEnabled
-        p[Keys.internalTraceRetainedRows] = v.internalTraceRetainedRows
         p[Keys.demosaicAlgorithm] = v.demosaicAlgorithm.name
         p[Keys.dualAutoContrast] = v.dualAutoContrast
         p[Keys.dualContrastPercent] = v.dualContrastPercent.coerceIn(0f, 100f)
@@ -930,7 +955,6 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.aePriorityDisabled] = v.aePriorityDisabled
         p[Keys.rawrAeEnabled] = v.rawrAe.enabled
         p[Keys.rawrAeNightLook] = v.rawrAe.nightLook.name
-        p[Keys.rawrAeMinShutter] = v.rawrAe.minShutter.name
         p[Keys.rawrAeMaxShutter] = v.rawrAe.maxShutter.name
         p[Keys.rawrAeBalance] = v.rawrAe.balance.name
         p[Keys.rawrAeDigitalGain] = v.rawrAe.digitalGain.name
@@ -1082,6 +1106,8 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val agxToneVibrance = floatPreferencesKey("agxTone_vibrance")
         val agxPreset = stringPreferencesKey("agx_preset")
         val videoAgxPreset = stringPreferencesKey("video_agx_preset")
+        val selectedAgxLookId = stringPreferencesKey("selected_agx_look_id")
+        val videoAgxLookId = stringPreferencesKey("video_agx_look_id")
         val agxValues = stringPreferencesKey("agx_values")
         val videoColorRenderProfile = stringPreferencesKey("video_color_render_profile")
         val videoUserLutProfileId = stringPreferencesKey("video_user_lut_profile_id")
@@ -1090,6 +1116,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val colorRenderProfile = stringPreferencesKey("color_render_profile")
         val selectedUserLutProfileId = stringPreferencesKey("selected_user_lut_profile_id")
         val userLutProfiles = stringPreferencesKey("user_lut_profiles")
+        val bundledDcpVersion = intPreferencesKey("bundled_dcp_version")
         val lensProfiles = stringPreferencesKey("lens_profiles")
         val lastLensId = stringPreferencesKey("last_lens_id")
         val rawrToneRenderExposure = floatPreferencesKey("profile_tone_rawr_render_exposure")
@@ -1148,11 +1175,11 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val multiframeFallbackLuma = floatPreferencesKey("multiframe_fallback_luma")
         val customGpuDriverEnabled = booleanPreferencesKey("debug_custom_gpu_driver_enabled")
         val customGpuDriverName = stringPreferencesKey("debug_custom_gpu_driver_name")
-        val persistentDiagnosticsEnabled = booleanPreferencesKey("debug_persistent_diagnostics_enabled")
+        val retiredPersistentDiagnosticsEnabled = booleanPreferencesKey("debug_persistent_diagnostics_enabled")
         val persistZslRingEnabled = booleanPreferencesKey("debug_persist_zsl_ring_enabled")
         val persistZslRingOnShutterEnabled = booleanPreferencesKey("debug_persist_zsl_ring_on_shutter_enabled")
-        val internalTraceCaptureEnabled = booleanPreferencesKey("debug_internal_trace_capture_enabled")
-        val internalTraceRetainedRows = intPreferencesKey("debug_internal_trace_retained_rows")
+        val retiredInternalTraceCaptureEnabled = booleanPreferencesKey("debug_internal_trace_capture_enabled")
+        val retiredInternalTraceRetainedRows = intPreferencesKey("debug_internal_trace_retained_rows")
         val demosaicAlgorithm = stringPreferencesKey("capture_demosaic_algorithm")
         val dualAutoContrast = booleanPreferencesKey("dual_auto_contrast")
         val dualContrastPercent = floatPreferencesKey("dual_contrast_percent")
@@ -1228,7 +1255,6 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val aePriorityDisabled = booleanPreferencesKey("capture_ae_priority_disabled")
         val rawrAeEnabled = booleanPreferencesKey("capture_rawr_ae_enabled")
         val rawrAeNightLook = stringPreferencesKey("capture_rawr_ae_night_look")
-        val rawrAeMinShutter = stringPreferencesKey("capture_rawr_ae_min_shutter")
         val rawrAeMaxShutter = stringPreferencesKey("capture_rawr_ae_max_shutter")
         val rawrAeBalance = stringPreferencesKey("capture_rawr_ae_balance")
         val rawrAeDigitalGain = stringPreferencesKey("capture_rawr_ae_digital_gain")
@@ -1251,7 +1277,12 @@ object SettingsPreferencesStore {
         val dcpFiles = DcpFileStore(context.applicationContext)
         var gpuEnabled: Boolean? = null
         return com.rawr.camera.settings.architecture.SettingsEditor(
-            defaults, repository.values, repository::save, scope,
+            defaults, flow {
+                val deviceDefaults = DeviceLensDefaults.lenses
+                BundledDcpProfiles.install(context.applicationContext, deviceDefaults)
+                repository.seedBundledDcps(deviceDefaults)
+                emitAll(repository.values)
+            }, repository::save, scope,
             onChanged = { values ->
                 // Tagging OFF must gate new admissions before persistence or flow delivery.
                 com.rawr.camera.location.CameraLocation.get(context).setEnabled(values.locationTagging)
@@ -1267,7 +1298,7 @@ object SettingsPreferencesStore {
             onPersisted = { saved, live ->
                 // A newer edit may already be visible while this older write finishes.
                 lutFiles.persisted(saved, live)
-                dcpFiles.sync(saved.lensProfiles.orEmpty() + live.lensProfiles.orEmpty())
+                dcpFiles.sync(saved.lensProfiles.orEmpty() + live.lensProfiles.orEmpty() + DeviceLensDefaults.lenses)
             }
         ).also { editor ->
             instance = editor

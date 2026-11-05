@@ -9,6 +9,8 @@ package com.rawr.camera.ui
  */
 object CaptureTestTags {
     const val VIEWFINDER = "capture_viewfinder"
+    const val DCP_PROFILE = "capture_dcp_profile"
+    fun dcpOption(file: String?): String = "capture_dcp_${file ?: "default"}"
     const val SHUTTER = "capture_shutter"
     const val VIDEO_RECORD = "capture_video_record"
     const val VIDEO_RECORD_TIMER = "capture_video_record_timer"
@@ -30,6 +32,8 @@ object CaptureTestTags {
     const val SELF_TIMER_COUNTDOWN = "capture_self_timer_countdown"
     const val HDR_BRACKETED_NOTICE = "hdr_bracketed_notice"
     const val BRACKET_HOLD_NOTICE = "bracket_hold_notice"
+    const val LENS_UNAVAILABLE_NOTICE = "capture_lens_unavailable_notice"
+    const val PROFILE_ERROR_NOTICE = "capture_profile_error_notice"
     const val TOPBAR_MONITOR = "capture_topbar_monitor"
     const val TOPBAR_SETTINGS = "capture_topbar_settings"
 

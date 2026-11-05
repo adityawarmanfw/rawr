@@ -43,7 +43,6 @@ enum class SettingsSection(val title: String) {
     Multiframe("Multiframe"),
     FilmSim("Film Simulation"),
     Debug("Debug"),
-    InternalLogging("Internal Logging"),
     About("About"),
 
     // Kept only for compatibility with older persisted/navigation tests; no longer exposed.
@@ -198,17 +197,14 @@ enum class RawrNightLook(val label: String, val nativeId: Int) {
     Off("Off", 0)
 }
 
-/** Shutter at which ISO starts rising (Auto: 1/30 s). */
-enum class RawrMinShutter(val label: String, val ns: Long) {
-    Auto("1/30", 0L),
-    S15("1/15", 66_666_667L),
-    S60("1/60", 16_666_667L),
-    S125("1/125", 8_000_000L)
-}
-
-/** Longest shutter in low light (Auto: 1/15 s handheld, within the Auto minimum FPS). */
+/**
+ * Slowest shutter rawr AE will use. ISO takes over the rest of the light; the engine starts
+ * raising ISO at 1/30 s (or this, if faster). Auto: 1/15 s for photo, the frame time for video.
+ */
 enum class RawrMaxShutter(val label: String, val ns: Long) {
-    Auto("Auto", 0L),
+    Auto("Auto (1/15)", 0L),
+    S125("1/125", 8_000_000L),
+    S60("1/60", 16_666_667L),
     S30("1/30", 33_333_333L),
     S15("1/15", 66_666_667L),
     S8("1/8", 125_000_000L),
@@ -228,7 +224,10 @@ enum class RawrDigitalGain(val label: String, val ev: Float) {
     Off("Off", 0f),
     Ev1("+1 EV", 1f),
     Ev2("+2 EV", 2f),
-    Ev3("+3 EV", 3f)
+    Ev3("+3 EV", 3f),
+    Ev4("+4 EV", 4f),
+    /** No practical limit: whatever the scene still lacks becomes gain (noisy). */
+    Maximum("Maximum", 16f)
 }
 
 /** How quickly rawr AE follows the scene; native speed ids. */
@@ -251,7 +250,6 @@ enum class RawrMetering(val label: String, val nativeId: Int) {
 data class RawrAeSettings(
     val enabled: Boolean = true,
     val nightLook: RawrNightLook = RawrNightLook.Natural,
-    val minShutter: RawrMinShutter = RawrMinShutter.Auto,
     val maxShutter: RawrMaxShutter = RawrMaxShutter.Auto,
     val balance: RawrBalance = RawrBalance.Balanced,
     val digitalGain: RawrDigitalGain = RawrDigitalGain.Ev2,
@@ -1095,8 +1093,11 @@ data class SettingsValues(
     val rec709Tone: ProfileTone = ProfileTone.Neutral,
     /** AgX's render exposure (its other display tone fields are unused), shared by its presets. */
     val agxTone: ProfileTone = ProfileTone.Neutral,
-    val agxPreset: AgxPreset = AgxPreset.Default,
-    val videoAgxPreset: AgxPreset = AgxPreset.Default,
+    val agxPreset: AgxPreset = AgxPreset.Rawr,
+    val videoAgxPreset: AgxPreset = AgxPreset.Rawr,
+    /** Saved look origins survive edits; photo and video remember their own selection. */
+    val selectedAgxLookId: String? = null,
+    val videoAgxLookId: String? = null,
     /** Edited AgX controls per preset; a missing preset uses its defaults. */
     val agxValues: Map<AgxPreset, AgxValues> = emptyMap(),
     /** User-saved AgX looks; applying one writes its values into its base look. */
@@ -1121,11 +1122,8 @@ data class SettingsValues(
     val multiframeTuning: MultiframeTuning = MultiframeTuning(),
     val customGpuDriverEnabled: Boolean = false,
     val customGpuDriverName: String? = null,
-    val persistentDiagnosticsEnabled: Boolean = false,
     val persistZslRingEnabled: Boolean = false,
     val persistZslRingOnShutterEnabled: Boolean = false,
-    val internalTraceCaptureEnabled: Boolean = false,
-    val internalTraceRetainedRows: Int = 8192,
     val demosaicAlgorithm: DemosaicAlgorithm = DemosaicAlgorithm.Amaze,
     val dualAutoContrast: Boolean = true,
     val dualContrastPercent: Float = 20f,
@@ -1224,7 +1222,7 @@ data class SettingsValues(
 
     fun activeProfileLabel(): String = when {
         isLogActive -> videoLogProfile.label
-        isAgxActive() -> regularAgxPreset().label
+        isAgxActive() -> selectedAgxLook()?.name ?: regularAgxPreset().label
         else -> selectedLutProfile()?.name?.takeIf { it.isNotBlank() } ?: regularRenderProfile().label
     }
 

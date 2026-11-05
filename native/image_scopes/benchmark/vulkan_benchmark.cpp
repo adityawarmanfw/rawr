@@ -201,6 +201,36 @@ int main(int argc, char** argv) {
         std::cout << "DEVICE vendor=" << props.vendorID << " device=" << props.deviceID
                   << " driver=" << props.driverVersion << " api=" << props.apiVersion << "\n";
         VkQueryPool qp = vk.createTimestampQueryPool(2);
+        if (argc > 1 && std::string(argv[1]) == "--waveform-only") {
+            for (auto [w, h] : {std::pair<std::uint32_t, std::uint32_t>{1020, 765}, {2040, 1530}}) {
+                auto image = vk.createRgbaImage(w, h);
+                vk.uploadRgba(image, pattern(w, h));
+                auto target = vk.createRgbaImage(512, 384);
+                vk.uploadRgba(target, std::vector<std::uint8_t>(512u * 384u * 4u));
+                ImageScopes scopes({{vk.physicalDevice(), vk.device(), nullptr}, 3});
+                for (unsigned rotation : {0u, 1u}) {
+                    for (auto mode : {WaveformMode::Luma, WaveformMode::RgbOverlay}) {
+                        const auto name = std::to_string(w) + "x" + std::to_string(h) + "_q" +
+                            std::to_string(rotation) + (mode == WaveformMode::Luma ? "_luma" : "_rgb");
+                        print(name, bench(vk, qp, scopes, [&](VkCommandBuffer command, std::uint32_t slot) {
+                            DisplayWaveformRecordInfo r{};
+                            r.commandBuffer = command;
+                            r.input = {image.view, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_GENERAL, w, h};
+                            r.renderTarget = {target.view, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_GENERAL, 512, 384};
+                            r.frameSlot = slot;
+                            r.sourceQuarterTurns = rotation;
+                            r.render.mode = mode;
+                            r.samplingMode = SamplingMode::FullReference;
+                            scopes.recordDisplayWaveform(r);
+                        }, 10, 60));
+                        std::cout.flush();
+                    }
+                }
+            }
+            vk.destroyQueryPool(qp);
+            std::cout << "IMAGE_SCOPES_WAVEFORM_BENCHMARK_PASS\n";
+            return 0;
+        }
         if (argc > 1 && (std::string(argv[1]) == "--live" || std::string(argv[1]) == "--live-vectors")) {
             if (argc < 3 || argc > 4)
                 throw std::runtime_error("usage: --live|--live-vectors FIXTURE_DIRECTORY [ITERATIONS]");

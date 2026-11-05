@@ -24,6 +24,12 @@ class CaptureCoordinator final {
     bool detachedWorkActive() const noexcept {
         return single_.detachedHqWorkActive() || multiframe_.multiframeWorkActive();
     }
+    // Some accepted capture still needs the camera session (frames due, or not yet copied
+    // out of camera buffers). Processing after that runs with the camera closed.
+    bool holdsCameraFrames() const noexcept {
+        return single_.holdsCameraFrame() || multiframe_.holdsCameraFrames() ||
+               multiframe_.bracketHold().opened != multiframe_.bracketHold().done;
+    }
     std::string pollDng() {
         auto result = multiframe_.pollMultiframeDngCompletion();
         return result.empty() ? single_.pollDngCompletion() : result;

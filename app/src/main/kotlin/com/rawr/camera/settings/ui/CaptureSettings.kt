@@ -60,8 +60,8 @@ internal fun CaptureSettings(state: SettingsUiState, dispatch: SettingsDispatch)
             )
             SettingDivider()
             SettingsRow(
-                title = "Exposure",
-                value = if (state.values.rawrAe.enabled) "Rawr AE" else "Device AE",
+                title = "Auto Exposure",
+                value = if (state.values.rawrAe.enabled) "Rawr" else "Device",
                 testTag = SettingsTestTags.row("Capture", "exposure"),
                 onClick = { dispatch.invoke(OpenSection(SettingsSection.Exposure)) }
             )
@@ -113,7 +113,7 @@ internal fun ExposureSettings(state: SettingsUiState, dispatch: SettingsDispatch
             title = "Auto Exposure",
             description =
                 if (ae.enabled) {
-                    "Rawr sets shutter and ISO in Auto, S and I, for photo and video."
+                    "Rawr picks shutter and ISO in Auto, shutter priority and ISO priority, for photo and video."
                 } else {
                     "Auto uses the camera's own exposure."
                 }
@@ -144,42 +144,39 @@ internal fun ExposureSettings(state: SettingsUiState, dispatch: SettingsDispatch
                     {
                         when (it) {
                             RawrNightLook.Natural -> "Dim scenes stay dark, like they look"
-                            RawrNightLook.Bright -> "Dim scenes a little darker than day"
+                            RawrNightLook.Bright -> "Dim scenes only slightly darker than day"
                             RawrNightLook.Off -> "Every scene at day brightness"
                         }
                     }
                 ) { setAe(ae.copy(nightLook = it)) }
                 RawrAeChoice(
-                    "Shutter / ISO Balance", RawrBalance.entries, ae.balance, { it.label }, null,
-                    {
-                        when (it) {
-                            RawrBalance.LowIso -> "Slower shutter first: cleaner, more blur"
-                            RawrBalance.Balanced -> "Shutter to the minimum speed, then ISO"
-                            RawrBalance.Faster -> "1 EV faster shutter, more ISO"
-                            RawrBalance.Fastest -> "2 EV faster shutter, more ISO"
-                        }
-                    }
-                ) { setAe(ae.copy(balance = it)) }
-                RawrAeChoice(
-                    "Minimum Shutter Speed",
-                    RawrMinShutter.entries,
-                    ae.minShutter,
-                    { it.label },
-                    "ISO starts rising once the shutter would be slower than this"
-                ) { setAe(ae.copy(minShutter = it)) }
-                RawrAeChoice(
-                    "Longest Shutter",
+                    "Slowest Shutter",
                     RawrMaxShutter.entries,
                     ae.maxShutter,
                     { it.label },
-                    "In low light the shutter stretches up to this. Auto: 1/15 s handheld"
+                    "In dim light the shutter never goes slower than this; ISO makes up the rest. " +
+                        "Auto is 1/15 s for photo and the frame time for video"
                 ) { setAe(ae.copy(maxShutter = it)) }
+                RawrAeChoice(
+                    "Shutter / ISO Balance", RawrBalance.entries, ae.balance, { it.label },
+                    "Shifts the shutter by whole stops and ISO makes up the difference, so brightness stays the same. " +
+                        "No effect in bright light",
+                    {
+                        when (it) {
+                            RawrBalance.LowIso -> "Shutter 1 stop slower, half the ISO: cleaner, more blur"
+                            RawrBalance.Balanced -> "Shutter and ISO as the light needs"
+                            RawrBalance.Faster -> "Shutter 1 stop faster, double the ISO"
+                            RawrBalance.Fastest -> "Shutter 2 stops faster, four times the ISO"
+                        }
+                    }
+                ) { setAe(ae.copy(balance = it)) }
                 RawrAeChoice(
                     "Digital Gain",
                     RawrDigitalGain.entries,
                     ae.digitalGain,
                     { it.label },
-                    "Brightening past the sensor's highest real ISO, applied after RAW; DNGs carry it as BaselineExposure"
+                    "Brightening past the sensor's highest real ISO, applied after RAW; DNGs carry it as BaselineExposure. " +
+                        "Maximum has no limit and gets noisy in the dark"
                 ) { setAe(ae.copy(digitalGain = it)) }
                 RawrAeChoice("Adaptation Speed", RawrAeSpeed.entries, ae.speed, { it.label }, null) {
                     setAe(ae.copy(speed = it))

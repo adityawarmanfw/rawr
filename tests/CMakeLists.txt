@@ -24,14 +24,15 @@ function(rawr_test name)
   target_compile_options(${name} PRIVATE -Wall -Wextra -Werror -UNDEBUG)
   if(name STREQUAL "capture_job_test")
     add_test(NAME ${name} COMMAND ${name} "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/capture_job_v1.job")
+  elseif(name STREQUAL "builtin_route_golden_test")
+    add_test(NAME ${name} COMMAND ${name} "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/camera/builtin_routes.txt")
   else()
     add_test(NAME ${name} COMMAND ${name})
   endif()
   set_tests_properties(${name} PROPERTIES ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}")
 endfunction()
 
-rawr_test(gps_metadata_test native/gps_metadata_test.cpp "${APP}/encoding/jpeg/JpegCaptureWriter.cpp")
-target_compile_definitions(gps_metadata_test PRIVATE RAWR_EXIF_ONLY)
+rawr_test(gps_metadata_test native/gps_metadata_test.cpp "${APP}/encoding/jpeg/JpegExif.cpp")
 target_link_libraries(gps_metadata_test PRIVATE rawr_tinydng)
 
 rawr_test(renderer_bayer_bin_test
@@ -90,15 +91,46 @@ rawr_test(camera_result_state_test
   "${RAWR_ROOT}/app/src/main/cpp/color/ColorMath.cpp")
 rawr_test(sensitivity_probe_startup_test
   "${RAWR_ROOT}/tests/native/sensitivity_probe_startup_test.cpp")
+rawr_test(queue_priority_policy_test
+  "${RAWR_ROOT}/tests/native/queue_priority_policy_test.cpp")
+rawr_test(readback_memory_policy_test
+  "${RAWR_ROOT}/tests/native/readback_memory_policy_test.cpp")
+rawr_test(guide_shader_local_size_test
+  "${RAWR_ROOT}/tests/native/guide_shader_local_size_test.cpp")
+rawr_test(guide_dense_reach_test
+  "${RAWR_ROOT}/tests/native/guide_dense_reach_test.cpp")
 
 rawr_test(camera_session_policy_test
   "${RAWR_ROOT}/tests/native/camera_session_policy_test.cpp")
 rawr_test(raw_reader_usage_ladder_test
   "${RAWR_ROOT}/tests/native/raw_reader_usage_ladder_test.cpp")
+rawr_test(camera_key_result_test
+  "${RAWR_ROOT}/tests/native/camera_key_result_test.cpp")
+rawr_test(camera_start_ladder_test
+  "${RAWR_ROOT}/tests/native/camera_start_ladder_test.cpp")
+rawr_test(session_recipe_log_test
+  "${RAWR_ROOT}/tests/native/session_recipe_log_test.cpp")
+rawr_test(camera_request_test
+  "${RAWR_ROOT}/tests/native/camera_request_test.cpp"
+  "${RAWR_ROOT}/app/src/main/cpp/camera/CameraRequest.cpp")
+rawr_test(camera_key_attempts_test
+  "${RAWR_ROOT}/tests/native/camera_key_attempts_test.cpp")
+rawr_test(vendor_gate_preset_test
+  "${RAWR_ROOT}/tests/native/vendor_gate_preset_test.cpp")
+rawr_test(companion_stream_size_test
+  "${RAWR_ROOT}/tests/native/companion_stream_size_test.cpp")
 rawr_test(camera_video_facts_test
   "${RAWR_ROOT}/tests/native/camera_video_facts_test.cpp"
   "${RAWR_ROOT}/app/src/main/cpp/camera/CameraVideoFacts.cpp")
 add_test(NAME camera_video_facts_test_snapshot COMMAND "${UV_EXECUTABLE}" run --no-project --cache-dir "${RAWR_ROOT}/tmp/uv-cache" "${CMAKE_CURRENT_SOURCE_DIR}/native/camera_video_facts_test_snapshot.py" "$<TARGET_FILE:camera_video_facts_test>")
+rawr_test(camera_control_contract_test
+  "${RAWR_ROOT}/tests/native/camera_control_contract_test.cpp"
+  "${RAWR_ROOT}/app/src/main/cpp/camera/CameraControlSerialization.cpp"
+  "${RAWR_ROOT}/app/src/main/cpp/camera/CameraProfileJson.cpp"
+  "${RAWR_ROOT}/app/src/main/cpp/color/DcpProfile.cpp"
+  "${RAWR_ROOT}/app/src/main/cpp/color/ColorMath.cpp"
+  "${RAWR_ROOT}/app/src/main/cpp/geometry/LensDistortion.cpp"
+  "${RAWR_ROOT}/app/src/main/cpp/camera/CameraRouting.cpp")
 rawr_test(camera_white_balance_test
   "${RAWR_ROOT}/tests/native/camera_white_balance_test.cpp"
   "${RAWR_ROOT}/app/src/main/cpp/camera/WhiteBalanceMath.cpp"
@@ -192,6 +224,63 @@ rawr_test(dcp_profile_test
   "${APP}/color/ColorMath.cpp")
 rawr_test(camera_profile_test
   "${RAWR_ROOT}/tests/native/camera_profile_test.cpp"
+  "${APP}/camera/CameraRouting.cpp"
+  "${APP}/camera/CameraProfileJson.cpp"
+  "${APP}/color/DcpProfile.cpp"
+  "${APP}/color/ColorMath.cpp"
+  "${APP}/geometry/LensDistortion.cpp")
+rawr_test(profile_schema_test
+  "${RAWR_ROOT}/tests/native/profile_schema_test.cpp"
+  "${APP}/camera/CameraRouting.cpp"
+  "${APP}/camera/CameraProfileJson.cpp"
+  "${APP}/color/DcpProfile.cpp"
+  "${APP}/color/ColorMath.cpp"
+  "${APP}/geometry/LensDistortion.cpp")
+rawr_test(builtin_route_golden_test
+  "${RAWR_ROOT}/tests/native/builtin_route_golden_test.cpp"
+  "${APP}/camera/CameraRouting.cpp"
+  "${APP}/camera/CameraProfileJson.cpp"
+  "${APP}/color/DcpProfile.cpp"
+  "${APP}/color/ColorMath.cpp"
+  "${APP}/geometry/LensDistortion.cpp")
+set_tests_properties(builtin_route_golden_test PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+rawr_test(full_res_recipe_test
+  "${RAWR_ROOT}/tests/native/full_res_recipe_test.cpp"
+  "${APP}/camera/CameraRouting.cpp"
+  "${APP}/camera/CameraProfileJson.cpp"
+  "${APP}/color/DcpProfile.cpp"
+  "${APP}/color/ColorMath.cpp"
+  "${APP}/geometry/LensDistortion.cpp")
+rawr_test(camera_workarounds_test
+  "${RAWR_ROOT}/tests/native/camera_workarounds_test.cpp"
+  "${APP}/camera/CameraRouting.cpp"
+  "${APP}/camera/CameraProfileJson.cpp"
+  "${APP}/color/DcpProfile.cpp"
+  "${APP}/color/ColorMath.cpp"
+  "${APP}/geometry/LensDistortion.cpp")
+rawr_test(session_recipe_test
+  "${RAWR_ROOT}/tests/native/session_recipe_test.cpp"
+  "${APP}/camera/CameraRouting.cpp"
+  "${APP}/camera/CameraProfileJson.cpp"
+  "${APP}/color/DcpProfile.cpp"
+  "${APP}/color/ColorMath.cpp"
+  "${APP}/geometry/LensDistortion.cpp")
+rawr_test(camera_key_scope_test
+  "${RAWR_ROOT}/tests/native/camera_key_scope_test.cpp"
+  "${APP}/camera/CameraRouting.cpp"
+  "${APP}/camera/CameraProfileJson.cpp"
+  "${APP}/color/DcpProfile.cpp"
+  "${APP}/color/ColorMath.cpp"
+  "${APP}/geometry/LensDistortion.cpp")
+rawr_test(companion_block_test
+  "${RAWR_ROOT}/tests/native/companion_block_test.cpp"
+  "${APP}/camera/CameraRouting.cpp"
+  "${APP}/camera/CameraProfileJson.cpp"
+  "${APP}/color/DcpProfile.cpp"
+  "${APP}/color/ColorMath.cpp"
+  "${APP}/geometry/LensDistortion.cpp")
+rawr_test(camera_api_test
+  "${RAWR_ROOT}/tests/native/camera_api_test.cpp"
   "${APP}/camera/CameraRouting.cpp"
   "${APP}/camera/CameraProfileJson.cpp"
   "${APP}/color/DcpProfile.cpp"

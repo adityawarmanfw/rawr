@@ -191,6 +191,11 @@ internal fun CaptureViewfinder(
         }
         if (state.captureFlash) Box(Modifier.matchParentSize().background(Color.White.copy(alpha = .12f)))
         Box(controlFrameModifier.zIndex(3f)) {
+            if (state.capabilities.lensUnavailable) {
+                LensUnavailableNotice(state.orientation, Modifier.align(Alignment.Center))
+            } else if (state.capabilities.profileError.isNotEmpty()) {
+                ProfileErrorNotice(state.capabilities.profileError, state.orientation, Modifier.align(Alignment.Center))
+            }
             HdrBracketedNotice(
                 active = state.hdrPlusBracketedActive,
                 orientation = state.orientation,

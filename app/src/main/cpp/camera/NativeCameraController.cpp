@@ -1,4 +1,5 @@
 #include "camera/NativeCameraController.h"
+#include "camera/JavaCameraDriver.h"
 #include "capture/BurstLimits.h"
 
 #include <android/log.h>
@@ -29,10 +30,14 @@
 #include "camera/CameraProfileJson.h"
 #include "camera/CameraRequestPipeline.h"
 #include "camera/CameraResultProcessor.h"
+#include "camera/CameraStartLadder.h"
 #include "camera/CameraWhiteBalanceControls.h"
 #include "camera/FullSizeSequence.h"
+#include "camera/SessionRecipe.h"
+#include "camera/VendorGatePreset.h"
 #include "camera/SensitivityProbeStartup.h"
 #include "camera/StillFocus.h"
+#include "camera/StillExposureGuard.h"
 #include "camera/ViewfinderExposure.h"
 #include "geometry/OrientationTransform.h"
 #include "metadata/MetadataDiagnostics.h"
@@ -50,15 +55,30 @@ std::string systemProperty(const char* name) {
     return value;
 }
 
-// `adb shell setprop debug.rawr.camera_profile generic|<built-in id>`
+// `adb shell setprop debug.rawr.camera_profile generic|<built-in id>|file:<absolute path>`
 // overrides the device's matched built-in profile (and any user lens profile)
-// for bring-up on new devices.
+// for bring-up on new devices. A file is a profile JSON the app can read (its own
+// files directory), for running an exact recipe without going through the lens editor.
 const std::string& profileIdFromSetprop() {
     static const std::string overridden = [] {
         const std::string value = systemProperty("debug.rawr.camera_profile");
-        return isBuiltInProfileId(value) ? value : std::string();
+        return isBuiltInProfileId(value) || value.rfind("file:", 0) == 0 ? value : std::string();
     }();
     return overridden;
+}
+
+// The profile named by a file: override; nullopt (with the reason) when it can't be read or parsed.
+std::optional<CameraProfile> profileFromSetpropFile(std::string* error) {
+    const auto& value = profileIdFromSetprop();
+    if (value.rfind("file:", 0) != 0) return std::nullopt;
+    std::ifstream in(value.substr(5));
+    if (!in) {
+        *error = "unreadable " + value.substr(5);
+        return std::nullopt;
+    }
+    std::stringstream text;
+    text << in.rdbuf();
+    return parseCameraProfile(text.str(), error);
 }
 
 ProfileMatch deviceProfileMatch() {
@@ -67,7 +87,14 @@ ProfileMatch deviceProfileMatch() {
 
 const std::string& activeProfileId(const ProfileMatch& match) {
     const auto& overridden = profileIdFromSetprop();
-    return overridden.empty() ? match.profileId : overridden;
+    return isBuiltInProfileId(overridden) ? overridden : match.profileId;
+}
+
+CameraProfile initialProfile(const ProfileMatch& match) {
+    std::string error;
+    if (auto file = profileFromSetpropFile(&error)) return std::move(*file);
+    if (!error.empty()) CAME("CAMERA_PROFILE_FILE_REJECTED %s", error.c_str());
+    return builtInCameraProfile(activeProfileId(match));
 }
 
 std::string describeRoute(const LensRoute& route) { return serializeCameraProfile({"", {route}}); }
@@ -113,6 +140,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
     // The viewfinder request is replaced (decision request, then nothing) while
     // full-size stills are in flight (CameraDeviceSession::repeatFullSizeDecision).
     bool fullSizeDecisionRepeating = false;
+    StillExposureGuard stillExposureGuard;
     std::function<void()> pendingFocus;
     std::function<void()> pendingFocusMode;
     // Bounded retire for worker-driven stop/start-failure paths. Healthy
@@ -129,11 +157,17 @@ struct NativeCameraController::Impl final : CameraEventSink {
     // user's lens profile (setProfile).
     const std::string deviceModel = systemProperty("ro.product.model");
     const ProfileMatch builtInMatch = deviceProfileMatch();
-    CameraProfile profile = builtInCameraProfile(activeProfileId(builtInMatch));
+    CameraProfile profile = initialProfile(builtInMatch);
     std::string preferredCameraId;
     // cameraId/physicalCameraId routes whose HAL rejected the companion YUV
     // stream; they start RAW-only for the rest of this process.
+    // Configure-time RAW-only retry for routes the start ladder doesn't cover
+    // (capture-stream routes, whose companion is required).
     std::set<std::string> rawOnlyRoutes;
+    CameraStartLadder startLadder;
+    // Generation the start ladder watches for its first frame; 0 = none. Lets
+    // per-frame and capture-failure callbacks skip the mutex.
+    std::atomic<uint64_t> ladderGeneration{0};
     std::string accessRoute = "direct";
     uint32_t fullSizeBurstLimit = 0;
     bool fullSizeBurstSequential = false;
@@ -189,6 +223,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
     void setLens(const std::string& value) {
         std::unique_lock<std::mutex> lock(mutex);
         if (lensId == value) return;
+        startLadder.resetGivenUp();
 
         const bool restart = active;
         if (!restart) {
@@ -198,12 +233,15 @@ struct NativeCameraController::Impl final : CameraEventSink {
 
         // Reject any late result from the retiring lens while its session drains.
         active = false;
+        // A session that won't close (after a device error) is force-retired, as
+        // a stop does: aborting here dropped the switch and left the old session
+        // holding the camera until the stall watchdog fired.
         if (!retireSessionLocked(lock, std::chrono::seconds(3), "CAMERA_LENS_SWITCH")) {
-            diag("CAMERA_LENS_SWITCH_ABORT from=" + lensId + " to=" + value + " reason=session_close_timeout");
-            return;
+            diag("CAMERA_LENS_SWITCH_FORCED from=" + lensId + " to=" + value + " reason=session_close_timeout");
+            forceRetireSessionLocked(lock, "CAMERA_LENS_SWITCH");
         }
 
-        // Session is now definitively closed. It is safe to release the remaining
+        // Session is now closed or force-retired. It is safe to release the remaining
         // old-camera resources and create an independent vendor-session context.
         teardownCameraResourcesLocked(lock);
         lensId = value;
@@ -221,6 +259,16 @@ struct NativeCameraController::Impl final : CameraEventSink {
 
     // Replaces the lens profile. Restarts the camera only when the running
     // lens's route actually changed (or the lens is gone).
+    // A profile the app sent could not be applied. The running profile stays; the reason goes to the log
+    // and, through the control state, to the viewfinder, so the user is never left believing it took effect.
+    void rejectProfile(const std::string& error) {
+        std::lock_guard<std::mutex> lock(mutex);
+        profileError = error.empty() ? "invalid lens profile" : error;
+        diag("CAMERA_PROFILE_REJECTED error=" + profileError + " keeping=" + profile.id);
+        CAME("CAMERA_PROFILE_REJECTED error=%s keeping=%s", profileError.c_str(), profile.id.c_str());
+    }
+    std::string profileError;  // guarded by mutex
+
     bool setProfile(CameraProfile next) {
         std::unique_lock<std::mutex> lock(mutex);
         if (!profileIdFromSetprop().empty()) {
@@ -228,6 +276,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
             return false;
         }
         const auto before = routeForLens(profile, lensId);
+        startLadder.resetGivenUp();
+        profileError.clear();
         profile = std::move(next);
         publishProfileLocked();
         auto after = routeForLens(profile, lensId);
@@ -241,8 +291,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
         if (!routeChanged || !active || !preferredCameraId.empty()) return true;
         active = false;
         if (!retireSessionLocked(lock, std::chrono::seconds(3), "CAMERA_PROFILE_SWITCH")) {
-            diag("CAMERA_PROFILE_SWITCH_ABORT reason=session_close_timeout");
-            return true;
+            diag("CAMERA_PROFILE_SWITCH_FORCED reason=session_close_timeout");
+            forceRetireSessionLocked(lock, "CAMERA_PROFILE_SWITCH");
         }
         teardownCameraResourcesLocked(lock);
         active = true;
@@ -325,8 +375,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
     // Exposure start of the burst's previous frame (MONOTONIC ms; -1 none).
     std::atomic<int64_t> longExposureLastStartMs{-1};
     std::atomic<int32_t> longExposureGapSlot{0};
-    int64_t burstGapEstMs(bool captureStream) const {
-        return longExposureGapEstMs[captureStream ? 1 : 0].load(std::memory_order_relaxed);
+    int64_t burstGapEstMs(bool photoStream) const {
+        return longExposureGapEstMs[photoStream ? 1 : 0].load(std::memory_order_relaxed);
     }
     std::atomic<int> lastLongExposureHonored{-1};  // -1 none yet, 0 shortened, 1 honored
     std::chrono::steady_clock::time_point longExposureSubmitted{};
@@ -431,6 +481,24 @@ struct NativeCameraController::Impl final : CameraEventSink {
         } else if (control.appliedExposureTimeNs && control.appliedSensitivity) {
             e = {*control.appliedExposureTimeNs, *control.appliedSensitivity};
         }
+        // With levels the viewfinder's black floor confirms, the still takes that checked frame's exposure. Unconfirmed
+        // or mismatched levels never cancel the still: it goes out with the normal exposure and the log says so, since
+        // a full-size frame with a doubtful exposure is still evidence and a cancelled one is none.
+        if (deviceSession.cameraContext()->guardStillExposure && control.exposureMode != ExposureControlMode::Manual) {
+            const auto checked = stillExposureGuard.checked(generation, monotonicMs());
+            const auto measured = checked ? StillExposureGuard::requestExposure(*checked,
+                results.sensitivityReportedPerRequest().value_or(1.0),
+                control.exposureMode == ExposureControlMode::ShutterPriority ? control.requestedExposureTimeNs : 0,
+                control.exposureMode == ExposureControlMode::IsoPriority ? control.requestedSensitivity : 0)
+                                          : std::nullopt;
+            if (measured) {
+                e = {measured->exposureTimeNs, measured->sensitivity};
+                diag("CAMERA_STILL_EXPOSURE_CHECK timestampNs=" + std::to_string(checked->timestampNs) + " levels=consistent");
+            } else {
+                diag("CAMERA_STILL_EXPOSURE_CHECK levels=unverified tag=" + std::to_string(requestId) +
+                     " exposure=normal " + stillExposureGuard.describe(generation, monotonicMs()));
+            }
+        }
         if (e.exposureTimeNs <= 0 || e.sensitivity <= 0) {
             diag("CAMERA_FULL_SIZE_SUBMIT sent=0 reason=no_exposure tag=" + std::to_string(requestId));
             return abandon();
@@ -459,6 +527,10 @@ struct NativeCameraController::Impl final : CameraEventSink {
             fullSizeDecision = FullSizeDecision::None;
             if (!valid()) return abandon();
             if (fullSizeDecisionRepeating) (void)deviceSession.stopRepeating([this](const std::string& line) { diag(line); });
+        }
+        if (deviceSession.stopViewfinderForPhotos() && !fullSizeDecisionRepeating) {
+            if (!deviceSession.stopRepeating([this](const std::string& line) { diag(line); })) return abandon();
+            fullSizeDecisionRepeating = true;  // Existing completion/abandon path restores the viewfinder.
         }
         const std::vector<CameraRequestPipeline::BracketExposure> exposures(count, e);
         // The ring runs from the press over queue + exposure + readout: the
@@ -538,8 +610,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         longExposureSubmitted = std::chrono::steady_clock::now();
         const std::vector<CameraRequestPipeline::BracketExposure> exposures(
             count, CameraRequestPipeline::BracketExposure{pair->exposureTimeNs, pair->sensitivity});
-        const bool sent = requests.captureBracket(deviceSession.session(), deviceSession.request(),
-                                                  deviceSession.callbackContext(), control, exposures, requestId);
+        const bool sent = requests.captureBracket(deviceSession.session(), deviceSession.request(), control, exposures, requestId);
         diag("CAMERA_LONG_EXPOSURE_SUBMIT sent=" + std::to_string(sent ? 1 : 0) + " tag=" + std::to_string(requestId) +
              " count=" + std::to_string(count) +
              " exposureNs=" + std::to_string(pair->exposureTimeNs) + " iso=" + std::to_string(pair->sensitivity) +
@@ -624,8 +695,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
             diag(std::string("CAMERA_BRACKET_SKIPPED longEv=") + gain + " limit=exposure");
             return false;
         }
-        return requests.captureBracket(deviceSession.session(), deviceSession.request(), deviceSession.callbackContext(),
-                                       control, exposures, requestId);
+        return requests.captureBracket(deviceSession.session(), deviceSession.request(), control, exposures, requestId);
     }
 
     // Calibration is part of lens startup, before any preview is published.
@@ -643,8 +713,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
         if (const auto route = selectedRouteLocked()) {
             std::ostringstream keys;
             keys.precision(17);
-            for (const auto& setting : route->keys) {
-                if (!setting.enabled || setting.scope != CameraKeySetting::Scope::Session) continue;
+            for (const auto& setting : route->vendorKeys) {
+                if (!setting.enabled || !keyAppliesIn(setting.scope, CameraKeySetting::Scope::Session)) continue;
                 keys << '|' << setting.tag << '=';
                 for (std::size_t i = 0; i < setting.values.size(); ++i) keys << (i ? "," : "") << setting.values[i];
             }
@@ -701,8 +771,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // Geometric midpoint avoids the manual endpoints that can be clamped.
         const int32_t probeIso = static_cast<int32_t>(std::llround(
             std::sqrt(double(std::max(1, caps.sensitivityMin)) * double(std::max(1, caps.advertisedSensitivityMax)))));
-        const bool sent = requests.captureBracket(deviceSession.session(), deviceSession.request(),
-                                                  deviceSession.callbackContext(), control,
+        const bool sent = requests.captureBracket(deviceSession.session(), deviceSession.request(), control,
                                                   {{exposure, probeIso}}, metadata::kSensitivityProbeRequestId);
         diag(std::string("CAMERA_SENSITIVITY_PROBE sent=") + (sent ? "1" : "0") + " exposureNs=" +
              std::to_string(exposure) + " iso=" + std::to_string(probeIso));
@@ -732,11 +801,9 @@ struct NativeCameraController::Impl final : CameraEventSink {
         auto metering = meteringRequestLocked();
         const auto trigger = metering.trigger;
         metering.trigger = CameraFocusTrigger::Idle;
-        const bool submitted = requests.submit(deviceSession.session(), deviceSession.request(),
-                                               deviceSession.callbackContext(), control, metering);
+        const bool submitted = requests.submit(deviceSession.session(), deviceSession.request(), control, metering);
         if (submitted && trigger != CameraFocusTrigger::Idle) {
-            if (requests.captureAfTrigger(deviceSession.session(), deviceSession.request(),
-                                          deviceSession.callbackContext(), control, trigger))
+            if (requests.captureAfTrigger(deviceSession.session(), deviceSession.request(), control, trigger))
                 focusControls.finishTrigger();
             else
                 diag(std::string("CAMERA_AF_TRIGGER_FAILED trigger=") +
@@ -794,8 +861,12 @@ struct NativeCameraController::Impl final : CameraEventSink {
         rawrAePending.store(0, std::memory_order_relaxed);
         focusControls.reset(control);
         starting = true;
+        LensRoute requestedRoute = *requested;
+        if (const auto outcome = applyCameraApiOverride(requestedRoute, systemProperty("debug.rawr.camera_api"));
+            !outcome.empty())
+            diag("CAMERA_API_OVERRIDE lens=" + requestedRoute.lensId + " " + outcome);
         const std::optional<LensRoute> selected =
-            deviceSession.select(*requested, [this](const std::string& line) { diag(line); });
+            deviceSession.select(requestedRoute, [this](const std::string& line) { diag(line); });
         if (!selected) {
             active = false;
             starting = false;
@@ -813,8 +884,9 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // Vendor full-size modes: the HAL's S/I priority AE crashes the camera
         // provider once it raises gain (vivo X300 Ultra 50 MP); only rawr AE
         // may own S/I there.
-        halShutterPriority = control.capabilities.shutterPrioritySupported && !route.unlistedStream;
-        halIsoPriority = control.capabilities.isoPrioritySupported && !route.unlistedStream;
+        const CameraWorkarounds workarounds = effectiveWorkarounds(route);
+        halShutterPriority = control.capabilities.shutterPrioritySupported && !workarounds.appPriorityAe;
+        halIsoPriority = control.capabilities.isoPrioritySupported && !workarounds.appPriorityAe;
         applyAePriorityPreferenceLocked();
         publishProfileLocked();
         control.focusRequestId = previousControl.focusRequestId;
@@ -882,16 +954,18 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // on a request without a target fps range (AE off). Continuous AF
         // without regions and manual focus stay.
         // Device safety survives imported/user-edited lens profiles.
-        control.capabilities.tapAfHoldsUntilNextTap =
-            builtInMatch.profileId == "vivo_x300_ultra" || !route.vendorGate.empty();
+        control.capabilities.tapAfHoldsUntilNextTap = workarounds.holdTapFocus;
+        control.capabilities.keepTemplateRegions = workarounds.keepTemplateRegions;
         control.capabilities.faceAfSteering = !control.capabilities.tapAfHoldsUntilNextTap;
         control.capabilities.dngOnly =
-            route.captureStream && uint64_t(route.captureStream->width) * route.captureStream->height > kDngOnlyPixels;
-        if (route.unlistedStream) {
+            route.photoStream && uint64_t(route.photoStream->width) * route.photoStream->height > kDngOnlyPixels;
+        control.capabilities.frameRate = route.frameRate;
+        control.capabilities.minimalRequestDefaults = route.requestDefaults == RequestDefaults::Minimal;
+        if (workarounds.noTapFocus) {
             control.capabilities.tapAfSupported = false;
             control.capabilities.maxAfRegions = 0;
-            control.capabilities.targetFpsRangeRequired = true;
         }
+        if (workarounds.alwaysSendFrameRate) control.capabilities.targetFpsRangeRequired = true;
         diag(describeCameraControlCapabilities(control));
 
         diag(metadata::describe(*deviceSession.cameraContext()));
@@ -903,12 +977,44 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // `debug.rawr.companion_stream 0|1` overrides.
         const std::string companionOverride = systemProperty("debug.rawr.companion_stream");
         const std::string companionRouteKey = route.cameraId + '/' + route.physicalCameraId;
-        // A capture-stream route (vivo seamless) needs a YUV output configured or
-        // its full-size stills crash the camera provider.
-        const bool companionStream =
-            route.captureStream.has_value() || companionOverride == "1" ||
-            (companionOverride != "0" && !builtInMatch.verified && !route.unlistedStream &&
-             !rawOnlyRoutes.count(companionRouteKey));
+        // Capture-stream routes default to a YUV output: vivo seamless stills
+        // require it. Other recipes can explicitly opt out.
+        // The companion the unverified-device rule adds may be dropped by the
+        // start ladder; a forced one (override, capture-stream route) may not.
+        const bool companionByRule = !route.disableCompanion && companionOverride != "0" &&
+                                     !builtInMatch.verified && !workarounds.noAutoCompanion;
+        const bool ladderEligible = CameraStartLadder::eligible(companionByRule, route.photoStream.has_value(),
+                                                                route.companionSize.has_value(), companionOverride == "1");
+        const std::string ladderKey = route.lensId + '|' + describeRoute(route);
+        const int64_t viewfinderExposureNs =
+            control.exposureMode == ExposureControlMode::Auto ? 0 : control.requestedExposureTimeNs;
+        if (effectiveCameraApi(route) == CameraApi::Java && !javaCameraBackendInstalled()) {
+            // Operating mode and stream use case exist only on the Java API. Fail visibly; running the lens without
+            // them would give a different mode with no explanation.
+            diag("CAMERA_API lens=" + route.lensId + " cameraApi=java available=0 reason=not_installed");
+            control.capabilities.lensUnavailable = true;
+            rollbackCameraStartLocked(lock, "backend_unavailable");
+            return;
+        }
+        const auto ladderPlan =
+            startLadder.begin(ladderKey, deviceSession.generation(), monotonicMs(), viewfinderExposureNs, ladderEligible);
+        ladderGeneration.store(startLadder.watching(deviceSession.generation()) ? deviceSession.generation() : 0,
+                               std::memory_order_release);
+        if (ladderPlan == CameraStartLadder::Plan::GaveUp) {
+            diag("CAMERA_START_LADDER lens=" + route.lensId + " step=gave_up action=not_started");
+            control.capabilities.lensUnavailable = true;
+            rollbackCameraStartLocked(lock, "start_ladder_gave_up");
+            return;
+        }
+        const SessionRecipe recipe = resolveSessionRecipe(
+            route, RecipeInputs{companionOverride == "1",
+                                companionByRule && ladderPlan != CameraStartLadder::Plan::RawOnly &&
+                                    !rawOnlyRoutes.count(companionRouteKey)});
+        const bool companionStream = recipe.companion.has_value();
+        if (route.disableCompanion)
+            diag("CAMERA_COMPANION_DISABLED lens=" + route.lensId + " source=profile");
+        if (ladderPlan == CameraStartLadder::Plan::RawOnly)
+            diag("CAMERA_START_LADDER lens=" + route.lensId + " step=raw_only companion=0");
         std::ostringstream selection;
         selection << "CAMERA_NDK_SELECTION profile=" << profile.id << " model=" << deviceModel
                   << " lensId=" << route.lensId << " cameraId=" << route.cameraId
@@ -934,10 +1040,10 @@ struct NativeCameraController::Impl final : CameraEventSink {
             if (configured && callbacks.createRawWindow)
                 window = callbacks.createRawWindow(setupGeneration, route.stream.width, route.stream.height,
                                                    route.stream.format);
-            if (configured && window && route.captureStream && callbacks.createCaptureWindow)
-                captureWindow = callbacks.createCaptureWindow(setupGeneration, route.captureStream->width,
-                                                              route.captureStream->height,
-                                                              route.captureStream->format);
+            if (configured && window && route.photoStream && callbacks.createCaptureWindow)
+                captureWindow = callbacks.createCaptureWindow(setupGeneration, route.photoStream->width,
+                                                              route.photoStream->height,
+                                                              route.photoStream->format);
         } catch (...) {
             configured = false;
         }
@@ -949,7 +1055,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
             lock.lock();
             return;
         }
-        if (!configured || !window || (route.captureStream && !captureWindow)) {
+        if (!configured || !window || (route.photoStream && !captureWindow)) {
             // Not handed to the device session yet: nothing else owns them.
             lock.unlock();
             if (configured && window && callbacks.destroyRawWindow) callbacks.destroyRawWindow(setupGeneration);
@@ -962,8 +1068,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
         }
         deviceSession.setRawWindow(window);
         deviceSession.setCaptureWindow(captureWindow);
-        fullSizeBurstLimit = route.captureBurst;
-        fullSizeBurstSequential = route.captureBurstSequential;
+        fullSizeBurstLimit = route.mergeFrameLimit;
+        fullSizeBurstSequential = route.mergeFramesOneByOne;
         const auto stillCurrent = [&] {
             return active && !shutDown && setupGeneration == deviceSession.generation();
         };
@@ -972,15 +1078,24 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // A stop or lens switch may have retired this start while open waited.
         // Its teardown owns the old window; do not roll back a newer generation.
         if (!stillCurrent()) return;
-        if (!opened || !deviceSession.createSession(window, selected, control, meteringRequestLocked(),
+        const bool sessionCreated = opened && deviceSession.createSession(window, selected, recipe, control, meteringRequestLocked(),
                                          ndkCallbacks, requests, [this](const std::string& line) { diag(line); },
-                                         companionStream)) {
+                                         [&](int32_t delayMs) {
+                                             captureChanged.wait_for(lock, std::chrono::milliseconds(delayMs),
+                                                                     [&] { return !stillCurrent(); });
+                                             return stillCurrent();
+                                         });
+        if (!stillCurrent()) return;
+        if (!sessionCreated) {
             // Some HALs reject RAW + YUV at configure time (observed: physical
             // RAW16 + YUV on a Xiaomi logical camera). Retry this route once
             // RAW-only through a full reopen: the failed configure can take
             // the device down with it.
-            if (opened && companionStream && companionOverride != "1" &&
-                rawOnlyRoutes.insert(companionRouteKey).second) {
+            const bool retryRawOnly =
+                opened && companionStream && companionOverride != "1" && !route.companionSize &&
+                (ladderEligible ? !startLadder.rawOnly(ladderKey) : rawOnlyRoutes.insert(companionRouteKey).second);
+            if (retryRawOnly) {
+                if (ladderEligible) startLadder.configureRejected(ladderKey);
                 rollbackCameraStartLocked(lock, "companion_session_rejected");
                 if (shutDown) return;
                 diag("CAMERA_COMPANION_FALLBACK route=" + companionRouteKey + " retry=raw_only");
@@ -995,7 +1110,9 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // The companion only has to start the pipeline. Producing it on every
         // frame holds each capture result back about a frame behind its RAW
         // image, which starves the preview pairer.
-        companionDetachGeneration.store(companionStream ? deviceSession.generation() : 0, std::memory_order_release);
+        // A profile companion stays targeted: the mode needs it on every frame.
+        companionDetachGeneration.store(companionStream && recipe.companion->detach ? deviceSession.generation() : 0,
+                                        std::memory_order_release);
         diag("CAMERA_START_DONE generation=" + std::to_string(deviceSession.generation()));
     }
 
@@ -1011,6 +1128,20 @@ struct NativeCameraController::Impl final : CameraEventSink {
     // leaked context is bounded to one small struct per wedge. Must be
     // followed by teardownCameraResourcesLocked() so the next start reopens
     // the device instead of no-op'ing on the leaked handle.
+    // Logs a start-ladder step. Returns true when the start failed and the
+    // caller must request a restart (a device error restarts on its own).
+    bool noteLadderOutcomeLocked(CameraStartLadder::Outcome outcome, const char* reason) {
+        using Outcome = CameraStartLadder::Outcome;
+        if (outcome == Outcome::None) return false;
+        ladderGeneration.store(0, std::memory_order_release);
+        const char* step = outcome == Outcome::Retry          ? "retry"
+                           : outcome == Outcome::RetryRawOnly ? "raw_only"
+                                                              : "gave_up";
+        diag("CAMERA_START_LADDER lens=" + lensId + " step=" + step + " reason=" + reason +
+             " generation=" + std::to_string(deviceSession.generation()));
+        return true;
+    }
+
     void forceRetireSessionLocked(std::unique_lock<std::mutex>&, const char* prefix) {
         deviceSession.forceRetire(prefix, [this](const std::string& line) { diag(line); });
     }
@@ -1084,7 +1215,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         std::lock_guard<std::mutex> lock(mutex);
         if (callbackGeneration == deviceSession.generation()) diag(message);
     }
-    void cameraCaptureStarted(uint64_t callbackGeneration, const ACaptureRequest* requestCopy, int64_t sensorTimestamp) override {
+    void cameraCaptureStarted(uint64_t callbackGeneration, const CameraRequest* requestCopy, int64_t sensorTimestamp) override {
         // Validate before reading borrowed provenance, including late callbacks
         // from a forcibly retired session whose request storage is gone.
         std::lock_guard<std::mutex> lock(mutex);
@@ -1092,7 +1223,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         const uint64_t tag = longExposureTag.load(std::memory_order_relaxed);
         if (tag == 0) return;
         void* userContext = nullptr;
-        if (ACaptureRequest_getUserContext(requestCopy, &userContext) != ACAMERA_OK || !userContext) return;
+        if (!requestCopy || requestCopy->userContext(&userContext) != ACAMERA_OK || !userContext) return;
         if (static_cast<const CameraRequestProvenance*>(userContext)->optimizedStillRequestId != tag) return;
         if (deviceSession.hasCaptureStream())
             fullSizeLastExposureTimestamp = sensorTimestamp + longExposureNs.load(std::memory_order_relaxed);
@@ -1145,16 +1276,29 @@ struct NativeCameraController::Impl final : CameraEventSink {
     void cameraCaptureFailed(uint64_t callbackGeneration) override {
         // Set once at construction; the receiver checks the generation.
         if (callbacks.captureFailed) callbacks.captureFailed(callbackGeneration);
+        if (ladderGeneration.load(std::memory_order_acquire) != callbackGeneration) return;
+        bool restart = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (callbackGeneration != deviceSession.generation()) return;
+            restart = noteLadderOutcomeLocked(startLadder.captureFailed(callbackGeneration), "capture_failed");
+        }
+        if (restart && callbacks.acquisitionFailed) callbacks.acquisitionFailed(callbackGeneration, 0);
     }
-    void cameraStillFailed(uint64_t generation, const ACaptureRequest* request) override {
+    void cameraStillFailed(uint64_t generation, const CameraRequest* request, const char* kind, int64_t frameNumber,
+                           int reason) override {
         uint64_t tag = 0;
         {
             std::lock_guard<std::mutex> lock(mutex);
             if (generation != deviceSession.generation()) return;
             void* provenance = nullptr;
-            if (!request || ACaptureRequest_getUserContext(request, &provenance) != ACAMERA_OK || !provenance) return;
+            if (!request || request->userContext(&provenance) != ACAMERA_OK || !provenance) return;
             tag = static_cast<const CameraRequestProvenance*>(provenance)->optimizedStillRequestId;
             if (!tag) return;
+            // Every failed still is logged, past the per-session cap on failure lines: it is what the bundle is for.
+            diag(std::string("CAMERA_STILL_FAILED tag=") + std::to_string(tag) + " kind=" + kind +
+                 " frame=" + std::to_string(frameNumber) + " reason=" + std::to_string(reason) +
+                 " lens=" + control.capabilities.lensId);
             if (tag == metadata::kFullSizeDecisionRequestId) {
                 // Not a capture: the still that follows is still submitted.
                 if (fullSizeDecision == FullSizeDecision::Waiting) fullSizeDecision = FullSizeDecision::Failed;
@@ -1177,6 +1321,8 @@ struct NativeCameraController::Impl final : CameraEventSink {
         {
             std::lock_guard<std::mutex> lock(mutex);
             if (generation != deviceSession.generation()) return;
+            // The restart that follows (acquisitionFailed below) uses the new step.
+            (void)noteLadderOutcomeLocked(startLadder.deviceFailed(generation), "device_error");
             fullSizeSequence.fail();
             longExposureTag.store(0, std::memory_order_relaxed);
             longExposureStartMs.store(-1, std::memory_order_relaxed);
@@ -1212,12 +1358,12 @@ struct NativeCameraController::Impl final : CameraEventSink {
         }
         if (failedTag && callbacks.acquisitionFailed) callbacks.acquisitionFailed(generation, failedTag);
     }
-    void cameraSessionClosed(uint64_t callbackGeneration, ACameraCaptureSession* session) override {
+    void cameraSessionClosed(uint64_t callbackGeneration, const void* session) override {
         std::lock_guard<std::mutex> lock(mutex);
         diag("CAMERA_NDK_SESSION_CLOSED generation=" + std::to_string(callbackGeneration));
         deviceSession.sessionClosed(callbackGeneration, session);
     }
-    void cameraCaptureCompleted(uint64_t callbackGeneration, const ACaptureRequest* requestCopy,
+    void cameraCaptureCompleted(uint64_t callbackGeneration, const CameraRequest* requestCopy,
                                 const ACameraMetadata* result) override {
         std::unique_lock<std::mutex> lock(mutex);
         results.auditCallback(callbackGeneration, deviceSession.generation(), active,
@@ -1225,8 +1371,9 @@ struct NativeCameraController::Impl final : CameraEventSink {
         // Validate before decoding a request's borrowed provenance pointer.
         if (!active || callbackGeneration != deviceSession.generation() || !deviceSession.cameraContext() || !result)
             return;
+        deviceSession.logKeyResultsOnce(result, [this](const std::string& line) { diag(line); });
         auto actions = results.process(requestCopy, result, control, deviceSession.cameraContext(),
-                                       deviceSession.staticLevels(), deviceSession.sensorModeOverridden(),
+                                       deviceSession.staticLevels(), deviceSession.captureStaticLevels(), deviceSession.hasCaptureStream(), deviceSession.sensorModeOverridden(),
                                        requests.latestSubmittedSerial());
         captureChanged.notify_all();
         if (!actions.frame) return;
@@ -1246,11 +1393,10 @@ struct NativeCameraController::Impl final : CameraEventSink {
             std::string line = "CAMERA_FULL_SIZE_RESULT tag=" +
                                std::to_string(actions.frame->optimizedStillRequestId.value_or(0)) +
                                " timestampNs=" + std::to_string(actions.frame->timestampNs);
-            for (const char* name : {"vcf.parameter.seamlessMode", "vivo.parameter.highResolutionDngType",
-                                     "vivo.control.seamless.remosaic.enable", "vivo.control.sensorMode"}) {
-                const auto value = deviceSession.vendorResultValue(result, name);
-                line += std::string(" ") + name + "=" + (value ? std::to_string(*value) : "missing");
-                if (std::string_view(name) == "vcf.parameter.seamlessMode") actions.frame->vendorSeamlessMode = value;
+            for (const auto& probe : gatePreset(deviceSession.stillGate()).resultProbes) {
+                const auto value = deviceSession.vendorResultValue(result, probe.tag);
+                line += " " + probe.tag + "=" + (value ? std::to_string(*value) : "missing");
+                if (probe.alias == "seamlessMode") actions.frame->vendorSeamlessMode = value;
             }
             diag(line);
         }
@@ -1330,6 +1476,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
     CameraControlState getControlState() const {
         std::lock_guard<std::mutex> lock(mutex);
         CameraControlState snapshot = control;
+        snapshot.capabilities.profileError = profileError;
         if (control.focusObservedEpoch != control.focusEpoch || control.focusObservedAtMs <= 0 ||
             monotonicMs() - control.focusObservedAtMs > 1500)
             snapshot.afState.reset();
@@ -1834,6 +1981,13 @@ struct NativeCameraController::Impl final : CameraEventSink {
     }
     void tickControls(int64_t nowMs) {
         std::unique_lock<std::mutex> lock(mutex);
+        if (const auto watched = ladderGeneration.load(std::memory_order_acquire);
+            watched != 0 && watched == deviceSession.generation() &&
+            noteLadderOutcomeLocked(startLadder.tick(watched, nowMs), "no_first_frame")) {
+            lock.unlock();
+            if (callbacks.acquisitionFailed) callbacks.acquisitionFailed(watched, 0);
+            return;
+        }
         if (fullSizeSequence.failed()) return;
         if (fullSizeSequence.expire(nowMs)) {
             invalidateFocus(control);
@@ -1915,11 +2069,17 @@ void NativeCameraController::setLensId(const std::string& lensId) { impl_->setLe
 const CameraProfile& deviceBuiltInCameraProfile() { return builtInCameraProfile(activeProfileId(deviceProfileMatch())); }
 
 bool NativeCameraController::setProfile(CameraProfile profile) { return impl_->setProfile(std::move(profile)); }
+void NativeCameraController::rejectProfile(const std::string& error) { impl_->rejectProfile(error); }
 void NativeCameraController::setExperimentalZeroCopyEnabled(bool enabled) {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     impl_->experimentalZeroCopyEnabled = enabled;
 }
-void NativeCameraController::rawFrameArrived(uint64_t generation) {
+void NativeCameraController::framePaired(uint64_t generation) {
+    if (uint64_t watched = generation;
+        generation != 0 && impl_->ladderGeneration.compare_exchange_strong(watched, 0, std::memory_order_acq_rel)) {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        impl_->startLadder.firstFrame(generation);
+    }
     uint64_t expected = generation;
     if (generation == 0 || impl_->companionDetachGeneration.load(std::memory_order_acquire) != generation ||
         !impl_->companionDetachGeneration.compare_exchange_strong(expected, 0, std::memory_order_acq_rel))
@@ -1999,6 +2159,24 @@ void NativeCameraController::setRawrAeConfig(const RawrAeConfig& config) { impl_
 NativeCameraController::RawrAeContext NativeCameraController::rawrAeContext() const {
     std::lock_guard<std::mutex> lock(impl_->rawrAeContextMutex);
     return impl_->rawrAePublished;
+}
+void NativeCameraController::observePreviewBlackFloor(const metadata::FrameMetadataSnapshot& frame,
+                                                       const std::optional<std::array<float, 4>>& floor) {
+    if (!frame.cameraContext || !frame.cameraContext->guardStillExposure || frame.optimizedStillRequestId) return;
+    const bool manualResult = frame.aeMode == 0 && frame.requestedSensitivity && frame.requestedExposureTimeNs;
+    const auto four = [](const std::array<float, 4>& v) {
+        char text[64];
+        std::snprintf(text, sizeof(text), "%.0f,%.0f,%.0f,%.0f", v[0], v[1], v[2], v[3]);
+        return std::string(text);
+    };
+    char white[24];
+    std::snprintf(white, sizeof(white), "%.0f", frame.effectiveWhiteLevel);
+    impl_->stillExposureGuard.observe(frame.cameraContext->cameraContextGeneration,
+        {manualResult ? *frame.requestedExposureTimeNs : frame.exposureTimeNs,
+         manualResult ? *frame.requestedSensitivity : frame.sensitivity, !manualResult, frame.timestampNs},
+        Impl::monotonicMs(), blackFloorAgrees(floor, frame.blackLevelPhysicalRggb, frame.effectiveWhiteLevel),
+        "floor=" + (floor ? four(*floor) : std::string("none")) + " black=" + four(frame.blackLevelPhysicalRggb) +
+            " white=" + white);
 }
 void NativeCameraController::setRawrAeRequest(int64_t exposureTimeNs, int32_t sensitivity) {
     if (exposureTimeNs <= 0 || exposureTimeNs >= (int64_t(1) << 40) || sensitivity <= 0 || sensitivity > 0xFFFFFF)

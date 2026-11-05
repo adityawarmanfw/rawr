@@ -66,7 +66,7 @@ void setRawrAutoExposure(EngineHandle h, bool enabled, int nightLook, int isoMin
     c.shutterStartNs = std::max<int64_t>(0, shutterStartNs);
     c.shutterMaxNs = std::max<int64_t>(0, shutterMaxNs);
     c.balanceEv = std::isfinite(balanceEv) ? std::clamp(balanceEv, -2.0f, 2.0f) : 0.0f;
-    c.maxDigitalGainEv = std::isfinite(maxDigitalGainEv) ? std::clamp(maxDigitalGainEv, 0.0f, 4.0f) : 2.0f;
+    c.maxDigitalGainEv = std::isfinite(maxDigitalGainEv) ? std::clamp(maxDigitalGainEv, 0.0f, 16.0f) : 2.0f;
     c.speed = std::clamp(speed, 0, 2);
     c.metering = std::clamp(metering, 0, 3);
     engine(h)->cameraControls().setRawrAeConfig(c);
@@ -173,6 +173,9 @@ bool setRecordingFps(EngineHandle h, int fps) noexcept { return h && engine(h)->
 void setPreviewForeground(EngineHandle h, bool foreground) noexcept {
     if (h) engine(h)->cameraControls().setForeground(foreground);
 }
+void setUiPresentationActive(EngineHandle h, bool active) noexcept {
+    if (h) engine(h)->setUiPresentationActive(active);
+}
 void setInitialConfigReady(EngineHandle h) noexcept {
     if (h) engine(h)->cameraControls().setInitialConfigReady();
 }
@@ -183,6 +186,9 @@ void tickCameraSession(EngineHandle h) noexcept {
     if (!h) return;
     engine(h)->tickRawReaderUsage();
     engine(h)->cameraControls().tickSession();
+}
+void flushDiagnostics(EngineHandle h) noexcept {
+    if (h) engine(h)->flushDiagnostics();
 }
 bool canRecoverStills(EngineHandle h) noexcept { return h && engine(h)->cameraControls().canRecoverStills(); }
 void setVideoMode(EngineHandle h, bool video, int fps) noexcept {
@@ -211,6 +217,7 @@ uint64_t requestRawStillCapture(EngineHandle h, rawrcam::encoding::dng::DngCaptu
     }
 }
 std::string pollDngWriteCompletion(EngineHandle h) { return h ? engine(h)->pollDngWriteCompletion() : std::string{}; }
+bool stillCaptureHoldsCamera(EngineHandle h) { return h && engine(h)->stillCaptureHoldsCamera(); }
 std::string pollJpegWriteCompletion(EngineHandle h) { return h ? engine(h)->pollJpegWriteCompletion() : std::string{}; }
 uint64_t recoverStill(EngineHandle h, const std::string& name, bool multiframe, int dng, int merged, int jpeg) {
     if (h) return engine(h)->recoverStill(name, multiframe, dng, merged, jpeg);

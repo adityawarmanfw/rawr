@@ -160,7 +160,9 @@ internal object NativeCapabilityProjection {
                 stabilizationOptions = emptyList(),
                 supportedWhiteBalanceModes = supportedWbModes,
                 manualWhiteBalanceSupported = s.manualWhiteBalanceSupported,
-                dngOnly = s.dngOnly
+                dngOnly = s.dngOnly,
+                lensUnavailable = s.lensUnavailable,
+                profileError = s.profileError
             )
         return NativeExposureProjection(
             caps,

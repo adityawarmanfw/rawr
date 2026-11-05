@@ -9,10 +9,11 @@ dump is enough to find, tap and check a control. Commands:
 
   ui state [-a]            visible tagged/labelled nodes (-a: every node of the app)
   ui tap <sel>             tap the centre of a node
+  ui scroll <sel> [up|down]  scroll a tagged container (default down)
   ui text <sel>            print a node's text / description / flags
   ui wait <sel> [-g] [-t S]  wait until visible (-g: until gone), default 10 s
   ui open <section>        deep-link Settings, e.g. Image, Capture, FilmSim
-  ui app | stop | back     launch capture / force-stop / system back
+  ui app | stop | back | home [--gesture]  launch / stop / Back / system Home
   ui shot [name]           screenshot to tmp/ui/<name>.png, downscaled
   ui audit                 clickable nodes with no id (the "needs a tag" list)
   ui seq "tap a" "wait b"  several commands in one call; stops at the first failure
@@ -141,6 +142,21 @@ def cmd_tap(args):
     print(f"tap {args[0]} @{n.center[0]},{n.center[1]}")
 
 
+def cmd_scroll(args):
+    """Scroll a tagged container, deriving the gesture from its visible bounds."""
+    if not args or (len(args) > 1 and args[1] not in ("up", "down")):
+        raise UiError("scroll needs a selector and optional up|down (default down)")
+    n = require(dump(), args[0])
+    if "scroll" not in n.flags:
+        raise UiError(f"not scrollable: {args[0]}")
+    left, top, right, bottom = n.bounds
+    x = (left + right) // 2
+    upper, lower = top + (bottom - top) // 4, top + (bottom - top) * 3 // 4
+    start, end = (upper, lower) if len(args) > 1 and args[1] == "up" else (lower, upper)
+    adb("shell", "input", "swipe", str(x), str(start), str(x), str(end), "350")
+    print(f"scroll {args[0]} {args[1] if len(args) > 1 else 'down'}")
+
+
 def cmd_text(args):
     n = require(dump(), args[0])
     print(n.line())
@@ -191,6 +207,24 @@ def cmd_back(_):
     print("back")
 
 
+def cmd_home(args):
+    if args == ["--gesture"]:
+        # System navigation has no app testTag. Derive its edge gesture from
+        # the current display size; never use coordinates to select app controls.
+        sizes = re.findall(r"(\d+)x(\d+)", adb("shell", "wm", "size"))
+        if not sizes:
+            raise UiError("cannot determine display size for system Home gesture")
+        width, height = map(int, sizes[-1])
+        adb("shell", "input", "swipe", str(width // 2), str(height - 2),
+            str(width // 2), str(height * 55 // 100), "250")
+        print("home gesture")
+    elif not args:
+        adb("shell", "input", "keyevent", "KEYCODE_HOME")
+        print("home")
+    else:
+        raise UiError("usage: ui home [--gesture]")
+
+
 def cmd_shot(args):
     SHOTS.mkdir(parents=True, exist_ok=True)
     out = SHOTS / f"{args[0] if args else 'shot'}.png"
@@ -209,8 +243,8 @@ def cmd_audit(_):
     print(f"{len(bare)} clickable node(s) without a tag")
 
 
-COMMANDS = {"state": cmd_state, "tap": cmd_tap, "text": cmd_text, "wait": cmd_wait, "open": cmd_open,
-            "app": cmd_app, "stop": cmd_stop, "back": cmd_back, "shot": cmd_shot, "audit": cmd_audit}
+COMMANDS = {"state": cmd_state, "tap": cmd_tap, "text": cmd_text, "scroll": cmd_scroll, "wait": cmd_wait, "open": cmd_open,
+            "app": cmd_app, "stop": cmd_stop, "back": cmd_back, "home": cmd_home, "shot": cmd_shot, "audit": cmd_audit}
 
 
 def run(argv: list[str]):

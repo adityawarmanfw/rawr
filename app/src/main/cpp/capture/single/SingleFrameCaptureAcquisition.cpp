@@ -42,6 +42,10 @@ bool SingleFrameCaptureAcquisition::busy() const noexcept {
     std::lock_guard<std::mutex> lock(mutex_);
     return pending_.has_value() || ready_.has_value() || failure_.has_value() || workerRunning_;
 }
+bool SingleFrameCaptureAcquisition::copyingCameraImage() const noexcept {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return workerRunning_;
+}
 bool SingleFrameCaptureAcquisition::deferSubmittedFrame(const metadata::FrameMetadataSnapshot& metadata,
                                                         const color::FrameColorTransform& colorState,
                                                         const tonemap::TonemapParams& tonemapParams, float aePostGain,

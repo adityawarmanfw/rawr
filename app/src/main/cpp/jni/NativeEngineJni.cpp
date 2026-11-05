@@ -13,12 +13,14 @@
 #include "camera/CameraProbe.h"
 #include "camera/CameraMetadataTags.h"
 #include "camera/VendorCameraGate.h"
+#include "camera/JavaCameraDriver.h"
 #include "camera/CameraProfileJson.h"
 #include "camera/CameraVideoCapabilities.h"
 #include "camera/NativeCameraController.h"
 #include "capture/CaptureRequest.h"
 #include "color/DcpProfile.h"
 #include "diagnostics/logging/RuntimeTraceRecorder.h"
+#include "jni/CaptureGps.h"
 #include "jni/DevelopSettingsReader.h"
 #include "jni/SessionEngineApi.h"
 #include "tonemap/ColorRenderProfile.h"
@@ -265,9 +267,18 @@ extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreview
                                                                                                              jlong h) {
     rawrcam::session::setInitialConfigReady(handle(h));
 }
+extern "C" JNIEXPORT void JNICALL
+Java_com_rawr_camera_integration_NativePreviewEngine_setUiPresentationActive(JNIEnv*, jobject, jlong h, jboolean v) {
+    rawrcam::session::setUiPresentationActive(handle(h), v == JNI_TRUE);
+}
 extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreviewEngine_setStillCaptureInFlight(
     JNIEnv*, jobject, jlong h, jboolean begin) {
     rawrcam::session::setStillCaptureInFlight(handle(h), begin == JNI_TRUE);
+}
+extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreviewEngine_flushDiagnostics(JNIEnv*,
+                                                                                                        jobject,
+                                                                                                        jlong h) {
+    rawrcam::session::flushDiagnostics(handle(h));
 }
 extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreviewEngine_tickCameraSession(JNIEnv*,
                                                                                                          jobject,
@@ -672,14 +683,11 @@ static void fillCaptureSharpening(JNIEnv* env, rawrcam::capture::JpegCaptureRequ
     }
     jpeg.develop.captureSharpenIterations = rawrcam::jni::captureSharpenIterations(recipe);
 }
-static std::optional<tinydng_gps> captureGps(JNIEnv* env, jdoubleArray values) {
-    if (!values || env->GetArrayLength(values) != 6) return std::nullopt;
-    jdouble data[6];
-    env->GetDoubleArrayRegion(values, 0, 6, data);
-    if (env->ExceptionCheck()) return std::nullopt;
-    const int64_t time = std::isfinite(data[4]) && data[4] > 0 && data[4] < 253402300800000.0 ? int64_t(data[4]) : 0;
-    const int provider = data[5] >= 1 && data[5] <= 3 && std::floor(data[5]) == data[5] ? int(data[5]) : 0;
-    return rawrcam::metadata::makeGps(data[0], data[1], data[2], data[3], time, provider);
+static std::optional<tinydng_gps> captureGps(JNIEnv* env, jobject value) {
+    const auto gps = rawrcam::jni::readCaptureGps(env, value);
+    if (!gps) return std::nullopt;
+    return rawrcam::metadata::makeGps(gps->latitude, gps->longitude, gps->altitude, gps->accuracy,
+                                      gps->fixTimeMillis, gps->providerCode);
 }
 
 extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_integration_NativePreviewEngine_requestRawStillCapture(
@@ -692,7 +700,7 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_integration_NativePrevie
     jfloat defringeStrength, jfloat defringeEdgeThreshold, jfloat defringeLumaFloor, jintArray denoiseModes,
     jfloatArray denoiseStrengths, jstring captureRecipe, jfloatArray captureTone, jfloatArray captureFilmValues,
     jintArray captureFilmEnums, jboolean captureFilmEnabled, jboolean ultraHdrEnabled, jint ultraHdrGainmapQuality,
-    jint dngCompression, jdoubleArray gps) {
+    jint dngCompression, jobject gps) {
     const std::string deviceMake = jString(env, make);
     const std::string deviceModel = jString(env, model);
     const DenoiseIntent denoise = parseDenoiseSpec(env, denoiseModes, denoiseStrengths);
@@ -730,7 +738,7 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_rawr_camera_integration_NativePrevie
     jfloat defringeStrength, jfloat defringeEdgeThreshold, jfloat defringeLumaFloor, jintArray denoiseModes,
     jfloatArray denoiseStrengths, jstring captureRecipe, jfloatArray captureTone, jfloatArray captureFilmValues,
     jintArray captureFilmEnums, jboolean captureFilmEnabled, jboolean ultraHdrEnabled, jint ultraHdrGainmapQuality,
-    jint dngCompression, jdoubleArray gps) {
+    jint dngCompression, jobject gps) {
     const std::string deviceMake = jString(env, make);
     const std::string deviceModel = jString(env, model);
     const DenoiseIntent denoise = parseDenoiseSpec(env, denoiseModes, denoiseStrengths);
@@ -771,6 +779,10 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_com_rawr_camera_integration_NativePreviewEngine_pollDngWriteCompletion(JNIEnv* env, jobject, jlong h) {
     auto s = rawrcam::session::pollDngWriteCompletion(handle(h));
     return env->NewStringUTF(s.c_str());
+}
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_rawr_camera_integration_NativePreviewEngine_stillCaptureHoldsCamera(JNIEnv*, jobject, jlong h) {
+    return rawrcam::session::stillCaptureHoldsCamera(handle(h)) ? JNI_TRUE : JNI_FALSE;
 }
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_rawr_camera_integration_NativePreviewEngine_pollJpegWriteCompletion(JNIEnv* env, jobject, jlong h) {
@@ -972,13 +984,6 @@ extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_NativePreview
     }
 }
 
-extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_InternalTraceNative_clear(JNIEnv*, jobject) {
-    rawrcam::diagnostics::RuntimeTraceRecorder::instance().clear();
-}
-extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_InternalTraceNative_setRetainedRows(JNIEnv*, jobject,
-                                                                                                       jint rows) {
-    rawrcam::diagnostics::RuntimeTraceRecorder::instance().setRetainedRows(static_cast<uint32_t>(std::max(rows, 0)));
-}
 extern "C" JNIEXPORT void JNICALL Java_com_rawr_camera_integration_InternalTraceNative_recordZslArtifactPublished(
     JNIEnv*, jobject, jboolean success, jlong bytes) {
     rawrcam::diagnostics::RuntimeTraceRecorder::instance().record(
@@ -1007,4 +1012,9 @@ Java_com_rawr_camera_integration_NativePreviewEngine_installCameraTagResolver(JN
 extern "C" JNIEXPORT void JNICALL
 Java_com_rawr_camera_integration_NativePreviewEngine_installVendorCameraGate(JNIEnv* env, jobject, jobject gate) {
     rawrcam::camera::installVendorCameraGate(env, gate);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_rawr_camera_integration_NativePreviewEngine_installJavaCameraBackend(JNIEnv* env, jobject, jobject backend) {
+    rawrcam::camera::installJavaCameraBackend(env, backend);
 }

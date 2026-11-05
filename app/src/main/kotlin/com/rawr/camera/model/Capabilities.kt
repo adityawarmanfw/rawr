@@ -77,7 +77,11 @@ data class CameraCapabilities(
     /** True when the HAL advertises COLOR_CORRECTION TRANSFORM_MATRIX. */
     val manualWhiteBalanceSupported: Boolean = false,
     /** The lens saves DNG only (200 MP): the output format is shown and captured as DNG. */
-    val dngOnly: Boolean = false
+    val dngOnly: Boolean = false,
+    /** The lens's camera session never delivered a frame and recovery gave up. */
+    val lensUnavailable: Boolean = false,
+    /** Why the last lens profile was refused (the previous one stays in force); empty when none. */
+    val profileError: String = ""
 ) {
     init {
         require(lenses.isNotEmpty()) { "A usable camera capability snapshot must contain at least one lens" }

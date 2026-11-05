@@ -18,6 +18,8 @@ class SessionFrameCallbacks final : public pipeline::FrameLifecyclePort,
    public:
     explicit SessionFrameCallbacks(SessionEngine* engine);
     void postDiagnostic(const std::string& line) override;
+    void observePreviewBlackFloor(const metadata::FrameMetadataSnapshot& frame,
+                                   const std::optional<std::array<float, 4>>& floor) override;
     void postAudit(const std::string& line) override;
     void notifySwapchainOutOfDate() override;
     void finalizeDetachedStill() override;

@@ -14,6 +14,10 @@ including known zero values, in all three Exif date groups. The existing JPEG
 Exif serialization and renderer-source tests check native qualifiers, distinct
 source original/digitized groups and preservation of unknown source qualifiers.
 
+The existing `mov_muxer` scenarios also check all ten date fields and the keyed
+creation date: MP4/MOV, representative UTC offsets, one 64-bit date-header case,
+and interrupted recovery with a partial index tail and GPS/LOG coexistence.
+
 For memory checks, configure a separate build with `-DRAWR_SANITIZERS=ON`.
 Native libraries also retain their CMake test targets and reference fixtures;
 GPU tests require a suitable Vulkan implementation. Kotlin tests run via Gradle.

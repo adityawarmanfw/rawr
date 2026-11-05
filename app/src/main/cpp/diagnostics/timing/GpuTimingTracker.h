@@ -44,6 +44,11 @@ class GpuTimingTracker final {
     void markVideoDemosaicDone(VkCommandBuffer command, uint32_t slotIndex) const;
     void markVideoPostDone(VkCommandBuffer command, uint32_t slotIndex) const;
     void markRawDone(VkCommandBuffer command, uint32_t slotIndex) const;
+    VkQueryPool rawCfaQueryPool() const noexcept { return stageTimingEnabled_ ? queryPool_ : VK_NULL_HANDLE; }
+    uint32_t rawCfaQueryIndex(uint32_t slotIndex) noexcept;
+    uint32_t rawHighlightPrepareQueryIndex(uint32_t slotIndex) const noexcept;
+    uint32_t rawGuideSeedQueryIndex(uint32_t slotIndex) const noexcept;
+    uint32_t rawGuidePropagationQueryIndex(uint32_t slotIndex) const noexcept;
     void markTonemapInputReady(VkCommandBuffer command, uint32_t slotIndex) const;
     void markTonemapDone(VkCommandBuffer command, uint32_t slotIndex) const;
     void markTonemapRepeatInputReady(VkCommandBuffer command, uint32_t slotIndex) const;
@@ -71,6 +76,8 @@ class GpuTimingTracker final {
     VkQueryPool queryPool_ = VK_NULL_HANDLE;
     float timestampPeriodNs_ = 1.0f;
     uint32_t frameSlotCount_ = 0;
+    bool stageTimingEnabled_ = false;
+    uint32_t queriesPerSlot_ = 15;
     uint64_t submitted_ = 0;
     uint64_t dropped_ = 0;
     uint64_t timingSamples_ = 0;
@@ -87,6 +94,15 @@ class GpuTimingTracker final {
     double videoRenderNs_ = 0.0;
     uint64_t videoTimingSamples_ = 0;
     std::array<bool, imaging::kRealtimeFramesInFlight> videoActive_{};
+    std::array<bool, imaging::kRealtimeFramesInFlight> rawCfaActive_{};
+    uint64_t rawCfaSamples_ = 0;
+    double rawCfaNs_ = 0.0;
+    double rawHighlightNs_ = 0.0;
+    double rawHighlightPrepareNs_ = 0.0;
+    double rawHighlightApplyNs_ = 0.0;
+    double rawGuideSeedNs_ = 0.0;
+    double rawGuidePropagationNs_ = 0.0;
+    double rawGuideSmoothNs_ = 0.0;
     double rawShaderNs_ = 0.0;
     double toneHandoffNs_ = 0.0;
     std::array<bool, imaging::kRealtimeFramesInFlight> probeRepeat_{};

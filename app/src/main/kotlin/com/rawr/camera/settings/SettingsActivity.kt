@@ -15,7 +15,6 @@ import androidx.activity.viewModels
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import com.rawr.camera.MainActivity
-import com.rawr.camera.integration.InternalTraceNative
 import com.rawr.camera.settings.architecture.ImportLutStage
 import com.rawr.camera.settings.architecture.OpenLensEditor
 import com.rawr.camera.settings.architecture.OpenSection
@@ -32,7 +31,6 @@ import com.rawr.camera.settings.ui.SettingsRoute
 import com.rawr.camera.storage.PickFile
 import com.rawr.camera.storage.launchPicker
 import com.rawr.camera.ui.CaptureTheme
-import java.io.File
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
@@ -81,25 +79,6 @@ class SettingsActivity : ComponentActivity() {
                     }
             }
         }
-    private val traceDumpLauncher =
-        registerForActivityResult(
-            ActivityResultContracts.CreateDocument("text/plain")
-        ) { uri ->
-            if (uri != null) {
-                val source = File(filesDir, INTERNAL_TRACE_FILE)
-                runCatching {
-                    require(source.isFile && source.length() > 0L) { "No internal trace has been captured yet" }
-                    contentResolver.openOutputStream(uri, "wt")!!.use { output ->
-                        source.inputStream().use { input -> input.copyTo(output) }
-                    }
-                }.onSuccess {
-                    Toast.makeText(this, "Internal trace exported", Toast.LENGTH_SHORT).show()
-                }.onFailure {
-                    Toast.makeText(this, it.message ?: "Unable to export trace", Toast.LENGTH_LONG).show()
-                }
-            }
-        }
-
     private val lutPicker =
         registerForActivityResult(PickFile()) { uri ->
             if (uri != null) {
@@ -115,6 +94,11 @@ class SettingsActivity : ComponentActivity() {
         registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { tree ->
             val sections = backupExportSelection.take()
             if (tree != null && sections != null) exportBackup(tree, sections)
+        }
+
+    private val diagnosticsFolderPicker =
+        registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { tree ->
+            if (tree != null) exportDiagnosticsBundle(tree)
         }
 
     private val backupImportFolderPicker =
@@ -146,9 +130,7 @@ class SettingsActivity : ComponentActivity() {
                     onImportLut = ::pickLut,
                     onImportGpuDriver = ::pickGpuDriver,
                     onPickSaveDirectory = ::pickSaveDirectory,
-                    onDumpInternalTrace = ::dumpInternalTrace,
-                    onClearInternalTrace = ::clearInternalTrace,
-                    onExportDiagnosticsBundle = ::exportDiagnosticsBundle,
+                    onExportDiagnosticsBundle = { launchFolderPicker(diagnosticsFolderPicker) },
                     onExportBackup = ::chooseExportSections,
                     onImportBackup = { launchFolderPicker(backupImportFolderPicker) },
                     onRequestSaveNotificationPermission = ::requestSaveNotificationPermission,
@@ -204,25 +186,23 @@ class SettingsActivity : ComponentActivity() {
         notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
-    private fun clearInternalTrace() {
-        InternalTraceNative.clear()
-        File(filesDir, INTERNAL_TRACE_FILE).delete()
-        Toast.makeText(this, "Internal log cleared", Toast.LENGTH_SHORT).show()
-    }
-
-    private fun exportDiagnosticsBundle() {
+    private fun exportDiagnosticsBundle(tree: android.net.Uri) {
         val stamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
-        val saveLocationId = viewModel.controller.state.value.values.saveLocationId
         Thread({
-            val name =
-                com.rawr.camera.storage
-                    .ArtifactDiagnosticExporter(this)
-                    .exportDiagnosticsBundle(saveLocationId, stamp)
+            val result =
+                runCatching {
+                    com.rawr.camera.storage
+                        .ArtifactDiagnosticExporter(this)
+                        .exportDiagnosticsBundle(tree, stamp)
+                }
             runOnUiThread {
                 Toast
                     .makeText(
                         this,
-                        if (name != null) "Diagnostics bundle saved: $name" else "No diagnostics files to export",
+                        result.fold(
+                            { "Diagnostic bundle saved: $it" },
+                            { it.message ?: "Unable to export diagnostic bundle" }
+                        ),
                         Toast.LENGTH_LONG
                     ).show()
             }
@@ -373,16 +353,6 @@ class SettingsActivity : ComponentActivity() {
         }, "rawr-backup-read").start()
     }
 
-    private fun dumpInternalTrace() {
-        val source = File(filesDir, INTERNAL_TRACE_FILE)
-        if (!source.isFile || source.length() == 0L) {
-            Toast.makeText(this, "No internal trace captured yet", Toast.LENGTH_SHORT).show()
-            return
-        }
-        val stamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
-        traceDumpLauncher.launch("RAWR_internal_trace_$stamp.txt")
-    }
-
     private fun pickSaveDirectory() {
         saveDirectoryPicker.launch(null)
     }
@@ -406,7 +376,6 @@ class SettingsActivity : ComponentActivity() {
     }
 
     companion object {
-        const val INTERNAL_TRACE_FILE = "rawrcam_internal_runtime_trace.txt"
         const val EXTRA_SECTION = "settings_section"
         const val EXTRA_LENS = "settings_lens"
 

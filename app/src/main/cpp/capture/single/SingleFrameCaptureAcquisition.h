@@ -24,6 +24,8 @@ class SingleFrameCaptureAcquisition final {
         slot_.expectOptimizedFrame(id, extraWait);
     }
     bool busy() const noexcept;
+    // The copy worker runs, so the camera's image may still be held (released when the CPU read ends).
+    bool copyingCameraImage() const noexcept;
     bool metadataTimedOut() const noexcept { return waitFrames_ >= 8; }
     bool expectsTimestamp(uint64_t timestamp) const;
     bool deferSubmittedFrame(const metadata::FrameMetadataSnapshot&, const color::FrameColorTransform&,

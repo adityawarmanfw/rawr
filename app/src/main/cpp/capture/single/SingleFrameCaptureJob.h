@@ -14,6 +14,7 @@ class SingleFrameCaptureJob final {
     bool rawSnapshotConfigured() const noexcept { return acquisition_.configured(); }
     bool captureRequested() const noexcept { return acquisition_.captureRequested(); }
     bool deferredSnapshotBusy() const noexcept { return acquisition_.busy(); }
+    bool copyingCameraImage() const noexcept { return acquisition_.copyingCameraImage(); }
     uint64_t requestRawStillCapture(encoding::dng::DngCaptureContext, JpegCaptureRequest);
     void expectOptimizedFrame(uint64_t id, std::chrono::milliseconds extraWait) {
         acquisition_.expectOptimizedFrame(id, extraWait);

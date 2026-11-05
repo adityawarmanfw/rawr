@@ -94,4 +94,28 @@ class AgxLookReducerTest {
         val b = reduceAgxLooks(a, ImportAgxLook("B", AgxPreset.Default, AgxPreset.Default.defaults))
         assertEquals(2, b.values.agxLooks.map { it.id }.distinct().size)
     }
+
+    @Test fun savedLookRemainsSelectedThroughEditRenameUpdateAndDelete() {
+        val saved = reduceAgxLooks(state.withValues(state.values.withAgxValue(AgxParameter.Contrast, 2f)), SaveAgxLook("Mine"))
+        val look = saved.values.agxLooks.single()
+        assertEquals(look, saved.values.selectedAgxLook())
+        assertFalse(saved.values.isAgxModified())
+        val edited = saved.withValues(saved.values.withAgxValue(AgxParameter.Contrast, 2.4f))
+        assertEquals(look, edited.values.selectedAgxLook())
+        assertTrue(edited.values.isAgxModified())
+        val renamed = reduceAgxLooks(edited, RenameAgxLook(look.id, "Renamed"))
+        assertEquals("Renamed", renamed.values.activeProfileLabel())
+        assertTrue(renamed.values.isAgxModified())
+        val updated = reduceAgxLooks(renamed, UpdateAgxLook(look.id))
+        assertFalse(updated.values.isAgxModified())
+        assertEquals(2.4f, updated.values.activeAgxDefaults().valueOf(AgxParameter.Contrast))
+        val editedAgain = updated.values.withAgxValue(AgxParameter.Contrast, 3f)
+        assertEquals(2.4f, editedAgain.withAgxDefault(AgxParameter.Contrast).activeAgxValues().valueOf(AgxParameter.Contrast))
+        val bothModes = updated.withValues(updated.values.copy(videoAgxPreset = look.base, videoAgxLookId = look.id))
+        val deleted = reduceAgxLooks(bothModes, DeleteAgxLook(look.id)).values
+        assertNull(deleted.selectedAgxLookId)
+        assertNull(deleted.videoAgxLookId)
+        assertEquals(updated.values.activeAgxValues(), deleted.activeAgxValues())
+        assertEquals(look.base.defaults, deleted.activeAgxDefaults())
+    }
 }

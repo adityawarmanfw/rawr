@@ -46,7 +46,7 @@ class CameraControlSurface final {
     // Rebuilds the running camera session on a following tick.
     void requestSessionRestart();
     void setZeroCopy(bool enabled);
-    void rawFrameArrived(uint64_t generation);
+    void framePaired(uint64_t generation);
     void setInternalTraceCaptureEnabled(bool enabled);
     void setOisEnabled(bool enabled);
     void setAntibandingMode(uint8_t mode);

@@ -16,3 +16,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "RawrCam"
 include(":app")
+// Headless GPU test APK: its preBuild needs a full release native build, so opt in with -Prawr.gpuTests=true.
+if (providers.gradleProperty("rawr.gpuTests").orNull == "true") include(":gpu-tests")

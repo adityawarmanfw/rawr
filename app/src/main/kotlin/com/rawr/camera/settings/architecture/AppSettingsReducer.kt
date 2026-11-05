@@ -53,10 +53,6 @@ internal fun reduceAppSettings(
         state.withValues(state.values.copy(customGpuDriverName = action.displayName))
     }
 
-    is SetPersistentDiagnosticsEnabled -> {
-        state.withValues(state.values.copy(persistentDiagnosticsEnabled = action.enabled))
-    }
-
     is SetPersistZslRingEnabled -> {
         state.withValues(state.values.copy(persistZslRingEnabled = action.enabled))
     }
@@ -65,17 +61,5 @@ internal fun reduceAppSettings(
         state.withValues(state.values.copy(persistZslRingOnShutterEnabled = action.enabled))
     }
 
-    is SetInternalTraceCaptureEnabled -> {
-        state.withValues(state.values.copy(internalTraceCaptureEnabled = action.enabled))
-    }
-
-    is SetInternalTraceRetainedRows -> {
-        state.withValues(
-            state.values.copy(
-                internalTraceRetainedRows =
-                    action.rows.takeIf { it in setOf(4096, 8192, 16384, 32768) } ?: 8192
-            )
-        )
-    }
     else -> error("Unsupported app settings action: $action")
 }

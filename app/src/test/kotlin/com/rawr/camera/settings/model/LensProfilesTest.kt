@@ -25,10 +25,19 @@ class LensProfilesTest {
 
     @Test
     fun staticLevelsNeedWhiteAboveBlack() {
-        val bad = lens.copy(levels = LensLevels(isStatic = true, blackRggb = listOf(64f, 64f, 64f, 64f), white = 64f))
+        val bad = lens.image { copy(levels = LensLevels(isStatic = true, blackRggb = listOf(64f, 64f, 64f, 64f), white = 64f)) }
         assertEquals(listOf("White level must be above the black levels"), validateLensProfile(bad, emptyList()))
-        val dynamic = lens.copy(levels = LensLevels(isStatic = false, white = 0f))
+        val dynamic = lens.image { copy(levels = LensLevels(isStatic = false, white = 0f)) }
         assertEquals(emptyList(), validateLensProfile(dynamic, emptyList()))
+    }
+
+    @Test
+    fun fixedFrameRateStaysWithinWhatNativeAccepts() {
+        assertEquals(emptyList(), validateLensProfile(lens.session { copy(frameRate = MAX_FRAME_RATE) }, emptyList()))
+        assertEquals(
+            listOf("Fixed frame rate must be 0 to $MAX_FRAME_RATE"),
+            validateLensProfile(lens.session { copy(frameRate = MAX_FRAME_RATE + 1) }, emptyList())
+        )
     }
 
     @Test

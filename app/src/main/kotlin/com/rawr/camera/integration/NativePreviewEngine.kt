@@ -1,6 +1,7 @@
 package com.rawr.camera.integration
 
 import android.view.Surface
+import com.rawr.camera.location.CaptureGps
 
 /**
  * Thin JNI boundary for the application imaging engine.
@@ -20,6 +21,9 @@ class NativePreviewEngine {
 
     /** Installed once per process, before any camera opens. */
     external fun installVendorCameraGate(gate: VendorCameraGate)
+
+    /** Installed once per process, before any camera opens: runs lenses that need Camera2-only features. */
+    external fun installJavaCameraBackend(backend: JavaCameraBackend)
 
     external fun create(filesDir: String, nativeLibraryDir: String, customDriverPath: String): Long
 
@@ -42,9 +46,12 @@ class NativePreviewEngine {
 
     external fun setCameraActive(handle: Long, active: Boolean)
     external fun setPreviewForeground(handle: Long, foreground: Boolean)
+    external fun setUiPresentationActive(handle: Long, active: Boolean)
     external fun setInitialConfigReady(handle: Long)
     external fun setStillCaptureInFlight(handle: Long, begin: Boolean)
     external fun tickCameraSession(handle: Long)
+
+    external fun flushDiagnostics(handle: Long)
     external fun canRecoverStills(handle: Long): Boolean
     external fun setVideoMode(handle: Long, video: Boolean, fps: Int)
 
@@ -177,7 +184,7 @@ class NativePreviewEngine {
         // forwards a quality. q95 keeps JPEG contours down in sky gradients.
         ultraHdrGainmapQuality: Int = 95,
         dngCompression: Int = 0,
-        gps: DoubleArray? = null
+        gps: CaptureGps? = null
     ): Long
 
     external fun cancelPreparedMultiframeCapture(handle: Long)
@@ -240,10 +247,12 @@ class NativePreviewEngine {
         // forwards a quality. q95 keeps JPEG contours down in sky gradients.
         ultraHdrGainmapQuality: Int = 95,
         dngCompression: Int = 0,
-        gps: DoubleArray? = null
+        gps: CaptureGps? = null
     ): Long
 
     external fun pollDngWriteCompletion(handle: Long): String
+
+    external fun stillCaptureHoldsCamera(handle: Long): Boolean
 
     external fun pollJpegWriteCompletion(handle: Long): String
 

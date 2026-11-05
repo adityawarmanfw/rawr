@@ -24,6 +24,13 @@ uint64_t FrameIngressQueue::latestTimestamp(uint64_t generation) const {
     std::lock_guard<std::mutex> lock(mutex_);
     return generation == generation_ ? latestTimestamp_ : 0;
 }
+void FrameIngressQueue::setLowPowerIdle(bool idle) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        lowPowerIdle_ = idle;
+    }
+    changed_.notify_one();
+}
 void FrameIngressQueue::enqueue(AcquiredRawFrame frame) {
     RawFrameLease lease(frame);
     {
@@ -65,7 +72,12 @@ void FrameIngressQueue::run() {
         Drops drops{};
         {
             std::unique_lock<std::mutex> lock(mutex_);
-            changed_.wait_for(lock, std::chrono::milliseconds(10), [this] { return stopped_ || !queue_.empty(); });
+            const bool idle = lowPowerIdle_;
+            // Real frames/metadata and lifecycle changes always wake promptly.
+            // Only empty timer ticks slow down, after the owner has retired
+            // preview and confirmed no detached capture work remains.
+            changed_.wait_for(lock, std::chrono::milliseconds(idle ? 100 : 10),
+                             [this, idle] { return stopped_ || !queue_.empty() || lowPowerIdle_ != idle; });
             if (stopped_ && queue_.empty()) return;
             if (!queue_.empty()) {
                 event = std::move(queue_.front());

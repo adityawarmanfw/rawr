@@ -99,6 +99,7 @@ class FrameSubmitCoordinator final {
 
     void setDisplayRotationDegrees(int value) noexcept { displayRotationDegrees_ = value; }
     void setPresentationPaused(bool value) noexcept { presentationPaused_ = value; }
+    void setUiPresentationActive(bool value) noexcept { uiPresentationActive_.store(value, std::memory_order_relaxed); }
     void setVideoOutput(rawrcam::video::VideoSession* value) noexcept { videoOutput_ = value; }
     // Where recording frames are lost. Only counted while the encoder Surface is attached.
     struct VideoDropReasons {
@@ -163,6 +164,12 @@ class FrameSubmitCoordinator final {
     [[nodiscard]] bool lensShadingCorrectionEnabled() const noexcept { return lensShadingCorrectionEnabled_; }
 
     bool submitMetadata(const rawrcam::metadata::FrameMetadataSnapshot& metadata);
+    // The generation of the newest image+metadata pair accepted since the last call, or 0. A buffer that
+    // arrives without usable results never counts, so it cannot mark a session as started.
+    [[nodiscard]] uint64_t takePairedGeneration() noexcept {
+        return pairedGeneration_.exchange(0, std::memory_order_acq_rel);
+    }
+
     void onRawFrame(rawrcam::imaging::RawFrameLease frame);
     void releaseCompletedSlots(bool force);
 
@@ -270,9 +277,12 @@ class FrameSubmitCoordinator final {
     std::string filesDir_;
 
     std::unique_ptr<rawrcam::imaging::FramePairer> framePairer_;
+    // Generation of the latest accepted image+metadata pair; read once by takePairedGeneration().
+    std::atomic<uint64_t> pairedGeneration_{0};
     FrameSubmitConfiguration config_{};
     bool configured_ = false;
     bool presentationPaused_ = true;
+    std::atomic<bool> uiPresentationActive_{true};
     rawrcam::video::VideoSession* videoOutput_ = nullptr;
     uint64_t videoSubmitted_ = 0;
     uint64_t videoDrops_ = 0;

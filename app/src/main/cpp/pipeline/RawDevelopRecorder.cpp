@@ -217,7 +217,7 @@ RawDevelopRecordResult RawDevelopRecorder::record(const RawDevelopRecordInput& i
                              VK_ACCESS_SHADER_READ_BIT);
         rawPreviewInputView = slot.rawCopy.view;
     } else if (rawTransferCopy) {
-        if (auditSubmitCount < 7 && audit_) {
+        if (auditSubmitCount < kPipelineAuditFrames && audit_) {
             audit_("PIPELINE_RAW_TRANSFER_RECORDED generation=" + std::to_string(in.generation) +
                    " timestampNs=" + std::to_string(in.timestampNs) + " raw=" + std::to_string(in.rawWidth) + "x" +
                    std::to_string(in.rawHeight));
@@ -332,6 +332,13 @@ RawDevelopRecordResult RawDevelopRecorder::record(const RawDevelopRecordInput& i
                 : std::max(in.tonemapParams.aePostGain * std::exp2(in.tonemapParams.exposureEV), 1.0e-6f);
     raw_preview::RawPreviewRecordInfo rawRecord{};
     rawRecord.commandBuffer = slot.command;
+    if (const auto pool = performance_.rawCfaQueryPool(); pool != VK_NULL_HANDLE) {
+        rawRecord.cfaTimingPool = pool;
+        rawRecord.cfaTimingQuery = performance_.rawCfaQueryIndex(in.slotIndex);
+        rawRecord.highlightPrepareTimingQuery = performance_.rawHighlightPrepareQueryIndex(in.slotIndex);
+        rawRecord.guideSeedTimingQuery = performance_.rawGuideSeedQueryIndex(in.slotIndex);
+        rawRecord.guidePropagationTimingQuery = performance_.rawGuidePropagationQueryIndex(in.slotIndex);
+    }
     rawRecord.inputRawR16UintView = rawPreviewInputView;
     rawRecord.inputRawImportBuffer = useBufferDirect ? in.raw.importBuffer : VK_NULL_HANDLE;
     rawRecord.inputRawStridePixels = useBufferDirect ? in.raw.importBufferStridePixels : 0u;
@@ -381,7 +388,7 @@ RawDevelopRecordResult RawDevelopRecorder::record(const RawDevelopRecordInput& i
         integrityProbe_.recordBufferPreviewBenchmark(slot.command, in.slotIndex, transferOracleImage, in.raw.copyBuffer,
                                                      bufferParams);
     }
-    if (auditSubmitCount < 7 && audit_) {
+    if (auditSubmitCount < kPipelineAuditFrames && audit_) {
         audit_("PIPELINE_RAW_PREVIEW_RECORDED generation=" + std::to_string(in.generation) +
                " timestampNs=" + std::to_string(in.timestampNs) + " input=" + std::to_string(rawRecord.width) + "x" +
                std::to_string(rawRecord.height) + " whiteLevel=" + std::to_string(params.whiteLevel));
@@ -519,7 +526,7 @@ RawDevelopRecordResult RawDevelopRecorder::record(const RawDevelopRecordInput& i
             performance_.markTonemapDone(slot.command, in.slotIndex);
             performance_.markTonemapRepeatInputReady(slot.command, in.slotIndex);
             performance_.markTonemapRepeatDone(slot.command, in.slotIndex);
-            if (filmOk && auditSubmitCount < 7 && audit_) {
+            if (filmOk && auditSubmitCount < kPipelineAuditFrames && audit_) {
                 audit_("PIPELINE_FILM_SIM_RECORDED generation=" + std::to_string(in.generation) +
                        " timestampNs=" + std::to_string(in.timestampNs) + " input=" + std::to_string(lookWidth) + "x" +
                        std::to_string(lookHeight));

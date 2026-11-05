@@ -8,9 +8,21 @@
 
 namespace rawrcam::camera {
 
+// Bracket requests keep the recipe's cadence too; legacy lenses retain 30 fps.
+inline int64_t cameraBracketFrameDuration(const CameraControlState& state, int64_t exposureNs) {
+    const int64_t period = state.capabilities.frameRate > 0
+                              ? 1'000'000'000LL / state.capabilities.frameRate : 33'333'333LL;
+    const int64_t duration = std::max(period, exposureNs);
+    return state.capabilities.maxFrameDurationNs > 0
+               ? std::min(duration, state.capabilities.maxFrameDurationNs) : duration;
+}
+
 // Shared by session parameters, repeating requests and frozen provenance.
 inline std::optional<std::array<int32_t, 2>> cameraTargetFpsRange(const CameraControlState& state,
                                                                   bool priorityRequested) {
+    // A vendor sensor mode that runs at one rate (Xiaomi 75 mm 50 MP: 24 fps) keeps it on every request.
+    if (state.capabilities.frameRate > 0)
+        return std::array<int32_t, 2>{state.capabilities.frameRate, state.capabilities.frameRate};
     if (state.recordingFps > 0) return std::array<int32_t, 2>{state.recordingFps, state.recordingFps};
     const auto& caps = state.capabilities;
     if (priorityRequested && caps.priorityAeTargetFpsMin > 0 &&

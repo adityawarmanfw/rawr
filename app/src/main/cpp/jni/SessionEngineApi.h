@@ -69,9 +69,11 @@ void setAutoMinFps(EngineHandle handle, int fps) noexcept;
 void setAePriorityDisabled(EngineHandle handle, bool disabled) noexcept;
 bool setRecordingFps(EngineHandle handle, int fps) noexcept;
 void setPreviewForeground(EngineHandle handle, bool foreground) noexcept;
+void setUiPresentationActive(EngineHandle handle, bool active) noexcept;
 void setInitialConfigReady(EngineHandle handle) noexcept;
 void setStillCaptureInFlight(EngineHandle handle, bool begin) noexcept;
 void tickCameraSession(EngineHandle handle) noexcept;
+void flushDiagnostics(EngineHandle handle) noexcept;
 bool canRecoverStills(EngineHandle handle) noexcept;
 void setVideoMode(EngineHandle handle, bool video, int fps) noexcept;
 void setShutterAngleDegrees(EngineHandle handle, double degrees) noexcept;
@@ -81,6 +83,7 @@ void setScopePresentationState(EngineHandle handle, const rawrcam::monitoring::S
 uint64_t requestRawStillCapture(EngineHandle handle, rawrcam::encoding::dng::DngCaptureContext dngContext,
                                 rawrcam::capture::JpegCaptureRequest jpegContext) noexcept;
 std::string pollDngWriteCompletion(EngineHandle handle);
+bool stillCaptureHoldsCamera(EngineHandle handle);
 std::string pollJpegWriteCompletion(EngineHandle handle);
 uint64_t recoverStill(EngineHandle handle, const std::string& name, bool multiframe, int dng, int merged, int jpeg);
 std::string runHighlightReplay(EngineHandle handle, const std::string& inputPath);

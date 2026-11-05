@@ -115,6 +115,7 @@ rawrcam_module(encoding
   DEPENDS color develop diagnostics_logging geometry imaging metadata support tonemap
   SOURCES
     encoding/jpeg/JpegCaptureWriter.cpp
+    encoding/jpeg/JpegExif.cpp
     encoding/jpeg/StripJpegEncoder.cpp
     encoding/rzsl/RzslBundleSink.cpp
 )
@@ -128,6 +129,10 @@ rawrcam_module(camera
     camera/CameraDeviceSession.cpp
     camera/CameraCallbacks.cpp
     camera/CameraRequestPipeline.cpp
+    camera/CameraRequest.cpp
+    camera/NdkRequest.cpp
+    camera/NdkCameraDriver.cpp
+    camera/JavaCameraDriver.cpp
     camera/CameraResultProcessor.cpp
     camera/CameraMetadataTags.cpp
     camera/VendorCameraGate.cpp

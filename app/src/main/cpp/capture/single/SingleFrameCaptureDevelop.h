@@ -42,6 +42,7 @@ class SingleFrameCaptureDevelop final {
     std::optional<develop::rendered::RenderedStillContext> context_;
     std::optional<develop::rendered::RenderedStillCompletion> failure_;
     bool diagnostics_ = false;
+    bool secondaryQueue_ = true;
     double demosaicMs_ = 0.0, demosaicSetupMs_ = 0.0;
 };
 }  // namespace rawrcam::capture

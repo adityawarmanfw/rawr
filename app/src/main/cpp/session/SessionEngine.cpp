@@ -64,6 +64,9 @@ SessionEngine::SessionEngine(std::string filesDir) : filesDir_(std::move(filesDi
         const bool configured = realtime_.configureCamera(generation, metadata);
         lastCameraContext_ = std::make_shared<const rawrcam::metadata::CameraContextMetadata>(metadata);
         profileReaderUsage_ = metadata.rawReaderUsage;
+        profileMaxImages_ = metadata.rawBufferCount;
+        profileReaderProbe_ = metadata.rawBufferTestFirst;
+        profileReaderDemote_ = metadata.rawBufferFallBack;
         // The RAW size may have changed (or become known): rebuild the prewarm.
         if (configured) {
             cameraCapabilities_ = capabilities;
@@ -83,8 +86,11 @@ SessionEngine::SessionEngine(std::string filesDir) : filesDir_(std::move(filesDi
             constexpr uint64_t kGpuUsage = AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE |
                                            AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER |
                                            AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT;
-            rawReaderUsage_.readerCreated(generation, rawFrameIngress_.requestedUsage() & kGpuUsage,
-                                          steadyMillis());
+            rawReaderUsage_.readerCreated(
+                generation,
+                imaging::RawReaderUsageLadder::watchedUsage(profileReaderUsage_.has_value() && !profileReaderDemote_,
+                                                            rawFrameIngress_.requestedUsage() & kGpuUsage),
+                steadyMillis());
         }
         return window;
     };
@@ -100,9 +106,12 @@ SessionEngine::SessionEngine(std::string filesDir) : filesDir_(std::move(filesDi
         std::lock_guard<std::mutex> lock(mu_);
         if (generation != cameraSetupGeneration_) return static_cast<ANativeWindow*>(nullptr);
         try {
-            // vivo full-size outputs configure only with no usage or GPU_DATA_BUFFER.
-            auto* window = captureFrameIngress_.create(generation, width, height, format,
-                                                       AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER);
+            // vivo full-size outputs configure only with no usage or GPU_DATA_BUFFER;
+            // a lens profile can name another (Xiaomi: CPU read).
+            const uint64_t usage = lastCameraContext_ && lastCameraContext_->photoBufferUsage
+                                       ? *lastCameraContext_->photoBufferUsage
+                                       : uint64_t(AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER);
+            auto* window = captureFrameIngress_.create(generation, width, height, format, usage);
             captureReaderGeneration_ = generation;
             fullSizeFrames_.store(0, std::memory_order_relaxed);
             // Full size is 2x (50 MP) or 4x (200 MP) the binned pixel array; the buffer may be wider
@@ -185,6 +194,7 @@ SessionEngine::SessionEngine(std::string filesDir) : filesDir_(std::move(filesDi
 SessionEngine::~SessionEngine() { shutdown(); }
 
 bool SessionEngine::setSurface(JNIEnv* env, jobject surfaceObj, int displayRotationDegrees) {
+    if (surfaceObj) ingressQueue_.setLowPowerIdle(false);
     // Retire before detaching presentation, unless a still owns the session.
     // Activation callbacks acquire mu_, so reconcile outside that lock.
     if (!surfaceObj) cameraControls_.setSurfaceReady(false);
@@ -373,25 +383,30 @@ void SessionEngine::consumeIngress(imaging::FrameIngressQueue::Event event, imag
         if (delay > 50 && (++ingressSlowReports_ % 120u) == 1u)
             LOGI("INGRESS_QUEUE_SLOW delayMs=%lld kind=%s", static_cast<long long>(delay), raw ? "raw" : "metadata");
     }
-    // Outside mu_: the controller takes its own lock and must never nest under it.
-    if (raw) cameraControls_.rawFrameArrived(std::get<imaging::RawFrameLease>(event.payload).get().generation);
-    std::lock_guard<std::mutex> lock(mu_);
-    if (raw) rawReaderUsage_.rawArrived(std::get<imaging::RawFrameLease>(event.payload).get().generation);
-    drainFullSizeStills();
-    if (drops.images) realtime_.timing().recordDropped(drops.images);
-    if (drops.images && videoSession_.ready() && realtime_.coordinator().videoSubmitted() > 0)
-        videoIngressDrops_.fetch_add(drops.images, std::memory_order_relaxed);
-    if (drops.images || drops.metadata)
-        LOGI("INGRESS_QUEUE_PRESSURE rawDropped=%llu metadataDropped=%llu",
-             static_cast<unsigned long long>(drops.images), static_cast<unsigned long long>(drops.metadata));
-    if (raw)
-        realtime_.coordinator().onRawFrame(std::move(std::get<imaging::RawFrameLease>(event.payload)));
-    else if (const auto* metadata = std::get_if<metadata::FrameMetadataSnapshot>(&event.payload))
-        (void)realtime_.coordinator().submitMetadata(*metadata);
-    else {
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (raw) rawReaderUsage_.rawArrived(std::get<imaging::RawFrameLease>(event.payload).get().generation);
+        drainFullSizeStills();
+        if (drops.images) realtime_.timing().recordDropped(drops.images);
+        if (drops.images && videoSession_.ready() && realtime_.coordinator().videoSubmitted() > 0)
+            videoIngressDrops_.fetch_add(drops.images, std::memory_order_relaxed);
+        if (drops.images || drops.metadata)
+            LOGI("INGRESS_QUEUE_PRESSURE rawDropped=%llu metadataDropped=%llu",
+                 static_cast<unsigned long long>(drops.images), static_cast<unsigned long long>(drops.metadata));
+        // Paused presentation still receives metadata. Retire completed image
+        // leases on those events rather than depending on an idle ingress poll.
         realtime_.coordinator().releaseCompletedSlots(false);
-        capture_.single().advance();
+        if (raw)
+            realtime_.coordinator().onRawFrame(std::move(std::get<imaging::RawFrameLease>(event.payload)));
+        else if (const auto* metadata = std::get_if<metadata::FrameMetadataSnapshot>(&event.payload))
+            (void)realtime_.coordinator().submitMetadata(*metadata);
+        else {
+            capture_.single().advance();
+        }
     }
+    // Outside mu_: the controller takes its own lock and must never nest under it. A session has
+    // started when an image and its metadata paired, not when a buffer merely arrived.
+    if (const uint64_t paired = realtime_.coordinator().takePairedGeneration()) cameraControls_.framePaired(paired);
 }
 
 void SessionEngine::shutdown() {

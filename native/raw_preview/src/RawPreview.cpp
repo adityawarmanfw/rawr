@@ -208,10 +208,13 @@ RawPreview::RawPreview(const RawPreviewCreateInfo& ci)
         throw std::runtime_error("RawPreview: highlight guide shaders missing next to " + ci.cfaStateShaderPath);
     if (allHighlightShaders) {
         const auto seed = readSpirv(seedPath), propagate = readSpirv(propagatePath), smooth = readSpirv(smoothPath);
+        const auto control = ci.highlightGuideControlShaderPath.empty() ? std::vector<uint32_t>{}
+                                                                      : readSpirv(ci.highlightGuideControlShaderPath);
         guidePipelines_ = std::make_unique<rawr::highlight::GuideChainPipelines>(
             device_, rawr::highlight::GuideChainShaders{{seed.data(), seed.size()},
                                                         {propagate.data(), propagate.size()},
-                                                        {smooth.data(), smooth.size()}});
+                                                        {smooth.data(), smooth.size()},
+                                                        {control.data(), control.size()}});
         createImagePipeline(3, 32, applyPath, highlightApplyDsl_, highlightApplyLayout_, highlightApplyPipeline_);
     }
     if (!ci.cfaStateShaderPath.empty() && readable(coloroppPath) && readable(coloroppTonePath)) {
@@ -261,11 +264,6 @@ RawPreview::ColoroppResources& RawPreview::coloroppResourcesFor(VkImageView outp
     ColoroppResources r{rawr::vk::DeviceObjects(device_)};
     r.demosaiced = r.objects.adoptOwnedImage(rawr::vk::createOwnedImage(
         physicalDevice_, device_, width, height, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT));
-    // Same usage as the caller's linear image: the display path samples,
-    // blits (film) and stores to it.
-    r.sdr = r.objects.adoptOwnedImage(rawr::vk::createOwnedImage(
-        physicalDevice_, device_, width, height, VK_FORMAT_R16G16B16A16_SFLOAT,
-        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT));
     VkDescriptorSetLayout layouts[2]{coloroppDsl_, coloroppToneDsl_};
     VkDescriptorSet sets[2]{};
     VkDescriptorSetAllocateInfo ai{};
@@ -507,19 +505,16 @@ RawPreviewRecordResult RawPreview::record(const RawPreviewRecordInfo& recordInfo
     ColoroppResources* coloropp =
         useColoropp ? &coloroppResourcesFor(recordInfo.outputLinearRgba16fView, outputWidth, outputHeight) : nullptr;
     if (coloropp && !coloropp->initialized) {
-        VkImageMemoryBarrier init[2]{};
-        VkImage images[2]{coloropp->demosaiced.image, coloropp->sdr.image};
-        for (uint32_t i = 0; i < 2; ++i) {
-            init[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            init[i].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            init[i].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-            init[i].srcQueueFamilyIndex = init[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            init[i].image = images[i];
-            init[i].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            init[i].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        }
+        VkImageMemoryBarrier init{};
+        init.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        init.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        init.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        init.srcQueueFamilyIndex = init.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        init.image = coloropp->demosaiced.image;
+        init.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        init.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
         vkCmdPipelineBarrier(recordInfo.commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 2, init);
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &init);
         coloropp->initialized = true;
     }
     // The CFA-state pass writes the Inpaint Opposed source image instead of the
@@ -554,7 +549,7 @@ RawPreviewRecordResult RawPreview::record(const RawPreviewRecordInfo& recordInfo
         VkBufferMemoryBarrier cleared{};
         cleared.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
         cleared.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        cleared.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        cleared.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
         cleared.srcQueueFamilyIndex = cleared.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         cleared.buffer = clipFlag->buffer;
         cleared.size = VK_WHOLE_SIZE;
@@ -606,14 +601,35 @@ RawPreviewRecordResult RawPreview::record(const RawPreviewRecordInfo& recordInfo
                             &descriptorSet, 0, nullptr);
     vkCmdPushConstants(recordInfo.commandBuffer, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
     vkCmdDispatch(recordInfo.commandBuffer, (outputWidth + 7) / 8, (outputHeight + 7) / 8, 1);
+    if (recordInfo.cfaTimingPool != VK_NULL_HANDLE)
+        vkCmdWriteTimestamp(recordInfo.commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                            recordInfo.cfaTimingPool, recordInfo.cfaTimingQuery);
+    bool guideRecorded = false;
+    auto markHighlightPrepared = [&]() {
+        if (!guideRecorded && recordInfo.cfaTimingPool != VK_NULL_HANDLE) {
+            if (recordInfo.guideSeedTimingQuery != UINT32_MAX)
+                vkCmdWriteTimestamp(recordInfo.commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                    recordInfo.cfaTimingPool, recordInfo.guideSeedTimingQuery);
+            if (recordInfo.guidePropagationTimingQuery != UINT32_MAX)
+                vkCmdWriteTimestamp(recordInfo.commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                    recordInfo.cfaTimingPool, recordInfo.guidePropagationTimingQuery);
+        }
+        if (recordInfo.cfaTimingPool != VK_NULL_HANDLE && recordInfo.highlightPrepareTimingQuery != UINT32_MAX)
+            vkCmdWriteTimestamp(recordInfo.commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                recordInfo.cfaTimingPool, recordInfo.highlightPrepareTimingQuery);
+    };
 
     if (coloropp) {
         recordColoropp(recordInfo, *coloropp, lsc.buffer, lscValid);
+        markHighlightPrepared();
         if (recordInfo.parameters.bypassHighlightTone)
             return {};
         return {coloropp->sdr.image, coloropp->sdr.view};
     }
-    if (!usePropagatedHighlight) return {};
+    if (!usePropagatedHighlight) {
+        markHighlightPrepared();
+        return {};
+    }
 
     HighlightResources& hr = highlightResourcesFor(recordInfo.outputLinearRgba16fView, outputWidth, outputHeight);
     VkMemoryBarrier rgbReady{};
@@ -640,9 +656,17 @@ RawPreviewRecordResult RawPreview::record(const RawPreviewRecordInfo& recordInfo
                              VK_PIPELINE_STAGE_CONDITIONAL_RENDERING_BIT_EXT, 0, 0, nullptr, 1, &flagReady, 0,
                              nullptr);
     }
+    const rawr::highlight::GuideChain::Timing guideTiming{recordInfo.cfaTimingPool, recordInfo.guideSeedTimingQuery,
+                                                         recordInfo.guidePropagationTimingQuery};
+    const bool timeGuide = guideTiming.pool != VK_NULL_HANDLE && guideTiming.seedQuery != UINT32_MAX &&
+                           guideTiming.propagationQuery != UINT32_MAX;
     VkImageView finalGuide = hr.chain->record(recordInfo.commandBuffer, recordInfo.outputLinearRgba16fView,
                                               recordInfo.outputCfaStateR16UintView, outputWidth, outputHeight,
-                                              ceilings, predicatedHighlight ? &conditional : nullptr);
+                                              ceilings, predicatedHighlight ? &conditional : nullptr,
+                                              timeGuide ? &guideTiming : nullptr,
+                                              clipFlag ? clipFlag->buffer : VK_NULL_HANDLE);
+    guideRecorded = timeGuide;
+    markHighlightPrepared();
     VkDescriptorImageInfo applyInfo[3]{{VK_NULL_HANDLE, recordInfo.outputLinearRgba16fView, VK_IMAGE_LAYOUT_GENERAL},
                                        {VK_NULL_HANDLE, recordInfo.outputCfaStateR16UintView, VK_IMAGE_LAYOUT_GENERAL},
                                        {VK_NULL_HANDLE, finalGuide, VK_IMAGE_LAYOUT_GENERAL}};
@@ -673,10 +697,14 @@ RawPreviewRecordResult RawPreview::record(const RawPreviewRecordInfo& recordInfo
                             &hr.applySet, 0, nullptr);
     vkCmdPushConstants(recordInfo.commandBuffer, highlightApplyLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ap),
                        &ap);
-    if (predicatedHighlight) beginConditional_(recordInfo.commandBuffer, &condBegin);
-    vkCmdDispatch(recordInfo.commandBuffer, (outputWidth + 15u) / 16u, (outputHeight + 15u) / 16u, 1);
-    if (predicatedHighlight) endConditional_(recordInfo.commandBuffer);
-    return {};
+    const VkBuffer indirect = hr.chain->indirectArguments();
+    if (predicatedHighlight && !indirect) beginConditional_(recordInfo.commandBuffer, &condBegin);
+    if (indirect)
+        vkCmdDispatchIndirect(recordInfo.commandBuffer, indirect, rawr::highlight::GuideChain::kApplyDispatchOffset);
+    else
+        vkCmdDispatch(recordInfo.commandBuffer, (outputWidth + 15u) / 16u, (outputHeight + 15u) / 16u, 1);
+    if (predicatedHighlight && !indirect) endConditional_(recordInfo.commandBuffer);
+    return {VK_NULL_HANDLE, VK_NULL_HANDLE, indirect};
 }
 
 void RawPreview::recordColoropp(const RawPreviewRecordInfo& recordInfo, ColoroppResources& r, VkBuffer lscBuffer,
@@ -735,6 +763,25 @@ void RawPreview::recordColoropp(const RawPreviewRecordInfo& recordInfo, Coloropp
     computeToCompute();
 
     if (p.bypassHighlightTone) return;
+
+    // Direct output profiles apply tone downstream and never use this SDR
+    // image. Allocate only on the first frame that actually needs it. Keep
+    // it thereafter so profile switches cannot retire in-flight resources.
+    if (!r.sdr.image) {
+        r.sdr = r.objects.adoptOwnedImage(rawr::vk::createOwnedImage(
+            physicalDevice_, device_, width, height, VK_FORMAT_R16G16B16A16_SFLOAT,
+            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT));
+        VkImageMemoryBarrier init{};
+        init.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        init.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        init.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        init.srcQueueFamilyIndex = init.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        init.image = r.sdr.image;
+        init.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        init.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             0, 0, nullptr, 0, nullptr, 1, &init);
+    }
 
     VkDescriptorImageInfo toneImages[2]{{VK_NULL_HANDLE, recordInfo.outputLinearRgba16fView, VK_IMAGE_LAYOUT_GENERAL},
                                         {VK_NULL_HANDLE, r.sdr.view, VK_IMAGE_LAYOUT_GENERAL}};

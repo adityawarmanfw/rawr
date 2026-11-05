@@ -50,6 +50,9 @@ Raw16CpuSnapshotResult copyCompletedRaw16AhbToPacked(AHardwareBuffer* ahb, uint3
 // Read-only CPU sample of a live camera frame for RAW_CONTENT_STATS. Requires a
 // CPU-readable reader; otherwise returns a line describing why it could not
 // sample. acquireFenceFd stays owned by the caller.
+[[nodiscard]] std::optional<std::array<float, 4>> sampleRawBlackFloor(
+    AImage* image, AHardwareBuffer* ahb, int acquireFenceFd, int cfa);
+
 [[nodiscard]] std::string sampleRawContentStats(AImage* image, AHardwareBuffer* ahb, int acquireFenceFd,
                                                 const RawContentStatsInput& input);
 

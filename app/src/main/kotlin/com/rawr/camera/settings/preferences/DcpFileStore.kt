@@ -47,7 +47,7 @@ class DcpFileStore internal constructor(
             check(staged.renameTo(target)) { "Unable to store the profile" }
             // A fresh import isn't referenced until the lens is saved: sync() keeps it a while.
             target.setLastModified(System.currentTimeMillis())
-            return LensDcp(name, profileName.ifBlank { name.removeSuffix(".dcp") })
+            return BundledDcpProfiles.reference(name, profileName.ifBlank { name.removeSuffix(".dcp") })
         } finally {
             staged.delete()
         }
@@ -55,14 +55,14 @@ class DcpFileStore internal constructor(
 
     /** Deletes stored profiles no lens references, except recent imports a lens editor may still save. */
     fun sync(lenses: List<LensProfile>?) {
-        val used = lenses.orEmpty().mapNotNull { it.dcp?.file }.toSet()
+        val used = lenses.orEmpty().flatMap { it.image.availableDcps.map { dcp -> dcp.file } }.toSet()
         val cutoff = System.currentTimeMillis() - UNSAVED_GRACE_MS
         dir.listFiles()?.forEach { file -> if (file.name !in used && file.lastModified() < cutoff) file.delete() }
     }
 
     /** Restore only referenced, intact, usable profiles; missing profiles fall back to camera colour. */
     internal fun restore(staging: File, lenses: List<LensProfile>?): List<LensProfile>? {
-        lenses.orEmpty().mapNotNull { it.dcp?.file }.distinct().forEach { name ->
+        lenses.orEmpty().flatMap { it.image.availableDcps.map { dcp -> dcp.file } }.distinct().forEach { name ->
             if (!isFileName(name)) return@forEach
             val file = File(staging, name)
             if (!file.isFile || file.length() > MAX_BYTES) return@forEach
@@ -75,8 +75,8 @@ class DcpFileStore internal constructor(
             }
         }
         return lenses?.map { lens ->
-            val dcp = lens.dcp
-            if (dcp != null && (!isFileName(dcp.file) || !File(dir, dcp.file).isFile)) lens.copy(dcp = null) else lens
+            val missing = lens.image.availableDcps.filter { !isFileName(it.file) || !File(dir, it.file).isFile }
+            missing.fold(lens) { current, profile -> current.image { removeDcp(profile.file) } }
         }
     }
 

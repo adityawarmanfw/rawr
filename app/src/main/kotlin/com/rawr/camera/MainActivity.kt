@@ -350,9 +350,16 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         captureViewModel.foreground.resume(this)
+        captureViewModel.setUiPresentationActive(true)
+    }
+
+    override fun onUserLeaveHint() {
+        captureViewModel.setUiPresentationActive(false)
+        super.onUserLeaveHint()
     }
 
     override fun onPause() {
+        captureViewModel.setUiPresentationActive(false)
         captureViewModel.foreground.pause(this)
         super.onPause()
     }

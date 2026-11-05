@@ -29,16 +29,6 @@ void RuntimeTraceRecorder::setEnabled(bool enabled) noexcept {
     enabled_.store(enabled, std::memory_order_release);
 }
 
-void RuntimeTraceRecorder::setRetainedRows(uint32_t rows) noexcept {
-    if (rows != 4096 && rows != 8192 && rows != 16384 && rows != 32768) rows = 8192;
-    retainedRows_.store(rows, std::memory_order_release);
-}
-
-void RuntimeTraceRecorder::clear() noexcept {
-    nextSequence_.store(0, std::memory_order_relaxed);
-    for (auto& event : events_) event.sequence.store(UINT64_MAX, std::memory_order_relaxed);
-}
-
 void RuntimeTraceRecorder::record(RuntimeTraceStage stage, uint64_t cameraTimestampNs, uint64_t frameOrdinal,
                                   int32_t slot, int64_t exposureTimeNs, int32_t sensitivity, uint32_t flags,
                                   int64_t value, int32_t cameraId) noexcept {

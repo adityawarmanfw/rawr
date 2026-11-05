@@ -24,11 +24,12 @@ RawFrameIngress::RawFrameIngress(FrameCallback frameCallback, Diagnostic diagnos
 RawFrameIngress::~RawFrameIngress() { destroy(); }
 
 ANativeWindow* RawFrameIngress::create(uint64_t generation, uint32_t width, uint32_t height,
-                                       geometry::RawPixelFormat format, uint64_t ahbUsage) {
+                                       geometry::RawPixelFormat format, uint64_t ahbUsage, uint32_t maxImages) {
     destroy();
     std::unique_lock<std::mutex> lock(drainMutex_);
     generation_ = generation;
     usage_ = ahbUsage;
+    maxImages_ = maxImages ? maxImages : uint32_t(kRawReaderMaxImages);
     imageDescriptionLogged_ = false;
     auditImageCount_ = 0;
     readerStats_ = {};
@@ -36,7 +37,7 @@ ANativeWindow* RawFrameIngress::create(uint64_t generation, uint32_t width, uint
 
     const int32_t imageFormat = format == geometry::RawPixelFormat::Raw10 ? AIMAGE_FORMAT_RAW10 : AIMAGE_FORMAT_RAW16;
     const media_status_t status = AImageReader_newWithUsage(static_cast<int32_t>(width), static_cast<int32_t>(height),
-                                                            imageFormat, ahbUsage, kRawReaderMaxImages, &reader_);
+                                                            imageFormat, ahbUsage, int32_t(maxImages_), &reader_);
     if (status != AMEDIA_OK || !reader_) {
         std::ostringstream oss;
         oss << "AImageReader_newWithUsage " << geometry::rawPixelFormatName(format) << " failed status=" << status
@@ -61,7 +62,7 @@ ANativeWindow* RawFrameIngress::create(uint64_t generation, uint32_t width, uint
 
     std::ostringstream d;
     d << "RAW_READER_CREATED_NATIVE format=AIMAGE_FORMAT_" << geometry::rawPixelFormatName(format) << " dims=" << width
-      << "x" << height << " requestedUsage=0x" << std::hex << ahbUsage << std::dec << " maxImages=6";
+      << "x" << height << " requestedUsage=0x" << std::hex << ahbUsage << std::dec << " maxImages=" << maxImages_;
     LOGI("%s", d.str().c_str());
     if (diagnostic_) diagnostic_(d.str());
     return inputWindow;
@@ -109,7 +110,7 @@ void RawFrameIngress::onImageAvailable(AImageReader* reader) {
 void RawFrameIngress::drainLocked(AImageReader* reader) {
     // Drain a short burst per callback. A callback is not a promise that a
     // second notification will arrive for an image already queued here.
-    for (int drained = 0; drained < static_cast<int>(kRawReaderMaxImages); ++drained) {
+    for (int drained = 0; drained < static_cast<int>(maxImages_); ++drained) {
         AImage* image = nullptr;
         int fenceFd = -1;
         // Acquire in sensor order. acquireLatestImageAsync silently discards queued

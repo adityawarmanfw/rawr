@@ -30,6 +30,10 @@ internal class CaptureSettingsSync(
     fun start() {
         check(!started)
         started = true
+        // Diagnostics always record (bounded in native), so a bundle exported
+        // after a problem already holds the evidence: no switch to remember.
+        previewCoordinator.setPersistentDiagnosticsEnabled(true)
+        previewCoordinator.setInternalTraceCaptureEnabled(true)
         syncSetting({ it.controlSurfaceStyle }) { controller.dispatch(SetControlSurfaceStyle(it)) }
         syncSetting({ it.oisEnabledPreference }) { previewCoordinator.setOisEnabled(it) }
         syncSetting({ it.lensProfiles }) { previewCoordinator.setLensProfiles(it) }
@@ -65,9 +69,7 @@ internal class CaptureSettingsSync(
         syncSetting({ it.autoMinFpsId }) {
             previewCoordinator.setAutoMinFps(com.rawr.camera.settings.model.autoMinFpsForId(it))
         }
-        syncSetting({ it.persistentDiagnosticsEnabled }) { previewCoordinator.setPersistentDiagnosticsEnabled(it) }
         syncSetting({ it.persistZslRingEnabled }) { previewCoordinator.setPersistZslRingEnabled(it) }
-        syncSetting({ it.internalTraceCaptureEnabled }) { previewCoordinator.setInternalTraceCaptureEnabled(it) }
         syncSetting({ it.photoLensShadingEnabled }) { previewCoordinator.setLensShadingCorrectionEnabled(it) }
         // The viewfinder frames what the current mode saves.
         syncSetting({ if (it.isVideo) it.videoDistortionCorrectionEnabled else it.distortionCorrectionEnabled }) {
@@ -93,9 +95,6 @@ internal class CaptureSettingsSync(
             ) it.multiframeTuning.bracketEv else 0f
         }) { previewCoordinator.setHdrPlusHeadroomMaxEv(it) }
         syncSetting({ it.persistentEngineEnabled }) { previewCoordinator.setPersistentEngineEnabled(it) }
-        syncSetting({ it.internalTraceRetainedRows }) {
-            com.rawr.camera.integration.InternalTraceNative.setRetainedRows(it)
-        }
         // Keyed on profile identity + LUT structure (tone normalized out):
         // native profile switches rebuild the tonemap engine, so tone-only
         // edits must not retrigger them (tone flows via setTonemapParameters).

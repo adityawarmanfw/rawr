@@ -21,6 +21,8 @@ class FrameLifecyclePort {
    public:
     virtual ~FrameLifecyclePort() = default;
     virtual void postDiagnostic(const std::string& line) = 0;
+    virtual void observePreviewBlackFloor(const metadata::FrameMetadataSnapshot& frame,
+                                           const std::optional<std::array<float, 4>>& floor) = 0;
     virtual void postAudit(const std::string& line) = 0;
     virtual void notifySwapchainOutOfDate() = 0;
     virtual void finalizeDetachedStill() = 0;
