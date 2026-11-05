@@ -42,6 +42,7 @@ static rawrcam::imaging::RawSnapshot makeFrame(bool resolvable) {
     ctx->sensorPhysicalSizeMm = {8.0f, 6.0f};
     ctx->availableFocalLengthsMm = {6.0f};
     ctx->availableApertures = {1.8f};
+    ctx->lensFacing = 1;
     ctx->lensShadingMapWidth = 2;
     ctx->lensShadingMapHeight = 2;
     ctx->color.referenceIlluminant1 = 21;
@@ -144,7 +145,7 @@ int main() {
         tele.metadata.scalerCropRegion = {0, 0, 4, 6, true};
         auto params = rawrcam::encoding::dng::makeTinyDngWriteParams(tele, capture, &error);
         if (!params || params->lensMake != "vivo" ||
-            params->lensModel != "vivo X300 Ultra telephoto camera 22.5mm f/2.7" ||
+            params->lensModel != "vivo X300 Ultra back camera 22.5mm f/2.7" ||
             !params->exif.has_focal_length_35mm || params->exif.focal_length_35mm != 85 ||
             !params->exif.has_fnumber ||
             std::abs(double(params->exif.fnumber_rational[0]) / params->exif.fnumber_rational[1] - aperture) > 1e-5 ||
@@ -410,7 +411,7 @@ int main() {
                   img->exif.make && std::string(img->exif.make) == "vivo" &&
                   img->exif.lens_make && std::string(img->exif.lens_make) == "vivo" &&
                   img->exif.lens_model &&
-                  std::string(img->exif.lens_model) == "vivo X300 Ultra wide camera 6mm f/1.8";
+                  std::string(img->exif.lens_model) == "vivo X300 Ultra back camera 6mm f/1.8";
         if (ok) {
             tinydng_pixels px{};
             tinydng_decode_options dopts{};

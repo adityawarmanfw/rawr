@@ -8,7 +8,7 @@ Example:
 
 ```text
 LensMake:  vivo
-LensModel: vivo X300 Ultra telephoto camera 22.48mm f/2.67
+LensModel: vivo X300 Ultra back camera 22.48mm f/2.67
 ```
 
 ## Identity and optics
@@ -17,15 +17,19 @@ LensModel: vivo X300 Ultra telephoto camera 22.48mm f/2.67
   already starts with the manufacturer (case-insensitive, whole-word prefix),
   the manufacturer is not repeated. Only lens-name strings are normalized;
   `Make`, `Model`, hardware matching and DNG `UniqueCameraModel` are unchanged.
+- Known Camera2 `LENS_FACING` adds `front`, `back` or `external` before `camera`.
+  Unknown facing omits that word; it is never assumed to mean back. Optical
+  categories such as wide or telephoto are not inferred or included.
 - The focal length printed in the name is the single **physical** focal length
   reported in the pinned camera's `LENS_INFO_AVAILABLE_FOCAL_LENGTHS`, not the
   shot's focal length, 35mm equivalent or digital-zoom-adjusted length.
 - For that fixed-focal module, the name uses the widest supported opening: the
   smallest f-number in `LENS_INFO_AVAILABLE_APERTURES`. Stopping down does not
   rename the lens. Missing aperture characteristics omit the aperture suffix.
-- Missing or multiple available focal lengths produce a generic `camera` name
-  without numeric suffixes. Independent focal/aperture lists do not establish
-  a zoom lens's endpoint specification; no current-shot fallback is used.
+- Missing or multiple available focal lengths produce a `camera` name with
+  known facing but without numeric suffixes. Independent focal/aperture lists
+  do not establish a zoom lens's endpoint specification; no current-shot fallback
+  is used.
 - Numeric `FocalLength` and `FNumber` still describe the shot. The numeric
   35mm-equivalent calculation also retains its existing per-frame input.
 - Numbers use the shortest round-trip representation of the reported float,
@@ -37,33 +41,14 @@ LensModel: vivo X300 Ultra telephoto camera 22.48mm f/2.67
   the inspected Apple/Google convention. It does not identify the actual optical
   supplier. No vendor-marketing brand or native lens serial is inferred.
 
-Camera type is a **heuristic**, classified by the rounded, uncropped
-35mm-equivalent focal length computed from the single characteristic focal
-length and sensor physical dimensions:
-
-| Equivalent focal length | Camera type |
-|---|---|
-| 1–18mm | ultra wide camera |
-| 19–39mm | wide camera |
-| 40–149mm | telephoto camera |
-| 150mm and above | ultra telephoto camera |
-
-These thresholds are adapted from [bjzhou/PhotonCamera commit
-95f02b8291e6aa3a6f06e982c58a926c72f1098f](https://github.com/bjzhou/PhotonCamera/commit/95f02b8291e6aa3a6f06e982c58a926c72f1098f),
-`DeviceUtil.formatExifLensModel`, by zhoubinjia (Apache-2.0). Unlike upstream,
-Rawr prints physical focal length and preserves the reported numeric precision.
-See [third-party notices](../THIRD_PARTY_NOTICES.md).
-
-Front/back facing is a separate Camera2 characteristic (`LENS_FACING`); it is
-not inferred from focal length or included in this naming convention.
-
-If sensor dimensions are unavailable/invalid, the type is simply `camera`.
 Missing optical specifications are omitted from the name; no optics are guessed.
 Missing shot results do not remove known static name details.
 `FocalLengthIn35mmFormat` is omitted when it cannot be calculated within EXIF's
-valid range. Digital crop and reconstructed pixel scale do not change the
-module's lens name. This is a descriptive identity policy, not a requirement
+valid range, including when sensor dimensions are unavailable/invalid. This
+does not remove known facing or optics from the name. Digital crop and
+reconstructed pixel scale do not change the module's lens name. This is a descriptive identity policy, not a requirement
 that Exif model strings contain these suffixes or proof of an OEM lens model.
+Native OEM-name discovery and supplied-name preference are not implemented.
 
 ## Optical specification and source preservation
 
@@ -99,16 +84,16 @@ are outside this preservation extension.
 String generation and equivalent-focal-length calculation run only in the
 existing DNG/JPEG encoder workers, after acquisition. JPEG processing resolves
 a compact optional focal-length/maximum-opening snapshot and copies the
-sensor-size pair from the frame's pinned camera context. The encoder uses
-those characteristics for the name and the already frozen shot focal length
-for the numeric equivalent. No new device queries, disk/network I/O, locks,
+sensor-size pair and facing from the frame's pinned camera context. The encoder
+uses the optical characteristics and facing for the name and the already frozen
+shot focal length for the numeric equivalent. No new device queries, disk/network I/O, locks,
 waits or work are added to shutter submission, Camera2 callbacks or preview
 processing. Encoder placement is not a claim of zero resource cost.
 
 The widest characteristic aperture is resolved once per output preparation and
-shared by the name, specification and maximum-opening calculation. Matching
-shot/characteristic focal lengths reuse their equivalent calculation. DNG moves
-generated name strings into its output parameters; JPEG borrows imported names
+shared by the name, specification and maximum-opening calculation. The numeric
+equivalent is calculated separately from naming; no classification is performed.
+DNG moves generated name strings into its output parameters; JPEG borrows imported names
 only during serialization and keeps generated native names in caller-owned
 storage for the same lifetime. No persistent cache or synchronization is added.
 These remove source-level redundant work; no latency or battery improvement

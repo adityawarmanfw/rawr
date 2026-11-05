@@ -22,7 +22,6 @@ of this file. The GNU GPL v3 text is the repository `LICENSE`.
 | hdr-plus-swift / Burst Photo (HDR+ spatial merge) | `native/multiframe/merge_hdrplus` | https://github.com/martin-marek/hdr-plus-swift | GPL-3.0 |
 | libultrahdr (Ultra HDR / JPEG_R mux) | `native/gainmap` | https://github.com/google/libultrahdr | Apache-2.0 |
 | Oklab gamut clipping (Björn Ottosson) | `native/tonemap_engine` | https://bottosson.github.io/posts/gamutclipping/ | MIT |
-| PhotonCamera focal-length camera-type heuristic | `app/src/main/cpp/encoding/LensMetadata.h` | [bjzhou/PhotonCamera, commit 95f02b8291e6aa3a6f06e982c58a926c72f1098f](https://github.com/bjzhou/PhotonCamera/commit/95f02b8291e6aa3a6f06e982c58a926c72f1098f) | Apache-2.0 |
 | tinydng | `native/tinydng` | https://github.com/syoyo/tinydng | MIT |
 | libjpeg-turbo | `native/libjpeg-turbo` | https://github.com/libjpeg-turbo/libjpeg-turbo | IJG + BSD-3-Clause |
 | libadrenotools | build-time fetch (Adreno driver loading) | https://github.com/bylaws/libadrenotools | BSD-2-Clause |
@@ -74,13 +73,6 @@ is assigned to them; their permission notice is separate from rawr's code licens
   (jamy.lafenetre@ens-paris-saclay.fr). MIT.
 - **libultrahdr** — Copyright (c) Google LLC. Apache-2.0.
 - **Oklab gamut clipping** — Copyright (c) Björn Ottosson. MIT.
-- **PhotonCamera focal-length camera-type heuristic** — zhoubinjia and the
-  bjzhou/PhotonCamera contributors. Apache-2.0. Thresholds adapted from
-  `DeviceUtil.formatExifLensModel`, commit
-  `95f02b8291e6aa3a6f06e982c58a926c72f1098f` (2026-07-30). Rawr's implementation
-  uses physical focal length in the name, preserves reported numeric precision,
-  and handles missing metadata without a device database. The Apache-2.0 license
-  is bundled as `app/src/main/assets/licenses/Apache-2.0.txt`.
 - **tinydng** — Copyright (c) 2016-Present Syoyo Fujita and many contributors.
   MIT.
 - **libjpeg-turbo** — IJG License, Copyright (C) 1991-2020 Thomas G. Lane and

@@ -14,7 +14,8 @@ struct JpegLensMetadataView {
 inline JpegLensMetadataView lensMetadataForJpeg(const JpegCaptureContext& context, LensMetadata& generated) {
     if (context.captureSensorSizeMm) {
         generated = buildLensMetadata(context.deviceMake, context.deviceModel, context.focalLengthMm,
-                                       context.captureLensOptics, *context.captureSensorSizeMm);
+                                       context.captureLensOptics, *context.captureSensorSizeMm,
+                                       context.captureLensFacing);
         return {generated.make, generated.model, generated.focalLength35mm};
     }
     // Imported DNG metadata belongs to the source camera, not this device.

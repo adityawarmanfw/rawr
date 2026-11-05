@@ -65,17 +65,6 @@ inline std::optional<std::uint16_t> equivalentFocalLength35mm(
     return static_cast<std::uint16_t>(std::lround(equivalent));
 }
 
-// Classification thresholds from bjzhou/PhotonCamera (Apache-2.0), zhoubinjia:
-// https://github.com/bjzhou/PhotonCamera/commit/95f02b8291e6aa3a6f06e982c58a926c72f1098f
-// Unlike upstream, the name below prints physical focal length, never digital zoom.
-inline const char* lensCameraType(std::optional<std::uint16_t> equivalent) noexcept {
-    if (!equivalent || *equivalent == 0) return "camera";
-    if (*equivalent <= 18) return "ultra wide camera";
-    if (*equivalent < 40) return "wide camera";
-    if (*equivalent < 150) return "telephoto camera";
-    return "ultra telephoto camera";
-}
-
 inline std::string lensNumber(float value, bool fractional = false) {
     char buffer[64];
     // Shortest round-trip representation of the reported float, independent of locale.
@@ -110,7 +99,7 @@ inline bool lensModelIncludesMake(std::string_view model, std::string_view make)
 // Encoder-worker only: consumes frozen metadata; no device queries, I/O or shared state.
 inline LensMetadata buildLensMetadata(std::string_view make, std::string_view model,
                                       std::optional<float> focalLengthMm, const LensIdentityOptics& optics,
-                                      const std::array<float, 2>& sensorSizeMm) {
+                                      const std::array<float, 2>& sensorSizeMm, std::int32_t lensFacing) {
     LensMetadata result;
     result.make = lensAsciiIdentity(make);
     const auto displayModel = lensAsciiIdentity(model);
@@ -122,10 +111,13 @@ inline LensMetadata buildLensMetadata(std::string_view make, std::string_view mo
         if (!displayModel.empty()) result.model += " " + displayModel;
     }
     if (result.model.empty()) return result;
-    result.model += " ";
-    const auto identityEquivalent = optics.focalLengthMm == focalLengthMm
-        ? result.focalLength35mm : equivalentFocalLength35mm(optics.focalLengthMm, sensorSizeMm);
-    result.model += lensCameraType(identityEquivalent);
+    switch (lensFacing) {
+        case 0: result.model += " front"; break;
+        case 1: result.model += " back"; break;
+        case 2: result.model += " external"; break;
+        default: break;
+    }
+    result.model += " camera";
     if (optics.focalLengthMm) result.model += " " + lensNumber(*optics.focalLengthMm) + "mm";
     if (optics.maxAperture) result.model += " f/" + lensNumber(*optics.maxAperture, true);
     return result;

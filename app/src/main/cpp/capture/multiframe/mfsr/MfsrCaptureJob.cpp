@@ -697,6 +697,7 @@ void MfsrCaptureJob::runStages(Published& published) {
                 mergedJpeg.output.aperture = job->referenceMetadata.aperture;
                 mergedJpeg.output.focalLengthMm = job->referenceMetadata.focalLengthMm;
                 mergedJpeg.output.captureSensorSizeMm = camera.sensorPhysicalSizeMm;
+                mergedJpeg.output.captureLensFacing = camera.lensFacing;
                 const auto widestAperture = rawrcam::encoding::widestLensAperture(camera.availableApertures);
                 mergedJpeg.output.captureLensOptics =
                     rawrcam::encoding::lensIdentityOptics(camera.availableFocalLengthsMm, widestAperture);

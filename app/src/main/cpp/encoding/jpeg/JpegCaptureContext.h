@@ -55,6 +55,7 @@ struct JpegCaptureContext {
     // Not journaled: recovery repopulates it from the persisted camera context.
     std::optional<std::array<float, 2>> captureSensorSizeMm;
     LensIdentityOptics captureLensOptics;
+    std::int32_t captureLensFacing = -1;
     // Re-rendered DNGs preserve source lens metadata instead of generating names.
     std::optional<std::uint16_t> focalLength35mm;
     std::optional<std::array<double, 4>> lensSpecification;

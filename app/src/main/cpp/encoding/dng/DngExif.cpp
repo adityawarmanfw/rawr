@@ -84,7 +84,7 @@ void fillDngExif(TinyDngWriteParams& p, const rawrcam::imaging::RawSnapshot& fra
     }
     auto lens = buildLensMetadata(captureContext.deviceMake, displayModel, frame.metadata.focalLengthMm,
                                        lensIdentityOptics(ctx.availableFocalLengthsMm, widestAperture),
-                                       ctx.sensorPhysicalSizeMm);
+                                       ctx.sensorPhysicalSizeMm, ctx.lensFacing);
     p.lensMake = std::move(lens.make);
     p.lensModel = std::move(lens.model);
     p.software = rawrcam::encoding::kSoftwareName;

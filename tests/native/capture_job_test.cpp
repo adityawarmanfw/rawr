@@ -42,6 +42,7 @@ int main(int argc, char** argv) {
     camera->sensorPhysicalSizeMm = {9.16f, 6.87f};
     camera->availableFocalLengthsMm = {22.5f};
     camera->availableApertures = {2.7f, 4.0f};
+    camera->lensFacing = 1;
     j.frame.metadata.cameraContext = camera;
     j.frame.metadata.exposureTimeNs = 123456;
     j.frame.metadata.focalLengthMm = 22.5f;
@@ -149,8 +150,8 @@ int main(int argc, char** argv) {
         recoveredCamera.availableFocalLengthsMm, rawrcam::encoding::widestLensAperture(recoveredCamera.availableApertures));
     const auto recoveredLens = rawrcam::encoding::buildLensMetadata(
         restored.dng.deviceMake, restored.dng.deviceDisplayModel, restored.frame.metadata.focalLengthMm,
-        recoveredOptics, recoveredCamera.sensorPhysicalSizeMm);
-    assert(recoveredLens.model == "vivo X300 Ultra telephoto camera 22.5mm f/2.7" && recoveredLens.focalLength35mm == 85);
+        recoveredOptics, recoveredCamera.sensorPhysicalSizeMm, recoveredCamera.lensFacing);
+    assert(recoveredLens.model == "vivo X300 Ultra back camera 22.5mm f/2.7" && recoveredLens.focalLength35mm == 85);
     assert(restored.frame.metadata.requestedSensitivity == 3200);
     assert(!restored.frame.metadata.suppressPreview);
     assert(restored.frame.metadata.lensShadingMap == j.frame.metadata.lensShadingMap);

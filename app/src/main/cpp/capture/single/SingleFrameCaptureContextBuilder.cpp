@@ -159,6 +159,7 @@ void applySingleFrameCaptureMetadata(encoding::jpeg::JpegCaptureContext& output,
     output.aperture = captured.metadata.aperture;
     output.focalLengthMm = captured.metadata.focalLengthMm;
     output.captureSensorSizeMm = camera.sensorPhysicalSizeMm;
+    output.captureLensFacing = camera.lensFacing;
     const auto widestAperture = encoding::widestLensAperture(camera.availableApertures);
     output.captureLensOptics = encoding::lensIdentityOptics(camera.availableFocalLengthsMm, widestAperture);
     output.lensSpecification = encoding::lensSpecification(camera.availableFocalLengthsMm, widestAperture);
