@@ -25,6 +25,7 @@ struct SourceCaptureExif {
     std::optional<float> fNumber;  // FNumber, else APEX ApertureValue
     std::optional<float> focalLengthMm;
     std::optional<std::uint16_t> focalLength35mm;
+    std::optional<std::array<std::uint32_t, 2>> digitalZoomRatio;
     std::optional<std::int64_t> exposureTimeNs;
     std::optional<std::int32_t> sensitivity;
     std::string dateTimeOriginal;  // "YYYY:MM:DD HH:MM:SS" as written

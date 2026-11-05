@@ -95,6 +95,10 @@ std::optional<std::uint16_t> focal35(const tinydng_exif& e) {
     if (!e.has_focal_length_35mm || e.focal_length_35mm == 0) return std::nullopt;
     return e.focal_length_35mm;
 }
+std::optional<std::array<std::uint32_t, 2>> digitalZoom(const tinydng_exif& e) {
+    if (!e.has_digital_zoom || e.digital_zoom_rational[1] == 0) return std::nullopt;
+    return std::array<std::uint32_t, 2>{e.digital_zoom_rational[0], e.digital_zoom_rational[1]};
+}
 std::optional<std::array<double, 4>> lensSpec(const tinydng_exif& e) {
     if (!e.has_lens_spec) return std::nullopt;
     bool any = false;
@@ -142,6 +146,7 @@ SourceCaptureExif readSourceCaptureExif(const tinydng_exif& image, const tinydng
     out.fNumber = either<float>(image, root, fNumber);
     out.focalLengthMm = either<float>(image, root, focal);
     out.focalLength35mm = either<std::uint16_t>(image, root, focal35);
+    out.digitalZoomRatio = either<std::array<std::uint32_t, 2>>(image, root, digitalZoom);
     out.exposureTimeNs = either<std::int64_t>(image, root, exposure);
     out.sensitivity = either<std::int32_t>(image, root, iso);
     out.dateTimeOriginal = dateTime(image.datetime_original, rootText(&tinydng_exif::datetime_original));
@@ -190,6 +195,9 @@ void preserveSourceLensExif(tinydng_exif& output, const tinydng_exif& image,
     source = select([](const auto& exif) { return focal35(exif).has_value(); });
     output.has_focal_length_35mm = source != nullptr;
     if (source) output.focal_length_35mm = source->focal_length_35mm;
+    const auto zoom = either<std::array<std::uint32_t, 2>>(image, root, digitalZoom);
+    output.has_digital_zoom = zoom.has_value();
+    if (zoom) std::copy(zoom->begin(), zoom->end(), output.digital_zoom_rational);
     source = select([](const auto& exif) { return ratio(exif.aperture_value, exif.has_aperture_value, true).has_value(); });
     output.has_aperture_value = source != nullptr;
     if (source) std::copy_n(source->aperture_value, 2, output.aperture_value);

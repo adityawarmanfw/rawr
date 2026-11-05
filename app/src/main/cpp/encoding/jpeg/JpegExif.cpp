@@ -193,6 +193,12 @@ std::vector<unsigned char> buildExif(const JpegCaptureContext& c, std::uint32_t 
     const auto lens = lensMetadataForJpeg(c, generatedLens);
     if (lens.focalLength35mm && *lens.focalLength35mm > 0)
         exif.push_back({0xA405, 3, 1, shortData(*lens.focalLength35mm)});
+    if (c.digitalZoomRatio && (*c.digitalZoomRatio)[1] != 0) {
+        std::vector<unsigned char> ratio;
+        put32(ratio, (*c.digitalZoomRatio)[0]);
+        put32(ratio, (*c.digitalZoomRatio)[1]);
+        exif.push_back({0xA404, 5, 1, ratio});
+    }
     if (c.lensSpecification) {
         std::vector<unsigned char> spec;
         for (std::size_t index = 0; index < c.lensSpecification->size(); ++index) {

@@ -167,6 +167,36 @@ int main() {
               (*preferred.lensSpecification)[2] == 0, "specification precedence never splices endpoints");
     }
 
+    {
+        auto image = blank();
+        auto root = blank();
+        root.has_digital_zoom = 1;
+        root.digital_zoom_rational[0] = 3;
+        root.digital_zoom_rational[1] = 2;
+        auto x = readSourceCaptureExif(image, &root, nullptr);
+        check(x.digitalZoomRatio && (*x.digitalZoomRatio)[0] == 3 && (*x.digitalZoomRatio)[1] == 2,
+              "root digital zoom preserved");
+        auto converted = image;
+        rawrcam::renderer::preserveSourceLensExif(converted, image, &root, nullptr);
+        check(converted.has_digital_zoom && converted.digital_zoom_rational[0] == 3 &&
+              converted.digital_zoom_rational[1] == 2, "conversion retains root digital zoom");
+        image.has_digital_zoom = 1;
+        image.digital_zoom_rational[0] = 0;
+        image.digital_zoom_rational[1] = 1;
+        x = readSourceCaptureExif(image, &root, nullptr);
+        check(x.digitalZoomRatio && (*x.digitalZoomRatio)[0] == 0, "explicit no-zoom overrides root");
+        rawrcam::renderer::preserveSourceLensExif(converted, image, &root, nullptr);
+        check(converted.has_digital_zoom && converted.digital_zoom_rational[0] == 0 &&
+              converted.digital_zoom_rational[1] == 1, "conversion retains explicit no-zoom over root");
+        rawrcam::renderer::preserveSourceLensExif(converted, blank(), nullptr, nullptr);
+        check(!converted.has_digital_zoom, "conversion clears absent source zoom");
+        image.digital_zoom_rational[1] = 0;
+        x = readSourceCaptureExif(image, nullptr, nullptr);
+        check(!x.digitalZoomRatio, "invalid source zoom omitted");
+        x = readSourceCaptureExif(blank(), nullptr, nullptr);
+        check(!x.digitalZoomRatio, "missing source zoom not invented");
+    }
+
     // FNumber beats APEX ApertureValue; APEX alone still converts.
     {
         auto image = blank();

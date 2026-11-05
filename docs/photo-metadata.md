@@ -60,6 +60,13 @@ widest opening. Independent lists do not establish zoom-endpoint pairings, so
 unproven endpoint apertures use the defined rational `0/0`. A specification
 without usable focal information is omitted; other zero rationals are unchanged.
 
+Native JPEG also writes Exif DigitalZoomRatio using the same active-array-width /
+capture-crop-width calculation as the existing DNG path. It uses the frozen
+single-frame or merge-reference metadata; output resizing does not change the
+capture ratio. An uncropped known frame writes a ratio of 1, matching native DNG;
+unavailable crop geometry omits the tag. Recovery reconstructs the ratio from
+already persisted frame/camera metadata without a journal-format change.
+
 JPEG also writes ApertureValue from the actual shooting aperture and known
 MaxApertureValue from available optical characteristics. Both use unsigned APEX
 units; unknown or unrepresentable values are omitted. A stopped-down shot never
@@ -76,8 +83,11 @@ MaxApertureValue, including components above the signed 32-bit range. DNG conver
 also retains the original DNG LensInfo; its root/SubIFD fallback is optical-only,
 not a wholesale replacement of unrelated EXIF. Source serials are retained as
 capture facts and may identify a lens. Missing source facts never come from the
-exporting phone. Focus/distance, zoom, subject coordinates and focal-plane tags
-are outside this preservation extension.
+exporting phone. DigitalZoomRatio is also preserved for JPEG development and DNG conversion,
+including an explicit zero numerator (Exif's no-digital-zoom indication). A missing
+or invalid source ratio is not inferred from image dimensions or the exporting
+phone. Focus/distance, subject coordinates and focal-plane tags are outside this
+preservation extension.
 
 ## Performance and provenance
 

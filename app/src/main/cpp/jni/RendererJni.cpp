@@ -506,6 +506,7 @@ Java_com_rawr_camera_renderer_RendererNative_render(JNIEnv* e, jobject, jlong id
             c.aperture = source.fNumber;
             c.focalLengthMm = source.focalLengthMm;
             c.focalLength35mm = source.focalLength35mm;
+            c.digitalZoomRatio = source.digitalZoomRatio;
             c.lensSpecification = source.lensSpecification;
             c.apertureValue = source.apertureValue;
             c.maxApertureValue = source.maxApertureValue;

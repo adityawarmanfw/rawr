@@ -41,6 +41,7 @@
 #include "encoding/SoftwareName.h"
 #include "encoding/jpeg/JpegPublicDescription.h"
 #include "encoding/jpeg/JpegCaptureWriter.h"
+#include "encoding/jpeg/JpegLensMetadata.h"
 #include "encoding/jpeg/JpegTimingsFormat.h"
 #include "encoding/rzsl/RzslBundleSink.h"
 #include "geometry/CfaPattern.h"
@@ -696,6 +697,8 @@ void MfsrCaptureJob::runStages(Published& published) {
                 mergedJpeg.output.sensitivity = job->referenceMetadata.sensitivity;
                 mergedJpeg.output.aperture = job->referenceMetadata.aperture;
                 mergedJpeg.output.focalLengthMm = job->referenceMetadata.focalLengthMm;
+                mergedJpeg.output.digitalZoomRatio = rawrcam::encoding::jpeg::captureDigitalZoomRatio(
+                    camera.geometry.activeArray, job->referenceMetadata.scalerCropRegion);
                 mergedJpeg.output.captureSensorSizeMm = camera.sensorPhysicalSizeMm;
                 mergedJpeg.output.captureLensFacing = camera.lensFacing;
                 const auto widestAperture = rawrcam::encoding::widestLensAperture(camera.availableApertures);

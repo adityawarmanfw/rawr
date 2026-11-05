@@ -2,8 +2,18 @@
 
 #include "encoding/LensMetadata.h"
 #include "encoding/jpeg/JpegCaptureContext.h"
+#include "metadata/MetadataTypes.h"
 
 namespace rawrcam::encoding::jpeg {
+
+inline std::optional<std::array<std::uint32_t, 2>> captureDigitalZoomRatio(
+    const metadata::RectI& activeArray, const metadata::RectI& cropRegion) {
+    if (!metadata::validRect(activeArray) || !metadata::validRect(cropRegion)) return std::nullopt;
+    const auto fullWidth = metadata::rectWidth(activeArray);
+    const auto cropWidth = metadata::rectWidth(cropRegion);
+    if (fullWidth < cropWidth) return std::nullopt;
+    return std::array<std::uint32_t, 2>{fullWidth, cropWidth};
+}
 
 struct JpegLensMetadataView {
     std::string_view make;

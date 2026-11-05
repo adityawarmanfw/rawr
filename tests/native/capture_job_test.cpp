@@ -14,6 +14,7 @@
 #include "capture/persistence/ProcessingRecipe.h"
 #include "color/DcpProfile.h"
 #include "encoding/LensMetadata.h"
+#include "encoding/jpeg/JpegLensMetadata.h"
 using namespace rawrcam::capture::persistence;
 int main(int argc, char** argv) {
     if (argc == 2) {
@@ -43,6 +44,8 @@ int main(int argc, char** argv) {
     camera->availableFocalLengthsMm = {22.5f};
     camera->availableApertures = {2.7f, 4.0f};
     camera->lensFacing = 1;
+    camera->geometry.activeArray = {0, 0, 4000, 3000, true};
+    j.frame.metadata.scalerCropRegion = {1000, 750, 3000, 2250, true};
     j.frame.metadata.cameraContext = camera;
     j.frame.metadata.exposureTimeNs = 123456;
     j.frame.metadata.focalLengthMm = 22.5f;
@@ -152,6 +155,9 @@ int main(int argc, char** argv) {
         restored.dng.deviceMake, restored.dng.deviceDisplayModel, restored.frame.metadata.focalLengthMm,
         recoveredOptics, recoveredCamera.sensorPhysicalSizeMm, recoveredCamera.lensFacing);
     assert(recoveredLens.model == "vivo X300 Ultra back camera 22.5mm f/2.7" && recoveredLens.focalLength35mm == 85);
+    const auto recoveredZoom = rawrcam::encoding::jpeg::captureDigitalZoomRatio(
+        recoveredCamera.geometry.activeArray, restored.frame.metadata.scalerCropRegion);
+    assert(recoveredZoom && double((*recoveredZoom)[0]) / (*recoveredZoom)[1] == 2.0);
     assert(restored.frame.metadata.requestedSensitivity == 3200);
     assert(!restored.frame.metadata.suppressPreview);
     assert(restored.frame.metadata.lensShadingMap == j.frame.metadata.lensShadingMap);

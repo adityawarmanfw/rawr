@@ -64,6 +64,9 @@ static int gpsConversion() {
     exif.focal_length_rational[0] = 3'000'000'000u;
     exif.focal_length_rational[1] = 300'000'000u;
     exif.focal_length_35mm = 50;
+    exif.has_digital_zoom = 1;
+    exif.digital_zoom_rational[0] = 3;
+    exif.digital_zoom_rational[1] = 2;
     auto gps = rawrcam::metadata::makeGps(0, 0, -12345.0, {}, 1793059200123LL);
     std::vector<uint16_t> pixels(64 * 64, 1000);
     tinydng_write_image image{};
@@ -106,6 +109,8 @@ static int gpsConversion() {
                     CHECK(loaded->exif.has_focal_length && loaded->exif.focal_length_rational[1] != 0 &&
                         double(loaded->exif.focal_length_rational[0]) / loaded->exif.focal_length_rational[1] == 10.0);
                     CHECK(loaded->exif.has_focal_length_35mm && loaded->exif.focal_length_35mm == 50);
+                    CHECK(loaded->exif.has_digital_zoom && loaded->exif.digital_zoom_rational[0] == 3 &&
+                        loaded->exif.digital_zoom_rational[1] == 2);
                     CHECK(loaded->exif.has_aperture_value && loaded->exif.aperture_value[1] != 0 &&
                         double(loaded->exif.aperture_value[0]) / loaded->exif.aperture_value[1] == 2.0);
                 CHECK(loaded->exif.has_max_aperture_value && loaded->exif.max_aperture_value[0] == 0 &&

@@ -89,4 +89,13 @@ int main() {
     capture.focalLength35mm.reset();
     source = jpeg::lensMetadataForJpeg(capture, generated);
     assert(source.make.empty() && source.model.empty() && !source.focalLength35mm);
+
+    const rawrcam::metadata::RectI active{0, 0, 4000, 3000, true};
+    const rawrcam::metadata::RectI crop{1000, 750, 3000, 2250, true};
+    capture.digitalZoomRatio = jpeg::captureDigitalZoomRatio(active, crop);
+    assert(capture.digitalZoomRatio && double((*capture.digitalZoomRatio)[0]) / (*capture.digitalZoomRatio)[1] == 2.0);
+    capture.digitalZoomRatio = jpeg::captureDigitalZoomRatio(active, active);
+    assert(capture.digitalZoomRatio && (*capture.digitalZoomRatio)[0] == (*capture.digitalZoomRatio)[1]);
+    capture.digitalZoomRatio = jpeg::captureDigitalZoomRatio(active, {});
+    assert(!capture.digitalZoomRatio);
 }

@@ -50,6 +50,7 @@ struct JpegCaptureContext {
     std::int32_t sensitivity = 0;
     std::optional<float> aperture;
     std::optional<float> focalLengthMm;
+    std::optional<std::array<std::uint32_t, 2>> digitalZoomRatio;
     // Transient capture-only input, copied from the pinned frame in the processing
     // lane. Lens strings/35mm equivalent are built later by the encoder worker.
     // Not journaled: recovery repopulates it from the persisted camera context.
