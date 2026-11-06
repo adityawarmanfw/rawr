@@ -38,14 +38,28 @@ target_link_libraries(jpeg_strip_check PRIVATE rawr_strip_jpeg)
 add_test(NAME jpeg_strip_check COMMAND jpeg_strip_check)
 add_executable(jpeg_writer_check jpeg_writer_check.cpp
   "${APP}/encoding/jpeg/JpegCaptureWriter.cpp"
+  "${APP}/encoding/jpeg/JpegExif.cpp"
   "${APP}/diagnostics/logging/RuntimeTraceRecorder.cpp"
   "${RAWR_ROOT}/native/gainmap/src/UltrahdrMux.cpp")
-target_include_directories(jpeg_writer_check PRIVATE "${RAWR_ROOT}/native/gainmap/include")
+target_include_directories(jpeg_writer_check PRIVATE "${RAWR_ROOT}/native/gainmap/include" "${RAWR_ROOT}/native/tinydng")
 if(ANDROID)
   target_link_libraries(jpeg_writer_check PRIVATE log)
 else()
   target_include_directories(jpeg_writer_check PRIVATE stubs "${VULKAN_HEADERS}")
 endif()
-target_link_libraries(jpeg_writer_check PRIVATE rawr_strip_jpeg)
+target_link_libraries(jpeg_writer_check PRIVATE rawr_strip_jpeg ${CMAKE_DL_LIBS})
 add_test(NAME jpeg_writer_check COMMAND jpeg_writer_check)
 set_tests_properties(jpeg_writer_check PROPERTIES ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}")
+add_executable(ultrahdr_mux_benchmark ultrahdr_mux_benchmark.cpp
+  "${RAWR_ROOT}/native/gainmap/src/UltrahdrMux.cpp")
+target_include_directories(ultrahdr_mux_benchmark PRIVATE "${RAWR_ROOT}/native/gainmap/include")
+target_compile_definitions(ultrahdr_mux_benchmark PRIVATE RAWR_MUX_SEGMENTS)
+set(RAWR_ULTRAHDR_BASELINE_SOURCE "" CACHE FILEPATH "Pre-change UltrahdrMux.cpp for paired mux benchmarks")
+if(RAWR_ULTRAHDR_BASELINE_SOURCE)
+  add_executable(ultrahdr_mux_benchmark_baseline ultrahdr_mux_benchmark.cpp "${RAWR_ULTRAHDR_BASELINE_SOURCE}")
+  target_include_directories(ultrahdr_mux_benchmark_baseline PRIVATE "${RAWR_ROOT}/native/gainmap/include")
+endif()
+add_executable(ultrahdr_mux_check "${RAWR_ROOT}/native/gainmap/tests/test_ultrahdr_mux.cpp"
+  "${RAWR_ROOT}/native/gainmap/src/UltrahdrMux.cpp")
+target_include_directories(ultrahdr_mux_check PRIVATE "${RAWR_ROOT}/native/gainmap/include")
+add_test(NAME ultrahdr_mux_check COMMAND ultrahdr_mux_check)

@@ -44,6 +44,17 @@ struct UltrahdrMuxResult {
     size_t secondaryOffset = 0;  // file offset of secondary SOI
 };
 
+// Owns only rebuilt metadata/headers; image payloads borrow the encoded inputs.
+// Keep both input JPEG allocations stable until all four parts are consumed.
+struct UltrahdrMuxParts {
+    std::vector<uint8_t> primaryHeader;
+    const uint8_t* primaryScan = nullptr;
+    size_t primaryScanSize = 0;
+    std::vector<uint8_t> secondaryHeader;
+    const uint8_t* secondaryBody = nullptr;
+    size_t secondaryBodySize = 0;
+};
+
 class UltrahdrMux {
    public:
     static bool validateParams(const UltrahdrMuxParams& params, const char** reason = nullptr) noexcept;
@@ -53,6 +64,12 @@ class UltrahdrMux {
     static UltrahdrMuxResult assemble(const uint8_t* baseJpeg, size_t baseSize, const uint8_t* mapJpeg,
                                       size_t mapSize, const uint8_t* exifPayload, size_t exifSize,
                                       const UltrahdrMuxParams& params, std::vector<uint8_t>& outFile);
+    // Concatenating primaryHeader, primaryScan, secondaryHeader, secondaryBody
+    // produces the exact assemble() file without copying either image payload.
+    // On validation failure, outParts is unchanged and no output is written.
+    static UltrahdrMuxResult assembleParts(const uint8_t* baseJpeg, size_t baseSize, const uint8_t* mapJpeg,
+                                           size_t mapSize, const uint8_t* exifPayload, size_t exifSize,
+                                           const UltrahdrMuxParams& params, UltrahdrMuxParts& outParts);
 };
 
 }  // namespace gainmap
