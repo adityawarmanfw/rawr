@@ -4,7 +4,7 @@ package com.rawr.camera.renderer.library
 internal object ConvertNative {
     init { System.loadLibrary("rawrcam_native") }
 
-    /** "ok\nwidth\nheight\nbits\ncompression\norientation\nrawr\nconvertible\nmake\nmodel\ndateTimeOriginal\noffsetTimeOriginal" or "error\nmessage". */
+    /** "ok\nwidth\nheight\nbits\ncompression\norientation\nrawr\nconvertible\nmake\nmodel" or "error\nmessage". */
     external fun probe(path: String): String
 
     /** [width, height, argb...] unrotated, or null. */

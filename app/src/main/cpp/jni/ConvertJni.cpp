@@ -28,7 +28,7 @@ ConvertJob* job(jlong handle) { return reinterpret_cast<ConvertJob*>(handle); }
 
 }  // namespace
 
-// "ok\nwidth\nheight\nbits\ncompression\norientation\nrawr\nconvertible\nmake\nmodel\ndateTimeOriginal\noffsetTimeOriginal"
+// "ok\nwidth\nheight\nbits\ncompression\norientation\nrawr\nconvertible\nmake\nmodel"
 // or "error\n<message>".
 extern "C" JNIEXPORT jstring JNICALL Java_com_rawr_camera_renderer_library_ConvertNative_probe(JNIEnv* e, jobject,
                                                                                                 jstring path) {
@@ -51,9 +51,7 @@ extern "C" JNIEXPORT jstring JNICALL Java_com_rawr_camera_renderer_library_Conve
             << (info.rawr ? 1 : 0) << '\n'
             << (info.convertible ? 1 : 0) << '\n'
             << clean(info.make) << '\n'
-            << clean(info.model) << '\n'
-            << clean(info.dateTimeOriginal) << '\n'
-            << clean(info.offsetTimeOriginal);
+            << clean(info.model);
     }
     return e->NewStringUTF(out.str().c_str());
 }

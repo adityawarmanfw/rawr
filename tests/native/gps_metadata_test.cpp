@@ -138,6 +138,11 @@ static void roundTrip(const std::optional<tinydng_gps>& gps,
         fields = read();
         assert(text(0x9004) == jpegContext.dateTimeDigitized && !fields.contains(0x9012) && !fields.contains(0x9292));
         assert(!fields.contains(0x9003) && !fields.contains(0x9011) && !fields.contains(0x9291));
+        jpegContext.offsetTimeDigitized = "-03:30";
+        jpegContext.subsecTimeDigitized = "567";
+        fields = read();
+        assert(text(0x9004) == jpegContext.dateTimeDigitized && text(0x9012) == "-03:30" && text(0x9292) == "567");
+        assert(!fields.contains(0x9003) && !fields.contains(0x9011) && !fields.contains(0x9291));
         jpegContext.dateTimeDigitized.clear();
         fields = read();
         for (uint16_t tag : {0x9003, 0x9004, 0x9011, 0x9012, 0x9291, 0x9292}) assert(!fields.contains(tag));

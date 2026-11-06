@@ -168,6 +168,9 @@ int main() {
               distinct.offsetTimeDigitized.empty() && distinct.subsecTimeDigitized.empty(),
               "qualifiers from a different root date are not borrowed");
           root.datetime_digitized = image.datetime_digitized;
+          const auto compatible = readSourceCaptureExif(image, &root, nullptr);
+          check(compatible.offsetTimeDigitized == "-03:30" && compatible.subsecTimeDigitized == "567",
+              "matching dates fill missing source qualifiers");
           image.offset_time_digitized = s("+00:00");
           const auto conflicting = readSourceCaptureExif(image, &root, nullptr);
           check(conflicting.offsetTimeDigitized == "+00:00" && conflicting.subsecTimeDigitized.empty(),
