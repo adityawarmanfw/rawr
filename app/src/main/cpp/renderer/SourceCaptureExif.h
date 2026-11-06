@@ -18,10 +18,14 @@ struct SourceCaptureExif {
     std::string model;
     std::string lensMake;
     std::string lensModel;
-    std::optional<std::array<double, 4>> lensSpecification;  // min/max focal, min/max f-number
+    std::string lensSerial;
+    std::optional<std::array<double, 4>> lensSpecification;  // focal bounds, widest opening at each endpoint
+    std::optional<double> apertureValue;
+    std::optional<double> maxApertureValue;
     std::optional<float> fNumber;  // FNumber, else APEX ApertureValue
     std::optional<float> focalLengthMm;
     std::optional<std::uint16_t> focalLength35mm;
+    std::optional<std::array<std::uint32_t, 2>> digitalZoomRatio;
     std::optional<std::int64_t> exposureTimeNs;
     std::optional<std::int32_t> sensitivity;
     std::string dateTimeOriginal;  // "YYYY:MM:DD HH:MM:SS" as written
@@ -35,16 +39,16 @@ struct SourceCaptureExif {
 // root may be null or alias image. uniqueCameraModel (DNG IFD0) stands in
 // for Model only when neither IFD names one.
 SourceCaptureExif readSourceCaptureExif(const tinydng_exif& image, const tinydng_exif* root,
-                                        const char* uniqueCameraModel);
+                                        const char* uniqueCameraModel, const tinydng_raw_info* rootRaw = nullptr);
 
-// Export camera identity: the source's make/model whenever it names a camera
-// (a lone model keeps an empty make rather than borrowing the exporter's),
-// the exporting device's only when the source names none.
+void preserveSourceLensExif(tinydng_exif& output, const tinydng_exif& image,
+                            const tinydng_exif* root, const tinydng_raw_info* rootRaw);
+
+// Export camera identity stays with the source, including unknown values.
 struct ExportIdentity {
     std::string make;
     std::string model;
 };
-ExportIdentity exportIdentity(const SourceCaptureExif& source, const std::string& deviceMake,
-                              const std::string& deviceModel);
+ExportIdentity exportIdentity(const SourceCaptureExif& source);
 
 }  // namespace rawrcam::renderer

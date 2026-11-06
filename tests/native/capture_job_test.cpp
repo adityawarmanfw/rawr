@@ -13,6 +13,8 @@
 #include "capture/persistence/CaptureJob.h"
 #include "capture/persistence/ProcessingRecipe.h"
 #include "color/DcpProfile.h"
+#include "encoding/LensMetadata.h"
+#include "encoding/jpeg/JpegLensMetadata.h"
 using namespace rawrcam::capture::persistence;
 int main(int argc, char** argv) {
     if (argc == 2) {
@@ -38,8 +40,16 @@ int main(int argc, char** argv) {
     camera->cameraId = "3";
     camera->lensId = "wide";
     camera->lensDistortion = {1, 2, 3, 4, 5};
+    camera->sensorPhysicalSizeMm = {9.16f, 6.87f};
+    camera->availableFocalLengthsMm = {22.5f};
+    camera->availableApertures = {2.7f, 4.0f};
+    camera->lensFacing = 1;
+    camera->geometry.activeArray = {0, 0, 4000, 3000, true};
+    j.frame.metadata.scalerCropRegion = {1000, 750, 3000, 2250, true};
     j.frame.metadata.cameraContext = camera;
     j.frame.metadata.exposureTimeNs = 123456;
+    j.frame.metadata.focalLengthMm = 22.5f;
+    j.frame.metadata.aperture = 4.0f;
     j.frame.metadata.sensorNoiseProfile = {.001, .00002};
     j.frame.metadata.lensShadingMap = {1, 2, 3, 4};
     j.frame.metadata.requestedSensitivity = 3200;
@@ -54,6 +64,7 @@ int main(int argc, char** argv) {
     j.mergedDng.gps = j.dng.gps;
     j.jpeg.output.gps = j.dng.gps;
     j.dng.deviceModel = "V2562";
+    j.dng.deviceMake = "vivo";
     j.dng.deviceDisplayModel = "X300 Ultra";
     j.mergedDng.deviceDisplayModel = "X300 Ultra";
     j.jpeg.output.outputFd = rawrcam::encoding::OutputFd(::open("/dev/null", O_WRONLY));
@@ -133,6 +144,20 @@ int main(int argc, char** argv) {
     assert(restored.mergedDng.deviceDisplayModel == "X300 Ultra");
     assert(restored.frame.raw16 == j.frame.raw16);
     assert(restored.frame.metadata.cameraContext->lensDistortion == camera->lensDistortion);
+    const auto& recoveredCamera = *restored.frame.metadata.cameraContext;
+    assert(recoveredCamera.sensorPhysicalSizeMm == camera->sensorPhysicalSizeMm);
+    assert(recoveredCamera.availableFocalLengthsMm == camera->availableFocalLengthsMm);
+    assert(recoveredCamera.availableApertures == camera->availableApertures);
+    assert(restored.frame.metadata.focalLengthMm == 22.5f && restored.frame.metadata.aperture == 4.0f);
+    const auto recoveredOptics = rawrcam::encoding::lensIdentityOptics(
+        recoveredCamera.availableFocalLengthsMm, rawrcam::encoding::widestLensAperture(recoveredCamera.availableApertures));
+    const auto recoveredLens = rawrcam::encoding::buildLensMetadata(
+        restored.dng.deviceMake, restored.dng.deviceDisplayModel, restored.frame.metadata.focalLengthMm,
+        recoveredOptics, recoveredCamera.sensorPhysicalSizeMm, recoveredCamera.lensFacing);
+    assert(recoveredLens.model == "vivo X300 Ultra back camera 22.5mm f/2.7" && recoveredLens.focalLength35mm == 85);
+    const auto recoveredZoom = rawrcam::encoding::jpeg::captureDigitalZoomRatio(
+        recoveredCamera.geometry.activeArray, restored.frame.metadata.scalerCropRegion);
+    assert(recoveredZoom && double((*recoveredZoom)[0]) / (*recoveredZoom)[1] == 2.0);
     assert(restored.frame.metadata.requestedSensitivity == 3200);
     assert(!restored.frame.metadata.suppressPreview);
     assert(restored.frame.metadata.lensShadingMap == j.frame.metadata.lensShadingMap);

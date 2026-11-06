@@ -1,5 +1,6 @@
 #include "encoding/SoftwareName.h"
 #include "encoding/dng/DngExif.h"
+#include "encoding/LensMetadata.h"
 
 #include <algorithm>
 #include <cmath>
@@ -7,6 +8,7 @@
 #include <ctime>
 #include <limits>
 #include <string>
+#include <utility>
 
 #include "geometry/LensDistortion.h"
 #include "geometry/OrientationTransform.h"
@@ -68,17 +70,21 @@ void quantizeURational(float value, uint32_t& num, uint32_t& den) {
 void fillDngExif(TinyDngWriteParams& p, const rawrcam::imaging::RawSnapshot& frame,
                  const DngCaptureContext& captureContext) {
     const auto& ctx = *frame.metadata.cameraContext;
+    const auto widestAperture = widestLensAperture(ctx.availableApertures);
     tinydng_exif& ex = p.exif;
     if (!captureContext.deviceMake.empty()) {
         p.make = captureContext.deviceMake;
-        p.lensMake = captureContext.deviceMake;
     }
     const auto& displayModel = captureContext.deviceDisplayModel.empty()
         ? captureContext.deviceModel : captureContext.deviceDisplayModel;
     if (!displayModel.empty()) {
         p.model = displayModel;
-        p.lensModel = captureContext.deviceModel;
     }
+    auto lens = buildLensMetadata(captureContext.deviceMake, displayModel, frame.metadata.focalLengthMm,
+                                       lensIdentityOptics(ctx.availableFocalLengthsMm, widestAperture),
+                                       ctx.sensorPhysicalSizeMm, ctx.lensFacing);
+    p.lensMake = std::move(lens.make);
+    p.lensModel = std::move(lens.model);
     p.software = rawrcam::encoding::kSoftwareName;
     p.description = tiffAsciiDescription(captureContext.imageDescription.empty() ? rawrcam::encoding::kCapturedWith
                                                                                  : captureContext.imageDescription);
@@ -116,7 +122,7 @@ void fillDngExif(TinyDngWriteParams& p, const rawrcam::imaging::RawSnapshot& fra
         ex.iso = frame.metadata.sensitivity;
         ex.has_iso = 1;
     }
-    if (frame.metadata.aperture && *frame.metadata.aperture > 0.0f) {
+    if (frame.metadata.aperture && validLensNumber(*frame.metadata.aperture)) {
         quantizeURational(*frame.metadata.aperture, ex.fnumber_rational[0], ex.fnumber_rational[1]);
         ex.has_fnumber = 1;
         quantizeURational(float(2.0 * std::log2(*frame.metadata.aperture)), ex.max_aperture_rational[0],
@@ -125,25 +131,17 @@ void fillDngExif(TinyDngWriteParams& p, const rawrcam::imaging::RawSnapshot& fra
         quantizeSRational(float(2.0 * std::log2(*frame.metadata.aperture)), ex.aperture_value[0], ex.aperture_value[1]);
         ex.has_aperture_value = 1;
     }
-    if (!ctx.availableApertures.empty()) {
-        const float amin = *std::min_element(ctx.availableApertures.begin(), ctx.availableApertures.end());
-        if (amin > 0.0f) {
-            quantizeURational(float(2.0 * std::log2(amin)), ex.max_aperture_rational[0], ex.max_aperture_rational[1]);
-            ex.has_max_aperture_value = 1;
-        }
+    if (widestAperture) {
+        quantizeURational(float(2.0 * std::log2(*widestAperture)), ex.max_aperture_rational[0], ex.max_aperture_rational[1]);
+        ex.has_max_aperture_value = 1;
     }
-    if (frame.metadata.focalLengthMm && *frame.metadata.focalLengthMm > 0.0f) {
+    if (frame.metadata.focalLengthMm && validLensNumber(*frame.metadata.focalLengthMm)) {
         quantizeURational(*frame.metadata.focalLengthMm, ex.focal_length_rational[0], ex.focal_length_rational[1]);
         ex.has_focal_length = 1;
-        const double sw = ctx.sensorPhysicalSizeMm[0], sh = ctx.sensorPhysicalSizeMm[1];
-        if (sw > 0.0 && sh > 0.0) {
-            const double eq =
-                *frame.metadata.focalLengthMm * std::sqrt(36.0 * 36.0 + 24.0 * 24.0) / std::sqrt(sw * sw + sh * sh);
-            if (eq >= 1.0 && eq <= 65535.0) {
-                ex.focal_length_35mm = uint16_t(std::lround(eq));
-                ex.has_focal_length_35mm = 1;
-            }
-        }
+    }
+    if (lens.focalLength35mm) {
+        ex.focal_length_35mm = *lens.focalLength35mm;
+        ex.has_focal_length_35mm = 1;
     }
     if (frame.metadata.focusDistanceDiopters && *frame.metadata.focusDistanceDiopters > 0.000001f) {
         quantizeURational(1.0f / *frame.metadata.focusDistanceDiopters, ex.subject_distance_rational[0],
@@ -183,17 +181,8 @@ void fillDngExif(TinyDngWriteParams& p, const rawrcam::imaging::RawSnapshot& fra
             p.subsecDig = p.subsec;
         }
     }
-    if (!ctx.availableFocalLengthsMm.empty()) {
-        const auto [fminIt, fmaxIt] =
-            std::minmax_element(ctx.availableFocalLengthsMm.begin(), ctx.availableFocalLengthsMm.end());
-        ex.lens_spec[0] = *fminIt;
-        ex.lens_spec[1] = *fmaxIt;
-        if (!ctx.availableApertures.empty()) {
-            const float amin = *std::min_element(ctx.availableApertures.begin(), ctx.availableApertures.end());
-            const float amax = *std::max_element(ctx.availableApertures.begin(), ctx.availableApertures.end());
-            ex.lens_spec[2] = amin > 0 ? amin : 0;
-            ex.lens_spec[3] = amax > 0 ? amax : 0;
-        }
+    if (const auto specification = lensSpecification(ctx.availableFocalLengthsMm, widestAperture)) {
+        std::copy(specification->begin(), specification->end(), ex.lens_spec);
         ex.has_lens_spec = 1;
     }
 }

@@ -625,6 +625,12 @@ int td_dng_handle_tag(tinydng_context *ctx, const td_reader *r,
       if (n == 4) img->exif.has_lens_spec = 1;
       break;
     }
+    case TD_TAG_LENS_INFO: {
+      if (type == TD_TYPE_RATIONAL && count == 4 &&
+          td_read_reals(r, type, data_off, count, img->raw.lens_info, 4) == 4)
+        img->raw.has_lens_info = 1;
+      break;
+    }
     case TD_TAG_UNIQUE_CAMERA_MODEL:
       td_set_ascii(ctx, &img->raw.unique_camera_model, r, data_off, count, err);
       break;

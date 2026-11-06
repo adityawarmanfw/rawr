@@ -1,6 +1,6 @@
 // Renderer export EXIF: a re-rendered DNG keeps the source camera, lens and
 // capture time. Each field reads the RAW image IFD first and IFD0 second; the
-// exporting device's identity only fills in for a source that names none.
+// source's unknown camera identity stays unknown.
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -74,6 +74,13 @@ int main() {
         root.model = s("23078PND5G");
         root.lens_make = s("Xiaomi");
         root.lens_model = s("Main 23mm");
+        root.lens_serial = s("Lens serial");
+        root.aperture_value[0] = root.max_aperture_value[0] = 1852;
+        root.aperture_value[1] = root.max_aperture_value[1] = 1000;
+        root.has_aperture_value = root.has_max_aperture_value = 1;
+        root.max_aperture_rational[0] = 3'704'000'000u;
+        root.max_aperture_rational[1] = 2'000'000'000u;
+        std::memcpy(root.max_aperture_value, root.max_aperture_rational, sizeof root.max_aperture_value);
         root.lens_spec[0] = 23;
         root.lens_spec[1] = 23;
         root.lens_spec[2] = 1.9;
@@ -101,6 +108,9 @@ int main() {
         const auto x = readSourceCaptureExif(image, &root, nullptr);
         check(x.make == "Xiaomi" && x.model == "23078PND5G", "root make/model");
         check(x.lensMake == "Xiaomi" && x.lensModel == "Main 23mm", "root lens");
+        check(x.lensSerial == "Lens serial", "source lens serial retained");
+        check(x.apertureValue && std::abs(*x.apertureValue - 1.852) < 1e-9, "source aperture value retained");
+        check(x.maxApertureValue && std::abs(*x.maxApertureValue - 1.852) < 1e-9, "source maximum aperture retained");
         check(x.lensSpecification && (*x.lensSpecification)[2] == 1.9, "root lens spec");
         check(x.fNumber && std::abs(*x.fNumber - 1.9f) < 1e-5f, "root fnumber");
         check(x.focalLengthMm && std::abs(*x.focalLengthMm - 6.9f) < 1e-5f, "root focal");
@@ -112,8 +122,18 @@ int main() {
         check(x.offsetTimeOriginal == "+08:00", "root offset");
         check(x.subsecTimeOriginal == "042", "root subsec");
         check(x.offsetTimeDigitized == "-03:30" && x.subsecTimeDigitized == "567", "independent digitized qualifiers");
-        const auto id = exportIdentity(x, "vivo", "X300 Ultra");
-        check(id.make == "Xiaomi" && id.model == "23078PND5G", "source identity beats the exporter");
+        const auto id = exportIdentity(x);
+        check(id.make == "Xiaomi" && id.model == "23078PND5G", "source identity preserved");
+          image.model = s("RAW camera");
+          auto converted = image;
+          rawrcam::renderer::preserveSourceLensExif(converted, image, &root, nullptr);
+          check(converted.lens_serial == root.lens_serial && converted.has_lens_spec &&
+              converted.lens_spec[2] == 1.9, "conversion retains root optics despite RAW identity");
+          check(converted.has_max_aperture_value && converted.max_aperture_rational[1] != 0 &&
+              std::abs(double(converted.max_aperture_rational[0]) / converted.max_aperture_rational[1] - 1.852) < 1e-9,
+              "conversion retains unsigned maximum aperture");
+          check(converted.model == image.model && !converted.make && !converted.has_iso &&
+              !converted.has_exposure_time, "lens fallback does not replace unrelated EXIF");
     }
 
     // Per field: the image IFD wins where it has a value, IFD0 fills the rest.
@@ -152,6 +172,51 @@ int main() {
           const auto conflicting = readSourceCaptureExif(image, &root, nullptr);
           check(conflicting.offsetTimeDigitized == "+00:00" && conflicting.subsecTimeDigitized.empty(),
               "matching wall-clock dates with conflicting offsets do not share fractions");
+          tinydng_raw_info raw{};
+          raw.has_lens_info = 1;
+          raw.lens_info[0] = 6;
+          raw.lens_info[1] = 12;
+          const auto fallback = readSourceCaptureExif(image, &root, nullptr, &raw);
+          check(fallback.lensSpecification && (*fallback.lensSpecification)[1] == 12 &&
+              (*fallback.lensSpecification)[2] == 0, "DNG-only lens specification fallback");
+          image.has_lens_spec = root.has_lens_spec = 1;
+          image.lens_spec[0] = image.lens_spec[1] = 8;
+          root.lens_spec[0] = 6;
+          root.lens_spec[1] = 12;
+          root.lens_spec[2] = root.lens_spec[3] = 1.8;
+          const auto preferred = readSourceCaptureExif(image, &root, nullptr, &raw);
+          check(preferred.lensSpecification && (*preferred.lensSpecification)[0] == 8 &&
+              (*preferred.lensSpecification)[2] == 0, "specification precedence never splices endpoints");
+    }
+
+    {
+        auto image = blank();
+        auto root = blank();
+        root.has_digital_zoom = 1;
+        root.digital_zoom_rational[0] = 3;
+        root.digital_zoom_rational[1] = 2;
+        auto x = readSourceCaptureExif(image, &root, nullptr);
+        check(x.digitalZoomRatio && (*x.digitalZoomRatio)[0] == 3 && (*x.digitalZoomRatio)[1] == 2,
+              "root digital zoom preserved");
+        auto converted = image;
+        rawrcam::renderer::preserveSourceLensExif(converted, image, &root, nullptr);
+        check(converted.has_digital_zoom && converted.digital_zoom_rational[0] == 3 &&
+              converted.digital_zoom_rational[1] == 2, "conversion retains root digital zoom");
+        image.has_digital_zoom = 1;
+        image.digital_zoom_rational[0] = 0;
+        image.digital_zoom_rational[1] = 1;
+        x = readSourceCaptureExif(image, &root, nullptr);
+        check(x.digitalZoomRatio && (*x.digitalZoomRatio)[0] == 0, "explicit no-zoom overrides root");
+        rawrcam::renderer::preserveSourceLensExif(converted, image, &root, nullptr);
+        check(converted.has_digital_zoom && converted.digital_zoom_rational[0] == 0 &&
+              converted.digital_zoom_rational[1] == 1, "conversion retains explicit no-zoom over root");
+        rawrcam::renderer::preserveSourceLensExif(converted, blank(), nullptr, nullptr);
+        check(!converted.has_digital_zoom, "conversion clears absent source zoom");
+        image.digital_zoom_rational[1] = 0;
+        x = readSourceCaptureExif(image, nullptr, nullptr);
+        check(!x.digitalZoomRatio, "invalid source zoom omitted");
+        x = readSourceCaptureExif(blank(), nullptr, nullptr);
+        check(!x.digitalZoomRatio, "missing source zoom not invented");
     }
 
     // FNumber beats APEX ApertureValue; APEX alone still converts.
@@ -168,9 +233,12 @@ int main() {
         image.has_fnumber = 0;
         x = readSourceCaptureExif(image, nullptr, nullptr);
         check(x.fNumber && std::abs(*x.fNumber - 2.0f) < 1e-4f, "apex fallback");
+        image.aperture_value[0] = 0;
+        x = readSourceCaptureExif(image, nullptr, nullptr);
+        check(x.apertureValue && *x.apertureValue == 0 && x.fNumber == 1.0f, "known zero APEX retained");
     }
 
-    // A tagless source: capture time stays unknown; identity uses the existing fallback.
+    // A tagless source: capture time and camera identity stay unknown.
     {
         auto image = blank();
         image.datetime_original = s("    :  :     :  :  ");
@@ -180,8 +248,8 @@ int main() {
         check(!x.fNumber && !x.focalLengthMm && !x.exposureTimeNs && !x.sensitivity && !x.lensSpecification,
               "no numeric tags");
         check(x.dateTimeOriginal.empty() && x.offsetTimeOriginal.empty(), "blank date is absent, offset dropped");
-        const auto id = exportIdentity(x, "vivo", "X300 Ultra");
-        check(id.make == "vivo" && id.model == "X300 Ultra", "device identity fallback");
+        const auto id = exportIdentity(x);
+        check(id.make.empty() && id.model.empty(), "unknown source identity stays unknown");
     }
 
     // UniqueCameraModel names the camera when Make/Model are missing; the
@@ -192,7 +260,7 @@ int main() {
         const auto x = readSourceCaptureExif(image, nullptr, "Some Camera");
         check(x.model == "Some Camera" && x.make.empty(), "unique camera model");
         check(x.dateTimeOriginal.empty(), "zeroed date is absent");
-        const auto id = exportIdentity(x, "vivo", "X300 Ultra");
+        const auto id = exportIdentity(x);
         check(id.make.empty() && id.model == "Some Camera", "no mixed identity");
         for (const char* unknown : {"2026:00:00 00:00:00", "2025:02:31 15:13:00"}) {
             image.datetime_original = s(unknown);

@@ -9,7 +9,7 @@
 
 using GpsFields = std::map<uint16_t, std::vector<uint8_t>>;
 
-static GpsFields ifdFields(const uint8_t* bytes, size_t size, uint16_t pointerTag = 34853) {
+static GpsFields ifdFields(const uint8_t* bytes, size_t size, uint16_t directoryTag = 34853, uint16_t onlyTag = 0) {
     const bool bigEndian = bytes[0] == 'M';
     const auto number = [&](size_t offset, size_t length) {
         assert(offset <= size && length <= size - offset);
@@ -24,10 +24,10 @@ static GpsFields ifdFields(const uint8_t* bytes, size_t size, uint16_t pointerTa
     const size_t inlineSize = bigTiff ? 8 : 4;
     const size_t root = number(bigTiff ? 8 : 4, inlineSize);
     const auto rootCount = number(root, countSize);
-    size_t gpsOffset = pointerTag ? 0 : root;
+        size_t gpsOffset = directoryTag ? 0 : root;
     for (size_t index = 0; index < rootCount; ++index) {
         const size_t entry = root + countSize + index * entrySize;
-        if (number(entry, 2) == pointerTag) gpsOffset = number(entry + (bigTiff ? 12 : 8), inlineSize);
+        if (number(entry, 2) == directoryTag) gpsOffset = number(entry + (bigTiff ? 12 : 8), inlineSize);
     }
     GpsFields fields;
     if (!gpsOffset) return fields;
@@ -36,6 +36,7 @@ static GpsFields ifdFields(const uint8_t* bytes, size_t size, uint16_t pointerTa
     for (size_t index = 0; index < count; ++index) {
         const size_t entry = gpsOffset + countSize + index * entrySize;
         const auto tag = uint16_t(number(entry, 2));
+        if (onlyTag && tag != onlyTag) continue;
         const auto type = number(entry + 2, 2);
         const auto values = number(entry + 4, bigTiff ? 8 : 4);
         assert(type == 1 || type == 2 || type == 3 || type == 4 || type == 5 || type == 7);
@@ -51,7 +52,9 @@ static GpsFields ifdFields(const uint8_t* bytes, size_t size, uint16_t pointerTa
     return fields;
 }
 
-static void roundTrip(const std::optional<tinydng_gps>& gps, bool legacyVersion = false) {
+static void roundTrip(const std::optional<tinydng_gps>& gps,
+                      std::optional<std::array<uint32_t, 2>> digitalZoom = std::nullopt,
+                      bool legacyVersion = false) {
     tinydng_error error{};
     auto* context = tinydng_context_create(nullptr, &error);
     assert(context);
@@ -67,6 +70,8 @@ static void roundTrip(const std::optional<tinydng_gps>& gps, bool legacyVersion 
     tinydng_exif exif{};
     exif.has_exif_version = 1;
     std::memcpy(exif.exif_version, legacyVersion ? "0230" : "0300", 4);
+    exif.has_digital_zoom = digitalZoom.has_value();
+    if (digitalZoom) std::copy(digitalZoom->begin(), digitalZoom->end(), exif.digital_zoom_rational);
     image.exif = &exif;
     tinydng_write_options options{};
     options.as_dng = 1;
@@ -78,6 +83,7 @@ static void roundTrip(const std::optional<tinydng_gps>& gps, bool legacyVersion 
     jpegContext.wallClockUnixMillis = 1'700'000'000'000;
     jpegContext.preserveSourceTime = legacyVersion;
     if (legacyVersion) jpegContext.sourceExifVersion = std::array<uint8_t, 4>{'0', '2', '3', '0'};
+    jpegContext.digitalZoomRatio = digitalZoom;
     const auto jpegExif = rawrcam::encoding::jpeg::buildExif(jpegContext, 2, 2);
     assert(jpegExif.size() > 14 && std::memcmp(jpegExif.data(), "Exif\0\0II", 8) == 0);
     const auto jpegGps = ifdFields(jpegExif.data() + 6, jpegExif.size() - 6);
@@ -137,6 +143,9 @@ static void roundTrip(const std::optional<tinydng_gps>& gps, bool legacyVersion 
         for (uint16_t tag : {0x9003, 0x9004, 0x9011, 0x9012, 0x9291, 0x9292}) assert(!fields.contains(tag));
         assert(text(0x9010) == "+00:00" && text(0x9290) == "000");
     }
+    const auto jpegZoom = ifdFields(jpegExif.data() + 6, jpegExif.size() - 6, 0x8769, 0xA404);
+    const auto tiffZoom = ifdFields(bytes, size, 0x8769, 0xA404);
+    assert(jpegZoom == tiffZoom && jpegZoom.empty() == !digitalZoom.has_value());
     tinydng_document* document = nullptr;
     assert(tinydng_open_memory(context, bytes, size, nullptr, &document, &error) == TINYDNG_OK);
     const auto* loaded = tinydng_image_get(document, 0);
@@ -167,8 +176,8 @@ int main() {
     assert(std::abs(double(high->altitude[0]) / high->altitude[1] - 12345.678) < 0.001);
     assert(high->has_time && high->timestamp[2][0] == 123 && high->timestamp[2][1] == 1000);
     assert(validGps(*high));
-    roundTrip(*high, true);
-    roundTrip(*zero);
+    roundTrip(*high, std::array<uint32_t, 2>{3, 2}, true);
+    roundTrip(*zero, std::array<uint32_t, 2>{0, 1});
 
     auto absent = makeGps(12, 34, std::nullopt, std::nullopt, 0);
     assert(absent && !absent->has_altitude && !absent->has_time);

@@ -40,6 +40,9 @@ static int gpsConversion() {
     tinydng_raw_info raw{};
     raw.white_level_present = 1;
     raw.white_level[0] = 4095;
+    raw.has_lens_info = 1;
+    raw.lens_info[0] = 6;
+    raw.lens_info[1] = 12;
     tinydng_cfa cfa{};
     cfa.present = 1;
     cfa.pattern_dim[0] = cfa.pattern_dim[1] = 2;
@@ -56,6 +59,23 @@ static int gpsConversion() {
     exif.datetime_digitized = const_cast<char*>("2026:05:02 01:02:03");
     exif.offset_time_digitized = const_cast<char*>("-03:30");
     exif.subsec_time_digitized = const_cast<char*>("567");
+    exif.lens_make = const_cast<char*>("Source maker");
+    exif.lens_model = const_cast<char*>("Source lens");
+    exif.lens_serial = const_cast<char*>("Source lens serial");
+    exif.has_aperture_value = exif.has_max_aperture_value = 1;
+    exif.aperture_value[0] = 2;
+    exif.aperture_value[1] = 1;
+    exif.max_aperture_rational[0] = 0;
+    exif.max_aperture_rational[1] = 1;
+    exif.has_fnumber = exif.has_focal_length = exif.has_focal_length_35mm = 1;
+    exif.fnumber_rational[0] = 3'000'000'000u;
+    exif.fnumber_rational[1] = 1'500'000'000u;
+    exif.focal_length_rational[0] = 3'000'000'000u;
+    exif.focal_length_rational[1] = 300'000'000u;
+    exif.focal_length_35mm = 50;
+    exif.has_digital_zoom = 1;
+    exif.digital_zoom_rational[0] = 3;
+    exif.digital_zoom_rational[1] = 2;
     auto gps = rawrcam::metadata::makeGps(0, 0, -12345.0, {}, 1793059200123LL);
     std::vector<uint16_t> pixels(64 * 64, 1000);
     tinydng_write_image image{};
@@ -104,6 +124,25 @@ static int gpsConversion() {
                 CHECK(!loaded->exif.datetime_original && !loaded->exif.datetime_digitized);
                 CHECK(!loaded->exif.offset_time_original && !loaded->exif.offset_time_digitized);
                 CHECK(!loaded->exif.subsec_time_original && !loaded->exif.subsec_time_digitized);
+            }
+            if (sourceProfile == 0) {
+                CHECK(loaded->raw.has_lens_info && loaded->raw.lens_info[1] == 12);
+                CHECK(loaded->exif.has_lens_spec && loaded->exif.lens_spec[1] == 12 &&
+                    loaded->exif.lens_spec[2] == 0 && loaded->exif.lens_spec[3] == 0);
+                CHECK(loaded->exif.lens_serial && std::strcmp(loaded->exif.lens_serial, "Source lens serial") == 0);
+                    CHECK(loaded->exif.lens_make && std::strcmp(loaded->exif.lens_make, "Source maker") == 0);
+                    CHECK(loaded->exif.lens_model && std::strcmp(loaded->exif.lens_model, "Source lens") == 0);
+                    CHECK(loaded->exif.has_fnumber && loaded->exif.fnumber_rational[1] != 0 &&
+                        double(loaded->exif.fnumber_rational[0]) / loaded->exif.fnumber_rational[1] == 2.0);
+                    CHECK(loaded->exif.has_focal_length && loaded->exif.focal_length_rational[1] != 0 &&
+                        double(loaded->exif.focal_length_rational[0]) / loaded->exif.focal_length_rational[1] == 10.0);
+                    CHECK(loaded->exif.has_focal_length_35mm && loaded->exif.focal_length_35mm == 50);
+                    CHECK(loaded->exif.has_digital_zoom && loaded->exif.digital_zoom_rational[0] == 3 &&
+                        loaded->exif.digital_zoom_rational[1] == 2);
+                    CHECK(loaded->exif.has_aperture_value && loaded->exif.aperture_value[1] != 0 &&
+                        double(loaded->exif.aperture_value[0]) / loaded->exif.aperture_value[1] == 2.0);
+                CHECK(loaded->exif.has_max_aperture_value && loaded->exif.max_aperture_value[0] == 0 &&
+                    loaded->exif.max_aperture_value[1] != 0);
             }
             tinydng_document_destroy(context, document);
         }
