@@ -77,7 +77,9 @@ DngSource::DngSource(const std::string& path) : rawCachePath_(path + ".raw16-v1"
                 index_ = i;
             }
         }
-        if (!image_ || !image_->raw.has_dng_version) throw std::runtime_error("Not a supported Bayer DNG");
+        const auto* root = tinydng_image_get(document_, 0);
+        if (!root || !root->raw.has_dng_version || !image_)
+            throw std::runtime_error("Not a supported Bayer DNG");
         const auto& p = *image_;
         if (p.width < 16 || p.height < 16 || (p.width & 1u) || (p.height & 1u))
             throw std::runtime_error("DNG sensor dimensions must be even and at least 16 pixels");
@@ -127,7 +129,6 @@ DngSource::DngSource(const std::string& path) : rawCachePath_(path + ".raw16-v1"
         orientation = p.exif.orientation ? p.exif.orientation : (exif ? exif->orientation : 1);
         if (!orientation) orientation = 1;
         if (orientation > 8) throw std::runtime_error("Invalid DNG orientation");
-        const auto* root = tinydng_image_get(document_, 0);
         captureExif_ = readSourceCaptureExif(p.exif, exif, p.raw.unique_camera_model ? p.raw.unique_camera_model
                                                                                        : root->raw.unique_camera_model,
                                              &root->raw);
@@ -156,10 +157,11 @@ DngSource::DngSource(const std::string& path) : rawCachePath_(path + ".raw16-v1"
             rawr = true;
             provenance = r.rawr_private_data + std::strlen(r.rawr_private_data) + 1;
         }
-        if (!r.color_matrix_present || !r.has_as_shot_neutral)
+        const auto& calibrationRaw = root->raw;
+        if (!calibrationRaw.color_matrix_present || !calibrationRaw.has_as_shot_neutral)
             throw std::runtime_error("DNG is missing color calibration or white balance");
         Matrix color{};
-        std::copy_n(r.color_matrix1, 9, color.begin());
+        std::copy_n(calibrationRaw.color_matrix1, 9, color.begin());
         // Choose the closest calibration by reciprocal temperature, then adapt the
         // recorded neutral to D65 with Bradford. Refinement is performed below.
         auto illuminant = [](uint16_t id) {
@@ -170,15 +172,17 @@ DngSource::DngSource(const std::string& path) : rawCachePath_(path + ".raw16-v1"
                    : id == 22 ? 7500.0
                               : 5003.0;
         };
-        std::array<double, 3> neutral{r.as_shot_neutral[0], r.as_shot_neutral[1], r.as_shot_neutral[2]};
+        std::array<double, 3> neutral{calibrationRaw.as_shot_neutral[0], calibrationRaw.as_shot_neutral[1],
+                          calibrationRaw.as_shot_neutral[2]};
         for (double v : neutral)
             if (!std::isfinite(v) || v <= 0) throw std::runtime_error("Invalid DNG white balance");
         for (int i = 0; i < 3; ++i) wb[i] = float(neutral[1] / neutral[i]);
         Matrix calibration{1, 0, 0, 0, 1, 0, 0, 0, 1};
-        if (r.camera_calibration_present) std::copy_n(r.camera_calibration1, 9, calibration.begin());
+        if (calibrationRaw.camera_calibration_present)
+            std::copy_n(calibrationRaw.camera_calibration1, 9, calibration.begin());
         Matrix analog{1, 0, 0, 0, 1, 0, 0, 0, 1};
-        if (r.has_analog_balance)
-            for (int i = 0; i < 3; ++i) analog[i * 3 + i] = r.analog_balance[i];
+        if (calibrationRaw.has_analog_balance)
+            for (int i = 0; i < 3; ++i) analog[i * 3 + i] = calibrationRaw.analog_balance[i];
         Matrix inv{};
         for (int iteration = 0; iteration < 5; ++iteration) {
             inv = inverse(multiply(analog, multiply(calibration, color)));
@@ -186,14 +190,18 @@ DngSource::DngSource(const std::string& path) : rawCachePath_(path + ".raw16-v1"
             double sum = xyz[0] + xyz[1] + xyz[2];
             double x = xyz[0] / sum, y = xyz[1] / sum, n = (x - 0.3320) / (y - 0.1858);
             double temp = std::clamp(-449 * n * n * n + 3525 * n * n - 6823.3 * n + 5520.33, 2000.0, 25000.0);
-            if (r.calibration_illuminant2) {
-                double t1 = illuminant(r.calibration_illuminant1), t2 = illuminant(r.calibration_illuminant2);
+            if (calibrationRaw.calibration_illuminant2) {
+                double t1 = illuminant(calibrationRaw.calibration_illuminant1),
+                       t2 = illuminant(calibrationRaw.calibration_illuminant2);
                 double a = t1 == t2 ? 0 : std::clamp((1 / temp - 1 / t1) / (1 / t2 - 1 / t1), 0.0, 1.0);
-                for (int i = 0; i < 9; ++i) color[i] = (1 - a) * r.color_matrix1[i] + a * r.color_matrix2[i];
-                if (r.camera_calibration_present && std::any_of(r.camera_calibration2, r.camera_calibration2 + 9,
-                                                                [](double value) { return value != 0; }))
+                for (int i = 0; i < 9; ++i)
+                    color[i] = (1 - a) * calibrationRaw.color_matrix1[i] + a * calibrationRaw.color_matrix2[i];
+                if (calibrationRaw.camera_calibration_present &&
+                    std::any_of(calibrationRaw.camera_calibration2, calibrationRaw.camera_calibration2 + 9,
+                                [](double value) { return value != 0; }))
                     for (int i = 0; i < 9; ++i)
-                        calibration[i] = (1 - a) * r.camera_calibration1[i] + a * r.camera_calibration2[i];
+                        calibration[i] = (1 - a) * calibrationRaw.camera_calibration1[i] +
+                                         a * calibrationRaw.camera_calibration2[i];
             }
         }
         inv = inverse(multiply(analog, multiply(calibration, color)));
