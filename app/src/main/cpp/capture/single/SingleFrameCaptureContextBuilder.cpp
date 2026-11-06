@@ -9,6 +9,7 @@
 #include "develop/DevelopContextBuilder.h"
 #include "develop/render/DenoiseProfile.h"
 #include "geometry/OrientationTransform.h"
+#include "encoding/jpeg/JpegLensMetadata.h"
 
 namespace rawrcam::capture {
 const char* singleFrameDemosaicName(develop::DemosaicAlgorithm algorithm) noexcept {
@@ -158,6 +159,14 @@ void applySingleFrameCaptureMetadata(encoding::jpeg::JpegCaptureContext& output,
     output.sensitivity = captured.metadata.sensitivity;
     output.aperture = captured.metadata.aperture;
     output.focalLengthMm = captured.metadata.focalLengthMm;
+    output.digitalZoomRatio = encoding::jpeg::captureDigitalZoomRatio(camera.geometry.activeArray,
+                                                                     captured.metadata.scalerCropRegion);
+    output.captureSensorSizeMm = camera.sensorPhysicalSizeMm;
+    output.captureLensFacing = camera.lensFacing;
+    const auto widestAperture = encoding::widestLensAperture(camera.availableApertures);
+    output.captureLensOptics = encoding::lensIdentityOptics(camera.availableFocalLengthsMm, widestAperture);
+    output.lensSpecification = encoding::lensSpecification(camera.availableFocalLengthsMm, widestAperture);
+    output.maxApertureValue = encoding::lensApertureValue(widestAperture);
 }
 
 }  // namespace rawrcam::capture

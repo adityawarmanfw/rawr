@@ -129,7 +129,8 @@ DngSource::DngSource(const std::string& path) : rawCachePath_(path + ".raw16-v1"
         if (orientation > 8) throw std::runtime_error("Invalid DNG orientation");
         const auto* root = tinydng_image_get(document_, 0);
         captureExif_ = readSourceCaptureExif(p.exif, exif, p.raw.unique_camera_model ? p.raw.unique_camera_model
-                                                                                       : root->raw.unique_camera_model);
+                                                                                       : root->raw.unique_camera_model,
+                                             &root->raw);
         const auto sourceGps = metadata::readSourceGps(p, root);
         captureExif_.gps = sourceGps.gps;
         captureExif_.gpsExifVersion = sourceGps.exifVersion;

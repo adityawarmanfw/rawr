@@ -1,5 +1,6 @@
 #include "encoding/jpeg/JpegExif.h"
 #include "encoding/SoftwareName.h"
+#include "encoding/jpeg/JpegLensMetadata.h"
 
 #include <algorithm>
 #include <array>
@@ -8,6 +9,7 @@
 #include <ctime>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace rawrcam::encoding::jpeg {
@@ -37,7 +39,7 @@ struct IfdEntry {
     std::vector<unsigned char> data;
 };
 
-std::vector<unsigned char> asciiData(const std::string& s) {
+std::vector<unsigned char> asciiData(std::string_view s) {
     std::vector<unsigned char> out(s.begin(), s.end());
     out.push_back(0);
     return out;
@@ -161,14 +163,17 @@ std::vector<unsigned char> buildExif(const JpegCaptureContext& c, std::uint32_t 
     const std::string digitized = sourceTime && !c.dateTimeDigitized.empty() ? c.dateTimeDigitized : original;
     const std::string originalOffset = sourceTime ? c.offsetTimeOriginal : offset;
     const std::string originalSubsec = sourceTime ? c.subsecTimeOriginal : subsec;
-    auto ascii = [](std::uint16_t tag, const std::string& s) {
+    auto ascii = [](std::uint16_t tag, std::string_view s) {
         return IfdEntry{tag, 2, static_cast<std::uint32_t>(s.size() + 1), asciiData(s)};
     };
 
     std::vector<IfdEntry> exif;
     if (c.exposureTimeNs > 0)
         exif.push_back({0x829A, 5, 1, rationalData(static_cast<double>(c.exposureTimeNs) / 1.0e9, 1000000u)});
-    if (c.aperture && *c.aperture > 0.0f) exif.push_back({0x829D, 5, 1, rationalData(*c.aperture, 10000u)});
+    if (c.aperture && validLensNumber(*c.aperture)) exif.push_back({0x829D, 5, 1, rationalData(*c.aperture, 10000u)});
+    const auto apertureValue = c.apertureValue ? c.apertureValue : lensApertureValue(c.aperture);
+    if (apertureValue) exif.push_back({0x9202, 5, 1, rationalData(*apertureValue)});
+    if (c.maxApertureValue) exif.push_back({0x9205, 5, 1, rationalData(*c.maxApertureValue)});
     if (c.sensitivity > 0 && c.sensitivity <= 65535)
         exif.push_back({0x8827, 3, 1, shortData(static_cast<std::uint16_t>(c.sensitivity))});
     const std::array<uint8_t, 4> version = c.sourceExifVersion.value_or(
@@ -182,19 +187,30 @@ std::vector<unsigned char> buildExif(const JpegCaptureContext& c, std::uint32_t 
     }
     if (sourceTime && !dateTime.empty()) exif.push_back(ascii(0x9010, offset));
     if (!originalSubsec.empty()) exif.push_back(ascii(0x9291, originalSubsec));
-    if (c.focalLengthMm && *c.focalLengthMm > 0.0f)
+    if (c.focalLengthMm && validLensNumber(*c.focalLengthMm))
         exif.push_back({0x920A, 5, 1, rationalData(*c.focalLengthMm, 10000u)});
-    if (c.focalLength35mm && *c.focalLength35mm > 0) exif.push_back({0xA405, 3, 1, shortData(*c.focalLength35mm)});
+    LensMetadata generatedLens;
+    const auto lens = lensMetadataForJpeg(c, generatedLens);
+    if (lens.focalLength35mm && *lens.focalLength35mm > 0)
+        exif.push_back({0xA405, 3, 1, shortData(*lens.focalLength35mm)});
+    if (c.digitalZoomRatio && (*c.digitalZoomRatio)[1] != 0) {
+        std::vector<unsigned char> ratio;
+        put32(ratio, (*c.digitalZoomRatio)[0]);
+        put32(ratio, (*c.digitalZoomRatio)[1]);
+        exif.push_back({0xA404, 5, 1, ratio});
+    }
     if (c.lensSpecification) {
         std::vector<unsigned char> spec;
-        for (double v : *c.lensSpecification) {
-            const auto r = rationalData(v, 10000u);
+        for (std::size_t index = 0; index < c.lensSpecification->size(); ++index) {
+            const double value = (*c.lensSpecification)[index];
+            const auto r = rationalData(value, index >= 2 && value == 0.0 ? 0u : 10000u);
             spec.insert(spec.end(), r.begin(), r.end());
         }
         exif.push_back({0xA432, 5, 4, spec});
     }
-    if (!c.lensMake.empty()) exif.push_back(ascii(0xA433, c.lensMake));
-    if (!c.lensModel.empty()) exif.push_back(ascii(0xA434, c.lensModel));
+    if (!lens.make.empty()) exif.push_back(ascii(0xA433, lens.make));
+    if (!lens.model.empty()) exif.push_back(ascii(0xA434, lens.model));
+    if (!c.lensSerial.empty()) exif.push_back(ascii(0xA435, c.lensSerial));
     exif.push_back({0xA001, 3, 1, shortData(1)});  // sRGB
     exif.push_back({0xA000, 7, 4, {'0', '1', '0', '0'}});
     exif.push_back({0xA002, 4, 1, longData(width)});

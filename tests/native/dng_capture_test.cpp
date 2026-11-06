@@ -8,6 +8,7 @@
 #include <tiny_dng_ljpeg92_v2.h>
 
 #include <cmath>
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <cstdio>
@@ -41,6 +42,7 @@ static rawrcam::imaging::RawSnapshot makeFrame(bool resolvable) {
     ctx->sensorPhysicalSizeMm = {8.0f, 6.0f};
     ctx->availableFocalLengthsMm = {6.0f};
     ctx->availableApertures = {1.8f};
+    ctx->lensFacing = 1;
     ctx->lensShadingMapWidth = 2;
     ctx->lensShadingMapHeight = 2;
     ctx->color.referenceIlluminant1 = 21;
@@ -128,6 +130,32 @@ int main() {
         withoutGps.gps.reset();
         auto params = rawrcam::encoding::dng::makeTinyDngWriteParams(good, withoutGps, &error);
         if (!params || params->gps || params->image.gps) return 80;
+    }
+
+    // Lens identity follows the physical module, not the crop or RAW pixel scale.
+    for (float aperture : {2.7f, 4.0f}) {
+        auto tele = makeFrame(true);
+        auto camera = std::make_shared<rawrcam::metadata::CameraContextMetadata>(*tele.metadata.cameraContext);
+        camera->sensorPhysicalSizeMm = {9.16f, 6.87f};
+        camera->availableFocalLengthsMm = {22.5f};
+        camera->availableApertures = {2.7f, 4.0f};
+        tele.metadata.cameraContext = camera;
+        tele.metadata.focalLengthMm = 22.5f;
+        tele.metadata.aperture = aperture;
+        tele.metadata.scalerCropRegion = {0, 0, 4, 6, true};
+        auto params = rawrcam::encoding::dng::makeTinyDngWriteParams(tele, capture, &error);
+        if (!params || params->lensMake != "vivo" ||
+            params->lensModel != "vivo X300 Ultra back camera 22.5mm f/2.7" ||
+            !params->exif.has_focal_length_35mm || params->exif.focal_length_35mm != 85 ||
+            !params->exif.has_fnumber ||
+            std::abs(double(params->exif.fnumber_rational[0]) / params->exif.fnumber_rational[1] - aperture) > 1e-5 ||
+            params->uniqueModel.find("V2562") == std::string::npos) return 72;
+            if (!params->exif.has_lens_spec || !params->raw.has_lens_info) return 73;
+            const std::array<double, 4> expectedSpecification{22.5, 22.5, 2.7, 2.7};
+            for (std::size_t index = 0; index < expectedSpecification.size(); ++index) {
+                if (std::abs(params->exif.lens_spec[index] - expectedSpecification[index]) > 1e-6 ||
+                    std::abs(params->raw.lens_info[index] - expectedSpecification[index]) > 1e-6) return 73;
+            }
     }
 
     // DNG keeps the sensor raster and composes the mirror before display rotation.
@@ -374,11 +402,16 @@ int main() {
                   rawrcam::metadata::sameGpsRecord(img->gps, *capture.gps) &&
                   img->exif.has_exif_version && std::memcmp(img->exif.exif_version, "0300", 4) == 0 &&
                   img->raw.white_level_present && img->raw.white_level[0] == 4095 &&
+                  img->raw.has_lens_info && img->raw.lens_info[0] == params->raw.lens_info[0] &&
+                  img->raw.lens_info[3] == params->raw.lens_info[3] &&
                   img->raw.has_active_area && img->raw.noise_profile_count == 6 &&
                   img->raw.opcode_count >= 1 && img->raw.gainmap_count == 4 &&
                   img->raw.rawr_private_data != nullptr &&
                   std::string(img->raw.rawr_private_data) == "Rawr tinydng provenance" &&
-                  img->exif.make && std::string(img->exif.make) == "vivo";
+                  img->exif.make && std::string(img->exif.make) == "vivo" &&
+                  img->exif.lens_make && std::string(img->exif.lens_make) == "vivo" &&
+                  img->exif.lens_model &&
+                  std::string(img->exif.lens_model) == "vivo X300 Ultra back camera 6mm f/1.8";
         if (ok) {
             tinydng_pixels px{};
             tinydng_decode_options dopts{};

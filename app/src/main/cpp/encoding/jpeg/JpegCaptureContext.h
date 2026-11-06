@@ -6,6 +6,7 @@
 #include <string>
 
 #include "color/UltraHdrParams.h"
+#include "encoding/LensMetadata.h"
 #include "encoding/OutputFd.h"
 #include "metadata/GpsMetadata.h"
 
@@ -49,13 +50,22 @@ struct JpegCaptureContext {
     std::int32_t sensitivity = 0;
     std::optional<float> aperture;
     std::optional<float> focalLengthMm;
-    // Re-rendered DNGs only: the source's lens and capture time. Empty/absent
-    // on camera captures, whose DateTimeOriginal stays wallClockUnixMillis.
-    // When dateTimeOriginal is set, DateTime (0x0132) remains the export time.
+    std::optional<std::array<std::uint32_t, 2>> digitalZoomRatio;
+    // Transient capture-only input, copied from the pinned frame in the processing
+    // lane. Lens strings/35mm equivalent are built later by the encoder worker.
+    // Not journaled: recovery repopulates it from the persisted camera context.
+    std::optional<std::array<float, 2>> captureSensorSizeMm;
+    LensIdentityOptics captureLensOptics;
+    std::int32_t captureLensFacing = -1;
+    // Re-rendered DNGs preserve source lens metadata instead of generating names.
     std::optional<std::uint16_t> focalLength35mm;
     std::optional<std::array<double, 4>> lensSpecification;
+    std::optional<double> apertureValue;
+    std::optional<double> maxApertureValue;
     std::string lensMake;
     std::string lensModel;
+    std::string lensSerial;
+    // Source capture time on re-renders; DateTime remains export time.
     std::string dateTimeOriginal;  // "YYYY:MM:DD HH:MM:SS"
     std::string dateTimeDigitized;
     std::string offsetTimeOriginal;
