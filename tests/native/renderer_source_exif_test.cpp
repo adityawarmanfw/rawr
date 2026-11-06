@@ -103,6 +103,8 @@ int main() {
         root.datetime_digitized = s("2026:05:01 12:34:57");
         root.offset_time_original = s("+08:00");
         root.subsec_time_original = s("042");
+        root.offset_time_digitized = s("-03:30");
+        root.subsec_time_digitized = s("567");
         const auto x = readSourceCaptureExif(image, &root, nullptr);
         check(x.make == "Xiaomi" && x.model == "23078PND5G", "root make/model");
         check(x.lensMake == "Xiaomi" && x.lensModel == "Main 23mm", "root lens");
@@ -119,6 +121,7 @@ int main() {
         check(x.dateTimeDigitized == "2026:05:01 12:34:57", "root datetime digitized");
         check(x.offsetTimeOriginal == "+08:00", "root offset");
         check(x.subsecTimeOriginal == "042", "root subsec");
+        check(x.offsetTimeDigitized == "-03:30" && x.subsecTimeDigitized == "567", "independent digitized qualifiers");
         const auto id = exportIdentity(x);
         check(id.make == "Xiaomi" && id.model == "23078PND5G", "source identity preserved");
           image.model = s("RAW camera");
@@ -147,9 +150,31 @@ int main() {
         root.exposure_time[0] = 1;
         root.exposure_time[1] = 50;
         root.has_exposure_time = 1;
+        image.datetime_digitized = s("2026:05:02 01:02:03");
+        image.offset_time_digitized = s("+00:00");
+        image.subsec_time_digitized = s("000");
         const auto x = readSourceCaptureExif(image, &root, "Unique Model");
         check(x.make == "Root Make" && x.model == "Image Model", "mixed make/model, trimmed");
         check(x.sensitivity == 100 && x.exposureTimeNs == 20'000'000, "mixed numeric fallback");
+        check(x.dateTimeOriginal.empty() && x.dateTimeDigitized == "2026:05:02 01:02:03" &&
+              x.offsetTimeDigitized == "+00:00" && x.subsecTimeDigitized == "000", "digitized group without original");
+          image.offset_time_digitized = nullptr;
+          image.subsec_time_digitized = nullptr;
+          root.datetime_digitized = s("2025:12:31 23:59:59");
+          root.offset_time_digitized = s("-03:30");
+          root.subsec_time_digitized = s("567");
+          const auto distinct = readSourceCaptureExif(image, &root, nullptr);
+          check(distinct.dateTimeDigitized == "2026:05:02 01:02:03" &&
+              distinct.offsetTimeDigitized.empty() && distinct.subsecTimeDigitized.empty(),
+              "qualifiers from a different root date are not borrowed");
+          root.datetime_digitized = image.datetime_digitized;
+          const auto compatible = readSourceCaptureExif(image, &root, nullptr);
+          check(compatible.offsetTimeDigitized == "-03:30" && compatible.subsecTimeDigitized == "567",
+              "matching dates fill missing source qualifiers");
+          image.offset_time_digitized = s("+00:00");
+          const auto conflicting = readSourceCaptureExif(image, &root, nullptr);
+          check(conflicting.offsetTimeDigitized == "+00:00" && conflicting.subsecTimeDigitized.empty(),
+              "matching wall-clock dates with conflicting offsets do not share fractions");
           tinydng_raw_info raw{};
           raw.has_lens_info = 1;
           raw.lens_info[0] = 6;
@@ -216,8 +241,7 @@ int main() {
         check(x.apertureValue && *x.apertureValue == 0 && x.fNumber == 1.0f, "known zero APEX retained");
     }
 
-    // A tagless source: no camera identity is invented; the writer still
-    // falls back to the export time (empty dateTimeOriginal).
+    // A tagless source: capture time and camera identity stay unknown.
     {
         auto image = blank();
         image.datetime_original = s("    :  :     :  :  ");
@@ -241,17 +265,25 @@ int main() {
         check(x.dateTimeOriginal.empty(), "zeroed date is absent");
         const auto id = exportIdentity(x);
         check(id.make.empty() && id.model == "Some Camera", "no mixed identity");
+        for (const char* unknown : {"2026:00:00 00:00:00", "2025:02:31 15:13:00"}) {
+            image.datetime_original = s(unknown);
+            check(readSourceCaptureExif(image, nullptr, nullptr).dateTimeOriginal.empty(),
+                  "unrecognised external source date stays unknown");
+        }
     }
 
     // Malformed time qualifiers are dropped; the date itself is kept.
     {
         auto image = blank();
-        image.datetime_original = s("2025:12:31 23:59:59");
+        image.datetime_original = s("2025:12:31 23:59:59.123");
         image.offset_time_original = s("GMT+1");
         image.subsec_time_original = s("12a");
         const auto x = readSourceCaptureExif(image, nullptr, nullptr);
-        check(x.dateTimeOriginal == "2025:12:31 23:59:59" && x.dateTimeDigitized.empty(), "date kept");
+        check(x.dateTimeOriginal == "2025:12:31 23:59:59" && x.dateTimeDigitized.empty(), "whole-second prefix kept");
         check(x.offsetTimeOriginal.empty() && x.subsecTimeOriginal.empty(), "bad qualifiers dropped");
+          image.offset_time_original = s("+07:60");
+          check(readSourceCaptureExif(image, nullptr, nullptr).offsetTimeOriginal.empty(),
+              "out-of-range external offset stays unknown");
     }
 
     if (failures == 0) std::printf("renderer_source_exif_test: ok\n");

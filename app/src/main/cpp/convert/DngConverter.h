@@ -25,10 +25,8 @@ struct ConvertResult {
 };
 
 struct ConvertOptions {
-    // EXIF offset ("+07:00") written when the source has no OffsetTimeOriginal.
-    // Android's media scanner only trusts DateTimeOriginal with an offset once
-    // the file's modification time no longer matches the capture.
-    std::string offsetTime;
+    std::int64_t wallClockUnixMillis = 0;
+    std::int16_t utcOffsetMinutes = 0;
 };
 
 // Output size as a fraction of the source pixel count.

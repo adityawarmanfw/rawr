@@ -1,6 +1,7 @@
 #include "encoding/jpeg/JpegExif.h"
 #include "encoding/SoftwareName.h"
 #include "encoding/jpeg/JpegLensMetadata.h"
+#include "metadata/ExifTime.h"
 
 #include <algorithm>
 #include <array>
@@ -65,27 +66,6 @@ std::vector<unsigned char> rationalData(double value, std::uint32_t denominator 
     return out;
 }
 
-std::string exifDateTime(std::int64_t millis, std::int16_t offsetMinutes) {
-    if (millis <= 0) return {};
-    const time_t localSeconds = static_cast<time_t>(millis / 1000 + static_cast<std::int64_t>(offsetMinutes) * 60);
-    struct tm local{};
-    if (!gmtime_r(&localSeconds, &local)) return {};
-    char buf[20]{};
-    if (std::strftime(buf, sizeof(buf), "%Y:%m:%d %H:%M:%S", &local) == 0) return {};
-    return std::string(buf);
-}
-
-std::string exifOffset(std::int16_t offsetMinutes) {
-    const int total = static_cast<int>(offsetMinutes);
-    const char sign = total < 0 ? '-' : '+';
-    const int absMinutes = std::abs(total);
-    char buf[8]{};
-    const int hours = std::min(absMinutes / 60, 99);
-    const int minutes = std::min(absMinutes % 60, 59);
-    std::snprintf(buf, sizeof(buf), "%c%02d:%02d", sign, hours, minutes);
-    return std::string(buf);
-}
-
 IfdEntry rationals(std::uint16_t tag, const std::uint32_t (*pairs)[2], std::uint32_t count) {
     IfdEntry entry{tag, 5, count, {}};
     for (std::uint32_t i = 0; i < count; ++i) {
@@ -133,10 +113,10 @@ std::vector<IfdEntry> gpsIfd(const tinydng_gps& gps) {
 // Builds a compact EXIF APP1 payload. TIFF offsets are relative to the TIFF header
 // immediately following the six-byte "Exif\0\0" signature.
 std::vector<unsigned char> buildExif(const JpegCaptureContext& c, std::uint32_t width, std::uint32_t height) {
-    const std::string dateTime = exifDateTime(c.wallClockUnixMillis, c.utcOffsetMinutes);
-    const std::string offset = exifOffset(c.utcOffsetMinutes);
-    const std::string subsec =
-        c.wallClockUnixMillis > 0 ? std::to_string(c.wallClockUnixMillis % 1000 + 1000).substr(1) : std::string{};
+    const auto time = metadata::exifTime(c.wallClockUnixMillis, c.utcOffsetMinutes);
+    const auto& dateTime = time.dateTime;
+    const auto& offset = time.offset;
+    const auto& subsec = time.subsec;
 
     std::vector<IfdEntry> ifd0;
     if (!c.imageDescription.empty()) {
@@ -156,13 +136,12 @@ std::vector<unsigned char> buildExif(const JpegCaptureContext& c, std::uint32_t 
     ifd0.push_back({0x8769, 4, 1, longData(0)});
     if (c.gps) ifd0.push_back({0x8825, 4, 1, longData(0)});
 
-    // A re-rendered DNG keeps its source capture time; DateTime stays the
-    // render (file modification) time, qualified by OffsetTime.
-    const bool sourceTime = !c.dateTimeOriginal.empty();
-    const std::string original = sourceTime ? c.dateTimeOriginal : dateTime;
-    const std::string digitized = sourceTime && !c.dateTimeDigitized.empty() ? c.dateTimeDigitized : original;
-    const std::string originalOffset = sourceTime ? c.offsetTimeOriginal : offset;
-    const std::string originalSubsec = sourceTime ? c.subsecTimeOriginal : subsec;
+    const std::string& original = c.preserveSourceTime ? c.dateTimeOriginal : dateTime;
+    const std::string& digitized = c.preserveSourceTime ? c.dateTimeDigitized : dateTime;
+    const std::string& originalOffset = c.preserveSourceTime ? c.offsetTimeOriginal : offset;
+    const std::string& originalSubsec = c.preserveSourceTime ? c.subsecTimeOriginal : subsec;
+    const std::string& digitizedOffset = c.preserveSourceTime ? c.offsetTimeDigitized : offset;
+    const std::string& digitizedSubsec = c.preserveSourceTime ? c.subsecTimeDigitized : subsec;
     auto ascii = [](std::uint16_t tag, std::string_view s) {
         return IfdEntry{tag, 2, static_cast<std::uint32_t>(s.size() + 1), asciiData(s)};
     };
@@ -176,17 +155,23 @@ std::vector<unsigned char> buildExif(const JpegCaptureContext& c, std::uint32_t 
     if (c.maxApertureValue) exif.push_back({0x9205, 5, 1, rationalData(*c.maxApertureValue)});
     if (c.sensitivity > 0 && c.sensitivity <= 65535)
         exif.push_back({0x8827, 3, 1, shortData(static_cast<std::uint16_t>(c.sensitivity))});
-    const std::array<uint8_t, 4> version = c.sourceExifVersion.value_or(
-        c.gps ? std::array<uint8_t, 4>{'0', '3', '0', '0'} : std::array<uint8_t, 4>{'0', '2', '3', '2'});
+    const auto version = std::max(c.sourceExifVersion.value_or(
+        c.gps ? std::array<uint8_t, 4>{'0', '3', '0', '0'} : std::array<uint8_t, 4>{'0', '2', '3', '2'}),
+        std::array<uint8_t, 4>{'0', '2', '3', '1'});
     exif.push_back({0x9000, 7, 4, {version.begin(), version.end()}});
     exif.push_back({0x9101, 7, 4, {1, 2, 3, 0}});
     if (!original.empty()) {
         exif.push_back(ascii(0x9003, original));
-        exif.push_back(ascii(0x9004, digitized));
         if (!originalOffset.empty()) exif.push_back(ascii(0x9011, originalOffset));
     }
-    if (sourceTime && !dateTime.empty()) exif.push_back(ascii(0x9010, offset));
-    if (!originalSubsec.empty()) exif.push_back(ascii(0x9291, originalSubsec));
+    if (!digitized.empty()) {
+        exif.push_back(ascii(0x9004, digitized));
+        if (!digitizedOffset.empty()) exif.push_back(ascii(0x9012, digitizedOffset));
+    }
+    if (!dateTime.empty()) exif.push_back(ascii(0x9010, offset));
+    if (!dateTime.empty() && !subsec.empty()) exif.push_back(ascii(0x9290, subsec));
+    if (!original.empty() && !originalSubsec.empty()) exif.push_back(ascii(0x9291, originalSubsec));
+    if (!digitized.empty() && !digitizedSubsec.empty()) exif.push_back(ascii(0x9292, digitizedSubsec));
     if (c.focalLengthMm && validLensNumber(*c.focalLengthMm))
         exif.push_back({0x920A, 5, 1, rationalData(*c.focalLengthMm, 10000u)});
     LensMetadata generatedLens;

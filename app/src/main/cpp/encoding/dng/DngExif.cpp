@@ -1,11 +1,10 @@
 #include "encoding/SoftwareName.h"
 #include "encoding/dng/DngExif.h"
 #include "encoding/LensMetadata.h"
+#include "metadata/ExifTime.h"
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
-#include <ctime>
 #include <limits>
 #include <string>
 #include <utility>
@@ -27,28 +26,6 @@ std::string tiffAsciiDescription(std::string text) {
         }
     }
     return text;
-}
-
-std::string exifDateTime(int y, unsigned mo, unsigned d, unsigned h, unsigned mi, unsigned s) {
-    char buf[32]{};
-    std::snprintf(buf, sizeof(buf), "%04d:%02u:%02u %02u:%02u:%02u", y, mo, d, h, mi, s);
-    return std::string(buf);
-}
-
-std::string exifOffset(std::int16_t minutes) {
-    const char sign = minutes < 0 ? '-' : '+';
-    const int absolute = minutes < 0 ? -static_cast<int>(minutes) : static_cast<int>(minutes);
-    char buf[16]{};
-    std::snprintf(buf, sizeof(buf), "%c%02d:%02d", sign, absolute / 60, absolute % 60);
-    return std::string(buf);
-}
-
-std::string exifSubseconds(std::uint32_t nanosecond) {
-    char buf[10]{};
-    std::snprintf(buf, sizeof(buf), "%09u", nanosecond);
-    std::string out(buf);
-    while (out.size() > 1 && out.back() == '0') out.pop_back();
-    return out;
 }
 
 // Quantize a float to {round(v*1e6), 1e6} int32 pair (matches legacy writer).
@@ -166,28 +143,17 @@ void fillDngExif(TinyDngWriteParams& p, const rawrcam::imaging::RawSnapshot& fra
             ex.has_digital_zoom = 1;
         }
     }
-    if (captureContext.wallClockUnixMillis > 0) {
-        const time_t localSeconds = static_cast<time_t>(captureContext.wallClockUnixMillis / 1000 +
-                                                        int64_t(captureContext.utcOffsetMinutes) * 60);
-        struct tm local{};
-        if (gmtime_r(&localSeconds, &local)) {
-            p.datetime = exifDateTime(local.tm_year + 1900, unsigned(local.tm_mon + 1), unsigned(local.tm_mday),
-                                      unsigned(local.tm_hour), unsigned(local.tm_min), unsigned(local.tm_sec));
-            p.dateOriginal = p.datetime;
-            p.dateDigitized = p.datetime;
-            // Legacy writer emits OffsetTime* only when the offset is non-zero.
-            if (captureContext.utcOffsetMinutes) {
-                p.offsetTime = exifOffset(captureContext.utcOffsetMinutes);
-                p.offsetOrig = p.offsetTime;
-                p.offsetDig = p.offsetTime;
-            }
-            const uint32_t ns = uint32_t(captureContext.wallClockUnixMillis % 1000) * 1000000u;
-            if (ns) {
-                p.subsec = exifSubseconds(ns);
-                p.subsecOrig = p.subsec;
-                p.subsecDig = p.subsec;
-            }
-        }
+    auto time = metadata::exifTime(captureContext.wallClockUnixMillis, captureContext.utcOffsetMinutes);
+    if (!time.dateTime.empty()) {
+        p.datetime = std::move(time.dateTime);
+        p.dateOriginal = p.datetime;
+        p.dateDigitized = p.datetime;
+        p.offsetTime = std::move(time.offset);
+        p.offsetOrig = p.offsetTime;
+        p.offsetDig = p.offsetTime;
+        p.subsec = std::move(time.subsec);
+        p.subsecOrig = p.subsec;
+        p.subsecDig = p.subsec;
     }
     if (const auto specification = lensSpecification(ctx.availableFocalLengthsMm, widestAperture)) {
         std::copy(specification->begin(), specification->end(), ex.lens_spec);

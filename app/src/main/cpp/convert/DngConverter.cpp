@@ -2,6 +2,7 @@
 
 #include "convert/BayerResample.h"
 #include "convert/NaturalBin.h"
+#include "metadata/ExifTime.h"
 #include "metadata/GpsMetadata.h"
 #include "renderer/SourceCaptureExif.h"
 
@@ -28,6 +29,9 @@ struct Source {
     const tinydng_image_info* info = nullptr;
     size_t index = 0;
     metadata::SourceGps gps;
+    metadata::ExifTime modificationTime;
+    metadata::ExifTime originalTime;
+    metadata::ExifTime digitizedTime;
 
     Source() = default;
     Source(const Source&) = delete;
@@ -69,7 +73,7 @@ struct Source {
     }
 
     // Image EXIF, or the document's when the RAW lives in a SubIFD.
-    tinydng_exif exif(const ConvertOptions& options) const {
+    tinydng_exif exif(const ConvertOptions& options) {
         tinydng_exif out = info->exif;
         const tinydng_exif* root = tinydng_document_exif(doc);
         if (root && !out.make && !out.model && !out.datetime_original) out = *root;
@@ -82,11 +86,24 @@ struct Source {
             out.has_exif_version = 1;
             std::memcpy(out.exif_version, gps.exifVersion->data(), 4);
         }
-        if (!options.offsetTime.empty() && out.datetime_original && !out.offset_time_original) {
-            char* offset = const_cast<char*>(options.offsetTime.c_str());
-            out.offset_time_original = offset;
-            if (!out.offset_time) out.offset_time = offset;
-            if (out.datetime_digitized && !out.offset_time_digitized) out.offset_time_digitized = offset;
+        modificationTime = metadata::exifTime(options.wallClockUnixMillis, options.utcOffsetMinutes);
+        out.datetime = modificationTime.dateTime.empty() ? nullptr : modificationTime.dateTime.data();
+        out.offset_time = modificationTime.offset.empty() ? nullptr : modificationTime.offset.data();
+        out.subsec_time = modificationTime.subsec.empty() ? nullptr : modificationTime.subsec.data();
+        originalTime = metadata::readExifTime(info->exif, root, &tinydng_exif::datetime_original,
+                              &tinydng_exif::offset_time_original, &tinydng_exif::subsec_time_original);
+        digitizedTime = metadata::readExifTime(info->exif, root, &tinydng_exif::datetime_digitized,
+                               &tinydng_exif::offset_time_digitized, &tinydng_exif::subsec_time_digitized);
+        out.datetime_original = originalTime.dateTime.empty() ? nullptr : originalTime.dateTime.data();
+        out.offset_time_original = originalTime.offset.empty() ? nullptr : originalTime.offset.data();
+        out.subsec_time_original = originalTime.subsec.empty() ? nullptr : originalTime.subsec.data();
+        out.datetime_digitized = digitizedTime.dateTime.empty() ? nullptr : digitizedTime.dateTime.data();
+        out.offset_time_digitized = digitizedTime.offset.empty() ? nullptr : digitizedTime.offset.data();
+        out.subsec_time_digitized = digitizedTime.subsec.empty() ? nullptr : digitizedTime.subsec.data();
+        if ((out.offset_time || out.offset_time_original || out.offset_time_digitized) &&
+            (!out.has_exif_version || std::memcmp(out.exif_version, "0231", 4) < 0)) {
+            out.has_exif_version = 1;
+            std::memcpy(out.exif_version, "0231", 4);
         }
         return out;
     }

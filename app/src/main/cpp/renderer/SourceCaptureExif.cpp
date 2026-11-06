@@ -1,4 +1,5 @@
 #include "SourceCaptureExif.h"
+#include "metadata/ExifTime.h"
 
 #include <algorithm>
 #include <cctype>
@@ -7,53 +8,9 @@
 
 namespace rawrcam::renderer {
 namespace {
-std::string trimmed(const char* text) {
-    if (!text) return {};
-    std::string s(text);
-    while (!s.empty() && (s.back() == '\0' || std::isspace(static_cast<unsigned char>(s.back())))) s.pop_back();
-    size_t start = 0;
-    while (start < s.size() && std::isspace(static_cast<unsigned char>(s[start]))) ++start;
-    return s.substr(start);
-}
 std::string text(const char* image, const char* root) {
-    auto value = trimmed(image);
-    return value.empty() ? trimmed(root) : value;
-}
-// "YYYY:MM:DD HH:MM:SS"; blank or zeroed dates (EXIF's "unknown") are absent.
-bool validDateTime(const std::string& s) {
-    if (s.size() < 19) return false;
-    for (size_t i = 0; i < 19; ++i) {
-        const char expected = i == 4 || i == 7 || i == 13 || i == 16 ? ':' : i == 10 ? ' ' : '0';
-        if (expected == '0' ? !std::isdigit(static_cast<unsigned char>(s[i])) : s[i] != expected) return false;
-    }
-    return s.compare(0, 4, "0000") != 0;
-}
-std::string dateTime(const char* image, const char* root) {
-    for (const char* candidate : {image, root}) {
-        auto value = trimmed(candidate);
-        if (validDateTime(value)) return value.substr(0, 19);
-    }
-    return {};
-}
-// "+HH:MM" / "-HH:MM".
-std::string offset(const char* image, const char* root) {
-    for (const char* candidate : {image, root}) {
-        auto s = trimmed(candidate);
-        if (s.size() == 6 && (s[0] == '+' || s[0] == '-') && std::isdigit(static_cast<unsigned char>(s[1])) &&
-            std::isdigit(static_cast<unsigned char>(s[2])) && s[3] == ':' &&
-            std::isdigit(static_cast<unsigned char>(s[4])) && std::isdigit(static_cast<unsigned char>(s[5])))
-            return s;
-    }
-    return {};
-}
-std::string digits(const char* image, const char* root) {
-    for (const char* candidate : {image, root}) {
-        auto s = trimmed(candidate);
-        bool ok = !s.empty();
-        for (char ch : s) ok &= std::isdigit(static_cast<unsigned char>(ch)) != 0;
-        if (ok) return s;
-    }
-    return {};
+    auto value = metadata::trimExifText(image);
+    return value.empty() ? metadata::trimExifText(root) : value;
 }
 std::optional<double> ratio(const int32_t (&value)[2], bool present, bool allowZero = false) {
     if (!present || value[0] < 0 || (!allowZero && value[0] == 0) || value[1] <= 0) return std::nullopt;
@@ -132,7 +89,7 @@ SourceCaptureExif readSourceCaptureExif(const tinydng_exif& image, const tinydng
     SourceCaptureExif out;
     out.make = text(image.make, rootText(&tinydng_exif::make));
     out.model = text(image.model, rootText(&tinydng_exif::model));
-    if (out.model.empty()) out.model = trimmed(uniqueCameraModel);
+    if (out.model.empty()) out.model = metadata::trimExifText(uniqueCameraModel);
     out.lensMake = text(image.lens_make, rootText(&tinydng_exif::lens_make));
     out.lensModel = text(image.lens_model, rootText(&tinydng_exif::lens_model));
     out.lensSerial = text(image.lens_serial, rootText(&tinydng_exif::lens_serial));
@@ -149,13 +106,16 @@ SourceCaptureExif readSourceCaptureExif(const tinydng_exif& image, const tinydng
     out.digitalZoomRatio = either<std::array<std::uint32_t, 2>>(image, root, digitalZoom);
     out.exposureTimeNs = either<std::int64_t>(image, root, exposure);
     out.sensitivity = either<std::int32_t>(image, root, iso);
-    out.dateTimeOriginal = dateTime(image.datetime_original, rootText(&tinydng_exif::datetime_original));
-    // The rest of the time group only qualifies an original capture time.
-    if (!out.dateTimeOriginal.empty()) {
-        out.dateTimeDigitized = dateTime(image.datetime_digitized, rootText(&tinydng_exif::datetime_digitized));
-        out.offsetTimeOriginal = offset(image.offset_time_original, rootText(&tinydng_exif::offset_time_original));
-        out.subsecTimeOriginal = digits(image.subsec_time_original, rootText(&tinydng_exif::subsec_time_original));
-    }
+    auto original = metadata::readExifTime(image, root, &tinydng_exif::datetime_original,
+                                          &tinydng_exif::offset_time_original, &tinydng_exif::subsec_time_original);
+    out.dateTimeOriginal = std::move(original.dateTime);
+    out.offsetTimeOriginal = std::move(original.offset);
+    out.subsecTimeOriginal = std::move(original.subsec);
+    auto digitized = metadata::readExifTime(image, root, &tinydng_exif::datetime_digitized,
+                                           &tinydng_exif::offset_time_digitized, &tinydng_exif::subsec_time_digitized);
+    out.dateTimeDigitized = std::move(digitized.dateTime);
+    out.offsetTimeDigitized = std::move(digitized.offset);
+    out.subsecTimeDigitized = std::move(digitized.subsec);
     return out;
 }
 
