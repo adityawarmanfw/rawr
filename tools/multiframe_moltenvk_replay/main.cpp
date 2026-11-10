@@ -1098,6 +1098,12 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
                 stageDump->image(pre + "pre", arena.image("rx_dbg_pre"), 1);
                 stageDump->image(pre + "er", arena.image("rx_er"), 1);
                 stageDump->image(pre + "scale", arena.image("rx_dbg_scale"), 1);
+            } else if (st == "final") {
+                stageDump->image("final", arena.image("rx_dbg_fin_out"), 3);
+                stageDump->image("neff", arena.image("rx_dbg_fin_out"), 1, 3);
+                stageDump->image("pre_lowcov", arena.image("rx_dbg_fin_pre"), 3);
+                stageDump->image("conf", arena.image("rx_dbg_fin_pre"), 1, 3);
+                stageDump->image("base/lowcov_w", arena.image("rx_dbg_fin_w"), 1);
             } else if (st == "companions_done") {
                 stageDump->image("support", arena.image("rx_support"), 1);
                 stageDump->image("cover", arena.image("rx_cover"), 1);

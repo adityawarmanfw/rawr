@@ -1,0 +1,173 @@
+#version 450
+#extension GL_GOOGLE_include_directive : enable
+// Rexture final pass: reference finalize + low-coverage smoothing, fused.
+//   finalize(p): the base's own 3 x 3 samples join the running sums (same kernel, red / blue 1.2x wider);
+//     neff = (sum w)^2 / sum_frames W^2 per colour, mass = sum w / (support + 1),
+//     conf = min over colours of smoothstep(1, 3, neff) * smoothstep(.001, .03, mass),
+//     out = rcd + (merged - rcd) * conf, rcd = the bounded RCD demosaic of the base.
+//   low coverage (cover = 1 + sum of clipped robustness at half resolution, w = clip((3 - cover) / 1.5, 0, 1)):
+//     step 3 colour from green: D = out - G averaged over 7 x 7 with weights exp(-r^2 / 2 1.2^2) * exp(-dG^2 / 2 s^2),
+//     s^2 = 9 (alpha G + beta) / cover; out1 = G + (1 - w) D + w <D>.
+//     step 4: out2 = (1 - w) out1 + w <out1> over 5 x 5 (spatial sigma 1.0, same range weight), only where w > 0.
+// One workgroup = 16 x 16 pixels. A workgroup without low-coverage pixels within 2 px runs finalize only; otherwise
+// finalize is evaluated for the 26 x 26 neighbourhood in shared memory (the steps need radius 3 + 2). Starts from
+// reference_accumulate.comp and a11_finalize.comp.
+#include "rx_common.glsl"
+
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0, r16ui) readonly uniform uimage2D rawU16;      // the base frame
+layout(set = 0, binding = 1, rgba32f) readonly uniform image2D covI;
+layout(set = 0, binding = 2, rgba32f) readonly uniform image2D accA;
+layout(set = 0, binding = 3, rgba32f) readonly uniform image2D accB;
+layout(set = 0, binding = 4, r32f) readonly uniform image2D accC;
+layout(set = 0, binding = 5, r32f) readonly uniform image2D supportI;
+layout(set = 0, binding = 6, r32f) readonly uniform image2D coverI;
+layout(set = 0, binding = 7, rgba16f) readonly uniform image2D rcdI;
+layout(set = 0, binding = 8, rgba16f) writeonly uniform image2D outI;
+layout(set = 0, binding = 9, rgba32f) writeonly uniform image2D dbgOutI;   // (final rgb, neff)       verification only
+layout(set = 0, binding = 10, rgba32f) writeonly uniform image2D dbgPreI;  // (pre-lowcov rgb, conf)  verification only
+layout(set = 0, binding = 11, r32f) writeonly uniform image2D dbgWI;       // w                       verification only
+layout(push_constant) uniform P {
+    vec4 black;
+    float white;
+    int w, h, cfa, debug;
+    float alpha, beta;
+} p;
+
+const float RB_WIDEN = 1.2;
+const float NEFF_LO = 1.0, NEFF_HI = 3.0, MASS_LO = 0.001, MASS_HI = 0.03;
+const float LOWCOV_LO = 1.5, LOWCOV_HI = 3.0, SIGMA_C = 1.2, SIGMA_G = 1.0;
+const int OT = 26, O1T = 20;
+shared vec3 sOut[OT * OT];     // finalize result at image positions o0 - 5 .. o0 + 20
+shared vec3 sOut1[O1T * O1T];  // after step 3 at image positions o0 - 2 .. o0 + 17
+shared uint sAny;
+
+struct Fin { vec3 rgb; float conf; float neff; };
+
+float coverAt(ivec2 q) { return imageLoad(coverI, clamp(q / 2, ivec2(0), imageSize(coverI) - 1)).x; }
+float lowW(ivec2 q) { return clamp((LOWCOV_HI - coverAt(q)) / (LOWCOV_HI - LOWCOV_LO), 0.0, 1.0); }
+
+Fin finalizeAt(ivec2 q0) {
+    const ivec2 size = ivec2(p.w, p.h);
+    vec3 ca, cb, cc4, cd;
+    vec2 cf;
+    RX_COV_NEIGHBOURS(covI, q0, ca, cb, cc4, cd, cf);
+    const vec3 qi = rxCovInverse(ca, cb, cc4, cd, cf);
+    vec3 rs = vec3(0.0), rw = vec3(0.0);
+    for (int dy = -1; dy <= 1; ++dy)
+        for (int dx = -1; dx <= 1; ++dx) {
+            ivec2 q = q0 + ivec2(dx, dy);
+            if (any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, size))) continue;
+            int cc = rxChannel(q, p.cfa);
+            float s = cc == 1 ? 1.0 : 1.0 / (RB_WIDEN * RB_WIDEN);
+            float z = max(0.0, s * (qi.x * float(dx * dx) + 2.0 * qi.y * float(dx * dy) + qi.z * float(dy * dy)));
+            float ww = exp(-0.5 * z);
+            float v = rxNormFromRaw(float(imageLoad(rawU16, q).x), q, p.black, p.white);
+            rs[cc] += v * ww;
+            rw[cc] += ww;
+        }
+    vec4 a = imageLoad(accA, q0), b = imageLoad(accB, q0);
+    vec3 accSq = vec3(a.w, b.w, imageLoad(accC, q0).x);
+    vec3 total = b.xyz + rw;
+    vec3 square = accSq + rw * rw;
+    vec3 neff = total * total / max(square, vec3(1e-20));
+    float loc = imageLoad(supportI, clamp(q0 / 2, ivec2(0), imageSize(supportI) - 1)).x;
+    vec3 mass = total / max(loc + 1.0, 1.0);
+    vec3 cert = vec3(smoothstep(NEFF_LO, NEFF_HI, neff.x) * smoothstep(MASS_LO, MASS_HI, mass.x),
+                     smoothstep(NEFF_LO, NEFF_HI, neff.y) * smoothstep(MASS_LO, MASS_HI, mass.y),
+                     smoothstep(NEFF_LO, NEFF_HI, neff.z) * smoothstep(MASS_LO, MASS_HI, mass.z));
+    float conf = min(cert.x, min(cert.y, cert.z));
+    vec3 merged = (a.xyz + rs) / max(total, vec3(1e-20));
+    vec3 base = imageLoad(rcdI, q0).xyz;
+    Fin f;
+    f.rgb = base + (merged - base) * conf;
+    f.conf = conf;
+    f.neff = min(neff.x, min(neff.y, neff.z));
+    return f;
+}
+
+void main() {
+    const ivec2 t2 = ivec2(gl_LocalInvocationID.xy);
+    const int tid = t2.y * 16 + t2.x;
+    const ivec2 o0 = ivec2(gl_WorkGroupID.xy) * 16;
+    const ivec2 size = ivec2(p.w, p.h);
+    const ivec2 pos = o0 + t2;
+    const bool inImage = pos.x < p.w && pos.y < p.h;
+    if (tid == 0) sAny = 0u;
+    barrier();
+    for (int i = tid; i < 400; i += 256) {
+        ivec2 q = clamp(o0 - 2 + ivec2(i % 20, i / 20), ivec2(0), size - 1);
+        if (lowW(q) > 0.0) atomicOr(sAny, 1u);
+    }
+    barrier();
+    if (sAny == 0u) {                                         // uniform per workgroup: finalize only
+        if (inImage) {
+            Fin f = finalizeAt(pos);
+            imageStore(outI, pos, vec4(f.rgb, 1.0));
+            if (p.debug != 0) {
+                imageStore(dbgOutI, pos, vec4(f.rgb, f.neff));
+                imageStore(dbgPreI, pos, vec4(f.rgb, f.conf));
+                imageStore(dbgWI, pos, vec4(0.0));
+            }
+        }
+        return;
+    }
+    for (int i = tid; i < OT * OT; i += 256) {
+        ivec2 q = o0 - 5 + ivec2(i % OT, i / OT);
+        sOut[i] = (q.x >= 0 && q.y >= 0 && q.x < p.w && q.y < p.h) ? finalizeAt(q).rgb : vec3(0.0);
+    }
+    barrier();
+    const float sc2 = 2.0 * SIGMA_C * SIGMA_C, sg2 = 2.0 * SIGMA_G * SIGMA_G;
+    for (int j = tid; j < O1T * O1T; j += 256) {
+        ivec2 L = o0 - 2 + ivec2(j % O1T, j / O1T);
+        if (L.x < 0 || L.y < 0 || L.x >= p.w || L.y >= p.h) { sOut1[j] = vec3(0.0); continue; }
+        vec3 outL = sOut[(L.y - (o0.y - 5)) * OT + (L.x - (o0.x - 5))];
+        float wL = lowW(L);
+        if (wL <= 0.0) { sOut1[j] = outL; continue; }
+        float Gp = outL.y;
+        float r2 = 9.0 * (p.alpha * max(Gp, 0.0) + p.beta) / max(coverAt(L), 1.0);
+        vec2 num = vec2(0.0);
+        float den = 0.0;
+        for (int dy = -3; dy <= 3; ++dy)
+            for (int dx = -3; dx <= 3; ++dx) {
+                ivec2 q = clamp(L + ivec2(dx, dy), ivec2(0), size - 1);
+                vec3 o = sOut[(q.y - (o0.y - 5)) * OT + (q.x - (o0.x - 5))];
+                float dg = o.y - Gp;
+                float k = exp(-float(dy * dy + dx * dx) / sc2 - dg * dg / (2.0 * max(r2, 1e-30)));
+                num += k * vec2(o.x - o.y, o.z - o.y);
+                den += k;
+            }
+        vec2 D = vec2(outL.x - Gp, outL.z - Gp);
+        vec2 out1 = Gp + (1.0 - wL) * D + wL * num / den;
+        sOut1[j] = vec3(out1.x, Gp, out1.y);
+    }
+    barrier();
+    if (!inImage) return;
+    vec3 pre = sOut[(pos.y - (o0.y - 5)) * OT + (pos.x - (o0.x - 5))];
+    float wp = lowW(pos);
+    vec3 fin = pre;
+    if (wp > 0.0) {
+        vec3 c1 = sOut1[(pos.y - (o0.y - 2)) * O1T + (pos.x - (o0.x - 2))];
+        float G1p = c1.y;
+        float r2 = 9.0 * (p.alpha * max(G1p, 0.0) + p.beta) / max(coverAt(pos), 1.0);
+        vec3 num = vec3(0.0);
+        float den = 0.0;
+        for (int dy = -2; dy <= 2; ++dy)
+            for (int dx = -2; dx <= 2; ++dx) {
+                ivec2 q = clamp(pos + ivec2(dx, dy), ivec2(0), size - 1);
+                vec3 o1 = sOut1[(q.y - (o0.y - 2)) * O1T + (q.x - (o0.x - 2))];
+                float dg = o1.y - G1p;
+                float k = exp(-float(dy * dy + dx * dx) / sg2 - dg * dg / (2.0 * max(r2, 1e-30)));
+                num += k * o1;
+                den += k;
+            }
+        fin = (1.0 - wp) * c1 + wp * num / den;
+    }
+    imageStore(outI, pos, vec4(fin, 1.0));
+    if (p.debug != 0) {
+        Fin f = finalizeAt(pos);
+        imageStore(dbgOutI, pos, vec4(fin, f.neff));
+        imageStore(dbgPreI, pos, vec4(pre, f.conf));
+        imageStore(dbgWI, pos, vec4(wp));
+    }
+}

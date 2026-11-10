@@ -46,6 +46,9 @@ class RextureRecorder final {
     // Adds the aligned companion to the running per-pixel sums (after recordRobustness).
     void recordAccumulate(VkCommandBuffer, VkImageView rawU16, const MultiframeFrameParameters&, bool debug) const;
 
+    // Final pass (after the last companion): reference finalize + low-coverage smoothing into linear_output (RGBA16F).
+    void recordFinalize(VkCommandBuffer, VkImageView baseRawU16, const MultiframeFrameParameters&, bool debug) const;
+
    private:
     ResourceArena& arena_;
     VulkanExecutor& executor_;

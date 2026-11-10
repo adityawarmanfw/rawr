@@ -91,7 +91,8 @@ set(RAWR_MF_SHADER_SOURCES
   ${RAWR_MF_DIR}/merge_rexture/shaders/rx_lk.comp
   ${RAWR_MF_DIR}/merge_rexture/shaders/rx_fill.comp
   ${RAWR_MF_DIR}/merge_rexture/shaders/rx_robust.comp
-  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_accumulate.comp)
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_accumulate.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_finalize.comp)
 set(RAWR_MF_SPV_OUTPUTS)
 foreach(RAWR_MF_SRC IN LISTS RAWR_MF_SHADER_SOURCES)
   get_filename_component(RAWR_MF_NAME ${RAWR_MF_SRC} NAME_WE)

@@ -671,6 +671,12 @@ BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>
         if (frameConsumed) frameConsumed(i);
     }
     if (rextureObserver_) rextureObserver_("companions_done", ref, arena_);
+    timings.finalizeMs = gpuOrWall(executeChunk(20u, ref, 2u, [&] {
+        recordTimestamp(0u);
+        recorder.recordFinalize(command_, frames[ref].raw.view, frames[ref].parameters, rextureDebug_);
+        recordTimestamp(1u);
+    }));
+    if (rextureObserver_) rextureObserver_("final", ref, arena_);
     timings.totalMs = std::chrono::duration<double, std::milli>(Clock::now() - runBegin).count();
     const auto& out = arena_.image("linear_output");
     BurstRunResult result{ref,

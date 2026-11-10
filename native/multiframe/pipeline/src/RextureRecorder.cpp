@@ -45,6 +45,12 @@ struct AccPc {
     std::int32_t w, h, cfa, debug;
     float frameWeight;
 };
+struct FinalPc {
+    float black[4];
+    float white;
+    std::int32_t w, h, cfa, debug;
+    float alpha, beta;
+};
 struct BoundPc {
     float black[4];
     float white;
@@ -79,7 +85,12 @@ ScratchLayout makeRextureScratchLayout(const MultiframeGeometry& g, bool debug) 
     img("rx_acc_a", g.output, PixelStorage::RGBA32Float, Lifetime::Output);
     img("rx_acc_b", g.output, PixelStorage::RGBA32Float, Lifetime::Output);
     img("rx_acc_c", g.output, PixelStorage::R32Float, Lifetime::Output);
-    if (debug) img("rx_dbg_ss2", g.output, PixelStorage::RGBA32Float, Lifetime::Output);
+    if (debug) {
+        img("rx_dbg_ss2", g.output, PixelStorage::RGBA32Float, Lifetime::Output);
+        img("rx_dbg_fin_out", g.output, PixelStorage::RGBA32Float, Lifetime::Output);  // (final rgb, neff)
+        img("rx_dbg_fin_pre", g.output, PixelStorage::RGBA32Float, Lifetime::Output);  // (pre-lowcov rgb, conf)
+        img("rx_dbg_fin_w", g.output, PixelStorage::R32Float, Lifetime::Output);
+    }
     // Robustness: the frame's weight map, and the burst-long support / cover maps (half resolution, fp32 sums).
     img("rx_er", g.guide, PixelStorage::R32Float, Lifetime::Companion);
     img("rx_support", g.guide, PixelStorage::R32Float, Lifetime::Burst);
@@ -350,6 +361,36 @@ void RextureRecorder::recordAccumulate(VkCommandBuffer c, VkImageView rawU16, co
                        ib(4, a), ib(5, arena_.image("rx_acc_b")), ib(6, arena_.image("rx_acc_c")), ib(7, ss2)},
                       {}},
                      &p, sizeof(p), divUp(a.extent.width, 16), divUp(a.extent.height, 16));
+    computeWriteBarrier(c);
+}
+}  // namespace rawr::raw_gpu_pipeline
+
+namespace rawr::raw_gpu_pipeline {
+void RextureRecorder::recordFinalize(VkCommandBuffer c, VkImageView rawU16, const MultiframeFrameParameters& f,
+                                     bool debug) const {
+    if (!rawU16) throw std::invalid_argument("rexture recorder: null RAW16 view");
+    const auto& out = arena_.image("linear_output");
+    FinalPc p{};
+    std::copy(f.normalization.blackByPhase.begin(), f.normalization.blackByPhase.end(), p.black);
+    p.white = f.normalization.whiteLevel;
+    p.w = std::int32_t(out.extent.width);
+    p.h = std::int32_t(out.extent.height);
+    p.cfa = std::int32_t(config_.cfa);
+    p.debug = debug ? 1 : 0;
+    p.alpha = config_.noiseAlpha;
+    p.beta = config_.noiseBeta;
+    ImageBinding raw{0, rawU16, VK_IMAGE_LAYOUT_GENERAL};
+    const auto& accA = arena_.image("rx_acc_a");
+    const auto& accC = arena_.image("rx_acc_c");
+    const ArenaImage& dbgOut = debug ? arena_.image("rx_dbg_fin_out") : accA;  // never written without debug
+    const ArenaImage& dbgPre = debug ? arena_.image("rx_dbg_fin_pre") : accA;
+    const ArenaImage& dbgW = debug ? arena_.image("rx_dbg_fin_w") : accC;
+    executor_.record(c, ShaderId::RxFinalize,
+                     {{raw, ib(1, arena_.image("rx_base_cov")), ib(2, accA), ib(3, arena_.image("rx_acc_b")), ib(4, accC),
+                       ib(5, arena_.image("rx_support")), ib(6, arena_.image("rx_cover")), ib(7, arena_.image("rx_base_rcd")),
+                       ib(8, out), ib(9, dbgOut), ib(10, dbgPre), ib(11, dbgW)},
+                      {}},
+                     &p, sizeof(p), divUp(out.extent.width, 16), divUp(out.extent.height, 16));
     computeWriteBarrier(c);
 }
 }  // namespace rawr::raw_gpu_pipeline
