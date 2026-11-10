@@ -115,6 +115,8 @@
 #include "mf_robust_warp_trace.h"
 #include "mf_support_accumulate_prod.h"
 #include "mf_support_accumulate_trace.h"
+#include "mf_rx_frame_prep_prod.h"
+#include "mf_rx_pyramid_prod.h"
 namespace rawr::raw_gpu_pipeline {
 namespace {
 struct B {
@@ -508,7 +510,11 @@ const std::array<Spec, static_cast<size_t>(ShaderId::Count)> specs{{{"raw_normal
                                    mf_hdrq_seed_dft_prod_spv_size,
                                    mf_hdrq_seed_dft_trace_spv,
                                    mf_hdrq_seed_dft_trace_spv_size,
-                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}}}};
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                  {"rx_frame_prep", mf_rx_frame_prep_prod_spv, mf_rx_frame_prep_prod_spv_size, mf_rx_frame_prep_prod_spv, mf_rx_frame_prep_prod_spv_size,
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {5, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                  {"rx_pyramid", mf_rx_pyramid_prod_spv, mf_rx_pyramid_prod_spv_size, mf_rx_pyramid_prod_spv, mf_rx_pyramid_prod_spv_size,
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}}}};
 void ck(VkResult r, const char* w) {
     if (r != VK_SUCCESS) throw std::runtime_error(std::string(w) + " VkResult=" + std::to_string(r));
 }
@@ -536,6 +542,8 @@ void VulkanExecutor::initialize(VkDevice d, bool wantTrace) {
         "hdrp_prepare", "hdrp_hot_pixel", "hdrp_avg_pool", "hdrp_blur", "hdrp_upsample_align", "hdrp_correct_upsampling", "hdrp_tile_diff", "hdrp_best_tile", "hdrp_warp", "hdrp_color_diff", "hdrp_column_sum", "hdrp_mean", "hdrp_merge_weight", "hdrp_accumulate", "hdrp_finalize",
         "hdrq_to_rgba", "hdrq_warp_rgba", "hdrq_rms", "hdrq_mismatch", "hdrq_region_mean", "hdrq_mismatch_norm", "hdrq_forward_dft", "hdrq_merge", "hdrq_deconvolute", "hdrq_backward_dft", "hdrq_border", "hdrq_accumulate", "hdrq_shift_table",
         "hdrq_highlights_norm", "hdrq_normalize", "hdrq_seed_dft",
+        "rx_frame_prep",
+        "rx_pyramid",
     };
     static_assert(sizeof(kOrder) / sizeof(kOrder[0]) == static_cast<size_t>(ShaderId::Count),
                   "executor spec order table out of sync with ShaderId");

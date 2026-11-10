@@ -2,6 +2,7 @@
 #include <rawr/raw_gpu_pipeline/BurstNoiseEstimate.h>
 #include <rawr/raw_gpu_pipeline/HdrPlusRecorder.h>
 #include <rawr/raw_gpu_pipeline/MergeMath.h>
+#include <rawr/raw_gpu_pipeline/RextureRecorder.h>
 
 #include <algorithm>
 #include <array>
@@ -188,6 +189,8 @@ void AndroidBurstCoordinator::initializeArenaLocked(VkPhysicalDevice physical, V
                           makeHdrPlusFrequencyScratchLayout(
                               rawr::raw_merge_hdrplus_gpu::makeFrequencyGeometry(width_, height_, hdrplus_), width_, height_));
         arenaHdrPlus_ = hdrplus_;
+    } else if (algorithm_ == MergeAlgorithm::Rexture) {
+        arena_.initialize(physical, device, makeRextureScratchLayout(makeMultiframeGeometry(width_, height_, 1.0f)));
     } else {
         arena_.initialize(physical, device, makeMultiframeScratchLayout(makeMultiframeGeometry(width_, height_, outputScale_)));
     }
@@ -379,6 +382,7 @@ BurstRunResult AndroidBurstCoordinator::run(const std::vector<BurstFrame>& frame
     BurstStageTimings timings{};
     timings.initializeMs = pendingInitializeMs_;
     const auto timestamp = [&](std::uint32_t query) { recordTimestamp(query); };
+    if (algorithm_ == MergeAlgorithm::Rexture) return runRexture(frames, ref, frameConsumed, frameLoad);
     if (algorithm_ == MergeAlgorithm::HdrPlusSpatial) return runHdrPlus(frames, ref, frameConsumed, frameLoad);
     if (usesFrequencyMerge(algorithm_)) return runHdrPlusFrequency(frames, ref, frameConsumed, frameLoad);
     if (frameLoad) frameLoad(ref);
@@ -578,6 +582,66 @@ BurstRunResult AndroidBurstCoordinator::run(const std::vector<BurstFrame>& frame
             timings};
     result.noiseEstimated = noiseEstimated;
     if (noiseEstimated) result.estimatedNoise = *merge_.sensorNoiseProfile;
+    return result;
+}
+BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>& frames, std::uint32_t ref,
+                                                   const FrameConsumed& frameConsumed, const FrameLoad& frameLoad) {
+    if (frameLoad) frameLoad(ref);
+    using Clock = std::chrono::steady_clock;
+    const auto runBegin = Clock::now();
+    BurstStageTimings timings{};
+    timings.initializeMs = pendingInitializeMs_;
+    const auto gpuOrWall = [](const ChunkTiming& t) { return t.second.empty() ? t.first : t.second.front(); };
+    // Scalar noise model: the mean of the four CFA-site pairs (the alignment convention), else the configured pair.
+    rawr::raw_merge_rexture_gpu::Config config{};
+    config.cfa = static_cast<rawr::raw_merge_rexture_gpu::CfaPattern>(static_cast<std::uint32_t>(merge_.cfa));
+    config.noiseAlpha = merge_.noiseAlpha;
+    config.noiseBeta = merge_.noiseBeta;
+    if (merge_.sensorNoiseProfile) {
+        const auto& n = *merge_.sensorNoiseProfile;
+        config.noiseAlpha = .25f * (n.slopeBySite[0] + n.slopeBySite[1] + n.slopeBySite[2] + n.slopeBySite[3]);
+        config.noiseBeta = .25f * (n.offsetBySite[0] + n.offsetBySite[1] + n.offsetBySite[2] + n.offsetBySite[3]);
+    }
+    config.whiteBalance = frames[ref].parameters.whiteBalance;
+    RextureRecorder recorder(arena_, executor_, config);
+    const bool initializeLayouts = !layoutsInitialized_;
+    timings.referencePrepareMs = gpuOrWall(executeChunk(1u, ref, 2u, [&] {
+        recordTimestamp(0u);
+        if (initializeLayouts) arena_.recordInitializeLayouts(command_);
+        recorder.recordPrepare(command_, true, frames[ref].raw.view, frames[ref].parameters);
+        recordTimestamp(1u);
+    }));
+    if (initializeLayouts) layoutsInitialized_ = true;
+    if (rextureObserver_) rextureObserver_("base_prepare", ref, arena_);
+    std::uint32_t companions = 0;
+    for (std::uint32_t i = 0; i < frames.size(); ++i) {
+        if (i == ref) continue;
+        if (frames[i].raw.ref.width != width_ || frames[i].raw.ref.height != height_)
+            throw std::invalid_argument("multiframe burst: RAW geometry mismatch");
+        if (frameLoad) frameLoad(i);
+        timings.companionPrepareMs += gpuOrWall(executeChunk(11u, i, 2u, [&] {
+            recordTimestamp(0u);
+            recorder.recordPrepare(command_, false, frames[i].raw.view, frames[i].parameters);
+            recordTimestamp(1u);
+        }));
+        if (rextureObserver_) rextureObserver_("companion_prepare", i, arena_);
+        ++companions;
+        if (frameConsumed) frameConsumed(i);
+    }
+    timings.totalMs = std::chrono::duration<double, std::milli>(Clock::now() - runBegin).count();
+    const auto& out = arena_.image("linear_output");
+    BurstRunResult result{ref,
+                          std::uint32_t(frames.size()),
+                          out.image,
+                          out.view,
+                          out.format,
+                          out.extent,
+                          arena_.physicalImageBytes(),
+                          arena_.physicalBufferBytes(),
+                          1u + companions,
+                          resourcesReused_,
+                          pipelineCacheReused_,
+                          timings};
     return result;
 }
 BurstRunResult AndroidBurstCoordinator::runHdrPlus(const std::vector<BurstFrame>& frames, std::uint32_t ref,

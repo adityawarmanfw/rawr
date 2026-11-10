@@ -12,6 +12,7 @@
 #include "geometry/CfaPattern.h"
 #include "renderer/DngSource.h"
 #include "vk_test_common.hpp"
+#include "StageDump.h"
 #include "SyntheticBurst.h"
 
 #include <algorithm>
@@ -26,6 +27,7 @@
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -472,7 +474,9 @@ struct TuneOpts {
     bool hotPixels = true;
     std::string hotPixelList;  // test/diagnostic override: "x y" per line
     std::string reference = "recorded";  // recorded|middle|sharpest|darkest
-    std::string mergeAlgorithm = "wronski";  // wronski|hdrplus|hdrplus-freq|hdrplus-bracket
+    std::string mergeAlgorithm = "wronski";  // wronski|hdrplus|hdrplus-freq|hdrplus-bracket|rexture
+    std::string dumpStages;  // rexture: directory for stage dumps (compare.py layout)
+    std::string noiseAb;     // "a,b": scalar noise model override (normalised units)
     rawr::raw_merge_hdrplus_gpu::Config hdrplus{};
 };
 
@@ -977,6 +981,14 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
         std::cerr << "noise_source=calibrated_override slope=" << profile.slopeBySite[0]
                   << " offset=" << profile.offsetBySite[0] << '\n';
     } else std::cerr << "noise_source=legacy_override\n";
+    if (!tune.noiseAb.empty()) {
+        const auto comma = tune.noiseAb.find(',');
+        if (comma == std::string::npos) throw std::invalid_argument("--noise-ab needs A,B");
+        merge.sensorNoiseProfile.reset();
+        merge.noiseAlpha = std::stof(tune.noiseAb.substr(0, comma));
+        merge.noiseBeta = std::stof(tune.noiseAb.substr(comma + 1));
+        std::cerr << "noise_source=scalar_override alpha=" << merge.noiseAlpha << " beta=" << merge.noiseBeta << '\n';
+    }
     if (tune.kDetail >= 0.f) merge.kDetail = tune.kDetail;
     if (tune.kDenoise >= 0.f) merge.kDenoise = tune.kDenoise;
     if (tune.dThreshold >= 0.f) merge.dThreshold = tune.dThreshold;
@@ -1043,13 +1055,36 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
                                vktest::ck(vkQueueSubmit(context.q, 1, &info, fence), "burst queue submit");
                            },
                            width, height, tune.scale, {}, alignment, merge,
-                           tune.mergeAlgorithm == "hdrplus"        ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusSpatial
+                           tune.mergeAlgorithm == "rexture"        ? rawr::raw_gpu_pipeline::MergeAlgorithm::Rexture
+                           : tune.mergeAlgorithm == "hdrplus"      ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusSpatial
                            : tune.mergeAlgorithm == "hdrplus-freq" ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusFrequency
                            : tune.mergeAlgorithm == "hdrplus-bracket"
                                ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusBracketed
                                                                    : rawr::raw_gpu_pipeline::MergeAlgorithm::Wronski,
                            tune.hdrplus);
+    std::unique_ptr<stagedump::StageDump> stageDump;
+    if (!tune.dumpStages.empty()) {
+        if (tune.mergeAlgorithm != "rexture") throw std::invalid_argument("--dump-stages needs --merge rexture");
+        stageDump = std::make_unique<stagedump::StageDump>(
+            context, tune.dumpStages, [&](const stagedump::StageDump::Record& record) { commands.submit(context.q, record); });
+        coordinator.setRextureObserver([&](const char* stage, std::uint32_t frame, const rawr::raw_gpu_pipeline::ResourceArena& arena) {
+            const std::string st = stage;
+            const auto dumpPrepare = [&](const std::string& who, const std::string& prefix) {
+                for (int l = 0; l < 4; ++l)
+                    stageDump->image(prefix + "guide_l" + std::to_string(l), arena.image(who + "l" + std::to_string(l)), 1);
+                stageDump->image(prefix + "mean", arena.image(who + "mean"), 3);
+                stageDump->image(prefix + "var", arena.image(who + "var"), 3);
+            };
+            if (st == "base_prepare") {
+                dumpPrepare("rx_base_", "base/");
+                stageDump->image("base/tensor_raw", arena.image("rx_base_tensor"), 3);
+            } else if (st == "companion_prepare") {
+                dumpPrepare("rx_alt_", "frames/" + std::to_string(frame) + "/");
+            }
+        });
+    }
     auto result = coordinator.run(runFrames, runRef);
+    if (stageDump) stageDump->finish();
     const auto reportRun = [&](int iteration) {
         const auto& t = result.timings;
         std::cerr << "benchmark iteration=" << iteration << " total_ms=" << t.totalMs
@@ -1366,6 +1401,8 @@ int main(int argc, char** argv) {
             else if (a == "--export-dng") { tune.exportDng = need(a.c_str()); tune.dumpAllSingles = true; }
             else if (a == "--reference") tune.reference = need(a.c_str());
             else if (a == "--merge") tune.mergeAlgorithm = need(a.c_str());
+            else if (a == "--dump-stages") tune.dumpStages = need(a.c_str());
+            else if (a == "--noise-ab") tune.noiseAb = need(a.c_str());
             else if (a == "--hdrplus-strength") tune.hdrplus.strength = std::stof(need(a.c_str()));
             else if (a == "--hdrplus-tile") tune.hdrplus.tileSize = std::uint32_t(std::stoul(need(a.c_str())));
             else if (a == "--hdrplus-search") tune.hdrplus.searchDistance = std::uint32_t(std::stoul(need(a.c_str())));

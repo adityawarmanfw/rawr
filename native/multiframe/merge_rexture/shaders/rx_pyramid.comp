@@ -1,0 +1,34 @@
+#version 450
+#extension GL_GOOGLE_include_directive : enable
+// Rexture pyramid step l2 -> l1 -> l0: VALID Gaussian (sigma 2, 17 taps, y then x) decimated by 4.
+// Output (i, j) = sum_a sum_b k[a] k[b] src[4 i + a][4 j + b]. Starts from pyramid_gaussian + pyramid_decimate (fused,
+// no intermediate images).
+#include "rx_tables.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0, r32f) readonly uniform image2D srcI;
+layout(set = 0, binding = 1, r32f) writeonly uniform image2D dstI;
+layout(push_constant) uniform P { int dstW, dstH; } p;
+
+shared float sV[8 * 45];
+
+void main() {
+    const ivec2 t = ivec2(gl_LocalInvocationID.xy);
+    const int tid = t.y * 8 + t.x;
+    const ivec2 o0 = ivec2(gl_WorkGroupID.xy) * 8;
+    const ivec2 srcMax = imageSize(srcI) - 1;
+    for (int i = tid; i < 8 * 45; i += 64) {
+        int r = i / 45, c = i % 45;
+        float acc = 0.0;
+        for (int a = 0; a < 17; ++a)
+            acc += RX_K4[a] * imageLoad(srcI, min(ivec2(4 * o0.x + c, 4 * (o0.y + r) + a), srcMax)).x;
+        sV[i] = acc;
+    }
+    barrier();
+    ivec2 o = o0 + t;
+    if (o.x < p.dstW && o.y < p.dstH) {
+        float acc = 0.0;
+        for (int b = 0; b < 17; ++b) acc += RX_K4[b] * sV[t.y * 45 + 4 * t.x + b];
+        imageStore(dstI, o, vec4(acc));
+    }
+}

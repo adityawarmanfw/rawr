@@ -78,7 +78,9 @@ set(RAWR_MF_SHADER_SOURCES
   ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_accumulate.comp
   ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_shift_table.comp
   ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_highlights_norm.comp
-  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_normalize.comp)
+  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_normalize.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_frame_prep.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_pyramid.comp)
 set(RAWR_MF_SPV_OUTPUTS)
 foreach(RAWR_MF_SRC IN LISTS RAWR_MF_SHADER_SOURCES)
   get_filename_component(RAWR_MF_NAME ${RAWR_MF_SRC} NAME_WE)
@@ -91,6 +93,10 @@ foreach(RAWR_MF_SRC IN LISTS RAWR_MF_SHADER_SOURCES)
   set(RAWR_MF_INCLUDE_DEPS)
   if(RAWR_MF_NAME MATCHES "^hdrq_(forward|seed)_dft$")
     list(APPEND RAWR_MF_INCLUDE_DEPS ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_forward_dft.glsl)
+  endif()
+  if(RAWR_MF_NAME MATCHES "^rx_")
+    file(GLOB RAWR_RX_GLSL ${RAWR_MF_DIR}/merge_rexture/shaders/*.glsl)
+    list(APPEND RAWR_MF_INCLUDE_DEPS ${RAWR_RX_GLSL})
   endif()
   set(RAWR_MF_PROD_EXTRA)
   if(RAWR_MF_NAME STREQUAL "robust_photometric")
@@ -116,6 +122,7 @@ add_library(raw_gpu_pipeline STATIC
   src/ResourceArena.cpp
   src/MultiframeRecorder.cpp
   src/HdrPlusRecorder.cpp
+  src/RextureRecorder.cpp
   src/AndroidBurstCoordinator.cpp
   src/BurstNoiseEstimate.cpp)
 add_dependencies(raw_gpu_pipeline raw_multiframe_gpu_shaders)
@@ -124,6 +131,7 @@ target_include_directories(raw_gpu_pipeline
          ${RAWR_MF_DIR}/alignment/include
          ${RAWR_MF_DIR}/merge_wronski/include
          ${RAWR_MF_DIR}/merge_hdrplus/include
+         ${RAWR_MF_DIR}/merge_rexture/include
          ${RAWR_NATIVE_DIR}/zsl_codec/include
          ${RAWR_NATIVE_DIR}/zsl_ring/include
   PRIVATE ${RAWR_MF_SPV_DIR})

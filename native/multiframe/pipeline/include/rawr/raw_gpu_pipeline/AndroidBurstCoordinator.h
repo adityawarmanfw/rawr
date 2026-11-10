@@ -15,11 +15,13 @@ namespace rawr::raw_gpu_pipeline {
 // Wronski: kernel-regression super-resolution merge (RGB output, optional
 // upscale). HdrPlusSpatial: HDR+ tile-aligned robust average. HdrPlusFrequency:
 // HDR+ per-frequency Wiener merge (upstream "Higher quality").
+// Rexture: kernel-regression Bayer merge for equal-exposure bursts at 1x (module merge_rexture; opt-in).
 // HdrPlusBracketed: the frequency merge over an exposure-bracketed burst
 // (upstream's non-uniform exposure path; the reference should be the darkest
 // frame). All HDR+ variants write Bayer values into the RGBA16F output and run
 // at 1x only.
-enum class MergeAlgorithm : std::uint32_t { Wronski = 0, HdrPlusSpatial = 1, HdrPlusFrequency = 2, HdrPlusBracketed = 3 };
+enum class MergeAlgorithm : std::uint32_t { Wronski = 0, HdrPlusSpatial = 1, HdrPlusFrequency = 2, HdrPlusBracketed = 3,
+                                                Rexture = 4 };
 struct BurstFrame {
     rawr::zsl_ring::GpuRawImageView raw{};
     MultiframeFrameParameters parameters{};
@@ -95,6 +97,10 @@ class AndroidBurstCoordinator final {
     // the companion in flight (FrameConsumed then frees it). Multi-pass merges
     // load every frame first. Unset: frames are resident.
     using FrameLoad = std::function<void(std::uint32_t)>;
+    // Debug/verification hook for the Rexture merge: called after each stage group has finished on the GPU (the
+    // arena's images then hold that stage's results). Unset in production.
+    using RextureObserver = std::function<void(const char* stage, std::uint32_t frame, const ResourceArena&)>;
+    void setRextureObserver(RextureObserver observer) { rextureObserver_ = std::move(observer); }
     AndroidBurstCoordinator() = default;
     ~AndroidBurstCoordinator() { reset(); }
     AndroidBurstCoordinator(const AndroidBurstCoordinator&) = delete;
@@ -169,6 +175,9 @@ class AndroidBurstCoordinator final {
     ChunkTiming executeChunk(std::uint32_t chunkCode, std::uint32_t frameIndex, std::uint32_t queryCount,
                              const std::function<void()>& record);
     void recordTimestamp(std::uint32_t query);
+    RextureObserver rextureObserver_{};
+    BurstRunResult runRexture(const std::vector<BurstFrame>& frames, std::uint32_t referenceIndex,
+                              const FrameConsumed& frameConsumed, const FrameLoad& frameLoad);
     BurstRunResult runHdrPlus(const std::vector<BurstFrame>& frames, std::uint32_t referenceIndex,
                               const FrameConsumed& frameConsumed, const FrameLoad& frameLoad);
     BurstRunResult runHdrPlusFrequency(const std::vector<BurstFrame>& frames, std::uint32_t referenceIndex,
