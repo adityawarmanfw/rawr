@@ -207,31 +207,20 @@ internal fun SensorLayoutGroup(
     hasPhotoStream: Boolean = false,
     onChange: (LensSensorLayout) -> Unit
 ) {
+    var editPhotoCfa by remember(hasPhotoStream) { mutableStateOf(false) }
     SettingsGroup(
         title = "Sensor layout",
         description = "Choose the mosaic the RAW actually contains. Quad and 4×4 are remosaiced to Bayer " +
             "at full resolution. Colour order sets the order of the pixels or same-colour blocks."
     ) {
-        DropdownChoiceRow(
-            title = if (hasPhotoStream) "Viewfinder layout" else "RAW layout",
-            selected = layout.block,
-            values = SENSOR_LAYOUT_BLOCKS,
-            label = ::sensorLayoutBlockLabel,
-            supportingText = if (hasPhotoStream) "Viewfinder and video; full-size photos use their own layout" else null,
-            testTag = lensEditorTag("sensor_layout_block"),
-            onSelect = { onChange(layout.copy(block = it)) }
-        )
         if (hasPhotoStream) {
+            CompactChoiceRow(listOf(false, true), editPhotoCfa, { if (it) "Photo CFA" else "Viewfinder CFA" }) {
+                editPhotoCfa = it
+            }
             SettingDivider()
-            DropdownChoiceRow(
-                title = "Photo stream layout",
-                selected = layout.photoBlock,
-                values = SENSOR_LAYOUT_BLOCKS,
-                label = ::sensorLayoutBlockLabel,
-                supportingText = "Full-size single and merged photos; independent of the viewfinder",
-                testTag = lensEditorTag("photo_sensor_layout_block"),
-                onSelect = { onChange(layout.copy(photoBlock = it)) }
-            )
+        }
+        CompactChoiceRow(SENSOR_LAYOUT_BLOCKS, if (editPhotoCfa) layout.photoBlock else layout.block, ::sensorLayoutBlockLabel) {
+            onChange(if (editPhotoCfa) layout.copy(photoBlock = it) else layout.copy(block = it))
         }
         SettingDivider()
         DropdownChoiceRow(
