@@ -89,11 +89,17 @@
           "type": "int32",
           "scope": "still",
           "values": [
-            0
+            5
           ],
           "enabled": true
         }
-      ]
+      ],
+      "image": {
+        "sensorLayout": {
+          "block": 1,
+          "photoBlock": 2
+        }
+      }
     },
     {
       "id": "1x",
@@ -173,11 +179,17 @@
           "type": "int32",
           "scope": "still",
           "values": [
-            5
+            13
           ],
           "enabled": true
         }
-      ]
+      ],
+      "image": {
+        "sensorLayout": {
+          "block": 1,
+          "photoBlock": 2
+        }
+      }
     },
     {
       "id": "3x",

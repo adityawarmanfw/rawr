@@ -426,8 +426,8 @@ void testOppoPhotoStreams() {
     const auto roundTrip = parseCameraProfile(serializeCameraProfile(oppo));
     assert(roundTrip && roundTrip->lenses.size() == 8);
     for (const auto& [name, camera, mode, width, height, block] : {
-             std::tuple{"H0.6", "3", 0, 8192u, 6144u, 1u},
-             std::tuple{"H1x", "2", 5, 8160u, 6128u, 1u},
+             std::tuple{"H0.6", "3", 5, 8192u, 6144u, 2u},
+             std::tuple{"H1x", "2", 13, 8160u, 6128u, 2u},
              std::tuple{"H3x", "4", 8, 8192u, 6144u, 2u},
              std::tuple{"H10x", "5", 25, 8192u, 6144u, 2u}}) {
         const auto lens = routeForLens(*roundTrip, name);
