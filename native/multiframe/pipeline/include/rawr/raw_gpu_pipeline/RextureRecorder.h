@@ -43,6 +43,9 @@ class RextureRecorder final {
     // minimum + support / cover update.
     void recordRobustness(VkCommandBuffer, bool debug) const;
 
+    // Adds the aligned companion to the running per-pixel sums (after recordRobustness).
+    void recordAccumulate(VkCommandBuffer, VkImageView rawU16, const MultiframeFrameParameters&, bool debug) const;
+
    private:
     ResourceArena& arena_;
     VulkanExecutor& executor_;

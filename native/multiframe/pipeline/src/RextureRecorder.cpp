@@ -39,6 +39,12 @@ struct RobustPc {
     float alpha, beta;
     std::int32_t debug;
 };
+struct AccPc {
+    float black[4];
+    float white;
+    std::int32_t w, h, cfa, debug;
+    float frameWeight;
+};
 struct BoundPc {
     float black[4];
     float white;
@@ -69,6 +75,11 @@ ScratchLayout makeRextureScratchLayout(const MultiframeGeometry& g, bool debug) 
     img("rx_base_cov", g.guide, PixelStorage::RGBA32Float, Lifetime::Burst);
     img("rx_base_rcd", g.output, PixelStorage::RGBA16Float, Lifetime::Burst);  // fallback demosaic (RCD output is RGBA16F)
     if (debug) img("rx_dbg_qinv", g.output, PixelStorage::RGBA32Float, Lifetime::Burst);
+    // Accumulators (packed, fp32): A = (sum w x [rgb], sum_frames W^2 [r]), B = (sum w [rgb], ... [g]), C = (... [b]).
+    img("rx_acc_a", g.output, PixelStorage::RGBA32Float, Lifetime::Output);
+    img("rx_acc_b", g.output, PixelStorage::RGBA32Float, Lifetime::Output);
+    img("rx_acc_c", g.output, PixelStorage::R32Float, Lifetime::Output);
+    if (debug) img("rx_dbg_ss2", g.output, PixelStorage::RGBA32Float, Lifetime::Output);
     // Robustness: the frame's weight map, and the burst-long support / cover maps (half resolution, fp32 sums).
     img("rx_er", g.guide, PixelStorage::R32Float, Lifetime::Companion);
     img("rx_support", g.guide, PixelStorage::R32Float, Lifetime::Burst);
@@ -289,6 +300,12 @@ void RextureRecorder::recordBurstClear(VkCommandBuffer c) const {
     one.float32[0] = 1.0f;
     vkCmdClearColorImage(c, arena_.image("rx_support").image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &range);
     vkCmdClearColorImage(c, arena_.image("rx_cover").image, VK_IMAGE_LAYOUT_GENERAL, &one, 1, &range);
+    for (const char* n : {"rx_acc_a", "rx_acc_b", "rx_acc_c", "rx_dbg_ss2"}) {
+        try {
+            vkCmdClearColorImage(c, arena_.image(n).image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &range);
+        } catch (const std::out_of_range&) {  // debug-only image
+        }
+    }
     VkMemoryBarrier b{};
     b.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -309,6 +326,30 @@ void RextureRecorder::recordRobustness(VkCommandBuffer c, bool debug) const {
                        ib(7, arena_.image("rx_cover")), ib(8, dbgPre), ib(9, dbgScale)},
                       {}},
                      &p, sizeof(p), divUp(er.extent.width, 16), divUp(er.extent.height, 16));
+    computeWriteBarrier(c);
+}
+}  // namespace rawr::raw_gpu_pipeline
+
+namespace rawr::raw_gpu_pipeline {
+void RextureRecorder::recordAccumulate(VkCommandBuffer c, VkImageView rawU16, const MultiframeFrameParameters& f,
+                                       bool debug) const {
+    if (!rawU16) throw std::invalid_argument("rexture recorder: null RAW16 view");
+    const auto& a = arena_.image("rx_acc_a");
+    AccPc p{};
+    std::copy(f.normalization.blackByPhase.begin(), f.normalization.blackByPhase.end(), p.black);
+    p.white = f.normalization.whiteLevel;
+    p.w = std::int32_t(a.extent.width);
+    p.h = std::int32_t(a.extent.height);
+    p.cfa = std::int32_t(config_.cfa);
+    p.debug = debug ? 1 : 0;
+    p.frameWeight = 1.0f;
+    ImageBinding raw{0, rawU16, VK_IMAGE_LAYOUT_GENERAL};
+    const ArenaImage& ss2 = debug ? arena_.image("rx_dbg_ss2") : a;   // never touched without debug
+    executor_.record(c, ShaderId::RxAccumulate,
+                     {{raw, ib(1, arena_.image("rx_flow_l3")), ib(2, arena_.image("rx_er")), ib(3, arena_.image("rx_base_cov")),
+                       ib(4, a), ib(5, arena_.image("rx_acc_b")), ib(6, arena_.image("rx_acc_c")), ib(7, ss2)},
+                      {}},
+                     &p, sizeof(p), divUp(a.extent.width, 16), divUp(a.extent.height, 16));
     computeWriteBarrier(c);
 }
 }  // namespace rawr::raw_gpu_pipeline

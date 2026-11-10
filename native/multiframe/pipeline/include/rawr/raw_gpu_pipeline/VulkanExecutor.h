@@ -75,6 +75,7 @@ enum class ShaderId : std::uint32_t {
     RxLk,
     RxFill,
     RxRobust,
+    RxAccumulate,
     Count
 };
 struct ImageBinding {

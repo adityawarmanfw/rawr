@@ -662,6 +662,11 @@ BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>
             recordTimestamp(1u);
         }));
         if (rextureObserver_) rextureObserver_("companion_robust", i, arena_);
+        timings.accumulationMs += gpuOrWall(executeChunk(14u, i, 2u, [&] {
+            recordTimestamp(0u);
+            recorder.recordAccumulate(command_, frames[i].raw.view, frames[i].parameters, rextureDebug_);
+            recordTimestamp(1u);
+        }));
         ++companions;
         if (frameConsumed) frameConsumed(i);
     }

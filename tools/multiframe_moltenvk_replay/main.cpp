@@ -1101,6 +1101,10 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
             } else if (st == "companions_done") {
                 stageDump->image("support", arena.image("rx_support"), 1);
                 stageDump->image("cover", arena.image("rx_cover"), 1);
+                stageDump->image("acc/s", arena.image("rx_acc_a"), 3);
+                stageDump->image("acc/w", arena.image("rx_acc_b"), 3);
+                stageDump->gather("acc/sq", {{&arena.image("rx_acc_a"), 3}, {&arena.image("rx_acc_b"), 3}, {&arena.image("rx_acc_c"), 0}});
+                stageDump->image("acc/ss2", arena.image("rx_dbg_ss2"), 3);
             } else if (st == "base_demosaic") {
                 stageDump->image("base/rcd", arena.image("rx_base_rcd"), 3);
             } else if (st == "companion_prepare") {
