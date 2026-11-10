@@ -1,0 +1,123 @@
+#version 450
+#extension GL_GOOGLE_include_directive : enable
+// Rexture robustness of one companion frame, fused: motion prior (flow spread of the 3 x 3 neighbouring fine tiles),
+// bilinear flow field, photometric test on the half-resolution guide (noise-corrected difference of the base's and the
+// warped frame's 3 x 3 colour means; sigma^2 = max(min(base, alt local variance), expected noise); weight
+// exp(-k q), k = 0.1 * 9 / s, s = 1.5 on tiles whose flow disagrees with its neighbours, 9 elsewhere), then the 5 x 5
+// minimum filter, and the update of the half-resolution support (sum of robustness) and cover (1 + sum of
+// clip(robustness, 0, 1)) maps. One workgroup = 16 x 16 guide positions; the unfiltered robustness of the 20 x 20
+// neighbourhood lives in shared memory. Starts from robust_flow_scale, robust_photometric, robust_erode5,
+// support_accumulate.
+#include "rx_common.glsl"
+
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0, rg32f) readonly uniform image2D flowI;       // fine tile flow (fx, fy) in raw pixels
+layout(set = 0, binding = 1, rgba32f) readonly uniform image2D baseMeanI;
+layout(set = 0, binding = 2, rgba32f) readonly uniform image2D baseVarI;
+layout(set = 0, binding = 3, rgba32f) readonly uniform image2D altMeanI;
+layout(set = 0, binding = 4, rgba32f) readonly uniform image2D altVarI;
+layout(set = 0, binding = 5, r32f) writeonly uniform image2D erI;         // robustness after the 5 x 5 minimum
+layout(set = 0, binding = 6, r32f) uniform image2D supportI;              // += er
+layout(set = 0, binding = 7, r32f) uniform image2D coverI;                // += clip(er, 0, 1)
+layout(set = 0, binding = 8, r32f) writeonly uniform image2D dbgPreI;     // verification only
+layout(set = 0, binding = 9, r32f) writeonly uniform image2D dbgScaleI;   // verification only
+layout(push_constant) uniform P { float alpha, beta; int debug; } p;
+
+const float MOTION_THRESHOLD = 0.65, ROBUST_S1 = 1.5, ROBUST_S2 = 9.0, ROB_K = 0.1;
+const int T = 20;
+shared float sPre[T * T];
+
+// motion prior of fine tile t: s1 where the flow of the 3 x 3 neighbouring tiles spreads, else s2
+float tileScale(ivec2 t) {
+    ivec2 n = imageSize(flowI);
+    vec2 mn = vec2(1e30), mx = vec2(-1e30);
+    for (int dy = -1; dy <= 1; ++dy)
+        for (int dx = -1; dx <= 1; ++dx) {
+            ivec2 q = t + ivec2(dx, dy);
+            if (any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, n))) continue;
+            vec2 f = imageLoad(flowI, q).xy;
+            mn = min(mn, f);
+            mx = max(mx, f);
+        }
+    vec2 d = mx - mn;
+    return dot(d, d) > MOTION_THRESHOLD * MOTION_THRESHOLD ? ROBUST_S1 : ROBUST_S2;
+}
+
+float dq(float t) {
+    float a = abs(t);
+    return a <= 0.5 ? 1.0 - 2.0 * a * a : (a <= 1.5 ? a * a - 2.5 * a + 1.5 : 0.0);
+}
+
+// unfiltered robustness of guide position q (clamped into the grid by the caller)
+float preAt(ivec2 q, ivec2 gsz) {
+    ivec2 tn = imageSize(flowI);
+    // bilinear flow at the quad's raw position (2 q), tile size 16
+    vec2 g = (vec2(2 * q) + 0.5) / 16.0 - 0.5;
+    vec2 b = floor(g), fr = g - b;
+    vec2 acc = vec2(0.0);
+    float tot = 0.0;
+    for (int j = 0; j < 2; ++j)
+        for (int i = 0; i < 2; ++i) {
+            ivec2 tq = clamp(ivec2(b) + ivec2(i, j), ivec2(0), tn - 1);
+            float w = (i == 1 ? fr.x : 1.0 - fr.x) * (j == 1 ? fr.y : 1.0 - fr.y);
+            acc += w * imageLoad(flowI, tq).xy;
+            tot += w;
+        }
+    bool ok = tot > 1e-8;
+    vec2 f = ok ? acc / tot : vec2(0.0);
+    vec2 l = vec2(q) + 0.5 * f;                      // warped position on the guide grid
+    bool inb = ok && l.x >= 0.0 && l.y >= 0.0 && l.x < float(gsz.x) && l.y < float(gsz.y);
+    ivec2 c = ivec2(roundEven(l));
+    vec3 accM = vec3(0.0), accV = vec3(0.0);
+    float z = 0.0;
+    for (int dy = -1; dy <= 1; ++dy)
+        for (int dx = -1; dx <= 1; ++dx) {
+            ivec2 tq = clamp(c + ivec2(dx, dy), ivec2(0), gsz - 1);
+            float w = dq(float(tq.y) - l.y) * dq(float(tq.x) - l.x);
+            accM += w * imageLoad(altMeanI, tq).xyz;
+            accV += w * imageLoad(altVarI, tq).xyz;
+            z += w;
+        }
+    float zz = z != 0.0 ? z : 1.0;
+    vec3 bm = accM / zz, bv = accV / zz;
+    vec3 a = imageLoad(baseMeanI, q).xyz, v = imageLoad(baseVarI, q).xyz;
+    vec3 d = a - bm;
+    float ds = dot(d, d);
+    vec3 vn = (p.alpha * max(a, vec3(0.0)) + p.beta) * vec3(1.0, 0.5, 1.0);
+    float nl = (8.0 / 9.0) * (vn.x + vn.y + vn.z), nd = (2.0 / 9.0) * (vn.x + vn.y + vn.z);
+    float shrink = ds / max(ds + nd, 1e-30);
+    if (ds > 0.0) ds = ds * shrink * shrink;
+    float sc = tileScale(clamp(q / 8, ivec2(0), tn - 1));    // tile of the quad: (2 q) / 16
+    vec3 mv = min(v, bv);
+    float ssg = max(mv.x + mv.y + mv.z, nl);
+    float kq = ROB_K * ROBUST_S2 / max(sc, 1e-6);
+    float r = exp(-kq * ds / ssg);
+    bool good = inb && !any(isnan(bm)) && !any(isinf(bm)) && sc > 0.0;
+    return good ? r : 0.0;
+}
+
+void main() {
+    const ivec2 t2 = ivec2(gl_LocalInvocationID.xy);
+    const int tid = t2.y * 16 + t2.x;
+    const ivec2 o0 = ivec2(gl_WorkGroupID.xy) * 16;
+    const ivec2 gsz = imageSize(baseMeanI);
+    for (int i = tid; i < T * T; i += 256) {
+        ivec2 q = clamp(o0 - 2 + ivec2(i % T, i / T), ivec2(0), gsz - 1);   // minimum filter: edge 'nearest'
+        sPre[i] = preAt(q, gsz);
+    }
+    barrier();
+    ivec2 q = o0 + t2;
+    if (q.x >= gsz.x || q.y >= gsz.y) return;
+    float er = 1e30;
+    for (int dy = 0; dy < 5; ++dy)
+        for (int dx = 0; dx < 5; ++dx) er = min(er, sPre[(t2.y + dy) * T + t2.x + dx]);
+    imageStore(erI, q, vec4(er));
+    imageStore(supportI, q, vec4(imageLoad(supportI, q).x + max(er, 0.0)));
+    imageStore(coverI, q, vec4(imageLoad(coverI, q).x + clamp(er, 0.0, 1.0)));
+    if (p.debug != 0) {
+        imageStore(dbgPreI, q, vec4(sPre[(t2.y + 2) * T + t2.x + 2]));
+        ivec2 tn = imageSize(flowI);
+        if ((q.x & 7) == 0 && (q.y & 7) == 0 && q.x / 8 < tn.x && q.y / 8 < tn.y)
+            imageStore(dbgScaleI, q / 8, vec4(tileScale(q / 8)));
+    }
+}

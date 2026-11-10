@@ -37,6 +37,12 @@ class RextureRecorder final {
     // debug: also keeps the prior (candidate upsampling) and the block-match result of the level for verification.
     void recordAlignmentLevel(VkCommandBuffer, std::uint32_t level, bool debug) const;
 
+    // Burst start: zero the support map and set the cover map to 1 (cover = 1 + sum of the frames' clipped robustness).
+    void recordBurstClear(VkCommandBuffer) const;
+    // Robustness of the aligned companion (after its last alignment level): fused motion prior + photometric test + 5 x 5
+    // minimum + support / cover update.
+    void recordRobustness(VkCommandBuffer, bool debug) const;
+
    private:
     ResourceArena& arena_;
     VulkanExecutor& executor_;

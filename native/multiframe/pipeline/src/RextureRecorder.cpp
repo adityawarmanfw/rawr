@@ -35,6 +35,10 @@ struct LkPc {
     std::int32_t ts, which, iterations;
     float clipRadius, eps;
 };
+struct RobustPc {
+    float alpha, beta;
+    std::int32_t debug;
+};
 struct BoundPc {
     float black[4];
     float white;
@@ -65,6 +69,15 @@ ScratchLayout makeRextureScratchLayout(const MultiframeGeometry& g, bool debug) 
     img("rx_base_cov", g.guide, PixelStorage::RGBA32Float, Lifetime::Burst);
     img("rx_base_rcd", g.output, PixelStorage::RGBA16Float, Lifetime::Burst);  // fallback demosaic (RCD output is RGBA16F)
     if (debug) img("rx_dbg_qinv", g.output, PixelStorage::RGBA32Float, Lifetime::Burst);
+    // Robustness: the frame's weight map, and the burst-long support / cover maps (half resolution, fp32 sums).
+    img("rx_er", g.guide, PixelStorage::R32Float, Lifetime::Companion);
+    img("rx_support", g.guide, PixelStorage::R32Float, Lifetime::Burst);
+    img("rx_cover", g.guide, PixelStorage::R32Float, Lifetime::Burst);
+    if (debug) {
+        img("rx_dbg_pre", g.guide, PixelStorage::R32Float, Lifetime::Companion);
+        img("rx_dbg_scale", Extent2D{g.coarseToFine[3].tilesX, g.coarseToFine[3].tilesY}, PixelStorage::R32Float,
+            Lifetime::Companion);
+    }
     // Alignment: per-level tile structure of the base (persistent) and the companion's flow / block-match cost.
     for (std::size_t l = 0; l < 4u; ++l) {
         const Extent2D tiles{g.coarseToFine[l].tilesX, g.coarseToFine[l].tilesY};
@@ -266,5 +279,36 @@ void RextureRecorder::recordAlignmentLevel(VkCommandBuffer c, std::uint32_t l, b
                          ty);
         computeWriteBarrier(c);
     }
+}
+}  // namespace rawr::raw_gpu_pipeline
+
+namespace rawr::raw_gpu_pipeline {
+void RextureRecorder::recordBurstClear(VkCommandBuffer c) const {
+    VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    VkClearColorValue zero{}, one{};
+    one.float32[0] = 1.0f;
+    vkCmdClearColorImage(c, arena_.image("rx_support").image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &range);
+    vkCmdClearColorImage(c, arena_.image("rx_cover").image, VK_IMAGE_LAYOUT_GENERAL, &one, 1, &range);
+    VkMemoryBarrier b{};
+    b.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(c, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &b, 0, nullptr, 0,
+                         nullptr);
+}
+
+void RextureRecorder::recordRobustness(VkCommandBuffer c, bool debug) const {
+    const auto& er = arena_.image("rx_er");
+    RobustPc p{config_.noiseAlpha, config_.noiseBeta, debug ? 1 : 0};
+    const ArenaImage& dbgPre = debug ? arena_.image("rx_dbg_pre") : er;       // never written without debug
+    const ArenaImage& dbgScale = debug ? arena_.image("rx_dbg_scale") : er;
+    executor_.record(c, ShaderId::RxRobust,
+                     {{ib(0, arena_.image("rx_flow_l3")), ib(1, arena_.image("rx_base_mean")),
+                       ib(2, arena_.image("rx_base_var")), ib(3, arena_.image("rx_alt_mean")),
+                       ib(4, arena_.image("rx_alt_var")), ib(5, er), ib(6, arena_.image("rx_support")),
+                       ib(7, arena_.image("rx_cover")), ib(8, dbgPre), ib(9, dbgScale)},
+                      {}},
+                     &p, sizeof(p), divUp(er.extent.width, 16), divUp(er.extent.height, 16));
+    computeWriteBarrier(c);
 }
 }  // namespace rawr::raw_gpu_pipeline

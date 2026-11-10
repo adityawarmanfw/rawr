@@ -477,6 +477,7 @@ struct TuneOpts {
     std::string mergeAlgorithm = "wronski";  // wronski|hdrplus|hdrplus-freq|hdrplus-bracket|rexture
     std::string dumpStages;  // rexture: directory for stage dumps (compare.py layout)
     std::string noiseAb;     // "a,b": scalar noise model override (normalised units)
+    std::string injectFlow;  // rexture verification: dump dir whose frames/<i>/flow replaces the estimated fine flow
     rawr::raw_merge_hdrplus_gpu::Config hdrplus{};
 };
 
@@ -1082,6 +1083,24 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
                     stageDump->image(pre + "L" + ls + "_mode", arena.image("rx_tiles_l" + ls), 1, 3);
                 }
                 stageDump->image(pre + "flow", arena.image("rx_flow_l3"), 2);
+                if (!tune.injectFlow.empty()) {   // verification: continue with the reference's flow
+                    const auto file = std::filesystem::path(tune.injectFlow) / ("frames__" + std::to_string(frame) + "__flow.bin");
+                    std::ifstream in(file, std::ios::binary | std::ios::ate);
+                    if (!in) throw std::runtime_error("cannot open " + file.string());
+                    const auto bytes = static_cast<std::size_t>(in.tellg());
+                    in.seekg(0);
+                    std::vector<float> flow(bytes / sizeof(float));
+                    in.read(reinterpret_cast<char*>(flow.data()), static_cast<std::streamsize>(bytes));
+                    stageDump->upload(arena.image("rx_flow_l3"), flow);
+                }
+            } else if (st == "companion_robust") {
+                const std::string pre = "frames/" + std::to_string(frame) + "/";
+                stageDump->image(pre + "pre", arena.image("rx_dbg_pre"), 1);
+                stageDump->image(pre + "er", arena.image("rx_er"), 1);
+                stageDump->image(pre + "scale", arena.image("rx_dbg_scale"), 1);
+            } else if (st == "companions_done") {
+                stageDump->image("support", arena.image("rx_support"), 1);
+                stageDump->image("cover", arena.image("rx_cover"), 1);
             } else if (st == "base_demosaic") {
                 stageDump->image("base/rcd", arena.image("rx_base_rcd"), 3);
             } else if (st == "companion_prepare") {
@@ -1421,6 +1440,7 @@ int main(int argc, char** argv) {
             else if (a == "--merge") tune.mergeAlgorithm = need(a.c_str());
             else if (a == "--dump-stages") tune.dumpStages = need(a.c_str());
             else if (a == "--noise-ab") tune.noiseAb = need(a.c_str());
+            else if (a == "--inject-flow") tune.injectFlow = need(a.c_str());
             else if (a == "--hdrplus-strength") tune.hdrplus.strength = std::stof(need(a.c_str()));
             else if (a == "--hdrplus-tile") tune.hdrplus.tileSize = std::uint32_t(std::stoul(need(a.c_str())));
             else if (a == "--hdrplus-search") tune.hdrplus.searchDistance = std::uint32_t(std::stoul(need(a.c_str())));

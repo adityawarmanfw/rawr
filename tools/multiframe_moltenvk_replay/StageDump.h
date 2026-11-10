@@ -84,6 +84,37 @@ class StageDump {
         put(name, out.data(), out.size() * sizeof(float), "float32", shape);
     }
 
+    // Uploads float32 texels (all channels of the image's format; R32F / RG32F / RGBA32F only) into an arena image.
+    void upload(const rawr::raw_gpu_pipeline::ArenaImage& img, const std::vector<float>& data) {
+        std::uint32_t texel = 0;
+        switch (img.format) {
+            case VK_FORMAT_R32_SFLOAT: texel = 4; break;
+            case VK_FORMAT_R32G32_SFLOAT: texel = 8; break;
+            case VK_FORMAT_R32G32B32A32_SFLOAT: texel = 16; break;
+            default: throw std::runtime_error("stage upload: unsupported format");
+        }
+        const VkDeviceSize bytes = VkDeviceSize(img.extent.width) * img.extent.height * texel;
+        if (data.size() * sizeof(float) != bytes) throw std::runtime_error("stage upload: size mismatch");
+        auto buf = vktest::mkBuf(ctx_.pd, ctx_.dev, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        void* mapped = nullptr;
+        vktest::ck(vkMapMemory(ctx_.dev, buf.m, 0, bytes, 0, &mapped), "stage upload map");
+        std::memcpy(mapped, data.data(), static_cast<std::size_t>(bytes));
+        vkUnmapMemory(ctx_.dev, buf.m);
+        submit_([&](VkCommandBuffer c) {
+            barrier(c, img.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_SHADER_WRITE_BIT,
+                    VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+            VkBufferImageCopy copy{};
+            copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            copy.imageExtent = {img.extent.width, img.extent.height, 1};
+            vkCmdCopyBufferToImage(c, buf.b, img.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+            barrier(c, img.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+                    VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+        });
+        vktest::delBuf(ctx_.dev, buf);
+    }
+
     void put(const std::string& name, const void* data, std::size_t bytes, const std::string& dtype,
              const std::vector<std::uint32_t>& shape) {
         std::string file = name;

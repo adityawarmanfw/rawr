@@ -610,6 +610,7 @@ BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>
     timings.referencePrepareMs = gpuOrWall(executeChunk(1u, ref, 2u, [&] {
         recordTimestamp(0u);
         if (initializeLayouts) arena_.recordInitializeLayouts(command_);
+        recorder.recordBurstClear(command_);
         recorder.recordPrepare(command_, true, frames[ref].raw.view, frames[ref].parameters);
         recordTimestamp(1u);
     }));
@@ -655,9 +656,16 @@ BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>
                 recordTimestamp(1u);
             }));
         if (rextureObserver_) rextureObserver_("companion_align", i, arena_);
+        timings.robustnessMs += gpuOrWall(executeChunk(13u, i, 2u, [&] {
+            recordTimestamp(0u);
+            recorder.recordRobustness(command_, rextureDebug_);
+            recordTimestamp(1u);
+        }));
+        if (rextureObserver_) rextureObserver_("companion_robust", i, arena_);
         ++companions;
         if (frameConsumed) frameConsumed(i);
     }
+    if (rextureObserver_) rextureObserver_("companions_done", ref, arena_);
     timings.totalMs = std::chrono::duration<double, std::milli>(Clock::now() - runBegin).count();
     const auto& out = arena_.image("linear_output");
     BurstRunResult result{ref,

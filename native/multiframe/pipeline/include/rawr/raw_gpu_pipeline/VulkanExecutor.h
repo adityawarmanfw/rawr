@@ -74,6 +74,7 @@ enum class ShaderId : std::uint32_t {
     RxBlockMatch,
     RxLk,
     RxFill,
+    RxRobust,
     Count
 };
 struct ImageBinding {
