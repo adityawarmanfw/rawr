@@ -18,10 +18,13 @@ struct PreparePc {
 struct PyramidPc {
     std::int32_t dstW, dstH;
 };
+struct AxisPc {
+    std::int32_t axis;
+};
 static_assert(sizeof(PreparePc) <= 128);
 }  // namespace
 
-ScratchLayout makeRextureScratchLayout(const MultiframeGeometry& g) {
+ScratchLayout makeRextureScratchLayout(const MultiframeGeometry& g, bool debug) {
     ScratchLayout r{};
     r.geometry = g;
     auto img = [&](std::string n, Extent2D e, PixelStorage s, Lifetime l) {
@@ -37,6 +40,8 @@ ScratchLayout makeRextureScratchLayout(const MultiframeGeometry& g) {
         img(std::string(who) + "var", g.guide, PixelStorage::RGBA32Float, life);
     }
     img("rx_base_tensor", g.guide, PixelStorage::RGBA32Float, Lifetime::Burst);
+    img("rx_base_cov", g.guide, PixelStorage::RGBA32Float, Lifetime::Burst);
+    if (debug) img("rx_dbg_qinv", g.output, PixelStorage::RGBA32Float, Lifetime::Burst);
     img("linear_output", g.output, PixelStorage::RGBA16Float, Lifetime::Output);
     auto bytes = [](const ImageSpec& s) {
         return static_cast<std::uint64_t>(s.extent.width) * s.extent.height * bytesPerPixel(s.storage);
@@ -95,4 +100,27 @@ void RextureRecorder::recordPyramid(VkCommandBuffer c, bool base) const {
     }
 }
 
+}  // namespace rawr::raw_gpu_pipeline
+
+namespace rawr::raw_gpu_pipeline {
+void RextureRecorder::recordBaseKernel(VkCommandBuffer c, bool debug) const {
+    const auto& tensor = arena_.image("rx_base_tensor");
+    const auto& tmpA = arena_.image("rx_alt_mean");  // scratch: free until the first companion is prepared
+    const auto& tmpB = arena_.image("rx_alt_var");
+    const auto& cov = arena_.image("rx_base_cov");
+    const std::uint32_t gx = divUp(tensor.extent.width, 16), gy = divUp(tensor.extent.height, 16);
+    AxisPc vertical{0}, horizontal{1};
+    executor_.record(c, ShaderId::RxKernelBlur, {{ib(0, tensor), ib(1, tmpA)}, {}}, &vertical, sizeof(vertical), gx, gy);
+    computeWriteBarrier(c);
+    executor_.record(c, ShaderId::RxKernelBlur, {{ib(0, tmpA), ib(1, tmpB)}, {}}, &horizontal, sizeof(horizontal), gx, gy);
+    computeWriteBarrier(c);
+    executor_.record(c, ShaderId::RxKernelCov, {{ib(0, tmpB), ib(1, tensor), ib(2, cov)}, {}}, nullptr, 0, gx, gy);
+    computeWriteBarrier(c);
+    if (debug) {
+        const auto& q = arena_.image("rx_dbg_qinv");
+        executor_.record(c, ShaderId::RxQinvDebug, {{ib(0, cov), ib(1, q)}, {}}, nullptr, 0, divUp(q.extent.width, 16),
+                         divUp(q.extent.height, 16));
+        computeWriteBarrier(c);
+    }
+}
 }  // namespace rawr::raw_gpu_pipeline

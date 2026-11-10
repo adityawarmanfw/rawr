@@ -1,0 +1,22 @@
+#version 450
+#extension GL_GOOGLE_include_directive : enable
+// Rexture base pass: Gaussian integration (sigma 1.5, 13 taps, edge clamp = scipy mode 'nearest') of the 2x2 structure
+// tensor sums, one axis per dispatch. axis 0 = vertical (scipy's first axis), 1 = horizontal.
+#include "rx_tables.glsl"
+
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0, rgba32f) readonly uniform image2D srcI;
+layout(set = 0, binding = 1, rgba32f) writeonly uniform image2D dstI;
+layout(push_constant) uniform P { int axis; } p;
+
+void main() {
+    ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(srcI);
+    if (q.x >= size.x || q.y >= size.y) return;
+    vec3 acc = vec3(0.0);
+    for (int k = -6; k <= 6; ++k) {
+        ivec2 s = p.axis == 0 ? ivec2(q.x, clamp(q.y + k, 0, size.y - 1)) : ivec2(clamp(q.x + k, 0, size.x - 1), q.y);
+        acc += RX_KT[k + 6] * imageLoad(srcI, s).xyz;
+    }
+    imageStore(dstI, q, vec4(acc, 0.0));
+}

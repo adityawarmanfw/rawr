@@ -176,6 +176,7 @@ bool AndroidBurstCoordinator::arenaMatchesSelection() const noexcept {
     // Frequency and bracketed merges share one layout.
     if (arenaAlgorithm_ != algorithm_ && !(usesFrequencyMerge(arenaAlgorithm_) && usesFrequencyMerge(algorithm_)))
         return false;
+    if (algorithm_ == MergeAlgorithm::Rexture && arenaRextureDebug_ != rextureDebug_) return false;
     return algorithm_ == MergeAlgorithm::Wronski || (arenaHdrPlus_.tileSize == hdrplus_.tileSize &&
                                                      arenaHdrPlus_.searchDistance == hdrplus_.searchDistance);
 }
@@ -190,7 +191,8 @@ void AndroidBurstCoordinator::initializeArenaLocked(VkPhysicalDevice physical, V
                               rawr::raw_merge_hdrplus_gpu::makeFrequencyGeometry(width_, height_, hdrplus_), width_, height_));
         arenaHdrPlus_ = hdrplus_;
     } else if (algorithm_ == MergeAlgorithm::Rexture) {
-        arena_.initialize(physical, device, makeRextureScratchLayout(makeMultiframeGeometry(width_, height_, 1.0f)));
+        arena_.initialize(physical, device, makeRextureScratchLayout(makeMultiframeGeometry(width_, height_, 1.0f), rextureDebug_));
+        arenaRextureDebug_ = rextureDebug_;
     } else {
         arena_.initialize(physical, device, makeMultiframeScratchLayout(makeMultiframeGeometry(width_, height_, outputScale_)));
     }
@@ -613,6 +615,12 @@ BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>
     }));
     if (initializeLayouts) layoutsInitialized_ = true;
     if (rextureObserver_) rextureObserver_("base_prepare", ref, arena_);
+    timings.referenceStatsMs = gpuOrWall(executeChunk(2u, ref, 2u, [&] {
+        recordTimestamp(0u);
+        recorder.recordBaseKernel(command_, rextureDebug_);
+        recordTimestamp(1u);
+    }));
+    if (rextureObserver_) rextureObserver_("base_kernel", ref, arena_);
     std::uint32_t companions = 0;
     for (std::uint32_t i = 0; i < frames.size(); ++i) {
         if (i == ref) continue;

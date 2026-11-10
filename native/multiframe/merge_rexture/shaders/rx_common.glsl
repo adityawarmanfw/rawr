@@ -12,3 +12,31 @@ float rxNormFromRaw(float rawValue, ivec2 qClamped, vec4 black, float white) {
     float den = max(1.0, white - b);
     return (rawValue - b) / den;
 }
+
+// ---- covariance (kernel) helpers -------------------------------------------------------------------------------------
+// Packed (cxx, cxy, cyy). The 4 neighbouring half-resolution covariances of output pixel o are fetched by the caller
+// (image formats cannot be passed to functions); RX_COV_NEIGHBOURS does it for an image named `covI`.
+// cov_inverse_at: bilinear (edge clamp) at ((oy - .5) / 2, (ox - .5) / 2), then the 2x2 inverse used by the kernel weight.
+#define RX_COV_NEIGHBOURS(COVI, O, A, B, C, D, F)                                                                    \
+    {                                                                                                                \
+        vec2 k_ = (vec2(O) - 0.5) / 2.0;                                                                             \
+        vec2 b_ = floor(k_);                                                                                         \
+        F = k_ - b_;                                                                                                 \
+        ivec2 sz_ = imageSize(COVI);                                                                                 \
+        ivec2 lo_ = clamp(ivec2(b_), ivec2(0), sz_ - 1), hi_ = clamp(ivec2(b_) + 1, ivec2(0), sz_ - 1);              \
+        A = imageLoad(COVI, ivec2(lo_.x, lo_.y)).xyz;                                                                \
+        B = imageLoad(COVI, ivec2(hi_.x, lo_.y)).xyz;                                                                \
+        C = imageLoad(COVI, ivec2(lo_.x, hi_.y)).xyz;                                                                \
+        D = imageLoad(COVI, ivec2(hi_.x, hi_.y)).xyz;                                                                \
+    }
+
+// f = (fx, fy). Returns the inverse (qxx, qxy, qyy).
+vec3 rxCovInverse(vec3 a, vec3 b, vec3 c, vec3 d, vec2 f) {
+    vec3 t = a + f.x * (b - a);
+    vec3 u = c + f.x * (d - c);
+    vec3 cv = t + f.y * (u - t);
+    float det = cv.x * cv.z - cv.y * cv.y;
+    bool good = !isnan(det) && !isinf(det) && abs(det) > 1e-10;
+    float idet = good ? 1.0 / det : 0.0;
+    return vec3(good ? idet * cv.z : 1.0, good ? -idet * cv.y : 0.0, good ? idet * cv.x : 1.0);
+}

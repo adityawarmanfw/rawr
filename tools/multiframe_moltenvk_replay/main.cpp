@@ -1050,18 +1050,6 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
         const double warmMs = std::chrono::duration<double, std::milli>(Clock::now() - warmBegin).count();
         std::cerr << "warmup_ms=" << warmMs << '\n';
     }
-    coordinator.initialize(context.pd, context.dev, context.qf,
-                           [&](const VkSubmitInfo& info, VkFence fence) {
-                               vktest::ck(vkQueueSubmit(context.q, 1, &info, fence), "burst queue submit");
-                           },
-                           width, height, tune.scale, {}, alignment, merge,
-                           tune.mergeAlgorithm == "rexture"        ? rawr::raw_gpu_pipeline::MergeAlgorithm::Rexture
-                           : tune.mergeAlgorithm == "hdrplus"      ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusSpatial
-                           : tune.mergeAlgorithm == "hdrplus-freq" ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusFrequency
-                           : tune.mergeAlgorithm == "hdrplus-bracket"
-                               ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusBracketed
-                                                                   : rawr::raw_gpu_pipeline::MergeAlgorithm::Wronski,
-                           tune.hdrplus);
     std::unique_ptr<stagedump::StageDump> stageDump;
     if (!tune.dumpStages.empty()) {
         if (tune.mergeAlgorithm != "rexture") throw std::invalid_argument("--dump-stages needs --merge rexture");
@@ -1078,11 +1066,27 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
             if (st == "base_prepare") {
                 dumpPrepare("rx_base_", "base/");
                 stageDump->image("base/tensor_raw", arena.image("rx_base_tensor"), 3);
+            } else if (st == "base_kernel") {
+                stageDump->image("base/tensor_int", arena.image("rx_alt_var"), 3);
+                stageDump->image("base/cov", arena.image("rx_base_cov"), 3);
+                stageDump->image("base/qinv", arena.image("rx_dbg_qinv"), 3);
             } else if (st == "companion_prepare") {
                 dumpPrepare("rx_alt_", "frames/" + std::to_string(frame) + "/");
             }
         });
     }
+    coordinator.initialize(context.pd, context.dev, context.qf,
+                           [&](const VkSubmitInfo& info, VkFence fence) {
+                               vktest::ck(vkQueueSubmit(context.q, 1, &info, fence), "burst queue submit");
+                           },
+                           width, height, tune.scale, {}, alignment, merge,
+                           tune.mergeAlgorithm == "rexture"        ? rawr::raw_gpu_pipeline::MergeAlgorithm::Rexture
+                           : tune.mergeAlgorithm == "hdrplus"      ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusSpatial
+                           : tune.mergeAlgorithm == "hdrplus-freq" ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusFrequency
+                           : tune.mergeAlgorithm == "hdrplus-bracket"
+                               ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusBracketed
+                                                                   : rawr::raw_gpu_pipeline::MergeAlgorithm::Wronski,
+                           tune.hdrplus);
     auto result = coordinator.run(runFrames, runRef);
     if (stageDump) stageDump->finish();
     const auto reportRun = [&](int iteration) {

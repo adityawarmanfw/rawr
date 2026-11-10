@@ -100,7 +100,11 @@ class AndroidBurstCoordinator final {
     // Debug/verification hook for the Rexture merge: called after each stage group has finished on the GPU (the
     // arena's images then hold that stage's results). Unset in production.
     using RextureObserver = std::function<void(const char* stage, std::uint32_t frame, const ResourceArena&)>;
-    void setRextureObserver(RextureObserver observer) { rextureObserver_ = std::move(observer); }
+    // Set before initialize(): an observer also makes the arena include the verification-only debug images.
+    void setRextureObserver(RextureObserver observer) {
+        rextureObserver_ = std::move(observer);
+        rextureDebug_ = static_cast<bool>(rextureObserver_);
+    }
     AndroidBurstCoordinator() = default;
     ~AndroidBurstCoordinator() { reset(); }
     AndroidBurstCoordinator(const AndroidBurstCoordinator&) = delete;
@@ -176,6 +180,7 @@ class AndroidBurstCoordinator final {
                              const std::function<void()>& record);
     void recordTimestamp(std::uint32_t query);
     RextureObserver rextureObserver_{};
+    bool rextureDebug_ = false, arenaRextureDebug_ = false;
     BurstRunResult runRexture(const std::vector<BurstFrame>& frames, std::uint32_t referenceIndex,
                               const FrameConsumed& frameConsumed, const FrameLoad& frameLoad);
     BurstRunResult runHdrPlus(const std::vector<BurstFrame>& frames, std::uint32_t referenceIndex,

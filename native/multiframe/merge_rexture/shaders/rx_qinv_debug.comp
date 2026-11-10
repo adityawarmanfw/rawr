@@ -1,0 +1,18 @@
+#version 450
+#extension GL_GOOGLE_include_directive : enable
+// Verification only (never dispatched in production): materialises cov_inverse_at for every output pixel so it can be
+// compared with the reference. The merge shaders evaluate the same rxCovInverse per pixel on the fly.
+#include "rx_common.glsl"
+
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0, rgba32f) readonly uniform image2D covI;
+layout(set = 0, binding = 1, rgba32f) writeonly uniform image2D qinvI;
+
+void main() {
+    ivec2 o = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(o, imageSize(qinvI)))) return;
+    vec3 a, b, c, d;
+    vec2 f;
+    RX_COV_NEIGHBOURS(covI, o, a, b, c, d, f);
+    imageStore(qinvI, o, vec4(rxCovInverse(a, b, c, d, f), 0.0));
+}

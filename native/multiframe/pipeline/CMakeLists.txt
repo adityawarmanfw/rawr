@@ -80,7 +80,10 @@ set(RAWR_MF_SHADER_SOURCES
   ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_highlights_norm.comp
   ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_normalize.comp
   ${RAWR_MF_DIR}/merge_rexture/shaders/rx_frame_prep.comp
-  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_pyramid.comp)
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_pyramid.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_kernel_blur.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_kernel_cov.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_qinv_debug.comp)
 set(RAWR_MF_SPV_OUTPUTS)
 foreach(RAWR_MF_SRC IN LISTS RAWR_MF_SHADER_SOURCES)
   get_filename_component(RAWR_MF_NAME ${RAWR_MF_SRC} NAME_WE)
