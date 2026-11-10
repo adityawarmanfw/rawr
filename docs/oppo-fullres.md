@@ -6,6 +6,14 @@ profile, without adding a new gate like `vivoFullSize`. The profile matches
 CPH2841, PMA110 and PMA120. These settings come from X9 Ultra testing; they
 are not a universal recipe for every OPPO phone or firmware version.
 
+With these app changes, the entire app-side 50/200 MP unlocking method can be
+configured through the lens settings, without adding another device-specific
+gate or changing the app code. The same approach is expected to work on other
+OPPO phones too, using the appropriate camera IDs, sensor modes, stream sizes
+and CFA layouts, although this has not yet been verified on those devices.
+The external root/library-patch requirement for 200 MP described below still
+applies to the tested X9 Ultra setup; it is not performed by the app settings.
+
 ## Unlocking full resolution
 
 We use Java Camera2, minimal request defaults and two separate RAW10 streams:
