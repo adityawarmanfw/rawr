@@ -46,6 +46,7 @@ struct CameraContextMetadata {
     bool rawBufferFallBack = false;
     // The lens profile's capture-stream reader usage (LensRoute::photoBufferUsage), if any.
     std::optional<uint64_t> photoBufferUsage;
+    uint32_t photoBufferCount = 0;  // 0 keeps the reader default.
     // Recipe capture streams require a measured viewfinder floor before borrowing exposure.
     bool guardStillExposure = false;
     uint32_t rawPreviewCfa = 0;  // RGGB=0, GRBG=1, GBRG=2, BGGR=3.
@@ -55,6 +56,7 @@ struct CameraContextMetadata {
     // order before anything else reads it. Never persisted: stored frames
     // are already Bayer.
     uint32_t cfaBlock = 1;
+    uint32_t photoCfaBlock = 1;  // CFA of the separate photo output before remosaic.
     // imaging::CfaRemosaicQuality for live frames (ingress) and single stills.
     uint32_t cfaLiveQuality = 1;
     uint32_t cfaPhotoQuality = 2;

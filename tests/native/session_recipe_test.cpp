@@ -65,6 +65,7 @@ void testTemplatesAndStructure() {
         const auto recipe = resolveSessionRecipe(lens, {});
         assert(recipe.repeatingStillTemplate == lens.stillTemplate.value_or(false));
         assert(recipe.captureStillTemplate == lens.stillTemplate.value_or(true));
+        assert(recipe.photoIncludePreview == lens.photoIncludePreview);
         assert(recipe.auxJpeg == lens.auxJpegSize);
         assert(recipe.startupDelayMs == lens.startupDelayMs);
         assert(recipe.gate == lens.vendorGate);

@@ -270,9 +270,9 @@ internal object LensProfileCodec {
             }
             objectField(streams, "photo")?.let { photo ->
                 streamSize(photo, required = true)
-                buffers(photo, count = false)
+                buffers(photo, count = true)
                 number(photo, "mergeFrameLimit", 0.0..30.0, true)
-                flags(photo, "mergeFramesOneByOne")
+                flags(photo, "mergeFramesOneByOne", "includePreview")
                 levels(photo)
             }
             objectField(streams, "companion")?.let { c ->
@@ -357,6 +357,10 @@ internal object LensProfileCodec {
                     number(layout, "block", 1.0..Int.MAX_VALUE.toDouble(), true)
                     require(layout.getInt("block") in SENSOR_LAYOUT_BLOCKS)
                 }
+                if (layout.has("photoBlock")) {
+                    number(layout, "photoBlock", 1.0..Int.MAX_VALUE.toDouble(), true)
+                    require(layout.getInt("photoBlock") in SENSOR_LAYOUT_BLOCKS)
+                }
                 choice(layout, "colourOrder", COLOUR_ORDERS.toList())
                 choice(layout, "liveRemosaic", LIVE_REMOSAIC_QUALITIES.toList())
                 choice(layout, "photoRemosaic", PHOTO_REMOSAIC_QUALITIES.toList())
@@ -389,7 +393,11 @@ internal object LensProfileCodec {
         streams.photo?.let { photo ->
             streamsJson.put("photo", encodeStream(photo.choice).apply {
                 if (photo.useCase != 0) put("useCase", photo.useCase)
-                photo.bufferUsage?.let { put("buffers", JSONObject().put("usage", it)) }
+                if (photo.bufferUsage != null || photo.bufferCount > 0) put("buffers", JSONObject().apply {
+                    photo.bufferUsage?.let { put("usage", it) }
+                    if (photo.bufferCount > 0) put("count", photo.bufferCount)
+                })
+                if (!photo.includePreview) put("includePreview", false)
                 if (photo.mergeFrameLimit > 0) put("mergeFrameLimit", photo.mergeFrameLimit)
                 if (photo.mergeFramesOneByOne) put("mergeFramesOneByOne", true)
                 photo.levels?.let { put("levels", encodeLevels(it)) }
@@ -442,9 +450,12 @@ internal object LensProfileCodec {
                 .put("shutterMaxNs", i.exposure.shutterMaxNs))
             .apply {
                 val layout = i.sensorLayout
-                if (layout.block > 1 || layout.colourOrder != null) {
+                if (layout.block > 1 || layout.photoBlock > 1 || layout.colourOrder != null) {
                     put("sensorLayout", JSONObject().put("block", layout.block).put("liveRemosaic", layout.liveRemosaic)
-                        .put("photoRemosaic", layout.photoRemosaic).apply { layout.colourOrder?.let { put("colourOrder", it) } })
+                        .put("photoRemosaic", layout.photoRemosaic).apply {
+                            if (layout.photoBlock > 1) put("photoBlock", layout.photoBlock)
+                            layout.colourOrder?.let { put("colourOrder", it) }
+                        })
                 }
                 i.distortion?.let { put("distortion", JSONObject(it)) }
                 if (i.mirror != LensMirror.None) put("mirror", i.mirror.wireName)
@@ -530,6 +541,8 @@ internal object LensProfileCodec {
                         bufferUsage = bufferUsage(p),
                         mergeFrameLimit = p.optInt("mergeFrameLimit").coerceIn(0, 30),
                         mergeFramesOneByOne = p.optBoolean("mergeFramesOneByOne"),
+                        includePreview = p.optBoolean("includePreview", true),
+                        bufferCount = p.optJSONObject("buffers")?.optInt("count", 0) ?: 0,
                         levels = p.optJSONObject("levels")?.let { decodeLevels(it) }
                     )
                 },
@@ -572,7 +585,8 @@ internal object LensProfileCodec {
                     block = layout?.optInt("block", 1)?.takeIf { it in SENSOR_LAYOUT_BLOCKS } ?: 1,
                     colourOrder = layout?.optString("colourOrder")?.takeIf { it in COLOUR_ORDERS },
                     liveRemosaic = layout?.optString("liveRemosaic")?.takeIf { it in LIVE_REMOSAIC_QUALITIES } ?: "standard",
-                    photoRemosaic = layout?.optString("photoRemosaic")?.takeIf { it in PHOTO_REMOSAIC_QUALITIES } ?: "high"
+                    photoRemosaic = layout?.optString("photoRemosaic")?.takeIf { it in PHOTO_REMOSAIC_QUALITIES } ?: "high",
+                    photoBlock = layout?.optInt("photoBlock", 1)?.takeIf { it in SENSOR_LAYOUT_BLOCKS } ?: 1
                 ),
                 distortion = image?.optJSONObject("distortion")?.toString(),
                 mirror = LensMirror.fromWire(image?.optString("mirror")),

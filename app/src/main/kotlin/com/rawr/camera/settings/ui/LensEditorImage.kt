@@ -202,21 +202,44 @@ internal fun formatLevel(value: Float): String =
     if (value == Math.round(value).toFloat()) Math.round(value).toString() else value.toString()
 
 @Composable
-internal fun SensorLayoutGroup(layout: LensSensorLayout, onChange: (LensSensorLayout) -> Unit) {
+internal fun SensorLayoutGroup(
+    layout: LensSensorLayout,
+    hasPhotoStream: Boolean = false,
+    onChange: (LensSensorLayout) -> Unit
+) {
     SettingsGroup(
         title = "Sensor layout",
-        description = "For RAW that comes out as coloured blocks or with wrong colours: some sensor modes " +
-            "(often in-sensor crops) deliver the quad or 4x4 mosaic while reporting Bayer. Quad and 4x4 are " +
-            "remosaiced to Bayer at full resolution. Colour order fixes swapped red/blue or magenta-green " +
-            "casts; for quad and 4x4 it is the order of the blocks."
+        description = "Choose the mosaic the RAW actually contains. Quad and 4×4 are remosaiced to Bayer " +
+            "at full resolution. Colour order sets the order of the pixels or same-colour blocks."
     ) {
-        CompactChoiceRow(SENSOR_LAYOUT_BLOCKS, layout.block, ::sensorLayoutBlockLabel) { onChange(layout.copy(block = it)) }
+        DropdownChoiceRow(
+            title = if (hasPhotoStream) "Viewfinder layout" else "RAW layout",
+            selected = layout.block,
+            values = SENSOR_LAYOUT_BLOCKS,
+            label = ::sensorLayoutBlockLabel,
+            supportingText = if (hasPhotoStream) "Viewfinder and video; full-size photos use their own layout" else null,
+            testTag = lensEditorTag("sensor_layout_block"),
+            onSelect = { onChange(layout.copy(block = it)) }
+        )
+        if (hasPhotoStream) {
+            SettingDivider()
+            DropdownChoiceRow(
+                title = "Photo stream layout",
+                selected = layout.photoBlock,
+                values = SENSOR_LAYOUT_BLOCKS,
+                label = ::sensorLayoutBlockLabel,
+                supportingText = "Full-size single and merged photos; independent of the viewfinder",
+                testTag = lensEditorTag("photo_sensor_layout_block"),
+                onSelect = { onChange(layout.copy(photoBlock = it)) }
+            )
+        }
         SettingDivider()
         DropdownChoiceRow(
             title = "Colour order",
             selected = layout.colourOrder,
             values = listOf<String?>(null) + COLOUR_ORDERS,
             label = { it ?: "Camera's" },
+            testTag = lensEditorTag("sensor_colour_order"),
             onSelect = { onChange(layout.copy(colourOrder = it)) }
         )
         if (layout.block > 1) {
@@ -226,17 +249,22 @@ internal fun SensorLayoutGroup(layout: LensSensorLayout, onChange: (LensSensorLa
                 selected = layout.liveRemosaic,
                 values = LIVE_REMOSAIC_QUALITIES,
                 label = ::remosaicQualityLabel,
-                supportingText = "Viewfinder, video and merged photos (their frames come from the live stream). " +
+                supportingText = (if (hasPhotoStream) "Viewfinder and video. " else "Viewfinder, video and merged photos. ") +
                     "Fast skips green interpolation: about 20% cheaper, softer colour detail.",
+                testTag = lensEditorTag("live_remosaic"),
                 onSelect = { onChange(layout.copy(liveRemosaic = it)) }
             )
+        }
+        if (if (hasPhotoStream) layout.photoBlock > 1 else layout.block > 1) {
             SettingDivider()
             DropdownChoiceRow(
                 title = "Photo remosaic",
                 selected = layout.photoRemosaic,
                 values = PHOTO_REMOSAIC_QUALITIES,
                 label = ::remosaicQualityLabel,
-                supportingText = "Single photos. High searches wider for clean edges; adds ~0.15 s per photo.",
+                supportingText = "Single photos. High searches wider for clean edges." +
+                    if (hasPhotoStream) " Merged photo frames use Standard." else "",
+                testTag = lensEditorTag("photo_remosaic"),
                 onSelect = { onChange(layout.copy(photoRemosaic = it)) }
             )
         }

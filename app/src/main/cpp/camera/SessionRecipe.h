@@ -57,6 +57,7 @@ struct CompanionRecipe {
 // What the controller decided about the session's structure for one start, in one place.
 struct SessionRecipe {
     bool repeatingStillTemplate = false;  // the viewfinder request uses the still-capture template
+    bool photoIncludePreview = true;
     bool captureStillTemplate = true;     // full-size stills are built from the still-capture template
     std::optional<CompanionRecipe> companion;
     std::optional<std::pair<uint32_t, uint32_t>> auxJpeg;
@@ -100,6 +101,7 @@ struct RecipeInputs {
     SessionRecipe r;
     r.repeatingStillTemplate = lens.stillTemplate.value_or(false);
     r.captureStillTemplate = lens.stillTemplate.value_or(true);
+    r.photoIncludePreview = lens.photoIncludePreview;
     if (companionStreamEnabled(lens, in.forcedCompanion, in.automaticCompanion)) {
         CompanionRecipe c;
         c.privateFormat = lens.companionPrivate;

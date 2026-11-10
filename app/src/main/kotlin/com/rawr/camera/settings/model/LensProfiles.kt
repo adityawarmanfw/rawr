@@ -218,7 +218,11 @@ data class PhotoStreamSettings(
     val mergeFrameLimit: Int = 0,
     /** Merged frames go in one by one, each after the previous frame (HAL fails queued ones). */
     val mergeFramesOneByOne: Boolean = false,
-    val levels: LensLevels? = null
+    val levels: LensLevels? = null,
+    /** Include the viewfinder RAW target in each photo request (legacy behaviour). */
+    val includePreview: Boolean = true,
+    /** Photo reader maxImages, 2–16; 0 keeps the app default. */
+    val bufferCount: Int = 0
 )
 
 /** The companion: a small output next to RAW that some HALs need before they deliver RAW. */
@@ -339,7 +343,9 @@ data class LensSensorLayout(
     /** Remosaic for the viewfinder, video and merge frames: "fast" or "standard" (GPU). */
     val liveRemosaic: String = "standard",
     /** Remosaic for single photos: "standard" or "high" (CPU). */
-    val photoRemosaic: String = "high"
+    val photoRemosaic: String = "high",
+    /** Same-colour block side for the separate photo stream; Bayer by default. */
+    val photoBlock: Int = 1
 )
 
 /** Width x height of an extra camera output of a lens profile. */
@@ -377,6 +383,7 @@ fun validateLensProfile(lens: LensProfile, others: List<LensProfile>): List<Stri
     streams.photo?.let {
         if (it.choice.width <= 0 || it.choice.height <= 0) add("Photo stream width and height must be positive whole numbers")
         if (it.mergeFrameLimit !in 0..30) add("Merged photo frame limit must be between 0 and 30")
+        if (it.bufferCount != 0 && it.bufferCount !in 2..16) add("Photo stream buffer count must be 2 to 16")
     }
     validateLevels(lens.image.levels)?.let { add(it) }
     lens.vendorKeys.forEach { key -> validateVendorKey(key)?.let { add(it) } }

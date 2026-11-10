@@ -7,6 +7,7 @@
 #include <cmath>
 #include <sstream>
 #include <stdexcept>
+#include <thread>
 #include <utility>
 
 #include "camera/NativeCameraController.h"
@@ -18,8 +19,9 @@
 #include "geometry/CfaPattern.h"
 #include "capture/FullSizeFallbacks.h"
 #include "capture/BurstLimits.h"
-#include "imaging/FrameLimits.h"
 #include "imaging/BinnedCorner.h"
+#include "imaging/CfaRemosaic.h"
+#include "imaging/FrameLimits.h"
 #include "imaging/Raw16CpuSnapshot.h"
 #include "imaging/RawFrameLease.h"
 #include "metadata/MetadataDiagnostics.h"
@@ -111,15 +113,16 @@ SessionEngine::SessionEngine(std::string filesDir) : filesDir_(std::move(filesDi
             const uint64_t usage = lastCameraContext_ && lastCameraContext_->photoBufferUsage
                                        ? *lastCameraContext_->photoBufferUsage
                                        : uint64_t(AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER);
-            auto* window = captureFrameIngress_.create(generation, width, height, format, usage);
+            const uint32_t count = lastCameraContext_ ? lastCameraContext_->photoBufferCount : 0;
+            auto* window = captureFrameIngress_.create(generation, width, height, format, usage, count);
             captureReaderGeneration_ = generation;
             fullSizeFrames_.store(0, std::memory_order_relaxed);
             // Full size is 2x (50 MP) or 4x (200 MP) the binned pixel array; the buffer may be wider
             // (8192 vs 8160 on vivo).
             if (lastCameraContext_) {
                 auto context = std::make_shared<rawrcam::metadata::CameraContextMetadata>(*lastCameraContext_);
-                // The HAL hands full-size stills over as Bayer: a block-CFA setting is the viewfinder stream's.
-                context->cfaBlock = 1;
+                // The photo output may have a different CFA from the binned viewfinder.
+                context->cfaBlock = context->photoCfaBlock;
                 auto& g = context->geometry;
                 const uint32_t scale = g.pixelArrayWidth ? std::max(1u, width / g.pixelArrayWidth) : 1u;
                 g.rawBufferWidth = std::min(width, scale * g.pixelArrayWidth);
@@ -673,6 +676,11 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
             journal->dropExpected();
             ++binnedCorners;
             continue;
+        }
+        if (context->cfaBlock > 1u) {
+            const auto threads = std::clamp(std::thread::hardware_concurrency(), 1u, 8u);
+            imaging::remosaicBlockCfa(packed, width, height, context->cfaBlock, context->rawPreviewCfa,
+                                     threads, imaging::CfaRemosaicQuality::Standard);
         }
         journal->append(packed);
     }

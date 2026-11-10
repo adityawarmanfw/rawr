@@ -420,6 +420,40 @@ void testProfileJson() {
     assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","levels":{"static":true,"black":[1]}}]})"));
 }
 
+void testOppoPhotoStreams() {
+    using namespace rawrcam::camera;
+    const auto oppo = builtInCameraProfile("oppo_find_x9_ultra");
+    const auto roundTrip = parseCameraProfile(serializeCameraProfile(oppo));
+    assert(roundTrip && roundTrip->lenses.size() == 8);
+    for (const auto& [name, camera, mode, width, height, block] : {
+             std::tuple{"H0.6", "3", 0, 8192u, 6144u, 1u},
+             std::tuple{"H1x", "2", 5, 8160u, 6128u, 1u},
+             std::tuple{"H3x", "4", 8, 8192u, 6144u, 2u},
+             std::tuple{"H10x", "5", 25, 8192u, 6144u, 2u}}) {
+        const auto lens = routeForLens(*roundTrip, name);
+        assert(lens && lens->cameraId == camera && lens->photoStream);
+        assert(lens->photoStream->width == width && lens->photoStream->height == height);
+        assert(lens->sensorLayoutBlock == 1 && lens->photoSensorLayoutBlock == block);
+        assert(!lens->photoIncludePreview && lens->photoBufferCount == 2 && lens->photoBufferUsage == 3);
+        assert(lens->vendorGate.empty() && lens->vendorKeys.size() == 3);
+        size_t stillKeys = 0, sessionKeys = 0;
+        for (const auto& key : lens->vendorKeys) {
+            assert(!keyAppliesIn(key.scope, CameraKeySetting::Scope::Request));
+            if (key.tag == "com.oplus.engineercamera.agingtest.mode.select") {
+                ++stillKeys;
+                assert(key.scope == CameraKeySetting::Scope::Still && key.values == std::vector<double>{double(mode)});
+            } else {
+                ++sessionKeys;
+                assert(key.scope == CameraKeySetting::Scope::Session);
+            }
+        }
+        assert(stillKeys == 1 && sessionKeys == 2);
+    }
+    const auto vivo = routeForLens(builtInCameraProfile("vivo_x300_ultra"), "H85");
+    assert(vivo && vivo->photoIncludePreview && vivo->photoBufferCount == 0 && vivo->photoSensorLayoutBlock == 1);
+    assert(!parseCameraProfile(R"({"schema":2,"lenses":[{"id":"bad","camera":{"id":"5"},"image":{"sensorLayout":{"photoBlock":3}}}]})"));
+}
+
 }  // namespace
 
 int main() {
@@ -442,6 +476,7 @@ int main() {
     assert(!rawrcam::camera::parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","mirror":"invalid"}]})"));
     testGeometryGate();
     testNegotiation();
+    testOppoPhotoStreams();
     testEmbeddedProfiles();
     testProfileMatching();
     testProfiles();

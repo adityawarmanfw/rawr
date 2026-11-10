@@ -236,7 +236,7 @@ internal fun LensEditorScreen(state: SettingsUiState, lensName: String?, dispatc
             levels = draft.image.levels,
             camera = camera
         ) { draft = draft.image { copy(levels = it) } }
-        SensorLayoutGroup(draft.image.sensorLayout) { draft = draft.image { copy(sensorLayout = it) } }
+        SensorLayoutGroup(draft.image.sensorLayout, hasPhotoStream = draft.streams.photo != null) { draft = draft.image { copy(sensorLayout = it) } }
         LensDcpProfiles(
             image = draft.image,
             importing = importingDcp,

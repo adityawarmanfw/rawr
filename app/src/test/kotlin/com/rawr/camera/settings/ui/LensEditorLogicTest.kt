@@ -103,6 +103,23 @@ class LensEditorLogicTest {
     }
 
     @Test
+    fun photoBufferCountAppearsInAdvancedSummary() {
+        val tuned = lens.streams { copy(photo = photoStream.copy(bufferCount = 2, includePreview = false)) }
+        assertEquals(listOf("Buffers"), tuned.advancedSummary())
+        val reset = tuned.withAutomaticAdvanced()
+        assertEquals(0, reset.streams.photo!!.bufferCount)
+        assertEquals(false, reset.streams.photo!!.includePreview)
+        assertEquals(emptyList(), reset.advancedSummary())
+    }
+
+    @Test
+    fun photoQuadLayoutAppearsInLensSummary() {
+        val quad = lens.streams { copy(photo = photoStream) }
+            .image { copy(sensorLayout = sensorLayout.copy(photoBlock = 2)) }
+        assertTrue(lensSummary(quad).contains("Photo Quad 2×2"))
+    }
+
+    @Test
     fun advancedSummaryIgnoresTheVisibleSettings() {
         val visible = lens
             .raw { copy(choice = live) }
@@ -121,7 +138,7 @@ class LensEditorLogicTest {
             .copy(vendorKeys = listOf(VendorKey("vivo.control.forceSensorMode", values = listOf(17.0))))
         val tuned = visible
             .companion { copy(mode = CompanionMode.Fixed, size = LensOutputSize(640, 480), useCase = 4) }
-            .streams { copy(auxJpeg = AuxJpegSettings(LensOutputSize(4096, 3072)), photo = photo!!.copy(useCase = 2, bufferUsage = "none")) }
+            .streams { copy(auxJpeg = AuxJpegSettings(LensOutputSize(4096, 3072)), photo = photo!!.copy(useCase = 2, bufferUsage = "none", bufferCount = 2)) }
             .raw { copy(useCase = 1, buffers = buffers.copy(count = 8, testFirst = true), levels = LensLevels()) }
             .session { copy(cameraApi = "java", params = "full", stillTemplate = true, startupDelayMs = 500, stopViewfinderForPhotos = true, workarounds = listOf("noTapFocus")) }
             .copy(request = lens.request.copy(defaults = "minimal"))

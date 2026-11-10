@@ -41,6 +41,18 @@ class LensProfilesTest {
     }
 
     @Test
+    fun photoBufferCountIsValidatedBeforeSaving() {
+        val photo = PhotoStreamSettings(RawStreamChoice(RawStreamFormat.Raw10, 8192, 6144))
+        for (count in listOf(0, 2, 16)) {
+            assertEquals(emptyList(), validateLensProfile(lens.streams { copy(photo = photo.copy(bufferCount = count)) }, emptyList()))
+        }
+        for (count in listOf(-1, 1, 17)) {
+            assertEquals(listOf("Photo stream buffer count must be 2 to 16"),
+                validateLensProfile(lens.streams { copy(photo = photo.copy(bufferCount = count)) }, emptyList()))
+        }
+    }
+
+    @Test
     fun vendorKeysCheckValuesAgainstType() {
         assertNull(validateVendorKey(VendorKey("a", values = listOf(31.0))))
         assertEquals("a: enter at least one value", validateVendorKey(VendorKey("a")))

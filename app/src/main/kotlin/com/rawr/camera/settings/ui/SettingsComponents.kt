@@ -839,6 +839,7 @@ internal fun <T> DropdownChoiceRow(
     enabled: Boolean = true,
     supportingText: String? = null,
     optionText: ((T) -> String?)? = null,
+    testTag: String? = null,
     onSelect: (T) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -846,6 +847,7 @@ internal fun <T> DropdownChoiceRow(
         title,
         supportingText = supportingText,
         enabled = enabled,
+        testTag = testTag,
         onClick = { expanded = true },
         trailing = {
             // Menu anchors to the value, so it opens under the arrow at the row's end.
