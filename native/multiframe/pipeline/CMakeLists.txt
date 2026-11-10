@@ -83,7 +83,8 @@ set(RAWR_MF_SHADER_SOURCES
   ${RAWR_MF_DIR}/merge_rexture/shaders/rx_pyramid.comp
   ${RAWR_MF_DIR}/merge_rexture/shaders/rx_kernel_blur.comp
   ${RAWR_MF_DIR}/merge_rexture/shaders/rx_kernel_cov.comp
-  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_qinv_debug.comp)
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_qinv_debug.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_rcd_bound.comp)
 set(RAWR_MF_SPV_OUTPUTS)
 foreach(RAWR_MF_SRC IN LISTS RAWR_MF_SHADER_SOURCES)
   get_filename_component(RAWR_MF_NAME ${RAWR_MF_SRC} NAME_WE)
@@ -126,6 +127,7 @@ add_library(raw_gpu_pipeline STATIC
   src/MultiframeRecorder.cpp
   src/HdrPlusRecorder.cpp
   src/RextureRecorder.cpp
+  src/RextureBaseDemosaic.cpp
   src/AndroidBurstCoordinator.cpp
   src/BurstNoiseEstimate.cpp)
 add_dependencies(raw_gpu_pipeline raw_multiframe_gpu_shaders)
@@ -139,6 +141,12 @@ target_include_directories(raw_gpu_pipeline
          ${RAWR_NATIVE_DIR}/zsl_ring/include
   PRIVATE ${RAWR_MF_SPV_DIR})
 target_link_libraries(raw_gpu_pipeline PUBLIC ${VULKAN_LIB})
+# Rexture's fallback demosaic is the unmodified RCD library (native/raw_demosaic); without it the merge reports itself
+# unavailable (RextureBaseDemosaic::available()).
+if(TARGET rcd::rcd AND TARGET raw_demosaic::embedded_shaders)
+  target_link_libraries(raw_gpu_pipeline PUBLIC rcd::rcd raw_demosaic::embedded_shaders)
+  target_compile_definitions(raw_gpu_pipeline PUBLIC RAWR_REXTURE_HAS_RCD=1)
+endif()
 target_compile_features(raw_gpu_pipeline PUBLIC cxx_std_17)
 target_compile_options(raw_gpu_pipeline PRIVATE -Wall -Wextra -Wpedantic)
 # Warnings are errors on Android. Host SDKs declare core entry points as

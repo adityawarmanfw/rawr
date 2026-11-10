@@ -1070,6 +1070,8 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
                 stageDump->image("base/tensor_int", arena.image("rx_alt_var"), 3);
                 stageDump->image("base/cov", arena.image("rx_base_cov"), 3);
                 stageDump->image("base/qinv", arena.image("rx_dbg_qinv"), 3);
+            } else if (st == "base_demosaic") {
+                stageDump->image("base/rcd", arena.image("rx_base_rcd"), 3);
             } else if (st == "companion_prepare") {
                 dumpPrepare("rx_alt_", "frames/" + std::to_string(frame) + "/");
             }

@@ -40,3 +40,10 @@ vec3 rxCovInverse(vec3 a, vec3 b, vec3 c, vec3 d, vec2 f) {
     float idet = good ? 1.0 / det : 0.0;
     return vec3(good ? idet * cv.z : 1.0, good ? -idet * cv.y : 0.0, good ? idet * cv.x : 1.0);
 }
+
+// Colour of the CFA site q: 0 R, 1 G, 2 B.
+int rxChannel(ivec2 q, int cfa) {
+    int px = (q.x ^ ((cfa == 1 || cfa == 3) ? 1 : 0)) & 1;
+    int py = (q.y ^ ((cfa == 2 || cfa == 3) ? 1 : 0)) & 1;
+    return (py == 0 && px == 0) ? 0 : ((py == 1 && px == 1) ? 2 : 1);
+}

@@ -68,6 +68,7 @@ enum class ShaderId : std::uint32_t {
     RxKernelBlur,
     RxKernelCov,
     RxQinvDebug,
+    RxRcdBound,
     Count
 };
 struct ImageBinding {

@@ -18,6 +18,11 @@ struct PreparePc {
 struct PyramidPc {
     std::int32_t dstW, dstH;
 };
+struct BoundPc {
+    float black[4];
+    float white;
+    std::int32_t w, h, cfa;
+};
 struct AxisPc {
     std::int32_t axis;
 };
@@ -41,6 +46,7 @@ ScratchLayout makeRextureScratchLayout(const MultiframeGeometry& g, bool debug) 
     }
     img("rx_base_tensor", g.guide, PixelStorage::RGBA32Float, Lifetime::Burst);
     img("rx_base_cov", g.guide, PixelStorage::RGBA32Float, Lifetime::Burst);
+    img("rx_base_rcd", g.output, PixelStorage::RGBA16Float, Lifetime::Burst);  // fallback demosaic (RCD output is RGBA16F)
     if (debug) img("rx_dbg_qinv", g.output, PixelStorage::RGBA32Float, Lifetime::Burst);
     img("linear_output", g.output, PixelStorage::RGBA16Float, Lifetime::Output);
     auto bytes = [](const ImageSpec& s) {
@@ -122,5 +128,22 @@ void RextureRecorder::recordBaseKernel(VkCommandBuffer c, bool debug) const {
                          divUp(q.extent.height, 16));
         computeWriteBarrier(c);
     }
+}
+}  // namespace rawr::raw_gpu_pipeline
+
+namespace rawr::raw_gpu_pipeline {
+void RextureRecorder::recordBaseDemosaicBound(VkCommandBuffer c, VkImageView rawU16,
+                                              const MultiframeFrameParameters& f) const {
+    const auto& rcd = arena_.image("rx_base_rcd");
+    BoundPc p{};
+    std::copy(f.normalization.blackByPhase.begin(), f.normalization.blackByPhase.end(), p.black);
+    p.white = f.normalization.whiteLevel;
+    p.w = std::int32_t(rcd.extent.width);
+    p.h = std::int32_t(rcd.extent.height);
+    p.cfa = std::int32_t(config_.cfa);
+    ImageBinding raw{0, rawU16, VK_IMAGE_LAYOUT_GENERAL};
+    executor_.record(c, ShaderId::RxRcdBound, {{raw, ib(1, rcd)}, {}}, &p, sizeof(p), divUp(rcd.extent.width, 16),
+                     divUp(rcd.extent.height, 16));
+    computeWriteBarrier(c);
 }
 }  // namespace rawr::raw_gpu_pipeline

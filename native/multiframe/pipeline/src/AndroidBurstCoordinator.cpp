@@ -621,6 +621,20 @@ BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>
         recordTimestamp(1u);
     }));
     if (rextureObserver_) rextureObserver_("base_kernel", ref, arena_);
+    // Fallback demosaic of the base (RCD + native-range bound). The RCD pipeline is created outside command
+    // recording and released right after, so its scratch never coexists with the companion buffers.
+    baseDemosaic_.ensure(physical_, device_, queueFamily_, width_, height_, static_cast<std::uint32_t>(config.cfa),
+                         config.whiteBalance);
+    timings.referenceStatsMs += gpuOrWall(executeChunk(3u, ref, 2u, [&] {
+        recordTimestamp(0u);
+        baseDemosaic_.record(command_, frames[ref].raw.image, frames[ref].raw.view, frames[ref].parameters.normalization,
+                             arena_.image("rx_base_rcd"));
+        computeWriteBarrier(command_);
+        recorder.recordBaseDemosaicBound(command_, frames[ref].raw.view, frames[ref].parameters);
+        recordTimestamp(1u);
+    }));
+    if (rextureObserver_) rextureObserver_("base_demosaic", ref, arena_);
+    baseDemosaic_.release();
     std::uint32_t companions = 0;
     for (std::uint32_t i = 0; i < frames.size(); ++i) {
         if (i == ref) continue;
@@ -935,6 +949,7 @@ void AndroidBurstCoordinator::releaseScratch() noexcept {
         submissionInFlight_ = false;
     }
     destroyHostBuffers();
+    baseDemosaic_.release();
     arena_.reset();
     arenaReady_ = false;
     layoutsInitialized_ = false;
@@ -950,6 +965,7 @@ void AndroidBurstCoordinator::resetLocked() noexcept {
         (void)vkWaitForFences(device_, 1, &fence_, VK_TRUE, UINT64_MAX);
         submissionInFlight_ = false;
     }
+    baseDemosaic_.release();
     resetInfraLocked();
     arena_.reset();
     queueFamily_ = width_ = height_ = 0;

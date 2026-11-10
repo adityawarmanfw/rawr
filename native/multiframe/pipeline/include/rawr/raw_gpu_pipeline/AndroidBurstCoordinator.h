@@ -1,5 +1,6 @@
 #pragma once
 #include <rawr/raw_gpu_pipeline/MultiframeRecorder.h>
+#include <rawr/raw_gpu_pipeline/RextureBaseDemosaic.h>
 #include <rawr/raw_merge_hdrplus_gpu/RawMergeHdrPlusGpu.h>
 #include <rawr/zsl_ring/RawImageRing.h>
 #include <vulkan/vulkan.h>
@@ -181,6 +182,7 @@ class AndroidBurstCoordinator final {
     void recordTimestamp(std::uint32_t query);
     RextureObserver rextureObserver_{};
     bool rextureDebug_ = false, arenaRextureDebug_ = false;
+    RextureBaseDemosaic baseDemosaic_{};
     BurstRunResult runRexture(const std::vector<BurstFrame>& frames, std::uint32_t referenceIndex,
                               const FrameConsumed& frameConsumed, const FrameLoad& frameLoad);
     BurstRunResult runHdrPlus(const std::vector<BurstFrame>& frames, std::uint32_t referenceIndex,

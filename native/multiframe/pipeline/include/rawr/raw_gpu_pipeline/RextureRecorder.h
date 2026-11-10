@@ -28,6 +28,9 @@ class RextureRecorder final {
     // Uses rx_alt_mean / rx_alt_var as scratch, so it must run before the first companion's preparation.
     void recordBaseKernel(VkCommandBuffer, bool debug) const;
 
+    // Clamps the RCD base to the native-sample range of each colour (5 x 5) in place; follows the RCD demosaic.
+    void recordBaseDemosaicBound(VkCommandBuffer, VkImageView rawU16, const MultiframeFrameParameters&) const;
+
    private:
     ResourceArena& arena_;
     VulkanExecutor& executor_;
