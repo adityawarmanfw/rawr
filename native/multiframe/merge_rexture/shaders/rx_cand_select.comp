@@ -1,0 +1,91 @@
+#version 450
+#extension GL_GOOGLE_include_directive : enable
+// Rexture alignment, levels 1..3: initial flow of every fine tile by candidate upsampling (Monte Carlo-calibrated,
+// IPOL 2021 Alg. 1): the coarse tile's displacement, the nearest coarse tile's in each spatial direction, and the bilinear
+// interpolation of the coarse flow field are scaled to this level; the one with the lowest L1 distance between the
+// reference tile and the alternate tile (integer displacement, clamped sampling) wins, but the bilinear guess is kept
+// unless the best coarse candidate beats it by up_k (3) noise SDs. One workgroup per 16 x 16 tile.
+// Starts from flow_upsample.comp (bilinear) + new.
+#include "rx_tables.glsl"
+
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0, r32f) readonly uniform image2D refI;
+layout(set = 0, binding = 1, r32f) readonly uniform image2D movI;
+layout(set = 0, binding = 2, rg32f) readonly uniform image2D coarseI;
+layout(set = 0, binding = 3, rg32f) writeonly uniform image2D flowI;
+layout(push_constant) uniform P {
+    int repeat;      // fine tiles per coarse tile in each direction, times 2 (reference: scale * coarse_ts / 16)
+    float scale;     // flow scale between the levels
+    int level;
+    float alpha, beta;
+} p;
+
+shared vec4 sCost[256];
+shared float sMean[256];
+
+void axisIndices(int idx, int nc, out int nb, out int other) {
+    float g = (float(idx) + 0.5) / float(p.repeat);
+    float fl = floor(g);
+    nb = clamp(int(fl), 0, nc - 1);
+    float fr = g - fl;
+    other = clamp(fr < 0.5 ? nb - 1 : nb + 1, 0, nc - 1);
+}
+
+void main() {
+    const ivec2 t = ivec2(gl_WorkGroupID.xy);
+    const ivec2 l = ivec2(gl_LocalInvocationID.xy);
+    const int tid = l.y * 16 + l.x;
+    const ivec2 cs = imageSize(coarseI);
+    const ivec2 movMax = imageSize(movI) - 1;
+
+    int nx, ox, ny, oy;
+    axisIndices(t.x, cs.x, nx, ox);
+    axisIndices(t.y, cs.y, ny, oy);
+    vec2 c[4];
+    c[0] = imageLoad(coarseI, ivec2(nx, ny)).xy;
+    c[1] = imageLoad(coarseI, ivec2(nx, oy)).xy;
+    c[2] = imageLoad(coarseI, ivec2(ox, ny)).xy;
+    // bilinear guess (clamped), times the level scale
+    vec2 g = (vec2(t) + 0.5) / float(p.repeat) - 0.5;
+    vec2 b = floor(g), f = g - b;
+    ivec2 lo = clamp(ivec2(b), ivec2(0), cs - 1), hi = clamp(ivec2(b) + 1, ivec2(0), cs - 1);
+    vec2 v00 = imageLoad(coarseI, lo).xy, v10 = imageLoad(coarseI, ivec2(hi.x, lo.y)).xy;
+    vec2 v01 = imageLoad(coarseI, ivec2(lo.x, hi.y)).xy, v11 = imageLoad(coarseI, hi).xy;
+    vec2 top = v00 * (1.0 - f.x) + v10 * f.x, bot = v01 * (1.0 - f.x) + v11 * f.x;
+    vec2 bil = (top * (1.0 - f.y) + bot * f.y) * p.scale;
+    c[3] = bil / p.scale;
+
+    ivec2 q = t * 16 + l;
+    float refv = imageLoad(refI, q).x;
+    vec4 cost;
+    for (int k = 0; k < 4; ++k) {
+        ivec2 d = ivec2(roundEven(c[k] * p.scale));
+        cost[k] = abs(refv - imageLoad(movI, clamp(q + d, ivec2(0), movMax)).x);
+    }
+    sCost[tid] = cost;
+    sMean[tid] = refv;
+    barrier();
+    for (int s = 128; s > 0; s >>= 1) {
+        if (tid < s) {
+            sCost[tid] += sCost[tid + s];
+            sMean[tid] += sMean[tid + s];
+        }
+        barrier();
+    }
+    if (tid == 0) {
+        vec4 cs4 = sCost[0];
+        float best = cs4.x;
+        int sel = 0;
+        for (int k = 1; k < 4; ++k)
+            if (cs4[k] < best) {
+                best = cs4[k];
+                sel = k;
+            }
+        vec2 outv = sel < 3 ? c[sel] * p.scale : bil;
+        float mean = sMean[0] / 256.0;
+        float sd = RX_L1_SD[p.level] * sqrt(max(p.alpha * max(mean, 0.0) + p.beta, 1e-12));
+        const float UP_K = 3.0;
+        vec2 res = (cs4.w - best > UP_K * sd) ? outv : bil;
+        imageStore(flowI, t, vec4(res, 0.0, 0.0));
+    }
+}

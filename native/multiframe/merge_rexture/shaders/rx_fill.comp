@@ -1,0 +1,76 @@
+#version 450
+#extension GL_GOOGLE_include_directive : enable
+// Rexture alignment, coarsest level only: tiles that cannot constrain motion take the flow of the constrained tiles
+// (mode 2) by normalised Gaussian interpolation, with sigma doubling from 1 until every tile is filled
+// (reference fill_from). One workgroup for the whole tile grid (at most 1024 tiles).
+
+layout(local_size_x = 256) in;
+layout(set = 0, binding = 0, rg32f) uniform image2D flowI;
+layout(set = 0, binding = 1, rgba32f) readonly uniform image2D tilesI;
+
+const int MAXT = 1024;
+shared vec2 sFlow[MAXT];
+shared vec2 sOut[MAXT];
+shared float sGood[MAXT];
+shared uint sTodo[MAXT];
+shared uint sAny;
+
+void main() {
+    const ivec2 n = imageSize(flowI);
+    const int count = n.x * n.y;
+    const int tid = int(gl_LocalInvocationID.x);
+    if (tid == 0) sAny = 0u;
+    barrier();
+    for (int i = tid; i < count; i += 256) {
+        ivec2 q = ivec2(i % n.x, i / n.x);
+        bool good = imageLoad(tilesI, q).w == 2.0;
+        sFlow[i] = imageLoad(flowI, q).xy;
+        sOut[i] = sFlow[i];
+        sGood[i] = good ? 1.0 : 0.0;
+        sTodo[i] = good ? 0u : 1u;
+        if (good) atomicOr(sAny, 1u);
+    }
+    barrier();
+    if (sAny == 0u) return;
+    float sig = 1.0;
+    const float limit = 4.0 * float(max(n.x, n.y));
+    for (int iter = 0; iter < 16; ++iter) {
+        if (sig >= limit) break;
+        uint any_ = 0u;
+        for (int i = tid; i < count; i += 256) any_ |= sTodo[i];
+        if (tid == 0) sAny = 0u;
+        barrier();
+        if (any_ != 0u) atomicOr(sAny, 1u);
+        barrier();
+        if (sAny == 0u) break;
+        // radius and normalisation of the 1-D kernel (scipy gaussian_filter, truncate 4)
+        int r = int(4.0 * sig + 0.5);
+        float S = 0.0;
+        for (int k = -r; k <= r; ++k) S += exp(-0.5 * float(k * k) / (sig * sig));
+        for (int i = tid; i < count; i += 256) {
+            if (sTodo[i] == 0u) continue;
+            ivec2 q = ivec2(i % n.x, i / n.x);
+            float w = 0.0;
+            vec2 v = vec2(0.0);
+            for (int dy = -r; dy <= r; ++dy) {
+                float wy = exp(-0.5 * float(dy * dy) / (sig * sig)) / S;
+                int yy = clamp(q.y + dy, 0, n.y - 1);
+                for (int dx = -r; dx <= r; ++dx) {
+                    float wx = exp(-0.5 * float(dx * dx) / (sig * sig)) / S;
+                    int j = yy * n.x + clamp(q.x + dx, 0, n.x - 1);
+                    float wt = wy * wx;
+                    w += wt * sGood[j];
+                    v += wt * sGood[j] * sFlow[j];
+                }
+            }
+            if (w > 1e-6) {
+                sOut[i] = v / max(w, 1e-12);
+                sTodo[i] = 0u;      // only this thread's tile is touched
+            }
+        }
+        barrier();
+        sig *= 2.0;
+    }
+    barrier();
+    for (int i = tid; i < count; i += 256) imageStore(flowI, ivec2(i % n.x, i / n.x), vec4(sOut[i], 0.0, 0.0));
+}

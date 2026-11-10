@@ -121,6 +121,11 @@
 #include "mf_rx_kernel_cov_prod.h"
 #include "mf_rx_qinv_debug_prod.h"
 #include "mf_rx_rcd_bound_prod.h"
+#include "mf_rx_ref_tiles_prod.h"
+#include "mf_rx_cand_select_prod.h"
+#include "mf_rx_block_match_prod.h"
+#include "mf_rx_lk_prod.h"
+#include "mf_rx_fill_prod.h"
 namespace rawr::raw_gpu_pipeline {
 namespace {
 struct B {
@@ -526,6 +531,16 @@ const std::array<Spec, static_cast<size_t>(ShaderId::Count)> specs{{{"raw_normal
                                   {"rx_qinv_debug", mf_rx_qinv_debug_prod_spv, mf_rx_qinv_debug_prod_spv_size, mf_rx_qinv_debug_prod_spv, mf_rx_qinv_debug_prod_spv_size,
                                    {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
                                   {"rx_rcd_bound", mf_rx_rcd_bound_prod_spv, mf_rx_rcd_bound_prod_spv_size, mf_rx_rcd_bound_prod_spv, mf_rx_rcd_bound_prod_spv_size,
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                  {"rx_ref_tiles", mf_rx_ref_tiles_prod_spv, mf_rx_ref_tiles_prod_spv_size, mf_rx_ref_tiles_prod_spv, mf_rx_ref_tiles_prod_spv_size,
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                  {"rx_cand_select", mf_rx_cand_select_prod_spv, mf_rx_cand_select_prod_spv_size, mf_rx_cand_select_prod_spv, mf_rx_cand_select_prod_spv_size,
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                  {"rx_block_match", mf_rx_block_match_prod_spv, mf_rx_block_match_prod_spv_size, mf_rx_block_match_prod_spv, mf_rx_block_match_prod_spv_size,
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                  {"rx_lk", mf_rx_lk_prod_spv, mf_rx_lk_prod_spv_size, mf_rx_lk_prod_spv, mf_rx_lk_prod_spv_size,
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                  {"rx_fill", mf_rx_fill_prod_spv, mf_rx_fill_prod_spv_size, mf_rx_fill_prod_spv, mf_rx_fill_prod_spv_size,
                                    {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}}}};
 void ck(VkResult r, const char* w) {
     if (r != VK_SUCCESS) throw std::runtime_error(std::string(w) + " VkResult=" + std::to_string(r));
@@ -560,6 +575,11 @@ void VulkanExecutor::initialize(VkDevice d, bool wantTrace) {
         "rx_kernel_cov",
         "rx_qinv_debug",
         "rx_rcd_bound",
+        "rx_ref_tiles",
+        "rx_cand_select",
+        "rx_block_match",
+        "rx_lk",
+        "rx_fill",
     };
     static_assert(sizeof(kOrder) / sizeof(kOrder[0]) == static_cast<size_t>(ShaderId::Count),
                   "executor spec order table out of sync with ShaderId");

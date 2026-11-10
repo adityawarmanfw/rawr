@@ -30,7 +30,8 @@ class StageDump {
     ~StageDump() { finish(); }
 
     // Dumps channels [0, channels) of an arena image as float32, shape (h, w) for one channel else (h, w, channels).
-    void image(const std::string& name, const rawr::raw_gpu_pipeline::ArenaImage& img, std::uint32_t channels) {
+    void image(const std::string& name, const rawr::raw_gpu_pipeline::ArenaImage& img, std::uint32_t channels,
+               std::uint32_t firstChannel = 0) {
         std::uint32_t texel = 0, have = 0;
         bool half = false;
         switch (img.format) {
@@ -41,7 +42,7 @@ class StageDump {
             case VK_FORMAT_R16G16B16A16_SFLOAT: texel = 8; have = 4; half = true; break;
             default: throw std::runtime_error("stage dump: unsupported format for " + name);
         }
-        if (channels > have) throw std::runtime_error("stage dump: too many channels for " + name);
+        if (firstChannel + channels > have) throw std::runtime_error("stage dump: too many channels for " + name);
         const std::uint32_t w = img.extent.width, h = img.extent.height;
         const VkDeviceSize bytes = VkDeviceSize(w) * h * texel;
         auto buf = vktest::mkBuf(ctx_.pd, ctx_.dev, bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -65,7 +66,7 @@ class StageDump {
         const std::uint32_t chBytes = half ? 2u : 4u;
         for (std::size_t i = 0; i < std::size_t(w) * h; ++i)
             for (std::uint32_t k = 0; k < channels; ++k) {
-                const std::uint8_t* at = src + i * texel + k * chBytes;
+                const std::uint8_t* at = src + i * texel + (firstChannel + k) * chBytes;
                 float v;
                 if (half) {
                     std::uint16_t hv;

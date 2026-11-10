@@ -1070,6 +1070,18 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
                 stageDump->image("base/tensor_int", arena.image("rx_alt_var"), 3);
                 stageDump->image("base/cov", arena.image("rx_base_cov"), 3);
                 stageDump->image("base/qinv", arena.image("rx_dbg_qinv"), 3);
+            } else if (st == "companion_align") {
+                const std::string pre = "frames/" + std::to_string(frame) + "/";
+                for (int l = 0; l < 4; ++l) {
+                    const std::string ls = std::to_string(l);
+                    stageDump->image(pre + "L" + ls + "_lk", arena.image("rx_flow_l" + ls), 2);
+                    stageDump->image(pre + "L" + ls + "_bm", arena.image("rx_dbg_bm_l" + ls), 2);
+                    stageDump->image(pre + "L" + ls + "_prior", arena.image("rx_dbg_prior_l" + ls), 2);
+                    stageDump->image(pre + "L" + ls + "_cost", arena.image("rx_bmcost_l" + ls), 1);
+                    stageDump->image(pre + "L" + ls + "_tensor", arena.image("rx_tiles_l" + ls), 3);
+                    stageDump->image(pre + "L" + ls + "_mode", arena.image("rx_tiles_l" + ls), 1, 3);
+                }
+                stageDump->image(pre + "flow", arena.image("rx_flow_l3"), 2);
             } else if (st == "base_demosaic") {
                 stageDump->image("base/rcd", arena.image("rx_base_rcd"), 3);
             } else if (st == "companion_prepare") {

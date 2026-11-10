@@ -618,6 +618,7 @@ BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>
     timings.referenceStatsMs = gpuOrWall(executeChunk(2u, ref, 2u, [&] {
         recordTimestamp(0u);
         recorder.recordBaseKernel(command_, rextureDebug_);
+        recorder.recordBaseTiles(command_);
         recordTimestamp(1u);
     }));
     if (rextureObserver_) rextureObserver_("base_kernel", ref, arena_);
@@ -647,6 +648,13 @@ BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>
             recordTimestamp(1u);
         }));
         if (rextureObserver_) rextureObserver_("companion_prepare", i, arena_);
+        for (std::uint32_t level = 0; level < 4u; ++level)
+            timings.alignmentMs += gpuOrWall(executeChunk(11u, i, 2u, [&] {
+                recordTimestamp(0u);
+                recorder.recordAlignmentLevel(command_, level, rextureDebug_);
+                recordTimestamp(1u);
+            }));
+        if (rextureObserver_) rextureObserver_("companion_align", i, arena_);
         ++companions;
         if (frameConsumed) frameConsumed(i);
     }

@@ -1,0 +1,52 @@
+#version 450
+#extension GL_GOOGLE_include_directive : enable
+// Rexture base pass, per alignment level: structure of every reference tile. One workgroup per tile writes
+// (A00, A01, A11, mode): the tile's gradient tensor sums (gradients with zero padding, as the LK refinement uses) and the
+// flat-tile mode: 2 = constrained along both axes (full search + LK), 1 = along one axis only (LK along the gradient),
+// 0 = unconstrained (keeps the coarser level's estimate). A tile is constrained along an axis if its tensor eigenvalue
+// is >= rel_snr (2) times the expected gradient energy of noise: tile_pixels * level_factor * (alpha * mean + beta).
+// Starts from lk_refine.comp (tensor) and tile_modes() of the reference.
+#include "rx_tables.glsl"
+
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0, r32f) readonly uniform image2D refI;
+layout(set = 0, binding = 1, rgba32f) writeonly uniform image2D tilesI;
+layout(push_constant) uniform P { int ts; int level; float alpha, beta; } p;
+
+shared vec4 red[256];
+
+float refAt(ivec2 q, ivec2 size) {
+    return (any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, size))) ? 0.0 : imageLoad(refI, q).x;
+}
+
+void main() {
+    const ivec2 size = imageSize(refI);
+    const ivec2 t = ivec2(gl_WorkGroupID.xy);
+    const ivec2 l = ivec2(gl_LocalInvocationID.xy);
+    const int tid = l.y * 16 + l.x;
+    vec4 v = vec4(0.0);
+    if (l.x < p.ts && l.y < p.ts) {
+        ivec2 q = t * p.ts + l;
+        float gx = refAt(q + ivec2(1, 0), size) - refAt(q - ivec2(1, 0), size);
+        float gy = refAt(q + ivec2(0, 1), size) - refAt(q - ivec2(0, 1), size);
+        v = vec4(gx * gx, gx * gy, gy * gy, imageLoad(refI, q).x);
+    }
+    red[tid] = v;
+    barrier();
+    for (int s = 128; s > 0; s >>= 1) {
+        if (tid < s) red[tid] += red[tid + s];
+        barrier();
+    }
+    if (tid == 0) {
+        vec4 r = red[0];
+        float n = float(p.ts * p.ts);
+        float mean = r.w / n;
+        float e = n * RX_LEVEL_NOISE[p.level] * max(p.alpha * mean + p.beta, 1e-12);
+        float tr = r.x + r.z;
+        float disc = sqrt((r.x - r.z) * (r.x - r.z) + 4.0 * r.y * r.y);
+        float l1 = 0.5 * (tr + disc), l2 = 0.5 * (tr - disc);
+        const float K = 2.0;   // rel_snr
+        float mode = l2 >= K * e ? 2.0 : (l1 >= K * e ? 1.0 : 0.0);
+        imageStore(tilesI, t, vec4(r.x, r.y, r.z, mode));
+    }
+}

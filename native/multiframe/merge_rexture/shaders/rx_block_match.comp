@@ -1,0 +1,69 @@
+#version 450
+#extension GL_GOOGLE_include_directive : enable
+// Rexture alignment: integer block search around round(flow), only on tiles of mode 2. One workgroup per tile, one
+// thread per candidate displacement (81 at radius 4, 9 at radius 1); the reference tile and the (tile + 2 radius)^2 window
+// of the alternate level are cached in shared memory. metric 1 (levels 0..2): L2, window sampled with clamped
+// coordinates, ties-to-even rounding of the start; metric 0 (finest level): L1, zero outside the image, half-integer
+// starts rounded away from zero. First minimum in (sy, sx) scan order wins (strict '<'). Starts from block_match.comp.
+#extension GL_GOOGLE_include_directive : enable
+
+layout(local_size_x = 128) in;
+layout(set = 0, binding = 0, r32f) readonly uniform image2D refI;
+layout(set = 0, binding = 1, r32f) readonly uniform image2D movI;
+layout(set = 0, binding = 2, rg32f) uniform image2D flowI;
+layout(set = 0, binding = 3, rgba32f) readonly uniform image2D tilesI;
+layout(set = 0, binding = 4, r32f) writeonly uniform image2D costI;
+layout(push_constant) uniform P { int ts, radius, metric; } p;
+
+shared float sRef[256];
+shared float sMov[576];
+shared float sCost[128];
+
+float sampleMov(ivec2 q) {
+    ivec2 n = imageSize(movI);
+    if (p.metric == 1) return imageLoad(movI, clamp(q, ivec2(0), n - 1)).x;
+    if (any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, n))) return 0.0;
+    return imageLoad(movI, q).x;
+}
+
+void main() {
+    const ivec2 t = ivec2(gl_WorkGroupID.xy);
+    const int tid = int(gl_LocalInvocationID.x);
+    if (imageLoad(tilesI, t).w != 2.0) return;      // uniform per workgroup
+    const int ts = p.ts, r = p.radius, W = ts + 2 * r, N = 2 * r + 1;
+    vec2 fl = imageLoad(flowI, t).xy;
+    vec2 rounded = roundEven(fl);
+    if (p.metric == 0) {
+        vec2 away = sign(fl) * floor(abs(fl) + 0.5);
+        rounded = mix(rounded, away, vec2(equal(abs(fl - rounded), vec2(0.5))));
+    }
+    const ivec2 base = ivec2(rounded);
+    const ivec2 w0 = t * ts + base - r;
+    for (int i = tid; i < ts * ts; i += 128) sRef[i] = imageLoad(refI, t * ts + ivec2(i % ts, i / ts)).x;
+    for (int i = tid; i < W * W; i += 128) sMov[i] = sampleMov(w0 + ivec2(i % W, i / W));
+    barrier();
+    float cost = 3.4e38;
+    if (tid < N * N) {
+        int sy = tid / N, sx = tid % N;      // shift = (sx - r, sy - r)
+        float acc = 0.0;
+        for (int py = 0; py < ts; ++py)
+            for (int px = 0; px < ts; ++px) {
+                float e = sRef[py * ts + px] - sMov[(py + sy) * W + px + sx];
+                acc += p.metric == 0 ? abs(e) : e * e;
+            }
+        cost = acc;
+    }
+    sCost[tid] = cost;
+    barrier();
+    if (tid == 0) {
+        float best = sCost[0];
+        int win = 0;
+        for (int c = 1; c < N * N; ++c)
+            if (sCost[c] < best) {
+                best = sCost[c];
+                win = c;
+            }
+        imageStore(flowI, t, vec4(vec2(base + ivec2(win % N - r, win / N - r)), 0.0, 0.0));
+        imageStore(costI, t, vec4(best));
+    }
+}

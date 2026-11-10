@@ -18,6 +18,23 @@ struct PreparePc {
 struct PyramidPc {
     std::int32_t dstW, dstH;
 };
+struct TilesPc {
+    std::int32_t ts, level;
+    float alpha, beta;
+};
+struct CandPc {
+    std::int32_t repeat;
+    float scale;
+    std::int32_t level;
+    float alpha, beta;
+};
+struct BlockPc {
+    std::int32_t ts, radius, metric;
+};
+struct LkPc {
+    std::int32_t ts, which, iterations;
+    float clipRadius, eps;
+};
 struct BoundPc {
     float black[4];
     float white;
@@ -48,6 +65,17 @@ ScratchLayout makeRextureScratchLayout(const MultiframeGeometry& g, bool debug) 
     img("rx_base_cov", g.guide, PixelStorage::RGBA32Float, Lifetime::Burst);
     img("rx_base_rcd", g.output, PixelStorage::RGBA16Float, Lifetime::Burst);  // fallback demosaic (RCD output is RGBA16F)
     if (debug) img("rx_dbg_qinv", g.output, PixelStorage::RGBA32Float, Lifetime::Burst);
+    // Alignment: per-level tile structure of the base (persistent) and the companion's flow / block-match cost.
+    for (std::size_t l = 0; l < 4u; ++l) {
+        const Extent2D tiles{g.coarseToFine[l].tilesX, g.coarseToFine[l].tilesY};
+        img("rx_tiles_l" + std::to_string(l), tiles, PixelStorage::RGBA32Float, Lifetime::Burst);
+        img("rx_flow_l" + std::to_string(l), tiles, PixelStorage::RG32Float, Lifetime::Companion);
+        img("rx_bmcost_l" + std::to_string(l), tiles, PixelStorage::R32Float, Lifetime::Companion);
+        if (debug) {
+            img("rx_dbg_prior_l" + std::to_string(l), tiles, PixelStorage::RG32Float, Lifetime::Companion);
+            img("rx_dbg_bm_l" + std::to_string(l), tiles, PixelStorage::RG32Float, Lifetime::Companion);
+        }
+    }
     img("linear_output", g.output, PixelStorage::RGBA16Float, Lifetime::Output);
     auto bytes = [](const ImageSpec& s) {
         return static_cast<std::uint64_t>(s.extent.width) * s.extent.height * bytesPerPixel(s.storage);
@@ -145,5 +173,98 @@ void RextureRecorder::recordBaseDemosaicBound(VkCommandBuffer c, VkImageView raw
     executor_.record(c, ShaderId::RxRcdBound, {{raw, ib(1, rcd)}, {}}, &p, sizeof(p), divUp(rcd.extent.width, 16),
                      divUp(rcd.extent.height, 16));
     computeWriteBarrier(c);
+}
+}  // namespace rawr::raw_gpu_pipeline
+
+namespace rawr::raw_gpu_pipeline {
+namespace {
+// Reference alignment configuration (coarse l = 0 .. fine l = 3): tile size, search radius, metric (1 = L2 clamped,
+// 0 = L1 zero outside) and the flow scale from the next coarser level.
+constexpr std::uint32_t kTileSize[4] = {8, 16, 16, 16};
+constexpr std::uint32_t kRadius[4] = {4, 4, 4, 1};
+constexpr std::int32_t kMetric[4] = {1, 1, 1, 0};
+constexpr std::uint32_t kUpsampleScale[4] = {0, 4, 4, 2};
+constexpr std::int32_t kLkIterations = 3;
+constexpr float kHessianEps = 1.0e-10f;
+
+void copyFlow(VkCommandBuffer c, const ArenaImage& src, const ArenaImage& dst) {
+    VkMemoryBarrier b{};
+    b.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    b.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdPipelineBarrier(c, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &b, 0, nullptr,
+                         0, nullptr);
+    VkImageCopy r{};
+    r.srcSubresource = r.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    r.extent = {src.extent.width, src.extent.height, 1};
+    vkCmdCopyImage(c, src.image, VK_IMAGE_LAYOUT_GENERAL, dst.image, VK_IMAGE_LAYOUT_GENERAL, 1, &r);
+    VkMemoryBarrier a{};
+    a.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    a.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    a.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(c, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &a, 0, nullptr,
+                         0, nullptr);
+}
+}  // namespace
+
+void RextureRecorder::recordBaseTiles(VkCommandBuffer c) const {
+    for (std::uint32_t l = 0; l < 4u; ++l) {
+        const auto& ref = arena_.image("rx_base_l" + std::to_string(l));
+        const auto& tiles = arena_.image("rx_tiles_l" + std::to_string(l));
+        TilesPc p{std::int32_t(kTileSize[l]), std::int32_t(l), config_.noiseAlpha, config_.noiseBeta};
+        executor_.record(c, ShaderId::RxRefTiles, {{ib(0, ref), ib(1, tiles)}, {}}, &p, sizeof(p), tiles.extent.width,
+                         tiles.extent.height);
+        computeWriteBarrier(c);
+    }
+}
+
+void RextureRecorder::recordAlignmentLevel(VkCommandBuffer c, std::uint32_t l, bool debug) const {
+    if (l >= 4u) throw std::invalid_argument("rexture recorder: invalid alignment level");
+    const std::string ls = std::to_string(l);
+    const auto& ref = arena_.image("rx_base_l" + ls);
+    const auto& mov = arena_.image("rx_alt_l" + ls);
+    const auto& flow = arena_.image("rx_flow_l" + ls);
+    const auto& tiles = arena_.image("rx_tiles_l" + ls);
+    const std::uint32_t tx = flow.extent.width, ty = flow.extent.height;
+    if (l == 0) {
+        if (tx * ty > 1024u) throw std::runtime_error("rexture recorder: coarsest alignment grid too large");
+        const VkClearColorValue zero{};
+        VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdClearColorImage(c, flow.image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &range);
+        VkMemoryBarrier b{};
+        b.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        vkCmdPipelineBarrier(c, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &b, 0,
+                             nullptr, 0, nullptr);
+    } else {
+        const auto& coarse = arena_.image("rx_flow_l" + std::to_string(l - 1));
+        const std::uint32_t coarseTs = kTileSize[l - 1];
+        CandPc p{std::int32_t((kUpsampleScale[l] * coarseTs) / 16u), float(kUpsampleScale[l]), std::int32_t(l),
+                 config_.noiseAlpha, config_.noiseBeta};
+        executor_.record(c, ShaderId::RxCandSelect, {{ib(0, ref), ib(1, mov), ib(2, coarse), ib(3, flow)}, {}}, &p,
+                         sizeof(p), tx, ty);
+        computeWriteBarrier(c);
+    }
+    if (debug) copyFlow(c, flow, arena_.image("rx_dbg_prior_l" + ls));
+    BlockPc bp{std::int32_t(kTileSize[l]), std::int32_t(kRadius[l]), kMetric[l]};
+    executor_.record(c, ShaderId::RxBlockMatch,
+                     {{ib(0, ref), ib(1, mov), ib(2, flow), ib(3, tiles), ib(4, arena_.image("rx_bmcost_l" + ls))}, {}}, &bp,
+                     sizeof(bp), tx, ty);
+    computeWriteBarrier(c);
+    if (debug) copyFlow(c, flow, arena_.image("rx_dbg_bm_l" + ls));
+    // Levels above the coarsest: mode 2 and mode 1 tiles are independent, one dispatch. The coarsest level fills the
+    // unconstrained tiles from the constrained ones between the two.
+    LkPc lk{std::int32_t(kTileSize[l]), l == 0 ? 2 : 3, kLkIterations, float(kRadius[l]), kHessianEps};
+    executor_.record(c, ShaderId::RxLk, {{ib(0, ref), ib(1, mov), ib(2, flow), ib(3, tiles)}, {}}, &lk, sizeof(lk), tx, ty);
+    computeWriteBarrier(c);
+    if (l == 0) {
+        executor_.record(c, ShaderId::RxFill, {{ib(0, flow), ib(1, tiles)}, {}}, nullptr, 0, 1, 1);
+        computeWriteBarrier(c);
+        lk.which = 1;
+        executor_.record(c, ShaderId::RxLk, {{ib(0, ref), ib(1, mov), ib(2, flow), ib(3, tiles)}, {}}, &lk, sizeof(lk), tx,
+                         ty);
+        computeWriteBarrier(c);
+    }
 }
 }  // namespace rawr::raw_gpu_pipeline

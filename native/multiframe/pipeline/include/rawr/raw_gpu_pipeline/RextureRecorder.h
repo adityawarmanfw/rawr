@@ -31,6 +31,12 @@ class RextureRecorder final {
     // Clamps the RCD base to the native-sample range of each colour (5 x 5) in place; follows the RCD demosaic.
     void recordBaseDemosaicBound(VkCommandBuffer, VkImageView rawU16, const MultiframeFrameParameters&) const;
 
+    // Base: per-level tile structure (gradient tensor + flat-tile mode) of the reference pyramid. After recordPrepare(base).
+    void recordBaseTiles(VkCommandBuffer) const;
+    // Companion alignment level l (0 = coarsest .. 3 = finest); record 0..3 in order after recordPrepare(companion).
+    // debug: also keeps the prior (candidate upsampling) and the block-match result of the level for verification.
+    void recordAlignmentLevel(VkCommandBuffer, std::uint32_t level, bool debug) const;
+
    private:
     ResourceArena& arena_;
     VulkanExecutor& executor_;

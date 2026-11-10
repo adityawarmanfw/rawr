@@ -84,7 +84,12 @@ set(RAWR_MF_SHADER_SOURCES
   ${RAWR_MF_DIR}/merge_rexture/shaders/rx_kernel_blur.comp
   ${RAWR_MF_DIR}/merge_rexture/shaders/rx_kernel_cov.comp
   ${RAWR_MF_DIR}/merge_rexture/shaders/rx_qinv_debug.comp
-  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_rcd_bound.comp)
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_rcd_bound.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_ref_tiles.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_cand_select.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_block_match.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_lk.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_fill.comp)
 set(RAWR_MF_SPV_OUTPUTS)
 foreach(RAWR_MF_SRC IN LISTS RAWR_MF_SHADER_SOURCES)
   get_filename_component(RAWR_MF_NAME ${RAWR_MF_SRC} NAME_WE)

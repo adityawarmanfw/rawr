@@ -69,6 +69,11 @@ enum class ShaderId : std::uint32_t {
     RxKernelCov,
     RxQinvDebug,
     RxRcdBound,
+    RxRefTiles,
+    RxCandSelect,
+    RxBlockMatch,
+    RxLk,
+    RxFill,
     Count
 };
 struct ImageBinding {

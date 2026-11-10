@@ -20,3 +20,12 @@ for name, f in (('RX_K2', 2), ('RX_K4', 4)):
     print(f'const float {name}[{len(k)}] = float[{len(k)}](' + ', '.join(f'{float(v):.9e}' for v in k) + ');')
 k = scipy_kernel(1.5)    # structure-tensor integration scale (CFG tensor_sigma), half-resolution pixels
 print(f'const float RX_KT[{len(k)}] = float[{len(k)}](' + ', '.join(f'{float(v):.9e}' for v in k) + ');')
+
+# Frozen Monte-Carlo constants of the reference alignment (fixed seeds), produced by the reference implementation
+# (level_noise_factors(local5, no half step) and l1_diff_sd(16, level)); see the comments below.
+print("""
+// Frozen Monte-Carlo constants of the reference alignment (merge_m0.py d03c7f5; fixed seeds 12345 / 99).
+// RX_LEVEL_NOISE[l]: expected gradient energy E[gx^2] of unit-variance white raw noise through local5 + the pyramid to level l.
+// RX_L1_SD[l]: SD of L1(ref, alt1) - L1(ref, alt2) over a 16 x 16 tile of unit-variance noise at level l (l = 1..3).
+const float RX_LEVEL_NOISE[4] = float[4](6.142577622e-04, 8.549295366e-03, 6.750960648e-02, 8.997264504e-02);
+const float RX_L1_SD[4] = float[4](0.000000000e+00, 1.450300813e+00, 5.695584297e+00, 1.110085583e+01);""")
