@@ -285,9 +285,10 @@ internal fun CaptureGroup(lens: LensProfile, camera: ProbedCamera?, onPickStream
                     "The full-size mode's dimensions, including sizes the camera doesn't list"
                 ) { update { copy(choice = choice.copy(width = it.width, height = it.height)) } }
                 SettingsSwitchRow(
-                    title = "Include viewfinder in photo requests",
+                    title = "Send photo requests to both streams",
                     checked = capture.includePreview,
-                    supportingText = "Also send each full-size photo request to the viewfinder RAW stream. " +
+                    supportingText = "Target both photo and viewfinder RAW streams when taking a full-size photo. " +
+                        "This does not turn the live viewfinder on or off. " +
                         "Required by some vivo modes; keep off for OPPO full-size modes.",
                     testTag = lensEditorTag("photo_include_preview")
                 ) { update { copy(includePreview = it) } }
@@ -506,7 +507,7 @@ internal fun BuffersGroup(lens: LensProfile, camera: ProbedCamera?, onChange: (L
             }
             CaptureNumberField("Photo stream buffer count", capture.bufferCount,
                 Modifier.testTag(lensEditorTag("photo_buffer_count")),
-                "Frames the photo reader holds, 2 to 16. 0 = 6") {
+                "Maximum photo buffers held at once, 2 to 16. 0 = default (6). This does not set the burst frame count.") {
                 onChange(lens.streams { copy(photo = capture.copy(bufferCount = it)) })
             }
         }

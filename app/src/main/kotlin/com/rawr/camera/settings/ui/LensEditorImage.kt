@@ -224,14 +224,15 @@ internal fun SensorLayoutGroup(
         }
         SettingDivider()
         DropdownChoiceRow(
-            title = "Colour order",
+            title = if (hasPhotoStream) "Shared colour order" else "Colour order",
             selected = layout.colourOrder,
             values = listOf<String?>(null) + COLOUR_ORDERS,
             label = { it ?: "Camera's" },
+            supportingText = if (hasPhotoStream) "Applies to both viewfinder and photo CFA, regardless of the selected tab." else null,
             testTag = lensEditorTag("sensor_colour_order"),
             onSelect = { onChange(layout.copy(colourOrder = it)) }
         )
-        if (layout.block > 1) {
+        if ((!hasPhotoStream || !editPhotoCfa) && layout.block > 1) {
             SettingDivider()
             DropdownChoiceRow(
                 title = "Live remosaic",
@@ -244,7 +245,7 @@ internal fun SensorLayoutGroup(
                 onSelect = { onChange(layout.copy(liveRemosaic = it)) }
             )
         }
-        if (if (hasPhotoStream) layout.photoBlock > 1 else layout.block > 1) {
+        if (if (hasPhotoStream) editPhotoCfa && layout.photoBlock > 1 else layout.block > 1) {
             SettingDivider()
             DropdownChoiceRow(
                 title = "Photo remosaic",
