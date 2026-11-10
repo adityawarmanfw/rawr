@@ -192,6 +192,65 @@
       }
     },
     {
+      "id": "1xF",
+      "camera": {
+        "id": "2"
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 4080,
+          "height": 3064
+        },
+        "photo": {
+          "format": "RAW10",
+          "width": 16320,
+          "height": 12256,
+          "buffers": {
+            "usage": "0x3",
+            "count": 2
+          },
+          "mergeFramesOneByOne": false,
+          "includePreview": false
+        },
+        "companion": {
+          "mode": "off"
+        }
+      },
+      "session": {
+        "cameraApi": "java"
+      },
+      "request": {
+        "defaults": "minimal"
+      },
+      "vendorKeys": [
+        {
+          "tag": "com.oplus.is.sdk.camera.package",
+          "type": "byte",
+          "scope": "session",
+          "values": [
+            1
+          ],
+          "enabled": true
+        },
+        {
+          "tag": "com.oplus.is.from.extension",
+          "type": "int32",
+          "scope": "session",
+          "values": [
+            1
+          ],
+          "enabled": true
+        }
+      ],
+      "image": {
+        "sensorLayout": {
+          "block": 1,
+          "photoBlock": 4
+        }
+      }
+    },
+    {
       "id": "3x",
       "camera": {
         "id": "4"
@@ -278,6 +337,65 @@
         "sensorLayout": {
           "block": 1,
           "photoBlock": 2
+        }
+      }
+    },
+    {
+      "id": "3xF",
+      "camera": {
+        "id": "4"
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 4096,
+          "height": 3072
+        },
+        "photo": {
+          "format": "RAW10",
+          "width": 16384,
+          "height": 12288,
+          "buffers": {
+            "usage": "0x3",
+            "count": 2
+          },
+          "mergeFramesOneByOne": false,
+          "includePreview": false
+        },
+        "companion": {
+          "mode": "off"
+        }
+      },
+      "session": {
+        "cameraApi": "java"
+      },
+      "request": {
+        "defaults": "minimal"
+      },
+      "vendorKeys": [
+        {
+          "tag": "com.oplus.is.sdk.camera.package",
+          "type": "byte",
+          "scope": "session",
+          "values": [
+            1
+          ],
+          "enabled": true
+        },
+        {
+          "tag": "com.oplus.is.from.extension",
+          "type": "int32",
+          "scope": "session",
+          "values": [
+            1
+          ],
+          "enabled": true
+        }
+      ],
+      "image": {
+        "sensorLayout": {
+          "block": 1,
+          "photoBlock": 4
         }
       }
     },

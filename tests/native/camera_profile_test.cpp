@@ -424,7 +424,7 @@ void testOppoPhotoStreams() {
     using namespace rawrcam::camera;
     const auto oppo = builtInCameraProfile("oppo_find_x9_ultra");
     const auto roundTrip = parseCameraProfile(serializeCameraProfile(oppo));
-    assert(roundTrip && roundTrip->lenses.size() == 8);
+    assert(roundTrip && roundTrip->lenses.size() == 10);
     for (const auto& [name, camera, mode, width, height, block] : {
              std::tuple{"H0.6", "3", 5, 8192u, 6144u, 2u},
              std::tuple{"H1x", "2", 13, 8160u, 6128u, 2u},
@@ -449,6 +449,22 @@ void testOppoPhotoStreams() {
         }
         assert(stillKeys == 1 && sessionKeys == 2);
     }
+    // 200 MP is selected by stream geometry, with no forced sensor-mode key.
+    for (const auto& [name, camera, width, height] : {
+             std::tuple{"1xF", "2", 16320u, 12256u},
+             std::tuple{"3xF", "4", 16384u, 12288u}}) {
+        const auto lens = routeForLens(*roundTrip, name);
+        assert(lens && lens->cameraId == camera && lens->photoStream);
+        assert(lens->photoStream->width == width && lens->photoStream->height == height);
+        assert(lens->sensorLayoutBlock == 1 && lens->photoSensorLayoutBlock == 4);
+        assert(!lens->photoIncludePreview && lens->photoBufferUsage == 3 && lens->photoBufferCount == 2);
+        assert(lens->vendorKeys.size() == 2);
+        for (const auto& key : lens->vendorKeys) {
+            assert(key.tag != "com.oplus.engineercamera.agingtest.mode.select");
+            assert(key.scope == CameraKeySetting::Scope::Session);
+        }
+    }
+    for (const auto& lens : roundTrip->lenses) assert(!lens.stopViewfinderForPhotos);
     const auto vivo = routeForLens(builtInCameraProfile("vivo_x300_ultra"), "H85");
     assert(vivo && vivo->photoIncludePreview && vivo->photoBufferCount == 0 && vivo->photoSensorLayoutBlock == 1);
     assert(!parseCameraProfile(R"({"schema":2,"lenses":[{"id":"bad","camera":{"id":"5"},"image":{"sensorLayout":{"photoBlock":3}}}]})"));
