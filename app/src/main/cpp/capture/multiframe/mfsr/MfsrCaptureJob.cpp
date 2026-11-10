@@ -1,4 +1,5 @@
 #include "capture/multiframe/mfsr/MfsrCaptureJob.h"
+#include "diagnostics/timing/CaptureStageTimer.h"
 
 #include <android/log.h>
 #include <unistd.h>
@@ -85,6 +86,7 @@ std::uint64_t readMemAvailableBytes() {
 
 void MfsrCaptureJob::run() noexcept {
     const std::uint64_t requestId = work_->requestId;
+    diagnostics::CaptureStageTimer jobTiming("burst_process_and_outputs", requestId);
     const std::string baseName = work_->baseDng.displayName, mergedName = work_->mergedDng.displayName,
                       jpegName = work_->mergedJpeg.output.displayName;
     const bool wantBase = work_->baseDng.outputFd.valid(), wantMerged = work_->mergedDng.outputFd.valid(),
@@ -426,6 +428,9 @@ void MfsrCaptureJob::runStages(Published& published) {
             const auto hotPixels = job->referenceMetadata.hotPixelMap;
             rawr::raw_gpu_pipeline::BurstStageTimings total{};
             for (const auto& window : strips) {
+                diagnostics::CaptureStageTimer stripTiming("merge_strip", requestId, window.y0);
+                CAPTURE_DEBUG_LOG("MERGE_STRIP_BEGIN requestId=%llu y0=%u rows=%u frames=%zu algorithm=%u",
+                     static_cast<unsigned long long>(requestId), window.y0, window.rows, job->frames.size(), tuning.mergeAlgorithm);
                 job->setRowWindow(window.y0, window.rows);
                 auto& stripHot = job->referenceMetadata.hotPixelMap;
                 stripHot.clear();
@@ -434,8 +439,11 @@ void MfsrCaptureJob::runStages(Published& published) {
                         stripHot.push_back(hotPixels[i]);
                         stripHot.push_back(hotPixels[i + 1] - int32_t(window.y0));
                     }
+                diagnostics::CaptureStageTimer mergeTiming("merge_strip_compute_and_load", requestId, window.y0);
                 auto merged = MergeProcessor::run(ctx.vulkan, coordinator, *job, ctx.rawWidth, window.rows, ctx.cfa,
                                                   tuning, false, queueSubmit, mergeSubmit);
+                mergeTiming.finish();
+                diagnostics::CaptureStageTimer projectionTiming("merge_strip_project_and_stitch", requestId, window.y0);
                 if (!outputAdapterReady) {
                     outputAdapter.initialize(ctx.vulkan.physicalDevice(), ctx.vulkan.device(),
                                              ctx.vulkan.queueFamily(), mergeSubmit, ctx.rawWidth, window.rows);
@@ -445,7 +453,12 @@ void MfsrCaptureJob::runStages(Published& published) {
                 const auto packed = projectMerged(merged);
                 projectMs += wallMs(projectBegin);
                 writeStrip(full, ctx.rawWidth, window, reinterpret_cast<const std::uint16_t*>(packed.pixels.data()));
+                projectionTiming.finish();
                 const auto& t = merged.timings;
+                CAPTURE_DEBUG_LOG("MERGE_STRIP_STAGES requestId=%llu y0=%u initMs=%.3f noiseMs=%.3f refMs=%.3f prepMs=%.3f alignMs=%.3f kernelMs=%.3f robustMs=%.3f accumMs=%.3f finalizeMs=%.3f totalMs=%.3f",
+                     static_cast<unsigned long long>(requestId), window.y0, t.initializeMs, t.noiseEstimateMs,
+                     t.referencePrepareMs + t.referenceStatsMs, t.companionPrepareMs, t.alignmentMs,
+                     t.kernelStatsMs, t.robustnessMs, t.accumulationMs, t.finalizeMs, t.totalMs);
                 total.initializeMs += t.initializeMs;
                 total.noiseEstimateMs += t.noiseEstimateMs;
                 total.referencePrepareMs += t.referencePrepareMs;
@@ -468,6 +481,7 @@ void MfsrCaptureJob::runStages(Published& published) {
             stitched = std::move(packed);
             LOGI("MULTIFRAME_STRIPS count=%zu totalMs=%.1f", strips.size(), wallMs(stripsBegin));
         } else {
+            diagnostics::CaptureStageTimer mergeTiming("merge_whole_compute_and_load", requestId);
             mergeResult = MergeProcessor::run(ctx.vulkan, coordinator, *job, ctx.rawWidth, ctx.rawHeight, ctx.cfa,
                                               tuning, dumpRzslRequested, queueSubmit, mergeSubmit);
         }

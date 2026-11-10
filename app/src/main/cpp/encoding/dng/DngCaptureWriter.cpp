@@ -1,4 +1,5 @@
 #include "encoding/dng/DngCaptureWriter.h"
+#include "diagnostics/timing/CaptureStageTimer.h"
 
 #include <sys/resource.h>
 #include <sys/stat.h>
@@ -71,6 +72,7 @@ class FdWriteIo {
         return ok;
     }
     uint64_t highWater() const { return highWater_; }
+    double pwriteMs() const { return pwriteMs_; }
 
    private:
     static constexpr size_t kBufferBytes = 1u << 20;
@@ -79,7 +81,15 @@ class FdWriteIo {
         size_t remaining = len;
         uint64_t cur = off;
         while (remaining > 0) {
+#ifndef NDEBUG
+            const double writeBegin = diagnostics::captureMonoMs();
+#endif
             const ssize_t n = ::pwrite(fd_, p, remaining, static_cast<off_t>(cur));
+#ifndef NDEBUG
+            const int writeErrno = errno;
+            pwriteMs_ += diagnostics::captureMonoMs() - writeBegin;
+            errno = writeErrno;
+#endif
             if (n < 0 && errno == EINTR) continue;
             if (n <= 0) return false;
             p += static_cast<size_t>(n);
@@ -88,6 +98,7 @@ class FdWriteIo {
         }
         return true;
     }
+    double pwriteMs_ = 0.0;
     int fd_ = -1;
     uint64_t pos_ = 0;
     uint64_t highWater_ = 0;
@@ -120,17 +131,26 @@ bool DngCaptureWriter::start(std::shared_ptr<const rawrcam::imaging::RawSnapshot
             // Background priority: file encoding must never preempt camera or
             // preview threads, especially on throttled silicon.
             ::setpriority(PRIO_PROCESS, 0, 10);
+            diagnostics::CaptureStageTimer dngTiming("dng_encode_write_and_fsync", frame->requestId);
+            CAPTURE_TIMING_LOG( "DNG_BEGIN requestId=%llu name=%s raw=%ux%u",
+                static_cast<unsigned long long>(frame->requestId), context.displayName.c_str(), frame->width, frame->height);
             DngWriteCompletion done{};
             done.requestId = frame->requestId;
             done.displayName = context.displayName;
             const int fd = context.outputFd.get();
+#ifndef NDEBUG
+            double pwriteMs = 0.0;
+#endif
             try {
+                diagnostics::CaptureStageTimer metadataTiming("dng_metadata_adapt", frame->requestId);
                 std::string adaptError;
                 auto params = makeTinyDngWriteParams(*frame, context, &adaptError);
+                metadataTiming.finish();
                 if (!params) {
                     done.error = "metadata_adapter: " + adaptError;
                 } else {
                     params->rebind();
+                    diagnostics::CaptureStageTimer writeTiming("dng_encode_and_write", frame->requestId);
                     const auto writeStart = std::chrono::steady_clock::now();
                     tinydng_error err{};
                     tinydng_config cfg{};
@@ -166,8 +186,12 @@ bool DngCaptureWriter::start(std::shared_ptr<const rawrcam::imaging::RawSnapshot
                                 done.fileBytes = endBytes;
                             }
                         }
+#ifndef NDEBUG
+                        pwriteMs = fdio.pwriteMs();
+#endif
                         tinydng_context_destroy(tctx);
                     }
+                    writeTiming.finish();
                     const auto writeEnd = std::chrono::steady_clock::now();
                     done.writeMs = std::chrono::duration<double, std::milli>(writeEnd - writeStart).count();
                     if (done.error.empty() && done.fileBytes == 0) {
@@ -176,6 +200,7 @@ bool DngCaptureWriter::start(std::shared_ptr<const rawrcam::imaging::RawSnapshot
                             done.fileBytes = static_cast<uint64_t>(stbuf.st_size);
                     }
                     if (done.error.empty()) {
+                        diagnostics::CaptureStageTimer syncTiming("dng_fsync", frame->requestId);
                         const auto fsyncStart = std::chrono::steady_clock::now();
                         if (::fsync(fd) != 0) done.error = "fsync failed: " + std::string(std::strerror(errno));
                         const auto fsyncEnd = std::chrono::steady_clock::now();
@@ -193,6 +218,11 @@ bool DngCaptureWriter::start(std::shared_ptr<const rawrcam::imaging::RawSnapshot
             if (::close(context.outputFd.release()) != 0 && done.error.empty())
                 done.error = "close failed: " + std::string(std::strerror(errno));
             done.success = done.error.empty();
+            CAPTURE_TIMING_LOG(
+                "DNG_TIMING requestId=%llu name=%s writeMs=%.3f pwriteMs=%.3f nonPwriteMs=%.3f fsyncMs=%.3f bytes=%llu success=%d",
+                static_cast<unsigned long long>(frame->requestId), done.displayName.c_str(), done.writeMs, pwriteMs,
+                std::max(0.0, done.writeMs - pwriteMs), done.fsyncMs,
+                static_cast<unsigned long long>(done.fileBytes), done.success ? 1 : 0);
             std::lock_guard<std::mutex> lock(mutex_);
             completion_ = std::move(done);
             busy_ = false;

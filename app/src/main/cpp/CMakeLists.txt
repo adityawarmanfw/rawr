@@ -426,3 +426,8 @@ set_source_files_properties(encoding/jpeg/JpegCaptureWriter.cpp PROPERTIES COMPI
 # allocation/copy/serialization paths in device Debug builds too.
 set_source_files_properties(capture/persistence/BurstJob.cpp capture/persistence/CaptureJob.cpp
   PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Debug>:-O2>")
+
+# Full-size burst remosaic is inline in SessionEngine.cpp. Keep device Debug
+# timing representative of optimized CPU loops without changing the algorithm.
+set_source_files_properties(session/SessionEngine.cpp
+  PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Debug>:-O2>")
