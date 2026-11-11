@@ -46,6 +46,7 @@ layout(push_constant) uniform Parameters {
     uint mode; // 0 estimate, 1 apply (thresholds from thresh[scaleIdx])
     uint scaleIdx;
     uint groupsX;
+    float edgeK; // edge-stop sharpness: e = |d|^2/sigma^2 * edgeK - 9 (0.02 = darktable's; higher keeps chroma edges)
 }
 p;
 
@@ -73,7 +74,7 @@ void main() {
                 int xx = clamp(int(lx) + mult * (ii - 2), 0, int(p.tileE) - 1);
                 vec3 v = imageLoad(fineImg, ivec2(xx, yy)).rgb;
                 vec3 d = c0 - v;
-                float e = dot(d, d) * p.invSigma2 * 0.02 - 9.0;
+                float e = dot(d, d) * p.invSigma2 * p.edgeK - 9.0;
                 float w = b3tap(jj) * b3tap(ii) * (e > 20.0 ? 0.0 : exp2(-max(e, 0.0)));
                 wgt += vec3(w);
                 acc += w * v;

@@ -68,7 +68,7 @@ struct Cfg {
     float wb[3] = {1.0f, 1.0f, 1.0f};
     float a = 0.0f, b = 0.0f;
     float strength = 1.0f, shadows = 1.0f;
-    float forceY = 0.25f, forceUv = 0.75f;
+    float forceY = 0.25f, forceUv = 0.75f, edgeK = 0.02f;
 };
 
 Cfg parse(int argc, char** argv) {
@@ -95,6 +95,7 @@ Cfg parse(int argc, char** argv) {
         else if (k == "--shadows") c.shadows = std::strtof(need().c_str(), nullptr);
         else if (k == "--force-y") c.forceY = std::strtof(need().c_str(), nullptr);
         else if (k == "--force-uv") c.forceUv = std::strtof(need().c_str(), nullptr);
+        else if (k == "--edge-k") c.edgeK = std::strtof(need().c_str(), nullptr);
         else throw std::runtime_error("unknown arg " + k);
     }
     if (c.spvDir.empty() || c.inPath.empty() || !c.w || !c.h) throw std::runtime_error("missing args");
@@ -316,6 +317,7 @@ int main(int argc, char** argv) {
             p.noiseB = c.b;
             p.forceY = c.forceY;
             p.forceUv = c.forceUv;
+            p.edgeK = c.edgeK;
             p.whiteBalance = {c.wb[0], c.wb[1], c.wb[2]};
             p.maxScale = c.scales;
             p.tileSize = c.tile;

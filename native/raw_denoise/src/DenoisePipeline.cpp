@@ -305,7 +305,7 @@ DenoisePipeline::DenoisePipeline(VkPhysicalDevice physical, VkDevice device, Den
                               &im.prePipeLayout);
     im.atrLayout = makeLayout(device, {{0, STORAGE_IMAGE}, {1, STORAGE_IMAGE}, {2, STORAGE_IMAGE},
                                        {3, STORAGE_BUFFER}, {4, STORAGE_BUFFER}, {5, STORAGE_IMAGE}},
-                              36, &im.atrPipeLayout);
+                              40, &im.atrPipeLayout);
     im.thrLayout = makeLayout(device, {{0, STORAGE_BUFFER}, {1, STORAGE_BUFFER}}, 24,
                               &im.thrPipeLayout);
     im.backLayout = makeLayout(device, {{0, STORAGE_IMAGE}, {1, STORAGE_IMAGE}, {2, STORAGE_IMAGE}},
@@ -522,7 +522,8 @@ void DenoisePipeline::record(VkCommandBuffer command, VkImageView srcView, VkIma
                     uint32_t mult;
                     float inv;
                     uint32_t mode, scaleIdx, groupsX;
-                } pa{extent, tw, th, halo, mult, 1.0f / sb2, 0u, (uint32_t)scale, groupsX};
+                    float edgeK;
+                } pa{extent, tw, th, halo, mult, 1.0f / sb2, 0u, (uint32_t)scale, groupsX, params.edgeK};
                 dispatch(atrPipe, im.atrPipeLayout, atrSet, &pa, sizeof(pa), groupsX, groupsY);
                 {
                     struct PT {
