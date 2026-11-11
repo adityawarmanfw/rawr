@@ -1,5 +1,6 @@
 #include <rawr/raw_gpu_pipeline/AndroidBurstCoordinator.h>
 #include <rawr/raw_gpu_pipeline/ReplayMetadata.h>
+#include <rawr/raw_gpu_pipeline/RextureRecorder.h>
 #include <rawr/raw_multiframe_output/MultiframeOutputAdapter.h>
 #include <rawr/zsl_codec/ZslDecoder.h>
 #include <rawr/zsl_container/ZslContainer.h>
@@ -1324,7 +1325,7 @@ int main(int argc, char** argv) {
         " [--flat-sigma F] [--detail-floor F] [--scale-bandwidth-gain F]"
         " [--coverage-neff-lo F] [--coverage-neff-hi F] [--coverage-mass-lo F] [--coverage-mass-hi F]"
         " [--robustness-t F] [--robustness-s1 F] [--robustness-s2 F]"
-         " [--max-frames I] [--suffix STR] [--dump-base] [--dump-all-singles] [--dump-raw16] [--export-dng DIR] [--export-merged-dng FILE] [--merge wronski|hdrplus|hdrplus-freq|hdrplus-bracket] [--hdrplus-strength F] [--hdrplus-tile 16|32] [--hdrplus-search 32|64|128] [--hdrplus-faithful] [--affine-deadzone F] [--affine-softness F] [--affine-isotropic] [--fallback-chroma GAIN] [--fallback-luma GAIN] [--fallback-max-sigma PX] [--no-hot-pixels] [--hot-pixel-list FILE]"
+         " [--max-frames I] [--suffix STR] [--dump-base] [--dump-all-singles] [--dump-raw16] [--export-dng DIR] [--export-merged-dng FILE] [--merge wronski|hdrplus|hdrplus-freq|hdrplus-bracket|rexture] [--rexture-strip-rows N] [--hdrplus-strength F] [--hdrplus-tile 16|32] [--hdrplus-search 32|64|128] [--hdrplus-faithful] [--affine-deadzone F] [--affine-softness F] [--affine-isotropic] [--fallback-chroma GAIN] [--fallback-luma GAIN] [--fallback-max-sigma PX] [--no-hot-pixels] [--hot-pixel-list FILE]"
          " [--reference recorded|middle|sharpest|darkest] INPUT [INPUT2 ...]\n"
          "  INPUT: FILE.rzsl | DNG_DIR or dng:DNG_DIR (every *.dng, name-sorted, is one burst)"
          " | rawburst:DIR | synthetic:...";
@@ -1390,6 +1391,8 @@ int main(int argc, char** argv) {
             else if (a == "--reference") tune.reference = need(a.c_str());
             else if (a == "--merge") tune.mergeAlgorithm = need(a.c_str());
             else if (a == "--dump-stages") tune.dumpStages = need(a.c_str());
+            else if (a == "--rexture-strip-rows")   // test: the output must not depend on the grain pass's strip height
+                rawr::raw_gpu_pipeline::RextureRecorder::setStripRowsForTesting(std::uint32_t(std::stoul(need(a.c_str()))));
             else if (a == "--noise-ab") tune.noiseAb = need(a.c_str());
             else if (a == "--inject-flow") tune.injectFlow = need(a.c_str());
             else if (a == "--hdrplus-strength") tune.hdrplus.strength = std::stof(need(a.c_str()));

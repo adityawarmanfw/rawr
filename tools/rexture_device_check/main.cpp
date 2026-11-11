@@ -6,6 +6,7 @@
 // --frames N cycles the burst's frames to N (timing only: repeated frames align trivially but cost the same).
 #include <rawr/raw_gpu_pipeline/AndroidBurstCoordinator.h>
 #include <rawr/raw_gpu_pipeline/RextureFrameScorer.h>
+#include <rawr/raw_gpu_pipeline/RextureRecorder.h>
 
 #include <algorithm>
 #include <chrono>
@@ -111,6 +112,8 @@ int main(int argc, char** argv) {
             else if (a == "--inject-flow") inject = need();
             else if (a == "--repeat") repeat = std::stoi(need());
             else if (a == "--scores") scores = true;
+            else if (a == "--strip-rows")   // the grain pass's strip height: the output must not depend on it
+                rawr::raw_gpu_pipeline::RextureRecorder::setStripRowsForTesting(std::uint32_t(std::stoul(need())));
             else if (a.rfind("--", 0) == 0) throw std::invalid_argument("unknown flag " + a);
             else dir = a;
         }
