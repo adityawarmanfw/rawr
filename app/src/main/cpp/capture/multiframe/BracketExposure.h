@@ -17,7 +17,7 @@ namespace rawrcam::capture::multiframe {
 
 inline constexpr std::uint32_t kMergeAlgorithmHdrPlusBracketed = 3u;
 // Rexture (native/multiframe/merge_rexture): equal-exposure bursts at native resolution. One merge window holds up
-// to kRextureMaxPixels (~72 bytes of arena per pixel: ~0.94 GiB at 13 MP, ~3.7 GiB at 50 MP on the device, between
+// to kRextureMaxPixels (~72 bytes of arena per pixel: ~0.91 GiB at 13 MP, ~3.45 GiB at 50 MP on the device, between
 // HDR+ Quality and Wronski). Larger frames merge in strips of that size (MfsrCaptureJob, DNG only), like the other
 // merges; keep this equal to the strip budget there.
 inline constexpr std::uint32_t kMergeAlgorithmRexture = 4u;
