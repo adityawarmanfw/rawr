@@ -21,6 +21,9 @@ layout(push_constant) uniform P {
     float alpha, beta;
 } p;
 
+shared vec4 sCost[256];
+shared uint sAmb;
+shared vec4 sBest;
 shared float sHi[4 * 256];
 shared float sLo[4 * 256];
 shared float sMean[256];
@@ -59,43 +62,81 @@ void main() {
 
     ivec2 q = t * 16 + l;
     float refv = imageLoad(refI, q).x;
+    // Pass 1: fp32 costs. Candidates that map to the same integer shift have identical costs, so only tiles where two
+    // different shifts come within 1e-4 relative of each other are summed again in float-float (reference float64 order).
+    ivec2 shift[4];
+    vec4 cost32;
     for (int k = 0; k < 4; ++k) {
-        ivec2 d = ivec2(roundEven(c[k] * p.scale));
-        float dh, dl, th, tl;
-        rxFfDiff(refv, imageLoad(movI, clamp(q + d, ivec2(0), movMax)).x, dh, dl);
-        rxFfAbs(dh, dl, th, tl);
-        sHi[k * 256 + tid] = th;
-        sLo[k * 256 + tid] = tl;
+        shift[k] = ivec2(roundEven(c[k] * p.scale));
+        cost32[k] = abs(refv - imageLoad(movI, clamp(q + shift[k], ivec2(0), movMax)).x);
     }
+    sCost[tid] = cost32;
     sMean[tid] = refv;
     barrier();
     for (int s = 128; s > 0; s >>= 1) {
         if (tid < s) {
-            for (int k = 0; k < 4; ++k) {
-                float h = sHi[k * 256 + tid], l = sLo[k * 256 + tid];
-                rxFfAdd(h, l, sHi[k * 256 + tid + s], sLo[k * 256 + tid + s]);
-                sHi[k * 256 + tid] = h;
-                sLo[k * 256 + tid] = l;
-            }
+            sCost[tid] += sCost[tid + s];
             sMean[tid] += sMean[tid + s];
         }
         barrier();
     }
     if (tid == 0) {
-        float best = sHi[0], bestLo = sLo[0];
+        vec4 c4 = sCost[0];
+        bool amb = false;
+        for (int i = 0; i < 4; ++i)
+            for (int j = i + 1; j < 4; ++j)
+                if (shift[i] != shift[j] && abs(c4[i] - c4[j]) <= 1e-4 * max(max(c4[i], c4[j]), 1e-12)) amb = true;
+        sAmb = amb ? 1u : 0u;
+        sBest = c4;
+    }
+    barrier();
+    vec4 exact = sBest;           // (hi) costs; replaced below when ambiguous
+    if (sAmb != 0u) {
+        for (int k = 0; k < 4; ++k) {
+            float dh, dl, th, tl;
+            rxFfDiff(refv, imageLoad(movI, clamp(q + shift[k], ivec2(0), movMax)).x, dh, dl);
+            rxFfAbs(dh, dl, th, tl);
+            sHi[k * 256 + tid] = th;
+            sLo[k * 256 + tid] = tl;
+        }
+        barrier();
+        for (int s = 128; s > 0; s >>= 1) {
+            if (tid < s)
+                for (int k = 0; k < 4; ++k) {
+                    float h = sHi[k * 256 + tid], l = sLo[k * 256 + tid];
+                    rxFfAdd(h, l, sHi[k * 256 + tid + s], sLo[k * 256 + tid + s]);
+                    sHi[k * 256 + tid] = h;
+                    sLo[k * 256 + tid] = l;
+                }
+            barrier();
+        }
+    }
+    if (tid == 0) {
         int sel = 0;
-        for (int k = 1; k < 4; ++k)
-            if (rxFfLess(sHi[k * 256], sLo[k * 256], best, bestLo)) {
-                best = sHi[k * 256];
-                bestLo = sLo[k * 256];
-                sel = k;
-            }
-        float cBil = sHi[3 * 256] + sLo[3 * 256];
+        float cBil;
+        if (sAmb != 0u) {
+            float best = sHi[0], bestLo = sLo[0];
+            for (int k = 1; k < 4; ++k)
+                if (rxFfLess(sHi[k * 256], sLo[k * 256], best, bestLo)) {
+                    best = sHi[k * 256];
+                    bestLo = sLo[k * 256];
+                    sel = k;
+                }
+            cBil = sHi[3 * 256] + sLo[3 * 256] - (best + bestLo);
+        } else {
+            float best = exact.x;
+            for (int k = 1; k < 4; ++k)
+                if (exact[k] < best) {
+                    best = exact[k];
+                    sel = k;
+                }
+            cBil = exact.w - best;
+        }
         vec2 outv = sel < 3 ? c[sel] * p.scale : bil;
         float mean = sMean[0] / 256.0;
         float sd = RX_L1_SD[p.level] * sqrt(max(p.alpha * max(mean, 0.0) + p.beta, 1e-12));
         const float UP_K = 3.0;
-        vec2 res = (cBil - (best + bestLo) > UP_K * sd) ? outv : bil;
+        vec2 res = (cBil > UP_K * sd) ? outv : bil;
         imageStore(flowI, t, vec4(res, 0.0, 0.0));
     }
 }

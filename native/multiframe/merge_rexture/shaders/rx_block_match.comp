@@ -44,8 +44,28 @@ void main() {
     for (int i = tid; i < ts * ts; i += 128) sRef[i] = imageLoad(refI, t * ts + ivec2(i % ts, i / ts)).x;
     for (int i = tid; i < W * W; i += 128) sMov[i] = sampleMov(w0 + ivec2(i % W, i / W));
     barrier();
+    // Pass 1: plain fp32 cost of every candidate. Pass 2: only candidates within a relative margin of the fp32 minimum (the
+    // fp32 sum is good to ~1e-6) are summed again in float-float, so ties and near-ties follow the reference's float64 sums.
+    const int cand = N * N;
+    float cost32 = 3.4e38;
+    if (tid < cand) {
+        int sy = tid / N, sx = tid % N;
+        float acc = 0.0;
+        for (int py = 0; py < ts; ++py)
+            for (int px = 0; px < ts; ++px) {
+                float e = sRef[py * ts + px] - sMov[(py + sy) * W + px + sx];
+                acc += p.metric == 0 ? abs(e) : e * e;
+            }
+        cost32 = acc;
+    }
+    sCostHi[tid] = cost32;
+    barrier();
+    float minCost = 3.4e38;
+    for (int c = 0; c < cand; ++c) minCost = min(minCost, sCostHi[c]);
+    const float limit = minCost * 1.00005;
+    barrier();
     float costHi = 3.4e38, costLo = 0.0;
-    if (tid < N * N) {
+    if (tid < cand && cost32 <= limit) {
         int sy = tid / N, sx = tid % N;      // shift = (sx - r, sy - r)
         precise float hi = 0.0, lo = 0.0;
         for (int py = 0; py < ts; ++py)

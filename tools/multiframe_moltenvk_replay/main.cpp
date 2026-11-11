@@ -12,6 +12,7 @@
 #include "geometry/CfaPattern.h"
 #include "renderer/DngSource.h"
 #include "vk_test_common.hpp"
+#include "RextureStageObserver.h"
 #include "StageDump.h"
 #include "SyntheticBurst.h"
 
@@ -1056,67 +1057,7 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
         if (tune.mergeAlgorithm != "rexture") throw std::invalid_argument("--dump-stages needs --merge rexture");
         stageDump = std::make_unique<stagedump::StageDump>(
             context, tune.dumpStages, [&](const stagedump::StageDump::Record& record) { commands.submit(context.q, record); });
-        coordinator.setRextureObserver([&](const char* stage, std::uint32_t frame, const rawr::raw_gpu_pipeline::ResourceArena& arena) {
-            const std::string st = stage;
-            const auto dumpPrepare = [&](const std::string& who, const std::string& prefix) {
-                for (int l = 0; l < 4; ++l)
-                    stageDump->image(prefix + "guide_l" + std::to_string(l), arena.image(who + "l" + std::to_string(l)), 1);
-                stageDump->image(prefix + "mean", arena.image(who + "mean"), 3);
-                stageDump->image(prefix + "var", arena.image(who + "var"), 3);
-            };
-            if (st == "base_prepare") {
-                dumpPrepare("rx_base_", "base/");
-                stageDump->image("base/tensor_raw", arena.image("rx_base_tensor"), 3);
-            } else if (st == "base_kernel") {
-                stageDump->image("base/tensor_int", arena.image("rx_alt_var"), 3);
-                stageDump->image("base/cov", arena.image("rx_base_cov"), 3);
-                stageDump->image("base/qinv", arena.image("rx_dbg_qinv"), 3);
-            } else if (st == "companion_align") {
-                const std::string pre = "frames/" + std::to_string(frame) + "/";
-                for (int l = 0; l < 4; ++l) {
-                    const std::string ls = std::to_string(l);
-                    stageDump->image(pre + "L" + ls + "_lk", arena.image("rx_flow_l" + ls), 2);
-                    stageDump->image(pre + "L" + ls + "_bm", arena.image("rx_dbg_bm_l" + ls), 2);
-                    stageDump->image(pre + "L" + ls + "_prior", arena.image("rx_dbg_prior_l" + ls), 2);
-                    stageDump->image(pre + "L" + ls + "_cost", arena.image("rx_bmcost_l" + ls), 1);
-                    stageDump->image(pre + "L" + ls + "_tensor", arena.image("rx_tiles_l" + ls), 3);
-                    stageDump->image(pre + "L" + ls + "_mode", arena.image("rx_tiles_l" + ls), 1, 3);
-                }
-                stageDump->image(pre + "flow", arena.image("rx_flow_l3"), 2);
-                if (!tune.injectFlow.empty()) {   // verification: continue with the reference's flow
-                    const auto file = std::filesystem::path(tune.injectFlow) / ("frames__" + std::to_string(frame) + "__flow.bin");
-                    std::ifstream in(file, std::ios::binary | std::ios::ate);
-                    if (!in) throw std::runtime_error("cannot open " + file.string());
-                    const auto bytes = static_cast<std::size_t>(in.tellg());
-                    in.seekg(0);
-                    std::vector<float> flow(bytes / sizeof(float));
-                    in.read(reinterpret_cast<char*>(flow.data()), static_cast<std::streamsize>(bytes));
-                    stageDump->upload(arena.image("rx_flow_l3"), flow);
-                }
-            } else if (st == "companion_robust") {
-                const std::string pre = "frames/" + std::to_string(frame) + "/";
-                stageDump->image(pre + "pre", arena.image("rx_dbg_pre"), 1);
-                stageDump->image(pre + "er", arena.image("rx_er"), 1);
-                stageDump->image(pre + "scale", arena.image("rx_dbg_scale"), 1);
-            } else if (st == "final") {
-                stageDump->image("final", arena.image("rx_dbg_fin_out"), 3);
-                stageDump->image("neff", arena.image("rx_dbg_fin_out"), 1, 3);
-                stageDump->image("pre_lowcov", arena.image("rx_dbg_fin_pre"), 3);
-                stageDump->image("conf", arena.image("rx_dbg_fin_pre"), 1, 3);
-                stageDump->image("base/lowcov_w", arena.image("rx_dbg_fin_w"), 1);
-            } else if (st == "companions_done") {
-                stageDump->image("support", arena.image("rx_support"), 1);
-                stageDump->image("cover", arena.image("rx_cover"), 1);
-                stageDump->image("acc/s", arena.image("rx_acc_a"), 3);
-                stageDump->image("acc/w", arena.image("rx_acc_b"), 3);
-                stageDump->gather("acc/sq", {{&arena.image("rx_acc_a"), 3}, {&arena.image("rx_acc_b"), 3}, {&arena.image("rx_acc_c"), 0}});
-                stageDump->image("acc/ss2", arena.image("rx_dbg_ss2"), 3);
-            } else if (st == "base_demosaic") {
-                stageDump->image("base/rcd", arena.image("rx_base_rcd"), 3);
-            } else if (st == "companion_prepare") {
-                dumpPrepare("rx_alt_", "frames/" + std::to_string(frame) + "/");
-            }
-        });
+        coordinator.setRextureObserver(stagedump::makeRextureObserver(*stageDump, tune.injectFlow));
     }
     coordinator.initialize(context.pd, context.dev, context.qf,
                            [&](const VkSubmitInfo& info, VkFence fence) {
