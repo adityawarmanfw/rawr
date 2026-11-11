@@ -2,12 +2,13 @@
 #extension GL_GOOGLE_include_directive : enable
 // Rexture fallback demosaic bound (rcd_clamp = 5): every interpolated (non-native) channel of the RCD base is clamped to the
 // range of that colour's native samples in the 5 x 5 neighbourhood (edge clamp). A demosaic bound, not a filter: only
-// overshooting values change. In place on the RCD output; reads the raw frame directly (normalised).
+// overshooting values change. Reads the fp32 RCD work image and the raw frame (normalised), writes the RGBA16F base.
 #include "rx_common.glsl"
 
 layout(local_size_x = 16, local_size_y = 16) in;
 layout(set = 0, binding = 0, r16ui) readonly uniform uimage2D rawU16;
-layout(set = 0, binding = 1, rgba32f) uniform image2D rgbI;
+layout(set = 0, binding = 1, rgba32f) readonly uniform image2D rgbI;       // fp32 RCD work image
+layout(set = 0, binding = 2, rgba16f) writeonly uniform image2D outI;      // the stored base (RGBA16F)
 layout(push_constant) uniform P {
     vec4 black;
     float white;
@@ -47,5 +48,5 @@ void main() {
             }
         val[k] = clamp(val[k], lo, hi);
     }
-    imageStore(rgbI, q, vec4(val[0], val[1], val[2], v.w));
+    imageStore(outI, q, vec4(val[0], val[1], val[2], 1.0));
 }

@@ -539,7 +539,7 @@ const std::array<Spec, static_cast<size_t>(ShaderId::Count)> specs{{{"raw_normal
                                   {"rx_qinv_debug", mf_rx_qinv_debug_prod_spv, mf_rx_qinv_debug_prod_spv_size, mf_rx_qinv_debug_prod_spv, mf_rx_qinv_debug_prod_spv_size,
                                    {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
                                   {"rx_rcd_bound", mf_rx_rcd_bound_prod_spv, mf_rx_rcd_bound_prod_spv_size, mf_rx_rcd_bound_prod_spv, mf_rx_rcd_bound_prod_spv_size,
-                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
                                   {"rx_ref_tiles", mf_rx_ref_tiles_prod_spv, mf_rx_ref_tiles_prod_spv_size, mf_rx_ref_tiles_prod_spv, mf_rx_ref_tiles_prod_spv_size,
                                    {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
                                   {"rx_cand_select", mf_rx_cand_select_prod_spv, mf_rx_cand_select_prod_spv_size, mf_rx_cand_select_prod_spv, mf_rx_cand_select_prod_spv_size,

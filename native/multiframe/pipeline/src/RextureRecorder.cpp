@@ -27,9 +27,10 @@ struct CandPc {
     float scale;
     std::int32_t level;
     float alpha, beta;
+    std::int32_t exactTies;
 };
 struct BlockPc {
-    std::int32_t ts, radius, metric;
+    std::int32_t ts, radius, metric, exactTies;
 };
 struct LkPc {
     std::int32_t ts, which, iterations;
@@ -79,8 +80,7 @@ ScratchLayout makeRextureScratchLayout(const MultiframeGeometry& g, bool debug) 
     }
     img("rx_base_tensor", g.guide, PixelStorage::RGBA32Float, Lifetime::Burst);
     img("rx_base_cov", g.guide, PixelStorage::RGBA32Float, Lifetime::Burst);
-    img("rx_base_rcd", g.output, PixelStorage::RGBA32Float, Lifetime::Burst);  // fallback demosaic, fp32 work planes
-    img("rx_rcd_dir", g.output, PixelStorage::RG32Float, Lifetime::Burst);       // RCD direction field (base pass only)
+    img("rx_base_rcd", g.output, PixelStorage::RGBA16Float, Lifetime::Burst);  // fallback demosaic, stored fp16 (RCD runs on accumulator memory)
     if (debug) img("rx_dbg_qinv", g.output, PixelStorage::RGBA32Float, Lifetime::Burst);
     // Accumulators (packed, fp32): A = (sum w x [rgb], sum_frames W^2 [r]), B = (sum w [rgb], ... [g]), C = (... [b]).
     img("rx_acc_a", g.output, PixelStorage::RGBA32Float, Lifetime::Output);
@@ -198,7 +198,8 @@ void RextureRecorder::recordBaseKernel(VkCommandBuffer c, bool debug) const {
 namespace rawr::raw_gpu_pipeline {
 void RextureRecorder::recordBaseDemosaicBound(VkCommandBuffer c, VkImageView rawU16,
                                               const MultiframeFrameParameters& f) const {
-    const auto& rcd = arena_.image("rx_base_rcd");
+    const auto& rcd = arena_.image("rx_acc_a");   // fp32 RCD work image
+    const auto& base = arena_.image("rx_base_rcd");
     BoundPc p{};
     std::copy(f.normalization.blackByPhase.begin(), f.normalization.blackByPhase.end(), p.black);
     p.white = f.normalization.whiteLevel;
@@ -206,7 +207,7 @@ void RextureRecorder::recordBaseDemosaicBound(VkCommandBuffer c, VkImageView raw
     p.h = std::int32_t(rcd.extent.height);
     p.cfa = std::int32_t(config_.cfa);
     ImageBinding raw{0, rawU16, VK_IMAGE_LAYOUT_GENERAL};
-    executor_.record(c, ShaderId::RxRcdBound, {{raw, ib(1, rcd)}, {}}, &p, sizeof(p), divUp(rcd.extent.width, 16),
+    executor_.record(c, ShaderId::RxRcdBound, {{raw, ib(1, rcd), ib(2, base)}, {}}, &p, sizeof(p), divUp(rcd.extent.width, 16),
                      divUp(rcd.extent.height, 16));
     computeWriteBarrier(c);
 }
@@ -277,13 +278,13 @@ void RextureRecorder::recordAlignmentLevel(VkCommandBuffer c, std::uint32_t l, b
         const auto& coarse = arena_.image("rx_flow_l" + std::to_string(l - 1));
         const std::uint32_t coarseTs = kTileSize[l - 1];
         CandPc p{std::int32_t((kUpsampleScale[l] * coarseTs) / 16u), float(kUpsampleScale[l]), std::int32_t(l),
-                 config_.noiseAlpha, config_.noiseBeta};
+                 config_.noiseAlpha, config_.noiseBeta, debug ? 1 : 0};
         executor_.record(c, ShaderId::RxCandSelect, {{ib(0, ref), ib(1, mov), ib(2, coarse), ib(3, flow)}, {}}, &p,
                          sizeof(p), tx, ty);
         computeWriteBarrier(c);
     }
     if (debug) copyFlow(c, flow, arena_.image("rx_dbg_prior_l" + ls));
-    BlockPc bp{std::int32_t(kTileSize[l]), std::int32_t(kRadius[l]), kMetric[l]};
+    BlockPc bp{std::int32_t(kTileSize[l]), std::int32_t(kRadius[l]), kMetric[l], debug ? 1 : 0};
     executor_.record(c, ShaderId::RxBlockMatch,
                      {{ib(0, ref), ib(1, mov), ib(2, flow), ib(3, tiles), ib(4, arena_.image("rx_bmcost_l" + ls))}, {}}, &bp,
                      sizeof(bp), tx, ty);
@@ -312,12 +313,7 @@ void RextureRecorder::recordBurstClear(VkCommandBuffer c) const {
     one.float32[0] = 1.0f;
     vkCmdClearColorImage(c, arena_.image("rx_support").image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &range);
     vkCmdClearColorImage(c, arena_.image("rx_cover").image, VK_IMAGE_LAYOUT_GENERAL, &one, 1, &range);
-    for (const char* n : {"rx_acc_a", "rx_acc_b", "rx_acc_c", "rx_dbg_ss2"}) {
-        try {
-            vkCmdClearColorImage(c, arena_.image(n).image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &range);
-        } catch (const std::out_of_range&) {  // debug-only image
-        }
-    }
+    // accumulators are cleared by recordAccumulatorClear after the base demosaic has used their memory
     VkMemoryBarrier b{};
     b.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -399,8 +395,10 @@ void RextureRecorder::recordFinalize(VkCommandBuffer c, VkImageView rawU16, cons
 namespace rawr::raw_gpu_pipeline {
 void RextureRecorder::recordBaseDemosaic(VkCommandBuffer c, VkImageView rawU16, const MultiframeFrameParameters& f) const {
     if (!rawU16) throw std::invalid_argument("rexture recorder: null RAW16 view");
-    const auto& out = arena_.image("rx_base_rcd");
-    const auto& dir = arena_.image("rx_rcd_dir");
+    // RCD runs once on the base, before any companion: its fp32 work planes live in the accumulators' memory (work image =
+    // rx_acc_a, direction field = rx_acc_b), which are cleared right after, so no scratch of its own is allocated.
+    const auto& out = arena_.image("rx_acc_a");
+    const auto& dir = arena_.image("rx_acc_b");
     struct Pc {
         std::uint32_t width, height, pattern, pad;
         float black[4], invRange[4], balance[4];
@@ -430,5 +428,31 @@ void RextureRecorder::recordBaseDemosaic(VkCommandBuffer c, VkImageView rawU16, 
     executor_.record(c, ShaderId::RxRcdExport, b, &p, sizeof(p), divUp(p.width, 4), divUp(p.height, 32));
     computeWriteBarrier(c);
     recordBaseDemosaicBound(c, rawU16, f);
+    recordAccumulatorClear(c);
+}
+}  // namespace rawr::raw_gpu_pipeline
+
+namespace rawr::raw_gpu_pipeline {
+void RextureRecorder::recordAccumulatorClear(VkCommandBuffer c) const {
+    VkMemoryBarrier pre{};  // the compute passes that used this memory (RCD scratch) must finish before the clear
+    pre.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    pre.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    pre.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdPipelineBarrier(c, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &pre, 0, nullptr, 0,
+                         nullptr);
+    VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    const VkClearColorValue zero{};
+    for (const char* n : {"rx_acc_a", "rx_acc_b", "rx_acc_c", "rx_dbg_ss2"}) {
+        try {
+            vkCmdClearColorImage(c, arena_.image(n).image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &range);
+        } catch (const std::out_of_range&) {  // debug-only image
+        }
+    }
+    VkMemoryBarrier b{};
+    b.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+    b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(c, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &b, 0, nullptr, 0, nullptr);
 }
 }  // namespace rawr::raw_gpu_pipeline

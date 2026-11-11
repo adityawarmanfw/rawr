@@ -19,6 +19,7 @@ layout(push_constant) uniform P {
     float scale;     // flow scale between the levels
     int level;
     float alpha, beta;
+    int exactTies;
 } p;
 
 shared vec4 sCost[256];
@@ -85,7 +86,7 @@ void main() {
         bool amb = false;
         for (int i = 0; i < 4; ++i)
             for (int j = i + 1; j < 4; ++j)
-                if (shift[i] != shift[j] && abs(c4[i] - c4[j]) <= 1e-4 * max(max(c4[i], c4[j]), 1e-12)) amb = true;
+                if (p.exactTies != 0 && shift[i] != shift[j] && abs(c4[i] - c4[j]) <= 1e-4 * max(max(c4[i], c4[j]), 1e-12)) amb = true;
         sAmb = amb ? 1u : 0u;
         sBest = c4;
     }

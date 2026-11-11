@@ -30,6 +30,8 @@ class RextureRecorder final {
 
     // RCD demosaic of the base (fp32 work planes, the spec's white balance) followed by the native-range bound.
     void recordBaseDemosaic(VkCommandBuffer, VkImageView rawU16, const MultiframeFrameParameters&) const;
+    // Zeroes the accumulators (after the base demosaic, which uses their memory as scratch).
+    void recordAccumulatorClear(VkCommandBuffer) const;
     // Clamps the RCD base to the native-sample range of each colour (5 x 5) in place; follows the RCD demosaic.
     void recordBaseDemosaicBound(VkCommandBuffer, VkImageView rawU16, const MultiframeFrameParameters&) const;
 

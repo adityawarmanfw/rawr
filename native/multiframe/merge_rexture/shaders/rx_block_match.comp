@@ -14,7 +14,7 @@ layout(set = 0, binding = 1, r32f) readonly uniform image2D movI;
 layout(set = 0, binding = 2, rg32f) uniform image2D flowI;
 layout(set = 0, binding = 3, rgba32f) readonly uniform image2D tilesI;
 layout(set = 0, binding = 4, r32f) writeonly uniform image2D costI;
-layout(push_constant) uniform P { int ts, radius, metric; } p;
+layout(push_constant) uniform P { int ts, radius, metric, exactTies; } p;
 
 shared float sRef[256];
 shared float sMov[576];
@@ -61,11 +61,15 @@ void main() {
     sCostHi[tid] = cost32;
     barrier();
     float minCost = 3.4e38;
-    for (int c = 0; c < cand; ++c) minCost = min(minCost, sCostHi[c]);
+    if (p.exactTies != 0)
+        for (int c = 0; c < cand; ++c) minCost = min(minCost, sCostHi[c]);
     const float limit = minCost * 1.00005;
     barrier();
+    // exactTies (verification builds): float-float re-sum of the near-minimum candidates, reference float64 order.
+    // Production: plain fp32 sums (first minimum in scan order).
     float costHi = 3.4e38, costLo = 0.0;
-    if (tid < cand && cost32 <= limit) {
+    if (p.exactTies == 0) { costHi = cost32; }
+    else if (tid < cand && cost32 <= limit) {
         int sy = tid / N, sx = tid % N;      // shift = (sx - r, sy - r)
         precise float hi = 0.0, lo = 0.0;
         for (int py = 0; py < ts; ++py)
