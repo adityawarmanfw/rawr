@@ -23,7 +23,8 @@ keeps the list unchanged. Loading the default restores the device defaults;
 loading another variant saves its lenses as the user's editable configuration.
 No other settings sections are replaced.
 
-On devices with several matching profiles, **Reset to device default** opens
-the same picker. With a single profile, it retains the reset confirmation.
+**Reset to device default** always restores the automatically selected default
+profile after confirmation, without opening the picker. It is disabled while
+the device defaults are already in use.
 Profiles requiring root are opt-in; choosing one does not install a library
 patch or grant root access.

@@ -124,11 +124,9 @@ internal fun LensSettings(state: SettingsUiState, dispatch: SettingsDispatch) {
             SettingsRow(
                 title = "Reset to device default",
                 supportingText = "Replace this list with the built-in lenses for this phone.",
-                enabled = !usingDefaults || hardware.deviceProfiles.size > 1,
+                enabled = !usingDefaults,
                 testTag = SettingsTestTags.row("Lens", "reset_device_default"),
-                onClick = {
-                    if (hardware.deviceProfiles.size > 1) showProfiles = true else confirmReset = true
-                }
+                onClick = { confirmReset = true }
             )
         }
     }
