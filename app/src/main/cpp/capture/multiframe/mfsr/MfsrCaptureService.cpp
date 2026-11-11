@@ -218,12 +218,63 @@ std::uint64_t MfsrCaptureService::start(std::unique_ptr<PendingMultiframeCapture
         workerThread_ = std::thread([this, current = pending]() mutable {
             setpriority(PRIO_PROCESS, 0, 5);
             while (current) {
+                // Rexture merges the live frames as soon as the base is chosen, while the spool thread still writes
+                // the journal; every other merge waits for the durable journal and reloads from it.
+                bool live = false;
                 {
                     std::unique_lock<std::mutex> lock(current->mutex);
-                    current->readyCondition.wait(lock, [&] { return current->ready; });
+                    current->readyCondition.wait(lock, [&] { return current->ready || current->selected; });
+                    live = current->live;
                 }
-                auto& original = *current->work;
+                MultiframeWorkItem* originalItem = current->work.get();
+                auto& original = *originalItem;
+                // Kept for the failure report once the work item belongs to the job.
+                const std::uint64_t liveRequestId = original.requestId;
+                const bool liveJpegRequested = original.jpegRequested;
+                const std::string liveJpegName = original.mergedJpeg.output.displayName;
                 try {
+                    if (live) {
+                        SpoolingWork* spool = current.get();
+                        original.awaitDurable = [spool] {
+                            std::unique_lock<std::mutex> lock(spool->mutex);
+                            spool->readyCondition.wait(lock, [&] { return spool->ready; });
+                        };
+                        original.capture->pinsMayRelease = [spool] {
+                            return spool->durable.load(std::memory_order_acquire);
+                        };
+                        std::lock_guard<std::mutex> processing(vulkan_.stillProcessingMutex());
+                        diagnostics::RuntimeTraceRecorder::instance().record(
+                            diagnostics::RuntimeTraceStage::StillProcessingBegin, 0, liveRequestId, -1, 0, 0, 1u);
+                        struct TraceEnd {
+                            uint64_t id;
+                            ~TraceEnd() {
+                                diagnostics::RuntimeTraceRecorder::instance().record(
+                                    diagnostics::RuntimeTraceStage::StillProcessingEnd, 0, id, -1, 0, 0, 1u);
+                            }
+                        } traceEnd{liveRequestId};
+                        LOGI("BURST_LIVE requestId=%llu acceptedToStartMs=%.1f",
+                             static_cast<unsigned long long>(liveRequestId),
+                             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - original.acceptedAt)
+                                 .count());
+                        MfsrCaptureJob::Context ctx{vulkan_,
+                                                    queue0Mutex_,
+                                                    filesDir_,
+                                                    original.capture->frames.front().raw.ref.width,
+                                                    original.capture->frames.front().raw.ref.height,
+                                                    original.capture->referenceMetadata.cameraContext->rawPreviewCfa,
+                                                    burstCoordinator_,
+                                                    renderedStill_,
+                                                    persistentEngineEnabled_,
+                                                    dngBox_,
+                                                    jpegBox_,
+                                                    filmAssetManager_};
+                        const auto acceptedAt = original.acceptedAt;
+                        originalItem = nullptr;  // the job owns the work item from here
+                        MfsrCaptureJob(ctx, std::move(current->work)).run();
+                        LOGI("BURST_FINISHED requestId=%llu acceptedToFinishedMs=%.1f live=1",
+                             static_cast<unsigned long long>(liveRequestId),
+                             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - acceptedAt).count());
+                    } else {
                     if (!current->error.empty()) throw std::runtime_error(current->error);
                     std::lock_guard<std::mutex> processing(vulkan_.stillProcessingMutex());
                     diagnostics::RuntimeTraceRecorder::instance().record(
@@ -249,6 +300,8 @@ std::uint64_t MfsrCaptureService::start(std::unique_ptr<PendingMultiframeCapture
                     restored->mergedDng.outputFd = std::move(original.mergedDng.outputFd);
                     restored->mergedJpeg.output.outputFd = std::move(original.mergedJpeg.output.outputFd);
                     restored->dumpRzslRequested = original.dumpRzslRequested;
+                    // Not part of the journal: carried over from the live request.
+                    restored->mergedJpeg.develop.multiframeNativeRgb = original.mergedJpeg.develop.multiframeNativeRgb;
                     MfsrCaptureJob::Context ctx{vulkan_,
                                                 queue0Mutex_,
                                                 filesDir_,
@@ -265,7 +318,13 @@ std::uint64_t MfsrCaptureService::start(std::unique_ptr<PendingMultiframeCapture
                     LOGI("BURST_FINISHED requestId=%llu acceptedToFinishedMs=%.1f",
                          static_cast<unsigned long long>(original.requestId),
                          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - original.acceptedAt).count());
+                    }
                 } catch (const std::exception& e) {
+                    if (!originalItem) {
+                        // The live job owns the work item (and any outputs it still holds): report the JPEG only.
+                        if (liveJpegRequested)
+                            jpegBox_.push(std::to_string(liveRequestId) + "\t0\t" + liveJpegName + "\t" + e.what() + "\t0");
+                    } else {
                     // Outputs still held here were never handed to the job, which publishes its own.
                     const bool baseHeld = original.baseDng.outputFd.valid();
                     const bool mergedHeld = original.mergedDng.outputFd.valid();
@@ -278,6 +337,13 @@ std::uint64_t MfsrCaptureService::start(std::unique_ptr<PendingMultiframeCapture
                         dngBox_.push(prefix + original.mergedDng.displayName + "\t" + e.what());
                     if (original.jpegRequested)
                         jpegBox_.push(prefix + original.mergedJpeg.output.displayName + "\t" + e.what() + "\t0");
+                    }
+                }
+                {
+                    // The spool thread may still be finishing this capture's journal (live merge): it owns `current`'s
+                    // storage reservation, so do not drop the last reference before it is done.
+                    std::unique_lock<std::mutex> lock(current->mutex);
+                    current->readyCondition.wait(lock, [&] { return current->ready; });
                 }
                 std::lock_guard<std::mutex> lock(queueMutex_);
                 if (!queuedWork_.empty()) {
@@ -318,6 +384,7 @@ void MfsrCaptureService::spoolLoop() {
             pending = spoolQueue_.front();
             spoolQueue_.pop_front();
         }
+        bool liveRun = false;
         try {
             // Deferred sharpest-reference selection, entirely on the GPU: one
             // small compute scoring pass over the pinned burst images, then a
@@ -465,6 +532,17 @@ void MfsrCaptureService::spoolLoop() {
                     // The burst is frozen at the press: the newest frame is the press time.
                     const double press = *std::max_element(times.begin(), times.end());
                     const auto best = static_cast<std::uint32_t>(rawr::raw_merge_rexture_gpu::chooseBaseAtPress(frameScores, times, press));
+                    for (std::size_t i = 0; i < scores.size(); ++i) {
+                        const double age = std::max(press - times[i], 0.0);
+                        const bool inWindow = age <= rawr::raw_merge_rexture_gpu::kBaseWindowSeconds;
+                        const double value = scores[i].sharp *
+                                             std::max(1.0 - rawr::raw_merge_rexture_gpu::kBaseSaturationPenalty * scores[i].sat, 0.0) *
+                                             std::max(1.0 - rawr::raw_merge_rexture_gpu::kBaseTimePenalty * age /
+                                                                 rawr::raw_merge_rexture_gpu::kBaseWindowSeconds, 0.0);
+                        LOGI("MULTIFRAME_REXTURE_SCORE frame=%zu sharp=%.6g sat=%.5f ageMs=%.1f inWindow=%d value=%.6g%s", i,
+                             scores[i].sharp, scores[i].sat, age * 1000.0, inWindow ? 1 : 0, value,
+                             i == best ? " <- base" : "");
+                    }
                     burst.referenceIndex = best;
                     burst.referenceMetadata = burst.metadata[best];
                     burst.referenceColor = burst.colors[best];
@@ -489,20 +567,43 @@ void MfsrCaptureService::spoolLoop() {
                 burst.referenceColor = burst.colors[reference];
                 LOGI("MULTIFRAME_BASEFRAME mode=bracket-darkest selected=%u/%zu", reference, burst.frames.size());
             }
-            persistence::saveBurst(pending->path, *pending->work, vulkan_, queue0Mutex_);
+            const auto requestId = pending->work->requestId;
+            const bool live = pending->work->tuning.mergeAlgorithm == kMergeAlgorithmRexture && burst.snapshot &&
+                              !burst.cpuFrame && !burst.acquiredJournal && !burst.pendingBracket &&
+                              !pending->work->dumpRzslRequested;
+            if (live) {
+                // Everything the journal header needs is copied out of the work item first. From the moment the
+                // worker is released it owns the work item and the live frames; this thread then only reads the
+                // frames (GPU images the ring pins keep alive until the journal is durable) and never touches
+                // pending->work again.
+                auto journalJob = persistence::makeBurstJob(*pending->work);
+                auto* liveBurst = pending->work->capture.get();
+                {
+                    std::lock_guard<std::mutex> lock(pending->mutex);
+                    pending->live = true;
+                    pending->selected = true;
+                }
+                liveRun = true;
+                pending->readyCondition.notify_all();
+                persistence::saveBurstFrames(pending->path, journalJob, *liveBurst, requestId, vulkan_, queue0Mutex_);
+                pending->durable.store(true, std::memory_order_release);
+            } else {
+                persistence::saveBurst(pending->path, *pending->work, vulkan_, queue0Mutex_);
+            }
             diagnostics::RuntimeTraceRecorder::instance().record(diagnostics::RuntimeTraceStage::StillDurable, 0,
-                                                                 pending->work->requestId, -1, 0, 0, 1u);
+                                                                 requestId, -1, 0, 0, 1u);
         } catch (const std::exception& e) {
             pending->error = e.what();
         }
-        pending->work->capture.reset();  // Release live ring pins immediately after durable readback.
+        // Release live ring pins immediately after durable readback; a live merge's job owns them until it ends.
+        if (!liveRun) pending->work->capture.reset();
         pending->reservation.reset();
         spooling_.fetch_sub(1, std::memory_order_acq_rel);
         {
             std::lock_guard<std::mutex> lock(pending->mutex);
             pending->ready = true;
         }
-        pending->readyCondition.notify_one();
+        pending->readyCondition.notify_all();
     }
 }
 

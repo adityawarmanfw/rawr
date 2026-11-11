@@ -568,7 +568,7 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
         dumpRzslRequested: Boolean,
         multiframeTuning: MultiframeTuning,
         multiframeBaseFrameMode: com.rawr.camera.settings.model.MultiframeBaseFrameMode,
-        multiframeChromaDenoise: Boolean = true,
+        multiframeChromaDenoise: Boolean = false,
         distortionCorrectionEnabled: Boolean,
         filmDescription: String?,
         defringeEnabled: Boolean,

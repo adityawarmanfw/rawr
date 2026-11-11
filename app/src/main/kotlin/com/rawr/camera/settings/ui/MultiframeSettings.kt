@@ -72,13 +72,22 @@ internal fun MultiframeSettings(state: SettingsUiState, dispatch: SettingsDispat
             // written before rendering.
             SettingsSwitchRow(
                 title = "Chroma Denoise",
-                checked = state.values.multiframeChromaDenoise && !hdrPlus && !rexture,
+                checked = state.values.multiframeChromaDenoise && !hdrPlus,
                 supportingText =
-                    if (hdrPlus || rexture) "Not available for HDR+ or Rexture yet."
+                    if (hdrPlus) "Not available for HDR+ yet."
                     else "JPEG only. Removes leftover colour blotches from the merged image (chroma only, luma untouched) using the noise measured from the burst. Separate from Image > Denoise, which applies to single frames.",
-                enabled = enabled && !hdrPlus && !rexture
+                enabled = enabled && !hdrPlus
             ) { dispatch.invoke(SetMultiframeChromaDenoise(it)) }
             SettingDivider()
+            if (rexture) {
+                SettingsSwitchRow(
+                    title = "Rexture Native RGB",
+                    checked = state.values.multiframeRextureNativeRgb,
+                    supportingText = "JPEG only. Renders the JPEG from Rexture's own merged colour instead of re-mosaicking it and running the Demosaic setting. The DNG is unaffected.",
+                    enabled = enabled
+                ) { dispatch.invoke(SetMultiframeRextureNativeRgb(it)) }
+                SettingDivider()
+            }
             if (hdrPlus) {
                 MultiframeSlider(spec(MultiframeNumericParameter.HdrPlusStrength), tuning, enabled, dispatch)
                 SettingDivider()

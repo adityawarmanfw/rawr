@@ -592,6 +592,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
             filmPresets = FilmSimCodec.decodePresets(p[Keys.filmPresets]),
             multiframeBaseFrameMode = enumOrDefault(p[Keys.multiframeBaseFrameMode], d.multiframeBaseFrameMode),
             multiframeChromaDenoise = p[Keys.multiframeChromaDenoise] ?: d.multiframeChromaDenoise,
+            multiframeRextureNativeRgb = p[Keys.multiframeRextureNativeRgb] ?: d.multiframeRextureNativeRgb,
             multiframeTuning =
                 MultiframeTuning(
                     outputResolution =
@@ -848,6 +849,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.filmPresets] = FilmSimCodec.encodePresets(v.filmPresets)
         p[Keys.multiframeBaseFrameMode] = v.multiframeBaseFrameMode.name
         p[Keys.multiframeChromaDenoise] = v.multiframeChromaDenoise
+        p[Keys.multiframeRextureNativeRgb] = v.multiframeRextureNativeRgb
         // Noise-profile selection was removed (always burst-fitted).
         p.remove(Keys.multiframeNoiseProfile)
         p.remove(Keys.camera2NoiseModelEnabled)
@@ -1140,6 +1142,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val agxLooks = stringPreferencesKey("agx_looks")
         val multiframeBaseFrameMode = stringPreferencesKey("multiframe_base_frame_mode")
         val multiframeChromaDenoise = booleanPreferencesKey("multiframe_chroma_denoise")
+        val multiframeRextureNativeRgb = booleanPreferencesKey("multiframe_rexture_native_rgb")
         val camera2NoiseModelEnabled = booleanPreferencesKey("camera2_noise_model_enabled")
         val multiframeNoiseProfile = stringPreferencesKey("multiframe_noise_profile")
         val multiframeOutputResolution = stringPreferencesKey("multiframe_output_resolution")

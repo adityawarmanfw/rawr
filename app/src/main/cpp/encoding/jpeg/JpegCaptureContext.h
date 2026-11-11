@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -122,6 +123,8 @@ struct JpegCaptureContext {
     double mfProjectMs = 0.0;
     double mfRgbPrepMs = 0.0;
     bool mfDirectRgb = false;
+    // Multiframe: when the capture was accepted (burst save and queue wait happen between this and the stages above).
+    std::chrono::steady_clock::time_point acceptedAt{};
 };
 
 }  // namespace rawrcam::encoding::jpeg

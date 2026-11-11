@@ -40,10 +40,10 @@ rawr::raw_gpu_pipeline::BurstRunResult MergeProcessor::run(
     mergeConfig.fallbackLumaGain = tuning.fallbackLumaGain;
     mergeConfig.fallbackChromaMaxSigma = 16.0f;
     auto stageSink = rawrcam::capture::multiframe::makeTraceStageSink();
-    // Rexture holds ~1.2 GB of fp32 per-pixel state at 13 MP and streams whole frames: above kRextureMaxPixels the merge is
-    // refused, which takes the existing failure path (base frame out, capture kept).
+    // One Rexture window holds ~72 bytes of arena per pixel. The job splits larger frames into strips of at most
+    // kRextureMaxPixels; a window above it is refused, which takes the existing failure path (base frame out, capture kept).
     if (tuning.mergeAlgorithm == kMergeAlgorithmRexture && std::uint64_t(width) * height > kRextureMaxPixels)
-        throw std::runtime_error("Rexture: raw geometry above 16 MP");
+        throw std::runtime_error("Rexture: merge window above kRextureMaxPixels");
     const auto algorithm = tuning.mergeAlgorithm == kMergeAlgorithmRexture
                                ? rawr::raw_gpu_pipeline::MergeAlgorithm::Rexture
                            : tuning.mergeAlgorithm == kMergeAlgorithmHdrPlusBracketed
@@ -87,7 +87,8 @@ rawr::raw_gpu_pipeline::BurstRunResult MergeProcessor::run(
     auto result = coordinator.run(
         burst.frames, burst.referenceIndex,
         [&burst, dumpRzslRequested](std::uint32_t index) {
-            if (!dumpRzslRequested && burst.snapshot && index < burst.frames.size() && index != burst.referenceIndex) {
+            if (!dumpRzslRequested && burst.snapshot && index < burst.frames.size() && index != burst.referenceIndex &&
+                (!burst.pinsMayRelease || burst.pinsMayRelease())) {
                 burst.snapshot->release(burst.frames[index].raw.ref.frameId);
             }
             // Journal-backed: the companion's image goes once merged.

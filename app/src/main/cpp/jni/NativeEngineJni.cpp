@@ -98,7 +98,7 @@ rawrcam::capture::multiframe::MultiframeTuning multiframeTuning(JNIEnv* env, jfl
     if (count >= 25) {
         std::array<jfloat, 6> merge{0.0f, 13.0f, 32.0f, -2.0f, 2.0f, 0.0f};
         env->GetFloatArrayRegion(values, 23, std::min<jsize>(count - 23, jsize(merge.size())), merge.data());
-        if (!(merge[0] == 0.0f || merge[0] == 1.0f || merge[0] == 2.0f || merge[0] == 3.0f) ||
+        if (!(merge[0] == 0.0f || merge[0] == 1.0f || merge[0] == 2.0f || merge[0] == 3.0f || merge[0] == 4.0f) ||
             !inRange(merge[1], 1.0f, 22.0f) || !(merge[2] == 16.0f || merge[2] == 32.0f) ||
             !inRange(merge[3], -4.0f, -1.0f) || !inRange(merge[4], 0.0f, 16.0f) || !inRange(merge[5], 0.0f, 3.0f))
             return {};
@@ -709,6 +709,7 @@ static void fillCaptureSharpening(JNIEnv* env, rawrcam::capture::JpegCaptureRequ
         return;
     }
     jpeg.develop.captureSharpenIterations = rawrcam::jni::captureSharpenIterations(recipe);
+    jpeg.develop.multiframeNativeRgb = recipe.flag("rextureNativeRgb", false);
 }
 static std::optional<tinydng_gps> captureGps(JNIEnv* env, jobject value) {
     const auto gps = rawrcam::jni::readCaptureGps(env, value);

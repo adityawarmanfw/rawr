@@ -45,7 +45,9 @@ std::string buildParametersBlock(const MultiframeTuningView& tuning, const Multi
         mp << std::fixed << std::setprecision(1) << megapixels;
         out << "- Output: " << outWidth << 'x' << outHeight << " (" << scale.str() << "x, ~" << mp.str() << " MP)\n";
     }
-    if (tuning.mergeAlgorithm != 0u) {
+    if (tuning.mergeAlgorithm == 4u) {
+        out << "- Merge: Rexture (kernel-regression merge of the whole burst; base = best of the last 0.25 s)\n";
+    } else if (tuning.mergeAlgorithm != 0u) {
         out << (tuning.mergeAlgorithm == 3u   ? "- Merge: HDR+ bracketed (frequency merge, darkest-frame reference)\n"
                 : tuning.mergeAlgorithm == 2u ? "- Merge: HDR+ frequency (tile alignment + per-frequency Wiener merge)\n"
                                               : "- Merge: HDR+ spatial (tile alignment + robust average)\n")
@@ -88,7 +90,7 @@ std::string buildParametersBlock(const MultiframeTuningView& tuning, const Multi
     }
     out << "\nMultiframe Reconstruction inputs:\n"
         << "- Noise profile: " << output.noiseProfile << '\n'
-        << "- JPEG input: merged CFA\n";
+        << "- JPEG input: " << output.jpegInput << '\n';
     out << '\n' << encoding::formatOutputParameters(output) << '\n' << encoding::formatAdaptiveTone(tonemap);
     if (filmRendered && !filmDescription.empty()) {
         // Kotlin-curated film summary (stock/paper names live there); kept
@@ -101,9 +103,14 @@ std::string buildParametersBlock(const MultiframeTuningView& tuning, const Multi
 }
 
 std::string buildSharpnessSection(MultiframeBaseFrameMode mode, const std::vector<float>& scores,
-                                  std::uint32_t referenceIndex, std::uint32_t frameCount) {
+                                  std::uint32_t referenceIndex, std::uint32_t frameCount, bool pressSelected) {
     std::ostringstream out;
     out << "\nBase Frame Selection:\n";
+    if (pressSelected) {
+        out << "- Mode: shutter press (best sharpness and exposure of the last 0.25 s)\n"
+            << "- Reference: frame " << (referenceIndex + 1u) << " of " << frameCount << '\n';
+        return out.str();
+    }
     if (mode != MultiframeBaseFrameMode::Sharpest || scores.size() != frameCount) {
         out << "- Mode: middle\n"
             << "- Reference: chronological middle (frame " << (referenceIndex + 1u) << " of " << frameCount << ")\n";

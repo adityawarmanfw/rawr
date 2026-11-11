@@ -47,6 +47,12 @@ CaptureJob load(const std::string& path,
 CaptureJob loadHeader(const std::string& path, uint64_t& framesOffset);
 void saveBurst(const std::string& path, multiframe::MultiframeWorkItem& work, const vulkan::VulkanContext& vulkan,
                std::mutex& queueMutex);
+// saveBurst in two steps, so a merge can run on the live frames while the journal is written: makeBurstJob copies
+// everything the header needs out of the work item (and fixes its resolved recipes); saveBurstFrames then only reads
+// the burst's frames (GPU images, CPU source or acquisition journal) and the copied header.
+CaptureJob makeBurstJob(multiframe::MultiframeWorkItem& work);
+void saveBurstFrames(const std::string& path, CaptureJob& job, multiframe::FrozenBurst& burst, std::uint64_t requestId,
+                     const vulkan::VulkanContext& vulkan, std::mutex& queueMutex);
 // lazy: only the reference frame is uploaded; the rest load on demand
 // (burst.loadFrame) and drop after the merge (burst.releaseFrame).
 std::unique_ptr<multiframe::MultiframeWorkItem> loadBurst(const std::string& path, const vulkan::VulkanContext& vulkan,

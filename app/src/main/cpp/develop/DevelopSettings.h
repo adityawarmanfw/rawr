@@ -35,6 +35,9 @@ struct DevelopSettings {
     // Multiframe only: chroma-only profiled wavelet on the merge, noise from
     // the burst fit / frame count (independent of the single-frame denoise).
     bool multiframeChromaDenoise = false;
+    // Rexture only: the JPEG renders from the merged RGB (LSC + clamp) instead of re-mosaicking it and running the
+    // demosaic setting. Not stored in the burst journal: a capture restored from disk uses the standard path.
+    bool multiframeNativeRgb = false;
     bool lensShadingCorrectionEnabled = false;
     bool highlightReconstructionEnabled = true;
     std::uint32_t highlightReconstructionMethod = 0;  // 0 propagation, 1 RawTherapee Coloropp
