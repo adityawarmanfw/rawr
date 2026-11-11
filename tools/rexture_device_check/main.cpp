@@ -124,7 +124,8 @@ int main(int argc, char** argv) {
         auto ctx = vktest::ctx();
         std::cout << "device=" << ctx.prop.deviceName << " shared_kb=" << ctx.prop.limits.maxComputeSharedMemorySize / 1024u
                   << " geometry=" << width << 'x' << height << " frames=" << count << " merge=" << merge << '\n';
-        Commands commands(ctx);
+        auto commandsHolder = std::make_unique<Commands>(ctx);
+        Commands& commands = *commandsHolder;
         std::vector<vktest::Img> images;
         std::vector<BurstFrame> burst;
         std::vector<std::vector<std::uint8_t>> raws(stored);
@@ -236,7 +237,10 @@ int main(int argc, char** argv) {
         if (dump) dump->finish();
         coordinator.reset();
         for (auto& im : images) vktest::delImg(ctx.dev, im);
+        dump.reset();
+        commandsHolder.reset();  // before the device goes away
         vktest::delCtx(ctx);
+        std::fflush(stdout);
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "ERROR " << e.what() << '\n';
