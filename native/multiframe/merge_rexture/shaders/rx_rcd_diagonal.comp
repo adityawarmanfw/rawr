@@ -1,0 +1,55 @@
+#version 450
+// Copy of native/raw_demosaic/rcd/shaders/rcd_diagonal.comp (production workgroup size 32x8) on fp32 work planes; see rx_rcd_common.glsl.
+#ifndef RCD_LOCAL_X
+#define RCD_LOCAL_X 32
+#endif
+#ifndef RCD_LOCAL_Y
+#define RCD_LOCAL_Y 8
+#endif
+layout(local_size_x = RCD_LOCAL_X, local_size_y = RCD_LOCAL_Y, local_size_z = 1) in;
+#include "rx_rcd_common.glsl"
+
+// Compressed dispatch: one invocation per non-green CFA site. Every Bayer row
+// contains alternating green/non-green samples, so mapping a half-width x
+// coordinate to the row's non-green parity avoids launching threads that
+// immediately return. RCD math is unchanged.
+ivec2 nonGreenSiteFromInvocation() {
+    int y = int(gl_GlobalInvocationID.y);
+    int x0 = int(gl_GlobalInvocationID.x) * 2;
+    ivec2 p = ivec2(x0, y);
+    if (y < int(pc.height) && rgbColorAt(p) == 1) p.x = x0 + 1;
+    return p;
+}
+
+float refinedPq(ivec2 p) {
+    float center = imageLoad(directionImage, p).y;
+    float neigh =
+        0.25 * (imageLoad(directionImage, p + ivec2(-1, -1)).y + imageLoad(directionImage, p + ivec2(1, -1)).y +
+                imageLoad(directionImage, p + ivec2(-1, 1)).y + imageLoad(directionImage, p + ivec2(1, 1)).y);
+    return abs(0.5 - center) < abs(0.5 - neigh) ? neigh : center;
+}
+
+void main() {
+    ivec2 p = nonGreenSiteFromInvocation();
+    if (p.x >= int(pc.width) || p.y >= int(pc.height) || !inRcdWorkingRegion(p)) return;
+
+    int own = rgbColorAt(p);  // guaranteed R or B by compressed mapping
+    int c = 2 - own;
+    vec3 center = rgbAt(p);
+    float G = center.g;
+    const ivec2 nw = ivec2(-1, -1), ne = ivec2(1, -1), sw = ivec2(-1, 1), se = ivec2(1, 1);
+
+    vec3 rn = rgbAt(p + nw), re = rgbAt(p + ne), rs = rgbAt(p + sw), rse = rgbAt(p + se);
+    vec3 rn3 = rgbAt(p + 3 * nw), re3 = rgbAt(p + 3 * ne), rs3 = rgbAt(p + 3 * sw), rse3 = rgbAt(p + 3 * se);
+    vec3 rn2 = rgbAt(p + 2 * nw), re2 = rgbAt(p + 2 * ne), rs2 = rgbAt(p + 2 * sw), rse2 = rgbAt(p + 2 * se);
+
+    float NW = EPS + abs(rn[c] - rse[c]) + abs(rn[c] - rn3[c]) + abs(G - rn2.g);
+    float NE = EPS + abs(re[c] - rs[c]) + abs(re[c] - re3[c]) + abs(G - re2.g);
+    float SW = EPS + abs(re[c] - rs[c]) + abs(rs[c] - rs3[c]) + abs(G - rs2.g);
+    float SE = EPS + abs(rn[c] - rse[c]) + abs(rse[c] - rse3[c]) + abs(G - rse2.g);
+    float nwE = rn[c] - rn.g, neE = re[c] - re.g, swE = rs[c] - rs.g, seE = rse[c] - rse.g;
+    float pE = (NW * seE + SE * nwE) / (NW + SE);
+    float qE = (NE * swE + SW * neE) / (NE + SW);
+    center[c] = G + mix(pE, qE, refinedPq(p));
+    storeIntermediate(p, center);
+}

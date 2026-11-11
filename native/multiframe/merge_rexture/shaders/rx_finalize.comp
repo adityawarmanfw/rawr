@@ -22,7 +22,7 @@ layout(set = 0, binding = 3, rgba32f) readonly uniform image2D accB;
 layout(set = 0, binding = 4, r32f) readonly uniform image2D accC;
 layout(set = 0, binding = 5, r32f) readonly uniform image2D supportI;
 layout(set = 0, binding = 6, r32f) readonly uniform image2D coverI;
-layout(set = 0, binding = 7, rgba16f) readonly uniform image2D rcdI;
+layout(set = 0, binding = 7, rgba32f) readonly uniform image2D rcdI;
 layout(set = 0, binding = 8, rgba16f) writeonly uniform image2D outI;
 layout(set = 0, binding = 9, rgba32f) writeonly uniform image2D dbgOutI;   // (final rgb, neff)       verification only
 layout(set = 0, binding = 10, rgba32f) writeonly uniform image2D dbgPreI;  // (pre-lowcov rgb, conf)  verification only

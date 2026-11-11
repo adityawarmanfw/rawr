@@ -7,7 +7,7 @@
 
 layout(local_size_x = 16, local_size_y = 16) in;
 layout(set = 0, binding = 0, r16ui) readonly uniform uimage2D rawU16;
-layout(set = 0, binding = 1, rgba16f) uniform image2D rgbI;
+layout(set = 0, binding = 1, rgba32f) uniform image2D rgbI;
 layout(push_constant) uniform P {
     vec4 black;
     float white;

@@ -47,3 +47,35 @@ int rxChannel(ivec2 q, int cfa) {
     int py = (q.y ^ ((cfa == 2 || cfa == 3) ? 1 : 0)) & 1;
     return (py == 0 && px == 0) ? 0 : ((py == 1 && px == 1) ? 2 : 1);
 }
+
+// ---- float-float (double-single) arithmetic ---------------------------------------------------------------------------
+// The reference sums tile costs in float64; block-match and candidate winners are decided by strict '<' on those sums, so
+// ties and near-ties must be resolved from (almost) exactly rounded sums. Values are (hi, lo) with hi = fl(hi + lo).
+void rxFfAdd(inout float hi, inout float lo, float xh, float xl) {
+    precise float s = hi + xh;
+    precise float bb = s - hi;
+    precise float err = (hi - (s - bb)) + (xh - bb);
+    precise float t = lo + err + xl;
+    precise float z = s + t;
+    lo = t - (z - s);
+    hi = z;
+}
+// a - b exactly as (hi, lo)
+void rxFfDiff(float a, float b, out float hi, out float lo) {
+    precise float d = a - b;
+    precise float bb = d - a;
+    precise float e = (a - (d - bb)) + (-b - bb);
+    hi = d;
+    lo = e;
+}
+// |e| and e^2 of an exact difference (hi, lo), as (hi, lo)
+void rxFfAbs(float dh, float dl, out float th, out float tl) {
+    th = abs(dh);
+    tl = dh < 0.0 ? -dl : dl;
+}
+void rxFfSquare(float dh, float dl, out float th, out float tl) {
+    precise float p = dh * dh;
+    th = p;
+    tl = fma(dh, dh, -p) + 2.0 * dh * dl;
+}
+bool rxFfLess(float ah, float al, float bh, float bl) { return ah < bh || (ah == bh && al < bl); }

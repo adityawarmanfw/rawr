@@ -6,6 +6,7 @@
 // coordinates, ties-to-even rounding of the start; metric 0 (finest level): L1, zero outside the image, half-integer
 // starts rounded away from zero. First minimum in (sy, sx) scan order wins (strict '<'). Starts from block_match.comp.
 #extension GL_GOOGLE_include_directive : enable
+#include "rx_common.glsl"
 
 layout(local_size_x = 128) in;
 layout(set = 0, binding = 0, r32f) readonly uniform image2D refI;
@@ -17,7 +18,8 @@ layout(push_constant) uniform P { int ts, radius, metric; } p;
 
 shared float sRef[256];
 shared float sMov[576];
-shared float sCost[128];
+shared float sCostHi[128];
+shared float sCostLo[128];
 
 float sampleMov(ivec2 q) {
     ivec2 n = imageSize(movI);
@@ -42,25 +44,30 @@ void main() {
     for (int i = tid; i < ts * ts; i += 128) sRef[i] = imageLoad(refI, t * ts + ivec2(i % ts, i / ts)).x;
     for (int i = tid; i < W * W; i += 128) sMov[i] = sampleMov(w0 + ivec2(i % W, i / W));
     barrier();
-    float cost = 3.4e38;
+    float costHi = 3.4e38, costLo = 0.0;
     if (tid < N * N) {
         int sy = tid / N, sx = tid % N;      // shift = (sx - r, sy - r)
-        float acc = 0.0;
+        precise float hi = 0.0, lo = 0.0;
         for (int py = 0; py < ts; ++py)
             for (int px = 0; px < ts; ++px) {
-                float e = sRef[py * ts + px] - sMov[(py + sy) * W + px + sx];
-                acc += p.metric == 0 ? abs(e) : e * e;
+                float dh, dl, th, tl;
+                rxFfDiff(sRef[py * ts + px], sMov[(py + sy) * W + px + sx], dh, dl);
+                if (p.metric == 0) rxFfAbs(dh, dl, th, tl); else rxFfSquare(dh, dl, th, tl);
+                rxFfAdd(hi, lo, th, tl);
             }
-        cost = acc;
+        costHi = hi;
+        costLo = lo;
     }
-    sCost[tid] = cost;
+    sCostHi[tid] = costHi;
+    sCostLo[tid] = costLo;
     barrier();
     if (tid == 0) {
-        float best = sCost[0];
+        float best = sCostHi[0], bestLo = sCostLo[0];
         int win = 0;
         for (int c = 1; c < N * N; ++c)
-            if (sCost[c] < best) {
-                best = sCost[c];
+            if (rxFfLess(sCostHi[c], sCostLo[c], best, bestLo)) {
+                best = sCostHi[c];
+                bestLo = sCostLo[c];
                 win = c;
             }
         imageStore(flowI, t, vec4(vec2(base + ivec2(win % N - r, win / N - r)), 0.0, 0.0));

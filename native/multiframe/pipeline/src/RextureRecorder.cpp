@@ -79,7 +79,8 @@ ScratchLayout makeRextureScratchLayout(const MultiframeGeometry& g, bool debug) 
     }
     img("rx_base_tensor", g.guide, PixelStorage::RGBA32Float, Lifetime::Burst);
     img("rx_base_cov", g.guide, PixelStorage::RGBA32Float, Lifetime::Burst);
-    img("rx_base_rcd", g.output, PixelStorage::RGBA16Float, Lifetime::Burst);  // fallback demosaic (RCD output is RGBA16F)
+    img("rx_base_rcd", g.output, PixelStorage::RGBA32Float, Lifetime::Burst);  // fallback demosaic, fp32 work planes
+    img("rx_rcd_dir", g.output, PixelStorage::RG32Float, Lifetime::Burst);       // RCD direction field (base pass only)
     if (debug) img("rx_dbg_qinv", g.output, PixelStorage::RGBA32Float, Lifetime::Burst);
     // Accumulators (packed, fp32): A = (sum w x [rgb], sum_frames W^2 [r]), B = (sum w [rgb], ... [g]), C = (... [b]).
     img("rx_acc_a", g.output, PixelStorage::RGBA32Float, Lifetime::Output);
@@ -392,5 +393,42 @@ void RextureRecorder::recordFinalize(VkCommandBuffer c, VkImageView rawU16, cons
                       {}},
                      &p, sizeof(p), divUp(out.extent.width, 16), divUp(out.extent.height, 16));
     computeWriteBarrier(c);
+}
+}  // namespace rawr::raw_gpu_pipeline
+
+namespace rawr::raw_gpu_pipeline {
+void RextureRecorder::recordBaseDemosaic(VkCommandBuffer c, VkImageView rawU16, const MultiframeFrameParameters& f) const {
+    if (!rawU16) throw std::invalid_argument("rexture recorder: null RAW16 view");
+    const auto& out = arena_.image("rx_base_rcd");
+    const auto& dir = arena_.image("rx_rcd_dir");
+    struct Pc {
+        std::uint32_t width, height, pattern, pad;
+        float black[4], invRange[4], balance[4];
+    } p{};
+    p.width = out.extent.width;
+    p.height = out.extent.height;
+    p.pattern = static_cast<std::uint32_t>(config_.cfa);
+    for (int i = 0; i < 4; ++i) {
+        p.black[i] = f.normalization.blackByPhase[i];
+        p.invRange[i] = 1.0f / (f.normalization.whiteLevel - f.normalization.blackByPhase[i]);
+    }
+    for (int i = 0; i < 3; ++i) p.balance[i] = config_.whiteBalance[i];
+    p.balance[3] = 1.0f;
+    ImageBinding raw{0, rawU16, VK_IMAGE_LAYOUT_GENERAL};
+    const DispatchBindings b{{raw, ib(1, dir), ib(2, out)}, {}};
+    const std::uint32_t half = (p.width + 1u) / 2u;
+    // production workgroup sizes of the library: direction 4x32, green 4x32, diagonal 32x8 (half width), green sites 8x32
+    // (half width), export 4x32
+    executor_.record(c, ShaderId::RxRcdDirection, b, &p, sizeof(p), divUp(p.width, 4), divUp(p.height, 32));
+    computeWriteBarrier(c);
+    executor_.record(c, ShaderId::RxRcdGreen, b, &p, sizeof(p), divUp(p.width, 4), divUp(p.height, 32));
+    computeWriteBarrier(c);
+    executor_.record(c, ShaderId::RxRcdDiagonal, b, &p, sizeof(p), divUp(half, 32), divUp(p.height, 8));
+    computeWriteBarrier(c);
+    executor_.record(c, ShaderId::RxRcdGreenSites, b, &p, sizeof(p), divUp(half, 8), divUp(p.height, 32));
+    computeWriteBarrier(c);
+    executor_.record(c, ShaderId::RxRcdExport, b, &p, sizeof(p), divUp(p.width, 4), divUp(p.height, 32));
+    computeWriteBarrier(c);
+    recordBaseDemosaicBound(c, rawU16, f);
 }
 }  // namespace rawr::raw_gpu_pipeline

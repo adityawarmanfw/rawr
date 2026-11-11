@@ -13,9 +13,6 @@ find_program(GLSLC glslc REQUIRED)
 # links only its host reference.
 set(RAW_SHARPNESS_BUILD_VULKAN OFF CACHE BOOL "" FORCE)
 set(RAW_SHARPNESS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-# Rexture's fallback demosaic: RCD with its embedded production shaders.
-set(RAW_DEMOSAIC_EMBED_SHADERS ON CACHE BOOL "" FORCE)
-add_subdirectory("${RAWR_ROOT}/native/raw_demosaic" "${CMAKE_CURRENT_BINARY_DIR}/raw_demosaic")
 add_subdirectory("${RAWR_ROOT}/native/multiframe" "${CMAKE_CURRENT_BINARY_DIR}/multiframe")
 # DNG burst input decodes through the app's production DngSource.
 add_subdirectory("${RAWR_ROOT}/native/tinydng" "${CMAKE_CURRENT_BINARY_DIR}/tinydng")
