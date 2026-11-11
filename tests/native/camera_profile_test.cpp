@@ -474,8 +474,9 @@ void testOppoPhotoStreams() {
     assert(!routeForLens(*roundTrip, "3xF"));
     for (const auto& lens : roundTrip->lenses) assert(!lens.stopViewfinderForPhotos);
     const auto remosaiced = parseCameraProfile(serializeCameraProfile(builtInCameraProfile("oppo_x9u_50mp_remosaiced")));
-    assert(remosaiced && remosaiced->lenses.size() == 8);
-    for (const auto& [name, mode] : {std::pair{"H0.6", 0}, {"H1x", 5}, {"H3x", 7}, {"H10x", 0}}) {
+    assert(remosaiced && remosaiced->lenses.size() == 7);
+    assert(!routeForLens(*remosaiced, "H3x"));
+    for (const auto& [name, mode] : {std::pair{"H0.6", 0}, {"H1x", 5}, {"H10x", 0}}) {
         const auto lens = routeForLens(*remosaiced, name);
         assert(lens && lens->photoStream && lens->sensorLayoutBlock == 1 && lens->photoSensorLayoutBlock == 1);
         size_t modeKeys = 0;

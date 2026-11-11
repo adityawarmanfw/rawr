@@ -2,7 +2,7 @@
   "id": "oppo_x9u_50mp_remosaiced",
   "schema": 2,
   "name": "OPPO X9U - 50 MP remosaiced",
-  "version": 1,
+  "version": 2,
   "match": {
     "models": [
       "CPH2841",
@@ -214,74 +214,6 @@
       }
     },
     {
-      "id": "H3x",
-      "camera": {
-        "id": "4"
-      },
-      "streams": {
-        "raw": {
-          "format": "RAW10",
-          "width": 4096,
-          "height": 3072
-        },
-        "photo": {
-          "format": "RAW10",
-          "width": 8192,
-          "height": 6144,
-          "buffers": {
-            "usage": "0x3",
-            "count": 2
-          },
-          "mergeFramesOneByOne": false,
-          "includePreview": false
-        },
-        "companion": {
-          "mode": "off"
-        }
-      },
-      "session": {
-        "cameraApi": "java"
-      },
-      "request": {
-        "defaults": "minimal"
-      },
-      "vendorKeys": [
-        {
-          "tag": "com.oplus.is.sdk.camera.package",
-          "type": "byte",
-          "scope": "session",
-          "values": [
-            1
-          ],
-          "enabled": true
-        },
-        {
-          "tag": "com.oplus.is.from.extension",
-          "type": "int32",
-          "scope": "session",
-          "values": [
-            1
-          ],
-          "enabled": true
-        },
-        {
-          "tag": "com.oplus.engineercamera.agingtest.mode.select",
-          "type": "int32",
-          "scope": "still",
-          "values": [
-            7
-          ],
-          "enabled": true
-        }
-      ],
-      "image": {
-        "sensorLayout": {
-          "block": 1,
-          "photoBlock": 1
-        }
-      }
-    },
-    {
       "id": "10x",
       "camera": {
         "id": "5"
@@ -373,5 +305,5 @@
     }
   ],
   "default": false,
-  "description": "Standard lenses and 50 MP Bayer RAW, remosaiced by the camera. No root required."
+  "description": "Standard lenses and 50 MP Bayer RAW, remosaiced by the camera. No root required. The 3x telephoto has no working remosaiced sensor mode (mode 7 does not work); H3x is unavailable."
 }

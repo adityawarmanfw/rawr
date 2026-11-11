@@ -219,5 +219,5 @@
     }
   ],
   "default": false,
-  "description": "Standard lenses plus 1xF and 3xF 200 MP RAW. Requires root and a patched camera.qcom.sm8850.so; this profile does not install the patch."
+  "description": "Standard lenses plus 1xF and 3xF 200 MP RAW. Requires root and a patched camera.qcom.sm8850.so; this profile does not install the patch. Patched libraries for rooted devices can be found in the OFX7U Telegram group: https://t.me/OFX7U"
 }

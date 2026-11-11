@@ -6,7 +6,7 @@ Three built-in profiles match CPH2841, PMA110 and PMA120. Select one in
 | Profile | Full-resolution lenses | Default |
 |---|---|---|
 | [50 MP native RAW](../app/src/main/cpp/camera/profiles/oppo_x9u_50mp_native_raw.json) | H0.6, H1x, H3x, H10x; Quad RAW remosaiced by RAWR | Yes |
-| [50 MP remosaiced](../app/src/main/cpp/camera/profiles/oppo_x9u_50mp_remosaiced.json) | H0.6, H1x, H3x, H10x; Bayer RAW remosaiced by the camera | No |
+| [50 MP remosaiced](../app/src/main/cpp/camera/profiles/oppo_x9u_50mp_remosaiced.json) | H0.6, H1x, H10x; Bayer RAW remosaiced by the camera | No |
 | [200 MP (requires root + patched lib)](../app/src/main/cpp/camera/profiles/oppo_x9u_200mp.json) | 1xF and 3xF; no H lenses | No |
 
 All three retain the same standard 0.6x, 1x, 3x and 10x lenses. The default
@@ -43,8 +43,10 @@ requests or session parameters. The same rule applies to captureBurst.
 | H10x | 5 | 8192×6144 | 25 | Quad 2×2 |
 
 The 50 MP remosaiced variant uses the same streams, but sets Photo CFA to
-Bayer and still-only agingtest modes to `0`, `5`, `7`, `0` for H0.6, H1x,
-H3x and H10x respectively. The table above describes the default native RAW variant.
+Bayer and still-only agingtest modes to `0`, `5`, `0` for H0.6, H1x
+and H10x respectively. The 3x telephoto has no working remosaiced sensor mode:
+mode 7 does not work, so H3x is omitted from this variant. The standard 3x
+lens remains available. The table above describes the default native RAW variant.
 
 For **200 MP, the agingtest key is omitted entirely**. The large RAW stream
 makes the HAL select mode 0 automatically. Preview can remain active during
