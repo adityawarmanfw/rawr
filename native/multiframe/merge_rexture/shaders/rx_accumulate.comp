@@ -6,7 +6,7 @@
 //   exp(-1/2 d^T Q d) * robustness,    d = q - (m - 1/2),   Q = inverse base covariance at o (red / blue samples use Q / 1.2^2)
 // where robustness is the frame's half-resolution weight at o / 2. Per pixel and colour the burst keeps sum(w x), sum(w),
 // and sum over frames of (sum of the frame's w)^2 (effective frame count); debug builds also sum w^2 (variance factor).
-// Packed state: A = (s.r, s.g, s.b, sq.r), B = (w.r, w.g, w.b, sq.g), C = sq.b. Reads the raw frame directly.
+// Packed state: A = (s.rgb, w.r), B = (w.g, w.b), C = (sq.rgb) in fp16. Reads the raw frame directly.
 // Starts from accumulate.comp.
 #include "rx_common.glsl"
 
@@ -15,69 +15,91 @@ layout(set = 0, binding = 0, r16ui) readonly uniform uimage2D rawU16;
 layout(set = 0, binding = 1, rg32f) readonly uniform image2D flowI;
 layout(set = 0, binding = 2, r32f) readonly uniform image2D erI;
 layout(set = 0, binding = 3, rgba32f) readonly uniform image2D covI;
-layout(set = 0, binding = 4, rgba32f) uniform image2D accA;
-layout(set = 0, binding = 5, rgba32f) uniform image2D accB;
-layout(set = 0, binding = 6, r32f) uniform image2D accC;
+layout(set = 0, binding = 4, rgba32f) uniform image2D accA;      // (s.rgb, w.r)
+layout(set = 0, binding = 5, rg32f) uniform image2D accB;        // (w.g, w.b)
+layout(set = 0, binding = 6, rgba16f) uniform image2D accC;      // sum over frames of (sum of the frame's w)^2, fp16
 layout(set = 0, binding = 7, rgba32f) uniform image2D accSs2;    // sum of w^2 (debug only)
+// second frame of a pair (bound to the first frame's images when the pass handles one frame)
+layout(set = 0, binding = 8, r16ui) readonly uniform uimage2D rawU16B;
+layout(set = 0, binding = 9, rg32f) readonly uniform image2D flowB;
+layout(set = 0, binding = 10, r32f) readonly uniform image2D erB;
 layout(push_constant) uniform P {
     vec4 black;
     float white;
     int w, h, cfa;
     int debug;
     float frameWeight;       // per-frame weight (1 for equal exposures); hook for the bracket path
+    int frames;              // 1 or 2: frames added by this pass (state is read and written once per pass)
 } p;
 
 const float RB_WIDEN = 1.2;
+
+uint loadRaw(int f, ivec2 q) { return f == 0 ? imageLoad(rawU16, q).x : imageLoad(rawU16B, q).x; }
+vec2 loadFlow(int f, ivec2 q) { return f == 0 ? imageLoad(flowI, q).xy : imageLoad(flowB, q).xy; }
+float loadEr(int f, ivec2 q) { return f == 0 ? imageLoad(erI, q).x : imageLoad(erB, q).x; }
 
 void main() {
     const ivec2 o = ivec2(gl_GlobalInvocationID.xy);
     if (o.x >= p.w || o.y >= p.h) return;
     const ivec2 rawSize = ivec2(p.w, p.h);
-    // bilinear flow at o (tile size 16)
     const ivec2 tn = imageSize(flowI);
-    vec2 g = (vec2(o) + 0.5) / 16.0 - 0.5;
-    vec2 b = floor(g), fr = g - b;
-    vec2 facc = vec2(0.0);
-    float tot = 0.0;
-    for (int j = 0; j < 2; ++j)
-        for (int i = 0; i < 2; ++i) {
-            ivec2 tq = clamp(ivec2(b) + ivec2(i, j), ivec2(0), tn - 1);
-            float wgt = (i == 1 ? fr.x : 1.0 - fr.x) * (j == 1 ? fr.y : 1.0 - fr.y);
-            facc += wgt * imageLoad(flowI, tq).xy;
-            tot += wgt;
+    vec3 qi = vec3(0.0);
+    bool haveQ = false;
+    vec3 sumS = vec3(0.0), sumW = vec3(0.0), sumSq = vec3(0.0), sumF2 = vec3(0.0);
+    for (int f = 0; f < p.frames; ++f) {
+        // bilinear flow at o (tile size 16)
+        vec2 g = (vec2(o) + 0.5) / 16.0 - 0.5;
+        vec2 b = floor(g), fr = g - b;
+        vec2 facc = vec2(0.0);
+        float tot = 0.0;
+        for (int j = 0; j < 2; ++j)
+            for (int i = 0; i < 2; ++i) {
+                ivec2 tq = clamp(ivec2(b) + ivec2(i, j), ivec2(0), tn - 1);
+                float wgt = (i == 1 ? fr.x : 1.0 - fr.x) * (j == 1 ? fr.y : 1.0 - fr.y);
+                facc += wgt * loadFlow(f, tq);
+                tot += wgt;
+            }
+        bool ok = tot > 1e-8;
+        vec2 fl = ok ? facc / tot : vec2(0.0);
+        vec2 mv = vec2(o) + 0.5 + fl;
+        bool inb = ok && mv.x >= 0.0 && mv.y >= 0.0 && mv.x < float(p.w) && mv.y < float(p.h);
+        float r = loadEr(f, clamp(o / 2, ivec2(0), imageSize(erI) - 1));
+        if (!(inb && r > 0.0)) continue;
+        if (!haveQ) {
+            vec3 ca, cb, cc4, cd;
+            vec2 cf;
+            RX_COV_NEIGHBOURS(covI, o, ca, cb, cc4, cd, cf);
+            qi = rxCovInverse(ca, cb, cc4, cd, cf);
+            haveQ = true;
         }
-    bool ok = tot > 1e-8;
-    vec2 f = ok ? facc / tot : vec2(0.0);
-    vec2 mv = vec2(o) + 0.5 + f;
-    bool inb = ok && mv.x >= 0.0 && mv.y >= 0.0 && mv.x < float(p.w) && mv.y < float(p.h);
-    float r = imageLoad(erI, clamp(o / 2, ivec2(0), imageSize(erI) - 1)).x;
-    if (!(inb && r > 0.0)) return;                                      // nothing to add (use == false)
-    vec3 ca, cb, cc4, cd;
-    vec2 cf;
-    RX_COV_NEIGHBOURS(covI, o, ca, cb, cc4, cd, cf);
-    const vec3 qi = rxCovInverse(ca, cb, cc4, cd, cf);
-    const ivec2 c0 = ivec2(floor(mv));
-    const vec2 e = mv - 0.5;
-    vec3 fs = vec3(0.0), fw = vec3(0.0), f2 = vec3(0.0);
-    for (int dy = -1; dy <= 1; ++dy)
-        for (int dx = -1; dx <= 1; ++dx) {
-            ivec2 q = c0 + ivec2(dx, dy);
-            if (any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, rawSize))) continue;
-            int cc = rxChannel(q, p.cfa);
-            float s = cc == 1 ? 1.0 : 1.0 / (RB_WIDEN * RB_WIDEN);
-            vec2 d = vec2(q) - e;
-            float z = max(0.0, s * (qi.x * d.x * d.x + 2.0 * qi.y * d.x * d.y + qi.z * d.y * d.y));
-            float ww = exp(-0.5 * z) * r * p.frameWeight;
-            float x = rxNormFromRaw(float(imageLoad(rawU16, q).x), q, p.black, p.white);
-            fs[cc] += ww * x;
-            fw[cc] += ww;
-            f2[cc] += ww * ww;
-        }
-    vec4 a = imageLoad(accA, o), bb = imageLoad(accB, o);
-    float sqb = imageLoad(accC, o).x;
-    vec3 sq = fw * fw;
-    imageStore(accA, o, vec4(a.xyz + fs, a.w + sq.x));
-    imageStore(accB, o, vec4(bb.xyz + fw, bb.w + sq.y));
-    imageStore(accC, o, vec4(sqb + sq.z));
-    if (p.debug != 0) imageStore(accSs2, o, vec4(imageLoad(accSs2, o).xyz + f2, 0.0));
+        const ivec2 c0 = ivec2(floor(mv));
+        const vec2 e = mv - 0.5;
+        vec3 fs = vec3(0.0), fw = vec3(0.0), f2 = vec3(0.0);
+        for (int dy = -1; dy <= 1; ++dy)
+            for (int dx = -1; dx <= 1; ++dx) {
+                ivec2 q = c0 + ivec2(dx, dy);
+                if (any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, rawSize))) continue;
+                int cc = rxChannel(q, p.cfa);
+                float s = cc == 1 ? 1.0 : 1.0 / (RB_WIDEN * RB_WIDEN);
+                vec2 d = vec2(q) - e;
+                float z = max(0.0, s * (qi.x * d.x * d.x + 2.0 * qi.y * d.x * d.y + qi.z * d.y * d.y));
+                float ww = exp(-0.5 * z) * r * p.frameWeight;
+                float x = rxNormFromRaw(float(loadRaw(f, q)), q, p.black, p.white);
+                fs[cc] += ww * x;
+                fw[cc] += ww;
+                f2[cc] += ww * ww;
+            }
+        sumS += fs;
+        sumW += fw;
+        sumSq += fw * fw;
+        sumF2 += f2;
+    }
+    if (!haveQ) return;
+    vec4 a = imageLoad(accA, o);
+    vec2 bb = imageLoad(accB, o).xy;
+    vec3 sq = imageLoad(accC, o).xyz + sumSq;
+    imageStore(accA, o, vec4(a.xyz + sumS, a.w + sumW.x));
+    imageStore(accB, o, vec4(bb + sumW.yz, 0.0, 0.0));
+    imageStore(accC, o, vec4(sq, 0.0));
+    if (p.debug != 0) imageStore(accSs2, o, vec4(imageLoad(accSs2, o).xyz + sumF2, 0.0));
 }

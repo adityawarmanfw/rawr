@@ -35,18 +35,17 @@ void main() {
     int own = rxChannel(q, p.cfa);
     vec4 v = imageLoad(rgbI, q);
     float val[3] = float[3](v.x, v.y, v.z);
-    for (int k = 0; k < 3; ++k) {
-        if (k == own) continue;
-        float lo = 1.0e30, hi = -1.0e30;
-        for (int dy = 0; dy < 5; ++dy)
-            for (int dx = 0; dx < 5; ++dx) {
-                int i = (t2.y + dy) * T + t2.x + dx;
-                if (int(sC[i]) == k) {
-                    lo = min(lo, sX[i]);
-                    hi = max(hi, sX[i]);
-                }
-            }
-        val[k] = clamp(val[k], lo, hi);
-    }
+    // one pass over the 5 x 5 window: each native sample updates the range of its own colour
+    vec3 lo = vec3(1.0e30), hi = vec3(-1.0e30);
+    for (int dy = 0; dy < 5; ++dy)
+        for (int dx = 0; dx < 5; ++dx) {
+            int i = (t2.y + dy) * T + t2.x + dx;
+            int c = int(sC[i]);
+            float x = sX[i];
+            lo[c] = min(lo[c], x);
+            hi[c] = max(hi[c], x);
+        }
+    for (int k = 0; k < 3; ++k)
+        if (k != own) val[k] = clamp(val[k], lo[k], hi[k]);
     imageStore(outI, q, vec4(val[0], val[1], val[2], 1.0));
 }

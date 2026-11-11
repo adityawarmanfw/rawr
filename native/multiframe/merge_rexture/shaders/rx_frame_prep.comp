@@ -11,7 +11,10 @@
 #include "rx_tables.glsl"
 #include "rx_common.glsl"
 
-layout(local_size_x = 16, local_size_y = 16) in;
+#ifndef RX_PG
+#define RX_PG 16          // guide positions per workgroup edge (workgroup = RX_PG x RX_PG threads)
+#endif
+layout(local_size_x = RX_PG, local_size_y = RX_PG) in;
 layout(set = 0, binding = 0, r16ui) readonly uniform uimage2D rawU16;
 layout(set = 0, binding = 1, r32f) writeonly uniform image2D l3Out;
 layout(set = 0, binding = 2, r32f) writeonly uniform image2D l2Out;
@@ -29,9 +32,10 @@ layout(push_constant) uniform P {
 }
 p;
 
-const int RAW_T = 43, L3_T = 39, G_T = 18;
+const int PG = RX_PG, NT = RX_PG * RX_PG;
+const int RAW_T = 2 * PG + 11, L3_T = 2 * PG + 7, G_T = PG + 2;   // raw tile (local5 + Gaussian apron), l3 tile, guide tile
 shared float sA[RAW_T * RAW_T];   // normalised raw tile, later the l3 tile (39 x 39)
-shared float sB[RAW_T * L3_T];    // horizontal local5, later the vertical Gaussian pass (16 x 39)
+shared float sB[RAW_T * L3_T];    // horizontal local5, later the vertical Gaussian pass (PG x L3_T)
 shared vec3 sG[G_T * G_T];        // guide R, G, B at guide positions g0 - 1 .. g0 + 16
 shared float sGrey[G_T * G_T];    // GAT grey at the same positions (base only)
 
@@ -42,24 +46,27 @@ float gat(float x) {
 
 void main() {
     const ivec2 tid2 = ivec2(gl_LocalInvocationID.xy);
-    const int tid = tid2.y * 16 + tid2.x;
-    const ivec2 g0 = ivec2(gl_WorkGroupID.xy) * 16;      // first guide position of the tile
+    const int tid = tid2.y * PG + tid2.x;
+    const ivec2 g0 = ivec2(gl_WorkGroupID.xy) * PG;      // first guide position of the tile
     const ivec2 gSize = ivec2(p.w / 2, p.h / 2);
     const ivec2 rawSize = ivec2(p.w, p.h);
     const ivec2 rt0 = 2 * g0 - 2;                         // raw coordinate of tile (0, 0)
 
     // (A) normalised raw tile
-    for (int i = tid; i < RAW_T * RAW_T; i += 256) {
-        ivec2 qc = clamp(rt0 + ivec2(i % RAW_T, i / RAW_T), ivec2(0), rawSize - 1);
-        sA[i] = rxNormFromRaw(float(imageLoad(rawU16, qc).x), qc, p.black, p.white);
-    }
+    for (int y = tid2.y; y < RAW_T; y += PG)
+        for (int x = tid2.x; x < RAW_T; x += PG) {
+            ivec2 qc = clamp(rt0 + ivec2(x, y), ivec2(0), rawSize - 1);
+            sA[y * RAW_T + x] = rxNormFromRaw(float(imageLoad(rawU16, qc).x), qc, p.black, p.white);
+        }
     barrier();
 
     // (B) guide planes and grey from the raw tile; horizontal local5 into sB
     const ivec2 red = rxRedOffset(p.cfa);
     const ivec2 blue = ivec2(1) - red;
-    for (int i = tid; i < G_T * G_T; i += 256) {
-        ivec2 gq = clamp(g0 - 1 + ivec2(i % G_T, i / G_T), ivec2(0), gSize - 1);
+    for (int gy = tid2.y; gy < G_T; gy += PG)
+      for (int gx = tid2.x; gx < G_T; gx += PG) {
+        const int i = gy * G_T + gx;
+        ivec2 gq = clamp(g0 - 1 + ivec2(gx, gy), ivec2(0), gSize - 1);
         ivec2 t = 2 * gq - rt0;                           // tile coordinate of the quad's (0, 0) sample
         float r = sA[(t.y + red.y) * RAW_T + t.x + red.x];
         float b = sA[(t.y + blue.y) * RAW_T + t.x + blue.x];
@@ -72,32 +79,30 @@ void main() {
             sGrey[i] = 0.25 * (gat(s00) + gat(s01) + gat(s10) + gat(s11));
         }
     }
-    for (int i = tid; i < RAW_T * L3_T; i += 256) {
-        int r = i / L3_T, c = i % L3_T;
-        const int o = r * RAW_T + c;
-        sB[i] = (sA[o] + 4.0 * sA[o + 1] + 6.0 * sA[o + 2] + 4.0 * sA[o + 3] + sA[o + 4]) * 0.0625;
-    }
+    for (int r = tid2.y; r < RAW_T; r += PG)
+        for (int c = tid2.x; c < L3_T; c += PG) {
+            const int o = r * RAW_T + c;
+            sB[r * L3_T + c] = (sA[o] + 4.0 * sA[o + 1] + 6.0 * sA[o + 2] + 4.0 * sA[o + 3] + sA[o + 4]) * 0.0625;
+        }
     barrier();
 
     // (C) vertical local5: the l3 tile (overwrites sA; its last read was above)
-    for (int i = tid; i < L3_T * L3_T; i += 256) {
-        int r = i / L3_T, c = i % L3_T;
-        sA[i] = (sB[r * L3_T + c] + 4.0 * sB[(r + 1) * L3_T + c] + 6.0 * sB[(r + 2) * L3_T + c] +
-                 4.0 * sB[(r + 3) * L3_T + c] + sB[(r + 4) * L3_T + c]) * 0.0625;
-    }
+    for (int r = tid2.y; r < L3_T; r += PG)
+        for (int c = tid2.x; c < L3_T; c += PG)
+            sA[r * L3_T + c] = (sB[r * L3_T + c] + 4.0 * sB[(r + 1) * L3_T + c] + 6.0 * sB[(r + 2) * L3_T + c] +
+                                4.0 * sB[(r + 3) * L3_T + c] + sB[(r + 4) * L3_T + c]) * 0.0625;
     barrier();
 
     // (D) l3 store (the 32 x 32 block of this tile) and the vertical Gaussian pass of l2
-    for (int dy = 0; dy < 32; dy += 16)
-        for (int dx = 0; dx < 32; dx += 16) {
+    for (int dy = 0; dy < 2 * PG; dy += PG)
+        for (int dx = 0; dx < 2 * PG; dx += PG) {
             ivec2 q = 2 * g0 + tid2 + ivec2(dx, dy);
             if (q.x < p.w && q.y < p.h) imageStore(l3Out, q, vec4(sA[(tid2.y + dy) * L3_T + tid2.x + dx]));
         }
-    for (int i = tid; i < 16 * L3_T; i += 256) {
-        int r = i / L3_T, c = i % L3_T;
+    for (int c = tid2.x; c < L3_T; c += PG) {   // vertical Gaussian pass: one row of the PG x L3_T tile per thread row
         float acc = 0.0;
-        for (int a = 0; a < 9; ++a) acc += RX_K2[a] * sA[(2 * r + a) * L3_T + c];
-        sB[i] = acc;
+        for (int a = 0; a < 9; ++a) acc += RX_K2[a] * sA[(2 * tid2.y + a) * L3_T + c];
+        sB[tid2.y * L3_T + c] = acc;
     }
     barrier();
 

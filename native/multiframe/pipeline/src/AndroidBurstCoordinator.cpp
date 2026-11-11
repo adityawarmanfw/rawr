@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -621,62 +622,141 @@ BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>
     }
     config.whiteBalance = frames[ref].parameters.whiteBalance;
     RextureRecorder recorder(arena_, executor_, config);
+    // RAWR_REXTURE_PROFILE: GPU time per dispatch group (timestamps after each group), per-chunk wall time and the host time
+    // between chunks, printed at the end. Never set in production.
+    const bool profile = std::getenv("RAWR_REXTURE_PROFILE") != nullptr;
+    std::map<std::string, double> profGpu;
+    double wallInChunks = 0.0, gpuInChunks = 0.0, hostLoad = 0.0;
+    std::uint32_t chunkCount = 0;
+    const auto profiled = [&](std::uint32_t code, std::uint32_t frame, std::uint32_t marks, const std::function<void()>& rec) {
+        ++chunkCount;
+        if (!profile) return gpuOrWall(executeChunk(code, frame, 2u, [&] {
+            recordTimestamp(0u);
+            rec();
+            recordTimestamp(1u);
+        }));
+        std::vector<const char*> names;
+        std::uint32_t q = 0;
+        recorder.setMark([&](const char* n) {
+            names.push_back(n);
+            recordTimestamp(++q);
+        });
+        const auto t = executeChunk(code, frame, marks + 1u, [&] {
+            recordTimestamp(0u);
+            rec();
+        });
+        recorder.setMark({});
+        double gpu = 0.0;
+        for (std::size_t k = 0; k < t.second.size() && k < names.size(); ++k) {
+            profGpu[names[k]] += t.second[k];
+            gpu += t.second[k];
+        }
+        wallInChunks += t.first;
+        gpuInChunks += gpu;
+        return gpu > 0.0 ? gpu : t.first;
+    };
     const bool initializeLayouts = !layoutsInitialized_;
-    timings.referencePrepareMs = gpuOrWall(executeChunk(1u, ref, 2u, [&] {
-        recordTimestamp(0u);
+    timings.referencePrepareMs = profiled(1u, ref, 3u, [&] {
         if (initializeLayouts) arena_.recordInitializeLayouts(command_);
         recorder.recordBurstClear(command_);
         recorder.recordPrepare(command_, true, frames[ref].raw.view, frames[ref].parameters);
-        recordTimestamp(1u);
-    }));
+    });
     if (initializeLayouts) layoutsInitialized_ = true;
     if (rextureObserver_) rextureObserver_("base_prepare", ref, arena_);
-    timings.referenceStatsMs = gpuOrWall(executeChunk(2u, ref, 2u, [&] {
-        recordTimestamp(0u);
+    timings.referenceStatsMs = profiled(2u, ref, rextureDebug_ ? 5u : 4u, [&] {
         recorder.recordBaseKernel(command_, rextureDebug_);
         recorder.recordBaseTiles(command_);
-        recordTimestamp(1u);
-    }));
+    });
     if (rextureObserver_) rextureObserver_("base_kernel", ref, arena_);
     // Fallback demosaic of the base: RCD (fp32 copy of the library's passes) + native-range bound.
-    timings.referenceStatsMs += gpuOrWall(executeChunk(3u, ref, 2u, [&] {
-        recordTimestamp(0u);
+    timings.referenceStatsMs += profiled(3u, ref, 7u, [&] {
         recorder.recordBaseDemosaic(command_, frames[ref].raw.view, frames[ref].parameters);
-        recordTimestamp(1u);
-    }));
+    });
     if (rextureObserver_) rextureObserver_("base_demosaic", ref, arena_);
+    bool samePairLevels = true;  // pair accumulation needs one black / white level set for the burst
+    for (const auto& fr : frames)
+        samePairLevels = samePairLevels && fr.parameters.normalization.whiteLevel == frames[ref].parameters.normalization.whiteLevel &&
+                         fr.parameters.normalization.blackByPhase == frames[ref].parameters.normalization.blackByPhase;
+    int pending = -1;  // first frame of a pair waiting for its partner (production path)
     std::uint32_t companions = 0;
     for (std::uint32_t i = 0; i < frames.size(); ++i) {
         if (i == ref) continue;
         if (frames[i].raw.ref.width != width_ || frames[i].raw.ref.height != height_)
             throw std::invalid_argument("multiframe burst: RAW geometry mismatch");
+        const auto loadBegin = Clock::now();
         if (frameLoad) frameLoad(i);
-        timings.companionPrepareMs += gpuOrWall(executeChunk(11u, i, 2u, [&] {
-            recordTimestamp(0u);
-            recorder.recordPrepare(command_, false, frames[i].raw.view, frames[i].parameters);
-            recordTimestamp(1u);
-        }));
-        if (rextureObserver_) rextureObserver_("companion_prepare", i, arena_);
-        for (std::uint32_t level = 0; level < 4u; ++level)
-            timings.alignmentMs += gpuOrWall(executeChunk(11u, i, 2u, [&] {
-                recordTimestamp(0u);
-                recorder.recordAlignmentLevel(command_, level, rextureDebug_);
-                recordTimestamp(1u);
-            }));
-        if (rextureObserver_) rextureObserver_("companion_align", i, arena_);
-        timings.robustnessMs += gpuOrWall(executeChunk(13u, i, 2u, [&] {
-            recordTimestamp(0u);
-            recorder.recordRobustness(command_, rextureDebug_);
-            recordTimestamp(1u);
-        }));
-        if (rextureObserver_) rextureObserver_("companion_robust", i, arena_);
-        timings.accumulationMs += gpuOrWall(executeChunk(14u, i, 2u, [&] {
-            recordTimestamp(0u);
-            recorder.recordAccumulate(command_, frames[i].raw.view, frames[i].parameters, rextureDebug_);
-            recordTimestamp(1u);
-        }));
+        hostLoad += std::chrono::duration<double, std::milli>(Clock::now() - loadBegin).count();
+        if (rextureObserver_) {
+            // Verification build: one submission per stage group so every stage can be dumped.
+            timings.companionPrepareMs += profiled(11u, i, 3u, [&] {
+                recorder.recordPrepare(command_, false, frames[i].raw.view, frames[i].parameters);
+            });
+            rextureObserver_("companion_prepare", i, arena_);
+            for (std::uint32_t level = 0; level < 4u; ++level)
+                timings.alignmentMs += profiled(11u, i, RextureRecorder::alignmentMarks(level), [&] {
+                    recorder.recordAlignmentLevel(command_, level, rextureDebug_);
+                });
+            rextureObserver_("companion_align", i, arena_);
+            timings.robustnessMs += profiled(13u, i, 1u, [&] { recorder.recordRobustness(command_, rextureDebug_); });
+            rextureObserver_("companion_robust", i, arena_);
+            timings.accumulationMs += profiled(14u, i, 1u, [&] {
+                recorder.recordAccumulate(command_, frames[i].raw.view, frames[i].parameters, rextureDebug_);
+            });
+        } else if (!samePairLevels) {
+            timings.companionPrepareMs += profiled(11u, i, 3u + 4u + 3u + 3u, [&] {
+                recorder.recordPrepare(command_, false, frames[i].raw.view, frames[i].parameters);
+                for (std::uint32_t level = 0; level < 3u; ++level) recorder.recordAlignmentLevel(command_, level, false);
+            });
+            timings.alignmentMs += profiled(11u, i, 3u + 1u, [&] {
+                recorder.recordAlignmentLevel(command_, 3u, false);
+                recorder.recordRobustness(command_, false);
+            });
+            timings.accumulationMs += profiled(14u, i, 1u, [&] {
+                recorder.recordAccumulate(command_, frames[i].raw.view, frames[i].parameters, false);
+            });
+        } else {
+            // Three submissions per companion (a submission costs ~1.4 ms of GPU idle on Adreno, and the preview needs a gap
+            // at least every ~25 ms): prepare + coarse alignment (~15 ms), finest level + robustness (~20 ms), accumulate
+            // (~24 ms, one dispatch).
+            // Companions are accumulated in pairs: the per-pixel state is read and written once per two frames. The first
+            // of a pair waits (its raw stays pinned) while the second is prepared and aligned.
+            const std::uint32_t slot = pending < 0 ? 0u : 1u;  // pairing is only used when every frame shares the levels
+            constexpr std::uint32_t kMarks1 = 3u + 4u + 3u + 3u;
+            timings.companionPrepareMs += profiled(11u, i, kMarks1, [&] {
+                recorder.recordPrepare(command_, false, frames[i].raw.view, frames[i].parameters);
+                for (std::uint32_t level = 0; level < 3u; ++level) recorder.recordAlignmentLevel(command_, level, false);
+            });
+            timings.alignmentMs += profiled(11u, i, 3u + 1u, [&] {
+                recorder.recordAlignmentLevel(command_, 3u, false, slot);
+                recorder.recordRobustness(command_, false, slot);
+            });
+            if (pending < 0) {
+                pending = static_cast<int>(i);
+                continue;
+            }
+            timings.accumulationMs += profiled(14u, i, 1u, [&] {
+                recorder.recordAccumulatePair(command_, frames[pending].raw.view, frames[i].raw.view, frames[i].parameters);
+            });
+            ++companions;
+            if (frameConsumed) frameConsumed(static_cast<std::uint32_t>(pending));
+            pending = -1;
+        }
         ++companions;
         if (frameConsumed) frameConsumed(i);
+    }
+    if (pending >= 0) {  // odd companion count: the last frame alone
+        const auto i = static_cast<std::uint32_t>(pending);
+        timings.accumulationMs += profiled(14u, i, 1u, [&] {
+            recorder.recordAccumulate(command_, frames[i].raw.view, frames[i].parameters, false);
+        });
+        ++companions;
+        if (frameConsumed) frameConsumed(i);
+    }
+    if (profile) {
+        std::fprintf(stderr, "rexture_profile companions=%u chunks=%u gpu_ms=%.2f chunk_wall_ms=%.2f frame_load_ms=%.2f stages:",
+                     companions, chunkCount, gpuInChunks, wallInChunks, hostLoad);
+        for (const auto& kv : profGpu) std::fprintf(stderr, " %s=%.2f", kv.first.c_str(), kv.second);
+        std::fprintf(stderr, "\n");
     }
     if (rextureObserver_) rextureObserver_("companions_done", ref, arena_);
     timings.finalizeMs = gpuOrWall(executeChunk(20u, ref, 2u, [&] {

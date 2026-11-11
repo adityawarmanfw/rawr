@@ -1,6 +1,8 @@
 #include <rawr/raw_gpu_pipeline/ResourceArena.h>
 
+#include <algorithm>
 #include <array>
+#include <map>
 #include <stdexcept>
 #include <vector>
 namespace rawr::raw_gpu_pipeline {
@@ -27,6 +29,8 @@ VkFormat pixelStorageFormat(PixelStorage s) {
             return VK_FORMAT_R8_UINT;
         case PixelStorage::R16Uint:
             return VK_FORMAT_R16_UINT;
+        case PixelStorage::R16Float:
+            return VK_FORMAT_R16_SFLOAT;
         case PixelStorage::R32Float:
             return VK_FORMAT_R32_SFLOAT;
         case PixelStorage::RG32Float:
@@ -51,7 +55,10 @@ void ResourceArena::initialize(VkPhysicalDevice p, VkDevice d, const ScratchLayo
             VkDeviceSize offset = 0;
             bool dedicated = false;
             VkDeviceMemory memory = VK_NULL_HANDLE;
+            std::string pool, placeAt;
         };
+        std::map<std::string, const ImagePlacement*> placementOf;
+        for (const auto& pl : l.placements) placementOf[pl.name] = &pl;
         std::vector<PendingImage> pendingImages;
         for (const auto& s : l.images) {
             ArenaImage a{};
@@ -92,7 +99,8 @@ void ResourceArena::initialize(VkPhysicalDevice p, VkDevice d, const ScratchLayo
             if (!images_.emplace(s.name, a).second) throw std::runtime_error("multiframe arena: duplicate image name");
             pendingImages.push_back(
                 {s.name, mr, mt(p, mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT), 0u,
-                 dedicated.requiresDedicatedAllocation == VK_TRUE, VK_NULL_HANDLE});
+                 dedicated.requiresDedicatedAllocation == VK_TRUE, VK_NULL_HANDLE, placementOf.count(s.name) ? placementOf[s.name]->pool : std::string(),
+                 placementOf.count(s.name) ? placementOf[s.name]->placeAt : std::string()});
         }
         constexpr VkDeviceSize kImageBlockTargetBytes = 128ull * 1024ull * 1024ull;
         for (std::uint32_t type = 0; type < VK_MAX_MEMORY_TYPES; ++type) {
@@ -113,7 +121,7 @@ void ResourceArena::initialize(VkPhysicalDevice p, VkDevice d, const ScratchLayo
                 cursor = 0u;
             };
             for (auto& pending : pendingImages) {
-                if (pending.dedicated || pending.memoryType != type) continue;
+                if (pending.dedicated || pending.memoryType != type || !pending.pool.empty()) continue;
                 VkDeviceSize offset = alignUp(cursor, pending.requirements.alignment);
                 if (!block.empty() && offset + pending.requirements.size > kImageBlockTargetBytes) {
                     allocateBlock();
@@ -138,6 +146,55 @@ void ResourceArena::initialize(VkPhysicalDevice p, VkDevice d, const ScratchLayo
             ck(vkAllocateMemory(d, &ai, nullptr, &pending.memory), "multiframe arena: allocate dedicated image");
             imageMemoryBlocks_.push_back(pending.memory);
             physicalImageBytes_ += pending.requirements.size;
+        }
+        // Pools: one allocation per pool, members placed by their placeAt rule (aliasing images with disjoint lifetimes).
+        {
+            std::map<std::string, std::vector<PendingImage*>> pools;
+            for (auto& pending : pendingImages)
+                if (!pending.pool.empty()) pools[pending.pool].push_back(&pending);
+            for (auto& [poolName, members] : pools) {
+                std::map<std::string, PendingImage*> byName;
+                VkDeviceSize total = 0, alignment = 1;
+                std::uint32_t type = members.front()->memoryType;
+                std::uint32_t typeBits = ~0u;
+                for (auto* m : members) {
+                    if (m->dedicated) throw std::runtime_error("multiframe arena: pooled image requires dedicated memory");
+                    typeBits &= m->requirements.memoryTypeBits;
+                    alignment = std::max(alignment, m->requirements.alignment);
+                }
+                if (!(typeBits & (1u << type))) throw std::runtime_error("multiframe arena: pool members need different memory types");
+                for (auto* m : members) {
+                    VkDeviceSize offset = 0;
+                    const std::string& at = m->placeAt;
+                    if (at.rfind("start:", 0) == 0) {
+                        offset = byName.at(at.substr(6))->offset;
+                    } else if (at.rfind("end:", 0) == 0) {
+                        std::string list = at.substr(4);
+                        std::size_t pos = 0;
+                        while (pos <= list.size()) {
+                            const auto comma = list.find(',', pos);
+                            const std::string n = list.substr(pos, comma == std::string::npos ? std::string::npos : comma - pos);
+                            const auto* o = byName.at(n);
+                            offset = std::max(offset, o->offset + o->requirements.size);
+                            if (comma == std::string::npos) break;
+                            pos = comma + 1;
+                        }
+                        offset = alignUp(offset, m->requirements.alignment);
+                    }
+                    m->offset = offset;
+                    byName[m->name] = m;
+                    total = std::max(total, offset + m->requirements.size);
+                }
+                VkMemoryAllocateInfo ai{};
+                ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+                ai.allocationSize = alignUp(total, alignment);
+                ai.memoryTypeIndex = type;
+                VkDeviceMemory memory = VK_NULL_HANDLE;
+                ck(vkAllocateMemory(d, &ai, nullptr, &memory), "multiframe arena: allocate image pool");
+                imageMemoryBlocks_.push_back(memory);
+                physicalImageBytes_ += ai.allocationSize;
+                for (auto* m : members) m->memory = memory;
+            }
         }
         for (const auto& pending : pendingImages) {
             auto& a = images_.at(pending.name);

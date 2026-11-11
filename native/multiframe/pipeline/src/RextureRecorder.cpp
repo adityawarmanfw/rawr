@@ -1,9 +1,13 @@
 #include <rawr/raw_gpu_pipeline/RextureRecorder.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <stdexcept>
 #include <string>
 
+#ifndef RX_PREP_PG
+#define RX_PREP_PG 16
+#endif
 namespace rawr::raw_gpu_pipeline {
 namespace {
 constexpr std::uint32_t divUp(std::uint32_t x, std::uint32_t y) { return (x + y - 1u) / y; }
@@ -14,6 +18,7 @@ struct PreparePc {
     float white;
     std::int32_t w, h, l2w, l2h, cfa, isBase;
     float alpha, beta;
+    std::int32_t skip;
 };
 struct PyramidPc {
     std::int32_t dstW, dstH;
@@ -45,6 +50,7 @@ struct AccPc {
     float white;
     std::int32_t w, h, cfa, debug;
     float frameWeight;
+    std::int32_t frames;
 };
 struct FinalPc {
     float black[4];
@@ -66,26 +72,35 @@ static_assert(sizeof(PreparePc) <= 128);
 ScratchLayout makeRextureScratchLayout(const MultiframeGeometry& g, bool debug) {
     ScratchLayout r{};
     r.geometry = g;
-    auto img = [&](std::string n, Extent2D e, PixelStorage s, Lifetime l) {
+    auto img = [&](std::string n, Extent2D e, PixelStorage s, Lifetime l, std::string pool = {}, std::string placeAt = {}) {
         if (!e.width || !e.height) throw std::invalid_argument("rexture layout: empty image " + n);
+        if (!pool.empty()) r.placements.push_back({n, std::move(pool), std::move(placeAt)});
         r.images.push_back({std::move(n), e, s, l});
     };
     for (const char* who : {"rx_base_", "rx_alt_"}) {
         const bool base = std::string(who) == "rx_base_";
         const Lifetime life = base ? Lifetime::Burst : Lifetime::Companion;
         for (std::size_t l = 0; l < 4u; ++l)
-            img(std::string(who) + "l" + std::to_string(l), g.coarseToFine[l].image, PixelStorage::R32Float, life);
-        img(std::string(who) + "mean", g.guide, PixelStorage::RGBA32Float, life);
-        img(std::string(who) + "var", g.guide, PixelStorage::RGBA32Float, life);
+            img(std::string(who) + "l" + std::to_string(l), g.coarseToFine[l].image, PixelStorage::R32Float, life,
+                (!base && l == 3u) ? "companion" : "");
+        if (base) {
+            img("rx_base_mean", g.guide, PixelStorage::RGBA32Float, life);
+            img("rx_base_var", g.guide, PixelStorage::RGBA32Float, life);
+        }
     }
-    img("rx_base_tensor", g.guide, PixelStorage::RGBA32Float, Lifetime::Burst);
+    // The per-companion guide images share one pool with the base tensor (live only until the first companion is prepared,
+    // and the base kernel's scratch is rx_alt_mean / rx_alt_var, placed after it) and with linear_output (written after the
+    // last companion): alias, no extra memory.
+    img("rx_base_tensor", g.guide, PixelStorage::RGBA32Float, Lifetime::Burst, "companion", "start:rx_alt_l3");
+    img("rx_alt_mean", g.guide, PixelStorage::RGBA32Float, Lifetime::Companion, "companion", "end:rx_alt_l3,rx_base_tensor");
+    img("rx_alt_var", g.guide, PixelStorage::RGBA32Float, Lifetime::Companion, "companion", "end:rx_alt_mean");
     img("rx_base_cov", g.guide, PixelStorage::RGBA32Float, Lifetime::Burst);
     img("rx_base_rcd", g.output, PixelStorage::RGBA16Float, Lifetime::Burst);  // fallback demosaic, stored fp16 (RCD runs on accumulator memory)
     if (debug) img("rx_dbg_qinv", g.output, PixelStorage::RGBA32Float, Lifetime::Burst);
     // Accumulators (packed, fp32): A = (sum w x [rgb], sum_frames W^2 [r]), B = (sum w [rgb], ... [g]), C = (... [b]).
     img("rx_acc_a", g.output, PixelStorage::RGBA32Float, Lifetime::Output);
-    img("rx_acc_b", g.output, PixelStorage::RGBA32Float, Lifetime::Output);
-    img("rx_acc_c", g.output, PixelStorage::R32Float, Lifetime::Output);
+    img("rx_acc_b", g.output, PixelStorage::RG32Float, Lifetime::Output);
+    img("rx_acc_c", g.output, PixelStorage::RGBA16Float, Lifetime::Output);
     if (debug) {
         img("rx_dbg_ss2", g.output, PixelStorage::RGBA32Float, Lifetime::Output);
         img("rx_dbg_fin_out", g.output, PixelStorage::RGBA32Float, Lifetime::Output);  // (final rgb, neff)
@@ -94,6 +109,7 @@ ScratchLayout makeRextureScratchLayout(const MultiframeGeometry& g, bool debug) 
     }
     // Robustness: the frame's weight map, and the burst-long support / cover maps (half resolution, fp32 sums).
     img("rx_er", g.guide, PixelStorage::R32Float, Lifetime::Companion);
+    img("rx_er_b", g.guide, PixelStorage::R32Float, Lifetime::Companion);
     img("rx_support", g.guide, PixelStorage::R32Float, Lifetime::Burst);
     img("rx_cover", g.guide, PixelStorage::R32Float, Lifetime::Burst);
     if (debug) {
@@ -106,13 +122,14 @@ ScratchLayout makeRextureScratchLayout(const MultiframeGeometry& g, bool debug) 
         const Extent2D tiles{g.coarseToFine[l].tilesX, g.coarseToFine[l].tilesY};
         img("rx_tiles_l" + std::to_string(l), tiles, PixelStorage::RGBA32Float, Lifetime::Burst);
         img("rx_flow_l" + std::to_string(l), tiles, PixelStorage::RG32Float, Lifetime::Companion);
+        if (l == 3) img("rx_flow_l3_b", tiles, PixelStorage::RG32Float, Lifetime::Companion);  // second slot of a pair
         img("rx_bmcost_l" + std::to_string(l), tiles, PixelStorage::R32Float, Lifetime::Companion);
         if (debug) {
             img("rx_dbg_prior_l" + std::to_string(l), tiles, PixelStorage::RG32Float, Lifetime::Companion);
             img("rx_dbg_bm_l" + std::to_string(l), tiles, PixelStorage::RG32Float, Lifetime::Companion);
         }
     }
-    img("linear_output", g.output, PixelStorage::RGBA16Float, Lifetime::Output);
+    img("linear_output", g.output, PixelStorage::RGBA16Float, Lifetime::Output, "companion", "start:rx_alt_l3");
     auto bytes = [](const ImageSpec& s) {
         return static_cast<std::uint64_t>(s.extent.width) * s.extent.height * bytesPerPixel(s.storage);
     };
@@ -147,14 +164,16 @@ void RextureRecorder::recordPrepare(VkCommandBuffer c, bool base, VkImageView ra
     p.isBase = base ? 1 : 0;
     p.alpha = config_.noiseAlpha;
     p.beta = config_.noiseBeta;
+    p.skip = std::getenv("RX_PREP_SKIP") ? std::atoi(std::getenv("RX_PREP_SKIP")) : 0;
     ImageBinding raw{0, rawU16, VK_IMAGE_LAYOUT_GENERAL};
     // One workgroup per 16 x 16 guide positions (32 x 32 raw pixels).
     executor_.record(c, ShaderId::RxFramePrep,
                      {{raw, ib(1, l3), ib(2, l2), ib(3, arena_.image(who + "mean")), ib(4, arena_.image(who + "var")),
                        ib(5, arena_.image("rx_base_tensor"))},
                       {}},
-                     &p, sizeof(p), divUp(guide.extent.width, 16), divUp(guide.extent.height, 16));
+                     &p, sizeof(p), divUp(guide.extent.width, RX_PREP_PG), divUp(guide.extent.height, RX_PREP_PG));
     computeWriteBarrier(c);
+    if (mark_) mark_("prep");
     recordPyramid(c, base);
 }
 
@@ -167,6 +186,7 @@ void RextureRecorder::recordPyramid(VkCommandBuffer c, bool base) const {
         executor_.record(c, ShaderId::RxPyramid, {{ib(0, src), ib(1, dst)}, {}}, &p, sizeof(p),
                          divUp(dst.extent.width, 8), divUp(dst.extent.height, 8));
         computeWriteBarrier(c);
+        if (mark_) mark_(l == 1 ? "pyr_l1" : "pyr_l0");
     }
 }
 
@@ -182,10 +202,13 @@ void RextureRecorder::recordBaseKernel(VkCommandBuffer c, bool debug) const {
     AxisPc vertical{0}, horizontal{1};
     executor_.record(c, ShaderId::RxKernelBlur, {{ib(0, tensor), ib(1, tmpA)}, {}}, &vertical, sizeof(vertical), gx, gy);
     computeWriteBarrier(c);
+    if (mark_) mark_("blur_v");
     executor_.record(c, ShaderId::RxKernelBlur, {{ib(0, tmpA), ib(1, tmpB)}, {}}, &horizontal, sizeof(horizontal), gx, gy);
     computeWriteBarrier(c);
+    if (mark_) mark_("blur_h");
     executor_.record(c, ShaderId::RxKernelCov, {{ib(0, tmpB), ib(1, tensor), ib(2, cov)}, {}}, nullptr, 0, gx, gy);
     computeWriteBarrier(c);
+    if (mark_) mark_("cov");
     if (debug) {
         const auto& q = arena_.image("rx_dbg_qinv");
         executor_.record(c, ShaderId::RxQinvDebug, {{ib(0, cov), ib(1, q)}, {}}, nullptr, 0, divUp(q.extent.width, 16),
@@ -253,14 +276,15 @@ void RextureRecorder::recordBaseTiles(VkCommandBuffer c) const {
                          tiles.extent.height);
         computeWriteBarrier(c);
     }
+    if (mark_) mark_("ref_tiles");
 }
 
-void RextureRecorder::recordAlignmentLevel(VkCommandBuffer c, std::uint32_t l, bool debug) const {
+void RextureRecorder::recordAlignmentLevel(VkCommandBuffer c, std::uint32_t l, bool debug, std::uint32_t slot) const {
     if (l >= 4u) throw std::invalid_argument("rexture recorder: invalid alignment level");
     const std::string ls = std::to_string(l);
     const auto& ref = arena_.image("rx_base_l" + ls);
     const auto& mov = arena_.image("rx_alt_l" + ls);
-    const auto& flow = arena_.image("rx_flow_l" + ls);
+    const auto& flow = arena_.image(l == 3 && slot == 1 ? std::string("rx_flow_l3_b") : "rx_flow_l" + ls);
     const auto& tiles = arena_.image("rx_tiles_l" + ls);
     const std::uint32_t tx = flow.extent.width, ty = flow.extent.height;
     if (l == 0) {
@@ -283,25 +307,30 @@ void RextureRecorder::recordAlignmentLevel(VkCommandBuffer c, std::uint32_t l, b
                          sizeof(p), tx, ty);
         computeWriteBarrier(c);
     }
+    if (mark_ && l > 0) mark_("cand");
     if (debug) copyFlow(c, flow, arena_.image("rx_dbg_prior_l" + ls));
     BlockPc bp{std::int32_t(kTileSize[l]), std::int32_t(kRadius[l]), kMetric[l], debug ? 1 : 0};
     executor_.record(c, ShaderId::RxBlockMatch,
                      {{ib(0, ref), ib(1, mov), ib(2, flow), ib(3, tiles), ib(4, arena_.image("rx_bmcost_l" + ls))}, {}}, &bp,
                      sizeof(bp), tx, ty);
     computeWriteBarrier(c);
+    if (mark_) mark_("bm");
     if (debug) copyFlow(c, flow, arena_.image("rx_dbg_bm_l" + ls));
     // Levels above the coarsest: mode 2 and mode 1 tiles are independent, one dispatch. The coarsest level fills the
     // unconstrained tiles from the constrained ones between the two.
     LkPc lk{std::int32_t(kTileSize[l]), l == 0 ? 2 : 3, kLkIterations, float(kRadius[l]), kHessianEps};
     executor_.record(c, ShaderId::RxLk, {{ib(0, ref), ib(1, mov), ib(2, flow), ib(3, tiles)}, {}}, &lk, sizeof(lk), tx, ty);
     computeWriteBarrier(c);
+    if (mark_) mark_("lk");
     if (l == 0) {
         executor_.record(c, ShaderId::RxFill, {{ib(0, flow), ib(1, tiles)}, {}}, nullptr, 0, 1, 1);
         computeWriteBarrier(c);
+        if (mark_) mark_("fill");
         lk.which = 1;
         executor_.record(c, ShaderId::RxLk, {{ib(0, ref), ib(1, mov), ib(2, flow), ib(3, tiles)}, {}}, &lk, sizeof(lk), tx,
                          ty);
         computeWriteBarrier(c);
+        if (mark_) mark_("lk1");
     }
 }
 }  // namespace rawr::raw_gpu_pipeline
@@ -322,23 +351,27 @@ void RextureRecorder::recordBurstClear(VkCommandBuffer c) const {
                          nullptr);
 }
 
-void RextureRecorder::recordRobustness(VkCommandBuffer c, bool debug) const {
-    const auto& er = arena_.image("rx_er");
+void RextureRecorder::recordRobustness(VkCommandBuffer c, bool debug, std::uint32_t slot) const {
+    const auto& er = arena_.image(slot == 1 ? "rx_er_b" : "rx_er");
     RobustPc p{config_.noiseAlpha, config_.noiseBeta, debug ? 1 : 0};
     const ArenaImage& dbgPre = debug ? arena_.image("rx_dbg_pre") : er;       // never written without debug
     const ArenaImage& dbgScale = debug ? arena_.image("rx_dbg_scale") : er;
     executor_.record(c, ShaderId::RxRobust,
-                     {{ib(0, arena_.image("rx_flow_l3")), ib(1, arena_.image("rx_base_mean")),
+                     {{ib(0, arena_.image(slot == 1 ? "rx_flow_l3_b" : "rx_flow_l3")), ib(1, arena_.image("rx_base_mean")),
                        ib(2, arena_.image("rx_base_var")), ib(3, arena_.image("rx_alt_mean")),
                        ib(4, arena_.image("rx_alt_var")), ib(5, er), ib(6, arena_.image("rx_support")),
                        ib(7, arena_.image("rx_cover")), ib(8, dbgPre), ib(9, dbgScale)},
                       {}},
                      &p, sizeof(p), divUp(er.extent.width, 16), divUp(er.extent.height, 16));
     computeWriteBarrier(c);
+    if (mark_) mark_("robust");
 }
 }  // namespace rawr::raw_gpu_pipeline
 
 namespace rawr::raw_gpu_pipeline {
+namespace {
+ImageBinding raw8(VkImageView v) { return {8, v, VK_IMAGE_LAYOUT_GENERAL}; }
+}  // namespace
 void RextureRecorder::recordAccumulate(VkCommandBuffer c, VkImageView rawU16, const MultiframeFrameParameters& f,
                                        bool debug) const {
     if (!rawU16) throw std::invalid_argument("rexture recorder: null RAW16 view");
@@ -351,14 +384,17 @@ void RextureRecorder::recordAccumulate(VkCommandBuffer c, VkImageView rawU16, co
     p.cfa = std::int32_t(config_.cfa);
     p.debug = debug ? 1 : 0;
     p.frameWeight = 1.0f;
+    p.frames = 1;
     ImageBinding raw{0, rawU16, VK_IMAGE_LAYOUT_GENERAL};
     const ArenaImage& ss2 = debug ? arena_.image("rx_dbg_ss2") : a;   // never touched without debug
     executor_.record(c, ShaderId::RxAccumulate,
                      {{raw, ib(1, arena_.image("rx_flow_l3")), ib(2, arena_.image("rx_er")), ib(3, arena_.image("rx_base_cov")),
-                       ib(4, a), ib(5, arena_.image("rx_acc_b")), ib(6, arena_.image("rx_acc_c")), ib(7, ss2)},
+                       ib(4, a), ib(5, arena_.image("rx_acc_b")), ib(6, arena_.image("rx_acc_c")), ib(7, ss2),
+                       raw8(rawU16), ib(9, arena_.image("rx_flow_l3")), ib(10, arena_.image("rx_er"))},
                       {}},
                      &p, sizeof(p), divUp(a.extent.width, 16), divUp(a.extent.height, 16));
     computeWriteBarrier(c);
+    if (mark_) mark_("accumulate");
 }
 }  // namespace rawr::raw_gpu_pipeline
 
@@ -381,7 +417,7 @@ void RextureRecorder::recordFinalize(VkCommandBuffer c, VkImageView rawU16, cons
     const auto& accC = arena_.image("rx_acc_c");
     const ArenaImage& dbgOut = debug ? arena_.image("rx_dbg_fin_out") : accA;  // never written without debug
     const ArenaImage& dbgPre = debug ? arena_.image("rx_dbg_fin_pre") : accA;
-    const ArenaImage& dbgW = debug ? arena_.image("rx_dbg_fin_w") : accC;
+    const ArenaImage& dbgW = debug ? arena_.image("rx_dbg_fin_w") : arena_.image("rx_support");
     executor_.record(c, ShaderId::RxFinalize,
                      {{raw, ib(1, arena_.image("rx_base_cov")), ib(2, accA), ib(3, arena_.image("rx_acc_b")), ib(4, accC),
                        ib(5, arena_.image("rx_support")), ib(6, arena_.image("rx_cover")), ib(7, arena_.image("rx_base_rcd")),
@@ -419,16 +455,23 @@ void RextureRecorder::recordBaseDemosaic(VkCommandBuffer c, VkImageView rawU16, 
     // (half width), export 4x32
     executor_.record(c, ShaderId::RxRcdDirection, b, &p, sizeof(p), divUp(p.width, 4), divUp(p.height, 32));
     computeWriteBarrier(c);
+    if (mark_) mark_("rcd_dir");
     executor_.record(c, ShaderId::RxRcdGreen, b, &p, sizeof(p), divUp(p.width, 4), divUp(p.height, 32));
     computeWriteBarrier(c);
+    if (mark_) mark_("rcd_green");
     executor_.record(c, ShaderId::RxRcdDiagonal, b, &p, sizeof(p), divUp(half, 32), divUp(p.height, 8));
     computeWriteBarrier(c);
+    if (mark_) mark_("rcd_diag");
     executor_.record(c, ShaderId::RxRcdGreenSites, b, &p, sizeof(p), divUp(half, 8), divUp(p.height, 32));
     computeWriteBarrier(c);
+    if (mark_) mark_("rcd_sites");
     executor_.record(c, ShaderId::RxRcdExport, b, &p, sizeof(p), divUp(p.width, 4), divUp(p.height, 32));
     computeWriteBarrier(c);
+    if (mark_) mark_("rcd_export");
     recordBaseDemosaicBound(c, rawU16, f);
+    if (mark_) mark_("rcd_bound");
     recordAccumulatorClear(c);
+    if (mark_) mark_("acc_clear");
 }
 }  // namespace rawr::raw_gpu_pipeline
 
@@ -454,5 +497,31 @@ void RextureRecorder::recordAccumulatorClear(VkCommandBuffer c) const {
     b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
     vkCmdPipelineBarrier(c, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &b, 0, nullptr, 0, nullptr);
+}
+}  // namespace rawr::raw_gpu_pipeline
+
+namespace rawr::raw_gpu_pipeline {
+void RextureRecorder::recordAccumulatePair(VkCommandBuffer c, VkImageView rawSlot0, VkImageView rawSlot1,
+                                           const MultiframeFrameParameters& f) const {
+    if (!rawSlot0 || !rawSlot1) throw std::invalid_argument("rexture recorder: null RAW16 view");
+    const auto& a = arena_.image("rx_acc_a");
+    AccPc p{};
+    std::copy(f.normalization.blackByPhase.begin(), f.normalization.blackByPhase.end(), p.black);
+    p.white = f.normalization.whiteLevel;
+    p.w = std::int32_t(a.extent.width);
+    p.h = std::int32_t(a.extent.height);
+    p.cfa = std::int32_t(config_.cfa);
+    p.debug = 0;
+    p.frameWeight = 1.0f;
+    p.frames = 2;
+    ImageBinding raw{0, rawSlot0, VK_IMAGE_LAYOUT_GENERAL};
+    executor_.record(c, ShaderId::RxAccumulate,
+                     {{raw, ib(1, arena_.image("rx_flow_l3")), ib(2, arena_.image("rx_er")), ib(3, arena_.image("rx_base_cov")),
+                       ib(4, a), ib(5, arena_.image("rx_acc_b")), ib(6, arena_.image("rx_acc_c")), ib(7, a), raw8(rawSlot1),
+                       ib(9, arena_.image("rx_flow_l3_b")), ib(10, arena_.image("rx_er_b"))},
+                      {}},
+                     &p, sizeof(p), divUp(a.extent.width, 16), divUp(a.extent.height, 16));
+    computeWriteBarrier(c);
+    if (mark_) mark_("accumulate");
 }
 }  // namespace rawr::raw_gpu_pipeline

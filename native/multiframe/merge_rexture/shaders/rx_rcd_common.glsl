@@ -5,7 +5,7 @@
 #define RX_RCD_COMMON_GLSL
 
 layout(set = 0, binding = 0, r16ui) uniform readonly uimage2D raw16Input;
-layout(set = 0, binding = 1, rgba32f) uniform image2D directionImage;   // (vh, pq, -, -): RGBA32F so that it can share memory with an accumulator
+layout(set = 0, binding = 1, rg32f) uniform image2D directionImage;   // (vh, pq); shares memory with accumulator B (RG32F)
 layout(set = 0, binding = 2, rgba32f) uniform image2D outputImage;
 
 layout(push_constant) uniform Push {

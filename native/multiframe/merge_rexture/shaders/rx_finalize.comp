@@ -18,8 +18,8 @@ layout(local_size_x = 16, local_size_y = 16) in;
 layout(set = 0, binding = 0, r16ui) readonly uniform uimage2D rawU16;      // the base frame
 layout(set = 0, binding = 1, rgba32f) readonly uniform image2D covI;
 layout(set = 0, binding = 2, rgba32f) readonly uniform image2D accA;
-layout(set = 0, binding = 3, rgba32f) readonly uniform image2D accB;
-layout(set = 0, binding = 4, r32f) readonly uniform image2D accC;
+layout(set = 0, binding = 3, rg32f) readonly uniform image2D accB;
+layout(set = 0, binding = 4, rgba16f) readonly uniform image2D accC;
 layout(set = 0, binding = 5, r32f) readonly uniform image2D supportI;
 layout(set = 0, binding = 6, r32f) readonly uniform image2D coverI;
 layout(set = 0, binding = 7, rgba16f) readonly uniform image2D rcdI;
@@ -66,9 +66,10 @@ Fin finalizeAt(ivec2 q0) {
             rs[cc] += v * ww;
             rw[cc] += ww;
         }
-    vec4 a = imageLoad(accA, q0), b = imageLoad(accB, q0);
-    vec3 accSq = vec3(a.w, b.w, imageLoad(accC, q0).x);
-    vec3 total = b.xyz + rw;
+    vec4 a = imageLoad(accA, q0);
+    vec2 bw = imageLoad(accB, q0).xy;
+    vec3 accSq = imageLoad(accC, q0).xyz;
+    vec3 total = vec3(a.w, bw) + rw;
     vec3 square = accSq + rw * rw;
     vec3 neff = total * total / max(square, vec3(1e-20));
     float loc = imageLoad(supportI, clamp(q0 / 2, ivec2(0), imageSize(supportI) - 1)).x;

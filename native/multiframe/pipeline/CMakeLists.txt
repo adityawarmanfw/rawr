@@ -99,6 +99,8 @@ set(RAWR_MF_SHADER_SOURCES
   ${RAWR_MF_DIR}/merge_rexture/shaders/rx_rcd_diagonal.comp
   ${RAWR_MF_DIR}/merge_rexture/shaders/rx_rcd_green_sites.comp
   ${RAWR_MF_DIR}/merge_rexture/shaders/rx_rcd_export.comp)
+# Guide positions per workgroup edge of rx_frame_prep (shader RX_PG and the recorder's dispatch must agree).
+set(RAWR_RX_PREP_PG 16 CACHE STRING "rx_frame_prep workgroup tile edge")
 set(RAWR_MF_SPV_OUTPUTS)
 foreach(RAWR_MF_SRC IN LISTS RAWR_MF_SHADER_SOURCES)
   get_filename_component(RAWR_MF_NAME ${RAWR_MF_SRC} NAME_WE)
@@ -117,6 +119,9 @@ foreach(RAWR_MF_SRC IN LISTS RAWR_MF_SHADER_SOURCES)
     list(APPEND RAWR_MF_INCLUDE_DEPS ${RAWR_RX_GLSL})
   endif()
   set(RAWR_MF_PROD_EXTRA)
+  if(RAWR_MF_NAME STREQUAL "rx_frame_prep")
+    set(RAWR_MF_PROD_EXTRA -DRX_PG=${RAWR_RX_PREP_PG})
+  endif()
   if(RAWR_MF_NAME STREQUAL "robust_photometric")
     set(RAWR_MF_PROD_EXTRA -DRAWR_MIN_GATE=1)
   endif()
@@ -155,6 +160,7 @@ target_include_directories(raw_gpu_pipeline
          ${RAWR_NATIVE_DIR}/zsl_ring/include
   PRIVATE ${RAWR_MF_SPV_DIR})
 target_link_libraries(raw_gpu_pipeline PUBLIC ${VULKAN_LIB})
+target_compile_definitions(raw_gpu_pipeline PRIVATE RX_PREP_PG=${RAWR_RX_PREP_PG})
 target_compile_features(raw_gpu_pipeline PUBLIC cxx_std_17)
 target_compile_options(raw_gpu_pipeline PRIVATE -Wall -Wextra -Wpedantic)
 # Warnings are errors on Android. Host SDKs declare core entry points as

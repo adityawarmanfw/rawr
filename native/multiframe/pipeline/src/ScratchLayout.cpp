@@ -10,6 +10,7 @@ std::uint32_t bytesPerPixel(PixelStorage s) noexcept {
         case PixelStorage::R8Uint:
             return 1;
         case PixelStorage::R16Uint:
+        case PixelStorage::R16Float:
             return 2;
         case PixelStorage::R32Float:
             return 4;

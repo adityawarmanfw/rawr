@@ -6,6 +6,7 @@
 #include <rawr/raw_merge_rexture_gpu/RawMergeRextureGpu.h>
 
 #include <cstdint>
+#include <functional>
 
 namespace rawr::raw_gpu_pipeline {
 
@@ -39,21 +40,31 @@ class RextureRecorder final {
     void recordBaseTiles(VkCommandBuffer) const;
     // Companion alignment level l (0 = coarsest .. 3 = finest); record 0..3 in order after recordPrepare(companion).
     // debug: also keeps the prior (candidate upsampling) and the block-match result of the level for verification.
-    void recordAlignmentLevel(VkCommandBuffer, std::uint32_t level, bool debug) const;
+    void recordAlignmentLevel(VkCommandBuffer, std::uint32_t level, bool debug, std::uint32_t slot = 0) const;
 
     // Burst start: zero the support map and set the cover map to 1 (cover = 1 + sum of the frames' clipped robustness).
     void recordBurstClear(VkCommandBuffer) const;
     // Robustness of the aligned companion (after its last alignment level): fused motion prior + photometric test + 5 x 5
     // minimum + support / cover update.
-    void recordRobustness(VkCommandBuffer, bool debug) const;
+    void recordRobustness(VkCommandBuffer, bool debug, std::uint32_t slot = 0) const;
 
     // Adds the aligned companion to the running per-pixel sums (after recordRobustness).
     void recordAccumulate(VkCommandBuffer, VkImageView rawU16, const MultiframeFrameParameters&, bool debug) const;
+    // Two aligned companions (slots 0 and 1: fine flow + robustness kept apart) in one pass: the per-pixel state is read and
+    // written once for both. The frames must share black / white levels.
+    void recordAccumulatePair(VkCommandBuffer, VkImageView rawSlot0, VkImageView rawSlot1, const MultiframeFrameParameters&) const;
 
     // Final pass (after the last companion): reference finalize + low-coverage smoothing into linear_output (RGBA16F).
     void recordFinalize(VkCommandBuffer, VkImageView baseRawU16, const MultiframeFrameParameters&, bool debug) const;
 
+    // Profiling: called with the stage name after each dispatch group of the companion stages (never set in production).
+    using Mark = std::function<void(const char*)>;
+    void setMark(Mark mark) const { mark_ = std::move(mark); }
+    // Number of marks recordAlignmentLevel emits for level l.
+    static std::uint32_t alignmentMarks(std::uint32_t level) noexcept { return level == 0 ? 4u : 3u; }
+
    private:
+    mutable Mark mark_;
     ResourceArena& arena_;
     VulkanExecutor& executor_;
     rawr::raw_merge_rexture_gpu::Config config_;

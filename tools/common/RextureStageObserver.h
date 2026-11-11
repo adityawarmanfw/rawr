@@ -69,8 +69,8 @@ inline std::function<void(const char*, std::uint32_t, const rawr::raw_gpu_pipeli
                 dump.image("support", arena.image("rx_support"), 1);
                 dump.image("cover", arena.image("rx_cover"), 1);
                 dump.image("acc/s", arena.image("rx_acc_a"), 3);
-                dump.image("acc/w", arena.image("rx_acc_b"), 3);
-                dump.gather("acc/sq", {{&arena.image("rx_acc_a"), 3}, {&arena.image("rx_acc_b"), 3}, {&arena.image("rx_acc_c"), 0}});
+                dump.gather("acc/w", {{&arena.image("rx_acc_a"), 3}, {&arena.image("rx_acc_b"), 0}, {&arena.image("rx_acc_b"), 1}});
+                dump.image("acc/sq", arena.image("rx_acc_c"), 3);
                 dump.image("acc/ss2", arena.image("rx_dbg_ss2"), 3);
             } else if (st == "base_demosaic") {
                 dump.image("base/rcd", arena.image("rx_base_rcd"), 3);
