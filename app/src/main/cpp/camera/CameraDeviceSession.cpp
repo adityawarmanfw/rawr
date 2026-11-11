@@ -980,6 +980,16 @@ bool CameraDeviceSession::captureFullSize(CameraRequestPipeline& pipeline, const
         const uint8_t intent = captureStillTemplate_ ? ACAMERA_CONTROL_CAPTURE_INTENT_STILL_CAPTURE
                                                      : ACAMERA_CONTROL_CAPTURE_INTENT_PREVIEW;
         (void)request->setU8(ACAMERA_CONTROL_CAPTURE_INTENT, 1, &intent);
+        // Keep the preview's OIS mode on the fresh still template: its implicit
+        // default can move the optical framing when the full-size mode returns.
+        RequestEntry ois{};
+        if (request_->get(ACAMERA_LENS_OPTICAL_STABILIZATION_MODE, &ois) == ACAMERA_OK &&
+            ois.count == 1 && ois.data.u8) {
+            const auto status = request->setU8(ACAMERA_LENS_OPTICAL_STABILIZATION_MODE, 1, ois.data.u8);
+            // Optional control: retain the previous template behaviour if this
+            // camera rejects it, rather than refusing an otherwise valid photo.
+            if (!ok(status)) diag("CAMERA_STILL_OIS_COPY_FAILED status=" + statusText(status));
+        }
         // Preserve the actual preview AF mode and retained tap region. Changing
         // AUTO/CONTINUOUS to OFF for one still resets AF and can move the lens.
         // Copy only these focus keys onto the fresh template: cloning the whole

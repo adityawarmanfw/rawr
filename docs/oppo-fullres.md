@@ -115,6 +115,11 @@ patched camera library on the tested X9 Ultra setup.
 
 ## Changes required in the app
 
+- **Consistent OIS across requests.** Full-size still requests copy the
+  viewfinder's explicit OIS mode onto the fresh still template. On the tested
+  H1x setup, omitting this field caused a brief framing jump when preview
+  resumed; explicitly keeping OIS off removed it. Unsupported writes are
+  logged and retain the previous template behaviour without rejecting the photo.
 - **Separate request targets and geometry.** Preview remains Bayer RAW10 at
   4080×3064 for 1x or 4096×3072 for the other cameras. `includePreview: false`
   targets only the large photo stream in still requests; repeating preview
