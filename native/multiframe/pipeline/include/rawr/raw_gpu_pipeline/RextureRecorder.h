@@ -54,8 +54,11 @@ class RextureRecorder final {
     // written once for both. The frames must share black / white levels.
     void recordAccumulatePair(VkCommandBuffer, VkImageView rawSlot0, VkImageView rawSlot1, const MultiframeFrameParameters&) const;
 
-    // Final pass (after the last companion): reference finalize + low-coverage smoothing into linear_output (RGBA16F).
+    // Final pass (after the last companion): finalize into linear_output (RGBA16F), then the strip-wise grain pass that
+    // lowers the noise where few frames were merged to the level of the merged areas around it.
     void recordFinalize(VkCommandBuffer, VkImageView baseRawU16, const MultiframeFrameParameters&, bool debug) const;
+    // Tests and tools only: rows per strip of the grain pass (0 = default). The output must not depend on it.
+    static void setStripRowsForTesting(std::uint32_t rows) noexcept;
 
     // Profiling: called with the stage name after each dispatch group of the companion stages (never set in production).
     using Mark = std::function<void(const char*)>;
@@ -69,6 +72,7 @@ class RextureRecorder final {
     VulkanExecutor& executor_;
     rawr::raw_merge_rexture_gpu::Config config_;
     void recordPyramid(VkCommandBuffer, bool base) const;
+    void recordGrainPass(VkCommandBuffer) const;
 };
 
 }  // namespace rawr::raw_gpu_pipeline

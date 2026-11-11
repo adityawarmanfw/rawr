@@ -1,7 +1,9 @@
 #pragma once
 // The Rexture stage observer shared by the desktop replay tool and the on-device check: after each stage group it dumps the
 // arena images the NumPy comparison needs (tmp/indep/m7/compare.py layout) and optionally replaces the estimated fine flow
-// by a reference dump's flow.
+// by a reference dump's flow. The stages up to the robustness maps match the NumPy spec; the per-frame weight
+// normalisation (accumulators, finalize) and the grain pass are Rexture additions the spec does not have ("final" is the
+// merge output after both).
 #include <rawr/raw_gpu_pipeline/AndroidBurstCoordinator.h>
 
 #include <filesystem>
@@ -60,14 +62,14 @@ inline std::function<void(const char*, std::uint32_t, const rawr::raw_gpu_pipeli
                 dump.image(pre + "er", arena.image("rx_er"), 1);
                 dump.image(pre + "scale", arena.image("rx_dbg_scale"), 1);
             } else if (st == "final") {
-                dump.image("final", arena.image("rx_dbg_fin_out"), 3);
+                // linear_output is the merge result (after the grain pass); the debug images hold the finalize output.
+                dump.image("final", arena.image("linear_output"), 3);
                 dump.image("neff", arena.image("rx_dbg_fin_out"), 1, 3);
-                dump.image("pre_lowcov", arena.image("rx_dbg_fin_pre"), 3);
+                dump.image("pre_grain", arena.image("rx_dbg_fin_pre"), 3);
                 dump.image("conf", arena.image("rx_dbg_fin_pre"), 1, 3);
-                dump.image("base/lowcov_w", arena.image("rx_dbg_fin_w"), 1);
+                dump.image("noise_m", arena.image("rx_lc_m"), 1);   // output noise variance relative to one frame, per 4 x 4 cell
             } else if (st == "companions_done") {
                 dump.image("support", arena.image("rx_support"), 1);
-                dump.image("cover", arena.image("rx_cover"), 1);
                 dump.image("acc/s", arena.image("rx_acc_a"), 3);
                 dump.gather("acc/w", {{&arena.image("rx_acc_a"), 3}, {&arena.image("rx_acc_b"), 0}, {&arena.image("rx_acc_b"), 1}});
                 dump.image("acc/sq", arena.image("rx_acc_c"), 3);

@@ -33,6 +33,10 @@ layout(push_constant) uniform P {
 } p;
 
 const float RB_WIDEN = 1.2;
+// Every frame carries the same total weight at a pixel: its kernel weights are scaled so that their sum per colour is the
+// frame's robustness (a floor keeps weak-support taps from being boosted). Without it the base frame's samples, which sit on
+// the output grid, weigh about three times a companion's, and the merge keeps more noise in red and blue.
+const float FRAME_NORM_FLOOR = 0.1;
 
 uint loadRaw(int f, ivec2 q) { return f == 0 ? imageLoad(rawU16, q).x : imageLoad(rawU16B, q).x; }
 vec2 loadFlow(int f, ivec2 q) { return f == 0 ? imageLoad(flowI, q).xy : imageLoad(flowB, q).xy; }
@@ -89,6 +93,13 @@ void main() {
                 fw[cc] += ww;
                 f2[cc] += ww * ww;
             }
+        {
+            const float rw = max(r * p.frameWeight, 1e-30);
+            const vec3 sc = vec3(1.0) / max(fw / rw, vec3(FRAME_NORM_FLOOR));
+            fs *= sc;
+            fw *= sc;
+            f2 *= sc * sc;
+        }
         sumS += fs;
         sumW += fw;
         sumSq += fw * fw;

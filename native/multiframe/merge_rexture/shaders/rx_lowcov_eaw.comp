@@ -1,0 +1,110 @@
+#version 450
+#extension GL_GOOGLE_include_directive : enable
+// Rexture grain evening where the merge kept few frames, in strips of rows (scratch memory independent of the image
+// height). Three levels of an edge-avoiding a-trous filter (5 x 5 B3 taps at stride 1, 2, 4; range weight on green
+// and on the colour difference (R - G, B - G), noise scaled by m, the output's noise variance relative to one frame) give
+// a smooth x3; the result is x3 + g (x0 - x3), g = clamp(sqrt(TARGET / m), GMIN, 1): every band finer than x3 shrinks by
+// the same factor, so the grain keeps its size and only gets weaker. Pixels with m <= TARGET are not written.
+//   op 0: x1 = A1(x0)    op 1: x2 = A2(x1)    op 3: save original rows    op 2: out = x3 + g (x0 - x3), x3 = A4(x2), in place.
+// A strip core [r0, r1) needs x0 rows +-14, x1 rows +-12, x2 rows +-8 (image edges clamp, like the whole-image filter).
+// In-place output would destroy the next strip's top halo, so op 3 (after op 1, before op 2) saves the original last 14 rows
+// of the core into haloI; op 0 of the next strip reads rows above its core from there.
+// m comes from rx_finalize on a grid of 4 x 4 pixel cells (cell mean), sampled bilinearly. A workgroup whose 24 px
+// surroundings hold no cell with m > TARGET skips ops 0 / 1 (and the write of op 2): nothing downstream can use them.
+// The 24 px margin covers the 14 px reach of the filter chain plus the bilinear support of m.
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0, rgba16f) uniform image2D x0I;      // the merge output (linear_output)
+layout(set = 0, binding = 1, rgba16f) uniform image2D haloI;    // original rows [r0 - 14, r0) of the image
+layout(set = 0, binding = 2, rgba16f) uniform image2D x1I;      // strip: image rows [a1, ...)
+layout(set = 0, binding = 3, rgba16f) uniform image2D x2I;      // strip: image rows [a2, ...)
+layout(set = 0, binding = 4, r32f) readonly uniform image2D mI; // m per 4 x 4 cell
+layout(push_constant) uniform P {
+    int op, w, h;
+    int r0, r1;           // strip core rows
+    int y0, rows;         // image rows computed by this dispatch
+    int a1, a2;           // first image row held by x1I, x2I
+    float alpha, beta;    // single-frame noise model of the merge
+} p;
+
+const int HALO = 14;
+// Tuned on real dark-scene bursts against HDR+ Quality: the fallback is lowered to the grain level of the merged areas
+// next to it (m = 0.15 is about the noise variance of a 7-8 frame merge) and never below 0.3 of its amplitude.
+const float TARGET = 0.15;             // output noise variance relative to one frame that is left alone
+const float GMIN = 0.3;                // lowest amplitude gain of the bands finer than x3
+const float KC = 2.0;                  // colour range weight relative to the luma one
+const float FK[3] = float[3](1.0, 0.6, 0.4);   // range noise factor of the three levels
+const float B3[5] = float[5](1.0 / 16.0, 4.0 / 16.0, 6.0 / 16.0, 4.0 / 16.0, 1.0 / 16.0);
+shared uint sActive;
+
+float mAt(ivec2 q) {
+    ivec2 n = imageSize(mI);
+    vec2 u = (vec2(q) + 0.5) / 4.0 - 0.5;
+    vec2 b = floor(u), f = u - b;
+    ivec2 lo = clamp(ivec2(b), ivec2(0), n - 1), hi = clamp(ivec2(b) + 1, ivec2(0), n - 1);
+    float a = mix(imageLoad(mI, lo).x, imageLoad(mI, ivec2(hi.x, lo.y)).x, f.x);
+    float c = mix(imageLoad(mI, ivec2(lo.x, hi.y)).x, imageLoad(mI, hi).x, f.x);
+    return mix(a, c, f.y);
+}
+
+// q is inside the image
+vec3 fetch(int level, ivec2 q) {
+    if (level == 0) {
+        if (q.y < p.r0) return imageLoad(haloI, ivec2(q.x, q.y - (p.r0 - HALO))).rgb;
+        return imageLoad(x0I, q).rgb;
+    }
+    if (level == 1) return imageLoad(x1I, ivec2(q.x, q.y - p.a1)).rgb;
+    return imageLoad(x2I, ivec2(q.x, q.y - p.a2)).rgb;
+}
+
+vec3 atrous(int level, ivec2 q, int stride, float m) {
+    const vec3 c = fetch(level, q);
+    const float r2 = max(9.0 * (p.alpha * max(c.g, 0.0) + p.beta) * m * FK[level] * FK[level], 1e-12);
+    vec3 num = vec3(0.0);
+    float den = 0.0;
+    for (int j = 0; j < 5; ++j)
+        for (int i = 0; i < 5; ++i) {
+            ivec2 t = clamp(q + stride * ivec2(i - 2, j - 2), ivec2(0), ivec2(p.w - 1, p.h - 1));
+            vec3 v = fetch(level, t);
+            float dg = v.g - c.g;
+            vec2 dc = (v.rb - v.g) - (c.rb - c.g);
+            float k = B3[i] * B3[j] * exp(-dg * dg / (2.0 * r2) - dot(dc, dc) / (2.0 * KC * r2));
+            num += k * v;
+            den += k;
+        }
+    return num / den;
+}
+
+void main() {
+    const int tid = int(gl_LocalInvocationIndex);
+    const ivec2 q = ivec2(int(gl_GlobalInvocationID.x), p.y0 + int(gl_GlobalInvocationID.y));
+    const bool inside = q.x < p.w && int(gl_GlobalInvocationID.y) < p.rows;
+    if (p.op == 3) {   // rows [r1 - 14, r1) of the original image for the next strip
+        if (inside) imageStore(haloI, ivec2(q.x, q.y - (p.r1 - HALO)), imageLoad(x0I, q));
+        return;
+    }
+    {   // skip workgroups whose surroundings hold nothing to fix
+        if (tid == 0) sActive = 0u;
+        barrier();
+        const ivec2 wo = ivec2(int(gl_WorkGroupID.x) * 16, p.y0 + int(gl_WorkGroupID.y) * 16);
+        const ivec2 c0 = ivec2((wo.x - 24) >> 2, (wo.y - 24) >> 2);   // 16 x 16 cells = [wo - 24, wo + 40)
+        {
+            ivec2 c = clamp(c0 + ivec2(tid % 16, tid / 16), ivec2(0), imageSize(mI) - 1);
+            if (imageLoad(mI, c).x > TARGET) atomicOr(sActive, 1u);
+        }
+        barrier();
+        if (sActive == 0u) return;
+    }
+    if (!inside) return;
+    const float m = mAt(q);
+    if (p.op == 0) {
+        imageStore(x1I, ivec2(q.x, q.y - p.a1), vec4(atrous(0, q, 1, m), 1.0));
+    } else if (p.op == 1) {
+        imageStore(x2I, ivec2(q.x, q.y - p.a2), vec4(atrous(1, q, 2, m), 1.0));
+    } else {
+        const float g = clamp(sqrt(TARGET / max(m, 1e-6)), GMIN, 1.0);
+        if (g >= 1.0) return;
+        const vec3 x3 = atrous(2, q, 4, m);
+        const vec3 x0 = imageLoad(x0I, q).rgb;
+        imageStore(x0I, q, vec4(x3 + g * (x0 - x3), 1.0));
+    }
+}

@@ -4,9 +4,8 @@
 // bilinear flow field, photometric test on the half-resolution guide (noise-corrected difference of the base's and the
 // warped frame's 3 x 3 colour means; sigma^2 = max(min(base, alt local variance), expected noise); weight
 // exp(-k q), k = 0.1 * 9 / s, s = 1.5 on tiles whose flow disagrees with its neighbours, 9 elsewhere), then the 5 x 5
-// minimum filter, and the update of the half-resolution support (sum of robustness) and cover (1 + sum of
-// clip(robustness, 0, 1)) maps. One workgroup = 16 x 16 guide positions; the unfiltered robustness of the 20 x 20
-// neighbourhood lives in shared memory. Starts from robust_flow_scale, robust_photometric, robust_erode5,
+// minimum filter, and the update of the half-resolution support (sum of robustness) map. One workgroup = 16 x 16 guide
+// positions; the unfiltered robustness of the 20 x 20 neighbourhood lives in shared memory. Starts from robust_flow_scale, robust_photometric, robust_erode5,
 // support_accumulate.
 #include "rx_common.glsl"
 
@@ -18,9 +17,8 @@ layout(set = 0, binding = 3, rgba32f) readonly uniform image2D altMeanI;
 layout(set = 0, binding = 4, rgba32f) readonly uniform image2D altVarI;
 layout(set = 0, binding = 5, r32f) writeonly uniform image2D erI;         // robustness after the 5 x 5 minimum
 layout(set = 0, binding = 6, r32f) uniform image2D supportI;              // += er
-layout(set = 0, binding = 7, r32f) uniform image2D coverI;                // += clip(er, 0, 1)
-layout(set = 0, binding = 8, r32f) writeonly uniform image2D dbgPreI;     // verification only
-layout(set = 0, binding = 9, r32f) writeonly uniform image2D dbgScaleI;   // verification only
+layout(set = 0, binding = 7, r32f) writeonly uniform image2D dbgPreI;     // verification only
+layout(set = 0, binding = 8, r32f) writeonly uniform image2D dbgScaleI;   // verification only
 layout(push_constant) uniform P { float alpha, beta; int debug; } p;
 
 const float MOTION_THRESHOLD = 0.65, ROBUST_S1 = 1.5, ROBUST_S2 = 9.0, ROB_K = 0.1;
@@ -113,7 +111,6 @@ void main() {
         for (int dx = 0; dx < 5; ++dx) er = min(er, sPre[(t2.y + dy) * T + t2.x + dx]);
     imageStore(erI, q, vec4(er));
     imageStore(supportI, q, vec4(imageLoad(supportI, q).x + max(er, 0.0)));
-    imageStore(coverI, q, vec4(imageLoad(coverI, q).x + clamp(er, 0.0, 1.0)));
     if (p.debug != 0) {
         imageStore(dbgPreI, q, vec4(sPre[(t2.y + 2) * T + t2.x + 2]));
         ivec2 tn = imageSize(flowI);
