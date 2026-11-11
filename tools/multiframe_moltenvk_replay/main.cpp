@@ -1071,12 +1071,6 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
                                ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusBracketed
                                                                    : rawr::raw_gpu_pipeline::MergeAlgorithm::Wronski,
                            tune.hdrplus);
-    if (tune.mergeAlgorithm == "rexture" && std::getenv("RAWR_REXTURE_SCORES")) {
-        const auto scores = coordinator.scoreRextureFrames(runFrames);
-        for (std::size_t i = 0; i < scores.size(); ++i)
-            std::cerr << "rexture_score frame=" << i << " sharp=" << std::setprecision(9) << scores[i].sharp
-                      << " sat=" << scores[i].sat << '\n';
-    }
     auto result = coordinator.run(runFrames, runRef);
     if (stageDump) stageDump->finish();
     const auto reportRun = [&](int iteration) {

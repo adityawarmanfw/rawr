@@ -5,6 +5,7 @@
 //                        [--inject-flow DUMPDIR] [--repeat K] [--scores]
 // --frames N cycles the burst's frames to N (timing only: repeated frames align trivially but cost the same).
 #include <rawr/raw_gpu_pipeline/AndroidBurstCoordinator.h>
+#include <rawr/raw_gpu_pipeline/RextureFrameScorer.h>
 
 #include <algorithm>
 #include <chrono>
@@ -212,10 +213,13 @@ int main(int argc, char** argv) {
         coordinator.initialize(ctx.pd, ctx.dev, ctx.qf,
                                [&](const VkSubmitInfo& si, VkFence f) { vktest::ck(vkQueueSubmit(ctx.q, 1, &si, f), "burst submit"); },
                                width, height, 1.0f, {}, {}, cfg, algorithm, {});
-        if (scores && algorithm == MergeAlgorithm::Rexture) {
-            const auto s = coordinator.scoreRextureFrames(burst);
-            for (std::size_t i = 0; i < s.size(); ++i)
-                std::printf("score frame=%zu sharp=%.9g sat=%.6f\n", i, s[i].sharp, s[i].sat);
+        if (scores) {
+            RextureFrameScorer scorer;
+            scorer.initialize(ctx.pd, ctx.dev, ctx.qf, [&](const VkSubmitInfo& si, VkFence f) { vktest::ck(vkQueueSubmit(ctx.q, 1, &si, f), "score submit"); });
+            const auto t0 = Clock::now();
+            const auto s = scorer.score(burst, width, height, cfa, cfg.noiseAlpha, cfg.noiseBeta);
+            std::printf("score_ms=%.2f\n", std::chrono::duration<double, std::milli>(Clock::now() - t0).count());
+            for (std::size_t i = 0; i < s.size(); ++i) std::printf("score frame=%zu sharp=%.9g sat=%.6f\n", i, s[i].sharp, s[i].sat);
         }
         BurstRunResult result;
         for (int it = 0; it < repeat; ++it) {

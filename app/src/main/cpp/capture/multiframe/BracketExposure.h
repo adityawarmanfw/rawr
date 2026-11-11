@@ -16,6 +16,9 @@
 namespace rawrcam::capture::multiframe {
 
 inline constexpr std::uint32_t kMergeAlgorithmHdrPlusBracketed = 3u;
+// Rexture (native/multiframe/merge_rexture): equal-exposure bursts at native resolution, up to kRextureMaxPixels.
+inline constexpr std::uint32_t kMergeAlgorithmRexture = 4u;
+inline constexpr std::uint64_t kRextureMaxPixels = 16800000ull;
 
 // Linear RAW exposure of one delivered frame: exposure time x sensor gain
 // (the post-RAW boost is applied after RAW, so it is not part of the signal).

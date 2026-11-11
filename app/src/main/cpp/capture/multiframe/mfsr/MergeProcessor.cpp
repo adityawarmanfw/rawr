@@ -40,7 +40,13 @@ rawr::raw_gpu_pipeline::BurstRunResult MergeProcessor::run(
     mergeConfig.fallbackLumaGain = tuning.fallbackLumaGain;
     mergeConfig.fallbackChromaMaxSigma = 16.0f;
     auto stageSink = rawrcam::capture::multiframe::makeTraceStageSink();
-    const auto algorithm = tuning.mergeAlgorithm == kMergeAlgorithmHdrPlusBracketed
+    // Rexture holds ~1.2 GB of fp32 per-pixel state at 13 MP and streams whole frames: above kRextureMaxPixels the merge is
+    // refused, which takes the existing failure path (base frame out, capture kept).
+    if (tuning.mergeAlgorithm == kMergeAlgorithmRexture && std::uint64_t(width) * height > kRextureMaxPixels)
+        throw std::runtime_error("Rexture: raw geometry above 16 MP");
+    const auto algorithm = tuning.mergeAlgorithm == kMergeAlgorithmRexture
+                               ? rawr::raw_gpu_pipeline::MergeAlgorithm::Rexture
+                           : tuning.mergeAlgorithm == kMergeAlgorithmHdrPlusBracketed
                                ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusBracketed
                            : tuning.mergeAlgorithm == 2u ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusFrequency
                            : tuning.mergeAlgorithm == 1u ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusSpatial

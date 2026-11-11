@@ -4,8 +4,10 @@
 #include <sys/resource.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <chrono>
 #include <raw_sharpness/raw_sharpness_types.hpp>
+#include <rawr/raw_merge_rexture_gpu/BaseSelection.h>
 #include <stdexcept>
 
 #include "capture/CaptureRequest.h"
@@ -349,7 +351,8 @@ void MfsrCaptureService::spoolLoop() {
             }
             // CPU-held frames (full-size bursts) have nothing on the GPU to score:
             // they keep the middle reference.
-            if (pending->work->baseFrameMode == MultiframeBaseFrameMode::Sharpest && !burst.cpuFrame &&
+            if (pending->work->baseFrameMode == MultiframeBaseFrameMode::Sharpest &&
+                pending->work->tuning.mergeAlgorithm != kMergeAlgorithmRexture && !burst.cpuFrame &&
                 !burst.acquiredJournal && burst.frames.size() >= 2u &&
                 burst.frames.size() <= raw_sharpness::RawSharpness::kMaxFrames) {
                 try {
@@ -415,6 +418,62 @@ void MfsrCaptureService::spoolLoop() {
                     LOGE("MULTIFRAME_SHARPNESS_FALLBACK %s", e.what());
                 } catch (...) {
                     LOGE("MULTIFRAME_SHARPNESS_FALLBACK unknown");
+                }
+            }
+            // Rexture: the base is chosen at the press, from the frames of the last quarter second: one batched scoring
+            // dispatch (sharpness above the noise expectation, clipped share), then the best score penalised for clipping and
+            // age. Any failure keeps the frozen middle reference.
+            if (pending->work->tuning.mergeAlgorithm == kMergeAlgorithmRexture && !burst.cpuFrame && !burst.acquiredJournal &&
+                burst.frames.size() >= 2u && burst.frames.size() <= 32u && burst.metadata.size() == burst.frames.size() &&
+                burst.colors.size() == burst.frames.size()) {
+                try {
+                    const auto begin = std::chrono::steady_clock::now();
+                    std::vector<rawr::raw_gpu_pipeline::RextureFrameScorer::Score> scores;
+                    {
+                        std::lock_guard<std::mutex> scoreLock(sharpnessMutex_);
+                        if (!rextureScorer_.ready())
+                            rextureScorer_.initialize(vulkan_.physicalDevice(), vulkan_.device(), vulkan_.queueFamily(),
+                                                      [&](const VkSubmitInfo& info, VkFence fence) {
+                                                          std::lock_guard<std::mutex> queueLock(queue0Mutex_);
+                                                          if (vkQueueSubmit(vulkan_.queue(), 1, &info, fence) != VK_SUCCESS)
+                                                              throw std::runtime_error("rexture score queue submit");
+                                                      });
+                        const auto& ref0 = burst.metadata.front();
+                        // Normalised noise model from Camera2 (S, O per CFA site): a = S / range, b = (S black + O) / range^2.
+                        float alpha = 1.80710882e-4f, beta = 3.1937599182128e-6f;
+                        if (ref0.sensorNoiseProfile.size() >= 8u && ref0.effectiveWhiteLevel > 0.0f) {
+                            double a = 0, b = 0;
+                            for (int site = 0; site < 4; ++site) {
+                                const double black = ref0.blackLevelPhysicalRggb[site];
+                                const double range = double(ref0.effectiveWhiteLevel) - black;
+                                a += ref0.sensorNoiseProfile[2 * site] / range;
+                                b += (ref0.sensorNoiseProfile[2 * site] * black + ref0.sensorNoiseProfile[2 * site + 1]) /
+                                     (range * range);
+                            }
+                            if (a > 0.0 && b >= 0.0) alpha = float(a / 4.0), beta = float(b / 4.0);
+                        }
+                        const std::uint32_t cfa = ref0.cameraContext ? ref0.cameraContext->rawPreviewCfa : 0u;
+                        scores = rextureScorer_.score(burst.frames, burst.frames.front().raw.ref.width,
+                                                      burst.frames.front().raw.ref.height, cfa <= 3u ? cfa : 0u, alpha, beta);
+                    }
+                    std::vector<rawr::raw_merge_rexture_gpu::FrameScore> frameScores;
+                    std::vector<double> times;
+                    for (std::size_t i = 0; i < scores.size(); ++i) {
+                        frameScores.push_back({scores[i].sharp, scores[i].sat});
+                        times.push_back(double(burst.metadata[i].timestampNs) * 1.0e-9);
+                    }
+                    // The burst is frozen at the press: the newest frame is the press time.
+                    const double press = *std::max_element(times.begin(), times.end());
+                    const auto best = static_cast<std::uint32_t>(rawr::raw_merge_rexture_gpu::chooseBaseAtPress(frameScores, times, press));
+                    burst.referenceIndex = best;
+                    burst.referenceMetadata = burst.metadata[best];
+                    burst.referenceColor = burst.colors[best];
+                    LOGI("MULTIFRAME_BASEFRAME mode=rexture-press selected=%u/%zu scoreMs=%.1f", best, burst.frames.size(),
+                         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count());
+                } catch (const std::exception& e) {
+                    LOGE("MULTIFRAME_REXTURE_SCORE_FALLBACK %s", e.what());
+                } catch (...) {
+                    LOGE("MULTIFRAME_REXTURE_SCORE_FALLBACK unknown");
                 }
             }
             // Bracketed bursts merge onto the darkest frame (sharpest among

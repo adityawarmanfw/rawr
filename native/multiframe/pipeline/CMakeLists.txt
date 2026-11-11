@@ -141,6 +141,7 @@ add_library(raw_gpu_pipeline STATIC
   src/MultiframeRecorder.cpp
   src/HdrPlusRecorder.cpp
   src/RextureRecorder.cpp
+  src/RextureFrameScorer.cpp
   src/AndroidBurstCoordinator.cpp
   src/BurstNoiseEstimate.cpp)
 add_dependencies(raw_gpu_pipeline raw_multiframe_gpu_shaders)

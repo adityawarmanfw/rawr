@@ -80,7 +80,6 @@ void AndroidBurstCoordinator::destroyHostBuffer(HostBuffer& hb) noexcept {
 void AndroidBurstCoordinator::destroyHostBuffers() noexcept {
     destroyHostBuffer(noiseStats_);
     destroyHostBuffer(hotPixels_);
-    destroyHostBuffer(scoreStats_);
 }
 void AndroidBurstCoordinator::warmPipelines(VkPhysicalDevice physical, VkDevice device, std::uint32_t qf) {
     if (!physical || !device) throw std::invalid_argument("multiframe burst: invalid warmup handles");
@@ -366,39 +365,13 @@ void AndroidBurstCoordinator::recordTimestamp(std::uint32_t query) {
     if (timestampsSupported_)
         vkCmdWriteTimestamp(command_, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, timestampPool_, query);
 }
-BurstRunResult AndroidBurstCoordinator::run(const std::vector<BurstFrame>& frames, std::uint32_t ref,
-                                            FrameConsumed frameConsumed, FrameLoad frameLoad) {
-    if (!device_ || !arenaReady_ || frames.size() < 2 || ref >= frames.size())
-        throw std::invalid_argument("multiframe burst: invalid run");
-    if (frames[ref].raw.ref.width != width_ || frames[ref].raw.ref.height != height_)
-        throw std::invalid_argument("multiframe burst: RAW geometry mismatch");
-    // Chunk codes are stable trace ABI for device diagnostics. Companion work
-    // deliberately remains split at scheduling boundaries so preview submits can
-    // interleave on the shared graphics queue. Alignment is additionally split
-    // per coarse-to-fine level (chunk 11 repeats): a whole companion's
-    // alignment holds the GPU for ~35ms, starving 30/60fps preview, while a
-    // single level holds it for ~1-20ms. Recorded commands are unchanged.
-    // 1=reference, 11=prepare/alignment, 12=kernel/stats,
-    // 13=robustness, 14=accumulate, 20=finalize.
-    using Clock = std::chrono::steady_clock;
-    const auto runBegin = Clock::now();
-    BurstStageTimings timings{};
-    timings.initializeMs = pendingInitializeMs_;
+// Burst noise estimation: fits the noise profile from the reference and a neighbouring frame (flat static blocks). Sets
+// merge_.sensorNoiseProfile on success; the caller restores merge_ afterwards. Returns whether a fit was used.
+bool AndroidBurstCoordinator::estimateNoiseFromBurst(const std::vector<BurstFrame>& frames, std::uint32_t ref,
+                                                     const FrameLoad& frameLoad, BurstStageTimings& timings) {
     const auto timestamp = [&](std::uint32_t query) { recordTimestamp(query); };
-    if (algorithm_ == MergeAlgorithm::Rexture) return runRexture(frames, ref, frameConsumed, frameLoad);
-    if (algorithm_ == MergeAlgorithm::HdrPlusSpatial) return runHdrPlus(frames, ref, frameConsumed, frameLoad);
-    if (usesFrequencyMerge(algorithm_)) return runHdrPlusFrequency(frames, ref, frameConsumed, frameLoad);
-    if (frameLoad) frameLoad(ref);
-    // Burst noise estimation: the profile it fits drives everything below
-    // (robustness LUT, kernel GAT, aperture gate), so it runs first. The
-    // configured profile is restored after the run (also on failure).
-    struct RestoreMerge {
-        rawr::raw_merge_wronski_gpu::Config& target;
-        rawr::raw_merge_wronski_gpu::Config saved;
-        ~RestoreMerge() { target = saved; }
-    } restoreMerge{merge_, merge_};
     bool noiseEstimated = false;
-    if (merge_.estimateNoiseFromBurst) {
+    if (merge_.estimateNoiseFromBurst && frames.size() >= 2) {
         const std::uint32_t neighbour = ref + 1u < frames.size() ? ref + 1u : ref - 1u;
         if (frameLoad) frameLoad(neighbour);
         const std::uint32_t blocksX = (width_ + kNoiseBlockSize - 1u) / kNoiseBlockSize;
@@ -437,6 +410,40 @@ BurstRunResult AndroidBurstCoordinator::run(const std::vector<BurstFrame>& frame
             noiseEstimated = true;
         }
     }
+    return noiseEstimated;
+}
+BurstRunResult AndroidBurstCoordinator::run(const std::vector<BurstFrame>& frames, std::uint32_t ref,
+                                            FrameConsumed frameConsumed, FrameLoad frameLoad) {
+    if (!device_ || !arenaReady_ || frames.size() < 2 || ref >= frames.size())
+        throw std::invalid_argument("multiframe burst: invalid run");
+    if (frames[ref].raw.ref.width != width_ || frames[ref].raw.ref.height != height_)
+        throw std::invalid_argument("multiframe burst: RAW geometry mismatch");
+    // Chunk codes are stable trace ABI for device diagnostics. Companion work
+    // deliberately remains split at scheduling boundaries so preview submits can
+    // interleave on the shared graphics queue. Alignment is additionally split
+    // per coarse-to-fine level (chunk 11 repeats): a whole companion's
+    // alignment holds the GPU for ~35ms, starving 30/60fps preview, while a
+    // single level holds it for ~1-20ms. Recorded commands are unchanged.
+    // 1=reference, 11=prepare/alignment, 12=kernel/stats,
+    // 13=robustness, 14=accumulate, 20=finalize.
+    using Clock = std::chrono::steady_clock;
+    const auto runBegin = Clock::now();
+    BurstStageTimings timings{};
+    timings.initializeMs = pendingInitializeMs_;
+    const auto timestamp = [&](std::uint32_t query) { recordTimestamp(query); };
+    if (algorithm_ == MergeAlgorithm::Rexture) return runRexture(frames, ref, frameConsumed, frameLoad);
+    if (algorithm_ == MergeAlgorithm::HdrPlusSpatial) return runHdrPlus(frames, ref, frameConsumed, frameLoad);
+    if (usesFrequencyMerge(algorithm_)) return runHdrPlusFrequency(frames, ref, frameConsumed, frameLoad);
+    if (frameLoad) frameLoad(ref);
+    // Burst noise estimation: the profile it fits drives everything below
+    // (robustness LUT, kernel GAT, aperture gate), so it runs first. The
+    // configured profile is restored after the run (also on failure).
+    struct RestoreMerge {
+        rawr::raw_merge_wronski_gpu::Config& target;
+        rawr::raw_merge_wronski_gpu::Config saved;
+        ~RestoreMerge() { target = saved; }
+    } restoreMerge{merge_, merge_};
+    const bool noiseEstimated = estimateNoiseFromBurst(frames, ref, frameLoad, timings);
     std::array<float, 3u * 1001u> stdc{}, diffc{};
     auto siteVariance = [&](std::uint32_t site, float x) {
         if (!merge_.sensorNoiseProfile) return merge_.noiseAlpha * x + merge_.noiseBeta;
@@ -587,66 +594,6 @@ BurstRunResult AndroidBurstCoordinator::run(const std::vector<BurstFrame>& frame
     if (noiseEstimated) result.estimatedNoise = *merge_.sensorNoiseProfile;
     return result;
 }
-std::vector<AndroidBurstCoordinator::RextureFrameScore> AndroidBurstCoordinator::scoreRextureFrames(
-    const std::vector<BurstFrame>& frames) {
-    if (!device_ || !executionReady_ || frames.empty()) throw std::invalid_argument("rexture score: not initialized");
-    struct Pc {
-        float black[4];
-        float white;
-        std::int32_t w, h, cfa;
-        float alpha, beta;
-        std::int32_t frameSlot, workgroups;
-    };
-    const std::uint32_t qw = width_ / 4u, qh = height_ / 4u;
-    const std::uint32_t gx = (qw + 15u) / 16u, gy = (qh + 15u) / 16u, groups = gx * gy;
-    float alpha = merge_.noiseAlpha, beta = merge_.noiseBeta;
-    if (merge_.sensorNoiseProfile) {
-        const auto& n = *merge_.sensorNoiseProfile;
-        alpha = .25f * (n.slopeBySite[0] + n.slopeBySite[1] + n.slopeBySite[2] + n.slopeBySite[3]);
-        beta = .25f * (n.offsetBySite[0] + n.offsetBySite[1] + n.offsetBySite[2] + n.offsetBySite[3]);
-    }
-    ensureHostBuffer(scoreStats_, VkDeviceSize(frames.size()) * groups * 4u * sizeof(float));
-    executeChunk(30u, 0u, 2u, [&] {
-        recordTimestamp(0u);
-        for (std::uint32_t i = 0; i < frames.size(); ++i) {
-            const auto& norm = frames[i].parameters.normalization;
-            Pc pc{};
-            std::copy(norm.blackByPhase.begin(), norm.blackByPhase.end(), pc.black);
-            pc.white = norm.whiteLevel;
-            pc.w = std::int32_t(width_);
-            pc.h = std::int32_t(height_);
-            pc.cfa = std::int32_t(static_cast<std::uint32_t>(merge_.cfa));
-            pc.alpha = alpha;
-            pc.beta = beta;
-            pc.frameSlot = std::int32_t(i);
-            pc.workgroups = std::int32_t(groups);
-            executor_.record(command_, ShaderId::RxFrameScore,
-                             {{{0u, frames[i].raw.view}}, {{1u, scoreStats_.buffer}}}, &pc, sizeof(pc), gx, gy);
-        }
-        VkMemoryBarrier toHost{};
-        toHost.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-        toHost.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        toHost.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
-        vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &toHost, 0,
-                             nullptr, 0, nullptr);
-        recordTimestamp(1u);
-    });
-    std::vector<RextureFrameScore> out(frames.size());
-    const auto* p = static_cast<const float*>(scoreStats_.mapped);
-    for (std::size_t i = 0; i < frames.size(); ++i) {
-        double sumOk = 0, okCount = 0, clipCount = 0, count = 0;
-        for (std::uint32_t g = 0; g < groups; ++g) {
-            const float* v = p + (i * groups + g) * 4u;
-            sumOk += v[0];
-            okCount += v[1];
-            clipCount += v[2];
-            count += v[3];
-        }
-        out[i].sharp = okCount > 0 ? std::max(sumOk / okCount, 0.0) : 0.0;
-        out[i].sat = count > 0 ? clipCount / count : 0.0;
-    }
-    return out;
-}
 BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>& frames, std::uint32_t ref,
                                                    const FrameConsumed& frameConsumed, const FrameLoad& frameLoad) {
     if (frameLoad) frameLoad(ref);
@@ -655,6 +602,13 @@ BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>
     BurstStageTimings timings{};
     timings.initializeMs = pendingInitializeMs_;
     const auto gpuOrWall = [](const ChunkTiming& t) { return t.second.empty() ? t.first : t.second.front(); };
+    // The burst-fitted noise profile (when it fits) replaces the configured one for this run only.
+    struct RestoreMerge {
+        rawr::raw_merge_wronski_gpu::Config& target;
+        rawr::raw_merge_wronski_gpu::Config saved;
+        ~RestoreMerge() { target = saved; }
+    } restoreMerge{merge_, merge_};
+    const bool noiseFitted = estimateNoiseFromBurst(frames, ref, frameLoad, timings);
     // Scalar noise model: the mean of the four CFA-site pairs (the alignment convention), else the configured pair.
     rawr::raw_merge_rexture_gpu::Config config{};
     config.cfa = static_cast<rawr::raw_merge_rexture_gpu::CfaPattern>(static_cast<std::uint32_t>(merge_.cfa));
@@ -745,6 +699,8 @@ BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>
                           resourcesReused_,
                           pipelineCacheReused_,
                           timings};
+    result.noiseEstimated = noiseFitted;
+    if (noiseFitted) result.estimatedNoise = *merge_.sensorNoiseProfile;
     return result;
 }
 BurstRunResult AndroidBurstCoordinator::runHdrPlus(const std::vector<BurstFrame>& frames, std::uint32_t ref,

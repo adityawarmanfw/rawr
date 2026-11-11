@@ -476,7 +476,9 @@ enum class MultiframeMergeAlgorithm(val nativeId: Int, val label: String) {
     Wronski(0, "Super-resolution"),
     HdrPlus(1, "HDR+"),
     HdrPlusQuality(2, "HDR+ Quality"),
-    HdrPlusBracketed(3, "HDR+ Bracketed");
+    HdrPlusBracketed(3, "HDR+ Bracketed"),
+    /** Kernel-regression Bayer merge for equal-exposure bursts, native resolution only (native/multiframe/merge_rexture). */
+    Rexture(4, "Rexture");
 
     /** False when this build hides the algorithm (see [FeatureFlags]). */
     val available: Boolean

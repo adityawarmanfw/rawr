@@ -16,7 +16,8 @@ internal fun MultiframeSettings(state: SettingsUiState, dispatch: SettingsDispat
     val enabled = state.values.experimentalMultiframeEnabled
     val tuning = state.values.multiframeTuning
     val spec = { parameter: MultiframeNumericParameter -> MultiframeSpecs.forParameter(parameter) }
-    val hdrPlus = tuning.mergeAlgorithm != MultiframeMergeAlgorithm.Wronski
+    val rexture = tuning.mergeAlgorithm == MultiframeMergeAlgorithm.Rexture
+    val hdrPlus = tuning.mergeAlgorithm != MultiframeMergeAlgorithm.Wronski && !rexture
     val bracketed = tuning.mergeAlgorithm == MultiframeMergeAlgorithm.HdrPlusBracketed
     SettingsPageContainer {
         SettingsGroup(
@@ -38,7 +39,8 @@ internal fun MultiframeSettings(state: SettingsUiState, dispatch: SettingsDispat
             title = "Merge Algorithm",
             description = "Super-resolution: kernel-regression merge, smoother with optional upscaling. HDR+: tile-aligned robust average on the RAW mosaic; keeps natural single-frame grain at higher SNR and avoids blotches in low light. HDR+ Quality: per-frequency merge, cleaner with mild sharpening and blends motion more, slower. " +
                 (if (MultiframeMergeAlgorithm.HdrPlusBracketed.available) "HDR+ Bracketed: HDR+ Quality on a burst metered darker to keep bright areas (sky, lamps) from clipping, brightened back, plus a few longer frames right after the shutter for cleaner shadows; hold still a moment longer. " else "") +
-                "(All HDR+ modes: native resolution only.)"
+                "Rexture: kernel-regression merge of the whole burst at native resolution, aligned and weighted per pixel; the sharpest frame of the last quarter second before the shutter is the base. Equal-exposure bursts, up to about 16 MP. " +
+                "(All HDR+ modes and Rexture: native resolution only.)"
         ) {
             MultiframeMergeAlgorithm.entries.filter { it.available }.forEachIndexed { index, candidate ->
                 if (index > 0) SettingDivider()
@@ -70,18 +72,18 @@ internal fun MultiframeSettings(state: SettingsUiState, dispatch: SettingsDispat
             // written before rendering.
             SettingsSwitchRow(
                 title = "Chroma Denoise",
-                checked = state.values.multiframeChromaDenoise && !hdrPlus,
+                checked = state.values.multiframeChromaDenoise && !hdrPlus && !rexture,
                 supportingText =
-                    if (hdrPlus) "Not available for HDR+ yet."
+                    if (hdrPlus || rexture) "Not available for HDR+ or Rexture yet."
                     else "JPEG only. Removes leftover colour blotches from the merged image (chroma only, luma untouched) using the noise measured from the burst. Separate from Image > Denoise, which applies to single frames.",
-                enabled = enabled && !hdrPlus
+                enabled = enabled && !hdrPlus && !rexture
             ) { dispatch.invoke(SetMultiframeChromaDenoise(it)) }
             SettingDivider()
             if (hdrPlus) {
                 MultiframeSlider(spec(MultiframeNumericParameter.HdrPlusStrength), tuning, enabled, dispatch)
                 SettingDivider()
                 MultiframeSlider(spec(MultiframeNumericParameter.HdrPlusTileSize), tuning, enabled, dispatch)
-            } else {
+            } else if (!rexture) {
                 StandaloneNumericSliderRow(
                     identity = "mf_output_resolution",
                     label = "Merged Resolution",
@@ -116,7 +118,7 @@ internal fun MultiframeSettings(state: SettingsUiState, dispatch: SettingsDispat
             }
             // HDR+ Bracketed sets its own frame counts below.
             if (!bracketed) {
-                SettingDivider()
+                if (!rexture) SettingDivider()
                 MultiframeSlider(spec(MultiframeNumericParameter.MaxFrames), tuning, enabled, dispatch)
             }
         }
@@ -147,7 +149,7 @@ internal fun MultiframeSettings(state: SettingsUiState, dispatch: SettingsDispat
                 )
             }
         }
-        if (!hdrPlus) {
+        if (!hdrPlus && !rexture) {
             SettingsGroup(
                 title = "Alignment",
                 description = "Subpixel refinement and weak-texture rejection. Higher cutoff rejects more ambiguous tiles."

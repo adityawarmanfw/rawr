@@ -129,7 +129,6 @@
 #include "mf_rx_robust_prod.h"
 #include "mf_rx_accumulate_prod.h"
 #include "mf_rx_finalize_prod.h"
-#include "mf_rx_frame_score_prod.h"
 #include "mf_rx_rcd_direction_prod.h"
 #include "mf_rx_rcd_green_prod.h"
 #include "mf_rx_rcd_diagonal_prod.h"
@@ -556,9 +555,7 @@ const std::array<Spec, static_cast<size_t>(ShaderId::Count)> specs{{{"raw_normal
                                   {"rx_accumulate", mf_rx_accumulate_prod_spv, mf_rx_accumulate_prod_spv_size, mf_rx_accumulate_prod_spv, mf_rx_accumulate_prod_spv_size,
                                    {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {5, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {7, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
                                   {"rx_finalize", mf_rx_finalize_prod_spv, mf_rx_finalize_prod_spv_size, mf_rx_finalize_prod_spv, mf_rx_finalize_prod_spv_size,
-                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {5, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {7, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {8, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {9, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {10, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {11, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
-                                  {"rx_frame_score", mf_rx_frame_score_prod_spv, mf_rx_frame_score_prod_spv_size, mf_rx_frame_score_prod_spv, mf_rx_frame_score_prod_spv_size,
-                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}}},
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {5, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {7, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {8, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {9, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {10, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {11, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}}},
                                   {"rx_rcd_direction", mf_rx_rcd_direction_prod_spv, mf_rx_rcd_direction_prod_spv_size, mf_rx_rcd_direction_prod_spv, mf_rx_rcd_direction_prod_spv_size,
                                    {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
                                   {"rx_rcd_green", mf_rx_rcd_green_prod_spv, mf_rx_rcd_green_prod_spv_size, mf_rx_rcd_green_prod_spv, mf_rx_rcd_green_prod_spv_size,
@@ -610,7 +607,6 @@ void VulkanExecutor::initialize(VkDevice d, bool wantTrace) {
         "rx_robust",
         "rx_accumulate",
         "rx_finalize",
-        "rx_frame_score",
         "rx_rcd_direction",
         "rx_rcd_green",
         "rx_rcd_diagonal",

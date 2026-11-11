@@ -125,12 +125,6 @@ class AndroidBurstCoordinator final {
     // release it. Same reuse rules as initialize().
     void warmAll(VkPhysicalDevice physical, VkDevice device, std::uint32_t queueFamily, std::uint32_t width,
                  std::uint32_t height);
-    // Rexture base selection: scores every frame (one submission) with rx_frame_score. Needs initialize() first; the noise
-    // model is the configured one. Pair with rawr::raw_merge_rexture_gpu::chooseBaseAtPress.
-    struct RextureFrameScore {
-        double sharp = 0.0, sat = 0.0;
-    };
-    std::vector<RextureFrameScore> scoreRextureFrames(const std::vector<BurstFrame>& frames);
     BurstRunResult run(const std::vector<BurstFrame>& frames, std::uint32_t referenceIndex,
                        FrameConsumed frameConsumed = {}, FrameLoad frameLoad = {});
     // One-shot wait inserted on the next submitted chunk (cross-queue memory
@@ -185,6 +179,8 @@ class AndroidBurstCoordinator final {
     ChunkTiming executeChunk(std::uint32_t chunkCode, std::uint32_t frameIndex, std::uint32_t queryCount,
                              const std::function<void()>& record);
     void recordTimestamp(std::uint32_t query);
+    bool estimateNoiseFromBurst(const std::vector<BurstFrame>& frames, std::uint32_t ref, const FrameLoad& frameLoad,
+                                BurstStageTimings& timings);
     RextureObserver rextureObserver_{};
     bool rextureDebug_ = false, arenaRextureDebug_ = false;
     BurstRunResult runRexture(const std::vector<BurstFrame>& frames, std::uint32_t referenceIndex,
@@ -210,7 +206,6 @@ class AndroidBurstCoordinator final {
     };
     HostBuffer noiseStats_{};
     HostBuffer hotPixels_{};
-    HostBuffer scoreStats_{};
     void ensureHostBuffer(HostBuffer& buffer, VkDeviceSize bytes);
     void destroyHostBuffer(HostBuffer& buffer) noexcept;
     void destroyHostBuffers() noexcept;
