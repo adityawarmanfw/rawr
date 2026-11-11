@@ -1,9 +1,7 @@
 #pragma once
 
 #include <android/log.h>
-#include <algorithm>
 #include <memory>
-#include <stdexcept>
 #include <utility>
 
 #include "capture/FullSizeFallbacks.h"
@@ -24,12 +22,10 @@ inline void keepBinnedCorner(imaging::RawSnapshot& frame) {
     if (d <= 1) return;
     const uint32_t width = frame.width / d, height = frame.height / d;
     const auto& base = context->binnedFallbackContext;
-    // Ignore padding outside the sensor pixel array when comparing the base readout.
-    if (!base || width != std::min(base->geometry.rawBufferWidth, base->geometry.pixelArrayWidth) ||
-        height != std::min(base->geometry.rawBufferHeight, base->geometry.pixelArrayHeight))
-        throw std::runtime_error("full_size_binned_layout_unknown");
-
-    auto cropped = std::make_shared<metadata::CameraContextMetadata>(*base);
+    // Preserve legacy cropping for every detected corner, regardless of its size.
+    // Separate photo streams retain the base CFA; other paths keep their existing CFA.
+    auto cropped = std::make_shared<metadata::CameraContextMetadata>(*context);
+    if (base) cropped->cfaBlock = base->cfaBlock;
     cropped->geometry.rawBufferWidth = width;
     cropped->geometry.rawBufferHeight = height;
     __android_log_print(ANDROID_LOG_WARN, "RawrCamNative",

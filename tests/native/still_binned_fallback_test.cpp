@@ -2,7 +2,6 @@
 #include <cstring>
 #include <iostream>
 #include <memory>
-#include <string>
 #include <vector>
 
 #include "capture/single/StillBinnedCorner.h"
@@ -91,27 +90,36 @@ void testFullResolutionStillRemosaics() {
     }
 }
 
-void testUnknownLayoutIsRejected() {
-    // A half-size image inside a 4x buffer is not the known 1x base mode.
-    for (bool missingBase : {false, true}) {
-        auto s = shot(4, 1, 4, missingBase ? kBase : kBase * 2);
-        if (missingBase) s.photo->binnedFallbackContext.reset();
-        const auto original = s.frame.raw16;
-        const auto before = capture::fullSizeFallbacks().binnedStills.load();
-        bool rejected = false;
-        try { capture::keepBinnedCorner(s.frame); }
-        catch (const std::runtime_error& e) { rejected = std::string(e.what()) == "full_size_binned_layout_unknown"; }
-        assert(rejected);
-        assert(s.frame.raw16 == original && s.frame.width == kBase * 4);
-        assert(s.frame.metadata.cameraContext == s.photo);
-        assert(capture::fullSizeFallbacks().binnedStills.load() == before);
-    }
+void testUnusualCornerSizeKeepsLegacyCrop() {
+    // The old detector accepts a half-size corner even in a 4x photo buffer.
+    auto s = shot(4, 1, 4, kBase * 2);
+    const auto expected = mosaic(kBase * 2, 1);
+    capture::keepBinnedCorner(s.frame);
+    assert(s.frame.width == kBase * 2 && s.frame.height == kBase * 2);
+    assert(s.frame.packedRowStrideBytes == kBase * 4);
+    assert(s.frame.metadata.cameraContext->cfaBlock == 1);
+    capture::remosaicBlockCfaStill(s.frame);
+    assert(s.frame.raw16 == expected);
+    assert(s.photo->cfaBlock == 4);
+}
+
+void testNoSeparatePhotoContextKeepsExistingCfa() {
+    auto s = shot(2, 1, 1, kBase);
+    s.photo->binnedFallbackContext.reset();
+    const auto expected = mosaic(kBase, 1);
+    capture::keepBinnedCorner(s.frame);
+    assert(s.frame.width == kBase && s.frame.height == kBase);
+    assert(s.frame.metadata.cameraContext != s.photo);
+    assert(s.frame.metadata.cameraContext->cfaBlock == 1);
+    capture::remosaicBlockCfaStill(s.frame);
+    assert(s.frame.raw16 == expected);
 }
 }  // namespace
 
 int main() {
     testKnownBinnedLayout();
     testFullResolutionStillRemosaics();
-    testUnknownLayoutIsRejected();
+    testUnusualCornerSizeKeepsLegacyCrop();
+    testNoSeparatePhotoContextKeepsExistingCfa();
     std::cout << "still_binned_fallback_test passed\n";
 }

@@ -131,10 +131,10 @@ patched camera library on the tested X9 Ultra setup.
   In a burst, each full-res frame is remosaiced before journaling and merge.
 - **Binned single-frame fallback.** If the HAL skips the full-size sensor
   switch and returns the base readout in the buffer's corner, the saved crop
-  uses a private copy of the base-stream context, including its CFA. Keeping
+  uses a private copy of the photo context with the base-stream CFA. Keeping
   the requested photo CFA here would incorrectly remosaic Bayer as Quad/4×4.
-  A crop whose dimensions do not match the known base readout is rejected
-  instead of guessing its CFA. The shared session context is unchanged.
+  The existing corner detection and cropping rules are unchanged; no extra
+  size check rejects detected fallback frames. The shared session context is unchanged.
 - **Editable settings.** These options are exposed in the lens editor.
   Sensor layout retains the familiar Bayer / Quad 2×2 / 4×4 CompactChoiceRow,
   with a Viewfinder CFA / Photo CFA selector only for lenses with a separate
