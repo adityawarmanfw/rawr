@@ -57,6 +57,9 @@ struct CameraContextMetadata {
     // are already Bayer.
     uint32_t cfaBlock = 1;
     uint32_t photoCfaBlock = 1;  // CFA of the separate photo output before remosaic.
+    // Photo contexts pin their original base-stream layout for a HAL binned-corner fallback.
+    // Transient only: journaled pixels have already been cropped and remosaiced to Bayer.
+    std::shared_ptr<const CameraContextMetadata> binnedFallbackContext;
     // imaging::CfaRemosaicQuality for live frames (ingress) and single stills.
     uint32_t cfaLiveQuality = 1;
     uint32_t cfaPhotoQuality = 2;

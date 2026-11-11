@@ -125,6 +125,7 @@ SessionEngine::SessionEngine(std::string filesDir) : filesDir_(std::move(filesDi
             if (lastCameraContext_) {
                 auto context = std::make_shared<rawrcam::metadata::CameraContextMetadata>(*lastCameraContext_);
                 // The photo output may have a different CFA from the binned viewfinder.
+                context->binnedFallbackContext = lastCameraContext_;
                 context->cfaBlock = context->photoCfaBlock;
                 auto& g = context->geometry;
                 const uint32_t scale = g.pixelArrayWidth ? std::max(1u, width / g.pixelArrayWidth) : 1u;

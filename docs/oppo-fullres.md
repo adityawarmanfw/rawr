@@ -129,6 +129,12 @@ patched camera library on the tested X9 Ultra setup.
   while `photoBlock: 2` or `4` describes the photo RAW. Remosaic converts it
   to Bayer at full resolution; it does not bin or reduce 200 MP to 50 MP.
   In a burst, each full-res frame is remosaiced before journaling and merge.
+- **Binned single-frame fallback.** If the HAL skips the full-size sensor
+  switch and returns the base readout in the buffer's corner, the saved crop
+  uses a private copy of the base-stream context, including its CFA. Keeping
+  the requested photo CFA here would incorrectly remosaic Bayer as Quad/4×4.
+  A crop whose dimensions do not match the known base readout is rejected
+  instead of guessing its CFA. The shared session context is unchanged.
 - **Editable settings.** These options are exposed in the lens editor.
   Sensor layout retains the familiar Bayer / Quad 2×2 / 4×4 CompactChoiceRow,
   with a Viewfinder CFA / Photo CFA selector only for lenses with a separate
