@@ -52,16 +52,47 @@ bool isBuiltInProfileId(const std::string& profileId) {
     return profileId == "generic" || builtInCameraProfile(profileId).id == profileId;
 }
 
+std::vector<const BuiltInProfile*> matchingBuiltInProfiles(const PropertyReader& property) {
+    std::vector<const BuiltInProfile*> exact, fallback;
+    const auto model = property("ro.product.model");
+    for (const auto& p : builtInProfiles()) {
+        if (!model.empty() && contains(p.match.models, model)) {
+            exact.push_back(&p);
+            continue;
+        }
+        for (const auto& [name, prefix] : p.match.propertyPrefixes) {
+            const auto value = property(name);
+            if (!value.empty() && value.rfind(prefix, 0) == 0) {
+                fallback.push_back(&p);
+                break;
+            }
+        }
+    }
+    return exact.empty() ? fallback : exact;
+}
+
 ProfileMatch matchBuiltInProfile(const PropertyReader& property) {
-    const std::string model = property("ro.product.model");
-    for (const auto& p : builtInProfiles())
-        if (!model.empty() && contains(p.match.models, model))
-            return {p.profile.id, "model", contains(p.match.verifiedModels, model)};
-    for (const auto& p : builtInProfiles())
-        for (const auto& [name, prefix] : p.match.propertyPrefixes)
-            if (property(name).rfind(prefix, 0) == 0)
-                return {p.profile.id, "property:" + name, contains(p.match.verifiedModels, model)};
-    return {};
+    const auto candidates = matchingBuiltInProfiles(property);
+    const BuiltInProfile* chosen = nullptr;
+    for (const auto* p : candidates) {
+        if (!p->isDefault) continue;
+        if (chosen) return {};  // Ambiguous defaults must never unlock a root-only mode.
+        chosen = p;
+    }
+    if (!chosen && candidates.size() == 1) chosen = candidates.front();
+    if (!chosen) return {};
+    const auto model = property("ro.product.model");
+    std::string rule = "model";
+    if (!contains(chosen->match.models, model)) {
+        for (const auto& [name, prefix] : chosen->match.propertyPrefixes) {
+            const auto value = property(name);
+            if (!value.empty() && value.rfind(prefix, 0) == 0) {
+                rule = "property:" + name;
+                break;
+            }
+        }
+    }
+    return {chosen->profile.id, rule, contains(chosen->match.verifiedModels, model)};
 }
 
 std::optional<LensRoute> routeForLens(const CameraProfile& profile, const std::string& lensId) {

@@ -1,5 +1,7 @@
 package com.rawr.camera.settings.ui
 
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -52,6 +54,8 @@ internal fun LensSettings(state: SettingsUiState, dispatch: SettingsDispatch) {
     val usingDefaults = state.values.lensProfiles == null
     var deleteTarget by remember { mutableStateOf<LensProfile?>(null) }
     var copyTarget by remember { mutableStateOf<LensProfile?>(null) }
+    var showProfiles by remember { mutableStateOf(false) }
+    var profileTarget by remember { mutableStateOf<com.rawr.camera.integration.DeviceCameraProfile?>(null) }
     var confirmReset by remember { mutableStateOf(false) }
     val haptics = LocalSettingsHaptics.current
 
@@ -108,11 +112,23 @@ internal fun LensSettings(state: SettingsUiState, dispatch: SettingsDispatch) {
                 onClick = { dispatch.invoke(OpenLensEditor(null)) }
             )
             SettingDivider()
+            if (hardware.deviceProfiles.isNotEmpty()) {
+                SettingsRow(
+                    title = "Load device profile",
+                    supportingText = "Choose a built-in lens configuration for this phone.",
+                    testTag = SettingsTestTags.row("Lens", "load_device_profile"),
+                    onClick = { showProfiles = true }
+                )
+                SettingDivider()
+            }
             SettingsRow(
                 title = "Reset to device default",
                 supportingText = "Replace this list with the built-in lenses for this phone.",
-                enabled = !usingDefaults,
-                onClick = { confirmReset = true }
+                enabled = !usingDefaults || hardware.deviceProfiles.size > 1,
+                testTag = SettingsTestTags.row("Lens", "reset_device_default"),
+                onClick = {
+                    if (hardware.deviceProfiles.size > 1) showProfiles = true else confirmReset = true
+                }
             )
         }
     }
@@ -148,6 +164,50 @@ internal fun LensSettings(state: SettingsUiState, dispatch: SettingsDispatch) {
                 }) { Text("Delete") }
             },
             dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text("Cancel") } }
+        )
+    }
+    if (showProfiles) {
+        AlertDialog(
+            onDismissRequest = { showProfiles = false },
+            title = { Text("Load device profile") },
+            text = {
+                Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())) {
+                    hardware.deviceProfiles.forEach { profile ->
+                        SettingsRow(
+                            title = profile.name,
+                            supportingText = listOfNotNull(
+                                "Default".takeIf { profile.isDefault },
+                                profile.description.takeIf { it.isNotBlank() }
+                            ).joinToString(" · "),
+                            testTag = SettingsTestTags.row("Lens", "profile_${profile.id}"),
+                            onClick = { showProfiles = false; profileTarget = profile }
+                        )
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showProfiles = false },
+                    modifier = Modifier.testTag(SettingsTestTags.row("Lens", "profile_cancel"))) { Text("Cancel") }
+            }
+        )
+    }
+    profileTarget?.let { profile ->
+        AlertDialog(
+            onDismissRequest = { profileTarget = null },
+            title = { Text("Load ${profile.name}?") },
+            text = { Text(listOf(profile.description, "This replaces your current lens list and its custom settings.")
+                .filter { it.isNotBlank() }.joinToString("\n\n")) },
+            confirmButton = {
+                TextButton(onClick = {
+                    dispatch.invoke(SetLensProfiles(if (profile.isDefault) null else profile.lenses))
+                    profileTarget = null
+                }, modifier = Modifier.testTag(SettingsTestTags.row("Lens", "profile_confirm"))) { Text("Load") }
+            },
+            dismissButton = {
+                TextButton(onClick = { profileTarget = null },
+                    modifier = Modifier.testTag(SettingsTestTags.row("Lens", "profile_load_cancel"))) { Text("Cancel") }
+            }
         )
     }
     if (confirmReset) {

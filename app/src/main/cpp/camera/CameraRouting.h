@@ -316,6 +316,8 @@ struct BuiltInProfile {
     CameraProfile profile;
     std::string name;  // Marketing name, for logs.
     int version = 1;   // Bumped when the defaults change.
+    bool isDefault = false;  // Required on exactly one variant when several match.
+    std::string description;  // Requirements and differences shown in the profile picker.
     ProfileMatchRules match;
 };
 
@@ -335,6 +337,7 @@ using PropertyReader = std::function<std::string(const std::string& name)>;
 [[nodiscard]] const CameraProfile& builtInCameraProfile(const std::string& profileId);
 [[nodiscard]] bool isBuiltInProfileId(const std::string& profileId);
 // Picks the device's profile from system properties (ro.product.model first).
+[[nodiscard]] std::vector<const BuiltInProfile*> matchingBuiltInProfiles(const PropertyReader& property);
 [[nodiscard]] ProfileMatch matchBuiltInProfile(const PropertyReader& property);
 
 [[nodiscard]] std::optional<LensRoute> routeForLens(const CameraProfile& profile, const std::string& lensId);

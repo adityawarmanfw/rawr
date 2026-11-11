@@ -1247,6 +1247,12 @@ std::optional<BuiltInProfile> parseBuiltInProfile(const std::string& json, std::
     out.profile = std::move(*profile);
     out.name = root.str("name", out.profile.id);
     out.version = int(root.num("version", 1));
+    if (const auto* value = root.get("default"); value && value->kind != Json::Kind::Bool) {
+        if (error) *error = "profile default must be a boolean";
+        return std::nullopt;
+    }
+    out.isDefault = root.flag("default", false);
+    out.description = root.str("description");
     if (root.get("quirks") || root.get("workarounds")) {
         if (error) *error = "profile " + out.profile.id + ": workarounds belong to lenses (session.workarounds)";
         return std::nullopt;

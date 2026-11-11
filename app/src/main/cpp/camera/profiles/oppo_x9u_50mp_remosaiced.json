@@ -1,7 +1,7 @@
 {
-  "id": "oppo_find_x9_ultra",
+  "id": "oppo_x9u_50mp_remosaiced",
   "schema": 2,
-  "name": "OPPO Find X9 Ultra",
+  "name": "OPPO X9U - 50 MP remosaiced",
   "version": 1,
   "match": {
     "models": [
@@ -89,7 +89,7 @@
           "type": "int32",
           "scope": "still",
           "values": [
-            5
+            0
           ],
           "enabled": true
         }
@@ -97,7 +97,7 @@
       "image": {
         "sensorLayout": {
           "block": 1,
-          "photoBlock": 2
+          "photoBlock": 1
         }
       }
     },
@@ -179,7 +179,7 @@
           "type": "int32",
           "scope": "still",
           "values": [
-            13
+            5
           ],
           "enabled": true
         }
@@ -187,66 +187,7 @@
       "image": {
         "sensorLayout": {
           "block": 1,
-          "photoBlock": 2
-        }
-      }
-    },
-    {
-      "id": "1xF",
-      "camera": {
-        "id": "2"
-      },
-      "streams": {
-        "raw": {
-          "format": "RAW10",
-          "width": 4080,
-          "height": 3064
-        },
-        "photo": {
-          "format": "RAW10",
-          "width": 16320,
-          "height": 12256,
-          "buffers": {
-            "usage": "0x3",
-            "count": 2
-          },
-          "mergeFramesOneByOne": false,
-          "includePreview": false
-        },
-        "companion": {
-          "mode": "off"
-        }
-      },
-      "session": {
-        "cameraApi": "java"
-      },
-      "request": {
-        "defaults": "minimal"
-      },
-      "vendorKeys": [
-        {
-          "tag": "com.oplus.is.sdk.camera.package",
-          "type": "byte",
-          "scope": "session",
-          "values": [
-            1
-          ],
-          "enabled": true
-        },
-        {
-          "tag": "com.oplus.is.from.extension",
-          "type": "int32",
-          "scope": "session",
-          "values": [
-            1
-          ],
-          "enabled": true
-        }
-      ],
-      "image": {
-        "sensorLayout": {
-          "block": 1,
-          "photoBlock": 4
+          "photoBlock": 1
         }
       }
     },
@@ -328,7 +269,7 @@
           "type": "int32",
           "scope": "still",
           "values": [
-            8
+            7
           ],
           "enabled": true
         }
@@ -336,66 +277,7 @@
       "image": {
         "sensorLayout": {
           "block": 1,
-          "photoBlock": 2
-        }
-      }
-    },
-    {
-      "id": "3xF",
-      "camera": {
-        "id": "4"
-      },
-      "streams": {
-        "raw": {
-          "format": "RAW10",
-          "width": 4096,
-          "height": 3072
-        },
-        "photo": {
-          "format": "RAW10",
-          "width": 16384,
-          "height": 12288,
-          "buffers": {
-            "usage": "0x3",
-            "count": 2
-          },
-          "mergeFramesOneByOne": false,
-          "includePreview": false
-        },
-        "companion": {
-          "mode": "off"
-        }
-      },
-      "session": {
-        "cameraApi": "java"
-      },
-      "request": {
-        "defaults": "minimal"
-      },
-      "vendorKeys": [
-        {
-          "tag": "com.oplus.is.sdk.camera.package",
-          "type": "byte",
-          "scope": "session",
-          "values": [
-            1
-          ],
-          "enabled": true
-        },
-        {
-          "tag": "com.oplus.is.from.extension",
-          "type": "int32",
-          "scope": "session",
-          "values": [
-            1
-          ],
-          "enabled": true
-        }
-      ],
-      "image": {
-        "sensorLayout": {
-          "block": 1,
-          "photoBlock": 4
+          "photoBlock": 1
         }
       }
     },
@@ -477,7 +359,7 @@
           "type": "int32",
           "scope": "still",
           "values": [
-            25
+            0
           ],
           "enabled": true
         }
@@ -485,9 +367,11 @@
       "image": {
         "sensorLayout": {
           "block": 1,
-          "photoBlock": 2
+          "photoBlock": 1
         }
       }
     }
-  ]
+  ],
+  "default": false,
+  "description": "Standard lenses and 50 MP Bayer RAW, remosaiced by the camera. No root required."
 }

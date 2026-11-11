@@ -137,11 +137,31 @@ void testProfileMatching() {
     assert(isBuiltInProfileId("vivo_x300_ultra") && isBuiltInProfileId("vivo_x300_pro") && isBuiltInProfileId("generic"));
     assert(!isBuiltInProfileId("") && !isBuiltInProfileId("user") && !isBuiltInProfileId("v2562"));
 
+    // Every overlapping model has one explicit default; single legacy profiles need no marker.
+    for (const auto& profile : builtInProfiles()) {
+        for (const auto& model : profile.match.models) {
+            const auto property = props({{"ro.product.model", model}});
+            const auto candidates = matchingBuiltInProfiles(property);
+            assert(!candidates.empty());
+            size_t defaults = 0;
+            for (const auto* candidate : candidates) defaults += candidate->isDefault;
+            assert(candidates.size() == 1 || defaults == 1);
+            const auto selected = matchBuiltInProfile(property);
+            assert(selected.profileId != "generic");
+            for (const auto* candidate : candidates)
+                if (candidate->isDefault) assert(selected.profileId == candidate->profile.id);
+        }
+    }
+
     // Rejected built-ins: reserved id, no match rules.
     const std::string lens = R"("lenses":[{"id":"1x","cameraId":"0"}])";
     assert(!parseBuiltInProfile(R"({"id":"generic","match":{"models":["X"]},)" + lens + "}"));
     assert(!parseBuiltInProfile(R"({"id":"x","match":{"models":[]},)" + lens + "}"));
     const auto ok = parseBuiltInProfile(R"({"id":"x","version":3,"match":{"propertyPrefixes":{"a":"b"}},)" + lens + "}");
+    const auto variant = parseBuiltInProfile(R"({"id":"variant","default":true,"description":"Requires root","match":{"models":["X"]},)" + lens + "}");
+    assert(variant && variant->isDefault && variant->description == "Requires root");
+    assert(ok && !ok->isDefault);
+    assert(!parseBuiltInProfile(R"({"id":"bad","default":"true","match":{"models":["X"]},)" + lens + "}"));
     assert(ok && ok->version == 3 && ok->name == "x" && ok->match.propertyPrefixes.size() == 1);
 }
 
@@ -422,9 +442,9 @@ void testProfileJson() {
 
 void testOppoPhotoStreams() {
     using namespace rawrcam::camera;
-    const auto oppo = builtInCameraProfile("oppo_find_x9_ultra");
+    const auto oppo = builtInCameraProfile("oppo_x9u_50mp_native_raw");
     const auto roundTrip = parseCameraProfile(serializeCameraProfile(oppo));
-    assert(roundTrip && roundTrip->lenses.size() == 10);
+    assert(roundTrip && roundTrip->lenses.size() == 8);
     for (const auto& [name, camera, mode, width, height, block] : {
              std::tuple{"H0.6", "3", 5, 8192u, 6144u, 2u},
              std::tuple{"H1x", "2", 13, 8160u, 6128u, 2u},
@@ -449,22 +469,45 @@ void testOppoPhotoStreams() {
         }
         assert(stillKeys == 1 && sessionKeys == 2);
     }
-    // 200 MP is selected by stream geometry, with no forced sensor-mode key.
-    for (const auto& [name, camera, width, height] : {
-             std::tuple{"1xF", "2", 16320u, 12256u},
-             std::tuple{"3xF", "4", 16384u, 12288u}}) {
-        const auto lens = routeForLens(*roundTrip, name);
-        assert(lens && lens->cameraId == camera && lens->photoStream);
-        assert(lens->photoStream->width == width && lens->photoStream->height == height);
-        assert(lens->sensorLayoutBlock == 1 && lens->photoSensorLayoutBlock == 4);
-        assert(!lens->photoIncludePreview && lens->photoBufferUsage == 3 && lens->photoBufferCount == 2);
-        assert(lens->vendorKeys.size() == 2);
-        for (const auto& key : lens->vendorKeys) {
-            assert(key.tag != "com.oplus.engineercamera.agingtest.mode.select");
-            assert(key.scope == CameraKeySetting::Scope::Session);
-        }
-    }
+    // Root-only 200 MP modes must not ship in the default profile.
+    assert(!routeForLens(*roundTrip, "1xF"));
+    assert(!routeForLens(*roundTrip, "3xF"));
     for (const auto& lens : roundTrip->lenses) assert(!lens.stopViewfinderForPhotos);
+    const auto remosaiced = parseCameraProfile(serializeCameraProfile(builtInCameraProfile("oppo_x9u_50mp_remosaiced")));
+    assert(remosaiced && remosaiced->lenses.size() == 8);
+    for (const auto& [name, mode] : {std::pair{"H0.6", 0}, {"H1x", 5}, {"H3x", 7}, {"H10x", 0}}) {
+        const auto lens = routeForLens(*remosaiced, name);
+        assert(lens && lens->photoStream && lens->sensorLayoutBlock == 1 && lens->photoSensorLayoutBlock == 1);
+        size_t modeKeys = 0;
+        for (const auto& key : lens->vendorKeys) {
+            if (key.tag != "com.oplus.engineercamera.agingtest.mode.select") continue;
+            ++modeKeys;
+            assert(key.scope == CameraKeySetting::Scope::Still && key.values == std::vector<double>{double(mode)});
+        }
+        assert(modeKeys == 1);
+    }
+    const auto full = parseCameraProfile(serializeCameraProfile(builtInCameraProfile("oppo_x9u_200mp")));
+    assert(full && full->lenses.size() == 6);
+    for (const auto& [name, width, height] : {std::tuple{"1xF", 16320u, 12256u}, {"3xF", 16384u, 12288u}}) {
+        const auto lens = routeForLens(*full, name);
+        assert(lens && lens->photoStream && lens->photoStream->width == width && lens->photoStream->height == height);
+        assert(lens->sensorLayoutBlock == 1 && lens->photoSensorLayoutBlock == 4);
+        assert(!lens->photoIncludePreview && lens->photoBufferCount == 2 && lens->photoBufferUsage == 3);
+        assert(lens->vendorKeys.size() == 2);
+        for (const auto& key : lens->vendorKeys) assert(key.scope == CameraKeySetting::Scope::Session);
+    }
+    for (const auto& lens : full->lenses) assert(lens.lensId.front() != 'H');
+    for (const char* name : {"0.6x", "1x", "3x", "10x"}) {
+        const auto standard = routeForLens(oppo, name);
+        assert(standard);
+        assert(serializeCameraProfile({"", {*standard}}) == serializeCameraProfile({"", {*routeForLens(*full, name)}}));
+        assert(serializeCameraProfile({"", {*standard}}) == serializeCameraProfile({"", {*routeForLens(*remosaiced, name)}}));
+    }
+    for (const char* model : {"CPH2841", "PMA110", "PMA120"}) {
+        const auto property = props({{"ro.product.model", model}});
+        assert(matchingBuiltInProfiles(property).size() == 3);
+        assert(matchBuiltInProfile(property).profileId == "oppo_x9u_50mp_native_raw");
+    }
     const auto vivo = routeForLens(builtInCameraProfile("vivo_x300_ultra"), "H85");
     assert(vivo && vivo->photoIncludePreview && vivo->photoBufferCount == 0 && vivo->photoSensorLayoutBlock == 1);
     assert(!parseCameraProfile(R"({"schema":2,"lenses":[{"id":"bad","camera":{"id":"5"},"image":{"sensorLayout":{"photoBlock":3}}}]})"));
