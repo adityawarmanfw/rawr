@@ -80,6 +80,7 @@ void AndroidBurstCoordinator::destroyHostBuffer(HostBuffer& hb) noexcept {
 void AndroidBurstCoordinator::destroyHostBuffers() noexcept {
     destroyHostBuffer(noiseStats_);
     destroyHostBuffer(hotPixels_);
+    destroyHostBuffer(scoreStats_);
 }
 void AndroidBurstCoordinator::warmPipelines(VkPhysicalDevice physical, VkDevice device, std::uint32_t qf) {
     if (!physical || !device) throw std::invalid_argument("multiframe burst: invalid warmup handles");
@@ -585,6 +586,66 @@ BurstRunResult AndroidBurstCoordinator::run(const std::vector<BurstFrame>& frame
     result.noiseEstimated = noiseEstimated;
     if (noiseEstimated) result.estimatedNoise = *merge_.sensorNoiseProfile;
     return result;
+}
+std::vector<AndroidBurstCoordinator::RextureFrameScore> AndroidBurstCoordinator::scoreRextureFrames(
+    const std::vector<BurstFrame>& frames) {
+    if (!device_ || !executionReady_ || frames.empty()) throw std::invalid_argument("rexture score: not initialized");
+    struct Pc {
+        float black[4];
+        float white;
+        std::int32_t w, h, cfa;
+        float alpha, beta;
+        std::int32_t frameSlot, workgroups;
+    };
+    const std::uint32_t qw = width_ / 4u, qh = height_ / 4u;
+    const std::uint32_t gx = (qw + 15u) / 16u, gy = (qh + 15u) / 16u, groups = gx * gy;
+    float alpha = merge_.noiseAlpha, beta = merge_.noiseBeta;
+    if (merge_.sensorNoiseProfile) {
+        const auto& n = *merge_.sensorNoiseProfile;
+        alpha = .25f * (n.slopeBySite[0] + n.slopeBySite[1] + n.slopeBySite[2] + n.slopeBySite[3]);
+        beta = .25f * (n.offsetBySite[0] + n.offsetBySite[1] + n.offsetBySite[2] + n.offsetBySite[3]);
+    }
+    ensureHostBuffer(scoreStats_, VkDeviceSize(frames.size()) * groups * 4u * sizeof(float));
+    executeChunk(30u, 0u, 2u, [&] {
+        recordTimestamp(0u);
+        for (std::uint32_t i = 0; i < frames.size(); ++i) {
+            const auto& norm = frames[i].parameters.normalization;
+            Pc pc{};
+            std::copy(norm.blackByPhase.begin(), norm.blackByPhase.end(), pc.black);
+            pc.white = norm.whiteLevel;
+            pc.w = std::int32_t(width_);
+            pc.h = std::int32_t(height_);
+            pc.cfa = std::int32_t(static_cast<std::uint32_t>(merge_.cfa));
+            pc.alpha = alpha;
+            pc.beta = beta;
+            pc.frameSlot = std::int32_t(i);
+            pc.workgroups = std::int32_t(groups);
+            executor_.record(command_, ShaderId::RxFrameScore,
+                             {{{0u, frames[i].raw.view}}, {{1u, scoreStats_.buffer}}}, &pc, sizeof(pc), gx, gy);
+        }
+        VkMemoryBarrier toHost{};
+        toHost.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        toHost.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        toHost.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+        vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &toHost, 0,
+                             nullptr, 0, nullptr);
+        recordTimestamp(1u);
+    });
+    std::vector<RextureFrameScore> out(frames.size());
+    const auto* p = static_cast<const float*>(scoreStats_.mapped);
+    for (std::size_t i = 0; i < frames.size(); ++i) {
+        double sumOk = 0, okCount = 0, clipCount = 0, count = 0;
+        for (std::uint32_t g = 0; g < groups; ++g) {
+            const float* v = p + (i * groups + g) * 4u;
+            sumOk += v[0];
+            okCount += v[1];
+            clipCount += v[2];
+            count += v[3];
+        }
+        out[i].sharp = okCount > 0 ? std::max(sumOk / okCount, 0.0) : 0.0;
+        out[i].sat = count > 0 ? clipCount / count : 0.0;
+    }
+    return out;
 }
 BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>& frames, std::uint32_t ref,
                                                    const FrameConsumed& frameConsumed, const FrameLoad& frameLoad) {

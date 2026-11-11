@@ -92,7 +92,8 @@ set(RAWR_MF_SHADER_SOURCES
   ${RAWR_MF_DIR}/merge_rexture/shaders/rx_fill.comp
   ${RAWR_MF_DIR}/merge_rexture/shaders/rx_robust.comp
   ${RAWR_MF_DIR}/merge_rexture/shaders/rx_accumulate.comp
-  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_finalize.comp)
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_finalize.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_frame_score.comp)
 set(RAWR_MF_SPV_OUTPUTS)
 foreach(RAWR_MF_SRC IN LISTS RAWR_MF_SHADER_SOURCES)
   get_filename_component(RAWR_MF_NAME ${RAWR_MF_SRC} NAME_WE)
@@ -166,7 +167,7 @@ endif()
 
 if(RAW_GPU_PIPELINE_BUILD_TESTS)
   enable_testing()
-  foreach(TEST_NAME merge_math_test hdrplus_geometry_test reconstruction_tiling_test resource_geometry_test scratch_layout_test)
+  foreach(TEST_NAME merge_math_test hdrplus_geometry_test reconstruction_tiling_test resource_geometry_test scratch_layout_test rexture_base_selection_test)
     add_executable(${TEST_NAME} tests/${TEST_NAME}.cpp)
     target_link_libraries(${TEST_NAME} PRIVATE raw_gpu_pipeline)
     # The tests are assert-based; keep asserts active in every build type.
