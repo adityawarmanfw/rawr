@@ -2,15 +2,17 @@
 #extension GL_GOOGLE_include_directive : enable
 // Rexture base pass: anisotropic kernel covariance (cxx, cxy, cyy), raw-pixel units, at half resolution.
 // Inputs: the integrated tensor (sa, sb, sd) and the local (2x2, un-integrated) tensor. Constants are the reference
-// configuration: k_detail .20, k_denoise 2, d_threshold .71, d_transition 1, k_stretch 4, k_shrink 2, detail_floor .25
-// with floor_snr (3, 8). (The "true flat" map is not part of the merge.) Starts from kernel_estimate.comp.
+// configuration: k_detail .20, k_denoise 2, d_threshold .71, d_transition 1, k_shrink 2, detail_floor .25 with
+// floor_snr (3, 8), except k_stretch 1.5 (reference 4): in foliage the integrated tensor still reports one strong
+// orientation across many leaves, and a 4x stretch averages the merged samples along it (smooth patches with crisp
+// outlines, an oil-paint look). (The "true flat" map is not part of the merge.) Starts from kernel_estimate.comp.
 
 layout(local_size_x = 16, local_size_y = 16) in;
 layout(set = 0, binding = 0, rgba32f) readonly uniform image2D integratedI;
 layout(set = 0, binding = 1, rgba32f) readonly uniform image2D localI;
 layout(set = 0, binding = 2, rgba32f) writeonly uniform image2D covI;
 
-const float K_DETAIL = 0.20, K_DENOISE = 2.0, D_THRESHOLD = 0.71, D_TRANSITION = 1.0, K_STRETCH = 4.0, K_SHRINK = 2.0;
+const float K_DETAIL = 0.20, K_DENOISE = 2.0, D_THRESHOLD = 0.71, D_TRANSITION = 1.0, K_STRETCH = 1.5, K_SHRINK = 2.0;
 const float DETAIL_FLOOR = 0.25, FLOOR_SNR_LO = 3.0, FLOOR_SNR_HI = 8.0;
 
 void main() {
