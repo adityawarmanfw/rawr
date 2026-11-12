@@ -18,8 +18,15 @@ struct LensShadingMapSnapshot final {
     uint32_t height = 0;
     std::vector<float> gains;
 
+    // Shading gains are >= 1 at the centre and grow towards the corners. A map with a non-finite or near-zero gain (a HAL can
+    // hand out an unfilled map right after a session restart) would scale the image towards black: such a map is rejected
+    // and the frame renders without shading correction.
+    static constexpr float kMinPlausibleGain = 0.25f;
     [[nodiscard]] bool valid() const noexcept {
-        return width >= 2u && height >= 2u && gains.size() == static_cast<size_t>(width) * height * 4u;
+        if (!(width >= 2u && height >= 2u && gains.size() == static_cast<size_t>(width) * height * 4u)) return false;
+        for (const float g : gains)
+            if (!(g >= kMinPlausibleGain) || !(g < 1.0e6f)) return false;  // also false for NaN
+        return true;
     }
     [[nodiscard]] LensShadingMapView view() const noexcept { return {width, height, gains.data(), gains.size()}; }
 

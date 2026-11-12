@@ -643,6 +643,23 @@ void MfsrCaptureJob::runStages(Published& published) {
             try {
                 const auto lsc = rawrcam::develop::highlight::LensShadingMapSnapshot::fromMetadata(
                     job->referenceMetadata, mergedJpeg.develop.lensShadingCorrectionEnabled);
+                {
+                    const auto& g = job->referenceMetadata.lensShadingMap;
+                    float lo = 0.0f, hi = 0.0f;
+                    std::size_t bad = 0, finite = 0;
+                    for (const float v : g) {
+                        if (!std::isfinite(v)) {
+                            ++bad;
+                            continue;
+                        }
+                        lo = (finite == 0 || v < lo) ? v : lo;
+                        hi = (finite == 0 || v > hi) ? v : hi;
+                        ++finite;
+                    }
+                    LOGI("MULTIFRAME_LSC_MAP enabled=%d map=%ux%u values=%zu min=%.3f max=%.3f nonfinite=%zu used=%d",
+                         mergedJpeg.develop.lensShadingCorrectionEnabled ? 1 : 0, job->referenceMetadata.lensShadingMapWidth,
+                         job->referenceMetadata.lensShadingMapHeight, g.size(), lo, hi, bad, lsc.valid() ? 1 : 0);
+                }
                 outputAdapter.releaseDngResources();
                 // 1A sensor OR: reference RAW (R16U, pre-LSC/WB) supplies
                 // per-phase truth that merge dilution can hide. Applied only

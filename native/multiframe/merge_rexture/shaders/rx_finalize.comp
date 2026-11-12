@@ -77,6 +77,11 @@ Fin finalizeAt(ivec2 q0) {
     vec3 base = imageLoad(rcdI, q0).xyz;
     Fin f;
     f.rgb = base + (merged - base) * conf;
+    // A non-finite value (degenerate weights, a bad sample) takes the base's value, or 0: one bad pixel must not reach the
+    // whole-image statistics of the render (auto sharpening, exposure, gain map), which would spoil the entire picture.
+    for (int c = 0; c < 3; ++c)
+        if (isnan(f.rgb[c]) || isinf(f.rgb[c])) f.rgb[c] = (isnan(base[c]) || isinf(base[c])) ? 0.0 : base[c];
+    if (isnan(conf)) conf = 0.0;
     f.conf = conf;
     f.neff = min(neff.x, min(neff.y, neff.z));
     return f;
