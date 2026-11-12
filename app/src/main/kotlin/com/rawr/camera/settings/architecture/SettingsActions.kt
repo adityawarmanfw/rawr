@@ -316,7 +316,6 @@ data class SetMultiframeRextureNativeRgb(val enabled: Boolean) : SettingsApplica
 data class SetMultiframeNumericValue(val parameter: MultiframeNumericParameter, val value: Float) :
     SettingsApplicationAction
 
-data class SetMultiframeOutputResolution(val value: MultiframeOutputResolution) : SettingsApplicationAction
 
 data class SetMultiframeMergeAlgorithm(val value: MultiframeMergeAlgorithm) : SettingsApplicationAction
 

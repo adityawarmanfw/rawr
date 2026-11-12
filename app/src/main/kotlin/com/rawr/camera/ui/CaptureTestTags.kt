@@ -30,7 +30,6 @@ object CaptureTestTags {
     const val TOPBAR_WHITE_BALANCE = "capture_topbar_white_balance"
     const val TOPBAR_SELF_TIMER = "capture_topbar_self_timer"
     const val SELF_TIMER_COUNTDOWN = "capture_self_timer_countdown"
-    const val HDR_BRACKETED_NOTICE = "hdr_bracketed_notice"
     const val BRACKET_HOLD_NOTICE = "bracket_hold_notice"
     const val LENS_UNAVAILABLE_NOTICE = "capture_lens_unavailable_notice"
     const val PROFILE_ERROR_NOTICE = "capture_profile_error_notice"

@@ -1,15 +1,9 @@
 package com.rawr.camera.settings.ui
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import com.rawr.camera.settings.architecture.*
 import com.rawr.camera.settings.model.*
-import kotlin.math.roundToInt
 
 @Composable
 internal fun MultiframeSettings(state: SettingsUiState, dispatch: SettingsDispatch) {
@@ -17,8 +11,6 @@ internal fun MultiframeSettings(state: SettingsUiState, dispatch: SettingsDispat
     val tuning = state.values.multiframeTuning
     val spec = { parameter: MultiframeNumericParameter -> MultiframeSpecs.forParameter(parameter) }
     val rexture = tuning.mergeAlgorithm == MultiframeMergeAlgorithm.Rexture
-    val hdrPlus = tuning.mergeAlgorithm != MultiframeMergeAlgorithm.Wronski && !rexture
-    val bracketed = tuning.mergeAlgorithm == MultiframeMergeAlgorithm.HdrPlusBracketed
     SettingsPageContainer {
         SettingsGroup(
             description = "Multiframe still pipeline. Off leaves the existing single-frame capture path untouched."
@@ -37,12 +29,11 @@ internal fun MultiframeSettings(state: SettingsUiState, dispatch: SettingsDispat
         }
         SettingsGroup(
             title = "Merge Algorithm",
-            description = "Super-resolution: kernel-regression merge, smoother with optional upscaling. HDR+: tile-aligned robust average on the RAW mosaic; keeps natural single-frame grain at higher SNR and avoids blotches in low light. HDR+ Quality: per-frequency merge, cleaner with mild sharpening and blends motion more, slower. " +
-                (if (MultiframeMergeAlgorithm.HdrPlusBracketed.available) "HDR+ Bracketed: HDR+ Quality on a burst metered darker to keep bright areas (sky, lamps) from clipping, brightened back, plus a few longer frames right after the shutter for cleaner shadows; hold still a moment longer. " else "") +
+            description = "HDR+ Quality: per-frequency merge, cleaner with mild sharpening and blends motion more. " +
                 "Rexture: kernel-regression merge of the whole burst at native resolution, aligned and weighted per pixel; the sharpest frame of the last quarter second before the shutter is the base. Equal-exposure bursts. Up to about 56 MP it merges the whole frame (JPEG and DNG); above that it merges in strips and saves DNG only. " +
-                "(All HDR+ modes and Rexture: native resolution only.)"
+                "(Native resolution only.)"
         ) {
-            MultiframeMergeAlgorithm.entries.filter { it.available }.forEachIndexed { index, candidate ->
+            MultiframeMergeAlgorithm.entries.forEachIndexed { index, candidate ->
                 if (index > 0) SettingDivider()
                 SettingsSelectionRow(
                     title = candidate.label,
@@ -70,16 +61,15 @@ internal fun MultiframeSettings(state: SettingsUiState, dispatch: SettingsDispat
             title = "Output",
             description = "Double-tap any parameter label to restore its default."
         ) {
-            // Needs the burst noise fit, which only the super-resolution merge
-            // measures; HDR+ would always skip it. JPEG only: the merged DNG is
+            // Needs the burst noise fit, which only the Rexture merge uses; JPEG only: the merged DNG is
             // written before rendering.
             SettingsSwitchRow(
                 title = "Chroma Denoise",
-                checked = state.values.multiframeChromaDenoise && !hdrPlus,
+                checked = state.values.multiframeChromaDenoise && rexture,
                 supportingText =
-                    if (hdrPlus) "Not available for HDR+ yet."
+                    if (!rexture) "Not available for HDR+ yet."
                     else "JPEG only. Removes leftover colour blotches from the merged image (chroma only, luma untouched) using the noise measured from the burst. Separate from Image > Denoise, which applies to single frames.",
-                enabled = enabled && !hdrPlus
+                enabled = enabled && rexture
             ) { dispatch.invoke(SetMultiframeChromaDenoise(it)) }
             SettingDivider()
             if (rexture) {
@@ -89,146 +79,13 @@ internal fun MultiframeSettings(state: SettingsUiState, dispatch: SettingsDispat
                     supportingText = "JPEG only. Renders the JPEG from Rexture's own merged colour instead of re-mosaicking it and running the Demosaic setting. The DNG is unaffected.",
                     enabled = enabled
                 ) { dispatch.invoke(SetMultiframeRextureNativeRgb(it)) }
-                SettingDivider()
-            }
-            if (hdrPlus) {
+            } else {
                 MultiframeSlider(spec(MultiframeNumericParameter.HdrPlusStrength), tuning, enabled, dispatch)
                 SettingDivider()
                 MultiframeSlider(spec(MultiframeNumericParameter.HdrPlusTileSize), tuning, enabled, dispatch)
-            } else if (!rexture) {
-                StandaloneNumericSliderRow(
-                    identity = "mf_output_resolution",
-                    label = "Merged Resolution",
-                    supportingText = "Lower: faster, smaller files at native resolution. Higher: a larger reconstructed image with more cost; it cannot recover absent detail.",
-                    minimum = 0f,
-                    maximum = (MultiframeOutputResolution.entries.size - 1).toFloat(),
-                    step = 1f,
-                    decimals = 0,
-                    value = tuning.outputResolution.ordinal.toFloat(),
-                    enabled = enabled,
-                    defaultValue = MultiframeOutputResolution.Native.ordinal.toFloat(),
-                    valueFormatter = { value ->
-                        MultiframeOutputResolution.entries[
-                            value.roundToInt().coerceIn(
-                                0,
-                                MultiframeOutputResolution.entries.lastIndex
-                            )
-                        ].label
-                    }
-                ) { value ->
-                    dispatch.invoke(
-                        SetMultiframeOutputResolution(
-                            MultiframeOutputResolution.entries[
-                                value.roundToInt().coerceIn(
-                                    0,
-                                    MultiframeOutputResolution.entries.lastIndex
-                                )
-                            ]
-                        )
-                    )
-                }
             }
-            // HDR+ Bracketed sets its own frame counts below.
-            if (!bracketed) {
-                if (!rexture) SettingDivider()
-                MultiframeSlider(spec(MultiframeNumericParameter.MaxFrames), tuning, enabled, dispatch)
-            }
-        }
-        if (bracketed) {
-            SettingsGroup(
-                title = "HDR+ Bracketed",
-                description = "Exposures are relative to auto exposure (AE). The ZSL burst from before the shutter goes darker to protect highlights; the frames after it are brighter to clean up shadows."
-            ) {
-                MultiframeSlider(spec(MultiframeNumericParameter.BracketEv), tuning, enabled, dispatch)
-                SettingDivider()
-                MultiframeSlider(
-                    spec(MultiframeNumericParameter.LongFrameEv), tuning, enabled && tuning.bracketFrames > 0, dispatch
-                )
-                SettingDivider()
-                MultiframeSlider(spec(MultiframeNumericParameter.MaxFrames), tuning, enabled, dispatch)
-                SettingDivider()
-                // Its range follows Maximum Frames (a 2-frame burst stays before the press).
-                val afterMax = tuning.maxPostShutterFrames()
-                MultiframeSlider(
-                    spec(MultiframeNumericParameter.BracketFrames), tuning, enabled && afterMax > 0, dispatch,
-                    maximum = afterMax.coerceAtLeast(1).toFloat(), value = tuning.postShutterFrames().toFloat()
-                )
-                Text(
-                    "Uses ${tuning.zslFrames()} frames from before the shutter + ${tuning.postShutterFrames()} after",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp)
-                )
-            }
-        }
-        if (!hdrPlus && !rexture) {
-            SettingsGroup(
-                title = "Alignment",
-                description = "Subpixel refinement and weak-texture rejection. Higher cutoff rejects more ambiguous tiles."
-            ) {
-                MultiframeSlider(spec(MultiframeNumericParameter.LkIterations), tuning, enabled, dispatch)
-                SettingDivider()
-                MultiframeSlider(spec(MultiframeNumericParameter.HessianEpsilonExponent), tuning, enabled, dispatch)
-            }
-            SettingsGroup(
-                title = "Reconstruction",
-                description = "Kernel shape and the transition between detail reconstruction and denoising."
-            ) {
-                listOf(
-                    spec(MultiframeNumericParameter.KDetail),
-                    spec(MultiframeNumericParameter.KDenoise),
-                    spec(MultiframeNumericParameter.DThreshold),
-                    spec(MultiframeNumericParameter.DTransition),
-                    spec(MultiframeNumericParameter.KStretch),
-                    spec(MultiframeNumericParameter.KShrink)
-                ).forEachIndexed { index, spec ->
-                    if (index > 0) SettingDivider()
-                    MultiframeSlider(spec, tuning, enabled, dispatch)
-                }
-            }
-            SettingsGroup(
-                title = "Detail Bandwidth",
-                description = "Decoupled flat denoising, narrow-kernel floor and coverage fallback. The floor never narrows kernels; scale gain grows it above 1x only."
-            ) {
-                listOf(
-                    spec(MultiframeNumericParameter.FlatSigma),
-                    spec(MultiframeNumericParameter.DetailFloorSigma),
-                    spec(MultiframeNumericParameter.ScaleBandwidthGain),
-                    spec(MultiframeNumericParameter.CoverageNeffLo),
-                    spec(MultiframeNumericParameter.CoverageNeffHi),
-                    spec(MultiframeNumericParameter.CoverageMassLo),
-                    spec(MultiframeNumericParameter.CoverageMassHi)
-                ).forEachIndexed { index, spec ->
-                    if (index > 0) SettingDivider()
-                    MultiframeSlider(spec, tuning, enabled, dispatch)
-                }
-            }
-            SettingsGroup(
-                title = "Motion Fallback Cleanup",
-                description = "Where motion or rejection leaves fewer merged frames, smooth to match the rest of the image. Strength scales per pixel with the missing frames; fully merged areas are untouched."
-            ) {
-                listOf(
-                    spec(MultiframeNumericParameter.FallbackChroma),
-                    spec(MultiframeNumericParameter.FallbackLuma)
-                ).forEachIndexed { index, spec ->
-                    if (index > 0) SettingDivider()
-                    MultiframeSlider(spec, tuning, enabled, dispatch)
-                }
-            }
-            SettingsGroup(
-                title = "Robustness",
-                description = "Controls companion rejection for photometric differences and independently moving regions."
-            ) {
-                listOf(
-                    spec(MultiframeNumericParameter.RobustnessT),
-                    spec(MultiframeNumericParameter.RobustnessS1),
-                    spec(MultiframeNumericParameter.RobustnessS2),
-                    spec(MultiframeNumericParameter.MotionThreshold)
-                ).forEachIndexed { index, spec ->
-                    if (index > 0) SettingDivider()
-                    MultiframeSlider(spec, tuning, enabled, dispatch)
-                }
-            }
+            SettingDivider()
+            MultiframeSlider(spec(MultiframeNumericParameter.MaxFrames), tuning, enabled, dispatch)
         }
     }
 }
@@ -238,31 +95,20 @@ private fun MultiframeSlider(
     spec: MultiframeNumericSpec,
     tuning: MultiframeTuning,
     enabled: Boolean,
-    dispatch: SettingsDispatch,
-    maximum: Float = spec.maximum,
-    value: Float = tuning.value(spec.parameter)
+    dispatch: SettingsDispatch
 ) {
     StandaloneNumericSliderRow(
         identity = "mf_${spec.parameter.name}",
         label = spec.label,
         supportingText = spec.supportingText,
         minimum = spec.minimum,
-        maximum = maximum,
+        maximum = spec.maximum,
         step = spec.step,
         decimals = spec.decimals,
-        value = value.coerceIn(spec.minimum, maximum),
+        value = tuning.value(spec.parameter).coerceIn(spec.minimum, spec.maximum),
         enabled = enabled,
         defaultValue = spec.defaultValue,
         unit = spec.unit,
-        valueFormatter =
-            if (spec.parameter == MultiframeNumericParameter.HessianEpsilonExponent) {
-                { value -> "1e${value.roundToInt()}" }
-            } else if (spec.parameter == MultiframeNumericParameter.LongFrameEv) {
-                { value -> if (value <= 0f) "Auto exposure" else String.format(java.util.Locale.US, "AE +%.1fEV", value) }
-            } else if (spec.parameter == MultiframeNumericParameter.BracketEv) {
-                { value -> String.format(java.util.Locale.US, "up to AE %.1fEV", value) }
-            } else {
-                null
-            }
+        valueFormatter = null
     ) { dispatch.invoke(SetMultiframeNumericValue(spec.parameter, it)) }
 }

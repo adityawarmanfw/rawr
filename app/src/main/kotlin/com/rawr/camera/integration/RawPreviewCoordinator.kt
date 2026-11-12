@@ -255,8 +255,8 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
 
 
     /** Frames frozen; more than maxFrames when native folded the long frames into the burst. */
-    fun prepareExperimentalMultiframe(maxFrames: Int, longFrames: Int = 0): Int =
-        native.prepareExperimentalMultiframe(nativeHandle, maxFrames.coerceIn(2, 30), longFrames.coerceIn(0, 28))
+    fun prepareExperimentalMultiframe(maxFrames: Int): Int =
+        native.prepareExperimentalMultiframe(nativeHandle, maxFrames.coerceIn(2, 30), 0)
 
     fun cancelPreparedMultiframeCapture() = native.cancelPreparedMultiframeCapture(nativeHandle)
 
@@ -316,9 +316,6 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
     // the zero-copy reader usage no longer depends on the toggle.
     fun setExperimentalMultiframeEnabled(enabled: Boolean) =
         postNative { native.setExperimentalMultiframeEnabled(nativeHandle, enabled) }
-    /** HDR+ Bracketed ZSL highlight headroom limit in EV (< 0); 0 turns the meter off. */
-    fun setHdrPlusHeadroomMaxEv(maxEv: Float) =
-        postNative { native.setHdrPlusHeadroomMaxEv(nativeHandle, maxEv) }
 
     // No restart needed: the film engine is created lazily with a queue
     // wait-idle and the preview ingress is untouched.
