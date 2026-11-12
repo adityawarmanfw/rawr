@@ -51,16 +51,19 @@ internal fun MultiframeSettings(state: SettingsUiState, dispatch: SettingsDispat
                 ) { dispatch.invoke(SetMultiframeMergeAlgorithm(candidate)) }
             }
         }
-        SettingsGroup(
-            title = "Reference Frame",
-            description = "Which burst frame anchors alignment and merge."
-        ) {
-            MultiframeBaseFrameMode.entries.forEachIndexed { index, candidate ->
-                if (index > 0) SettingDivider()
-                SettingsSelectionRow(
-                    title = candidate.label,
-                    selected = state.values.multiframeBaseFrameMode == candidate
-                ) { dispatch.invoke(SetMultiframeBaseFrameMode(candidate)) }
+        // Rexture picks its base itself, at the shutter press (frame score), so the choice does not apply to it.
+        if (!rexture) {
+            SettingsGroup(
+                title = "Reference Frame",
+                description = "Which burst frame anchors alignment and merge."
+            ) {
+                MultiframeBaseFrameMode.entries.forEachIndexed { index, candidate ->
+                    if (index > 0) SettingDivider()
+                    SettingsSelectionRow(
+                        title = candidate.label,
+                        selected = state.values.multiframeBaseFrameMode == candidate
+                    ) { dispatch.invoke(SetMultiframeBaseFrameMode(candidate)) }
+                }
             }
         }
         SettingsGroup(
