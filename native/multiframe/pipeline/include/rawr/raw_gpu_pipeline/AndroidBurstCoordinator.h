@@ -123,6 +123,8 @@ class AndroidBurstCoordinator final {
     // output scale (default Wronski 1x; HDR+ holds ~0.5GB instead). Makes even the first burst fully warm when geometry
     // matches. Holds ~1.3GB while the camera is open; reset()/resetConfiguration
     // release it. Same reuse rules as initialize().
+    // Merge algorithm id (MergeAlgorithm) the next warmAll / burst will lay its arena out for.
+    std::uint32_t nextAlgorithmId() const noexcept { return static_cast<std::uint32_t>(lastAlgorithm_); }
     void warmAll(VkPhysicalDevice physical, VkDevice device, std::uint32_t queueFamily, std::uint32_t width,
                  std::uint32_t height);
     BurstRunResult run(const std::vector<BurstFrame>& frames, std::uint32_t referenceIndex,

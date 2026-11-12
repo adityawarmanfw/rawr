@@ -74,7 +74,8 @@ void MfsrCaptureService::configure(const Geometry& geometry, bool warmEnabled) {
     // process killed, so only warm geometries whose worst-case arena fits.
     // A shutter before/without warm falls back to cold initialization.
     constexpr std::uint64_t kMaxWarmArenaBytes = 1536ull * 1024u * 1024u;  // 1.5 GiB
-    const std::uint64_t arenaBytes = estimateMergeArenaBytes(geometry.rawWidth, geometry.rawHeight);
+    const std::uint64_t arenaBytes = estimateMergeArenaBytes(geometry.rawWidth, geometry.rawHeight,
+                                                                 burstCoordinator_.nextAlgorithmId());
     LOGI("MULTIFRAME_WARM_PLAN raw=%ux%u arena1xMaxMB=%.0f budgetMB=%.0f", geometry.rawWidth, geometry.rawHeight,
          double(arenaBytes) / (1024.0 * 1024.0), double(kMaxWarmArenaBytes) / (1024.0 * 1024.0));
     if (arenaBytes == 0 || arenaBytes > kMaxWarmArenaBytes) {

@@ -147,7 +147,7 @@ void MfsrCaptureJob::runStages(Published& published) {
         // and HDR+ stream one companion). Logged so a device trace shows which
         // side of the limit a failed burst ran on.
         const std::uint32_t mergeRows = stripMode ? strips.front().rows : ctx.rawHeight;
-        const std::uint64_t arenaEstimate = estimateMergeArenaBytes(ctx.rawWidth, mergeRows);
+        const std::uint64_t arenaEstimate = estimateMergeArenaBytes(ctx.rawWidth, mergeRows, work->tuning.mergeAlgorithm);
         const std::uint64_t frameBytes = std::uint64_t(ctx.rawWidth) * mergeRows * sizeof(std::uint16_t);
         const std::size_t residentFrames = work->tuning.mergeAlgorithm == 2u || work->tuning.mergeAlgorithm == 3u
                                                ? job->frames.size()
