@@ -66,10 +66,13 @@ struct JpegCaptureContext {
     std::string lensModel;
     std::string lensSerial;
     // Source capture time on re-renders; DateTime remains export time.
+    bool preserveSourceTime = false;
     std::string dateTimeOriginal;  // "YYYY:MM:DD HH:MM:SS"
     std::string dateTimeDigitized;
     std::string offsetTimeOriginal;
     std::string subsecTimeOriginal;
+    std::string offsetTimeDigitized;
+    std::string subsecTimeDigitized;
 
     // Frozen public metadata. Keep implementation-specific algorithm names out of this report.
     std::string imageDescription;

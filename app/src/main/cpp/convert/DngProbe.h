@@ -15,7 +15,6 @@ struct DngInfo {
     bool rawr = false;         // carries Rawr provenance
     bool convertible = false;  // Bayer 8-16 bit, uncompressed or lossless JPEG
     std::string make, model;
-    std::string dateTimeOriginal, offsetTimeOriginal;  // EXIF strings, may be empty
 };
 
 DngInfo probeDng(const std::string& path);

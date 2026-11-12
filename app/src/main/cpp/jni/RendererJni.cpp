@@ -498,9 +498,6 @@ Java_com_rawr_camera_renderer_RendererNative_render(JNIEnv* e, jobject, jlong id
             c.utcOffsetMinutes = std::int16_t(exportJson.number("utcOffsetMinutes", 0));
             c.displayName = exportJson.text("displayName");
             if (c.displayName.empty()) c.displayName = "Renderer.jpg";
-            // Capture EXIF carried by the source DNG, when present. Tags are
-            // omitted when absent, matching the still writer's behavior; an
-            // absent DateTimeOriginal falls back to the export time.
             if (source.exposureTimeNs) c.exposureTimeNs = *source.exposureTimeNs;
             if (source.sensitivity) c.sensitivity = *source.sensitivity;
             c.aperture = source.fNumber;
@@ -513,10 +510,13 @@ Java_com_rawr_camera_renderer_RendererNative_render(JNIEnv* e, jobject, jlong id
             c.lensMake = source.lensMake;
             c.lensModel = source.lensModel;
             c.lensSerial = source.lensSerial;
+            c.preserveSourceTime = true;
             c.dateTimeOriginal = source.dateTimeOriginal;
             c.dateTimeDigitized = source.dateTimeDigitized;
             c.offsetTimeOriginal = source.offsetTimeOriginal;
             c.subsecTimeOriginal = source.subsecTimeOriginal;
+            c.offsetTimeDigitized = source.offsetTimeDigitized;
+            c.subsecTimeDigitized = source.subsecTimeDigitized;
             // Stage timings: same attribution as still captures. Demosaic is
             // the renderer pre-work wall time (prepare + resample/warp/upload).
             const auto& completion = engine.lastCompletion();

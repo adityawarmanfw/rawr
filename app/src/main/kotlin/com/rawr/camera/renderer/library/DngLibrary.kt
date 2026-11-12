@@ -46,9 +46,6 @@ data class DngEntry(
     val rawr: Boolean = false,
     val convertible: Boolean = false,
     val model: String = "",
-    /** EXIF DateTimeOriginal and OffsetTimeOriginal as written, may be empty. */
-    val dateTimeOriginal: String = "",
-    val offsetTimeOriginal: String = "",
     val error: String = "",
     /** Output sizes (MP, as in the file suffix) already converted from this file. */
     val converted: Set<Int> = emptySet(),
@@ -240,8 +237,6 @@ class DngLibrary private constructor(private val context: Context) {
                     // Avoid "vivo vivo X300 Ultra".
                     if (parts.size == 2 && parts[1].startsWith(parts[0], ignoreCase = true)) parts[1] else parts.joinToString(" ")
                 })
-                put("dateTimeOriginal", result.getOrNull(10).orEmpty())
-                put("offsetTimeOriginal", result.getOrNull(11).orEmpty())
             } else {
                 put("error", result.getOrNull(1) ?: "Cannot read DNG")
             }
@@ -257,8 +252,6 @@ class DngLibrary private constructor(private val context: Context) {
             rawr = json.optBoolean("rawr"),
             convertible = json.optBoolean("convertible"),
             model = json.optString("model"),
-            dateTimeOriginal = json.optString("dateTimeOriginal"),
-            offsetTimeOriginal = json.optString("offsetTimeOriginal"),
             error = json.optString("error")
         )
     }

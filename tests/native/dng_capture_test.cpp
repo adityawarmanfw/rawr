@@ -328,7 +328,13 @@ int main() {
                                         : rawrcam::encoding::dng::DngCompression::Uncompressed;
         // The frame recipe is rendered upstream and embedded verbatim; empty is omitted.
         capture.frameRecipe = pass == 0 ? R"({"version":1,"frameMarker":1})" : "";
-        auto params = rawrcam::encoding::dng::makeTinyDngWriteParams(good, capture, &error);
+        auto timed = capture;
+        if (pass == 1) {
+            timed.wallClockUnixMillis -= timed.wallClockUnixMillis % 1000;
+            timed.utcOffsetMinutes = 0;
+            timed.gps.reset();
+        }
+        auto params = rawrcam::encoding::dng::makeTinyDngWriteParams(good, timed, &error);
         if (!params) {
             std::cerr << error << "\n";
             return 1;
@@ -398,9 +404,8 @@ int main() {
         const tinydng_image_info* img = tinydng_image_get(doc, 0);
         const uint16_t wantComp = pass == 0 ? 7 : 1;
         bool ok = img && img->width == 8 && img->height == 6 && img->compression == wantComp &&
-                  img->gps.has_coordinates && img->gps.has_altitude &&
-                  rawrcam::metadata::sameGpsRecord(img->gps, *capture.gps) &&
-                  img->exif.has_exif_version && std::memcmp(img->exif.exif_version, "0300", 4) == 0 &&
+                  (timed.gps ? rawrcam::metadata::sameGpsRecord(img->gps, *timed.gps) : !img->has_gps_directory) &&
+                  img->exif.has_exif_version && std::memcmp(img->exif.exif_version, pass == 0 ? "0300" : "0231", 4) == 0 &&
                   img->raw.white_level_present && img->raw.white_level[0] == 4095 &&
                   img->raw.has_lens_info && img->raw.lens_info[0] == params->raw.lens_info[0] &&
                   img->raw.lens_info[3] == params->raw.lens_info[3] &&
@@ -412,6 +417,12 @@ int main() {
                   img->exif.lens_make && std::string(img->exif.lens_make) == "vivo" &&
                   img->exif.lens_model &&
                   std::string(img->exif.lens_model) == "vivo X300 Ultra back camera 6mm f/1.8";
+        if (img) {
+            for (const char* value : {img->exif.offset_time, img->exif.offset_time_original, img->exif.offset_time_digitized})
+                ok &= value && std::string(value) == (pass == 0 ? "+07:00" : "+00:00");
+            for (const char* value : {img->exif.subsec_time, img->exif.subsec_time_original, img->exif.subsec_time_digitized})
+                ok &= value && std::string(value) == (pass == 0 ? "123" : "000");
+        }
         if (ok) {
             tinydng_pixels px{};
             tinydng_decode_options dopts{};

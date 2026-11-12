@@ -82,10 +82,6 @@ DngInfo probeDng(const std::string& path) {
     info.make = make ? make : "";
     info.model = model ? model : "";
     info.rawr = isRawrProvenance(image->raw);
-    const char* dto = exif.datetime_original ? exif.datetime_original : (root ? root->datetime_original : nullptr);
-    const char* offset = exif.offset_time_original ? exif.offset_time_original : (root ? root->offset_time_original : nullptr);
-    info.dateTimeOriginal = dto ? dto : "";
-    info.offsetTimeOriginal = offset ? offset : "";
     info.convertible = image->samples_per_pixel == 1 && image->cfa.pattern_dim[0] == 2 &&
                        image->cfa.pattern_dim[1] == 2 && image->bits_per_sample >= 8 &&
                        image->bits_per_sample <= 16 && (image->compression == 1 || image->compression == 7) &&
