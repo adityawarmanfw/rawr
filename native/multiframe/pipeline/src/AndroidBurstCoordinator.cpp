@@ -95,6 +95,9 @@ void AndroidBurstCoordinator::warmPipelines(VkPhysicalDevice physical, VkDevice 
 void AndroidBurstCoordinator::warmAll(VkPhysicalDevice physical, VkDevice device, std::uint32_t qf, std::uint32_t w,
                                       std::uint32_t h) {
     if (!physical || !device || !w || !h) throw std::invalid_argument("multiframe burst: invalid warmup handles");
+    // A burst already merging owns the arena; the burst itself leaves it ready, so there is nothing to warm.
+    std::unique_lock<std::mutex> runLock(runMutex_, std::try_to_lock);
+    if (!runLock.owns_lock()) return;
     std::lock_guard<std::mutex> lock(initMutex_);
     if (!(executionReady_ && device_ == device && queueFamily_ == qf)) {
         resetLocked();
@@ -415,6 +418,7 @@ bool AndroidBurstCoordinator::estimateNoiseFromBurst(const std::vector<BurstFram
 }
 BurstRunResult AndroidBurstCoordinator::run(const std::vector<BurstFrame>& frames, std::uint32_t ref,
                                             FrameConsumed frameConsumed, FrameLoad frameLoad) {
+    std::lock_guard<std::mutex> runLock(runMutex_);
     if (!device_ || !arenaReady_ || frames.size() < 2 || ref >= frames.size())
         throw std::invalid_argument("multiframe burst: invalid run");
     if (frames[ref].raw.ref.width != width_ || frames[ref].raw.ref.height != height_)

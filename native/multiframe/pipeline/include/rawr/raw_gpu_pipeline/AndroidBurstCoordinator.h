@@ -158,6 +158,7 @@ class AndroidBurstCoordinator final {
     // Guards initialize/warmPipelines/reset (pipelines + pools + handles).
     // run() is called after initialize() returns on the same worker.
     std::mutex initMutex_;
+    std::mutex runMutex_;  // held for a whole run(): the warm-up must not replace the arena under a merge
     bool executionReady_ = false;
     void resetLocked() noexcept;
     void resetInfraLocked() noexcept;
