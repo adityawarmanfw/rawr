@@ -1,7 +1,7 @@
 #!/bin/sh
 # Runs rexture_device_check on a connected phone (adb). Needs the NDK build (see CMakeLists.txt) and rawburst folders
-# (bundle.txt, frame_NN.raw16, frame_NN.meta; made by tmp/indep/m7/tools/export_burst.py).
-#   run_on_device.sh <binary> <out dir> check <burst dir>...      stage dumps to <out>/<burst>/ for compare.py
+# (bundle.txt, frame_NN.raw16, frame_NN.meta).
+#   run_on_device.sh <binary> <out dir> check <burst dir>...      stage dumps to <out>/<burst>/ for the NumPy comparison
 #   run_on_device.sh <binary> <out dir> time  <burst dir> <noise a,b>   Rexture vs HDR+ Quality, 8 and 16 frames
 # No camera or UI is touched; the app is force-stopped before and after so it cannot compete for the GPU.
 set -eu

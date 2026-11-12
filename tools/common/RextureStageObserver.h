@@ -1,6 +1,6 @@
 #pragma once
 // The Rexture stage observer shared by the desktop replay tool and the on-device check: after each stage group it dumps the
-// arena images the NumPy comparison needs (tmp/indep/m7/compare.py layout) and optionally replaces the estimated fine flow
+// arena images the NumPy comparison needs and optionally replaces the estimated fine flow
 // by a reference dump's flow. The stages up to the robustness maps match the NumPy spec; the per-frame weight
 // normalisation (accumulators, finalize) and the grain pass are Rexture additions the spec does not have ("final" is the
 // merge output after both).

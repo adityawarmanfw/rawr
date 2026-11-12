@@ -1,5 +1,5 @@
 #pragma once
-// Stage-by-stage dumps of the Rexture merge for the NumPy comparison (tmp/indep/m7/compare.py): reads arena images back
+// Stage-by-stage dumps of the Rexture merge for the NumPy comparison: reads arena images back
 // to float32 and writes <dir>/<name with / -> __>.bin plus manifest.json (same layout as the NumPy reference dumps).
 #include <rawr/raw_gpu_pipeline/ResourceArena.h>
 #include <vulkan/vulkan.h>

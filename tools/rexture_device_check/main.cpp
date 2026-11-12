@@ -1,5 +1,5 @@
 // On-device (and desktop) check of the Rexture merge: runs a burst in the replay tool's `rawburst:` layout through the
-// production coordinator, optionally dumps every stage for the NumPy comparison (tmp/indep/m7/compare.py), or times the merge
+// production coordinator, optionally dumps every stage for the NumPy comparison, or times the merge
 // against HDR+ Quality. No camera, no app: an NDK executable pushed with adb.
 //   rexture_device_check DIR [--merge rexture|hdrplus-freq] [--frames N] [--noise-ab A,B] [--dump-stages OUT]
 //                        [--inject-flow DUMPDIR] [--repeat K] [--scores]
