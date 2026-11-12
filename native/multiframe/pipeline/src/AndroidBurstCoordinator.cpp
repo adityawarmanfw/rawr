@@ -190,13 +190,13 @@ void AndroidBurstCoordinator::initializeArenaLocked(VkPhysicalDevice physical, V
 }
 void AndroidBurstCoordinator::initialize(VkPhysicalDevice physical, VkDevice device, std::uint32_t qf, Submit submit,
                                          std::uint32_t w, std::uint32_t h, StageSink stageSink,
-                                         rawr::raw_merge_wronski_gpu::Config merge, MergeAlgorithm algorithm,
+                                         rawr::raw_merge_common::Config merge, MergeAlgorithm algorithm,
                                          rawr::raw_merge_hdrplus_gpu::Config hdrplus) {
     if (!physical || !device || !submit || !w || !h)
         throw std::invalid_argument("multiframe burst: invalid initialize");
     if (!rawr::raw_merge_hdrplus_gpu::valid(hdrplus))
         throw std::invalid_argument("multiframe burst: invalid HDR+ tuning");
-    if (!rawr::raw_merge_wronski_gpu::valid(merge)) throw std::invalid_argument("multiframe burst: invalid tuning");
+    if (!rawr::raw_merge_common::valid(merge)) throw std::invalid_argument("multiframe burst: invalid tuning");
     std::lock_guard<std::mutex> lock(initMutex_);
     lastAlgorithm_ = algorithm;
     lastHdrPlus_ = hdrplus;
@@ -416,8 +416,8 @@ BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>
     const auto gpuOrWall = [](const ChunkTiming& t) { return t.second.empty() ? t.first : t.second.front(); };
     // The burst-fitted noise profile (when it fits) replaces the configured one for this run only.
     struct RestoreMerge {
-        rawr::raw_merge_wronski_gpu::Config& target;
-        rawr::raw_merge_wronski_gpu::Config saved;
+        rawr::raw_merge_common::Config& target;
+        rawr::raw_merge_common::Config saved;
         ~RestoreMerge() { target = saved; }
     } restoreMerge{merge_, merge_};
     const bool noiseFitted = estimateNoiseFromBurst(frames, ref, frameLoad, timings);

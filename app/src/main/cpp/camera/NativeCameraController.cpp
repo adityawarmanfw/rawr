@@ -632,7 +632,6 @@ struct NativeCameraController::Impl final : CameraEventSink {
 
     // Calibration is part of lens startup, before any preview is published.
     SensitivityProbeStartup sensitivityStartup;
-    bool sensitivityCalibrationWanted = false;
     // Reported/requested ISO ratios already measured, per camera, lens,
     // profile and the exact session keys applied: the ratio belongs to the
     // sensor mode those keys select, so editing a key value re-probes. A
@@ -691,7 +690,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
     }
     bool sensitivityProbeEligibleLocked() const {
         // rawr AE needs the coordinate too: it refuses to run without it.
-        return (sensitivityCalibrationWanted || rawrAeConfig.enabled) && deviceSession.sensorModeOverridden() &&
+        return rawrAeConfig.enabled && deviceSession.sensorModeOverridden() &&
                control.capabilities.manualExposureSupported && !control.videoMode && control.recordingFps <= 0;
     }
     bool probeSensitivityCoordinateLocked() {
@@ -2025,12 +2024,6 @@ void NativeCameraController::setSensitivityCalibrationStore(const std::string& p
     std::lock_guard<std::mutex> lock(impl_->mutex);
     impl_->sensitivityStorePath = path;
     impl_->loadSensitivityStoreLocked();
-}
-void NativeCameraController::setSensitivityCalibrationWanted(bool wanted) {
-    std::unique_lock<std::mutex> lock(impl_->mutex);
-    const bool changed = impl_->sensitivityCalibrationWanted != wanted;
-    impl_->sensitivityCalibrationWanted = wanted;
-    if (changed && wanted) impl_->restartForSensitivityCalibrationLocked(lock);
 }
 void NativeCameraController::setExposureCompensationSteps(int32_t value) { impl_->setEvSteps(value); }
 void NativeCameraController::setRawrAeConfig(const RawrAeConfig& config) { impl_->setRawrAeConfigValue(config); }

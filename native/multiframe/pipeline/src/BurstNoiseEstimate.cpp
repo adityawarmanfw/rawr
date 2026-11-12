@@ -109,7 +109,7 @@ std::optional<BurstNoiseFit> fitBurstNoise(const float* blockStats, std::uint32_
         fit.profile.offsetBySite[site] = float(b);
     }
     fit.bins = minBins;
-    if (!rawr::raw_merge_wronski_gpu::valid(fit.profile)) return std::nullopt;
+    if (!rawr::raw_merge_common::valid(fit.profile)) return std::nullopt;
     return fit;
 }
 

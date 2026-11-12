@@ -3,7 +3,7 @@
 #include <cstdio>
 #include <vector>
 
-#include "capture/multiframe/BracketExposure.h"
+#include "capture/multiframe/MergeExposure.h"
 
 using namespace rawrcam::capture::multiframe;
 using rawrcam::metadata::FrameMetadataSnapshot;
@@ -52,6 +52,6 @@ int main() {
         const auto scale = mergedNoiseVarianceScale(std::vector<FrameMetadataSnapshot>(3), 1u);
         assert(scale[0] == 1.0 && scale[1] == 1.0);
     }
-    std::puts("bracket_exposure_test OK");
+    std::puts("merge_exposure_test OK");
     return 0;
 }

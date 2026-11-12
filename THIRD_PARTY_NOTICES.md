@@ -18,7 +18,6 @@ of this file. The GNU GPL v3 text is the repository `LICENSE`.
 | AMaZE GPU pass structure, adapted from a privately shared GPL-3.0 implementation (2026) | `native/raw_demosaic/amaze` | — | GPL-3.0-or-later |
 | QB binning, adapted from a privately shared GPL-3.0 implementation (2026) | `app/src/main/cpp/renderer/NaturalBayerBin.h` | — | GPL-3.0 |
 | spektrafilm / spektrafilm-ofx | `native/spektrafilm`, `app/src/main/assets/spektrafilm` | https://github.com/chaert-s/spektrafilm-ofx , https://github.com/andreavolpato/spektrafilm | GPL-3.0-only |
-| Handheld Multi-Frame Super-Resolution (Wronski et al.) | `native/multiframe` | https://github.com/Jamy-L/Handheld-Multi-Frame-Super-Resolution | MIT |
 | hdr-plus-swift / Burst Photo (HDR+ spatial merge) | `native/multiframe/merge_hdrplus` | https://github.com/martin-marek/hdr-plus-swift | GPL-3.0 |
 | libultrahdr (Ultra HDR / JPEG_R mux) | `native/gainmap` | https://github.com/google/libultrahdr | Apache-2.0 |
 | Oklab gamut clipping (Björn Ottosson) | `native/tonemap_engine` | https://bottosson.github.io/posts/gamutclipping/ | MIT |
@@ -163,7 +162,6 @@ Independent Rawr implementations of published methods, credited for provenance:
 
 - **MHC 5×5 demosaic** (`native/video_pipeline`, `tools/video_demosaic_moltenvk`):
   Malvar, He, Cutler (2004).
-- **Handheld MFSR** (`native/multiframe`): Wronski et al., SIGGRAPH 2019.
 - **Ultra HDR gain map** (`native/gainmap`): ISO 21496-1.
 - **Exposure fusion** (`native/local_tone`): Mertens, Kautz, Van Reeth,
   "Exposure Fusion" (Pacific Graphics 2007), in the real-time single-image form

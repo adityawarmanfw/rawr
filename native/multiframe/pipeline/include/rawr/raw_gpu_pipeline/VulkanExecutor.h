@@ -31,7 +31,6 @@ enum class ShaderId : std::uint32_t {
     HdrqBorder,
     HdrqAccumulate,
     HdrqShiftTable,
-    HdrqHighlightsNorm,
     HdrqSeedDft,
     RxFramePrep,
     RxPyramid,

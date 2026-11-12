@@ -53,8 +53,6 @@
 #include "mf_hdrq_accumulate_trace.h"
 #include "mf_hdrq_shift_table_prod.h"
 #include "mf_hdrq_shift_table_trace.h"
-#include "mf_hdrq_highlights_norm_prod.h"
-#include "mf_hdrq_highlights_norm_trace.h"
 #include "mf_rx_frame_prep_prod.h"
 #include "mf_rx_pyramid_prod.h"
 #include "mf_rx_kernel_blur_prod.h"
@@ -163,7 +161,7 @@ const std::array<Spec, static_cast<size_t>(ShaderId::Count)> specs{{{"noise_esti
                                    mf_hdrq_warp_rgba_prod_spv_size,
                                    mf_hdrq_warp_rgba_trace_spv,
                                    mf_hdrq_warp_rgba_trace_spv_size,
-                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}}},
                                   {"hdrq_rms",
                                    mf_hdrq_rms_prod_spv,
                                    mf_hdrq_rms_prod_spv_size,
@@ -199,7 +197,7 @@ const std::array<Spec, static_cast<size_t>(ShaderId::Count)> specs{{{"noise_esti
                                    mf_hdrq_merge_prod_spv_size,
                                    mf_hdrq_merge_trace_spv,
                                    mf_hdrq_merge_trace_spv_size,
-                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, {6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {7, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}}},
                                   {"hdrq_deconvolute",
                                    mf_hdrq_deconvolute_prod_spv,
                                    mf_hdrq_deconvolute_prod_spv_size,
@@ -230,12 +228,6 @@ const std::array<Spec, static_cast<size_t>(ShaderId::Count)> specs{{{"noise_esti
                                    mf_hdrq_shift_table_trace_spv,
                                    mf_hdrq_shift_table_trace_spv_size,
                                    {{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}}},
-                                  {"hdrq_highlights_norm",
-                                   mf_hdrq_highlights_norm_prod_spv,
-                                   mf_hdrq_highlights_norm_prod_spv_size,
-                                   mf_hdrq_highlights_norm_trace_spv,
-                                   mf_hdrq_highlights_norm_trace_spv_size,
-                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
                                   {"hdrq_seed_dft",
                                    mf_hdrq_seed_dft_prod_spv,
                                    mf_hdrq_seed_dft_prod_spv_size,
@@ -305,7 +297,7 @@ void VulkanExecutor::initialize(VkDevice d, bool wantTrace) {
     static constexpr const char* kOrder[] = {
         "noise_estimate",     "hdrp_prepare", "hdrp_hot_pixel", "hdrp_avg_pool", "hdrp_blur", "hdrp_upsample_align", "hdrp_correct_upsampling", "hdrp_tile_diff", "hdrp_best_tile", "hdrp_finalize",
         "hdrq_to_rgba", "hdrq_warp_rgba", "hdrq_rms", "hdrq_mismatch", "hdrq_region_mean", "hdrq_mismatch_norm", "hdrq_forward_dft", "hdrq_merge", "hdrq_deconvolute", "hdrq_backward_dft", "hdrq_border", "hdrq_accumulate", "hdrq_shift_table",
-        "hdrq_highlights_norm", "hdrq_seed_dft",
+        "hdrq_seed_dft",
         "rx_frame_prep",
         "rx_pyramid",
         "rx_kernel_blur",

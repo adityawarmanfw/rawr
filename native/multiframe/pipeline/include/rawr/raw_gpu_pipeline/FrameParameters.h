@@ -1,7 +1,7 @@
 #pragma once
 #include <rawr/raw_gpu_pipeline/ResourceArena.h>
 #include <rawr/raw_gpu_pipeline/VulkanExecutor.h>
-#include <rawr/raw_merge_wronski_gpu/RawMergeWronskiGpu.h>
+#include <rawr/raw_merge_common/RawMergeCommon.h>
 
 #include <array>
 #include <cstdint>

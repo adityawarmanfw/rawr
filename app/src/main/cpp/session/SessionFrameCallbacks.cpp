@@ -6,7 +6,7 @@
 #include <cmath>
 #include <cstdlib>
 
-#include "capture/multiframe/BracketExposure.h"
+#include "capture/multiframe/MergeExposure.h"
 #include "color/AePostGainCurve.h"
 #include "camera/NativeCameraController.h"
 #include "color/AutoKeyExposure.h"

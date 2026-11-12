@@ -5,7 +5,7 @@
 
 #include "capture/CaptureRequest.h"
 #include "capture/BurstLimits.h"
-#include "capture/multiframe/BracketExposure.h"
+#include "capture/multiframe/MergeExposure.h"
 #include "capture/persistence/CaptureJob.h"
 #include "develop/render/DenoiseProfile.h"
 #include "local_tone/ExposureFusion.h"

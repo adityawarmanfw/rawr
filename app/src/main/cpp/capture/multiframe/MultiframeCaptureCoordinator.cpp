@@ -8,7 +8,7 @@
 #include <cstdint>
 
 #include "capture/CaptureRequest.h"
-#include "capture/multiframe/BracketExposure.h"
+#include "capture/multiframe/MergeExposure.h"
 #include "diagnostics/logging/RuntimeTraceRecorder.h"
 #include "imaging/FrameLimits.h"
 #include "vulkan/VulkanContext.h"

@@ -166,8 +166,8 @@ rawr_test(capture_job_test
 
 rawr_test(film_exposure_test
   "${RAWR_ROOT}/tests/native/film_exposure_test.cpp")
-rawr_test(bracket_exposure_test
-  "${RAWR_ROOT}/tests/native/bracket_exposure_test.cpp")
+rawr_test(merge_exposure_test
+  "${RAWR_ROOT}/tests/native/merge_exposure_test.cpp")
 rawr_test(strip_merge_test
   "${RAWR_ROOT}/tests/native/strip_merge_test.cpp")
 rawr_test(film_scratch_estimate_test

@@ -198,8 +198,8 @@ int main(int argc, char** argv) {
         vktest::delBuf(ctx.dev, staging);
         if (ref >= burst.size()) ref = std::uint32_t(burst.size() / 2);
 
-        rawr::raw_merge_wronski_gpu::Config cfg{};
-        cfg.cfa = static_cast<rawr::raw_merge_wronski_gpu::CfaPattern>(cfa);
+        rawr::raw_merge_common::Config cfg{};
+        cfg.cfa = static_cast<rawr::raw_merge_common::CfaPattern>(cfa);
         if (!noiseAb.empty()) {
             const auto comma = noiseAb.find(',');
             cfg.noiseAlpha = std::stof(noiseAb.substr(0, comma));

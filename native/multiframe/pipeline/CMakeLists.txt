@@ -48,7 +48,6 @@ set(RAWR_MF_SHADER_SOURCES
   ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_border.comp
   ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_accumulate.comp
   ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_shift_table.comp
-  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_highlights_norm.comp
   ${RAWR_MF_DIR}/merge_rexture/shaders/rx_frame_prep.comp
   ${RAWR_MF_DIR}/merge_rexture/shaders/rx_pyramid.comp
   ${RAWR_MF_DIR}/merge_rexture/shaders/rx_kernel_blur.comp
@@ -119,7 +118,7 @@ add_library(raw_gpu_pipeline STATIC
 add_dependencies(raw_gpu_pipeline raw_multiframe_gpu_shaders)
 target_include_directories(raw_gpu_pipeline
   PUBLIC include
-         ${RAWR_MF_DIR}/merge_wronski/include
+         ${RAWR_MF_DIR}/merge_common/include
          ${RAWR_MF_DIR}/merge_hdrplus/include
          ${RAWR_MF_DIR}/merge_rexture/include
          ${RAWR_NATIVE_DIR}/zsl_codec/include

@@ -12,7 +12,7 @@
 
 #include "capture/CaptureRequest.h"
 #include "capture/multiframe/BracketCollector.h"
-#include "capture/multiframe/BracketExposure.h"
+#include "capture/multiframe/MergeExposure.h"
 #include "capture/multiframe/MergeArenaEstimate.h"
 #include "capture/multiframe/mfsr/MfsrCaptureJob.h"
 #include "capture/persistence/AcquiredRawJournal.h"

@@ -83,13 +83,8 @@ class NativeCameraController {
     // Most a positive-EV long frame can gain over the current repeating
     // exposure (EV); nullopt when unknown.
     std::optional<double> longFrameRoomEv() const;
-    // Measures the reported/requested ISO ratio during startup when lens
-    // session keys change the sensor mode (a ratio of 1 is a valid result;
-    // keys do not imply DCG), before exposing the viewfinder.
-    // Enabling it on an uncalibrated live session restarts that session.
-    // Never probes during video.
-    void setSensitivityCalibrationWanted(bool wanted);
-    // File keeping measured calibrations across launches (once per camera).
+    // The reported/requested ISO ratio is measured during startup when lens session keys change the sensor mode (rawr AE
+    // needs it), never during video. File keeping measured calibrations across launches (once per camera).
     void setSensitivityCalibrationStore(const std::string& path);
     void setExposureCompensationSteps(int32_t steps);
     // rawr auto exposure (opt-in, color/RawrAutoExposure.h). When enabled

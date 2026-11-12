@@ -61,7 +61,7 @@ struct BurstRunResult {
     VkImageView cfaView = VK_NULL_HANDLE;
     // Set when estimateNoiseFromBurst produced the profile this run merged with.
     bool noiseEstimated = false;
-    rawr::raw_merge_wronski_gpu::CfaNoiseProfile estimatedNoise{};
+    rawr::raw_merge_common::CfaNoiseProfile estimatedNoise{};
 };
 // Synchronous correctness executor. The app runs it on a background worker while
 // borrowing pinned RAW16 images from RawImageRing. It uses the app's existing Vulkan queue via Submit.
@@ -101,7 +101,7 @@ class AndroidBurstCoordinator final {
     AndroidBurstCoordinator& operator=(const AndroidBurstCoordinator&) = delete;
     void initialize(VkPhysicalDevice physical, VkDevice device, std::uint32_t queueFamily, Submit submit,
                     std::uint32_t width, std::uint32_t height, StageSink stageSink = {},
-                    rawr::raw_merge_wronski_gpu::Config merge = {}, MergeAlgorithm algorithm = MergeAlgorithm::Rexture,
+                    rawr::raw_merge_common::Config merge = {}, MergeAlgorithm algorithm = MergeAlgorithm::Rexture,
                     rawr::raw_merge_hdrplus_gpu::Config hdrplus = {});
     // Pre-creates pipelines, command pool, fence and timestamp pool on a
     // background thread so the first burst skips cold init. Arena images
@@ -155,7 +155,7 @@ class AndroidBurstCoordinator final {
     bool timestampsSupported_ = false;
     ResourceArena arena_{};
     VulkanExecutor executor_{};
-    rawr::raw_merge_wronski_gpu::Config merge_{};
+    rawr::raw_merge_common::Config merge_{};
     MergeAlgorithm algorithm_ = MergeAlgorithm::Rexture;
     rawr::raw_merge_hdrplus_gpu::Config hdrplus_{};
     // Which layout arena_ currently holds (HDR+ geometry depends on its config).

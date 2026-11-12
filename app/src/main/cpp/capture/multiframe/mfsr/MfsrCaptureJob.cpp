@@ -17,7 +17,7 @@
 #include <thread>
 #include <utility>
 
-#include "capture/multiframe/BracketExposure.h"
+#include "capture/multiframe/MergeExposure.h"
 #include "capture/multiframe/MergeArenaEstimate.h"
 #include "capture/multiframe/MultiframeDescription.h"
 #include "capture/multiframe/MultiframeQueueHelpers.h"
@@ -289,7 +289,7 @@ void MfsrCaptureJob::runStages(Published& published) {
     bool rzslDumpAttempted = false;
     // Noise is fitted from the burst at merge time; offline replay re-fits it
     // (--noise-source burst), so the replay record carries the legacy model.
-    rawr::raw_merge_wronski_gpu::Config resolvedNoise{};
+    rawr::raw_merge_common::Config resolvedNoise{};
     std::ostringstream replayMetadata;
     replayMetadata << rawr::raw_gpu_pipeline::serializeReplayNoise(resolvedNoise) << "rawrReferenceIndex\t"
                    << job->referenceIndex << '\n';

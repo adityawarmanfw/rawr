@@ -2,7 +2,7 @@
 
 #include <stdexcept>
 
-#include "capture/multiframe/BracketExposure.h"
+#include "capture/multiframe/MergeExposure.h"
 #include "capture/multiframe/MultiframeQueueHelpers.h"
 #include "diagnostics/logging/NativeLog.h"
 namespace rawrcam::capture::multiframe {
@@ -13,8 +13,8 @@ rawr::raw_gpu_pipeline::BurstRunResult MergeProcessor::run(
     const rawr::raw_gpu_pipeline::AndroidBurstCoordinator::Submit& mergeSubmit) {
     const bool useMfQueue = context.hasMultiframeQueue();
     // The noise model is fitted from the burst; the merges read only the CFA, the burst fit switch and the hot pixels.
-    rawr::raw_merge_wronski_gpu::Config mergeConfig{};
-    mergeConfig.cfa = static_cast<rawr::raw_merge_wronski_gpu::CfaPattern>(cfa);
+    rawr::raw_merge_common::Config mergeConfig{};
+    mergeConfig.cfa = static_cast<rawr::raw_merge_common::CfaPattern>(cfa);
     mergeConfig.estimateNoiseFromBurst = true;
     mergeConfig.hotPixels = burst.referenceMetadata.hotPixelMap;
     auto stageSink = rawrcam::capture::multiframe::makeTraceStageSink();
