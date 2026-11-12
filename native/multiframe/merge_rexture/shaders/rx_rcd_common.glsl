@@ -1,23 +1,44 @@
 // Copy of native/raw_demosaic/rcd/shaders/rcd_common.glsl for Rexture's base demosaic, trimmed to the RAW-image input with a
-// fixed balance and run with fp32 intermediates (the library keeps its work planes in an RGBA16F image). RCD algorithm by Luis
+// fixed balance and run with fp32 intermediates (the library keeps its work planes in an RGBA16F image).
+// Strip-wise: the work planes (outputImage, directionImage) hold only the image rows [y0, y0 + rows); every access goes through
+// wp(). Rows within 7 of a strip edge of the planes are not exact (their neighbours are clamped), so the caller keeps a margin
+// of at least 8 rows. Workgroups whose surroundings need no fallback demosaic (fbTiles) return immediately. RCD algorithm by Luis
 // Sanz Rodriguez via librtprocess / RawTherapee (GPL-3.0-or-later); see native/raw_demosaic/NOTICE.md.
 #ifndef RX_RCD_COMMON_GLSL
 #define RX_RCD_COMMON_GLSL
 
 layout(set = 0, binding = 0, r16ui) uniform readonly uimage2D raw16Input;
-layout(set = 0, binding = 1, rg32f) uniform image2D directionImage;   // (vh, pq); shares memory with accumulator B (RG32F)
-layout(set = 0, binding = 2, rgba32f) uniform image2D outputImage;
+layout(set = 0, binding = 1, rg32f) uniform image2D directionImage;   // (vh, pq) of the strip rows
+layout(set = 0, binding = 2, rgba32f) uniform image2D outputImage;     // RGB work planes of the strip rows
+layout(set = 0, binding = 3, r32f) readonly uniform image2D fbTiles;   // 1 = the 16 x 16 tile needs the fallback
 
 layout(push_constant) uniform Push {
     uint width;
     uint height;
     uint pattern;
-    uint pad0;
+    int y0;            // first image row held by the work planes
     vec4 black;        // per raster phase
     vec4 invRange;     // 1 / (white - black) per raster phase
     vec4 fixedBalance; // R, G, B gains (the spec's balance, unnormalised)
+    int rows;          // rows held by the work planes
+    int gate;          // 1 = skip workgroups away from flagged tiles
+    int pad1, pad2;
 }
 pc;
+
+// Plane coordinate of an image pixel (rows outside the planes clamp to their edge rows).
+ivec2 wp(ivec2 p) { return ivec2(p.x, clamp(p.y - pc.y0, 0, pc.rows - 1)); }
+// True when a flagged 16 x 16 tile lies within one tile of the image rectangle [lo, hi] (workgroup-uniform use only). One
+// tile of margin covers the 7 pixels over which the five RCD passes depend on each other.
+bool fallbackNeeded(ivec2 lo, ivec2 hi) {
+    if (pc.gate == 0) return true;
+    const ivec2 n = imageSize(fbTiles);
+    const ivec2 t0 = max(lo / 16 - 1, ivec2(0)), t1 = min(hi / 16 + 1, n - 1);
+    for (int ty = t0.y; ty <= t1.y; ++ty)
+        for (int tx = t0.x; tx <= t1.x; ++tx)
+            if (imageLoad(fbTiles, ivec2(tx, ty)).x > 0.5) return true;
+    return false;
+}
 
 const float EPS = 1e-5;
 const float EPS2 = 1e-10;
@@ -72,7 +93,7 @@ float pqDirection(ivec2 p) {
     return ps / (ps + qs);
 }
 
-float directionAt(ivec2 p, int channel) { return imageLoad(directionImage, p)[channel]; }
+float directionAt(ivec2 p, int channel) { return imageLoad(directionImage, wp(p))[channel]; }
 float refinedDirection(ivec2 p, int channel) {
     float center = directionAt(p, channel);
     float neigh = 0.25 * (directionAt(p + ivec2(-1, -1), channel) + directionAt(p + ivec2(1, -1), channel) +
@@ -142,10 +163,10 @@ vec3 librtprocessBayerBorderRgb(ivec2 p) {
     return outRgb;
 }
 
-vec3 rgbAt(ivec2 p) { return imageLoad(outputImage, p).rgb; }
-void storeRgb(ivec2 p, vec3 rgb) { imageStore(outputImage, p, vec4(rgb, 1.0)); }
+vec3 rgbAt(ivec2 p) { return imageLoad(outputImage, wp(p)).rgb; }
+void storeRgb(ivec2 p, vec3 rgb) { imageStore(outputImage, wp(p), vec4(rgb, 1.0)); }
 // Intermediate passes store normalized RCD-domain RGB. Only the final green-site
 // pass applies outputFactor globally; helpers below therefore use raw imageStore.
-void storeIntermediate(ivec2 p, vec3 rgb) { imageStore(outputImage, p, vec4(rgb, 1.0)); }
+void storeIntermediate(ivec2 p, vec3 rgb) { imageStore(outputImage, wp(p), vec4(rgb, 1.0)); }
 
 #endif

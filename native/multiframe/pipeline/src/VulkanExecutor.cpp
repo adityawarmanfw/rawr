@@ -135,6 +135,7 @@
 #include "mf_rx_rcd_green_sites_prod.h"
 #include "mf_rx_rcd_export_prod.h"
 #include "mf_rx_lowcov_eaw_prod.h"
+#include "mf_rx_fb_flags_prod.h"
 namespace rawr::raw_gpu_pipeline {
 namespace {
 struct B {
@@ -556,18 +557,20 @@ const std::array<Spec, static_cast<size_t>(ShaderId::Count)> specs{{{"raw_normal
                                   {"rx_accumulate", mf_rx_accumulate_prod_spv, mf_rx_accumulate_prod_spv_size, mf_rx_accumulate_prod_spv, mf_rx_accumulate_prod_spv_size,
                                    {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {5, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {7, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {8, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {9, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {10, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
                                   {"rx_finalize", mf_rx_finalize_prod_spv, mf_rx_finalize_prod_spv_size, mf_rx_finalize_prod_spv, mf_rx_finalize_prod_spv_size,
-                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {5, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {7, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {8, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {9, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {10, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {5, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {7, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {8, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {9, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {10, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {11, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
                                   {"rx_rcd_direction", mf_rx_rcd_direction_prod_spv, mf_rx_rcd_direction_prod_spv_size, mf_rx_rcd_direction_prod_spv, mf_rx_rcd_direction_prod_spv_size,
-                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
                                   {"rx_rcd_green", mf_rx_rcd_green_prod_spv, mf_rx_rcd_green_prod_spv_size, mf_rx_rcd_green_prod_spv, mf_rx_rcd_green_prod_spv_size,
-                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
                                   {"rx_rcd_diagonal", mf_rx_rcd_diagonal_prod_spv, mf_rx_rcd_diagonal_prod_spv_size, mf_rx_rcd_diagonal_prod_spv, mf_rx_rcd_diagonal_prod_spv_size,
-                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
                                   {"rx_rcd_green_sites", mf_rx_rcd_green_sites_prod_spv, mf_rx_rcd_green_sites_prod_spv_size, mf_rx_rcd_green_sites_prod_spv, mf_rx_rcd_green_sites_prod_spv_size,
-                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
                                   {"rx_rcd_export", mf_rx_rcd_export_prod_spv, mf_rx_rcd_export_prod_spv_size, mf_rx_rcd_export_prod_spv, mf_rx_rcd_export_prod_spv_size,
-                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
                                   {"rx_lowcov_eaw", mf_rx_lowcov_eaw_prod_spv, mf_rx_lowcov_eaw_prod_spv_size, mf_rx_lowcov_eaw_prod_spv, mf_rx_lowcov_eaw_prod_spv_size,
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                  {"rx_fb_flags", mf_rx_fb_flags_prod_spv, mf_rx_fb_flags_prod_spv_size, mf_rx_fb_flags_prod_spv, mf_rx_fb_flags_prod_spv_size,
                                    {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}}}};
 void ck(VkResult r, const char* w) {
     if (r != VK_SUCCESS) throw std::runtime_error(std::string(w) + " VkResult=" + std::to_string(r));
@@ -616,6 +619,7 @@ void VulkanExecutor::initialize(VkDevice d, bool wantTrace) {
         "rx_rcd_green_sites",
         "rx_rcd_export",
         "rx_lowcov_eaw",
+        "rx_fb_flags",
     };
     static_assert(sizeof(kOrder) / sizeof(kOrder[0]) == static_cast<size_t>(ShaderId::Count),
                   "executor spec order table out of sync with ShaderId");

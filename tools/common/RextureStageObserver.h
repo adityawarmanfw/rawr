@@ -75,7 +75,7 @@ inline std::function<void(const char*, std::uint32_t, const rawr::raw_gpu_pipeli
                 dump.image("acc/sq", arena.image("rx_acc_c"), 3);
                 dump.image("acc/ss2", arena.image("rx_dbg_ss2"), 3);
             } else if (st == "base_demosaic") {
-                dump.image("base/rcd", arena.image("rx_base_rcd"), 3);
+                dump.image("base/rcd", arena.image("rx_rcd_work"), 3);
             } else if (st == "companion_prepare") {
                 dumpPrepare("rx_alt_", "frames/" + std::to_string(frame) + "/");
             }

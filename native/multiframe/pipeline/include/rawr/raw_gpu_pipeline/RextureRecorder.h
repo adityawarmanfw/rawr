@@ -31,12 +31,10 @@ class RextureRecorder final {
     // Uses rx_alt_mean / rx_alt_var as scratch, so it must run before the first companion's preparation.
     void recordBaseKernel(VkCommandBuffer, bool debug) const;
 
-    // RCD demosaic of the base (fp32 work planes, the spec's white balance) followed by the native-range bound.
+    // Verification build only (makeRextureScratchLayout debug = true): RCD demosaic of the whole base frame (fp32 work planes,
+    // the spec's white balance) followed by the native-range bound, kept in rx_rcd_work. Production builds demosaic strip by
+    // strip inside recordFinalize and never call this.
     void recordBaseDemosaic(VkCommandBuffer, VkImageView rawU16, const MultiframeFrameParameters&) const;
-    // Zeroes the accumulators (after the base demosaic, which uses their memory as scratch).
-    void recordAccumulatorClear(VkCommandBuffer) const;
-    // Clamps the RCD base to the native-sample range of each colour (5 x 5) in place; follows the RCD demosaic.
-    void recordBaseDemosaicBound(VkCommandBuffer, VkImageView rawU16, const MultiframeFrameParameters&) const;
 
     // Base: per-level tile structure (gradient tensor + flat-tile mode) of the reference pyramid. After recordPrepare(base).
     void recordBaseTiles(VkCommandBuffer) const;
@@ -44,7 +42,7 @@ class RextureRecorder final {
     // debug: also keeps the prior (candidate upsampling) and the block-match result of the level for verification.
     void recordAlignmentLevel(VkCommandBuffer, std::uint32_t level, bool debug, std::uint32_t slot = 0) const;
 
-    // Burst start: zero the support map and set the cover map to 1 (cover = 1 + sum of the frames' clipped robustness).
+    // Burst start: zero the support map and the accumulators.
     void recordBurstClear(VkCommandBuffer) const;
     // Robustness of the aligned companion (after its last alignment level): fused motion prior + photometric test + 5 x 5
     // minimum + support / cover update.
@@ -59,11 +57,15 @@ class RextureRecorder final {
     void recordAccumulatePair(VkCommandBuffer, VkImageView rawSlot0, VkImageView rawSlot1, const MultiframeFrameParameters&,
                               float gain0 = 1.0f, float gain1 = 1.0f) const;
 
-    // Final pass (after the last companion): finalize into linear_output (RGBA16F), then the strip-wise grain pass that
-    // lowers the noise where few frames were merged to the level of the merged areas around it.
+    // Final pass (after the last companion): flags the 16 x 16 tiles that may need the fallback demosaic, then strip by strip
+    // the RCD demosaic of the base (flagged tiles only) and the finalize into linear_output (RGBA16F), then the strip-wise
+    // grain pass that lowers the noise where few frames were merged to the level of the merged areas around it.
     void recordFinalize(VkCommandBuffer, VkImageView baseRawU16, const MultiframeFrameParameters&, bool debug) const;
     // Tests and tools only: rows per strip of the grain pass (0 = default). The output must not depend on it.
     static void setStripRowsForTesting(std::uint32_t rows) noexcept;
+
+    // Number of marks recordFinalize emits for an image of this height.
+    static std::uint32_t finalizeMarks(std::uint32_t height, bool debug) noexcept;
 
     // Profiling: called with the stage name after each dispatch group of the companion stages (never set in production).
     using Mark = std::function<void(const char*)>;
@@ -78,6 +80,8 @@ class RextureRecorder final {
     rawr::raw_merge_rexture_gpu::Config config_;
     void recordPyramid(VkCommandBuffer, bool base) const;
     void recordGrainPass(VkCommandBuffer) const;
+    void recordRcd(VkCommandBuffer, VkImageView rawU16, const MultiframeFrameParameters&, std::int32_t y0, std::int32_t rows,
+                   bool gate) const;
 };
 
 }  // namespace rawr::raw_gpu_pipeline

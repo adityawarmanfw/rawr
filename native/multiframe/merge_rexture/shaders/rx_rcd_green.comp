@@ -36,7 +36,8 @@ float trefinedDirection(ivec2 p, int channel) {
 }
 
 void main() {
-    ivec2 groupBase = ivec2(gl_WorkGroupID.xy) * ivec2(RCD_LOCAL_X, RCD_LOCAL_Y);
+    ivec2 groupBase = ivec2(gl_WorkGroupID.xy) * ivec2(RCD_LOCAL_X, RCD_LOCAL_Y) + ivec2(0, pc.y0);
+    if (!fallbackNeeded(groupBase, groupBase + ivec2(RCD_LOCAL_X, RCD_LOCAL_Y) - 1)) return;
     uint linear = gl_LocalInvocationIndex;
     for (uint i = linear; i < uint(CFA_W * CFA_H); i += WG_SIZE) {
         ivec2 q = ivec2(int(i % uint(CFA_W)), int(i / uint(CFA_W)));
@@ -45,12 +46,12 @@ void main() {
     for (uint i = linear; i < uint(DIR_W * DIR_H); i += WG_SIZE) {
         ivec2 q = ivec2(int(i % uint(DIR_W)), int(i / uint(DIR_W)));
         ivec2 gp = clampRaw(groupBase + q - ivec2(1));
-        dirTile[i] = imageLoad(directionImage, gp).rg;
+        dirTile[i] = imageLoad(directionImage, wp(gp)).rg;
     }
     barrier();
 
-    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
-    if (p.x >= int(pc.width) || p.y >= int(pc.height)) return;
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy) + ivec2(0, pc.y0);
+    if (p.x >= int(pc.width) || p.y >= int(pc.height) || p.y >= pc.y0 + pc.rows) return;
     if (!inRcdWorkingRegion(p)) {
         storeIntermediate(p, nativeCfaRgb(p));
         return;

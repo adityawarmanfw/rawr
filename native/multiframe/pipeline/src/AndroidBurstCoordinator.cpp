@@ -668,11 +668,14 @@ BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>
         recorder.recordBaseTiles(command_);
     });
     if (rextureObserver_) rextureObserver_("base_kernel", ref, arena_);
-    // Fallback demosaic of the base: RCD (fp32 copy of the library's passes) + native-range bound.
-    timings.referenceStatsMs += profiled(3u, ref, 7u, [&] {
-        recorder.recordBaseDemosaic(command_, frames[ref].raw.view, frames[ref].parameters);
-    });
-    if (rextureObserver_) rextureObserver_("base_demosaic", ref, arena_);
+    // Fallback demosaic of the base: production runs it strip by strip inside the final pass; the verification build runs it
+    // once on the whole frame here so that it can be dumped.
+    if (rextureDebug_) {
+        timings.referenceStatsMs += profiled(3u, ref, 6u, [&] {
+            recorder.recordBaseDemosaic(command_, frames[ref].raw.view, frames[ref].parameters);
+        });
+        if (rextureObserver_) rextureObserver_("base_demosaic", ref, arena_);
+    }
     bool samePairLevels = true;  // pair accumulation needs one black / white level set for the burst
     for (const auto& fr : frames)
         samePairLevels = samePairLevels && fr.parameters.normalization.whiteLevel == frames[ref].parameters.normalization.whiteLevel &&
@@ -755,18 +758,16 @@ BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>
         ++companions;
         if (frameConsumed) frameConsumed(i);
     }
+    if (rextureObserver_) rextureObserver_("companions_done", ref, arena_);
+    timings.finalizeMs = profiled(20u, ref, RextureRecorder::finalizeMarks(height_, rextureDebug_), [&] {
+        recorder.recordFinalize(command_, frames[ref].raw.view, frames[ref].parameters, rextureDebug_);
+    });
     if (profile) {
         std::fprintf(stderr, "rexture_profile companions=%u chunks=%u gpu_ms=%.2f chunk_wall_ms=%.2f frame_load_ms=%.2f stages:",
                      companions, chunkCount, gpuInChunks, wallInChunks, hostLoad);
         for (const auto& kv : profGpu) std::fprintf(stderr, " %s=%.2f", kv.first.c_str(), kv.second);
         std::fprintf(stderr, "\n");
     }
-    if (rextureObserver_) rextureObserver_("companions_done", ref, arena_);
-    timings.finalizeMs = gpuOrWall(executeChunk(20u, ref, 2u, [&] {
-        recordTimestamp(0u);
-        recorder.recordFinalize(command_, frames[ref].raw.view, frames[ref].parameters, rextureDebug_);
-        recordTimestamp(1u);
-    }));
     if (rextureObserver_) rextureObserver_("final", ref, arena_);
     timings.totalMs = std::chrono::duration<double, std::milli>(Clock::now() - runBegin).count();
     const auto& out = arena_.image("linear_output");

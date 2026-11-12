@@ -38,7 +38,8 @@ float tpqDirection(ivec2 p) {
 }
 
 void main() {
-    ivec2 groupBase = ivec2(gl_WorkGroupID.xy) * ivec2(RCD_LOCAL_X, RCD_LOCAL_Y);
+    ivec2 groupBase = ivec2(gl_WorkGroupID.xy) * ivec2(RCD_LOCAL_X, RCD_LOCAL_Y) + ivec2(0, pc.y0);
+    if (!fallbackNeeded(groupBase, groupBase + ivec2(RCD_LOCAL_X, RCD_LOCAL_Y) - 1)) return;
     uint linear = gl_LocalInvocationIndex;
     // Cooperative halo load. cfa() performs the exact existing edge clamp/input conversion.
     for (uint i = linear; i < uint(TILE_W * TILE_H); i += WG_SIZE) {
@@ -47,13 +48,13 @@ void main() {
     }
     barrier();
 
-    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
-    if (p.x >= int(pc.width) || p.y >= int(pc.height)) return;
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy) + ivec2(0, pc.y0);
+    if (p.x >= int(pc.width) || p.y >= int(pc.height) || p.y >= pc.y0 + pc.rows) return;
     float vh = 0.5, pq = 0.5;
     if (p.x >= 4 && p.y >= 4 && p.x < int(pc.width) - 4 && p.y < int(pc.height) - 4) {
         ivec2 lp = ivec2(gl_LocalInvocationID.xy) + ivec2(4);
         vh = tvhDirection(lp);
         pq = tpqDirection(lp);
     }
-    imageStore(directionImage, p, vec4(vh, pq, 0, 0));
+    imageStore(directionImage, wp(p), vec4(vh, pq, 0, 0));
 }

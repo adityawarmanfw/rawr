@@ -6,6 +6,8 @@
 //     neff = (sum w)^2 / sum_frames W^2 per colour, mass = sum w / (support + 1),
 //     conf = min over colours of smoothstep(1, 3, neff) * smoothstep(.001, .03, mass),
 //     out = rcd + (merged - rcd) * conf, rcd = the bounded RCD demosaic of the base.
+//   The RCD demosaic exists only for the strip being finished (work planes of rows [rcdY0, rcdY0 + rcdRows)) and only in the
+//   16 x 16 tiles rx_fb_flags flagged; in the others conf is 1 and the merged value is the output.
 //   m = the output's noise variance relative to one frame: the RCD share (1 - conf)^2 plus the merged share
 //     conf^2 / neff. It is written as the mean per 4 x 4 pixel cell (the per-site alternation of red / green / blue
 //     averages out) for rx_lowcov_eaw, which evens out the grain where few frames were merged.
@@ -19,15 +21,18 @@ layout(set = 0, binding = 2, rgba32f) readonly uniform image2D accA;
 layout(set = 0, binding = 3, rg32f) readonly uniform image2D accB;
 layout(set = 0, binding = 4, rgba16f) readonly uniform image2D accC;
 layout(set = 0, binding = 5, r32f) readonly uniform image2D supportI;
-layout(set = 0, binding = 6, rgba16f) readonly uniform image2D rcdI;
+layout(set = 0, binding = 6, rgba32f) readonly uniform image2D rcdI;       // bounded fp32 RCD of the strip rows
 layout(set = 0, binding = 7, rgba16f) writeonly uniform image2D outI;
 layout(set = 0, binding = 8, rgba32f) writeonly uniform image2D dbgOutI;   // (final rgb, neff)       verification only
 layout(set = 0, binding = 9, rgba32f) writeonly uniform image2D dbgPreI;   // (pre-grain rgb, conf)   verification only
 layout(set = 0, binding = 10, r32f) writeonly uniform image2D mI;          // m per 4 x 4 pixel cell
+layout(set = 0, binding = 11, r32f) readonly uniform image2D fbTiles;      // 1 = the 16 x 16 tile has an RCD fallback
 layout(push_constant) uniform P {
     vec4 black;
     float white;
     int w, h, cfa, debug;
+    int row0;                // first row of this dispatch (a multiple of 16)
+    int rcdY0, rcdRows;      // rows held by the RCD work planes
 } p;
 
 const float RB_WIDEN = 1.2;
@@ -74,9 +79,11 @@ Fin finalizeAt(ivec2 q0) {
                      smoothstep(NEFF_LO, NEFF_HI, neff.z) * smoothstep(MASS_LO, MASS_HI, mass.z));
     float conf = min(cert.x, min(cert.y, cert.z));
     vec3 merged = (a.xyz + rs) / max(total, vec3(1e-20));
-    vec3 base = imageLoad(rcdI, q0).xyz;
+    const bool fallback = imageLoad(fbTiles, q0 / 16).x > 0.5;
+    vec3 base = fallback ? imageLoad(rcdI, ivec2(q0.x, clamp(q0.y - p.rcdY0, 0, p.rcdRows - 1))).xyz : merged;
     Fin f;
-    f.rgb = base + (merged - base) * conf;
+    if (!fallback) conf = 1.0;
+    f.rgb = fallback ? base + (merged - base) * conf : merged;
     // A non-finite value (degenerate weights, a bad sample) takes the base's value, or 0: one bad pixel must not reach the
     // whole-image statistics of the render (auto sharpening, exposure, gain map), which would spoil the entire picture.
     for (int c = 0; c < 3; ++c)
@@ -90,7 +97,7 @@ Fin finalizeAt(ivec2 q0) {
 void main() {
     const ivec2 t2 = ivec2(gl_LocalInvocationID.xy);
     const int tid = t2.y * 16 + t2.x;
-    const ivec2 o0 = ivec2(gl_WorkGroupID.xy) * 16;
+    const ivec2 o0 = ivec2(gl_WorkGroupID.x * 16, p.row0 + gl_WorkGroupID.y * 16);
     const ivec2 pos = o0 + t2;
     if (pos.x < p.w && pos.y < p.h) {
         Fin f = finalizeAt(pos);

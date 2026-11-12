@@ -1,0 +1,44 @@
+#version 450
+// Rexture fallback flags: one value per 16 x 16 pixel tile, 1 when some pixel of the tile may need the fallback demosaic
+// (conf < 1 in rx_finalize), 0 when none does. Tiles flagged 0 take the merged value as it is, and the strip-wise RCD skips
+// them. The test is conservative and needs only the accumulated sums: finalize adds the base's own weights r (per colour,
+// 0..1) to total T and square sum S, and neff(r) = (T + r)^2 / (S + r^2) is largest between and smallest at the ends of
+// [0, 1] (its derivative has the sign of S - r T), so neff >= min(neff(0), neff(1)); mass only grows with r. conf is 1 when
+// neff >= NEFF_HI and mass >= MASS_HI in every colour.
+#include "rx_common.glsl"
+
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0, rgba32f) readonly uniform image2D accA;
+layout(set = 0, binding = 1, rg32f) readonly uniform image2D accB;
+layout(set = 0, binding = 2, rgba16f) readonly uniform image2D accC;
+layout(set = 0, binding = 3, r32f) readonly uniform image2D supportI;
+layout(set = 0, binding = 4, r32f) writeonly uniform image2D flagsI;
+layout(push_constant) uniform P {
+    int w, h;
+} p;
+
+const float NEFF_HI = 3.0, MASS_HI = 0.03;   // as in rx_finalize
+shared uint sAny;
+
+void main() {
+    if (gl_LocalInvocationIndex == 0u) sAny = 0u;
+    barrier();
+    const ivec2 q0 = ivec2(gl_GlobalInvocationID.xy);
+    if (q0.x < p.w && q0.y < p.h) {
+        const vec4 a = imageLoad(accA, q0);
+        const vec2 bw = imageLoad(accB, q0).xy;
+        const vec3 sq = imageLoad(accC, q0).xyz;
+        const vec3 total = vec3(a.w, bw);
+        const float loc = imageLoad(supportI, clamp(q0 / 2, ivec2(0), imageSize(supportI) - 1)).x;
+        const vec3 neff0 = total * total / max(sq, vec3(1e-20));
+        const vec3 neff1 = (total + 1.0) * (total + 1.0) / (sq + 1.0);
+        const vec3 mass = total / max(loc + 1.0, 1.0);
+        const vec3 n = min(neff0, neff1);
+        // NaN compares false, so a non-finite sum is flagged
+        const bool certain = n.x >= NEFF_HI && n.y >= NEFF_HI && n.z >= NEFF_HI && mass.x >= MASS_HI && mass.y >= MASS_HI &&
+                             mass.z >= MASS_HI;
+        if (!certain) atomicOr(sAny, 1u);
+    }
+    barrier();
+    if (gl_LocalInvocationIndex == 0u) imageStore(flagsI, ivec2(gl_WorkGroupID.xy), vec4(sAny != 0u ? 1.0 : 0.0));
+}
