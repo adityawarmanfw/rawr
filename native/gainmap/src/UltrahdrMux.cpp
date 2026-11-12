@@ -6,6 +6,7 @@
 #include <cstring>
 #include <limits>
 #include <string>
+#include <utility>
 
 namespace gainmap {
 namespace {
@@ -284,9 +285,9 @@ bool UltrahdrMux::validateParams(const UltrahdrMuxParams& p, const char** reason
     return true;
 }
 
-UltrahdrMuxResult UltrahdrMux::assemble(const uint8_t* baseJpeg, size_t baseSize, const uint8_t* mapJpeg,
+UltrahdrMuxResult UltrahdrMux::assembleParts(const uint8_t* baseJpeg, size_t baseSize, const uint8_t* mapJpeg,
                                         size_t mapSize, const uint8_t* exifPayload, size_t exifSize,
-                                        const UltrahdrMuxParams& params, std::vector<uint8_t>& outFile) {
+                                        const UltrahdrMuxParams& params, UltrahdrMuxParts& outParts) {
     UltrahdrMuxResult result;
     const char* reason = nullptr;
     if (!validateParams(params, &reason)) {
@@ -334,7 +335,7 @@ UltrahdrMuxResult UltrahdrMux::assemble(const uint8_t* baseJpeg, size_t baseSize
     }
 
     std::vector<uint8_t> out;
-    out.reserve(baseSize + mapSize + xmpPrimary.size() + xmpSecondary.size() + 512);
+    out.reserve(scan.sosOffset + exifSize + xmpPrimary.size() + 512);
     // SOI
     out.push_back(0xFF);
     out.push_back(0xD8);
@@ -372,10 +373,14 @@ UltrahdrMuxResult UltrahdrMux::assemble(const uint8_t* baseJpeg, size_t baseSize
     putMarker(out, 0xE2);
     putU16BE(out, (uint16_t)mpfField);
     out.insert(out.end(), mpfPayload.begin(), mpfPayload.end());
-    // SOS..EOI of base
-    out.insert(out.end(), baseJpeg + scan.sosOffset, baseJpeg + baseSize);
+    UltrahdrMuxParts parts;
+    parts.primaryHeader = std::move(out);
+    parts.primaryScan = baseJpeg + scan.sosOffset;
+    parts.primaryScanSize = baseSize - scan.sosOffset;
+    out = {};
+    out.reserve(xmpSecondary.size() + isoSecondary.size() + xmpNsLen + isoNsLen + 16);
     // Secondary SOI
-    const size_t secondarySoi = out.size();
+    const size_t secondarySoi = primarySize;
     out.push_back(0xFF);
     out.push_back(0xD8);
     // XMP secondary APP1
@@ -388,13 +393,31 @@ UltrahdrMuxResult UltrahdrMux::assemble(const uint8_t* baseJpeg, size_t baseSize
     putU16BE(out, (uint16_t)isoSecField);
     out.insert(out.end(), kIsoNs, kIsoNs + isoNsLen);
     out.insert(out.end(), isoSecondary.begin(), isoSecondary.end());
-    // Map scan data (skip its SOI)
-    out.insert(out.end(), mapJpeg + 2, mapJpeg + mapSize);
+    parts.secondaryHeader = std::move(out);
+    // Map scan data (skip its SOI); retain the original encoder allocation.
+    parts.secondaryBody = mapJpeg + 2;
+    parts.secondaryBodySize = mapSize - 2;
 
     result.ok = true;
     result.primarySize = primarySize;
     result.secondarySize = secondarySize;
     result.secondaryOffset = secondarySoi;
+    outParts = std::move(parts);
+    return result;
+}
+
+UltrahdrMuxResult UltrahdrMux::assemble(const uint8_t* baseJpeg, size_t baseSize, const uint8_t* mapJpeg,
+                                      size_t mapSize, const uint8_t* exifPayload, size_t exifSize,
+                                      const UltrahdrMuxParams& params, std::vector<uint8_t>& outFile) {
+    UltrahdrMuxParts parts;
+    const auto result = assembleParts(baseJpeg, baseSize, mapJpeg, mapSize, exifPayload, exifSize, params, parts);
+    if (!result.ok) return result;
+    std::vector<uint8_t> out;
+    out.reserve(result.primarySize + result.secondarySize);
+    out.insert(out.end(), parts.primaryHeader.begin(), parts.primaryHeader.end());
+    out.insert(out.end(), parts.primaryScan, parts.primaryScan + parts.primaryScanSize);
+    out.insert(out.end(), parts.secondaryHeader.begin(), parts.secondaryHeader.end());
+    out.insert(out.end(), parts.secondaryBody, parts.secondaryBody + parts.secondaryBodySize);
     outFile = std::move(out);
     return result;
 }
