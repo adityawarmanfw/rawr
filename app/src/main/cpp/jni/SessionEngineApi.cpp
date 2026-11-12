@@ -133,9 +133,6 @@ void setExperimentalZeroCopy(EngineHandle h, bool v) noexcept {
 void setExperimentalMultiframeEnabled(EngineHandle h, bool v) noexcept {
     if (h) engine(h)->setExperimentalMultiframeEnabled(v);
 }
-void setHdrPlusHeadroomMaxEv(EngineHandle h, float v) noexcept {
-    if (h) engine(h)->setHdrPlusHeadroomMaxEv(v);
-}
 void setPersistentEngineEnabled(EngineHandle h, bool v) noexcept {
     if (h) engine(h)->setPersistentEngineEnabled(v);
 }

@@ -1,7 +1,5 @@
 #pragma once
 #include "color/AutoKeyExposure.h"
-#include "color/ExposureNormalizer.h"
-#include "color/HdrHeadroomMeter.h"
 #include "color/RawrAutoExposure.h"
 
 #include <mutex>
@@ -24,8 +22,6 @@ class SessionFrameCallbacks final : public pipeline::FrameLifecyclePort,
     void notifySwapchainOutOfDate() override;
     void finalizeDetachedStill() override;
     float postGainFor(const rawrcam::metadata::FrameMetadataSnapshot& metadata) override;
-    // HDR+ Bracketed: the lift (EV) the viewfinder showed this frame with.
-    std::optional<float> normalizedLiftEv(std::uint64_t timestampNs) const;
     void applyAutoKey(tonemap::TonemapParams& tone, const rawrcam::metadata::FrameMetadataSnapshot& metadata) override;
     void advanceStill() override;
     bool isStillCaptureRequested() override;
@@ -76,10 +72,6 @@ class SessionFrameCallbacks final : public pipeline::FrameLifecyclePort,
     // Frame-thread only (slot retire).
     rawrcam::color::AutoKeySmoother autoKeySmoother_;
     rawrcam::color::AutoKeySmoother keySmoother_, highlightSmoother_;
-    rawrcam::color::HdrHeadroomMeter headroomMeter_;
-    // Frame lane and still admission both ask for lifts.
-    mutable std::mutex normalizerMutex_;
-    rawrcam::color::ExposureNormalizer normalizer_;
     // rawr auto exposure: metered at slot retire, read by postGainFor.
     mutable std::mutex rawrAeMutex_;
     rawrcam::color::rawr_ae::Controller rawrAe_;
@@ -87,8 +79,6 @@ class SessionFrameCallbacks final : public pipeline::FrameLifecyclePort,
     bool rawrAeEngaged() const;
     void updateRawrAe(const image_scopes::SceneExposureStatsData* stats, float clipLuma,
                       const rawrcam::metadata::FrameMetadataSnapshot& metadata, std::uint64_t timestampNs);
-    void updateHdrHeadroom(const image_scopes::SceneExposureStatsData* stats, float clipLuma,
-                           const rawrcam::metadata::FrameMetadataSnapshot& metadata, std::uint64_t timestampNs);
 };
 
 }  // namespace rawrcam::session

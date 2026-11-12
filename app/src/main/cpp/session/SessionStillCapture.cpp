@@ -158,15 +158,6 @@ void SessionEngine::setExperimentalMultiframeEnabled(bool enabled) {
     if (enabled) realtime_.ensureMultiframeBridge();
     LOGI("MULTIFRAME_EXPERIMENTAL enabled=%s", enabled ? "true" : "false");
 }
-void SessionEngine::setHdrPlusHeadroomMaxEv(float maxEv) {
-    const float floor = std::isfinite(maxEv) ? std::clamp(maxEv, -4.0f, 0.0f) : 0.0f;
-    hdrHeadroomMaxEv_.store(floor, std::memory_order_relaxed);
-    if (!cameraControls_.controller()) return;
-    cameraControls_.controller()->setSensitivityCalibrationWanted(floor < 0.0f);
-    // Off: drop the headroom now; on: the meter sets it from the next frames.
-    if (!(floor < 0.0f)) cameraControls_.controller()->setHdrHeadroomEv(0.0f);
-    LOGI("HDRPLUS_BRACKET headroomMaxEv=%.1f", floor);
-}
 rawr::local_tone::LiftNoise SessionEngine::liftNoiseFor(const metadata::FrameMetadataSnapshot& m, float renderGain,
                                                         std::uint32_t frames) noexcept {
     rawr::local_tone::LiftNoise n{};
@@ -189,14 +180,6 @@ void SessionEngine::setLocalTone(float shadowsEv, float highlightsEv, float sigm
     localToneBoost_.store(boostLocalContrast, std::memory_order_relaxed);
     localToneShadowsEv_.store(ev, std::memory_order_relaxed);
     LOGI("LOCAL_TONE shadowsEv=%.2f", ev);
-}
-float SessionEngine::reportedHeadroomEvFor(const metadata::FrameMetadataSnapshot& metadata) const {
-    const auto* controller = cameraControls_.controller();
-    return controller ? controller->hdrHeadroomEvFor(metadata.aeMode, metadata.aeCompensationSteps) : 0.0f;
-}
-float SessionEngine::hdrHeadroomEvFor(const metadata::FrameMetadataSnapshot& metadata) const {
-    if (const auto lift = pipelineCallbacks_.normalizedLiftEv(metadata.timestampNs)) return -*lift;
-    return reportedHeadroomEvFor(metadata);
 }
 void SessionEngine::setPersistentEngineEnabled(bool enabled) {
     std::lock_guard<std::mutex> lock(mu_);
