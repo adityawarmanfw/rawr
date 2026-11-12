@@ -18,7 +18,7 @@ still a native library, not app code.
 |---|---|---|---|---|---|
 | Clip classification + CFA pack | `raw_preview` (cfa_state) | `raw_demosaic/common` (sensor_clip_pack) | `multiframe/output` (prepare_rgb) | `raw_ingress` | GPU camera ingress: RAW10 (MIPI packed) to R16 unpack from the imported camera buffer. |
 | `video_pipeline` | CPU normalize (`RendererEngine`) |
-| Demosaic | `raw_preview` (2×2 cell) | `raw_demosaic` (RCD / VNG4 / Dual) | `multiframe/merge_wronski` (merge outputs RGB) | `video_pipeline` (MHC 5×5) | `raw_demosaic` (+ quadfix) |
+| Demosaic | `raw_preview` (2×2 cell) | `raw_demosaic` (RCD / VNG4 / Dual) | `multiframe` (merge outputs the CFA) | `video_pipeline` (MHC 5×5) | `raw_demosaic` (+ quadfix) |
 | Capture sharpening | — | `capture_sharpening` (planned) | — | — | `capture_sharpening` (planned) |
 | Post-demosaic denoise | — | `raw_denoise` | — | `raw_denoise` | `raw_denoise` |
 | WB, highlight, FCC, defringe | `raw_preview` + `raw_highlight` | `post_demosaic` + `raw_highlight` + `false_color_correction` | same as single | same as single | same as single |
@@ -42,7 +42,7 @@ Opposed, and every pipeline runs the selected one; see
 | `raw_denoise` | Profiled wavelet denoise (darktable denoiseprofile port). |
 | `false_color_correction` | RawTherapee false-colour suppression. |
 | `capture_sharpening` | RawTherapee capture sharpening (Richardson-Lucy deconvolution) on demosaiced pre-WB RGB. |
-| `multiframe` | Multiframe burst: `alignment`, `merge_wronski`, `pipeline` (executor, recorder, burst coordinator), `output` (CFA projection, JPEG-path RGB), `sharpness` (reference-frame scoring). |
+| `multiframe` | Multiframe burst: `merge_hdrplus` (HDR+ Quality), `merge_rexture`, `pipeline` (executor, recorder, burst coordinator), `output` (CFA projection, JPEG-path RGB), `sharpness` (reference-frame scoring). |
 | `tonemap_engine` | Scene-linear to display rendering, LUTs, colour transforms. |
 | `spektrafilm` | Film simulation. |
 | `gainmap` | UltraHDR gain map compute and muxing. |

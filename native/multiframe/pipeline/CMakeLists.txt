@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.22)
 project(raw_gpu_pipeline LANGUAGES CXX)
 
-# Multiframe burst executor. It compiles the alignment (../alignment) and
-# Wronski merge (../merge_wronski) shaders it dispatches, in production
+# Multiframe burst executor. It compiles the HDR+ (../merge_hdrplus) and
+# Rexture (../merge_rexture) shaders it dispatches, in production
 # and scalar-trace variants, and embeds them as mf_<name>_{prod,trace}.h.
 option(RAW_GPU_PIPELINE_BUILD_TESTS "Build host unit tests" OFF)
 

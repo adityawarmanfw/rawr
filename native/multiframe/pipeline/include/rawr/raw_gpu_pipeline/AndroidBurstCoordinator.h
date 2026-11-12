@@ -56,7 +56,7 @@ struct BurstRunResult {
     bool pipelineCacheReused = false;
     BurstStageTimings timings{};
     // HDR+ only: normalized full-precision R32F CFA plane (same extent as
-    // output) for the 16-bit merged DNG projection. Null for Wronski.
+    // output) for the 16-bit merged DNG projection. HDR+ Quality only (null for Rexture).
     VkImage cfaImage = VK_NULL_HANDLE;
     VkImageView cfaView = VK_NULL_HANDLE;
     // Set when estimateNoiseFromBurst produced the profile this run merged with.
