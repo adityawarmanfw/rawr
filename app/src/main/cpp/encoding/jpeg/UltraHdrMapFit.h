@@ -2,8 +2,7 @@
 // Legacy brightness fit: adaptive gainmap ceiling + shoulder + chroma
 // compression, applied in the JPEG writer on the GPU wide-range map (no
 // second render). Header-only so host tests can include it directly.
-// Mirrors the validated offline prototype (tmp/final_stack.py::remux_final)
-// brightness baseline: fit = ceil((p99.9(mean log-gain) + margin) / step) * step clamped
+// Brightness baseline: fit = ceil((p99.9(mean log-gain) + margin) / step) * step clamped
 // to [floor, min(displayCap, wideMax)]; shoulder y = knee + W*(1-exp(-(x-knee)/W))
 // above knee = fitted - kneeBelow; chroma d' = T*tanh(d/T) around the
 // per-pixel mean of shouldered channels.
