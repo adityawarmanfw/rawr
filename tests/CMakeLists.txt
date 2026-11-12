@@ -56,6 +56,14 @@ rawr_test(renderer_source_exif_test
   "${RAWR_ROOT}/tests/native/renderer_source_exif_test.cpp"
   "${APP}/renderer/SourceCaptureExif.cpp")
 target_link_libraries(renderer_source_exif_test PRIVATE rawr_tinydng)
+rawr_test(renderer_dng_source_test
+  native/renderer_dng_source_test.cpp
+  "${APP}/renderer/DngSource.cpp"
+  "${APP}/renderer/SourceCaptureExif.cpp"
+  "${APP}/color/ColorCalibration.cpp"
+  "${APP}/color/DcpProfile.cpp"
+  "${APP}/color/ColorMath.cpp")
+target_link_libraries(renderer_dng_source_test PRIVATE rawr_tinydng)
 rawr_test(renderer_resample_test
   "${RAWR_ROOT}/tests/native/renderer_resample_test.cpp"
   "${APP}/renderer/LinearResample.cpp")
