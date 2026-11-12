@@ -465,6 +465,13 @@ void MfsrCaptureJob::runStages(Published& published) {
                 .25f * (n.offsetBySite[0] + n.offsetBySite[1] + n.offsetBySite[2] + n.offsetBySite[3]),
                 double(mergeResult->physicalImageBytes) / (1024.0 * 1024.0),
                 double(mergeResult->physicalBufferBytes) / (1024.0 * 1024.0));
+            // Wall time versus the GPU-timestamp stages above: chunks = submissions, gpu = summed GPU intervals, wait =
+            // host blocked on the fence (GPU work plus queue latency), rec/sub = host recording and queue submit,
+            // between = host time outside any submission.
+            LOGI("MULTIFRAME_MERGE_WALL chunks=%u wallMs=%.1f chunkWallMs=%.1f gpuMs=%.1f waitMs=%.1f recMs=%.1f "
+                 "subMs=%.1f betweenMs=%.1f idleMs=%.1f",
+                 t.chunkCount, t.totalMs, t.chunkWallMs, t.chunkGpuMs, t.chunkWaitMs, t.chunkRecordMs, t.chunkSubmitMs,
+                 t.totalMs - t.chunkWallMs, t.chunkWaitMs - t.chunkGpuMs);
             mfStages.initNote = mergeResult->resourcesReused
                                     ? "pipelines warm"
                                     : (mergeResult->pipelineCacheReused ? "pipeline cache reused" : "cold");
