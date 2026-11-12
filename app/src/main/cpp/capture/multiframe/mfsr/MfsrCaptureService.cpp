@@ -68,8 +68,8 @@ void MfsrCaptureService::configure(const Geometry& geometry, bool warmEnabled) {
     geometry_ = geometry;
     if (vulkan_.device() == VK_NULL_HANDLE || !warmEnabled) return;
     // An arena is laid out for the whole frame, not for the tuned 12.5 MP
-    // geometry: Wronski is ~1.26 GiB at 12.5 MP but ~5.05 GiB at 50 MP and
-    // ~20.2 GiB at 200 MP (HDR+ Quality: ~0.77 / ~3.08 / ~12.3 GiB). Reserving
+    // geometry: Rexture is ~0.8 GiB at 12.5 MP but ~3.3 GiB at 50 MP and
+    // ~13 GiB at 200 MP (HDR+ Quality: ~0.77 / ~3.08 / ~12.3 GiB). Reserving
     // that while the camera is open starves the still render and gets the
     // process killed, so only warm geometries whose worst-case arena fits.
     // A shutter before/without warm falls back to cold initialization.
@@ -101,7 +101,7 @@ void MfsrCaptureService::configure(const Geometry& geometry, bool warmEnabled) {
             try {
                 const auto begin = std::chrono::steady_clock::now();
                 // Pipelines + arena (last merge algorithm/scale): first burst
-                // fully warm when geometry matches. ~1.3GB (Wronski) or
+                // fully warm when geometry matches. ~0.8GB (Rexture) or
                 // ~0.5GB (HDR+) held while the camera is open; reset() releases it.
                 burstCoordinator_.warmAll(vulkan_.physicalDevice(), vulkan_.device(), vulkan_.queueFamily(), rawW,
                                           rawH);
@@ -554,19 +554,6 @@ void MfsrCaptureService::spoolLoop() {
                 } catch (...) {
                     LOGE("MULTIFRAME_REXTURE_SCORE_FALLBACK unknown");
                 }
-            }
-            // Bracketed bursts merge onto the darkest frame (sharpest among
-            // those when scored), whatever the base frame mode: the
-            // underexposed ZSL burst, not the long frames.
-            if (pending->work->tuning.mergeAlgorithm == kMergeAlgorithmHdrPlusBracketed &&
-                burst.metadata.size() == burst.frames.size() && burst.colors.size() == burst.frames.size() &&
-                isExposureBracketed(burst.metadata)) {
-                const auto reference =
-                    bracketReference(burst.metadata, pending->work->sharpnessScores, burst.referenceIndex);
-                burst.referenceIndex = reference;
-                burst.referenceMetadata = burst.metadata[reference];
-                burst.referenceColor = burst.colors[reference];
-                LOGI("MULTIFRAME_BASEFRAME mode=bracket-darkest selected=%u/%zu", reference, burst.frames.size());
             }
             const auto requestId = pending->work->requestId;
             const bool live = pending->work->tuning.mergeAlgorithm == kMergeAlgorithmRexture && burst.snapshot &&

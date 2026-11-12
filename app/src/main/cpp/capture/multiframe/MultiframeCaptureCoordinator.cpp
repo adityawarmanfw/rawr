@@ -54,7 +54,7 @@ void MultiframeCaptureCoordinator::configureFullSize(uint32_t width, uint32_t he
     fullSizeOnly_ = true;
     resetZsl();
     // The service skips the warm arena when its layout would be several GiB:
-    // a 50 MP frame needs ~3.08 GiB (HDR+ Quality) to ~5.05 GiB (Wronski)
+    // a 50 MP frame needs ~3.1 GiB (HDR+ Quality) to ~3.4 GiB (Rexture)
     // before any input frame, and the system kills the app shortly after the
     // camera opens. Small (12.5 MP) geometries still warm as before.
     mfsrService_->configure(config_, experimentalMultiframeEnabled_);
@@ -236,7 +236,7 @@ uint64_t MultiframeCaptureCoordinator::startPreparedMultiframeCapture(
     rawrcam::capture::JpegCaptureRequest mergedJpeg, bool dumpRzslRequested,
     rawrcam::capture::multiframe::MultiframeTuning tuning,
     rawrcam::capture::multiframe::MultiframeBaseFrameMode baseFrameMode, const tonemap::TonemapParams& tone,
-    bool filmEnabled, const spektrafilm_native::FilmLook& filmLook, std::optional<BracketPlan>* bracketPlan) noexcept {
+    bool filmEnabled, const spektrafilm_native::FilmLook& filmLook) noexcept {
     // A rejected request closes its destinations as the contexts go out of scope.
     const bool jpegRequested = mergedJpeg.output.outputFd.valid();
     if (!pendingMultiframeCapture_ || (!baseDng.outputFd.valid() && !mergedDng.outputFd.valid() && !jpegRequested) ||
@@ -247,7 +247,6 @@ uint64_t MultiframeCaptureCoordinator::startPreparedMultiframeCapture(
 
     // Admission must never throw out of this noexcept entry point: a failure
     // rejects the capture, and the contexts close their outputs on unwinding.
-    std::shared_ptr<BracketCollector> collector;
     try {
         auto frozenTonemap = baseDng.captureTone ? *baseDng.captureTone : tone;
         frozenTonemap.aePostGain = postGainFor_(pendingMultiframeCapture_->referenceMetadata);
@@ -261,46 +260,7 @@ uint64_t MultiframeCaptureCoordinator::startPreparedMultiframeCapture(
                 baseDng.baselineExposureEV = baseDng.baselineExposureEV.value_or(0.0f) + gainEv;
             }
         }
-        // HDR+ bracketed: arm a collector for the post-shutter long frames. The
-        // caller submits the camera requests (outside the session lock); the
-        // spool worker waits for the frames before the burst becomes durable.
         abandonActiveBracket();
-        if (bracketPlan && tuning.mergeAlgorithm == kMergeAlgorithmHdrPlusBracketed && tuning.bracketFrames > 0u) {
-            const auto& reference = pendingMultiframeCapture_->referenceMetadata;
-            // Frozen frames stay pinned; the long frames need free ring slots
-            // beyond the preview frames in flight.
-            const std::size_t capacity = multiframeRingFrames(config_.rawWidth, config_.rawHeight);
-            const std::size_t used = pendingMultiframeCapture_->frames.size() + rawrcam::imaging::kRealtimeFramesInFlight;
-            const auto frames =
-                static_cast<std::uint32_t>(std::min<std::size_t>(tuning.bracketFrames, capacity > used ? capacity - used : 0u));
-            if (frames > 0u && reference.exposureTimeNs > 0 && reference.sensitivity > 0) {
-                bracketHold_->opened.fetch_add(1, std::memory_order_acq_rel);
-                collector = std::make_shared<BracketCollector>(
-                    nextBracketRequestId_++, frames,
-                    [hold = bracketHold_] { hold->done.fetch_add(1, std::memory_order_acq_rel); });
-                BracketPlan plan{};
-                plan.requestId = collector->requestId();
-                plan.baseExposureTimeNs = reference.exposureTimeNs;
-                plan.baseSensitivity = reference.sensitivity;
-                // Long frames: the setting is EV over Camera2 AE (the user's
-                // exposure in manual), so over the burst it adds the burst's
-                // headroom; at least +1 EV over the burst so they add shadow signal.
-                const double reference = linearExposure(pendingMultiframeCapture_->referenceMetadata);
-                const float liftEv = tuning.aeLinearExposure > 0.0f && reference > 0.0
-                                         ? std::max(0.0f, float(std::log2(double(tuning.aeLinearExposure) / reference)))
-                                         : 0.0f;
-                const float longEv = std::clamp(liftEv + std::max(0.0f, tuning.longFrameEv), 1.0f, 6.0f);
-                plan.evOffsets.assign(frames, longEv);
-                LOGI("MULTIFRAME_BRACKET_PLAN frames=%u longEv=%.2f headroomLift=%.2f baseExposureNs=%lld baseIso=%d",
-                     frames, longEv, liftEv, static_cast<long long>(plan.baseExposureTimeNs), plan.baseSensitivity);
-                *bracketPlan = plan;
-                pendingMultiframeCapture_->pendingBracket = collector;
-                activeBracket_ = collector;
-            } else {
-                LOGW("MULTIFRAME_BRACKET_SKIP freeSlots=%u exposureNs=%lld iso=%d", frames,
-                     static_cast<long long>(reference.exposureTimeNs), reference.sensitivity);
-            }
-        }
         const bool captureFilmEnabled = baseDng.captureFilm ? baseDng.captureFilmEnabled : filmEnabled;
         const auto captureFilm = baseDng.captureFilm ? *baseDng.captureFilm : filmLook;
         auto capture = std::move(pendingMultiframeCapture_);
@@ -309,8 +269,6 @@ uint64_t MultiframeCaptureCoordinator::startPreparedMultiframeCapture(
                                 dumpRzslRequested, frozenTonemap, tuning, baseFrameMode, captureFilmEnabled, captureFilm);
         if (requestId == 0u) {
             // The service owned and closed the outputs on rejection; nothing pending remains.
-            if (collector) abandonBracket(collector->requestId());
-            if (bracketPlan) bracketPlan->reset();
             return 0u;
         }
         return requestId;
@@ -320,8 +278,6 @@ uint64_t MultiframeCaptureCoordinator::startPreparedMultiframeCapture(
         LOGW("MULTIFRAME_START_REJECTED unknown");
     }
     pendingMultiframeCapture_.reset();
-    if (collector) abandonBracket(collector->requestId());
-    if (bracketPlan) bracketPlan->reset();
     return 0u;
 }
 

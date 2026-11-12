@@ -60,7 +60,7 @@ namespace rawrcam::capture::multiframe {
 namespace {
 constexpr const char* kTag = "RawrCamNative";
 // Whole-frame merge window. The arena is laid out for the window, so this
-// threshold bounds the per-window arena (~3.40 GiB HDR+ / ~5.59 GiB Wronski at
+// threshold bounds the per-window arena (~3.40 GiB HDR+ / ~3.4 GiB Rexture at
 // 56 MP, ~0.77 / ~1.26 GiB at 12.5 MP). It is not a memory budget by itself.
 constexpr std::uint64_t kStripMergePixels = 56'000'000;
 static_assert(kRextureMaxPixels >= kStripMergePixels, "a strip window must fit a Rexture merge");
@@ -143,13 +143,13 @@ void MfsrCaptureJob::runStages(Published& published) {
     const bool dumpRzslRequested = work->dumpRzslRequested;
     {
         // Pre-merge footprint: the arena grows with the window geometry, and
-        // HDR+ Quality/Bracketed keep every journaled frame resident (Wronski
+        // HDR+ Quality keeps every journaled frame resident (Rexture
         // and HDR+ stream one companion). Logged so a device trace shows which
         // side of the limit a failed burst ran on.
         const std::uint32_t mergeRows = stripMode ? strips.front().rows : ctx.rawHeight;
         const std::uint64_t arenaEstimate = estimateMergeArenaBytes(ctx.rawWidth, mergeRows, work->tuning.mergeAlgorithm);
         const std::uint64_t frameBytes = std::uint64_t(ctx.rawWidth) * mergeRows * sizeof(std::uint16_t);
-        const std::size_t residentFrames = work->tuning.mergeAlgorithm == 2u || work->tuning.mergeAlgorithm == 3u
+        const std::size_t residentFrames = work->tuning.mergeAlgorithm == 2u
                                                ? job->frames.size()
                                                : std::min<std::size_t>(2u, job->frames.size());
         const std::uint64_t avail = readMemAvailableBytes();
@@ -159,47 +159,13 @@ void MfsrCaptureJob::runStages(Published& published) {
              double(arenaEstimate) / (1024.0 * 1024.0),
              double(frameBytes * residentFrames) / (1024.0 * 1024.0), double(avail) / (1024.0 * 1024.0));
     }
+    // Both merges work on the RAW grid.
     const auto tuning = [&] {
-        // Super-resolution output must stay within the GPU's 2D image limit
-        // (large sensors at the 1.386x maximum would exceed it).
         auto t = work->tuning;
-        const float maxDimension = static_cast<float>(geometry::RawGeometryLimits{}.maxDimension);
-        const float largestSide = static_cast<float>(std::max(ctx.rawWidth, ctx.rawHeight));
-        if (largestSide > 0.0f)
-            t.outputScale = std::clamp(t.outputScale, 1.0f, std::max(1.0f, maxDimension / largestSide));
-        // HDR+ (both modes) merges on the RAW grid (the coordinator enforces 1x too).
-        if (t.mergeAlgorithm != 0u) t.outputScale = 1.0f;
+        t.outputScale = 1.0f;
         return t;
     }();
-    // Bracketed bursts merge onto their darkest frame and are lifted back.
-    // Underexposed-ZSL captures (bracketCapture 1) carry the lift in the
-    // frozen AE post-gain already, like the viewfinder; only the DNGs need it
-    // as BaselineExposure. Older dark-frame captures lift the render too.
-    const bool bracketed = tuning.mergeAlgorithm == kMergeAlgorithmHdrPlusBracketed && job &&
-                           job->metadata.size() == job->frames.size() && job->referenceIndex < job->metadata.size();
-    const bool headroomCapture = bracketed && tuning.bracketCapture == 1u;
-    const float dngLiftEv = !bracketed ? 0.0f
-                            : headroomCapture
-                                ? headroomLiftEv(tuning.aeLinearExposure, job->metadata[job->referenceIndex])
-                            : isExposureBracketed(job->metadata) ? bracketLiftEv(job->metadata, job->referenceIndex)
-                                                                 : 0.0f;
-    const float liftEv = headroomCapture ? 0.0f : dngLiftEv;
     auto frozenTonemap = work->frozenTonemap;
-    frozenTonemap.exposureEV += liftEv;
-    if (liftEv > 0.0f) {
-        // Older dark-frame captures lift the render through exposureEV, which
-        // DNG re-renders do not read: fold it into the recipe's post-gain.
-        const float liftedGain = std::min(tonemap::kMaxAePostGain, frozenTonemap.aePostGain * std::exp2(liftEv));
-        mergedDng.resolvedRecipe =
-            persistence::resolvedRecipe(work->frozenTonemap, liftedGain, work->filmEnabled, work->filmLook);
-        baseDng.resolvedRecipe = mergedDng.resolvedRecipe;
-    }
-    if (dngLiftEv > 0.0f) {
-        mergedDng.baselineExposureEV = mergedDng.baselineExposureEV.value_or(0.0f) + dngLiftEv;
-        baseDng.baselineExposureEV = baseDng.baselineExposureEV.value_or(0.0f) + dngLiftEv;  // base = dark reference
-        LOGI("MULTIFRAME_BRACKET lift=%.2fEV render=%.2fEV reference=%u capture=%u", dngLiftEv, liftEv,
-             job->referenceIndex, tuning.bracketCapture);
-    }
     const auto baseFrameMode = work->baseFrameMode;
     const auto sharpnessScores = work->sharpnessScores;
     const double sharpnessMs = work->sharpnessMs;
@@ -210,35 +176,9 @@ void MfsrCaptureJob::runStages(Published& published) {
     // Shared EXIF inputs (capture settings; timings attach per file horizon).
     MultiframeTuningView tuningView{};
     tuningView.outputScale = tuning.outputScale;
-    tuningView.lkIterations = tuning.lkIterations;
-    tuningView.hessianEpsilon = tuning.hessianEpsilon;
-    tuningView.kDetail = tuning.kDetail;
-    tuningView.kDenoise = tuning.kDenoise;
-    tuningView.dThreshold = tuning.dThreshold;
-    tuningView.dTransition = tuning.dTransition;
-    tuningView.kStretch = tuning.kStretch;
-    tuningView.kShrink = tuning.kShrink;
-    tuningView.flatSigma = tuning.flatSigma;
-    tuningView.detailFloorSigma = tuning.detailFloorSigma;
-    tuningView.scaleBandwidthGain = tuning.scaleBandwidthGain;
-    tuningView.coverageNeffLo = tuning.coverageNeffLo;
-    tuningView.coverageNeffHi = tuning.coverageNeffHi;
-    tuningView.coverageMassLo = tuning.coverageMassLo;
-    tuningView.coverageMassHi = tuning.coverageMassHi;
-    tuningView.robustnessT = tuning.robustnessT;
-    tuningView.robustnessS1 = tuning.robustnessS1;
-    tuningView.robustnessS2 = tuning.robustnessS2;
-    tuningView.motionThreshold = tuning.motionThreshold;
-    tuningView.fallbackChromaGain = tuning.fallbackChromaGain;
-    tuningView.fallbackLumaGain = tuning.fallbackLumaGain;
     tuningView.mergeAlgorithm = tuning.mergeAlgorithm;
     tuningView.hdrplusStrength = tuning.hdrplusStrength;
     tuningView.hdrplusTileSize = tuning.hdrplusTileSize;
-    tuningView.bracketEv = tuning.bracketEv;
-    tuningView.bracketFrames = tuning.bracketFrames;
-    tuningView.bracketLiftEv = dngLiftEv;
-    tuningView.bracketCapture = tuning.bracketCapture;
-    tuningView.longFrameEv = tuning.longFrameEv;
     tuningView.baseFrameMode = baseFrameMode;
     MultiframeOutputInfo outputInfo{};
     outputInfo.noiseProfile = "Burst (fitted per capture)";
@@ -353,10 +293,6 @@ void MfsrCaptureJob::runStages(Published& published) {
     std::ostringstream replayMetadata;
     replayMetadata << rawr::raw_gpu_pipeline::serializeReplayNoise(resolvedNoise) << "rawrReferenceIndex\t"
                    << job->referenceIndex << '\n';
-    // HDR+ Bracketed: the Camera2 AE exposure the burst was underexposed from,
-    // so offline replays lift the merged DNG like the app.
-    if (tuning.bracketCapture == 1u && tuning.aeLinearExposure > 0.0f)
-        replayMetadata << std::setprecision(9) << "rawrAeLinearExposure\t" << tuning.aeLinearExposure << '\n';
     auto dumpRzsl = [&]() {
         if (!dumpRzslRequested || rzslDumpAttempted) return;
         rzslDumpAttempted = true;
@@ -573,12 +509,10 @@ void MfsrCaptureJob::runStages(Published& published) {
                 mergedFrame->metadata.effectiveWhiteLevel *= projection.codeScale;
                 LOGI("MULTIFRAME_DNG_16BIT scale=%.3f white=%.0f source=%s", projection.codeScale,
                      mergedFrame->metadata.effectiveWhiteLevel, projection.sourceIsCfaR32f ? "r32f" : "rgba16f");
-                mergedDng.reconstructedGeometry = tuning.outputScale > 1.0001f;
-                // HDR+ merges are an exposure-weighted mean on the raw grid;
-                // Wronski's kernel merge has no closed-form noise, keep the
-                // reference profile there; so does Rexture (per-pixel weights).
-                if (tuning.mergeAlgorithm != 0u && tuning.mergeAlgorithm != kMergeAlgorithmRexture &&
-                    job->metadata.size() == job->frames.size()) {
+                mergedDng.reconstructedGeometry = false;
+                // HDR+ Quality is an exposure-weighted mean on the raw grid; Rexture (per-pixel weights) has no
+                // closed-form noise, keep the reference profile there.
+                if (tuning.mergeAlgorithm != kMergeAlgorithmRexture && job->metadata.size() == job->frames.size()) {
                     mergedDng.noiseVarianceScale = mergedNoiseVarianceScale(job->metadata, job->referenceIndex);
                     LOGI("MULTIFRAME_DNG_NOISE shot=%.4f read=%.4f", (*mergedDng.noiseVarianceScale)[0],
                          (*mergedDng.noiseVarianceScale)[1]);
@@ -768,8 +702,7 @@ void MfsrCaptureJob::runStages(Published& published) {
                 const std::uint32_t mergedW = mergeResult->outputExtent.width;
                 const std::uint32_t mergedH = mergeResult->outputExtent.height;
                 const auto demosaicBegin = std::chrono::steady_clock::now();
-                const auto geometry = tuning.outputScale > 1.0001f ? develop::StillDemosaicGeometry::ReconstructedCfa
-                                                                   : develop::StillDemosaicGeometry::SensorNative;
+                const auto geometry = develop::StillDemosaicGeometry::SensorNative;
                 VkQueue demosaicQueue = useMfQueue ? mfQueue : VK_NULL_HANDLE;
                 std::mutex* demosaicMutex = useMfQueue ? &ctx.vulkan.mfSubmitMutex() : nullptr;
                 std::optional<develop::demosaic::StillCompletion> demosaicDone;
@@ -868,8 +801,6 @@ void MfsrCaptureJob::runStages(Published& published) {
                 renderedContext.filmTiled = uint64_t(renderedContext.width) * renderedContext.height >= 12000000u &&
                                             (!work->filmLook.grainEnabled || work->filmLook.grainModel != 2);
                 renderedContext.filmLook = work->filmLook;
-                // Bracket lift is exposure normalization, not a creative film lift (uncapped).
-                renderedContext.filmLook.filmExposureEv += liftEv;
                 renderedContext.sensorToLinearSrgb = job->referenceColor.cameraToLinearSrgbRowMajor;
                 develop::applyDevelopSettings(renderedContext, mergedJpeg.develop);
                 // The single-frame denoisers (Image > Denoise: wavelet) never

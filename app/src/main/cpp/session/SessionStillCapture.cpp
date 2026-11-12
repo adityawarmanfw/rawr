@@ -203,10 +203,7 @@ void SessionEngine::setPersistentEngineEnabled(bool enabled) {
     capture_.multiframe().setPersistentEngineEnabled(enabled);
     LOGI("PERSISTENT_ENGINE enabled=%s", enabled ? "true" : "false");
 }
-uint32_t SessionEngine::prepareExperimentalMultiframe(uint32_t maxFrames, uint32_t longFrames) {
-    // HDR+ Bracketed: when the shutter/gain limits would leave the long
-    // frames too dark to help (they would be skipped), freeze their slots as
-    // burst frames instead. Checked outside mu_ like other camera calls.
+uint32_t SessionEngine::prepareExperimentalMultiframe(uint32_t maxFrames) {
     // Long exposure (shutter past the viewfinder cap): the ZSL ring holds only
     // viewfinder frames, so the merge takes a burst
     // of post-shutter frames at that shutter (full-size stills below on a
@@ -214,16 +211,16 @@ uint32_t SessionEngine::prepareExperimentalMultiframe(uint32_t maxFrames, uint32
     if (const auto* controller = cameraControls_.controller()) {
         if (const auto exposure = controller->deferredCaptureExposure()) {
             if (!controller->hasFullSizeCapture())
-                return prepareLongExposureBurst(maxFrames + longFrames, exposure->exposureTimeNs);
+                return prepareLongExposureBurst(maxFrames, exposure->exposureTimeNs);
         }
     }
     // Capture-stream lens: the ZSL ring holds only binned viewfinder frames;
     // the merge takes a burst of full-size stills requested now.
     if (const auto* controller = cameraControls_.controller(); controller && controller->hasFullSizeCapture()) {
         const uint32_t profileLimit = controller->fullSizeBurstLimit();
-        const uint32_t cap = capture::fullSizeBurstCount(maxFrames + longFrames, profileLimit);
+        const uint32_t cap = capture::fullSizeBurstCount(maxFrames, profileLimit);
         LOGI("MULTIFRAME_FULL_SIZE_PLAN requested=%u profileLimit=%u effective=%u sequential=%d",
-             maxFrames + longFrames, profileLimit, cap, controller->fullSizeBurstSequential() ? 1 : 0);
+             maxFrames, profileLimit, cap, controller->fullSizeBurstSequential() ? 1 : 0);
         // A lens whose HAL fails full-size bursts takes a single still instead.
         if (cap < 2u) {
             LOGI("MULTIFRAME_FULL_SIZE_SINGLE limit=%u", cap);
@@ -231,15 +228,8 @@ uint32_t SessionEngine::prepareExperimentalMultiframe(uint32_t maxFrames, uint32
         }
         return prepareFullSizeBurst(cap);
     }
-    bool skipLong = false;
-    if (longFrames > 0u) {
-        const auto* controller = cameraControls_.controller();
-        skipLong = controller && !controller->longFramesWorthwhile();
-        if (skipLong) LOGI("MULTIFRAME_BRACKET_PRESKIP burst=%u long=%u", maxFrames + longFrames, longFrames);
-    }
     std::lock_guard<std::mutex> lock(mu_);
-    bracketSkippedForPending_ = skipLong;
-    uint32_t burst = std::min<uint32_t>(skipLong ? maxFrames + longFrames : maxFrames, capture::kMaxBurstFrames);
+    uint32_t burst = std::min<uint32_t>(maxFrames, capture::kMaxBurstFrames);
     // The streaming RAW ring enforces its own byte budget; do not impose a separate resolution-based count.
     return capture_.multiframe().prepareExperimentalMultiframeOnShutter(burst);
 }
@@ -292,7 +282,6 @@ uint32_t SessionEngine::prepareLongExposureBurst(uint32_t maxFrames, int64_t exp
     burst.referenceColor = burst.colors[burst.referenceIndex];
     const auto prepared = static_cast<uint32_t>(burst.frames.size());
     std::lock_guard<std::mutex> lock(mu_);
-    bracketSkippedForPending_ = true;  // the long frames are the burst
     return capture_.multiframe().adoptPreparedCapture(
                std::make_unique<rawrcam::capture::multiframe::PendingMultiframeCapture>(std::move(burst)))
                ? prepared
@@ -303,33 +292,15 @@ uint64_t SessionEngine::startPreparedMultiframeCapture(
     rawrcam::capture::JpegCaptureRequest mergedJpeg, bool dumpRzslRequested,
     rawrcam::capture::multiframe::MultiframeTuning tuning,
     rawrcam::capture::multiframe::MultiframeBaseFrameMode baseFrameMode) {
-    std::optional<rawrcam::capture::multiframe::BracketPlan> bracket;
     uint64_t requestId = 0;
     {
         std::lock_guard<std::mutex> lock(mu_);
-        // HDR+ Bracketed: record the Camera2 AE exposure the underexposed ZSL
-        // burst is lifted back to (unchanged reference exposure in manual).
-        if (tuning.mergeAlgorithm == rawrcam::capture::multiframe::kMergeAlgorithmHdrPlusBracketed) {
-            tuning.bracketCapture = 1u;
-            // Their slots were frozen as burst frames at the shutter (or a
-            // full-size burst has no binned long frames to take).
-            if (bracketSkippedForPending_) tuning.bracketFrames = 0u;
-            if (const auto reference = capture_.multiframe().preparedReferenceMetadata()) {
-                const double exposure = rawrcam::capture::multiframe::linearExposure(*reference);
-                tuning.aeLinearExposure = float(exposure * std::exp2(-double(hdrHeadroomEvFor(*reference))));
-            }
-        }
         // Noise limit for the merge: the reference frame's noise model at
-        // its render gain over the frames merged (burst plus any
-        // post-shutter frames).
+        // its render gain over the frames merged.
         auto tone = look_.toneParams();
         rawr::local_tone::LiftNoise noise{};
         if (const auto reference = capture_.multiframe().preparedReferenceMetadata()) {
-            const std::uint32_t frames =
-                capture_.multiframe().preparedFrameCount() +
-                (tuning.mergeAlgorithm == rawrcam::capture::multiframe::kMergeAlgorithmHdrPlusBracketed
-                     ? tuning.bracketFrames
-                     : 0u);
+            const std::uint32_t frames = capture_.multiframe().preparedFrameCount();
             noise = liftNoiseFor(*reference, pipelineCallbacks_.postGainFor(*reference) * std::exp2(tone.exposureEV),
                                  frames);
         }
@@ -348,26 +319,12 @@ uint64_t SessionEngine::startPreparedMultiframeCapture(
         mergedDng.autoKeyEv = baseDng.autoKeyEv;
         requestId = capture_.multiframe().startPreparedMultiframeCapture(
             std::move(baseDng), std::move(mergedDng), std::move(mergedJpeg), dumpRzslRequested, tuning, baseFrameMode,
-            tone, look_.requestedFilmEnabled(), look_.filmLook(), &bracket);
-    }
-    // HDR+ bracketed: the dark frames are one-shot camera requests, submitted
-    // outside mu_ like every other camera control call.
-    if (requestId != 0u && bracket) {
-        auto* controller = cameraControls_.controller();
-        const bool submitted =
-            controller && controller->captureExposureBracket(bracket->requestId, bracket->baseExposureTimeNs,
-                                                             bracket->baseSensitivity, bracket->evOffsets);
-        if (!submitted) {
-            LOGW("MULTIFRAME_BRACKET_SUBMIT_FAIL request=%llu", static_cast<unsigned long long>(bracket->requestId));
-            std::lock_guard<std::mutex> lock(mu_);
-            capture_.multiframe().abandonBracket(bracket->requestId);
-        }
+            tone, look_.requestedFilmEnabled(), look_.filmLook());
     }
     return requestId;
 }
 void SessionEngine::cancelPreparedMultiframeCapture() {
     std::lock_guard<std::mutex> lock(mu_);
-    bracketSkippedForPending_ = false;
     capture_.multiframe().cancelPreparedMultiframeCapture();
 }
 

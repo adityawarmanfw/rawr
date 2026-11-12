@@ -133,7 +133,7 @@ class NativePreviewEngine {
 
 
 
-    external fun prepareExperimentalMultiframe(handle: Long, maxFrames: Int, longFrames: Int): Int
+    external fun prepareExperimentalMultiframe(handle: Long, maxFrames: Int): Int
 
     external fun startPreparedMultiframeCapture(
         handle: Long,

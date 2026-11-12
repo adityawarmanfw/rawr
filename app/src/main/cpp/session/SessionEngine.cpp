@@ -767,7 +767,6 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
     pending->referenceColor = pending->colors[pending->referenceIndex];
     const auto prepared = static_cast<uint32_t>(pending->frames.size());
     std::lock_guard<std::mutex> lock(mu_);
-    bracketSkippedForPending_ = true;  // no binned long frames for a full-size burst
     return capture_.multiframe().adoptPreparedCapture(std::move(pending)) ? prepared : UINT32_MAX;
 }
 bool SessionEngine::fullSizeStillClaimed(uint64_t timestampNs) {
