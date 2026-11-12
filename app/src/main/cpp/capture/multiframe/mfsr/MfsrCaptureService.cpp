@@ -558,9 +558,12 @@ void MfsrCaptureService::spoolLoop() {
                     burst.referenceIndex = best;
                     burst.referenceMetadata = burst.metadata[best];
                     burst.referenceColor = burst.colors[best];
+                    const double scoreMs =
+                        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
+                    pending->work->baseSelectMs = scoreMs;
+                    pending->work->baseSelectFrames = static_cast<std::uint32_t>(windowIndex.size());
                     LOGI("MULTIFRAME_BASEFRAME mode=rexture-press selected=%u/%zu scored=%zu scoreMs=%.1f", best, burst.frames.size(),
-                         windowIndex.size(),
-                         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count());
+                         windowIndex.size(), scoreMs);
                 } catch (const std::exception& e) {
                     LOGE("MULTIFRAME_REXTURE_SCORE_FALLBACK %s", e.what());
                 } catch (...) {

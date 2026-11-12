@@ -198,6 +198,8 @@ void MfsrCaptureJob::runStages(Published& published) {
         rawrcam::encoding::jpeg::toneParametersFrom(frozenTonemap, mergedJpeg.develop.colorRenderProfile);
     MultiframeStageTimings mfStages{};
     mfStages.sharpnessMs = sharpnessMs;
+    mfStages.baseSelectMs = work->baseSelectMs;
+    mfStages.baseSelectFrames = work->baseSelectFrames;
     using rawr::raw_multiframe_output::MultiframeOutputAdapter;
     using rawrcam::develop::rendered::RenderedStillCompletion;
     using rawrcam::develop::rendered::RenderedStillContext;
@@ -472,6 +474,9 @@ void MfsrCaptureJob::runStages(Published& published) {
                  "subMs=%.1f betweenMs=%.1f idleMs=%.1f",
                  t.chunkCount, t.totalMs, t.chunkWallMs, t.chunkGpuMs, t.chunkWaitMs, t.chunkRecordMs, t.chunkSubmitMs,
                  t.totalMs - t.chunkWallMs, t.chunkWaitMs - t.chunkGpuMs);
+            mfStages.mergeWallMs = t.totalMs;
+            mfStages.mergeGpuMs = t.chunkGpuMs;
+            mfStages.mergeWaitMs = t.chunkWaitMs;
             mfStages.initNote = mergeResult->resourcesReused
                                     ? "pipelines warm"
                                     : (mergeResult->pipelineCacheReused ? "pipeline cache reused" : "cold");
