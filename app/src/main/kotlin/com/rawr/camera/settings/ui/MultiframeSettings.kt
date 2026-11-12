@@ -39,7 +39,7 @@ internal fun MultiframeSettings(state: SettingsUiState, dispatch: SettingsDispat
             title = "Merge Algorithm",
             description = "Super-resolution: kernel-regression merge, smoother with optional upscaling. HDR+: tile-aligned robust average on the RAW mosaic; keeps natural single-frame grain at higher SNR and avoids blotches in low light. HDR+ Quality: per-frequency merge, cleaner with mild sharpening and blends motion more, slower. " +
                 (if (MultiframeMergeAlgorithm.HdrPlusBracketed.available) "HDR+ Bracketed: HDR+ Quality on a burst metered darker to keep bright areas (sky, lamps) from clipping, brightened back, plus a few longer frames right after the shutter for cleaner shadows; hold still a moment longer. " else "") +
-                "Rexture: kernel-regression merge of the whole burst at native resolution, aligned and weighted per pixel; the sharpest frame of the last quarter second before the shutter is the base. Equal-exposure bursts, up to about 16 MP. " +
+                "Rexture: kernel-regression merge of the whole burst at native resolution, aligned and weighted per pixel; the sharpest frame of the last quarter second before the shutter is the base. Equal-exposure bursts. Up to about 56 MP it merges the whole frame (JPEG and DNG); above that it merges in strips and saves DNG only. " +
                 "(All HDR+ modes and Rexture: native resolution only.)"
         ) {
             MultiframeMergeAlgorithm.entries.filter { it.available }.forEachIndexed { index, candidate ->
