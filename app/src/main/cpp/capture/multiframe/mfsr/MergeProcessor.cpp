@@ -12,7 +12,6 @@ rawr::raw_gpu_pipeline::BurstRunResult MergeProcessor::run(
     const rawr::raw_gpu_pipeline::AndroidBurstCoordinator::Submit& queueSubmit,
     const rawr::raw_gpu_pipeline::AndroidBurstCoordinator::Submit& mergeSubmit) {
     const bool useMfQueue = context.hasMultiframeQueue();
-    rawr::raw_alignment_gpu::Config alignmentConfig{};
     // The noise model is fitted from the burst; the merges read only the CFA, the burst fit switch and the hot pixels.
     rawr::raw_merge_wronski_gpu::Config mergeConfig{};
     mergeConfig.cfa = static_cast<rawr::raw_merge_wronski_gpu::CfaPattern>(cfa);
@@ -39,8 +38,7 @@ rawr::raw_gpu_pipeline::BurstRunResult MergeProcessor::run(
     hdrplusConfig.strength = tuning.hdrplusStrength;
     hdrplusConfig.tileSize = tuning.hdrplusTileSize;
     coordinator.initialize(context.physicalDevice(), context.device(), context.queueFamily(), mergeSubmit, width,
-                           height, tuning.outputScale, stageSink, alignmentConfig, mergeConfig, algorithm,
-                           hdrplusConfig);
+                           height, stageSink, mergeConfig, algorithm, hdrplusConfig);
     ScopedSemaphore mfStartSem(context.device(), useMfQueue);
     if (useMfQueue) {
         // Empty signal ordered after all prior queue-0 work (decodes, base

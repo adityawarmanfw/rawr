@@ -123,7 +123,7 @@ rawrcam::metadata::FrameMetadataSnapshot frameMetadata(const std::string& metada
     out.colorCorrectionGainsRggb = floats4(tsv(metadata, "colorCorrectionGainsRggb"), {1, 1, 1, 1});
     const auto white = tsv(metadata, "effectiveWhiteLevel");
     out.effectiveWhiteLevel = white.empty() ? 1023.f : std::stof(white);
-    // Per-frame exposure (bracketed merges scale frames by their ratio).
+    // Per-frame exposure (every merge scales companions to the reference exposure).
     const auto exposureNs = tsv(metadata, "exposureTimeNs");
     if (!exposureNs.empty()) out.exposureTimeNs = std::stoll(exposureNs);
     const auto sensitivity = tsv(metadata, "sensitivity");
@@ -476,7 +476,7 @@ struct TuneOpts {
     bool hotPixels = true;
     std::string hotPixelList;  // test/diagnostic override: "x y" per line
     std::string reference = "recorded";  // recorded|middle|sharpest|darkest
-    std::string mergeAlgorithm = "wronski";  // wronski|hdrplus|hdrplus-freq|hdrplus-bracket|rexture
+    std::string mergeAlgorithm = "rexture";  // rexture|hdrplus-freq
     std::string dumpStages;  // rexture: directory for stage dumps (compare.py layout)
     std::string noiseAb;     // "a,b": scalar noise model override (normalised units)
     std::string injectFlow;  // rexture verification: dump dir whose frames/<i>/flow replaces the estimated fine flow
@@ -814,8 +814,6 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
         std::cerr << "diagnostic=duplicate_middle frame=" << mid << '\n';
     }
 
-    rawr::raw_alignment_gpu::Config alignment{};
-    alignment.lkIterations = static_cast<std::uint32_t>(tune.lkIterations);
     rawr::raw_merge_wronski_gpu::Config merge{};
     merge.cfa = static_cast<rawr::raw_merge_wronski_gpu::CfaPattern>(bundle.cfa);
     merge.kDetail = .08f;
@@ -907,17 +905,6 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
         std::cerr << "reference_source=recorded_scores ref=" << originalRef << '\n';
     } else {
         std::cerr << "reference_source=recorded_index ref=" << originalRef << '\n';
-    }
-    // Bracketed merges reference the darkest frame (the app's rule), unless
-    // middle/sharpest was forced.
-    if (tune.reference == "darkest" || (tune.mergeAlgorithm == "hdrplus-bracket" && tune.reference == "recorded")) {
-        const auto before = originalRef;
-        originalRef = rawrcam::capture::multiframe::bracketReference(metadata, storedScores,
-                                                                     static_cast<std::uint32_t>(originalRef));
-        std::cerr << "reference_source=darkest ref=" << originalRef << " (was " << before << ") bracketed="
-                  << (rawrcam::capture::multiframe::isExposureBracketed(metadata) ? 1 : 0) << " lift_ev="
-                  << rawrcam::capture::multiframe::bracketLiftEv(metadata, static_cast<std::uint32_t>(originalRef))
-                  << '\n';
     }
     if (originalRef >= burst.size()) throw std::invalid_argument("RZSL: reference index out of range");
     if (tune.noiseSource == "recorded" || tune.noiseSource == "burst") {
@@ -1064,13 +1051,9 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
                            [&](const VkSubmitInfo& info, VkFence fence) {
                                vktest::ck(vkQueueSubmit(context.q, 1, &info, fence), "burst queue submit");
                            },
-                           width, height, tune.scale, {}, alignment, merge,
-                           tune.mergeAlgorithm == "rexture"        ? rawr::raw_gpu_pipeline::MergeAlgorithm::Rexture
-                           : tune.mergeAlgorithm == "hdrplus"      ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusSpatial
-                           : tune.mergeAlgorithm == "hdrplus-freq" ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusFrequency
-                           : tune.mergeAlgorithm == "hdrplus-bracket"
-                               ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusBracketed
-                                                                   : rawr::raw_gpu_pipeline::MergeAlgorithm::Wronski,
+                           width, height, {}, merge,
+                           tune.mergeAlgorithm == "rexture" ? rawr::raw_gpu_pipeline::MergeAlgorithm::Rexture
+                                                            : rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusFrequency,
                            tune.hdrplus);
     auto result = coordinator.run(runFrames, runRef);
     if (stageDump) stageDump->finish();
@@ -1111,12 +1094,7 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
                         std::size_t(width) * 2u);
         for (auto& black : refMeta.blackLevelPhysicalRggb) black *= projection.codeScale;
         refMeta.effectiveWhiteLevel *= projection.codeScale;
-        // Bracketed bursts, as MfsrCaptureJob: underexposed-ZSL captures lift
-        // to their recorded Camera2 AE exposure, older ones to the brightest frame.
-        const auto aeText = tsv(bundle.frames.front().metadata, "rawrAeLinearExposure");
-        const float liftEv = !aeText.empty()
-                                 ? rawrcam::capture::multiframe::headroomLiftEv(std::stof(aeText), metadata[metaRef])
-                                 : rawrcam::capture::multiframe::bracketLiftEv(metadata, metaRef);
+        const float liftEv = 0.0f;
         std::filesystem::path file = tune.exportMergedDng;
         if (file.has_parent_path()) std::filesystem::create_directories(file.parent_path());
         writeFrameDng(file, bundle.cfa, width, height, bundle.frames[metaRef].metadata, refMeta, codes.data(),

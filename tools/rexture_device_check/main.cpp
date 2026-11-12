@@ -216,7 +216,7 @@ int main(int argc, char** argv) {
         }
         coordinator.initialize(ctx.pd, ctx.dev, ctx.qf,
                                [&](const VkSubmitInfo& si, VkFence f) { vktest::ck(vkQueueSubmit(ctx.q, 1, &si, f), "burst submit"); },
-                               width, height, 1.0f, {}, {}, cfg, algorithm, {});
+                               width, height, {}, cfg, algorithm, {});
         if (scores) {
             RextureFrameScorer scorer;
             scorer.initialize(ctx.pd, ctx.dev, ctx.qf, [&](const VkSubmitInfo& si, VkFence f) { vktest::ck(vkQueueSubmit(ctx.q, 1, &si, f), "score submit"); });
