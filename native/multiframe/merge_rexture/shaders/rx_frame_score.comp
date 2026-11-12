@@ -3,7 +3,7 @@
 // Rexture base selection: cheap per-frame score, evaluated at the shutter press for the frames of the candidate window.
 // Quarter-resolution green plane q (mean of the 8 green samples of each 4 x 4 raw block); sharp = mean over unclipped
 // positions of (Laplacian(q)^2 - 20 * expected noise variance of q), expected variance (alpha max(q, 0) + beta) / 8;
-// sat = share of quarter-resolution positions whose 4 x 4 block holds a clipped raw sample (>= white - 3).
+// sat = share of quarter-resolution positions whose 4 x 4 block holds a clipped raw sample (normalised >= RX_CLIP_NORM).
 // One workgroup = 16 x 16 quarter-resolution positions; it writes one partial
 // (sum of lap^2 - 20 var over ok positions, number of ok positions, number of clipped positions, number of positions) to
 // partials[frameSlot * workgroups + wg]; the host adds them in double precision.
@@ -21,17 +21,15 @@ layout(push_constant) uniform P {
 } p;
 
 shared vec4 red[256];
-const float CLIP_MARGIN = 3.0;
-
 // (q, clipped) of quarter-resolution position t
 vec2 quarter(ivec2 t) {
     float s = 0.0, clipped = 0.0;
     for (int dy = 0; dy < 4; ++dy)
         for (int dx = 0; dx < 4; ++dx) {
             ivec2 q = t * 4 + ivec2(dx, dy);
-            float raw = float(imageLoad(rawU16, q).x);
-            if (raw >= p.white - CLIP_MARGIN) clipped = 1.0;
-            if (rxChannel(q, p.cfa) == 1) s += rxNormFromRaw(raw, q, p.black, p.white);
+            float v = rxNormFromRaw(float(imageLoad(rawU16, q).x), q, p.black, p.white);
+            if (v >= RX_CLIP_NORM) clipped = 1.0;
+            if (rxChannel(q, p.cfa) == 1) s += v;
         }
     return vec2(0.125 * s, clipped);
 }

@@ -677,6 +677,8 @@ BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>
     for (const auto& fr : frames)
         samePairLevels = samePairLevels && fr.parameters.normalization.whiteLevel == frames[ref].parameters.normalization.whiteLevel &&
                          fr.parameters.normalization.blackByPhase == frames[ref].parameters.normalization.blackByPhase;
+    // AE may still be settling while the ZSL ring fills: every companion is scaled to the base's exposure, as in the HDR+ path.
+    const auto gainOf = [&](std::uint32_t i) { return exposureGain(frames, ref, i); };
     int pending = -1;  // first frame of a pair waiting for its partner (production path)
     std::uint32_t companions = 0;
     for (std::uint32_t i = 0; i < frames.size(); ++i) {
@@ -689,7 +691,7 @@ BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>
         if (rextureObserver_) {
             // Verification build: one submission per stage group so every stage can be dumped.
             timings.companionPrepareMs += profiled(11u, i, 3u, [&] {
-                recorder.recordPrepare(command_, false, frames[i].raw.view, frames[i].parameters);
+                recorder.recordPrepare(command_, false, frames[i].raw.view, frames[i].parameters, gainOf(i));
             });
             rextureObserver_("companion_prepare", i, arena_);
             for (std::uint32_t level = 0; level < 4u; ++level)
@@ -700,11 +702,11 @@ BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>
             timings.robustnessMs += profiled(13u, i, 1u, [&] { recorder.recordRobustness(command_, rextureDebug_); });
             rextureObserver_("companion_robust", i, arena_);
             timings.accumulationMs += profiled(14u, i, 1u, [&] {
-                recorder.recordAccumulate(command_, frames[i].raw.view, frames[i].parameters, rextureDebug_);
+                recorder.recordAccumulate(command_, frames[i].raw.view, frames[i].parameters, rextureDebug_, gainOf(i));
             });
         } else if (!samePairLevels) {
             timings.companionPrepareMs += profiled(11u, i, 3u + 4u + 3u + 3u, [&] {
-                recorder.recordPrepare(command_, false, frames[i].raw.view, frames[i].parameters);
+                recorder.recordPrepare(command_, false, frames[i].raw.view, frames[i].parameters, gainOf(i));
                 for (std::uint32_t level = 0; level < 3u; ++level) recorder.recordAlignmentLevel(command_, level, false);
             });
             timings.alignmentMs += profiled(11u, i, 3u + 1u, [&] {
@@ -712,7 +714,7 @@ BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>
                 recorder.recordRobustness(command_, false);
             });
             timings.accumulationMs += profiled(14u, i, 1u, [&] {
-                recorder.recordAccumulate(command_, frames[i].raw.view, frames[i].parameters, false);
+                recorder.recordAccumulate(command_, frames[i].raw.view, frames[i].parameters, false, gainOf(i));
             });
         } else {
             // Three submissions per companion (a submission costs ~1.4 ms of GPU idle on Adreno, and the preview needs a gap
@@ -723,7 +725,7 @@ BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>
             const std::uint32_t slot = pending < 0 ? 0u : 1u;  // pairing is only used when every frame shares the levels
             constexpr std::uint32_t kMarks1 = 3u + 4u + 3u + 3u;
             timings.companionPrepareMs += profiled(11u, i, kMarks1, [&] {
-                recorder.recordPrepare(command_, false, frames[i].raw.view, frames[i].parameters);
+                recorder.recordPrepare(command_, false, frames[i].raw.view, frames[i].parameters, gainOf(i));
                 for (std::uint32_t level = 0; level < 3u; ++level) recorder.recordAlignmentLevel(command_, level, false);
             });
             timings.alignmentMs += profiled(11u, i, 3u + 1u, [&] {
@@ -735,7 +737,8 @@ BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>
                 continue;
             }
             timings.accumulationMs += profiled(14u, i, 1u, [&] {
-                recorder.recordAccumulatePair(command_, frames[pending].raw.view, frames[i].raw.view, frames[i].parameters);
+                recorder.recordAccumulatePair(command_, frames[pending].raw.view, frames[i].raw.view, frames[i].parameters,
+                                              gainOf(static_cast<std::uint32_t>(pending)), gainOf(i));
             });
             ++companions;
             if (frameConsumed) frameConsumed(static_cast<std::uint32_t>(pending));
@@ -747,7 +750,7 @@ BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>
     if (pending >= 0) {  // odd companion count: the last frame alone
         const auto i = static_cast<std::uint32_t>(pending);
         timings.accumulationMs += profiled(14u, i, 1u, [&] {
-            recorder.recordAccumulate(command_, frames[i].raw.view, frames[i].parameters, false);
+            recorder.recordAccumulate(command_, frames[i].raw.view, frames[i].parameters, false, gainOf(i));
         });
         ++companions;
         if (frameConsumed) frameConsumed(i);

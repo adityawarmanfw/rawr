@@ -22,8 +22,10 @@ class RextureRecorder final {
     RextureRecorder(ResourceArena& arena, VulkanExecutor& executor, rawr::raw_merge_rexture_gpu::Config config);
 
     // Frame preparation: normalise + local5 guide + pyramid + guide mean/variance (+ structure tensor for the base).
-    // Reads the raw U16 image directly.
-    void recordPrepare(VkCommandBuffer, bool base, VkImageView rawU16, const MultiframeFrameParameters&) const;
+    // Reads the raw U16 image directly. gain = reference exposure / frame exposure scales a companion to the base (ignored
+    // for the base).
+    void recordPrepare(VkCommandBuffer, bool base, VkImageView rawU16, const MultiframeFrameParameters&,
+                       float gain = 1.0f) const;
 
     // Base-frame kernel: structure-tensor integration and the anisotropic covariance (needs recordPrepare(base) first).
     // Uses rx_alt_mean / rx_alt_var as scratch, so it must run before the first companion's preparation.
@@ -48,11 +50,14 @@ class RextureRecorder final {
     // minimum + support / cover update.
     void recordRobustness(VkCommandBuffer, bool debug, std::uint32_t slot = 0) const;
 
-    // Adds the aligned companion to the running per-pixel sums (after recordRobustness).
-    void recordAccumulate(VkCommandBuffer, VkImageView rawU16, const MultiframeFrameParameters&, bool debug) const;
+    // Adds the aligned companion to the running per-pixel sums (after recordRobustness), scaled by gain (as in
+    // recordPrepare); a companion exposed longer than the base (gain < 1) leaves its clipped samples out.
+    void recordAccumulate(VkCommandBuffer, VkImageView rawU16, const MultiframeFrameParameters&, bool debug,
+                          float gain = 1.0f) const;
     // Two aligned companions (slots 0 and 1: fine flow + robustness kept apart) in one pass: the per-pixel state is read and
     // written once for both. The frames must share black / white levels.
-    void recordAccumulatePair(VkCommandBuffer, VkImageView rawSlot0, VkImageView rawSlot1, const MultiframeFrameParameters&) const;
+    void recordAccumulatePair(VkCommandBuffer, VkImageView rawSlot0, VkImageView rawSlot1, const MultiframeFrameParameters&,
+                              float gain0 = 1.0f, float gain1 = 1.0f) const;
 
     // Final pass (after the last companion): finalize into linear_output (RGBA16F), then the strip-wise grain pass that
     // lowers the noise where few frames were merged to the level of the merged areas around it.

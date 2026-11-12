@@ -29,6 +29,8 @@ layout(push_constant) uniform P {
     int cfa;
     int isBase;      // 1: also write the structure tensor
     float alpha, beta;
+    int skip;        // (host-side profiling knob, unused here)
+    float gain;      // reference exposure / this frame's exposure (1 for the base and equal-exposure bursts)
 }
 p;
 
@@ -56,7 +58,7 @@ void main() {
     for (int y = tid2.y; y < RAW_T; y += PG)
         for (int x = tid2.x; x < RAW_T; x += PG) {
             ivec2 qc = clamp(rt0 + ivec2(x, y), ivec2(0), rawSize - 1);
-            sA[y * RAW_T + x] = rxNormFromRaw(float(imageLoad(rawU16, qc).x), qc, p.black, p.white);
+            sA[y * RAW_T + x] = p.gain * rxNormFromRaw(float(imageLoad(rawU16, qc).x), qc, p.black, p.white);
         }
     barrier();
 

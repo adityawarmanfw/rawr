@@ -20,6 +20,7 @@ struct PreparePc {
     std::int32_t w, h, l2w, l2h, cfa, isBase;
     float alpha, beta;
     std::int32_t skip;
+    float gain;  // reference exposure / frame exposure
 };
 struct PyramidPc {
     std::int32_t dstW, dstH;
@@ -52,6 +53,7 @@ struct AccPc {
     std::int32_t w, h, cfa, debug;
     float frameWeight;
     std::int32_t frames;
+    float gain0, gain1;  // reference exposure / frame exposure of the pass's frames
 };
 struct FinalPc {
     float black[4];
@@ -161,7 +163,7 @@ RextureRecorder::RextureRecorder(ResourceArena& arena, VulkanExecutor& executor,
 }
 
 void RextureRecorder::recordPrepare(VkCommandBuffer c, bool base, VkImageView rawU16,
-                                    const MultiframeFrameParameters& f) const {
+                                    const MultiframeFrameParameters& f, float gain) const {
     if (!rawU16) throw std::invalid_argument("rexture recorder: null RAW16 view");
     const std::string who = base ? "rx_base_" : "rx_alt_";
     const auto& l3 = arena_.image(who + "l3");
@@ -182,6 +184,7 @@ void RextureRecorder::recordPrepare(VkCommandBuffer c, bool base, VkImageView ra
     p.alpha = config_.noiseAlpha;
     p.beta = config_.noiseBeta;
     p.skip = std::getenv("RX_PREP_SKIP") ? std::atoi(std::getenv("RX_PREP_SKIP")) : 0;
+    p.gain = base ? 1.0f : gain;
     ImageBinding raw{0, rawU16, VK_IMAGE_LAYOUT_GENERAL};
     // One workgroup per 16 x 16 guide positions (32 x 32 raw pixels).
     executor_.record(c, ShaderId::RxFramePrep,
@@ -388,7 +391,7 @@ namespace {
 ImageBinding raw8(VkImageView v) { return {8, v, VK_IMAGE_LAYOUT_GENERAL}; }
 }  // namespace
 void RextureRecorder::recordAccumulate(VkCommandBuffer c, VkImageView rawU16, const MultiframeFrameParameters& f,
-                                       bool debug) const {
+                                       bool debug, float gain) const {
     if (!rawU16) throw std::invalid_argument("rexture recorder: null RAW16 view");
     const auto& a = arena_.image("rx_acc_a");
     AccPc p{};
@@ -400,6 +403,7 @@ void RextureRecorder::recordAccumulate(VkCommandBuffer c, VkImageView rawU16, co
     p.debug = debug ? 1 : 0;
     p.frameWeight = 1.0f;
     p.frames = 1;
+    p.gain0 = p.gain1 = gain;
     ImageBinding raw{0, rawU16, VK_IMAGE_LAYOUT_GENERAL};
     const ArenaImage& ss2 = debug ? arena_.image("rx_dbg_ss2") : a;   // never touched without debug
     executor_.record(c, ShaderId::RxAccumulate,
@@ -551,7 +555,7 @@ void RextureRecorder::recordAccumulatorClear(VkCommandBuffer c) const {
 
 namespace rawr::raw_gpu_pipeline {
 void RextureRecorder::recordAccumulatePair(VkCommandBuffer c, VkImageView rawSlot0, VkImageView rawSlot1,
-                                           const MultiframeFrameParameters& f) const {
+                                           const MultiframeFrameParameters& f, float gain0, float gain1) const {
     if (!rawSlot0 || !rawSlot1) throw std::invalid_argument("rexture recorder: null RAW16 view");
     const auto& a = arena_.image("rx_acc_a");
     AccPc p{};
@@ -563,6 +567,8 @@ void RextureRecorder::recordAccumulatePair(VkCommandBuffer c, VkImageView rawSlo
     p.debug = 0;
     p.frameWeight = 1.0f;
     p.frames = 2;
+    p.gain0 = gain0;
+    p.gain1 = gain1;
     ImageBinding raw{0, rawSlot0, VK_IMAGE_LAYOUT_GENERAL};
     executor_.record(c, ShaderId::RxAccumulate,
                      {{raw, ib(1, arena_.image("rx_flow_l3")), ib(2, arena_.image("rx_er")), ib(3, arena_.image("rx_base_cov")),

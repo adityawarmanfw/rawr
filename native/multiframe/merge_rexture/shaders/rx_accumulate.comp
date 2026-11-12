@@ -7,7 +7,7 @@
 // where robustness is the frame's half-resolution weight at o / 2. Per pixel and colour the burst keeps sum(w x), sum(w),
 // and sum over frames of (sum of the frame's w)^2 (effective frame count); debug builds also sum w^2 (variance factor).
 // Packed state: A = (s.rgb, w.r), B = (w.g, w.b), C = (sq.rgb) in fp16. Reads the raw frame directly.
-// Starts from accumulate.comp.
+// Companions of a different exposure are scaled to the base (gain0 / gain1). Starts from accumulate.comp.
 #include "rx_common.glsl"
 
 layout(local_size_x = 16, local_size_y = 16) in;
@@ -30,6 +30,7 @@ layout(push_constant) uniform P {
     int debug;
     float frameWeight;       // per-frame weight (1 for equal exposures); hook for the bracket path
     int frames;              // 1 or 2: frames added by this pass (state is read and written once per pass)
+    float gain0, gain1;      // reference exposure / frame exposure of the pass's frames (1 for equal exposures)
 } p;
 
 const float RB_WIDEN = 1.2;
@@ -41,6 +42,7 @@ const float FRAME_NORM_FLOOR = 0.1;
 uint loadRaw(int f, ivec2 q) { return f == 0 ? imageLoad(rawU16, q).x : imageLoad(rawU16B, q).x; }
 vec2 loadFlow(int f, ivec2 q) { return f == 0 ? imageLoad(flowI, q).xy : imageLoad(flowB, q).xy; }
 float loadEr(int f, ivec2 q) { return f == 0 ? imageLoad(erI, q).x : imageLoad(erB, q).x; }
+float frameGain(int f) { return f == 0 ? p.gain0 : p.gain1; }
 
 void main() {
     const ivec2 o = ivec2(gl_GlobalInvocationID.xy);
@@ -78,6 +80,11 @@ void main() {
         }
         const ivec2 c0 = ivec2(floor(mv));
         const vec2 e = mv - 0.5;
+        // A frame exposed longer than the base is scaled down to it; its clipped samples would then read below the base's
+        // clip and pull highlights towards a wrong colour, so they are left out (a shorter frame keeps them: scaled up they
+        // stay at or above the base's clip, which the output stage clamps and flags).
+        const float eg = frameGain(f);
+        const bool dropClipped = eg < 1.0 - 1e-3;
         vec3 fs = vec3(0.0), fw = vec3(0.0), f2 = vec3(0.0);
         for (int dy = -1; dy <= 1; ++dy)
             for (int dx = -1; dx <= 1; ++dx) {
@@ -87,8 +94,10 @@ void main() {
                 float s = cc == 1 ? 1.0 : 1.0 / (RB_WIDEN * RB_WIDEN);
                 vec2 d = vec2(q) - e;
                 float z = max(0.0, s * (qi.x * d.x * d.x + 2.0 * qi.y * d.x * d.y + qi.z * d.y * d.y));
+                float xn = rxNormFromRaw(float(loadRaw(f, q)), q, p.black, p.white);
+                if (dropClipped && xn >= RX_CLIP_NORM) continue;
                 float ww = exp(-0.5 * z) * r * p.frameWeight;
-                float x = rxNormFromRaw(float(loadRaw(f, q)), q, p.black, p.white);
+                float x = eg * xn;
                 fs[cc] += ww * x;
                 fw[cc] += ww;
                 f2[cc] += ww * ww;

@@ -4,6 +4,10 @@
 // Offsets (x, y) of the red site inside a 2x2 quad.
 ivec2 rxRedOffset(int cfa) { return ivec2((cfa == 1 || cfa == 3) ? 1 : 0, (cfa == 2 || cfa == 3) ? 1 : 0); }
 
+// A normalised sample at or above this is treated as clipped. Below the white level on purpose: some sensors clip a
+// colour a few percent under it (V2562 35 mm red at about 0.978).
+const float RX_CLIP_NORM = 0.95;
+
 // Normalised value of a raw sample at (already clamped) site q. Coordinates are clamped to the image first and the
 // phase of the clamped site is used: identical to normalising the whole image and edge-padding it.
 float rxNormFromRaw(float rawValue, ivec2 qClamped, vec4 black, float white) {
