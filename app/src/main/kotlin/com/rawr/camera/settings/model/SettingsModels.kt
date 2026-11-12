@@ -545,7 +545,7 @@ object MultiframeSpecs {
             "Lower: faster but noisier. Higher: cleaner flats yet slightly softer edges, slower with more motion risk.",
             2f,
             30f,
-            16f,
+            12f,
             1f,
             0
         )
@@ -886,13 +886,13 @@ object MultiframeSpecs {
 
 data class MultiframeTuning(
     val outputResolution: MultiframeOutputResolution = MultiframeOutputResolution.Native,
-    val mergeAlgorithm: MultiframeMergeAlgorithm = MultiframeMergeAlgorithm.HdrPlusQuality,
+    val mergeAlgorithm: MultiframeMergeAlgorithm = MultiframeMergeAlgorithm.Rexture,
     val hdrPlusStrength: Float = 13f,
     val hdrPlusTileSize: Int = 32,
     val bracketEv: Float = -3f,
     val bracketFrames: Int = 2,
     val longFrameEv: Float = 0f,
-    val maxFrames: Int = 16,
+    val maxFrames: Int = 12,
     val lkIterations: Int = 5,
     val hessianEpsilonExponent: Int = -10,
     val kDetail: Float = .15f,
