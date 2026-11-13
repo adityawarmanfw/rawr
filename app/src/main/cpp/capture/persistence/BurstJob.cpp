@@ -21,10 +21,7 @@ void check(VkResult r) {
     if (r != VK_SUCCESS) throw std::runtime_error("capture_job_vulkan_" + std::to_string(r));
 }
 }  // namespace
-void saveBurst(const std::string& path, multiframe::MultiframeWorkItem& work, const vulkan::VulkanContext& vk,
-               std::mutex& mutex) {
-    const auto started = std::chrono::steady_clock::now();
-    double readbackMs = 0.0;
+CaptureJob makeBurstJob(multiframe::MultiframeWorkItem& work) {
     // Sharpest-reference selection already ran on the GPU in the spool thread
     // before this call (MfsrCaptureService::spoolLoop), so the persisted
     // reference is final here. Each frame is synchronously read back before
@@ -58,6 +55,12 @@ void saveBurst(const std::string& path, multiframe::MultiframeWorkItem& work, co
     job.referenceIndex = burst.referenceIndex;
     job.metadata = burst.metadata;
     for (auto& f : burst.frames) job.parameters.push_back(f.parameters);
+    return job;
+}
+void saveBurstFrames(const std::string& path, CaptureJob& job, multiframe::FrozenBurst& burst, std::uint64_t requestId,
+                     const vulkan::VulkanContext& vk, std::mutex& mutex) {
+    const auto started = std::chrono::steady_clock::now();
+    double readbackMs = 0.0;
     if (burst.acquiredJournal) {
         burst.acquiredJournal->commit(path, job);
         const double totalMs =
@@ -65,7 +68,7 @@ void saveBurst(const std::string& path, multiframe::MultiframeWorkItem& work, co
         __android_log_print(
             ANDROID_LOG_INFO, "RawrCamNative",
             "BURST_SAVE requestId=%llu frames=%zu source=acquisition_journal payloadRewrittenBytes=0 totalMs=%.1f",
-            static_cast<unsigned long long>(work.requestId), burst.frames.size(), totalMs);
+            static_cast<unsigned long long>(requestId), burst.frames.size(), totalMs);
         return;
     }
     // CPU-held frames are journaled straight from their source (no GPU readback).
@@ -80,7 +83,7 @@ void saveBurst(const std::string& path, multiframe::MultiframeWorkItem& work, co
             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
         __android_log_print(ANDROID_LOG_INFO, "RawrCamNative",
             "BURST_SAVE requestId=%llu frames=%zu source=cpu totalMs=%.1f readMs=%.1f",
-            static_cast<unsigned long long>(work.requestId), burst.frames.size(), totalMs, readMs);
+            static_cast<unsigned long long>(requestId), burst.frames.size(), totalMs, readMs);
         return;
     }
     rawr::raw_multiframe_output::MultiframeOutputAdapter adapter;
@@ -100,9 +103,14 @@ void saveBurst(const std::string& path, multiframe::MultiframeWorkItem& work, co
     const double totalMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
     __android_log_print(ANDROID_LOG_INFO, "RawrCamNative",
         "BURST_SAVE requestId=%llu frames=%zu bytes=%llu totalMs=%.1f readbackMs=%.1f storageAndSetupMs=%.1f",
-        static_cast<unsigned long long>(work.requestId), burst.frames.size(),
+        static_cast<unsigned long long>(requestId), burst.frames.size(),
         static_cast<unsigned long long>(uint64_t(job.frame.width) * job.frame.height * 2 * burst.frames.size()),
         totalMs, readbackMs, totalMs - readbackMs);
+}
+void saveBurst(const std::string& path, multiframe::MultiframeWorkItem& work, const vulkan::VulkanContext& vk,
+               std::mutex& mutex) {
+    auto job = makeBurstJob(work);
+    saveBurstFrames(path, job, *work.capture, work.requestId, vk, mutex);
 }
 namespace {
 // Frames read from the journal on demand (lazy loadBurst).

@@ -221,6 +221,7 @@ private fun PhotoLookToggles(
                 com.rawr.camera.settings.model.MultiframeMergeAlgorithm.HdrPlus -> "HDR+"
                 com.rawr.camera.settings.model.MultiframeMergeAlgorithm.HdrPlusQuality -> "HDR+ Q"
                 com.rawr.camera.settings.model.MultiframeMergeAlgorithm.HdrPlusBracketed -> "HDR+ B"
+                com.rawr.camera.settings.model.MultiframeMergeAlgorithm.Rexture -> "Rexture"
             },
             active = state.experimentalMultiframeEnabled,
             testTag = CaptureTestTags.COMPACT_MULTIFRAME,

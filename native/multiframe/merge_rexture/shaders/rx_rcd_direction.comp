@@ -1,0 +1,60 @@
+#version 450
+// Copy of native/raw_demosaic/rcd/shaders/rcd_direction.comp (production workgroup size 4x32) on fp32 work planes; see rx_rcd_common.glsl.
+#ifndef RCD_LOCAL_X
+#define RCD_LOCAL_X 4
+#endif
+#ifndef RCD_LOCAL_Y
+#define RCD_LOCAL_Y 32
+#endif
+layout(local_size_x = RCD_LOCAL_X, local_size_y = RCD_LOCAL_Y, local_size_z = 1) in;
+#include "rx_rcd_common.glsl"
+
+// Output tile + 4-pixel CFA halo required by vhDirection/pqDirection.
+const int TILE_W = RCD_LOCAL_X + 8;
+const int TILE_H = RCD_LOCAL_Y + 8;
+const uint WG_SIZE = uint(RCD_LOCAL_X * RCD_LOCAL_Y);
+shared float cfaTile[TILE_W * TILE_H];
+
+int tileIndex(ivec2 q) { return q.y * TILE_W + q.x; }
+float tcfa(ivec2 q) { return cfaTile[tileIndex(q)]; }
+
+float thp1d(ivec2 p, ivec2 d) {
+    float h = (tcfa(p - 3 * d) - tcfa(p - d) - tcfa(p + d) + tcfa(p + 3 * d)) -
+              3.0 * (tcfa(p - 2 * d) + tcfa(p + 2 * d)) + 6.0 * tcfa(p);
+    return h * h;
+}
+float tvhDirection(ivec2 p) {
+    float vs =
+        max(EPS2, thp1d(p + ivec2(0, -1), ivec2(0, 1)) + thp1d(p, ivec2(0, 1)) + thp1d(p + ivec2(0, 1), ivec2(0, 1)));
+    float hs =
+        max(EPS2, thp1d(p + ivec2(-1, 0), ivec2(1, 0)) + thp1d(p, ivec2(1, 0)) + thp1d(p + ivec2(1, 0), ivec2(1, 0)));
+    return vs / (vs + hs);
+}
+float tpqDirection(ivec2 p) {
+    ivec2 P = ivec2(1, 1), Q = ivec2(1, -1);
+    float ps = max(EPS2, thp1d(p - P, P) + thp1d(p, P) + thp1d(p + P, P));
+    float qs = max(EPS2, thp1d(p - Q, Q) + thp1d(p, Q) + thp1d(p + Q, Q));
+    return ps / (ps + qs);
+}
+
+void main() {
+    ivec2 groupBase = ivec2(gl_WorkGroupID.xy) * ivec2(RCD_LOCAL_X, RCD_LOCAL_Y) + ivec2(0, pc.y0);
+    if (!fallbackNeeded(groupBase, groupBase + ivec2(RCD_LOCAL_X, RCD_LOCAL_Y) - 1)) return;
+    uint linear = gl_LocalInvocationIndex;
+    // Cooperative halo load. cfa() performs the exact existing edge clamp/input conversion.
+    for (uint i = linear; i < uint(TILE_W * TILE_H); i += WG_SIZE) {
+        ivec2 q = ivec2(int(i % uint(TILE_W)), int(i / uint(TILE_W)));
+        cfaTile[i] = cfa(groupBase + q - ivec2(4));
+    }
+    barrier();
+
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy) + ivec2(0, pc.y0);
+    if (p.x >= int(pc.width) || p.y >= int(pc.height) || p.y >= pc.y0 + pc.rows) return;
+    float vh = 0.5, pq = 0.5;
+    if (p.x >= 4 && p.y >= 4 && p.x < int(pc.width) - 4 && p.y < int(pc.height) - 4) {
+        ivec2 lp = ivec2(gl_LocalInvocationID.xy) + ivec2(4);
+        vh = tvhDirection(lp);
+        pq = tpqDirection(lp);
+    }
+    imageStore(directionImage, wp(p), vec4(vh, pq, 0, 0));
+}

@@ -78,7 +78,31 @@ set(RAWR_MF_SHADER_SOURCES
   ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_accumulate.comp
   ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_shift_table.comp
   ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_highlights_norm.comp
-  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_normalize.comp)
+  ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_normalize.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_frame_prep.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_pyramid.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_kernel_blur.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_kernel_cov.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_qinv_debug.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_rcd_bound.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_ref_tiles.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_cand_select.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_block_match.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_lk.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_fill.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_robust.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_accumulate.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_finalize.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_frame_score.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_rcd_direction.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_rcd_green.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_rcd_diagonal.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_rcd_green_sites.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_rcd_export.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_lowcov_eaw.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_fb_flags.comp)
+# Guide positions per workgroup edge of rx_frame_prep (shader RX_PG and the recorder's dispatch must agree).
+set(RAWR_RX_PREP_PG 16 CACHE STRING "rx_frame_prep workgroup tile edge")
 set(RAWR_MF_SPV_OUTPUTS)
 foreach(RAWR_MF_SRC IN LISTS RAWR_MF_SHADER_SOURCES)
   get_filename_component(RAWR_MF_NAME ${RAWR_MF_SRC} NAME_WE)
@@ -92,7 +116,14 @@ foreach(RAWR_MF_SRC IN LISTS RAWR_MF_SHADER_SOURCES)
   if(RAWR_MF_NAME MATCHES "^hdrq_(forward|seed)_dft$")
     list(APPEND RAWR_MF_INCLUDE_DEPS ${RAWR_MF_DIR}/merge_hdrplus/shaders/hdrq_forward_dft.glsl)
   endif()
+  if(RAWR_MF_NAME MATCHES "^rx_")
+    file(GLOB RAWR_RX_GLSL ${RAWR_MF_DIR}/merge_rexture/shaders/*.glsl)
+    list(APPEND RAWR_MF_INCLUDE_DEPS ${RAWR_RX_GLSL})
+  endif()
   set(RAWR_MF_PROD_EXTRA)
+  if(RAWR_MF_NAME STREQUAL "rx_frame_prep")
+    set(RAWR_MF_PROD_EXTRA -DRX_PG=${RAWR_RX_PREP_PG})
+  endif()
   if(RAWR_MF_NAME STREQUAL "robust_photometric")
     set(RAWR_MF_PROD_EXTRA -DRAWR_MIN_GATE=1)
   endif()
@@ -116,6 +147,8 @@ add_library(raw_gpu_pipeline STATIC
   src/ResourceArena.cpp
   src/MultiframeRecorder.cpp
   src/HdrPlusRecorder.cpp
+  src/RextureRecorder.cpp
+  src/RextureFrameScorer.cpp
   src/AndroidBurstCoordinator.cpp
   src/BurstNoiseEstimate.cpp)
 add_dependencies(raw_gpu_pipeline raw_multiframe_gpu_shaders)
@@ -124,10 +157,12 @@ target_include_directories(raw_gpu_pipeline
          ${RAWR_MF_DIR}/alignment/include
          ${RAWR_MF_DIR}/merge_wronski/include
          ${RAWR_MF_DIR}/merge_hdrplus/include
+         ${RAWR_MF_DIR}/merge_rexture/include
          ${RAWR_NATIVE_DIR}/zsl_codec/include
          ${RAWR_NATIVE_DIR}/zsl_ring/include
   PRIVATE ${RAWR_MF_SPV_DIR})
 target_link_libraries(raw_gpu_pipeline PUBLIC ${VULKAN_LIB})
+target_compile_definitions(raw_gpu_pipeline PRIVATE RX_PREP_PG=${RAWR_RX_PREP_PG})
 target_compile_features(raw_gpu_pipeline PUBLIC cxx_std_17)
 target_compile_options(raw_gpu_pipeline PRIVATE -Wall -Wextra -Wpedantic)
 # Warnings are errors on Android. Host SDKs declare core entry points as
@@ -139,7 +174,7 @@ endif()
 
 if(RAW_GPU_PIPELINE_BUILD_TESTS)
   enable_testing()
-  foreach(TEST_NAME merge_math_test hdrplus_geometry_test reconstruction_tiling_test resource_geometry_test scratch_layout_test)
+  foreach(TEST_NAME merge_math_test hdrplus_geometry_test reconstruction_tiling_test resource_geometry_test scratch_layout_test rexture_base_selection_test)
     add_executable(${TEST_NAME} tests/${TEST_NAME}.cpp)
     target_link_libraries(${TEST_NAME} PRIVATE raw_gpu_pipeline)
     # The tests are assert-based; keep asserts active in every build type.

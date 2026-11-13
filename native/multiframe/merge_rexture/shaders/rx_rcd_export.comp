@@ -1,0 +1,21 @@
+#version 450
+// Copy of native/raw_demosaic/rcd/shaders/rcd_export.comp (production workgroup size 4x32) on fp32 work planes; see rx_rcd_common.glsl.
+#ifndef RCD_LOCAL_X
+#define RCD_LOCAL_X 4
+#endif
+#ifndef RCD_LOCAL_Y
+#define RCD_LOCAL_Y 32
+#endif
+layout(local_size_x = RCD_LOCAL_X, local_size_y = RCD_LOCAL_Y, local_size_z = 1) in;
+#include "rx_rcd_common.glsl"
+void main() {
+    const ivec2 first = ivec2(gl_WorkGroupID.xy) * ivec2(RCD_LOCAL_X, RCD_LOCAL_Y) + ivec2(0, pc.y0);
+    if (!fallbackNeeded(first, first + ivec2(RCD_LOCAL_X, RCD_LOCAL_Y) - 1)) return;
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy) + ivec2(0, pc.y0);
+    if (p.x >= int(pc.width) || p.y >= int(pc.height) || p.y >= pc.y0 + pc.rows) return;
+    // Match librtprocess ordering exactly: RCD working passes first, then
+    // bayerborder_demosaic() overwrites the outer 9-pixel border.
+    vec3 rgb = inRcdInterior(p) ? rgbAt(p) : librtprocessBayerBorderRgb(p);
+    rgb /= pc.fixedBalance.rgb;
+    imageStore(outputImage, wp(p), vec4(rgb, 1.0));
+}

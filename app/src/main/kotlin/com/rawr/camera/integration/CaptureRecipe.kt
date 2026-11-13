@@ -74,6 +74,8 @@ internal object CaptureRecipe {
         put("defringeEdgeThreshold", v.photoDefringeEdgeThreshold)
         put("defringeLumaFloor", v.photoDefringeLumaFloor)
         put("captureSharpeningEnabled", v.photoCaptureSharpeningEnabled)
+        put("rextureNativeRgb",
+            v.multiframeRextureNativeRgb && v.multiframeTuning.mergeAlgorithm == MultiframeMergeAlgorithm.Rexture)
         put("captureSharpeningLevel", v.photoCaptureSharpeningLevel.name)
         // Photo denoise writes the stable recipe keys from the sealed value.
         val legacyDenoise = v.photoDenoise.toLegacy()

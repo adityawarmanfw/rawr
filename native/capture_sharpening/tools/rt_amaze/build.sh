@@ -4,8 +4,7 @@
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../../../.." && pwd)
-# RawTherapee checkout: git clone https://github.com/RawTherapee/RawTherapee tmp/ref/RawTherapee
-# (git -C tmp/ref/RawTherapee checkout b2ee504)
+# RawTherapee checkout at commit b2ee504 (https://github.com/RawTherapee/RawTherapee); point RT at it.
 RT=${RT:-$REPO/tmp/ref/RawTherapee}
 E=$RT/rtengine
 OUT=$REPO/tmp/capture_sharpening/rt_amaze

@@ -35,6 +35,9 @@ struct FrozenBurst {
     // Journal-backed: later loads read only rows [y0, y0 + rows) of each
     // frame (strip merge); drops every loaded frame. rows 0 = whole frames.
     std::function<void(std::uint32_t y0, std::uint32_t rows)> setRowWindow;
+    // Live bursts merged while their journal is still being written: the ring pins may only be released once this
+    // says the journal no longer reads the frames. Unset: release freely.
+    std::function<bool()> pinsMayRelease;
     std::vector<rawr::zsl_ring::RawImageRef> refs;
     std::vector<rawr::raw_gpu_pipeline::BurstFrame> frames;
     std::vector<rawrcam::metadata::FrameMetadataSnapshot> metadata;

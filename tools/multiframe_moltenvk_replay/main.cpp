@@ -1,5 +1,6 @@
 #include <rawr/raw_gpu_pipeline/AndroidBurstCoordinator.h>
 #include <rawr/raw_gpu_pipeline/ReplayMetadata.h>
+#include <rawr/raw_gpu_pipeline/RextureRecorder.h>
 #include <rawr/raw_multiframe_output/MultiframeOutputAdapter.h>
 #include <rawr/zsl_codec/ZslDecoder.h>
 #include <rawr/zsl_container/ZslContainer.h>
@@ -12,6 +13,8 @@
 #include "geometry/CfaPattern.h"
 #include "renderer/DngSource.h"
 #include "vk_test_common.hpp"
+#include "RextureStageObserver.h"
+#include "StageDump.h"
 #include "SyntheticBurst.h"
 
 #include <algorithm>
@@ -26,6 +29,7 @@
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -472,7 +476,10 @@ struct TuneOpts {
     bool hotPixels = true;
     std::string hotPixelList;  // test/diagnostic override: "x y" per line
     std::string reference = "recorded";  // recorded|middle|sharpest|darkest
-    std::string mergeAlgorithm = "wronski";  // wronski|hdrplus|hdrplus-freq|hdrplus-bracket
+    std::string mergeAlgorithm = "wronski";  // wronski|hdrplus|hdrplus-freq|hdrplus-bracket|rexture
+    std::string dumpStages;  // rexture: directory for stage dumps (compare.py layout)
+    std::string noiseAb;     // "a,b": scalar noise model override (normalised units)
+    std::string injectFlow;  // rexture verification: dump dir whose frames/<i>/flow replaces the estimated fine flow
     rawr::raw_merge_hdrplus_gpu::Config hdrplus{};
 };
 
@@ -977,6 +984,14 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
         std::cerr << "noise_source=calibrated_override slope=" << profile.slopeBySite[0]
                   << " offset=" << profile.offsetBySite[0] << '\n';
     } else std::cerr << "noise_source=legacy_override\n";
+    if (!tune.noiseAb.empty()) {
+        const auto comma = tune.noiseAb.find(',');
+        if (comma == std::string::npos) throw std::invalid_argument("--noise-ab needs A,B");
+        merge.sensorNoiseProfile.reset();
+        merge.noiseAlpha = std::stof(tune.noiseAb.substr(0, comma));
+        merge.noiseBeta = std::stof(tune.noiseAb.substr(comma + 1));
+        std::cerr << "noise_source=scalar_override alpha=" << merge.noiseAlpha << " beta=" << merge.noiseBeta << '\n';
+    }
     if (tune.kDetail >= 0.f) merge.kDetail = tune.kDetail;
     if (tune.kDenoise >= 0.f) merge.kDenoise = tune.kDenoise;
     if (tune.dThreshold >= 0.f) merge.dThreshold = tune.dThreshold;
@@ -1038,18 +1053,27 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
         const double warmMs = std::chrono::duration<double, std::milli>(Clock::now() - warmBegin).count();
         std::cerr << "warmup_ms=" << warmMs << '\n';
     }
+    std::unique_ptr<stagedump::StageDump> stageDump;
+    if (!tune.dumpStages.empty()) {
+        if (tune.mergeAlgorithm != "rexture") throw std::invalid_argument("--dump-stages needs --merge rexture");
+        stageDump = std::make_unique<stagedump::StageDump>(
+            context, tune.dumpStages, [&](const stagedump::StageDump::Record& record) { commands.submit(context.q, record); });
+        coordinator.setRextureObserver(stagedump::makeRextureObserver(*stageDump, tune.injectFlow));
+    }
     coordinator.initialize(context.pd, context.dev, context.qf,
                            [&](const VkSubmitInfo& info, VkFence fence) {
                                vktest::ck(vkQueueSubmit(context.q, 1, &info, fence), "burst queue submit");
                            },
                            width, height, tune.scale, {}, alignment, merge,
-                           tune.mergeAlgorithm == "hdrplus"        ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusSpatial
+                           tune.mergeAlgorithm == "rexture"        ? rawr::raw_gpu_pipeline::MergeAlgorithm::Rexture
+                           : tune.mergeAlgorithm == "hdrplus"      ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusSpatial
                            : tune.mergeAlgorithm == "hdrplus-freq" ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusFrequency
                            : tune.mergeAlgorithm == "hdrplus-bracket"
                                ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusBracketed
                                                                    : rawr::raw_gpu_pipeline::MergeAlgorithm::Wronski,
                            tune.hdrplus);
     auto result = coordinator.run(runFrames, runRef);
+    if (stageDump) stageDump->finish();
     const auto reportRun = [&](int iteration) {
         const auto& t = result.timings;
         std::cerr << "benchmark iteration=" << iteration << " total_ms=" << t.totalMs
@@ -1301,7 +1325,7 @@ int main(int argc, char** argv) {
         " [--flat-sigma F] [--detail-floor F] [--scale-bandwidth-gain F]"
         " [--coverage-neff-lo F] [--coverage-neff-hi F] [--coverage-mass-lo F] [--coverage-mass-hi F]"
         " [--robustness-t F] [--robustness-s1 F] [--robustness-s2 F]"
-         " [--max-frames I] [--suffix STR] [--dump-base] [--dump-all-singles] [--dump-raw16] [--export-dng DIR] [--export-merged-dng FILE] [--merge wronski|hdrplus|hdrplus-freq|hdrplus-bracket] [--hdrplus-strength F] [--hdrplus-tile 16|32] [--hdrplus-search 32|64|128] [--hdrplus-faithful] [--affine-deadzone F] [--affine-softness F] [--affine-isotropic] [--fallback-chroma GAIN] [--fallback-luma GAIN] [--fallback-max-sigma PX] [--no-hot-pixels] [--hot-pixel-list FILE]"
+         " [--max-frames I] [--suffix STR] [--dump-base] [--dump-all-singles] [--dump-raw16] [--export-dng DIR] [--export-merged-dng FILE] [--merge wronski|hdrplus|hdrplus-freq|hdrplus-bracket|rexture] [--rexture-strip-rows N] [--hdrplus-strength F] [--hdrplus-tile 16|32] [--hdrplus-search 32|64|128] [--hdrplus-faithful] [--affine-deadzone F] [--affine-softness F] [--affine-isotropic] [--fallback-chroma GAIN] [--fallback-luma GAIN] [--fallback-max-sigma PX] [--no-hot-pixels] [--hot-pixel-list FILE]"
          " [--reference recorded|middle|sharpest|darkest] INPUT [INPUT2 ...]\n"
          "  INPUT: FILE.rzsl | DNG_DIR or dng:DNG_DIR (every *.dng, name-sorted, is one burst)"
          " | rawburst:DIR | synthetic:...";
@@ -1366,6 +1390,11 @@ int main(int argc, char** argv) {
             else if (a == "--export-dng") { tune.exportDng = need(a.c_str()); tune.dumpAllSingles = true; }
             else if (a == "--reference") tune.reference = need(a.c_str());
             else if (a == "--merge") tune.mergeAlgorithm = need(a.c_str());
+            else if (a == "--dump-stages") tune.dumpStages = need(a.c_str());
+            else if (a == "--rexture-strip-rows")   // test: the output must not depend on the grain pass's strip height
+                rawr::raw_gpu_pipeline::RextureRecorder::setStripRowsForTesting(std::uint32_t(std::stoul(need(a.c_str()))));
+            else if (a == "--noise-ab") tune.noiseAb = need(a.c_str());
+            else if (a == "--inject-flow") tune.injectFlow = need(a.c_str());
             else if (a == "--hdrplus-strength") tune.hdrplus.strength = std::stof(need(a.c_str()));
             else if (a == "--hdrplus-tile") tune.hdrplus.tileSize = std::uint32_t(std::stoul(need(a.c_str())));
             else if (a == "--hdrplus-search") tune.hdrplus.searchDistance = std::uint32_t(std::stoul(need(a.c_str())));

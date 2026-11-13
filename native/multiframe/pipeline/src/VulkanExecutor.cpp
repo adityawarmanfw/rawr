@@ -115,6 +115,27 @@
 #include "mf_robust_warp_trace.h"
 #include "mf_support_accumulate_prod.h"
 #include "mf_support_accumulate_trace.h"
+#include "mf_rx_frame_prep_prod.h"
+#include "mf_rx_pyramid_prod.h"
+#include "mf_rx_kernel_blur_prod.h"
+#include "mf_rx_kernel_cov_prod.h"
+#include "mf_rx_qinv_debug_prod.h"
+#include "mf_rx_rcd_bound_prod.h"
+#include "mf_rx_ref_tiles_prod.h"
+#include "mf_rx_cand_select_prod.h"
+#include "mf_rx_block_match_prod.h"
+#include "mf_rx_lk_prod.h"
+#include "mf_rx_fill_prod.h"
+#include "mf_rx_robust_prod.h"
+#include "mf_rx_accumulate_prod.h"
+#include "mf_rx_finalize_prod.h"
+#include "mf_rx_rcd_direction_prod.h"
+#include "mf_rx_rcd_green_prod.h"
+#include "mf_rx_rcd_diagonal_prod.h"
+#include "mf_rx_rcd_green_sites_prod.h"
+#include "mf_rx_rcd_export_prod.h"
+#include "mf_rx_lowcov_eaw_prod.h"
+#include "mf_rx_fb_flags_prod.h"
 namespace rawr::raw_gpu_pipeline {
 namespace {
 struct B {
@@ -508,7 +529,49 @@ const std::array<Spec, static_cast<size_t>(ShaderId::Count)> specs{{{"raw_normal
                                    mf_hdrq_seed_dft_prod_spv_size,
                                    mf_hdrq_seed_dft_trace_spv,
                                    mf_hdrq_seed_dft_trace_spv_size,
-                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}}}};
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                  {"rx_frame_prep", mf_rx_frame_prep_prod_spv, mf_rx_frame_prep_prod_spv_size, mf_rx_frame_prep_prod_spv, mf_rx_frame_prep_prod_spv_size,
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {5, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                  {"rx_pyramid", mf_rx_pyramid_prod_spv, mf_rx_pyramid_prod_spv_size, mf_rx_pyramid_prod_spv, mf_rx_pyramid_prod_spv_size,
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                  {"rx_kernel_blur", mf_rx_kernel_blur_prod_spv, mf_rx_kernel_blur_prod_spv_size, mf_rx_kernel_blur_prod_spv, mf_rx_kernel_blur_prod_spv_size,
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                  {"rx_kernel_cov", mf_rx_kernel_cov_prod_spv, mf_rx_kernel_cov_prod_spv_size, mf_rx_kernel_cov_prod_spv, mf_rx_kernel_cov_prod_spv_size,
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                  {"rx_qinv_debug", mf_rx_qinv_debug_prod_spv, mf_rx_qinv_debug_prod_spv_size, mf_rx_qinv_debug_prod_spv, mf_rx_qinv_debug_prod_spv_size,
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                  {"rx_rcd_bound", mf_rx_rcd_bound_prod_spv, mf_rx_rcd_bound_prod_spv_size, mf_rx_rcd_bound_prod_spv, mf_rx_rcd_bound_prod_spv_size,
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                  {"rx_ref_tiles", mf_rx_ref_tiles_prod_spv, mf_rx_ref_tiles_prod_spv_size, mf_rx_ref_tiles_prod_spv, mf_rx_ref_tiles_prod_spv_size,
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                  {"rx_cand_select", mf_rx_cand_select_prod_spv, mf_rx_cand_select_prod_spv_size, mf_rx_cand_select_prod_spv, mf_rx_cand_select_prod_spv_size,
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                  {"rx_block_match", mf_rx_block_match_prod_spv, mf_rx_block_match_prod_spv_size, mf_rx_block_match_prod_spv, mf_rx_block_match_prod_spv_size,
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                  {"rx_lk", mf_rx_lk_prod_spv, mf_rx_lk_prod_spv_size, mf_rx_lk_prod_spv, mf_rx_lk_prod_spv_size,
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                  {"rx_fill", mf_rx_fill_prod_spv, mf_rx_fill_prod_spv_size, mf_rx_fill_prod_spv, mf_rx_fill_prod_spv_size,
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                  {"rx_robust", mf_rx_robust_prod_spv, mf_rx_robust_prod_spv_size, mf_rx_robust_prod_spv, mf_rx_robust_prod_spv_size,
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {5, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {7, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {8, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                  {"rx_accumulate", mf_rx_accumulate_prod_spv, mf_rx_accumulate_prod_spv_size, mf_rx_accumulate_prod_spv, mf_rx_accumulate_prod_spv_size,
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {5, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {7, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {8, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {9, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {10, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                  {"rx_finalize", mf_rx_finalize_prod_spv, mf_rx_finalize_prod_spv_size, mf_rx_finalize_prod_spv, mf_rx_finalize_prod_spv_size,
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {5, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {7, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {8, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {9, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {10, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {11, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                  {"rx_rcd_direction", mf_rx_rcd_direction_prod_spv, mf_rx_rcd_direction_prod_spv_size, mf_rx_rcd_direction_prod_spv, mf_rx_rcd_direction_prod_spv_size,
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                  {"rx_rcd_green", mf_rx_rcd_green_prod_spv, mf_rx_rcd_green_prod_spv_size, mf_rx_rcd_green_prod_spv, mf_rx_rcd_green_prod_spv_size,
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                  {"rx_rcd_diagonal", mf_rx_rcd_diagonal_prod_spv, mf_rx_rcd_diagonal_prod_spv_size, mf_rx_rcd_diagonal_prod_spv, mf_rx_rcd_diagonal_prod_spv_size,
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                  {"rx_rcd_green_sites", mf_rx_rcd_green_sites_prod_spv, mf_rx_rcd_green_sites_prod_spv_size, mf_rx_rcd_green_sites_prod_spv, mf_rx_rcd_green_sites_prod_spv_size,
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                  {"rx_rcd_export", mf_rx_rcd_export_prod_spv, mf_rx_rcd_export_prod_spv_size, mf_rx_rcd_export_prod_spv, mf_rx_rcd_export_prod_spv_size,
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                  {"rx_lowcov_eaw", mf_rx_lowcov_eaw_prod_spv, mf_rx_lowcov_eaw_prod_spv_size, mf_rx_lowcov_eaw_prod_spv, mf_rx_lowcov_eaw_prod_spv_size,
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                  {"rx_fb_flags", mf_rx_fb_flags_prod_spv, mf_rx_fb_flags_prod_spv_size, mf_rx_fb_flags_prod_spv, mf_rx_fb_flags_prod_spv_size,
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}}}};
 void ck(VkResult r, const char* w) {
     if (r != VK_SUCCESS) throw std::runtime_error(std::string(w) + " VkResult=" + std::to_string(r));
 }
@@ -536,6 +599,27 @@ void VulkanExecutor::initialize(VkDevice d, bool wantTrace) {
         "hdrp_prepare", "hdrp_hot_pixel", "hdrp_avg_pool", "hdrp_blur", "hdrp_upsample_align", "hdrp_correct_upsampling", "hdrp_tile_diff", "hdrp_best_tile", "hdrp_warp", "hdrp_color_diff", "hdrp_column_sum", "hdrp_mean", "hdrp_merge_weight", "hdrp_accumulate", "hdrp_finalize",
         "hdrq_to_rgba", "hdrq_warp_rgba", "hdrq_rms", "hdrq_mismatch", "hdrq_region_mean", "hdrq_mismatch_norm", "hdrq_forward_dft", "hdrq_merge", "hdrq_deconvolute", "hdrq_backward_dft", "hdrq_border", "hdrq_accumulate", "hdrq_shift_table",
         "hdrq_highlights_norm", "hdrq_normalize", "hdrq_seed_dft",
+        "rx_frame_prep",
+        "rx_pyramid",
+        "rx_kernel_blur",
+        "rx_kernel_cov",
+        "rx_qinv_debug",
+        "rx_rcd_bound",
+        "rx_ref_tiles",
+        "rx_cand_select",
+        "rx_block_match",
+        "rx_lk",
+        "rx_fill",
+        "rx_robust",
+        "rx_accumulate",
+        "rx_finalize",
+        "rx_rcd_direction",
+        "rx_rcd_green",
+        "rx_rcd_diagonal",
+        "rx_rcd_green_sites",
+        "rx_rcd_export",
+        "rx_lowcov_eaw",
+        "rx_fb_flags",
     };
     static_assert(sizeof(kOrder) / sizeof(kOrder[0]) == static_cast<size_t>(ShaderId::Count),
                   "executor spec order table out of sync with ShaderId");
@@ -589,7 +673,7 @@ void VulkanExecutor::initialize(VkDevice d, bool wantTrace) {
         if (wantTrace) nb++;
         if (ni) ps.push_back({VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, ni});
         if (nb) ps.push_back({VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nb});
-        constexpr uint32_t kSetsPerProgram = 256;
+        constexpr uint32_t kSetsPerProgram = 1024;   // one set per dispatch of a program in one chunk (Rexture grain pass: 4 per strip)
         for (auto& q : ps) q.descriptorCount *= kSetsPerProgram;
         VkDescriptorPoolCreateInfo pci{};
         pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;

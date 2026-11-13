@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -43,6 +44,9 @@ struct MultiframeWorkItem {
     std::vector<float> sharpnessScores{};
     // Scoring pass wall time (ms), for EXIF. Zero when unscored.
     double sharpnessMs = 0.0;
+    // Set when the merge runs on the live frames while the journal is written (Rexture): blocks until the journal is
+    // durable (or failed). The job calls it before publishing any output and before it releases the capture.
+    std::function<void()> awaitDurable;
 };
 
 }  // namespace rawrcam::capture::multiframe

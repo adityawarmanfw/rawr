@@ -1,0 +1,96 @@
+#version 450
+#extension GL_GOOGLE_include_directive : enable
+// Rexture alignment: inverse-compositional Lucas-Kanade refinement of every tile's flow, 3 iterations with the
+// reference gradient (zero padded) and the fixed Hessian of the tile (rx_ref_tiles). Per tile mode: 2 = full 2-D update,
+// 1 = update along the tile's principal gradient direction only (aperture), 0 = none. `which` selects the tiles handled:
+// 2 = mode 2 only, 1 = mode 1 only, 3 = both. The alternate level is sampled bilinearly with a zero ring around the image.
+// In place on the flow image. Starts from lk_refine.comp.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0, r32f) readonly uniform image2D refI;
+layout(set = 0, binding = 1, r32f) readonly uniform image2D movI;
+layout(set = 0, binding = 2, rg32f) uniform image2D flowI;
+layout(set = 0, binding = 3, rgba32f) readonly uniform image2D tilesI;
+layout(push_constant) uniform P {
+    int ts, which, iterations;
+    float clipRadius, eps;
+} p;
+
+shared vec2 red[256];
+shared vec2 sF;
+
+float mz(ivec2 Q) {
+    ivec2 sz = imageSize(movI);
+    ivec2 qp = clamp(Q + 1, ivec2(0), sz + 1);
+    if (qp.x < 1 || qp.y < 1 || qp.x > sz.x || qp.y > sz.y) return 0.0;
+    return imageLoad(movI, qp - 1).x;
+}
+float refAt(ivec2 q, ivec2 size) {
+    return (any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, size))) ? 0.0 : imageLoad(refI, q).x;
+}
+
+void main() {
+    const ivec2 t = ivec2(gl_WorkGroupID.xy);
+    const ivec2 l = ivec2(gl_LocalInvocationID.xy);
+    const int tid = l.y * 16 + l.x;
+    vec4 tile = imageLoad(tilesI, t);
+    int mode = int(tile.w);
+    bool handled = (p.which == 3) ? (mode == 1 || mode == 2) : (mode == p.which);
+    if (!handled) return;                                   // uniform per workgroup
+    const ivec2 size = imageSize(refI);
+    const bool inTile = l.x < p.ts && l.y < p.ts;
+    const ivec2 q = t * p.ts + l;
+    float gx = 0.0, gy = 0.0, refv = 0.0;
+    if (inTile) {
+        gx = refAt(q + ivec2(1, 0), size) - refAt(q - ivec2(1, 0), size);
+        gy = refAt(q + ivec2(0, 1), size) - refAt(q - ivec2(0, 1), size);
+        refv = imageLoad(refI, q).x;
+    }
+    const float A00 = tile.x, A01 = tile.y, A11 = tile.z;
+    // mode 2: inverse Hessian; mode 1: principal axis
+    float det = A00 * A11 - A01 * A01;
+    bool ok = abs(det) >= p.eps;
+    float sid = ok ? 1.0 / det : 0.0;
+    float tr = A00 + A11, disc = sqrt(max((A00 - A11) * (A00 - A11) + 4.0 * A01 * A01, 0.0));
+    float l1 = 0.5 * (tr + disc);
+    float vx = abs(A01) > 1e-30 ? A01 : (A00 >= A11 ? 1.0 : 0.0);
+    float vy = abs(A01) > 1e-30 ? l1 - A00 : (A00 >= A11 ? 0.0 : 1.0);
+    float nrm = max(length(vec2(vx, vy)), 1e-30);
+    vec2 e1 = vec2(vx, vy) / nrm;
+    if (tid == 0) sF = imageLoad(flowI, t).xy;
+    barrier();
+    for (int it = 0; it < p.iterations; ++it) {
+        vec2 f = sF;
+        vec2 ip = floor(f), fr = f - ip;
+        float dt = 0.0;
+        if (inTile) {
+            ivec2 B = q + ivec2(ip);
+            float a = mz(B), b1 = mz(B + ivec2(1, 0)), c = mz(B + ivec2(0, 1)), d = mz(B + ivec2(1, 1));
+            float x0 = a + (b1 - a) * fr.x, x1 = c + (d - c) * fr.x;
+            dt = x0 + (x1 - x0) * fr.y - refv;
+        }
+        red[tid] = vec2(gx * dt, gy * dt);
+        barrier();
+        for (int s = 128; s > 0; s >>= 1) {
+            if (tid < s) red[tid] += red[tid + s];
+            barrier();
+        }
+        if (tid == 0) {
+            float B0 = -red[0].x, B1 = -red[0].y;
+            vec2 delta;
+            bool upd;
+            if (mode == 1) {
+                float proj = (e1.x * B0 + e1.y * B1) / max(l1, 1e-30);
+                delta = e1 * proj;
+                upd = l1 > 0.0;
+            } else {
+                delta = vec2(sid * (A11 * B0 - A01 * B1), sid * (-A01 * B0 + A00 * B1));
+                upd = ok;
+            }
+            delta = clamp(delta, vec2(-p.clipRadius), vec2(p.clipRadius));
+            if (upd) sF = f + delta;
+        }
+        barrier();
+    }
+    if (tid == 0) imageStore(flowI, t, vec4(sF, 0.0, 0.0));
+}

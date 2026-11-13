@@ -1,12 +1,13 @@
 #include "capture/multiframe/mfsr/MfsrCaptureService.h"
-#include "diagnostics/timing/CaptureStageTimer.h"
 
 #include <android/log.h>
 #include <sys/resource.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <chrono>
 #include <raw_sharpness/raw_sharpness_types.hpp>
+#include <rawr/raw_merge_rexture_gpu/BaseSelection.h>
 #include <stdexcept>
 
 #include "capture/CaptureRequest.h"
@@ -73,7 +74,8 @@ void MfsrCaptureService::configure(const Geometry& geometry, bool warmEnabled) {
     // process killed, so only warm geometries whose worst-case arena fits.
     // A shutter before/without warm falls back to cold initialization.
     constexpr std::uint64_t kMaxWarmArenaBytes = 1536ull * 1024u * 1024u;  // 1.5 GiB
-    const std::uint64_t arenaBytes = estimateMergeArenaBytes(geometry.rawWidth, geometry.rawHeight);
+    const std::uint64_t arenaBytes = estimateMergeArenaBytes(geometry.rawWidth, geometry.rawHeight,
+                                                                 burstCoordinator_.nextAlgorithmId());
     LOGI("MULTIFRAME_WARM_PLAN raw=%ux%u arena1xMaxMB=%.0f budgetMB=%.0f", geometry.rawWidth, geometry.rawHeight,
          double(arenaBytes) / (1024.0 * 1024.0), double(kMaxWarmArenaBytes) / (1024.0 * 1024.0));
     if (arenaBytes == 0 || arenaBytes > kMaxWarmArenaBytes) {
@@ -217,22 +219,65 @@ std::uint64_t MfsrCaptureService::start(std::unique_ptr<PendingMultiframeCapture
         workerThread_ = std::thread([this, current = pending]() mutable {
             setpriority(PRIO_PROCESS, 0, 5);
             while (current) {
-                CAPTURE_DEBUG_LOG("BURST_WORKER_DEQUEUED requestId=%llu acceptedElapsedMs=%.3f monoMs=%.3f",
-                     static_cast<unsigned long long>(current->work->requestId),
-                     std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - current->work->acceptedAt).count(),
-                     diagnostics::captureMonoMs());
-                diagnostics::CaptureStageTimer spoolWait("burst_wait_spool", current->work->requestId);
+                // Rexture merges the live frames as soon as the base is chosen, while the spool thread still writes
+                // the journal; every other merge waits for the durable journal and reloads from it.
+                bool live = false;
                 {
                     std::unique_lock<std::mutex> lock(current->mutex);
-                    current->readyCondition.wait(lock, [&] { return current->ready; });
+                    current->readyCondition.wait(lock, [&] { return current->ready || current->selected; });
+                    live = current->live;
                 }
-                spoolWait.finish();
-                auto& original = *current->work;
+                MultiframeWorkItem* originalItem = current->work.get();
+                auto& original = *originalItem;
+                // Kept for the failure report once the work item belongs to the job.
+                const std::uint64_t liveRequestId = original.requestId;
+                const bool liveJpegRequested = original.jpegRequested;
+                const std::string liveJpegName = original.mergedJpeg.output.displayName;
                 try {
+                    if (live) {
+                        SpoolingWork* spool = current.get();
+                        original.awaitDurable = [spool] {
+                            std::unique_lock<std::mutex> lock(spool->mutex);
+                            spool->readyCondition.wait(lock, [&] { return spool->ready; });
+                        };
+                        original.capture->pinsMayRelease = [spool] {
+                            return spool->durable.load(std::memory_order_acquire);
+                        };
+                        std::lock_guard<std::mutex> processing(vulkan_.stillProcessingMutex());
+                        diagnostics::RuntimeTraceRecorder::instance().record(
+                            diagnostics::RuntimeTraceStage::StillProcessingBegin, 0, liveRequestId, -1, 0, 0, 1u);
+                        struct TraceEnd {
+                            uint64_t id;
+                            ~TraceEnd() {
+                                diagnostics::RuntimeTraceRecorder::instance().record(
+                                    diagnostics::RuntimeTraceStage::StillProcessingEnd, 0, id, -1, 0, 0, 1u);
+                            }
+                        } traceEnd{liveRequestId};
+                        LOGI("BURST_LIVE requestId=%llu acceptedToStartMs=%.1f",
+                             static_cast<unsigned long long>(liveRequestId),
+                             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - original.acceptedAt)
+                                 .count());
+                        MfsrCaptureJob::Context ctx{vulkan_,
+                                                    queue0Mutex_,
+                                                    filesDir_,
+                                                    original.capture->frames.front().raw.ref.width,
+                                                    original.capture->frames.front().raw.ref.height,
+                                                    original.capture->referenceMetadata.cameraContext->rawPreviewCfa,
+                                                    burstCoordinator_,
+                                                    renderedStill_,
+                                                    persistentEngineEnabled_,
+                                                    dngBox_,
+                                                    jpegBox_,
+                                                    filmAssetManager_};
+                        const auto acceptedAt = original.acceptedAt;
+                        originalItem = nullptr;  // the job owns the work item from here
+                        MfsrCaptureJob(ctx, std::move(current->work)).run();
+                        LOGI("BURST_FINISHED requestId=%llu acceptedToFinishedMs=%.1f live=1",
+                             static_cast<unsigned long long>(liveRequestId),
+                             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - acceptedAt).count());
+                    } else {
                     if (!current->error.empty()) throw std::runtime_error(current->error);
-                    diagnostics::CaptureStageTimer gpuWait("burst_wait_processing_mutex", original.requestId);
                     std::lock_guard<std::mutex> processing(vulkan_.stillProcessingMutex());
-                    gpuWait.finish();
                     diagnostics::RuntimeTraceRecorder::instance().record(
                         diagnostics::RuntimeTraceStage::StillProcessingBegin, 0, original.requestId, -1, 0, 0, 1u);
                     struct TraceEnd {
@@ -246,10 +291,8 @@ std::uint64_t MfsrCaptureService::start(std::unique_ptr<PendingMultiframeCapture
                     // merges (super-resolution, HDR+) hold the reference plus one
                     // companion and drop each once merged; HDR+ Quality's four passes
                     // load the whole burst first. The RZSL dump reads every frame.
-                    diagnostics::CaptureStageTimer loadTiming("burst_load", original.requestId);
                     auto restored =
                         persistence::loadBurst(current->path, vulkan_, queue0Mutex_, !original.dumpRzslRequested);
-                    loadTiming.finish();
                     restored->acceptedAt = original.acceptedAt;
                     LOGI("BURST_READY requestId=%llu acceptedToReadyMs=%.1f",
                          static_cast<unsigned long long>(original.requestId),
@@ -258,6 +301,8 @@ std::uint64_t MfsrCaptureService::start(std::unique_ptr<PendingMultiframeCapture
                     restored->mergedDng.outputFd = std::move(original.mergedDng.outputFd);
                     restored->mergedJpeg.output.outputFd = std::move(original.mergedJpeg.output.outputFd);
                     restored->dumpRzslRequested = original.dumpRzslRequested;
+                    // Not part of the journal: carried over from the live request.
+                    restored->mergedJpeg.develop.multiframeNativeRgb = original.mergedJpeg.develop.multiframeNativeRgb;
                     MfsrCaptureJob::Context ctx{vulkan_,
                                                 queue0Mutex_,
                                                 filesDir_,
@@ -274,7 +319,13 @@ std::uint64_t MfsrCaptureService::start(std::unique_ptr<PendingMultiframeCapture
                     LOGI("BURST_FINISHED requestId=%llu acceptedToFinishedMs=%.1f",
                          static_cast<unsigned long long>(original.requestId),
                          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - original.acceptedAt).count());
+                    }
                 } catch (const std::exception& e) {
+                    if (!originalItem) {
+                        // The live job owns the work item (and any outputs it still holds): report the JPEG only.
+                        if (liveJpegRequested)
+                            jpegBox_.push(std::to_string(liveRequestId) + "\t0\t" + liveJpegName + "\t" + e.what() + "\t0");
+                    } else {
                     // Outputs still held here were never handed to the job, which publishes its own.
                     const bool baseHeld = original.baseDng.outputFd.valid();
                     const bool mergedHeld = original.mergedDng.outputFd.valid();
@@ -287,6 +338,13 @@ std::uint64_t MfsrCaptureService::start(std::unique_ptr<PendingMultiframeCapture
                         dngBox_.push(prefix + original.mergedDng.displayName + "\t" + e.what());
                     if (original.jpegRequested)
                         jpegBox_.push(prefix + original.mergedJpeg.output.displayName + "\t" + e.what() + "\t0");
+                    }
+                }
+                {
+                    // The spool thread may still be finishing this capture's journal (live merge): it owns `current`'s
+                    // storage reservation, so do not drop the last reference before it is done.
+                    std::unique_lock<std::mutex> lock(current->mutex);
+                    current->readyCondition.wait(lock, [&] { return current->ready; });
                 }
                 std::lock_guard<std::mutex> lock(queueMutex_);
                 if (!queuedWork_.empty()) {
@@ -327,9 +385,8 @@ void MfsrCaptureService::spoolLoop() {
             pending = spoolQueue_.front();
             spoolQueue_.pop_front();
         }
-        diagnostics::CaptureStageTimer spoolTiming("burst_spool", pending->work->requestId);
+        bool liveRun = false;
         try {
-            diagnostics::CaptureStageTimer selectionTiming("burst_reference_selection", pending->work->requestId);
             // Deferred sharpest-reference selection, entirely on the GPU: one
             // small compute scoring pass over the pinned burst images, then a
             // ~30KB partial readback. No bulk RAW copies; the save below keeps
@@ -362,7 +419,8 @@ void MfsrCaptureService::spoolLoop() {
             }
             // CPU-held frames (full-size bursts) have nothing on the GPU to score:
             // they keep the middle reference.
-            if (pending->work->baseFrameMode == MultiframeBaseFrameMode::Sharpest && !burst.cpuFrame &&
+            if (pending->work->baseFrameMode == MultiframeBaseFrameMode::Sharpest &&
+                pending->work->tuning.mergeAlgorithm != kMergeAlgorithmRexture && !burst.cpuFrame &&
                 !burst.acquiredJournal && burst.frames.size() >= 2u &&
                 burst.frames.size() <= raw_sharpness::RawSharpness::kMaxFrames) {
                 try {
@@ -430,6 +488,73 @@ void MfsrCaptureService::spoolLoop() {
                     LOGE("MULTIFRAME_SHARPNESS_FALLBACK unknown");
                 }
             }
+            // Rexture: the base is chosen at the press, from the frames of the last quarter second: one batched scoring
+            // dispatch (sharpness above the noise expectation, clipped share), then the best score penalised for clipping and
+            // age. Any failure keeps the frozen middle reference.
+            if (pending->work->tuning.mergeAlgorithm == kMergeAlgorithmRexture && !burst.cpuFrame && !burst.acquiredJournal &&
+                burst.frames.size() >= 2u && burst.frames.size() <= 32u && burst.metadata.size() == burst.frames.size() &&
+                burst.colors.size() == burst.frames.size()) {
+                try {
+                    const auto begin = std::chrono::steady_clock::now();
+                    std::vector<rawr::raw_gpu_pipeline::RextureFrameScorer::Score> scores;
+                    {
+                        std::lock_guard<std::mutex> scoreLock(sharpnessMutex_);
+                        if (!rextureScorer_.ready())
+                            rextureScorer_.initialize(vulkan_.physicalDevice(), vulkan_.device(), vulkan_.queueFamily(),
+                                                      [&](const VkSubmitInfo& info, VkFence fence) {
+                                                          std::lock_guard<std::mutex> queueLock(queue0Mutex_);
+                                                          if (vkQueueSubmit(vulkan_.queue(), 1, &info, fence) != VK_SUCCESS)
+                                                              throw std::runtime_error("rexture score queue submit");
+                                                      });
+                        const auto& ref0 = burst.metadata.front();
+                        // Normalised noise model from Camera2 (S, O per CFA site): a = S / range, b = (S black + O) / range^2.
+                        float alpha = 1.80710882e-4f, beta = 3.1937599182128e-6f;
+                        if (ref0.sensorNoiseProfile.size() >= 8u && ref0.effectiveWhiteLevel > 0.0f) {
+                            double a = 0, b = 0;
+                            for (int site = 0; site < 4; ++site) {
+                                const double black = ref0.blackLevelPhysicalRggb[site];
+                                const double range = double(ref0.effectiveWhiteLevel) - black;
+                                a += ref0.sensorNoiseProfile[2 * site] / range;
+                                b += (ref0.sensorNoiseProfile[2 * site] * black + ref0.sensorNoiseProfile[2 * site + 1]) /
+                                     (range * range);
+                            }
+                            if (a > 0.0 && b >= 0.0) alpha = float(a / 4.0), beta = float(b / 4.0);
+                        }
+                        const std::uint32_t cfa = ref0.cameraContext ? ref0.cameraContext->rawPreviewCfa : 0u;
+                        scores = rextureScorer_.score(burst.frames, burst.frames.front().raw.ref.width,
+                                                      burst.frames.front().raw.ref.height, cfa <= 3u ? cfa : 0u, alpha, beta);
+                    }
+                    std::vector<rawr::raw_merge_rexture_gpu::FrameScore> frameScores;
+                    std::vector<double> times;
+                    for (std::size_t i = 0; i < scores.size(); ++i) {
+                        frameScores.push_back({scores[i].sharp, scores[i].sat});
+                        times.push_back(double(burst.metadata[i].timestampNs) * 1.0e-9);
+                    }
+                    // The burst is frozen at the press: the newest frame is the press time.
+                    const double press = *std::max_element(times.begin(), times.end());
+                    const auto best = static_cast<std::uint32_t>(rawr::raw_merge_rexture_gpu::chooseBaseAtPress(frameScores, times, press));
+                    for (std::size_t i = 0; i < scores.size(); ++i) {
+                        const double age = std::max(press - times[i], 0.0);
+                        const bool inWindow = age <= rawr::raw_merge_rexture_gpu::kBaseWindowSeconds;
+                        const double value = scores[i].sharp *
+                                             std::max(1.0 - rawr::raw_merge_rexture_gpu::kBaseSaturationPenalty * scores[i].sat, 0.0) *
+                                             std::max(1.0 - rawr::raw_merge_rexture_gpu::kBaseTimePenalty * age /
+                                                                 rawr::raw_merge_rexture_gpu::kBaseWindowSeconds, 0.0);
+                        LOGI("MULTIFRAME_REXTURE_SCORE frame=%zu sharp=%.6g sat=%.5f ageMs=%.1f inWindow=%d value=%.6g%s", i,
+                             scores[i].sharp, scores[i].sat, age * 1000.0, inWindow ? 1 : 0, value,
+                             i == best ? " <- base" : "");
+                    }
+                    burst.referenceIndex = best;
+                    burst.referenceMetadata = burst.metadata[best];
+                    burst.referenceColor = burst.colors[best];
+                    LOGI("MULTIFRAME_BASEFRAME mode=rexture-press selected=%u/%zu scoreMs=%.1f", best, burst.frames.size(),
+                         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count());
+                } catch (const std::exception& e) {
+                    LOGE("MULTIFRAME_REXTURE_SCORE_FALLBACK %s", e.what());
+                } catch (...) {
+                    LOGE("MULTIFRAME_REXTURE_SCORE_FALLBACK unknown");
+                }
+            }
             // Bracketed bursts merge onto the darkest frame (sharpest among
             // those when scored), whatever the base frame mode: the
             // underexposed ZSL burst, not the long frames.
@@ -443,22 +568,43 @@ void MfsrCaptureService::spoolLoop() {
                 burst.referenceColor = burst.colors[reference];
                 LOGI("MULTIFRAME_BASEFRAME mode=bracket-darkest selected=%u/%zu", reference, burst.frames.size());
             }
-            selectionTiming.finish();
-            diagnostics::CaptureStageTimer saveTiming("burst_save", pending->work->requestId);
-            persistence::saveBurst(pending->path, *pending->work, vulkan_, queue0Mutex_);
+            const auto requestId = pending->work->requestId;
+            const bool live = pending->work->tuning.mergeAlgorithm == kMergeAlgorithmRexture && burst.snapshot &&
+                              !burst.cpuFrame && !burst.acquiredJournal && !burst.pendingBracket &&
+                              !pending->work->dumpRzslRequested;
+            if (live) {
+                // Everything the journal header needs is copied out of the work item first. From the moment the
+                // worker is released it owns the work item and the live frames; this thread then only reads the
+                // frames (GPU images the ring pins keep alive until the journal is durable) and never touches
+                // pending->work again.
+                auto journalJob = persistence::makeBurstJob(*pending->work);
+                auto* liveBurst = pending->work->capture.get();
+                {
+                    std::lock_guard<std::mutex> lock(pending->mutex);
+                    pending->live = true;
+                    pending->selected = true;
+                }
+                liveRun = true;
+                pending->readyCondition.notify_all();
+                persistence::saveBurstFrames(pending->path, journalJob, *liveBurst, requestId, vulkan_, queue0Mutex_);
+                pending->durable.store(true, std::memory_order_release);
+            } else {
+                persistence::saveBurst(pending->path, *pending->work, vulkan_, queue0Mutex_);
+            }
             diagnostics::RuntimeTraceRecorder::instance().record(diagnostics::RuntimeTraceStage::StillDurable, 0,
-                                                                 pending->work->requestId, -1, 0, 0, 1u);
+                                                                 requestId, -1, 0, 0, 1u);
         } catch (const std::exception& e) {
             pending->error = e.what();
         }
-        pending->work->capture.reset();  // Release live ring pins immediately after durable readback.
+        // Release live ring pins immediately after durable readback; a live merge's job owns them until it ends.
+        if (!liveRun) pending->work->capture.reset();
         pending->reservation.reset();
         spooling_.fetch_sub(1, std::memory_order_acq_rel);
         {
             std::lock_guard<std::mutex> lock(pending->mutex);
             pending->ready = true;
         }
-        pending->readyCondition.notify_one();
+        pending->readyCondition.notify_all();
     }
 }
 

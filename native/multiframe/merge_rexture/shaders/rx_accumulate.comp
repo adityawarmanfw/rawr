@@ -1,0 +1,125 @@
+#version 450
+#extension GL_GOOGLE_include_directive : enable
+// Rexture accumulation of one companion frame (gather, one output pixel per thread, no atomics). For output pixel o: the
+// fine tile flow is interpolated bilinearly at o, the warped position m = o + 1/2 + flow is rounded down, and the 3 x 3
+// raw samples q around it of the companion are added to the running sums of their own colour with weight
+//   exp(-1/2 d^T Q d) * robustness,    d = q - (m - 1/2),   Q = inverse base covariance at o (red / blue samples use Q / 1.2^2)
+// where robustness is the frame's half-resolution weight at o / 2. Per pixel and colour the burst keeps sum(w x), sum(w),
+// and sum over frames of (sum of the frame's w)^2 (effective frame count); debug builds also sum w^2 (variance factor).
+// Packed state: A = (s.rgb, w.r), B = (w.g, w.b), C = (sq.rgb) in fp16. Reads the raw frame directly.
+// Companions of a different exposure are scaled to the base (gain0 / gain1). Starts from accumulate.comp.
+#include "rx_common.glsl"
+
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0, r16ui) readonly uniform uimage2D rawU16;
+layout(set = 0, binding = 1, rg32f) readonly uniform image2D flowI;
+layout(set = 0, binding = 2, r32f) readonly uniform image2D erI;
+layout(set = 0, binding = 3, rgba32f) readonly uniform image2D covI;
+layout(set = 0, binding = 4, rgba32f) uniform image2D accA;      // (s.rgb, w.r)
+layout(set = 0, binding = 5, rg32f) uniform image2D accB;        // (w.g, w.b)
+layout(set = 0, binding = 6, rgba16f) uniform image2D accC;      // sum over frames of (sum of the frame's w)^2, fp16
+layout(set = 0, binding = 7, rgba32f) uniform image2D accSs2;    // sum of w^2 (debug only)
+// second frame of a pair (bound to the first frame's images when the pass handles one frame)
+layout(set = 0, binding = 8, r16ui) readonly uniform uimage2D rawU16B;
+layout(set = 0, binding = 9, rg32f) readonly uniform image2D flowB;
+layout(set = 0, binding = 10, r32f) readonly uniform image2D erB;
+layout(push_constant) uniform P {
+    vec4 black;
+    float white;
+    int w, h, cfa;
+    int debug;
+    float frameWeight;       // per-frame weight (1 for equal exposures); hook for the bracket path
+    int frames;              // 1 or 2: frames added by this pass (state is read and written once per pass)
+    float gain0, gain1;      // reference exposure / frame exposure of the pass's frames (1 for equal exposures)
+} p;
+
+const float RB_WIDEN = 1.2;
+// Every frame carries the same total weight at a pixel: its kernel weights are scaled so that their sum per colour is the
+// frame's robustness (a floor keeps weak-support taps from being boosted). Without it the base frame's samples, which sit on
+// the output grid, weigh about three times a companion's, and the merge keeps more noise in red and blue.
+const float FRAME_NORM_FLOOR = 0.1;
+
+uint loadRaw(int f, ivec2 q) { return f == 0 ? imageLoad(rawU16, q).x : imageLoad(rawU16B, q).x; }
+vec2 loadFlow(int f, ivec2 q) { return f == 0 ? imageLoad(flowI, q).xy : imageLoad(flowB, q).xy; }
+float loadEr(int f, ivec2 q) { return f == 0 ? imageLoad(erI, q).x : imageLoad(erB, q).x; }
+float frameGain(int f) { return f == 0 ? p.gain0 : p.gain1; }
+
+void main() {
+    const ivec2 o = ivec2(gl_GlobalInvocationID.xy);
+    if (o.x >= p.w || o.y >= p.h) return;
+    const ivec2 rawSize = ivec2(p.w, p.h);
+    const ivec2 tn = imageSize(flowI);
+    vec3 qi = vec3(0.0);
+    bool haveQ = false;
+    vec3 sumS = vec3(0.0), sumW = vec3(0.0), sumSq = vec3(0.0), sumF2 = vec3(0.0);
+    for (int f = 0; f < p.frames; ++f) {
+        // bilinear flow at o (tile size 16)
+        vec2 g = (vec2(o) + 0.5) / 16.0 - 0.5;
+        vec2 b = floor(g), fr = g - b;
+        vec2 facc = vec2(0.0);
+        float tot = 0.0;
+        for (int j = 0; j < 2; ++j)
+            for (int i = 0; i < 2; ++i) {
+                ivec2 tq = clamp(ivec2(b) + ivec2(i, j), ivec2(0), tn - 1);
+                float wgt = (i == 1 ? fr.x : 1.0 - fr.x) * (j == 1 ? fr.y : 1.0 - fr.y);
+                facc += wgt * loadFlow(f, tq);
+                tot += wgt;
+            }
+        bool ok = tot > 1e-8;
+        vec2 fl = ok ? facc / tot : vec2(0.0);
+        vec2 mv = vec2(o) + 0.5 + fl;
+        bool inb = ok && mv.x >= 0.0 && mv.y >= 0.0 && mv.x < float(p.w) && mv.y < float(p.h);
+        float r = loadEr(f, clamp(o / 2, ivec2(0), imageSize(erI) - 1));
+        if (!(inb && r > 0.0)) continue;
+        if (!haveQ) {
+            vec3 ca, cb, cc4, cd;
+            vec2 cf;
+            RX_COV_NEIGHBOURS(covI, o, ca, cb, cc4, cd, cf);
+            qi = rxCovInverse(ca, cb, cc4, cd, cf);
+            haveQ = true;
+        }
+        const ivec2 c0 = ivec2(floor(mv));
+        const vec2 e = mv - 0.5;
+        // A frame exposed longer than the base is scaled down to it; its clipped samples would then read below the base's
+        // clip and pull highlights towards a wrong colour, so they are left out (a shorter frame keeps them: scaled up they
+        // stay at or above the base's clip, which the output stage clamps and flags).
+        const float eg = frameGain(f);
+        const bool dropClipped = eg < 1.0 - 1e-3;
+        vec3 fs = vec3(0.0), fw = vec3(0.0), f2 = vec3(0.0);
+        for (int dy = -1; dy <= 1; ++dy)
+            for (int dx = -1; dx <= 1; ++dx) {
+                ivec2 q = c0 + ivec2(dx, dy);
+                if (any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, rawSize))) continue;
+                int cc = rxChannel(q, p.cfa);
+                float s = cc == 1 ? 1.0 : 1.0 / (RB_WIDEN * RB_WIDEN);
+                vec2 d = vec2(q) - e;
+                float z = max(0.0, s * (qi.x * d.x * d.x + 2.0 * qi.y * d.x * d.y + qi.z * d.y * d.y));
+                float xn = rxNormFromRaw(float(loadRaw(f, q)), q, p.black, p.white);
+                if (dropClipped && xn >= RX_CLIP_NORM) continue;
+                float ww = exp(-0.5 * z) * r * p.frameWeight;
+                float x = eg * xn;
+                fs[cc] += ww * x;
+                fw[cc] += ww;
+                f2[cc] += ww * ww;
+            }
+        {
+            const float rw = max(r * p.frameWeight, 1e-30);
+            const vec3 sc = vec3(1.0) / max(fw / rw, vec3(FRAME_NORM_FLOOR));
+            fs *= sc;
+            fw *= sc;
+            f2 *= sc * sc;
+        }
+        sumS += fs;
+        sumW += fw;
+        sumSq += fw * fw;
+        sumF2 += f2;
+    }
+    if (!haveQ) return;
+    vec4 a = imageLoad(accA, o);
+    vec2 bb = imageLoad(accB, o).xy;
+    vec3 sq = imageLoad(accC, o).xyz + sumSq;
+    imageStore(accA, o, vec4(a.xyz + sumS, a.w + sumW.x));
+    imageStore(accB, o, vec4(bb + sumW.yz, 0.0, 0.0));
+    imageStore(accC, o, vec4(sq, 0.0));
+    if (p.debug != 0) imageStore(accSs2, o, vec4(imageLoad(accSs2, o).xyz + sumF2, 0.0));
+}

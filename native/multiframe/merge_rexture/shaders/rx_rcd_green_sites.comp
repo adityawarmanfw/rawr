@@ -1,0 +1,66 @@
+#version 450
+// Copy of native/raw_demosaic/rcd/shaders/rcd_green_sites.comp (production workgroup size 8x32) on fp32 work planes; see rx_rcd_common.glsl.
+#ifndef RCD_LOCAL_X
+#define RCD_LOCAL_X 8
+#endif
+#ifndef RCD_LOCAL_Y
+#define RCD_LOCAL_Y 32
+#endif
+layout(local_size_x = RCD_LOCAL_X, local_size_y = RCD_LOCAL_Y, local_size_z = 1) in;
+#include "rx_rcd_common.glsl"
+
+// Compressed dispatch: one invocation per green CFA site. This halves launched
+// invocations versus the 0.8.0 full-width dispatch while preserving the exact
+// green-site reconstruction equations.
+ivec2 greenSiteFromInvocation() {
+    int y = int(gl_GlobalInvocationID.y) + pc.y0;
+    int x0 = int(gl_GlobalInvocationID.x) * 2;
+    ivec2 p = ivec2(x0, y);
+    if (y < int(pc.height) && rgbColorAt(p) != 1) p.x = x0 + 1;
+    return p;
+}
+
+float refinedVh(ivec2 p) {
+    float center = imageLoad(directionImage, wp(p)).x;
+    float neigh =
+        0.25 * (imageLoad(directionImage, wp(p + ivec2(-1, -1))).x + imageLoad(directionImage, wp(p + ivec2(1, -1))).x +
+                imageLoad(directionImage, wp(p + ivec2(-1, 1))).x + imageLoad(directionImage, wp(p + ivec2(1, 1))).x);
+    return abs(0.5 - center) < abs(0.5 - neigh) ? neigh : center;
+}
+
+void main() {
+    const ivec2 first = ivec2(int(gl_WorkGroupID.x) * RCD_LOCAL_X * 2, int(gl_WorkGroupID.y) * RCD_LOCAL_Y + pc.y0);
+    if (!fallbackNeeded(first, first + ivec2(RCD_LOCAL_X * 2, RCD_LOCAL_Y) - 1)) return;
+    ivec2 p = greenSiteFromInvocation();
+    if (p.x >= int(pc.width) || p.y >= int(pc.height) || p.y >= pc.y0 + pc.rows || !inRcdWorkingRegion(p)) return;
+
+    vec3 o = rgbAt(p);
+    float G = o.g;
+    vec3 n = rgbAt(p + ivec2(0, -1)), s = rgbAt(p + ivec2(0, 1));
+    vec3 w = rgbAt(p + ivec2(-1, 0)), e = rgbAt(p + ivec2(1, 0));
+    vec3 n2 = rgbAt(p + ivec2(0, -2)), s2 = rgbAt(p + ivec2(0, 2));
+    vec3 w2 = rgbAt(p + ivec2(-2, 0)), e2 = rgbAt(p + ivec2(2, 0));
+    vec3 n3 = rgbAt(p + ivec2(0, -3)), s3 = rgbAt(p + ivec2(0, 3));
+    vec3 w3 = rgbAt(p + ivec2(-3, 0)), e3 = rgbAt(p + ivec2(3, 0));
+
+    float N1 = EPS + abs(G - n2.g);
+    float S1 = EPS + abs(G - s2.g);
+    float W1 = EPS + abs(G - w2.g);
+    float E1 = EPS + abs(G - e2.g);
+    float disc = refinedVh(p);
+
+    // R and B use identical equations, so evaluate them together as vec2.
+    // This also guarantees +/-3 samples are loaded once rather than once per
+    // channel as in 0.8.0's scalar loop.
+    vec2 nC = n.rb, sC = s.rb, wC = w.rb, eC = e.rb;
+    vec2 sn = abs(nC - sC), ew = abs(wC - eC);
+    vec2 nG = vec2(N1) + sn + abs(nC - n3.rb);
+    vec2 sG = vec2(S1) + sn + abs(sC - s3.rb);
+    vec2 wG = vec2(W1) + ew + abs(wC - w3.rb);
+    vec2 eG = vec2(E1) + ew + abs(eC - e3.rb);
+    vec2 nE = nC - vec2(n.g), sE = sC - vec2(s.g), wE = wC - vec2(w.g), eE = eC - vec2(e.g);
+    vec2 vE = (nG * sE + sG * nE) / (nG + sG);
+    vec2 hE = (eG * wE + wG * eE) / (eG + wG);
+    o.rb = vec2(G) + mix(vE, hE, vec2(disc));
+    storeIntermediate(p, o);
+}

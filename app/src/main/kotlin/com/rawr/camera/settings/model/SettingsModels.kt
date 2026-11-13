@@ -476,7 +476,9 @@ enum class MultiframeMergeAlgorithm(val nativeId: Int, val label: String) {
     Wronski(0, "Super-resolution"),
     HdrPlus(1, "HDR+"),
     HdrPlusQuality(2, "HDR+ Quality"),
-    HdrPlusBracketed(3, "HDR+ Bracketed");
+    HdrPlusBracketed(3, "HDR+ Bracketed"),
+    /** Kernel-regression Bayer merge for equal-exposure bursts, native resolution only (native/multiframe/merge_rexture). */
+    Rexture(4, "Rexture");
 
     /** False when this build hides the algorithm (see [FeatureFlags]). */
     val available: Boolean
@@ -1117,8 +1119,10 @@ data class SettingsValues(
     val filmPresets: List<FilmPreset> = emptyList(),
     val multiframeBaseFrameMode: MultiframeBaseFrameMode = MultiframeBaseFrameMode.Sharpest,
     // Chroma-only profiled wavelet on the merged image, fed the burst-fitted
-    // noise / frame count. Independent of Image > Denoise (single frame only).
-    val multiframeChromaDenoise: Boolean = true,
+    // noise / frame count. Independent of Image > Denoise (single frame only). Off by default.
+    val multiframeChromaDenoise: Boolean = false,
+    // Rexture only: render the JPEG from the merged RGB (no re-mosaic, no demosaic setting). The DNG is unaffected.
+    val multiframeRextureNativeRgb: Boolean = false,
     val multiframeTuning: MultiframeTuning = MultiframeTuning(),
     val customGpuDriverEnabled: Boolean = false,
     val customGpuDriverName: String? = null,

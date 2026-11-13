@@ -1,0 +1,92 @@
+#version 450
+// Copy of native/raw_demosaic/rcd/shaders/rcd_green.comp (production workgroup size 4x32) on fp32 work planes; see rx_rcd_common.glsl.
+#ifndef RCD_LOCAL_X
+#define RCD_LOCAL_X 4
+#endif
+#ifndef RCD_LOCAL_Y
+#define RCD_LOCAL_Y 32
+#endif
+layout(local_size_x = RCD_LOCAL_X, local_size_y = RCD_LOCAL_Y, local_size_z = 1) in;
+#include "rx_rcd_common.glsl"
+
+// CFA needs a 4-pixel halo; refinedDirection needs a 1-pixel halo.
+const int CFA_W = RCD_LOCAL_X + 8;
+const int CFA_H = RCD_LOCAL_Y + 8;
+const int DIR_W = RCD_LOCAL_X + 2;
+const int DIR_H = RCD_LOCAL_Y + 2;
+const uint WG_SIZE = uint(RCD_LOCAL_X * RCD_LOCAL_Y);
+shared float cfaTile[CFA_W * CFA_H];
+shared vec2 dirTile[DIR_W * DIR_H];
+
+int cidx(ivec2 q) { return q.y * CFA_W + q.x; }
+float tcfa(ivec2 q) { return cfaTile[cidx(q)]; }
+int didx(ivec2 q) { return q.y * DIR_W + q.x; }
+vec2 tdir(ivec2 q) { return dirTile[didx(q)]; }
+
+float tlpfRb(ivec2 p) {
+    return tcfa(p) +
+           0.5 * (tcfa(p + ivec2(-1, 0)) + tcfa(p + ivec2(1, 0)) + tcfa(p + ivec2(0, -1)) + tcfa(p + ivec2(0, 1))) +
+           0.25 * (tcfa(p + ivec2(-1, -1)) + tcfa(p + ivec2(1, -1)) + tcfa(p + ivec2(-1, 1)) + tcfa(p + ivec2(1, 1)));
+}
+float trefinedDirection(ivec2 p, int channel) {
+    float center = tdir(p)[channel];
+    float neigh = 0.25 * (tdir(p + ivec2(-1, -1))[channel] + tdir(p + ivec2(1, -1))[channel] +
+                          tdir(p + ivec2(-1, 1))[channel] + tdir(p + ivec2(1, 1))[channel]);
+    return abs(0.5 - center) < abs(0.5 - neigh) ? neigh : center;
+}
+
+void main() {
+    ivec2 groupBase = ivec2(gl_WorkGroupID.xy) * ivec2(RCD_LOCAL_X, RCD_LOCAL_Y) + ivec2(0, pc.y0);
+    if (!fallbackNeeded(groupBase, groupBase + ivec2(RCD_LOCAL_X, RCD_LOCAL_Y) - 1)) return;
+    uint linear = gl_LocalInvocationIndex;
+    for (uint i = linear; i < uint(CFA_W * CFA_H); i += WG_SIZE) {
+        ivec2 q = ivec2(int(i % uint(CFA_W)), int(i / uint(CFA_W)));
+        cfaTile[i] = cfa(groupBase + q - ivec2(4));
+    }
+    for (uint i = linear; i < uint(DIR_W * DIR_H); i += WG_SIZE) {
+        ivec2 q = ivec2(int(i % uint(DIR_W)), int(i / uint(DIR_W)));
+        ivec2 gp = clampRaw(groupBase + q - ivec2(1));
+        dirTile[i] = imageLoad(directionImage, wp(gp)).rg;
+    }
+    barrier();
+
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy) + ivec2(0, pc.y0);
+    if (p.x >= int(pc.width) || p.y >= int(pc.height) || p.y >= pc.y0 + pc.rows) return;
+    if (!inRcdWorkingRegion(p)) {
+        storeIntermediate(p, nativeCfaRgb(p));
+        return;
+    }
+
+    ivec2 lp = ivec2(gl_LocalInvocationID.xy) + ivec2(4);
+    ivec2 dp = ivec2(gl_LocalInvocationID.xy) + ivec2(1);
+    int own = rgbColorAt(p);
+    float s = tcfa(lp);
+    if (own == 1) {
+        storeIntermediate(p, vec3(0.0, s, 0.0));
+        return;
+    }
+
+    float nG = EPS + abs(tcfa(lp + ivec2(0, -1)) - tcfa(lp + ivec2(0, 1))) + abs(s - tcfa(lp + ivec2(0, -2))) +
+               abs(tcfa(lp + ivec2(0, -1)) - tcfa(lp + ivec2(0, -3))) +
+               abs(tcfa(lp + ivec2(0, -2)) - tcfa(lp + ivec2(0, -4)));
+    float sG = EPS + abs(tcfa(lp + ivec2(0, -1)) - tcfa(lp + ivec2(0, 1))) + abs(s - tcfa(lp + ivec2(0, 2))) +
+               abs(tcfa(lp + ivec2(0, 1)) - tcfa(lp + ivec2(0, 3))) +
+               abs(tcfa(lp + ivec2(0, 2)) - tcfa(lp + ivec2(0, 4)));
+    float wG = EPS + abs(tcfa(lp + ivec2(-1, 0)) - tcfa(lp + ivec2(1, 0))) + abs(s - tcfa(lp + ivec2(-2, 0))) +
+               abs(tcfa(lp + ivec2(-1, 0)) - tcfa(lp + ivec2(-3, 0))) +
+               abs(tcfa(lp + ivec2(-2, 0)) - tcfa(lp + ivec2(-4, 0)));
+    float eG = EPS + abs(tcfa(lp + ivec2(-1, 0)) - tcfa(lp + ivec2(1, 0))) + abs(s - tcfa(lp + ivec2(2, 0))) +
+               abs(tcfa(lp + ivec2(1, 0)) - tcfa(lp + ivec2(3, 0))) +
+               abs(tcfa(lp + ivec2(2, 0)) - tcfa(lp + ivec2(4, 0)));
+
+    float lpf = tlpfRb(lp);
+    float nE = tcfa(lp + ivec2(0, -1)) * (2.0 * lpf) / ratioDenom(lpf + tlpfRb(lp + ivec2(0, -2)));
+    float sE = tcfa(lp + ivec2(0, 1)) * (2.0 * lpf) / ratioDenom(lpf + tlpfRb(lp + ivec2(0, 2)));
+    float wE = tcfa(lp + ivec2(-1, 0)) * (2.0 * lpf) / ratioDenom(lpf + tlpfRb(lp + ivec2(-2, 0)));
+    float eE = tcfa(lp + ivec2(1, 0)) * (2.0 * lpf) / ratioDenom(lpf + tlpfRb(lp + ivec2(2, 0)));
+    float vE = (sG * nE + nG * sE) / (nG + sG);
+    float hE = (wG * eE + eG * wE) / (eG + wG);
+    float disc = trefinedDirection(dp, 0);
+    float g = mix(vE, hE, disc);
+    storeIntermediate(p, own == 0 ? vec3(s, g, 0.0) : vec3(0.0, g, s));
+}

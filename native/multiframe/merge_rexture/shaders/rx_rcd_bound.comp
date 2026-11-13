@@ -1,0 +1,61 @@
+#version 450
+#extension GL_GOOGLE_include_directive : enable
+// Rexture fallback demosaic bound (rcd_clamp = 5): every interpolated (non-native) channel of the RCD base is clamped to the
+// range of that colour's native samples in the 5 x 5 neighbourhood (edge clamp). A demosaic bound, not a filter: only
+// overshooting values change. In place on the fp32 RCD work image (strip rows [y0, y0 + rows)); reads the raw frame
+// (normalised). Skips 16 x 16 pixel groups that no flagged tile (rx_fb_flags) is near.
+#include "rx_common.glsl"
+
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0, r16ui) readonly uniform uimage2D rawU16;
+layout(set = 0, binding = 1, rgba32f) uniform image2D rgbI;                // fp32 RCD work image, bounded in place
+layout(set = 0, binding = 2, r32f) readonly uniform image2D fbTiles;       // 1 = the 16 x 16 tile needs the fallback
+layout(push_constant) uniform P {
+    vec4 black;
+    float white;
+    int w, h, cfa;
+    int y0, rows, gate;
+} p;
+
+const int T = 20;                      // 16 + 2 * 2
+shared float sX[T * T];                // normalised raw tile
+shared uint sC[T * T];                 // colour of each tile site
+
+void main() {
+    const ivec2 t2 = ivec2(gl_LocalInvocationID.xy);
+    const int tid = t2.y * 16 + t2.x;
+    const ivec2 o0 = ivec2(gl_WorkGroupID.xy) * 16 + ivec2(0, p.y0);
+    const ivec2 size = ivec2(p.w, p.h);
+    if (p.gate != 0) {   // only the flagged tiles themselves are read by the final pass (workgroup-uniform)
+        const ivec2 n = imageSize(fbTiles);
+        bool any = false;
+        for (int ty = o0.y / 16; ty <= min((o0.y + 15) / 16, n.y - 1); ++ty)
+            for (int tx = o0.x / 16; tx <= min((o0.x + 15) / 16, n.x - 1); ++tx) any = any || imageLoad(fbTiles, ivec2(tx, ty)).x > 0.5;
+        if (!any) return;
+    }
+    for (int i = tid; i < T * T; i += 256) {
+        ivec2 qc = clamp(o0 - 2 + ivec2(i % T, i / T), ivec2(0), size - 1);
+        sX[i] = rxNormFromRaw(float(imageLoad(rawU16, qc).x), qc, p.black, p.white);
+        sC[i] = uint(rxChannel(qc, p.cfa));
+    }
+    barrier();
+    ivec2 q = o0 + t2;
+    if (q.x >= p.w || q.y >= p.h || q.y >= p.y0 + p.rows) return;
+    const ivec2 wq = ivec2(q.x, q.y - p.y0);
+    int own = rxChannel(q, p.cfa);
+    vec4 v = imageLoad(rgbI, wq);
+    float val[3] = float[3](v.x, v.y, v.z);
+    // one pass over the 5 x 5 window: each native sample updates the range of its own colour
+    vec3 lo = vec3(1.0e30), hi = vec3(-1.0e30);
+    for (int dy = 0; dy < 5; ++dy)
+        for (int dx = 0; dx < 5; ++dx) {
+            int i = (t2.y + dy) * T + t2.x + dx;
+            int c = int(sC[i]);
+            float x = sX[i];
+            lo[c] = min(lo[c], x);
+            hi[c] = max(hi[c], x);
+        }
+    for (int k = 0; k < 3; ++k)
+        if (k != own) val[k] = clamp(val[k], lo[k], hi[k]);
+    imageStore(rgbI, wq, vec4(val[0], val[1], val[2], 1.0));
+}

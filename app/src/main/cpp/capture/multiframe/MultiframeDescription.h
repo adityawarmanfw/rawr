@@ -55,6 +55,7 @@ struct MultiframeTuningView {
 struct MultiframeOutputInfo : encoding::OutputParameters {
     MultiframeOutputInfo() { chromaDenoiseLabel = "off"; }
     std::string noiseProfile = "Default";
+    std::string jpegInput = "merged CFA";
 };
 
 // Tonemap UI values, mapped from tonemap::TonemapParams in run() so this
@@ -103,9 +104,10 @@ std::string buildParametersBlock(const MultiframeTuningView& tuning, const Multi
 
 // Base Frame Selection section: the base frame and the mean sharpness
 // relative to it (per-frame raw scores stay in RZSL). Empty scores (Middle
-// mode) print the middle reference.
+// mode) print the middle reference. pressSelected: the base was chosen at the
+// shutter press (Rexture), so the per-burst sharpness list does not apply.
 std::string buildSharpnessSection(MultiframeBaseFrameMode mode, const std::vector<float>& scores,
-                                  std::uint32_t referenceIndex, std::uint32_t frameCount);
+                                  std::uint32_t referenceIndex, std::uint32_t frameCount, bool pressSelected = false);
 
 // "Multiframe: T ms" + four stage lines + "Multiframe timings breakdown:"
 // eight detail lines. Shared string for DNG and (via context) JPEG.

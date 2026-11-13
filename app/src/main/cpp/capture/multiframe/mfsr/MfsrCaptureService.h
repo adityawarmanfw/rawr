@@ -1,5 +1,6 @@
 #pragma once
 #include <rawr/raw_gpu_pipeline/AndroidBurstCoordinator.h>
+#include <rawr/raw_gpu_pipeline/RextureFrameScorer.h>
 #include <spektrafilm/SpektraFilm.h>
 
 #include <atomic>
@@ -96,6 +97,8 @@ class MfsrCaptureService {
     // reset is never called). Destroyed after all threads join.
     raw_sharpness::RawSharpness sharpness_;
     std::mutex sharpnessMutex_;
+    // Rexture base selection at the press (own pipeline, independent of the merge coordinator); guarded by sharpnessMutex_.
+    rawr::raw_gpu_pipeline::RextureFrameScorer rextureScorer_;
     std::mutex queueMutex_;
     AAssetManager* filmAssetManager_ = nullptr;
     bool persistentEngineEnabled_ = false;
@@ -110,7 +113,12 @@ class MfsrCaptureService {
         std::string path, error;
         std::mutex mutex;
         std::condition_variable readyCondition;
-        bool ready = false;
+        bool ready = false;  // the spool thread is done with this capture (journal durable, or failed)
+        // Live merge (Rexture): the base is chosen and the header copied, so the worker may start on the live
+        // frames while the journal is still being written. durable: the journal no longer reads the frames.
+        bool selected = false;
+        bool live = false;
+        std::atomic<bool> durable{false};
     };
     void spoolLoop();
     std::deque<std::shared_ptr<SpoolingWork>> queuedWork_, spoolQueue_;
