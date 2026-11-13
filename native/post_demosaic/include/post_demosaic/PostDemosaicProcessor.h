@@ -73,6 +73,9 @@ struct DenoiseRequest {
     // the coarsest bands first: faster, but large-scale (chroma-blotch)
     // cleanup goes first. Clamped to [1,7] at record time.
     int maxScale = 7;
+    // Edge-stop sharpness of the wavelet weights (0.02 = shipped single-frame behaviour). The multiframe chroma
+    // denoise raises it so colour edges are not averaged across. Clamped to [0.02, 4] at record time.
+    float edgeK = 0.02f;
 };
 class PostDemosaicProcessor final {
    public:

@@ -907,7 +907,7 @@ std::vector<uint8_t> RendererEngine::render(DngSource& source, const std::string
         << context.defringeLumaFloor << ',' << context.highlightReconstructionEnabled << ','
         << context.highlightReconstructionMethod << ',' << context.highlightThreshold << ',' << context.highlightCompression << ','
         << context.denoiseStrength << ',' << context.denoiseDetail << ',' << context.denoiseForceY << ','
-        << context.denoiseMaxScale << ',' << context.denoiseNoiseA << ',' << context.denoiseNoiseB;
+        << context.denoiseMaxScale << ',' << context.denoiseNoiseA << ',' << context.denoiseNoiseB << ',' << context.denoiseEdgeK;
     if (context.highlightReconstructionEnabled && context.highlightReconstructionMethod == 1u)
         linearKey << ',' << (context.filmEnabled ? color::filmExposureEv(context.filmLook, context.tonemapParams.aePostGain,
                                                                 context.tonemapParams.exposureEV)

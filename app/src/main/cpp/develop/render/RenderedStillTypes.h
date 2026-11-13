@@ -68,6 +68,8 @@ struct RenderedStillContext {
     // PostDemosaicProcessor. Out-of-range values clamp at record time.
     float denoiseForceY = 0.25f;
     int denoiseMaxScale = 7;
+    // Wavelet edge-stop sharpness (0.02 = shipped; the multiframe chroma denoise raises it so colour edges do not bleed).
+    float denoiseEdgeK = 0.02f;
     // Normalized-domain noise model (green): variance = a*x + b, resolved
     // from the frame SENSOR_NOISE_PROFILE with the demosaic normalization.
     float denoiseNoiseA = 0.0f;

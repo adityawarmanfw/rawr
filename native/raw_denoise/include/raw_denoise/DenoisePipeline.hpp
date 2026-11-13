@@ -46,6 +46,10 @@ struct DenoiseParams {
     int maxScale = 7;
     float forceY = 0.25f;
     float forceUv = 0.75f;
+    // Edge-stop sharpness of the a-trous weights (e = |d|^2/sigma^2 * edgeK - 9). 0.02 is the darktable value
+    // (single-frame default, parity-gated). Higher values stop averaging across weaker edges: the multiframe
+    // chroma denoise uses 0.5 so colour edges (blue/yellow above all) do not bleed.
+    float edgeK = 0.02f;
     // Inner tile extent; extended buffers are (tile+2H)^2.
     uint32_t tileSize = 1536;
 };

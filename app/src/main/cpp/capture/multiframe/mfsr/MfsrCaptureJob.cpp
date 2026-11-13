@@ -846,6 +846,9 @@ void MfsrCaptureJob::runStages(Published& published) {
                         renderedContext.denoiseDetail = 1.0f;
                         renderedContext.denoiseForceY = 0.0f;
                         renderedContext.denoiseMaxScale = 7;
+                        // The default edge-stop averages across any colour step under ~20 noise sigmas, which
+                        // smears blue/yellow edges (equal-luma ones most). 0.5 keeps them with no loss of denoise.
+                        renderedContext.denoiseEdgeK = 0.5f;
                         renderedContext.denoiseNoiseA = a;
                         renderedContext.denoiseNoiseB = b;
                         outputInfo.chromaDenoiseLabel =
