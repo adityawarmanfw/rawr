@@ -52,10 +52,17 @@ void testDeviceMatch() {
     size_t matched = 0;
     for (const auto& device : builtInProfiles()) {
         if (device.match.models.empty()) continue;
-        const auto match = matchBuiltInProfile([&](const std::string& name) {
+        const PropertyReader property = [&](const std::string& name) {
             return name == "ro.product.model" ? device.match.models.front() : std::string();
-        });
-        assert(match.profileId == device.profile.id);
+        };
+        // Variants of one device share its models: every variant is a candidate for the
+        // model, and the profile the app selects is the single one or the explicit default.
+        const auto candidates = matchingBuiltInProfiles(property);
+        bool listed = false;
+        for (const auto* candidate : candidates) listed = listed || candidate->profile.id == device.profile.id;
+        assert(listed);
+        const auto match = matchBuiltInProfile(property);
+        if (candidates.size() == 1 || device.isDefault) assert(match.profileId == device.profile.id);
         ++matched;
     }
     assert(matched >= 2);
