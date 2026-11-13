@@ -101,6 +101,19 @@ int main() {
     }
     const std::string timingsMiddle = formatMultiframeTimings(stages, MultiframeBaseFrameMode::Middle);
     assert(contains(timingsMiddle, "skipped (middle)"));
+    // Rexture: press-time scoring is reported (not "skipped"), and the merge wall time is split from its GPU stages.
+    auto rexture = stages;
+    rexture.sharpnessMs = 0.0;
+    rexture.baseSelectMs = 41.5;
+    rexture.baseSelectFrames = 8;
+    rexture.mergeWallMs = 2249.6;
+    rexture.mergeGpuMs = 1440.7;
+    rexture.mergeWaitMs = 2174.5;
+    const std::string timingsRexture = formatMultiframeTimings(rexture, MultiframeBaseFrameMode::Middle);
+    assert(!contains(timingsRexture, "skipped (middle)"));
+    assert(contains(timingsRexture, "Base selection: 41.5 ms (press-time scoring of 8 frames"));
+    assert(contains(timingsRexture, "Merge wall time: 2249.6 ms (GPU 1440.7, queue/GPU idle 733.8, host 75.1;"));
+    assert(!contains(timings, "Merge wall time"));
 
     const std::string imageProc =
         formatImageProcessing(true, 0.0, 96.4, 6400.0, 210.7, false, 1, 88.3, 342.9, 906.8, false, 12.5,

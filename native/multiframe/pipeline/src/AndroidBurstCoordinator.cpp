@@ -273,6 +273,7 @@ AndroidBurstCoordinator::ChunkTiming AndroidBurstCoordinator::executeChunk(std::
     if (queryCount == 0u || queryCount > kTimestampQueryCapacity) throw std::invalid_argument("multiframe timestamp query count");
     using Clock = std::chrono::steady_clock;
     const auto begin = Clock::now();
+    Clock::time_point submitBegin = begin, waitBegin = begin;
     if (stageSink_) stageSink_(Stage::ChunkBegin, chunkCode, frameIndex);
     try {
         if (submissionInFlight_) {
@@ -309,8 +310,10 @@ AndroidBurstCoordinator::ChunkTiming AndroidBurstCoordinator::executeChunk(std::
         }
         check(vkResetFences(device_, 1, &fence_), "multiframe reset fence");
         if (stageSink_) stageSink_(Stage::SubmitBegin, arena_.physicalImageBytes(), arena_.physicalBufferBytes());
+        submitBegin = Clock::now();
         submit_(si, fence_);
         submissionInFlight_ = true;
+        waitBegin = Clock::now();
         if (stageSink_) stageSink_(Stage::SubmitEnd, arena_.physicalImageBytes(), arena_.physicalBufferBytes());
         if (stageSink_)
             stageSink_(Stage::FenceWaitBegin, arena_.physicalImageBytes(), arena_.physicalBufferBytes());
@@ -334,7 +337,15 @@ AndroidBurstCoordinator::ChunkTiming AndroidBurstCoordinator::executeChunk(std::
             gpuIntervals.push_back(double(values[i] - values[i - 1u]) * double(timestampPeriodNs_) / 1.0e6);
         }
     }
-    const double wall = std::chrono::duration<double, std::milli>(Clock::now() - begin).count();
+    const auto end = Clock::now();
+    const auto ms = [](Clock::duration d) { return std::chrono::duration<double, std::milli>(d).count(); };
+    const double wall = ms(end - begin);
+    ++chunkStats_.chunkCount;
+    chunkStats_.chunkWallMs += wall;
+    chunkStats_.chunkRecordMs += ms(submitBegin - begin);
+    chunkStats_.chunkSubmitMs += ms(waitBegin - submitBegin);
+    chunkStats_.chunkWaitMs += ms(end - waitBegin);
+    for (const double g : gpuIntervals) chunkStats_.chunkGpuMs += g;
     return std::pair<double, std::vector<double>>(wall, std::move(gpuIntervals));
 }
 void AndroidBurstCoordinator::recordTimestamp(std::uint32_t query) {
@@ -403,6 +414,7 @@ BurstRunResult AndroidBurstCoordinator::run(const std::vector<BurstFrame>& frame
     // single level holds it for ~1-20ms. Recorded commands are unchanged.
     // 1=reference, 11=prepare/alignment, 12=kernel/stats,
     // 13=robustness, 14=accumulate, 20=finalize.
+    chunkStats_ = {};
     if (algorithm_ == MergeAlgorithm::Rexture) return runRexture(frames, ref, frameConsumed, frameLoad);
     return runHdrPlusFrequency(frames, ref, frameConsumed, frameLoad);
 }
@@ -581,6 +593,12 @@ BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>
     }
     if (rextureObserver_) rextureObserver_("final", ref, arena_);
     timings.totalMs = std::chrono::duration<double, std::milli>(Clock::now() - runBegin).count();
+    timings.chunkCount = chunkStats_.chunkCount;
+    timings.chunkWallMs = chunkStats_.chunkWallMs;
+    timings.chunkRecordMs = chunkStats_.chunkRecordMs;
+    timings.chunkSubmitMs = chunkStats_.chunkSubmitMs;
+    timings.chunkWaitMs = chunkStats_.chunkWaitMs;
+    timings.chunkGpuMs = chunkStats_.chunkGpuMs;
     const auto& out = arena_.image("linear_output");
     BurstRunResult result{ref,
                           std::uint32_t(frames.size()),
@@ -712,6 +730,12 @@ BurstRunResult AndroidBurstCoordinator::runHdrPlusFrequency(const std::vector<Bu
         recordTimestamp(1u);
     }));
     timings.totalMs = std::chrono::duration<double, std::milli>(Clock::now() - runBegin).count();
+    timings.chunkCount = chunkStats_.chunkCount;
+    timings.chunkWallMs = chunkStats_.chunkWallMs;
+    timings.chunkRecordMs = chunkStats_.chunkRecordMs;
+    timings.chunkSubmitMs = chunkStats_.chunkSubmitMs;
+    timings.chunkWaitMs = chunkStats_.chunkWaitMs;
+    timings.chunkGpuMs = chunkStats_.chunkGpuMs;
     const auto& out = arena_.image("hdrp_output");
     const auto& cfa = arena_.image("hdrp_cfa");
     BurstRunResult result{ref,

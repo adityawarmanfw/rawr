@@ -497,6 +497,11 @@ void MfsrCaptureService::spoolLoop() {
                 try {
                     const auto begin = std::chrono::steady_clock::now();
                     std::vector<rawr::raw_gpu_pipeline::RextureFrameScorer::Score> scores;
+                    // The burst is frozen at the press: the newest frame is the press time.
+                    std::vector<double> times;
+                    for (const auto& m : burst.metadata) times.push_back(double(m.timestampNs) * 1.0e-9);
+                    const double press = *std::max_element(times.begin(), times.end());
+                    std::vector<std::size_t> windowIndex;
                     {
                         std::lock_guard<std::mutex> scoreLock(sharpnessMutex_);
                         if (!rextureScorer_.ready())
@@ -521,19 +526,25 @@ void MfsrCaptureService::spoolLoop() {
                             if (a > 0.0 && b >= 0.0) alpha = float(a / 4.0), beta = float(b / 4.0);
                         }
                         const std::uint32_t cfa = ref0.cameraContext ? ref0.cameraContext->rawPreviewCfa : 0u;
-                        scores = rextureScorer_.score(burst.frames, burst.frames.front().raw.ref.width,
-                                                      burst.frames.front().raw.ref.height, cfa <= 3u ? cfa : 0u, alpha, beta);
+                        // Only frames inside the base window can be chosen as the base (chooseBaseAtPress), so only those
+                        // are scored; the rest keep a zero score and are never candidates.
+                        std::vector<rawr::raw_gpu_pipeline::BurstFrame> windowFrames;
+                        windowIndex.clear();
+                        for (std::size_t i = 0; i < burst.frames.size(); ++i)
+                            if (press - times[i] <= rawr::raw_merge_rexture_gpu::kBaseWindowSeconds) {
+                                windowIndex.push_back(i);
+                                windowFrames.push_back(burst.frames[i]);
+                            }
+                        const auto windowScores =
+                            rextureScorer_.score(windowFrames, burst.frames.front().raw.ref.width,
+                                                 burst.frames.front().raw.ref.height, cfa <= 3u ? cfa : 0u, alpha, beta);
+                        scores.assign(burst.frames.size(), {});
+                        for (std::size_t k = 0; k < windowIndex.size(); ++k) scores[windowIndex[k]] = windowScores[k];
                     }
                     std::vector<rawr::raw_merge_rexture_gpu::FrameScore> frameScores;
-                    std::vector<double> times;
-                    for (std::size_t i = 0; i < scores.size(); ++i) {
-                        frameScores.push_back({scores[i].sharp, scores[i].sat});
-                        times.push_back(double(burst.metadata[i].timestampNs) * 1.0e-9);
-                    }
-                    // The burst is frozen at the press: the newest frame is the press time.
-                    const double press = *std::max_element(times.begin(), times.end());
+                    for (std::size_t i = 0; i < scores.size(); ++i) frameScores.push_back({scores[i].sharp, scores[i].sat});
                     const auto best = static_cast<std::uint32_t>(rawr::raw_merge_rexture_gpu::chooseBaseAtPress(frameScores, times, press));
-                    for (std::size_t i = 0; i < scores.size(); ++i) {
+                    for (const std::size_t i : windowIndex) {
                         const double age = std::max(press - times[i], 0.0);
                         const bool inWindow = age <= rawr::raw_merge_rexture_gpu::kBaseWindowSeconds;
                         const double value = scores[i].sharp *
@@ -547,8 +558,12 @@ void MfsrCaptureService::spoolLoop() {
                     burst.referenceIndex = best;
                     burst.referenceMetadata = burst.metadata[best];
                     burst.referenceColor = burst.colors[best];
-                    LOGI("MULTIFRAME_BASEFRAME mode=rexture-press selected=%u/%zu scoreMs=%.1f", best, burst.frames.size(),
-                         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count());
+                    const double scoreMs =
+                        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
+                    pending->work->baseSelectMs = scoreMs;
+                    pending->work->baseSelectFrames = static_cast<std::uint32_t>(windowIndex.size());
+                    LOGI("MULTIFRAME_BASEFRAME mode=rexture-press selected=%u/%zu scored=%zu scoreMs=%.1f", best, burst.frames.size(),
+                         windowIndex.size(), scoreMs);
                 } catch (const std::exception& e) {
                     LOGE("MULTIFRAME_REXTURE_SCORE_FALLBACK %s", e.what());
                 } catch (...) {

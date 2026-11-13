@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "capture/multiframe/MultiframeDescription.h"
 
 #include <cmath>
@@ -96,8 +97,17 @@ std::string formatMultiframeTimings(const MultiframeStageTimings& stages, Multif
     std::ostringstream out;
     out << "\nMultiframe: " << ms1(stages.multiframeTotalMs()) << " ms\n"
         << "- Initialization: " << ms1(stages.initMs) << " ms (" << stages.initNote << ")\n";
+    if (stages.mergeWallMs > 0.0) {
+        out << "- Merge wall time: " << ms1(stages.mergeWallMs) << " ms (GPU " << ms1(stages.mergeGpuMs)
+            << ", queue/GPU idle " << ms1(std::max(stages.mergeWaitMs - stages.mergeGpuMs, 0.0)) << ", host "
+            << ms1(std::max(stages.mergeWallMs - stages.mergeWaitMs, 0.0))
+            << "; the stages below are GPU-timestamped)\n";
+    }
     if (mode == MultiframeBaseFrameMode::Sharpest && stages.sharpnessMs > 0.0) {
         out << "- Sharpness: " << ms1(stages.sharpnessMs) << " ms\n";
+    } else if (stages.baseSelectMs > 0.0) {
+        out << "- Base selection: " << ms1(stages.baseSelectMs) << " ms (press-time scoring of "
+            << stages.baseSelectFrames << " frames, not in the total)\n";
     } else {
         out << "- Sharpness: skipped (middle)\n";
     }

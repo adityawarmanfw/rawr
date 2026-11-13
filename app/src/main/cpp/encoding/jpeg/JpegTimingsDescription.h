@@ -53,7 +53,7 @@ inline std::string appendProcessingTimes(const JpegCaptureContext& c, double jpe
                 ? "Elapsed since capture accepted: " +
                       formatMs1(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - c.acceptedAt)
                                     .count()) +
-                      " ms (also counts burst save and queue wait, which the stages below do not)\n"
+                      " ms (also counts base selection, queue wait and GPU idle, which the stages below do not)\n"
                 : std::string())
         << (multiframe ? c.multiframeTimingsBlock + formatOutputProjection(baseReadMs, projectMs) : std::string())
         << formatImageProcessing(directRgb, c.demosaicMs, c.mfRgbPrepMs, c.renderSetupMs,

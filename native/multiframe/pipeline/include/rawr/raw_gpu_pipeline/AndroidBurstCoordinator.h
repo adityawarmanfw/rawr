@@ -35,6 +35,12 @@ struct BurstStageTimings {
     double finalizeMs = 0.0;
     double noiseEstimateMs = 0.0;
     double totalMs = 0.0;
+    // Where the wall time of the run goes. The stage timings above are GPU timestamps; the host side of every
+    // submission (record, submit, fence wait, query readback) and the host work between submissions are not in them.
+    // chunkWallMs = chunkRecordMs + chunkSubmitMs + chunkWaitMs + readback; totalMs - chunkWallMs = host time between
+    // submissions (frame loads, pairing, noise fit setup, ...).
+    std::uint32_t chunkCount = 0;
+    double chunkWallMs = 0.0, chunkRecordMs = 0.0, chunkSubmitMs = 0.0, chunkWaitMs = 0.0, chunkGpuMs = 0.0;
     [[nodiscard]] double alignmentTotalMs() const noexcept {
         return referencePrepareMs + companionPrepareMs + alignmentMs;
     }
@@ -179,6 +185,7 @@ class AndroidBurstCoordinator final {
     bool arenaReady_ = false;
     bool layoutsInitialized_ = false;
     bool submissionInFlight_ = false;
+    BurstStageTimings chunkStats_{};  // per-run accumulation of the chunk fields, copied into the result's timings
     bool resourcesReused_ = false;
     bool pipelineCacheReused_ = false;
     double pendingInitializeMs_ = 0.0;

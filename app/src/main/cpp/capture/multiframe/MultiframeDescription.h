@@ -50,6 +50,12 @@ struct MultiframeStageTimings {
     double finalizeMs = 0.0;
     double projectMs = 0.0;
     double rgbPrepMs = 0.0;
+    // Press-time base selection (Rexture): scoring time and how many frames were scored. 0 = not run.
+    double baseSelectMs = 0.0;
+    std::uint32_t baseSelectFrames = 0;
+    // Wall time of the merge run against its GPU-timestamped stages: the stage times below are GPU intervals, the merge
+    // also waits on the queue and the GPU idles between its submissions. 0 = not measured.
+    double mergeWallMs = 0.0, mergeGpuMs = 0.0, mergeWaitMs = 0.0;
     std::string initNote = "cold";
     [[nodiscard]] double alignmentTotalMs() const noexcept { return refPrepareMs + companionPrepareMs + alignMs; }
     [[nodiscard]] double mergeTotalMs() const noexcept {
