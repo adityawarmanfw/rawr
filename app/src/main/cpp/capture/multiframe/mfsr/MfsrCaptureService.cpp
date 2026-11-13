@@ -1,5 +1,4 @@
 #include "capture/multiframe/mfsr/MfsrCaptureService.h"
-#include "diagnostics/timing/CaptureStageTimer.h"
 
 #include <android/log.h>
 #include <sys/resource.h>
@@ -217,22 +216,14 @@ std::uint64_t MfsrCaptureService::start(std::unique_ptr<PendingMultiframeCapture
         workerThread_ = std::thread([this, current = pending]() mutable {
             setpriority(PRIO_PROCESS, 0, 5);
             while (current) {
-                CAPTURE_DEBUG_LOG("BURST_WORKER_DEQUEUED requestId=%llu acceptedElapsedMs=%.3f monoMs=%.3f",
-                     static_cast<unsigned long long>(current->work->requestId),
-                     std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - current->work->acceptedAt).count(),
-                     diagnostics::captureMonoMs());
-                diagnostics::CaptureStageTimer spoolWait("burst_wait_spool", current->work->requestId);
                 {
                     std::unique_lock<std::mutex> lock(current->mutex);
                     current->readyCondition.wait(lock, [&] { return current->ready; });
                 }
-                spoolWait.finish();
                 auto& original = *current->work;
                 try {
                     if (!current->error.empty()) throw std::runtime_error(current->error);
-                    diagnostics::CaptureStageTimer gpuWait("burst_wait_processing_mutex", original.requestId);
                     std::lock_guard<std::mutex> processing(vulkan_.stillProcessingMutex());
-                    gpuWait.finish();
                     diagnostics::RuntimeTraceRecorder::instance().record(
                         diagnostics::RuntimeTraceStage::StillProcessingBegin, 0, original.requestId, -1, 0, 0, 1u);
                     struct TraceEnd {
@@ -246,10 +237,8 @@ std::uint64_t MfsrCaptureService::start(std::unique_ptr<PendingMultiframeCapture
                     // merges (super-resolution, HDR+) hold the reference plus one
                     // companion and drop each once merged; HDR+ Quality's four passes
                     // load the whole burst first. The RZSL dump reads every frame.
-                    diagnostics::CaptureStageTimer loadTiming("burst_load", original.requestId);
                     auto restored =
                         persistence::loadBurst(current->path, vulkan_, queue0Mutex_, !original.dumpRzslRequested);
-                    loadTiming.finish();
                     restored->acceptedAt = original.acceptedAt;
                     LOGI("BURST_READY requestId=%llu acceptedToReadyMs=%.1f",
                          static_cast<unsigned long long>(original.requestId),
@@ -327,9 +316,7 @@ void MfsrCaptureService::spoolLoop() {
             pending = spoolQueue_.front();
             spoolQueue_.pop_front();
         }
-        diagnostics::CaptureStageTimer spoolTiming("burst_spool", pending->work->requestId);
         try {
-            diagnostics::CaptureStageTimer selectionTiming("burst_reference_selection", pending->work->requestId);
             // Deferred sharpest-reference selection, entirely on the GPU: one
             // small compute scoring pass over the pinned burst images, then a
             // ~30KB partial readback. No bulk RAW copies; the save below keeps
@@ -443,8 +430,6 @@ void MfsrCaptureService::spoolLoop() {
                 burst.referenceColor = burst.colors[reference];
                 LOGI("MULTIFRAME_BASEFRAME mode=bracket-darkest selected=%u/%zu", reference, burst.frames.size());
             }
-            selectionTiming.finish();
-            diagnostics::CaptureStageTimer saveTiming("burst_save", pending->work->requestId);
             persistence::saveBurst(pending->path, *pending->work, vulkan_, queue0Mutex_);
             diagnostics::RuntimeTraceRecorder::instance().record(diagnostics::RuntimeTraceStage::StillDurable, 0,
                                                                  pending->work->requestId, -1, 0, 0, 1u);
