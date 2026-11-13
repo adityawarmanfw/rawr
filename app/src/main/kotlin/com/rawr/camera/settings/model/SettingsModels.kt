@@ -507,7 +507,7 @@ object MultiframeSpecs {
             "Lower: faster but noisier. Higher: cleaner flats yet slightly softer edges, slower with more motion risk.",
             2f,
             30f,
-            12f,
+            6f,
             1f,
             0
         )
@@ -546,7 +546,7 @@ data class MultiframeTuning(
     val mergeAlgorithm: MultiframeMergeAlgorithm = MultiframeMergeAlgorithm.Rexture,
     val hdrPlusStrength: Float = 13f,
     val hdrPlusTileSize: Int = 32,
-    val maxFrames: Int = 12
+    val maxFrames: Int = 6
 ) {
     fun value(parameter: MultiframeNumericParameter): Float = when (parameter) {
         MultiframeNumericParameter.MaxFrames -> maxFrames.toFloat()
