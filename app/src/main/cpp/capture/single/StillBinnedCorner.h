@@ -22,8 +22,10 @@ inline void keepBinnedCorner(imaging::RawSnapshot& frame) {
     if (d <= 1) return;
     const uint32_t width = frame.width / d, height = frame.height / d;
     const auto& base = context->binnedFallbackContext;
-    // Preserve legacy cropping for every detected corner, regardless of its size.
-    // Separate photo streams retain the base CFA; other paths keep their existing CFA.
+    // Crop every detected corner, whatever its size. The full-size context carries the photo
+    // stream's CFA (photoCfaBlock), but a corner frame is binned base-stream data, so when a
+    // base context was recorded (separate photo stream) its CFA is restored, including for
+    // block-CFA photo streams. Without one, the frame's own CFA is kept.
     auto cropped = std::make_shared<metadata::CameraContextMetadata>(*context);
     if (base) cropped->cfaBlock = base->cfaBlock;
     cropped->geometry.rawBufferWidth = width;
