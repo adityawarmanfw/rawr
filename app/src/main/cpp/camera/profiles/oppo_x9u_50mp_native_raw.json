@@ -53,7 +53,8 @@
             "count": 2
           },
           "mergeFramesOneByOne": false,
-          "includePreview": false
+          "includePreview": false,
+          "mergeFrameLimit": 3
         },
         "companion": {
           "mode": "off"
@@ -143,7 +144,8 @@
             "count": 2
           },
           "mergeFramesOneByOne": false,
-          "includePreview": false
+          "includePreview": false,
+          "mergeFrameLimit": 3
         },
         "companion": {
           "mode": "off"
@@ -233,7 +235,8 @@
             "count": 2
           },
           "mergeFramesOneByOne": false,
-          "includePreview": false
+          "includePreview": false,
+          "mergeFrameLimit": 3
         },
         "companion": {
           "mode": "off"
@@ -323,7 +326,8 @@
             "count": 2
           },
           "mergeFramesOneByOne": false,
-          "includePreview": false
+          "includePreview": false,
+          "mergeFrameLimit": 3
         },
         "companion": {
           "mode": "off"
