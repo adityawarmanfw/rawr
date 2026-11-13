@@ -20,6 +20,13 @@ internal fun DisplayControlsSettings(state: SettingsUiState, dispatch: SettingsD
         SettingsGroup {
             GridModeSettingsRow(state.values.gridMode) { dispatch.invoke(SetGridMode(it)) }
             SettingDivider()
+            SettingsSwitchRow(
+                title = "DCP Quick Select",
+                checked = state.values.showDcpQuickSelect,
+                supportingText = "Show the DCP profile shortcut beside the lens selector on the capture screen.",
+                testTag = SettingsTestTags.row("DisplayControls", "dcp_quick_select")
+            ) { dispatch.invoke(SetShowDcpQuickSelect(it)) }
+            SettingDivider()
             ViewfinderResolutionRow(state.values.viewfinderDivisor) { dispatch.invoke(SetViewfinderDivisor(it)) }
             SettingDivider()
             SettingsRow(

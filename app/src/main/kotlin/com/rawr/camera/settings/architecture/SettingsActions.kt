@@ -68,6 +68,8 @@ data class SetGridMode(val value: GridMode) : SettingsApplicationAction
 
 data class SetViewfinderDivisor(val divisor: Int) : SettingsApplicationAction
 
+data class SetShowDcpQuickSelect(val enabled: Boolean) : SettingsApplicationAction
+
 data class SetColorRenderProfile(val value: ColorRenderProfile) : SettingsApplicationAction
 
 data class SelectUserLutProfile(val profileId: String) : SettingsApplicationAction

@@ -42,7 +42,7 @@ internal fun SettingsValues.toViewfinderQuickState(
     val compressionDefault =
         if (isVideo) VIDEO_HIGHLIGHT_COMPRESSION_DEFAULT else PHOTO_HIGHLIGHT_COMPRESSION_DEFAULT
     return ViewfinderQuickState(
-        dcps = (lensProfiles ?: deviceDefaults).map { DcpQuickState(it.name, it.image.availableDcps, it.image.dcp?.file) },
+        dcps = if (!showDcpQuickSelect) emptyList() else (lensProfiles ?: deviceDefaults).map { DcpQuickState(it.name, it.image.availableDcps, it.image.dcp?.file) },
         rawrAeEnabled = rawrAe.enabled,
         metering = rawrAe.metering,
         highlight = HighlightQuickState(

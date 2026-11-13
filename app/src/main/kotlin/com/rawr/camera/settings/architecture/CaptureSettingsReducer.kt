@@ -74,5 +74,8 @@ internal fun reduceCaptureSettings(
     is SetViewfinderDivisor -> {
         state.withValues(state.values.copy(viewfinderDivisor = action.divisor.coerceIn(1, 4)))
     }
+    is SetShowDcpQuickSelect -> {
+        state.withValues(state.values.copy(showDcpQuickSelect = action.enabled))
+    }
     else -> error("Unsupported capture settings action: $action")
 }
