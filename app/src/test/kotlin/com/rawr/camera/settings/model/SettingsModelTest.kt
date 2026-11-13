@@ -6,6 +6,7 @@ import com.rawr.camera.model.GridMode
 import com.rawr.camera.model.OverlayMode
 import com.rawr.camera.model.ScopeType
 import com.rawr.camera.model.WaveformMode
+import com.rawr.camera.model.toViewfinderQuickState
 import com.rawr.camera.settings.architecture.*
 import com.rawr.camera.settings.architecture.PersistentSettingsController
 import com.rawr.camera.settings.fixtures.SettingsFixtures
@@ -94,6 +95,7 @@ class SettingsModelTest {
         assertEquals(ControlSurfaceStyle.Basic, v.controlSurfaceStyle)
         assertEquals(GridMode.Thirds, v.gridMode)
         assertEquals(2, v.viewfinderDivisor)
+        assertTrue(v.showDcpQuickSelect)
         // Output.
         assertEquals("dng.lossless", v.dngCompressionId)
         assertEquals(98f, v.imageTone.jpegQuality)
@@ -432,6 +434,15 @@ class SettingsModelTest {
         val controller = PersistentSettingsController()
         controller.dispatch(SetGridMode(GridMode.Cross))
         assertEquals(GridMode.Cross, controller.state.value.values.gridMode)
+    }
+
+    @Test fun dcpQuickSelectIsShownByDefaultAndHidesTheCaptureShortcut() {
+        val controller = PersistentSettingsController()
+        assertTrue(controller.state.value.values.showDcpQuickSelect)
+        controller.dispatch(SetShowDcpQuickSelect(false))
+        val values = controller.state.value.values
+        assertFalse(values.showDcpQuickSelect)
+        assertTrue(values.toViewfinderQuickState().dcps.isEmpty())
     }
 
     @Test fun viewfinderDivisorIsDisplaySettingClampedToOneThroughFour() {

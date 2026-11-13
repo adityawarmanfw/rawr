@@ -618,6 +618,8 @@ data class SettingsValues(
     val dngEnabled: Boolean = true,
     val dngCompressionId: String = "dng.lossless",
     val gridMode: GridMode = GridMode.Thirds,
+    /** Capture-screen DCP shortcut next to the lens selector. */
+    val showDcpQuickSelect: Boolean = true,
     // Preview-only look-stage (tonemap or film) downsample divisor, 1..4.
     // Film always runs at 2 or more. Never touches stills, video, or EXIF.
     val viewfinderDivisor: Int = 2,

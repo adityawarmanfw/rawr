@@ -47,8 +47,7 @@ internal fun LensAndDcpSelector(
                         contentPadding = PaddingValues(horizontal = 8.dp)
                     ) {
                         Text("DCP · $label", maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            fontSize = 10.sp, fontFamily = CaptureMono, color = if (enabled) CaptureColors.Accent else CaptureColors.Muted,
-                            modifier = Modifier.uprightInLandscape(state.orientation))
+                            fontSize = 10.sp, fontFamily = CaptureMono, color = if (enabled) CaptureColors.Accent else CaptureColors.Muted)
                     }
                     DropdownMenu(expanded = expanded && enabled, onDismissRequest = { expanded = false }) {
                         val options = listOf(null to "Camera default") + dcp.profiles.map { it.file to it.name }
