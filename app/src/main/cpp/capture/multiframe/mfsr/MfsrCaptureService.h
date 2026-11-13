@@ -114,7 +114,7 @@ class MfsrCaptureService {
         std::mutex mutex;
         std::condition_variable readyCondition;
         bool ready = false;  // the spool thread is done with this capture (journal durable, or failed)
-        // Live merge (Rexture): the base is chosen and the header copied, so the worker may start on the live
+        // Live merge: the base is chosen and the header copied, so the worker may start on the live
         // frames while the journal is still being written. durable: the journal no longer reads the frames.
         bool selected = false;
         bool live = false;
