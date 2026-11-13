@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <fstream>
 #include <iterator>
+#include <cstring>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -351,6 +352,7 @@ void configure(const std::string& nativeLibraryDir, const std::string& path) {
     if (gLib) return;
     clearFns();
     const bool requested = !path.empty();
+    bool customDriver = false;
     // RawPreviewCoordinator only supplies a custom path when GpuPlatform supports
     // it, using the same check as the settings UI. Do not gate on
     // ro.hardware.vulkan here: Android can resolve the ICD via ro.board.platform.
@@ -364,6 +366,7 @@ void configure(const std::string& nativeLibraryDir, const std::string& path) {
             gLib = adrenotools_open_libvulkan(RTLD_NOW | RTLD_LOCAL, ADRENOTOOLS_DRIVER_CUSTOM, nullptr,
                                               nativeLibraryDir.c_str(), driverDir.c_str(), driverName.c_str(), nullptr);
             if (gLib) {
+                customDriver = true;
                 gDesc = std::string("adrenotools custom requested ") + path;
             } else {
                 gDesc = "system (adrenotools custom loader failed)";
@@ -382,133 +385,144 @@ void configure(const std::string& nativeLibraryDir, const std::string& path) {
     gGipa = reinterpret_cast<PFN_vkGetInstanceProcAddr>(dlsym(gLib, "vkGetInstanceProcAddr"));
     if (!gGipa) throw std::runtime_error("Selected Vulkan library has no vkGetInstanceProcAddr");
     vkGetInstanceProcAddr = gGipa;
-    setIf(vkAcquireNextImageKHR, gGipa(VK_NULL_HANDLE, "vkAcquireNextImageKHR"));
-    setIf(vkAllocateCommandBuffers, gGipa(VK_NULL_HANDLE, "vkAllocateCommandBuffers"));
-    setIf(vkAllocateDescriptorSets, gGipa(VK_NULL_HANDLE, "vkAllocateDescriptorSets"));
-    setIf(vkAllocateMemory, gGipa(VK_NULL_HANDLE, "vkAllocateMemory"));
-    setIf(vkBeginCommandBuffer, gGipa(VK_NULL_HANDLE, "vkBeginCommandBuffer"));
-    setIf(vkBindBufferMemory, gGipa(VK_NULL_HANDLE, "vkBindBufferMemory"));
-    setIf(vkBindImageMemory, gGipa(VK_NULL_HANDLE, "vkBindImageMemory"));
-    setIf(vkCmdBeginRenderPass, gGipa(VK_NULL_HANDLE, "vkCmdBeginRenderPass"));
-    setIf(vkCmdBindDescriptorSets, gGipa(VK_NULL_HANDLE, "vkCmdBindDescriptorSets"));
-    setIf(vkCmdBindPipeline, gGipa(VK_NULL_HANDLE, "vkCmdBindPipeline"));
-    setIf(vkCmdBlitImage, gGipa(VK_NULL_HANDLE, "vkCmdBlitImage"));
-    setIf(vkCmdClearColorImage, gGipa(VK_NULL_HANDLE, "vkCmdClearColorImage"));
-    setIf(vkCmdCopyBuffer, gGipa(VK_NULL_HANDLE, "vkCmdCopyBuffer"));
-    setIf(vkCmdCopyBufferToImage, gGipa(VK_NULL_HANDLE, "vkCmdCopyBufferToImage"));
-    setIf(vkCmdCopyImage, gGipa(VK_NULL_HANDLE, "vkCmdCopyImage"));
-    setIf(vkCmdCopyImageToBuffer, gGipa(VK_NULL_HANDLE, "vkCmdCopyImageToBuffer"));
-    setIf(vkCmdDispatch, gGipa(VK_NULL_HANDLE, "vkCmdDispatch"));
-    setIf(vkCmdDispatchIndirect, gGipa(VK_NULL_HANDLE, "vkCmdDispatchIndirect"));
-    setIf(vkCmdDispatchBase, gGipa(VK_NULL_HANDLE, "vkCmdDispatchBase"));
-    setIf(vkCmdDraw, gGipa(VK_NULL_HANDLE, "vkCmdDraw"));
-    setIf(vkCmdEndRenderPass, gGipa(VK_NULL_HANDLE, "vkCmdEndRenderPass"));
-    setIf(vkCmdFillBuffer, gGipa(VK_NULL_HANDLE, "vkCmdFillBuffer"));
-    setIf(vkCmdUpdateBuffer, gGipa(VK_NULL_HANDLE, "vkCmdUpdateBuffer"));
-    setIf(vkCmdPipelineBarrier, gGipa(VK_NULL_HANDLE, "vkCmdPipelineBarrier"));
-    setIf(vkCmdPushConstants, gGipa(VK_NULL_HANDLE, "vkCmdPushConstants"));
-    setIf(vkCmdResetQueryPool, gGipa(VK_NULL_HANDLE, "vkCmdResetQueryPool"));
-    setIf(vkCmdSetScissor, gGipa(VK_NULL_HANDLE, "vkCmdSetScissor"));
-    setIf(vkCmdSetViewport, gGipa(VK_NULL_HANDLE, "vkCmdSetViewport"));
-    setIf(vkCmdWriteTimestamp, gGipa(VK_NULL_HANDLE, "vkCmdWriteTimestamp"));
-    setIf(vkCreateAndroidSurfaceKHR, gGipa(VK_NULL_HANDLE, "vkCreateAndroidSurfaceKHR"));
-    setIf(vkCreateBuffer, gGipa(VK_NULL_HANDLE, "vkCreateBuffer"));
-    setIf(vkCreateCommandPool, gGipa(VK_NULL_HANDLE, "vkCreateCommandPool"));
-    setIf(vkCreateComputePipelines, gGipa(VK_NULL_HANDLE, "vkCreateComputePipelines"));
-    setIf(vkCreateDescriptorPool, gGipa(VK_NULL_HANDLE, "vkCreateDescriptorPool"));
-    setIf(vkCreateDescriptorSetLayout, gGipa(VK_NULL_HANDLE, "vkCreateDescriptorSetLayout"));
-    setIf(vkCreateDevice, gGipa(VK_NULL_HANDLE, "vkCreateDevice"));
-    setIf(vkCreateFence, gGipa(VK_NULL_HANDLE, "vkCreateFence"));
-    setIf(vkCreateFramebuffer, gGipa(VK_NULL_HANDLE, "vkCreateFramebuffer"));
-    setIf(vkCreateGraphicsPipelines, gGipa(VK_NULL_HANDLE, "vkCreateGraphicsPipelines"));
-    setIf(vkCreateImage, gGipa(VK_NULL_HANDLE, "vkCreateImage"));
-    setIf(vkCreateImageView, gGipa(VK_NULL_HANDLE, "vkCreateImageView"));
-    setIf(vkCreateInstance, gGipa(VK_NULL_HANDLE, "vkCreateInstance"));
-    setIf(vkCreatePipelineLayout, gGipa(VK_NULL_HANDLE, "vkCreatePipelineLayout"));
-    setIf(vkCreatePipelineCache, gGipa(VK_NULL_HANDLE, "vkCreatePipelineCache"));
-    setIf(vkDestroyPipelineCache, gGipa(VK_NULL_HANDLE, "vkDestroyPipelineCache"));
-    setIf(vkGetPipelineCacheData, gGipa(VK_NULL_HANDLE, "vkGetPipelineCacheData"));
-    setIf(vkCreateQueryPool, gGipa(VK_NULL_HANDLE, "vkCreateQueryPool"));
-    setIf(vkCreateRenderPass, gGipa(VK_NULL_HANDLE, "vkCreateRenderPass"));
-    setIf(vkCreateSampler, gGipa(VK_NULL_HANDLE, "vkCreateSampler"));
-    setIf(vkCreateSamplerYcbcrConversion, gGipa(VK_NULL_HANDLE, "vkCreateSamplerYcbcrConversion"));
-    setIf(vkCreateSemaphore, gGipa(VK_NULL_HANDLE, "vkCreateSemaphore"));
-    setIf(vkCreateShaderModule, gGipa(VK_NULL_HANDLE, "vkCreateShaderModule"));
-    setIf(vkCreateSwapchainKHR, gGipa(VK_NULL_HANDLE, "vkCreateSwapchainKHR"));
-    setIf(vkDestroyBuffer, gGipa(VK_NULL_HANDLE, "vkDestroyBuffer"));
-    setIf(vkDestroyCommandPool, gGipa(VK_NULL_HANDLE, "vkDestroyCommandPool"));
-    setIf(vkDestroyDescriptorPool, gGipa(VK_NULL_HANDLE, "vkDestroyDescriptorPool"));
-    setIf(vkDestroyDescriptorSetLayout, gGipa(VK_NULL_HANDLE, "vkDestroyDescriptorSetLayout"));
-    setIf(vkDestroyDevice, gGipa(VK_NULL_HANDLE, "vkDestroyDevice"));
-    setIf(vkDestroyFence, gGipa(VK_NULL_HANDLE, "vkDestroyFence"));
-    setIf(vkDestroyFramebuffer, gGipa(VK_NULL_HANDLE, "vkDestroyFramebuffer"));
-    setIf(vkDestroyImage, gGipa(VK_NULL_HANDLE, "vkDestroyImage"));
-    setIf(vkDestroyImageView, gGipa(VK_NULL_HANDLE, "vkDestroyImageView"));
-    setIf(vkDestroyInstance, gGipa(VK_NULL_HANDLE, "vkDestroyInstance"));
-    setIf(vkDestroyPipeline, gGipa(VK_NULL_HANDLE, "vkDestroyPipeline"));
-    setIf(vkDestroyPipelineLayout, gGipa(VK_NULL_HANDLE, "vkDestroyPipelineLayout"));
-    setIf(vkDestroyQueryPool, gGipa(VK_NULL_HANDLE, "vkDestroyQueryPool"));
-    setIf(vkDestroyRenderPass, gGipa(VK_NULL_HANDLE, "vkDestroyRenderPass"));
-    setIf(vkDestroySampler, gGipa(VK_NULL_HANDLE, "vkDestroySampler"));
-    setIf(vkDestroySamplerYcbcrConversion, gGipa(VK_NULL_HANDLE, "vkDestroySamplerYcbcrConversion"));
-    setIf(vkDestroySemaphore, gGipa(VK_NULL_HANDLE, "vkDestroySemaphore"));
-    setIf(vkDestroyShaderModule, gGipa(VK_NULL_HANDLE, "vkDestroyShaderModule"));
-    setIf(vkDestroySurfaceKHR, gGipa(VK_NULL_HANDLE, "vkDestroySurfaceKHR"));
-    setIf(vkDestroySwapchainKHR, gGipa(VK_NULL_HANDLE, "vkDestroySwapchainKHR"));
-    setIf(vkDeviceWaitIdle, gGipa(VK_NULL_HANDLE, "vkDeviceWaitIdle"));
-    setIf(vkEndCommandBuffer, gGipa(VK_NULL_HANDLE, "vkEndCommandBuffer"));
-    setIf(vkEnumerateDeviceExtensionProperties, gGipa(VK_NULL_HANDLE, "vkEnumerateDeviceExtensionProperties"));
-    setIf(vkEnumerateInstanceExtensionProperties, gGipa(VK_NULL_HANDLE, "vkEnumerateInstanceExtensionProperties"));
-    setIf(vkEnumeratePhysicalDevices, gGipa(VK_NULL_HANDLE, "vkEnumeratePhysicalDevices"));
+    // Before an instance exists only the global commands may be queried: Android's loader returns null for any other name
+    // and logs "invalid vkGetInstanceProcAddr(VK_NULL_HANDLE, ...)" for each (about 120 lines per launch). Every other
+    // pointer is set by loadInstance / loadDevice. A custom driver loaded directly may answer such queries, so it keeps
+    // the full early table as before.
+    const auto early = [&](const char* name) -> PFN_vkVoidFunction {
+        static constexpr const char* kGlobal[] = {"vkCreateInstance", "vkEnumerateInstanceExtensionProperties",
+                                                   "vkEnumerateInstanceLayerProperties", "vkEnumerateInstanceVersion"};
+        bool global = false;
+        for (const char* g : kGlobal) global = global || std::strcmp(g, name) == 0;
+        return (global || customDriver) ? gGipa(VK_NULL_HANDLE, name) : nullptr;
+    };
+    setIf(vkAcquireNextImageKHR, early("vkAcquireNextImageKHR"));
+    setIf(vkAllocateCommandBuffers, early("vkAllocateCommandBuffers"));
+    setIf(vkAllocateDescriptorSets, early("vkAllocateDescriptorSets"));
+    setIf(vkAllocateMemory, early("vkAllocateMemory"));
+    setIf(vkBeginCommandBuffer, early("vkBeginCommandBuffer"));
+    setIf(vkBindBufferMemory, early("vkBindBufferMemory"));
+    setIf(vkBindImageMemory, early("vkBindImageMemory"));
+    setIf(vkCmdBeginRenderPass, early("vkCmdBeginRenderPass"));
+    setIf(vkCmdBindDescriptorSets, early("vkCmdBindDescriptorSets"));
+    setIf(vkCmdBindPipeline, early("vkCmdBindPipeline"));
+    setIf(vkCmdBlitImage, early("vkCmdBlitImage"));
+    setIf(vkCmdClearColorImage, early("vkCmdClearColorImage"));
+    setIf(vkCmdCopyBuffer, early("vkCmdCopyBuffer"));
+    setIf(vkCmdCopyBufferToImage, early("vkCmdCopyBufferToImage"));
+    setIf(vkCmdCopyImage, early("vkCmdCopyImage"));
+    setIf(vkCmdCopyImageToBuffer, early("vkCmdCopyImageToBuffer"));
+    setIf(vkCmdDispatch, early("vkCmdDispatch"));
+    setIf(vkCmdDispatchIndirect, early("vkCmdDispatchIndirect"));
+    setIf(vkCmdDispatchBase, early("vkCmdDispatchBase"));
+    setIf(vkCmdDraw, early("vkCmdDraw"));
+    setIf(vkCmdEndRenderPass, early("vkCmdEndRenderPass"));
+    setIf(vkCmdFillBuffer, early("vkCmdFillBuffer"));
+    setIf(vkCmdUpdateBuffer, early("vkCmdUpdateBuffer"));
+    setIf(vkCmdPipelineBarrier, early("vkCmdPipelineBarrier"));
+    setIf(vkCmdPushConstants, early("vkCmdPushConstants"));
+    setIf(vkCmdResetQueryPool, early("vkCmdResetQueryPool"));
+    setIf(vkCmdSetScissor, early("vkCmdSetScissor"));
+    setIf(vkCmdSetViewport, early("vkCmdSetViewport"));
+    setIf(vkCmdWriteTimestamp, early("vkCmdWriteTimestamp"));
+    setIf(vkCreateAndroidSurfaceKHR, early("vkCreateAndroidSurfaceKHR"));
+    setIf(vkCreateBuffer, early("vkCreateBuffer"));
+    setIf(vkCreateCommandPool, early("vkCreateCommandPool"));
+    setIf(vkCreateComputePipelines, early("vkCreateComputePipelines"));
+    setIf(vkCreateDescriptorPool, early("vkCreateDescriptorPool"));
+    setIf(vkCreateDescriptorSetLayout, early("vkCreateDescriptorSetLayout"));
+    setIf(vkCreateDevice, early("vkCreateDevice"));
+    setIf(vkCreateFence, early("vkCreateFence"));
+    setIf(vkCreateFramebuffer, early("vkCreateFramebuffer"));
+    setIf(vkCreateGraphicsPipelines, early("vkCreateGraphicsPipelines"));
+    setIf(vkCreateImage, early("vkCreateImage"));
+    setIf(vkCreateImageView, early("vkCreateImageView"));
+    setIf(vkCreateInstance, early("vkCreateInstance"));
+    setIf(vkCreatePipelineLayout, early("vkCreatePipelineLayout"));
+    setIf(vkCreatePipelineCache, early("vkCreatePipelineCache"));
+    setIf(vkDestroyPipelineCache, early("vkDestroyPipelineCache"));
+    setIf(vkGetPipelineCacheData, early("vkGetPipelineCacheData"));
+    setIf(vkCreateQueryPool, early("vkCreateQueryPool"));
+    setIf(vkCreateRenderPass, early("vkCreateRenderPass"));
+    setIf(vkCreateSampler, early("vkCreateSampler"));
+    setIf(vkCreateSamplerYcbcrConversion, early("vkCreateSamplerYcbcrConversion"));
+    setIf(vkCreateSemaphore, early("vkCreateSemaphore"));
+    setIf(vkCreateShaderModule, early("vkCreateShaderModule"));
+    setIf(vkCreateSwapchainKHR, early("vkCreateSwapchainKHR"));
+    setIf(vkDestroyBuffer, early("vkDestroyBuffer"));
+    setIf(vkDestroyCommandPool, early("vkDestroyCommandPool"));
+    setIf(vkDestroyDescriptorPool, early("vkDestroyDescriptorPool"));
+    setIf(vkDestroyDescriptorSetLayout, early("vkDestroyDescriptorSetLayout"));
+    setIf(vkDestroyDevice, early("vkDestroyDevice"));
+    setIf(vkDestroyFence, early("vkDestroyFence"));
+    setIf(vkDestroyFramebuffer, early("vkDestroyFramebuffer"));
+    setIf(vkDestroyImage, early("vkDestroyImage"));
+    setIf(vkDestroyImageView, early("vkDestroyImageView"));
+    setIf(vkDestroyInstance, early("vkDestroyInstance"));
+    setIf(vkDestroyPipeline, early("vkDestroyPipeline"));
+    setIf(vkDestroyPipelineLayout, early("vkDestroyPipelineLayout"));
+    setIf(vkDestroyQueryPool, early("vkDestroyQueryPool"));
+    setIf(vkDestroyRenderPass, early("vkDestroyRenderPass"));
+    setIf(vkDestroySampler, early("vkDestroySampler"));
+    setIf(vkDestroySamplerYcbcrConversion, early("vkDestroySamplerYcbcrConversion"));
+    setIf(vkDestroySemaphore, early("vkDestroySemaphore"));
+    setIf(vkDestroyShaderModule, early("vkDestroyShaderModule"));
+    setIf(vkDestroySurfaceKHR, early("vkDestroySurfaceKHR"));
+    setIf(vkDestroySwapchainKHR, early("vkDestroySwapchainKHR"));
+    setIf(vkDeviceWaitIdle, early("vkDeviceWaitIdle"));
+    setIf(vkEndCommandBuffer, early("vkEndCommandBuffer"));
+    setIf(vkEnumerateDeviceExtensionProperties, early("vkEnumerateDeviceExtensionProperties"));
+    setIf(vkEnumerateInstanceExtensionProperties, early("vkEnumerateInstanceExtensionProperties"));
+    setIf(vkEnumeratePhysicalDevices, early("vkEnumeratePhysicalDevices"));
     setIf(vkGetPhysicalDeviceExternalBufferProperties,
-          gGipa(VK_NULL_HANDLE, "vkGetPhysicalDeviceExternalBufferProperties"));
-    setIf(vkFlushMappedMemoryRanges, gGipa(VK_NULL_HANDLE, "vkFlushMappedMemoryRanges"));
-    setIf(vkFreeCommandBuffers, gGipa(VK_NULL_HANDLE, "vkFreeCommandBuffers"));
-    setIf(vkFreeDescriptorSets, gGipa(VK_NULL_HANDLE, "vkFreeDescriptorSets"));
-    setIf(vkFreeMemory, gGipa(VK_NULL_HANDLE, "vkFreeMemory"));
-    setIf(vkGetBufferMemoryRequirements, gGipa(VK_NULL_HANDLE, "vkGetBufferMemoryRequirements"));
-    setIf(vkGetBufferMemoryRequirements2, gGipa(VK_NULL_HANDLE, "vkGetBufferMemoryRequirements2"));
+          early("vkGetPhysicalDeviceExternalBufferProperties"));
+    setIf(vkFlushMappedMemoryRanges, early("vkFlushMappedMemoryRanges"));
+    setIf(vkFreeCommandBuffers, early("vkFreeCommandBuffers"));
+    setIf(vkFreeDescriptorSets, early("vkFreeDescriptorSets"));
+    setIf(vkFreeMemory, early("vkFreeMemory"));
+    setIf(vkGetBufferMemoryRequirements, early("vkGetBufferMemoryRequirements"));
+    setIf(vkGetBufferMemoryRequirements2, early("vkGetBufferMemoryRequirements2"));
     if (!vkGetBufferMemoryRequirements2)
-        setIf(vkGetBufferMemoryRequirements2, gGipa(VK_NULL_HANDLE, "vkGetBufferMemoryRequirements2KHR"));
-    setIf(vkGetDeviceProcAddr, gGipa(VK_NULL_HANDLE, "vkGetDeviceProcAddr"));
-    setIf(vkGetDeviceQueue, gGipa(VK_NULL_HANDLE, "vkGetDeviceQueue"));
-    setIf(vkGetFenceStatus, gGipa(VK_NULL_HANDLE, "vkGetFenceStatus"));
-    setIf(vkGetImageMemoryRequirements, gGipa(VK_NULL_HANDLE, "vkGetImageMemoryRequirements"));
-    setIf(vkGetImageMemoryRequirements2, gGipa(VK_NULL_HANDLE, "vkGetImageMemoryRequirements2"));
+        setIf(vkGetBufferMemoryRequirements2, early("vkGetBufferMemoryRequirements2KHR"));
+    setIf(vkGetDeviceProcAddr, early("vkGetDeviceProcAddr"));
+    setIf(vkGetDeviceQueue, early("vkGetDeviceQueue"));
+    setIf(vkGetFenceStatus, early("vkGetFenceStatus"));
+    setIf(vkGetImageMemoryRequirements, early("vkGetImageMemoryRequirements"));
+    setIf(vkGetImageMemoryRequirements2, early("vkGetImageMemoryRequirements2"));
     if (!vkGetImageMemoryRequirements2)
-        setIf(vkGetImageMemoryRequirements2, gGipa(VK_NULL_HANDLE, "vkGetImageMemoryRequirements2KHR"));
-    setIf(vkGetImageSubresourceLayout, gGipa(VK_NULL_HANDLE, "vkGetImageSubresourceLayout"));
-    setIf(vkGetPhysicalDeviceFeatures, gGipa(VK_NULL_HANDLE, "vkGetPhysicalDeviceFeatures"));
-    setIf(vkGetPhysicalDeviceFeatures2, gGipa(VK_NULL_HANDLE, "vkGetPhysicalDeviceFeatures2"));
-    setIf(vkGetPhysicalDeviceFormatProperties, gGipa(VK_NULL_HANDLE, "vkGetPhysicalDeviceFormatProperties"));
-    setIf(vkGetPhysicalDeviceFormatProperties2, gGipa(VK_NULL_HANDLE, "vkGetPhysicalDeviceFormatProperties2"));
-    setIf(vkGetPhysicalDeviceImageFormatProperties, gGipa(VK_NULL_HANDLE, "vkGetPhysicalDeviceImageFormatProperties"));
+        setIf(vkGetImageMemoryRequirements2, early("vkGetImageMemoryRequirements2KHR"));
+    setIf(vkGetImageSubresourceLayout, early("vkGetImageSubresourceLayout"));
+    setIf(vkGetPhysicalDeviceFeatures, early("vkGetPhysicalDeviceFeatures"));
+    setIf(vkGetPhysicalDeviceFeatures2, early("vkGetPhysicalDeviceFeatures2"));
+    setIf(vkGetPhysicalDeviceFormatProperties, early("vkGetPhysicalDeviceFormatProperties"));
+    setIf(vkGetPhysicalDeviceFormatProperties2, early("vkGetPhysicalDeviceFormatProperties2"));
+    setIf(vkGetPhysicalDeviceImageFormatProperties, early("vkGetPhysicalDeviceImageFormatProperties"));
     setIf(vkGetPhysicalDeviceImageFormatProperties2,
-          gGipa(VK_NULL_HANDLE, "vkGetPhysicalDeviceImageFormatProperties2"));
-    setIf(vkGetPhysicalDeviceMemoryProperties, gGipa(VK_NULL_HANDLE, "vkGetPhysicalDeviceMemoryProperties"));
-    setIf(vkGetPhysicalDeviceMemoryProperties2, gGipa(VK_NULL_HANDLE, "vkGetPhysicalDeviceMemoryProperties2"));
-    setIf(vkGetPhysicalDeviceProperties, gGipa(VK_NULL_HANDLE, "vkGetPhysicalDeviceProperties"));
-    setIf(vkGetPhysicalDeviceProperties2, gGipa(VK_NULL_HANDLE, "vkGetPhysicalDeviceProperties2"));
+          early("vkGetPhysicalDeviceImageFormatProperties2"));
+    setIf(vkGetPhysicalDeviceMemoryProperties, early("vkGetPhysicalDeviceMemoryProperties"));
+    setIf(vkGetPhysicalDeviceMemoryProperties2, early("vkGetPhysicalDeviceMemoryProperties2"));
+    setIf(vkGetPhysicalDeviceProperties, early("vkGetPhysicalDeviceProperties"));
+    setIf(vkGetPhysicalDeviceProperties2, early("vkGetPhysicalDeviceProperties2"));
     if (!vkGetPhysicalDeviceProperties2)
-        setIf(vkGetPhysicalDeviceProperties2, gGipa(VK_NULL_HANDLE, "vkGetPhysicalDeviceProperties2KHR"));
-    setIf(vkGetPhysicalDeviceQueueFamilyProperties, gGipa(VK_NULL_HANDLE, "vkGetPhysicalDeviceQueueFamilyProperties"));
+        setIf(vkGetPhysicalDeviceProperties2, early("vkGetPhysicalDeviceProperties2KHR"));
+    setIf(vkGetPhysicalDeviceQueueFamilyProperties, early("vkGetPhysicalDeviceQueueFamilyProperties"));
     setIf(vkGetPhysicalDeviceSurfaceCapabilitiesKHR,
-          gGipa(VK_NULL_HANDLE, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR"));
-    setIf(vkGetPhysicalDeviceSurfaceFormatsKHR, gGipa(VK_NULL_HANDLE, "vkGetPhysicalDeviceSurfaceFormatsKHR"));
-    setIf(vkGetPhysicalDeviceSurfaceSupportKHR, gGipa(VK_NULL_HANDLE, "vkGetPhysicalDeviceSurfaceSupportKHR"));
-    setIf(vkGetQueryPoolResults, gGipa(VK_NULL_HANDLE, "vkGetQueryPoolResults"));
-    setIf(vkGetSwapchainImagesKHR, gGipa(VK_NULL_HANDLE, "vkGetSwapchainImagesKHR"));
-    setIf(vkInvalidateMappedMemoryRanges, gGipa(VK_NULL_HANDLE, "vkInvalidateMappedMemoryRanges"));
-    setIf(vkMapMemory, gGipa(VK_NULL_HANDLE, "vkMapMemory"));
-    setIf(vkQueuePresentKHR, gGipa(VK_NULL_HANDLE, "vkQueuePresentKHR"));
-    setIf(vkQueueSubmit, gGipa(VK_NULL_HANDLE, "vkQueueSubmit"));
-    setIf(vkQueueWaitIdle, gGipa(VK_NULL_HANDLE, "vkQueueWaitIdle"));
-    setIf(vkResetCommandBuffer, gGipa(VK_NULL_HANDLE, "vkResetCommandBuffer"));
-    setIf(vkResetDescriptorPool, gGipa(VK_NULL_HANDLE, "vkResetDescriptorPool"));
-    setIf(vkResetFences, gGipa(VK_NULL_HANDLE, "vkResetFences"));
-    setIf(vkUnmapMemory, gGipa(VK_NULL_HANDLE, "vkUnmapMemory"));
-    setIf(vkUpdateDescriptorSets, gGipa(VK_NULL_HANDLE, "vkUpdateDescriptorSets"));
-    setIf(vkWaitForFences, gGipa(VK_NULL_HANDLE, "vkWaitForFences"));
+          early("vkGetPhysicalDeviceSurfaceCapabilitiesKHR"));
+    setIf(vkGetPhysicalDeviceSurfaceFormatsKHR, early("vkGetPhysicalDeviceSurfaceFormatsKHR"));
+    setIf(vkGetPhysicalDeviceSurfaceSupportKHR, early("vkGetPhysicalDeviceSurfaceSupportKHR"));
+    setIf(vkGetQueryPoolResults, early("vkGetQueryPoolResults"));
+    setIf(vkGetSwapchainImagesKHR, early("vkGetSwapchainImagesKHR"));
+    setIf(vkInvalidateMappedMemoryRanges, early("vkInvalidateMappedMemoryRanges"));
+    setIf(vkMapMemory, early("vkMapMemory"));
+    setIf(vkQueuePresentKHR, early("vkQueuePresentKHR"));
+    setIf(vkQueueSubmit, early("vkQueueSubmit"));
+    setIf(vkQueueWaitIdle, early("vkQueueWaitIdle"));
+    setIf(vkResetCommandBuffer, early("vkResetCommandBuffer"));
+    setIf(vkResetDescriptorPool, early("vkResetDescriptorPool"));
+    setIf(vkResetFences, early("vkResetFences"));
+    setIf(vkUnmapMemory, early("vkUnmapMemory"));
+    setIf(vkUpdateDescriptorSets, early("vkUpdateDescriptorSets"));
+    setIf(vkWaitForFences, early("vkWaitForFences"));
 
     __android_log_print(ANDROID_LOG_INFO, "RawrCamNative", "GPU_DRIVER_SELECTED backend=%s", gDesc.c_str());
 }

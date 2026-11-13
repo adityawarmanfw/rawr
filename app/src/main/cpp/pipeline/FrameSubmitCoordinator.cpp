@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstring>
 #include <cmath>
 #include <cstdlib>
 #include <stdexcept>
@@ -971,8 +972,16 @@ void FrameSubmitCoordinator::recoverFailedSubmit(uint32_t slotIndex, bool slotSe
         lastSubmitFailure_ = std::move(failureKey);
         repeatedSubmitFailures_ = 0;
     }
-    if (repeatedSubmitFailures_ < 3 || repeatedSubmitFailures_ % 300 == 0)
-        LOGE("submit failed (repeat %llu): %s", static_cast<unsigned long long>(repeatedSubmitFailures_), error);
+    // VK_ERROR_SURFACE_LOST_KHR on acquire: the preview surface went away under a camera session reconfigure (lens or
+    // mode switch). Expected and recovered below, so it is not logged as an error.
+    const bool surfaceLost = std::strstr(error, "vkAcquireNextImageKHR VkResult=-1000000000") != nullptr;
+    if (repeatedSubmitFailures_ < 3 || repeatedSubmitFailures_ % 300 == 0) {
+        if (surfaceLost)
+            LOGI("PREVIEW_SURFACE_LOST (repeat %llu): preview frame dropped during a session reconfigure",
+                 static_cast<unsigned long long>(repeatedSubmitFailures_));
+        else
+            LOGE("submit failed (repeat %llu): %s", static_cast<unsigned long long>(repeatedSubmitFailures_), error);
+    }
     if (videoActive()) lastVideoSubmitFailure_ = error;
     lifecyclePort_.postDiagnostic(std::string("SUBMIT_FAILURE ") + error);
     if (queueSubmitted) return;
