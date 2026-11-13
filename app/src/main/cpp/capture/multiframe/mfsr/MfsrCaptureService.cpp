@@ -219,8 +219,9 @@ std::uint64_t MfsrCaptureService::start(std::unique_ptr<PendingMultiframeCapture
         workerThread_ = std::thread([this, current = pending]() mutable {
             setpriority(PRIO_PROCESS, 0, 5);
             while (current) {
-                // Rexture merges the live frames as soon as the base is chosen, while the spool thread still writes
-                // the journal; every other merge waits for the durable journal and reloads from it.
+                // The merge runs on the live frames as soon as the base is chosen, while the spool thread still writes
+                // the journal; a burst that cannot stay live (CPU frames, journal-backed full size) waits for the
+                // durable journal and reloads from it.
                 bool live = false;
                 {
                     std::unique_lock<std::mutex> lock(current->mutex);
@@ -571,8 +572,7 @@ void MfsrCaptureService::spoolLoop() {
                 }
             }
             const auto requestId = pending->work->requestId;
-            const bool live = pending->work->tuning.mergeAlgorithm == kMergeAlgorithmRexture && burst.snapshot &&
-                              !burst.cpuFrame && !burst.acquiredJournal && !burst.pendingBracket &&
+            const bool live = burst.snapshot && !burst.cpuFrame && !burst.acquiredJournal && !burst.pendingBracket &&
                               !pending->work->dumpRzslRequested;
             if (live) {
                 // Everything the journal header needs is copied out of the work item first. From the moment the
