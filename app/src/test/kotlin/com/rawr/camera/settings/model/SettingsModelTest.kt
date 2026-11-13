@@ -77,8 +77,8 @@ class SettingsModelTest {
         val v = PersistentSettingsController().state.value.values
         // Multiframe stays off, but is set up for HDR+ over 16 frames.
         assertFalse(v.experimentalMultiframeEnabled)
-        assertEquals(MultiframeMergeAlgorithm.HdrPlusQuality, v.multiframeTuning.mergeAlgorithm)
-        assertEquals(16, v.multiframeTuning.maxFrames)
+        assertEquals(MultiframeMergeAlgorithm.Rexture, v.multiframeTuning.mergeAlgorithm)
+        assertEquals(12, v.multiframeTuning.maxFrames)
         // Monitoring.
         assertEquals(setOf(OverlayMode.Peaking, OverlayMode.TonemapShadows, OverlayMode.RawHighlights), v.armedOverlays)
         assertEquals("peaking.high", v.peakingSensitivityId)
@@ -610,7 +610,7 @@ class SettingsModelTest {
     @Test fun multiframeMergeAlgorithmIsPersistableAndAppendedToNativeContract() {
         var persisted: SettingsValues? = null
         val controller = PersistentSettingsController(onValuesChanged = { persisted = it })
-        assertEquals(MultiframeMergeAlgorithm.HdrPlusQuality, controller.state.value.values.multiframeTuning.mergeAlgorithm)
+        assertEquals(MultiframeMergeAlgorithm.Rexture, controller.state.value.values.multiframeTuning.mergeAlgorithm)
 
         controller.dispatch(SetMultiframeMergeAlgorithm(MultiframeMergeAlgorithm.Wronski))
         controller.dispatch(SetMultiframeMergeAlgorithm(MultiframeMergeAlgorithm.HdrPlus))
@@ -653,7 +653,7 @@ class SettingsModelTest {
         assertEquals(16, bracketed.copy(maxFrames = 30, bracketFrames = 16).postShutterFrames())
         assertEquals(2, bracketed.copy(maxFrames = 4, bracketFrames = 16).postShutterFrames())
         assertEquals(2, bracketed.copy(maxFrames = 4, bracketFrames = 16).zslFrames())
-        assertEquals(16, MultiframeTuning().zslFrames())
+        assertEquals(12, MultiframeTuning().zslFrames())
     }
 
     @Test fun multiframeDefaultsFollowResearchedOperatingPoint() {
@@ -663,7 +663,7 @@ class SettingsModelTest {
         assertEquals(1f, defaults.flatSigma)
         assertEquals(.15f, defaults.detailFloorSigma)
         assertEquals(1f, defaults.scaleBandwidthGain)
-        assertEquals(16, defaults.maxFrames)
+        assertEquals(12, defaults.maxFrames)
         assertEquals(4f, defaults.fallbackChroma)
         assertEquals(2f, defaults.fallbackLuma)
         val params = MultiframeSpecs.all.map { it.parameter }
@@ -708,7 +708,7 @@ class SettingsModelTest {
 
     @Test fun multiframeDefaultsMatchOfflineTunedIAndFloorKDetailAtSafeMinimum() {
         val v2 = MultiframeTuning()
-        assertEquals(16, v2.maxFrames)
+        assertEquals(12, v2.maxFrames)
         assertEquals(.15f, v2.kDetail)
         assertEquals(5f, v2.kDenoise)
         assertEquals(.71f, v2.dThreshold)
@@ -742,7 +742,7 @@ class SettingsModelTest {
         assertTrue(MultiframeSpecs.forParameter(MultiframeNumericParameter.KShrink).accepts(10f))
         assertTrue(MultiframeSpecs.forParameter(MultiframeNumericParameter.FlatSigma).accepts(.5f))
         assertTrue(MultiframeSpecs.forParameter(MultiframeNumericParameter.DetailFloorSigma).accepts(0f))
-        assertEquals(16f, MultiframeSpecs.forParameter(MultiframeNumericParameter.MaxFrames).defaultValue)
+        assertEquals(12f, MultiframeSpecs.forParameter(MultiframeNumericParameter.MaxFrames).defaultValue)
         assertTrue(MultiframeSpecs.forParameter(MultiframeNumericParameter.DThreshold).accepts(.71f))
         assertTrue(MultiframeSpecs.forParameter(MultiframeNumericParameter.FallbackChroma).accepts(4f))
         assertTrue(MultiframeSpecs.forParameter(MultiframeNumericParameter.FallbackLuma).accepts(0f))
