@@ -7,7 +7,7 @@
 #include <raw_sharpness/raw_sharpness_types.hpp>
 #include <tinydng.h>
 
-#include "capture/multiframe/BracketExposure.h"
+#include "capture/multiframe/MergeExposure.h"
 #include "color/ColorCalibration.h"
 #include "color/ColorMath.h"
 #include "geometry/CfaPattern.h"
@@ -123,7 +123,7 @@ rawrcam::metadata::FrameMetadataSnapshot frameMetadata(const std::string& metada
     out.colorCorrectionGainsRggb = floats4(tsv(metadata, "colorCorrectionGainsRggb"), {1, 1, 1, 1});
     const auto white = tsv(metadata, "effectiveWhiteLevel");
     out.effectiveWhiteLevel = white.empty() ? 1023.f : std::stof(white);
-    // Per-frame exposure (bracketed merges scale frames by their ratio).
+    // Per-frame exposure (every merge scales companions to the reference exposure).
     const auto exposureNs = tsv(metadata, "exposureTimeNs");
     if (!exposureNs.empty()) out.exposureTimeNs = std::stoll(exposureNs);
     const auto sensitivity = tsv(metadata, "sensitivity");
@@ -434,27 +434,9 @@ void writeFrameDng(const std::filesystem::path& file, std::uint32_t cfa, std::ui
 
 struct TuneOpts {
     std::string noiseSource = "burst";  // matches the app (always burst-fitted)
-    float scale = 1.f;
-    int lkIterations = 3;
     bool dumpLinear = false;
     bool dumpCfa = false;
     int repeat = 1;
-    float kDetail = -1.f;  // -1 = merge default
-    float kDenoise = -1.f;
-    float dThreshold = -1.f;
-    float dTransition = -1.f;
-    float kStretch = -1.f;
-    float kShrink = -1.f;
-    float flatSigma = -2.f;  // -2 = Config default (-1 = legacy)
-    float detailFloorSigma = -1.f;  // -1 = Config default (0 = legacy)
-    float scaleBandwidthGain = -1.f;
-    float coverageNeffLo = -1.f;
-    float coverageNeffHi = -1.f;
-    float coverageMassLo = -1.f;
-    float coverageMassHi = -1.f;
-    float robustnessT = -1.f;
-    float robustnessS1 = -1.f;
-    float robustnessS2 = -1.f;
     int maxFrames = 0;  // 0 = all frames
     std::string calProfile;  // calibration.txt (R/G1/G2/B a/b lines) for noise-source=calibrated
     std::string suffix;
@@ -467,16 +449,10 @@ struct TuneOpts {
     std::string exportDng;
     std::string exportMergedDng;
     bool duplicateMiddle = false;  // diagnostic: every frame = the middle frame (perfect alignment)
-    float affineDeadzone = -1.f;
-    float affineSoftness = -1.f;
-    bool affineIsotropic = false;
-    float fallbackChroma = -1.f;
-    float fallbackLuma = -1.f;
-    float fallbackMaxSigma = -1.f;
     bool hotPixels = true;
     std::string hotPixelList;  // test/diagnostic override: "x y" per line
     std::string reference = "recorded";  // recorded|middle|sharpest|darkest
-    std::string mergeAlgorithm = "wronski";  // wronski|hdrplus|hdrplus-freq|hdrplus-bracket|rexture
+    std::string mergeAlgorithm = "rexture";  // rexture|hdrplus-freq
     std::string dumpStages;  // rexture: directory for stage dumps (compare.py layout)
     std::string noiseAb;     // "a,b": scalar noise model override (normalised units)
     std::string injectFlow;  // rexture verification: dump dir whose frames/<i>/flow replaces the estimated fine flow
@@ -814,19 +790,8 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
         std::cerr << "diagnostic=duplicate_middle frame=" << mid << '\n';
     }
 
-    rawr::raw_alignment_gpu::Config alignment{};
-    alignment.lkIterations = static_cast<std::uint32_t>(tune.lkIterations);
-    rawr::raw_merge_wronski_gpu::Config merge{};
-    merge.cfa = static_cast<rawr::raw_merge_wronski_gpu::CfaPattern>(bundle.cfa);
-    merge.kDetail = .08f;
-    merge.kDenoise = 5.f;
-    merge.dThreshold = .25f;
-    merge.dTransition = .3f;
-    merge.kStretch = 1.f;
-    merge.kShrink = 8.f;
-    merge.flatSigma = .5f;
-    merge.detailFloorSigma = 0.f;
-    merge.scaleBandwidthGain = 1.f;
+    rawr::raw_merge_common::Config merge{};
+    merge.cfa = static_cast<rawr::raw_merge_common::CfaPattern>(bundle.cfa);
     const auto referenceText = tsv(bundle.frames.front().metadata, "rawrReferenceIndex");
     std::size_t originalRef = referenceText.empty() ? burst.size() / 2 : std::stoul(referenceText);
     // Device-computed per-frame scores, when the bundle carries them (new
@@ -908,17 +873,6 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
     } else {
         std::cerr << "reference_source=recorded_index ref=" << originalRef << '\n';
     }
-    // Bracketed merges reference the darkest frame (the app's rule), unless
-    // middle/sharpest was forced.
-    if (tune.reference == "darkest" || (tune.mergeAlgorithm == "hdrplus-bracket" && tune.reference == "recorded")) {
-        const auto before = originalRef;
-        originalRef = rawrcam::capture::multiframe::bracketReference(metadata, storedScores,
-                                                                     static_cast<std::uint32_t>(originalRef));
-        std::cerr << "reference_source=darkest ref=" << originalRef << " (was " << before << ") bracketed="
-                  << (rawrcam::capture::multiframe::isExposureBracketed(metadata) ? 1 : 0) << " lift_ev="
-                  << rawrcam::capture::multiframe::bracketLiftEv(metadata, static_cast<std::uint32_t>(originalRef))
-                  << '\n';
-    }
     if (originalRef >= burst.size()) throw std::invalid_argument("RZSL: reference index out of range");
     if (tune.noiseSource == "recorded" || tune.noiseSource == "burst") {
         const bool recorded = rawr::raw_gpu_pipeline::applyReplayNoise(bundle.frames[originalRef].metadata, merge);
@@ -942,7 +896,7 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
                 throw std::invalid_argument("RZSL: missing Camera2 noise profile");
         const auto& refMeta = metadata[originalRef];
         const float white = refMeta.effectiveWhiteLevel;
-        rawr::raw_merge_wronski_gpu::CfaNoiseProfile profile{};
+        rawr::raw_merge_common::CfaNoiseProfile profile{};
         for (int i = 0; i < 4; ++i) {
             const float black = refMeta.blackLevelPhysicalRggb[i];
             const float range = white - black;
@@ -953,7 +907,7 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
             profile.offsetBySite[i] =
                 static_cast<float>((sRaw[i] * black + oRaw[i]) / (double(range) * range));
         }
-        if (!rawr::raw_merge_wronski_gpu::valid(profile)) throw std::invalid_argument("RZSL: invalid Camera2 noise profile");
+        if (!rawr::raw_merge_common::valid(profile)) throw std::invalid_argument("RZSL: invalid Camera2 noise profile");
         merge.sensorNoiseProfile = profile;
         std::cerr << "noise_source=camera2_override white=" << white
                   << " slope=" << profile.slopeBySite[0] << " offset=" << profile.offsetBySite[0] << '\n';
@@ -964,7 +918,7 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
         if (tune.calProfile.empty()) throw std::invalid_argument("calibrated needs --cal-profile");
         std::ifstream cal(tune.calProfile);
         if (!cal) throw std::invalid_argument("cannot open --cal-profile");
-        rawr::raw_merge_wronski_gpu::CfaNoiseProfile profile{};
+        rawr::raw_merge_common::CfaNoiseProfile profile{};
         const char* want[4] = {"R", "G1", "G2", "B"};
         std::string line;
         int got = 0;
@@ -979,7 +933,7 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
             ++got;
         }
         if (got != 4) throw std::invalid_argument("incomplete --cal-profile");
-        if (!rawr::raw_merge_wronski_gpu::valid(profile)) throw std::invalid_argument("invalid --cal-profile");
+        if (!rawr::raw_merge_common::valid(profile)) throw std::invalid_argument("invalid --cal-profile");
         merge.sensorNoiseProfile = profile;
         std::cerr << "noise_source=calibrated_override slope=" << profile.slopeBySite[0]
                   << " offset=" << profile.offsetBySite[0] << '\n';
@@ -992,28 +946,6 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
         merge.noiseBeta = std::stof(tune.noiseAb.substr(comma + 1));
         std::cerr << "noise_source=scalar_override alpha=" << merge.noiseAlpha << " beta=" << merge.noiseBeta << '\n';
     }
-    if (tune.kDetail >= 0.f) merge.kDetail = tune.kDetail;
-    if (tune.kDenoise >= 0.f) merge.kDenoise = tune.kDenoise;
-    if (tune.dThreshold >= 0.f) merge.dThreshold = tune.dThreshold;
-    if (tune.dTransition >= 0.f) merge.dTransition = tune.dTransition;
-    if (tune.kStretch >= 0.f) merge.kStretch = tune.kStretch;
-    if (tune.kShrink >= 0.f) merge.kShrink = tune.kShrink;
-    if (tune.flatSigma > -1.5f) merge.flatSigma = tune.flatSigma;
-    if (tune.detailFloorSigma >= 0.f) merge.detailFloorSigma = tune.detailFloorSigma;
-    if (tune.scaleBandwidthGain >= 0.f) merge.scaleBandwidthGain = tune.scaleBandwidthGain;
-    if (tune.coverageNeffLo >= 0.f) merge.coverageNeffLo = tune.coverageNeffLo;
-    if (tune.coverageNeffHi >= 0.f) merge.coverageNeffHi = tune.coverageNeffHi;
-    if (tune.coverageMassLo >= 0.f) merge.coverageMassLo = tune.coverageMassLo;
-    if (tune.coverageMassHi >= 0.f) merge.coverageMassHi = tune.coverageMassHi;
-    if (tune.robustnessT >= 0.f) merge.robustnessT = tune.robustnessT;
-    if (tune.robustnessS1 >= 0.f) merge.robustnessS1 = tune.robustnessS1;
-    if (tune.robustnessS2 >= 0.f) merge.robustnessS2 = tune.robustnessS2;
-    if (tune.affineDeadzone >= 0.f) merge.affineDeadzoneSigma = tune.affineDeadzone;
-    if (tune.affineSoftness >= 0.f) merge.affineSoftnessSigma = tune.affineSoftness;
-    if (tune.affineIsotropic) merge.affineApertureAware = false;
-    if (tune.fallbackChroma >= 0.f) merge.fallbackChromaGain = tune.fallbackChroma;
-    if (tune.fallbackLuma >= 0.f) merge.fallbackLumaGain = tune.fallbackLuma;
-    if (tune.fallbackMaxSigma >= 0.f) merge.fallbackChromaMaxSigma = tune.fallbackMaxSigma;
     if (tune.hotPixels) {
         // Sensor hot-pixel map of the reference frame (recorded by newer dumps).
         std::istringstream hot(tsv(bundle.frames[originalRef].metadata, "hotPixelMap"));
@@ -1064,13 +996,9 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
                            [&](const VkSubmitInfo& info, VkFence fence) {
                                vktest::ck(vkQueueSubmit(context.q, 1, &info, fence), "burst queue submit");
                            },
-                           width, height, tune.scale, {}, alignment, merge,
-                           tune.mergeAlgorithm == "rexture"        ? rawr::raw_gpu_pipeline::MergeAlgorithm::Rexture
-                           : tune.mergeAlgorithm == "hdrplus"      ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusSpatial
-                           : tune.mergeAlgorithm == "hdrplus-freq" ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusFrequency
-                           : tune.mergeAlgorithm == "hdrplus-bracket"
-                               ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusBracketed
-                                                                   : rawr::raw_gpu_pipeline::MergeAlgorithm::Wronski,
+                           width, height, {}, merge,
+                           tune.mergeAlgorithm == "rexture" ? rawr::raw_gpu_pipeline::MergeAlgorithm::Rexture
+                                                            : rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusFrequency,
                            tune.hdrplus);
     auto result = coordinator.run(runFrames, runRef);
     if (stageDump) stageDump->finish();
@@ -1111,12 +1039,7 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
                         std::size_t(width) * 2u);
         for (auto& black : refMeta.blackLevelPhysicalRggb) black *= projection.codeScale;
         refMeta.effectiveWhiteLevel *= projection.codeScale;
-        // Bracketed bursts, as MfsrCaptureJob: underexposed-ZSL captures lift
-        // to their recorded Camera2 AE exposure, older ones to the brightest frame.
-        const auto aeText = tsv(bundle.frames.front().metadata, "rawrAeLinearExposure");
-        const float liftEv = !aeText.empty()
-                                 ? rawrcam::capture::multiframe::headroomLiftEv(std::stof(aeText), metadata[metaRef])
-                                 : rawrcam::capture::multiframe::bracketLiftEv(metadata, metaRef);
+        const float liftEv = 0.0f;
         std::filesystem::path file = tune.exportMergedDng;
         if (file.has_parent_path()) std::filesystem::create_directories(file.parent_path());
         writeFrameDng(file, bundle.cfa, width, height, bundle.frames[metaRef].metadata, refMeta, codes.data(),
@@ -1191,8 +1114,8 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
             "." + tune.suffix + ".truth.rgb32f");
         std::ofstream truth(truthPath, std::ios::binary);
         for (unsigned y = 0; y < result.outputExtent.height; ++y) for (unsigned x = 0; x < result.outputExtent.width; ++x) {
-            const auto rgb = synthetic::sample((float(x) + .5f) / tune.scale - .5f,
-                (float(y) + .5f) / tune.scale - .5f, path == "synthetic:flat");
+            const auto rgb = synthetic::sample(float(x),
+                float(y), path == "synthetic:flat");
             truth.write(reinterpret_cast<const char*>(rgb.data()), sizeof(rgb));
         }
     }
@@ -1284,15 +1207,6 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
     std::cout << std::fixed << std::setprecision(3)
               << "RESULT input=" << path << " suffix=" << tune.suffix << " merge=" << tune.mergeAlgorithm
               << " frames=" << result.frameCount << " requested=" << useFrames
-              << " scale=" << tune.scale << " lkIterations=" << tune.lkIterations
-              << " kDetail=" << merge.kDetail << " kDenoise=" << merge.kDenoise
-              << " dThreshold=" << merge.dThreshold << " dTransition=" << merge.dTransition
-              << " kStretch=" << merge.kStretch << " kShrink=" << merge.kShrink
-              << " flatSigma=" << merge.flatSigma << " floor=" << merge.detailFloorSigma
-              << " scaleGain=" << merge.scaleBandwidthGain
-              << " neff=" << merge.coverageNeffLo << ".." << merge.coverageNeffHi
-              << " mass=" << merge.coverageMassLo << ".." << merge.coverageMassHi
-              << " robustnessT=" << merge.robustnessT
               << " load_ms=" << loadMs
               << " decode_ms=" << decodeMs << " init_ms=" << t.initializeMs << " ref_prepare_ms="
               << t.referencePrepareMs << " ref_stats_ms=" << t.referenceStatsMs << " companion_prepare_ms="
@@ -1318,14 +1232,10 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
 int main(int argc, char** argv) {
     const std::string usage =
         std::string("usage: ") + argv[0] +
-        " --output-dir DIR [--k-detail F] [--k-denoise F]"
-        " [--scale F] [--lk-iterations I] [--dump-linear] [--dump-cfa] [--repeat N] [--noise-source recorded|camera2|legacy|calibrated|burst]"
+        " --output-dir DIR"
+        " [--dump-linear] [--dump-cfa] [--repeat N] [--noise-source recorded|camera2|legacy|calibrated|burst]"
         " [--cal-profile FILE]"
-        " [--d-threshold F] [--d-transition F] [--k-stretch F] [--k-shrink F]"
-        " [--flat-sigma F] [--detail-floor F] [--scale-bandwidth-gain F]"
-        " [--coverage-neff-lo F] [--coverage-neff-hi F] [--coverage-mass-lo F] [--coverage-mass-hi F]"
-        " [--robustness-t F] [--robustness-s1 F] [--robustness-s2 F]"
-         " [--max-frames I] [--suffix STR] [--dump-base] [--dump-all-singles] [--dump-raw16] [--export-dng DIR] [--export-merged-dng FILE] [--merge wronski|hdrplus|hdrplus-freq|hdrplus-bracket|rexture] [--rexture-strip-rows N] [--hdrplus-strength F] [--hdrplus-tile 16|32] [--hdrplus-search 32|64|128] [--hdrplus-faithful] [--affine-deadzone F] [--affine-softness F] [--affine-isotropic] [--fallback-chroma GAIN] [--fallback-luma GAIN] [--fallback-max-sigma PX] [--no-hot-pixels] [--hot-pixel-list FILE]"
+         " [--max-frames I] [--suffix STR] [--dump-base] [--dump-all-singles] [--dump-raw16] [--export-dng DIR] [--export-merged-dng FILE] [--merge rexture|hdrplus-freq] [--rexture-strip-rows N] [--hdrplus-strength F] [--hdrplus-tile 16|32] [--hdrplus-search 32|64|128] [--hdrplus-faithful] [--affine-deadzone F] [--affine-softness F] [--affine-isotropic] [--fallback-chroma GAIN] [--fallback-luma GAIN] [--fallback-max-sigma PX] [--no-hot-pixels] [--hot-pixel-list FILE]"
          " [--reference recorded|middle|sharpest|darkest] INPUT [INPUT2 ...]\n"
          "  INPUT: FILE.rzsl | DNG_DIR or dng:DNG_DIR (every *.dng, name-sorted, is one burst)"
          " | rawburst:DIR | synthetic:...";
@@ -1351,39 +1261,15 @@ int main(int argc, char** argv) {
                 (void)need(a.c_str());  // already consumed in the pre-scan
             } else if (a == "--noise-source") tune.noiseSource = need(a.c_str());
             else if (a == "--cal-profile") tune.calProfile = need(a.c_str());
-            else if (a == "--scale") tune.scale = std::stof(need(a.c_str()));
-            else if (a == "--lk-iterations") tune.lkIterations = std::stoi(need(a.c_str()));
             else if (a == "--dump-linear") tune.dumpLinear = true;
             else if (a == "--dump-cfa") tune.dumpCfa = true;
             else if (a == "--repeat") tune.repeat = std::stoi(need(a.c_str()));
-            else if (a == "--k-detail") tune.kDetail = std::stof(need(a.c_str()));
-            else if (a == "--k-denoise") tune.kDenoise = std::stof(need(a.c_str()));
-            else if (a == "--d-threshold") tune.dThreshold = std::stof(need(a.c_str()));
-            else if (a == "--d-transition") tune.dTransition = std::stof(need(a.c_str()));
-            else if (a == "--k-stretch") tune.kStretch = std::stof(need(a.c_str()));
-            else if (a == "--k-shrink") tune.kShrink = std::stof(need(a.c_str()));
-            else if (a == "--flat-sigma") tune.flatSigma = std::stof(need(a.c_str()));
-            else if (a == "--detail-floor") tune.detailFloorSigma = std::stof(need(a.c_str()));
-            else if (a == "--scale-bandwidth-gain") tune.scaleBandwidthGain = std::stof(need(a.c_str()));
-            else if (a == "--coverage-neff-lo") tune.coverageNeffLo = std::stof(need(a.c_str()));
-            else if (a == "--coverage-neff-hi") tune.coverageNeffHi = std::stof(need(a.c_str()));
-            else if (a == "--coverage-mass-lo") tune.coverageMassLo = std::stof(need(a.c_str()));
-            else if (a == "--coverage-mass-hi") tune.coverageMassHi = std::stof(need(a.c_str()));
-            else if (a == "--robustness-t") tune.robustnessT = std::stof(need(a.c_str()));
-            else if (a == "--robustness-s1") tune.robustnessS1 = std::stof(need(a.c_str()));
-            else if (a == "--robustness-s2") tune.robustnessS2 = std::stof(need(a.c_str()));
             else if (a == "--max-frames") tune.maxFrames = std::stoi(need(a.c_str()));
             else if (a == "--suffix") tune.suffix = need(a.c_str());
             else if (a == "--dump-base") tune.dumpBase = true;
             else if (a == "--dump-all-singles") tune.dumpAllSingles = true;
-            else if (a == "--affine-deadzone") tune.affineDeadzone = std::stof(need(a.c_str()));
-            else if (a == "--affine-isotropic") tune.affineIsotropic = true;
             else if (a == "--no-hot-pixels") tune.hotPixels = false;
             else if (a == "--hot-pixel-list") tune.hotPixelList = need(a.c_str());
-            else if (a == "--fallback-max-sigma") tune.fallbackMaxSigma = std::stof(need(a.c_str()));
-            else if (a == "--fallback-luma") tune.fallbackLuma = std::stof(need(a.c_str()));
-            else if (a == "--fallback-chroma") tune.fallbackChroma = std::stof(need(a.c_str()));
-            else if (a == "--affine-softness") tune.affineSoftness = std::stof(need(a.c_str()));
             else if (a == "--duplicate-middle") tune.duplicateMiddle = true;
             else if (a == "--dump-raw16") tune.dumpAllSingles = tune.dumpRaw16 = true;
             else if (a == "--export-merged-dng") tune.exportMergedDng = need(a.c_str());
@@ -1414,24 +1300,9 @@ int main(int argc, char** argv) {
         if (tune.reference != "recorded" && tune.reference != "middle" && tune.reference != "sharpest" &&
             tune.reference != "darkest")
             throw std::invalid_argument("reference must be recorded, middle, sharpest, or darkest");
-        if (!std::isfinite(tune.scale) || tune.scale < 1.f || tune.scale > 2.f)
-            throw std::invalid_argument("scale must be finite and 1..2");
         if (tune.repeat < 1 || tune.repeat > 100) throw std::invalid_argument("repeat must be 1..100");
-        if (tune.lkIterations < 1 || tune.lkIterations > 30)
-            throw std::invalid_argument("lk-iterations must be 1..30");
         if (tune.maxFrames != 0 && (tune.maxFrames < 4 || tune.maxFrames > 30))
             throw std::invalid_argument("max-frames must be 4..30");
-        if (tune.flatSigma != -2.f && !(std::isfinite(tune.flatSigma) && tune.flatSigma >= -1.f))
-            throw std::invalid_argument("flat-sigma must be >= -1 (-1 = legacy kDetail*kDenoise)");
-        if (tune.detailFloorSigma != -1.f && !(std::isfinite(tune.detailFloorSigma) && tune.detailFloorSigma >= 0.f))
-            throw std::invalid_argument("detail-floor must be >= 0 (0 = legacy, try 0.08..0.15)");
-        if (tune.scaleBandwidthGain != -1.f &&
-            !(std::isfinite(tune.scaleBandwidthGain) && tune.scaleBandwidthGain >= 0.f))
-            throw std::invalid_argument("scale-bandwidth-gain must be >= 0 (0 = scale-agnostic, try 0.5..1)");
-        for (const float v : {tune.coverageNeffLo, tune.coverageNeffHi})
-            if (v != -1.f && !(std::isfinite(v) && v >= 0.f)) throw std::invalid_argument("coverage-neff must be >= 0");
-        for (const float v : {tune.coverageMassLo, tune.coverageMassHi})
-            if (v != -1.f && !(std::isfinite(v) && v >= 0.f)) throw std::invalid_argument("coverage-mass must be >= 0");
         for (const auto& in : inputs) replay(in, outputDir, tune);
         return 0;
     } catch (const std::exception& e) {

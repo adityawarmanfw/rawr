@@ -33,20 +33,6 @@ int main() {
     assert(std::fabs(hp::robustness(13.f) - 1.99907f) < 1e-4f);
     assert(hp::robustness(22.f) < hp::robustness(13.f) && hp::robustness(13.f) < hp::robustness(1.f));
 
-    // Bracketed frequency norms: equal-exposure frames use the uniform
-    // constants exactly; a companion ef times brighter scales the noise term
-    // by (1 + 1/ef) / 2 and keeps the other constants.
-    {
-        const auto uniform = hp::frequencyNorms(13.f);
-        assert(hp::uniformExposure({1.f, 1.f, 1.0005f}) && !hp::uniformExposure({1.f, 4.f}));
-        const auto same = hp::bracketedFrequencyNorms(13.f, 1.f);
-        assert(same.robustnessNorm == uniform.robustnessNorm && same.maxMotionNorm == uniform.maxMotionNorm &&
-               same.readNoise == uniform.readNoise);
-        const auto b = hp::bracketedFrequencyNorms(13.f, 4.f);
-        assert(std::fabs(b.robustnessNorm - 0.625f * uniform.robustnessNorm) < 1e-6f * uniform.robustnessNorm);
-        assert(b.readNoise == uniform.readNoise && b.maxMotionNorm == uniform.maxMotionNorm);
-    }
-
     bool threw = false;
     try {
         (void)hp::makeGeometry(4081, 3072, hp::Config{});

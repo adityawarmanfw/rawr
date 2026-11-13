@@ -1,5 +1,5 @@
 #pragma once
-#include <rawr/raw_gpu_pipeline/MultiframeRecorder.h>
+#include <rawr/raw_gpu_pipeline/FrameParameters.h>
 #include <rawr/raw_merge_hdrplus_gpu/RawMergeHdrPlusGpu.h>
 #include <rawr/zsl_ring/RawImageRing.h>
 #include <vulkan/vulkan.h>
@@ -12,16 +12,9 @@
 #include <vector>
 
 namespace rawr::raw_gpu_pipeline {
-// Wronski: kernel-regression super-resolution merge (RGB output, optional
-// upscale). HdrPlusSpatial: HDR+ tile-aligned robust average. HdrPlusFrequency:
-// HDR+ per-frequency Wiener merge (upstream "Higher quality").
-// Rexture: kernel-regression Bayer merge for equal-exposure bursts at 1x (module merge_rexture; opt-in).
-// HdrPlusBracketed: the frequency merge over an exposure-bracketed burst
-// (upstream's non-uniform exposure path; the reference should be the darkest
-// frame). All HDR+ variants write Bayer values into the RGBA16F output and run
-// at 1x only.
-enum class MergeAlgorithm : std::uint32_t { Wronski = 0, HdrPlusSpatial = 1, HdrPlusFrequency = 2, HdrPlusBracketed = 3,
-                                                Rexture = 4 };
+// HdrPlusFrequency: HDR+ per-frequency Wiener merge (upstream "Higher quality"). Rexture: kernel-regression Bayer merge
+// (module merge_rexture). Both write Bayer values into the RGBA16F output at 1x.
+enum class MergeAlgorithm : std::uint32_t { HdrPlusFrequency = 2, Rexture = 4 };
 struct BurstFrame {
     rawr::zsl_ring::GpuRawImageView raw{};
     MultiframeFrameParameters parameters{};
@@ -30,9 +23,6 @@ struct BurstFrame {
     // as the reference exposure.
     float exposure = 0.0f;
 };
-[[nodiscard]] constexpr bool usesFrequencyMerge(MergeAlgorithm a) noexcept {
-    return a == MergeAlgorithm::HdrPlusFrequency || a == MergeAlgorithm::HdrPlusBracketed;
-}
 struct BurstStageTimings {
     double initializeMs = 0.0;
     double referencePrepareMs = 0.0;
@@ -66,12 +56,12 @@ struct BurstRunResult {
     bool pipelineCacheReused = false;
     BurstStageTimings timings{};
     // HDR+ only: normalized full-precision R32F CFA plane (same extent as
-    // output) for the 16-bit merged DNG projection. Null for Wronski.
+    // output) for the 16-bit merged DNG projection. HDR+ Quality only (null for Rexture).
     VkImage cfaImage = VK_NULL_HANDLE;
     VkImageView cfaView = VK_NULL_HANDLE;
     // Set when estimateNoiseFromBurst produced the profile this run merged with.
     bool noiseEstimated = false;
-    rawr::raw_merge_wronski_gpu::CfaNoiseProfile estimatedNoise{};
+    rawr::raw_merge_common::CfaNoiseProfile estimatedNoise{};
 };
 // Synchronous correctness executor. The app runs it on a background worker while
 // borrowing pinned RAW16 images from RawImageRing. It uses the app's existing Vulkan queue via Submit.
@@ -110,9 +100,8 @@ class AndroidBurstCoordinator final {
     AndroidBurstCoordinator(const AndroidBurstCoordinator&) = delete;
     AndroidBurstCoordinator& operator=(const AndroidBurstCoordinator&) = delete;
     void initialize(VkPhysicalDevice physical, VkDevice device, std::uint32_t queueFamily, Submit submit,
-                    std::uint32_t width, std::uint32_t height, float outputScale = 1.0f, StageSink stageSink = {},
-                    rawr::raw_alignment_gpu::Config alignment = {}, rawr::raw_merge_wronski_gpu::Config merge = {},
-                    MergeAlgorithm algorithm = MergeAlgorithm::Wronski,
+                    std::uint32_t width, std::uint32_t height, StageSink stageSink = {},
+                    rawr::raw_merge_common::Config merge = {}, MergeAlgorithm algorithm = MergeAlgorithm::Rexture,
                     rawr::raw_merge_hdrplus_gpu::Config hdrplus = {});
     // Pre-creates pipelines, command pool, fence and timestamp pool on a
     // background thread so the first burst skips cold init. Arena images
@@ -120,7 +109,7 @@ class AndroidBurstCoordinator final {
     // reuses the warmed infrastructure. Never throws-fatal: callers log.
     void warmPipelines(VkPhysicalDevice physical, VkDevice device, std::uint32_t queueFamily);
     // warmPipelines plus arena creation for the last-used merge algorithm and
-    // output scale (default Wronski 1x; HDR+ holds ~0.5GB instead). Makes even the first burst fully warm when geometry
+    // output scale . Makes even the first burst fully warm when geometry
     // matches. Holds ~1.3GB while the camera is open; reset()/resetConfiguration
     // release it. Same reuse rules as initialize().
     // Merge algorithm id (MergeAlgorithm) the next warmAll / burst will lay its arena out for.
@@ -143,17 +132,15 @@ class AndroidBurstCoordinator final {
     VkPhysicalDevice physical_ = VK_NULL_HANDLE;
     VkDevice device_ = VK_NULL_HANDLE;
     std::uint32_t queueFamily_ = 0, width_ = 0, height_ = 0;
-    float outputScale_ = 0.0f;
     Submit submit_{};
     StageSink stageSink_{};
     VkCommandPool commandPool_ = VK_NULL_HANDLE;
     VkCommandBuffer command_ = VK_NULL_HANDLE;
     VkFence fence_ = VK_NULL_HANDLE;
     VkSemaphore initialWait_ = VK_NULL_HANDLE;
-    // Last output scale / merge selection seen (survive reset: self-tuning
-    // warmup heuristic, so warmAll builds the arena the next burst will use).
-    float lastScale_ = 1.0f;
-    MergeAlgorithm lastAlgorithm_ = MergeAlgorithm::Wronski;
+    // Last merge selection seen (survives reset: self-tuning warmup heuristic, so warmAll builds the arena the next burst
+    // will use).
+    MergeAlgorithm lastAlgorithm_ = MergeAlgorithm::Rexture;
     rawr::raw_merge_hdrplus_gpu::Config lastHdrPlus_{};
     // Guards initialize/warmPipelines/reset (pipelines + pools + handles).
     // run() is called after initialize() returns on the same worker.
@@ -168,12 +155,11 @@ class AndroidBurstCoordinator final {
     bool timestampsSupported_ = false;
     ResourceArena arena_{};
     VulkanExecutor executor_{};
-    rawr::raw_alignment_gpu::Config alignment_{};
-    rawr::raw_merge_wronski_gpu::Config merge_{};
-    MergeAlgorithm algorithm_ = MergeAlgorithm::Wronski;
+    rawr::raw_merge_common::Config merge_{};
+    MergeAlgorithm algorithm_ = MergeAlgorithm::Rexture;
     rawr::raw_merge_hdrplus_gpu::Config hdrplus_{};
     // Which layout arena_ currently holds (HDR+ geometry depends on its config).
-    MergeAlgorithm arenaAlgorithm_ = MergeAlgorithm::Wronski;
+    MergeAlgorithm arenaAlgorithm_ = MergeAlgorithm::Rexture;
     rawr::raw_merge_hdrplus_gpu::Config arenaHdrPlus_{};
     [[nodiscard]] bool arenaMatchesSelection() const noexcept;
     void initializeArenaLocked(VkPhysicalDevice physical, VkDevice device);
@@ -188,11 +174,8 @@ class AndroidBurstCoordinator final {
     bool rextureDebug_ = false, arenaRextureDebug_ = false;
     BurstRunResult runRexture(const std::vector<BurstFrame>& frames, std::uint32_t referenceIndex,
                               const FrameConsumed& frameConsumed, const FrameLoad& frameLoad);
-    BurstRunResult runHdrPlus(const std::vector<BurstFrame>& frames, std::uint32_t referenceIndex,
-                              const FrameConsumed& frameConsumed, const FrameLoad& frameLoad);
     BurstRunResult runHdrPlusFrequency(const std::vector<BurstFrame>& frames, std::uint32_t referenceIndex,
                                        const FrameConsumed& frameConsumed, const FrameLoad& frameLoad);
-    [[nodiscard]] bool hdrplusSelected() const noexcept { return algorithm_ != MergeAlgorithm::Wronski; }
     bool arenaReady_ = false;
     bool layoutsInitialized_ = false;
     bool submissionInFlight_ = false;

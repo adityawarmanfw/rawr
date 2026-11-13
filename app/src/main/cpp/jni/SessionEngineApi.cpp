@@ -95,10 +95,10 @@ void setPersistentDiagnosticsEnabled(EngineHandle h, bool v) noexcept {
 void setPersistZslRingEnabled(EngineHandle h, bool v) noexcept {
     if (h) engine(h)->setPersistZslRingEnabled(v);
 }
-uint32_t prepareExperimentalMultiframe(EngineHandle h, uint32_t maxFrames, uint32_t longFrames) noexcept {
+uint32_t prepareExperimentalMultiframe(EngineHandle h, uint32_t maxFrames) noexcept {
     if (!h) return 0u;
     try {
-        return engine(h)->prepareExperimentalMultiframe(maxFrames, longFrames);
+        return engine(h)->prepareExperimentalMultiframe(maxFrames);
     } catch (const std::exception& e) {
         LOGE("MULTIFRAME_PREPARATION_FAILED error=%s", e.what());
         return UINT32_MAX;
@@ -132,9 +132,6 @@ void setExperimentalZeroCopy(EngineHandle h, bool v) noexcept {
 }
 void setExperimentalMultiframeEnabled(EngineHandle h, bool v) noexcept {
     if (h) engine(h)->setExperimentalMultiframeEnabled(v);
-}
-void setHdrPlusHeadroomMaxEv(EngineHandle h, float v) noexcept {
-    if (h) engine(h)->setHdrPlusHeadroomMaxEv(v);
 }
 void setPersistentEngineEnabled(EngineHandle h, bool v) noexcept {
     if (h) engine(h)->setPersistentEngineEnabled(v);

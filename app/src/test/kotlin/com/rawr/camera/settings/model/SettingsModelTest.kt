@@ -446,19 +446,19 @@ class SettingsModelTest {
 
     @Test fun multiframeTunablesAreBoundedAndResettableToCatalogDefaults() {
         val controller = PersistentSettingsController()
-        controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.KDetail, .08f))
-        assertEquals(.08f, controller.state.value.values.multiframeTuning.kDetail)
+        controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.HdrPlusStrength, 18f))
+        assertEquals(18f, controller.state.value.values.multiframeTuning.hdrPlusStrength)
 
-        controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.KDetail, 1f))
-        assertEquals(.08f, controller.state.value.values.multiframeTuning.kDetail)
+        controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.HdrPlusStrength, 40f))
+        assertEquals(18f, controller.state.value.values.multiframeTuning.hdrPlusStrength)
 
         controller.dispatch(
             SetMultiframeNumericValue(
-                MultiframeNumericParameter.KDetail,
-                MultiframeSpecs.kDetail.defaultValue
+                MultiframeNumericParameter.HdrPlusStrength,
+                MultiframeSpecs.hdrPlusStrength.defaultValue
             )
         )
-        assertEquals(MultiframeTuning().kDetail, controller.state.value.values.multiframeTuning.kDetail)
+        assertEquals(MultiframeTuning().hdrPlusStrength, controller.state.value.values.multiframeTuning.hdrPlusStrength)
     }
 
     @Test fun photoDefringeDefaultsToEnabledWhileVideoStaysOff() {
@@ -597,88 +597,55 @@ class SettingsModelTest {
         assertEquals(1, MultiframeBaseFrameMode.Sharpest.nativeId)
     }
 
-    @Test fun multiframeResolutionUsesMpPresetsAndNativeContract() {
-        val tuning = MultiframeTuning(outputResolution = MultiframeOutputResolution.Mp20)
-        val native = tuning.nativeValues()
+    @Test fun multiframeNativeContractKeepsItsLayout() {
+        val native = MultiframeTuning().nativeValues()
         assertEquals(22, native.size)
-        assertEquals(MultiframeOutputResolution.Mp20.outputScale, native[0])
+        assertEquals(1f, native[0])  // output scale: native resolution only
         assertEquals(5f, native[1])
         assertEquals(1e-10f, native[2])
-        assertTrue(MultiframeOutputResolution.entries.all { it.label.contains("MP") })
     }
 
     @Test fun multiframeMergeAlgorithmIsPersistableAndAppendedToNativeContract() {
         var persisted: SettingsValues? = null
         val controller = PersistentSettingsController(onValuesChanged = { persisted = it })
         assertEquals(MultiframeMergeAlgorithm.Rexture, controller.state.value.values.multiframeTuning.mergeAlgorithm)
+        assertEquals(listOf(MultiframeMergeAlgorithm.HdrPlusQuality, MultiframeMergeAlgorithm.Rexture), MultiframeMergeAlgorithm.entries)
 
-        controller.dispatch(SetMultiframeMergeAlgorithm(MultiframeMergeAlgorithm.Wronski))
-        controller.dispatch(SetMultiframeMergeAlgorithm(MultiframeMergeAlgorithm.HdrPlus))
+        controller.dispatch(SetMultiframeMergeAlgorithm(MultiframeMergeAlgorithm.HdrPlusQuality))
         controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.HdrPlusStrength, 18f))
         controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.HdrPlusStrength, 40f))
 
         val tuning = controller.state.value.values.multiframeTuning
-        assertEquals(MultiframeMergeAlgorithm.HdrPlus, persisted?.multiframeTuning?.mergeAlgorithm)
+        assertEquals(MultiframeMergeAlgorithm.HdrPlusQuality, persisted?.multiframeTuning?.mergeAlgorithm)
         assertEquals(18f, tuning.hdrPlusStrength)
-        // Native layout: 22 tuning values, chroma flag, then algorithm id + strength.
+        // Native layout: 22 tuning values, chroma flag, then algorithm id + strength (bracket slots unused).
         assertEquals(22, tuning.nativeValues().size)
-        assertEquals(listOf(1f, 18f, 32f, -3f, 2f, 0f), tuning.nativeMergeValues().toList())
+        assertEquals(listOf(2f, 18f, 32f, -3f, 0f, 0f), tuning.nativeMergeValues().toList())
         controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.HdrPlusTileSize, 16f))
         controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.HdrPlusTileSize, 64f))
         assertEquals(16, controller.state.value.values.multiframeTuning.hdrPlusTileSize)
-        assertEquals(0, MultiframeMergeAlgorithm.Wronski.nativeId)
         assertEquals(2, MultiframeMergeAlgorithm.HdrPlusQuality.nativeId)
-        controller.dispatch(SetMultiframeMergeAlgorithm(MultiframeMergeAlgorithm.HdrPlusQuality))
-        assertEquals(2f, controller.state.value.values.multiframeTuning.nativeMergeValues()[0])
+        assertEquals(4, MultiframeMergeAlgorithm.Rexture.nativeId)
+        controller.dispatch(SetMultiframeMergeAlgorithm(MultiframeMergeAlgorithm.Rexture))
+        assertEquals(4f, controller.state.value.values.multiframeTuning.nativeMergeValues()[0])
         assertEquals(13f, MultiframeTuning().copy(hdrPlusStrength = 0f).sanitized().hdrPlusStrength)
-
-        assertEquals(3, MultiframeMergeAlgorithm.HdrPlusBracketed.nativeId)
-        controller.dispatch(SetMultiframeMergeAlgorithm(MultiframeMergeAlgorithm.HdrPlusBracketed))
-        controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.BracketEv, -2.7f))
-        controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.BracketFrames, 3f))
-        controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.LongFrameEv, 1.3f))
-        val bracketed = controller.state.value.values.multiframeTuning
-        assertEquals(-2.5f, bracketed.bracketEv)
-        assertEquals(listOf(3f, 18f, 16f, -2.5f, 3f, 1.5f), bracketed.nativeMergeValues().toList())
-        assertEquals(MultiframeMergeAlgorithm.HdrPlusBracketed, persisted?.multiframeTuning?.mergeAlgorithm)
-        assertEquals(-3f, MultiframeTuning().copy(bracketEv = -6f).sanitized().bracketEv)
-        assertEquals(2, MultiframeTuning().copy(bracketFrames = 17).sanitized().bracketFrames)
-        assertEquals(16, MultiframeTuning().copy(bracketFrames = 16).sanitized().bracketFrames)
-        assertEquals(0, MultiframeTuning().copy(bracketFrames = 0).sanitized().bracketFrames)
-        assertEquals(0f, MultiframeTuning().copy(longFrameEv = 5f).sanitized().longFrameEv)
-        // Bracketed: Maximum Frames is the total, after-shutter frames its split.
-        assertEquals(bracketed.maxFrames - 3, bracketed.zslFrames())
-        assertEquals(3, bracketed.postShutterFrames())
-        assertEquals(14, bracketed.copy(maxFrames = 30, bracketFrames = 16).zslFrames())
-        assertEquals(16, bracketed.copy(maxFrames = 30, bracketFrames = 16).postShutterFrames())
-        assertEquals(2, bracketed.copy(maxFrames = 4, bracketFrames = 16).postShutterFrames())
-        assertEquals(2, bracketed.copy(maxFrames = 4, bracketFrames = 16).zslFrames())
-        assertEquals(12, MultiframeTuning().zslFrames())
     }
 
     @Test fun multiframeDefaultsFollowResearchedOperatingPoint() {
         val defaults = MultiframeTuning()
-        assertEquals(.15f, defaults.kDetail)
-        assertEquals(2f, defaults.kStretch)
-        assertEquals(1f, defaults.flatSigma)
-        assertEquals(.15f, defaults.detailFloorSigma)
-        assertEquals(1f, defaults.scaleBandwidthGain)
+        assertEquals(MultiframeMergeAlgorithm.Rexture, defaults.mergeAlgorithm)
         assertEquals(12, defaults.maxFrames)
-        assertEquals(4f, defaults.fallbackChroma)
-        assertEquals(2f, defaults.fallbackLuma)
-        val params = MultiframeSpecs.all.map { it.parameter }
-        assertTrue(params.contains(MultiframeNumericParameter.FlatSigma))
-    }
-
-    @Test fun multiframeTuningBankIsSingle() {
-        val controller = PersistentSettingsController()
-        assertEquals(.15f, controller.state.value.values.multiframeTuning.kDetail)
-
-        controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.KDetail, .31f))
-
-        assertEquals(.31f, controller.state.value.values.multiframeTuning.kDetail)
-        val native = controller.state.value.values.multiframeTuning.nativeValues()
-        assertEquals(22, native.size)
+        assertEquals(13f, defaults.hdrPlusStrength)
+        assertEquals(32, defaults.hdrPlusTileSize)
+        assertEquals(
+            listOf(
+                MultiframeNumericParameter.MaxFrames,
+                MultiframeNumericParameter.HdrPlusStrength,
+                MultiframeNumericParameter.HdrPlusTileSize
+            ),
+            MultiframeSpecs.all.map { it.parameter }
+        )
+        assertEquals(12f, MultiframeSpecs.forParameter(MultiframeNumericParameter.MaxFrames).defaultValue)
     }
 
     @Test fun everyMultiframeTunableExplainsLowerAndHigherImageEffects() {
@@ -689,63 +656,9 @@ class SettingsModelTest {
     }
 
     @Test fun invalidPersistedMultiframeTuningFallsBackFieldByField() {
-        val restored =
-            MultiframeTuning(kDetail = Float.NaN, maxFrames = 99, robustnessT = .2f)
-                .sanitized()
-        assertEquals(MultiframeTuning().kDetail, restored.kDetail)
+        val restored = MultiframeTuning(hdrPlusStrength = Float.NaN, maxFrames = 99).sanitized()
+        assertEquals(MultiframeTuning().hdrPlusStrength, restored.hdrPlusStrength)
         assertEquals(MultiframeTuning().maxFrames, restored.maxFrames)
-        assertEquals(.2f, restored.robustnessT)
-    }
-
-    @Test fun multiframeDetailSanitizationUsesSingleRange() {
-        // Below the slider minimum resets to the default operating point.
-        assertEquals(.15f, MultiframeTuning(kDetail = .07f).sanitized().kDetail)
-        assertEquals(
-            .31f,
-            MultiframeTuning(kDetail = .31f).sanitized().kDetail
-        )
-    }
-
-    @Test fun multiframeDefaultsMatchOfflineTunedIAndFloorKDetailAtSafeMinimum() {
-        val v2 = MultiframeTuning()
-        assertEquals(12, v2.maxFrames)
-        assertEquals(.15f, v2.kDetail)
-        assertEquals(5f, v2.kDenoise)
-        assertEquals(.71f, v2.dThreshold)
-        assertEquals(1f, v2.dTransition)
-        assertEquals(2f, v2.kStretch)
-        assertEquals(8f, v2.kShrink)
-        // Operating point re-tuned 2026-10-01 against burst-fitted noise and
-        // full-coverage LK (offline replay: flat grain, edge 10-90 width vs
-        // base frame, motion bursts); kernels narrowed 2026-10-02 for the
-        // merged-CFA demosaic (texture MTF vs base frame). Below the kDetail
-        // min it sanitizes to the default.
-        val floored =
-            v2.copy(kDetail = .07f).sanitized(v2)
-        assertEquals(.15f, floored.kDetail)
-        val atFloor =
-            v2.copy(kDetail = .08f).sanitized(v2)
-        assertEquals(.08f, atFloor.kDetail)
-
-        // Extended kDenoise range admits strong denoise.
-        val denoised =
-            v2.copy(kDenoise = 7f).sanitized(v2)
-        assertEquals(7f, denoised.kDenoise)
-
-        // Specs agree with the native JNI guard: researched values accepted.
-        assertTrue(MultiframeSpecs.forParameter(MultiframeNumericParameter.KDetail).accepts(.08f))
-        assertTrue(MultiframeSpecs.forParameter(MultiframeNumericParameter.KDenoise).accepts(7f))
-        assertTrue(MultiframeSpecs.forParameter(MultiframeNumericParameter.DThreshold).accepts(.25f))
-        assertTrue(MultiframeSpecs.forParameter(MultiframeNumericParameter.DThreshold).accepts(.20f))
-        assertTrue(MultiframeSpecs.forParameter(MultiframeNumericParameter.DTransition).accepts(.3f))
-        assertTrue(MultiframeSpecs.forParameter(MultiframeNumericParameter.KShrink).accepts(8f))
-        assertTrue(MultiframeSpecs.forParameter(MultiframeNumericParameter.KShrink).accepts(10f))
-        assertTrue(MultiframeSpecs.forParameter(MultiframeNumericParameter.FlatSigma).accepts(.5f))
-        assertTrue(MultiframeSpecs.forParameter(MultiframeNumericParameter.DetailFloorSigma).accepts(0f))
-        assertEquals(12f, MultiframeSpecs.forParameter(MultiframeNumericParameter.MaxFrames).defaultValue)
-        assertTrue(MultiframeSpecs.forParameter(MultiframeNumericParameter.DThreshold).accepts(.71f))
-        assertTrue(MultiframeSpecs.forParameter(MultiframeNumericParameter.FallbackChroma).accepts(4f))
-        assertTrue(MultiframeSpecs.forParameter(MultiframeNumericParameter.FallbackLuma).accepts(0f))
     }
 
     @Test fun removingLastStageFromSelectedProfileFallsBackToRawrBase() {

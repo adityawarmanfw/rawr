@@ -40,8 +40,7 @@ class MultiframeCaptureCoordinator final {
                                             rawrcam::capture::JpegCaptureRequest mergedJpeg, bool dumpRzslRequested,
                                             MultiframeTuning tuning, MultiframeBaseFrameMode baseFrameMode,
                                             const tonemap::TonemapParams& tone, bool filmEnabled,
-                                            const spektrafilm_native::FilmLook& filmLook,
-                                            std::optional<BracketPlan>* bracketPlan = nullptr) noexcept;
+                                            const spektrafilm_native::FilmLook& filmLook) noexcept;
     void cancelPreparedMultiframeCapture() noexcept;
     // A burst assembled outside the ring (full-size stills); false when one is pending.
     bool adoptPreparedCapture(std::unique_ptr<PendingMultiframeCapture> capture) noexcept;

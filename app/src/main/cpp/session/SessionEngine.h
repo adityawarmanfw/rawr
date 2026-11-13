@@ -118,21 +118,8 @@ class SessionEngine {
     std::string pollJpegWriteCompletion();
     void setPersistZslRingEnabled(bool enabled);
     void setExperimentalMultiframeEnabled(bool enabled);
-    // HDR+ Bracketed selected (with multiframe on): maxEv < 0 is the most
-    // highlight headroom the meter may take (ZSL underexposure); 0 = off.
-    // Also allows the ISO calibration probe frame for the long frames.
-    void setHdrPlusHeadroomMaxEv(float maxEv);
-    [[nodiscard]] float hdrHeadroomMaxEv() const noexcept { return hdrHeadroomMaxEv_.load(std::memory_order_relaxed); }
-    // Headroom EV (<= 0) a delivered frame was exposed with, from its actual
-    // exposure against the normalizer's reference (ExposureNormalizer); its
-    // reported compensation when the frame was not normalized; 0 when none.
-    [[nodiscard]] float hdrHeadroomEvFor(const metadata::FrameMetadataSnapshot& metadata) const;
-    // The compensation part only, as the frame's result reports it.
-    [[nodiscard]] float reportedHeadroomEvFor(const metadata::FrameMetadataSnapshot& metadata) const;
     void setPersistentEngineEnabled(bool enabled);
-    // longFrames: HDR+ Bracketed post-shutter frames planned after these
-    // maxFrames burst frames; frozen as burst frames when they would be skipped.
-    uint32_t prepareExperimentalMultiframe(uint32_t maxFrames, uint32_t longFrames = 0u);
+    uint32_t prepareExperimentalMultiframe(uint32_t maxFrames);
     uint64_t startPreparedMultiframeCapture(rawrcam::encoding::dng::DngCaptureContext baseDng,
                                             rawrcam::encoding::dng::DngCaptureContext mergedDng,
                                             rawrcam::capture::JpegCaptureRequest mergedJpeg, bool dumpRzslRequested,
@@ -389,11 +376,6 @@ class SessionEngine {
     std::atomic<int> autoKeyMode_{0};
     mutable std::mutex autoKeyMutex_;
     tonemap::AdaptiveToneParams autoKeyCurve_{};
-    // HDR+ Bracketed headroom floor (EV < 0) or 0 when the meter is off.
-    std::atomic<float> hdrHeadroomMaxEv_{0.0f};
-    // The prepared HDR+ Bracketed capture froze its long-frame slots as burst
-    // frames (long frames would be skipped). Guarded by mu_.
-    bool bracketSkippedForPending_ = false;
     // Image > Shadow Lift: photo local tone mapping shadows EV (0 = adaptive curve).
     std::atomic<float> localToneShadowsEv_{0.0f};
     std::atomic<float> localToneHighlightsEv_{2.0f}, localToneSigma_{5.0f};

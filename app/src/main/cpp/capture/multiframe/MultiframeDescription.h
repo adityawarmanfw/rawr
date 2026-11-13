@@ -15,37 +15,9 @@ namespace rawrcam::capture::multiframe {
 // Shutter-time tuning bank, transported for EXIF reporting.
 struct MultiframeTuningView {
     float outputScale = 1.0f;
-    std::uint32_t lkIterations = 3;
-    float hessianEpsilon = 1.0e-10f;
-    float kDetail = 0.08f;
-    float kDenoise = 5.0f;
-    float dThreshold = 0.25f;
-    float dTransition = 0.30f;
-    float kStretch = 1.0f;
-    float kShrink = 8.0f;
-    float flatSigma = 0.5f;
-    float detailFloorSigma = 0.0f;
-    float scaleBandwidthGain = 1.0f;
-    float coverageNeffLo = 1.0f;
-    float coverageNeffHi = 3.0f;
-    float coverageMassLo = 0.001f;
-    float coverageMassHi = 0.03f;
-    float robustnessT = 0.09f;
-    float robustnessS1 = 1.5f;
-    float robustnessS2 = 9.0f;
-    float motionThreshold = 0.65f;
-    float fallbackChromaGain = 0.0f;
-    float fallbackLumaGain = 0.0f;
-    std::uint32_t mergeAlgorithm = 0;  // 0 = Wronski, 1 = HDR+ spatial, 2 = HDR+ frequency, 3 = HDR+ bracketed
+    std::uint32_t mergeAlgorithm = 4;  // 2 = HDR+ Quality (frequency merge), 4 = Rexture
     float hdrplusStrength = 13.0f;
     std::uint32_t hdrplusTileSize = 32;
-    float bracketEv = -2.0f;
-    std::uint32_t bracketFrames = 2;
-    float bracketLiftEv = 0.0f;  // measured: 0 = no dark frames merged / no headroom
-    // 1 = underexposed ZSL burst + long frames (bracketEv = headroom limit,
-    // bracketFrames = long frames requested); 0 = older dark-frame captures.
-    std::uint32_t bracketCapture = 0;
-    float longFrameEv = 0.0f;  // 0 = back to Camera2 AE
     MultiframeBaseFrameMode baseFrameMode = MultiframeBaseFrameMode::Sharpest;
 };
 

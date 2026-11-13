@@ -384,29 +384,10 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
                     // and a merge with partial LK coverage, so saved values no
                     // longer mean what they did. Reset the tuning (keeping the
                     // chosen output resolution); noise is now always burst-fitted.
-                    30 -> {
-                        values.copy(
-                            multiframeTuning =
-                                defaults.multiframeTuning.copy(
-                                    outputResolution = values.multiframeTuning.outputResolution
-                                )
-                        )
-                    }
+                    30 -> values.copy(multiframeTuning = defaults.multiframeTuning)
 
-                    // v31 -> v32: the JPEG path now demosaics the merged CFA,
-                    // which wants narrower merge kernels (kDetail .22 -> .15,
-                    // kStretch 3.5 -> 2). Only values still at the old
-                    // defaults move; hand-tuned ones are kept.
-                    31 -> {
-                        val t = values.multiframeTuning
-                        values.copy(
-                            multiframeTuning =
-                                t.copy(
-                                    kDetail = if (abs(t.kDetail - .22f) < 1e-4f) .15f else t.kDetail,
-                                    kStretch = if (abs(t.kStretch - 3.5f) < 1e-4f) 2f else t.kStretch
-                                )
-                        )
-                    }
+                    // v31 -> v32: merge kernel defaults moved (those tunings no longer exist).
+                    31 -> values
 
                     // v32 -> v33: keep tonemap / post-demosaic engines between
                     // shots by default. Rebuilding them cost ~390 ms per still
@@ -595,47 +576,10 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
             multiframeRextureNativeRgb = p[Keys.multiframeRextureNativeRgb] ?: d.multiframeRextureNativeRgb,
             multiframeTuning =
                 MultiframeTuning(
-                    outputResolution =
-                        enumOrDefault(
-                            p[Keys.multiframeOutputResolution],
-                            d.multiframeTuning.outputResolution
-                        ),
-                    mergeAlgorithm =
-                        enumOrDefault(p[Keys.multiframeMergeAlgorithm], d.multiframeTuning.mergeAlgorithm)
-                            .takeIf { it.available } ?: d.multiframeTuning.mergeAlgorithm,
+                    mergeAlgorithm = enumOrDefault(p[Keys.multiframeMergeAlgorithm], d.multiframeTuning.mergeAlgorithm),
                     hdrPlusStrength = p[Keys.multiframeHdrPlusStrength] ?: d.multiframeTuning.hdrPlusStrength,
                     hdrPlusTileSize = p[Keys.multiframeHdrPlusTileSize] ?: d.multiframeTuning.hdrPlusTileSize,
-                    bracketEv = p[Keys.multiframeBracketEv] ?: d.multiframeTuning.bracketEv,
-                    bracketFrames = p[Keys.multiframeBracketFrames] ?: d.multiframeTuning.bracketFrames,
-                    longFrameEv = p[Keys.multiframeLongFrameEv] ?: d.multiframeTuning.longFrameEv,
-                    // A separate ZSL count existed briefly (2026-10-15): fold it into the total once.
-                    maxFrames = (p[Keys.multiframeMaxFrames] ?: d.multiframeTuning.maxFrames).let { total ->
-                        p[Keys.legacyBracketZslFrames]?.let { zsl ->
-                            maxOf(total, zsl + (p[Keys.multiframeBracketFrames] ?: 0)).coerceAtMost(MAX_BURST_FRAMES)
-                        } ?: total
-                    },
-                    lkIterations = p[Keys.multiframeLkIterations] ?: d.multiframeTuning.lkIterations,
-                    hessianEpsilonExponent =
-                        p[Keys.multiframeHessianExponent] ?: d.multiframeTuning.hessianEpsilonExponent,
-                    kDetail = p[Keys.multiframeKDetail] ?: d.multiframeTuning.kDetail,
-                    kDenoise = p[Keys.multiframeKDenoise] ?: d.multiframeTuning.kDenoise,
-                    dThreshold = p[Keys.multiframeDThreshold] ?: d.multiframeTuning.dThreshold,
-                    dTransition = p[Keys.multiframeDTransition] ?: d.multiframeTuning.dTransition,
-                    kStretch = p[Keys.multiframeKStretch] ?: d.multiframeTuning.kStretch,
-                    kShrink = p[Keys.multiframeKShrink] ?: d.multiframeTuning.kShrink,
-                    robustnessT = p[Keys.multiframeRobustnessT] ?: d.multiframeTuning.robustnessT,
-                    robustnessS1 = p[Keys.multiframeRobustnessS1] ?: d.multiframeTuning.robustnessS1,
-                    robustnessS2 = p[Keys.multiframeRobustnessS2] ?: d.multiframeTuning.robustnessS2,
-                    motionThreshold = p[Keys.multiframeMotionThreshold] ?: d.multiframeTuning.motionThreshold,
-                    flatSigma = p[Keys.multiframeFlatSigma] ?: d.multiframeTuning.flatSigma,
-                    detailFloorSigma = p[Keys.multiframeDetailFloor] ?: d.multiframeTuning.detailFloorSigma,
-                    scaleBandwidthGain = p[Keys.multiframeScaleGain] ?: d.multiframeTuning.scaleBandwidthGain,
-                    coverageNeffLo = p[Keys.multiframeCoverageNeffLo] ?: d.multiframeTuning.coverageNeffLo,
-                    coverageNeffHi = p[Keys.multiframeCoverageNeffHi] ?: d.multiframeTuning.coverageNeffHi,
-                    coverageMassLo = p[Keys.multiframeCoverageMassLo] ?: d.multiframeTuning.coverageMassLo,
-                    coverageMassHi = p[Keys.multiframeCoverageMassHi] ?: d.multiframeTuning.coverageMassHi,
-                    fallbackChroma = p[Keys.multiframeFallbackChroma] ?: d.multiframeTuning.fallbackChroma,
-                    fallbackLuma = p[Keys.multiframeFallbackLuma] ?: d.multiframeTuning.fallbackLuma
+                    maxFrames = p[Keys.multiframeMaxFrames] ?: d.multiframeTuning.maxFrames
                 ).sanitized(d.multiframeTuning),
             customGpuDriverEnabled = p[Keys.customGpuDriverEnabled] ?: d.customGpuDriverEnabled,
             customGpuDriverName = p[Keys.customGpuDriverName] ?: d.customGpuDriverName,
@@ -853,36 +797,10 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         // Noise-profile selection was removed (always burst-fitted).
         p.remove(Keys.multiframeNoiseProfile)
         p.remove(Keys.camera2NoiseModelEnabled)
-        p[Keys.multiframeOutputResolution] = v.multiframeTuning.outputResolution.name
         p[Keys.multiframeMergeAlgorithm] = v.multiframeTuning.mergeAlgorithm.name
         p[Keys.multiframeHdrPlusStrength] = v.multiframeTuning.hdrPlusStrength
         p[Keys.multiframeHdrPlusTileSize] = v.multiframeTuning.hdrPlusTileSize
-        p[Keys.multiframeBracketEv] = v.multiframeTuning.bracketEv
-        p[Keys.multiframeBracketFrames] = v.multiframeTuning.bracketFrames
-        p[Keys.multiframeLongFrameEv] = v.multiframeTuning.longFrameEv
         p[Keys.multiframeMaxFrames] = v.multiframeTuning.maxFrames
-        p.remove(Keys.legacyBracketZslFrames)
-        p[Keys.multiframeLkIterations] = v.multiframeTuning.lkIterations
-        p[Keys.multiframeHessianExponent] = v.multiframeTuning.hessianEpsilonExponent
-        p[Keys.multiframeKDetail] = v.multiframeTuning.kDetail
-        p[Keys.multiframeKDenoise] = v.multiframeTuning.kDenoise
-        p[Keys.multiframeDThreshold] = v.multiframeTuning.dThreshold
-        p[Keys.multiframeDTransition] = v.multiframeTuning.dTransition
-        p[Keys.multiframeKStretch] = v.multiframeTuning.kStretch
-        p[Keys.multiframeKShrink] = v.multiframeTuning.kShrink
-        p[Keys.multiframeRobustnessT] = v.multiframeTuning.robustnessT
-        p[Keys.multiframeRobustnessS1] = v.multiframeTuning.robustnessS1
-        p[Keys.multiframeRobustnessS2] = v.multiframeTuning.robustnessS2
-        p[Keys.multiframeMotionThreshold] = v.multiframeTuning.motionThreshold
-        p[Keys.multiframeFlatSigma] = v.multiframeTuning.flatSigma
-        p[Keys.multiframeDetailFloor] = v.multiframeTuning.detailFloorSigma
-        p[Keys.multiframeScaleGain] = v.multiframeTuning.scaleBandwidthGain
-        p[Keys.multiframeCoverageNeffLo] = v.multiframeTuning.coverageNeffLo
-        p[Keys.multiframeCoverageNeffHi] = v.multiframeTuning.coverageNeffHi
-        p[Keys.multiframeCoverageMassLo] = v.multiframeTuning.coverageMassLo
-        p[Keys.multiframeCoverageMassHi] = v.multiframeTuning.coverageMassHi
-        p[Keys.multiframeFallbackChroma] = v.multiframeTuning.fallbackChroma
-        p[Keys.multiframeFallbackLuma] = v.multiframeTuning.fallbackLuma
         p[Keys.customGpuDriverEnabled] = v.customGpuDriverEnabled
         if (v.customGpuDriverName ==
             null
@@ -1145,37 +1063,10 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val multiframeRextureNativeRgb = booleanPreferencesKey("multiframe_rexture_native_rgb")
         val camera2NoiseModelEnabled = booleanPreferencesKey("camera2_noise_model_enabled")
         val multiframeNoiseProfile = stringPreferencesKey("multiframe_noise_profile")
-        val multiframeOutputResolution = stringPreferencesKey("multiframe_output_resolution")
         val multiframeMergeAlgorithm = stringPreferencesKey("multiframe_merge_algorithm")
         val multiframeHdrPlusStrength = floatPreferencesKey("multiframe_hdrplus_strength")
         val multiframeHdrPlusTileSize = intPreferencesKey("multiframe_hdrplus_tile_size")
-        val multiframeBracketEv = floatPreferencesKey("multiframe_bracket_ev")
-        val multiframeBracketFrames = intPreferencesKey("multiframe_bracket_frames")
-        val multiframeLongFrameEv = floatPreferencesKey("multiframe_long_frame_ev")
-        // Read once for migration, then removed on the next save.
-        val legacyBracketZslFrames = intPreferencesKey("multiframe_bracket_zsl_frames")
         val multiframeMaxFrames = intPreferencesKey("multiframe_max_frames")
-        val multiframeLkIterations = intPreferencesKey("multiframe_lk_iterations")
-        val multiframeHessianExponent = intPreferencesKey("multiframe_hessian_exponent")
-        val multiframeKDetail = floatPreferencesKey("multiframe_k_detail")
-        val multiframeKDenoise = floatPreferencesKey("multiframe_k_denoise")
-        val multiframeDThreshold = floatPreferencesKey("multiframe_d_threshold")
-        val multiframeDTransition = floatPreferencesKey("multiframe_d_transition")
-        val multiframeKStretch = floatPreferencesKey("multiframe_k_stretch")
-        val multiframeKShrink = floatPreferencesKey("multiframe_k_shrink")
-        val multiframeRobustnessT = floatPreferencesKey("multiframe_robustness_t")
-        val multiframeRobustnessS1 = floatPreferencesKey("multiframe_robustness_s1")
-        val multiframeRobustnessS2 = floatPreferencesKey("multiframe_robustness_s2")
-        val multiframeMotionThreshold = floatPreferencesKey("multiframe_motion_threshold")
-        val multiframeFlatSigma = floatPreferencesKey("multiframe_flat_sigma")
-        val multiframeDetailFloor = floatPreferencesKey("multiframe_detail_floor")
-        val multiframeScaleGain = floatPreferencesKey("multiframe_scale_gain")
-        val multiframeCoverageNeffLo = floatPreferencesKey("multiframe_coverage_neff_lo")
-        val multiframeCoverageNeffHi = floatPreferencesKey("multiframe_coverage_neff_hi")
-        val multiframeCoverageMassLo = floatPreferencesKey("multiframe_coverage_mass_lo")
-        val multiframeCoverageMassHi = floatPreferencesKey("multiframe_coverage_mass_hi")
-        val multiframeFallbackChroma = floatPreferencesKey("multiframe_fallback_chroma")
-        val multiframeFallbackLuma = floatPreferencesKey("multiframe_fallback_luma")
         val customGpuDriverEnabled = booleanPreferencesKey("debug_custom_gpu_driver_enabled")
         val customGpuDriverName = stringPreferencesKey("debug_custom_gpu_driver_name")
         val retiredPersistentDiagnosticsEnabled = booleanPreferencesKey("debug_persistent_diagnostics_enabled")

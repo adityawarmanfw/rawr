@@ -84,7 +84,6 @@ class NativePreviewEngine {
     external fun setExperimentalZeroCopy(handle: Long, enabled: Boolean)
 
     external fun setExperimentalMultiframeEnabled(handle: Long, enabled: Boolean)
-    external fun setHdrPlusHeadroomMaxEv(handle: Long, maxEv: Float)
 
     external fun setPersistentEngineEnabled(handle: Long, enabled: Boolean)
 
@@ -134,7 +133,7 @@ class NativePreviewEngine {
 
 
 
-    external fun prepareExperimentalMultiframe(handle: Long, maxFrames: Int, longFrames: Int): Int
+    external fun prepareExperimentalMultiframe(handle: Long, maxFrames: Int): Int
 
     external fun startPreparedMultiframeCapture(
         handle: Long,

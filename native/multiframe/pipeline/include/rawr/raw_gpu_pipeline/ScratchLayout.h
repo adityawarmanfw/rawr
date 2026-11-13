@@ -47,7 +47,5 @@ struct ScratchLayout {
 };
 
 std::uint32_t bytesPerPixel(PixelStorage) noexcept;
-ScratchLayout makeMultiframeScratchLayout(const MultiframeGeometry&);
-ScratchLayout makeMultiframeScratchLayout(const MultiframeGeometry&, std::uint32_t reconstructionStripeHeight);
 
 }  // namespace rawr::raw_gpu_pipeline

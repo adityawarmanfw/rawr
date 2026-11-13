@@ -198,8 +198,8 @@ int main(int argc, char** argv) {
         vktest::delBuf(ctx.dev, staging);
         if (ref >= burst.size()) ref = std::uint32_t(burst.size() / 2);
 
-        rawr::raw_merge_wronski_gpu::Config cfg{};
-        cfg.cfa = static_cast<rawr::raw_merge_wronski_gpu::CfaPattern>(cfa);
+        rawr::raw_merge_common::Config cfg{};
+        cfg.cfa = static_cast<rawr::raw_merge_common::CfaPattern>(cfa);
         if (!noiseAb.empty()) {
             const auto comma = noiseAb.find(',');
             cfg.noiseAlpha = std::stof(noiseAb.substr(0, comma));
@@ -216,7 +216,7 @@ int main(int argc, char** argv) {
         }
         coordinator.initialize(ctx.pd, ctx.dev, ctx.qf,
                                [&](const VkSubmitInfo& si, VkFence f) { vktest::ck(vkQueueSubmit(ctx.q, 1, &si, f), "burst submit"); },
-                               width, height, 1.0f, {}, {}, cfg, algorithm, {});
+                               width, height, {}, cfg, algorithm, {});
         if (scores) {
             RextureFrameScorer scorer;
             scorer.initialize(ctx.pd, ctx.dev, ctx.qf, [&](const VkSubmitInfo& si, VkFence f) { vktest::ck(vkQueueSubmit(ctx.q, 1, &si, f), "score submit"); });

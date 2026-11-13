@@ -465,24 +465,10 @@ enum class CaptureSharpeningLevel(val label: String, val iterations: Int) {
     Sharpest("Sharpest", 6)
 }
 
-enum class MultiframeOutputResolution(val label: String, val outputScale: Float) {
-    Native("12.5 MP", 1f),
-    Mp15("≈15 MP", 1.1f),
-    Mp20("≈20 MP", 1.264911f),
-    Mp24("≈24 MP", 1.385641f)
-}
-
 enum class MultiframeMergeAlgorithm(val nativeId: Int, val label: String) {
-    Wronski(0, "Super-resolution"),
-    HdrPlus(1, "HDR+"),
     HdrPlusQuality(2, "HDR+ Quality"),
-    HdrPlusBracketed(3, "HDR+ Bracketed"),
     /** Kernel-regression Bayer merge for equal-exposure bursts, native resolution only (native/multiframe/merge_rexture). */
-    Rexture(4, "Rexture");
-
-    /** False when this build hides the algorithm (see [FeatureFlags]). */
-    val available: Boolean
-        get() = this != HdrPlusBracketed || FeatureFlags.hdrPlusBracketed
+    Rexture(4, "Rexture")
 }
 
 enum class MultiframeBaseFrameMode(val nativeId: Int, val label: String) {
@@ -492,32 +478,8 @@ enum class MultiframeBaseFrameMode(val nativeId: Int, val label: String) {
 
 enum class MultiframeNumericParameter {
     MaxFrames,
-    LkIterations,
-    HessianEpsilonExponent,
-    KDetail,
-    KDenoise,
-    DThreshold,
-    DTransition,
-    KStretch,
-    KShrink,
-    RobustnessT,
-    RobustnessS1,
-    RobustnessS2,
-    MotionThreshold,
-    FlatSigma,
-    DetailFloorSigma,
-    ScaleBandwidthGain,
-    CoverageNeffLo,
-    CoverageNeffHi,
-    CoverageMassLo,
-    CoverageMassHi,
-    FallbackChroma,
-    FallbackLuma,
     HdrPlusStrength,
-    HdrPlusTileSize,
-    BracketEv,
-    BracketFrames,
-    LongFrameEv
+    HdrPlusTileSize
 }
 
 data class MultiframeNumericSpec(
@@ -549,241 +511,6 @@ object MultiframeSpecs {
             1f,
             0
         )
-    val lkIterations =
-        MultiframeNumericSpec(
-            MultiframeNumericParameter.LkIterations,
-            "LK Iterations",
-            "Lower: faster with less subpixel refinement. Higher: refines alignment further at greater GPU cost.",
-            2f,
-            5f,
-            5f,
-            1f,
-            0
-        )
-    val hessianEpsilonExponent =
-        MultiframeNumericSpec(
-            MultiframeNumericParameter.HessianEpsilonExponent,
-            "Weak-texture Cutoff",
-            "Lower: accepts weaker texture but risks unstable flow. Higher: rejects ambiguous tiles and falls back more often.",
-            -12f,
-            -7f,
-            -10f,
-            1f,
-            0
-        )
-    val kDetail =
-        MultiframeNumericSpec(
-            MultiframeNumericParameter.KDetail,
-            "Detail Kernel",
-            "Lower: sharper, narrower detail with more ringing risk. Higher: safer, broader reconstruction that becomes softer.",
-            .08f,
-            .33f,
-            .15f,
-            .01f,
-            2
-        )
-    val kDenoise =
-        MultiframeNumericSpec(
-            MultiframeNumericParameter.KDenoise,
-            "Denoise Strength",
-            "Lower: noisier flats with more texture. Higher: cleaner flats; strong edges stay sharp. Ignored while Flat Sigma is 0 or above (decoupled mode); set Flat Sigma to -1 to re-couple denoise strength to this knob.",
-            1f,
-            8f,
-            5f,
-            .25f,
-            2
-        )
-    val dThreshold =
-        MultiframeNumericSpec(
-            MultiframeNumericParameter.DThreshold,
-            "Detail Threshold",
-            "Lower: treats more regions as detail. Higher: moves more regions toward denoising.",
-            .2f,
-            1f,
-            .71f,
-            .01f,
-            2
-        )
-    val dTransition =
-        MultiframeNumericSpec(
-            MultiframeNumericParameter.DTransition,
-            "Detail Transition",
-            "Lower: makes a steeper, more sensitive detail/denoise switch. Higher: blends the regimes over a wider range.",
-            .3f,
-            2f,
-            1f,
-            .1f,
-            1
-        )
-    val kStretch =
-        MultiframeNumericSpec(
-            MultiframeNumericParameter.KStretch,
-            "Along-edge Stretch",
-            "Lower: less smoothing along edges. Higher: steadier edge continuity, with more risk of smearing along structure.",
-            1f,
-            6f,
-            2f,
-            .25f,
-            2
-        )
-    val kShrink =
-        MultiframeNumericSpec(
-            MultiframeNumericParameter.KShrink,
-            "Across-edge Shrink",
-            "Lower: wider, smoother sampling across edges. Higher: crisper edges with more shimmer risk on fine structure. With Detail Floor at 0 every step bites; raise the floor to make higher shrink values safe.",
-            1f,
-            10f,
-            8f,
-            .25f,
-            2
-        )
-    val robustnessT =
-        MultiframeNumericSpec(
-            MultiframeNumericParameter.RobustnessT,
-            "Photometric Threshold",
-            "Lower: rejects more differing samples, reducing ghosts but retaining noise. Higher: accepts more, with greater ghost risk.",
-            .05f,
-            .25f,
-            .08f,
-            .01f,
-            2
-        )
-    val robustnessS1 =
-        MultiframeNumericSpec(
-            MultiframeNumericParameter.RobustnessS1,
-            "Robustness Scale S1",
-            "Lower: stricter rejection in moving, low-variance areas. Higher: accepts more variation in those areas.",
-            1f,
-            4f,
-            1.5f,
-            .25f,
-            2
-        )
-    val robustnessS2 =
-        MultiframeNumericSpec(
-            MultiframeNumericParameter.RobustnessS2,
-            "Robustness Scale S2",
-            "Lower: stricter rejection in noisy, high-variance areas. Higher: accepts more variation there.",
-            6f,
-            24f,
-            9f,
-            1f,
-            0
-        )
-    val motionThreshold =
-        MultiframeNumericSpec(
-            MultiframeNumericParameter.MotionThreshold,
-            "Motion Threshold",
-            "Lower: detects and rejects local motion sooner. Higher: tolerates more flow variation, with greater ghost risk.",
-            .5f,
-            1f,
-            .65f,
-            .05f,
-            2
-        )
-    // Bandwidth/coverage knobs. flatSigma -1 = legacy coupled
-    // (kDetail*kDenoise); >= 0 sets the flat-region sigma independently.
-    // The floor never narrows kernels; scale gain grows it above 1x only.
-    val flatSigma =
-        MultiframeNumericSpec(
-            MultiframeNumericParameter.FlatSigma,
-            "Flat Sigma",
-            "Independent flat-region kernel sigma. Lower: more texture and noise in flats. Higher: calmer flats; edges keep their own narrow kernels. -1 keeps the legacy kDetail x kDenoise coupling.",
-            -1f,
-            2f,
-            1f,
-            .05f,
-            2
-        )
-    val detailFloorSigma =
-        MultiframeNumericSpec(
-            MultiframeNumericParameter.DetailFloorSigma,
-            "Detail Floor",
-            "Minimum edge-kernel sigma in input pixels. Lower: narrower kernels with more shimmer risk on fine structure. Higher: safer, broader sampling that becomes softer. Protective at 2x via Scale Gain.",
-            0f,
-            .25f,
-            .15f,
-            .01f,
-            2
-        )
-    val scaleBandwidthGain =
-        MultiframeNumericSpec(
-            MultiframeNumericParameter.ScaleBandwidthGain,
-            "Scale Gain",
-            "Grows the detail floor with output scale: floor x (1 + gain x (scale-1)). Lower: scale-agnostic kernels, sharper 2x with more shimmer risk. Higher: safer 2x upscales while leaving 1x untouched.",
-            0f,
-            2f,
-            1f,
-            .1f,
-            1
-        )
-    val coverageNeffLo =
-        MultiframeNumericSpec(
-            MultiframeNumericParameter.CoverageNeffLo,
-            "Coverage Neff Lo",
-            "Effective-frame-count gate start for the bounded-reference fallback. Lower: trusts the merge sooner, with more smear risk in weak support. Higher: falls back to the stable reconstruction sooner.",
-            0f,
-            6f,
-            1f,
-            .25f,
-            2
-        )
-    val coverageNeffHi =
-        MultiframeNumericSpec(
-            MultiframeNumericParameter.CoverageNeffHi,
-            "Coverage Neff Hi",
-            "Effective-frame-count gate end. Lower: blends toward the merge sooner. Higher: demands stronger frame support before fully trusting the merge.",
-            0f,
-            6f,
-            3f,
-            .25f,
-            2
-        )
-    val coverageMassLo =
-        MultiframeNumericSpec(
-            MultiframeNumericParameter.CoverageMassLo,
-            "Coverage Mass Lo",
-            "Gaussian phase-mass gate start. Lower: trusts weak phase sampling sooner, with more artifact risk. Higher: falls back sooner when sampling is poor.",
-            0f,
-            .1f,
-            .01f,
-            .001f,
-            3
-        )
-    val coverageMassHi =
-        MultiframeNumericSpec(
-            MultiframeNumericParameter.CoverageMassHi,
-            "Coverage Mass Hi",
-            "Gaussian phase-mass gate end. Lower: accepts sparser sampling. Higher: demands adequate sampling before trusting the narrow kernel.",
-            0f,
-            .1f,
-            .04f,
-            .001f,
-            3
-        )
-    val fallbackChroma =
-        MultiframeNumericSpec(
-            MultiframeNumericParameter.FallbackChroma,
-            "Fallback Chroma Cleanup",
-            "Chroma smoothing where the merge fell back to fewer frames (motion, rejection), scaled per pixel by the missing frames. Lower: fallback areas keep more single-frame colour noise (0 = off). Higher: cleaner colour in moving areas; edges stay guarded by the burst noise level.",
-            0f,
-            8f,
-            4f,
-            .25f,
-            2
-        )
-    val fallbackLuma =
-        MultiframeNumericSpec(
-            MultiframeNumericParameter.FallbackLuma,
-            "Fallback Luma Cleanup",
-            "Luma smoothing where motion checks rejected frames. Lower: moving areas keep more single-frame grain (0 = off). Higher: moving areas read as smooth motion blur; static edges are never touched.",
-            0f,
-            8f,
-            2f,
-            .25f,
-            2
-        )
-
     val hdrPlusStrength =
         MultiframeNumericSpec(
             MultiframeNumericParameter.HdrPlusStrength,
@@ -809,177 +536,32 @@ object MultiframeSpecs {
             "px"
         )
 
-    // HDR+ Bracketed, shown in this order: Underexpose, Overexpose, then
-    // Maximum Frames (the total) and After-Shutter Frames (its split).
-    val bracketEv =
-        MultiframeNumericSpec(
-            MultiframeNumericParameter.BracketEv,
-            "ZSL Underexposure (max)",
-            "The furthest below auto exposure the ZSL burst (and the live viewfinder stream, brightened back) may go to keep bright areas (sky, lamps) from clipping. Metered per scene: it goes only as dark as needed, often 0, and at most -1.5 EV in low light. Lower: recovers brighter highlights, noisier shadows. Higher: cleaner shadows. Auto exposure only.",
-            -4f,
-            -1f,
-            -3f,
-            .5f,
-            1,
-            "EV"
-        )
-
-    val longFrameEv =
-        MultiframeNumericSpec(
-            MultiframeNumericParameter.LongFrameEv,
-            "After-Shutter Exposure",
-            "Exposure of the after-shutter frames relative to auto exposure (your exposure in manual), whatever the ZSL burst used. 0: at auto exposure. Always at least 1 EV brighter than the burst. A longer shutter first (up to 1/15 s), then more ISO; limited by both. Lower: less motion blur. Higher: cleaner deep shadows, highlights clip in these frames (the burst keeps them).",
-            0f,
-            3f,
-            0f,
-            .5f,
-            1,
-            "EV"
-        )
-
-    val bracketFrames =
-        MultiframeNumericSpec(
-            MultiframeNumericParameter.BracketFrames,
-            "After-Shutter Frames",
-            "Of Maximum Frames, how many are brighter frames taken right after the shutter press (hold still until the tick); the rest come from just before it. 0: none. Lower: shorter hold. Higher: cleaner shadows, longer hold and more motion risk. When the scene is too dark for them to get brighter, they are taken before the press instead.",
-            0f,
-            16f,
-            2f,
-            1f,
-            0
-        )
-
-    val all =
-        listOf(
-            maxFrames,
-            lkIterations,
-            hessianEpsilonExponent,
-            kDetail,
-            kDenoise,
-            dThreshold,
-            dTransition,
-            kStretch,
-            kShrink,
-            robustnessT,
-            robustnessS1,
-            robustnessS2,
-            motionThreshold,
-            flatSigma,
-            detailFloorSigma,
-            scaleBandwidthGain,
-            coverageNeffLo,
-            coverageNeffHi,
-            coverageMassLo,
-            coverageMassHi,
-            fallbackChroma,
-            fallbackLuma,
-            hdrPlusStrength,
-            hdrPlusTileSize,
-            bracketEv,
-            bracketFrames,
-            longFrameEv
-        )
+    val all = listOf(maxFrames, hdrPlusStrength, hdrPlusTileSize)
 
     fun forParameter(parameter: MultiframeNumericParameter): MultiframeNumericSpec =
         all.first { it.parameter == parameter }
 }
 
 data class MultiframeTuning(
-    val outputResolution: MultiframeOutputResolution = MultiframeOutputResolution.Native,
     val mergeAlgorithm: MultiframeMergeAlgorithm = MultiframeMergeAlgorithm.Rexture,
     val hdrPlusStrength: Float = 13f,
     val hdrPlusTileSize: Int = 32,
-    val bracketEv: Float = -3f,
-    val bracketFrames: Int = 2,
-    val longFrameEv: Float = 0f,
-    val maxFrames: Int = 12,
-    val lkIterations: Int = 5,
-    val hessianEpsilonExponent: Int = -10,
-    val kDetail: Float = .15f,
-    val kDenoise: Float = 5f,
-    val dThreshold: Float = .71f,
-    val dTransition: Float = 1f,
-    val kStretch: Float = 2f,
-    val kShrink: Float = 8f,
-    val robustnessT: Float = .08f,
-    val robustnessS1: Float = 1.5f,
-    val robustnessS2: Float = 9f,
-    val motionThreshold: Float = .65f,
-    val flatSigma: Float = 1f,
-    val detailFloorSigma: Float = .15f,
-    val scaleBandwidthGain: Float = 1f,
-    val coverageNeffLo: Float = 1f,
-    val coverageNeffHi: Float = 3f,
-    val coverageMassLo: Float = .01f,
-    val coverageMassHi: Float = .04f,
-    val fallbackChroma: Float = 4f,
-    val fallbackLuma: Float = 2f
+    val maxFrames: Int = 12
 ) {
     fun value(parameter: MultiframeNumericParameter): Float = when (parameter) {
         MultiframeNumericParameter.MaxFrames -> maxFrames.toFloat()
-        MultiframeNumericParameter.LkIterations -> lkIterations.toFloat()
-        MultiframeNumericParameter.HessianEpsilonExponent -> hessianEpsilonExponent.toFloat()
-        MultiframeNumericParameter.KDetail -> kDetail
-        MultiframeNumericParameter.KDenoise -> kDenoise
-        MultiframeNumericParameter.DThreshold -> dThreshold
-        MultiframeNumericParameter.DTransition -> dTransition
-        MultiframeNumericParameter.KStretch -> kStretch
-        MultiframeNumericParameter.KShrink -> kShrink
-        MultiframeNumericParameter.RobustnessT -> robustnessT
-        MultiframeNumericParameter.RobustnessS1 -> robustnessS1
-        MultiframeNumericParameter.RobustnessS2 -> robustnessS2
-        MultiframeNumericParameter.MotionThreshold -> motionThreshold
-        MultiframeNumericParameter.FlatSigma -> flatSigma
-        MultiframeNumericParameter.DetailFloorSigma -> detailFloorSigma
-        MultiframeNumericParameter.ScaleBandwidthGain -> scaleBandwidthGain
-        MultiframeNumericParameter.CoverageNeffLo -> coverageNeffLo
-        MultiframeNumericParameter.CoverageNeffHi -> coverageNeffHi
-        MultiframeNumericParameter.CoverageMassLo -> coverageMassLo
-        MultiframeNumericParameter.CoverageMassHi -> coverageMassHi
-        MultiframeNumericParameter.FallbackChroma -> fallbackChroma
-        MultiframeNumericParameter.FallbackLuma -> fallbackLuma
         MultiframeNumericParameter.HdrPlusStrength -> hdrPlusStrength
         MultiframeNumericParameter.HdrPlusTileSize -> hdrPlusTileSize.toFloat()
-        MultiframeNumericParameter.BracketEv -> bracketEv
-        MultiframeNumericParameter.BracketFrames -> bracketFrames.toFloat()
-        MultiframeNumericParameter.LongFrameEv -> longFrameEv
     }
 
     fun withValue(parameter: MultiframeNumericParameter, value: Float): MultiframeTuning = when (parameter) {
         MultiframeNumericParameter.MaxFrames -> copy(maxFrames = value.roundToInt())
-        MultiframeNumericParameter.LkIterations -> copy(lkIterations = value.roundToInt())
-        MultiframeNumericParameter.HessianEpsilonExponent -> copy(hessianEpsilonExponent = value.roundToInt())
-        MultiframeNumericParameter.KDetail -> copy(kDetail = value)
-        MultiframeNumericParameter.KDenoise -> copy(kDenoise = value)
-        MultiframeNumericParameter.DThreshold -> copy(dThreshold = value)
-        MultiframeNumericParameter.DTransition -> copy(dTransition = value)
-        MultiframeNumericParameter.KStretch -> copy(kStretch = value)
-        MultiframeNumericParameter.KShrink -> copy(kShrink = value)
-        MultiframeNumericParameter.RobustnessT -> copy(robustnessT = value)
-        MultiframeNumericParameter.RobustnessS1 -> copy(robustnessS1 = value)
-        MultiframeNumericParameter.RobustnessS2 -> copy(robustnessS2 = value)
-        MultiframeNumericParameter.MotionThreshold -> copy(motionThreshold = value)
-        MultiframeNumericParameter.FlatSigma -> copy(flatSigma = value)
-        MultiframeNumericParameter.DetailFloorSigma -> copy(detailFloorSigma = value)
-        MultiframeNumericParameter.ScaleBandwidthGain -> copy(scaleBandwidthGain = value)
-        MultiframeNumericParameter.CoverageNeffLo -> copy(coverageNeffLo = value)
-        MultiframeNumericParameter.CoverageNeffHi -> copy(coverageNeffHi = value)
-        MultiframeNumericParameter.CoverageMassLo -> copy(coverageMassLo = value)
-        MultiframeNumericParameter.CoverageMassHi -> copy(coverageMassHi = value)
-        MultiframeNumericParameter.FallbackChroma -> copy(fallbackChroma = value)
-        MultiframeNumericParameter.FallbackLuma -> copy(fallbackLuma = value)
         MultiframeNumericParameter.HdrPlusStrength -> copy(hdrPlusStrength = value.roundToInt().toFloat())
         MultiframeNumericParameter.HdrPlusTileSize -> copy(hdrPlusTileSize = if (value < 24f) 16 else 32)
-        MultiframeNumericParameter.BracketEv -> copy(bracketEv = (value * 2f).roundToInt() / 2f)
-        MultiframeNumericParameter.BracketFrames -> copy(bracketFrames = value.roundToInt())
-        MultiframeNumericParameter.LongFrameEv -> copy(longFrameEv = (value * 2f).roundToInt() / 2f)
     }
 
     fun sanitized(defaults: MultiframeTuning = MultiframeTuning()): MultiframeTuning {
-        var clean =
-            copy(
-                outputResolution = outputResolution
-            )
+        var clean = this
         for (spec in MultiframeSpecs.all) {
             val candidate = clean.value(spec.parameter)
             clean =
@@ -991,54 +573,17 @@ data class MultiframeTuning(
         return clean
     }
 
+    /**
+     * Native tuning wire format (native indices 0-21). The native side still reads every slot, but no merge uses them any
+     * more: they are sent as the former defaults until the capture journal format is reworked.
+     */
     fun nativeValues(): FloatArray = floatArrayOf(
-        outputResolution.outputScale,
-        lkIterations.toFloat(),
-        Math.pow(10.0, hessianEpsilonExponent.toDouble()).toFloat(),
-        kDetail,
-        kDenoise,
-        dThreshold,
-        dTransition,
-        kStretch,
-        kShrink,
-        flatSigma,
-        detailFloorSigma,
-        scaleBandwidthGain,
-        coverageNeffLo,
-        coverageNeffHi,
-        coverageMassLo,
-        coverageMassHi,
-        robustnessT,
-        robustnessS1,
-        robustnessS2,
-        motionThreshold,
-        fallbackChroma,
-        fallbackLuma
+        1f, 5f, 1e-10f, .15f, 5f, .71f, 1f, 2f, 8f, 1f, .15f, 1f, 1f, 3f, .01f, .04f, .08f, 1.5f, 9f, .65f, 4f, 2f
     )
 
-    /** Most after-shutter frames HDR+ Bracketed can take: the total minus a 2-frame burst, at most 16. */
-    fun maxPostShutterFrames(): Int = (maxFrames - 2).coerceIn(0, 16)
-
-    /** ZSL frames to freeze at the shutter; HDR+ Bracketed leaves the rest of Maximum Frames to its after-shutter frames. */
-    fun zslFrames(): Int =
-        if (mergeAlgorithm == MultiframeMergeAlgorithm.HdrPlusBracketed) (maxFrames - postShutterFrames()).coerceAtLeast(2)
-        else maxFrames
-
-    /** Long frames HDR+ Bracketed requests after the shutter (0 for other merges). */
-    fun postShutterFrames(): Int =
-        if (mergeAlgorithm == MultiframeMergeAlgorithm.HdrPlusBracketed) bracketFrames.coerceIn(0, maxPostShutterFrames())
-        else 0
-
-    // Appended after the multiframe chroma-denoise flag (native indices 23-28).
+    // Appended after the multiframe chroma-denoise flag (native indices 23-28); the bracket slots are unused.
     fun nativeMergeValues(): FloatArray =
-        floatArrayOf(
-            mergeAlgorithm.nativeId.toFloat(),
-            hdrPlusStrength,
-            hdrPlusTileSize.toFloat(),
-            bracketEv,
-            bracketFrames.toFloat(),
-            longFrameEv
-        )
+        floatArrayOf(mergeAlgorithm.nativeId.toFloat(), hdrPlusStrength, hdrPlusTileSize.toFloat(), -3f, 0f, 0f)
 }
 
 data class SettingsValues(

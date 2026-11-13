@@ -231,46 +231,6 @@ internal fun SelfTimerCountdownOverlay(
     }
 }
 
-/**
- * Brief notice at the top of the viewfinder when HDR+ Bracketed becomes
- * active (and on entering the camera with it on): the burst is exposed darker
- * and lifted back, and frames follow the shutter. Fades out on its own.
- */
-@Composable
-internal fun HdrBracketedNotice(active: Boolean, orientation: Orientation, modifier: Modifier = Modifier) {
-    var visible by remember { mutableStateOf(false) }
-    LaunchedEffect(active) {
-        visible = active
-        if (active) {
-            kotlinx.coroutines.delay(HDR_BRACKETED_NOTICE_MS)
-            visible = false
-        }
-    }
-    AnimatedVisibility(
-        visible = visible,
-        enter = fadeIn(tween(250)),
-        exit = fadeOut(tween(600)),
-        modifier = modifier
-    ) {
-        Text(
-            "HDR+ Bracketed is active. The app will keep highlights from clipping and take a few " +
-                "extra frames after the shutter, so hold still a moment.",
-            color = Color.White,
-            fontSize = 13.sp,
-            textAlign = TextAlign.Center,
-            style = ViewfinderTextStyle,
-            modifier = Modifier
-                .uprightInLandscape(orientation)
-                .widthIn(max = 320.dp)
-                .background(Color.Black.copy(alpha = .45f), RoundedCornerShape(12.dp))
-                .padding(horizontal = 14.dp, vertical = 8.dp)
-                .testTag(CaptureTestTags.HDR_BRACKETED_NOTICE)
-        )
-    }
-}
-
-private const val HDR_BRACKETED_NOTICE_MS = 4_000L
-
 /** Shown while the lens's camera never produced a frame and recovery gave up. */
 @Composable
 internal fun LensUnavailableNotice(orientation: Orientation, modifier: Modifier = Modifier) {

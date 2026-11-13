@@ -1,5 +1,5 @@
 // Rexture shared helpers. Reference: tmp-free summary of the algorithm lives in merge_rexture/README.md.
-// CFA codes: 0 RGGB, 1 GRBG, 2 GBRG, 3 BGGR (same as RawMergeWronskiGpu CfaPattern).
+// CFA codes: 0 RGGB, 1 GRBG, 2 GBRG, 3 BGGR (same as RawMergeCommon CfaPattern).
 
 // Offsets (x, y) of the red site inside a 2x2 quad.
 ivec2 rxRedOffset(int cfa) { return ivec2((cfa == 1 || cfa == 3) ? 1 : 0, (cfa == 2 || cfa == 3) ? 1 : 0); }

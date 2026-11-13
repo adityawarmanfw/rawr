@@ -43,7 +43,7 @@ void setPreferredColorMode(EngineHandle handle, const std::string& mode) noexcep
 void setPipelineDiagnostic(EngineHandle handle, uint32_t mode) noexcept;
 void setPersistentDiagnosticsEnabled(EngineHandle handle, bool enabled) noexcept;
 void setPersistZslRingEnabled(EngineHandle handle, bool enabled) noexcept;
-uint32_t prepareExperimentalMultiframe(EngineHandle handle, uint32_t maxFrames, uint32_t longFrames) noexcept;
+uint32_t prepareExperimentalMultiframe(EngineHandle handle, uint32_t maxFrames) noexcept;
 uint64_t startPreparedMultiframeCapture(EngineHandle handle, rawrcam::encoding::dng::DngCaptureContext baseDng,
                                         rawrcam::encoding::dng::DngCaptureContext mergedDng,
                                         rawrcam::capture::JpegCaptureRequest mergedJpeg, bool dumpRzslRequested,
@@ -53,8 +53,6 @@ void cancelPreparedMultiframeCapture(EngineHandle handle) noexcept;
 void setInternalTraceCaptureEnabled(EngineHandle handle, bool enabled) noexcept;
 void setExperimentalZeroCopy(EngineHandle handle, bool enabled) noexcept;
 void setExperimentalMultiframeEnabled(EngineHandle handle, bool enabled) noexcept;
-// HDR+ Bracketed: most ZSL highlight headroom in EV (< 0), or 0 when off.
-void setHdrPlusHeadroomMaxEv(EngineHandle handle, float maxEv) noexcept;
 void setPersistentEngineEnabled(EngineHandle handle, bool enabled) noexcept;
 void setLensShadingCorrectionEnabled(EngineHandle handle, bool enabled) noexcept;
 void setHighlightReconstructionEnabled(EngineHandle handle, bool enabled) noexcept;

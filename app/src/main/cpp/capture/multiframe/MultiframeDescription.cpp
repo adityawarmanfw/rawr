@@ -21,12 +21,6 @@ std::string f3(float value) {
     return out.str();
 }
 
-std::string sci0(float value) {
-    std::ostringstream out;
-    out << std::scientific << std::setprecision(0) << value;
-    return out.str();
-}
-
 }  // namespace
 
 std::string buildExifHeader() { return std::string(rawrcam::encoding::kCapturedWith) + "\nMultiframe GPU merge\n"; }
@@ -47,46 +41,10 @@ std::string buildParametersBlock(const MultiframeTuningView& tuning, const Multi
     }
     if (tuning.mergeAlgorithm == 4u) {
         out << "- Merge: Rexture (kernel-regression merge of the whole burst; base = best of the last 0.25 s)\n";
-    } else if (tuning.mergeAlgorithm != 0u) {
-        out << (tuning.mergeAlgorithm == 3u   ? "- Merge: HDR+ bracketed (frequency merge, darkest-frame reference)\n"
-                : tuning.mergeAlgorithm == 2u ? "- Merge: HDR+ frequency (tile alignment + per-frequency Wiener merge)\n"
-                                              : "- Merge: HDR+ spatial (tile alignment + robust average)\n")
+    } else {
+        out << "- Merge: HDR+ frequency (tile alignment + per-frequency Wiener merge)\n"
             << "- HDR+ strength: " << f3(tuning.hdrplusStrength) << '\n'
             << "- HDR+ tile size: " << tuning.hdrplusTileSize << '\n';
-        if (tuning.mergeAlgorithm == 3u && tuning.bracketCapture == 1u) {
-            out << "- Highlight headroom: up to " << f3(tuning.bracketEv) << " EV, lifted "
-                << (tuning.bracketLiftEv > 0.0f ? f3(tuning.bracketLiftEv) + " EV" : std::string("none")) << '\n'
-                << "- Long frames: " << tuning.bracketFrames << " x "
-                << (tuning.longFrameEv > 0.0f ? "AE +" + f3(tuning.longFrameEv) + " EV" : std::string("AE"))
-                << '\n';
-        } else if (tuning.mergeAlgorithm == 3u) {
-            out << "- Bracket: " << tuning.bracketFrames << " x " << f3(tuning.bracketEv) << " EV\n"
-                << "- Bracket lift: "
-                << (tuning.bracketLiftEv > 0.0f ? f3(tuning.bracketLiftEv) + " EV" : std::string("none (no dark frames)"))
-                << '\n';
-        }
-    } else {
-        out << "- Merge: Wronski kernel regression\n"
-            << "- LK iterations: " << tuning.lkIterations << '\n'
-            << "- Hessian epsilon: " << sci0(tuning.hessianEpsilon) << '\n'
-            << "- kDetail: " << f3(tuning.kDetail) << '\n'
-            << "- kDenoise: " << f3(tuning.kDenoise) << '\n'
-            << "- dThreshold: " << f3(tuning.dThreshold) << '\n'
-            << "- dTransition: " << f3(tuning.dTransition) << '\n'
-            << "- kStretch: " << f3(tuning.kStretch) << '\n'
-            << "- kShrink: " << f3(tuning.kShrink) << '\n'
-            << "- Flat sigma: " << f3(tuning.flatSigma) << (tuning.flatSigma < 0.0f ? " (coupled)" : " (decoupled)") << '\n'
-            << "- Detail floor sigma: " << f3(tuning.detailFloorSigma) << (tuning.detailFloorSigma <= 0.0f ? " (off)" : "")
-            << '\n'
-            << "- Scale bandwidth gain: " << f3(tuning.scaleBandwidthGain)
-            << (tuning.scaleBandwidthGain <= 0.0f ? " (off)" : "") << '\n'
-            << "- Coverage Neff: " << f3(tuning.coverageNeffLo) << " .. " << f3(tuning.coverageNeffHi) << '\n'
-            << "- Coverage mass: " << f3(tuning.coverageMassLo) << " .. " << f3(tuning.coverageMassHi) << '\n';
-        out << "- Robustness T/S1/S2: " << f3(tuning.robustnessT) << " / " << f3(tuning.robustnessS1) << " / "
-            << f3(tuning.robustnessS2) << '\n'
-            << "- Motion threshold: " << f3(tuning.motionThreshold) << '\n'
-            << "- Fallback cleanup chroma/luma: " << f3(tuning.fallbackChromaGain) << " / " << f3(tuning.fallbackLumaGain)
-            << '\n';
     }
     out << "\nMultiframe Reconstruction inputs:\n"
         << "- Noise profile: " << output.noiseProfile << '\n'

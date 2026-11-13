@@ -32,13 +32,6 @@ internal fun reduceMultiframeSettings(
         }
     }
 
-    is SetMultiframeOutputResolution -> {
-        val values = state.values
-        state.withValues(
-            values.copy(multiframeTuning = values.multiframeTuning.copy(outputResolution = action.value))
-        )
-    }
-
     is SetMultiframeMergeAlgorithm -> {
         val values = state.values
         state.withValues(values.copy(multiframeTuning = values.multiframeTuning.copy(mergeAlgorithm = action.value)))

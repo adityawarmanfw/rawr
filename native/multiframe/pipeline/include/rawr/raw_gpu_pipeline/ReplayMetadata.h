@@ -1,5 +1,5 @@
 #pragma once
-#include <rawr/raw_merge_wronski_gpu/RawMergeWronskiGpu.h>
+#include <rawr/raw_merge_common/RawMergeCommon.h>
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
@@ -8,7 +8,7 @@
 namespace rawr::raw_gpu_pipeline {
 // Resolved numerical noise model, not a setting name: replay remains exact
 // even after a device calibration is updated. Appends to opaque RZSL TSV.
-inline std::string serializeReplayNoise(const rawr::raw_merge_wronski_gpu::Config& c) {
+inline std::string serializeReplayNoise(const rawr::raw_merge_common::Config& c) {
     std::ostringstream out;
     out << std::setprecision(9) << "rawrReplayNoiseV1\t" << (c.sensorNoiseProfile ? 1 : 0)
         << ' ' << c.noiseAlpha << ' ' << c.noiseBeta;
@@ -20,7 +20,7 @@ inline std::string serializeReplayNoise(const rawr::raw_merge_wronski_gpu::Confi
     }
     return out.str() + '\n';
 }
-inline bool applyReplayNoise(const std::string& metadata, rawr::raw_merge_wronski_gpu::Config& c) {
+inline bool applyReplayNoise(const std::string& metadata, rawr::raw_merge_common::Config& c) {
     std::istringstream lines(metadata);
     std::string line;
     while (std::getline(lines, line)) {
@@ -35,12 +35,12 @@ inline bool applyReplayNoise(const std::string& metadata, rawr::raw_merge_wronsk
             throw std::invalid_argument("RZSL: invalid resolved noise header");
         auto read = [&](auto& values) { for (float& v : values) if (!(in >> v)) throw std::invalid_argument("RZSL: truncated resolved noise"); };
         if (hasProfile) {
-            rawr::raw_merge_wronski_gpu::CfaNoiseProfile low{}, high{};
+            rawr::raw_merge_common::CfaNoiseProfile low{}, high{};
             read(low.slopeBySite); read(low.offsetBySite); read(high.slopeBySite); read(high.offsetBySite);
             read(candidate.noiseKneeBySite);
             candidate.sensorNoiseProfile = low; candidate.highSignalNoiseProfile = high;
         }
-        if (!rawr::raw_merge_wronski_gpu::valid(candidate)) throw std::invalid_argument("RZSL: invalid resolved noise");
+        if (!rawr::raw_merge_common::valid(candidate)) throw std::invalid_argument("RZSL: invalid resolved noise");
         c = candidate;
         return true;
     }

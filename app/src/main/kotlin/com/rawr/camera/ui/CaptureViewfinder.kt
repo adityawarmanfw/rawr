@@ -196,11 +196,6 @@ internal fun CaptureViewfinder(
             } else if (state.capabilities.profileError.isNotEmpty()) {
                 ProfileErrorNotice(state.capabilities.profileError, state.orientation, Modifier.align(Alignment.Center))
             }
-            HdrBracketedNotice(
-                active = state.hdrPlusBracketedActive,
-                orientation = state.orientation,
-                modifier = Modifier.align(Alignment.TopCenter).padding(top = 16.dp)
-            )
             // One status pill for every capture wait, in one place: moving it
             // while it fades out left an empty pill behind.
             CaptureStatusNotice(

@@ -2,7 +2,7 @@
 
 #include <stdexcept>
 
-#include "capture/multiframe/BracketExposure.h"
+#include "capture/multiframe/MergeExposure.h"
 #include "capture/multiframe/MultiframeQueueHelpers.h"
 #include "diagnostics/logging/NativeLog.h"
 namespace rawrcam::capture::multiframe {
@@ -12,64 +12,33 @@ rawr::raw_gpu_pipeline::BurstRunResult MergeProcessor::run(
     const rawr::raw_gpu_pipeline::AndroidBurstCoordinator::Submit& queueSubmit,
     const rawr::raw_gpu_pipeline::AndroidBurstCoordinator::Submit& mergeSubmit) {
     const bool useMfQueue = context.hasMultiframeQueue();
-    rawr::raw_alignment_gpu::Config alignmentConfig{};
-    alignmentConfig.lkIterations = tuning.lkIterations;
-    alignmentConfig.hessianEpsilon = tuning.hessianEpsilon;
-    rawr::raw_merge_wronski_gpu::Config mergeConfig{};
-    mergeConfig.cfa = static_cast<rawr::raw_merge_wronski_gpu::CfaPattern>(cfa);
-    mergeConfig.kDetail = tuning.kDetail;
-    mergeConfig.kDenoise = tuning.kDenoise;
-    mergeConfig.dThreshold = tuning.dThreshold;
-    mergeConfig.dTransition = tuning.dTransition;
-    mergeConfig.kStretch = tuning.kStretch;
-    mergeConfig.kShrink = tuning.kShrink;
-    mergeConfig.flatSigma = tuning.flatSigma;
-    mergeConfig.detailFloorSigma = tuning.detailFloorSigma;
-    mergeConfig.scaleBandwidthGain = tuning.scaleBandwidthGain;
-    mergeConfig.coverageNeffLo = tuning.coverageNeffLo;
-    mergeConfig.coverageNeffHi = tuning.coverageNeffHi;
-    mergeConfig.coverageMassLo = tuning.coverageMassLo;
-    mergeConfig.coverageMassHi = tuning.coverageMassHi;
-    mergeConfig.robustnessT = tuning.robustnessT;
-    mergeConfig.robustnessS1 = tuning.robustnessS1;
-    mergeConfig.robustnessS2 = tuning.robustnessS2;
-    mergeConfig.motionThreshold = tuning.motionThreshold;
+    // The noise model is fitted from the burst; the merges read only the CFA, the burst fit switch and the hot pixels.
+    rawr::raw_merge_common::Config mergeConfig{};
+    mergeConfig.cfa = static_cast<rawr::raw_merge_common::CfaPattern>(cfa);
     mergeConfig.estimateNoiseFromBurst = true;
     mergeConfig.hotPixels = burst.referenceMetadata.hotPixelMap;
-    mergeConfig.fallbackChromaGain = tuning.fallbackChromaGain;
-    mergeConfig.fallbackLumaGain = tuning.fallbackLumaGain;
-    mergeConfig.fallbackChromaMaxSigma = 16.0f;
     auto stageSink = rawrcam::capture::multiframe::makeTraceStageSink();
     // One Rexture window holds ~72 bytes of arena per pixel. The job splits larger frames into strips of at most
     // kRextureMaxPixels; a window above it is refused, which takes the existing failure path (base frame out, capture kept).
     if (tuning.mergeAlgorithm == kMergeAlgorithmRexture && std::uint64_t(width) * height > kRextureMaxPixels)
         throw std::runtime_error("Rexture: merge window above kRextureMaxPixels");
+    // Captures journaled by older builds with a removed merge algorithm (super-resolution, HDR+, HDR+ Bracketed) are not
+    // merged: the failure path outputs the base frame and keeps the capture.
+    if (tuning.mergeAlgorithm != kMergeAlgorithmRexture && tuning.mergeAlgorithm != kMergeAlgorithmHdrPlusQuality)
+        throw std::runtime_error("unsupported merge algorithm " + std::to_string(tuning.mergeAlgorithm));
     const auto algorithm = tuning.mergeAlgorithm == kMergeAlgorithmRexture
                                ? rawr::raw_gpu_pipeline::MergeAlgorithm::Rexture
-                           : tuning.mergeAlgorithm == kMergeAlgorithmHdrPlusBracketed
-                               ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusBracketed
-                           : tuning.mergeAlgorithm == 2u ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusFrequency
-                           : tuning.mergeAlgorithm == 1u ? rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusSpatial
-                                                         : rawr::raw_gpu_pipeline::MergeAlgorithm::Wronski;
-    // Per-frame exposure from the (journaled) metadata. HDR+ merges scale
-    // every companion to the reference exposure (AE may still be settling
-    // across the ring); a bracketed burst whose dark frames never arrived
-    // merges like HDR+ Quality.
-    if (algorithm != rawr::raw_gpu_pipeline::MergeAlgorithm::Wronski && burst.metadata.size() == burst.frames.size())
+                               : rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusFrequency;
+    // Per-frame exposure from the (journaled) metadata: both merges scale every companion to the reference exposure
+    // (AE may still be settling across the ring).
+    if (burst.metadata.size() == burst.frames.size())
         for (std::size_t i = 0; i < burst.frames.size(); ++i)
             burst.frames[i].exposure = float(linearExposure(burst.metadata[i]) * 1.0e-6);
-    if (algorithm == rawr::raw_gpu_pipeline::MergeAlgorithm::HdrPlusBracketed &&
-        burst.metadata.size() == burst.frames.size()) {
-        LOGI("MULTIFRAME_BRACKET merge frames=%zu reference=%u bracketed=%d lift=%.2fEV", burst.frames.size(),
-             burst.referenceIndex, isExposureBracketed(burst.metadata) ? 1 : 0,
-             bracketLiftEv(burst.metadata, burst.referenceIndex));
-    }
     rawr::raw_merge_hdrplus_gpu::Config hdrplusConfig{};
     hdrplusConfig.strength = tuning.hdrplusStrength;
     hdrplusConfig.tileSize = tuning.hdrplusTileSize;
     coordinator.initialize(context.physicalDevice(), context.device(), context.queueFamily(), mergeSubmit, width,
-                           height, tuning.outputScale, stageSink, alignmentConfig, mergeConfig, algorithm,
-                           hdrplusConfig);
+                           height, stageSink, mergeConfig, algorithm, hdrplusConfig);
     ScopedSemaphore mfStartSem(context.device(), useMfQueue);
     if (useMfQueue) {
         // Empty signal ordered after all prior queue-0 work (decodes, base

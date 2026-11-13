@@ -1,5 +1,5 @@
 #pragma once
-#include <rawr/raw_gpu_pipeline/MultiframeRecorder.h>
+#include <rawr/raw_gpu_pipeline/FrameParameters.h>
 #include <rawr/raw_gpu_pipeline/ResourceArena.h>
 #include <rawr/raw_gpu_pipeline/ScratchLayout.h>
 #include <rawr/raw_gpu_pipeline/VulkanExecutor.h>

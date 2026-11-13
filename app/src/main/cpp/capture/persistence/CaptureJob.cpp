@@ -254,7 +254,7 @@ struct Reader {
     }
     // Merge algorithm, HDR+ strength, tile size, the bracket fields and the
     // long-frame/headroom fields were appended to MultiframeTuning without a
-    // journal bump; older jobs carry a shorter prefix (88 bytes: Wronski only,
+    // journal bump; older jobs carry a shorter prefix (88 bytes: before the merge algorithm,
     // 96: before the tile size, 100: before the bracket fields, 108: before
     // the long-frame fields, read as legacy dark-frame captures).
     void one(multiframe::MultiframeTuning& v) {

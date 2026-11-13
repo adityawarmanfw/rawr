@@ -113,27 +113,6 @@ inline FrequencyNorms frequencyNorms(float strength) {
     return n;
 }
 
-// Bracketed exposure. exposureFactor = frame exposure / reference exposure
-// (>= 1 when the darkest frame is the reference).
-inline bool uniformExposure(const std::vector<float>& exposureFactors) {
-    for (const float f : exposureFactors)
-        if (std::abs(f - 1.f) > 1e-3f) return false;
-    return true;
-}
-// Per-frame norms for a bracketed burst (Rawr; replaces upstream's
-// burst-averaged exposure_corr1/2, 28.5 constant and min(4, ef) motion
-// boost). The Wiener noise term is the expected variance of the
-// reference-companion difference: rms measures the reference, a companion
-// scaled down by ef adds 1/ef of it (shot noise), so the uniform term is
-// scaled by (1 + 1/ef) / 2. Equal-exposure frames (the dark frames among
-// themselves) merge exactly like the uniform path; brighter frames' larger
-// share comes from the exposure-weighted mean (hdrq_merge), not from norms.
-inline FrequencyNorms bracketedFrequencyNorms(float strength, float exposureFactor) {
-    FrequencyNorms n = frequencyNorms(strength);
-    n.robustnessNorm *= 0.5f + 0.5f / std::max(1.f, exposureFactor);
-    return n;
-}
-
 // The frequency merge runs four passes over 8x8 RGBA tiles (16x16 raw
 // pixels). Upstream (1-based pass i) shifts the padding by tile_size_merge
 // raw pixels: left for even i, top for i < 3; raised-cosine windows make the

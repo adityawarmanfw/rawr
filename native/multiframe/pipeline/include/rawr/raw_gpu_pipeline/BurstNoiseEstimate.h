@@ -1,5 +1,5 @@
 #pragma once
-#include <rawr/raw_merge_wronski_gpu/RawMergeWronskiGpu.h>
+#include <rawr/raw_merge_common/RawMergeCommon.h>
 
 #include <cstdint>
 #include <optional>
@@ -12,7 +12,7 @@ inline constexpr std::uint32_t kNoiseBlockSize = 32u;
 inline constexpr std::uint32_t kNoiseBlockFloats = 16u;
 
 struct BurstNoiseFit {
-    rawr::raw_merge_wronski_gpu::CfaNoiseProfile profile{};
+    rawr::raw_merge_common::CfaNoiseProfile profile{};
     std::uint32_t usableBlocks = 0;
     std::uint32_t bins = 0;
 };

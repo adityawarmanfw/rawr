@@ -12,7 +12,6 @@ layout(set = 0, binding = 3, r32f) writeonly uniform image2D mismatch;
 layout(push_constant) uniform P {
     ivec2 tiles;
     ivec2 rgbaSize;
-    float exposureFactor;  // companion exposure / reference exposure (1 = uniform)
 } p;
 
 const float PI = 3.14159265358979323846;
@@ -50,6 +49,6 @@ void main() {
     if (lane != 0u) return;
     vec4 noise = imageLoad(rms, g);
     vec4 diff = sDiff[0] / sWeight[0];
-    vec4 m4 = diff / sqrt(0.5 * noise + 0.5 * noise / p.exposureFactor + 1.0);
+    vec4 m4 = diff / sqrt(noise + 1.0);
     imageStore(mismatch, g, vec4(0.25 * (m4.x + m4.y + m4.z + m4.w)));
 }
