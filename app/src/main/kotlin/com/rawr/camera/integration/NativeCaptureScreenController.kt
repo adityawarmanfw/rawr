@@ -86,7 +86,9 @@ class NativeCaptureScreenController(
         scope.launch {
             while (isActive) {
                 captureQueue.poll { capturePresentation.completed(pollStillCompletion()) }
-                delay(100)
+                // A finished capture is only published when this loop sees it: poll fast while one is in flight
+                // (the 100 ms idle period added 50 ms on average to every capture), slowly otherwise.
+                delay(if (state.value.pendingCaptures.any { !it.terminal }) 15 else 100)
             }
         }
     }
