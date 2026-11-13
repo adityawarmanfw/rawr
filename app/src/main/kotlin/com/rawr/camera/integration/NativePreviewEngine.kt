@@ -67,6 +67,7 @@ class NativePreviewEngine {
 
     /** This device's built-in lens profile JSON (matched natively from system properties). */
     external fun builtInCameraProfile(): String
+    external fun deviceCameraProfiles(): Array<String>
 
     /** A lens camera profile (.dcp) file: [error, name, summary]; error is empty when the app can use it. */
     external fun inspectCameraProfile(path: String): Array<String>

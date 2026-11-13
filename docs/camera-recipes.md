@@ -76,6 +76,8 @@ photos" in the editor); the RAW stream is then the binned viewfinder.
 | `format`, `width`, `height` | required | The full-size readout. |
 | `useCase` | 0 | Stream use case (Java Camera2 only). |
 | `buffers.usage` | GPU data buffer | Its reader's usage. |
+| `buffers.count` | 6 | Photo reader maxImages, 2–16. |
+| `includePreview` | true | Target the viewfinder RAW in photo requests too. OPPO uses false: photo RAW only. |
 | `mergeFrameLimit` | 0 (the app's cap) | Most full-size frames one merged photo may request (1 = single photos only). |
 | `mergeFramesOneByOne` | false | Request the frames one by one, each after the previous arrived. |
 | `levels` | the lens's | Black/white levels for full-size photos. |
@@ -132,9 +134,14 @@ HAL switch to full size, then the viewfinder stream stops for the photos); other
 ## Image (`image`)
 
 `levels` (static or dynamic black/white), `sensorLayout` (`block`, `colourOrder`, `liveRemosaic`,
-`photoRemosaic`), `distortion`
+`photoRemosaic`, `photoBlock`), `distortion`
 (rational model on its own frame size), `mirror`, `dcp` (camera profile file) and `exposure` (requests
 beyond the advertised ISO and shutter ranges).
+
+`sensorLayout.block` describes the viewfinder RAW (1 = Bayer, 2 = quad, 4 = 4x4).
+`photoBlock` independently describes the separate `streams.photo` output and defaults to 1.
+Both are remosaiced at full resolution. Photo-stream burst frames are remosaiced before
+merge; binned preview can remain Bayer while full-size photos use quad CFA.
 
 ## Camera workarounds
 

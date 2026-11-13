@@ -7,6 +7,7 @@
 #include <cmath>
 #include <sstream>
 #include <stdexcept>
+#include <thread>
 #include <utility>
 
 #include "camera/NativeCameraController.h"
@@ -15,11 +16,13 @@
 #include "color/WhiteBalance.h"
 #include "diagnostics/logging/NativeLog.h"
 #include "diagnostics/logging/RuntimeTraceRecorder.h"
+#include "diagnostics/timing/CaptureStageTimer.h"
 #include "geometry/CfaPattern.h"
 #include "capture/FullSizeFallbacks.h"
 #include "capture/BurstLimits.h"
-#include "imaging/FrameLimits.h"
 #include "imaging/BinnedCorner.h"
+#include "imaging/CfaRemosaic.h"
+#include "imaging/FrameLimits.h"
 #include "imaging/Raw16CpuSnapshot.h"
 #include "imaging/RawFrameLease.h"
 #include "metadata/MetadataDiagnostics.h"
@@ -111,15 +114,19 @@ SessionEngine::SessionEngine(std::string filesDir) : filesDir_(std::move(filesDi
             const uint64_t usage = lastCameraContext_ && lastCameraContext_->photoBufferUsage
                                        ? *lastCameraContext_->photoBufferUsage
                                        : uint64_t(AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER);
-            auto* window = captureFrameIngress_.create(generation, width, height, format, usage);
+            const uint32_t count = lastCameraContext_ ? lastCameraContext_->photoBufferCount : 0;
+            auto* window = captureFrameIngress_.create(generation, width, height, format, usage, count);
             captureReaderGeneration_ = generation;
             fullSizeFrames_.store(0, std::memory_order_relaxed);
+            fullSizeArrivalNs_.store(0, std::memory_order_relaxed);
+            fullSizeSensorNs_.store(0, std::memory_order_relaxed);
             // Full size is 2x (50 MP) or 4x (200 MP) the binned pixel array; the buffer may be wider
             // (8192 vs 8160 on vivo).
             if (lastCameraContext_) {
                 auto context = std::make_shared<rawrcam::metadata::CameraContextMetadata>(*lastCameraContext_);
-                // The HAL hands full-size stills over as Bayer: a block-CFA setting is the viewfinder stream's.
-                context->cfaBlock = 1;
+                // The photo output may have a different CFA from the binned viewfinder.
+                context->binnedFallbackContext = lastCameraContext_;
+                context->cfaBlock = context->photoCfaBlock;
                 auto& g = context->geometry;
                 const uint32_t scale = g.pixelArrayWidth ? std::max(1u, width / g.pixelArrayWidth) : 1u;
                 g.rawBufferWidth = std::min(width, scale * g.pixelArrayWidth);
@@ -440,6 +447,16 @@ void SessionEngine::waitForVideoPrewarmIdle() { videoSession_.waitForVideoPrewar
 
 namespace rawrcam::session {
 void SessionEngine::onFullSizeFrame(imaging::AcquiredRawFrame frame) {
+#ifndef NDEBUG
+    const int64_t arrivalNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    const auto previousArrival = fullSizeArrivalNs_.exchange(arrivalNs, std::memory_order_relaxed);
+    const auto previousSensor = fullSizeSensorNs_.exchange(frame.timestampNs, std::memory_order_relaxed);
+    CAPTURE_DEBUG_LOG("FULLRES_ARRIVAL generation=%llu sensorTimestampNs=%llu monoMs=%.3f arrivalDeltaMs=%.3f sensorDeltaMs=%.3f",
+         static_cast<unsigned long long>(frame.generation), static_cast<unsigned long long>(frame.timestampNs),
+         double(arrivalNs) / 1e6, previousArrival ? double(arrivalNs - previousArrival) / 1e6 : -1.0,
+         previousSensor && frame.timestampNs >= previousSensor ? double(frame.timestampNs - previousSensor) / 1e6 : -1.0);
+#endif
     imaging::RawFrameLease lease(frame);
     const auto n = fullSizeFrames_.fetch_add(1, std::memory_order_relaxed) + 1;
     appendDiagnostic("FULL_SIZE_FRAME n=" + std::to_string(n) + " timestampNs=" + std::to_string(frame.timestampNs) +
@@ -565,6 +582,10 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
         tag = nextFullSizeBurstTag_++;
         fullSize_.burstTags.insert(tag);
     }
+    diagnostics::CaptureStageTimer acquisitionTiming("fullres_acquire", tag);
+    CAPTURE_DEBUG_LOG("FULLRES_BURST_BEGIN tag=%llu generation=%llu frames=%u raw=%ux%u cfaBlock=%u",
+         static_cast<unsigned long long>(tag), static_cast<unsigned long long>(context->cameraContextGeneration),
+         count, context->geometry.rawBufferWidth, context->geometry.rawBufferHeight, context->cfaBlock);
     const auto forget = [&] {
         std::lock_guard<std::mutex> lock(fullSize_.mutex);
         fullSize_.burstTags.erase(tag);
@@ -580,8 +601,10 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
     }};
     const uint32_t width = context->geometry.rawBufferWidth, height = context->geometry.rawBufferHeight;
     const size_t bytes = size_t(width) * height * sizeof(uint16_t);
+    diagnostics::CaptureStageTimer allocationTiming("fullres_allocate", tag);
     auto journal = std::make_shared<capture::persistence::AcquiredRawJournal>(filesDir_, bytes, count);
     std::vector<uint8_t> packed(bytes);
+    allocationTiming.finish();
     struct Frame {
         imaging::RawFrameLease lease{imaging::AcquiredRawFrame{}};
         rawrcam::metadata::FrameMetadataSnapshot metadata;
@@ -594,8 +617,11 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
     // A sequential lens gets one still now and each next one once the
     // previous frame is in.
     const bool sequential = controller->fullSizeBurstSequential();
-    if (!controller->captureFullSize(tag, sequential ? 1u : count, true, sequential && count > 1))
-        return UINT32_MAX;  // acquisition failed; never submit a replacement capture
+    {
+        diagnostics::CaptureStageTimer submitTiming("fullres_submit", tag);
+        if (!controller->captureFullSize(tag, sequential ? 1u : count, true, sequential && count > 1))
+            return UINT32_MAX;  // acquisition failed; never submit a replacement capture
+    }
     const auto exposure = controller->deferredCaptureExposure();
     const auto budgetMs = count * (8000 + (exposure ? exposure->exposureTimeNs / 1'000'000 : 0));
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(budgetMs);
@@ -604,6 +630,8 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
                                         deadline - std::chrono::steady_clock::now()).count());
     };
     for (uint32_t index = 0; index < count; ++index) {
+        diagnostics::CaptureStageTimer frameTiming("fullres_frame", tag, index + 1);
+        diagnostics::CaptureStageTimer waitTiming("fullres_wait_buffer_and_result", tag, index + 1);
         std::unique_lock<std::mutex> lock(fullSize_.mutex);
         const auto ready = [&] {
             uint32_t n = 0;
@@ -640,27 +668,41 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
             ++it;  // retain metadata whose RAW buffer has not arrived yet
         }
         lock.unlock();
+        waitTiming.finish();
         if (frames.size() + binnedCorners != index + 1) return UINT32_MAX;
+        CAPTURE_DEBUG_LOG("FULLRES_FRAME tag=%llu frame=%u sensorTimestampNs=%llu",
+             static_cast<unsigned long long>(tag), index + 1,
+             static_cast<unsigned long long>(frames.back().metadata.timestampNs));
         // Next still goes in before this frame is copied: the copy overlaps
         // the sensor switch. A refused submission ends the burst with the
         // frames already in.
+        diagnostics::CaptureStageTimer nextSubmitTiming("fullres_next_submit", tag, index + 1);
         if (sequential && index + 1 < count &&
             (!controller->waitFullSizeIdle(remainingMs()) || !controller->captureFullSize(tag, 1u, true, index + 2 < count))) {
             appendDiagnostic("FULL_SIZE_BURST_SEQUENTIAL_STOPPED tag=" + std::to_string(tag) +
                              " requested=" + std::to_string(count) + " submitted=" + std::to_string(index + 1));
             for (; count > index + 1; --count) journal->dropExpected();
         }
+        nextSubmitTiming.finish();
+        diagnostics::CaptureStageTimer copyTiming("fullres_copy_raw_to_u16", tag, index + 1);
         auto& lease = frames.back().lease;
         const auto copy =
             imaging::copyCompletedRaw16AhbToPacked(lease.ahb(), width, height, packed, lease.fence(), lease.image());
+        copyTiming.finish();
+        CAPTURE_DEBUG_LOG("FULLRES_COPY tag=%llu frame=%u lockMs=%.3f decodeMs=%.3f unlockMs=%.3f rowStride=%d success=%d",
+             static_cast<unsigned long long>(tag), index + 1, copy.lockMs, copy.copyMs, copy.unlockMs,
+             copy.sourceRowStrideBytes, copy.success ? 1 : 0);
+        diagnostics::CaptureStageTimer releaseTiming("fullres_release_and_resume_reader", tag, index + 1);
         lease = imaging::RawFrameLease(imaging::AcquiredRawFrame{});
         // A queued burst may have filled every reader lease while this frame was copied.
         // Returning a lease does not promise a new image-available notification.
         // No fullSize_ or session mutex is held while the reader dispatches pending frames.
         captureFrameIngress_.resumeAfterRelease(context->cameraContextGeneration);
+        releaseTiming.finish();
         if (!copy.success) throw std::runtime_error("full_size_copy_failed:" + copy.error);
         // A frame the HAL returned binned (corner of the buffer) would wreck
         // the merge: leave it out and merge the full-size ones.
+        diagnostics::CaptureStageTimer checkTiming("fullres_validate_buffer", tag, index + 1);
         if (const auto check = imaging::fullSizeBinnedCorner(packed, width, height, context->geometry.pixelArrayWidth,
                                                              context->geometry.pixelArrayHeight,
                                                              frames.back().metadata.vendorSeamlessMode);
@@ -674,13 +716,23 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
             ++binnedCorners;
             continue;
         }
+        checkTiming.finish();
+        if (context->cfaBlock > 1u) {
+            diagnostics::CaptureStageTimer remosaicTiming("fullres_remosaic", tag, index + 1);
+            const auto threads = std::clamp(std::thread::hardware_concurrency(), 1u, 8u);
+            imaging::remosaicBlockCfa(packed, width, height, context->cfaBlock, context->rawPreviewCfa,
+                                     threads, imaging::CfaRemosaicQuality::Standard);
+        }
+        diagnostics::CaptureStageTimer journalTiming("fullres_journal_append", tag, index + 1);
         journal->append(packed);
     }
     // Completion belongs to the whole burst, never to each individual frame.
+    diagnostics::CaptureStageTimer idleTiming("fullres_wait_sequence_end", tag);
     if (!controller->waitFullSizeIdle(remainingMs())) {
         failedCameraGeneration_.store(context->cameraContextGeneration);
         return UINT32_MAX;
     }
+    idleTiming.finish();
     forget();
     appendDiagnostic("FULL_SIZE_BURST_FRAMES tag=" + std::to_string(tag) + " requested=" + std::to_string(count) +
                      " received=" + std::to_string(frames.size()) + " binnedCorners=" + std::to_string(binnedCorners));

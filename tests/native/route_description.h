@@ -64,6 +64,9 @@ inline std::string describeRouteForGolden(const LensRoute& r) {
     opt("auxJpegBufferUsage", r.auxJpegBufferUsage);
     o << "auxJpegUseCase=" << r.auxJpegStreamUseCase << '\n';
     o << "sensorLayout=block:" << r.sensorLayoutBlock << " liveRemosaic:" << r.liveRemosaic << " photoRemosaic:" << r.photoRemosaic << '\n';
+    if (!r.photoIncludePreview) o << "photoIncludePreview=0\n";
+    if (r.photoBufferCount) o << "photoBufferCount=" << r.photoBufferCount << '\n';
+    if (r.photoSensorLayoutBlock > 1) o << "photoSensorLayoutBlock=" << r.photoSensorLayoutBlock << '\n';
     opt("colourOrder", r.colourOrder);
     o << "distortion=";
     if (r.distortion) {

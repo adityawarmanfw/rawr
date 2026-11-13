@@ -158,6 +158,8 @@ struct LensRoute {
     bool mergeFramesOneByOne = false;
     // AHB usage for the photoStream reader; nullopt keeps GPU_DATA_BUFFER.
     std::optional<uint64_t> photoBufferUsage;
+    uint32_t photoBufferCount = 0;  // 0 keeps the reader default.
+    bool photoIncludePreview = true;  // Preserve both RAW targets; OPPO photo modes opt out.
     // Explicit recipe template shared by session, repeating and still requests.
     std::optional<bool> stillTemplate;  // Absent: preview repeating, still capture (legacy).
     // Fixed AE target fps range on the session and every request; 0 = the app's cadence.
@@ -197,6 +199,8 @@ struct LensRoute {
     // 4x4); ingress remosaics them to Bayer. colourOrder: block-level colour
     // order (CfaPattern code) replacing the camera's; nullopt keeps it.
     uint32_t sensorLayoutBlock = 1;
+    // Separate photo-stream CFA; absent streams and existing profiles keep Bayer.
+    uint32_t photoSensorLayoutBlock = 1;
     std::optional<uint32_t> colourOrder;
     // Remosaic quality (imaging::CfaRemosaicQuality): live = viewfinder, video
     // and merge frames (GPU: Fast 0 / Standard 1); photo = single stills
@@ -312,6 +316,8 @@ struct BuiltInProfile {
     CameraProfile profile;
     std::string name;  // Marketing name, for logs.
     int version = 1;   // Bumped when the defaults change.
+    bool isDefault = false;  // Required on exactly one variant when several match.
+    std::string description;  // Requirements and differences shown in the profile picker.
     ProfileMatchRules match;
 };
 
@@ -331,6 +337,7 @@ using PropertyReader = std::function<std::string(const std::string& name)>;
 [[nodiscard]] const CameraProfile& builtInCameraProfile(const std::string& profileId);
 [[nodiscard]] bool isBuiltInProfileId(const std::string& profileId);
 // Picks the device's profile from system properties (ro.product.model first).
+[[nodiscard]] std::vector<const BuiltInProfile*> matchingBuiltInProfiles(const PropertyReader& property);
 [[nodiscard]] ProfileMatch matchBuiltInProfile(const PropertyReader& property);
 
 [[nodiscard]] std::optional<LensRoute> routeForLens(const CameraProfile& profile, const std::string& lensId);

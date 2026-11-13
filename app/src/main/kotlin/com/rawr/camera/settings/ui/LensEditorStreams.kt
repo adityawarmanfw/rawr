@@ -284,6 +284,14 @@ internal fun CaptureGroup(lens: LensProfile, camera: ProbedCamera?, onPickStream
                     LensOutputSize(capture.choice.width, capture.choice.height), "capture",
                     "The full-size mode's dimensions, including sizes the camera doesn't list"
                 ) { update { copy(choice = choice.copy(width = it.width, height = it.height)) } }
+                SettingsSwitchRow(
+                    title = "Send photo requests to both streams",
+                    checked = capture.includePreview,
+                    supportingText = "Target both photo and viewfinder RAW streams when taking a full-size photo. " +
+                        "This does not turn the live viewfinder on or off. " +
+                        "Required by some vivo modes; keep off for OPPO full-size modes.",
+                    testTag = lensEditorTag("photo_include_preview")
+                ) { update { copy(includePreview = it) } }
                 CaptureNumberField("Merged photo frame limit", capture.mergeFrameLimit, Modifier.testTag(lensEditorTag("merge_frame_limit")),
                     "A merged (multiframe) photo on this lens takes at most this many full-size frames; Multiframe → " +
                         "Maximum Frames sets how many you want. 0 = no lens limit · 1 = single photos only") {
@@ -494,8 +502,13 @@ internal fun BuffersGroup(lens: LensProfile, camera: ProbedCamera?, onChange: (L
         }
         if (capture != null) {
             UsageField("Photo stream buffer usage", capture.bufferUsage, Modifier.testTag(lensEditorTag("photo_buffer_usage")),
-                "Empty: GPU data buffer, the one vivo full-size modes accept") {
+                "Empty: GPU data buffer. 0x3: CPU-readable, needed for OPPO RAW10 photos; none: no usage flags") {
                 onChange(lens.streams { copy(photo = capture.copy(bufferUsage = it)) })
+            }
+            CaptureNumberField("Photo stream buffer count", capture.bufferCount,
+                Modifier.testTag(lensEditorTag("photo_buffer_count")),
+                "Maximum photo buffers held at once, 2 to 16. 0 = default (6). This does not set the burst frame count.") {
+                onChange(lens.streams { copy(photo = capture.copy(bufferCount = it)) })
             }
         }
         SettingDivider()
@@ -546,7 +559,7 @@ internal fun UseCasesGroup(lens: LensProfile, onChange: (LensProfile) -> Unit) {
 internal fun LensProfile.withAutomaticAdvanced(): LensProfile = copy(
     streams = streams.copy(
         raw = streams.raw.copy(useCase = 0, buffers = BufferSettings(), levels = null),
-        photo = streams.photo?.copy(useCase = 0, bufferUsage = null),
+        photo = streams.photo?.copy(useCase = 0, bufferUsage = null, bufferCount = 0),
         companion = CompanionSettings(),
         auxJpeg = null
     ),
@@ -564,7 +577,8 @@ internal fun LensProfile.advancedSummary(): List<String> = buildList {
         companion != CompanionSettings() -> add("Companion tuned")
     }
     if (streams.auxJpeg != null) add("Aux JPEG")
-    if (streams.raw.buffers != BufferSettings() || streams.photo?.bufferUsage != null) add("Buffers")
+    if (streams.raw.buffers != BufferSettings() || streams.photo?.bufferUsage != null ||
+        (streams.photo?.bufferCount ?: 0) != 0) add("Buffers")
     if (streams.raw.levels != null) add("Viewfinder levels")
     if (listOf(streams.raw.useCase, streams.photo?.useCase ?: 0, companion.useCase, streams.auxJpeg?.useCase ?: 0).any { it != 0 })
         add("Use cases")

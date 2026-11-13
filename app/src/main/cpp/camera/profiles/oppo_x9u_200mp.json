@@ -1,0 +1,225 @@
+{
+  "id": "oppo_x9u_200mp",
+  "schema": 2,
+  "name": "OPPO X9U - 200 MP (requires root + patched lib)",
+  "version": 1,
+  "match": {
+    "models": [
+      "CPH2841",
+      "PMA110",
+      "PMA120"
+    ]
+  },
+  "lenses": [
+    {
+      "id": "0.6x",
+      "camera": {
+        "id": "3"
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 4096,
+          "height": 3072
+        },
+        "companion": {
+          "mode": "off"
+        }
+      },
+      "session": {
+        "cameraApi": "java"
+      },
+      "request": {
+        "defaults": "minimal"
+      }
+    },
+    {
+      "id": "1x",
+      "camera": {
+        "id": "2"
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 4080,
+          "height": 3064
+        },
+        "companion": {
+          "mode": "off"
+        }
+      },
+      "session": {
+        "cameraApi": "java"
+      },
+      "request": {
+        "defaults": "minimal"
+      }
+    },
+    {
+      "id": "1xF",
+      "camera": {
+        "id": "2"
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 4080,
+          "height": 3064
+        },
+        "photo": {
+          "format": "RAW10",
+          "width": 16320,
+          "height": 12256,
+          "buffers": {
+            "usage": "0x3",
+            "count": 2
+          },
+          "mergeFramesOneByOne": false,
+          "includePreview": false,
+          "mergeFrameLimit": 3
+        },
+        "companion": {
+          "mode": "off"
+        }
+      },
+      "session": {
+        "cameraApi": "java"
+      },
+      "request": {
+        "defaults": "minimal"
+      },
+      "vendorKeys": [
+        {
+          "tag": "com.oplus.is.sdk.camera.package",
+          "type": "byte",
+          "scope": "session",
+          "values": [
+            1
+          ],
+          "enabled": true
+        },
+        {
+          "tag": "com.oplus.is.from.extension",
+          "type": "int32",
+          "scope": "session",
+          "values": [
+            1
+          ],
+          "enabled": true
+        }
+      ],
+      "image": {
+        "sensorLayout": {
+          "block": 1,
+          "photoBlock": 4
+        }
+      }
+    },
+    {
+      "id": "3x",
+      "camera": {
+        "id": "4"
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 4096,
+          "height": 3072
+        },
+        "companion": {
+          "mode": "off"
+        }
+      },
+      "session": {
+        "cameraApi": "java"
+      },
+      "request": {
+        "defaults": "minimal"
+      }
+    },
+    {
+      "id": "3xF",
+      "camera": {
+        "id": "4"
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 4096,
+          "height": 3072
+        },
+        "photo": {
+          "format": "RAW10",
+          "width": 16384,
+          "height": 12288,
+          "buffers": {
+            "usage": "0x3",
+            "count": 2
+          },
+          "mergeFramesOneByOne": false,
+          "includePreview": false,
+          "mergeFrameLimit": 3
+        },
+        "companion": {
+          "mode": "off"
+        }
+      },
+      "session": {
+        "cameraApi": "java"
+      },
+      "request": {
+        "defaults": "minimal"
+      },
+      "vendorKeys": [
+        {
+          "tag": "com.oplus.is.sdk.camera.package",
+          "type": "byte",
+          "scope": "session",
+          "values": [
+            1
+          ],
+          "enabled": true
+        },
+        {
+          "tag": "com.oplus.is.from.extension",
+          "type": "int32",
+          "scope": "session",
+          "values": [
+            1
+          ],
+          "enabled": true
+        }
+      ],
+      "image": {
+        "sensorLayout": {
+          "block": 1,
+          "photoBlock": 4
+        }
+      }
+    },
+    {
+      "id": "10x",
+      "camera": {
+        "id": "5"
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 4096,
+          "height": 3072
+        },
+        "companion": {
+          "mode": "off"
+        }
+      },
+      "session": {
+        "cameraApi": "java"
+      },
+      "request": {
+        "defaults": "minimal"
+      }
+    }
+  ],
+  "default": false,
+  "description": "Standard lenses plus 1xF and 3xF 200 MP RAW. Requires root and a patched camera.qcom.sm8850.so; this profile does not install the patch. Patched libraries for rooted devices can be found in the OFX7U Telegram group: https://t.me/OFX7U"
+}

@@ -390,6 +390,22 @@ class LensProfileCodecTest {
     }
 
     @Test
+    fun keepsPhotoOnlyQuadLayoutThroughARoundTrip() {
+        val lens = LensProfile("H10x", "5")
+            .streams { copy(photo = PhotoStreamSettings(RawStreamChoice(RawStreamFormat.Raw10, 8192, 6144),
+                includePreview = false, bufferCount = 2)) }
+            .image { copy(sensorLayout = LensSensorLayout(photoBlock = 2)) }
+        val json = LensProfileCodec.encode(listOf(lens))
+        assertEquals(lens, requireNotNull(LensProfileCodec.decode(json)).single())
+        val layout = lensJson(json).getJSONObject("image").getJSONObject("sensorLayout")
+        assertEquals(1, layout.getInt("block"))
+        assertEquals(2, layout.getInt("photoBlock"))
+        val photo = lensJson(json).getJSONObject("streams").getJSONObject("photo")
+        assertEquals(false, photo.getBoolean("includePreview"))
+        assertEquals(2, photo.getJSONObject("buffers").getInt("count"))
+    }
+
+    @Test
     fun keepsFullSizeLensFieldsThroughARoundTrip() {
         val full = LensProfile("F85", "5")
             .raw { copy(choice = RawStreamChoice(RawStreamFormat.Raw16, 8160, 6144, highResLive = true),

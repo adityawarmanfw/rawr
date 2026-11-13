@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Log
+import com.rawr.camera.BuildConfig
 import androidx.core.content.ContextCompat
 import com.rawr.camera.model.CaptureOutputFormat
 import com.rawr.camera.settings.model.SettingsValues
@@ -84,6 +85,7 @@ class StillCaptureCoordinator(
     fun enqueueCapture(format: CaptureOutputFormat) {
         check(!closing) { "Capture coordinator is closing" }
         val requestedAtNs = android.os.SystemClock.elapsedRealtimeNanos()
+        if (BuildConfig.DEBUG) Log.i(TAG, "CAPTURE_PRESS token=$requestedAtNs monoMs=${System.nanoTime() / 1e6} format=$format")
         StillProcessingService.acquire(application, this)
         val snapshot = settings().copy(dngEnabled = format.dng, jpegEnabled = format.jpeg)
         val releaseAssets = com.rawr.camera.settings.preferences.CaptureLutPins.acquire(
@@ -155,12 +157,19 @@ class StillCaptureCoordinator(
 
     private fun captureInternal(jpegEnabled: Boolean, input: CaptureInput): Long {
         val now = input.captureTime.wallClockUnixMillis
+        val workerStartedNs = if (BuildConfig.DEBUG) android.os.SystemClock.elapsedRealtimeNanos() else 0L
+        if (BuildConfig.DEBUG) Log.i(TAG, "CAPTURE_TIMING stage=worker_start token=${input.requestedAtNs} " +
+            "clickElapsedMs=${(workerStartedNs - input.requestedAtNs) / 1e6} monoMs=${System.nanoTime() / 1e6}")
         val current = try { CaptureRecipe.freezeAssets(application, input.settings) }
             finally { input.releaseAssets() }
         input.frozenAssetId = current.selectedUserLutProfileId
         val filmDescription =
             if (current.filmSimEnabled) current.filmSimLook.describeFilm() else null
         val jpegQuality = current.imageTone.jpegQuality.toInt().coerceIn(95, 100)
+        if (BuildConfig.DEBUG) Log.i(TAG, "CAPTURE_TIMING stage=assets_ready token=${input.requestedAtNs} " +
+            "workerElapsedMs=${(android.os.SystemClock.elapsedRealtimeNanos() - workerStartedNs) / 1e6}")
+        val acquireStartedNs = if (BuildConfig.DEBUG) android.os.SystemClock.elapsedRealtimeNanos() else 0L
+        if (BuildConfig.DEBUG) Log.i(TAG, "CAPTURE_TIMING stage=acquire event=begin token=${input.requestedAtNs} monoMs=${System.nanoTime() / 1e6}")
         val multiframeFrames =
             if (current.experimentalMultiframeEnabled) {
                 preview.prepareExperimentalMultiframe(
@@ -171,6 +180,8 @@ class StillCaptureCoordinator(
             } else {
                 0
             }
+        if (BuildConfig.DEBUG) Log.i(TAG, "CAPTURE_TIMING stage=acquire event=end token=${input.requestedAtNs} frames=$multiframeFrames " +
+            "wallMs=${(android.os.SystemClock.elapsedRealtimeNanos() - acquireStartedNs) / 1e6}")
         val multiframe = multiframeFrames >= 2
         // File names count every merged frame, including HDR+ Bracketed's post-shutter dark frames.
         // A burst longer than requested already holds the long frames' slots (skipped).
@@ -180,6 +191,8 @@ class StillCaptureCoordinator(
         if (current.experimentalMultiframeEnabled && !multiframe) {
             Log.i(TAG, "Multiframe ring unavailable; capturing a fresh single frame")
         }
+        val outputStartedNs = if (BuildConfig.DEBUG) android.os.SystemClock.elapsedRealtimeNanos() else 0L
+        if (BuildConfig.DEBUG) Log.i(TAG, "CAPTURE_TIMING stage=prepare_outputs event=begin token=${input.requestedAtNs}")
         val output =
             outputs.prepare(
                 current.saveLocationId,
@@ -195,6 +208,8 @@ class StillCaptureCoordinator(
                 com.rawr.camera.storage.releaseCaptureAssets(application.filesDir, current.selectedUserLutProfileId.orEmpty())
                 return 0L
             }
+        if (BuildConfig.DEBUG) Log.i(TAG, "CAPTURE_TIMING stage=prepare_outputs event=end token=${input.requestedAtNs} " +
+            "wallMs=${(android.os.SystemClock.elapsedRealtimeNanos() - outputStartedNs) / 1e6}")
         val diagnosticsEnabled = current.pipelineDiagnosticsEnabled
         val zslPersistRequested = current.experimentalMultiframeEnabled && current.persistZslRingOnShutterEnabled
         val artifactExportRequested = diagnosticsEnabled
@@ -230,6 +245,8 @@ class StillCaptureCoordinator(
         // only here). Multiframe resolves separately below. Native keeps its
         // device gates (float16, geometry) as backstop with SKIP emits.
         val singleDenoise = current.photoDenoise.resolve(StillPath.SINGLE)
+        val submitStartedNs = if (BuildConfig.DEBUG) android.os.SystemClock.elapsedRealtimeNanos() else 0L
+        if (BuildConfig.DEBUG) Log.i(TAG, "CAPTURE_TIMING stage=submit_job event=begin token=${input.requestedAtNs}")
         val requestId =
             if (multiframe) {
                 val mfDenoise = current.photoDenoise.resolve(StillPath.MULTIFRAME)
@@ -322,6 +339,9 @@ class StillCaptureCoordinator(
                     jpegDisplayName = jpegDisplayName
                 )
             }
+        if (BuildConfig.DEBUG) Log.i(TAG, "CAPTURE_TIMING stage=submit_job event=end token=${input.requestedAtNs} requestId=$requestId " +
+            "wallMs=${(android.os.SystemClock.elapsedRealtimeNanos() - submitStartedNs) / 1e6} " +
+            "clickElapsedMs=${(android.os.SystemClock.elapsedRealtimeNanos() - input.requestedAtNs) / 1e6}")
         // Native accepts ownership of both detached FDs even on rejection, so only remove rows here.
         if (requestId == 0L) {
             scratchJpeg?.delete()
@@ -409,7 +429,11 @@ class StillCaptureCoordinator(
             }
             val state = requestStates[requestId] ?: return@let
             if (state.remainingDngs == 0 || !state.completedDngNames.add(displayName)) return@let
+            val publishStartedNs = if (BuildConfig.DEBUG) android.os.SystemClock.elapsedRealtimeNanos() else 0L
             val publication = outputs.completeDng(requestId, displayName, success)
+            if (BuildConfig.DEBUG) Log.i(TAG, "CAPTURE_DNG_PUBLISHED requestId=$requestId name=$displayName success=${publication.success} " +
+                "publishMs=${(android.os.SystemClock.elapsedRealtimeNanos() - publishStartedNs) / 1e6} " +
+                "clickElapsedMs=${state.requestedAtNs?.let { (android.os.SystemClock.elapsedRealtimeNanos() - it) / 1e6 }}")
             if (publication.success) onDngPublished()
             state.let { state ->
                 state.allDngsSuccessful = state.allDngsSuccessful && publication.success
@@ -485,6 +509,9 @@ class StillCaptureCoordinator(
         if (requestStates.remove(requestId, state)) {
             fallbackAliases.entries.removeAll { it.value == requestId }
             val success = state.allDngsSuccessful && (state.fallback || state.jpegSuccessful)
+            if (BuildConfig.DEBUG) Log.i(TAG, "CAPTURE_FINISHED requestId=$requestId success=$success " +
+                "clickElapsedMs=${state.requestedAtNs?.let { (android.os.SystemClock.elapsedRealtimeNanos() - it) / 1e6 }} " +
+                "monoMs=${System.nanoTime() / 1e6}")
             finishedEvents += CompletionEvent(requestId, CompletionEvent.Artifact.Finished, success,
                 filmFallbackMemory = state.fallback, dngFailed = !state.allDngsSuccessful)
             if (state.fallback && success) android.os.Handler(android.os.Looper.getMainLooper()).post {

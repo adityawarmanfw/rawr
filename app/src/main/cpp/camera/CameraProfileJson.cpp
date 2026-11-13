@@ -602,11 +602,13 @@ std::string serializeCameraProfile(const CameraProfile& profile) {
         if (r.photoStream) {
             ObjectWriter photo;
             if (r.photoStreamUseCase) photo.number("useCase", r.photoStreamUseCase);
-            if (r.photoBufferUsage) {
+            if (r.photoBufferUsage || r.photoBufferCount) {
                 ObjectWriter photoBuffers;
-                photoBuffers.text("usage", bufferUsageName(*r.photoBufferUsage));
+                if (r.photoBufferUsage) photoBuffers.text("usage", bufferUsageName(*r.photoBufferUsage));
+                if (r.photoBufferCount) photoBuffers.number("count", r.photoBufferCount);
                 photo.raw("buffers", photoBuffers.str());
             }
+            if (!r.photoIncludePreview) photo.flag("includePreview", false);
             if (r.mergeFrameLimit) photo.number("mergeFrameLimit", r.mergeFrameLimit);
             if (r.mergeFramesOneByOne) photo.flag("mergeFramesOneByOne", true);
             if (r.photoLevels) photo.raw("levels", levelsJson(*r.photoLevels));
@@ -687,9 +689,10 @@ std::string serializeCameraProfile(const CameraProfile& profile) {
         std::string exposure;
         appendExposure(exposure, r.exposure);
         image.raw("exposure", exposure);
-        if (r.sensorLayoutBlock > 1 || r.colourOrder) {
+        if (r.sensorLayoutBlock > 1 || r.photoSensorLayoutBlock > 1 || r.colourOrder) {
             ObjectWriter layout;
             layout.number("block", r.sensorLayoutBlock);
+            if (r.photoSensorLayoutBlock > 1) layout.number("photoBlock", r.photoSensorLayoutBlock);
             if (r.colourOrder) layout.text("colourOrder", cfaOrderName(*r.colourOrder));
             layout.text("liveRemosaic", r.liveRemosaic == 0 ? "fast" : "standard");
             layout.text("photoRemosaic", r.photoRemosaic == 2 ? "high" : "standard");
@@ -985,6 +988,9 @@ std::optional<LensRoute> readLens(const Json& l, std::string* error) {
         if (!readUseCase(p, r.photoStreamUseCase, error, "photo stream of lens " + r.lensId)) return std::nullopt;
         if (!readUsage(&object(p, "buffers"), "photo buffer usage", r.photoBufferUsage, error, r.lensId))
             return std::nullopt;
+        if (!readBufferCount(&object(p, "buffers"), "photo", r.photoBufferCount, error, r.lensId))
+            return std::nullopt;
+        r.photoIncludePreview = p->flag("includePreview", true);
         r.mergeFrameLimit = uint32_t(std::clamp(p->num("mergeFrameLimit"), 0.0, 30.0));
         r.mergeFramesOneByOne = p->flag("mergeFramesOneByOne", false);
         r.photoStream = photo;
@@ -1120,6 +1126,12 @@ std::optional<LensRoute> readLens(const Json& l, std::string* error) {
             return std::nullopt;
         }
         r.sensorLayoutBlock = uint32_t(block);
+        const double photoBlock = c->num("photoBlock", 1.0);
+        if (photoBlock != 1.0 && photoBlock != 2.0 && photoBlock != 4.0) {
+            if (error) *error = "invalid sensorLayout photoBlock for lens " + r.lensId;
+            return std::nullopt;
+        }
+        r.photoSensorLayoutBlock = uint32_t(photoBlock);
         if (const std::string order = c->str("colourOrder"); !order.empty()) {
             r.colourOrder = cfaOrderFromName(order);
             if (!r.colourOrder) {
@@ -1235,6 +1247,12 @@ std::optional<BuiltInProfile> parseBuiltInProfile(const std::string& json, std::
     out.profile = std::move(*profile);
     out.name = root.str("name", out.profile.id);
     out.version = int(root.num("version", 1));
+    if (const auto* value = root.get("default"); value && value->kind != Json::Kind::Bool) {
+        if (error) *error = "profile default must be a boolean";
+        return std::nullopt;
+    }
+    out.isDefault = root.flag("default", false);
+    out.description = root.str("description");
     if (root.get("quirks") || root.get("workarounds")) {
         if (error) *error = "profile " + out.profile.id + ": workarounds belong to lenses (session.workarounds)";
         return std::nullopt;

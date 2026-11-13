@@ -326,6 +326,33 @@ Java_com_rawr_camera_integration_NativePreviewEngine_builtInCameraProfile(JNIEnv
     const auto& profile = rawrcam::camera::deviceBuiltInCameraProfile();
     return env->NewStringUTF(rawrcam::camera::serializeCameraProfile(profile).c_str());
 }
+// Flat records: id, display name, description, default flag, lens document.
+extern "C" JNIEXPORT jobjectArray JNICALL
+Java_com_rawr_camera_integration_NativePreviewEngine_deviceCameraProfiles(JNIEnv* env, jobject) {
+    const auto profiles = rawrcam::camera::matchingBuiltInProfiles([](const std::string& name) {
+        char value[PROP_VALUE_MAX] = {};
+        __system_property_get(name.c_str(), value);
+        return std::string(value);
+    });
+    const auto selected = rawrcam::camera::matchBuiltInProfile([](const std::string& name) {
+        char value[PROP_VALUE_MAX] = {};
+        __system_property_get(name.c_str(), value);
+        return std::string(value);
+    });
+    auto result = env->NewObjectArray(profiles.size() * 5, env->FindClass("java/lang/String"), nullptr);
+    jsize index = 0;
+    for (const auto* p : profiles) {
+        for (const auto& value : {p->profile.id, p->name, p->description,
+                                 std::string(p->profile.id == selected.profileId ? "true" : "false"),
+                                 rawrcam::camera::serializeCameraProfile(p->profile)}) {
+            auto text = env->NewStringUTF(value.c_str());
+            env->SetObjectArrayElement(result, index++, text);
+            env->DeleteLocalRef(text);
+        }
+    }
+    return result;
+}
+
 // [error, name, summary] for a lens camera profile (.dcp) file; error is empty
 // when the app can use it. DCP names are free-form bytes: ASCII only, so
 // NewStringUTF never sees invalid modified UTF-8.

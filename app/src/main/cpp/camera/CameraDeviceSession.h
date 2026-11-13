@@ -141,6 +141,7 @@ class CameraDeviceSession final {
     bool companionDetachable_ = false;
     bool profileCompanionTargeted_ = true;
     bool captureStillTemplate_ = true;
+    bool photoIncludePreview_ = true;
     bool stopViewfinderForPhotos_ = false;
     AImageReader* auxJpegReader_ = nullptr;
     bool auxJpegConfigured_ = false;

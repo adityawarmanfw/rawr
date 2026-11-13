@@ -17,6 +17,7 @@ import kotlinx.coroutines.withContext
 
 /** What the lens settings need from the device: built-in lenses and camera/key probes. */
 interface LensHardware {
+    val deviceProfiles: List<com.rawr.camera.integration.DeviceCameraProfile> get() = emptyList()
     val deviceDefaults: List<LensProfile>
 
     suspend fun cameras(): CameraInventory
@@ -46,6 +47,7 @@ class AndroidLensHardware(context: Context) : LensHardware {
     private var inventory: CameraInventory? = null
     private val keyCatalogs = mutableMapOf<Pair<String, String>, CameraKeyCatalog>()
 
+    override val deviceProfiles get() = DeviceLensDefaults.profiles
     override val deviceDefaults: List<LensProfile> get() = DeviceLensDefaults.lenses
 
     override suspend fun cameras(): CameraInventory = mutex.withLock {

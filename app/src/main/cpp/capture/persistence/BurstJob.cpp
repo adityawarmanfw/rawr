@@ -1,3 +1,4 @@
+#include "diagnostics/timing/CaptureStageTimer.h"
 #include <android/log.h>
 #include <rawr/raw_multiframe_output/MultiframeOutputAdapter.h>
 
@@ -142,14 +143,20 @@ std::unique_ptr<multiframe::MultiframeWorkItem> loadBurst(const std::string& pat
         }
         const auto* vulkan = &vk;
         auto* queueMutex = &mutex;
-        burst->loadFrame = [source, uploaded, burst, vulkan, queueMutex, width, height](std::size_t i) {
+        burst->loadFrame = [source, uploaded, burst, vulkan, queueMutex, width, height, requestId = job.frame.requestId](std::size_t i) {
             if (i >= source->loaded.size() || source->loaded[i]) return;
+            diagnostics::CaptureStageTimer frameTiming("burst_lazy_frame", requestId, i + 1);
             const uint32_t rows = source->windowRows ? source->windowRows : height;
+            CAPTURE_TIMING_LOG("BURST_LAZY_FRAME requestId=%llu frame=%zu y0=%u rows=%u",
+                static_cast<unsigned long long>(requestId), i + 1, source->windowY0, rows);
+            diagnostics::CaptureStageTimer readTiming("burst_frame_storage_read", requestId, i + 1);
             const size_t rowBytes = size_t(width) * sizeof(uint16_t), bytes = rowBytes * rows;
             source->buffer.resize(bytes);
             source->file.seekg(std::streamoff(source->offset + i * source->bytes + source->windowY0 * rowBytes));
             source->file.read(reinterpret_cast<char*>(source->buffer.data()), std::streamsize(bytes));
             if (!source->file) throw std::runtime_error("capture_job_frame_read_failed");
+            readTiming.finish();
+            diagnostics::CaptureStageTimer uploadTiming("burst_frame_gpu_upload", requestId, i + 1);
             auto& frame = burst->frames[i];
             frame.raw = uploaded->add(*vulkan, *queueMutex, width, rows, frame.raw.ref.timestampNs,
                                       source->buffer.data(), bytes);

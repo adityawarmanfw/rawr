@@ -1,0 +1,312 @@
+{
+  "id": "oppo_x9u_50mp_remosaiced",
+  "schema": 2,
+  "name": "OPPO X9U - 50 MP remosaiced",
+  "version": 2,
+  "match": {
+    "models": [
+      "CPH2841",
+      "PMA110",
+      "PMA120"
+    ]
+  },
+  "lenses": [
+    {
+      "id": "0.6x",
+      "camera": {
+        "id": "3"
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 4096,
+          "height": 3072
+        },
+        "companion": {
+          "mode": "off"
+        }
+      },
+      "session": {
+        "cameraApi": "java"
+      },
+      "request": {
+        "defaults": "minimal"
+      }
+    },
+    {
+      "id": "H0.6",
+      "camera": {
+        "id": "3"
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 4096,
+          "height": 3072
+        },
+        "photo": {
+          "format": "RAW10",
+          "width": 8192,
+          "height": 6144,
+          "buffers": {
+            "usage": "0x3",
+            "count": 2
+          },
+          "mergeFramesOneByOne": false,
+          "includePreview": false,
+          "mergeFrameLimit": 3
+        },
+        "companion": {
+          "mode": "off"
+        }
+      },
+      "session": {
+        "cameraApi": "java"
+      },
+      "request": {
+        "defaults": "minimal"
+      },
+      "vendorKeys": [
+        {
+          "tag": "com.oplus.is.sdk.camera.package",
+          "type": "byte",
+          "scope": "session",
+          "values": [
+            1
+          ],
+          "enabled": true
+        },
+        {
+          "tag": "com.oplus.is.from.extension",
+          "type": "int32",
+          "scope": "session",
+          "values": [
+            1
+          ],
+          "enabled": true
+        },
+        {
+          "tag": "com.oplus.engineercamera.agingtest.mode.select",
+          "type": "int32",
+          "scope": "still",
+          "values": [
+            0
+          ],
+          "enabled": true
+        }
+      ],
+      "image": {
+        "sensorLayout": {
+          "block": 1,
+          "photoBlock": 1
+        }
+      }
+    },
+    {
+      "id": "1x",
+      "camera": {
+        "id": "2"
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 4080,
+          "height": 3064
+        },
+        "companion": {
+          "mode": "off"
+        }
+      },
+      "session": {
+        "cameraApi": "java"
+      },
+      "request": {
+        "defaults": "minimal"
+      }
+    },
+    {
+      "id": "H1x",
+      "camera": {
+        "id": "2"
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 4080,
+          "height": 3064
+        },
+        "photo": {
+          "format": "RAW10",
+          "width": 8160,
+          "height": 6128,
+          "buffers": {
+            "usage": "0x3",
+            "count": 2
+          },
+          "mergeFramesOneByOne": false,
+          "includePreview": false,
+          "mergeFrameLimit": 3
+        },
+        "companion": {
+          "mode": "off"
+        }
+      },
+      "session": {
+        "cameraApi": "java"
+      },
+      "request": {
+        "defaults": "minimal"
+      },
+      "vendorKeys": [
+        {
+          "tag": "com.oplus.is.sdk.camera.package",
+          "type": "byte",
+          "scope": "session",
+          "values": [
+            1
+          ],
+          "enabled": true
+        },
+        {
+          "tag": "com.oplus.is.from.extension",
+          "type": "int32",
+          "scope": "session",
+          "values": [
+            1
+          ],
+          "enabled": true
+        },
+        {
+          "tag": "com.oplus.engineercamera.agingtest.mode.select",
+          "type": "int32",
+          "scope": "still",
+          "values": [
+            5
+          ],
+          "enabled": true
+        }
+      ],
+      "image": {
+        "sensorLayout": {
+          "block": 1,
+          "photoBlock": 1
+        }
+      }
+    },
+    {
+      "id": "3x",
+      "camera": {
+        "id": "4"
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 4096,
+          "height": 3072
+        },
+        "companion": {
+          "mode": "off"
+        }
+      },
+      "session": {
+        "cameraApi": "java"
+      },
+      "request": {
+        "defaults": "minimal"
+      }
+    },
+    {
+      "id": "10x",
+      "camera": {
+        "id": "5"
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 4096,
+          "height": 3072
+        },
+        "companion": {
+          "mode": "off"
+        }
+      },
+      "session": {
+        "cameraApi": "java"
+      },
+      "request": {
+        "defaults": "minimal"
+      }
+    },
+    {
+      "id": "H10x",
+      "camera": {
+        "id": "5"
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 4096,
+          "height": 3072
+        },
+        "photo": {
+          "format": "RAW10",
+          "width": 8192,
+          "height": 6144,
+          "buffers": {
+            "usage": "0x3",
+            "count": 2
+          },
+          "mergeFramesOneByOne": false,
+          "includePreview": false,
+          "mergeFrameLimit": 3
+        },
+        "companion": {
+          "mode": "off"
+        }
+      },
+      "session": {
+        "cameraApi": "java"
+      },
+      "request": {
+        "defaults": "minimal"
+      },
+      "vendorKeys": [
+        {
+          "tag": "com.oplus.is.sdk.camera.package",
+          "type": "byte",
+          "scope": "session",
+          "values": [
+            1
+          ],
+          "enabled": true
+        },
+        {
+          "tag": "com.oplus.is.from.extension",
+          "type": "int32",
+          "scope": "session",
+          "values": [
+            1
+          ],
+          "enabled": true
+        },
+        {
+          "tag": "com.oplus.engineercamera.agingtest.mode.select",
+          "type": "int32",
+          "scope": "still",
+          "values": [
+            0
+          ],
+          "enabled": true
+        }
+      ],
+      "image": {
+        "sensorLayout": {
+          "block": 1,
+          "photoBlock": 1
+        }
+      }
+    }
+  ],
+  "default": false,
+  "description": "Standard lenses and 50 MP Bayer RAW, remosaiced by the camera. No root required. The 3x telephoto has no working remosaiced sensor mode (mode 7 does not work); H3x is unavailable."
+}

@@ -329,6 +329,8 @@ class SessionEngine {
         [this](const std::string& line) { recordPipelineAuditLine(line); }};
     uint64_t captureReaderGeneration_ = 0;
     std::atomic<uint32_t> fullSizeFrames_{0};
+    std::atomic<int64_t> fullSizeArrivalNs_{0};
+    std::atomic<uint64_t> fullSizeSensorNs_{0};
     void onFullSizeFrame(imaging::AcquiredRawFrame frame);
     // Full-size stills of a capture-stream lens: each still also lands binned
     // (same timestamp) in the viewfinder stream, where the photo claims it;
