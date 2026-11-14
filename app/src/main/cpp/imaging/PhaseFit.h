@@ -143,39 +143,52 @@ inline void fitFinalize(const uint32_t* stats, float black, uint32_t stride, flo
     }
 }
 
-// Corrected value of the sample at (x, y), black-subtracted, for block sum
-// `blockSum` (16 samples). Mirrors the shader's lookup.
-inline float fitCorrect(const float* lut, uint32_t x, uint32_t y, float raw, uint32_t blockSum, float black) {
+// Brightness lookup of one 4x4 block: bin position for its block sum.
+struct FitBlockPos {
+    uint32_t i0;
+    float fr;
+};
+inline FitBlockPos fitBlockPos(uint32_t blockSum, float black) {
     const float m = std::max(float(blockSum) / 16.0f - black, 1.0f);
     const float f = std::clamp((std::log(m) - (kFitLogMin + 0.5f * fitLogStep())) / fitLogStep(), 0.0f, float(kFitBins) - 1.001f);
     const uint32_t i0 = uint32_t(f);
-    const float fr = f - float(i0);
-    const uint32_t type = (((y >> 2) & 1u) << 1) | ((x >> 2) & 1u), p = ((y & 3u) << 2) | (x & 3u);
-    const float* c = lut + (type * 16 + p) * kFitBins;
-    const float ratio = c[i0] * (1.0f - fr) + c[i0 + 1] * fr;
-    return (raw - black) / ratio + black;
+    return {i0, f - float(i0)};
 }
 
-// Stage 4 fused with the exact 2x2 sum: quarter-DN output (w/2 x h/2).
+// Stage 4 fused with the exact 2x2 sum: quarter-DN output (w/2 x h/2). Works block by
+// block: one brightness lookup and the 16 position gains per 4x4 block, then each of its
+// four output pixels (2x2 samples each) is sum((raw - black) / ratio) + 4 * black.
 inline void fitSum2x2(const uint16_t* raw, const uint16_t* sums, uint32_t w, uint32_t h, float black, const float* lut,
                       uint16_t* out, uint32_t threads = 1) {
-    const uint32_t ow = w / 2, oh = h / 2, bw = w / 4;
-    threads = std::max(1u, std::min(threads, oh));
-    const auto rows = [&](uint32_t y0, uint32_t y1) {
-        for (uint32_t y = y0; y < y1; ++y)
-            for (uint32_t x = 0; x < ow; ++x) {
-                float s = 0.0f;
-                for (uint32_t j = 0; j < 2; ++j)
-                    for (uint32_t i = 0; i < 2; ++i) {
-                        const uint32_t sx = 2 * x + i, sy = 2 * y + j;
-                        s += fitCorrect(lut, sx, sy, float(raw[size_t(sy) * w + sx]), sums[size_t(sy >> 2) * bw + (sx >> 2)], black);
+    const uint32_t ow = w / 2, bw = w / 4, bh = h / 4;
+    threads = std::max(1u, std::min(threads, bh));
+    const auto rows = [&](uint32_t b0, uint32_t b1) {
+        for (uint32_t by = b0; by < b1; ++by)
+            for (uint32_t bx = 0; bx < bw; ++bx) {
+                const FitBlockPos pos = fitBlockPos(sums[size_t(by) * bw + bx], black);
+                const float* curve = lut + (((by & 1u) << 1) | (bx & 1u)) * 16u * kFitBins + pos.i0;
+                float gain[16];
+                for (uint32_t p = 0; p < 16; ++p) {
+                    const float* c = curve + p * kFitBins;
+                    gain[p] = 1.0f / (c[0] * (1.0f - pos.fr) + c[1] * pos.fr);
+                }
+                const uint16_t* base = raw + size_t(by * 4) * w + bx * 4;
+                uint16_t* dst = out + size_t(by * 2) * ow + bx * 2;
+                for (uint32_t oj = 0; oj < 2; ++oj)
+                    for (uint32_t oi = 0; oi < 2; ++oi) {
+                        float s = 4.0f * black;
+                        for (uint32_t j = 0; j < 2; ++j)
+                            for (uint32_t i = 0; i < 2; ++i) {
+                                const uint32_t p = ((oj * 2 + j) << 2) | (oi * 2 + i);
+                                s += (float(base[size_t(oj * 2 + j) * w + oi * 2 + i]) - black) * gain[p];
+                            }
+                        dst[size_t(oj) * ow + oi] = uint16_t(std::clamp(std::floor(s + 0.5f), 0.0f, 65535.0f));
                     }
-                out[size_t(y) * ow + x] = uint16_t(std::clamp(std::floor(s + 0.5f), 0.0f, 65535.0f));
             }
     };
     std::vector<std::thread> pool;
-    for (uint32_t t = 1; t < threads; ++t) pool.emplace_back(rows, oh * t / threads, oh * (t + 1) / threads);
-    rows(0, oh / threads);
+    for (uint32_t t = 1; t < threads; ++t) pool.emplace_back(rows, bh * t / threads, bh * (t + 1) / threads);
+    rows(0, bh / threads);
     for (auto& th : pool) th.join();
 }
 

@@ -40,7 +40,10 @@ Xiaomi 0.6-0.7/1.5-2.0/0.9-1.1 -> mostly unchanged. Statistics use an odd-stride
 Phone (Adreno 840, 16320x12288, GPU only, readback excluded, warm): Detail ~114 ms per frame
 (sum 8.5, green 14.4, Bayer out 76, trailing 8), Detail + fit ~151 ms (fit adds block sums 12,
 statistics 3, curve 1.5, corrected sum +19). Mac CPU, 8 threads: Detail 0.26 s, fit + corrected
-sum 0.07 s. GPU vs CPU: <= 2 codes on real frames, <= 4 with the fit. Phone CPU not measured.
+sum 0.07 s. GPU vs CPU: <= 2 codes on real frames, <= 4 with the fit.
+Phone CPU (Adreno 840 phone, 8 threads, same frame, cool): plain sum ~14 ms, fit + corrected sum
+~107 ms, Detail ~240 ms, so ~350 ms with the fit (was ~625 ms before the CPU Detail got the
+per-phase tap table, fused green + diff pass and per-block fit apply). Quad High ~280 ms.
 
 ## Files
 

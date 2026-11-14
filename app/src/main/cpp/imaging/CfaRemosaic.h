@@ -226,12 +226,13 @@ inline void remosaicBlockCfa(uint16_t* raw, uint32_t w, uint32_t h, uint32_t n, 
             pool.emplace_back([&, t] { body(rows * t / threads, rows * (t + 1) / threads); });
         for (auto& th : pool) th.join();
     };
-    parallelRows(h, [&](uint32_t y0, uint32_t y1) {
-        for (uint32_t y = y0; y < y1; ++y)
-            for (uint32_t x = 0; x < w; ++x)
-                green[size_t(y) * w + x] =
-                    uint16_t(std::clamp(std::lround(CfaRemosaicGreen::at(raw, w, h, n, order, x, y, codesPerDn, detail)), 0l, 65535l));
-    });
+    if (!detail)
+        parallelRows(h, [&](uint32_t y0, uint32_t y1) {
+            for (uint32_t y = y0; y < y1; ++y)
+                for (uint32_t x = 0; x < w; ++x)
+                    green[size_t(y) * w + x] =
+                        uint16_t(std::clamp(std::lround(CfaRemosaicGreen::at(raw, w, h, n, order, x, y, codesPerDn)), 0l, 65535l));
+        });
     if (quality == CfaRemosaicQuality::Standard) {
         diff.assign(size_t(bw) * bh, 0.0f);
         blockGreen.assign(size_t(bw) * bh, 0.0f);
@@ -256,49 +257,113 @@ inline void remosaicBlockCfa(uint16_t* raw, uint32_t w, uint32_t h, uint32_t n, 
         // aside because the Bayer output overwrites `raw` in place. Quarter-DN
         // 10-bit input stays well inside int16.
         std::vector<int16_t> pixelDiff(size_t(w) * h, 0);
-        parallelRows(h, [&](uint32_t y0, uint32_t y1) {
-            for (uint32_t y = y0; y < y1; ++y)
-                for (uint32_t x = 0; x < w; ++x) {
-                    if (cfaChannel(order, x / 2, y / 2) == 1u) continue;
-                    const size_t i = size_t(y) * w + x;
-                    pixelDiff[i] = int16_t(std::clamp<int32_t>(int32_t(raw[i]) - int32_t(green[i]), -32768, 32767));
+        // Green (cubic) and the colour difference in one pass per 2x2 group. A
+        // group lies inside one block; the horizontal terms belong to its rows
+        // and the vertical ones to its columns, so each is loaded once for the
+        // group (the shader's greenGroup does the same). Groups within 4 pixels
+        // of an edge use the clamped per-pixel estimate.
+        parallelRows((h + 1) / 2, [&](uint32_t g0, uint32_t g1) {
+            const float eps = codesPerDn;
+            const auto store = [&](uint32_t x, uint32_t y, float v, bool colour) {
+                const size_t i = size_t(y) * w + x;
+                green[i] = uint16_t(std::clamp(std::lround(v), 0l, 65535l));
+                if (colour) pixelDiff[i] = int16_t(std::clamp<int32_t>(int32_t(raw[i]) - int32_t(green[i]), -32768, 32767));
+            };
+            for (uint32_t gy = g0; gy < g1; ++gy)
+                for (uint32_t gx = 0; gx < (w + 1) / 2; ++gx) {
+                    const uint32_t x0 = gx * 2, y0 = gy * 2;
+                    const bool colour = cfaChannel(order, gx, gy) != 1u;
+                    const bool interior = x0 >= 4 && y0 >= 4 && x0 + 5 < w && y0 + 5 < h;
+                    if (!colour) {
+                        for (uint32_t j = 0; j < 2 && y0 + j < h; ++j)
+                            for (uint32_t i = 0; i < 2 && x0 + i < w; ++i) green[size_t(y0 + j) * w + x0 + i] = raw[size_t(y0 + j) * w + x0 + i];
+                        continue;
+                    }
+                    if (!interior) {
+                        for (uint32_t j = 0; j < 2 && y0 + j < h; ++j)
+                            for (uint32_t i = 0; i < 2 && x0 + i < w; ++i)
+                                store(x0 + i, y0 + j, CfaRemosaicGreen::at(raw, w, h, 2, order, x0 + i, y0 + j, codesPerDn, true), true);
+                        continue;
+                    }
+                    float gh[2][2], ah[2], gv[2][2], av[2];
+                    for (uint32_t j = 0; j < 2; ++j) {
+                        const uint16_t* r = raw + size_t(y0 + j) * w;
+                        const float gl = r[x0 - 1], gr = r[x0 + 2];
+                        ah[j] = std::abs(gl - gr) + std::abs(float(r[x0]) - float(r[x0 + 1])) +
+                                0.5f * std::abs(float(r[x0 - 3]) - float(r[x0 + 4]));
+                        for (uint32_t i = 0; i < 2; ++i)
+                            gh[j][i] = cfaHermite(gl, gr, (gl - float(r[x0 - 2])) * 3.0f, (float(r[x0 + 3]) - gr) * 3.0f,
+                                                  float(i + 1) / 3.0f);
+                    }
+                    for (uint32_t i = 0; i < 2; ++i) {
+                        const uint16_t* c = raw + x0 + i;
+                        const float gt = c[size_t(y0 - 1) * w], gb = c[size_t(y0 + 2) * w];
+                        av[i] = std::abs(gt - gb) + std::abs(float(c[size_t(y0) * w]) - float(c[size_t(y0 + 1) * w])) +
+                                0.5f * std::abs(float(c[size_t(y0 - 3) * w]) - float(c[size_t(y0 + 4) * w]));
+                        for (uint32_t j = 0; j < 2; ++j)
+                            gv[j][i] = cfaHermite(gt, gb, (gt - float(c[size_t(y0 - 2) * w])) * 3.0f,
+                                                  (float(c[size_t(y0 + 3) * w]) - gb) * 3.0f, float(j + 1) / 3.0f);
+                    }
+                    for (uint32_t j = 0; j < 2; ++j)
+                        for (uint32_t i = 0; i < 2; ++i) {
+                            const float a = (ah[j] + eps) * (ah[j] + eps), b = (av[i] + eps) * (av[i] + eps);
+                            store(x0 + i, y0 + j, (gh[j][i] * b + gv[j][i] * a) / (a + b), true);
+                        }
                 }
         });
         // Taps: wanted-colour pixels within 3 pixels, Gaussian distance weight
         // and quartic green similarity (same shape as High's, per pixel).
+        // The wanted-colour taps depend only on the pixel's phase (x & 3, y & 3),
+        // so each phase gets its tap list once (same order as the shader's block walk).
         constexpr int32_t kRadius = 3;
-        float spatialTable[2 * kRadius + 1][2 * kRadius + 1];
-        for (int32_t dy = -kRadius; dy <= kRadius; ++dy)
-            for (int32_t dx = -kRadius; dx <= kRadius; ++dx)
-                spatialTable[dy + kRadius][dx + kRadius] = std::exp(-float(dx * dx + dy * dy) * 0.25f);
+        struct DetailTap {
+            int32_t dx, dy;
+            float spatial;
+        };
+        std::vector<DetailTap> detailTaps[4][4];
+        for (int32_t py = 0; py < 4; ++py)
+            for (int32_t px = 0; px < 4; ++px) {
+                const uint32_t want = cfaChannel(order, uint32_t(px), uint32_t(py));
+                if (want == 1u || cfaChannel(order, uint32_t(px) / 2, uint32_t(py) / 2) == want) continue;
+                for (int32_t by = (py - kRadius) >> 1; by <= (py + kRadius) >> 1; ++by)
+                    for (int32_t bx = (px - kRadius) >> 1; bx <= (px + kRadius) >> 1; ++bx) {
+                        if (cfaChannel(order, uint32_t(bx) & 1u, uint32_t(by) & 1u) != want) continue;
+                        for (int32_t j = 0; j < 2; ++j)
+                            for (int32_t i = 0; i < 2; ++i) {
+                                const int32_t dx = 2 * bx + i - px, dy = 2 * by + j - py;
+                                if (std::abs(dx) > kRadius || std::abs(dy) > kRadius) continue;
+                                detailTaps[py][px].push_back({dx, dy, std::exp(-float(dx * dx + dy * dy) * 0.25f)});
+                            }
+                    }
+            }
+        const float sigmaFloor = 4.0f * codesPerDn;
         parallelRows(h, [&](uint32_t y0, uint32_t y1) {
             for (uint32_t y = y0; y < y1; ++y)
                 for (uint32_t x = 0; x < w; ++x) {
+                    const auto& taps = detailTaps[y & 3u][x & 3u];
                     const size_t i = size_t(y) * w + x;
-                    const uint32_t want = cfaChannel(order, x, y);
-                    float v;
                     const float greenHere = float(green[i]);
-                    if (want == 1u) {
+                    float v;
+                    if (taps.empty()) {
+                        if (cfaChannel(order, x, y) != 1u) continue;  // own site: the summed sample stays
                         v = greenHere;
-                    } else if (cfaChannel(order, x / 2, y / 2) == want) {
-                        continue;  // own site: the summed sample stays
                     } else {
+                        const bool interior = x >= uint32_t(kRadius) && y >= uint32_t(kRadius) &&
+                                              x + uint32_t(kRadius) < w && y + uint32_t(kRadius) < h;
                         float sum = 0.0f, weight = 0.0f;
-                        for (int32_t dy = -kRadius; dy <= kRadius; ++dy) {
-                            const int32_t qy = int32_t(y) + dy;
-                            if (qy < 0 || qy >= int32_t(h)) continue;
-                            for (int32_t dx = -kRadius; dx <= kRadius; ++dx) {
-                                const int32_t qx = int32_t(x) + dx;
-                                if (qx < 0 || qx >= int32_t(w)) continue;
-                                if (cfaChannel(order, uint32_t(qx) / 2, uint32_t(qy) / 2) != want) continue;
-                                const size_t b = size_t(qy) * w + size_t(qx);
-                                const float g = float(green[b]);
-                                const float sigma = 0.1f * std::max(greenHere, g) + 4.0f * codesPerDn;
-                                const float r = (g - greenHere) / sigma;
-                                const float wgt = spatialTable[dy + kRadius][dx + kRadius] / (1.0f + r * r * r * r);
-                                sum += wgt * float(pixelDiff[b]);
-                                weight += wgt;
+                        for (const auto& t : taps) {
+                            if (!interior) {
+                                const int32_t qx = int32_t(x) + t.dx, qy = int32_t(y) + t.dy;
+                                if (qx < 0 || qx >= int32_t(w) || qy < 0 || qy >= int32_t(h)) continue;
                             }
+                            const size_t b = size_t(int64_t(i) + int64_t(t.dy) * int64_t(w) + t.dx);
+                            const float g = float(green[b]);
+                            // spatial / (1 + (d / s)^4) with one division
+                            const float d = g - greenHere, sg = 0.1f * std::max(greenHere, g) + sigmaFloor;
+                            const float d2 = d * d, s2 = sg * sg, s4 = s2 * s2;
+                            const float wgt = t.spatial * s4 / (s4 + d2 * d2);
+                            sum += wgt * float(pixelDiff[b]);
+                            weight += wgt;
                         }
                         v = greenHere + (weight > 0.0f ? sum / weight : 0.0f);
                     }
