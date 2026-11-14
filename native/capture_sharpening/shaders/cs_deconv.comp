@@ -25,6 +25,9 @@ const int KA = KN > 0 ? KN : 1;  // array size (the generic variant never uses i
 // Outputs per invocation: RB rows x CB columns. 4x1 left half the 256
 // invocations idle in a second round (38 x 10 items); 8x1 and skipping the
 // zero disc-corner taps were slower on Adreno 840.
+// Only the 3 / 5 / 7 kernels use this path. For 9 and 13 the two-column block
+// gave wrong odd columns on Adreno 840 (a period-2 vertical stripe), so they
+// run the separable path below, which is also several times cheaper.
 #define RB 4
 #define CB 2
 
@@ -36,7 +39,9 @@ shared float tmpI[MAXF * MAXF];
 shared float tmpD[MAXF * MAXF];
 // Early-stop threshold per core pixel: Yold * blend * 0.5 (RT iterCheck).
 shared float checkThr[TILE * TILE];
-shared float kernelW[13 * 13];
+// 2-D disc weights (KN < 9 and the generic path), or the 1-D Gaussian taps (KN >= 9).
+const int KW = (KN == 0 || KN < 9) ? 13 * 13 : 13;
+shared float kernelW[KW];
 shared uint flagBits;
 // Stop flags rotate over three slots: slot it % 3 is set during iteration it's
 // multiply step and read after its barrier; slot (it + 1) % 3 is cleared
@@ -68,6 +73,95 @@ void buildKernel(float sigma, int n) {
         for (int i = 0; i < n * n; ++i) kernelW[i] /= s;
     }
     barrier();
+}
+
+// KN >= 9 : the Gaussian PSF as two 1-D passes (2 x KN taps per output instead of
+// KN x KN). RawTherapee truncates the kernel to a disc; the square separable one keeps
+// the corner taps, under 1 % of the weight at these sizes (see README).
+void buildKernelSep(float sigma, int n) {
+    uint lid = gl_LocalInvocationIndex;
+    int r = n / 2;
+    if (lid < uint(n)) kernelW[lid] = exp(-float((int(lid) - r) * (int(lid) - r)) / (2.0 * sigma * sigma));
+    barrier();
+    if (lid == 0u) {
+        float s = 0.0;
+        for (int i = 0; i < n; ++i) s += kernelW[i];
+        for (int i = 0; i < n; ++i) kernelW[i] /= s;
+    }
+    barrier();
+}
+
+#define SEP_SLOTS 7   // ceil(40 * 40 / 256): most results one invocation holds across a barrier
+
+// divide: tmpD = lum0 / max(G (x) tmpI, 1e-5) on the interior; else tmpI *= G (x) tmpD.
+// Horizontal pass into tmpD (columns [r, F - r), every row for divide: the ring rows of tmpI are
+// the original Y; only the interior rows for multiply: the ring rows of tmpD are 1, which a
+// normalised blur leaves at 1), then the vertical pass. A pass that overwrites the plane it reads
+// holds its results in registers across a barrier. tmpD's ring is 1 again when divide returns.
+void separableStep(const bool divide, int border, bool check, uint slot) {
+    // KN >= 9 always runs with border 8, so the window is a constant and the index math folds to shifts.
+    const int F = TILE + 2 * 8;
+    const int r = KN / 2;
+    const int inner = F - 2 * r;
+    const uint lid = gl_LocalInvocationIndex;
+    const uint inner2 = uint(inner * inner);
+    float res[SEP_SLOTS];
+    if (divide) {
+        for (uint k = lid; k < uint(F * inner); k += 256u) {
+            int y = int(k) / inner, x = r + int(k) % inner;
+            float acc = 0.0;
+            [[unroll]] for (int d = -KN / 2; d <= KN / 2; ++d) acc += kernelW[d + KN / 2] * tmpI[y * F + x + d];
+            tmpD[y * F + x] = acc;
+        }
+        barrier();
+        [[unroll]] for (int s = 0; s < SEP_SLOTS; ++s) {
+            uint k = lid + uint(s) * 256u;
+            res[s] = 0.0;
+            if (k < inner2) {
+                int y = r + int(k) / inner, x = r + int(k) % inner;
+                float acc = 0.0;
+                [[unroll]] for (int d = -KN / 2; d <= KN / 2; ++d) acc += kernelW[d + KN / 2] * tmpD[(y + d) * F + x];
+                res[s] = lum0(y * F + x) / max(acc, 0.00001);
+            }
+        }
+        barrier();
+        [[unroll]] for (int s = 0; s < SEP_SLOTS; ++s) {
+            uint k = lid + uint(s) * 256u;
+            if (k < inner2) tmpD[(r + int(k) / inner) * F + r + int(k) % inner] = res[s];
+        }
+        for (uint k = lid; k < uint(2 * r * inner); k += 256u) {
+            int row = int(k) / inner, x = r + int(k) % inner;
+            tmpD[(row < r ? row : F - 2 * r + row) * F + x] = 1.0;   // top r rows, then bottom r rows
+        }
+    } else {
+        [[unroll]] for (int s = 0; s < SEP_SLOTS; ++s) {
+            uint k = lid + uint(s) * 256u;
+            res[s] = 0.0;
+            if (k < inner2) {
+                int y = r + int(k) / inner, x = r + int(k) % inner;
+                float acc = 0.0;
+                [[unroll]] for (int d = -KN / 2; d <= KN / 2; ++d) acc += kernelW[d + KN / 2] * tmpD[y * F + x + d];
+                res[s] = acc;
+            }
+        }
+        barrier();
+        [[unroll]] for (int s = 0; s < SEP_SLOTS; ++s) {
+            uint k = lid + uint(s) * 256u;
+            if (k < inner2) tmpD[(r + int(k) / inner) * F + r + int(k) % inner] = res[s];
+        }
+        barrier();
+        for (uint k = lid; k < inner2; k += 256u) {
+            int y = r + int(k) / inner, x = r + int(k) % inner;
+            float acc = 0.0;
+            [[unroll]] for (int d = -KN / 2; d <= KN / 2; ++d) acc += kernelW[d + KN / 2] * tmpD[(y + d) * F + x];
+            int idx = y * F + x;
+            float t = tmpI[idx] * acc;
+            tmpI[idx] = t;
+            if (check && x >= border && y >= border && x < F - border && y < F - border &&
+                t < checkThr[(y - border) * TILE + (x - border)])
+                stopFlag[slot] = 1u;
+        }
+    }
 }
 
 float convolve(bool fromTmpI, int x, int y, int n, int F) {
@@ -204,7 +298,9 @@ void main() {
     }
     barrier();
     if (uintBitsToFloat(flagBits) < 0.01) return;  // RT skips tiles below minBlend
-    if (n > 0) buildKernel(sigmaTile, n);
+    if (n > 0) {
+        if (KN >= 9) buildKernelSep(sigmaTile, n); else buildKernel(sigmaTile, n);
+    }
 
     const int r = n / 2;
     const int inner = F - 2 * r;
@@ -214,7 +310,12 @@ void main() {
         const bool check = iterCheck && it < iterations - 1;
         const uint slot = uint(it) % 3u;
         if (lid == 0u) stopFlag[(slot + 1u) % 3u] = 0u;
-        if (KN != 0) {
+        if (KN >= 9) {
+            separableStep(true, border, false, slot);
+            barrier();
+            separableStep(false, border, check, slot);
+            barrier();
+        } else if (KN != 0) {
             blockedStep(true, F, border, false, slot);
             barrier();
             blockedStep(false, F, border, check, slot);

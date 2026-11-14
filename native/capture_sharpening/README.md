@@ -40,6 +40,14 @@ and the output matches a whole-frame run (50 MP: byte-identical in 3 strips).
 
 ## Deviations from RT
 
+- Kernels of 9 and 13 taps (sigma above 1.15) convolve as two 1-D Gaussian passes
+  instead of RT's disc-truncated 2-D kernel. The square kernel keeps the corner taps,
+  0.6 % of the weight at sigma 1.9; on a 12.5 MP frame the result matches the disc kernel
+  to fp16 rounding (Mac, fixed radius 1.9: max abs 1.2e-4). The 3 / 5 / 7 kernels stay
+  exact. On Adreno 840 the register-blocked 2-D path gave wrong odd columns (a period-2
+  vertical stripe) at 9 taps and wrong values at 13 even with one column per thread, so
+  the separable path is also the correct one there. Device (V2562, 12.5 MP, radius 1.9,
+  2 iterations): deconvolution 77 -> 30 ms, whole pass 120 -> 65 ms.
 - Scalar float on the GPU instead of RT's float/double mix: ~1 ulp per value.
 - The tile scratch ring is reset per tile; RT reuses it per OpenMP thread, which
   only changes results with a corner offset (and is schedule-dependent in RT).
