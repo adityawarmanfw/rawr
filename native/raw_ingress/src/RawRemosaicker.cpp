@@ -8,10 +8,14 @@
 namespace rawr::raw_ingress {
 namespace {
 void check(VkResult r, const char* what) {
-    if (r != VK_SUCCESS) throw std::runtime_error(std::string("raw remosaic: ") + what + " VkResult=" + std::to_string(r));
+    if (r != VK_SUCCESS)
+        throw std::runtime_error(std::string("raw remosaic: ") + what + " VkResult=" + std::to_string(r));
 }
 struct PushConstants {
     std::uint32_t width, height, rowStrideBytes, block, order, raw10, pass, blocksX, blocksY, parityR, parityB;
+    float codesPerDn;
+    float blackLevel;
+    std::uint32_t fit, fitStride;
 };
 void memoryBarrier(VkCommandBuffer command, VkAccessFlags src, VkAccessFlags dst) {
     VkMemoryBarrier b{};
@@ -72,8 +76,8 @@ RawRemosaicker::RawRemosaicker(const rawr::vk::GpuContext& context) : context_(c
         vkDestroyShaderModule(d, module, nullptr);
         check(created, "pipeline");
 
-        std::array<VkDescriptorPoolSize, 2> sizes{{{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3 * kSlots},
-                                                   {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 5 * kSlots}}};
+        std::array<VkDescriptorPoolSize, 2> sizes{
+            {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3 * kSlots}, {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 5 * kSlots}}};
         VkDescriptorPoolCreateInfo pi{};
         pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         pi.maxSets = kSlots;
@@ -172,9 +176,20 @@ void RawRemosaicker::record(VkCommandBuffer command, std::uint32_t slot, const F
         throw std::invalid_argument("raw remosaic: invalid record arguments");
     if (f.rowStrideBytes < (f.raw10 ? f.width / 4u * 5u : f.width * 2u))
         throw std::invalid_argument("raw remosaic: row stride below width");
-    ensureScratch(f.width, f.height, f.block);
-    Binding& bound = bound_[slot];
-    if (bound.source != f.source || bound.destination != f.destination || bound.raw != scratch_.raw.view) {
+    if (f.phaseFit && (!f.hexadecaToQuad || f.fitStride % 2u == 0u || f.width / 4u < 9u || f.height / 4u < 9u))
+        throw std::invalid_argument("raw remosaic: phase fit needs the Hexadeca reduction, an odd stride, 9x9 blocks");
+    const bool quadOnly = f.quality == Quality::High || f.quality == Quality::Detail;
+    if ((f.hexadecaToQuad && (f.block != 4u || !quadOnly || f.width % 8u || f.height % 8u)) ||
+        (quadOnly && !f.hexadecaToQuad && f.block != 2u) || static_cast<unsigned>(f.quality) > 3u)
+        throw std::invalid_argument("raw remosaic: unsupported High/reduction configuration");
+    const auto width = f.hexadecaToQuad ? f.width / 2u : f.width;
+    const auto height = f.hexadecaToQuad ? f.height / 2u : f.height;
+    const auto block = f.hexadecaToQuad ? 2u : f.block;
+    ensureScratch(width, height, block);
+    // The slot has retired before record(). Always refresh descriptors:
+    // callers may destroy/recreate buffers and views with recycled handle
+    // values, which cannot safely serve as resource-lifetime cache keys.
+    {
         VkDescriptorBufferInfo source{f.source, 0, VK_WHOLE_SIZE};
         VkDescriptorImageInfo image{VK_NULL_HANDLE, f.destination, VK_IMAGE_LAYOUT_GENERAL};
         VkDescriptorImageInfo raw{VK_NULL_HANDLE, scratch_.raw.view, VK_IMAGE_LAYOUT_GENERAL};
@@ -200,13 +215,25 @@ void RawRemosaicker::record(VkCommandBuffer command, std::uint32_t slot, const F
         writes[7].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[7].pBufferInfo = &diff;
         vkUpdateDescriptorSets(context_.device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
-        bound = {f.source, f.destination, scratch_.raw.view};
     }
-    const std::uint32_t bw = (f.width + f.block - 1) / f.block, bh = (f.height + f.block - 1) / f.block;
+    const std::uint32_t bw = (width + block - 1) / block, bh = (height + block - 1) / block;
     // Block parity ((y & 1) << 1 | (x & 1)) of red and blue for this order (0=RGGB 1=GRBG 2=GBRG 3=BGGR).
     static constexpr std::uint32_t kParityR[4] = {0u, 1u, 2u, 3u}, kParityB[4] = {3u, 2u, 1u, 0u};
-    PushConstants pc{f.width, f.height, f.rowStrideBytes, f.block, f.order, f.raw10 ? 1u : 0u, 0u, bw, bh,
-                     kParityR[f.order], kParityB[f.order]};
+    PushConstants pc{width,
+                     height,
+                     f.rowStrideBytes,
+                     block,
+                     f.order,
+                     f.raw10 ? 1u : 0u,
+                     0u,
+                     bw,
+                     bh,
+                     kParityR[f.order],
+                     kParityB[f.order],
+                     f.hexadecaToQuad ? 4.0f : 1.0f,
+                     f.blackLevel,
+                     f.phaseFit ? 1u : 0u,
+                     f.fitStride};
     const auto stamp = [&](std::uint32_t index) {
         if (f.timestamps) vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, f.timestamps, index);
     };
@@ -237,7 +264,29 @@ void RawRemosaicker::record(VkCommandBuffer command, std::uint32_t slot, const F
         vkCmdDispatch(command, (gx + 15u) / 16u, (gy + 15u) / 16u, 1);
     };
     // Raw rows into the cached image: a transfer for RAW16, an unpack for RAW10.
-    if (f.raw10) {
+    if (f.hexadecaToQuad) {
+        if (f.phaseFit) {
+            // Statistics and curve live in the diff buffer; the green image
+            // holds the 4x4 block sums until the green pass overwrites it.
+            const auto rw = [&] {
+                memoryBarrier(command, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+            };
+            const std::uint32_t bw4 = width / 2u, bh4 = height / 2u;
+            pass(13u, 16u, 16u);
+            rw();
+            pass(10u, bw4, bh4);
+            rw();
+            stamp(5);
+            pass(11u, (bw4 - 8u) / f.fitStride + 1u, (bh4 - 8u) / f.fitStride + 1u);
+            rw();
+            stamp(6);
+            pass(12u, 16u, 16u);
+            rw();
+            stamp(7);
+        }
+        pass(6u, width, height);
+        memoryBarrier(command, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+    } else if (f.raw10) {
         pass(3u, f.width, f.height);
         memoryBarrier(command, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
     } else {
@@ -250,16 +299,19 @@ void RawRemosaicker::record(VkCommandBuffer command, std::uint32_t slot, const F
         b.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
         b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &b,
-                             0, nullptr, 0, nullptr);
+        vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &b, 0,
+                             nullptr, 0, nullptr);
     }
     stamp(1);
     // One invocation per 2x2 pixel group (see the shader).
     const bool fast = f.quality == Quality::Fast;
-    pass(fast ? 4u : 0u, (f.width + 1u) / 2u, (f.height + 1u) / 2u);  // block means / green + colour difference
+    const bool detail = f.quality == Quality::Detail;
+    // Block means / green + colour difference (Detail: cubic green only).
+    pass(fast ? 4u : (detail ? 8u : 0u), (width + 1u) / 2u, (height + 1u) / 2u);
     memoryBarrier(command, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
     stamp(2);
-    pass(fast ? 5u : 2u, (f.width + 1u) / 2u, (f.height + 1u) / 2u);  // Bayer out
+    pass(fast ? 5u : (detail ? 9u : (f.quality == Quality::High ? 7u : 2u)), (width + 1u) / 2u,
+         (height + 1u) / 2u);  // Bayer out
     stamp(3);
 }
 

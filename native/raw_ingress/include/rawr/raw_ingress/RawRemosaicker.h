@@ -27,8 +27,9 @@ class RawRemosaicker final {
     RawRemosaicker(const RawRemosaicker&) = delete;
     RawRemosaicker& operator=(const RawRemosaicker&) = delete;
 
-    // Mirrors imaging::CfaRemosaicQuality (High is CPU-only).
-    enum class Quality : std::uint32_t { Fast = 0, Standard = 1 };
+    // Mirrors imaging::CfaRemosaicQuality. High and Detail support Quad only
+    // (block 2, or the Hexadeca reduction below).
+    enum class Quality : std::uint32_t { Fast = 0, Standard = 1, High = 2, Detail = 3 };
     struct Frame {
         VkBuffer source = VK_NULL_HANDLE;
         VkImageView destination = VK_NULL_HANDLE;  // GENERAL layout
@@ -38,13 +39,28 @@ class RawRemosaicker final {
         std::uint32_t block = 2;  // 2 or 4
         std::uint32_t order = 0;  // CfaPattern code of the blocks (and the Bayer out)
         Quality quality = Quality::Standard;
-        // Optional: timestamps 0..3 around raw-in, green + block diff, Bayer out (profiling).
+        // Standalone Hexadeca reduction: input dimensions above, output is
+        // width/2 x height/2. Requires block=4, High or Detail, dimensions divisible by 8.
+        // Source codes must be <=16383 (10-bit capture is the tested case).
+        // Exact 2x2 sums encode quarter DN; destination and scratch keep these
+        // units. No 200MP intermediate image. Caller scales calibration by 4.
+        bool hexadecaToQuad = false;
+        // Hexadeca reduction only: fit the sensor's per-position response from
+        // this frame's own flat blocks and divide it out before the 2x2 sum
+        // (imaging/PhaseFit.h). Samples must be <= 4095. `blackLevel` is the raw
+        // black in source codes; `fitStride` (odd) thins the statistics lattice
+        // (3 keeps full quality at about a ninth of the reads).
+        bool phaseFit = false;
+        float blackLevel = 64.0f;
+        std::uint32_t fitStride = 3;
+        // Optional: timestamps 0..3 around raw-in, green + block diff, Bayer out (profiling);
+        // with phaseFit also 5, 6, 7 after block sums, statistics and curve (pool of 8).
         VkQueryPool timestamps = VK_NULL_HANDLE;
     };
     // Records the three passes. Scratch is (re)allocated when the size
     // changes, which requires every earlier submission to have retired; the
     // slot's previous submission must have retired too (its set is rewritten
-    // when the bindings change).
+    // on every record, including when handle values have been recycled).
     void record(VkCommandBuffer command, std::uint32_t slot, const Frame& frame);
 
    private:
@@ -53,11 +69,6 @@ class RawRemosaicker final {
     void ensureScratch(std::uint32_t width, std::uint32_t height, std::uint32_t block);
     void releaseScratch() noexcept;
 
-    struct Binding {
-        VkBuffer source = VK_NULL_HANDLE;
-        VkImageView destination = VK_NULL_HANDLE;
-        VkImageView raw = VK_NULL_HANDLE;
-    };
     struct Scratch {
         rawr::vk::OwnedImage raw, green;
         VkBuffer diff = VK_NULL_HANDLE;
@@ -70,7 +81,6 @@ class RawRemosaicker final {
     VkPipeline pipeline_ = VK_NULL_HANDLE;
     VkDescriptorPool pool_ = VK_NULL_HANDLE;
     std::array<VkDescriptorSet, kSlots> sets_{};
-    std::array<Binding, kSlots> bound_{};
     Scratch scratch_;
 };
 

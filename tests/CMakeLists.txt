@@ -50,6 +50,8 @@ rawr_test(binned_corner_test
   "${RAWR_ROOT}/tests/native/binned_corner_test.cpp")
 rawr_test(cfa_remosaic_test
   "${RAWR_ROOT}/tests/native/cfa_remosaic_test.cpp")
+rawr_test(phase_fit_test
+  "${RAWR_ROOT}/tests/native/phase_fit_test.cpp")
 rawr_test(still_binned_fallback_test
   "${RAWR_ROOT}/tests/native/still_binned_fallback_test.cpp")
 target_include_directories(still_binned_fallback_test BEFORE PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/native/reader_stubs")

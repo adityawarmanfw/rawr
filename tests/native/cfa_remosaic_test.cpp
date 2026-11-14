@@ -99,6 +99,54 @@ int main() {
             check(sum / count < (quality == CfaRemosaicQuality::High ? 1.0 : (n == 2 ? 3.0 : 6.0)), what);
         }
     }
+    // A flat color field with quarter-DN channel values must retain its
+    // fractional signal on measured and reconstructed sites, in every order.
+    for (uint32_t order = 0; order < 4; ++order) {
+        constexpr uint32_t side = 64;
+        const uint16_t levels[3] = {401, 802, 603};
+        std::vector<uint16_t> input(side * side);
+        for (uint32_t y = 0; y < side; ++y)
+            for (uint32_t x = 0; x < side; ++x)
+                input[y * side + x] = levels[cfaChannel(order, x / 2, y / 2)];
+        for (auto q : {CfaRemosaicQuality::Standard, CfaRemosaicQuality::High, CfaRemosaicQuality::Detail}) {
+            auto out = input;
+            remosaicBlockCfa(out.data(), side, side, 2, order, 2, q, 4.0f);
+            bool exact = true;
+            for (uint32_t y = 12; y < side - 12; ++y)
+                for (uint32_t x = 12; x < side - 12; ++x)
+                    exact &= out[y * side + x] == levels[cfaChannel(order, x, y)];
+            check(exact, "quarter-DN constant-color field reconstructed exactly");
+        }
+        // Detail: a linear ramp is reproduced by the cubic green estimate (its
+        // end slopes equal the ramp slope), and the clamp keeps a step inside
+        // its end values.
+        for (uint32_t y = 0; y < side; ++y)
+            for (uint32_t x = 0; x < side; ++x) input[y * side + x] = uint16_t(400 + 6 * x + 3 * y);
+        for (uint32_t y = 8; y < side - 8; y += 3)
+            for (uint32_t x = 8; x < side - 8; x += 3) {
+                const float g = CfaRemosaicGreen::at(input.data(), side, side, 2, order, x, y, 1.0f, true);
+                check(std::abs(g - float(input[y * side + x])) < 0.01f, "cubic green reproduces a ramp");
+            }
+        for (uint32_t y = 0; y < side; ++y)
+            for (uint32_t x = 0; x < side; ++x) input[y * side + x] = x < 33 ? 200 : 800;
+        for (uint32_t y = 8; y < side - 8; y += 3)
+            for (uint32_t x = 8; x < side - 8; x += 3) {
+                const float g = CfaRemosaicGreen::at(input.data(), side, side, 2, order, x, y, 1.0f, true);
+                check(g >= 199.99f && g <= 800.01f, "cubic green does not overshoot a step");
+            }
+        // Green estimate is homogeneous when DN constants scale with input.
+        for (uint32_t y = 0; y < side; ++y)
+            for (uint32_t x = 0; x < side; ++x)
+                input[y * side + x] = uint16_t(64 + (x * 37 + y * 19) % 900);
+        auto scaled = input;
+        for (auto& v : scaled) v *= 4;
+        for (uint32_t y = 8; y < side - 8; y += 3)
+            for (uint32_t x = 8; x < side - 8; x += 3) {
+                float a = CfaRemosaicGreen::at(input.data(), side, side, 2, order, x, y);
+                float b = CfaRemosaicGreen::at(scaled.data(), side, side, 2, order, x, y, 4.0f);
+                check(std::abs(a - b / 4) < 0.001f, "fixed-point green weights retain DN scale");
+            }
+    }
     if (failures == 0) std::printf("cfa_remosaic_test: ok\n");
     return failures == 0 ? 0 : 1;
 }
