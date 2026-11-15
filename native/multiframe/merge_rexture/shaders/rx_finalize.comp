@@ -36,7 +36,9 @@ layout(push_constant) uniform P {
 } p;
 
 const float RB_WIDEN = 1.2;
-const float NEFF_LO = 1.0, NEFF_HI = 3.0, MASS_LO = 0.001, MASS_HI = 0.03;
+// NEFF_HI 1.5 (was 3): the smaller dark-area kernel (rx_kernel_cov) halves the effective frame count of a well merged pixel, and at 3 most of a dark moving
+// subject fell back to the single-frame demosaic of the noisy base frame, whose noise shows as a maze of curly lines.
+const float NEFF_LO = 1.0, NEFF_HI = 1.5, MASS_LO = 0.001, MASS_HI = 0.03;
 const float FRAME_NORM_FLOOR = 0.1;
 // Exponent of the normalisation: 1 = every frame carries the same weight whatever its sample offsets (sharpness falls as frames are
 // added), 0 = plain kernel weights (base ~3x over-weighted). 0.5 keeps the grain of 1 and the detail of 0 (tmp/rxsoft).

@@ -17,7 +17,7 @@ layout(push_constant) uniform P {
     int w, h;
 } p;
 
-const float NEFF_HI = 3.0, MASS_HI = 0.03;   // as in rx_finalize
+const float NEFF_HI = 1.5, MASS_HI = 0.03;   // as in rx_finalize
 shared uint sAny;
 
 void main() {
