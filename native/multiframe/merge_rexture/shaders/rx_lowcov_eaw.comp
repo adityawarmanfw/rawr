@@ -31,6 +31,9 @@ const int HALO = 14;
 // next to it (m = 0.15 is about the noise variance of a 7-8 frame merge) and never below 0.3 of its amplitude.
 const float TARGET = 0.15;             // output noise variance relative to one frame that is left alone
 const float GMIN = 0.3;                // lowest amplitude gain of the bands finer than x3
+// Colour is shrunk further out, down to m = TARGET_C (about 12 frames): its amplitude then stays level from 4 to 12 frames instead of
+// rising when the pass switches off at TARGET and falling again with more frames.
+const float TARGET_C = 0.08;
 const float KC = 2.0;                  // colour range weight relative to the luma one
 const float FK[3] = float[3](1.0, 0.6, 0.4);   // range noise factor of the three levels
 const float B3[5] = float[5](1.0 / 16.0, 4.0 / 16.0, 6.0 / 16.0, 4.0 / 16.0, 1.0 / 16.0);
@@ -89,7 +92,7 @@ void main() {
         const ivec2 c0 = ivec2((wo.x - 24) >> 2, (wo.y - 24) >> 2);   // 16 x 16 cells = [wo - 24, wo + 40)
         {
             ivec2 c = clamp(c0 + ivec2(tid % 16, tid / 16), ivec2(0), imageSize(mI) - 1);
-            if (imageLoad(mI, c).x > TARGET) atomicOr(sActive, 1u);
+            if (imageLoad(mI, c).x > TARGET_C) atomicOr(sActive, 1u);
         }
         barrier();
         if (sActive == 0u) return;
@@ -102,9 +105,18 @@ void main() {
         imageStore(x2I, ivec2(q.x, q.y - p.a2), vec4(atrous(1, q, 2, m), 1.0));
     } else {
         const float g = clamp(sqrt(TARGET / max(m, 1e-6)), GMIN, 1.0);
-        if (g >= 1.0) return;
+        const float gc = min(g * g, clamp(sqrt(TARGET_C / max(m, 1e-6)), 0.0, 1.0));   // colour gain
+        if (gc >= 1.0) return;
         const vec3 x3 = atrous(2, q, 4, m);
         const vec3 x0 = imageLoad(x0I, q).rgb;
-        imageStore(x0I, q, vec4(x3 + g * (x0 - x3), 1.0));
+        // Band-dependent shrink, coarse -> fine. Luma (green): the 4 px band by g, the 2 px and the finest band by sqrt(g), so most of the fine grain
+        // and the low-contrast texture survive and the coarse noise (the blotches) is what gets weaker. Colour (R - G, B - G) is shrunk harder, by min(g^2, sqrt(TARGET_C / m)) on
+        // every band: colour noise is far less visible than luma noise, and unshrunk fine colour noise shows as coloured specks along edges.
+        const vec3 x1 = fetch(1, q);
+        const vec3 x2 = fetch(2, q);
+        const vec3 b3 = x2 - x3, b2 = x1 - x2, b1 = x0 - x1;
+        const float yl = x3.g + g * b3.g + sqrt(g) * b2.g + sqrt(g) * b1.g;
+        const vec2 ch = (x3.rb - x3.g) + gc * ((b3.rb - b3.g) + (b2.rb - b2.g) + (b1.rb - b1.g));
+        imageStore(x0I, q, vec4(ch.x + yl, yl, ch.y + yl, 1.0));
     }
 }

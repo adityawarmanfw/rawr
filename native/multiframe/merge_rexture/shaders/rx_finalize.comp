@@ -37,7 +37,10 @@ layout(push_constant) uniform P {
 
 const float RB_WIDEN = 1.2;
 const float NEFF_LO = 1.0, NEFF_HI = 3.0, MASS_LO = 0.001, MASS_HI = 0.03;
-const float FRAME_NORM_FLOOR = 0.1;   // as in rx_accumulate
+const float FRAME_NORM_FLOOR = 0.1;
+// Exponent of the normalisation: 1 = every frame carries the same weight whatever its sample offsets (sharpness falls as frames are
+// added), 0 = plain kernel weights (base ~3x over-weighted). 0.5 keeps the grain of 1 and the detail of 0 (tmp/rxsoft).
+const float FRAME_NORM_GAMMA = 0.5;   // as in rx_accumulate
 shared float sM[256];                 // m of the workgroup's pixels (-1 outside the image)
 
 struct Fin { vec3 rgb; float conf; float neff; };
@@ -62,7 +65,7 @@ Fin finalizeAt(ivec2 q0) {
             rw[cc] += ww;
         }
     {   // the base frame's weight per colour is 1, like every companion's at full robustness
-        const vec3 sc = vec3(1.0) / max(rw, vec3(FRAME_NORM_FLOOR));
+        const vec3 sc = pow(vec3(1.0) / max(rw, vec3(FRAME_NORM_FLOOR)), vec3(FRAME_NORM_GAMMA));
         rs *= sc;
         rw *= sc;
     }

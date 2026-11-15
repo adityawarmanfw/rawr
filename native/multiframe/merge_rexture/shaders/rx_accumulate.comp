@@ -38,6 +38,9 @@ const float RB_WIDEN = 1.2;
 // frame's robustness (a floor keeps weak-support taps from being boosted). Without it the base frame's samples, which sit on
 // the output grid, weigh about three times a companion's, and the merge keeps more noise in red and blue.
 const float FRAME_NORM_FLOOR = 0.1;
+// Exponent of the normalisation: 1 = every frame carries the same weight whatever its sample offsets (sharpness falls as frames are
+// added), 0 = plain kernel weights (base ~3x over-weighted). 0.5 keeps the grain of 1 and the detail of 0 (tmp/rxsoft).
+const float FRAME_NORM_GAMMA = 0.5;
 
 uint loadRaw(int f, ivec2 q) { return f == 0 ? imageLoad(rawU16, q).x : imageLoad(rawU16B, q).x; }
 vec2 loadFlow(int f, ivec2 q) { return f == 0 ? imageLoad(flowI, q).xy : imageLoad(flowB, q).xy; }
@@ -104,7 +107,7 @@ void main() {
             }
         {
             const float rw = max(r * p.frameWeight, 1e-30);
-            const vec3 sc = vec3(1.0) / max(fw / rw, vec3(FRAME_NORM_FLOOR));
+            const vec3 sc = pow(vec3(1.0) / max(fw / rw, vec3(FRAME_NORM_FLOOR)), vec3(FRAME_NORM_GAMMA));
             fs *= sc;
             fw *= sc;
             f2 *= sc * sc;
