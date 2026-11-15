@@ -98,21 +98,19 @@ pixels, with main/tele image sizes of 8160×6128 and 8160×6144 respectively.
 
 ### Profile keys and shutter behavior
 
-The current H profiles assign keys to these scopes (names below use the
-`vivo.control.` prefix unless written in full):
+The current H profiles send only these keys (names below use the `vivo.control.` prefix unless
+written in full). The stock camera's other keys (`ultra_highresolution = 0`, `echo.mode`,
+`session.uiSwitch_state`, `is_pro_mode`, `camera_scenery_pro`, `onlyDng`, `isCapture`, `sensorMode`,
+`isUpscale`, `isPAPNeeded`) were removed as unneeded (profile version 12):
 
-- **Session and request:** `ai_highresolution = 1`, `ultra_highresolution = 0`,
-  `is_ProRaw_on = 2`, `echo.mode = 2`, `scenery.subfunction = 5`,
-  `session.uiSwitch_state = 2`.
-- **Request only:** `is_pro_mode = 1`, `camera_scenery_pro = 1` (byte).
-- **Still only:** `com.vivo.current_ui_module = 74`, `onlyDng = 1`,
-  `isCapture = 0`, `sensorMode = 0`, `isUpscale = 0`, `isPAPNeeded = 1` (byte).
-  Other listed profile keys are `int32`. The stills used to also force the lens's
-  full-size sensor mode (`forceSensorMode` 0 / 2 / 14 for H14 / H35 / H85); that
-  gave soft DNGs and was removed, so the HAL picks the mode as it does for the
-  200 MP lenses.
+- **Session and request:** `ai_highresolution = 1`, `is_ProRaw_on = 2`, `scenery.subfunction = 5`.
+- **Still and decision:** `com.vivo.current_ui_module = 74`.
 
-Request-scope keys are applied to the repeating preview and to the fresh
+All are `int32`. The stills used to also force the lens's full-size sensor mode (`forceSensorMode`
+0 / 2 / 14 for H14 / H35 / H85); that gave soft DNGs and was removed, so the HAL picks the mode as
+it does for the 200 MP lenses.
+
+Session-and-request keys are applied to the session, the repeating preview and the fresh
 `TEMPLATE_STILL_CAPTURE` request. On shutter press, the still targets both the
 binned RAW and full-size RAW outputs, uses the selected exposure, and preserves
 the preview AF mode/region (manual focus distance is set only in MF). Native code
@@ -189,16 +187,18 @@ uses `GPU_DATA_BUFFER`; the HAL supplies Bayer data, with static black levels
 
 ### Profile keys
 
-Names below use the `vivo.control.` prefix unless written in full:
+Names below use the `vivo.control.` prefix unless written in full. These are the only keys the F
+profiles send. The stock camera's other keys (`echo.mode`, `session.uiSwitch_state`, `is_pro_mode`,
+`camera_scenery_pro`, `onlyDng`, `isCapture`, `sensorMode`, `isUpscale`, `isPAPNeeded`) were removed
+from F35 and F85 as unneeded (profile version 11).
 
 - **Session and request:** `ultra_highresolution = 1`, `is_ProRaw_on = 2`,
-  `echo.mode = 2`, `scenery.subfunction = 5`, `session.uiSwitch_state = 2`.
-- **Request only:** `is_pro_mode = 1`, `camera_scenery_pro = 1` (byte).
-- **Still only:** `onlyDng = 1`, `isCapture = 0`, `sensorMode = 0`,
-  `isUpscale = 1`, `isPAPNeeded = 1` (byte).
+  `scenery.subfunction = 5`.
 - **Still and decision:** `com.vivo.current_ui_module = 74`.
+- **Added by the `vivoFullSize` gate, not the lens:** the per-still `requestId`, `frameFlag` and
+  `globalCaptureId`.
 
-Other listed profile keys are `int32`. Request-scope keys are applied to both
+Profile keys are `int32`. Session-and-request keys are applied to the session and to both
 normal preview requests and fresh still requests. Neither F profile sets
 `forceSensorMode`. In particular, UI module 74 is absent from normal RAW preview
 requests: it is sent on a special YUV-only preparation request and on the still.
