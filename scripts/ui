@@ -9,7 +9,7 @@ dump is enough to find, tap and check a control. Commands:
 
   ui state [-a]            visible tagged/labelled nodes (-a: every node of the app)
   ui tap <sel>             tap the centre of a node
-  ui scroll <sel> [up|down]  scroll a tagged container (default down)
+  ui scroll <sel> [up|down|left|right]  scroll a tagged container (default down)
   ui text <sel>            print a node's text / description / flags
   ui wait <sel> [-g] [-t S]  wait until visible (-g: until gone), default 10 s
   ui open <section>        deep-link Settings, e.g. Image, Capture, FilmSim
@@ -144,16 +144,32 @@ def cmd_tap(args):
 
 def cmd_scroll(args):
     """Scroll a tagged container, deriving the gesture from its visible bounds."""
-    if not args or (len(args) > 1 and args[1] not in ("up", "down")):
-        raise UiError("scroll needs a selector and optional up|down (default down)")
-    n = require(dump(), args[0])
+    if not args or (len(args) > 1 and args[1] not in ("up", "down", "left", "right")):
+        raise UiError("scroll needs a selector and optional up|down|left|right (default down)")
+    nodes = dump()
+    n = require(nodes, args[0])
     if "scroll" not in n.flags:
-        raise UiError(f"not scrollable: {args[0]}")
+        # Compose can put the tag on a section wrapper above its scroll node.
+        l, t, r, b = n.bounds
+        candidates = [v for v in nodes if "scroll" in v.flags and
+                      l <= v.bounds[0] < v.bounds[2] <= r and t <= v.bounds[1] < v.bounds[3] <= b]
+        if not candidates:
+            candidates = [v for v in nodes if "scroll" in v.flags and
+                          v.bounds[0] <= n.center[0] <= v.bounds[2] and v.bounds[1] <= n.center[1] <= v.bounds[3]]
+        if len(candidates) != 1:
+            raise UiError(f"not uniquely scrollable: {args[0]}")
+        n = candidates[0]
     left, top, right, bottom = n.bounds
     x = (left + right) // 2
     upper, lower = top + (bottom - top) // 4, top + (bottom - top) * 3 // 4
     start, end = (upper, lower) if len(args) > 1 and args[1] == "up" else (lower, upper)
-    adb("shell", "input", "swipe", str(x), str(start), str(x), str(end), "350")
+    if len(args) > 1 and args[1] in ("left", "right"):
+        y = (top + bottom) // 2
+        low, high = left + (right - left) // 4, left + (right - left) * 3 // 4
+        start, end = (high, low) if args[1] == "left" else (low, high)
+        adb("shell", "input", "swipe", str(start), str(y), str(end), str(y), "350")
+    else:
+        adb("shell", "input", "swipe", str(x), str(start), str(x), str(end), "350")
     print(f"scroll {args[0]} {args[1] if len(args) > 1 else 'down'}")
 
 
