@@ -11,8 +11,14 @@ layout(local_size_x = 16, local_size_y = 16) in;
 layout(set = 0, binding = 0, rgba32f) readonly uniform image2D integratedI;
 layout(set = 0, binding = 1, rgba32f) readonly uniform image2D localI;
 layout(set = 0, binding = 2, rgba32f) writeonly uniform image2D covI;
+layout(set = 0, binding = 3, rgba32f) readonly uniform image2D baseMeanI;   // base frame colour mean (guide grid)
+layout(push_constant) uniform P { float alpha, beta; } p;   // single-frame noise model
 
-const float K_DETAIL = 0.20, K_DENOISE = 2.0, D_THRESHOLD = 0.71, D_TRANSITION = 1.0, K_STRETCH = 1.75, K_SHRINK = 2.0;
+const float K_DETAIL = 0.20, K_DENOISE = 1.3, D_THRESHOLD = 0.71, D_TRANSITION = 1.0, K_STRETCH = 1.75, K_SHRINK = 2.0;
+// Where the base frame is clean (single-frame SNR above SNR_LO .. SNR_HI) the smoothing kernel of the structure-less areas narrows from K_DENOISE to
+// K_DENOISE_CLEAN: faint fine texture (feathers, fabric) is below the structure detector there but well above the noise, and the wide kernel erased it.
+// Noisy areas keep K_DENOISE, so the noise there is not touched.
+const float SNR_LO = 8.0, SNR_HI = 25.0, K_DENOISE_CLEAN = 1.0;
 const float DETAIL_FLOOR = 0.25, FLOOR_SNR_LO = 3.0, FLOOR_SNR_HI = 8.0;
 
 void main() {
@@ -45,8 +51,11 @@ void main() {
     float sl = sqrt(max(l1d, 0.0));
     float Dm = clamp(1.0 - sl / D_TRANSITION + D_THRESHOLD, 0.0, 1.0);
     float kk1 = 1.0 + (A - 1.0) * (1.0 / K_SHRINK - 1.0), kk2 = 1.0 + (A - 1.0) * (K_STRETCH - 1.0);
-    float k1 = K_DETAIL * ((1.0 - Dm) * kk1 + Dm * K_DENOISE);
-    float k2 = K_DETAIL * ((1.0 - Dm) * kk2 + Dm * K_DENOISE);
+    const float lvl = max(imageLoad(baseMeanI, clamp(q, ivec2(0), imageSize(baseMeanI) - 1)).y, 1e-6);
+    const float snr = lvl / sqrt(max(p.alpha * lvl + p.beta, 1e-20));
+    const float kden = mix(K_DENOISE, K_DENOISE_CLEAN, smoothstep(SNR_LO, SNR_HI, snr));
+    float k1 = K_DETAIL * ((1.0 - Dm) * kk1 + Dm * kden);
+    float k2 = K_DETAIL * ((1.0 - Dm) * kk2 + Dm * kden);
     float fl = DETAIL_FLOOR * clamp((FLOOR_SNR_HI - sl) / (FLOOR_SNR_HI - FLOOR_SNR_LO), 0.0, 1.0);
     k1 = max(k1, fl);
     k2 = max(k2, fl);

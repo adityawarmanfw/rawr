@@ -253,7 +253,11 @@ void RextureRecorder::recordBaseKernel(VkCommandBuffer c, bool debug) const {
     executor_.record(c, ShaderId::RxKernelBlur, {{ib(0, tmpA), ib(1, tmpB)}, {}}, &horizontal, sizeof(horizontal), gx, gy);
     computeWriteBarrier(c);
     if (mark_) mark_("blur_h");
-    executor_.record(c, ShaderId::RxKernelCov, {{ib(0, tmpB), ib(1, tensor), ib(2, cov)}, {}}, nullptr, 0, gx, gy);
+    struct KernelPc {
+        float alpha, beta;
+    } kpc{config_.noiseAlpha, config_.noiseBeta};
+    executor_.record(c, ShaderId::RxKernelCov, {{ib(0, tmpB), ib(1, tensor), ib(2, cov), ib(3, arena_.image("rx_base_mean"))}, {}}, &kpc,
+                     sizeof(kpc), gx, gy);
     computeWriteBarrier(c);
     if (mark_) mark_("cov");
     if (debug) {

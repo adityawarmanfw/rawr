@@ -28,12 +28,15 @@ layout(push_constant) uniform P {
 
 const int HALO = 14;
 // Tuned on real dark-scene bursts against HDR+ Quality: the fallback is lowered to the grain level of the merged areas
-// next to it (m = 0.15 is about the noise variance of a 7-8 frame merge) and never below 0.3 of its amplitude.
-const float TARGET = 0.15;             // output noise variance relative to one frame that is left alone
+// next to it and never below 0.3 of its amplitude. TARGET 0.25 (about a 4 frame merge): a cleaner merge than that is left alone, so faint wall-like
+// structure in a 6 to 10 frame merge is not cut together with its noise (0.15 cut the 8 to 50 px bands of a dark wall to 0.4 of the reference merge).
+const float TARGET = 0.25;             // output noise variance relative to one frame that is left alone
 const float GMIN = 0.3;                // lowest amplitude gain of the bands finer than x3
 // Colour is shrunk further out, down to m = TARGET_C (about 12 frames): its amplitude then stays level from 4 to 12 frames instead of
 // rising when the pass switches off at TARGET and falling again with more frames.
 const float TARGET_C = 0.08;
+const float SNR_LO = 15.0, SNR_HI = 45.0;
+const float SINGLE_SNR_LO = 15.0, SINGLE_SNR_HI = 28.0, SINGLE_M_LO = 0.85, SINGLE_M_HI = 0.97;
 const float KC = 2.0;                  // colour range weight relative to the luma one
 const float FK[3] = float[3](1.0, 0.6, 0.4);   // range noise factor of the three levels
 const float B3[5] = float[5](1.0 / 16.0, 4.0 / 16.0, 6.0 / 16.0, 4.0 / 16.0, 1.0 / 16.0);
@@ -59,15 +62,34 @@ vec3 fetch(int level, ivec2 q) {
     return imageLoad(x2I, ivec2(q.x, q.y - p.a2)).rgb;
 }
 
-vec3 atrous(int level, ivec2 q, int stride, float m) {
-    const vec3 c = fetch(level, q);
+// The 16 x 16 workgroup's (16 + 4 stride)^2 neighbourhood of one level, read once into shared memory: the 25 taps of every pixel come from there instead of
+// 25 image reads each. Rows past the last row this dispatch computes are never tapped and are not read (they may lie outside the strip's scratch rows).
+shared vec3 sTile[32 * 32];
+
+void loadTile(int level, int stride, ivec2 wo, int tid) {
+    const int T = 16 + 4 * stride;
+    const int lastRow = p.y0 + p.rows - 1 + 2 * stride;
+    for (int i = tid; i < T * T; i += 256) {
+        ivec2 t = wo + ivec2(i % T, i / T) - 2 * stride;
+        vec3 v = vec3(0.0);
+        if (t.y <= lastRow) {
+            t = clamp(t, ivec2(0), ivec2(p.w - 1, p.h - 1));
+            v = fetch(level, t);
+        }
+        sTile[i] = v;
+    }
+}
+
+// l: the pixel's position in the workgroup
+vec3 atrous(int level, ivec2 l, int stride, float m) {
+    const int T = 16 + 4 * stride;
+    const vec3 c = sTile[(l.y + 2 * stride) * T + l.x + 2 * stride];
     const float r2 = max(9.0 * (p.alpha * max(c.g, 0.0) + p.beta) * m * FK[level] * FK[level], 1e-12);
     vec3 num = vec3(0.0);
     float den = 0.0;
     for (int j = 0; j < 5; ++j)
         for (int i = 0; i < 5; ++i) {
-            ivec2 t = clamp(q + stride * ivec2(i - 2, j - 2), ivec2(0), ivec2(p.w - 1, p.h - 1));
-            vec3 v = fetch(level, t);
+            vec3 v = sTile[(l.y + stride * j) * T + l.x + stride * i];
             float dg = v.g - c.g;
             vec2 dc = (v.rb - v.g) - (c.rb - c.g);
             float k = B3[i] * B3[j] * exp(-dg * dg / (2.0 * r2) - dot(dc, dc) / (2.0 * KC * r2));
@@ -85,10 +107,10 @@ void main() {
         if (inside) imageStore(haloI, ivec2(q.x, q.y - (p.r1 - HALO)), imageLoad(x0I, q));
         return;
     }
+    const ivec2 wo = ivec2(int(gl_WorkGroupID.x) * 16, p.y0 + int(gl_WorkGroupID.y) * 16);
     {   // skip workgroups whose surroundings hold nothing to fix
         if (tid == 0) sActive = 0u;
         barrier();
-        const ivec2 wo = ivec2(int(gl_WorkGroupID.x) * 16, p.y0 + int(gl_WorkGroupID.y) * 16);
         const ivec2 c0 = ivec2((wo.x - 24) >> 2, (wo.y - 24) >> 2);   // 16 x 16 cells = [wo - 24, wo + 40)
         {
             ivec2 c = clamp(c0 + ivec2(tid % 16, tid / 16), ivec2(0), imageSize(mI) - 1);
@@ -97,17 +119,21 @@ void main() {
         barrier();
         if (sActive == 0u) return;
     }
+    const int stride = p.op == 0 ? 1 : (p.op == 1 ? 2 : 4);
+    loadTile(p.op, stride, wo, tid);   // level 0 for op 0, 1 for op 1, 2 for op 2
+    barrier();
     if (!inside) return;
+    const ivec2 lid = ivec2(gl_LocalInvocationID.xy);
     const float m = mAt(q);
     if (p.op == 0) {
-        imageStore(x1I, ivec2(q.x, q.y - p.a1), vec4(atrous(0, q, 1, m), 1.0));
+        imageStore(x1I, ivec2(q.x, q.y - p.a1), vec4(atrous(0, lid, 1, m), 1.0));
     } else if (p.op == 1) {
-        imageStore(x2I, ivec2(q.x, q.y - p.a2), vec4(atrous(1, q, 2, m), 1.0));
+        imageStore(x2I, ivec2(q.x, q.y - p.a2), vec4(atrous(1, lid, 2, m), 1.0));
     } else {
         const float g = clamp(sqrt(TARGET / max(m, 1e-6)), GMIN, 1.0);
         const float gc = min(g * g, clamp(sqrt(TARGET_C / max(m, 1e-6)), 0.0, 1.0));   // colour gain
         if (gc >= 1.0) return;
-        const vec3 x3 = atrous(2, q, 4, m);
+        const vec3 x3 = atrous(2, lid, 4, m);
         const vec3 x0 = imageLoad(x0I, q).rgb;
         // Band-dependent shrink, coarse -> fine. Luma (green): the 4 px band by g, the 2 px and the finest band by sqrt(g), so most of the fine grain
         // and the low-contrast texture survive and the coarse noise (the blotches) is what gets weaker. Colour (R - G, B - G) is shrunk harder, by min(g^2, sqrt(TARGET_C / m)) on
@@ -115,7 +141,13 @@ void main() {
         const vec3 x1 = fetch(1, q);
         const vec3 x2 = fetch(2, q);
         const vec3 b3 = x2 - x3, b2 = x1 - x2, b1 = x0 - x1;
-        const float yl = x3.g + g * b3.g + sqrt(g) * b2.g + sqrt(g) * b1.g;
+        const float snr = max(x3.g, 1e-6) / sqrt(max((p.alpha * max(x3.g, 0.0) + p.beta) * max(m, 1e-6), 1e-20));   // output SNR of the pixel
+        const float st = smoothstep(SNR_LO, SNR_HI, snr);   // 0 = noisy (shrink the fine bands like the 4 px band), 1 = clean (keep them)
+        // A clean pixel that kept a single frame (moving subject, m about 1): nothing was merged there and its single-frame noise is low, so the grain pass is
+        // skipped: it would only take texture off the demosaic.
+        const float snr1 = max(x3.g, 1e-6) / sqrt(max(p.alpha * max(x3.g, 0.0) + p.beta, 1e-20));   // single-frame SNR
+        const float keep = smoothstep(SINGLE_SNR_LO, SINGLE_SNR_HI, snr1) * smoothstep(SINGLE_M_LO, SINGLE_M_HI, m);
+        const float yl = mix(x3.g + g * b3.g + pow(g, 1.0 - 0.5 * st) * b2.g + pow(g, 1.0 - st) * b1.g, x0.g, keep);
         const vec2 ch = (x3.rb - x3.g) + gc * ((b3.rb - b3.g) + (b2.rb - b2.g) + (b1.rb - b1.g));
         imageStore(x0I, q, vec4(ch.x + yl, yl, ch.y + yl, 1.0));
     }
