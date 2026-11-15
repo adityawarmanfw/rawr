@@ -37,9 +37,10 @@ G/R/B %, without -> with fit: vivo frame 1.27/2.90/1.21 -> 0.25/0.80/0.25 (other
 Xiaomi 0.6-0.7/1.5-2.0/0.9-1.1 -> mostly unchanged. Statistics use an odd-stride block lattice
 (3 matches full quality; even strides miss block parities).
 
-Phone (Adreno 840, 16320x12288, GPU only, readback excluded, warm): Detail ~114 ms per frame
-(sum 8.5, green 14.4, Bayer out 76, trailing 8), Detail + fit ~151 ms (fit adds block sums 12,
-statistics 3, curve 1.5, corrected sum +19). Mac CPU, 8 threads: Detail 0.26 s, fit + corrected
+Phone (Adreno 840, 16320x12288, GPU only, readback excluded). Cool, steady state: Detail ~57 ms per
+frame (sum 7, green 9, Bayer out 25.5, trailing 5) after tiling the Bayer-out pass through shared
+memory (untiled: 84 ms, Bayer out 52 ms); a warm phone reads ~40% higher. The fit adds ~19 ms
+(block sums 6.6, statistics 1.7, curve 1.7, corrected sum +8.8). Mac CPU, 8 threads: Detail 0.26 s, fit + corrected
 sum 0.07 s. GPU vs CPU: <= 2 codes on real frames, <= 4 with the fit.
 Phone CPU (Adreno 840 phone, 8 threads, same frame, cool): plain sum ~14 ms, fit + corrected sum
 ~107 ms, Detail ~240 ms, so ~350 ms with the fit (was ~625 ms before the CPU Detail got the

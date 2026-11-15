@@ -365,6 +365,53 @@ float fastAt(uint x, uint y) {
     return top + (bottom - top) * ty;
 }
 
+// Tiled Detail Bayer out: a workgroup (32x32 pixels) first loads green and raw of its
+// pixels plus a 3-pixel halo into shared memory (green | raw << 16), then every pixel
+// walks its wanted-colour taps there instead of in the images. Same arithmetic as detailAt.
+const int DETAIL_TILE = 38;
+shared uint detailTile[38 * 38];
+
+uint detailTileAt(ivec2 p, ivec2 origin) { return detailTile[(p.y - origin.y) * DETAIL_TILE + (p.x - origin.x)]; }
+
+float detailAtTile(uint x, uint y, ivec2 origin) {
+    uint want = channelAt(x, y);
+    uint here = detailTileAt(ivec2(x, y), origin);
+    float g0 = float(here & 0xffffu);
+    if (want == 1u) return g0;
+    if (channelAt(x / 2u, y / 2u) == want) return float(here >> 16u);
+    uint parity = want == 0u ? pc.parityR : pc.parityB;
+    int bpy = int(parity >> 1u), bpx = int(parity & 1u);
+    int X = int(x), Y = int(y);
+    // The taps are the wanted-colour columns x rows of the 7x7 window (at most 4 each): the
+    // distance weight is separable, so list the columns and rows once.
+    int cols[4], rows[4];
+    float wc[4], wr[4];
+    int nc = 0, nr = 0;
+    for (int q = X - 3; q <= X + 3; ++q)
+        if (((q >> 1) & 1) == bpx && q >= 0 && q < int(pc.width)) {
+            cols[nc] = q;
+            wc[nc++] = kDetailExp[abs(q - X)];
+        }
+    for (int q = Y - 3; q <= Y + 3; ++q)
+        if (((q >> 1) & 1) == bpy && q >= 0 && q < int(pc.height)) {
+            rows[nr] = q;
+            wr[nr++] = kDetailExp[abs(q - Y)];
+        }
+    float floorSigma = 4.0 * pc.codesPerDn, sum = 0.0, weight = 0.0;
+    for (int j = 0; j < nr; ++j)
+        for (int i = 0; i < nc; ++i) {
+            uint t = detailTileAt(ivec2(cols[i], rows[j]), origin);
+            float g = float(t & 0xffffu);
+            // spatial / (1 + (d / s)^4) with one division
+            float d = g - g0, sg = 0.1 * max(g0, g) + floorSigma;
+            float d2 = d * d, s2 = sg * sg, s4 = s2 * s2;
+            float wgt = wc[i] * wr[j] * s4 / (s4 + d2 * d2);
+            sum += wgt * (float(t >> 16u) - g);
+            weight += wgt;
+        }
+    return g0 + (weight > 0.0 ? sum / weight : 0.0);
+}
+
 // Passes 0 and 2 run one invocation per 2x2 pixel group (always inside one
 // block, n being 2 or 4): a quarter of the invocations, shared loads, and
 // still enough of them in flight. A 16x16 workgroup covers 32x32 pixels, so
@@ -444,12 +491,25 @@ void main() {
     }
     uint x0 = x * 2u, y0 = y * 2u;
     uint x1 = min(pc.width, x0 + 2u), y1 = min(pc.height, y0 + 2u);
-    if (pc.pass == 2u || pc.pass == 5u || pc.pass == 7u || pc.pass == 9u) {
+    if (pc.pass == 9u) {
+        ivec2 origin = ivec2(gl_WorkGroupID.xy) * 32 - 3;
+        for (uint i = gl_LocalInvocationIndex; i < uint(DETAIL_TILE * DETAIL_TILE); i += 256u) {
+            ivec2 p = origin + ivec2(int(i) % DETAIL_TILE, int(i) / DETAIL_TILE);
+            uint v = 0u;
+            if (p.x >= 0 && p.y >= 0 && p.x < int(pc.width) && p.y < int(pc.height))
+                v = imageLoad(greenRead, p).r | (imageLoad(rawRead, p).r << 16u);
+            detailTile[i] = v;
+        }
+        barrier();
+        for (uint py = y0; py < y1; ++py)
+            for (uint px = x0; px < x1; ++px)
+                imageStore(dst, ivec2(int(px), int(py)), uvec4(roundDn(detailAtTile(px, py, origin)), 0u, 0u, 0u));
+        return;
+    }
+    if (pc.pass == 2u || pc.pass == 5u || pc.pass == 7u) {
         for (uint py = y0; py < y1; ++py)
             for (uint px = x0; px < x1; ++px) {
-                float v = pc.pass == 9u ? detailAt(px, py)
-                                         : (pc.pass == 7u ? highAt(px, py)
-                                                          : (pc.pass == 2u ? bayerAt(px, py) : fastAt(px, py)));
+                float v = pc.pass == 7u ? highAt(px, py) : (pc.pass == 2u ? bayerAt(px, py) : fastAt(px, py));
                 imageStore(dst, ivec2(int(px), int(py)), uvec4(roundDn(v), 0u, 0u, 0u));
             }
         return;

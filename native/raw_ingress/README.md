@@ -37,7 +37,7 @@ units. High block=4 without reduction is rejected; it has not been ported.
 Default Fast/Standard calls retain their original behavior. `Detail` (quad only: block=2, or the Hexadeca reduction)
 uses cubic green and per-pixel colour differences from wanted-colour pixels within 3 pixels;
 about 1.3 dB better than High against ground truth with the same real-sensor grid behaviour
-(tools/hexadeca_reference/README.md), at ~65 ms vs ~38 ms output pass on Adreno 840.
+(tools/hexadeca_reference/README.md), at ~25 ms for the output pass on Adreno 840 (tiled through shared memory; High is ~38 ms).
 `Frame::phaseFit` (Hexadeca reduction only) first fits the sensor's per-position
 response from the frame's own flat 4x4 blocks and divides it out before the 2x2 sum:
 passes 13 (clear), 10 (block sums into the green image), 11 (statistics on an odd-stride
