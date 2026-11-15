@@ -41,7 +41,10 @@ internal object NativeCapabilityProjection {
         val effectiveIsoMin = s.sensitivityMin
         val effectiveIsoMax = s.sensitivityMax
         val isoValues = fineIsoValues(effectiveIsoMin, effectiveIsoMax)
-        val evValues = (s.evMinSteps..s.evMaxSteps).toList().ifEmpty { listOf(0) }
+        // Some HALs report a very fine EV step (OPPO: 1/330), which would make the
+        // picker 1981 detents of 0.003 EV each. Offer ~1/3 EV detents, anchored at 0.
+        val evStride = if (s.evStep > 0.0) Math.round((1.0 / 3.0) / s.evStep).toInt().coerceAtLeast(1) else 1
+        val evValues = (s.evMinSteps..s.evMaxSteps).filter { it % evStride == 0 }.ifEmpty { listOf(0) }
 
         val isoCandidates = isoValues.map { ExposureCandidate("iso:$it", it.toString()) }
         val evCandidates = evValues.map { ExposureCandidate("ev:$it", ExposureFormat.formatEv(it * s.evStep)) }
