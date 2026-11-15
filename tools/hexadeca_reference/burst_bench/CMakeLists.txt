@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.24)
+project(quad_burst_bench LANGUAGES CXX)
+add_subdirectory(../../../native/raw_ingress ingress)
+add_executable(quad_burst_bench main.cpp)
+target_include_directories(quad_burst_bench PRIVATE ../../../native/vk_common/testing)
+target_link_libraries(quad_burst_bench PRIVATE rawr::raw_ingress)
+target_compile_features(quad_burst_bench PRIVATE cxx_std_17)
+target_compile_options(quad_burst_bench PRIVATE -Wall -Wextra -Werror)
