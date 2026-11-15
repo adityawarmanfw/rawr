@@ -9,6 +9,21 @@ class LensProfilesTest {
     private val lens = LensProfile(name = "35", cameraId = "3")
 
     @Test
+    fun leavingHexadecaClearsReducedOptionsAndInvalidDraftsAreRejected() {
+        val reduced = LensSensorLayout(photoBlock = 4, photoOutput = "reduced", photoPhaseFit = true)
+        assertEquals(reduced, reduced.withPhotoBlock(4))
+        for (block in listOf(1, 2)) {
+            val changed = reduced.withPhotoBlock(block)
+            assertEquals("full", changed.photoOutput)
+            assertEquals(false, changed.photoPhaseFit)
+            assertEquals(block, changed.photoBlock)
+            assertEquals(emptyList(), validateLensProfile(lens.image { copy(sensorLayout = changed) }, emptyList()))
+            val invalid = lens.image { copy(sensorLayout = reduced.copy(photoBlock = block)) }
+            assertTrue(validateLensProfile(invalid, emptyList()).contains("Reduced photo output needs a 4×4 photo CFA"))
+        }
+    }
+
+    @Test
     fun validLensHasNoProblems() {
         assertEquals(emptyList(), validateLensProfile(lens, emptyList()))
     }

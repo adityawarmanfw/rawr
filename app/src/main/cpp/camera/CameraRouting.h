@@ -202,6 +202,11 @@ struct LensRoute {
     // Separate photo-stream CFA; absent streams and existing profiles keep Bayer.
     uint32_t photoSensorLayoutBlock = 1;
     std::optional<uint32_t> colourOrder;
+    // Photo stream only, 4x4 photoSensorLayoutBlock: reduce each photo frame to a quarter of the pixels
+    // (Hexadeca 200 MP -> 50 MP Bayer, exact 2x2 sums in quarter-DN units) instead of remosaicing it at full
+    // size. photoPhaseFit also fits and removes the sensor's per-position response first.
+    bool photoReduced = false;
+    bool photoPhaseFit = false;
     // Remosaic quality (imaging::CfaRemosaicQuality): live = viewfinder, video
     // and merge frames (GPU: Fast 0 / Standard 1); photo = single stills
     // (CPU: Standard 1 / High 2).
@@ -221,6 +226,14 @@ struct LensRoute {
     color::DcpProfilePtr dcp;
     std::string dcpError;
 };
+
+// High-resolution photo streams expose JPEG only when configured for the
+// supported Hexadeca-to-quarter-resolution output. Ordinary routes are unchanged.
+[[nodiscard]] inline bool photoOutputDngOnly(const LensRoute& lens) noexcept {
+    constexpr uint64_t kDngOnlyPixels = 100'000'000;
+    const bool reduced = lens.photoReduced && lens.photoSensorLayoutBlock == 4u;
+    return lens.photoStream && uint64_t(lens.photoStream->width) * lens.photoStream->height > kDngOnlyPixels && !reduced;
+}
 
 // Operating mode and stream use case exist only on the Java API.
 [[nodiscard]] inline bool needsJavaCameraApi(const LensRoute& lens) noexcept {

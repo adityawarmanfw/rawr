@@ -689,10 +689,12 @@ std::string serializeCameraProfile(const CameraProfile& profile) {
         std::string exposure;
         appendExposure(exposure, r.exposure);
         image.raw("exposure", exposure);
-        if (r.sensorLayoutBlock > 1 || r.photoSensorLayoutBlock > 1 || r.colourOrder) {
+        if (r.sensorLayoutBlock > 1 || r.photoSensorLayoutBlock > 1 || r.colourOrder || r.photoReduced) {
             ObjectWriter layout;
             layout.number("block", r.sensorLayoutBlock);
             if (r.photoSensorLayoutBlock > 1) layout.number("photoBlock", r.photoSensorLayoutBlock);
+            if (r.photoReduced) layout.text("photoOutput", "reduced");
+            if (r.photoPhaseFit) layout.flag("photoPhaseFit", true);
             if (r.colourOrder) layout.text("colourOrder", cfaOrderName(*r.colourOrder));
             layout.text("liveRemosaic", r.liveRemosaic == 0 ? "fast" : "standard");
             layout.text("photoRemosaic", r.photoRemosaic == 2 ? "high" : "standard");
@@ -1132,6 +1134,17 @@ std::optional<LensRoute> readLens(const Json& l, std::string* error) {
             return std::nullopt;
         }
         r.photoSensorLayoutBlock = uint32_t(photoBlock);
+        const std::string photoOutput = c->str("photoOutput", "full");
+        if (photoOutput != "full" && photoOutput != "reduced") {
+            if (error) *error = "invalid sensorLayout photoOutput " + photoOutput + " for lens " + r.lensId;
+            return std::nullopt;
+        }
+        r.photoReduced = photoOutput == "reduced";
+        r.photoPhaseFit = c->flag("photoPhaseFit", false);
+        if (r.photoReduced && photoBlock != 4.0) {
+            if (error) *error = "sensorLayout photoOutput reduced needs photoBlock 4 for lens " + r.lensId;
+            return std::nullopt;
+        }
         if (const std::string order = c->str("colourOrder"); !order.empty()) {
             r.colourOrder = cfaOrderFromName(order);
             if (!r.colourOrder) {

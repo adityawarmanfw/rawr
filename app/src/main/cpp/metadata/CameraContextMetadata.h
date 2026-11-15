@@ -57,6 +57,10 @@ struct CameraContextMetadata {
     // are already Bayer.
     uint32_t cfaBlock = 1;
     uint32_t photoCfaBlock = 1;  // CFA of the separate photo output before remosaic.
+    // Photo frames are reduced to a quarter of the pixels at ingress (LensRoute::photoReduced); only with
+    // photoCfaBlock 4. Reduced frames are Bayer in quarter-DN units: levels are scaled by 4 (reduction x4 sum).
+    bool photoReduced = false;
+    bool photoPhaseFit = false;
     // Photo contexts pin their original base-stream layout for a HAL binned-corner fallback.
     // Transient only: journaled pixels have already been cropped and remosaiced to Bayer.
     std::shared_ptr<const CameraContextMetadata> binnedFallbackContext;

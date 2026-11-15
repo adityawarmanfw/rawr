@@ -62,6 +62,7 @@ import com.rawr.camera.settings.model.LENS_NAME_MAX_LENGTH
 import com.rawr.camera.settings.model.SENSOR_LAYOUT_BLOCKS
 import com.rawr.camera.settings.model.LIVE_REMOSAIC_QUALITIES
 import com.rawr.camera.settings.model.COLOUR_ORDERS
+import com.rawr.camera.settings.model.PHOTO_OUTPUTS
 import com.rawr.camera.settings.model.PHOTO_REMOSAIC_QUALITIES
 import com.rawr.camera.settings.model.CAMERA_API_CHOICES
 import com.rawr.camera.settings.model.CAMERA_WORKAROUNDS
@@ -220,7 +221,7 @@ internal fun SensorLayoutGroup(
             SettingDivider()
         }
         CompactChoiceRow(SENSOR_LAYOUT_BLOCKS, if (editPhotoCfa) layout.photoBlock else layout.block, ::sensorLayoutBlockLabel) {
-            onChange(if (editPhotoCfa) layout.copy(photoBlock = it) else layout.copy(block = it))
+            onChange(if (editPhotoCfa) layout.withPhotoBlock(it) else layout.copy(block = it))
         }
         SettingDivider()
         DropdownChoiceRow(
@@ -245,7 +246,30 @@ internal fun SensorLayoutGroup(
                 onSelect = { onChange(layout.copy(liveRemosaic = it)) }
             )
         }
-        if (if (hasPhotoStream) editPhotoCfa && layout.photoBlock > 1 else layout.block > 1) {
+        if (hasPhotoStream && editPhotoCfa && layout.photoBlock == 4) {
+            SettingDivider()
+            DropdownChoiceRow(
+                title = "Photo output",
+                selected = layout.photoOutput,
+                values = PHOTO_OUTPUTS,
+                label = ::photoOutputLabel,
+                supportingText = "Reduced turns each 4×4 photo frame into a quarter-size Bayer frame (200 MP to 50 MP) " +
+                    "before it is stored and merged: much faster merges, smaller files.",
+                testTag = lensEditorTag("photo_output"),
+                onSelect = { onChange(layout.copy(photoOutput = it, photoPhaseFit = layout.photoPhaseFit && it == "reduced")) }
+            )
+            if (layout.photoOutput == "reduced") {
+                SettingDivider()
+                SettingsSwitchRow(
+                    title = "Correct per-position response",
+                    checked = layout.photoPhaseFit,
+                    supportingText = "Fits the sensor's repeating grid pattern from each frame and removes it. " +
+                        "Helps on some sensors, adds about 0.1 s per frame.",
+                    testTag = lensEditorTag("photo_phase_fit")
+                ) { onChange(layout.copy(photoPhaseFit = it)) }
+            }
+        }
+        if (if (hasPhotoStream) editPhotoCfa && layout.photoBlock > 1 && layout.photoOutput == "full" else layout.block > 1) {
             SettingDivider()
             DropdownChoiceRow(
                 title = "Photo remosaic",
@@ -260,6 +284,8 @@ internal fun SensorLayoutGroup(
         }
     }
 }
+
+internal fun photoOutputLabel(output: String): String = if (output == "reduced") "Reduced (50 MP)" else "Full"
 
 internal fun remosaicQualityLabel(quality: String): String = when (quality) {
     "fast" -> "Fast"

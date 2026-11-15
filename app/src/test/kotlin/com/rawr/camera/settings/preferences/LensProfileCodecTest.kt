@@ -406,6 +406,22 @@ class LensProfileCodecTest {
     }
 
     @Test
+    fun keepsReducedPhotoOutputThroughARoundTrip() {
+        val lens = LensProfile("F4", "2")
+            .streams { copy(photo = PhotoStreamSettings(RawStreamChoice(RawStreamFormat.Raw16, 16320, 12256))) }
+            .image { copy(sensorLayout = LensSensorLayout(photoBlock = 4, photoOutput = "reduced", photoPhaseFit = true)) }
+        val json = LensProfileCodec.encode(listOf(lens))
+        assertEquals(lens, requireNotNull(LensProfileCodec.decode(json)).single())
+        val layout = lensJson(json).getJSONObject("image").getJSONObject("sensorLayout")
+        assertEquals("reduced", layout.getString("photoOutput"))
+        assertEquals(true, layout.getBoolean("photoPhaseFit"))
+        // Full output writes neither key.
+        val full = lens.image { copy(sensorLayout = LensSensorLayout(photoBlock = 4)) }
+        val fullLayout = lensJson(LensProfileCodec.encode(listOf(full))).getJSONObject("image").getJSONObject("sensorLayout")
+        assertEquals(false, fullLayout.has("photoOutput") || fullLayout.has("photoPhaseFit"))
+    }
+
+    @Test
     fun keepsFullSizeLensFieldsThroughARoundTrip() {
         val full = LensProfile("F85", "5")
             .raw { copy(choice = RawStreamChoice(RawStreamFormat.Raw16, 8160, 6144, highResLive = true),
@@ -515,6 +531,9 @@ class LensProfileCodecTest {
             """"streams":{"photo":{"format":"RAW16","width":0,"height":10}}""",
             """"streams":{"auxJpeg":{"width":640}}""",
             """"image":{"sensorLayout":{"block":3}}""",
+            """"image":{"sensorLayout":{"photoBlock":4,"photoOutput":"half"}}""",
+            """"image":{"sensorLayout":{"photoBlock":2,"photoOutput":"reduced"}}""",
+            """"image":{"sensorLayout":{"photoBlock":4,"photoPhaseFit":"yes"}}""",
             // Names schema 2 had before it matched the lens editor.
             """"keys":[]""",
             """"streams":{"capture":{"format":"RAW16","width":8,"height":8}}""",

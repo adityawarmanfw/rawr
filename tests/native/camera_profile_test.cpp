@@ -412,6 +412,15 @@ void testProfileJson() {
         assert(serializeCameraProfile(*parseCameraProfile(serializeCameraProfile(*cfa))) == serializeCameraProfile(*cfa));
         assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","cfa":{"block":3}}]})"));
         assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","cfa":{"order":"RGBG"}}]})"));
+        // Reduced photo output: 4x4 photo layout only; round-trips through the serializer.
+        const auto reduced = parseCameraProfile(R"({"lenses":[{"id":"r","cameraId":"2","cfa":{"photoBlock":4,"photoOutput":"reduced","photoPhaseFit":true}},
+            {"id":"f","cameraId":"3","cfa":{"photoBlock":4}}]})");
+        assert(reduced && reduced->lenses[0].photoReduced && reduced->lenses[0].photoPhaseFit);
+        assert(!reduced->lenses[1].photoReduced && !reduced->lenses[1].photoPhaseFit);
+        assert(serializeCameraProfile(*parseCameraProfile(serializeCameraProfile(*reduced))) == serializeCameraProfile(*reduced));
+        assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","cfa":{"photoBlock":2,"photoOutput":"reduced"}}]})"));
+        assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","cfa":{"photoOutput":"reduced"}}]})"));
+        assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","cfa":{"photoBlock":4,"photoOutput":"half"}}]})"));
         assert(still->lenses[0].vendorKeys[0].scope == CameraKeySetting::Scope::Still);
         assert(still->lenses[0].vendorKeys[1].scope == CameraKeySetting::Scope::Decision);
         assert(serializeCameraProfile(*still).find("\"scope\":\"decision\"") != std::string::npos);
@@ -534,6 +543,23 @@ int main() {
             assert(rawrcam::geometry::mirroredOrientation(orientation, mirror) == expected[mirror][orientation - 1]);
     }
     assert(!rawrcam::camera::parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","mirror":"invalid"}]})"));
+    // Output capability follows processing resolution, not just capture size.
+    {
+        const auto p = rawrcam::camera::parseCameraProfile(R"({"lenses":[{"id":"r","cameraId":"2","captureStream":{"format":"RAW16","width":16320,"height":12288},"cfa":{"photoBlock":4,"photoOutput":"reduced"}}]})");
+        assert(p);
+        auto route = p->lenses.front();
+        assert(!rawrcam::camera::photoOutputDngOnly(route));
+        route.photoReduced = false;
+        assert(rawrcam::camera::photoOutputDngOnly(route));
+        route.photoReduced = true;
+        route.photoSensorLayoutBlock = 2;
+        assert(rawrcam::camera::photoOutputDngOnly(route));
+        route.photoStream->width = 8160;
+        route.photoStream->height = 6144;
+        assert(!rawrcam::camera::photoOutputDngOnly(route));
+        route.photoStream.reset();
+        assert(!rawrcam::camera::photoOutputDngOnly(route));
+    }
     testGeometryGate();
     testNegotiation();
     testOppoPhotoStreams();

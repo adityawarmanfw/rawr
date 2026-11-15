@@ -345,8 +345,22 @@ data class LensSensorLayout(
     /** Remosaic for single photos: "standard" or "high" (CPU). */
     val photoRemosaic: String = "high",
     /** Same-colour block side for the separate photo stream; Bayer by default. */
-    val photoBlock: Int = 1
-)
+    val photoBlock: Int = 1,
+    /**
+     * "full": photo frames keep the sensor's resolution after remosaic. "reduced": 4×4 photo frames are reduced to
+     * a quarter of the pixels (200 MP to 50 MP Bayer) before storage and merge. Reduced needs photoBlock 4.
+     */
+    val photoOutput: String = "full",
+    /** Reduced output only: fit the sensor's per-position response from each frame and divide it out. */
+    val photoPhaseFit: Boolean = false
+) {
+    /** Leaving Hexadeca also clears options that are only valid for that layout. */
+    fun withPhotoBlock(value: Int): LensSensorLayout = copy(
+        photoBlock = value,
+        photoOutput = if (value == 4) photoOutput else "full",
+        photoPhaseFit = value == 4 && photoOutput == "reduced" && photoPhaseFit
+    )
+}
 
 /** Width x height of an extra camera output of a lens profile. */
 data class LensOutputSize(val width: Int, val height: Int)
@@ -367,6 +381,7 @@ val SENSOR_LAYOUT_BLOCKS = listOf(1, 2, 4)
 val COLOUR_ORDERS = listOf("RGGB", "GRBG", "GBRG", "BGGR")
 val LIVE_REMOSAIC_QUALITIES = listOf("fast", "standard")
 val PHOTO_REMOSAIC_QUALITIES = listOf("standard", "high")
+val PHOTO_OUTPUTS = listOf("full", "reduced")
 
 /** Problems with one lens, in display order; empty when the lens is valid. */
 fun validateLensProfile(lens: LensProfile, others: List<LensProfile>): List<String> = buildList {
@@ -385,6 +400,10 @@ fun validateLensProfile(lens: LensProfile, others: List<LensProfile>): List<Stri
         if (it.mergeFrameLimit !in 0..30) add("Merged photo frame limit must be between 0 and 30")
         if (it.bufferCount != 0 && it.bufferCount !in 2..16) add("Photo stream buffer count must be 2 to 16")
     }
+    val layout = lens.image.sensorLayout
+    if (layout.photoOutput !in PHOTO_OUTPUTS) add("Unknown photo output ${layout.photoOutput}")
+    if (layout.photoOutput == "reduced" && layout.photoBlock != 4)
+        add("Reduced photo output needs a 4×4 photo CFA")
     validateLevels(lens.image.levels)?.let { add(it) }
     lens.vendorKeys.forEach { key -> validateVendorKey(key)?.let { add(it) } }
     if (session.cameraApi !in CAMERA_API_CHOICES) add("Unknown camera API ${session.cameraApi}")

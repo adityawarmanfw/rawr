@@ -134,13 +134,22 @@ HAL switch to full size, then the viewfinder stream stops for the photos); other
 ## Image (`image`)
 
 `levels` (static or dynamic black/white), `sensorLayout` (`block`, `colourOrder`, `liveRemosaic`,
-`photoRemosaic`, `photoBlock`), `distortion`
+`photoRemosaic`, `photoBlock`, `photoOutput`, `photoPhaseFit`), `distortion`
 (rational model on its own frame size), `mirror`, `dcp` (camera profile file) and `exposure` (requests
 beyond the advertised ISO and shutter ranges).
 
+`photoOutput` (`full`, default, or `reduced`) applies to a 4×4 photo stream (`photoBlock` 4): `reduced` turns each
+photo frame into a quarter-size Bayer frame (200 MP to 50 MP: exact 2×2 same-colour sums, then a quad remosaic)
+before it is stored or merged. `photoPhaseFit` (default false, reduced output only) first fits the sensor's per-position
+response from the frame and divides it out. Reduction and Detail remosaic run on the GPU; two fenced upload
+slots overlap CPU uploads with GPU conversion during bursts. The existing recovery journal stores the reduced
+Bayer frames (including a 50 MP readback), and the strip merge subsequently loads those frames. Black/white
+levels use quarter-DN units (×4); sensor noise profiles and hot-pixel lists are omitted after this spatial
+reconstruction because they no longer describe the stored pixels. HAL binned-corner fallback frames are not reduced.
+
 `sensorLayout.block` describes the viewfinder RAW (1 = Bayer, 2 = quad, 4 = 4x4).
 `photoBlock` independently describes the separate `streams.photo` output and defaults to 1.
-Both are remosaiced at full resolution. Photo-stream burst frames are remosaiced before
+Full output remosaics at the original resolution. Photo-stream burst frames are remosaiced before
 merge; binned preview can remain Bayer while full-size photos use quad CFA.
 
 ## Camera workarounds

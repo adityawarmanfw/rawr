@@ -67,6 +67,7 @@ inline std::string describeRouteForGolden(const LensRoute& r) {
     if (!r.photoIncludePreview) o << "photoIncludePreview=0\n";
     if (r.photoBufferCount) o << "photoBufferCount=" << r.photoBufferCount << '\n';
     if (r.photoSensorLayoutBlock > 1) o << "photoSensorLayoutBlock=" << r.photoSensorLayoutBlock << '\n';
+    if (r.photoReduced) o << "photoReduced=1 photoPhaseFit=" << r.photoPhaseFit << '\n';
     opt("colourOrder", r.colourOrder);
     o << "distortion=";
     if (r.distortion) {

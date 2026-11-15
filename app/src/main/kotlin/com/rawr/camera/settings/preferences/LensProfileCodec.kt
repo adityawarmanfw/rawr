@@ -4,6 +4,7 @@ import com.rawr.camera.settings.model.validateVendorKey
 import com.rawr.camera.settings.model.SENSOR_LAYOUT_BLOCKS
 import com.rawr.camera.settings.model.LIVE_REMOSAIC_QUALITIES
 import com.rawr.camera.settings.model.COLOUR_ORDERS
+import com.rawr.camera.settings.model.PHOTO_OUTPUTS
 import com.rawr.camera.settings.model.PHOTO_REMOSAIC_QUALITIES
 import com.rawr.camera.settings.model.CAMERA_API_CHOICES
 import com.rawr.camera.settings.model.CAMERA_WORKAROUNDS
@@ -364,6 +365,10 @@ internal object LensProfileCodec {
                 choice(layout, "colourOrder", COLOUR_ORDERS.toList())
                 choice(layout, "liveRemosaic", LIVE_REMOSAIC_QUALITIES.toList())
                 choice(layout, "photoRemosaic", PHOTO_REMOSAIC_QUALITIES.toList())
+                choice(layout, "photoOutput", PHOTO_OUTPUTS)
+                flags(layout, "photoPhaseFit")
+                if (layout.optString("photoOutput") == "reduced")
+                    require(layout.optInt("photoBlock", 1) == 4) { "photoOutput reduced needs photoBlock 4" }
             }
             objectField(image, "distortion")
             choice(image, "mirror", LensMirror.entries.map { it.wireName })
@@ -454,6 +459,8 @@ internal object LensProfileCodec {
                     put("sensorLayout", JSONObject().put("block", layout.block).put("liveRemosaic", layout.liveRemosaic)
                         .put("photoRemosaic", layout.photoRemosaic).apply {
                             if (layout.photoBlock > 1) put("photoBlock", layout.photoBlock)
+                            if (layout.photoOutput != "full") put("photoOutput", layout.photoOutput)
+                            if (layout.photoPhaseFit) put("photoPhaseFit", true)
                             layout.colourOrder?.let { put("colourOrder", it) }
                         })
                 }
@@ -586,7 +593,9 @@ internal object LensProfileCodec {
                     colourOrder = layout?.optString("colourOrder")?.takeIf { it in COLOUR_ORDERS },
                     liveRemosaic = layout?.optString("liveRemosaic")?.takeIf { it in LIVE_REMOSAIC_QUALITIES } ?: "standard",
                     photoRemosaic = layout?.optString("photoRemosaic")?.takeIf { it in PHOTO_REMOSAIC_QUALITIES } ?: "high",
-                    photoBlock = layout?.optInt("photoBlock", 1)?.takeIf { it in SENSOR_LAYOUT_BLOCKS } ?: 1
+                    photoBlock = layout?.optInt("photoBlock", 1)?.takeIf { it in SENSOR_LAYOUT_BLOCKS } ?: 1,
+                    photoOutput = layout?.optString("photoOutput")?.takeIf { it in PHOTO_OUTPUTS } ?: "full",
+                    photoPhaseFit = layout?.optBoolean("photoPhaseFit", false) ?: false
                 ),
                 distortion = image?.optJSONObject("distortion")?.toString(),
                 mirror = LensMirror.fromWire(image?.optString("mirror")),
