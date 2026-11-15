@@ -5,6 +5,7 @@
 #include <chrono>
 #include <thread>
 
+#include "capture/ReducedRawMetadata.h"
 #include "imaging/CfaRemosaic.h"
 #include "imaging/RawSnapshot.h"
 
@@ -14,7 +15,7 @@ namespace rawrcam::capture {
 // develop) reads it, like ingress does for the viewfinder.
 inline void remosaicBlockCfaStill(imaging::RawSnapshot& frame) {
     const auto& context = frame.metadata.cameraContext;
-    if (!context || context->cfaBlock <= 1u) return;
+    if (!context || context->cfaBlock <= 1u || reducedRawRequested(*context)) return;
     const auto start = std::chrono::steady_clock::now();
     // All cores: 12 MP takes ~115 ms (Standard) / ~140-175 ms (High) at 8 threads on V2562.
     const uint32_t threads = std::clamp(std::thread::hardware_concurrency(), 1u, 8u);

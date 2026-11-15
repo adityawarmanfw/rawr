@@ -1,4 +1,5 @@
 #include "encoding/dng/DngMetadataAdapter.h"
+#include "capture/ReducedRawMetadata.h"
 
 #include "color/DcpProfile.h"
 #include <filesystem>
@@ -579,6 +580,26 @@ int main() {
         std::cout << "DNG_CAPTURE_FULL_SIZE_GEOMETRY_PASS\n";
     }
 
+    // Reduced output resolves both native and vendor-binned characteristic coordinates.
+    for (uint32_t advertised : {4u, 8u, 16u}) {
+        auto f = makeFrame(true);
+        auto c = std::make_shared<rawrcam::metadata::CameraContextMetadata>(*f.metadata.cameraContext);
+        c->geometry.rawBufferWidth = c->geometry.rawBufferHeight = 16;
+        c->geometry.pixelArrayWidth = c->geometry.pixelArrayHeight = advertised;
+        c->geometry.preCorrectionActiveArray = {0, 0, int(advertised), int(advertised), true};
+        c->cfaBlock = 4; c->photoReduced = true;
+        c->binnedFallbackContext = f.metadata.cameraContext;
+        f.metadata.cameraContext = c;
+        f.metadata.effectiveWhiteLevel = 1023;
+        rawrcam::capture::applyReducedRawMetadata(f.metadata);
+        f.width = f.height = 8; f.packedRowStrideBytes = 16; f.raw16.resize(128);
+        auto params = rawrcam::encoding::dng::makeTinyDngWriteParams(f, capture, &error);
+        if (!params || params->raw.active_area[2] != 8 || params->raw.active_area[3] != 8 ||
+            params->raw.white_level[0] != 4092 || params->raw.black_level_exact[0] != 256) {
+            std::cerr << "reduced geometry/calibration: " << error << "\n";
+            return 12;
+        }
+    }
     auto bad = makeFrame(false);
     error.clear();
     if (rawrcam::encoding::dng::makeTinyDngWriteParams(bad, capture, &error) ||

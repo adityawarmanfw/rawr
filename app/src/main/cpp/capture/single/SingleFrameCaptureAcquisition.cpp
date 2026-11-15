@@ -12,6 +12,33 @@
 #include "sys/resource.h"
 
 namespace rawrcam::capture {
+void SingleFrameCaptureAcquisition::remosaic(imaging::RawSnapshot& frame) {
+    if (!frame.metadata.cameraContext || !reducedRawRequested(*frame.metadata.cameraContext)) {
+        remosaicBlockCfaStill(frame);
+        return;
+    }
+    try {
+        ReducedRaw reducer(vk_, frame.width, frame.height, 1);
+        reducer.submit(0, frame.raw16, frame.metadata);
+        reducer.collect(0, frame.raw16);
+    } catch (const std::exception& e) {
+        // The reducer leaves the frame untouched on failure: keep full size and remosaic it as before.
+        emit("REDUCED_RAW_FALLBACK full_size requestId=" + std::to_string(frame.requestId) + " error=" + e.what());
+        auto context = std::make_shared<metadata::CameraContextMetadata>(*frame.metadata.cameraContext);
+        context->photoReduced = false;
+        context->photoPhaseFit = false;
+        frame.metadata.cameraContext = std::move(context);
+        remosaicBlockCfaStill(frame);
+        return;
+    }
+    applyReducedRawMetadata(frame.metadata);
+    frame.width /= 2;
+    frame.height /= 2;
+    frame.packedRowStrideBytes = frame.width * 2;
+    emit("STILL_REDUCED_GPU requestId=" + std::to_string(frame.requestId) + " raw=" +
+         std::to_string(frame.width) + "x" + std::to_string(frame.height));
+}
+
 bool SingleFrameCaptureAcquisition::busy() const noexcept {
     std::lock_guard<std::mutex> lock(mutex_);
     return pending_.has_value() || ready_.has_value() || failure_.has_value() || workerRunning_;
@@ -81,7 +108,7 @@ bool SingleFrameCaptureAcquisition::beginDeferredSnapshot(AImage* imageLease, AH
                     deferred.frame->sourceRowStrideBytes = deferred.copyResult.sourceRowStrideBytes;
                     deferred.frame->sourcePixelStrideBytes = deferred.copyResult.sourcePixelStrideBytes;
                     keepBinnedCorner(*deferred.frame);
-                    remosaicBlockCfaStill(*deferred.frame);
+                    remosaic(*deferred.frame);
                     __android_log_print(ANDROID_LOG_INFO, "RawrCamNative", "%s",
                                         imaging::stillRawContentStatsLine(*deferred.frame).c_str());
                     journal_.commit(deferred);
@@ -147,6 +174,8 @@ SingleMatchedFrameResult SingleFrameCaptureAcquisition::processMatchedFrame(
                 setpriority(PRIO_PROCESS, 0, 5);
                 std::string error;
                 try {
+                    if (deferred.frame->metadata.cameraContext &&
+                        reducedRawRequested(*deferred.frame->metadata.cameraContext)) remosaic(*deferred.frame);
                     journal_.commit(deferred);
                 } catch (const std::exception& e) {
                     error = e.what();

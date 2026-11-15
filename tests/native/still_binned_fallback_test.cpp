@@ -56,6 +56,8 @@ void testKnownBinnedLayout() {
     for (uint32_t scale : {2u, 4u}) {
         for (uint32_t baseBlock : {1u, 2u}) {
             auto s = shot(scale, baseBlock, scale, kBase);
+            s.photo->photoReduced = true;
+            s.photo->photoPhaseFit = true;
             auto expected = mosaic(kBase, baseBlock);
             imaging::remosaicBlockCfa(expected, kBase, kBase, baseBlock, 0, 1);
             const auto before = capture::fullSizeFallbacks().binnedStills.load();
@@ -64,6 +66,7 @@ void testKnownBinnedLayout() {
             const auto& cropped = s.frame.metadata.cameraContext;
             assert(cropped != s.photo && cropped != s.base);
             assert(cropped->cfaBlock == baseBlock && cropped->geometry.rawBufferWidth == kBase);
+            assert(!cropped->photoReduced && !cropped->photoPhaseFit);
             capture::remosaicBlockCfaStill(s.frame);
             assert(s.frame.raw16 == expected);
             assert(capture::fullSizeFallbacks().binnedStills.load() == before + 1);

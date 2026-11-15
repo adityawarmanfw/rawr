@@ -3,14 +3,15 @@
 #include <mutex>
 #include <thread>
 
+#include "capture/ReducedRaw.h"
 #include "capture/single/SingleCaptureResult.h"
 #include "capture/single/SingleFrameCaptureJournal.h"
 #include "capture/single/SingleShotSlot.h"
 namespace rawrcam::capture {
 class SingleFrameCaptureAcquisition final {
    public:
-    SingleFrameCaptureAcquisition(SingleFrameCaptureJournal& journal, CaptureDiagnostic diagnostic)
-        : journal_(journal), diagnostic_(std::move(diagnostic)), slot_(diagnostic_) {}
+    SingleFrameCaptureAcquisition(const vulkan::VulkanContext& vk, SingleFrameCaptureJournal& journal, CaptureDiagnostic diagnostic)
+        : vk_(vk), journal_(journal), diagnostic_(std::move(diagnostic)), slot_(diagnostic_) {}
     ~SingleFrameCaptureAcquisition() { shutdown(); }
     void configure(uint32_t w, uint32_t h, uint64_t generation) { slot_.configure(w, h, generation); }
     void disable(const std::string& reason) { slot_.disable(reason); }
@@ -46,6 +47,8 @@ class SingleFrameCaptureAcquisition final {
     void emit(const std::string& line) const {
         if (diagnostic_) diagnostic_(line);
     }
+    void remosaic(imaging::RawSnapshot&);
+    const vulkan::VulkanContext& vk_;
     SingleFrameCaptureJournal& journal_;
     CaptureDiagnostic diagnostic_;
     SingleShotSlot slot_;

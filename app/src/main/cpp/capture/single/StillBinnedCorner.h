@@ -28,6 +28,8 @@ inline void keepBinnedCorner(imaging::RawSnapshot& frame) {
     // block-CFA photo streams. Without one, the frame's own CFA is kept.
     auto cropped = std::make_shared<metadata::CameraContextMetadata>(*context);
     if (base) cropped->cfaBlock = base->cfaBlock;
+    cropped->photoReduced = false;
+    cropped->photoPhaseFit = false;
     cropped->geometry.rawBufferWidth = width;
     cropped->geometry.rawBufferHeight = height;
     __android_log_print(ANDROID_LOG_WARN, "RawrCamNative",

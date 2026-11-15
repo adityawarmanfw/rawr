@@ -1,3 +1,5 @@
+#include "capture/ReducedRaw.h"
+#include "capture/ReducedRawMetadata.h"
 #include "diagnostics/timing/GpuTimingTracker.h"
 // Composition root: construction, core lifecycle, metadata ingress, shutdown.
 #include <unistd.h>
@@ -132,7 +134,28 @@ SessionEngine::SessionEngine(std::string filesDir) : filesDir_(std::move(filesDi
                 g.rawBufferWidth = std::min(width, scale * g.pixelArrayWidth);
                 g.rawBufferHeight = std::min(height, scale * g.pixelArrayHeight);
                 capture_.single().configureRawSnapshot(g.rawBufferWidth, g.rawBufferHeight, generation);
-                capture_.multiframe().configureFullSize(g.rawBufferWidth, g.rawBufferHeight, context->rawPreviewCfa);
+                // Reduced output is decided here, once: the merge service is sized for the geometry
+                // below. A lens the reducer cannot take (levels, size, device limits) keeps full size.
+                if (capture::reducedRawRequested(*context)) {
+                    std::string reason;
+                    if (const char* r = capture::reducedRawUnsupportedReason(*context, g.rawBufferWidth, g.rawBufferHeight))
+                        reason = r;
+                    else
+                        reason = capture::ReducedRaw::deviceUnsupportedReason(vulkanContext_, g.rawBufferWidth,
+                                                                              g.rawBufferHeight);
+                    if (!reason.empty()) {
+                        appendDiagnostic("REDUCED_RAW_FALLBACK full_size reason=" + reason);
+                        context->photoReduced = false;
+                        context->photoPhaseFit = false;
+                    } else if (context->photoPhaseFit && context->baselineWhiteLevel > 0.0f &&
+                               !capture::reducedRawFitFits(context->baselineWhiteLevel)) {
+                        appendDiagnostic("REDUCED_RAW_FIT_OFF reason=white_level");
+                        context->photoPhaseFit = false;
+                    }
+                }
+                const uint32_t reduction = capture::reducedRawRequested(*context) ? 2u : 1u;
+                capture_.multiframe().configureFullSize(g.rawBufferWidth / reduction, g.rawBufferHeight / reduction,
+                                                       context->rawPreviewCfa);
                 appendDiagnostic("FULL_SIZE_STILL_CONFIG raw=" + std::to_string(g.rawBufferWidth) + "x" +
                                  std::to_string(g.rawBufferHeight) + " buffer=" + std::to_string(width) + "x" +
                                  std::to_string(height));
@@ -602,7 +625,18 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
     const uint32_t width = context->geometry.rawBufferWidth, height = context->geometry.rawBufferHeight;
     const size_t bytes = size_t(width) * height * sizeof(uint16_t);
     diagnostics::CaptureStageTimer allocationTiming("fullres_allocate", tag);
-    auto journal = std::make_shared<capture::persistence::AcquiredRawJournal>(filesDir_, bytes, count);
+    const bool reduced = capture::reducedRawRequested(*context);
+    const uint32_t outputWidth = reduced ? width / 2 : width, outputHeight = reduced ? height / 2 : height;
+    auto journal = std::make_shared<capture::persistence::AcquiredRawJournal>(filesDir_, reduced ? bytes / 4 : bytes, count);
+    std::unique_ptr<capture::ReducedRaw> reducer;
+    if (reduced) reducer = std::make_unique<capture::ReducedRaw>(vulkanContext_, width, height);
+    std::vector<uint8_t> reducedPixels;
+    size_t reducedSubmitted = 0, reducedCollected = 0;
+    const auto collectReduced = [&] {
+        reducer->collect(reducedCollected % 2, reducedPixels);
+        journal->append(reducedPixels);
+        ++reducedCollected;
+    };
     std::vector<uint8_t> packed(bytes);
     allocationTiming.finish();
     struct Frame {
@@ -717,6 +751,26 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
             continue;
         }
         checkTiming.finish();
+        if (reducer) {
+            diagnostics::CaptureStageTimer reduceTiming("fullres_reduce_gpu_submit", tag, index + 1);
+            try {
+                reducer->submit(reducedSubmitted % 2, packed, frames.back().metadata);
+            } catch (const std::exception& e) {
+                // This frame cannot be reduced; reduced and full-size frames never mix in one merge.
+                // Drop it like a binned-corner frame: fewer than two left falls back to a single still.
+                appendDiagnostic("REDUCED_RAW_FRAME_DROPPED tag=" + std::to_string(tag) +
+                                 " frame=" + std::to_string(index + 1) + " error=" + e.what());
+                frames.pop_back();
+                journal->dropExpected();
+                ++binnedCorners;
+                continue;
+            }
+            ++reducedSubmitted;
+            capture::applyReducedRawMetadata(frames.back().metadata);
+            // Submit N before collecting N-1: CPU upload overlaps the ordered GPU work.
+            if (reducedSubmitted - reducedCollected == 2) collectReduced();
+            continue;
+        }
         if (context->cfaBlock > 1u) {
             diagnostics::CaptureStageTimer remosaicTiming("fullres_remosaic", tag, index + 1);
             const auto threads = std::clamp(std::thread::hardware_concurrency(), 1u, 8u);
@@ -726,6 +780,9 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
         diagnostics::CaptureStageTimer journalTiming("fullres_journal_append", tag, index + 1);
         journal->append(packed);
     }
+    while (reducedCollected < reducedSubmitted) collectReduced();
+    reducer.reset();
+    std::vector<uint8_t>().swap(reducedPixels);
     // Completion belongs to the whole burst, never to each individual frame.
     diagnostics::CaptureStageTimer idleTiming("fullres_wait_sequence_end", tag);
     if (!controller->waitFullSizeIdle(remainingMs())) {
@@ -750,7 +807,7 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
     for (size_t i = 0; i < frames.size(); ++i) {
         auto& f = frames[i];
         rawr::raw_gpu_pipeline::BurstFrame frame{};
-        frame.raw.ref = {i + 1, f.metadata.timestampNs, width, height};
+        frame.raw.ref = {i + 1, f.metadata.timestampNs, outputWidth, outputHeight};
         const std::uint32_t cfa = context->rawPreviewCfa;
         frame.parameters.normalization.blackByPhase =
             rawrcam::geometry::reorderRggbByCode(f.metadata.blackLevelPhysicalRggb, cfa);

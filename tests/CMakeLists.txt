@@ -46,6 +46,7 @@ rawr_test(convert_binned_raw_test
   "${APP}/convert/DngConverter.cpp"
   "${APP}/renderer/SourceCaptureExif.cpp")
 target_link_libraries(convert_binned_raw_test PRIVATE rawr_tinydng)
+rawr_test(reduced_raw_metadata_test native/reduced_raw_metadata_test.cpp)
 rawr_test(binned_corner_test
   "${RAWR_ROOT}/tests/native/binned_corner_test.cpp")
 rawr_test(cfa_remosaic_test

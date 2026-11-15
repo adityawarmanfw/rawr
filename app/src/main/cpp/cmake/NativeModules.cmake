@@ -208,6 +208,7 @@ rawrcam_module(capture
     capture/persistence/BurstJob.cpp
     capture/single/SingleFrameCoordinator.cpp
     capture/single/SingleFrameCaptureJob.cpp
+    capture/ReducedRaw.cpp
     capture/single/SingleFrameCaptureAcquisition.cpp
     capture/single/SingleFrameCaptureJournal.cpp
     capture/single/SingleFrameCaptureDevelop.cpp
