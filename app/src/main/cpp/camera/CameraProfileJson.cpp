@@ -700,6 +700,12 @@ std::string serializeCameraProfile(const CameraProfile& profile) {
             layout.text("photoRemosaic", r.photoRemosaic == 3 ? "detail" : r.photoRemosaic == 2 ? "high" : "standard");
             image.raw("sensorLayout", layout.str());
         }
+        if (r.cropRight || r.cropBottom) {
+            ObjectWriter crop;
+            if (r.cropRight) crop.number("right", r.cropRight);
+            if (r.cropBottom) crop.number("bottom", r.cropBottom);
+            image.raw("cropEdges", crop.str());
+        }
         if (r.distortion) {
             std::string distortion;
             appendDistortion(distortion, *r.distortion);  // ,"distortion":{...}
@@ -1159,6 +1165,32 @@ std::optional<LensRoute> readLens(const Json& l, std::string* error) {
             const std::string live = c->str("liveRemosaic", "standard"), photo = c->str("photoRemosaic", "high");
             r.liveRemosaic = live == "fast" ? 0u : live == "detail" ? 3u : 1u;
             r.photoRemosaic = photo == "standard" ? 1u : photo == "detail" ? 3u : 2u;
+        }
+    }
+    // Raw edges the HAL pads with non-image rows/columns. Right and bottom
+    // only: cropping the left or top edge would move the CFA origin and needs
+    // an offset the ingress does not carry.
+    if (const Json* c = image.get("cropEdges"); c && c->kind == Json::Kind::Object) {
+        const uint32_t period = 2u * std::max(1u, r.sensorLayoutBlock);
+        for (const char* name : {"left", "top"}) {
+            if (c->num(name, 0.0) != 0.0) {
+                if (error) *error = std::string("cropEdges ") + name + " is not supported for lens " + r.lensId;
+                return std::nullopt;
+            }
+        }
+        for (const auto& [name, field] : {std::pair<const char*, uint32_t*>{"right", &r.cropRight},
+                                          std::pair<const char*, uint32_t*>{"bottom", &r.cropBottom}}) {
+            const double value = c->num(name, 0.0);
+            if (value < 0.0 || value != std::floor(value) || value > 65535.0) {
+                if (error) *error = std::string("invalid cropEdges ") + name + " for lens " + r.lensId;
+                return std::nullopt;
+            }
+            if (uint32_t(value) % period != 0u) {
+                if (error) *error = std::string("cropEdges ") + name + " must be a multiple of " +
+                                    std::to_string(period) + " for lens " + r.lensId;
+                return std::nullopt;
+            }
+            *field = uint32_t(value);
         }
     }
     if (!readLevels(image.get("levels"), r.levels)) {

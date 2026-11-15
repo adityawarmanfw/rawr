@@ -6,6 +6,7 @@
 #include <stdexcept>
 
 #include "capture/single/StillBinnedCorner.h"
+#include "capture/single/StillEdgeCrop.h"
 #include "capture/single/StillCfaRemosaic.h"
 #include "imaging/Raw16CpuSnapshot.h"
 #include "imaging/RawFrameLease.h"
@@ -122,6 +123,7 @@ bool SingleFrameCaptureAcquisition::beginDeferredSnapshot(AImage* imageLease, AH
                     deferred.frame->sourceRowStrideBytes = deferred.copyResult.sourceRowStrideBytes;
                     deferred.frame->sourcePixelStrideBytes = deferred.copyResult.sourcePixelStrideBytes;
                     keepBinnedCorner(*deferred.frame);
+                    keepCroppedEdges(*deferred.frame);
                     remosaic(*deferred.frame);
                     __android_log_print(ANDROID_LOG_INFO, "RawrCamNative", "%s",
                                         imaging::stillRawContentStatsLine(*deferred.frame).c_str());
@@ -188,6 +190,7 @@ SingleMatchedFrameResult SingleFrameCaptureAcquisition::processMatchedFrame(
                 setpriority(PRIO_PROCESS, 0, 5);
                 std::string error;
                 try {
+                    keepCroppedEdges(*deferred.frame);
                     if (deferred.frame->metadata.cameraContext &&
                         reducedRawRequested(*deferred.frame->metadata.cameraContext)) remosaic(*deferred.frame);
                     journal_.commit(deferred);

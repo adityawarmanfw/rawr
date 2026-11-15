@@ -258,6 +258,8 @@ std::optional<LensRoute> CameraDeviceSession::select(const LensRoute& requested,
     parsed->guardStillExposure = requiresStillExposureGuard(route);
     parsed->cfaBlock = route.sensorLayoutBlock;
     parsed->photoCfaBlock = route.photoSensorLayoutBlock;
+    parsed->cropRight = route.cropRight;
+    parsed->cropBottom = route.cropBottom;
     parsed->photoReduced = route.photoReduced;
     parsed->photoReduced25 = route.photoReduced25;
     parsed->photoPhaseFit = route.photoPhaseFit;

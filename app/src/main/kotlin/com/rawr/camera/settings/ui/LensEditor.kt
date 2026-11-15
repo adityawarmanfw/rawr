@@ -237,6 +237,12 @@ internal fun LensEditorScreen(state: SettingsUiState, lensName: String?, dispatc
             camera = camera
         ) { draft = draft.image { copy(levels = it) } }
         SensorLayoutGroup(draft.image.sensorLayout, hasPhotoStream = draft.streams.photo != null) { draft = draft.image { copy(sensorLayout = it) } }
+        RawEdgeCropGroup(
+            crop = draft.image.cropEdges,
+            rawWidth = draft.streams.raw.choice.width,
+            rawHeight = draft.streams.raw.choice.height,
+            cfaBlock = draft.image.sensorLayout.block
+        ) { draft = draft.image { copy(cropEdges = it) } }
         LensDcpProfiles(
             image = draft.image,
             importing = importingDcp,

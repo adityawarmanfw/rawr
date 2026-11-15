@@ -353,6 +353,10 @@ internal object LensProfileCodec {
                 number(exposure, "shutterMaxNs", 0.0..EXTENDED_SHUTTER_MAX_NS.toDouble(), true)
                 flags(exposure, "extended")
             }
+            objectField(image, "cropEdges")?.let { crop ->
+                number(crop, "right", 0.0..65535.0, true)
+                number(crop, "bottom", 0.0..65535.0, true)
+            }
             objectField(image, "sensorLayout")?.let { layout ->
                 if (layout.has("block")) {
                     number(layout, "block", 1.0..Int.MAX_VALUE.toDouble(), true)
@@ -463,6 +467,12 @@ internal object LensProfileCodec {
                             if (layout.photoPhaseFit) put("photoPhaseFit", true)
                             layout.colourOrder?.let { put("colourOrder", it) }
                         })
+                }
+                if (i.cropEdges.enabled) {
+                    put("cropEdges", JSONObject().apply {
+                        if (i.cropEdges.right > 0) put("right", i.cropEdges.right)
+                        if (i.cropEdges.bottom > 0) put("bottom", i.cropEdges.bottom)
+                    })
                 }
                 i.distortion?.let { put("distortion", JSONObject(it)) }
                 if (i.mirror != LensMirror.None) put("mirror", i.mirror.wireName)
@@ -597,6 +607,10 @@ internal object LensProfileCodec {
                     photoOutput = layout?.optString("photoOutput")?.takeIf { it in PHOTO_OUTPUTS } ?: "full",
                     photoPhaseFit = layout?.optBoolean("photoPhaseFit", false) ?: false
                 ),
+                cropEdges = image?.optJSONObject("cropEdges")?.let {
+                    LensCropEdges(right = it.optInt("right", 0).coerceAtLeast(0),
+                                  bottom = it.optInt("bottom", 0).coerceAtLeast(0))
+                } ?: LensCropEdges(),
                 distortion = image?.optJSONObject("distortion")?.toString(),
                 mirror = LensMirror.fromWire(image?.optString("mirror")),
                 dcp = image?.optJSONObject("dcp")?.let { d ->

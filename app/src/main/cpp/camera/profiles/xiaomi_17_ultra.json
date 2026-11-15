@@ -1204,6 +1204,102 @@
       }
     },
     {
+      "id": "4.3x 200MP",
+      "camera": {
+        "id": "4",
+        "physical": ""
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 4080,
+          "height": 3072
+        },
+        "photo": {
+          "format": "RAW10",
+          "width": 16320,
+          "height": 12288,
+          "useCase": 524547,
+          "buffers": {
+            "usage": "0x100003"
+          },
+          "mergeFrameLimit": 6,
+          "includePreview": false
+        },
+        "companion": {
+          "mode": "fixed",
+          "width": 1440,
+          "height": 1080,
+          "format": "private",
+          "targeted": true,
+          "detach": false,
+          "buffers": {
+            "usage": "0x100"
+          }
+        }
+      },
+      "session": {
+        "opMode": 36868,
+        "frameRate": 30
+      },
+      "vendorKeys": [
+        {
+          "tag": "xiaomi.remosaic.enabled",
+          "type": "byte",
+          "scope": "request",
+          "values": [
+            0
+          ],
+          "enabled": true
+        },
+        {
+          "tag": "xiaomi.remosaic.enabled",
+          "type": "byte",
+          "scope": "still",
+          "values": [
+            1
+          ],
+          "enabled": true
+        },
+        {
+          "tag": "xiaomi.zoomRatio.debug.zoomRatioDebugEnable",
+          "type": "int32",
+          "scope": "request",
+          "values": [
+            1
+          ],
+          "enabled": true
+        },
+        {
+          "tag": "xiaomi.zoomRatio.debug.setZoomRatioCode",
+          "type": "float",
+          "scope": "request",
+          "values": [
+            4.3
+          ],
+          "enabled": true
+        }
+      ],
+      "image": {
+        "levels": {
+          "static": true,
+          "black": [
+            64,
+            64,
+            64,
+            64
+          ],
+          "white": 1023
+        },
+        "sensorLayout": {
+          "photoBlock": 4,
+          "photoRemosaic": "standard",
+          "photoOutput": "reduced",
+          "photoPhaseFit": false
+        }
+      }
+    },
+    {
       "id": "4.3x ISZ",
       "camera": {
         "id": "4",

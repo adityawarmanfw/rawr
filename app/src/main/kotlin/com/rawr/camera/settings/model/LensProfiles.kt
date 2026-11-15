@@ -294,6 +294,8 @@ data class LensImage(
     /** Black/white levels of the lens; a stream can override them. */
     val levels: LensLevels = LensLevels(),
     val sensorLayout: LensSensorLayout = LensSensorLayout(),
+    /** Padded raw edges this lens drops; zero on both keeps the whole frame. */
+    val cropEdges: LensCropEdges = LensCropEdges(),
     /** Lens distortion calibration as its profile JSON object (validated natively); null for none. */
     val distortion: String? = null,
     /** Mirror of the image (photo, video, viewfinder; DNG via its orientation). */
@@ -330,6 +332,18 @@ data class LensImage(
         dcpProfiles = availableDcps.filterNot { it.file == file },
         dcp = dcp?.takeUnless { it.file == file }
     )
+}
+
+/**
+ * Raw columns and rows the camera delivers with no image in them (some vendor modes pad the frame).
+ * Right and bottom only: cropping the other two edges would move the CFA origin. Both must be
+ * multiples of the CFA period, so the colour order stays where it is.
+ */
+data class LensCropEdges(
+    val right: Int = 0,
+    val bottom: Int = 0
+) {
+    val enabled: Boolean get() = right > 0 || bottom > 0
 }
 
 data class LensSensorLayout(
@@ -404,6 +418,16 @@ fun validateLensProfile(lens: LensProfile, others: List<LensProfile>): List<Stri
         if (it.bufferCount != 0 && it.bufferCount !in 2..16) add("Photo stream buffer count must be 2 to 16")
     }
     val layout = lens.image.sensorLayout
+    val crop = lens.image.cropEdges
+    val cropPeriod = 2 * layout.block.coerceAtLeast(1)
+    listOf("Right" to crop.right, "Bottom" to crop.bottom).forEach { (edge, value) ->
+        if (value < 0) add("$edge raw edge crop can't be negative")
+        else if (value % cropPeriod != 0) add("$edge raw edge crop must be a multiple of $cropPeriod")
+    }
+    if (crop.right > 0 && streams.raw.choice.width > 0 && crop.right >= streams.raw.choice.width)
+        add("Right raw edge crop leaves nothing of the frame")
+    if (crop.bottom > 0 && streams.raw.choice.height > 0 && crop.bottom >= streams.raw.choice.height)
+        add("Bottom raw edge crop leaves nothing of the frame")
     if (layout.photoOutput !in PHOTO_OUTPUTS) add("Unknown photo output ${layout.photoOutput}")
     if (layout.photoOutput != "full" && layout.photoBlock != 4 && layout.photoBlock != 1)
         add("Reduced photo output needs a Bayer or 4×4 photo CFA")

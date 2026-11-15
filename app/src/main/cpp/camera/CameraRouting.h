@@ -216,6 +216,12 @@ struct LensRoute {
     // (CPU: Standard 1 / High 2).
     uint32_t liveRemosaic = 1;
     uint32_t photoRemosaic = 2;
+    // Raw rows/columns the HAL delivers but that hold no image (some vendor
+    // modes pad the bottom). Dropped from the right and bottom edges only, so
+    // the CFA phase at the origin is untouched and the row stride still comes
+    // from the buffer; both are multiples of the sensorLayoutBlock period.
+    uint32_t cropRight = 0;
+    uint32_t cropBottom = 0;
     // Lens distortion calibration when the camera reports none (vendor
     // calibration): undistorts photo renders and goes into the DNG as a
     // WarpRectilinear opcode. Defined on its own frame size, scaled to others.

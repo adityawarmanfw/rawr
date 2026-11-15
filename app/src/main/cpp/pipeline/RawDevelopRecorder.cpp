@@ -638,6 +638,21 @@ RawDevelopRecordResult RawDevelopRecorder::record(const RawDevelopRecordInput& i
                                                                in.previewHeight);
         }
     }
+    // Padded raw edges (lens profile image.cropEdges): the frame is still
+    // processed whole, so the metering and the scopes keep seeing the padding;
+    // this only keeps it off the screen. Stills drop it for real
+    // (capture/single/StillEdgeCrop.h). An idle video crop already frames
+    // tighter than the padding, so it wins.
+    if (previewCrop.width == 0 && in.diagnosticMode == 0u && in.metadata.cameraContext) {
+        const auto& context = *in.metadata.cameraContext;
+        if ((context.cropRight || context.cropBottom) && context.cropRight < in.rawWidth &&
+            context.cropBottom < in.rawHeight) {
+            const rawrcam::video::VideoSourceRect kept{0u, 0u, in.rawWidth - context.cropRight,
+                                                       in.rawHeight - context.cropBottom, false};
+            previewCrop = rawrcam::video::scaleVideoSourceRect(kept, in.rawWidth, in.rawHeight, in.previewWidth,
+                                                               in.previewHeight);
+        }
+    }
     // Framing matches the undistorted photo or recording (Kotlin sends the
     // current mode's setting); diagnostics show the sensor image as is. The
     // idle video crop zooms like the recorder, which only demosaics the crop.
