@@ -217,9 +217,11 @@ struct LensRoute {
     uint32_t liveRemosaic = 1;
     uint32_t photoRemosaic = 2;
     // Raw rows/columns the HAL delivers but that hold no image (some vendor
-    // modes pad the bottom). Dropped from the right and bottom edges only, so
-    // the CFA phase at the origin is untouched and the row stride still comes
-    // from the buffer; both are multiples of the sensorLayoutBlock period.
+    // modes pad an edge). All four are multiples of the CFA period
+    // (2 * sensorLayoutBlock), so the colour order of the kept area is the
+    // camera's own whichever edges are dropped.
+    uint32_t cropLeft = 0;
+    uint32_t cropTop = 0;
     uint32_t cropRight = 0;
     uint32_t cropBottom = 0;
     // Lens distortion calibration when the camera reports none (vendor

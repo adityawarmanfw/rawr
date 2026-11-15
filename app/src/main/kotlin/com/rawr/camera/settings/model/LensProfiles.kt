@@ -336,14 +336,15 @@ data class LensImage(
 
 /**
  * Raw columns and rows the camera delivers with no image in them (some vendor modes pad the frame).
- * Right and bottom only: cropping the other two edges would move the CFA origin. Both must be
- * multiples of the CFA period, so the colour order stays where it is.
+ * Every edge must be a multiple of the CFA period, so the kept area keeps the camera's colour order.
  */
 data class LensCropEdges(
+    val left: Int = 0,
+    val top: Int = 0,
     val right: Int = 0,
     val bottom: Int = 0
 ) {
-    val enabled: Boolean get() = right > 0 || bottom > 0
+    val enabled: Boolean get() = left > 0 || top > 0 || right > 0 || bottom > 0
 }
 
 data class LensSensorLayout(
@@ -420,14 +421,15 @@ fun validateLensProfile(lens: LensProfile, others: List<LensProfile>): List<Stri
     val layout = lens.image.sensorLayout
     val crop = lens.image.cropEdges
     val cropPeriod = 2 * layout.block.coerceAtLeast(1)
-    listOf("Right" to crop.right, "Bottom" to crop.bottom).forEach { (edge, value) ->
-        if (value < 0) add("$edge raw edge crop can't be negative")
-        else if (value % cropPeriod != 0) add("$edge raw edge crop must be a multiple of $cropPeriod")
-    }
-    if (crop.right > 0 && streams.raw.choice.width > 0 && crop.right >= streams.raw.choice.width)
-        add("Right raw edge crop leaves nothing of the frame")
-    if (crop.bottom > 0 && streams.raw.choice.height > 0 && crop.bottom >= streams.raw.choice.height)
-        add("Bottom raw edge crop leaves nothing of the frame")
+    listOf("Left" to crop.left, "Top" to crop.top, "Right" to crop.right, "Bottom" to crop.bottom)
+        .forEach { (edge, value) ->
+            if (value < 0) add("$edge raw edge crop can't be negative")
+            else if (value % cropPeriod != 0) add("$edge raw edge crop must be a multiple of $cropPeriod")
+        }
+    if (streams.raw.choice.width > 0 && crop.left + crop.right >= streams.raw.choice.width)
+        add("The left and right raw edge crops leave nothing of the frame")
+    if (streams.raw.choice.height > 0 && crop.top + crop.bottom >= streams.raw.choice.height)
+        add("The top and bottom raw edge crops leave nothing of the frame")
     if (layout.photoOutput !in PHOTO_OUTPUTS) add("Unknown photo output ${layout.photoOutput}")
     if (layout.photoOutput != "full" && layout.photoBlock != 4 && layout.photoBlock != 1)
         add("Reduced photo output needs a Bayer or 4×4 photo CFA")

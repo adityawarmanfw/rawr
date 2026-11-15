@@ -214,9 +214,9 @@ internal fun RawEdgeCropGroup(
     val period = 2 * cfaBlock.coerceAtLeast(1)
     SettingsGroup(
         title = "Raw edge crop",
-        description = "Some vendor modes pad the RAW with rows or columns that hold no image. " +
-            "Dropping them cleans up the photo and the DNG, and keeps the padding off the viewfinder. " +
-            "The metering and the scopes still see the whole frame."
+        description = "Some sensor modes leave rows or columns with no image in them. Dropping them cleans up " +
+            "the photo and the DNG, and keeps them off the viewfinder. The metering and the scopes still see " +
+            "the whole frame."
     ) {
         SettingsSwitchRow(
             title = "Drop padded raw edges",
@@ -226,17 +226,27 @@ internal fun RawEdgeCropGroup(
         if (crop.enabled) {
             SettingDivider()
             if (rawWidth > 0 && rawHeight > 0) {
+                val keptWidth = (rawWidth - crop.left - crop.right).coerceAtLeast(0)
+                val keptHeight = (rawHeight - crop.top - crop.bottom).coerceAtLeast(0)
                 SettingsRow(
                     title = "Kept raw area",
-                    value = "${(rawWidth - crop.right).coerceAtLeast(0)} × ${(rawHeight - crop.bottom).coerceAtLeast(0)}",
+                    value = "$keptWidth × $keptHeight",
                     supportingText = "Of $rawWidth × $rawHeight"
                 )
                 SettingDivider()
             }
             CaptureNumberField(
+                "Left", crop.left, Modifier.testTag(lensEditorTag("crop_edges_left")),
+                "Columns dropped from the left edge · steps of $period, so the colour order stays put"
+            ) { onChange(crop.copy(left = it)) }
+            CaptureNumberField(
                 "Right", crop.right, Modifier.testTag(lensEditorTag("crop_edges_right")),
-                "Columns dropped from the right edge · steps of $period, so the colour order stays put"
+                "Columns dropped from the right edge · steps of $period"
             ) { onChange(crop.copy(right = it)) }
+            CaptureNumberField(
+                "Top", crop.top, Modifier.testTag(lensEditorTag("crop_edges_top")),
+                "Rows dropped from the top edge · steps of $period"
+            ) { onChange(crop.copy(top = it)) }
             CaptureNumberField(
                 "Bottom", crop.bottom, Modifier.testTag(lensEditorTag("crop_edges_bottom")),
                 "Rows dropped from the bottom edge · steps of $period"

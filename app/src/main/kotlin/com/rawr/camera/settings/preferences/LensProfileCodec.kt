@@ -354,8 +354,7 @@ internal object LensProfileCodec {
                 flags(exposure, "extended")
             }
             objectField(image, "cropEdges")?.let { crop ->
-                number(crop, "right", 0.0..65535.0, true)
-                number(crop, "bottom", 0.0..65535.0, true)
+                for (edge in listOf("left", "top", "right", "bottom")) number(crop, edge, 0.0..65535.0, true)
             }
             objectField(image, "sensorLayout")?.let { layout ->
                 if (layout.has("block")) {
@@ -470,6 +469,8 @@ internal object LensProfileCodec {
                 }
                 if (i.cropEdges.enabled) {
                     put("cropEdges", JSONObject().apply {
+                        if (i.cropEdges.left > 0) put("left", i.cropEdges.left)
+                        if (i.cropEdges.top > 0) put("top", i.cropEdges.top)
                         if (i.cropEdges.right > 0) put("right", i.cropEdges.right)
                         if (i.cropEdges.bottom > 0) put("bottom", i.cropEdges.bottom)
                     })
@@ -608,7 +609,9 @@ internal object LensProfileCodec {
                     photoPhaseFit = layout?.optBoolean("photoPhaseFit", false) ?: false
                 ),
                 cropEdges = image?.optJSONObject("cropEdges")?.let {
-                    LensCropEdges(right = it.optInt("right", 0).coerceAtLeast(0),
+                    LensCropEdges(left = it.optInt("left", 0).coerceAtLeast(0),
+                                  top = it.optInt("top", 0).coerceAtLeast(0),
+                                  right = it.optInt("right", 0).coerceAtLeast(0),
                                   bottom = it.optInt("bottom", 0).coerceAtLeast(0))
                 } ?: LensCropEdges(),
                 distortion = image?.optJSONObject("distortion")?.toString(),

@@ -19,7 +19,7 @@ std::optional<NormalizedPoint> displayToSource(float displayX, float displayY, u
     const uint32_t quarterTurns = static_cast<uint32_t>(((rotationDegrees / 90) % 4 + 4) % 4);
     const bool swapped = quarterTurns == 1u || quarterTurns == 3u;
     float winX0, winY0, winX1, winY1;
-    cropWindowFractions(sourceWidth, sourceHeight, crop, swapped, winX0, winY0, winX1, winY1);
+    cropWindowFractions(sourceWidth, sourceHeight, crop, quarterTurns, winX0, winY0, winX1, winY1);
     // The presentation samples the window, so fit against the window aspect
     // (identical to the full source when the crop is disabled).
     const float displayedSourceWidth =
@@ -79,7 +79,7 @@ std::optional<NormalizedPoint> sourceToDisplay(float sourceX, float sourceY, uin
     const uint32_t quarterTurns = static_cast<uint32_t>(((rotationDegrees / 90) % 4 + 4) % 4);
     const bool swapped = quarterTurns == 1u || quarterTurns == 3u;
     float winX0, winY0, winX1, winY1;
-    cropWindowFractions(sourceWidth, sourceHeight, crop, swapped, winX0, winY0, winX1, winY1);
+    cropWindowFractions(sourceWidth, sourceHeight, crop, quarterTurns, winX0, winY0, winX1, winY1);
     const float winW = winX1 - winX0;
     const float winH = winY1 - winY0;
     const float displayedSourceWidth = (static_cast<float>(swapped ? sourceHeight : sourceWidth)) * winW;

@@ -645,10 +645,11 @@ RawDevelopRecordResult RawDevelopRecorder::record(const RawDevelopRecordInput& i
     // tighter than the padding, so it wins.
     if (previewCrop.width == 0 && in.diagnosticMode == 0u && in.metadata.cameraContext) {
         const auto& context = *in.metadata.cameraContext;
-        if ((context.cropRight || context.cropBottom) && context.cropRight < in.rawWidth &&
-            context.cropBottom < in.rawHeight) {
-            const rawrcam::video::VideoSourceRect kept{0u, 0u, in.rawWidth - context.cropRight,
-                                                       in.rawHeight - context.cropBottom, false};
+        const uint32_t dropX = context.cropLeft + context.cropRight;
+        const uint32_t dropY = context.cropTop + context.cropBottom;
+        if ((dropX || dropY) && dropX < in.rawWidth && dropY < in.rawHeight) {
+            const rawrcam::video::VideoSourceRect kept{context.cropLeft, context.cropTop, in.rawWidth - dropX,
+                                                       in.rawHeight - dropY, false};
             previewCrop = rawrcam::video::scaleVideoSourceRect(kept, in.rawWidth, in.rawHeight, in.previewWidth,
                                                                in.previewHeight);
         }

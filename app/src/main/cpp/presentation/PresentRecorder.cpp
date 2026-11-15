@@ -72,7 +72,9 @@ void PresentRecorder::record(const RecordInfo& i) {
         crop = {i.cropX, i.cropY, i.cropW, i.cropH, true};
     }
     float cropX0, cropY0, cropX1, cropY1;
-    rawrcam::geometry::cropWindowFractions(i.previewWidth, i.previewHeight, crop, quarterTurn, cropX0, cropY0,
+    // The crop is off for EXIF review, so the presentation turns are the only
+    // rotation the window has to survive.
+    rawrcam::geometry::cropWindowFractions(i.previewWidth, i.previewHeight, crop, presentationTurns, cropX0, cropY0,
                                            cropX1, cropY1);
     const float winW = cropX1 - cropX0;
     const float winH = cropY1 - cropY0;

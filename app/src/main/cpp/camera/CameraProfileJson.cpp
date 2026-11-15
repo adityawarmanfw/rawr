@@ -700,8 +700,10 @@ std::string serializeCameraProfile(const CameraProfile& profile) {
             layout.text("photoRemosaic", r.photoRemosaic == 3 ? "detail" : r.photoRemosaic == 2 ? "high" : "standard");
             image.raw("sensorLayout", layout.str());
         }
-        if (r.cropRight || r.cropBottom) {
+        if (r.cropLeft || r.cropTop || r.cropRight || r.cropBottom) {
             ObjectWriter crop;
+            if (r.cropLeft) crop.number("left", r.cropLeft);
+            if (r.cropTop) crop.number("top", r.cropTop);
             if (r.cropRight) crop.number("right", r.cropRight);
             if (r.cropBottom) crop.number("bottom", r.cropBottom);
             image.raw("cropEdges", crop.str());
@@ -1167,18 +1169,13 @@ std::optional<LensRoute> readLens(const Json& l, std::string* error) {
             r.photoRemosaic = photo == "standard" ? 1u : photo == "detail" ? 3u : 2u;
         }
     }
-    // Raw edges the HAL pads with non-image rows/columns. Right and bottom
-    // only: cropping the left or top edge would move the CFA origin and needs
-    // an offset the ingress does not carry.
+    // Raw edges the HAL pads with non-image rows/columns, dropped before
+    // anything develops or writes the frame.
     if (const Json* c = image.get("cropEdges"); c && c->kind == Json::Kind::Object) {
         const uint32_t period = 2u * std::max(1u, r.sensorLayoutBlock);
-        for (const char* name : {"left", "top"}) {
-            if (c->num(name, 0.0) != 0.0) {
-                if (error) *error = std::string("cropEdges ") + name + " is not supported for lens " + r.lensId;
-                return std::nullopt;
-            }
-        }
-        for (const auto& [name, field] : {std::pair<const char*, uint32_t*>{"right", &r.cropRight},
+        for (const auto& [name, field] : {std::pair<const char*, uint32_t*>{"left", &r.cropLeft},
+                                          std::pair<const char*, uint32_t*>{"top", &r.cropTop},
+                                          std::pair<const char*, uint32_t*>{"right", &r.cropRight},
                                           std::pair<const char*, uint32_t*>{"bottom", &r.cropBottom}}) {
             const double value = c->num(name, 0.0);
             if (value < 0.0 || value != std::floor(value) || value > 65535.0) {

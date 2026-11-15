@@ -46,25 +46,48 @@ std::optional<NormalizedPoint> sourceToDisplay(float sourceX, float sourceY, uin
 // Shared with the presentation shader path (PresentRecorder) so Kotlin-side
 // focus boxes, face boxes, and displayed pixels always agree.
 inline void cropWindowFractions(uint32_t sourceWidth, uint32_t sourceHeight, const SourceCropRect& crop,
-                                bool swapped, float& x0, float& y0, float& x1, float& y1) noexcept {
+                                uint32_t quarterTurns, float& x0, float& y0, float& x1, float& y1) noexcept {
     x0 = 0.0f;
     y0 = 0.0f;
     x1 = 1.0f;
     y1 = 1.0f;
     if (!crop.enabled || crop.w == 0 || crop.h == 0 || sourceWidth == 0 || sourceHeight == 0) return;
     if (crop.x + crop.w > sourceWidth || crop.y + crop.h > sourceHeight) return;
-    const float rotatedW = swapped ? float(sourceHeight) : float(sourceWidth);
-    const float rotatedH = swapped ? float(sourceWidth) : float(sourceHeight);
-    // Centered rects stay centered under quarter turns; dims swap on odd turns.
-    const float cropW = swapped ? float(crop.h) : float(crop.w);
-    const float cropH = swapped ? float(crop.w) : float(crop.h);
-    if (cropW <= 0.0f || cropH <= 0.0f || cropW > rotatedW || cropH > rotatedH) return;
-    const float fx = cropW / rotatedW;
-    const float fy = cropH / rotatedH;
-    x0 = (1.0f - fx) * 0.5f;
-    y0 = (1.0f - fy) * 0.5f;
-    x1 = 1.0f - x0;
-    y1 = 1.0f - y0;
+    // The window in source fractions, then turned into the rotated frame the
+    // presentation samples in. present.frag applies the window to its output
+    // UV and only then undoes the rotation (sourceUv), so each quarter turn
+    // sends the window's origin to a different corner: a window that is not
+    // centred needs the turn count, not just whether the axes swap.
+    const float fx0 = float(crop.x) / float(sourceWidth);
+    const float fx1 = float(crop.x + crop.w) / float(sourceWidth);
+    const float fy0 = float(crop.y) / float(sourceHeight);
+    const float fy1 = float(crop.y + crop.h) / float(sourceHeight);
+    switch (quarterTurns & 3u) {
+        case 1u:  // sourceUv: (q.y, 1 - q.x)
+            x0 = 1.0f - fy1;
+            x1 = 1.0f - fy0;
+            y0 = fx0;
+            y1 = fx1;
+            return;
+        case 2u:  // sourceUv: (1 - q.x, 1 - q.y)
+            x0 = 1.0f - fx1;
+            x1 = 1.0f - fx0;
+            y0 = 1.0f - fy1;
+            y1 = 1.0f - fy0;
+            return;
+        case 3u:  // sourceUv: (1 - q.y, q.x)
+            x0 = fy0;
+            x1 = fy1;
+            y0 = 1.0f - fx1;
+            y1 = 1.0f - fx0;
+            return;
+        default:
+            x0 = fx0;
+            x1 = fx1;
+            y0 = fy0;
+            y1 = fy1;
+            return;
+    }
 }
 
 }  // namespace rawrcam::geometry
