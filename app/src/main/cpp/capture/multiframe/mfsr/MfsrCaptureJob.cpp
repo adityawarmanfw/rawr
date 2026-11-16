@@ -2,12 +2,14 @@
 #include "diagnostics/timing/CaptureStageTimer.h"
 
 #include <android/log.h>
+#include <sys/system_properties.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -28,6 +30,7 @@
 #include "capture/persistence/FrameRecipe.h"
 #include "capture/persistence/ProcessingRecipe.h"
 #include "capture/single/SingleFrameCaptureContextBuilder.h"
+#include "capture/single/SingleFrameCaptureDevelop.h"
 #include "color/ColorMath.h"
 #include "color/FilmExposure.h"
 #include "color/WhiteBalance.h"
@@ -64,6 +67,8 @@ constexpr const char* kTag = "RawrCamNative";
 // 56 MP, ~0.77 / ~1.26 GiB at 12.5 MP). It is not a memory budget by itself.
 constexpr std::uint64_t kStripMergePixels = 56'000'000;
 static_assert(kRextureMaxPixels >= kStripMergePixels, "a strip window must fit a Rexture merge");
+// Smallest window the memory plan will choose: below it the overlap re-merged by every strip costs more than it saves.
+constexpr std::uint64_t kMinStripPixels = 16'000'000;
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, kTag, __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, kTag, __VA_ARGS__)
 
@@ -133,10 +138,55 @@ void MfsrCaptureJob::runStages(Published& published) {
     // A burst too large for one merge arena (vivo 200 MP: ~8 GB) merges in
     // overlapping strips the size of a 50 MP merge, stitched on the CPU.
     // DNG only: the merged CFA never exists on the GPU whole.
-    const auto strips = job && job->setRowWindow ? stripWindows(ctx.rawWidth, ctx.rawHeight, kStripMergePixels)
-                                                 : std::vector<StripWindow>{};
+    // The window follows the memory the phone has right now: a frame whose arena (plus its resident frames) fits
+    // merges whole at full speed, one that does not is split into the tallest windows that do. The arena is sized
+    // by the window geometry, not the frame count, so splitting is the only lever that shortens it. A 12 GB 17U at
+    // 8160x6144 needs ~3.8 GB with ~2.8 GB available and was killed. debug.rawr.strip_mp (16..56 MP) overrides.
+    const std::uint32_t residentFrames = job && work->tuning.mergeAlgorithm == 2u
+                                             ? std::uint32_t(job->frames.size())
+                                             : std::uint32_t(std::min<std::size_t>(2u, job ? job->frames.size() : 0u));
+    std::uint64_t memAvailable = readMemAvailableBytes();
+    std::uint64_t stripPixels = kStripMergePixels;
+    const char* stripReason = "whole";
+    {
+        char value[PROP_VALUE_MAX] = {};
+        // debug.rawr.mem_avail_mb (256..65536) replaces the measured MemAvailable in the plan only, to exercise the
+        // memory-fit choice on a phone with plenty of memory. The merge still runs on the real memory.
+        if (__system_property_get("debug.rawr.mem_avail_mb", value) > 0) {
+            const long mb = std::atol(value);
+            if (mb >= 256 && mb <= 65536) memAvailable = std::uint64_t(mb) * 1024u * 1024u;
+        }
+        value[0] = '\0';
+        const int mp = __system_property_get("debug.rawr.strip_mp", value) > 0 ? std::atoi(value) : 0;
+        if (mp >= 16 && mp <= 56) {
+            stripPixels = std::uint64_t(mp) * 1'000'000u;
+            stripReason = "property";
+        } else if (job && job->setRowWindow && memAvailable != 0) {
+            // Merging next to the system's own working set: leave the rest of what is available to it, and to the
+            // stitched frame and the JPEG develop that follow.
+            const std::uint64_t budget = memAvailable / 4u * 3u;
+            const std::uint64_t fit = memoryFitStripPixels(
+                ctx.rawWidth, ctx.rawHeight, kStripMergePixels, kMinStripPixels, budget, [&](std::uint32_t rows) {
+                    return estimateMergeArenaBytes(ctx.rawWidth, rows, work->tuning.mergeAlgorithm) +
+                           std::uint64_t(ctx.rawWidth) * rows * sizeof(std::uint16_t) * residentFrames;
+                });
+            if (fit < kStripMergePixels) {
+                stripPixels = fit;
+                stripReason = "memory";
+            }
+        }
+    }
+    const auto strips = job && job->setRowWindow
+                            ? stripWindows(ctx.rawWidth, ctx.rawHeight, stripPixels, 256, 128,
+                                           /*balanced=*/std::strcmp(stripReason, "memory") == 0)
+                            : std::vector<StripWindow>{};
     const bool stripMode = strips.size() > 1;
     const bool jpegRequested = work->jpegRequested && !stripMode;
+    // A frame split only to fit memory (<= 56 MP) still gets its JPEG: the stitched CFA is on the CPU at full size and
+    // develops like a single still once the arena is released. Larger frames (vivo 200 MP) stay DNG-only.
+    const bool stripJpeg =
+        stripMode && work->jpegRequested && std::uint64_t(ctx.rawWidth) * ctx.rawHeight <= kStripMergePixels;
+    bool stripJpegPublished = !stripJpeg;
     // Rexture JPEG from its own RGB (setting "JPEG demosaic: Rexture native"); the DNG is the mosaic either way.
     const bool nativeRgb = work->tuning.mergeAlgorithm == kMergeAlgorithmRexture && jpegRequested &&
                            mergedJpeg.develop.multiframeNativeRgb;
@@ -149,15 +199,11 @@ void MfsrCaptureJob::runStages(Published& published) {
         const std::uint32_t mergeRows = stripMode ? strips.front().rows : ctx.rawHeight;
         const std::uint64_t arenaEstimate = estimateMergeArenaBytes(ctx.rawWidth, mergeRows, work->tuning.mergeAlgorithm);
         const std::uint64_t frameBytes = std::uint64_t(ctx.rawWidth) * mergeRows * sizeof(std::uint16_t);
-        const std::size_t residentFrames = work->tuning.mergeAlgorithm == 2u
-                                               ? job->frames.size()
-                                               : std::min<std::size_t>(2u, job->frames.size());
-        const std::uint64_t avail = readMemAvailableBytes();
-        LOGI("MULTIFRAME_MEMORY_PLAN raw=%ux%u mergeRows=%u frames=%zu strips=%zu arena1xMaxMB=%.0f "
-             "residentFrameMB=%.0f availMB=%.0f",
-             ctx.rawWidth, ctx.rawHeight, mergeRows, job->frames.size(), strips.size(),
-             double(arenaEstimate) / (1024.0 * 1024.0),
-             double(frameBytes * residentFrames) / (1024.0 * 1024.0), double(avail) / (1024.0 * 1024.0));
+        LOGI("MULTIFRAME_MEMORY_PLAN raw=%ux%u mergeRows=%u frames=%zu strips=%zu stripMP=%.1f reason=%s "
+             "arena1xMaxMB=%.0f residentFrameMB=%.0f availMB=%.0f",
+             ctx.rawWidth, ctx.rawHeight, mergeRows, job->frames.size(), strips.size(), double(stripPixels) / 1e6,
+             stripReason, double(arenaEstimate) / (1024.0 * 1024.0),
+             double(frameBytes * residentFrames) / (1024.0 * 1024.0), double(memAvailable) / (1024.0 * 1024.0));
     }
     // Both merges work on the RAW grid.
     const auto tuning = [&] {
@@ -247,7 +293,7 @@ void MfsrCaptureJob::runStages(Published& published) {
         done.error = error;
         publishJpeg(done);
     };
-    if (stripMode && work->jpegRequested) {
+    if (stripMode && work->jpegRequested && !stripJpeg) {
         mergedJpeg.output.outputFd.reset();
         failJpeg("strip_merge_dng_only");
     }
@@ -365,6 +411,107 @@ void MfsrCaptureJob::runStages(Published& published) {
                                           : outputAdapter.projectMerged(merged.output, merged.outputView, projection);
     };
     std::optional<rawr::raw_multiframe_output::PackedRaw16> stitched;
+    // Strip merge JPEG: the stitched CFA back in sensor codes (the merged DNG widens them to 16 bit), developed and
+    // written like a single still after the merge arena is released, so the peak is the frame plus the develop.
+    std::shared_ptr<rawrcam::imaging::RawSnapshot> stripJpegFrame;
+    auto stripFullCodes = [&](const rawr::raw_multiframe_output::PackedRaw16& full) {
+        const float toSensor = 1.0f / rawr::raw_multiframe_output::sixteenBitCodeScale(
+                                          job->referenceMetadata.effectiveWhiteLevel);
+        rawr::raw_multiframe_output::PackedRaw16 out;
+        out.width = full.width;
+        out.height = full.height;
+        out.rowStrideBytes = full.width * std::uint32_t(sizeof(std::uint16_t));
+        out.pixels.resize(std::size_t(out.rowStrideBytes) * out.height);
+        const std::uint32_t inW = full.rowStrideBytes / std::uint32_t(sizeof(std::uint16_t));
+        const auto* src = reinterpret_cast<const std::uint16_t*>(full.pixels.data());
+        auto* dst = reinterpret_cast<std::uint16_t*>(out.pixels.data());
+        const std::uint32_t n = std::max(1u, std::min(6u, std::thread::hardware_concurrency()));
+        std::vector<std::thread> pool;
+        for (std::uint32_t t = 0; t < n; ++t) {
+            const std::uint32_t y0 = out.height * t / n, y1 = out.height * (t + 1) / n;
+            pool.emplace_back([=]() {
+                for (std::uint32_t y = y0; y < y1; ++y)
+                    for (std::uint32_t x = 0; x < out.width; ++x)
+                        dst[std::size_t(y) * out.width + x] = std::uint16_t(std::clamp(
+                            float(src[std::size_t(y) * inW + x]) * toSensor + 0.5f, 0.0f, 65535.0f));
+            });
+        }
+        for (auto& th : pool) th.join();
+        return makeCaptured(std::move(out));
+    };
+    auto renderStripJpeg = [&](std::shared_ptr<rawrcam::imaging::RawSnapshot> captured) {
+        const auto begin = std::chrono::steady_clock::now();
+        rawrcam::capture::SingleFrameCaptureDevelop develop(
+            ctx.vulkan, ctx.queue0Mutex, ctx.filesDir,
+            [](const std::string& line) { __android_log_print(ANDROID_LOG_INFO, "RawrCamNative", "%s", line.c_str()); });
+        develop.setAssetManager(ctx.assetManager);
+        if (!develop.start(captured, frozenTonemap, frozenTonemap.aePostGain, work->filmEnabled, work->filmLook,
+                           mergedJpeg)) {
+            throw std::runtime_error("strip_jpeg_develop_rejected");
+        }
+        std::optional<rawrcam::capture::SingleFrameDevelopResult> result;
+        while (!(result = develop.pollCompletion())) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        const auto& completed = result->completion;
+        if (!completed.success) {
+            develop.shutdown();
+            throw std::runtime_error("strip_jpeg_render_failed: " + completed.error);
+        }
+        auto jpegContext = std::move(mergedJpeg);
+        // EXIF orientation, exposure and lens tags (the merged-JPEG block that sets them does not run for strips).
+        rawrcam::capture::applySingleFrameCaptureMetadata(jpegContext.output, *captured);
+        jpegContext.output.appliedLensShadingCorrection = jpegContext.develop.lensShadingCorrectionEnabled;
+        jpegContext.output.appliedFccSteps = jpegContext.develop.fccSteps;
+        outputInfo.demosaicLabel = "single-frame demosaic on the stitched merge";
+        outputInfo.jpegInput = "stitched strip merge CFA";
+        {
+            const bool filmActual = completed.filmRendered && !jpegContext.output.filmDescription.empty();
+            jpegContext.output.imageDescription =
+                buildExifHeader() +
+                buildParametersBlock(tuningView, outputInfo, toneUi, filmActual ? jpegContext.output.filmDescription : "",
+                                     filmActual, mergeResult->frameCount, ctx.rawWidth, ctx.rawHeight) +
+                buildSharpnessSection(baseFrameMode, sharpnessScores, job->referenceIndex,
+                                      static_cast<std::uint32_t>(job->frames.size()),
+                                      tuning.mergeAlgorithm == kMergeAlgorithmRexture);
+            jpegContext.output.hasMultiframeTimings = mergeResult.has_value();
+            jpegContext.output.multiframeTimingsBlock = formatMultiframeTimings(mfStages, baseFrameMode);
+            jpegContext.output.multiframeTotalMs = mfStages.multiframeTotalMs();
+            jpegContext.output.mfBaseReadMs = baseReadMs;
+            jpegContext.output.mfProjectMs = projectMs;
+            jpegContext.output.acceptedAt = work->acceptedAt;
+        }
+        JpegCaptureWriter writer;
+        const auto& px = result->pixels;
+        const bool ultraHdr = jpegContext.output.ultraHdr.enabled && px.gainmapPixels && px.gainmapBytes > 0;
+        const bool accepted =
+            ultraHdr ? writer.startUltraHdr(requestId, px.pixels, px.bytes, completed.width, completed.height,
+                                            px.gainmapPixels, px.gainmapBytes, px.gainmapWidth, px.gainmapHeight,
+                                            std::move(jpegContext.output))
+                     : writer.start(requestId, px.pixels, px.bytes, completed.width, completed.height,
+                                    std::move(jpegContext.output));
+        if (!accepted) {
+            develop.shutdown();
+            throw std::runtime_error("strip_jpeg_writer_start_rejected");
+        }
+        std::optional<JpegWriteCompletion> done;
+        while (!(done = writer.pollCompletion())) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        develop.releasePixels();
+        develop.shutdown();
+        publishJpeg(*done);
+        LOGI("MULTIFRAME_STRIP_JPEG requestId=%llu success=%d totalMs=%.1f", static_cast<unsigned long long>(requestId),
+             done->success ? 1 : 0, wallMs(begin));
+    };
+    auto runStripJpeg = [&]() {
+        if (!stripJpegFrame) return;
+        try {
+            renderStripJpeg(std::move(stripJpegFrame));
+        } catch (const std::exception& e) {
+            mergedJpeg.output.outputFd.reset();
+            failJpeg(std::string("strip_jpeg_failed: ") + e.what());
+            LOGE("MULTIFRAME_STRIP_JPEG_FAIL %s", e.what());
+        }
+        stripJpegFrame.reset();
+        stripJpegPublished = true;
+    };
     try {
         auto& coordinator = ctx.burstCoordinator;
         if (stripMode) {
@@ -438,6 +585,15 @@ void MfsrCaptureJob::runStages(Published& published) {
                                               tuning, dumpRzslRequested, queueSubmit, mergeSubmit);
         }
         if (work->awaitDurable) work->awaitDurable();  // outputs follow: the journal must be durable first
+        if (stripJpeg && stitched) try {
+                stripJpegFrame = stripFullCodes(*stitched);  // before the merged DNG consumes the stitched CFA
+                outputAdapter.releaseDngResources();  // per-strip projection buffers: nothing reads them any more
+            } catch (const std::exception& e) {
+                mergedJpeg.output.outputFd.reset();
+                failJpeg(std::string("strip_jpeg_failed: ") + e.what());
+                LOGE("MULTIFRAME_STRIP_JPEG_FAIL %s", e.what());
+                stripJpegPublished = true;
+            }
         // Merge timings feed both horizons (merged DNG and JPEG). Populate
         // here — not inside the merged-DNG gate below — so JPEG-only captures
         // (no merged DNG requested) still report the merge/alignment stages
@@ -669,7 +825,7 @@ void MfsrCaptureJob::runStages(Published& published) {
             LOGI("MULTIFRAME_ARENA retain=%d totalRamGB=%.1f availMB=%.0f arenaMB=%.0f", retainArena ? 1 : 0,
                  double(totalRam) / (1024.0 * 1024.0 * 1024.0), double(availRam) / (1024.0 * 1024.0),
                  double(arenaBytes) / (1024.0 * 1024.0));
-            if (!retainArena) coordinator.releaseScratch();
+            if (!retainArena || stripJpeg) coordinator.releaseScratch();
         }
 
         if (jpegRequested) {
@@ -1047,6 +1203,12 @@ void MfsrCaptureJob::runStages(Published& published) {
         publishDng(*done);
         published = true;
     };
+    // The strip JPEG develops while the merged DNG writes (the writer keeps its own reference to the frame).
+    if (stripJpegFrame) {
+        mergedFrame.reset();
+        stitched.reset();
+        runStripJpeg();
+    }
     awaitDng(baseWriter, baseStarted, basePublished);
     awaitDng(mergedWriter, mergedStarted, mergedPublished);
     if (!basePublished) failDng(baseDisplayName, "base_dng_not_started");
@@ -1057,6 +1219,10 @@ void MfsrCaptureJob::runStages(Published& published) {
     if (!jpegPublished && jpegRequested) {
         mergedJpeg.output.outputFd.reset();
         failJpeg("merged_jpeg_not_started");
+    }
+    if (!stripJpegPublished) {
+        mergedJpeg.output.outputFd.reset();
+        failJpeg("strip_jpeg_not_started");
     }
     job->snapshot.reset();
 }

@@ -1,5 +1,6 @@
 #pragma once
-// Memory estimate for the multiframe merge arena. The arena is laid out for the whole merge window
+// Memory estimate for the multiframe merge arena (images that alias in a pool count once, as the arena allocates
+// them). The arena is laid out for the whole merge window
 // (native/multiframe/pipeline: RextureRecorder.cpp, HdrPlusRecorder.cpp), so it grows with the RAW geometry, not with the
 // frame count. Used to keep a camera session from reserving an arena that the device cannot hold, and to log the planned
 // footprint before a merge.
@@ -23,13 +24,13 @@ inline std::uint64_t estimateMergeArenaBytes(std::uint32_t width, std::uint32_t 
         const auto rexture = [&] {
             const auto layout = rawr::raw_gpu_pipeline::makeRextureScratchLayout(
                 rawr::raw_gpu_pipeline::makeMultiframeGeometry(width, height, 1.0f));
-            return layout.logicalImageBytes + layout.logicalBufferBytes;
+            return rawr::raw_gpu_pipeline::aliasedImageBytes(layout) + layout.logicalBufferBytes;
         };
         const auto quality = [&] {
             const auto layout = rawr::raw_gpu_pipeline::makeHdrPlusFrequencyScratchLayout(
                 rawr::raw_merge_hdrplus_gpu::makeFrequencyGeometry(width, height, rawr::raw_merge_hdrplus_gpu::Config{}),
                 width, height);
-            return layout.logicalImageBytes + layout.logicalBufferBytes;
+            return rawr::raw_gpu_pipeline::aliasedImageBytes(layout) + layout.logicalBufferBytes;
         };
         if (algorithm == 4u) return rexture();
         if (algorithm == 2u) return quality();

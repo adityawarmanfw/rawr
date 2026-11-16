@@ -173,6 +173,9 @@ rawr_test(merge_exposure_test
   "${RAWR_ROOT}/tests/native/merge_exposure_test.cpp")
 rawr_test(strip_merge_test
   "${RAWR_ROOT}/tests/native/strip_merge_test.cpp")
+rawr_test(scratch_layout_alias_test
+  "${RAWR_ROOT}/tests/native/scratch_layout_alias_test.cpp"
+  "${RAWR_ROOT}/native/multiframe/pipeline/src/ScratchLayout.cpp")
 rawr_test(film_scratch_estimate_test
   "${RAWR_ROOT}/tests/native/film_scratch_estimate_test.cpp")
 rawr_test(public_description_test
