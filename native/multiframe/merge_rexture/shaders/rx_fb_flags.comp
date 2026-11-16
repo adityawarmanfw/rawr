@@ -8,10 +8,10 @@
 #include "rx_common.glsl"
 
 layout(local_size_x = 16, local_size_y = 16) in;
-layout(set = 0, binding = 0, rgba32f) readonly uniform image2D accA;
-layout(set = 0, binding = 1, rg32f) readonly uniform image2D accB;
+layout(set = 0, binding = 0, rgba16f) readonly uniform image2D accA;
+layout(set = 0, binding = 1, rg16f) readonly uniform image2D accB;
 layout(set = 0, binding = 2, rgba16f) readonly uniform image2D accC;
-layout(set = 0, binding = 3, r32f) readonly uniform image2D supportI;
+layout(set = 0, binding = 3, r16f) readonly uniform image2D supportI;
 layout(set = 0, binding = 4, r32f) writeonly uniform image2D flagsI;
 layout(push_constant) uniform P {
     int w, h;

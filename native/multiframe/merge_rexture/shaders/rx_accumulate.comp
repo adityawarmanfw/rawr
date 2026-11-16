@@ -13,16 +13,16 @@
 layout(local_size_x = 16, local_size_y = 16) in;
 layout(set = 0, binding = 0, r16ui) readonly uniform uimage2D rawU16;
 layout(set = 0, binding = 1, rg32f) readonly uniform image2D flowI;
-layout(set = 0, binding = 2, r32f) readonly uniform image2D erI;
-layout(set = 0, binding = 3, rgba32f) readonly uniform image2D covI;
-layout(set = 0, binding = 4, rgba32f) uniform image2D accA;      // (s.rgb, w.r)
-layout(set = 0, binding = 5, rg32f) uniform image2D accB;        // (w.g, w.b)
+layout(set = 0, binding = 2, r16f) readonly uniform image2D erI;
+layout(set = 0, binding = 3, rgba16f) readonly uniform image2D covI;
+layout(set = 0, binding = 4, rgba16f) uniform image2D accA;      // (s.rgb, w.r)
+layout(set = 0, binding = 5, rg16f) uniform image2D accB;        // (w.g, w.b)
 layout(set = 0, binding = 6, rgba16f) uniform image2D accC;      // sum over frames of (sum of the frame's w)^2, fp16
-layout(set = 0, binding = 7, rgba32f) uniform image2D accSs2;    // sum of w^2 (debug only)
+layout(set = 0, binding = 7, rgba16f) uniform image2D accSs2;    // sum of w^2 (debug only)
 // second frame of a pair (bound to the first frame's images when the pass handles one frame)
 layout(set = 0, binding = 8, r16ui) readonly uniform uimage2D rawU16B;
 layout(set = 0, binding = 9, rg32f) readonly uniform image2D flowB;
-layout(set = 0, binding = 10, r32f) readonly uniform image2D erB;
+layout(set = 0, binding = 10, r16f) readonly uniform image2D erB;
 layout(push_constant) uniform P {
     vec4 black;
     float white;

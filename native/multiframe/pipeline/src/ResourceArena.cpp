@@ -35,6 +35,8 @@ VkFormat pixelStorageFormat(PixelStorage s) {
             return VK_FORMAT_R32_SFLOAT;
         case PixelStorage::RG32Float:
             return VK_FORMAT_R32G32_SFLOAT;
+        case PixelStorage::RG16Float:
+            return VK_FORMAT_R16G16_SFLOAT;
         case PixelStorage::RGBA16Float:
             return VK_FORMAT_R16G16B16A16_SFLOAT;
         case PixelStorage::RGBA32Float:

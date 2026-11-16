@@ -7,7 +7,7 @@
 
 namespace rawr::raw_gpu_pipeline {
 
-enum class PixelStorage : std::uint32_t { R8Uint, R16Uint, R32Float, RG32Float, RGBA16Float, RGBA32Float, R16Float };
+enum class PixelStorage : std::uint32_t { R8Uint, R16Uint, R32Float, RG32Float, RG16Float, RGBA16Float, RGBA32Float, R16Float };
 
 enum class Lifetime : std::uint32_t {
     Burst,        // retained across all companions

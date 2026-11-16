@@ -18,9 +18,9 @@ layout(local_size_x = RX_PG, local_size_y = RX_PG) in;
 layout(set = 0, binding = 0, r16ui) readonly uniform uimage2D rawU16;
 layout(set = 0, binding = 1, r32f) writeonly uniform image2D l3Out;
 layout(set = 0, binding = 2, r32f) writeonly uniform image2D l2Out;
-layout(set = 0, binding = 3, rgba32f) writeonly uniform image2D meanOut;
-layout(set = 0, binding = 4, rgba32f) writeonly uniform image2D varOut;
-layout(set = 0, binding = 5, rgba32f) writeonly uniform image2D tensorOut;
+layout(set = 0, binding = 3, rgba16f) writeonly uniform image2D meanOut;
+layout(set = 0, binding = 4, rgba16f) writeonly uniform image2D varOut;
+layout(set = 0, binding = 5, rgba16f) writeonly uniform image2D tensorOut;
 layout(push_constant) uniform P {
     vec4 black;      // per raster phase (y & 1) * 2 + (x & 1)
     float white;

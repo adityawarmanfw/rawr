@@ -11,12 +11,12 @@
 
 layout(local_size_x = 16, local_size_y = 16) in;
 layout(set = 0, binding = 0, rg32f) readonly uniform image2D flowI;       // fine tile flow (fx, fy) in raw pixels
-layout(set = 0, binding = 1, rgba32f) readonly uniform image2D baseMeanI;
-layout(set = 0, binding = 2, rgba32f) readonly uniform image2D baseVarI;
-layout(set = 0, binding = 3, rgba32f) readonly uniform image2D altMeanI;
-layout(set = 0, binding = 4, rgba32f) readonly uniform image2D altVarI;
-layout(set = 0, binding = 5, r32f) writeonly uniform image2D erI;         // robustness after the 5 x 5 minimum
-layout(set = 0, binding = 6, r32f) uniform image2D supportI;              // += er
+layout(set = 0, binding = 1, rgba16f) readonly uniform image2D baseMeanI;
+layout(set = 0, binding = 2, rgba16f) readonly uniform image2D baseVarI;
+layout(set = 0, binding = 3, rgba16f) readonly uniform image2D altMeanI;
+layout(set = 0, binding = 4, rgba16f) readonly uniform image2D altVarI;
+layout(set = 0, binding = 5, r16f) writeonly uniform image2D erI;         // robustness after the 5 x 5 minimum
+layout(set = 0, binding = 6, r16f) uniform image2D supportI;              // += er
 layout(set = 0, binding = 7, r32f) writeonly uniform image2D dbgPreI;     // verification only
 layout(set = 0, binding = 8, r32f) writeonly uniform image2D dbgScaleI;   // verification only
 layout(push_constant) uniform P { float alpha, beta; int debug; } p;

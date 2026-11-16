@@ -102,6 +102,9 @@ ScratchLayout makeRextureScratchLayout(const MultiframeGeometry& g, bool debug) 
         if (!pool.empty()) r.placements.push_back({n, std::move(pool), std::move(placeAt)});
         r.images.push_back({std::move(n), e, s, l});
     };
+    // Storage precision: the alignment pyramid stays fp32 (fp16 there changes the alignment decisions in repeating and
+    // moving texture); everything else (guide mean / variance / tensor / covariance, robustness maps, accumulators) is
+    // fp16, which measured within 0.05 DN rms of fp32 and ~1 GiB smaller at 50 MP.
     for (const char* who : {"rx_base_", "rx_alt_"}) {
         const bool base = std::string(who) == "rx_base_";
         const Lifetime life = base ? Lifetime::Burst : Lifetime::Companion;
@@ -109,31 +112,32 @@ ScratchLayout makeRextureScratchLayout(const MultiframeGeometry& g, bool debug) 
             img(std::string(who) + "l" + std::to_string(l), g.coarseToFine[l].image, PixelStorage::R32Float, life,
                 (!base && l == 3u) ? "companion" : "");
         if (base) {
-            img("rx_base_mean", g.guide, PixelStorage::RGBA32Float, life);
-            img("rx_base_var", g.guide, PixelStorage::RGBA32Float, life);
+            img("rx_base_mean", g.guide, PixelStorage::RGBA16Float, life);
+            img("rx_base_var", g.guide, PixelStorage::RGBA16Float, life);
         }
     }
     // The per-companion guide images share one pool with the base tensor (live only until the first companion is prepared,
     // and the base kernel's scratch is rx_alt_mean / rx_alt_var, placed after it) and with linear_output (written after the
     // last companion): alias, no extra memory.
-    img("rx_base_tensor", g.guide, PixelStorage::RGBA32Float, Lifetime::Burst, "companion", "start:rx_alt_l3");
-    img("rx_alt_mean", g.guide, PixelStorage::RGBA32Float, Lifetime::Companion, "companion", "end:rx_alt_l3,rx_base_tensor");
-    img("rx_alt_var", g.guide, PixelStorage::RGBA32Float, Lifetime::Companion, "companion", "end:rx_alt_mean");
-    img("rx_base_cov", g.guide, PixelStorage::RGBA32Float, Lifetime::Burst);
+    img("rx_base_tensor", g.guide, PixelStorage::RGBA16Float, Lifetime::Burst, "companion", "start:rx_alt_l3");
+    img("rx_alt_mean", g.guide, PixelStorage::RGBA16Float, Lifetime::Companion, "companion", "end:rx_alt_l3,rx_base_tensor");
+    img("rx_alt_var", g.guide, PixelStorage::RGBA16Float, Lifetime::Companion, "companion", "end:rx_alt_mean");
+    img("rx_base_cov", g.guide, PixelStorage::RGBA16Float, Lifetime::Burst);
     if (debug) img("rx_dbg_qinv", g.output, PixelStorage::RGBA32Float, Lifetime::Burst);
-    // Accumulators (packed, fp32): A = (sum w x [rgb], sum_frames W^2 [r]), B = (sum w [rgb], ... [g]), C = (... [b]).
-    img("rx_acc_a", g.output, PixelStorage::RGBA32Float, Lifetime::Output);
-    img("rx_acc_b", g.output, PixelStorage::RG32Float, Lifetime::Output);
+    // Accumulators (packed, fp16 storage: each frame's sum is read, added in fp32 and stored back, so it rounds once per
+    // frame): A = (sum w x [rgb], sum_frames W^2 [r]), B = (sum w [rgb], ... [g]), C = (... [b]).
+    img("rx_acc_a", g.output, PixelStorage::RGBA16Float, Lifetime::Output);
+    img("rx_acc_b", g.output, PixelStorage::RG16Float, Lifetime::Output);
     img("rx_acc_c", g.output, PixelStorage::RGBA16Float, Lifetime::Output);
     if (debug) {
         img("rx_dbg_ss2", g.output, PixelStorage::RGBA32Float, Lifetime::Output);
         img("rx_dbg_fin_out", g.output, PixelStorage::RGBA32Float, Lifetime::Output);  // (final rgb, neff)
         img("rx_dbg_fin_pre", g.output, PixelStorage::RGBA32Float, Lifetime::Output);  // (pre-lowcov rgb, conf)
     }
-    // Robustness: the frame's weight map, and the burst-long support / cover maps (half resolution, fp32 sums).
-    img("rx_er", g.guide, PixelStorage::R32Float, Lifetime::Companion);
-    img("rx_er_b", g.guide, PixelStorage::R32Float, Lifetime::Companion);
-    img("rx_support", g.guide, PixelStorage::R32Float, Lifetime::Burst);
+    // Robustness: the frame's weight map, and the burst-long support / cover maps (half resolution, fp16 storage).
+    img("rx_er", g.guide, PixelStorage::R16Float, Lifetime::Companion);
+    img("rx_er_b", g.guide, PixelStorage::R16Float, Lifetime::Companion);
+    img("rx_support", g.guide, PixelStorage::R16Float, Lifetime::Burst);
     if (debug) {
         img("rx_dbg_pre", g.guide, PixelStorage::R32Float, Lifetime::Companion);
         img("rx_dbg_scale", Extent2D{g.coarseToFine[3].tilesX, g.coarseToFine[3].tilesY}, PixelStorage::R32Float,

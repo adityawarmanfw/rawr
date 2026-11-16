@@ -16,11 +16,11 @@
 
 layout(local_size_x = 16, local_size_y = 16) in;
 layout(set = 0, binding = 0, r16ui) readonly uniform uimage2D rawU16;      // the base frame
-layout(set = 0, binding = 1, rgba32f) readonly uniform image2D covI;
-layout(set = 0, binding = 2, rgba32f) readonly uniform image2D accA;
-layout(set = 0, binding = 3, rg32f) readonly uniform image2D accB;
+layout(set = 0, binding = 1, rgba16f) readonly uniform image2D covI;
+layout(set = 0, binding = 2, rgba16f) readonly uniform image2D accA;
+layout(set = 0, binding = 3, rg16f) readonly uniform image2D accB;
 layout(set = 0, binding = 4, rgba16f) readonly uniform image2D accC;
-layout(set = 0, binding = 5, r32f) readonly uniform image2D supportI;
+layout(set = 0, binding = 5, r16f) readonly uniform image2D supportI;
 layout(set = 0, binding = 6, rgba32f) readonly uniform image2D rcdI;       // bounded fp32 RCD of the strip rows
 layout(set = 0, binding = 7, rgba16f) writeonly uniform image2D outI;
 layout(set = 0, binding = 8, rgba32f) writeonly uniform image2D dbgOutI;   // (final rgb, neff)       verification only

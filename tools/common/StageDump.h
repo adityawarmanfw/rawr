@@ -132,6 +132,7 @@ class StageDump {
             case VK_FORMAT_R32_SFLOAT: texel = 4; have = 1; break;
             case VK_FORMAT_R16_SFLOAT: texel = 2; have = 1; half = true; break;
             case VK_FORMAT_R32G32_SFLOAT: texel = 8; have = 2; break;
+            case VK_FORMAT_R16G16_SFLOAT: texel = 4; have = 2; half = true; break;
             case VK_FORMAT_R32G32B32A32_SFLOAT: texel = 16; have = 4; break;
             case VK_FORMAT_R16G16B16A16_SFLOAT: texel = 8; have = 4; half = true; break;
             default: throw std::runtime_error("stage dump: unsupported format for " + name);

@@ -5,8 +5,8 @@
 #include "rx_tables.glsl"
 
 layout(local_size_x = 16, local_size_y = 16) in;
-layout(set = 0, binding = 0, rgba32f) readonly uniform image2D srcI;
-layout(set = 0, binding = 1, rgba32f) writeonly uniform image2D dstI;
+layout(set = 0, binding = 0, rgba16f) readonly uniform image2D srcI;
+layout(set = 0, binding = 1, rgba16f) writeonly uniform image2D dstI;
 layout(push_constant) uniform P { int axis; } p;
 
 void main() {

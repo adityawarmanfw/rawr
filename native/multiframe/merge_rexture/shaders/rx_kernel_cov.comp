@@ -8,10 +8,10 @@
 // outlines, an oil-paint look). (The "true flat" map is not part of the merge.) Starts from kernel_estimate.comp.
 
 layout(local_size_x = 16, local_size_y = 16) in;
-layout(set = 0, binding = 0, rgba32f) readonly uniform image2D integratedI;
-layout(set = 0, binding = 1, rgba32f) readonly uniform image2D localI;
-layout(set = 0, binding = 2, rgba32f) writeonly uniform image2D covI;
-layout(set = 0, binding = 3, rgba32f) readonly uniform image2D baseMeanI;   // base frame colour mean (guide grid)
+layout(set = 0, binding = 0, rgba16f) readonly uniform image2D integratedI;
+layout(set = 0, binding = 1, rgba16f) readonly uniform image2D localI;
+layout(set = 0, binding = 2, rgba16f) writeonly uniform image2D covI;
+layout(set = 0, binding = 3, rgba16f) readonly uniform image2D baseMeanI;   // base frame colour mean (guide grid)
 layout(push_constant) uniform P { float alpha, beta; } p;   // single-frame noise model
 
 const float K_DETAIL = 0.20, K_DENOISE = 1.3, D_THRESHOLD = 0.71, D_TRANSITION = 1.0, K_STRETCH = 1.75, K_SHRINK = 2.0;
