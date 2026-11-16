@@ -281,7 +281,7 @@ constexpr std::uint32_t kTileSize[4] = {8, 16, 16, 16};
 constexpr std::uint32_t kRadius[4] = {4, 4, 4, 1};
 constexpr std::int32_t kMetric[4] = {1, 1, 1, 0};
 constexpr std::uint32_t kUpsampleScale[4] = {0, 4, 4, 2};
-constexpr std::int32_t kLkIterations = 3;
+constexpr std::int32_t kLkIterations = 6;
 constexpr float kHessianEps = 1.0e-10f;
 
 void copyFlow(VkCommandBuffer c, const ArenaImage& src, const ArenaImage& dst) {
