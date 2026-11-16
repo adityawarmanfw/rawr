@@ -39,9 +39,11 @@ std::condition_variable gPendingCloseCv;
 int gPendingCloses = 0;
 
 // Total time open() may spend waiting for closes and retrying an "in use" refusal.
-constexpr std::chrono::milliseconds kOpenBudget{2500};
+constexpr std::chrono::milliseconds kOpenBudget{3500};
 constexpr std::chrono::milliseconds kOpenRetryInitial{40};
-constexpr std::chrono::milliseconds kOpenRetryMax{400};
+// Short enough to catch the camera as soon as the service re-announces it: a Galaxy S23 Ultra needs about
+// 1.4 s and a 400 ms step both overshoots that by up to 400 ms and fits only eight tries in the budget.
+constexpr std::chrono::milliseconds kOpenRetryMax{120};
 
 // Cameras that could share this camera's sensor: its logical camera's physical ids, then every listed id.
 std::vector<std::string> sensorSiblingIds(ACameraManager* manager, const ACameraMetadata* chars, const std::string& self) {
@@ -387,9 +389,12 @@ bool CameraDeviceSession::open(const LensRoute& route, CameraCallbacks& callback
         // Android 17 on a Galaxy S23 Ultra (SM-S918B) reports that same transient drop as
         // ACAMERA_ERROR_INVALID_PARAMETER instead, on an id enumerated moments earlier and openable again
         // a few seconds later: without it here the open is given up at once and the watchdog restarts the
-        // camera, which is the ~8 s every lens switch cost. Retrying costs at most kOpenBudget.
+        // camera, which is the ~8 s every lens switch cost. The same switch can also report
+        // ACAMERA_ERROR_CAMERA_DISCONNECTED mid-sequence on a camera this app itself just closed and
+        // reopens moments later. Retrying costs at most kOpenBudget, still under that watchdog.
         const bool busy = os == ACAMERA_ERROR_MAX_CAMERA_IN_USE || os == ACAMERA_ERROR_CAMERA_IN_USE ||
-                          os == ACAMERA_ERROR_UNKNOWN || os == ACAMERA_ERROR_INVALID_PARAMETER;
+                          os == ACAMERA_ERROR_UNKNOWN || os == ACAMERA_ERROR_INVALID_PARAMETER ||
+                          os == ACAMERA_ERROR_CAMERA_DISCONNECTED;
         if (!busy || std::chrono::steady_clock::now() + backoff >= deadline) {
             releaseHeldGate();
             return false;
