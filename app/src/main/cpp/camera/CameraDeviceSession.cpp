@@ -384,8 +384,12 @@ bool CameraDeviceSession::open(const LensRoute& route, CameraCallbacks& callback
         // ACameraManager can also briefly drop the id after a close ("Camera ID 0 does not exist!",
         // reported as ACAMERA_ERROR_UNKNOWN) until the service re-announces it; Samsung hits this
         // on most lens switches, and without a retry the watchdog restarts the camera 8 s later.
+        // Android 17 on a Galaxy S23 Ultra (SM-S918B) reports that same transient drop as
+        // ACAMERA_ERROR_INVALID_PARAMETER instead, on an id enumerated moments earlier and openable again
+        // a few seconds later: without it here the open is given up at once and the watchdog restarts the
+        // camera, which is the ~8 s every lens switch cost. Retrying costs at most kOpenBudget.
         const bool busy = os == ACAMERA_ERROR_MAX_CAMERA_IN_USE || os == ACAMERA_ERROR_CAMERA_IN_USE ||
-                          os == ACAMERA_ERROR_UNKNOWN;
+                          os == ACAMERA_ERROR_UNKNOWN || os == ACAMERA_ERROR_INVALID_PARAMETER;
         if (!busy || std::chrono::steady_clock::now() + backoff >= deadline) {
             releaseHeldGate();
             return false;
