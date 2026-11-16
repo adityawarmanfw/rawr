@@ -46,7 +46,11 @@ void main() {
         float disc = sqrt((r.x - r.z) * (r.x - r.z) + 4.0 * r.y * r.y);
         float l1 = 0.5 * (tr + disc), l2 = 0.5 * (tr - disc);
         const float K = 2.0;   // rel_snr
-        float mode = l2 >= K * e ? 2.0 : (l1 >= K * e ? 1.0 : 0.0);
+        // Faint oriented structure (dark text, fine lines) still gets the one-axis refinement on the coarse levels 0..2, where there
+        // are few tiles; on the finest level that threshold would send most tiles through the refinement (+30% merge time).
+        const float K_ONE_AXIS_COARSE = 0.5;
+        float k1 = p.level <= 2 ? K_ONE_AXIS_COARSE : K;
+        float mode = l2 >= K * e ? 2.0 : (l1 >= k1 * e ? 1.0 : 0.0);
         imageStore(tilesI, t, vec4(r.x, r.y, r.z, mode));
     }
 }
