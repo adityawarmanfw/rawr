@@ -211,6 +211,7 @@ VkDeviceSize alignUp256(VkDeviceSize v) { return (v + 255u) / 256u * 256u; }
 struct MismatchPc {
     std::int32_t tilesX, tilesY, rgbaWidth, rgbaHeight;
     float noiseSlope, noiseOffset, black, frameInv;
+    float energyGain, energyDead, energyScale;
 };
 struct RegionPc {
     std::int32_t originX, originY, width, height;
@@ -230,6 +231,12 @@ struct FreqMergePc {
 // 10-35% of the fine real ripple detail in moving water; 1.0 keeps most of it (75-99% of the finest band) with only mild
 // grain, and 0.5 and below bring back the coarse grain of an unshrunk frame.
 constexpr float kGateLow = 1.6f, kGateHigh = 2.6f, kGateShrink = 1.0f;
+// Second displacement test, on the energy of the difference: the mean-based test cannot see a displaced fine pattern (small ripples,
+// foliage) because its block mean cancels. The block's mean square difference over what noise alone gives (q, ~1 for noise) raises the
+// statistic to 1 + kEnergyGain * (q - 1 - kEnergyDead) / kEnergyScale once q passes the dead zone; below it noise tiles are untouched.
+// Tuned on a 30-frame bay with moving water against pixel4a, 33TJ and the street: far-water ripple detail kept 38% -> 43% at the
+// finest band and rocks 82% -> 91%, for ~6% more noise in flat areas of long bursts (a more sensitive 0.4 / 0.2 keeps 58% but costs 18%).
+constexpr float kEnergyGain = 1.0f, kEnergyDead = 1.0f, kEnergyScale = 0.5f;
 struct BackwardPc {
     std::int32_t tilesX, tilesY;
     float frames, scale;
@@ -430,7 +437,7 @@ void HdrPlusFrequencyRecorder::recordCompanionMerge(VkCommandBuffer c, std::uint
     const auto& black = align_.referenceBlack();
     const float meanBlack = .25f * (black[0] + black[1] + black[2] + black[3]);
     MismatchPc mp{std::int32_t(tx), std::int32_t(ty), std::int32_t(geometry_.rgbaWidth), std::int32_t(geometry_.rgbaHeight),
-                  noiseSlope_, noiseOffset_, meanBlack, 1.0f / frameScale()};
+                  noiseSlope_, noiseOffset_, meanBlack, 1.0f / frameScale(), kEnergyGain, kEnergyDead, kEnergyScale};
     executor_.record(c, ShaderId::HdrqMismatch,
                      {{ib(0, refRgba), ib(1, alignedRgba), ib(2, arena_.image("hdrq_rms")), ib(3, mismatch),
                        ib(4, arena_.image("hdrq_zmap"))},

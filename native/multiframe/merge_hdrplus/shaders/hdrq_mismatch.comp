@@ -17,6 +17,9 @@ layout(push_constant) uniform P {
     float noiseOffset;  // raw-unit read-noise variance
     float black;        // the frames keep their black level: signal = value - black
     float frameInv;     // 1 / fp16 storage scale of the frames
+    float energyGain;   // weight of the energy test in the displacement statistic (0 = off)
+    float energyDead;   // excess energy (above the noise expectation) ignored before the test responds
+    float energyScale;  // excess energy that counts as one unit of the statistic
 } p;
 
 const float WIN16[16] = float[16](0.342940479, 0.434943816, 0.565056184, 0.657059521, 0.657059521, 0.565056184, 0.434943816, 0.342940479, 0.342940479, 0.434943816, 0.565056184, 0.657059521, 0.657059521, 0.565056184, 0.434943816, 0.342940479);
@@ -25,6 +28,7 @@ shared float sWeight[64];
 shared float sWeight2[64];
 shared vec4 sSig[64];       // weight * reference signal
 shared vec4 sSigned[64];    // weight * (ref - aligned)
+shared vec4 sSq[64];        // weight * (ref - aligned)^2
 shared float sBlockZ[16];
 
 void main() {
@@ -37,7 +41,7 @@ void main() {
     // Upstream clamps the end to size-1 (exclusive), dropping the last row/column.
     ivec2 start = max(ivec2(0), t0 - ts / 2);
     ivec2 end = min(p.rgbaSize - 1, t0 + ts * 3 / 2);
-    vec4 d = vec4(0.0), sig = vec4(0.0), sd = vec4(0.0);
+    vec4 d = vec4(0.0), sig = vec4(0.0), sd = vec4(0.0), sq = vec4(0.0);
     float w2 = 0.0, w = 0.0;
     for (int k = 0; k < 4; ++k) {
         ivec2 wl = ivec2(l.x, 4 * l.y + k);  // offset inside the 16x16 window
@@ -48,6 +52,7 @@ void main() {
             d += wk * abs(r - a);
             sig += wk * r;
             sd += wk * (r - a);
+            sq += wk * (r - a) * (r - a);
             w += wk;
             w2 += wk * wk;
         }
@@ -59,6 +64,7 @@ void main() {
     sWeight2[bi] = w2;
     sSig[bi] = sig;
     sSigned[bi] = sd;
+    sSq[bi] = sq;
     barrier();
     for (uint stride = 2u; stride > 0u; stride >>= 1u) {
         if ((bi & 3u) < stride) {
@@ -67,6 +73,7 @@ void main() {
             sWeight2[bi] += sWeight2[bi + stride];
             sSig[bi] += sSig[bi + stride];
             sSigned[bi] += sSigned[bi + stride];
+            sSq[bi] += sSq[bi + stride];
         }
         barrier();
     }
@@ -82,6 +89,17 @@ void main() {
             vec4 sigma = sqrt(2.0 * (p.noiseSlope * max(sumS / sumW - p.black, vec4(0.0)) + p.noiseOffset)) / sqrt(neff);
             vec4 zc = abs(sumD / sumW) / max(sigma, vec4(1.0e-6));
             z = 0.25 * (zc.x + zc.y + zc.z + zc.w) / 0.7979;
+            // Energy test: the weighted mean square difference against what noise alone gives (two independent frames: twice
+            // the variance). A displaced fine pattern (ripples, foliage) has a block mean difference near zero but a large
+            // energy, which the mean test above cannot see. Noise-only reads ~1; the response starts after a dead zone.
+            if (p.energyGain > 0.0) {
+                vec4 var2 = 2.0 * (p.noiseSlope * max(sumS / sumW - p.black, vec4(0.0)) + p.noiseOffset);
+                vec4 qc = (sSq[bi] / sumW) / max(var2, vec4(1.0e-6));
+                float q = 0.25 * (qc.x + qc.y + qc.z + qc.w);
+                float excess = q - 1.0 - p.energyDead;
+                // Below the dead zone the energy test says nothing: a noise-only block keeps exactly its mean-test value.
+                if (excess > 0.0) z = max(z, 1.0 + p.energyGain * excess / p.energyScale);
+            }
         }
         sBlockZ[bi >> 2] = z;
     }
