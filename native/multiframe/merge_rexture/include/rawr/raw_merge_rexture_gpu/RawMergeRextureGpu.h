@@ -16,6 +16,9 @@ struct Config {
     float noiseAlpha = 1.80710882e-4f, noiseBeta = 3.1937599182128e-6f;
     // White balance gains (R, G, B) used by the low-confidence fallback demosaic only; the output is not balanced.
     std::array<float, 3> whiteBalance{{1.0f, 1.0f, 1.0f}};
+    // Frames in the burst (base included). Only the grain pass reads it: with 8 or more frames the areas it still evens out
+    // are ones the robustness test rejected frames from (motion), where it keeps more of the texture than with few frames.
+    float burstFrames = 1.0f;
 };
 
 [[nodiscard]] inline bool valid(const Config& c) noexcept {

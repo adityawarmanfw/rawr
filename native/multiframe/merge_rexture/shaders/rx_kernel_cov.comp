@@ -22,6 +22,7 @@ const float SNR_LO = 8.0, SNR_HI = 25.0, K_DENOISE_CLEAN = 1.0;
 // Clean (bright, high-SNR) areas get a narrower kernel on a later SNR ramp than K_DENOISE_CLEAN's: the wide kernel erased fine
 // texture the single frame has well above its noise (plaster, fabric), and the mid-tones keep the old kernel.
 const float SNR_N_LO = 18.0, SNR_N_HI = 25.0, CLEAN_KDEN = 0.75, CLEAN_FLOOR = 0.575;
+const float ES_LO = 0.7, ES_HI = 1.3;
 const float DETAIL_FLOOR = 0.25, FLOOR_SNR_LO = 3.0, FLOOR_SNR_HI = 8.0;
 
 void main() {
@@ -56,7 +57,11 @@ void main() {
     float kk1 = 1.0 + (A - 1.0) * (1.0 / K_SHRINK - 1.0), kk2 = 1.0 + (A - 1.0) * (K_STRETCH - 1.0);
     const float lvl = max(imageLoad(baseMeanI, clamp(q, ivec2(0), imageSize(baseMeanI) - 1)).y, 1e-6);
     const float snr = lvl / sqrt(max(p.alpha * lvl + p.beta, 1e-20));
-    const float tn = smoothstep(SNR_N_LO, SNR_N_HI, snr);
+    // The narrow clean-area kernel is for texture: where the integrated gradient energy (tr) is no more than the noise floor (about
+    // 0.5 in these units, 0.9 at the 99th percentile of a clear sky) there is none, and a single frame's grain would stay (a bright
+    // sky kept 84% of the single frame's luma noise; with this gate 48%, HDR+ Quality 43%). Detail the two halves of a burst share
+    // in bright textured tiles is unchanged (34.15 vs 34.15 on a 20 frame daylight burst).
+    const float tn = smoothstep(SNR_N_LO, SNR_N_HI, snr) * smoothstep(ES_LO, ES_HI, tr);
     const float kden = mix(K_DENOISE, K_DENOISE_CLEAN, smoothstep(SNR_LO, SNR_HI, snr)) * mix(1.0, CLEAN_KDEN, tn);
     float k1 = K_DETAIL * ((1.0 - Dm) * kk1 + Dm * kden);
     float k2 = K_DETAIL * ((1.0 - Dm) * kk2 + Dm * kden);

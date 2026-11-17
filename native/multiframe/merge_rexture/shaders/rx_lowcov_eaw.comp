@@ -24,6 +24,7 @@ layout(push_constant) uniform P {
     int y0, rows;         // image rows computed by this dispatch
     int a1, a2;           // first image row held by x1I, x2I
     float alpha, beta;    // single-frame noise model of the merge
+    float frames;         // frames in the burst
 } p;
 
 const int HALO = 14;
@@ -38,7 +39,15 @@ const float TARGET_C = 0.08;
 const float SNR_LO = 15.0, SNR_HI = 45.0;
 const float SINGLE_SNR_LO = 15.0, SINGLE_SNR_HI = 28.0, SINGLE_M_LO = 0.85, SINGLE_M_HI = 0.97;
 const float KC = 2.0;                  // colour range weight relative to the luma one
-const float FK[3] = float[3](1.0, 0.6, 0.4);   // range noise factor of the three levels
+// Range noise factor of the three levels. With few frames (4 or fewer) (1.0, 0.6, 0.4): the grain is the merge's own and the pass evens
+// it. From 8 frames on (0.3, 0.18, 0.12): the areas still below TARGET are then ones the robustness test rejected frames from
+// (moving water, foliage), and with the old factors the range weight read their real ripples (a few noise sigmas high) as grain
+// and erased the 0.2-0.5 c/px bands (kept 0.50-0.31 of the base frame; 0.76-0.55 now, PhotonCamera 0.77-0.57). Flat noisy areas
+// still smooth (flat noise +1-3% on the 10 to 20 frame test bursts). Linear in between. Only where some frames were merged (m below M_LO):
+// where nearly one frame is left (m above M_HI: a moving crowd) the single-frame grain stays smoothed as before, or it shows as speckle.
+const float M_LO = 0.2, M_HI = 0.45;
+const float FK_FEW[3] = float[3](1.0, 0.6, 0.4), FK_MANY[3] = float[3](0.3, 0.18, 0.12);
+float fk(int level, float m) { return mix(FK_FEW[level], FK_MANY[level], smoothstep(4.0, 8.0, p.frames) * (1.0 - smoothstep(M_LO, M_HI, m))); }
 const float B3[5] = float[5](1.0 / 16.0, 4.0 / 16.0, 6.0 / 16.0, 4.0 / 16.0, 1.0 / 16.0);
 shared uint sActive;
 
@@ -84,7 +93,10 @@ void loadTile(int level, int stride, ivec2 wo, int tid) {
 vec3 atrous(int level, ivec2 l, int stride, float m) {
     const int T = 16 + 4 * stride;
     const vec3 c = sTile[(l.y + 2 * stride) * T + l.x + 2 * stride];
-    const float r2 = max(9.0 * (p.alpha * max(c.g, 0.0) + p.beta) * m * FK[level] * FK[level], 1e-12);
+    const float var = 9.0 * (p.alpha * max(c.g, 0.0) + p.beta) * m;
+    // Luma range factor follows the frame count (fk); the colour range keeps the few-frame factor, or the colour noise of
+    // moving crowds (single frames) survives as coloured specks.
+    const float r2 = max(var * fk(level, m) * fk(level, m), 1e-12), r2c = max(var * FK_FEW[level] * FK_FEW[level] * KC, 1e-12);
     vec3 num = vec3(0.0);
     float den = 0.0;
     for (int j = 0; j < 5; ++j)
@@ -92,7 +104,7 @@ vec3 atrous(int level, ivec2 l, int stride, float m) {
             vec3 v = sTile[(l.y + stride * j) * T + l.x + stride * i];
             float dg = v.g - c.g;
             vec2 dc = (v.rb - v.g) - (c.rb - c.g);
-            float k = B3[i] * B3[j] * exp(-dg * dg / (2.0 * r2) - dot(dc, dc) / (2.0 * KC * r2));
+            float k = B3[i] * B3[j] * exp(-dg * dg / (2.0 * r2) - dot(dc, dc) / (2.0 * r2c));
             num += k * v;
             den += k;
         }

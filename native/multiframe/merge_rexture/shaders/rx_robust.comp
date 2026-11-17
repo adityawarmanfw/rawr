@@ -3,7 +3,8 @@
 // Rexture robustness of one companion frame, fused: motion prior (flow spread of the 3 x 3 neighbouring fine tiles),
 // bilinear flow field, photometric test on the half-resolution guide (noise-corrected difference of the base's and the
 // warped frame's 3 x 3 colour means; sigma^2 = max(min(base, alt local variance), expected noise); weight
-// exp(-k q), k = 0.1 * 9 / s, s = 1.5 on tiles whose flow disagrees with its neighbours, 9 elsewhere), then the 5 x 5
+// exp(-k q), k = 0.1 * 9 / s, s = ROBUST_S1 on tiles whose flow disagrees with its neighbours, 9 elsewhere; down to ROBUST_S1_TEXTURED on flagged tiles
+// whose base frame is more textured than noise), then the 5 x 5
 // minimum filter, and the update of the half-resolution support (sum of robustness) map. One workgroup = 16 x 16 guide
 // positions; the unfiltered robustness of the 20 x 20 neighbourhood lives in shared memory. Starts from robust_flow_scale, robust_photometric, robust_erode5,
 // support_accumulate.
@@ -22,6 +23,12 @@ layout(set = 0, binding = 8, r32f) writeonly uniform image2D dbgScaleI;   // ver
 layout(push_constant) uniform P { float alpha, beta; int debug; } p;
 
 const float MOTION_THRESHOLD = 0.65, ROBUST_S1 = 1.5, ROBUST_S2 = 9.0, ROB_K = 0.1;
+// Where the flow disagrees AND the base frame holds texture above its noise (3 x 3 guide variance over its expected noise
+// variance, from TEX_LO to TEX_HI), frames are judged ROBUST_S1_TEXTURED instead: moving water, foliage. The 3 x 3 mean test
+// cannot see ripples a few pixels across, so at s = 1.5 a far-sea burst averaged them into mush (0.2-0.3 c/px band kept 50% of
+// the base frame; 55% here). Flat flagged areas (sky, walls: the flow there is arbitrary) keep s = 1.5. 0.3 keeps 63% (HDR+
+// Quality 68%) but a moving crowd then keeps single-frame grain: the two trade through the same frame rejection.
+const float ROBUST_S1_TEXTURED = 1.0, TEX_LO = 1.0, TEX_HI = 1.6;
 const int T = 20;
 shared float sPre[T * T];
 
@@ -86,6 +93,10 @@ float preAt(ivec2 q, ivec2 gsz) {
     float shrink = ds / max(ds + nd, 1e-30);
     if (ds > 0.0) ds = ds * shrink * shrink;
     float sc = tileScale(clamp(q / 8, ivec2(0), tn - 1));    // tile of the quad: (2 q) / 16
+    if (sc < ROBUST_S2) {
+        float texture = smoothstep(TEX_LO, TEX_HI, (v.x + v.y + v.z) / max(vn.x + vn.y + vn.z, 1e-30));
+        sc = mix(sc, ROBUST_S1_TEXTURED, texture);
+    }
     vec3 mv = min(v, bv);
     float ssg = max(mv.x + mv.y + mv.z, nl);
     float kq = ROB_K * ROBUST_S2 / max(sc, 1e-6);

@@ -65,10 +65,10 @@ struct FlagsPc {
     std::int32_t w, h;
 };
 // rx_lowcov_eaw: op 0 / 1 / 2 / 3, image size, strip core rows [r0, r1), rows computed by this dispatch (first row y0),
-// first image row held by the two strip scratch images, and the merge's single-frame noise model.
+// first image row held by the two strip scratch images, the merge's single-frame noise model and the burst's frame count.
 struct LowCoveragePc {
     std::int32_t op, w, h, r0, r1, y0, rows, a1, a2;
-    float alpha, beta;
+    float alpha, beta, frames;
 };
 // Rows of one strip of the grain pass (only tests change it: every height must give the same output).
 constexpr std::int32_t kStripRows = 256, kStripHalo = 14, kStripRowsX1 = kStripRows + 24, kStripRowsX2 = kStripRows + 16;
@@ -537,7 +537,7 @@ void RextureRecorder::recordGrainPass(VkCommandBuffer c) const {
     const auto& x2 = arena_.image("rx_lc_x2");
     const auto run = [&](std::int32_t op, std::int32_t r0, std::int32_t r1, std::int32_t y0, std::int32_t rows,
                          std::int32_t a1, std::int32_t a2) {
-        const LowCoveragePc q{op, w, h, r0, r1, y0, rows, a1, a2, config_.noiseAlpha, config_.noiseBeta};
+        const LowCoveragePc q{op, w, h, r0, r1, y0, rows, a1, a2, config_.noiseAlpha, config_.noiseBeta, config_.burstFrames};
         executor_.record(c, ShaderId::RxLowcovEaw, {{ib(0, out), ib(1, halo), ib(2, x1), ib(3, x2), ib(4, noiseGrid)}, {}}, &q,
                          sizeof(q), divUp(std::uint32_t(w), 16), divUp(std::uint32_t(rows), 16));
         computeWriteBarrier(c);
