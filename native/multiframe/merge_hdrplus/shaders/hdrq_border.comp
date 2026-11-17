@@ -4,10 +4,11 @@
 // pixels with the windowed reference.
 layout(local_size_x = 16, local_size_y = 16) in;
 layout(set = 0, binding = 0, rgba32f) uniform image2D img;
-layout(set = 0, binding = 1, rgba32f) readonly uniform image2D refRgba;
+layout(set = 0, binding = 1, rgba16f) readonly uniform image2D refRgba;
 layout(push_constant) uniform P {
     ivec2 size;
     float minValue;  // black level - 1
+    float frameInv;  // 1 / fp16 storage scale of the reference frame
 } p;
 
 const float PI = 3.14159265358979323846;
@@ -19,6 +20,6 @@ void main() {
     float angle = -2.0 * PI / 8.0;
     float w = (0.5 - 0.5 * cos(-angle * (float(d.x) + 0.5))) * (0.5 - 0.5 * cos(-angle * (float(d.y) + 0.5)));
     vec4 v = clamp(imageLoad(img, q), vec4(w * p.minValue), vec4(65535.0));
-    if (d.x == 0 || d.x == 7 || d.y == 0 || d.y == 7) v = 0.5 * (w * imageLoad(refRgba, q) + v);
+    if (d.x == 0 || d.x == 7 || d.y == 0 || d.y == 7) v = 0.5 * (w * p.frameInv * imageLoad(refRgba, q) + v);
     imageStore(img, q, v);
 }

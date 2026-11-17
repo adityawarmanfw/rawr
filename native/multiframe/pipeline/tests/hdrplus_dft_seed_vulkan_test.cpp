@@ -64,15 +64,26 @@ void barrier(VkCommandBuffer cmd, VkImage image, VkImageLayout from, VkImageLayo
                          nullptr, 1, &b);
 }
 
+// IEEE half from float (round toward zero; the test only needs finite, repeatable inputs).
+uint16_t toHalf(float f) {
+    uint32_t b;
+    std::memcpy(&b, &f, 4);
+    const uint32_t sign = (b >> 16) & 0x8000u;
+    const int exp = int((b >> 23) & 0xffu) - 127 + 15;
+    if (exp <= 0) return uint16_t(sign);
+    if (exp >= 31) return uint16_t(sign | 0x7bffu);
+    return uint16_t(sign | (uint32_t(exp) << 10) | ((b >> 13) & 0x3ffu));
+}
+
 void checkSeed(Gpu& gpu) {
     using namespace rawr::raw_gpu_pipeline;
     constexpr uint32_t w = 24, h = 16;
-    constexpr VkDeviceSize inputBytes = w * h * 4 * sizeof(float), outputBytes = 2 * inputBytes;
+    constexpr VkDeviceSize inputBytes = w * h * 4 * sizeof(uint16_t), outputBytes = 2 * inputBytes;  // fp16 images, as the shaders declare
     auto& c = gpu.c;
     const auto usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    auto src = vktest::mkImg(c.pd, c.dev, w, h, VK_FORMAT_R32G32B32A32_SFLOAT, usage);
+    auto src = vktest::mkImg(c.pd, c.dev, w, h, VK_FORMAT_R16G16B16A16_SFLOAT, usage);
     std::array<vktest::Img, 4> dst;
-    for (auto& img : dst) img = vktest::mkImg(c.pd, c.dev, w * 2, h, VK_FORMAT_R32G32B32A32_SFLOAT, usage);
+    for (auto& img : dst) img = vktest::mkImg(c.pd, c.dev, w * 2, h, VK_FORMAT_R16G16B16A16_SFLOAT, usage);
     auto upload = vktest::mkBuf(c.pd, c.dev, inputBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     auto readback = vktest::mkBuf(c.pd, c.dev, outputBytes * dst.size(), VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -82,12 +93,12 @@ void checkSeed(Gpu& gpu) {
     for (int pattern = 0; pattern < 4; ++pattern) {
         void* mapped = nullptr;
         vktest::ck(vkMapMemory(c.dev, upload.m, 0, inputBytes, 0, &mapped), "upload map");
-        auto* data = static_cast<float*>(mapped);
-        for (unsigned i = 0; i < inputBytes / sizeof(float); ++i)
-            data[i] = pattern == 0 ? 64.0f
-                      : pattern == 1
-                          ? (i % 257 == 0 ? 65535.0f : 0.0f)
-                          : float(int((i * 1664525u + 1013904223u) % 131071u) - 65535) * (pattern == 2 ? 1.0f : 0.001f);
+        auto* data = static_cast<uint16_t*>(mapped);
+        for (unsigned i = 0; i < inputBytes / sizeof(uint16_t); ++i)
+            data[i] = toHalf(pattern == 0 ? 64.0f
+                             : pattern == 1
+                                 ? (i % 257 == 0 ? 1000.0f : 0.0f)
+                                 : float(int((i * 1664525u + 1013904223u) % 2001u) - 1000) * (pattern == 2 ? 1.0f : 0.001f));
         vkUnmapMemory(c.dev, upload.m);
         exec.beginBatch();
         gpu.oneShot([&](VkCommandBuffer cmd) {
@@ -101,15 +112,17 @@ void checkSeed(Gpu& gpu) {
             for (auto& img : dst)
                 barrier(cmd, img.i, pattern == 0 ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                         VK_IMAGE_LAYOUT_GENERAL);
-            const int tiles[2] = {w / 8, h / 8};
+            // tiles, 1 / frame scale, spectrum scale (as hdrq_forward_dft.glsl declares them)
+            struct { int tiles[2]; float frameInv, scale; } pc{{w / 8, h / 8}, 1.0f, 1.0f / 64.0f};
+            const int tiles[2] = {pc.tiles[0], pc.tiles[1]};
             const auto ib = [](uint32_t n, const vktest::Img& img) {
                 return ImageBinding{n, img.v, VK_IMAGE_LAYOUT_GENERAL};
             };
             for (int i = 0; i < 2; ++i)
-                exec.record(cmd, ShaderId::HdrqForwardDft, {{ib(0, src), ib(1, dst[i])}, {}}, tiles, sizeof(tiles),
+                exec.record(cmd, ShaderId::HdrqForwardDft, {{ib(0, src), ib(1, dst[i])}, {}}, &pc, sizeof(pc),
                             tiles[0], tiles[1]);
-            exec.record(cmd, ShaderId::HdrqSeedDft, {{ib(0, src), ib(1, dst[2]), ib(2, dst[3])}, {}}, tiles,
-                        sizeof(tiles), tiles[0], tiles[1]);
+            exec.record(cmd, ShaderId::HdrqSeedDft, {{ib(0, src), ib(1, dst[2]), ib(2, dst[3])}, {}}, &pc,
+                        sizeof(pc), tiles[0], tiles[1]);
             for (unsigned i = 0; i < dst.size(); ++i) {
                 barrier(cmd, dst[i].i, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
                 copy.bufferOffset = i * outputBytes;

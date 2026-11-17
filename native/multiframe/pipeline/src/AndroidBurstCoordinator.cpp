@@ -43,7 +43,7 @@ void AndroidBurstCoordinator::ensureHostBuffer(HostBuffer& hb, VkDeviceSize byte
     VkBufferCreateInfo bi{};
     bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bi.size = bytes;
-    bi.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    bi.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     check(vkCreateBuffer(device_, &bi, nullptr, &hb.buffer), "multiframe host buffer");
     VkMemoryRequirements mr{};
@@ -80,6 +80,7 @@ void AndroidBurstCoordinator::destroyHostBuffer(HostBuffer& hb) noexcept {
 void AndroidBurstCoordinator::destroyHostBuffers() noexcept {
     destroyHostBuffer(noiseStats_);
     destroyHostBuffer(hotPixels_);
+    destroyHostBuffer(effectiveFrames_);
 }
 void AndroidBurstCoordinator::warmPipelines(VkPhysicalDevice physical, VkDevice device, std::uint32_t qf) {
     if (!physical || !device) throw std::invalid_argument("multiframe burst: invalid warmup handles");
@@ -634,6 +635,30 @@ BurstRunResult AndroidBurstCoordinator::runHdrPlusFrequency(const std::vector<Bu
     const auto gpuOrWall = [](const ChunkTiming& t) { return t.second.empty() ? t.first : t.second.front(); };
     const auto geometry = rawr::raw_merge_hdrplus_gpu::makeFrequencyGeometry(width_, height_, hdrplus_);
     HdrPlusFrequencyRecorder recorder(arena_, executor_, hdrplus_, geometry);
+    // Noise model for the displacement statistic: the burst-fitted profile when it fits (as the Rexture merge does),
+    // else the configured one; converted from normalized units to the merge's raw units. The fit also goes to the result,
+    // for the JPEG chroma denoise.
+    bool noiseFitted = false;
+    rawr::raw_merge_common::CfaNoiseProfile fittedNoise{};
+    {
+        struct RestoreMerge {
+            rawr::raw_merge_common::Config& target;
+            rawr::raw_merge_common::Config saved;
+            ~RestoreMerge() { target = saved; }
+        } restoreMerge{merge_, merge_};
+        noiseFitted = estimateNoiseFromBurst(frames, ref, frameLoad, timings);
+        if (noiseFitted && merge_.sensorNoiseProfile) fittedNoise = *merge_.sensorNoiseProfile;
+        float alpha = merge_.noiseAlpha, beta = merge_.noiseBeta;
+        if (merge_.sensorNoiseProfile) {
+            const auto& n = *merge_.sensorNoiseProfile;
+            alpha = .25f * (n.slopeBySite[0] + n.slopeBySite[1] + n.slopeBySite[2] + n.slopeBySite[3]);
+            beta = .25f * (n.offsetBySite[0] + n.offsetBySite[1] + n.offsetBySite[2] + n.offsetBySite[3]);
+        }
+        const auto& norm = frames[ref].parameters.normalization;
+        const float black = .25f * (norm.blackByPhase[0] + norm.blackByPhase[1] + norm.blackByPhase[2] + norm.blackByPhase[3]);
+        const float range = std::max(1.0f, norm.whiteLevel - black);
+        recorder.setNoise(alpha * range, beta * range * range);
+    }
     {
         std::vector<float> gains(frames.size(), 1.0f);
         for (std::uint32_t i = 0; i < frames.size(); ++i) gains[i] = exposureGain(frames, ref, i);
@@ -653,6 +678,7 @@ BurstRunResult AndroidBurstCoordinator::runHdrPlusFrequency(const std::vector<Bu
     for (std::uint32_t i = 0; i < frameCount; ++i)
         if (i != ref) order.push_back(i);
     std::uint32_t companions = 0;
+    float effectiveFrames = 0.0f;
     for (std::uint32_t pass = 0; pass < 4u; ++pass) {
         recorder.beginPass(pass);
         const bool initializeLayouts = !layoutsInitialized_;
@@ -718,6 +744,23 @@ BurstRunResult AndroidBurstCoordinator::runHdrPlusFrequency(const std::vector<Bu
                 if (frameConsumed) frameConsumed(i);
             }
         }
+        if (pass == 3u) {
+            const auto tiles = recorder.tileCount();
+            const VkDeviceSize bytes = VkDeviceSize(tiles.first) * tiles.second * sizeof(float);
+            ensureHostBuffer(effectiveFrames_, bytes);
+            executeChunk(32u, ref, 2u, [&] {
+                recordTimestamp(0u);
+                recorder.recordEffectiveFramesCopy(command_, effectiveFrames_.buffer);
+                recordTimestamp(1u);
+            });
+            check(vkWaitForFences(device_, 1, &fence_, VK_TRUE, UINT64_MAX), "multiframe effective frames fence");
+            submissionInFlight_ = false;
+            const auto* acc = static_cast<const float*>(effectiveFrames_.mapped);
+            double inverse = 0.0;
+            const std::size_t count = std::size_t(tiles.first) * tiles.second;
+            for (std::size_t t = 0; t < count; ++t) inverse += 1.0 / (1.0 + double(std::max(acc[t], 0.0f)));
+            effectiveFrames = count ? float(double(count) / inverse) : 0.0f;
+        }
         timings.finalizeMs += gpuOrWall(executeChunk(15u, ref, 2u, [&] {
             recordTimestamp(0u);
             recorder.recordPassFinish(command_, frameCount);
@@ -752,6 +795,9 @@ BurstRunResult AndroidBurstCoordinator::runHdrPlusFrequency(const std::vector<Bu
                           timings};
     result.cfaImage = cfa.image;
     result.cfaView = cfa.view;
+    result.noiseEstimated = noiseFitted;
+    if (noiseFitted) result.estimatedNoise = fittedNoise;
+    result.effectiveFrames = effectiveFrames;
     return result;
 }
 void AndroidBurstCoordinator::releaseScratch() noexcept {

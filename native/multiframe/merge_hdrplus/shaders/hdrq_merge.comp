@@ -11,24 +11,41 @@
 // the same argmin from 2 floats per bin instead of 16 (shared-memory bound on
 // mobile GPUs); first maximum wins like upstream's first minimum.
 layout(local_size_x = 8, local_size_y = 8) in;
-layout(set = 0, binding = 0, rgba32f) readonly uniform image2D refFt;
-layout(set = 0, binding = 1, rgba32f) readonly uniform image2D alignedFt;
-layout(set = 0, binding = 2, rgba32f) uniform image2D outFt;
+layout(set = 0, binding = 0, rgba16f) readonly uniform image2D refFt;
+layout(set = 0, binding = 1, rgba16f) readonly uniform image2D alignedRgba;  // transformed here: no aligned spectrum is stored
+layout(set = 0, binding = 2, rgba16f) uniform image2D outFt;
 layout(set = 0, binding = 3, rgba32f) readonly uniform image2D rms;
 layout(set = 0, binding = 4, r32f) readonly uniform image2D mismatch;
 // (cos, sin) per shift and bin, index shift * 64 + n * 8 + m (hdrq_shift_table).
+layout(set = 0, binding = 6, r32f) readonly uniform image2D zmap;
 layout(std430, set = 0, binding = 5) readonly buffer ShiftTable { vec2 v[]; } shiftTable;
 layout(push_constant) uniform P {
     ivec2 tiles;
     float robustnessNorm;
     float readNoise;
     float maxMotionNorm;
+    float gateLo;  // displacement statistic where the frame starts to be rejected
+    float gateHi;  // ... and where it is rejected outright
+    float noiseSlope;   // per-channel noise variance in raw units: slope * (signal - black) + offset
+    float noiseOffset;
+    float black;
+    float frameInv;       // 1 / fp16 storage scale of the frames
+    float spectrumScale;  // storage scale of the fp16 spectra
+    float shrink;       // strength of the reference's own spectral shrinkage inside gated tiles (0 = off)
 } p;
 
 shared vec4 sRefRe[64], sRefIm[64], sAlRe[64], sAlIm[64];  // index dn*8 + dm
 shared float sDiff[49];
 shared float sA[64], sB[64];
+shared vec4 tmpRe[8][8], tmpIm[8][8];  // DFT of the aligned tile, [dn][dm]
 shared int sBest;
+shared vec2 sPhase[56];  // (cos, sin) of theta * k * shiftOffset(j), index j * 8 + k
+shared vec2 sT[56];      // partial phase sums per (sy, m)
+
+// cos / sin of 2*pi*k/8 and the raised-cosine window, as in hdrq_forward_dft.glsl.
+const float C8[8] = float[8](1.0, 0.70710678118, 0.0, -0.70710678118, -1.0, -0.70710678118, 0.0, 0.70710678118);
+const float S8[8] = float[8](0.0, 0.70710678118, 1.0, 0.70710678118, 0.0, -0.70710678118, -1.0, -0.70710678118);
+const float HANN8[8] = float[8](0.03806023374, 0.30865828381, 0.69134171619, 0.96193976626, 0.96193976626, 0.69134171619, 0.30865828381, 0.03806023374);
 
 void main() {
     ivec2 t = ivec2(gl_WorkGroupID.xy);
@@ -38,35 +55,83 @@ void main() {
     const int ts = 8;
     ivec2 t0 = t * ts;
     ivec2 o = ivec2(2 * (t0.x + dm), t0.y + dn);
-    sRefRe[lane] = imageLoad(refFt, o);
-    sRefIm[lane] = imageLoad(refFt, o + ivec2(1, 0));
-    sAlRe[lane] = imageLoad(alignedFt, o);
-    sAlIm[lane] = imageLoad(alignedFt, o + ivec2(1, 0));
+    sRefRe[lane] = imageLoad(refFt, o) / p.spectrumScale;
+    sRefIm[lane] = imageLoad(refFt, o + ivec2(1, 0)) / p.spectrumScale;
+    {
+        // Forward DFT of the aligned tile (windowed 8x8, each channel): bin (dm, dn) per lane, as hdrq_forward_dft.
+        vec4 re = vec4(0.0), im = vec4(0.0);
+        for (int dy = 0; dy < 8; ++dy) {
+            vec4 v = (HANN8[dm] * HANN8[dy] * p.frameInv) * imageLoad(alignedRgba, t0 + ivec2(dm, dy));
+            re += C8[(dn * dy) & 7] * v;
+            im -= S8[(dn * dy) & 7] * v;
+        }
+        tmpRe[dn][dm] = re;
+        tmpIm[dn][dm] = im;
+        barrier();
+        re = vec4(0.0);
+        im = vec4(0.0);
+        for (int dx = 0; dx < 8; ++dx) {
+            float c = C8[(dm * dx) & 7], sn = -S8[(dm * dx) & 7];
+            vec4 dRe = tmpRe[dn][dx], dIm = tmpIm[dn][dx];
+            re += c * dRe - sn * dIm;
+            im += sn * dRe + c * dIm;
+        }
+        sAlRe[lane] = re;
+        sAlIm[lane] = im;
+    }
     {
         vec4 a = sRefRe[lane] * sAlRe[lane] + sRefIm[lane] * sAlIm[lane];
         vec4 b = sRefIm[lane] * sAlRe[lane] - sRefRe[lane] * sAlIm[lane];
         sA[lane] = a.x + a.y + a.z + a.w;
         sB[lane] = b.x + b.y + b.z + b.w;
     }
-    barrier();
-    if (lane < 49) {
-        float total = 0.0;
-        for (int k = 0; k < 64; ++k) {
-            vec2 cs = shiftTable.v[lane * 64 + k];
-            total += cs.x * sA[k] + cs.y * sB[k];
+    // Gate first: a tile where the frame is rejected outright takes the reference at every frequency, so the sub-pixel
+    // shift is never used.
+    float gate = smoothstep(p.gateLo, p.gateHi, imageLoad(zmap, t).x);
+    if (gate < 1.0) {
+        // The shift cost is Re sum_k C_k e^{i theta (m sx + n sy)} with C_k = A_k - i B_k and theta = -2 pi / 8: the phase
+        // is separable, so it is summed over n for each sy first (56 sums of 8), then over m for each (sx, sy) (49 sums of
+        // 8), instead of 49 sums of 64. The candidate offsets are the same grid on both axes.
+        if (lane < 56) {
+            int j = int(lane) / 8, k = int(lane) % 8;  // table entry: shift step j (0..6) times index k (0..7)
+            float a = -2.0 * 3.14159265358979323846 / 8.0 * float(k) * (-0.5 + float(j) / 6.0);
+            sPhase[lane] = vec2(cos(a), sin(a));
         }
-        sDiff[lane] = total;
-    }
-    barrier();
-    if (lane == 0) {
-        float best = -1e30;
-        int bi = 0;
-        for (int i = 0; i < 49; ++i)
-            if (sDiff[i] > best) {
-                best = sDiff[i];
-                bi = i;
+        barrier();
+        if (lane < 56) {
+            int sy = int(lane) / 8, m = int(lane) % 8;
+            vec2 acc = vec2(0.0);
+            for (int n = 0; n < 8; ++n) {
+                vec2 c = vec2(sA[n * 8 + m], -sB[n * 8 + m]);
+                vec2 ph = sPhase[sy * 8 + n];
+                acc += vec2(c.x * ph.x - c.y * ph.y, c.x * ph.y + c.y * ph.x);
             }
-        sBest = bi;
+            sT[lane] = acc;
+        }
+        barrier();
+        if (lane < 49) {
+            int sy = int(lane) / 7, sx = int(lane) % 7;
+            float total = 0.0;
+            for (int m = 0; m < 8; ++m) {
+                vec2 t2 = sT[sy * 8 + m];
+                vec2 ph = sPhase[sx * 8 + m];
+                total += t2.x * ph.x - t2.y * ph.y;
+            }
+            sDiff[lane] = total;
+        }
+        barrier();
+        if (lane == 0) {
+            float best = -1e30;
+            int bi = 0;
+            for (int i = 0; i < 49; ++i)
+                if (sDiff[i] > best) {
+                    best = sDiff[i];
+                    bi = i;
+                }
+            sBest = bi;
+        }
+    } else if (lane == 0) {
+        sBest = 0;
     }
     barrier();
     vec4 noiseNorm = (imageLoad(rms, t) + p.readNoise) * float(ts * ts) * p.robustnessNorm;
@@ -90,6 +155,19 @@ void main() {
     float lo = min(w4.x, min(w4.y, min(w4.z, w4.w))), hi = max(w4.x, max(w4.y, max(w4.z, w4.w)));
     // Mean of the two central channel weights (upstream's robust variant of Liba's max).
     float weight = clamp(0.5 * (w4.x + w4.y + w4.z + w4.w - lo - hi), 0.0, 1.0);
-    imageStore(outFt, o, imageLoad(outFt, o) + (1.0 - weight) * alRe + weight * refRe);
-    imageStore(outFt, o + ivec2(1, 0), imageLoad(outFt, o + ivec2(1, 0)) + (1.0 - weight) * alIm + weight * refIm);
+    // Hard gate: a tile whose aligned frame is displaced beyond the noise is not merged at any frequency.
+    weight = max(weight, gate);
+    // Where the frame is gated out the reference stands alone and keeps its own noise. Shrink its bins by their noise
+    // power (windowed 8x8 DFT: 9 sigma^2 per bin) so those tiles come out smooth instead of grainy; strong edges
+    // survive, the DC bin is untouched. Scaled by the gate so merged tiles are unchanged.
+    if (p.shrink > 0.0 && dm + dn > 0 && gate > 0.0) {
+        vec4 sigma2 = p.noiseSlope * max(4.0 * imageLoad(rms, t) - p.black, vec4(0.0)) + p.noiseOffset;
+        vec4 power = refRe * refRe + refIm * refIm;
+        vec4 g = power / (power + p.shrink * 9.0 * sigma2 + 1.0e-6);
+        float keep = 1.0 - gate;
+        refRe *= keep + gate * g;
+        refIm *= keep + gate * g;
+    }
+    imageStore(outFt, o, imageLoad(outFt, o) + p.spectrumScale * ((1.0 - weight) * alRe + weight * refRe));
+    imageStore(outFt, o + ivec2(1, 0), imageLoad(outFt, o + ivec2(1, 0)) + p.spectrumScale * ((1.0 - weight) * alIm + weight * refIm));
 }

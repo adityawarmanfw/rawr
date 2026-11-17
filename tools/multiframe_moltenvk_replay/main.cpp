@@ -1073,6 +1073,7 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
         vkUnmapMemory(context.dev, buf.m);
         vktest::delBuf(context.dev, buf);
     }
+    if (result.effectiveFrames > 0.0f) std::cerr << "effective_frames=" << result.effectiveFrames << " of " << result.frameCount << '\n';
     if (merge.estimateNoiseFromBurst) {
         const auto& n = result.estimatedNoise;
         std::cerr << "noise_burst estimated=" << (result.noiseEstimated ? 1 : 0)

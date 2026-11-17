@@ -6,9 +6,13 @@ layout(local_size_x = 16, local_size_y = 16) in;
 layout(set = 0, binding = 0, r32f) uniform image2D mismatch;
 layout(set = 0, binding = 1, r32f) uniform image2D total;
 layout(std430, set = 0, binding = 2) readonly buffer Mean { float v[]; } mean;
+layout(set = 0, binding = 3, r32f) readonly uniform image2D zmap;
+layout(set = 0, binding = 4, r32f) uniform image2D neffAcc;  // running sum over companions of (1 - gate): frames that merged
 layout(push_constant) uniform P {
     ivec2 tiles;
     float invFrames;
+    float gateLo;  // the gate of hdrq_merge
+    float gateHi;
 } p;
 
 void main() {
@@ -17,4 +21,5 @@ void main() {
     float m = clamp(imageLoad(mismatch, g).x * (0.12 / (mean.v[0] + 1e-12)), 0.0, 1.0);
     imageStore(mismatch, g, vec4(m));
     imageStore(total, g, vec4(imageLoad(total, g).x + m * p.invFrames));
+    imageStore(neffAcc, g, vec4(imageLoad(neffAcc, g).x + 1.0 - smoothstep(p.gateLo, p.gateHi, imageLoad(zmap, g).x)));
 }

@@ -68,6 +68,9 @@ struct BurstRunResult {
     // Set when estimateNoiseFromBurst produced the profile this run merged with.
     bool noiseEstimated = false;
     rawr::raw_merge_common::CfaNoiseProfile estimatedNoise{};
+    // HDR+ Quality: frames' worth of averaging the merged image actually got (harmonic mean over tiles of 1 + frames that
+    // merged). Frames gated out of moving tiles do not count, so it is below frameCount when the scene moved; 0 = not reported.
+    float effectiveFrames = 0.0f;
 };
 // Synchronous correctness executor. The app runs it on a background worker while
 // borrowing pinned RAW16 images from RawImageRing. It uses the app's existing Vulkan queue via Submit.
@@ -199,6 +202,7 @@ class AndroidBurstCoordinator final {
     };
     HostBuffer noiseStats_{};
     HostBuffer hotPixels_{};
+    HostBuffer effectiveFrames_{};
     void ensureHostBuffer(HostBuffer& buffer, VkDeviceSize bytes);
     void destroyHostBuffer(HostBuffer& buffer) noexcept;
     void destroyHostBuffers() noexcept;

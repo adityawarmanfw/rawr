@@ -4,7 +4,7 @@
 // high-mismatch tiles and strong frequencies. One lane per bin; bin (0,0)
 // is never modified, so every lane may read it.
 layout(local_size_x = 8, local_size_y = 8) in;
-layout(set = 0, binding = 0, rgba32f) uniform image2D ft;
+layout(set = 0, binding = 0, rgba16f) uniform image2D ft;
 layout(set = 0, binding = 1, r32f) readonly uniform image2D totalMismatch;
 layout(push_constant) uniform P {
     ivec2 tiles;

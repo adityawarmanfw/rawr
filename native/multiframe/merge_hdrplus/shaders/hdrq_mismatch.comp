@@ -4,19 +4,28 @@
 // the tile support, relative to the tile's shot noise (Liba 2019 "spatially
 // varying temporal merging"). One 16x16 workgroup per tile, one lane per
 // window pixel, tree reduction (upstream sums sequentially in one thread).
-layout(local_size_x = 16, local_size_y = 16) in;
-layout(set = 0, binding = 0, rgba32f) readonly uniform image2D refRgba;
-layout(set = 0, binding = 1, rgba32f) readonly uniform image2D alignedRgba;
+layout(local_size_x = 16, local_size_y = 4) in;  // each thread handles four vertically adjacent window pixels (one 4x4 block row)
+layout(set = 0, binding = 0, rgba16f) readonly uniform image2D refRgba;
+layout(set = 0, binding = 1, rgba16f) readonly uniform image2D alignedRgba;
 layout(set = 0, binding = 2, rgba32f) readonly uniform image2D rms;
 layout(set = 0, binding = 3, r32f) writeonly uniform image2D mismatch;
+layout(set = 0, binding = 4, r32f) writeonly uniform image2D zmap;
 layout(push_constant) uniform P {
     ivec2 tiles;
     ivec2 rgbaSize;
+    float noiseSlope;   // raw-unit shot-noise variance per signal unit (per RGBA channel)
+    float noiseOffset;  // raw-unit read-noise variance
+    float black;        // the frames keep their black level: signal = value - black
+    float frameInv;     // 1 / fp16 storage scale of the frames
 } p;
 
-const float PI = 3.14159265358979323846;
-shared vec4 sDiff[256];
-shared float sWeight[256];
+const float WIN16[16] = float[16](0.342940479, 0.434943816, 0.565056184, 0.657059521, 0.657059521, 0.565056184, 0.434943816, 0.342940479, 0.342940479, 0.434943816, 0.565056184, 0.657059521, 0.657059521, 0.565056184, 0.434943816, 0.342940479);
+shared vec4 sDiff[64];
+shared float sWeight[64];
+shared float sWeight2[64];
+shared vec4 sSig[64];       // weight * reference signal
+shared vec4 sSigned[64];    // weight * (ref - aligned)
+shared float sBlockZ[16];
 
 void main() {
     ivec2 g = ivec2(gl_WorkGroupID.xy);
@@ -28,27 +37,67 @@ void main() {
     // Upstream clamps the end to size-1 (exclusive), dropping the last row/column.
     ivec2 start = max(ivec2(0), t0 - ts / 2);
     ivec2 end = min(p.rgbaSize - 1, t0 + ts * 3 / 2);
-    ivec2 q = t0 - ts / 2 + l;  // window pixel; l is its offset (dx + shift)
-    float angle = -2.0 * PI / float(ts);
-    vec4 d = vec4(0.0);
-    float w = 0.0;
-    if (all(greaterThanEqual(q, start)) && all(lessThan(q, end))) {
-        w = (0.5 - 0.17 * cos(-angle * (float(l.x) + 0.5))) * (0.5 - 0.17 * cos(-angle * (float(l.y) + 0.5)));
-        d = w * abs(imageLoad(refRgba, q) - imageLoad(alignedRgba, q));
+    vec4 d = vec4(0.0), sig = vec4(0.0), sd = vec4(0.0);
+    float w2 = 0.0, w = 0.0;
+    for (int k = 0; k < 4; ++k) {
+        ivec2 wl = ivec2(l.x, 4 * l.y + k);  // offset inside the 16x16 window
+        ivec2 q = t0 - ts / 2 + wl;
+        if (all(greaterThanEqual(q, start)) && all(lessThan(q, end))) {
+            float wk = WIN16[wl.x] * WIN16[wl.y];
+            vec4 r = imageLoad(refRgba, q) * p.frameInv, a = imageLoad(alignedRgba, q) * p.frameInv;
+            d += wk * abs(r - a);
+            sig += wk * r;
+            sd += wk * (r - a);
+            w += wk;
+            w2 += wk * wk;
+        }
     }
-    sDiff[lane] = d;
-    sWeight[lane] = w;
+    // Stored block-contiguous (4 consecutive entries per 4x4 block, one block row per thread) so every sum is a short tree.
+    uint bi = uint((l.y * 4 + l.x / 4) * 4 + (l.x % 4));
+    sDiff[bi] = d;
+    sWeight[bi] = w;
+    sWeight2[bi] = w2;
+    sSig[bi] = sig;
+    sSigned[bi] = sd;
     barrier();
-    for (uint stride = 128u; stride > 0u; stride >>= 1u) {
-        if (lane < stride) {
-            sDiff[lane] += sDiff[lane + stride];
-            sWeight[lane] += sWeight[lane + stride];
+    for (uint stride = 2u; stride > 0u; stride >>= 1u) {
+        if ((bi & 3u) < stride) {
+            sDiff[bi] += sDiff[bi + stride];
+            sWeight[bi] += sWeight[bi + stride];
+            sWeight2[bi] += sWeight2[bi + stride];
+            sSig[bi] += sSig[bi + stride];
+            sSigned[bi] += sSigned[bi + stride];
         }
         barrier();
     }
+    // Noise-calibrated displacement statistic: per 4x4 block, |mean signed difference| against the noise of that
+    // weighted mean. Sub-pixel misalignment of fine texture averages out inside a block; an object that moved
+    // does not. Pure noise reads ~1 (E|N| = 0.798 sigma) at any brightness.
+    if ((bi & 3u) == 0u) {
+        vec4 sumD = sSigned[bi], sumS = sSig[bi];
+        float sumW = sWeight[bi], sumW2 = sWeight2[bi];
+        float z = 0.0;
+        if (sumW > 1.0e-3) {
+            float neff = sumW * sumW / max(sumW2, 1.0e-12);
+            vec4 sigma = sqrt(2.0 * (p.noiseSlope * max(sumS / sumW - p.black, vec4(0.0)) + p.noiseOffset)) / sqrt(neff);
+            vec4 zc = abs(sumD / sumW) / max(sigma, vec4(1.0e-6));
+            z = 0.25 * (zc.x + zc.y + zc.z + zc.w) / 0.7979;
+        }
+        sBlockZ[bi >> 2] = z;
+    }
+    barrier();
     if (lane != 0u) return;
+    float acc = 0.0;
+    vec4 dsum = vec4(0.0);
+    float wsum = 0.0;
+    for (uint b = 0u; b < 16u; ++b) {
+        acc += sBlockZ[b];
+        dsum += sDiff[b * 4u];
+        wsum += sWeight[b * 4u];
+    }
+    imageStore(zmap, g, vec4(acc / 16.0));
     vec4 noise = imageLoad(rms, g);
-    vec4 diff = sDiff[0] / sWeight[0];
+    vec4 diff = dsum / wsum;
     vec4 m4 = diff / sqrt(noise + 1.0);
     imageStore(mismatch, g, vec4(0.25 * (m4.x + m4.y + m4.z + m4.w)));
 }

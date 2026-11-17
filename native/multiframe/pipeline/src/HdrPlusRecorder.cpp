@@ -194,16 +194,23 @@ struct TilesPc {
 };
 struct ToRgbaPc {
     std::int32_t width, height, cropX, cropY, offsetX, offsetY, paddedWidth, paddedHeight;
+    float scale;
+};
+struct RmsPc {
+    std::int32_t tilesX, tilesY;
+    float frameInv;
 };
 struct WarpRgbaPc {
     std::int32_t width, height, cropX, cropY, paddedWidth, paddedHeight, tilesX, tilesY, halfTileSize;
     std::int32_t alignPad;  // ivec2 offset is 8-byte aligned in the GLSL block
     std::int32_t offsetX, offsetY;
     std::int32_t continuous;
+    float scale;
 };
 VkDeviceSize alignUp256(VkDeviceSize v) { return (v + 255u) / 256u * 256u; }
 struct MismatchPc {
     std::int32_t tilesX, tilesY, rgbaWidth, rgbaHeight;
+    float noiseSlope, noiseOffset, black, frameInv;
 };
 struct RegionPc {
     std::int32_t originX, originY, width, height;
@@ -211,18 +218,27 @@ struct RegionPc {
 struct MismatchNormPc {
     std::int32_t tilesX, tilesY;
     float invFrames;
+    float gateLo, gateHi;
 };
 struct FreqMergePc {
     std::int32_t tilesX, tilesY;
-    float robustnessNorm, readNoise, maxMotionNorm;
+    float robustnessNorm, readNoise, maxMotionNorm, gateLo, gateHi, noiseSlope, noiseOffset, black, frameInv, spectrumScale, shrink;
 };
+// A frame is gated out of a tile where the displacement statistic (1 = noise only) rises from kGateLow to kGateHigh; the
+// reference's own bins are then shrunk by kGateShrink times their noise power. Tuned on the tmp bursts (scooter, crowd,
+// 33TJ, Pixel street, birds).
+constexpr float kGateLow = 1.6f, kGateHigh = 2.6f, kGateShrink = 2.0f;
 struct BackwardPc {
     std::int32_t tilesX, tilesY;
-    float frames;
+    float frames, scale;
+};
+struct SeedPc {
+    std::int32_t tilesX, tilesY;
+    float frameInv, scale;
 };
 struct BorderPc {
     std::int32_t width, height;
-    float minValue;
+    float minValue, frameInv;
 };
 struct FreqAccumulatePc {
     std::int32_t width, height, offsetX, offsetY, mode;
@@ -235,7 +251,8 @@ ScratchLayout makeHdrPlusFrequencyScratchLayout(const hp::FrequencyGeometry& f, 
     const auto& g = f.align;
     const Extent2D raw{width, height}, padded{g.paddedWidth, g.paddedHeight};
     const Extent2D rgba{f.rgbaWidth, f.rgbaHeight}, spectrum{2u * f.rgbaWidth, f.rgbaHeight}, tiles{f.tilesX, f.tilesY};
-    const auto add = [&](const std::string& name, Extent2D e, PixelStorage s, Lifetime life) {
+    const auto add = [&](const std::string& name, Extent2D e, PixelStorage s, Lifetime life, const char* placeAt = nullptr) {
+        if (placeAt) l.placements.push_back({name, "hdrq_spectra", placeAt});
         l.images.push_back({name, e, s, life});
         l.logicalImageBytes += std::uint64_t(e.width) * e.height * bytesPerPixel(s);
     };
@@ -250,18 +267,20 @@ ScratchLayout makeHdrPlusFrequencyScratchLayout(const hp::FrequencyGeometry& f, 
         add(levelName(false, i), e, PixelStorage::R32Float, Lifetime::Companion);
         maxTiles = std::max<std::uint64_t>(maxTiles, std::uint64_t(g.levels[i].tilesX) * g.levels[i].tilesY);
     }
-    add("hdrq_ref_rgba", rgba, PixelStorage::RGBA32Float, Lifetime::Burst);
-    add("hdrq_aligned_rgba", rgba, PixelStorage::RGBA32Float, Lifetime::Companion);
+    add("hdrq_ref_rgba", rgba, PixelStorage::RGBA16Float, Lifetime::Burst);
+    add("hdrq_aligned_rgba", rgba, PixelStorage::RGBA16Float, Lifetime::Companion);
     add("hdrq_out_rgba", rgba, PixelStorage::RGBA32Float, Lifetime::Output);
-    add("hdrq_ref_ft", spectrum, PixelStorage::RGBA32Float, Lifetime::Burst);
-    add("hdrq_aligned_ft", spectrum, PixelStorage::RGBA32Float, Lifetime::Companion);
-    add("hdrq_final_ft", spectrum, PixelStorage::RGBA32Float, Lifetime::Output);
+    add("hdrq_ref_ft", spectrum, PixelStorage::RGBA16Float, Lifetime::Burst, "");
+    add("hdrq_final_ft", spectrum, PixelStorage::RGBA16Float, Lifetime::Output, "end:hdrq_ref_ft");
     add("hdrq_rms", tiles, PixelStorage::RGBA32Float, Lifetime::Burst);
     add("hdrq_mismatch", tiles, PixelStorage::R32Float, Lifetime::Companion);
+    add("hdrq_zmap", tiles, PixelStorage::R32Float, Lifetime::Companion);
+    add("hdrq_neff", tiles, PixelStorage::R32Float, Lifetime::Output);
     add("hdrq_total_mismatch", tiles, PixelStorage::R32Float, Lifetime::Output);
     add("hdrp_accum", raw, PixelStorage::R32Float, Lifetime::Output);
-    add("hdrp_output", raw, PixelStorage::RGBA16Float, Lifetime::Output);
-    add("hdrp_cfa", raw, PixelStorage::R32Float, Lifetime::Output);
+    // Written only by finalize, after every pass: the reference and running spectra are dead by then and share their memory.
+    add("hdrp_output", raw, PixelStorage::RGBA16Float, Lifetime::Output, "start:hdrq_ref_ft");
+    add("hdrp_cfa", raw, PixelStorage::R32Float, Lifetime::Output, "end:hdrp_output");
     const auto addBuffer = [&](const char* name, std::uint64_t bytes) {
         l.buffers.push_back({name, bytes, Lifetime::Companion});
         l.logicalBufferBytes += bytes;
@@ -349,19 +368,20 @@ void HdrPlusFrequencyRecorder::recordReference(VkCommandBuffer c, VkImageView ra
     ToRgbaPc tr{std::int32_t(geometry_.rgbaWidth),         std::int32_t(geometry_.rgbaHeight),
                 std::int32_t(geometry_.cropX),             std::int32_t(geometry_.cropY),
                 offset[0],                                 offset[1],
-                std::int32_t(geometry_.align.paddedWidth), std::int32_t(geometry_.align.paddedHeight)};
+                std::int32_t(geometry_.align.paddedWidth), std::int32_t(geometry_.align.paddedHeight), frameScale()};
     executor_.record(c, ShaderId::HdrqToRgba, {{ib(0, arena_.image("hdrp_ref_padded")), ib(1, rgba)}, {}}, &tr,
                      sizeof(tr), divUp(geometry_.rgbaWidth, 16), divUp(geometry_.rgbaHeight, 16));
     computeWriteBarrier(c);
-    TilesPc tp{std::int32_t(tx), std::int32_t(ty)};
-    executor_.record(c, ShaderId::HdrqRms, {{ib(0, rgba), ib(1, arena_.image("hdrq_rms"))}, {}}, &tp, sizeof(tp),
+    RmsPc rmsPc{std::int32_t(tx), std::int32_t(ty), 1.0f / frameScale()};
+    executor_.record(c, ShaderId::HdrqRms, {{ib(0, rgba), ib(1, arena_.image("hdrq_rms"))}, {}}, &rmsPc, sizeof(rmsPc),
                      divUp(tx, 16), divUp(ty, 16));
+    SeedPc sp{std::int32_t(tx), std::int32_t(ty), 1.0f / frameScale(), spectrumScale()};
     // The reference spectrum seeds both the reference and the running merge.
     // Each shifted pass has its own input/window; only the two identical
     // transforms within this pass are shared.
     executor_.record(c, ShaderId::HdrqSeedDft,
                      {{ib(0, rgba), ib(1, arena_.image("hdrq_ref_ft")), ib(2, arena_.image("hdrq_final_ft"))}, {}},
-                     &tp, sizeof(tp), tx, ty);
+                     &sp, sizeof(sp), tx, ty);
     // Per-pass total mismatch starts at zero.
     VkMemoryBarrier toTransfer{VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
                                VK_ACCESS_TRANSFER_WRITE_BIT};
@@ -370,6 +390,7 @@ void HdrPlusFrequencyRecorder::recordReference(VkCommandBuffer c, VkImageView ra
     const VkClearColorValue zero{};
     const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     vkCmdClearColorImage(c, arena_.image("hdrq_total_mismatch").image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &range);
+    vkCmdClearColorImage(c, arena_.image("hdrq_neff").image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &range);
     VkMemoryBarrier toCompute{VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr, VK_ACCESS_TRANSFER_WRITE_BIT,
                               VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT};
     vkCmdPipelineBarrier(c, VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
@@ -388,7 +409,7 @@ void HdrPlusFrequencyRecorder::recordCompanionMerge(VkCommandBuffer c, std::uint
     WarpRgbaPc wp{std::int32_t(geometry_.rgbaWidth), std::int32_t(geometry_.rgbaHeight), std::int32_t(geometry_.cropX),
                   std::int32_t(geometry_.cropY), std::int32_t(a.paddedWidth), std::int32_t(a.paddedHeight),
                   std::int32_t(level0.tilesX), std::int32_t(level0.tilesY), std::int32_t(level0.tileSize), 0,
-                  offset[0], offset[1], config_.frequencyAlignOnce ? 1 : 0};
+                  offset[0], offset[1], config_.frequencyAlignOnce ? 1 : 0, frameScale()};
     // Align-once: this companion's pass-0 shifts from its store slot.
     const BufferBinding shifts =
         config_.frequencyAlignOnce
@@ -400,17 +421,21 @@ void HdrPlusFrequencyRecorder::recordCompanionMerge(VkCommandBuffer c, std::uint
                      &wp, sizeof(wp), divUp(geometry_.rgbaWidth, 16), divUp(geometry_.rgbaHeight, 16));
     computeWriteBarrier(c);
     if (mark) mark(1u);
-    MismatchPc mp{std::int32_t(tx), std::int32_t(ty), std::int32_t(geometry_.rgbaWidth), std::int32_t(geometry_.rgbaHeight)};
+    const auto& black = align_.referenceBlack();
+    const float meanBlack = .25f * (black[0] + black[1] + black[2] + black[3]);
+    MismatchPc mp{std::int32_t(tx), std::int32_t(ty), std::int32_t(geometry_.rgbaWidth), std::int32_t(geometry_.rgbaHeight),
+                  noiseSlope_, noiseOffset_, meanBlack, 1.0f / frameScale()};
     executor_.record(c, ShaderId::HdrqMismatch,
-                     {{ib(0, refRgba), ib(1, alignedRgba), ib(2, arena_.image("hdrq_rms")), ib(3, mismatch)}, {}}, &mp,
+                     {{ib(0, refRgba), ib(1, alignedRgba), ib(2, arena_.image("hdrq_rms")), ib(3, mismatch),
+                       ib(4, arena_.image("hdrq_zmap"))},
+                      {}},
+                     &mp,
                      sizeof(mp), tx, ty);
     if (mark) {
         computeWriteBarrier(c);
         mark(5u);
     }
-    TilesPc tp{std::int32_t(tx), std::int32_t(ty)};
-    executor_.record(c, ShaderId::HdrqForwardDft, {{ib(0, alignedRgba), ib(1, arena_.image("hdrq_aligned_ft"))}, {}}, &tp,
-                     sizeof(tp), tx, ty);
+    // The aligned frame's spectrum is computed inside the merge pass (no stored aligned spectrum).
     computeWriteBarrier(c);
     if (mark) mark(2u);
     // Mean mismatch excluding the tile row/column introduced by this pass's shift.
@@ -422,20 +447,41 @@ void HdrPlusFrequencyRecorder::recordCompanionMerge(VkCommandBuffer c, std::uint
     executor_.record(c, ShaderId::HdrqRegionMean, {{ib(0, mismatch)}, {bb(1, arena_.buffer("hdrq_mean"))}}, &rp,
                      sizeof(rp), 1, 1);
     computeWriteBarrier(c);
-    MismatchNormPc np{std::int32_t(tx), std::int32_t(ty), 1.0f / float(frameCount)};
+    MismatchNormPc np{std::int32_t(tx), std::int32_t(ty), 1.0f / float(frameCount), kGateLow, kGateHigh};
     executor_.record(c, ShaderId::HdrqMismatchNorm,
-                     {{ib(0, mismatch), ib(1, arena_.image("hdrq_total_mismatch"))}, {bb(2, arena_.buffer("hdrq_mean"))}},
+                     {{ib(0, mismatch), ib(1, arena_.image("hdrq_total_mismatch")), ib(3, arena_.image("hdrq_zmap")),
+                       ib(4, arena_.image("hdrq_neff"))},
+                      {bb(2, arena_.buffer("hdrq_mean"))}},
                      &np, sizeof(np), divUp(tx, 16), divUp(ty, 16));
     computeWriteBarrier(c);
     if (mark) mark(3u);
     const auto norms = hp::frequencyNorms(config_.strength);
-    FreqMergePc fm{std::int32_t(tx), std::int32_t(ty), norms.robustnessNorm, norms.readNoise, norms.maxMotionNorm};
+    FreqMergePc fm{std::int32_t(tx), std::int32_t(ty), norms.robustnessNorm, norms.readNoise, norms.maxMotionNorm,
+                   kGateLow, kGateHigh, noiseSlope_, noiseOffset_, meanBlack, 1.0f / frameScale(), spectrumScale(), kGateShrink};
     executor_.record(c, ShaderId::HdrqMerge,
-                     {{ib(0, arena_.image("hdrq_ref_ft")), ib(1, arena_.image("hdrq_aligned_ft")),
-                       ib(2, arena_.image("hdrq_final_ft")), ib(3, arena_.image("hdrq_rms")), ib(4, mismatch)},
+                     {{ib(0, arena_.image("hdrq_ref_ft")), ib(1, alignedRgba),
+                       ib(2, arena_.image("hdrq_final_ft")), ib(3, arena_.image("hdrq_rms")), ib(4, mismatch),
+                       ib(6, arena_.image("hdrq_zmap"))},
                       {bb(5, arena_.buffer("hdrq_shift_table"))}},
                      &fm, sizeof(fm), tx, ty);
     computeWriteBarrier(c);
+}
+
+void HdrPlusFrequencyRecorder::recordEffectiveFramesCopy(VkCommandBuffer c, VkBuffer host) {
+    const auto& neff = arena_.image("hdrq_neff");
+    VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT};
+    vkCmdPipelineBarrier(c, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &mb, 0, nullptr, 0,
+                         nullptr);
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {neff.extent.width, neff.extent.height, 1};
+    vkCmdCopyImageToBuffer(c, neff.image, VK_IMAGE_LAYOUT_GENERAL, host, 1, &region);
+    VkMemoryBarrier toHost{VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT};
+    vkCmdPipelineBarrier(c, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &toHost, 0, nullptr, 0, nullptr);
+}
+
+std::pair<std::uint32_t, std::uint32_t> HdrPlusFrequencyRecorder::tileCount() const noexcept {
+    return {geometry_.tilesX, geometry_.tilesY};
 }
 
 void HdrPlusFrequencyRecorder::recordPassFinish(VkCommandBuffer c, std::uint32_t frameCount) {
@@ -446,11 +492,11 @@ void HdrPlusFrequencyRecorder::recordPassFinish(VkCommandBuffer c, std::uint32_t
     executor_.record(c, ShaderId::HdrqDeconvolute, {{ib(0, finalFt), ib(1, arena_.image("hdrq_total_mismatch"))}, {}}, &tp,
                      sizeof(tp), tx, ty);
     computeWriteBarrier(c);
-    BackwardPc bp{std::int32_t(tx), std::int32_t(ty), float(frameCount)};
+    BackwardPc bp{std::int32_t(tx), std::int32_t(ty), float(frameCount), spectrumScale()};
     executor_.record(c, ShaderId::HdrqBackwardDft, {{ib(0, finalFt), ib(1, out)}, {}}, &bp, sizeof(bp), tx, ty);
     computeWriteBarrier(c);
     // Exposure control off: upstream passes black level -1, so the clamp floor is -2 * window.
-    BorderPc bd{std::int32_t(geometry_.rgbaWidth), std::int32_t(geometry_.rgbaHeight), -2.0f};
+    BorderPc bd{std::int32_t(geometry_.rgbaWidth), std::int32_t(geometry_.rgbaHeight), -2.0f, 1.0f / frameScale()};
     executor_.record(c, ShaderId::HdrqBorder, {{ib(0, out), ib(1, arena_.image("hdrq_ref_rgba"))}, {}}, &bd, sizeof(bd),
                      divUp(geometry_.rgbaWidth, 16), divUp(geometry_.rgbaHeight, 16));
     computeWriteBarrier(c);

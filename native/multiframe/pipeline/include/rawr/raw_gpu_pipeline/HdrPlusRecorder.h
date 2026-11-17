@@ -6,6 +6,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <utility>
 #include <vector>
 
 namespace rawr::raw_gpu_pipeline {
@@ -24,6 +25,7 @@ class HdrPlusRecorder final {
     // (reference exposure / companion exposure); 1 when they match.
     void setCompanionGain(float gain) noexcept { companionGain_ = gain; }
     [[nodiscard]] const std::array<float, 4>& referenceBlack() const noexcept { return reference_.blackByPhase; }
+    [[nodiscard]] float referenceWhite() const noexcept { return reference_.whiteLevel; }
     // Reference padded frame and pyramid only (frequency merge passes).
     void recordReferencePrepare(VkCommandBuffer command, VkImageView rawU16, const RawNormalization& frame);
     // Per-pass padding offsets inside the fixed padded extent (frequency merge).
@@ -81,6 +83,12 @@ class HdrPlusFrequencyRecorder final {
     // companion to the reference before alignment and merge, as upstream's
     // prepare_texture does; the merge itself stays the uniform one.
     void setExposureNormalization(std::vector<float> gains) { normalizationGains_ = std::move(gains); }
+    // Noise variance of one RGBA channel in the merge's raw units: slope * (signal - black) + offset. Calibrates the
+    // displacement statistic that gates a frame out of tiles where it moved, and the shrinkage of the reference there.
+    void setNoise(float slope, float offset) noexcept {
+        noiseSlope_ = slope;
+        noiseOffset_ = offset;
+    }
     void beginPass(std::uint32_t pass) noexcept;
     // Align-once mode: companions are aligned (and the reference prepared)
     // only in pass 0; later passes read through a coordinate offset.
@@ -101,6 +109,10 @@ class HdrPlusFrequencyRecorder final {
     void recordCompanionMerge(VkCommandBuffer command, std::uint32_t frameCount, std::uint32_t slot,
                               const std::function<void(std::uint32_t)>& mark = {});
     void recordPassFinish(VkCommandBuffer command, std::uint32_t frameCount);
+    // After the last companion of a pass: copies the per-tile sum over companions of (1 - gate) (frames that merged)
+    // into a host buffer of tileCount().first * second floats.
+    void recordEffectiveFramesCopy(VkCommandBuffer command, VkBuffer host);
+    [[nodiscard]] std::pair<std::uint32_t, std::uint32_t> tileCount() const noexcept;
     void recordFinalize(VkCommandBuffer command) { align_.recordFinalize(command); }
 
    private:
@@ -111,6 +123,15 @@ class HdrPlusFrequencyRecorder final {
     HdrPlusRecorder align_;
     std::uint32_t pass_ = 0;
     std::vector<float> normalizationGains_{};
+    float noiseSlope_ = 0.0f, noiseOffset_ = 1.0f;
+    // Spectra are stored as fp16. A tile's DC bin sums up to 16 * white over the window and the running merge adds one
+    // such term per frame, so the stored values are scaled to keep the burst sum far below the fp16 maximum while
+    // small bins stay well above its subnormal range.
+    // The reference and aligned frames are stored as fp16 (half the traffic of the mismatch and merge passes), scaled so
+    // the largest raw value (any sensor range, with exposure gain headroom) stays far below the fp16 maximum; readers
+    // multiply by 1 / frameScale() and work in raw units.
+    float frameScale() const noexcept { return 2048.0f / std::max(align_.referenceWhite(), 1.0f); }
+    float spectrumScale() const noexcept { return 8.0f / std::max(align_.referenceWhite(), 1.0f); }
     // Companion prepare gain: the drift normalization.
     float frameGain(std::uint32_t slot) const noexcept {
         return slot < normalizationGains_.size() ? normalizationGains_[slot] : 1.0f;
