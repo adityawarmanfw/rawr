@@ -223,8 +223,6 @@ void MfsrCaptureJob::runStages(Published& published) {
     MultiframeTuningView tuningView{};
     tuningView.outputScale = tuning.outputScale;
     tuningView.mergeAlgorithm = tuning.mergeAlgorithm;
-    tuningView.hdrplusStrength = tuning.hdrplusStrength;
-    tuningView.hdrplusTileSize = tuning.hdrplusTileSize;
     tuningView.baseFrameMode = baseFrameMode;
     MultiframeOutputInfo outputInfo{};
     outputInfo.noiseProfile = "Burst (fitted per capture)";
@@ -983,7 +981,11 @@ void MfsrCaptureJob::runStages(Published& published) {
                 outputInfo.chromaDenoiseLabel = "off";
                 if (mergedJpeg.develop.multiframeChromaDenoise) {
                     const auto& n = mergeResult->estimatedNoise;
-                    const float frames = float(std::max<std::uint32_t>(mergeResult->frameCount, 1u));
+                    // HDR+ Quality reports the frames' worth of averaging the merged image got: frames gated out of moving
+                    // tiles do not lower the noise there. Rexture divides by the whole burst.
+                    const float frames = mergeResult->effectiveFrames > 0.0f
+                                             ? std::max(mergeResult->effectiveFrames, 1.0f)
+                                             : float(std::max<std::uint32_t>(mergeResult->frameCount, 1u));
                     const float a = .5f * (n.slopeBySite[1] + n.slopeBySite[2]) / frames;
                     const float b = .5f * (n.offsetBySite[1] + n.offsetBySite[2]) / frames;
                     if (mergeResult->noiseEstimated && std::isfinite(a) && a > 0.0f && std::isfinite(b) && b >= 0.0f) {
@@ -997,7 +999,7 @@ void MfsrCaptureJob::runStages(Published& published) {
                         renderedContext.denoiseNoiseA = a;
                         renderedContext.denoiseNoiseB = b;
                         outputInfo.chromaDenoiseLabel =
-                            "wavelet chroma (burst noise / " + std::to_string(mergeResult->frameCount) + ")";
+                            "wavelet chroma (burst noise / " + std::to_string(frames) + ")";
                     } else {
                         outputInfo.chromaDenoiseLabel = "skipped (no burst noise fit)";
                     }

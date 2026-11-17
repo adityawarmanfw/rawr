@@ -43,9 +43,8 @@ std::string buildParametersBlock(const MultiframeTuningView& tuning, const Multi
     if (tuning.mergeAlgorithm == 4u) {
         out << "- Merge: Rexture (kernel-regression merge of the whole burst; base = best of the last 0.25 s)\n";
     } else {
-        out << "- Merge: HDR+ frequency (tile alignment + per-frequency Wiener merge)\n"
-            << "- HDR+ strength: " << f3(tuning.hdrplusStrength) << '\n'
-            << "- HDR+ tile size: " << tuning.hdrplusTileSize << '\n';
+        out << "- Merge: HDR+ frequency (tile alignment + per-frequency Wiener merge; frames that moved are gated out per tile; "
+               "base = best of the last 0.25 s)\n";
     }
     out << "\nMultiframe Reconstruction inputs:\n"
         << "- Noise profile: " << output.noiseProfile << '\n'

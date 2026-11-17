@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <raw_sharpness/raw_sharpness_types.hpp>
 #include <rawr/raw_merge_rexture_gpu/BaseSelection.h>
 #include <stdexcept>
 
@@ -57,7 +56,6 @@ MfsrCaptureService::~MfsrCaptureService() {
     renderedStill_.setEnginePersistenceEnabled(false);
     renderedStill_.reset();
     renderedStill_.shutdownFilm();
-    sharpness_.reset();
     burstCoordinator_.reset();
 }
 
@@ -108,29 +106,6 @@ void MfsrCaptureService::configure(const Geometry& geometry, bool warmEnabled) {
                 const double ms =
                     std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
                 LOGI("MULTIFRAME_WARM arena+pipelines ready in %.1f ms", ms);
-                // Warm the sharpness scorer pipeline alongside the burst
-                // pipelines so the first Sharpest capture pays no compile.
-                // ~30KB buffer held while the camera is open; negligible.
-                try {
-                    std::lock_guard<std::mutex> sharpnessLock(sharpnessMutex_);
-                    if (!sharpness_.ready() && generation == warmGeneration_.load()) {
-                        raw_sharpness::RawSharpnessCreateInfo createInfo{};
-                        createInfo.physicalDevice = vulkan_.physicalDevice();
-                        createInfo.device = vulkan_.device();
-                        createInfo.queueFamily = vulkan_.queueFamily();
-                        sharpness_.initialize(createInfo, [&](const VkSubmitInfo& info, VkFence fence) {
-                            std::lock_guard<std::mutex> queueLock(queue0Mutex_);
-                            if (vkQueueSubmit(vulkan_.queue(), 1, &info, fence) != VK_SUCCESS) {
-                                throw std::runtime_error("sharpness queue submit");
-                            }
-                        });
-                        LOGI("MULTIFRAME_WARM sharpness scorer ready");
-                    }
-                } catch (const std::exception& e) {
-                    LOGE("MULTIFRAME_SHARPNESS_WARM_FAIL %s", e.what());
-                } catch (...) {
-                    LOGE("MULTIFRAME_SHARPNESS_WARM_FAIL unknown");
-                }
             } catch (const std::exception& e) {
                 LOGE("MULTIFRAME_WARM_FAIL %s", e.what());
             } catch (...) {
@@ -418,81 +393,12 @@ void MfsrCaptureService::spoolLoop() {
                      static_cast<unsigned long long>(collector->requestId()), collector->expected(), appended,
                      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count());
             }
-            // CPU-held frames (full-size bursts) have nothing on the GPU to score:
-            // they keep the middle reference.
-            if (pending->work->baseFrameMode == MultiframeBaseFrameMode::Sharpest &&
-                pending->work->tuning.mergeAlgorithm != kMergeAlgorithmRexture && !burst.cpuFrame &&
-                !burst.acquiredJournal && burst.frames.size() >= 2u &&
-                burst.frames.size() <= raw_sharpness::RawSharpness::kMaxFrames) {
-                try {
-                    {
-                        std::lock_guard<std::mutex> sharpnessLock(sharpnessMutex_);
-                        if (!sharpness_.ready()) {
-                            const auto begin = std::chrono::steady_clock::now();
-                            raw_sharpness::RawSharpnessCreateInfo createInfo{};
-                            createInfo.physicalDevice = vulkan_.physicalDevice();
-                            createInfo.device = vulkan_.device();
-                            createInfo.queueFamily = vulkan_.queueFamily();
-                            sharpness_.initialize(createInfo, [&](const VkSubmitInfo& info, VkFence fence) {
-                                std::lock_guard<std::mutex> queueLock(queue0Mutex_);
-                                if (vkQueueSubmit(vulkan_.queue(), 1, &info, fence) != VK_SUCCESS) {
-                                    throw std::runtime_error("sharpness queue submit");
-                                }
-                            });
-                            const double ms =
-                                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin)
-                                    .count();
-                            LOGI("MULTIFRAME_SHARPNESS scorer ready in %.1f ms", ms);
-                        }
-                    }
-                    std::vector<raw_sharpness::SharpnessFrame> sharpFrames;
-                    sharpFrames.reserve(burst.frames.size());
-                    for (std::size_t i = 0; i < burst.frames.size(); ++i) {
-                        raw_sharpness::SharpnessFrame frame{};
-                        frame.image = burst.frames[i].raw.image;
-                        frame.view = burst.frames[i].raw.view;
-                        frame.width = burst.frames[i].raw.ref.width;
-                        frame.height = burst.frames[i].raw.ref.height;
-                        std::uint32_t cfa = 0u;
-                        float white = 65535.0f;
-                        if (i < burst.metadata.size()) {
-                            if (burst.metadata[i].cameraContext) {
-                                cfa = burst.metadata[i].cameraContext->rawPreviewCfa;
-                            }
-                            white = burst.metadata[i].effectiveWhiteLevel;
-                        }
-                        frame.pattern = cfa <= 3u ? static_cast<raw_sharpness::BayerPattern>(cfa)
-                                                  : raw_sharpness::BayerPattern::RGGB;
-                        frame.whiteLevel = white;
-                        sharpFrames.push_back(frame);
-                    }
-                    const auto scoreBegin = std::chrono::steady_clock::now();
-                    const auto scores = sharpness_.score(sharpFrames);
-                    pending->work->sharpnessMs =
-                        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - scoreBegin)
-                            .count();
-                    // Retain for RZSL audit + exact replay, even if the
-                    // selection below keeps middle on a degenerate result.
-                    pending->work->sharpnessScores = scores;
-                    const auto middle = static_cast<std::uint32_t>(burst.frames.size() / 2u);
-                    const std::uint32_t best = raw_sharpness::reference::selectSharpest(scores, middle);
-                    if (best < burst.frames.size() && best < burst.metadata.size() && best < burst.colors.size()) {
-                        burst.referenceIndex = best;
-                        burst.referenceMetadata = burst.metadata[best];
-                        burst.referenceColor = burst.colors[best];
-                        LOGI("MULTIFRAME_BASEFRAME mode=sharpest selected=%u/%zu middle=%u", best, burst.frames.size(),
-                             middle);
-                    }
-                } catch (const std::exception& e) {
-                    LOGE("MULTIFRAME_SHARPNESS_FALLBACK %s", e.what());
-                } catch (...) {
-                    LOGE("MULTIFRAME_SHARPNESS_FALLBACK unknown");
-                }
-            }
-            // Rexture: the base is chosen at the press, from the frames of the last quarter second: one batched scoring
+            // Both merges: the base is chosen at the press, from the frames of the last quarter second: one batched scoring
             // dispatch (sharpness above the noise expectation, clipped share), then the best score penalised for clipping and
-            // age. Any failure keeps the frozen middle reference.
-            if (pending->work->tuning.mergeAlgorithm == kMergeAlgorithmRexture && !burst.cpuFrame && !burst.acquiredJournal &&
+            // age. Rexture merges around it; in HDR+ Quality it is also what stands alone where a frame is gated out of a
+            // moving tile. CPU-held frames (full-size bursts) have nothing on the GPU to score. Any failure keeps the
+            // frozen middle reference.
+            if (!burst.cpuFrame && !burst.acquiredJournal &&
                 burst.frames.size() >= 2u && burst.frames.size() <= 32u && burst.metadata.size() == burst.frames.size() &&
                 burst.colors.size() == burst.frames.size()) {
                 try {

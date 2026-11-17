@@ -35,8 +35,7 @@ rawr::raw_gpu_pipeline::BurstRunResult MergeProcessor::run(
         for (std::size_t i = 0; i < burst.frames.size(); ++i)
             burst.frames[i].exposure = float(linearExposure(burst.metadata[i]) * 1.0e-6);
     rawr::raw_merge_hdrplus_gpu::Config hdrplusConfig{};
-    hdrplusConfig.strength = tuning.hdrplusStrength;
-    hdrplusConfig.tileSize = tuning.hdrplusTileSize;
+    // Strength and tile size are fixed (Config defaults); the journaled tuning slots are reserved.
     coordinator.initialize(context.physicalDevice(), context.device(), context.queueFamily(), mergeSubmit, width,
                            height, stageSink, mergeConfig, algorithm, hdrplusConfig);
     ScopedSemaphore mfStartSem(context.device(), useMfQueue);

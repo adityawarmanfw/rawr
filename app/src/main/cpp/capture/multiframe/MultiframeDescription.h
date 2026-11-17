@@ -16,8 +16,6 @@ namespace rawrcam::capture::multiframe {
 struct MultiframeTuningView {
     float outputScale = 1.0f;
     std::uint32_t mergeAlgorithm = 4;  // 2 = HDR+ Quality (frequency merge), 4 = Rexture
-    float hdrplusStrength = 13.0f;
-    std::uint32_t hdrplusTileSize = 32;
     MultiframeBaseFrameMode baseFrameMode = MultiframeBaseFrameMode::Sharpest;
 };
 

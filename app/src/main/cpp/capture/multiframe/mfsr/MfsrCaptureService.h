@@ -9,7 +9,6 @@
 #include <deque>
 #include <memory>
 #include <mutex>
-#include <raw_sharpness/raw_sharpness.hpp>
 #include <string>
 #include <thread>
 
@@ -89,15 +88,8 @@ class MfsrCaptureService {
     Geometry geometry_{};
 
     rawr::raw_gpu_pipeline::AndroidBurstCoordinator burstCoordinator_;
-    // Sharpest-reference scorer (native/multiframe/sharpness backend):
-    // geometry-independent (fixed partial buffer), valid for the service
-    // lifetime (device outlives it). Initialized either by the delayed
-    // warmup or lazily on first Sharpest use; sharpnessMutex_ guards the
-    // check+init window only. score() itself needs no lock (no mutation,
-    // reset is never called). Destroyed after all threads join.
-    raw_sharpness::RawSharpness sharpness_;
-    std::mutex sharpnessMutex_;
-    // Rexture base selection at the press (own pipeline, independent of the merge coordinator); guarded by sharpnessMutex_.
+    std::mutex sharpnessMutex_;  // guards the base-frame scorer's lazy init
+    // Base-frame selection at the press (own pipeline, independent of the merge coordinator), both merges.
     rawr::raw_gpu_pipeline::RextureFrameScorer rextureScorer_;
     std::mutex queueMutex_;
     AAssetManager* filmAssetManager_ = nullptr;
