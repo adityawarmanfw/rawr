@@ -55,8 +55,9 @@ void main() {
     imageStore(ft, o, re);
     imageStore(ft, o + ivec2(1, 0), im);
 #ifdef RAWR_DFT_SEED
-    // Separate storage: the running merge mutates seed, never the reference.
-    imageStore(seed, o, re);
-    imageStore(seed, o + ivec2(1, 0), im);
+    // The running merge holds only the burst's difference from N x the reference spectrum (see hdrq_merge.comp), so it
+    // starts at zero.
+    imageStore(seed, o, vec4(0.0));
+    imageStore(seed, o + ivec2(1, 0), vec4(0.0));
 #endif
 }

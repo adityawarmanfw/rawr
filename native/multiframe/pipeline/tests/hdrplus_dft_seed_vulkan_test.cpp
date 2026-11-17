@@ -131,9 +131,14 @@ void checkSeed(Gpu& gpu) {
             }
         });
         vktest::ck(vkMapMemory(c.dev, readback.m, 0, VK_WHOLE_SIZE, 0, &mapped), "readback map");
-        for (unsigned i = 1; i < dst.size(); ++i)
+        // dst[1], dst[2]: independent transform and the seed pass's reference spectrum: identical.
+        for (unsigned i = 1; i < 3; ++i)
             if (std::memcmp(mapped, static_cast<char*>(mapped) + i * outputBytes, outputBytes) != 0)
                 throw std::runtime_error("seeded DFT differs from independent DFT");
+        // dst[3]: the running merge starts at zero (it holds the difference from N x the reference, see hdrq_merge.comp).
+        for (VkDeviceSize i = 0; i < outputBytes; ++i)
+            if (static_cast<const unsigned char*>(mapped)[3 * outputBytes + i] != 0)
+                throw std::runtime_error("running merge does not start at zero");
         vkUnmapMemory(c.dev, readback.m);
     }
     exec.reset();

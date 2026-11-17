@@ -5,6 +5,7 @@
 layout(local_size_x = 8, local_size_y = 8) in;
 layout(set = 0, binding = 0, rgba16f) readonly uniform image2D ft;
 layout(set = 0, binding = 1, rgba32f) writeonly uniform image2D dst;
+layout(set = 0, binding = 2, rgba16f) readonly uniform image2D refFt;  // the running merge holds the sum less frames x this
 layout(push_constant) uniform P {
     ivec2 tiles;
     float frames;
@@ -26,7 +27,8 @@ void main() {
     for (int dx = 0; dx < 8; ++dx) {
         float c = C8[(dm * dx) & 7], s = S8[(dm * dx) & 7];
         ivec2 x = ivec2(2 * (t0.x + dx), t0.y + dn);
-        vec4 dRe = imageLoad(ft, x), dIm = imageLoad(ft, x + ivec2(1, 0));
+        vec4 dRe = p.frames * imageLoad(refFt, x) + imageLoad(ft, x);
+        vec4 dIm = p.frames * imageLoad(refFt, x + ivec2(1, 0)) + imageLoad(ft, x + ivec2(1, 0));
         re += c * dRe - s * dIm;
         im += s * dRe + c * dIm;
     }

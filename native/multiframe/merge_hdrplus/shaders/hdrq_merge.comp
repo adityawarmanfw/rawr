@@ -141,6 +141,7 @@ void main() {
     vec2 cs = shiftTable.v[sBest * 64 + lane];
     float c = cs.x, s = cs.y;
     vec4 refRe = sRefRe[lane], refIm = sRefIm[lane];
+    const vec4 ref0Re = refRe, ref0Im = refIm;  // the reference as stored; refRe/refIm may be shrunk below
     vec4 alRe = c * sAlRe[lane] - s * sAlIm[lane];
     vec4 alIm = s * sAlRe[lane] + c * sAlIm[lane];
     float magnitudeNorm = 1.0;
@@ -168,6 +169,9 @@ void main() {
         refRe *= keep + gate * g;
         refIm *= keep + gate * g;
     }
-    imageStore(outFt, o, imageLoad(outFt, o) + p.spectrumScale * ((1.0 - weight) * alRe + weight * refRe));
-    imageStore(outFt, o + ivec2(1, 0), imageLoad(outFt, o + ivec2(1, 0)) + p.spectrumScale * ((1.0 - weight) * alIm + weight * refIm));
+    // The sum over the burst is N x reference + sum of (contribution - reference). Only the second term is stored: it has
+    // no black-level offset, so fp16 keeps it precise where the sum itself (dominated by the offset) would round away the
+    // few levels of shadow signal and band smooth dark gradients.
+    imageStore(outFt, o, imageLoad(outFt, o) + p.spectrumScale * ((1.0 - weight) * alRe + weight * refRe - ref0Re));
+    imageStore(outFt, o + ivec2(1, 0), imageLoad(outFt, o + ivec2(1, 0)) + p.spectrumScale * ((1.0 - weight) * alIm + weight * refIm - ref0Im));
 }
