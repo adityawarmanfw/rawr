@@ -244,8 +244,6 @@ internal object CaptureRecipe {
         put("multiframe", JSONObject().apply {
             val value = v.multiframeTuning.sanitized()
             put("mergeAlgorithm", value.mergeAlgorithm.name)
-            put("hdrPlusStrength", value.hdrPlusStrength)
-            put("hdrPlusTileSize", value.hdrPlusTileSize)
             put("maxFrames", value.maxFrames)
         })
     }.toString()

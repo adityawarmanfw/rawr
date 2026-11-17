@@ -578,8 +578,6 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
             multiframeTuning =
                 MultiframeTuning(
                     mergeAlgorithm = enumOrDefault(p[Keys.multiframeMergeAlgorithm], d.multiframeTuning.mergeAlgorithm),
-                    hdrPlusStrength = p[Keys.multiframeHdrPlusStrength] ?: d.multiframeTuning.hdrPlusStrength,
-                    hdrPlusTileSize = p[Keys.multiframeHdrPlusTileSize] ?: d.multiframeTuning.hdrPlusTileSize,
                     maxFrames = p[Keys.multiframeMaxFrames] ?: d.multiframeTuning.maxFrames
                 ).sanitized(d.multiframeTuning),
             customGpuDriverEnabled = p[Keys.customGpuDriverEnabled] ?: d.customGpuDriverEnabled,
@@ -800,8 +798,6 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p.remove(Keys.multiframeNoiseProfile)
         p.remove(Keys.camera2NoiseModelEnabled)
         p[Keys.multiframeMergeAlgorithm] = v.multiframeTuning.mergeAlgorithm.name
-        p[Keys.multiframeHdrPlusStrength] = v.multiframeTuning.hdrPlusStrength
-        p[Keys.multiframeHdrPlusTileSize] = v.multiframeTuning.hdrPlusTileSize
         p[Keys.multiframeMaxFrames] = v.multiframeTuning.maxFrames
         p[Keys.customGpuDriverEnabled] = v.customGpuDriverEnabled
         if (v.customGpuDriverName ==
@@ -1067,8 +1063,6 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val camera2NoiseModelEnabled = booleanPreferencesKey("camera2_noise_model_enabled")
         val multiframeNoiseProfile = stringPreferencesKey("multiframe_noise_profile")
         val multiframeMergeAlgorithm = stringPreferencesKey("multiframe_merge_algorithm")
-        val multiframeHdrPlusStrength = floatPreferencesKey("multiframe_hdrplus_strength")
-        val multiframeHdrPlusTileSize = intPreferencesKey("multiframe_hdrplus_tile_size")
         val multiframeMaxFrames = intPreferencesKey("multiframe_max_frames")
         val customGpuDriverEnabled = booleanPreferencesKey("debug_custom_gpu_driver_enabled")
         val customGpuDriverName = stringPreferencesKey("debug_custom_gpu_driver_name")

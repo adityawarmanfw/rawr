@@ -477,9 +477,7 @@ enum class MultiframeBaseFrameMode(val nativeId: Int, val label: String) {
 }
 
 enum class MultiframeNumericParameter {
-    MaxFrames,
-    HdrPlusStrength,
-    HdrPlusTileSize
+    MaxFrames
 }
 
 data class MultiframeNumericSpec(
@@ -496,6 +494,13 @@ data class MultiframeNumericSpec(
     fun accepts(value: Float): Boolean = value.isFinite() && value in minimum..maximum
 }
 
+/**
+ * HDR+ Quality alignment strength and tile size, fixed (tuned on the test bursts; the merge now gates out frames where
+ * they moved, so a global strength no longer trades ghosting against noise). Still sent in the native wire slots.
+ */
+private const val HDR_PLUS_STRENGTH = 13f
+private const val HDR_PLUS_TILE_SIZE = 32f
+
 /** Frames one multiframe capture may merge (native capture journal limit). */
 const val MAX_BURST_FRAMES = 30
 
@@ -511,32 +516,8 @@ object MultiframeSpecs {
             1f,
             0
         )
-    val hdrPlusStrength =
-        MultiframeNumericSpec(
-            MultiframeNumericParameter.HdrPlusStrength,
-            "HDR+ Strength",
-            "Lower: keeps more single-frame grain and rejects motion sooner. Higher: cleaner, but moving areas risk ghosting.",
-            1f,
-            22f,
-            13f,
-            1f,
-            0
-        )
 
-    val hdrPlusTileSize =
-        MultiframeNumericSpec(
-            MultiframeNumericParameter.HdrPlusTileSize,
-            "HDR+ Tile Size",
-            "Lower: 16 px follows small moving parts (wind, hands) with less ghosting, slightly noisier at very high ISO. Higher: 32 px aligns more steadily in heavy noise.",
-            16f,
-            32f,
-            32f,
-            16f,
-            0,
-            "px"
-        )
-
-    val all = listOf(maxFrames, hdrPlusStrength, hdrPlusTileSize)
+    val all = listOf(maxFrames)
 
     fun forParameter(parameter: MultiframeNumericParameter): MultiframeNumericSpec =
         all.first { it.parameter == parameter }
@@ -544,20 +525,14 @@ object MultiframeSpecs {
 
 data class MultiframeTuning(
     val mergeAlgorithm: MultiframeMergeAlgorithm = MultiframeMergeAlgorithm.Rexture,
-    val hdrPlusStrength: Float = 13f,
-    val hdrPlusTileSize: Int = 32,
     val maxFrames: Int = 6
 ) {
     fun value(parameter: MultiframeNumericParameter): Float = when (parameter) {
         MultiframeNumericParameter.MaxFrames -> maxFrames.toFloat()
-        MultiframeNumericParameter.HdrPlusStrength -> hdrPlusStrength
-        MultiframeNumericParameter.HdrPlusTileSize -> hdrPlusTileSize.toFloat()
     }
 
     fun withValue(parameter: MultiframeNumericParameter, value: Float): MultiframeTuning = when (parameter) {
         MultiframeNumericParameter.MaxFrames -> copy(maxFrames = value.roundToInt())
-        MultiframeNumericParameter.HdrPlusStrength -> copy(hdrPlusStrength = value.roundToInt().toFloat())
-        MultiframeNumericParameter.HdrPlusTileSize -> copy(hdrPlusTileSize = if (value < 24f) 16 else 32)
     }
 
     fun sanitized(defaults: MultiframeTuning = MultiframeTuning()): MultiframeTuning {
@@ -583,7 +558,7 @@ data class MultiframeTuning(
 
     // Appended after the multiframe chroma-denoise flag (native indices 23-28); the bracket slots are unused.
     fun nativeMergeValues(): FloatArray =
-        floatArrayOf(mergeAlgorithm.nativeId.toFloat(), hdrPlusStrength, hdrPlusTileSize.toFloat(), -3f, 0f, 0f)
+        floatArrayOf(mergeAlgorithm.nativeId.toFloat(), HDR_PLUS_STRENGTH, HDR_PLUS_TILE_SIZE, -3f, 0f, 0f)
 }
 
 data class SettingsValues(

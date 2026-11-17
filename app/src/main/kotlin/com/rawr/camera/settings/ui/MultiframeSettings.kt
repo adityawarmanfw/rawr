@@ -29,8 +29,9 @@ internal fun MultiframeSettings(state: SettingsUiState, dispatch: SettingsDispat
         }
         SettingsGroup(
             title = "Merge Algorithm",
-            description = "HDR+ Quality: per-frequency merge, cleaner with mild sharpening and blends motion more. " +
-                "Rexture: kernel-regression merge of the whole burst at native resolution, aligned and weighted per pixel; the sharpest frame of the last quarter second before the shutter is the base. Equal-exposure bursts. Up to about 56 MP it merges the whole frame (JPEG and DNG); above that it merges in strips and saves DNG only. " +
+            description = "Both merges use the sharpest frame of the last quarter second before the shutter as the base. " +
+                "HDR+ Quality: per-frequency merge, cleaner with mild sharpening; a frame is left out of the tiles where it moved, so moving subjects stay sharp. " +
+                "Rexture: kernel-regression merge of the whole burst at native resolution, aligned and weighted per pixel. Equal-exposure bursts. Up to about 56 MP it merges the whole frame (JPEG and DNG); above that it merges in strips and saves DNG only. " +
                 "(Native resolution only.)"
         ) {
             MultiframeMergeAlgorithm.entries.forEachIndexed { index, candidate ->
@@ -42,34 +43,17 @@ internal fun MultiframeSettings(state: SettingsUiState, dispatch: SettingsDispat
                 ) { dispatch.invoke(SetMultiframeMergeAlgorithm(candidate)) }
             }
         }
-        // Rexture picks its base itself, at the shutter press (frame score), so the choice does not apply to it.
-        if (!rexture) {
-            SettingsGroup(
-                title = "Reference Frame",
-                description = "Which burst frame anchors alignment and merge."
-            ) {
-                MultiframeBaseFrameMode.entries.forEachIndexed { index, candidate ->
-                    if (index > 0) SettingDivider()
-                    SettingsSelectionRow(
-                        title = candidate.label,
-                        selected = state.values.multiframeBaseFrameMode == candidate
-                    ) { dispatch.invoke(SetMultiframeBaseFrameMode(candidate)) }
-                }
-            }
-        }
         SettingsGroup(
             title = "Output",
             description = "Double-tap any parameter label to restore its default."
         ) {
-            // Needs the burst noise fit, which only the Rexture merge uses; JPEG only: the merged DNG is
-            // written before rendering.
+            // Needs the burst noise fit, which both merges run; JPEG only: the merged DNG is written before rendering.
             SettingsSwitchRow(
                 title = "Chroma Denoise",
-                checked = state.values.multiframeChromaDenoise && rexture,
+                checked = state.values.multiframeChromaDenoise,
                 supportingText =
-                    if (!rexture) "Not available for HDR+ yet."
-                    else "JPEG only. Removes leftover colour blotches from the merged image (chroma only, luma untouched) using the noise measured from the burst. Separate from Image > Denoise, which applies to single frames.",
-                enabled = enabled && rexture
+                    "JPEG only. Removes leftover colour blotches from the merged image (chroma only, luma untouched) using the noise measured from the burst. Separate from Image > Denoise, which applies to single frames.",
+                enabled = enabled
             ) { dispatch.invoke(SetMultiframeChromaDenoise(it)) }
             SettingDivider()
             if (rexture) {
@@ -79,10 +63,6 @@ internal fun MultiframeSettings(state: SettingsUiState, dispatch: SettingsDispat
                     supportingText = "JPEG only. Renders the JPEG from Rexture's own merged colour instead of re-mosaicking it and running the Demosaic setting. The DNG is unaffected.",
                     enabled = enabled
                 ) { dispatch.invoke(SetMultiframeRextureNativeRgb(it)) }
-            } else {
-                MultiframeSlider(spec(MultiframeNumericParameter.HdrPlusStrength), tuning, enabled, dispatch)
-                SettingDivider()
-                MultiframeSlider(spec(MultiframeNumericParameter.HdrPlusTileSize), tuning, enabled, dispatch)
             }
             SettingDivider()
             MultiframeSlider(spec(MultiframeNumericParameter.MaxFrames), tuning, enabled, dispatch)

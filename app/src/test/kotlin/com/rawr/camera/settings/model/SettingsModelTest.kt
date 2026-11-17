@@ -457,19 +457,19 @@ class SettingsModelTest {
 
     @Test fun multiframeTunablesAreBoundedAndResettableToCatalogDefaults() {
         val controller = PersistentSettingsController()
-        controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.HdrPlusStrength, 18f))
-        assertEquals(18f, controller.state.value.values.multiframeTuning.hdrPlusStrength)
+        controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.MaxFrames, 12f))
+        assertEquals(12, controller.state.value.values.multiframeTuning.maxFrames)
 
-        controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.HdrPlusStrength, 40f))
-        assertEquals(18f, controller.state.value.values.multiframeTuning.hdrPlusStrength)
+        controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.MaxFrames, 99f))
+        assertEquals(12, controller.state.value.values.multiframeTuning.maxFrames)
 
         controller.dispatch(
             SetMultiframeNumericValue(
-                MultiframeNumericParameter.HdrPlusStrength,
-                MultiframeSpecs.hdrPlusStrength.defaultValue
+                MultiframeNumericParameter.MaxFrames,
+                MultiframeSpecs.maxFrames.defaultValue
             )
         )
-        assertEquals(MultiframeTuning().hdrPlusStrength, controller.state.value.values.multiframeTuning.hdrPlusStrength)
+        assertEquals(MultiframeTuning().maxFrames, controller.state.value.values.multiframeTuning.maxFrames)
     }
 
     @Test fun photoDefringeDefaultsToEnabledWhileVideoStaysOff() {
@@ -623,39 +623,23 @@ class SettingsModelTest {
         assertEquals(listOf(MultiframeMergeAlgorithm.HdrPlusQuality, MultiframeMergeAlgorithm.Rexture), MultiframeMergeAlgorithm.entries)
 
         controller.dispatch(SetMultiframeMergeAlgorithm(MultiframeMergeAlgorithm.HdrPlusQuality))
-        controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.HdrPlusStrength, 18f))
-        controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.HdrPlusStrength, 40f))
 
         val tuning = controller.state.value.values.multiframeTuning
         assertEquals(MultiframeMergeAlgorithm.HdrPlusQuality, persisted?.multiframeTuning?.mergeAlgorithm)
-        assertEquals(18f, tuning.hdrPlusStrength)
-        // Native layout: 22 tuning values, chroma flag, then algorithm id + strength (bracket slots unused).
+        // Native layout: 22 tuning values, chroma flag, then algorithm id + fixed strength and tile size (bracket slots unused).
         assertEquals(22, tuning.nativeValues().size)
-        assertEquals(listOf(2f, 18f, 32f, -3f, 0f, 0f), tuning.nativeMergeValues().toList())
-        controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.HdrPlusTileSize, 16f))
-        controller.dispatch(SetMultiframeNumericValue(MultiframeNumericParameter.HdrPlusTileSize, 64f))
-        assertEquals(16, controller.state.value.values.multiframeTuning.hdrPlusTileSize)
+        assertEquals(listOf(2f, 13f, 32f, -3f, 0f, 0f), tuning.nativeMergeValues().toList())
         assertEquals(2, MultiframeMergeAlgorithm.HdrPlusQuality.nativeId)
         assertEquals(4, MultiframeMergeAlgorithm.Rexture.nativeId)
         controller.dispatch(SetMultiframeMergeAlgorithm(MultiframeMergeAlgorithm.Rexture))
         assertEquals(4f, controller.state.value.values.multiframeTuning.nativeMergeValues()[0])
-        assertEquals(13f, MultiframeTuning().copy(hdrPlusStrength = 0f).sanitized().hdrPlusStrength)
     }
 
     @Test fun multiframeDefaultsFollowResearchedOperatingPoint() {
         val defaults = MultiframeTuning()
         assertEquals(MultiframeMergeAlgorithm.Rexture, defaults.mergeAlgorithm)
         assertEquals(6, defaults.maxFrames)
-        assertEquals(13f, defaults.hdrPlusStrength)
-        assertEquals(32, defaults.hdrPlusTileSize)
-        assertEquals(
-            listOf(
-                MultiframeNumericParameter.MaxFrames,
-                MultiframeNumericParameter.HdrPlusStrength,
-                MultiframeNumericParameter.HdrPlusTileSize
-            ),
-            MultiframeSpecs.all.map { it.parameter }
-        )
+        assertEquals(listOf(MultiframeNumericParameter.MaxFrames), MultiframeSpecs.all.map { it.parameter })
         assertEquals(6f, MultiframeSpecs.forParameter(MultiframeNumericParameter.MaxFrames).defaultValue)
     }
 
@@ -667,8 +651,7 @@ class SettingsModelTest {
     }
 
     @Test fun invalidPersistedMultiframeTuningFallsBackFieldByField() {
-        val restored = MultiframeTuning(hdrPlusStrength = Float.NaN, maxFrames = 99).sanitized()
-        assertEquals(MultiframeTuning().hdrPlusStrength, restored.hdrPlusStrength)
+        val restored = MultiframeTuning(maxFrames = 99).sanitized()
         assertEquals(MultiframeTuning().maxFrames, restored.maxFrames)
     }
 
