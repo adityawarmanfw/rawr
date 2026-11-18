@@ -21,6 +21,7 @@
 
 #include "capture/multiframe/MergeExposure.h"
 #include "capture/multiframe/MergeArenaEstimate.h"
+#include "capture/multiframe/MergedEdgeCrop.h"
 #include "capture/multiframe/MultiframeDescription.h"
 #include "capture/multiframe/MultiframeQueueHelpers.h"
 #include "capture/multiframe/RzslCaptureWriter.h"
@@ -31,6 +32,7 @@
 #include "capture/persistence/ProcessingRecipe.h"
 #include "capture/single/SingleFrameCaptureContextBuilder.h"
 #include "capture/single/SingleFrameCaptureDevelop.h"
+#include "capture/single/StillEdgeCrop.h"
 #include "color/ColorMath.h"
 #include "color/FilmExposure.h"
 #include "color/WhiteBalance.h"
@@ -307,6 +309,11 @@ void MfsrCaptureJob::runStages(Published& published) {
         captured->metadata = job->referenceMetadata;
         captured->colorState = job->referenceColor;
         captured->raw16 = std::move(packed.pixels);
+        // Padded raw edges (lens profile image.cropEdges) leave the base,
+        // merged and strip DNGs like a single still's. Only on the raw grid:
+        // a super-resolved merge has no raw-edge coordinates.
+        if (captured->width == ctx.rawWidth && captured->height == ctx.rawHeight)
+            rawrcam::capture::keepCroppedEdges(*captured);
         return captured;
     };
     auto queueSubmit = [&](const VkSubmitInfo& info, VkFence fence) {
@@ -1139,18 +1146,39 @@ void MfsrCaptureJob::runStages(Published& published) {
                     const bool mfUltraHdr = jpegContext.output.ultraHdr.enabled && rendered.gainmapPixelData() &&
                                             rendered.gainmapPixelBytes() > 0;
                     bool mfWriterAccepted = false;
+                    // Padded raw edges: the merge and render ran on the whole
+                    // frame; drop them from the JPEG like a single still does.
+                    std::uint32_t cropL = 0, cropT = 0, cropR = 0, cropB = 0;
+                    if (const auto& cc = job->referenceMetadata.cameraContext) {
+                        cropL = cc->cropLeft;
+                        cropT = cc->cropTop;
+                        cropR = cc->cropRight;
+                        cropB = cc->cropBottom;
+                    }
+                    const auto keptMain = keepRgba8Edges(rendered.pixelData(), rendered.pixelBytes(),
+                                                         renderedDone->width, renderedDone->height, ctx.rawWidth,
+                                                         ctx.rawHeight, cropL, cropT, cropR, cropB);
+                    if (keptMain.cropped)
+                        LOGI("MULTIFRAME_EDGE_CROP requestId=%llu jpeg=%ux%u kept=%ux%u left=%u top=%u right=%u bottom=%u",
+                             static_cast<unsigned long long>(requestId), renderedDone->width, renderedDone->height,
+                             keptMain.width, keptMain.height, cropL, cropT, cropR, cropB);
+                    // Declared here, not in the branch: the writer encodes
+                    // after start() returns, so kept storage must outlive it.
+                    const auto keptMap = mfUltraHdr ? keepRgba8Edges(rendered.gainmapPixelData(),
+                                                                     rendered.gainmapPixelBytes(), rendered.gainmapWidth(),
+                                                                     rendered.gainmapHeight(), ctx.rawWidth,
+                                                                     ctx.rawHeight, cropL, cropT, cropR, cropB)
+                                                    : KeptRgba8{};
                     if (mfUltraHdr) {
                         mfWriterAccepted = jpegWriter.startUltraHdr(
-                            requestId, rendered.pixelData(), rendered.pixelBytes(), renderedDone->width,
-                            renderedDone->height, rendered.gainmapPixelData(), rendered.gainmapPixelBytes(),
-                            rendered.gainmapWidth(), rendered.gainmapHeight(), std::move(jpegContext.output));
+                            requestId, keptMain.data, keptMain.bytes, keptMain.width, keptMain.height, keptMap.data,
+                            keptMap.bytes, keptMap.width, keptMap.height, std::move(jpegContext.output));
                     } else {
                         if (jpegContext.output.ultraHdr.enabled)
                             LOGI("ULTRAHDR_MAP_MISSING requestId=%llu fallback=legacy_jpeg",
                                  static_cast<unsigned long long>(requestId));
-                        mfWriterAccepted =
-                            jpegWriter.start(requestId, rendered.pixelData(), rendered.pixelBytes(),
-                                             renderedDone->width, renderedDone->height, std::move(jpegContext.output));
+                        mfWriterAccepted = jpegWriter.start(requestId, keptMain.data, keptMain.bytes, keptMain.width,
+                                                            keptMain.height, std::move(jpegContext.output));
                     }
                     if (!mfWriterAccepted) {
                         throw std::runtime_error("merged_jpeg_writer_start_rejected");
