@@ -30,6 +30,9 @@ private val LevelDim = Color.White.copy(alpha = .6f)
 private val LevelShadow = Color.Black.copy(alpha = .35f)
 
 /** Fixed tick distance from the centre, tick length, and crosshair arm / centre gap (dp). */
+/** Line width of the ticks, crosshair and ring; the dark outline adds 1 dp. */
+private const val LEVEL_STROKE_DP = 1f
+
 private const val TICK_RADIUS_DP = 46f
 private const val TICK_LENGTH_DP = 6f
 private const val ARM_DP = 34f
@@ -91,8 +94,8 @@ private fun levelColor(locked: Boolean, angleDeg: Float): Color = when {
 }
 
 /** A line with a faint dark underlay so it stays readable on bright scenes. */
-private fun DrawScope.mark(color: Color, a: Offset, b: Offset, width: Float = 1.5.dp.toPx()) {
-    drawLine(LevelShadow, a, b, width + 1.5.dp.toPx(), StrokeCap.Round)
+private fun DrawScope.mark(color: Color, a: Offset, b: Offset, width: Float = LEVEL_STROKE_DP.dp.toPx()) {
+    drawLine(LevelShadow, a, b, width + 1.dp.toPx(), StrokeCap.Round)
     drawLine(color, a, b, width, StrokeCap.Round)
 }
 
@@ -132,8 +135,8 @@ private fun DrawScope.drawLevel(r: LevelReading) {
     // Fixed bubble at the centre: the target the moving bubble settles into.
     val ringR = BUBBLE_RADIUS_DP.dp.toPx() + 1.dp.toPx()
     val ringColor = if (activeColor == LevelGreen) LevelGreen else LevelDim
-    drawCircle(LevelShadow, ringR, c, style = Stroke(3.dp.toPx()))
-    drawCircle(ringColor, ringR, c, style = Stroke(1.5.dp.toPx()))
+    drawCircle(LevelShadow, ringR, c, style = Stroke((LEVEL_STROKE_DP + 1f).dp.toPx()))
+    drawCircle(ringColor, ringR, c, style = Stroke(LEVEL_STROKE_DP.dp.toPx()))
 
     // Moving bubble: faint and borderless. The two readings cross-fade by elevation, so the bubble
     // fades from one meaning to the other and never jumps across the dial.
