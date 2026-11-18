@@ -59,7 +59,12 @@ internal class AndroidCaptureHaptics(private val view: View) : CaptureHaptics {
 
     override fun longPress() = perform(HapticFeedbackConstants.LONG_PRESS)
 
-    override fun capture() = perform(HapticFeedbackConstants.CONFIRM)
+    // Shutter and record press: one clear click, but lighter than CONFIRM, which felt too hard.
+    private val shutterClick = SoftTick(
+        view, VibrationEffect.Composition.PRIMITIVE_CLICK, SHUTTER_CLICK_SCALE, HapticFeedbackConstants.CONTEXT_CLICK
+    )
+
+    override fun capture() = shutterClick.perform()
 
     override fun success() = perform(HapticFeedbackConstants.CONFIRM)
 
@@ -70,16 +75,27 @@ internal class AndroidCaptureHaptics(private val view: View) : CaptureHaptics {
     }
 }
 
-/** Low-amplitude tick for dense slider detents; falls back to CLOCK_TICK without primitive support. */
-internal class SoftTick(private val view: View) {
+/** Strength of the shutter click, 0..1 of the motor's CLICK primitive. Lower = softer. */
+private const val SHUTTER_CLICK_SCALE = 0.7f
+
+/**
+ * One scaled vibration primitive. The default is the low-amplitude tick for dense slider detents.
+ * Without primitive support, or with touch feedback off, it falls back to the system effect [fallback].
+ */
+internal class SoftTick(
+    private val view: View,
+    primitive: Int = VibrationEffect.Composition.PRIMITIVE_LOW_TICK,
+    scale: Float = 0.4f,
+    private val fallback: Int = HapticFeedbackConstants.CLOCK_TICK
+) {
     private val vibrator = view.context.getSystemService(VibratorManager::class.java)?.defaultVibrator
     private val effect = vibrator
-        ?.takeIf { it.areAllPrimitivesSupported(VibrationEffect.Composition.PRIMITIVE_LOW_TICK) }
-        ?.let { VibrationEffect.startComposition().addPrimitive(VibrationEffect.Composition.PRIMITIVE_LOW_TICK, 0.4f).compose() }
+        ?.takeIf { it.areAllPrimitivesSupported(primitive) }
+        ?.let { VibrationEffect.startComposition().addPrimitive(primitive, scale).compose() }
 
     fun perform() {
         val effect = effect
-        if (effect == null || !view.isHapticFeedbackEnabled) view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+        if (effect == null || !view.isHapticFeedbackEnabled) view.performHapticFeedback(fallback)
         else vibrator?.vibrate(effect)
     }
 }
