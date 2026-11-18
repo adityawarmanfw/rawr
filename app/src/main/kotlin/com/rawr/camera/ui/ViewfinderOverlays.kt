@@ -81,6 +81,12 @@ internal fun ViewfinderFixture(modifier: Modifier) {
     }
 }
 
+/** Grid line width and brightness; the 4x4 grid is finer, so it is a little fainter. */
+private const val GRID_WIDTH_DP = .6f
+private const val GRID_ALPHA = .45f
+private const val GRID_ALPHA_FINE = .30f
+private val GRID_UNDERLAY = Color.Black.copy(alpha = .30f)
+
 /** Radius kept clear around the centre for the level meter (its ticks reach about 52 dp). */
 private const val LEVEL_CLEARANCE_DP = 60f
 
@@ -88,7 +94,14 @@ private const val LEVEL_CLEARANCE_DP = 60f
 internal fun GridOverlay(mode: GridMode, modifier: Modifier, clearCenter: Boolean = false) {
     if (mode == GridMode.Off) return
     Canvas(modifier) {
-        val color = Color.White.copy(alpha = .20f)
+        val color = Color.White.copy(alpha = GRID_ALPHA)
+        // Thin line over a faint dark underlay, so it stays visible on bright and on dark scenes.
+        val lineWidth = GRID_WIDTH_DP.dp.toPx()
+        val underlayWidth = lineWidth + 1.dp.toPx()
+        fun gridLine(c: Color, a: Offset, b: Offset) {
+            drawLine(GRID_UNDERLAY, a, b, underlayWidth)
+            drawLine(c, a, b, lineWidth)
+        }
         val hole = if (clearCenter) LEVEL_CLEARANCE_DP.dp.toPx() else 0f
         val cx = size.width / 2f
         val cy = size.height / 2f
@@ -96,15 +109,15 @@ internal fun GridOverlay(mode: GridMode, modifier: Modifier, clearCenter: Boolea
         // A vertical/horizontal line, broken around the centre when the level meter needs it.
         fun vertical(x: Float, y0: Float, y1: Float, c: Color) {
             if (hole > 0f && x == cx) {
-                if (cy - hole > y0) drawLine(c, Offset(x, y0), Offset(x, cy - hole), 1f)
-                if (cy + hole < y1) drawLine(c, Offset(x, cy + hole), Offset(x, y1), 1f)
-            } else drawLine(c, Offset(x, y0), Offset(x, y1), 1f)
+                if (cy - hole > y0) gridLine(c, Offset(x, y0), Offset(x, cy - hole))
+                if (cy + hole < y1) gridLine(c, Offset(x, cy + hole), Offset(x, y1))
+            } else gridLine(c, Offset(x, y0), Offset(x, y1))
         }
         fun horizontal(y: Float, x0: Float, x1: Float, c: Color) {
             if (hole > 0f && y == cy) {
-                if (cx - hole > x0) drawLine(c, Offset(x0, y), Offset(cx - hole, y), 1f)
-                if (cx + hole < x1) drawLine(c, Offset(cx + hole, y), Offset(x1, y), 1f)
-            } else drawLine(c, Offset(x0, y), Offset(x1, y), 1f)
+                if (cx - hole > x0) gridLine(c, Offset(x0, y), Offset(cx - hole, y))
+                if (cx + hole < x1) gridLine(c, Offset(cx + hole, y), Offset(x1, y))
+            } else gridLine(c, Offset(x0, y), Offset(x1, y))
         }
 
         when (mode) {
@@ -118,8 +131,8 @@ internal fun GridOverlay(mode: GridMode, modifier: Modifier, clearCenter: Boolea
             GridMode.FourByFour -> {
                 (1..3).forEach { index ->
                     val fraction = index / 4f
-                    vertical(size.width * fraction, 0f, size.height, color.copy(alpha = .15f))
-                    horizontal(size.height * fraction, 0f, size.width, color.copy(alpha = .15f))
+                    vertical(size.width * fraction, 0f, size.height, color.copy(alpha = GRID_ALPHA_FINE))
+                    horizontal(size.height * fraction, 0f, size.width, color.copy(alpha = GRID_ALPHA_FINE))
                 }
             }
 
