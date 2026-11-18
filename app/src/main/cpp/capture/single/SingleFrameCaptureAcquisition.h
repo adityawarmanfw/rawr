@@ -48,6 +48,7 @@ class SingleFrameCaptureAcquisition final {
         if (diagnostic_) diagnostic_(line);
     }
     void remosaic(imaging::RawSnapshot&);
+    void remosaicBlockCfaStillGpu(imaging::RawSnapshot&);
     const vulkan::VulkanContext& vk_;
     SingleFrameCaptureJournal& journal_;
     CaptureDiagnostic diagnostic_;

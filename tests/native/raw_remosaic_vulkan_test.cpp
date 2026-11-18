@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 
+#include "capture/StripRemosaic.h"
 #include "imaging/CfaRemosaic.h"
 #include "imaging/PhaseFit.h"
 #include "imaging/RawPixelSource.h"
@@ -197,6 +198,116 @@ bool runCase(vktest::Ctx& c, rawr::raw_ingress::RawRemosaicker& remosaicker, VkC
     return ok;
 }
 
+// BlockRemosaicGpu's strip loop (capture/StripRemosaic.h, the production header) with a GPU window pass,
+// against the same pass over the whole frame (must be bit-identical) and the CPU reference.
+bool runStripped(vktest::Ctx& c, rawr::raw_ingress::RawRemosaicker& remosaicker, VkCommandBuffer cmd, VkFence fence,
+                 std::uint32_t width, std::uint32_t height, std::uint32_t block, std::uint32_t order,
+                 rawrcam::imaging::CfaRemosaicQuality quality, std::uint32_t strips, const char* input = nullptr,
+                 const char* output = nullptr) {
+    std::vector<std::uint8_t> frame(std::size_t(width) * height * 2);
+    auto* px = reinterpret_cast<std::uint16_t*>(frame.data());
+    if (input) {
+        std::ifstream file(input, std::ios::binary);
+        file.read(reinterpret_cast<char*>(frame.data()), frame.size());
+        if (!file || file.peek() != EOF) throw std::runtime_error("RAW16 input size mismatch");
+    } else {
+        std::uint32_t state = 0x9e3779b9u ^ (block * 31u + order);
+        for (std::uint32_t y = 0; y < height; ++y)
+            for (std::uint32_t x = 0; x < width; ++x) {
+                state = state * 1664525u + 1013904223u;
+                const auto ch = rawrcam::imaging::cfaChannel(order, x / block, y / block);
+                const float v = 64.0f + (ch == 1u ? 500.0f : 260.0f) * (1.0f + 0.5f * std::sin(x * 0.05f + y * 0.03f)) +
+                                ((x / 37 + y / 23) % 2 ? 150.0f : 0.0f) + float(state >> 28);
+                px[std::size_t(y) * width + x] = std::uint16_t(std::min(1023.0f, v));
+            }
+    }
+    const auto gpu = [&](std::uint32_t nStrips) {
+        const auto layout = rawrcam::capture::StripLayout::make(height, nStrips);
+        const VkDeviceSize bytes = VkDeviceSize(width) * layout.window * 2u;
+        const VkMemoryPropertyFlags host = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        auto buf = vktest::mkBuf(c.pd, c.dev, bytes,
+                                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                                     VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                 host);
+        auto img = vktest::mkImg(c.pd, c.dev, width, layout.window, VK_FORMAT_R16_UINT,
+                                 VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+        void* mapped = nullptr;
+        vktest::ck(vkMapMemory(c.dev, buf.m, 0, VK_WHOLE_SIZE, 0, &mapped), "map");
+        auto out = frame;
+        rawrcam::capture::remosaicInStrips(
+            out, width, height, layout, static_cast<std::uint8_t*>(mapped), [&](std::uint8_t*, std::uint32_t) {
+                vktest::ck(vkResetCommandBuffer(cmd, 0), "reset");
+                VkCommandBufferBeginInfo bi{};
+                bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+                vktest::ck(vkBeginCommandBuffer(cmd, &bi), "begin");
+                VkImageMemoryBarrier b{};
+                b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                b.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+                b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b.image = img.i;
+                b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
+                                     nullptr, 0, nullptr, 1, &b);
+                rawr::raw_ingress::RawRemosaicker::Frame f;
+                f.source = buf.b;
+                f.destination = img.v;
+                f.width = width;
+                f.height = layout.window;
+                f.rowStrideBytes = width * 2;
+                f.block = block;
+                f.order = order;
+                f.quality = static_cast<rawr::raw_ingress::RawRemosaicker::Quality>(static_cast<unsigned>(quality));
+                remosaicker.record(cmd, 0, f);
+                b.oldLayout = b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+                b.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
+                                     nullptr, 0, nullptr, 1, &b);
+                VkBufferImageCopy r{};
+                r.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                r.imageExtent = {width, layout.window, 1};
+                vkCmdCopyImageToBuffer(cmd, img.i, VK_IMAGE_LAYOUT_GENERAL, buf.b, 1, &r);  // result over the source
+                vktest::ck(vkEndCommandBuffer(cmd), "end");
+                VkSubmitInfo si{};
+                si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+                si.commandBufferCount = 1;
+                si.pCommandBuffers = &cmd;
+                vktest::ck(vkResetFences(c.dev, 1, &fence), "reset fence");
+                vktest::ck(vkQueueSubmit(c.q, 1, &si, fence), "submit");
+                vktest::ck(vkWaitForFences(c.dev, 1, &fence, VK_TRUE, UINT64_MAX), "wait");
+            });
+        vkUnmapMemory(c.dev, buf.m);
+        vktest::delImg(c.dev, img);
+        vktest::delBuf(c.dev, buf);
+        return std::make_pair(out, layout);
+    };
+    const auto [whole, wholeLayout] = gpu(1);
+    const auto [stripped, layout] = gpu(strips);
+    auto cpu = frame;
+    rawrcam::imaging::remosaicBlockCfa(cpu, width, height, block, order, 1, quality, 1.0f, 64.0f);  // Frame::blackLevel default
+    std::size_t differsFromWhole = 0, cpuOff = 0, cpuWorse = 0;
+    const auto* a = reinterpret_cast<const std::uint16_t*>(whole.data());
+    const auto* b2 = reinterpret_cast<const std::uint16_t*>(stripped.data());
+    const auto* r = reinterpret_cast<const std::uint16_t*>(cpu.data());
+    for (std::size_t i = 0; i < frame.size() / 2; ++i) {
+        differsFromWhole += a[i] != b2[i];
+        const int d = std::abs(int(b2[i]) - int(r[i]));
+        cpuOff += d != 0;
+        cpuWorse += d > 2;
+    }
+    if (output) {
+        std::ofstream file(output, std::ios::binary);
+        file.write(reinterpret_cast<const char*>(stripped.data()), stripped.size());
+    }
+    const bool ok = differsFromWhole == 0 && (input || cpuWorse == 0);  // a file: CPU numbers are informational
+    std::printf("%s %ux%u block=%u order=%u q=%u strips=%u (core=%u window=%u) vs-whole-gpu=%zu cpu-off=%zu cpu-worse=%zu\n",
+                ok ? "PASS" : "FAIL", width, height, block, order, unsigned(quality), layout.count(height), layout.core,
+                layout.window, differsFromWhole, cpuOff, cpuWorse);
+    return ok;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -227,7 +338,10 @@ int main(int argc, char** argv) {
                     throw std::runtime_error(
                         "usage: raw_remosaic_vulkan_test RAW16 WIDTH HEIGHT ORDER OUTPUT_RAW16 [high|detail|fit|quad]");
                 unsigned iw = std::stoul(argv[2]), ih = std::stoul(argv[3]), order = std::stoul(argv[4]);
-                if (argc == 7 && std::string(argv[6]) == "quad")  // native 2x2 quad, Detail (real-image parity)
+                if (argc == 7 && std::string(argv[6]) == "strips")  // quad Detail in 4 strips vs whole frame
+                    ok = runStripped(c, *remosaicker, cmd, fence, iw, ih, 2, order,
+                                     rawrcam::imaging::CfaRemosaicQuality::Detail, 4, argv[1], argv[5]);
+                else if (argc == 7 && std::string(argv[6]) == "quad")  // native 2x2 quad, Detail (real-image parity)
                     ok = runCase(c, *remosaicker, cmd, fence, 0,
                                  {iw, ih, 2, order, iw * 2, false, false, false, false, true, false}, argv[1], argv[5]);
                 else
@@ -263,6 +377,16 @@ int main(int argc, char** argv) {
                         ok = runCase(c, *remosaicker, cmd, fence, order % 3,
                                      {1024, 512, 4, order, raw10 ? 1283u : 2048u, raw10, false, false, true, true, true}) &&
                              ok;
+                // Strip loop of BlockRemosaicGpu: every quality, both blocks, heights with and without a layout.
+                for (unsigned order : {0u, 3u})
+                    for (auto q : {rawrcam::imaging::CfaRemosaicQuality::Standard,
+                                   rawrcam::imaging::CfaRemosaicQuality::High,
+                                   rawrcam::imaging::CfaRemosaicQuality::Detail})
+                        for (unsigned h : {1024u, 1000u, 520u})
+                            ok = runStripped(c, *remosaicker, cmd, fence, 256, h, 2, order, q, 4) && ok;
+                ok = runStripped(c, *remosaicker, cmd, fence, 256, 1024, 4, 1,
+                                 rawrcam::imaging::CfaRemosaicQuality::Standard, 3) &&
+                     ok;
                 // Identical geometry and slot, but new source/destination lifetimes.
                 // Driver-recycled handles must not skip descriptor refresh.
                 for (int repeat = 0; repeat < 3; ++repeat)

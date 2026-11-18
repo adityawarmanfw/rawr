@@ -12,9 +12,22 @@
 #include "sys/resource.h"
 
 namespace rawrcam::capture {
+void SingleFrameCaptureAcquisition::remosaicBlockCfaStillGpu(imaging::RawSnapshot& frame) {
+    const auto& context = frame.metadata.cameraContext;
+    std::unique_ptr<BlockRemosaicGpu> gpu;
+    if (context && context->cfaBlock > 1u && BlockRemosaicGpu::supports(context->cfaBlock, photoRemosaicQuality(*context))) {
+        try {
+            gpu = std::make_unique<BlockRemosaicGpu>(vk_, frame.width, frame.height);
+        } catch (const std::exception& e) {
+            emit("STILL_REMOSAIC_GPU_UNAVAILABLE requestId=" + std::to_string(frame.requestId) + " error=" + e.what());
+        }
+    }
+    remosaicBlockCfaStill(frame, gpu.get());
+}
+
 void SingleFrameCaptureAcquisition::remosaic(imaging::RawSnapshot& frame) {
     if (!frame.metadata.cameraContext || !reducedRawRequested(*frame.metadata.cameraContext)) {
-        remosaicBlockCfaStill(frame);
+        remosaicBlockCfaStillGpu(frame);
         return;
     }
     try {

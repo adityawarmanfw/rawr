@@ -277,9 +277,8 @@ internal fun SensorLayoutGroup(
                 selected = layout.photoRemosaic,
                 values = PHOTO_REMOSAIC_QUALITIES,
                 label = ::remosaicQualityLabel,
-                supportingText = "Single photos. High searches wider for clean edges. " +
-                    "Detail (quad 2×2 only) fits a colour line per pixel: the fewest fringes on thin lines and edges." +
-                    if (hasPhotoStream) " Merged photo frames use Standard." else "",
+                supportingText = "Single photos and merged frames. High searches wider for clean edges. " +
+                    "Detail (quad 2×2 only) fits a colour line per pixel: the fewest fringes on thin lines and edges.",
                 testTag = lensEditorTag("photo_remosaic"),
                 onSelect = { onChange(layout.copy(photoRemosaic = it)) }
             )

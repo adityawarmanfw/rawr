@@ -1,4 +1,5 @@
 #include "capture/ReducedRaw.h"
+#include "capture/single/StillCfaRemosaic.h"
 #include "capture/ReducedRawMetadata.h"
 #include "diagnostics/timing/GpuTimingTracker.h"
 // Composition root: construction, core lifecycle, metadata ingress, shutdown.
@@ -638,6 +639,8 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
         ++reducedCollected;
     };
     std::vector<uint8_t> packed(bytes);
+    std::unique_ptr<capture::BlockRemosaicGpu> gpuRemosaic;  // created at the first block-CFA frame
+    bool gpuRemosaicTried = false;
     allocationTiming.finish();
     struct Frame {
         imaging::RawFrameLease lease{imaging::AcquiredRawFrame{}};
@@ -773,15 +776,29 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
         }
         if (context->cfaBlock > 1u) {
             diagnostics::CaptureStageTimer remosaicTiming("fullres_remosaic", tag, index + 1);
-            const auto threads = std::clamp(std::thread::hardware_concurrency(), 1u, 8u);
-            imaging::remosaicBlockCfa(packed, width, height, context->cfaBlock, context->rawPreviewCfa,
-                                     threads, imaging::CfaRemosaicQuality::Standard);
+            // GPU first: the 50 MP Detail pass is ~40 ms there against ~300 ms on eight CPU cores.
+            // A device that cannot hold the buffers (or a lens/quality the shader lacks) uses the CPU.
+            if (!gpuRemosaicTried) {
+                gpuRemosaicTried = true;
+                try {
+                    gpuRemosaic = std::make_unique<capture::BlockRemosaicGpu>(vulkanContext_, width, height);
+                } catch (const std::exception& e) {
+                    appendDiagnostic("FULLRES_REMOSAIC_GPU_UNAVAILABLE tag=" + std::to_string(tag) + " error=" + e.what());
+                }
+            }
+            const bool onGpu = capture::remosaicBlockCfaBuffer(packed, width, height, *context,
+                                                               frames.back().metadata.blackLevelPhysicalRggb,
+                                                               gpuRemosaic.get());
+            CAPTURE_DEBUG_LOG("FULLRES_REMOSAIC tag=%llu frame=%u block=%u quality=%s gpu=%d",
+                              static_cast<unsigned long long>(tag), index + 1, context->cfaBlock,
+                              capture::remosaicQualityName(capture::photoRemosaicQuality(*context)), onGpu ? 1 : 0);
         }
         diagnostics::CaptureStageTimer journalTiming("fullres_journal_append", tag, index + 1);
         journal->append(packed);
     }
     while (reducedCollected < reducedSubmitted) collectReduced();
     reducer.reset();
+    gpuRemosaic.reset();
     std::vector<uint8_t>().swap(reducedPixels);
     // Completion belongs to the whole burst, never to each individual frame.
     diagnostics::CaptureStageTimer idleTiming("fullres_wait_sequence_end", tag);
