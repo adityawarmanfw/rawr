@@ -69,32 +69,54 @@ void NativeAvRecorder::configureVideo() {
     if (codecName) AMediaCodec_releaseName(videoCodec_, codecName);
     if (videoCodecName_.rfind("c2.android.", 0) == 0 || videoCodecName_.rfind("OMX.google.", 0) == 0)
         throw std::runtime_error("software HEVC encoder selected: " + videoCodecName_);
-    AMediaFormat* format = AMediaFormat_new();
-    if (!format) throw std::runtime_error("video format allocation failed");
-    AMediaFormat_setString(format, AMEDIAFORMAT_KEY_MIME, "video/hevc");
-    AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_WIDTH, settings_.width);
-    AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_HEIGHT, settings_.height);
-    AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_COLOR_FORMAT, kSurfaceColorFormat);
-    AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_PROFILE, settings_.bitDepth == 8 ? kMainProfile : kMain10Profile);
-    AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_BIT_RATE, settings_.bitrate);
-    AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_FRAME_RATE, settings_.fps);
-    // i-frame-interval is in seconds and accepts a float; 0 asks for every frame to be a sync frame.
-    AMediaFormat_setFloat(format, AMEDIAFORMAT_KEY_I_FRAME_INTERVAL,
-                          settings_.intraFrames <= 1 ? 0.0f
-                                                     : static_cast<float>(settings_.intraFrames) / settings_.fps);
-    if (settings_.bitrateMode >= 0) AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_BITRATE_MODE, settings_.bitrateMode);
-    // Optional codec key. A codec may reject the request during configure;
-    // omit it when left at the automatic default.
-    const int maxBFrames = settings_.intraFrames <= 1 ? 0 : settings_.maxBFrames;
-    if (maxBFrames >= 0) AMediaFormat_setInt32(format, "max-bframes", maxBFrames);
-    // Preserve the encoder's BT.709 RGB-to-YCbCr conversion. LOG signalling
-    // is rewritten after encoding, without changing the encoded samples.
-    AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_COLOR_STANDARD, 1);
-    AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_COLOR_TRANSFER, 3);
-    AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_COLOR_RANGE, 2);
-    const media_status_t configured =
-        AMediaCodec_configure(videoCodec_, format, nullptr, nullptr, AMEDIACODEC_CONFIGURE_FLAG_ENCODE);
-    AMediaFormat_delete(format);
+    // Realtime hints: operating-rate tells the codec driver the rate to clock for, and priority 0
+    // marks the session realtime. Without them a Qualcomm HEVC encoder can stay in a lower clock
+    // state and fall behind at 4K60 (encoder-side drops, latency piling up past 500 ms). A codec
+    // that refuses either key is configured again without both.
+    const auto configureWith = [&](bool realtime) {
+        AMediaFormat* format = AMediaFormat_new();
+        if (!format) throw std::runtime_error("video format allocation failed");
+        AMediaFormat_setString(format, AMEDIAFORMAT_KEY_MIME, "video/hevc");
+        AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_WIDTH, settings_.width);
+        AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_HEIGHT, settings_.height);
+        AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_COLOR_FORMAT, kSurfaceColorFormat);
+        AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_PROFILE, settings_.bitDepth == 8 ? kMainProfile : kMain10Profile);
+        AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_BIT_RATE, settings_.bitrate);
+        AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_FRAME_RATE, settings_.fps);
+        // i-frame-interval is in seconds and accepts a float; 0 asks for every frame to be a sync frame.
+        AMediaFormat_setFloat(format, AMEDIAFORMAT_KEY_I_FRAME_INTERVAL,
+                              settings_.intraFrames <= 1 ? 0.0f
+                                                         : static_cast<float>(settings_.intraFrames) / settings_.fps);
+        if (settings_.bitrateMode >= 0) AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_BITRATE_MODE, settings_.bitrateMode);
+        // Optional codec key. A codec may reject the request during configure;
+        // omit it when left at the automatic default.
+        const int maxBFrames = settings_.intraFrames <= 1 ? 0 : settings_.maxBFrames;
+        if (maxBFrames >= 0) AMediaFormat_setInt32(format, "max-bframes", maxBFrames);
+        // Preserve the encoder's BT.709 RGB-to-YCbCr conversion. LOG signalling
+        // is rewritten after encoding, without changing the encoded samples.
+        AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_COLOR_STANDARD, 1);
+        AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_COLOR_TRANSFER, 3);
+        AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_COLOR_RANGE, 2);
+        if (realtime) {
+            AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_OPERATING_RATE, settings_.fps);
+            AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_PRIORITY, 0);
+        }
+        const media_status_t status =
+            AMediaCodec_configure(videoCodec_, format, nullptr, nullptr, AMEDIACODEC_CONFIGURE_FLAG_ENCODE);
+        AMediaFormat_delete(format);
+        return status;
+    };
+    media_status_t configured = configureWith(true);
+    if (configured != AMEDIA_OK) {
+        __android_log_print(ANDROID_LOG_WARN, "RawrNativeVideo",
+                            "VIDEO_ENCODER_REALTIME_REFUSED status=%d codec=%s", int(configured),
+                            videoCodecName_.c_str());
+        configured = configureWith(false);
+    } else {
+        __android_log_print(ANDROID_LOG_INFO, "RawrNativeVideo",
+                            "VIDEO_ENCODER_REALTIME operatingRate=%d priority=0 codec=%s %dx%d", settings_.fps,
+                            videoCodecName_.c_str(), settings_.width, settings_.height);
+    }
     if (configured != AMEDIA_OK)
         throw std::runtime_error(std::string("configure HEVC ") + (settings_.bitDepth == 8 ? "Main " : "Main10 ") +
                                  std::to_string(settings_.width) + "x" + std::to_string(settings_.height) + " at " +
