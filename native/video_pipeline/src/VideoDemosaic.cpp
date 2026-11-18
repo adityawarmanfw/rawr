@@ -67,7 +67,7 @@ static_assert(sizeof(Push) == 104);
 }  // namespace
 
 VideoDemosaic::VideoDemosaic(const rawr::vk::GpuContext& context, uint32_t rawWidth, uint32_t rawHeight,
-                             uint32_t outputWidth, uint32_t outputHeight)
+                             uint32_t outputWidth, uint32_t outputHeight, const VideoKeptArea& kept)
     : context_(context),
       rawWidth_(rawWidth),
       rawHeight_(rawHeight),
@@ -78,7 +78,7 @@ VideoDemosaic::VideoDemosaic(const rawr::vk::GpuContext& context, uint32_t rawWi
         throw std::invalid_argument("video demosaic geometry/device invalid");
     // Crop rule shared with the idle preview crop (see VideoCrop.h); behavior
     // is unchanged, only the owner moved.
-    const VideoSourceRect sourceRect = videoSourceRect(rawWidth, rawHeight, outputWidth, outputHeight);
+    const VideoSourceRect sourceRect = videoSourceRect(rawWidth, rawHeight, outputWidth, outputHeight, kept);
     if (sourceRect.width == 0 || sourceRect.height == 0)
         throw std::invalid_argument("video output exceeds RAW sensor area");
     reduceCfa_ = sourceRect.reduceCfa;

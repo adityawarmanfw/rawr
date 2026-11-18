@@ -74,7 +74,8 @@ VideoSession::ProcessingKey VideoSession::predictedKey(uint32_t width, uint32_t 
                          rawHeight,
                          output_.preferredFormat(bitDepth),
                          desiredConfig_.fccSteps,
-                         desiredConfig_.defringeStrength};
+                         desiredConfig_.defringeStrength,
+                         kept_};
 }
 void VideoSession::setProcessingConfig(const VideoProcessingConfig& config) noexcept {
     desiredConfig_ = config;
@@ -111,7 +112,8 @@ bool VideoSession::start(JNIEnv* env, jobject javaSurface, uint32_t width, uint3
                           rawHeight,
                           output_.format(),
                           activeConfig_.fccSteps,
-                          activeConfig_.defringeStrength};
+                          activeConfig_.defringeStrength,
+                          kept_};
         const bool reused = hasProcessing(key);
         if (!reused) {
             resources_.release();
@@ -160,8 +162,9 @@ bool VideoSession::prewarmVideo(uint32_t width, uint32_t height, uint32_t bitDep
         const auto extent = rawExtent_();
         const uint32_t rawWidth = extent.width, rawHeight = extent.height;
         if (width == 0 || height == 0) {
-            width = rawWidth & ~1u;
-            height = rawHeight & ~1u;
+            // Open Gate: the whole image area, padded raw edges left out.
+            width = (kept_.valid() ? kept_.width : rawWidth) & ~1u;
+            height = (kept_.valid() ? kept_.height : rawHeight) & ~1u;
         }
         if (width == 0 || height == 0 || width > rawWidth || height > rawHeight) {
             videoPrewarmStatus_ = "skipped: raw " + std::to_string(rawWidth) + "x" + std::to_string(rawHeight);

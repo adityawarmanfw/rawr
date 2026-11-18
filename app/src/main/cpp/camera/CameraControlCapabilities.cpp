@@ -66,6 +66,13 @@ CameraControlState readInitialCameraControlState(const ACameraMetadata* characte
     state.capabilities.lensId = route.lensId;
     state.capabilities.rawWidth = static_cast<int32_t>(route.stream.width);
     state.capabilities.rawHeight = static_cast<int32_t>(route.stream.height);
+    {
+        const uint64_t dropX = uint64_t(route.cropLeft) + route.cropRight;
+        const uint64_t dropY = uint64_t(route.cropTop) + route.cropBottom;
+        const bool crop = (dropX || dropY) && dropX < route.stream.width && dropY < route.stream.height;
+        state.capabilities.keptWidth = static_cast<int32_t>(crop ? route.stream.width - dropX : route.stream.width);
+        state.capabilities.keptHeight = static_cast<int32_t>(crop ? route.stream.height - dropY : route.stream.height);
+    }
 
     if (const auto e = entry(characteristics, ACAMERA_SENSOR_INFO_SENSITIVITY_RANGE);
         e && e->data.i32 && e->count >= 2) {

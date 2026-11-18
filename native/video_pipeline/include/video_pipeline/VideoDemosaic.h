@@ -1,5 +1,7 @@
 #pragma once
 
+#include "video_pipeline/VideoCrop.h"
+
 #include <vulkan/vulkan.h>
 
 #include <array>
@@ -20,7 +22,7 @@ class VideoDemosaic final {
     static constexpr uint32_t kFramesInFlight = 3;
 
     VideoDemosaic(const rawr::vk::GpuContext& context, uint32_t rawWidth, uint32_t rawHeight, uint32_t outputWidth,
-                  uint32_t outputHeight);
+                  uint32_t outputHeight, const VideoKeptArea& kept = {});
     ~VideoDemosaic();
     VideoDemosaic(const VideoDemosaic&) = delete;
     VideoDemosaic& operator=(const VideoDemosaic&) = delete;

@@ -631,8 +631,14 @@ RawDevelopRecordResult RawDevelopRecorder::record(const RawDevelopRecordInput& i
     // visualizations always show the full frame.
     rawrcam::video::VideoSourceRect previewCrop{};
     if (in.diagnosticMode == 0u && in.videoCropOutWidth != 0 && in.videoCropOutHeight != 0) {
-        const auto full =
-            rawrcam::video::videoSourceRect(in.rawWidth, in.rawHeight, in.videoCropOutWidth, in.videoCropOutHeight);
+        // Centred on the image area, like the recorder: padded raw edges stay out.
+        const auto* context = in.metadata.cameraContext.get();
+        const auto kept = context ? rawrcam::video::videoKeptArea(in.rawWidth, in.rawHeight, context->cropLeft,
+                                                                  context->cropTop, context->cropRight,
+                                                                  context->cropBottom)
+                                  : rawrcam::video::VideoKeptArea{};
+        const auto full = rawrcam::video::videoSourceRect(in.rawWidth, in.rawHeight, in.videoCropOutWidth,
+                                                          in.videoCropOutHeight, kept);
         if (full.width != 0) {
             previewCrop = rawrcam::video::scaleVideoSourceRect(full, in.rawWidth, in.rawHeight, in.previewWidth,
                                                                in.previewHeight);

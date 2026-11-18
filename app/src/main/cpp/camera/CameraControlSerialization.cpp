@@ -49,6 +49,7 @@ std::string serializeCameraControlState(const CameraControlState& st) {
     std::ostringstream s;
     s << '{' << "\"generation\":" << c.generation << ",\"cameraId\":" << quoted(c.cameraId)
       << ",\"lensId\":" << quoted(c.lensId) << ",\"rawWidth\":" << c.rawWidth << ",\"rawHeight\":" << c.rawHeight
+      << ",\"keptWidth\":" << c.keptWidth << ",\"keptHeight\":" << c.keptHeight
       << ",\"cameraProfile\":" << quoted(c.cameraProfileId)
       << ",\"profileLenses\":[";
     for (size_t i = 0; i < c.profileLenses.size(); ++i)

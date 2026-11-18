@@ -586,8 +586,14 @@ void FrameSubmitCoordinator::submitSplitVideoAndMonitor(const SubmitParams& para
                              [&](VkCommandBuffer cmd, VkImageView view, uint32_t width, uint32_t height) {
                                  if (!diagnosticsPort_.sceneKeyMeteringEnabled()) return;
                                  // Spot and focus are on the full frame; the video image is its record crop.
+                                 const auto* cc = metadata.cameraContext.get();
+                                 const auto kept =
+                                     cc ? rawrcam::video::videoKeptArea(config_.rawWidth, config_.rawHeight,
+                                                                        cc->cropLeft, cc->cropTop, cc->cropRight,
+                                                                        cc->cropBottom)
+                                        : rawrcam::video::VideoKeptArea{};
                                  const auto crop = rawrcam::video::videoSourceRect(config_.rawWidth, config_.rawHeight,
-                                                                                   width, height);
+                                                                                   width, height, kept);
                                  const auto toCrop = [&](const std::array<float, 4>& source) {
                                      std::array<float, 4> out{};
                                      if (!(source[2] > source[0]) || crop.width <= 0 || crop.height <= 0) return out;

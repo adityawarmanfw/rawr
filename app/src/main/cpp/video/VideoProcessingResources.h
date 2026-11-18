@@ -25,15 +25,21 @@ class VideoProcessingResources final {
         VkFormat outputFormat = VK_FORMAT_UNDEFINED;
         uint32_t fccSteps = 0;
         float defringeStrength = 0.0f;
+        // Image area without padded raw edges (lens profile image.cropEdges); empty = whole RAW.
+        VideoKeptArea kept{};
         bool operator==(const ProcessingKey& o) const noexcept {
             return width == o.width && height == o.height && rawWidth == o.rawWidth && rawHeight == o.rawHeight &&
-                   outputFormat == o.outputFormat && fccSteps == o.fccSteps && defringeStrength == o.defringeStrength;
+                   outputFormat == o.outputFormat && fccSteps == o.fccSteps && defringeStrength == o.defringeStrength &&
+                   kept == o.kept;
         }
         bool operator!=(const ProcessingKey& o) const noexcept { return !(*this == o); }
         std::string describe() const {
             return std::to_string(width) + "x" + std::to_string(height) + " raw " + std::to_string(rawWidth) + "x" +
                    std::to_string(rawHeight) + " fmt " + std::to_string(outputFormat) + " fcc " +
-                   std::to_string(fccSteps) + " defringe " + std::to_string(defringeStrength);
+                   std::to_string(fccSteps) + " defringe " + std::to_string(defringeStrength) +
+                   (kept.valid() ? " kept " + std::to_string(kept.x) + "," + std::to_string(kept.y) + " " +
+                                       std::to_string(kept.width) + "x" + std::to_string(kept.height)
+                                 : std::string());
         }
     };
     // Processing built ahead of a recording, possibly off the engine lock.

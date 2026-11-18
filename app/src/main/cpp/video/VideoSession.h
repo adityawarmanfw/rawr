@@ -107,6 +107,10 @@ class VideoSession final {
     }
     // The lens profile mirror (geometry::kLensMirror* bits) of those frames.
     void setLensMirror(uint32_t mirror) { lensMirror_ = mirror; }
+    // Padded raw edges of the active lens (image.cropEdges). Set under the
+    // transition mutex when the camera is configured; recordings and the
+    // prewarm crop inside it, and Open Gate records just this area.
+    void setKeptArea(const VideoKeptArea& kept) noexcept { kept_ = kept; }
     void setDcpProfile(color::DcpProfilePtr profile, float weight1) {
         dcpProfile_ = std::move(profile);
         dcpWeight1_ = weight1;
@@ -125,6 +129,7 @@ class VideoSession final {
    private:
     std::optional<rawrcam::geometry::LensDistortionModel> lensDistortion_;
     uint32_t lensMirror_ = 0;
+    VideoKeptArea kept_{};
     color::DcpProfilePtr dcpProfile_;
     float dcpWeight1_ = 1.0f;
     bool prewarmVideo(uint32_t width, uint32_t height, uint32_t bitDepth);

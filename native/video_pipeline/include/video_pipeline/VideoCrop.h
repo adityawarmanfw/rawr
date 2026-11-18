@@ -36,6 +36,42 @@ struct VideoSourceRect {
     return rect;
 }
 
+// Image area of the RAW once padded edges are dropped (lens profile
+// image.cropEdges: rows or columns a vendor mode delivers with no image).
+// Edges are CFA-period multiples, so the origin keeps the colour order.
+// Empty (width/height 0) when nothing is dropped or the edges are invalid.
+struct VideoKeptArea {
+    uint32_t x = 0;
+    uint32_t y = 0;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    [[nodiscard]] bool valid() const noexcept { return width != 0 && height != 0; }
+    bool operator==(const VideoKeptArea& o) const noexcept {
+        return x == o.x && y == o.y && width == o.width && height == o.height;
+    }
+};
+
+[[nodiscard]] inline VideoKeptArea videoKeptArea(uint32_t rawWidth, uint32_t rawHeight, uint32_t left, uint32_t top,
+                                                 uint32_t right, uint32_t bottom) noexcept {
+    if (!(left | top | right | bottom)) return {};
+    if (uint64_t(left) + right >= rawWidth || uint64_t(top) + bottom >= rawHeight) return {};
+    return {left, top, rawWidth - left - right, rawHeight - top - bottom};
+}
+
+// Same rule, centred on the kept area instead of the whole RAW, so padded
+// edges never reach a recording or its preview. An empty kept area is the
+// whole RAW (the rule above, unchanged).
+[[nodiscard]] inline VideoSourceRect videoSourceRect(uint32_t rawWidth, uint32_t rawHeight, uint32_t outWidth,
+                                                     uint32_t outHeight, const VideoKeptArea& kept) noexcept {
+    if (!kept.valid() || uint64_t(kept.x) + kept.width > rawWidth || uint64_t(kept.y) + kept.height > rawHeight)
+        return videoSourceRect(rawWidth, rawHeight, outWidth, outHeight);
+    VideoSourceRect rect = videoSourceRect(kept.width, kept.height, outWidth, outHeight);
+    if (rect.width == 0) return rect;
+    rect.x += kept.x;
+    rect.y += kept.y;
+    return rect;
+}
+
 // Scales a full-RAW-space rect into another source space (e.g. the half-res
 // preview image). Exact for even halvings; otherwise truncates with even
 // alignment and clamps inside the target. Returns empty when degenerate.

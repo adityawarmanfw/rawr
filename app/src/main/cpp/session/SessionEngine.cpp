@@ -79,6 +79,10 @@ SessionEngine::SessionEngine(std::string filesDir) : filesDir_(std::move(filesDi
         cameraSetupGeneration_ = generation;
         const bool configured = realtime_.configureCamera(generation, metadata);
         lastCameraContext_ = std::make_shared<const rawrcam::metadata::CameraContextMetadata>(metadata);
+        // Recordings frame inside the image area: padded raw edges stay out.
+        videoSession_.setKeptArea(rawrcam::video::videoKeptArea(realtime_.rawWidth(), realtime_.rawHeight(),
+                                                                metadata.cropLeft, metadata.cropTop,
+                                                                metadata.cropRight, metadata.cropBottom));
         profileReaderUsage_ = metadata.rawReaderUsage;
         profileMaxImages_ = metadata.rawBufferCount;
         profileReaderProbe_ = metadata.rawBufferTestFirst;
@@ -315,7 +319,12 @@ rawrcam::geometry::SourceCropRect SessionEngine::previewVideoCropRectLocked() co
     const uint32_t previewW = realtime_.previewWidth();
     const uint32_t previewH = realtime_.previewHeight();
     if (rawW < 2 || rawH < 2 || previewW == 0 || previewH == 0) return crop;
-    const auto full = rawrcam::video::videoSourceRect(rawW, rawH, videoCropOutWidth_, videoCropOutHeight_);
+    const auto kept = lastCameraContext_
+                          ? rawrcam::video::videoKeptArea(rawW, rawH, lastCameraContext_->cropLeft,
+                                                          lastCameraContext_->cropTop, lastCameraContext_->cropRight,
+                                                          lastCameraContext_->cropBottom)
+                          : rawrcam::video::VideoKeptArea{};
+    const auto full = rawrcam::video::videoSourceRect(rawW, rawH, videoCropOutWidth_, videoCropOutHeight_, kept);
     if (full.width == 0) return crop;
     const auto scaled = rawrcam::video::scaleVideoSourceRect(full, rawW, rawH, previewW, previewH);
     if (scaled.width == 0) return crop;

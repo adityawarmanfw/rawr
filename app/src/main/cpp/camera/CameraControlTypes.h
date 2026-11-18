@@ -76,6 +76,10 @@ struct CameraControlCapabilities {
     std::string lensId;
     int32_t rawWidth = 0;
     int32_t rawHeight = 0;
+    // RAW image area without padded edges (lens profile image.cropEdges);
+    // equal to rawWidth/rawHeight when nothing is dropped. Open Gate size.
+    int32_t keptWidth = 0;
+    int32_t keptHeight = 0;
     // Active camera profile and its UI lenses as (lensId, label).
     std::string cameraProfileId;
     std::vector<std::pair<std::string, std::string>> profileLenses;

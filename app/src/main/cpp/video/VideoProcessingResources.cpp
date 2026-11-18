@@ -130,7 +130,8 @@ VideoProcessingResources::Prepared VideoProcessingResources::prepare(rawrcam::vu
     for (auto& pool : out.monitorPools)
         check(vkCreateQueryPool(context.device(), &queryInfo, nullptr, &pool), "video monitor query pool");
     out.demosaic =
-        std::make_unique<VideoDemosaic>(context.gpuContext(), key.rawWidth, key.rawHeight, key.width, key.height);
+        std::make_unique<VideoDemosaic>(context.gpuContext(), key.rawWidth, key.rawHeight, key.width, key.height,
+                                        key.kept);
     for (auto& stage : out.post) {
         stage = std::make_unique<rawr::post::PostDemosaicProcessor>(
             context.physicalDevice(), context.device(), context.queueFamily(), key.width, key.height, key.fccSteps,
