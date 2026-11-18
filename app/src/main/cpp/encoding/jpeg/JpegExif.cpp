@@ -156,7 +156,7 @@ std::vector<unsigned char> buildExif(const JpegCaptureContext& c, std::uint32_t 
     if (c.sensitivity > 0 && c.sensitivity <= 65535)
         exif.push_back({0x8827, 3, 1, shortData(static_cast<std::uint16_t>(c.sensitivity))});
     const auto version = std::max(c.sourceExifVersion.value_or(
-        c.gps ? std::array<uint8_t, 4>{'0', '3', '0', '0'} : std::array<uint8_t, 4>{'0', '2', '3', '2'}),
+        (c.gps || c.level) ? std::array<uint8_t, 4>{'0', '3', '0', '0'} : std::array<uint8_t, 4>{'0', '2', '3', '2'}),
         std::array<uint8_t, 4>{'0', '2', '3', '1'});
     exif.push_back({0x9000, 7, 4, {version.begin(), version.end()}});
     exif.push_back({0x9101, 7, 4, {1, 2, 3, 0}});
@@ -196,6 +196,13 @@ std::vector<unsigned char> buildExif(const JpegCaptureContext& c, std::uint32_t 
     if (!lens.make.empty()) exif.push_back(ascii(0xA433, lens.make));
     if (!lens.model.empty()) exif.push_back(ascii(0xA434, lens.model));
     if (!c.lensSerial.empty()) exif.push_back(ascii(0xA435, c.lensSerial));
+    if (c.level) {
+        const auto angle = rawrcam::metadata::elevationAngleRational(c.level->pitchDeg);
+        std::vector<unsigned char> value;
+        put32(value, static_cast<std::uint32_t>(angle[0]));
+        put32(value, static_cast<std::uint32_t>(angle[1]));
+        exif.push_back({0x9405, 10, 1, value});  // CameraElevationAngle, SRATIONAL
+    }
     exif.push_back({0xA001, 3, 1, shortData(1)});  // sRGB
     exif.push_back({0xA000, 7, 4, {'0', '1', '0', '0'}});
     exif.push_back({0xA002, 4, 1, longData(width)});

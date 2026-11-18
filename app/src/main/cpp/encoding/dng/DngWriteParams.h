@@ -31,6 +31,8 @@ struct TinyDngWriteParams {
     std::vector<tinydng_opcode> opcodes;
     std::vector<std::vector<uint8_t>> opcodeParams;
     std::vector<uint8_t> privateData;
+    // XMP packet (IFD0 tag 700) carrying the camera attitude; empty = none.
+    std::string xmpPacket;
 
     // Owned string storage backing tinydng char* fields.
     std::string uniqueModel, make, model, software, datetime, description;

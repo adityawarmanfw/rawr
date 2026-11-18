@@ -69,14 +69,16 @@ std::string xmlEscape(const std::string& text) {
     return out;
 }
 
-std::vector<unsigned char> buildXmp(const std::string& description) {
+std::vector<unsigned char> buildXmp(const std::string& description,
+                                    const std::optional<rawrcam::metadata::CaptureLevel>& level = std::nullopt) {
     static constexpr char kXmpId[] = "http://ns.adobe.com/xap/1.0/";
     const std::string escaped = xmlEscape(description);
     const std::string xml =
         "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">"
         "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">"
-        "<rdf:Description xmlns:dc=\"http://purl.org/dc/elements/1.1/\">"
-        "<dc:description><rdf:Alt><rdf:li xml:lang=\"x-default\">" +
+        "<rdf:Description xmlns:dc=\"http://purl.org/dc/elements/1.1/\"" +
+        (level ? rawrcam::metadata::levelXmpAttributes(*level) : std::string()) +
+        "><dc:description><rdf:Alt><rdf:li xml:lang=\"x-default\">" +
         escaped +
         "</rdf:li></rdf:Alt></dc:description>"
         "</rdf:Description></rdf:RDF></x:xmpmeta>";
@@ -137,7 +139,7 @@ bool writeUltraHdrFallback(int fd, const unsigned char* baseJpeg, std::size_t ba
     // stage instead of claiming UltraHDR.
     context.imageDescription = appendProcessingTimes(context, baseMs);
     const auto exif = buildExif(context, width, height);
-    const auto xmp = buildXmp(context.imageDescription);
+    const auto xmp = buildXmp(context.imageDescription, context.level);
     if (exif.size() + 2u > 65535u || xmp.size() + 2u > 65535u) return false;
     const unsigned char exifHeader[4] = {
         0xFFu,
@@ -269,7 +271,7 @@ bool JpegCaptureWriter::start(std::uint64_t requestId, const void* rgba8, std::s
                     done.encodeMs = std::chrono::duration<double, std::milli>(encodedAt - t0).count();
                     context.imageDescription = appendProcessingTimes(context, done.encodeMs);
                     const auto exif = buildExif(context, width, height);
-                    const auto xmp = buildXmp(context.imageDescription);
+                    const auto xmp = buildXmp(context.imageDescription, context.level);
                     if (exif.size() + 2u > 65535u || xmp.size() + 2u > 65535u) {
                         done.error = "metadata APP1 payload too large";
                     } else {

@@ -7,6 +7,7 @@
 
 #include "encoding/OutputFd.h"
 #include "metadata/GpsMetadata.h"
+#include "metadata/LevelMetadata.h"
 
 namespace tonemap {
 struct TonemapParams;
@@ -32,6 +33,8 @@ struct DngCaptureContext {
     std::string deviceDisplayModel;  // Optional friendly EXIF Model, frozen at capture.
     std::string displayName;
     std::optional<tinydng_gps> gps;
+    // Camera attitude at the shutter press. Not part of the capture journal: a recovered capture has none.
+    std::optional<rawrcam::metadata::CaptureLevel> level;
     std::shared_ptr<const tonemap::TonemapParams> captureTone;
     std::shared_ptr<const spektrafilm_native::FilmLook> captureFilm;
     bool captureFilmEnabled = false;

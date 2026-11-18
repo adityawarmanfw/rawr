@@ -559,6 +559,10 @@ int td_dng_handle_tag(tinydng_context *ctx, const td_reader *r,
       TD_CARRY_RATIONAL(img->exif.exposure_compensation, (uint32_t *)NULL,
                         img->exif.has_exposure_compensation);
       break;
+    case TD_TAG_CAMERA_ELEVATION_ANGLE:
+      TD_CARRY_RATIONAL(img->exif.camera_elevation_angle, (uint32_t *)NULL,
+                        img->exif.has_camera_elevation_angle);
+      break;
     case TD_TAG_FLASH:
       TD_CARRY_SHORT(img->exif.flash, img->exif.has_flash);
       break;

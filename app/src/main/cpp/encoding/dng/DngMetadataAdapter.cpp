@@ -217,6 +217,13 @@ void TinyDngWriteParams::rebind() noexcept {
     if (!privateData.empty()) {
         raw.rawr_private_data = reinterpret_cast<char*>(privateData.data());
     }
+    if (!xmpPacket.empty()) {
+        raw.xmp_packet.present = 1;
+        raw.xmp_packet.type = 1;  // TIFF BYTE
+        raw.xmp_packet.count = xmpPacket.size();
+        raw.xmp_packet.data = reinterpret_cast<uint8_t*>(xmpPacket.data());
+        raw.xmp_packet.size = xmpPacket.size();
+    }
     if (!packedPixels.empty()) {
         pixelData = packedPixels.data();
         image.data = packedPixels.data();
@@ -433,7 +440,15 @@ std::optional<TinyDngWriteParams> makeTinyDngWriteParams(const rawrcam::imaging:
     fillDngExif(p, frame, captureContext);
     p.gps = captureContext.gps;
     p.exif.has_exif_version = 1;
-    std::memcpy(p.exif.exif_version, p.gps ? "0300" : "0231", 4);
+    // CameraElevationAngle (pitch) is an EXIF 3.0 tag, so a level promotes the version like GPS does.
+    std::memcpy(p.exif.exif_version, (p.gps || captureContext.level) ? "0300" : "0231", 4);
+    if (captureContext.level) {
+        const auto angle = rawrcam::metadata::elevationAngleRational(captureContext.level->pitchDeg);
+        p.exif.camera_elevation_angle[0] = angle[0];
+        p.exif.camera_elevation_angle[1] = angle[1];
+        p.exif.has_camera_elevation_angle = 1;
+        p.xmpPacket = rawrcam::metadata::levelXmpPacket(*captureContext.level);
+    }
 
     p.privateData = buildDngProvenance(frame, captureContext, gm->mode);
     raw.rawr_private_data = reinterpret_cast<char*>(p.privateData.data());

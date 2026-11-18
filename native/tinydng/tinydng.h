@@ -305,6 +305,9 @@ typedef struct tinydng_exif {
   uint8_t has_sharpness;
   uint8_t exif_version[4];
   uint8_t has_exif_version;
+  /* ExifIFD CameraElevationAngle (0x9405, SRATIONAL): degrees, positive = lens above the horizon. */
+  int32_t camera_elevation_angle[2];
+  uint8_t has_camera_elevation_angle;
   tinydng_blob maker_note; /* ExifIFD */
 } tinydng_exif;
 

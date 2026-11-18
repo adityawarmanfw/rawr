@@ -61,6 +61,7 @@
 #define TD_WTAG_TIFF_EP_STANDARD_ID 37398u
 #define TD_WTAG_XMP 700u
 #define TD_WTAG_EXPOSURE_COMPENSATION 37380u
+#define TD_WTAG_CAMERA_ELEVATION_ANGLE 37893u
 #define TD_WTAG_SHARPNESS 41994u
 #define TD_WTAG_MAKER_NOTE 37500u
 #define TD_WTAG_DATETIME_ORIGINAL 36867u
@@ -2154,6 +2155,11 @@ tinydng_status tinydng_writer_create(tinydng_context *ctx,
             td_add_srational_pairs(e, TD_WTAG_EXPOSURE_COMPENSATION,
                                    &ex->exposure_compensation[0],
                                    &ex->exposure_compensation[1], 1);
+          }
+          if (ex->has_camera_elevation_angle) {
+            td_add_srational_pairs(e, TD_WTAG_CAMERA_ELEVATION_ANGLE,
+                                   &ex->camera_elevation_angle[0],
+                                   &ex->camera_elevation_angle[1], 1);
           }
           if (ex->has_sharpness) {
             td_add_short(e, TD_WTAG_SHARPNESS, ex->sharpness);

@@ -110,6 +110,22 @@ static bool ljpegSsss16Conformant() {
 }
 
 int main() {
+    {
+        namespace md = rawrcam::metadata;
+        const float flat[2] = {88.5f, std::nanf("")};
+        const auto noRoll = md::captureLevelFromValues(flat, 2);
+        if (!noRoll || noRoll->rollDeg || std::abs(noRoll->pitchDeg - 88.5f) > 1e-6f) return 90;
+        const float both[2] = {-12.345f, 200.0f};
+        const auto clamped = md::captureLevelFromValues(both, 2);
+        if (!clamped || !clamped->rollDeg || *clamped->rollDeg != 180.0f) return 91;
+        const float bad[2] = {std::nanf(""), 1.0f};
+        if (md::captureLevelFromValues(bad, 2) || md::captureLevelFromValues(nullptr, 2) ||
+            md::captureLevelFromValues(both, 1)) return 92;
+        const auto angle = md::elevationAngleRational(-12.345f);
+        if (angle[0] != -1235 && angle[0] != -1234) return 93;
+        if (angle[1] != 100) return 94;
+        if (md::levelXmpAttributes(*noRoll).find("rawr:Roll") != std::string::npos) return 95;
+    }
     if (!ljpegSsss16Conformant()) return 10;
     rawrcam::encoding::dng::DngCaptureContext capture{};
     capture.deviceMake = "vivo";
@@ -120,6 +136,7 @@ int main() {
     capture.utcOffsetMinutes = 420;
     capture.displayName = "RAWR_20260826_01000012.dng";
     capture.gps = rawrcam::metadata::makeGps(0, 0, 12345.678, std::nullopt, 1793059200123LL);
+    capture.level = rawrcam::metadata::CaptureLevel{3.2f, -1.8f};
     capture.baselineExposureEV = 2.0f;
     capture.processingRecipe = R"({"schema":"com.rawrcam.processing-recipe","version":1,"filmSimEnabled":true})";
     capture.resolvedRecipe = R"({"version":1,"aePostGain":4})";
@@ -334,6 +351,7 @@ int main() {
             timed.wallClockUnixMillis -= timed.wallClockUnixMillis % 1000;
             timed.utcOffsetMinutes = 0;
             timed.gps.reset();
+            timed.level.reset();
         }
         auto params = rawrcam::encoding::dng::makeTinyDngWriteParams(good, timed, &error);
         if (!params) {
@@ -419,6 +437,22 @@ int main() {
                   img->exif.lens_model &&
                   std::string(img->exif.lens_model) == "vivo X300 Ultra back camera 6mm f/1.8";
         if (img) {
+            // Camera attitude: EXIF CameraElevationAngle (hundredths of a degree) plus an XMP packet,
+            // present only when the capture measured one.
+            const bool hasXmp = img->raw.xmp_packet.present && img->raw.xmp_packet.data && img->raw.xmp_packet.size;
+            const std::string xmp = hasXmp ? std::string(reinterpret_cast<const char*>(img->raw.xmp_packet.data),
+                                                         img->raw.xmp_packet.size)
+                                           : std::string();
+            if (pass == 0) {
+                ok &= img->exif.has_camera_elevation_angle && img->exif.camera_elevation_angle[0] == 320 &&
+                      img->exif.camera_elevation_angle[1] == 100;
+                ok &= xmp.find("rawr:Pitch=\"3.20\"") != std::string::npos &&
+                      xmp.find("rawr:Roll=\"-1.80\"") != std::string::npos &&
+                      xmp.find("xmlns:rawr=\"urn:rawr:ns:1.0/\"") != std::string::npos;
+                ok &= img->raw.rawr_private_data != nullptr;
+            } else {
+                ok &= !img->exif.has_camera_elevation_angle && !hasXmp;
+            }
             for (const char* value : {img->exif.offset_time, img->exif.offset_time_original, img->exif.offset_time_digitized})
                 ok &= value && std::string(value) == (pass == 0 ? "+07:00" : "+00:00");
             for (const char* value : {img->exif.subsec_time, img->exif.subsec_time_original, img->exif.subsec_time_digitized})

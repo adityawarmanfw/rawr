@@ -163,6 +163,13 @@ std::vector<uint8_t> buildDngProvenance(const rawrcam::imaging::RawSnapshot& fra
     if (!ctx.lensDistortion.empty()) prov.extensions.emplace_back("com.rawrcam.lens.distortion_present", "true");
     if (!ctx.lensIntrinsicCalibration.empty())
         prov.extensions.emplace_back("com.rawrcam.lens.intrinsic_present", "true");
+    if (captureContext.level) {
+        prov.extensions.emplace_back("com.rawrcam.level.pitch_deg",
+                                     rawrcam::metadata::formatAngle(captureContext.level->pitchDeg));
+        if (captureContext.level->rollDeg)
+            prov.extensions.emplace_back("com.rawrcam.level.roll_deg",
+                                         rawrcam::metadata::formatAngle(*captureContext.level->rollDeg));
+    }
     if (!frame.metadata.hotPixelMap.empty())
         prov.extensions.emplace_back("com.rawrcam.hot_pixel.count",
                                      std::to_string(frame.metadata.hotPixelMap.size() / 2));
