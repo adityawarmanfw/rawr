@@ -1,5 +1,8 @@
 package com.rawr.camera.ui
 
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
@@ -19,6 +22,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.util.lerp
 import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.max
@@ -29,14 +33,17 @@ private val LevelWhite = Color.White.copy(alpha = .9f)
 private val LevelDim = Color.White.copy(alpha = .6f)
 private val LevelShadow = Color.Black.copy(alpha = .35f)
 
-/** Fixed tick distance from the centre, tick length, and crosshair arm / centre gap (dp). */
 /** Line width of the ticks, crosshair and ring; the dark outline adds 1 dp. */
 private const val LEVEL_STROKE_DP = 1f
 
+/** Fixed tick distance from the centre and tick length (dp). */
 private const val TICK_RADIUS_DP = 46f
 private const val TICK_LENGTH_DP = 6f
-private const val ARM_DP = 34f
+
+/** Crosshair: centre gap, the arm that matters, and the short stub the other arm shrinks to (dp). */
 private const val GAP_DP = 10f
+private const val ARM_DP = 34f
+private const val MINOR_ARM_DP = 18f
 
 /** How far the bubble travels per degree, and the most it travels (dp / degrees). */
 private const val BUBBLE_DP_PER_DEG = 2.5f
@@ -50,18 +57,27 @@ private const val BUBBLE_ALPHA = .45f
  * Four small fixed ticks (left, right, up, down) frame a crosshair that stays at the centre and
  * only rotates with the roll: lined up with the ticks means the horizon is level. A fixed ring at
  * the centre is the target; a faint borderless bubble moves freely for both roll and the up/down
- * angle and fills the ring when level. When the
- * lens swings toward the sky or ground the crosshair eases to still and the bubble's meaning
- * cross-fades to the tilt, over 60 to 75 degrees of elevation.
+ * angle and fills the ring when level. Only one crosshair arm matters at a time, the one that lines
+ * up with the horizon as the photographer sees it: horizontal in portrait, vertical in landscape.
+ * The other arm shrinks to a stub, and turning the phone springs the two over. When the lens swings
+ * toward the sky or ground the crosshair eases to still, both arms grow back to full length, and the
+ * bubble's meaning cross-fades to the tilt, over 60 to 75 degrees of elevation.
  */
 @Composable
 internal fun LevelMeterOverlay(modifier: Modifier = Modifier) {
     val reading = rememberLevelReading()
     LockHaptic(reading)
+    // Recomposes only when the phone crosses between portrait and landscape, not at sensor rate.
+    val landscape by remember { derivedStateOf { reading.value?.quadrant.let { it == 90 || it == 270 } } }
+    val landscapeBlend = animateFloatAsState(
+        targetValue = if (landscape) 1f else 0f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMediumLow),
+        label = "levelCrosshairLandscape"
+    )
     Box(modifier.testTag(CaptureTestTags.LEVEL_METER)) {
         Canvas(Modifier.matchParentSize()) {
             val r = reading.value ?: return@Canvas
-            drawLevel(r)
+            drawLevel(r, landscapeBlend.value)
         }
     }
 }
@@ -99,7 +115,22 @@ private fun DrawScope.mark(color: Color, a: Offset, b: Offset, width: Float = LE
     drawLine(color, a, b, width, StrokeCap.Round)
 }
 
-private fun DrawScope.drawLevel(r: LevelReading) {
+/** Lengths of the crosshair's horizontal and vertical arms, in px. */
+internal data class CrosshairArms(val horizontal: Float, val vertical: Float)
+
+/**
+ * Only the arm that lines up with the horizon as the photographer sees it is full length: the
+ * horizontal arm in portrait ([landscapeBlend] 0), the vertical arm in landscape (1). Pointing at the
+ * sky or ground ([flatBlend] 1) there is no horizon, so both arms are full. The blends may overshoot
+ * their 0..1 range while the spring settles, which makes the arms pop; [floor] keeps a stub visible.
+ */
+internal fun crosshairArms(landscapeBlend: Float, flatBlend: Float, major: Float, minor: Float, floor: Float): CrosshairArms {
+    val horizontal = lerp(lerp(major, minor, landscapeBlend), major, flatBlend)
+    val vertical = lerp(lerp(minor, major, landscapeBlend), major, flatBlend)
+    return CrosshairArms(max(horizontal, floor), max(vertical, floor))
+}
+
+private fun DrawScope.drawLevel(r: LevelReading, landscapeBlend: Float) {
     val c = center
     val w = r.flatBlend
     val flat = r.flat
@@ -123,12 +154,12 @@ private fun DrawScope.drawLevel(r: LevelReading) {
 
     // Crosshair: fixed at the centre. It rolls with the horizon and unwinds smoothly to still as the
     // lens swings toward the sky or ground, where roll stops meaning anything.
-    val arm = ARM_DP.dp.toPx()
     val gap = GAP_DP.dp.toPx()
+    val arms = crosshairArms(landscapeBlend, w, ARM_DP.dp.toPx(), MINOR_ARM_DP.dp.toPx(), gap + 2.dp.toPx())
     rotate(r.rollDeg * (1f - w), c) {
         listOf(-1f, 1f).forEach { s ->
-            mark(crosshairColor, Offset(c.x + s * gap, c.y), Offset(c.x + s * arm, c.y))
-            mark(crosshairColor, Offset(c.x, c.y + s * gap), Offset(c.x, c.y + s * arm))
+            mark(crosshairColor, Offset(c.x + s * gap, c.y), Offset(c.x + s * arms.horizontal, c.y))
+            mark(crosshairColor, Offset(c.x, c.y + s * gap), Offset(c.x, c.y + s * arms.vertical))
         }
     }
 
