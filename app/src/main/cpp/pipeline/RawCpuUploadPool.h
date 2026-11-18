@@ -41,7 +41,7 @@ class RawCpuUploadPool final {
     void configure(uint32_t width, uint32_t height) noexcept;
     // Block-CFA lens: every route below fills the owned image by remosaicing
     // to Bayer in `order` (block 1 = off). Takes effect on the next frame.
-    void configureRemosaic(uint32_t block, uint32_t order, uint32_t quality) noexcept;
+    void configureRemosaic(uint32_t block, uint32_t order, uint32_t quality, float black = 0.0f) noexcept;
     void destroy() noexcept;
 
     // Copies the camera frame into the slot's buffer. The caller must have
@@ -82,6 +82,7 @@ class RawCpuUploadPool final {
     std::unique_ptr<rawr::raw_ingress::Raw10Unpacker> unpacker_;
     std::unique_ptr<rawr::raw_ingress::RawRemosaicker> remosaicker_;
     uint32_t remosaicBlock_ = 1, remosaicOrder_ = 0, remosaicQuality_ = 1;
+    float remosaicBlack_ = 0.0f;
     // Points `raw` at the remosaicker when a block CFA is configured.
     void applyRemosaic(rawrcam::vulkan::ImportedRaw& raw, bool sourceRaw10);
     struct Parity {

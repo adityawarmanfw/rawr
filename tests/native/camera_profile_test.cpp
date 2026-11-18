@@ -410,6 +410,12 @@ void testProfileJson() {
         assert(cfa->lenses[1].sensorLayoutBlock == 1 && cfa->lenses[1].colourOrder == 3u);
         assert(cfa->lenses[1].liveRemosaic == 1u && cfa->lenses[1].photoRemosaic == 2u);  // defaults
         assert(serializeCameraProfile(*parseCameraProfile(serializeCameraProfile(*cfa))) == serializeCameraProfile(*cfa));
+        // Detail remosaic (live GPU and single-photo CPU) round-trips.
+        const auto detail = parseCameraProfile(
+            R"({"lenses":[{"id":"d","cameraId":"5","cfa":{"block":2,"live":"detail","photo":"detail"}}]})");
+        assert(detail && detail->lenses[0].liveRemosaic == 3u && detail->lenses[0].photoRemosaic == 3u);
+        assert(serializeCameraProfile(*parseCameraProfile(serializeCameraProfile(*detail))) ==
+               serializeCameraProfile(*detail));
         assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","cfa":{"block":3}}]})"));
         assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","cfa":{"order":"RGBG"}}]})"));
         // Reduced photo output: 4x4 photo layout only; round-trips through the serializer.

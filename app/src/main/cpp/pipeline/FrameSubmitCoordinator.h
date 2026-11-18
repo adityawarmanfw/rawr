@@ -69,11 +69,12 @@ struct FrameSubmitConfiguration {
     // Same-colour block side of the camera's RAW; >1 routes ingress through
     // the GPU remosaic so every consumer reads Bayer in `cfa` order.
     uint32_t cfaBlock = 1;
-    uint32_t cfaQuality = 1;  // imaging::CfaRemosaicQuality: Fast 0 / Standard 1
+    uint32_t cfaQuality = 1;  // imaging::CfaRemosaicQuality: Fast 0 / Standard 1 / Detail 3
     int sensorOrientationDegrees = 0;
     uint32_t diagnosticMode = 0;
     bool experimentalZeroCopy = false;
     bool lensShadingCorrectionEnabled = false;
+    float cfaBlack = 0.0f;  // raw black level in sample units (Detail remosaic regulariser)
 };
 
 // Owns the runtime state machine after Camera2 RAW/metadata enter the app and

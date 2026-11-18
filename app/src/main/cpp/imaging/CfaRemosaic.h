@@ -180,7 +180,8 @@ inline float cfaFastAt(const uint16_t* raw, const float* means, uint32_t w, uint
 // for quarter-DN codes). Caller must keep samples within uint16 range.
 // Output and intermediate green retain the same fixed-point units.
 inline void remosaicBlockCfa(uint16_t* raw, uint32_t w, uint32_t h, uint32_t n, uint32_t order, uint32_t threads = 1,
-                             CfaRemosaicQuality quality = CfaRemosaicQuality::Standard, float codesPerDn = 1.0f) {
+                             CfaRemosaicQuality quality = CfaRemosaicQuality::Standard, float codesPerDn = 1.0f,
+                             float blackLevel = 0.0f) {
     if (n < 2 || !raw || w < 2 * n || h < 2 * n || !std::isfinite(codesPerDn) || codesPerDn <= 0.0f) return;
     if (quality == CfaRemosaicQuality::Detail && n != 2) quality = CfaRemosaicQuality::High;
     const bool detail = quality == CfaRemosaicQuality::Detail;
@@ -337,6 +338,11 @@ inline void remosaicBlockCfa(uint16_t* raw, uint32_t w, uint32_t h, uint32_t n, 
                     }
             }
         const float sigmaFloor = 4.0f * codesPerDn;
+        // The wanted colour of a blended edge pixel lies on the line between the two colours, so it is a
+        // line fit T = a * G + b to the taps (slope regularised toward 1, the colour-difference model, where
+        // green does not vary). The green similarity is looser than a plain colour difference needs, so both
+        // sides of an edge contribute; the line is trusted a little beyond the taps' green range.
+        constexpr float kLineSimilarity = 0.5f, kLineExtrapolation = 1.0f;
         parallelRows(h, [&](uint32_t y0, uint32_t y1) {
             for (uint32_t y = y0; y < y1; ++y)
                 for (uint32_t x = 0; x < w; ++x) {
@@ -350,7 +356,10 @@ inline void remosaicBlockCfa(uint16_t* raw, uint32_t w, uint32_t h, uint32_t n, 
                     } else {
                         const bool interior = x >= uint32_t(kRadius) && y >= uint32_t(kRadius) &&
                                               x + uint32_t(kRadius) < w && y + uint32_t(kRadius) < h;
-                        float sum = 0.0f, weight = 0.0f;
+                        float weight = 0.0f;
+                        // Sums of the weighted line fit v = a * u + b, with u, v measured from the
+                        // pixel's own green (green and wanted colour of each tap, minus greenHere).
+                        float su = 0.0f, sv = 0.0f, suu = 0.0f, suv = 0.0f, umin = 1e30f, umax = -1e30f;
                         for (const auto& t : taps) {
                             if (!interior) {
                                 const int32_t qx = int32_t(x) + t.dx, qy = int32_t(y) + t.dy;
@@ -359,13 +368,35 @@ inline void remosaicBlockCfa(uint16_t* raw, uint32_t w, uint32_t h, uint32_t n, 
                             const size_t b = size_t(int64_t(i) + int64_t(t.dy) * int64_t(w) + t.dx);
                             const float g = float(green[b]);
                             // spatial / (1 + (d / s)^4) with one division
-                            const float d = g - greenHere, sg = 0.1f * std::max(greenHere, g) + sigmaFloor;
+                            const float d = g - greenHere, sg = kLineSimilarity * std::max(greenHere, g) + sigmaFloor;
                             const float d2 = d * d, s2 = sg * sg, s4 = s2 * s2;
                             const float wgt = t.spatial * s4 / (s4 + d2 * d2);
-                            sum += wgt * float(pixelDiff[b]);
+                            const float u = d, vv = d + float(pixelDiff[b]);
+                            if (wgt > 1e-3f) {
+                                umin = std::min(umin, u);
+                                umax = std::max(umax, u);
+                            }
+                            su += wgt * u;
+                            sv += wgt * vv;
+                            suu += wgt * u * u;
+                            suv += wgt * u * vv;
                             weight += wgt;
                         }
-                        v = greenHere + (weight > 0.0f ? sum / weight : 0.0f);
+                        if (weight > 0.0f) {
+                            const float mu = su / weight, mv = sv / weight;
+                            const float var = suu / weight - mu * mu, cov = suv / weight - mu * mv;
+                            // Slope regulariser (pulls the slope toward 1): a small share of the green level, plus a
+                            // noise-sized floor so flat dark areas keep the colour-difference model.
+                            const float level = std::max(greenHere - blackLevel, codesPerDn);
+                            const float lambda = 0.00025f * level * level + 64.0f * codesPerDn * codesPerDn;
+                            const float slope = (cov + lambda) / (var + lambda);
+                            // Fit only inside (a little beyond) the taps' green range; outside it, slope 1.
+                            const float margin = kLineExtrapolation * (umax - umin);
+                            const float uHere = std::clamp(0.0f, umin - margin, umax + margin);
+                            v = greenHere + mv + slope * (uHere - mu) - uHere;
+                        } else {
+                            v = greenHere;
+                        }
                     }
                     raw[i] = uint16_t(std::clamp(std::lround(v), 0l, 65535l));
                 }
@@ -470,9 +501,11 @@ inline void remosaicBlockCfa(uint16_t* raw, uint32_t w, uint32_t h, uint32_t n, 
 
 // Packed RAW16 bytes (little-endian, as the snapshots hold them).
 inline void remosaicBlockCfa(std::vector<uint8_t>& raw16, uint32_t w, uint32_t h, uint32_t n, uint32_t order,
-                             uint32_t threads = 1, CfaRemosaicQuality quality = CfaRemosaicQuality::Standard, float codesPerDn = 1.0f) {
+                             uint32_t threads = 1, CfaRemosaicQuality quality = CfaRemosaicQuality::Standard,
+                             float codesPerDn = 1.0f, float blackLevel = 0.0f) {
     if (raw16.size() < size_t(w) * h * 2) return;
-    remosaicBlockCfa(reinterpret_cast<uint16_t*>(raw16.data()), w, h, n, order, threads, quality, codesPerDn);
+    remosaicBlockCfa(reinterpret_cast<uint16_t*>(raw16.data()), w, h, n, order, threads, quality, codesPerDn,
+                     blackLevel);
 }
 
 }  // namespace rawrcam::imaging

@@ -241,7 +241,8 @@ internal fun SensorLayoutGroup(
                 values = LIVE_REMOSAIC_QUALITIES,
                 label = ::remosaicQualityLabel,
                 supportingText = (if (hasPhotoStream) "Viewfinder and video. " else "Viewfinder, video and merged photos. ") +
-                    "Fast skips green interpolation: about 20% cheaper, softer colour detail.",
+                    "Fast skips green interpolation: about 20% cheaper, softer colour detail. " +
+                    "Detail (quad 2×2 only) follows edges and thin lines with the fewest colour fringes.",
                 testTag = lensEditorTag("live_remosaic"),
                 onSelect = { onChange(layout.copy(liveRemosaic = it)) }
             )
@@ -276,7 +277,8 @@ internal fun SensorLayoutGroup(
                 selected = layout.photoRemosaic,
                 values = PHOTO_REMOSAIC_QUALITIES,
                 label = ::remosaicQualityLabel,
-                supportingText = "Single photos. High searches wider for clean edges." +
+                supportingText = "Single photos. High searches wider for clean edges. " +
+                    "Detail (quad 2×2 only) fits a colour line per pixel: the fewest fringes on thin lines and edges." +
                     if (hasPhotoStream) " Merged photo frames use Standard." else "",
                 testTag = lensEditorTag("photo_remosaic"),
                 onSelect = { onChange(layout.copy(photoRemosaic = it)) }
@@ -290,6 +292,7 @@ internal fun photoOutputLabel(output: String): String = if (output == "reduced")
 internal fun remosaicQualityLabel(quality: String): String = when (quality) {
     "fast" -> "Fast"
     "high" -> "High"
+    "detail" -> "Detail"
     else -> "Standard"
 }
 

@@ -94,9 +94,10 @@ bool runCase(vktest::Ctx& c, rawr::raw_ingress::RawRemosaicker& remosaicker, VkC
     rawrcam::imaging::remosaicBlockCfa(
         expected.data(), ow, oh, k.reduce ? 2u : k.block, k.order, 1,
         k.detail ? rawrcam::imaging::CfaRemosaicQuality::Detail
-        : k.high ? rawrcam::imaging::CfaRemosaicQuality::High
-               : (k.fast ? rawrcam::imaging::CfaRemosaicQuality::Fast : rawrcam::imaging::CfaRemosaicQuality::Standard),
-        k.reduce ? 4.0f : 1.0f);
+        : k.high
+            ? rawrcam::imaging::CfaRemosaicQuality::High
+            : (k.fast ? rawrcam::imaging::CfaRemosaicQuality::Fast : rawrcam::imaging::CfaRemosaicQuality::Standard),
+        k.reduce ? 4.0f : 1.0f, 64.0f * (k.reduce ? 4.0f : 1.0f));  // Frame::blackLevel default, in sample units
 
     const VkDeviceSize srcBytes = (packed.size() + 3u) & ~VkDeviceSize(3);
     const VkMemoryPropertyFlags host = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
@@ -224,11 +225,17 @@ int main(int argc, char** argv) {
             if (argc != 1) {
                 if (argc != 6 && argc != 7)
                     throw std::runtime_error(
-                        "usage: raw_remosaic_vulkan_test RAW16 WIDTH HEIGHT ORDER OUTPUT_RAW16 [high|detail|fit]");
+                        "usage: raw_remosaic_vulkan_test RAW16 WIDTH HEIGHT ORDER OUTPUT_RAW16 [high|detail|fit|quad]");
                 unsigned iw = std::stoul(argv[2]), ih = std::stoul(argv[3]), order = std::stoul(argv[4]);
-                ok = runCase(c, *remosaicker, cmd, fence, 0, {iw, ih, 4, order, iw * 2, false, false, true, true, !(argc == 7 && std::string(argv[6]) == "high"),
-                              argc == 7 && std::string(argv[6]) == "fit"},
-                             argv[1], argv[5]);
+                if (argc == 7 && std::string(argv[6]) == "quad")  // native 2x2 quad, Detail (real-image parity)
+                    ok = runCase(c, *remosaicker, cmd, fence, 0,
+                                 {iw, ih, 2, order, iw * 2, false, false, false, false, true, false}, argv[1], argv[5]);
+                else
+                    ok = runCase(
+                        c, *remosaicker, cmd, fence, 0,
+                        {iw, ih, 4, order, iw * 2, false, false, true, true,
+                         !(argc == 7 && std::string(argv[6]) == "high"), argc == 7 && std::string(argv[6]) == "fit"},
+                        argv[1], argv[5]);
             } else {
                 for (unsigned order = 0; order < 4; ++order) {
                     for (bool raw10 : {false, true}) {

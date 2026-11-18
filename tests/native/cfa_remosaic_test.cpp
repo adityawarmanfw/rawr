@@ -147,6 +147,39 @@ int main() {
                 check(std::abs(a - b / 4) < 0.001f, "fixed-point green weights retain DN scale");
             }
     }
+    // Detail's colour line: a two-colour edge with blended pixels. The red/blue of a blended pixel lie on the line
+    // between the two colours (slope != 1 against green), which a colour difference cannot follow.
+    {
+        constexpr uint32_t es = 96;
+        const float yel[3] = {330.0f, 300.0f, 40.0f}, drk[3] = {12.0f, 12.0f, 14.0f};
+        const auto colour = [&](uint32_t c, uint32_t x, uint32_t y) {
+            const float edgeAt = 30.0f + 0.31f * float(y);  // slanted edge, 2 px soft transition
+            const float a = std::clamp((float(x) - edgeAt) / 2.0f + 0.5f, 0.0f, 1.0f);
+            return 64.0f + yel[c] * (1.0f - a) + drk[c] * a;
+        };
+        for (uint32_t order : {0u, 3u}) {
+            std::vector<uint16_t> mosaic(es * es), truth(es * es);
+            for (uint32_t y = 0; y < es; ++y)
+                for (uint32_t x = 0; x < es; ++x) {
+                    mosaic[y * es + x] = uint16_t(std::lround(colour(cfaChannel(order, x / 2, y / 2), x, y)));
+                    truth[y * es + x] = uint16_t(std::lround(colour(cfaChannel(order, x, y), x, y)));
+                }
+            auto out = mosaic;
+            remosaicBlockCfa(out.data(), es, es, 2, order, 2, CfaRemosaicQuality::Detail, 1.0f, 64.0f);
+            double e = 0.0, worst = 0.0;
+            for (uint32_t y = 8; y < es - 8; ++y)
+                for (uint32_t x = 8; x < es - 8; ++x) {
+                    const double d = std::abs(double(out[y * es + x]) - double(truth[y * es + x]));
+                    e += d;
+                    worst = std::max(worst, d);
+                }
+            e /= double((es - 16) * (es - 16));
+            char what[96];
+            std::snprintf(what, sizeof what, "two-colour edge order=%u: mean error %.2f DN (max %.1f)", order, e,
+                          worst);
+            check(e < 1.0, what);
+        }
+    }
     if (failures == 0) std::printf("cfa_remosaic_test: ok\n");
     return failures == 0 ? 0 : 1;
 }

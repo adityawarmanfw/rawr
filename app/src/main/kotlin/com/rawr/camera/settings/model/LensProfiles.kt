@@ -379,8 +379,8 @@ enum class LensMirror(val wireName: String, val label: String) {
 
 val SENSOR_LAYOUT_BLOCKS = listOf(1, 2, 4)
 val COLOUR_ORDERS = listOf("RGGB", "GRBG", "GBRG", "BGGR")
-val LIVE_REMOSAIC_QUALITIES = listOf("fast", "standard")
-val PHOTO_REMOSAIC_QUALITIES = listOf("standard", "high")
+val LIVE_REMOSAIC_QUALITIES = listOf("fast", "standard", "detail")
+val PHOTO_REMOSAIC_QUALITIES = listOf("standard", "high", "detail")
 val PHOTO_OUTPUTS = listOf("full", "reduced")
 
 /** Problems with one lens, in display order; empty when the lens is valid. */

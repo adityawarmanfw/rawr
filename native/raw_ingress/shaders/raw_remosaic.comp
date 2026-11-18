@@ -8,7 +8,7 @@
 //  6. exact 2x2 source sum -> half-resolution quarter-DN Quad image;
 //  7. High Quad Bayer reconstruction (after pass 0 statistics);
 //  8. Detail Quad: green with cubic interpolation into the green image;
-//  9. Detail Quad Bayer out (per-pixel colour difference).
+//  9. Detail Quad Bayer out (per-pixel colour line fit).
 // Phase-response fit (Hexadeca reduction only, mirrors imaging/PhaseFit.h):
 //  13. clear the statistics; 10. block sums (16 raw samples) into the green
 //  image; 11. statistics over a lattice of flat blocks (shared-memory
@@ -293,12 +293,29 @@ void fitFinalizeType(uint type) {
     }
 }
 
-// Detail Quad (block 2): the colour difference raw - green of every wanted-
-// colour pixel within 3 pixels, Gaussian distance and quartic green-similarity
-// weights. Mirrors the Detail branch of remosaicBlockCfa, but visits only the
-// 2x2 blocks of the wanted colour (parity pc.parityR/B) instead of testing all
-// 49 taps, and takes the separable distance weight from a table.
+// Detail Quad (block 2): the wanted colour of a blended pixel is a line fit T = a * G + b through
+// the wanted-colour pixels within 3 pixels (Gaussian distance and quartic green-similarity weights),
+// measured from the pixel's own green: u = g - g0, v = raw - g0. The slope is pulled toward 1 (the
+// colour-difference model) by a regulariser, and the line is trusted up to one green range beyond
+// the taps. Mirrors the Detail branch of remosaicBlockCfa, but visits only the 2x2 blocks of the
+// wanted colour (parity pc.parityR/B) instead of testing all 49 taps, and takes the separable
+// distance weight from a table.
 const float kDetailExp[4] = float[4](1.0, 0.77880079, 0.36787945, 0.10539922);  // exp(-d^2 / 4)
+const float kLineSimilarity = 0.5;
+const float kLineExtrapolation = 1.0;
+
+// The line fit from its weighted sums (sums of w, w*u, w*v, w*u*u, w*u*v; green range of the taps).
+float lineFit(float g0, float weight, float su, float sv, float suu, float suv, float umin, float umax) {
+    if (!(weight > 0.0)) return g0;
+    float mu = su / weight, mv = sv / weight;
+    float var_ = suu / weight - mu * mu, cov = suv / weight - mu * mv;
+    float level = max(g0 - pc.blackLevel * pc.codesPerDn, pc.codesPerDn);
+    float lambda = 0.00025 * level * level + 64.0 * pc.codesPerDn * pc.codesPerDn;
+    float slope = (cov + lambda) / (var_ + lambda);
+    float margin = kLineExtrapolation * (umax - umin);
+    float uHere = clamp(0.0, umin - margin, umax + margin);
+    return g0 + mv + slope * (uHere - mu) - uHere;
+}
 
 float detailAt(uint x, uint y) {
     uint want = channelAt(x, y);
@@ -308,7 +325,7 @@ float detailAt(uint x, uint y) {
     uint parity = want == 0u ? pc.parityR : pc.parityB;
     int bpy = int(parity >> 1u), bpx = int(parity & 1u);
     int X = int(x), Y = int(y);
-    float sum = 0.0, weight = 0.0;
+    float weight = 0.0, su = 0.0, sv = 0.0, suu = 0.0, suv = 0.0, umin = 1e30, umax = -1e30;
     for (int by = (Y - 3) >> 1; by <= (Y + 3) >> 1; ++by) {
         if ((by & 1) != bpy) continue;
         for (int bx = (X - 3) >> 1; bx <= (X + 3) >> 1; ++bx) {
@@ -320,16 +337,24 @@ float detailAt(uint x, uint y) {
                     int qx = 2 * bx + i, dx = qx - X;
                     if (qx < 0 || qx >= int(pc.width) || abs(dx) > 3) continue;
                     float g = greenAt(uint(qx), uint(qy));
-                    float sigma = 0.1 * max(g0, g) + 4.0 * pc.codesPerDn;
-                    float r = (g - g0) / sigma;
-                    float wgt = kDetailExp[abs(dx)] * kDetailExp[abs(dy)] / (1.0 + r * r * r * r);
-                    sum += wgt * (rawAt(qx, qy) - g);
+                    float d = g - g0, sg = kLineSimilarity * max(g0, g) + 4.0 * pc.codesPerDn;
+                    float d2 = d * d, s2 = sg * sg, s4 = s2 * s2;
+                    float wgt = kDetailExp[abs(dx)] * kDetailExp[abs(dy)] * s4 / (s4 + d2 * d2);
+                    float vv = rawAt(qx, qy) - g0;
+                    if (wgt > 1e-3) {
+                        umin = min(umin, d);
+                        umax = max(umax, d);
+                    }
+                    su += wgt * d;
+                    sv += wgt * vv;
+                    suu += wgt * d * d;
+                    suv += wgt * d * vv;
                     weight += wgt;
                 }
             }
         }
     }
-    return g0 + (weight > 0.0 ? sum / weight : 0.0);
+    return lineFit(g0, weight, su, sv, suu, suv, umin, umax);
 }
 
 
@@ -397,19 +422,28 @@ float detailAtTile(uint x, uint y, ivec2 origin) {
             rows[nr] = q;
             wr[nr++] = kDetailExp[abs(q - Y)];
         }
-    float floorSigma = 4.0 * pc.codesPerDn, sum = 0.0, weight = 0.0;
+    float floorSigma = 4.0 * pc.codesPerDn;
+    float weight = 0.0, su = 0.0, sv = 0.0, suu = 0.0, suv = 0.0, umin = 1e30, umax = -1e30;
     for (int j = 0; j < nr; ++j)
         for (int i = 0; i < nc; ++i) {
             uint t = detailTileAt(ivec2(cols[i], rows[j]), origin);
             float g = float(t & 0xffffu);
-            // spatial / (1 + (d / s)^4) with one division
-            float d = g - g0, sg = 0.1 * max(g0, g) + floorSigma;
+            // spatial * s^4 / (s^4 + d^4), one division
+            float d = g - g0, sg = kLineSimilarity * max(g0, g) + floorSigma;
             float d2 = d * d, s2 = sg * sg, s4 = s2 * s2;
             float wgt = wc[i] * wr[j] * s4 / (s4 + d2 * d2);
-            sum += wgt * (float(t >> 16u) - g);
+            float vv = float(t >> 16u) - g0;
+            if (wgt > 1e-3) {
+                umin = min(umin, d);
+                umax = max(umax, d);
+            }
+            su += wgt * d;
+            sv += wgt * vv;
+            suu += wgt * d * d;
+            suv += wgt * d * vv;
             weight += wgt;
         }
-    return g0 + (weight > 0.0 ? sum / weight : 0.0);
+    return lineFit(g0, weight, su, sv, suu, suv, umin, umax);
 }
 
 // Passes 0 and 2 run one invocation per 2x2 pixel group (always inside one

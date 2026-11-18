@@ -696,8 +696,8 @@ std::string serializeCameraProfile(const CameraProfile& profile) {
             if (r.photoReduced) layout.text("photoOutput", "reduced");
             if (r.photoPhaseFit) layout.flag("photoPhaseFit", true);
             if (r.colourOrder) layout.text("colourOrder", cfaOrderName(*r.colourOrder));
-            layout.text("liveRemosaic", r.liveRemosaic == 0 ? "fast" : "standard");
-            layout.text("photoRemosaic", r.photoRemosaic == 2 ? "high" : "standard");
+            layout.text("liveRemosaic", r.liveRemosaic == 0 ? "fast" : r.liveRemosaic == 3 ? "detail" : "standard");
+            layout.text("photoRemosaic", r.photoRemosaic == 3 ? "detail" : r.photoRemosaic == 2 ? "high" : "standard");
             image.raw("sensorLayout", layout.str());
         }
         if (r.distortion) {
@@ -1152,8 +1152,11 @@ std::optional<LensRoute> readLens(const Json& l, std::string* error) {
                 return std::nullopt;
             }
         }
-        r.liveRemosaic = c->str("liveRemosaic", "standard") == "fast" ? 0u : 1u;
-        r.photoRemosaic = c->str("photoRemosaic", "high") == "standard" ? 1u : 2u;
+        {
+            const std::string live = c->str("liveRemosaic", "standard"), photo = c->str("photoRemosaic", "high");
+            r.liveRemosaic = live == "fast" ? 0u : live == "detail" ? 3u : 1u;
+            r.photoRemosaic = photo == "standard" ? 1u : photo == "detail" ? 3u : 2u;
+        }
     }
     if (!readLevels(image.get("levels"), r.levels)) {
         if (error) *error = "invalid levels for lens " + r.lensId;

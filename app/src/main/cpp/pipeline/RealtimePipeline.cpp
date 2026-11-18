@@ -386,8 +386,8 @@ bool RealtimePipeline::configureGeometry(uint64_t generation, uint32_t width, ui
         configured_ = true;
         realtime_.configure(pipeline::FrameSubmitConfiguration{
             generation_, rawWidth_, rawHeight_, previewWidth_, previewHeight_, cfa_, cfaBlock_, cfaQuality_,
-            sensorOrientationDegrees_,
-            realtime_.diagnosticMode(), realtime_.experimentalZeroCopy(), realtime_.lensShadingCorrectionEnabled()});
+            sensorOrientationDegrees_, realtime_.diagnosticMode(), realtime_.experimentalZeroCopy(),
+            realtime_.lensShadingCorrectionEnabled(), 0.25f * (black_[0] + black_[1] + black_[2] + black_[3])});
         realtime_.setDisplayRotationDegrees(displayRotationDegrees_);
         realtime_.setScopeDeviceRotationDegrees(scopeDeviceRotationDegrees_);
 
