@@ -21,6 +21,13 @@ internal fun DisplayControlsSettings(state: SettingsUiState, dispatch: SettingsD
             GridModeSettingsRow(state.values.gridMode) { dispatch.invoke(SetGridMode(it)) }
             SettingDivider()
             SettingsSwitchRow(
+                title = "Level meter",
+                checked = state.values.levelMeterEnabled,
+                supportingText = "Horizon line for tilt, a pitch gauge for up/down, and a bubble level when the camera points at the sky or ground.",
+                testTag = SettingsTestTags.row("DisplayControls", "level_meter")
+            ) { dispatch.invoke(SetLevelMeter(it)) }
+            SettingDivider()
+            SettingsSwitchRow(
                 title = "DCP Quick Select",
                 checked = state.values.showDcpQuickSelect,
                 supportingText = "Show the DCP profile shortcut beside the lens selector on the capture screen.",

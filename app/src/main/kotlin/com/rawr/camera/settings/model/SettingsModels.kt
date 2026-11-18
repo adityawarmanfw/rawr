@@ -595,6 +595,8 @@ data class SettingsValues(
     val gridMode: GridMode = GridMode.Thirds,
     /** Capture-screen DCP shortcut next to the lens selector. */
     val showDcpQuickSelect: Boolean = true,
+    /** Horizon/level overlay on the capture viewfinder. */
+    val levelMeterEnabled: Boolean = false,
     // Preview-only look-stage (tonemap or film) downsample divisor, 1..4.
     // Film always runs at 2 or more. Never touches stills, video, or EXIF.
     val viewfinderDivisor: Int = 2,

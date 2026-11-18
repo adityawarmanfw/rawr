@@ -77,5 +77,8 @@ internal fun reduceCaptureSettings(
     is SetShowDcpQuickSelect -> {
         state.withValues(state.values.copy(showDcpQuickSelect = action.enabled))
     }
+    is SetLevelMeter -> {
+        state.withValues(state.values.copy(levelMeterEnabled = action.enabled))
+    }
     else -> error("Unsupported capture settings action: $action")
 }

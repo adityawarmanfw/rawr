@@ -81,53 +81,51 @@ internal fun ViewfinderFixture(modifier: Modifier) {
     }
 }
 
+/** Radius kept clear around the centre for the level meter (its ticks reach about 52 dp). */
+private const val LEVEL_CLEARANCE_DP = 60f
+
 @Composable
-internal fun GridOverlay(mode: GridMode, modifier: Modifier) {
+internal fun GridOverlay(mode: GridMode, modifier: Modifier, clearCenter: Boolean = false) {
     if (mode == GridMode.Off) return
     Canvas(modifier) {
         val color = Color.White.copy(alpha = .20f)
+        val hole = if (clearCenter) LEVEL_CLEARANCE_DP.dp.toPx() else 0f
+        val cx = size.width / 2f
+        val cy = size.height / 2f
+
+        // A vertical/horizontal line, broken around the centre when the level meter needs it.
+        fun vertical(x: Float, y0: Float, y1: Float, c: Color) {
+            if (hole > 0f && x == cx) {
+                if (cy - hole > y0) drawLine(c, Offset(x, y0), Offset(x, cy - hole), 1f)
+                if (cy + hole < y1) drawLine(c, Offset(x, cy + hole), Offset(x, y1), 1f)
+            } else drawLine(c, Offset(x, y0), Offset(x, y1), 1f)
+        }
+        fun horizontal(y: Float, x0: Float, x1: Float, c: Color) {
+            if (hole > 0f && y == cy) {
+                if (cx - hole > x0) drawLine(c, Offset(x0, y), Offset(cx - hole, y), 1f)
+                if (cx + hole < x1) drawLine(c, Offset(cx + hole, y), Offset(x1, y), 1f)
+            } else drawLine(c, Offset(x0, y), Offset(x1, y), 1f)
+        }
+
         when (mode) {
             GridMode.Thirds -> {
                 listOf(1f / 3f, 2f / 3f).forEach { fraction ->
-                    drawLine(color, Offset(size.width * fraction, 0f), Offset(size.width * fraction, size.height), 1f)
-                    drawLine(color, Offset(0f, size.height * fraction), Offset(size.width, size.height * fraction), 1f)
+                    vertical(size.width * fraction, 0f, size.height, color)
+                    horizontal(size.height * fraction, 0f, size.width, color)
                 }
             }
 
             GridMode.FourByFour -> {
                 (1..3).forEach { index ->
                     val fraction = index / 4f
-                    drawLine(
-                        color.copy(alpha = .15f),
-                        Offset(size.width * fraction, 0f),
-                        Offset(size.width * fraction, size.height),
-                        1f
-                    )
-                    drawLine(
-                        color.copy(alpha = .15f),
-                        Offset(0f, size.height * fraction),
-                        Offset(
-                            size.width,
-                            size.height * fraction
-                        ),
-                        1f
-                    )
+                    vertical(size.width * fraction, 0f, size.height, color.copy(alpha = .15f))
+                    horizontal(size.height * fraction, 0f, size.width, color.copy(alpha = .15f))
                 }
             }
 
             GridMode.Cross -> {
-                drawLine(
-                    color,
-                    Offset(size.width / 2f, size.height * .2f),
-                    Offset(size.width / 2f, size.height * .8f),
-                    1f
-                )
-                drawLine(
-                    color,
-                    Offset(size.width * .2f, size.height / 2f),
-                    Offset(size.width * .8f, size.height / 2f),
-                    1f
-                )
+                vertical(cx, size.height * .2f, size.height * .8f, color)
+                horizontal(cy, size.width * .2f, size.width * .8f, color)
             }
 
             GridMode.Off -> {

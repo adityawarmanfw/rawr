@@ -64,7 +64,8 @@ internal fun CaptureViewfinder(
         if (!preview.nativeContent) {
             MonitoringOverlay(state.armedOverlays, state.falseColorManual, Modifier.matchParentSize())
         }
-        GridOverlay(state.grid, Modifier.matchParentSize())
+        GridOverlay(state.grid, Modifier.matchParentSize(), clearCenter = quick.levelMeterEnabled)
+        if (quick.levelMeterEnabled) LevelMeterOverlay(Modifier.matchParentSize())
 
         var viewfinderSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
         // Focus selector swaps the bottom slot to focus controls instead of

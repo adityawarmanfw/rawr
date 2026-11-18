@@ -445,6 +445,15 @@ class SettingsModelTest {
         assertTrue(values.toViewfinderQuickState().dcps.isEmpty())
     }
 
+    @Test fun levelMeterIsOffByDefaultAndReachesTheViewfinder() {
+        val controller = PersistentSettingsController()
+        assertFalse(controller.state.value.values.levelMeterEnabled)
+        assertFalse(controller.state.value.values.toViewfinderQuickState().levelMeterEnabled)
+        controller.dispatch(SetLevelMeter(true))
+        assertTrue(controller.state.value.values.levelMeterEnabled)
+        assertTrue(controller.state.value.values.toViewfinderQuickState().levelMeterEnabled)
+    }
+
     @Test fun viewfinderDivisorIsDisplaySettingClampedToOneThroughFour() {
         val controller = PersistentSettingsController()
         controller.dispatch(SetViewfinderDivisor(3))

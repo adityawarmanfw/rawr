@@ -9,6 +9,7 @@ package com.rawr.camera.ui
  */
 object CaptureTestTags {
     const val VIEWFINDER = "capture_viewfinder"
+    const val LEVEL_METER = "capture_level_meter"
     const val DCP_PROFILE = "capture_dcp_profile"
     fun dcpOption(file: String?): String = "capture_dcp_${file ?: "default"}"
     const val SHUTTER = "capture_shutter"

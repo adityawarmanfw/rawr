@@ -510,6 +510,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
             saveBaseDng = p[Keys.saveBaseDng] ?: true,
             gridMode = enumOrDefault(p[Keys.gridMode], d.gridMode),
             showDcpQuickSelect = p[Keys.showDcpQuickSelect] ?: d.showDcpQuickSelect,
+            levelMeterEnabled = p[Keys.levelMeterEnabled] ?: d.levelMeterEnabled,
             armedOverlays = decodeArmedOverlays(p, d.armedOverlays),
             falseColorManual = p[Keys.falseColorManual] ?: d.falseColorManual,
             activeScopes = decodeScopes(p[Keys.activeScopes], d.activeScopes),
@@ -713,6 +714,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.saveBaseDng] = v.saveBaseDng
         p[Keys.gridMode] = v.gridMode.name
         p[Keys.showDcpQuickSelect] = v.showDcpQuickSelect
+        p[Keys.levelMeterEnabled] = v.levelMeterEnabled
         // Blank (not absent) = all off, so a non-empty default can't come back.
         p[Keys.armedOverlays] = v.armedOverlays.map { it.name }.distinct().sorted().joinToString(",")
         p[Keys.falseColorManual] = v.falseColorManual
@@ -991,6 +993,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val saveBaseDng = booleanPreferencesKey("capture_save_base_dng")
         val gridMode = stringPreferencesKey("capture_grid_mode")
         val showDcpQuickSelect = booleanPreferencesKey("capture_show_dcp_quick_select")
+        val levelMeterEnabled = booleanPreferencesKey("capture_level_meter")
         val overlayMode = stringPreferencesKey("capture_overlay_mode")
         val armedOverlays = stringPreferencesKey("capture_armed_overlays")
         val falseColorManual = booleanPreferencesKey("capture_false_color_manual")
