@@ -61,6 +61,8 @@ class SessionEngine {
     // Shows exactly the record window in the viewfinder before recording
     // starts, so framing never jumps. No-op for Open Gate (already full).
     void setVideoPreviewCropOut(uint32_t width, uint32_t height);
+    // Video mode above 30 fps: frame inside the high-fps sensor mode's image area (image.cropEdgesHighFps).
+    void setVideoHighFps(bool high);
     // Keeps the recording processing for this size (0x0 = full RAW, Open
     // Gate) built ahead of recordings. The prewarm thread builds it off the
     // engine lock and rebuilds after camera reconfiguration and recordings.
@@ -280,6 +282,8 @@ class SessionEngine {
     // Armed idle-preview crop output size (mu_). Zero disables.
     uint32_t videoCropOutWidth_ = 0;
     uint32_t videoCropOutHeight_ = 0;
+    bool videoHighFps_ = false;  // mu_: video mode above 30 fps frames inside the high-fps sensor mode's image area
+    rawrcam::video::VideoKeptArea videoKeptAreaLocked(const rawrcam::metadata::CameraContextMetadata& m) const;
     rawrcam::diagnostics::PipelineDiagnostics pipelineDiagnostics_{
         [this](const std::string& line) { appendDiagnostic(line); }};
     capture::CaptureCoordinator capture_{

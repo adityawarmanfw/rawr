@@ -64,6 +64,11 @@ struct CameraContextMetadata {
     uint32_t cropTop = 0;
     uint32_t cropRight = 0;
     uint32_t cropBottom = 0;
+    // LensRoute::highFpsCrop*: padded edges of the >30 fps sensor mode.
+    uint32_t highFpsCropLeft = 0;
+    uint32_t highFpsCropTop = 0;
+    uint32_t highFpsCropRight = 0;
+    uint32_t highFpsCropBottom = 0;
     // Photo frames are reduced to a quarter of the pixels at ingress (LensRoute::photoReduced); only with
     // photoCfaBlock 4. Reduced frames are Bayer in quarter-DN units: levels are scaled by 4 (reduction x4 sum).
     bool photoReduced = false;

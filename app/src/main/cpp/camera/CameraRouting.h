@@ -224,6 +224,13 @@ struct LensRoute {
     uint32_t cropTop = 0;
     uint32_t cropRight = 0;
     uint32_t cropBottom = 0;
+    // Extra padded edges of the mode the sensor switches to above 30 fps
+    // (image.cropEdgesHighFps; Xiaomi 17 Ultra 1x at 60 fps: 512 blank rows at
+    // the bottom). Applied, on top of crop*, to video framing above 30 fps.
+    uint32_t highFpsCropLeft = 0;
+    uint32_t highFpsCropTop = 0;
+    uint32_t highFpsCropRight = 0;
+    uint32_t highFpsCropBottom = 0;
     // Lens distortion calibration when the camera reports none (vendor
     // calibration): undistorts photo renders and goes into the DNG as a
     // WarpRectilinear opcode. Defined on its own frame size, scaled to others.

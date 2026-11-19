@@ -708,6 +708,14 @@ std::string serializeCameraProfile(const CameraProfile& profile) {
             if (r.cropBottom) crop.number("bottom", r.cropBottom);
             image.raw("cropEdges", crop.str());
         }
+        if (r.highFpsCropLeft || r.highFpsCropTop || r.highFpsCropRight || r.highFpsCropBottom) {
+            ObjectWriter crop;
+            if (r.highFpsCropLeft) crop.number("left", r.highFpsCropLeft);
+            if (r.highFpsCropTop) crop.number("top", r.highFpsCropTop);
+            if (r.highFpsCropRight) crop.number("right", r.highFpsCropRight);
+            if (r.highFpsCropBottom) crop.number("bottom", r.highFpsCropBottom);
+            image.raw("cropEdgesHighFps", crop.str());
+        }
         if (r.distortion) {
             std::string distortion;
             appendDistortion(distortion, *r.distortion);  // ,"distortion":{...}
@@ -1171,24 +1179,29 @@ std::optional<LensRoute> readLens(const Json& l, std::string* error) {
     }
     // Raw edges the HAL pads with non-image rows/columns, dropped before
     // anything develops or writes the frame.
-    if (const Json* c = image.get("cropEdges"); c && c->kind == Json::Kind::Object) {
+    for (const auto& [key, left, top, right, bottom] :
+         {std::tuple{"cropEdges", &r.cropLeft, &r.cropTop, &r.cropRight, &r.cropBottom},
+          std::tuple{"cropEdgesHighFps", &r.highFpsCropLeft, &r.highFpsCropTop, &r.highFpsCropRight,
+                     &r.highFpsCropBottom}}) {
+    if (const Json* c = image.get(key); c && c->kind == Json::Kind::Object) {
         const uint32_t period = 2u * std::max(1u, r.sensorLayoutBlock);
-        for (const auto& [name, field] : {std::pair<const char*, uint32_t*>{"left", &r.cropLeft},
-                                          std::pair<const char*, uint32_t*>{"top", &r.cropTop},
-                                          std::pair<const char*, uint32_t*>{"right", &r.cropRight},
-                                          std::pair<const char*, uint32_t*>{"bottom", &r.cropBottom}}) {
+        for (const auto& [name, field] : {std::pair<const char*, uint32_t*>{"left", left},
+                                          std::pair<const char*, uint32_t*>{"top", top},
+                                          std::pair<const char*, uint32_t*>{"right", right},
+                                          std::pair<const char*, uint32_t*>{"bottom", bottom}}) {
             const double value = c->num(name, 0.0);
             if (value < 0.0 || value != std::floor(value) || value > 65535.0) {
-                if (error) *error = std::string("invalid cropEdges ") + name + " for lens " + r.lensId;
+                if (error) *error = std::string("invalid ") + key + " " + name + " for lens " + r.lensId;
                 return std::nullopt;
             }
             if (uint32_t(value) % period != 0u) {
-                if (error) *error = std::string("cropEdges ") + name + " must be a multiple of " +
+                if (error) *error = std::string(key) + " " + name + " must be a multiple of " +
                                     std::to_string(period) + " for lens " + r.lensId;
                 return std::nullopt;
             }
             *field = uint32_t(value);
         }
+    }
     }
     if (!readLevels(image.get("levels"), r.levels)) {
         if (error) *error = "invalid levels for lens " + r.lensId;

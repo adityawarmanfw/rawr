@@ -353,7 +353,7 @@ internal object LensProfileCodec {
                 number(exposure, "shutterMaxNs", 0.0..EXTENDED_SHUTTER_MAX_NS.toDouble(), true)
                 flags(exposure, "extended")
             }
-            objectField(image, "cropEdges")?.let { crop ->
+            for (key in listOf("cropEdges", "cropEdgesHighFps")) objectField(image, key)?.let { crop ->
                 for (edge in listOf("left", "top", "right", "bottom")) number(crop, edge, 0.0..65535.0, true)
             }
             objectField(image, "sensorLayout")?.let { layout ->
@@ -467,12 +467,12 @@ internal object LensProfileCodec {
                             layout.colourOrder?.let { put("colourOrder", it) }
                         })
                 }
-                if (i.cropEdges.enabled) {
-                    put("cropEdges", JSONObject().apply {
-                        if (i.cropEdges.left > 0) put("left", i.cropEdges.left)
-                        if (i.cropEdges.top > 0) put("top", i.cropEdges.top)
-                        if (i.cropEdges.right > 0) put("right", i.cropEdges.right)
-                        if (i.cropEdges.bottom > 0) put("bottom", i.cropEdges.bottom)
+                for ((key, edges) in listOf("cropEdges" to i.cropEdges, "cropEdgesHighFps" to i.cropEdgesHighFps)) {
+                    if (edges.enabled) put(key, JSONObject().apply {
+                        if (edges.left > 0) put("left", edges.left)
+                        if (edges.top > 0) put("top", edges.top)
+                        if (edges.right > 0) put("right", edges.right)
+                        if (edges.bottom > 0) put("bottom", edges.bottom)
                     })
                 }
                 i.distortion?.let { put("distortion", JSONObject(it)) }
@@ -609,6 +609,12 @@ internal object LensProfileCodec {
                     photoPhaseFit = layout?.optBoolean("photoPhaseFit", false) ?: false
                 ),
                 cropEdges = image?.optJSONObject("cropEdges")?.let {
+                    LensCropEdges(left = it.optInt("left", 0).coerceAtLeast(0),
+                                  top = it.optInt("top", 0).coerceAtLeast(0),
+                                  right = it.optInt("right", 0).coerceAtLeast(0),
+                                  bottom = it.optInt("bottom", 0).coerceAtLeast(0))
+                } ?: LensCropEdges(),
+                cropEdgesHighFps = image?.optJSONObject("cropEdgesHighFps")?.let {
                     LensCropEdges(left = it.optInt("left", 0).coerceAtLeast(0),
                                   top = it.optInt("top", 0).coerceAtLeast(0),
                                   right = it.optInt("right", 0).coerceAtLeast(0),

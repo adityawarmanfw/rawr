@@ -189,7 +189,9 @@ void flushDiagnostics(EngineHandle h) noexcept {
 }
 bool canRecoverStills(EngineHandle h) noexcept { return h && engine(h)->cameraControls().canRecoverStills(); }
 void setVideoMode(EngineHandle h, bool video, int fps) noexcept {
-    if (h) engine(h)->cameraControls().setVideoMode(video, fps);
+    if (!h) return;
+    engine(h)->cameraControls().setVideoMode(video, fps);
+    engine(h)->setVideoHighFps(video && fps > 30);
 }
 void setShutterAngleDegrees(EngineHandle h, double degrees) noexcept {
     if (h) engine(h)->cameraControls().setShutterAngleDegrees(degrees);

@@ -296,6 +296,8 @@ data class LensImage(
     val sensorLayout: LensSensorLayout = LensSensorLayout(),
     /** Padded raw edges this lens drops; zero on both keeps the whole frame. */
     val cropEdges: LensCropEdges = LensCropEdges(),
+    /** Extra padded edges of the sensor mode used above 30 fps (video framing only). */
+    val cropEdgesHighFps: LensCropEdges = LensCropEdges(),
     /** Lens distortion calibration as its profile JSON object (validated natively); null for none. */
     val distortion: String? = null,
     /** Mirror of the image (photo, video, viewfinder; DNG via its orientation). */
@@ -420,8 +422,11 @@ fun validateLensProfile(lens: LensProfile, others: List<LensProfile>): List<Stri
     }
     val layout = lens.image.sensorLayout
     val crop = lens.image.cropEdges
+    val highFpsCrop = lens.image.cropEdgesHighFps
     val cropPeriod = 2 * layout.block.coerceAtLeast(1)
-    listOf("Left" to crop.left, "Top" to crop.top, "Right" to crop.right, "Bottom" to crop.bottom)
+    (listOf("Left" to crop.left, "Top" to crop.top, "Right" to crop.right, "Bottom" to crop.bottom) +
+        listOf("High-fps left" to highFpsCrop.left, "High-fps top" to highFpsCrop.top,
+            "High-fps right" to highFpsCrop.right, "High-fps bottom" to highFpsCrop.bottom))
         .forEach { (edge, value) ->
             if (value < 0) add("$edge raw edge crop can't be negative")
             else if (value % cropPeriod != 0) add("$edge raw edge crop must be a multiple of $cropPeriod")

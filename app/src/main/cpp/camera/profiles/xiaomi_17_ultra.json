@@ -182,6 +182,9 @@
             0
           ],
           "white": 0
+        },
+        "cropEdgesHighFps": {
+          "bottom": 512
         }
       }
     },

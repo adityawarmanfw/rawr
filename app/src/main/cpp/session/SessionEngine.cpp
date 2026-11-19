@@ -80,9 +80,7 @@ SessionEngine::SessionEngine(std::string filesDir) : filesDir_(std::move(filesDi
         const bool configured = realtime_.configureCamera(generation, metadata);
         lastCameraContext_ = std::make_shared<const rawrcam::metadata::CameraContextMetadata>(metadata);
         // Recordings frame inside the image area: padded raw edges stay out.
-        videoSession_.setKeptArea(rawrcam::video::videoKeptArea(realtime_.rawWidth(), realtime_.rawHeight(),
-                                                                metadata.cropLeft, metadata.cropTop,
-                                                                metadata.cropRight, metadata.cropBottom));
+        videoSession_.setKeptArea(videoKeptAreaLocked(metadata));
         profileReaderUsage_ = metadata.rawReaderUsage;
         profileMaxImages_ = metadata.rawBufferCount;
         profileReaderProbe_ = metadata.rawBufferTestFirst;
@@ -309,6 +307,27 @@ void SessionEngine::setVideoPreviewCropOut(uint32_t width, uint32_t height) {
     swapchainRenderer_.resetLogging();
 }
 
+rawrcam::video::VideoKeptArea SessionEngine::videoKeptAreaLocked(
+    const rawrcam::metadata::CameraContextMetadata& m) const {
+    // Above 30 fps the sensor mode can pad more edges (image.cropEdgesHighFps).
+    const bool high = videoHighFps_;
+    return rawrcam::video::videoKeptArea(realtime_.rawWidth(), realtime_.rawHeight(),
+                                         high ? std::max(m.cropLeft, m.highFpsCropLeft) : m.cropLeft,
+                                         high ? std::max(m.cropTop, m.highFpsCropTop) : m.cropTop,
+                                         high ? std::max(m.cropRight, m.highFpsCropRight) : m.cropRight,
+                                         high ? std::max(m.cropBottom, m.highFpsCropBottom) : m.cropBottom);
+}
+
+void SessionEngine::setVideoHighFps(bool high) {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (videoHighFps_ == high) return;
+    videoHighFps_ = high;
+    if (!lastCameraContext_) return;
+    const auto kept = videoKeptAreaLocked(*lastCameraContext_);
+    LOGI("VIDEO_KEPT_AREA highFps=%d kept=%u,%u %ux%u", high ? 1 : 0, kept.x, kept.y, kept.width, kept.height);
+    videoSession_.setKeptArea(kept);
+}
+
 rawrcam::geometry::SourceCropRect SessionEngine::previewVideoCropRectLocked() const {
     rawrcam::geometry::SourceCropRect crop{};
     if (videoCropOutWidth_ == 0 || videoCropOutHeight_ == 0 || !realtime_.configured()) {
@@ -319,11 +338,7 @@ rawrcam::geometry::SourceCropRect SessionEngine::previewVideoCropRectLocked() co
     const uint32_t previewW = realtime_.previewWidth();
     const uint32_t previewH = realtime_.previewHeight();
     if (rawW < 2 || rawH < 2 || previewW == 0 || previewH == 0) return crop;
-    const auto kept = lastCameraContext_
-                          ? rawrcam::video::videoKeptArea(rawW, rawH, lastCameraContext_->cropLeft,
-                                                          lastCameraContext_->cropTop, lastCameraContext_->cropRight,
-                                                          lastCameraContext_->cropBottom)
-                          : rawrcam::video::VideoKeptArea{};
+    const auto kept = lastCameraContext_ ? videoKeptAreaLocked(*lastCameraContext_) : rawrcam::video::VideoKeptArea{};
     const auto full = rawrcam::video::videoSourceRect(rawW, rawH, videoCropOutWidth_, videoCropOutHeight_, kept);
     if (full.width == 0) return crop;
     const auto scaled = rawrcam::video::scaleVideoSourceRect(full, rawW, rawH, previewW, previewH);
