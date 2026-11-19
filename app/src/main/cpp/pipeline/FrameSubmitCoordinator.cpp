@@ -1,5 +1,7 @@
 #include "pipeline/FrameSubmitCoordinator.h"
 
+#include "video/ContextKeptArea.h"
+
 #include <android/log.h>
 #include <sys/system_properties.h>
 #include <time.h>
@@ -588,9 +590,8 @@ void FrameSubmitCoordinator::submitSplitVideoAndMonitor(const SubmitParams& para
                                  // Spot and focus are on the full frame; the video image is its record crop.
                                  const auto* cc = metadata.cameraContext.get();
                                  const auto kept =
-                                     cc ? rawrcam::video::videoKeptArea(config_.rawWidth, config_.rawHeight,
-                                                                        cc->cropLeft, cc->cropTop, cc->cropRight,
-                                                                        cc->cropBottom)
+                                     cc ? rawrcam::video::contextKeptArea(config_.rawWidth, config_.rawHeight, *cc,
+                                                                          videoHighFps_.load(std::memory_order_relaxed))
                                         : rawrcam::video::VideoKeptArea{};
                                  const auto crop = rawrcam::video::videoSourceRect(config_.rawWidth, config_.rawHeight,
                                                                                    width, height, kept);
@@ -783,6 +784,7 @@ FrameSubmitCoordinator::RecordedSubmit FrameSubmitCoordinator::recordSubmitComma
     recordInput.distortionCorrectionEnabled = distortionCorrectionEnabled_.load(std::memory_order_relaxed);
     recordInput.videoCropOutWidth = videoCropOutWidth_.load(std::memory_order_relaxed);
     recordInput.videoCropOutHeight = videoCropOutHeight_.load(std::memory_order_relaxed);
+    recordInput.videoHighFps = videoHighFps_.load(std::memory_order_relaxed);
     recordInput.filmEnabled = filmSimEnabled_;
     recordInput.filmLook = filmLook_;
     recordInput.viewfinderDivisor = viewfinderDivisor_;

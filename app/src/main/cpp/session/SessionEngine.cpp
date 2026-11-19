@@ -322,6 +322,7 @@ void SessionEngine::setVideoHighFps(bool high) {
     std::lock_guard<std::mutex> lock(mu_);
     if (videoHighFps_ == high) return;
     videoHighFps_ = high;
+    realtime_.coordinator().setVideoHighFps(high);
     if (!lastCameraContext_) return;
     const auto kept = videoKeptAreaLocked(*lastCameraContext_);
     LOGI("VIDEO_KEPT_AREA highFps=%d kept=%u,%u %ux%u", high ? 1 : 0, kept.x, kept.y, kept.width, kept.height);

@@ -108,6 +108,8 @@ struct RawDevelopRecordInput {
     // Undistort the viewfinder with the lens profile calibration (photo
     // Distortion correction setting), so framing matches the photo.
     bool distortionCorrectionEnabled = false;
+    // Video mode above 30 fps: frame inside the high-fps sensor mode's image area.
+    bool videoHighFps = false;
 };
 
 struct RawDevelopRecordResult {
