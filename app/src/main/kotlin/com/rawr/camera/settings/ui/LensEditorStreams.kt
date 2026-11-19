@@ -564,7 +564,7 @@ internal fun LensProfile.withAutomaticAdvanced(): LensProfile = copy(
         auxJpeg = null
     ),
     session = session.copy(cameraApi = "auto", params = "cadence", stillTemplate = null, startupDelayMs = 0,
-        stopViewfinderForPhotos = false, workarounds = emptyList()),
+        stopViewfinderForPhotos = false, separatePhotoSession = false, workarounds = emptyList()),
     request = request.copy(defaults = "rawr")
 )
 
@@ -589,6 +589,7 @@ internal fun LensProfile.advancedSummary(): List<String> = buildList {
     if (session.params != "cadence" || session.stillTemplate != null || session.startupDelayMs != 0 || request.defaults != "rawr")
         add("Session")
     if (session.stopViewfinderForPhotos) add("Stream stops for photos")
+    if (session.separatePhotoSession) add("Separate photo session")
     if (session.workarounds.isNotEmpty()) add(if (session.workarounds.size == 1) "1 workaround" else "${session.workarounds.size} workarounds")
 }
 

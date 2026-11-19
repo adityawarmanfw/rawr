@@ -48,8 +48,10 @@ class CameraDeviceSession final {
     bool createSession(ANativeWindow*, const std::optional<LensRoute>&, const SessionRecipe&, const CameraControlState&,
                        const CameraMeteringRequest&, CameraCallbacks&, CameraRequestPipeline&, const Diagnostic&,
                        const std::function<bool(int32_t)>& waitForStartup);
+    // closeUnlocked: the session is closed with the lock released (hidden from session() meanwhile), for a close
+    // that can wait on camera callbacks still in flight, which take the controller lock (photo-session switches).
     bool retire(std::unique_lock<std::mutex>&, std::optional<std::chrono::milliseconds>, const char*,
-                const Diagnostic&);
+                const Diagnostic&, bool closeUnlocked = false);
     void forceRetire(const char*, const Diagnostic&);
     CameraReaderRetirement release(const Diagnostic&);
     void sessionClosed(uint64_t generation, const void* session);
@@ -61,12 +63,29 @@ class CameraDeviceSession final {
     // Window of LensRoute::photoStream: a session output no repeating request targets.
     void setCaptureWindow(ANativeWindow* window) noexcept { captureWindow_ = window; }
     bool stopViewfinderForPhotos() const noexcept { return stopViewfinderForPhotos_; }
+    // LensRoute::separatePhotoSession: the viewfinder session runs without the photo stream, and full-size
+    // stills go through captureFullSizeInPhotoSession.
+    bool separatePhotoSession() const noexcept { return separatePhotoSession_; }
+    // The viewfinder session is down for a photo-only session (open, or between the two).
+    bool viewfinderSessionDown() const noexcept { return viewfinderDown_; }
+    bool photoSessionOpen() const noexcept { return photoSessionOpen_; }
     bool hasCaptureStream() const noexcept { return captureConfigured_; }
     // Burst of full-size stills (one per exposure, tagged tagId): copies of the
     // repeating request that also fill the capture stream, with STILL_CAPTURE
     // intent and the lens's still-scope keys.
     bool captureFullSize(CameraRequestPipeline&, const CameraControlState&,
                          const std::vector<CameraRequestPipeline::BracketExposure>&, uint64_t tagId, const Diagnostic&);
+    // Separate-photo-session lenses: closes the viewfinder session and configures one holding only the photo
+    // stream (a shot of several captureFullSize calls keeps it open), then sends the stills there: the
+    // still template, the lens's request- and still-scope keys, the focus distance the viewfinder had. Releases
+    // the lock while sessions close. On false the caller restores the viewfinder (restoreViewfinderSession).
+    bool captureFullSizeInPhotoSession(std::unique_lock<std::mutex>&, CameraRequestPipeline&, const CameraControlState&,
+                                       const std::vector<CameraRequestPipeline::BracketExposure>&, uint64_t tagId,
+                                       const Diagnostic&);
+    // Closes the photo-only session and configures the viewfinder session again, as it was started but with the
+    // given controls and no startup delay. True when the viewfinder session was already up.
+    bool restoreViewfinderSession(std::unique_lock<std::mutex>&, const CameraControlState&, const CameraMeteringRequest&,
+                                  const Diagnostic&);
     // A lens with decision-scope keys repeats a decision request before its
     // full-size stills: a copy of the repeating request at the lowest ISO
     // carrying those keys, filling only the companion YUV. The vivo HAL
@@ -95,7 +114,7 @@ class CameraDeviceSession final {
     bool deviceKept() const noexcept { return deviceKept_; }
     // True when the last successful open() reused a kept device instead of opening one.
     bool lastOpenReused() const noexcept { return lastOpenReused_; }
-    bool hasSession() const noexcept { return session_ != nullptr; }
+    bool hasSession() const noexcept { return session_ != nullptr || closingSession_ != nullptr; }
     CameraRequest* request() const noexcept { return request_.get(); }
     CameraSessionDriver* session() const noexcept { return session_.get(); }
     // The camera API of the open device ("native" or "java").
@@ -123,6 +142,10 @@ class CameraDeviceSession final {
 
    private:
     void releaseRequestOutputs(bool orphan) noexcept;
+    // After the viewfinder session has closed for a photo session: its requests and the outputs only it uses
+    // (companion, aux JPEG). The RAW and photo windows stay.
+    void releaseViewfinderOutputs() noexcept;
+    bool openPhotoSession(std::unique_lock<std::mutex>&, const Diagnostic&);
     void releaseCharacteristics() noexcept;
     // Adds the companion YUV output and request target; false leaves the session RAW-only.
     // size: the lens profile's companion size; nullopt uses the RAW-aspect companion choice.
@@ -143,6 +166,8 @@ class CameraDeviceSession final {
     std::unique_ptr<CameraSessionDriver> session_;
     // A session that has reported closed (or was retired), kept until teardown frees its outputs.
     std::unique_ptr<CameraSessionDriver> closedSession_;
+    // A session retire() is closing with the lock released (closeUnlocked).
+    std::unique_ptr<CameraSessionDriver> closingSession_;
     std::unique_ptr<CameraRequest> request_;
     std::unique_ptr<CameraRequest> sessionParameters_;
     ANativeWindow* captureWindow_ = nullptr;
@@ -162,6 +187,14 @@ class CameraDeviceSession final {
     bool captureStillTemplate_ = true;
     bool photoIncludePreview_ = true;
     bool stopViewfinderForPhotos_ = false;
+    bool separatePhotoSession_ = false;
+    bool viewfinderDown_ = false;
+    bool photoSessionOpen_ = false;
+    // How the viewfinder session was created, to configure it again after a photo session.
+    std::optional<LensRoute> viewfinderRoute_;
+    SessionRecipe viewfinderRecipe_;
+    CameraCallbacks* viewfinderCallbacks_ = nullptr;
+    CameraRequestPipeline* viewfinderPipeline_ = nullptr;
     AImageReader* auxJpegReader_ = nullptr;
     bool auxJpegConfigured_ = false;
     ACameraMetadata* characteristics_ = nullptr;

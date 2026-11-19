@@ -44,7 +44,7 @@ inline std::string describeRouteForGolden(const LensRoute& r) {
     for (const auto& q : workaroundNames(r.workarounds)) o << q << ' ';
     o << "\ngate=" << r.vendorGate << " hold:"
       << (r.gateHold ? (*r.gateHold == GateHold::UntilClosed ? "closed" : "configured") : "default")
-      << " stopViewfinderForPhotos:" << r.stopViewfinderForPhotos << '\n';
+      << " stopViewfinderForPhotos:" << r.stopViewfinderForPhotos << (r.separatePhotoSession ? " separatePhotoSession:1" : "") << '\n';
     o << "photoStream=";
     if (r.photoStream)
         o << int(r.photoStream->format) << ':' << r.photoStream->width << 'x' << r.photoStream->height;

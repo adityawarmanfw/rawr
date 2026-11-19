@@ -303,7 +303,7 @@ internal object LensProfileCodec {
             }
             number(session, "frameRate", 0.0..MAX_FRAME_RATE.toDouble(), true)
             number(session, "startupDelayMs", 0.0..5000.0, true)
-            flags(session, "stopViewfinderForPhotos")
+            flags(session, "stopViewfinderForPhotos", "separatePhotoSession")
             objectField(session, "gate")?.let { gate ->
                 if (gate.has("name")) require(gate.get("name") is String)
                 choice(gate, "hold", GATE_HOLDS)
@@ -450,6 +450,7 @@ internal object LensProfileCodec {
                 s.gateHold?.let { put("hold", it) }
             })
             if (s.stopViewfinderForPhotos) put("stopViewfinderForPhotos", true)
+            if (s.separatePhotoSession) put("separatePhotoSession", true)
             if (s.workarounds.isNotEmpty()) put("workarounds", JSONArray(s.workarounds))
         }
         val i = lens.image
@@ -591,6 +592,7 @@ internal object LensProfileCodec {
                 gate = gate?.optString("name").orEmpty(),
                 gateHold = gate?.optString("hold")?.takeIf { it in GATE_HOLDS },
                 stopViewfinderForPhotos = session?.optBoolean("stopViewfinderForPhotos") ?: false,
+                separatePhotoSession = session?.optBoolean("separatePhotoSession") ?: false,
                 workarounds = session?.optJSONArray("workarounds")
                     ?.let { a -> (0 until a.length()).map { a.getString(it) }.filter { it in CAMERA_WORKAROUNDS } } ?: emptyList()
             ),

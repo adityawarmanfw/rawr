@@ -128,12 +128,13 @@ fun LensProfile.resolvedCameraApi(): String =
     if (session.cameraApi != "auto") session.cameraApi else if (needsJavaCameraApi()) "java" else "native"
 
 /** How a lens takes a full-size photo; derived, not set (native stillStrategyFor). */
-enum class StillSequence { Direct, DecisionFrame, PauseViewfinder }
+enum class StillSequence { Direct, DecisionFrame, PauseViewfinder, SeparateSession }
 
 fun LensProfile.stillSequence(): StillSequence {
     val decisionKey = vendorKeys.any { it.enabled && it.scope == VendorKeyScope.Decision }
     val companionOn = streams.companion.mode != CompanionMode.Off && streams.companion.targeted
     return when {
+        streams.photo != null && session.separatePhotoSession -> StillSequence.SeparateSession
         streams.photo != null && companionOn && decisionKey -> StillSequence.DecisionFrame
         session.stopViewfinderForPhotos -> StillSequence.PauseViewfinder
         else -> StillSequence.Direct
@@ -149,7 +150,7 @@ fun isBufferUsage(text: String): Boolean =
         (text.length > 2 && (text.startsWith("0x") || text.startsWith("0X")) && text.drop(2).toULongOrNull(16) != null)
 
 /** Provider behaviours a lens can say it avoids (see the native CameraWorkarounds). */
-val CAMERA_WORKAROUNDS = listOf("holdTapFocus", "appPriorityAe", "noTapFocus", "alwaysSendFrameRate", "noAutoCompanion", "keepTemplateRegions", "ignoreLostCompanion")
+val CAMERA_WORKAROUNDS = listOf("holdTapFocus", "appPriorityAe", "noTapFocus", "alwaysSendFrameRate", "noAutoCompanion", "keepTemplateRegions", "ignoreLostCompanion", "keepTemplateEntries")
 
 /**
  * One lens, grouped the way profile schema 2 groups it: which camera, its streams, how the session runs, what
@@ -281,6 +282,11 @@ data class LensSession(
     /** "configured" or "closed"; null keeps the default (closed with high-res photos). Needs a [gate]. */
     val gateHold: String? = null,
     val stopViewfinderForPhotos: Boolean = false,
+    /**
+     * The photo stream gets a session of its own: the viewfinder session runs without it and is configured again
+     * after the photos. For cameras that fail with a full-size output beside the viewfinder (vivo X200 Ultra).
+     */
+    val separatePhotoSession: Boolean = false,
     /** Provider behaviours this lens avoids, from [CAMERA_WORKAROUNDS]. */
     val workarounds: List<String> = emptyList()
 )
@@ -444,7 +450,9 @@ fun validateLensProfile(lens: LensProfile, others: List<LensProfile>): List<Stri
     if (session.cameraApi == "native" && lens.needsJavaCameraApi()) add("An operating mode or stream use case needs Java Camera2")
     if (lens.resolvedCameraApi() == "java") {
         if (session.stopViewfinderForPhotos) add("Java Camera2 can't stop the viewfinder stream for photos")
+        if (session.separatePhotoSession) add("Java Camera2 can't open a separate photo session")
     }
+    if (session.separatePhotoSession && streams.photo == null) add("A separate photo session needs a photo stream")
     if (session.opMode < 0 || session.opMode == 1 || session.opMode == 2) add("Operating mode must be 0 or 3 and above")
     if (session.frameRate !in 0..MAX_FRAME_RATE) add("Fixed frame rate must be 0 to $MAX_FRAME_RATE")
     if (listOf(streams.raw.useCase, streams.photo?.useCase ?: 0, companion.useCase, streams.auxJpeg?.useCase ?: 0)

@@ -185,6 +185,10 @@ struct LensRoute {
     int32_t startupDelayMs = 0;
     // Pause the viewfinder for the still sequence, then restore it.
     bool stopViewfinderForPhotos = false;
+    // The photo stream gets a session of its own: the viewfinder session runs without it, closes at the
+    // shutter, a photo-only session takes the stills, then the viewfinder session is configured again.
+    // For HALs that fail when a full-size output is configured beside the viewfinder (vivo X200 Ultra).
+    bool separatePhotoSession = false;
     // Extra JPEG output configured with the session but never targeted.
     std::optional<std::pair<uint32_t, uint32_t>> auxJpegSize;
     std::optional<uint64_t> auxJpegBufferUsage;  // absent: the reader default
@@ -264,6 +268,7 @@ struct LensRoute {
 // only. A vendor gate is taken by the native session before either API opens the camera. nullptr: no conflict.
 [[nodiscard]] inline const char* javaCameraApiConflict(const LensRoute& lens) noexcept {
     if (lens.stopViewfinderForPhotos) return "stopViewfinderForPhotos";
+    if (lens.separatePhotoSession) return "separatePhotoSession";
     return nullptr;
 }
 
@@ -293,7 +298,7 @@ struct LensRoute {
 inline bool carriesRecipe(const LensRoute& route) {
     return !route.vendorKeys.empty() || route.photoStream || route.companionSize || route.auxJpegSize || route.frameRate > 0 ||
            route.stillTemplate || route.startupDelayMs > 0 || route.disableCompanion || route.companionPrivate ||
-           !route.companionTargeted || route.stopViewfinderForPhotos || route.rawBufferUsage || route.photoBufferUsage ||
+           !route.companionTargeted || route.stopViewfinderForPhotos || route.separatePhotoSession || route.rawBufferUsage || route.photoBufferUsage ||
            !route.vendorGate.empty() || route.highResLive || route.workarounds.any() || route.gateHold ||
            route.sessionParams != SessionParamsPolicy::Cadence || route.requestDefaults != RequestDefaults::Rawr ||
            route.companionBufferUsage || route.companionBufferCount || route.companionPhysical || route.companionDetach ||

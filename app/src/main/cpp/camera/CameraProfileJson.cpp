@@ -666,6 +666,7 @@ std::string serializeCameraProfile(const CameraProfile& profile) {
             session.raw("gate", gate.str());
         }
         if (r.stopViewfinderForPhotos) session.flag("stopViewfinderForPhotos", true);
+        if (r.separatePhotoSession) session.flag("separatePhotoSession", true);
         if (r.workarounds.any()) {
             std::string list = "[";
             for (const auto& name : workaroundNames(r.workarounds)) {
@@ -1113,6 +1114,7 @@ std::optional<LensRoute> readLens(const Json& l, std::string* error) {
     r.frameRate = int32_t(std::clamp(session.num("frameRate"), 0.0, 240.0));
     r.startupDelayMs = int32_t(std::clamp(session.num("startupDelayMs"), 0.0, 5000.0));
     r.stopViewfinderForPhotos = session.flag("stopViewfinderForPhotos", false);
+    r.separatePhotoSession = session.flag("separatePhotoSession", false);
     if (!readWorkarounds(session.array("workarounds"), r.workarounds, error, "lens " + r.lensId)) return std::nullopt;
     const Json& gate = object(&session, "gate");
     r.vendorGate = gate.str("name");
@@ -1233,6 +1235,10 @@ std::optional<LensRoute> readLens(const Json& l, std::string* error) {
     // Rules across sections.
     if (r.cameraApi == CameraApi::Native && needsJavaCameraApi(r)) {
         if (error) *error = "operating mode and stream use case need cameraApi java for lens " + r.lensId;
+        return std::nullopt;
+    }
+    if (r.separatePhotoSession && !r.photoStream) {
+        if (error) *error = "separatePhotoSession needs a photo stream for lens " + r.lensId;
         return std::nullopt;
     }
     if (effectiveCameraApi(r) == CameraApi::Java) {

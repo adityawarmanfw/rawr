@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "camera/CameraProfileJson.h"
+#include "camera/SessionRecipe.h"
 #include "camera/CameraRouting.h"
 #include "geometry/RawGeometry.h"
 
@@ -185,12 +186,47 @@ void testProfileMatching() {
             "image":{"sensorLayout":{"block":2},"cropEdges":{"bottom":2}}}]})";
         assert(!parseCameraProfile(quad, &error) && error.find("multiple of 4") != std::string::npos);
     }
-    // Other phones (X200 Ultra) and missing properties get generic.
-    m = matchBuiltInProfile(props({{"ro.product.model", "V2454A"}, {"ro.vivo.product.model", "PD2454"}}));
+    // X200 Ultra: the Chinese V2454DA is device-tested; the other variants are listed, and vivo's project code
+    // catches unlisted ones.
+    m = matchBuiltInProfile(props({{"ro.product.model", "V2454DA"}}));
+    assert(m.profileId == "vivo_x200_ultra" && m.rule == "model" && m.verified);
+    for (const char* model : {"V2454A", "V2454"}) {
+        m = matchBuiltInProfile(props({{"ro.product.model", model}}));
+        assert(m.profileId == "vivo_x200_ultra" && m.rule == "model" && !m.verified);
+    }
+    m = matchBuiltInProfile(props({{"ro.product.model", "V2454X"}, {"ro.vivo.product.model", "PD2454"}}));
+    assert(m.profileId == "vivo_x200_ultra" && m.rule == "property:ro.vivo.product.model" && !m.verified);
+    const auto x200u = builtInCameraProfile("vivo_x200_ultra");
+    // The 200 MP telephoto: 4x4 photo stream reduced to 50 MP Bayer, binned Bayer viewfinder.
+    const auto f85 = routeForLens(x200u, "F85");
+    assert(f85 && f85->cameraId == "5" && f85->photoStream && f85->photoStream->width == 16320);
+    assert(f85->sensorLayoutBlock == 1 && f85->photoSensorLayoutBlock == 4 && f85->photoReduced);
+    assert(f85->vendorGate == "vivoFullSize" && !photoOutputDngOnly(*f85));
+    // Every X200 Ultra full-size lens takes its photos in a session of their own.
+    for (const char* id : {"F35X", "F35RX", "F14X", "F14RX", "T85_50", "F85"}) {
+        const auto lens = routeForLens(x200u, id);
+        assert(lens && lens->separatePhotoSession && lens->workarounds.keepTemplateEntries);
+        assert(stillStrategyFor(*lens, true) == StillStrategy::SeparateSession);
+    }
+    assert(!routeForLens(x200u, "B12")->separatePhotoSession);
+    {
+        // A separate photo session needs a photo stream, and runs on the native API only.
+        std::string error;
+        const char* noPhoto = R"({"id":"t","schema":2,"lenses":[{"id":"a","camera":{"id":"0"},
+            "streams":{"raw":{"format":"RAW16","width":4000,"height":3000}},"session":{"separatePhotoSession":true}}]})";
+        assert(!parseCameraProfile(noPhoto, &error) && error.find("separatePhotoSession") != std::string::npos);
+        const char* java = R"({"id":"t","schema":2,"lenses":[{"id":"a","camera":{"id":"0"},
+            "streams":{"raw":{"format":"RAW16","width":4000,"height":3000},"photo":{"format":"RAW16","width":8000,"height":6000}},
+            "session":{"cameraApi":"java","separatePhotoSession":true}}]})";
+        assert(!parseCameraProfile(java, &error) && error.find("separatePhotoSession") != std::string::npos);
+    }
+    // Other phones and missing properties get generic.
+    m = matchBuiltInProfile(props({{"ro.product.model", "V2408A"}, {"ro.vivo.product.model", "PD2408"}}));
     assert(m.profileId == "generic" && m.rule == "none" && !m.verified);
     assert(matchBuiltInProfile(props({})).profileId == "generic");
 
     assert(isBuiltInProfileId("vivo_x300_ultra") && isBuiltInProfileId("vivo_x300_pro") && isBuiltInProfileId("generic"));
+    assert(isBuiltInProfileId("vivo_x200_ultra"));
     assert(!isBuiltInProfileId("") && !isBuiltInProfileId("user") && !isBuiltInProfileId("v2562"));
 
     // Every overlapping model has one explicit default; single legacy profiles need no marker.

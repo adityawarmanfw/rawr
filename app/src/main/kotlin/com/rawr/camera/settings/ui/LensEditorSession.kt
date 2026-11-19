@@ -167,7 +167,7 @@ internal fun SessionAdvancedGroup(lens: LensProfile, onChange: (LensProfile) -> 
             supportingText = "Minimal leaves distortion and hot-pixel modes, face detection and the AE priority tag to the camera",
             onSelect = { onChange(lens.copy(request = lens.request.copy(defaults = it))) }
         )
-        if (lens.streams.photo != null || lens.session.stopViewfinderForPhotos) {
+        if (lens.streams.photo != null || lens.session.stopViewfinderForPhotos || lens.session.separatePhotoSession) {
             SettingDivider()
             StreamDuringPhotosRow(lens, onChange)
         }
@@ -196,18 +196,35 @@ private fun StreamDuringPhotosRow(lens: LensProfile, onChange: (LensProfile) -> 
         )
         return
     }
+    val separate = lens.session.separatePhotoSession
+    val selected = when {
+        separate -> "separate"
+        stops -> "stops"
+        else -> "running"
+    }
     DropdownChoiceRow(
         title = "Viewfinder stream for photos",
-        selected = stops,
-        values = if (java && !stops) listOf(false) else listOf(false, true),
-        label = { if (it) "Stops" else "Keeps running" },
+        selected = selected,
+        values = if (java && selected == "running") listOf("running") else listOf("running", "stops", "separate"),
+        label = {
+            when (it) {
+                "separate" -> "Separate photo session"
+                "stops" -> "Stops"
+                else -> "Keeps running"
+            }
+        },
         supportingText = when {
-            java && stops -> "Java Camera2 can't stop it; choose Keeps running"
+            java && selected != "running" -> "Java Camera2 can't do this; choose Keeps running"
             java -> "Java Camera2 keeps the stream running"
+            selected == "separate" -> "Separate photo session: the viewfinder session runs without the photo stream; " +
+                "at the shutter it closes, a session with only the photo stream takes the photos, and the viewfinder " +
+                "session comes back. For cameras that fail with a full-size output beside the viewfinder"
             else -> "Stops: the camera's stream stops before a full-size photo and restarts after it, for cameras that " +
                 "only switch to full size with it stopped. The screen freezes for full-size photos either way"
         },
-        onSelect = { onChange(lens.session { copy(stopViewfinderForPhotos = it) }) }
+        onSelect = {
+            onChange(lens.session { copy(stopViewfinderForPhotos = it == "stops", separatePhotoSession = it == "separate") })
+        }
     )
 }
 
@@ -252,6 +269,7 @@ internal fun workaroundTitle(workaround: String) = when (workaround) {
     "noAutoCompanion" -> "No automatic companion"
     "keepTemplateRegions" -> "Keep the template's focus regions"
     "ignoreLostCompanion" -> "Ignore a lost companion buffer"
+    "keepTemplateEntries" -> "Keep the template's controls"
     else -> workaround
 }
 
@@ -263,5 +281,6 @@ internal fun workaroundDescription(workaround: String) = when (workaround) {
     "noAutoCompanion" -> "Do not add the small extra stream that unverified devices get"
     "keepTemplateRegions" -> "Without a tap, requests keep the camera's own focus and exposure regions instead of an empty one, which crashes this camera's focus code"
     "ignoreLostCompanion" -> "A lost companion buffer does not fail the frame, for cameras that drop it on full-size photos while the RAW arrives"
+    "keepTemplateEntries" -> "Requests never clear a control the camera's template set (fps range, exposure, colour gains, regions); clearing them crashes this camera"
     else -> ""
 }

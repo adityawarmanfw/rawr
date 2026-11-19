@@ -16,6 +16,7 @@ enum class StillStrategy : uint8_t {
     Direct,               // the still goes out beside the running viewfinder
     DecisionFrame,        // a tagged viewfinder-rate frame lets the HAL decide full size, then the viewfinder pauses
     StopRepeatThenStill,  // the viewfinder pauses, the still goes out, the viewfinder is restored
+    SeparateSession,      // the viewfinder session closes, a photo-only session takes the stills, the viewfinder returns
 };
 
 [[nodiscard]] constexpr const char* stillStrategyName(StillStrategy s) noexcept {
@@ -23,6 +24,7 @@ enum class StillStrategy : uint8_t {
         case StillStrategy::Direct: return "direct";
         case StillStrategy::DecisionFrame: return "decisionFrame";
         case StillStrategy::StopRepeatThenStill: return "stopRepeatThenStill";
+        case StillStrategy::SeparateSession: return "separateSession";
     }
     return "direct";
 }
@@ -90,6 +92,7 @@ struct RecipeInputs {
 }
 
 [[nodiscard]] inline StillStrategy stillStrategyFor(const LensRoute& lens, bool companionConfigured) noexcept {
+    if (lens.photoStream && lens.separatePhotoSession) return StillStrategy::SeparateSession;
     bool decisionKeys = false;
     for (const auto& k : lens.vendorKeys) decisionKeys |= k.enabled && k.scope == CameraKeySetting::Scope::Decision;
     if (lens.photoStream && companionConfigured && lens.companionTargeted && decisionKeys)

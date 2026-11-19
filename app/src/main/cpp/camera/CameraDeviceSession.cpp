@@ -98,8 +98,10 @@ void CameraDeviceSession::releaseRequestOutputs(bool orphan) noexcept {
         (void)request_.release();
         (void)sessionParameters_.release();
         (void)closedSession_.release();
+        (void)closingSession_.release();
         captureWindow_ = nullptr;
         captureConfigured_ = false;
+        separatePhotoSession_ = viewfinderDown_ = photoSessionOpen_ = false;
         companionReader_ = nullptr;
         companionWindow_ = nullptr;
         companionTargeted_ = false;
@@ -111,8 +113,13 @@ void CameraDeviceSession::releaseRequestOutputs(bool orphan) noexcept {
     request_.reset();
     sessionParameters_.reset();
     closedSession_.reset();
+    closingSession_.reset();
     captureWindow_ = nullptr;
     captureConfigured_ = false;
+    separatePhotoSession_ = viewfinderDown_ = photoSessionOpen_ = false;
+    viewfinderRoute_.reset();
+    viewfinderCallbacks_ = nullptr;
+    viewfinderPipeline_ = nullptr;
     stillKeys_.clear();
     companionWindow_ = nullptr;
     companionTargeted_ = false;
@@ -645,6 +652,12 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
     const uint32_t rawWidth = selected ? selected->stream.width : 0, rawHeight = selected ? selected->stream.height : 0;
     profileCompanionTargeted_ = !selected || selected->companionTargeted;
     stopViewfinderForPhotos_ = selected && selected->stopViewfinderForPhotos;
+    separatePhotoSession_ = selected && selected->separatePhotoSession && captureWindow_;
+    viewfinderDown_ = photoSessionOpen_ = false;
+    viewfinderRoute_ = selected;
+    viewfinderRecipe_ = recipe;
+    viewfinderCallbacks_ = &callbacks;
+    viewfinderPipeline_ = &pipeline;
     captureStillTemplate_ = recipe.captureStillTemplate;
     photoIncludePreview_ = recipe.photoIncludePreview;
     const bool companionStream = recipe.companion.has_value();
@@ -672,7 +685,8 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
     if (captureWindow_) {
         // Physical outputs would need the physical camera's sizes; capture routes name a camera directly.
         if (!physicalCameraId.empty()) return fail("capture_output", "reason=physical_camera_unsupported");
-        outputs.push_back({captureWindow_, std::string(), recipe.photoStreamUseCase});
+        // A separate photo session configures the photo stream at the shutter instead.
+        if (!separatePhotoSession_) outputs.push_back({captureWindow_, std::string(), recipe.photoStreamUseCase});
         if (selected) {
             stillKeys_ = selected->vendorKeys;
             stillKeysCameraId_ = selected->cameraId;
@@ -838,7 +852,7 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
         dumpCaptureRequest(request_.get(), "repeating_start", diag);
     }
     diag("CAMERA_NDK_SESSION_RUNNING companion=" + std::string(companionWindow_ ? "1" : "0") +
-         " photoStream=" + (captureConfigured_ ? "1" : "0") + " auxJpeg=" + (auxJpegConfigured_ ? "1" : "0") +
+         " photoStream=" + (captureConfigured_ ? (separatePhotoSession_ ? "separate" : "1") : "0") + " auxJpeg=" + (auxJpegConfigured_ ? "1" : "0") +
          " template=" + (repeatingTemplate == RequestTemplate::StillCapture ? "still" : "preview"));
     const auto& raw = cameraContext_->geometry;
     diagnostics::RuntimeTraceRecorder::instance().record(
@@ -848,7 +862,13 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
     return true;
 }
 bool CameraDeviceSession::retire(std::unique_lock<std::mutex>& lock, std::optional<std::chrono::milliseconds> timeout,
-                                 const char* diagnosticPrefix, const Diagnostic& diag) {
+                                 const char* diagnosticPrefix, const Diagnostic& diag, bool closeUnlocked) {
+    if (!session_ && closingSession_) {
+        // Another caller is closing it unlocked: wait for that close.
+        const auto generation = closeGeneration_;
+        const auto done = [this, generation] { return !closingSession_ || !closePending_ || closeGeneration_ != generation; };
+        return timeout ? closed_.wait_for(lock, *timeout, done) : (closed_.wait(lock, done), true);
+    }
     if (!session_) return true;
 
     CameraSessionDriver* const retiringSession = session_.get();
@@ -860,7 +880,15 @@ bool CameraDeviceSession::retire(std::unique_lock<std::mutex>& lock, std::option
     diag(std::string(diagnosticPrefix) + "_RETIRE generation=" + std::to_string(retiringGeneration) +
          " stopRepeatingStatus=" + statusText(stopStatus));
 
-    retiringSession->close();
+    if (closeUnlocked) {
+        closingSession_ = std::move(session_);
+        sessionContext_ = nullptr;
+        lock.unlock();
+        closingSession_->close();
+        lock.lock();
+    } else {
+        retiringSession->close();
+    }
 
     const auto closedPredicate = [this, retiringGeneration] {
         return !closePending_ || closeGeneration_ != retiringGeneration;
@@ -874,12 +902,15 @@ bool CameraDeviceSession::retire(std::unique_lock<std::mutex>& lock, std::option
     }
     if (!closed) {
         diag(std::string(diagnosticPrefix) + "_CLOSE_TIMEOUT generation=" + std::to_string(retiringGeneration));
+        // Back where forceRetire and teardown look for it.
+        if (closingSession_ && !session_) session_ = std::move(closingSession_);
         return false;
     }
 
     // onClosed owns/deletes its callback context and signals only after its
     // final access to the event sink. Once the predicate is satisfied there can be no
     // late session-state callback dereference through this context.
+    if (closingSession_) closedSession_ = std::move(closingSession_);
     if (session_) closedSession_ = std::move(session_);
     sessionContext_ = nullptr;
     diag(std::string(diagnosticPrefix) + "_CLOSED generation=" + std::to_string(retiringGeneration));
@@ -1105,5 +1136,151 @@ bool CameraDeviceSession::captureFullSize(CameraRequestPipeline& pipeline, const
         keysLogged = true;
         return result.failures.empty();
     });
+}
+
+void CameraDeviceSession::releaseViewfinderOutputs() noexcept {
+    // The closed viewfinder session's outputs go before the readers behind them.
+    closedSession_.reset();
+    request_.reset();
+    sessionParameters_.reset();
+    companionWindow_ = nullptr;
+    companionTargeted_ = false;
+    companionFromProfile_ = false;
+    companionDetachable_ = false;
+    if (companionReader_) AImageReader_delete(companionReader_);
+    companionReader_ = nullptr;
+    auxJpegConfigured_ = false;
+    if (auxJpegReader_) AImageReader_delete(auxJpegReader_);
+    auxJpegReader_ = nullptr;
+}
+bool CameraDeviceSession::openPhotoSession(std::unique_lock<std::mutex>& lock, const Diagnostic& diag) {
+    if (!device_ || !captureWindow_ || !viewfinderCallbacks_) return false;
+    const auto started = std::chrono::steady_clock::now();
+    const auto elapsedMs = [&] {
+        return std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count());
+    };
+    viewfinderDown_ = true;
+    const uint64_t generation = generation_;
+    if (session_ || closePending_) {
+        if (!retire(lock, std::chrono::milliseconds(2500), "CAMERA_VIEWFINDER_FOR_PHOTO", diag, true)) return false;
+    }
+    // The lock was released while the viewfinder closed: a stop may own the device now.
+    if (generation != generation_) return false;
+    releaseViewfinderOutputs();
+    if (!device_ || !captureWindow_) return false;
+    RequestStatus s = ACAMERA_OK;
+    const auto params = device_->createRequest(RequestTemplate::StillCapture, &s);
+    if (!ok(s) || !params) {
+        diag("CAMERA_PHOTO_SESSION stage=session_request status=" + statusText(s));
+        return false;
+    }
+    // The lens's still- and session-scope keys go in the session parameters too: the HAL picks the sensor mode when
+    // the streams are configured (the framework passes on only the keys it lists as session keys).
+    for (const auto scope : {CameraKeySetting::Scope::Session, CameraKeySetting::Scope::Still})
+        (void)applyCameraKeySettings(params.get(), characteristics_, stillKeys_, stillKeysCameraId_.c_str(), scope,
+                                     "photo_session", diag);
+    // A gate released after the viewfinder configured is taken again for this configure.
+    const std::string gate = viewfinderRoute_ ? viewfinderRoute_->vendorGate : std::string();
+    bool gateTaken = false;
+    if (!gate.empty() && heldGate_.empty()) {
+        std::string gateError;
+        if (!acquireVendorCameraGate(gate, &gateError)) {
+            diag("CAMERA_PHOTO_SESSION stage=vendor_gate gate=" + gate + " reason=" + gateError);
+            return false;
+        }
+        heldGate_ = gate;
+        gateTaken = true;
+    }
+    auto* callbackContext = viewfinderCallbacks_->sessionContext(generation_);
+    callbackContext->physicalCameraId.clear();
+    callbackContext->outputWindows = {captureWindow_};
+    callbackContext->outputLabels = {"capture"};
+    sessionContext_ = callbackContext;
+    const std::vector<SessionOutput> outputs{{captureWindow_, std::string(), viewfinderRecipe_.photoStreamUseCase}};
+    session_ = device_->createSession(outputs, params.get(), int32_t(viewfinderRecipe_.opMode), callbackContext, &s);
+    if (gateTaken && viewfinderRecipe_.gateHold == GateHold::UntilConfigured) releaseHeldGate();
+    if (!ok(s) || !session_) {
+        rollbackUnacceptedContext();
+        diag("CAMERA_PHOTO_SESSION stage=create status=" + statusText(s) + " ms=" + elapsedMs());
+        return false;
+    }
+    photoSessionOpen_ = true;
+    diag("CAMERA_PHOTO_SESSION stage=configured ms=" + elapsedMs());
+    return true;
+}
+bool CameraDeviceSession::captureFullSizeInPhotoSession(std::unique_lock<std::mutex>& lock, CameraRequestPipeline& pipeline,
+                                                        const CameraControlState& control,
+                                                        const std::vector<CameraRequestPipeline::BracketExposure>& exposures,
+                                                        uint64_t tagId, const Diagnostic& diag) {
+    if (!separatePhotoSession_ || !captureWindow_) return false;
+    if (!photoSessionOpen_ && !openPhotoSession(lock, diag)) return false;
+    if (!session_ || !sessionContext_ || !device_) return false;
+    RequestStatus created = ACAMERA_OK;
+    const auto owned = device_->createRequest(RequestTemplate::StillCapture, &created);
+    CameraRequest* const base = owned.get();
+    if (!ok(created) || !base || !ok(base->addTarget(captureWindow_))) return false;
+    const auto requestKeys = applyCameraKeySettings(base, characteristics_, stillKeys_, stillKeysCameraId_.c_str(),
+                                                    CameraKeySetting::Scope::Request, "lens", [](const std::string&) {});
+    if (!requestKeys.failures.empty()) return false;
+    // The sensor needs longer per frame at full size than the viewfinder cadence the bracket starts from: 1/7 s at
+    // 200 MP (vivo X200 Ultra HP9). The HAL clamps to its own minimum otherwise.
+    const int64_t minFrameNs =
+        viewfinderRoute_ && viewfinderRoute_->photoStream &&
+                uint64_t(viewfinderRoute_->photoStream->width) * viewfinderRoute_->photoStream->height > 100'000'000ull
+            ? 142'857'143
+            : 0;
+    bool keysLogged = false;
+    return pipeline.captureBracket(session_.get(), base, control, exposures, tagId, [&](CameraRequest* request) {
+        const uint8_t intent = ACAMERA_CONTROL_CAPTURE_INTENT_STILL_CAPTURE;
+        (void)request->setU8(ACAMERA_CONTROL_CAPTURE_INTENT, 1, &intent);
+        // A fresh session has no AF history: continuous AF would scan again. The stills take the lens distance the
+        // viewfinder had (control.stillFocusDistance), or the template's focus when there is none.
+        if (control.stillFocusDistance && std::isfinite(*control.stillFocusDistance)) {
+            const uint8_t afOff = ACAMERA_CONTROL_AF_MODE_OFF;
+            const float distance = *control.stillFocusDistance;
+            if (request->setU8(ACAMERA_CONTROL_AF_MODE, 1, &afOff) != ACAMERA_OK ||
+                request->setFloat(ACAMERA_LENS_FOCUS_DISTANCE, 1, &distance) != ACAMERA_OK)
+                return false;
+        }
+        if (minFrameNs > 0) {
+            RequestEntry duration{};
+            const int64_t current = request->get(ACAMERA_SENSOR_FRAME_DURATION, &duration) == ACAMERA_OK &&
+                                            duration.count == 1 && duration.data.i64
+                                        ? duration.data.i64[0]
+                                        : 0;
+            if (current < minFrameNs) (void)request->setI64(ACAMERA_SENSOR_FRAME_DURATION, 1, &minFrameNs);
+        }
+        // Only the lens's own still keys: a photo-only session is not the vendor camera app's still pipeline, so the
+        // gate preset's per-still ids stay out (the X200 Ultra takes its full-size stills without them).
+        const auto result = applyCameraKeySettings(request, characteristics_, stillKeys_, stillKeysCameraId_.c_str(),
+                                                   CameraKeySetting::Scope::Still, "lens",
+                                                   keysLogged ? Diagnostic([](const std::string&) {}) : diag);
+        if (!keysLogged) dumpCaptureRequest(request, "photo_session_still", diag);
+        keysLogged = true;
+        return result.failures.empty();
+    });
+}
+bool CameraDeviceSession::restoreViewfinderSession(std::unique_lock<std::mutex>& lock, const CameraControlState& control,
+                                                   const CameraMeteringRequest& metering, const Diagnostic& diag) {
+    if (!viewfinderDown_) return true;
+    const auto started = std::chrono::steady_clock::now();
+    const uint64_t generation = generation_;
+    if (session_ || closePending_) {
+        if (!retire(lock, std::chrono::milliseconds(2500), "CAMERA_PHOTO_SESSION", diag, true)) return false;
+    }
+    if (generation != generation_) return false;
+    photoSessionOpen_ = false;
+    if (!device_ || !rawWindow_ || !viewfinderCallbacks_ || !viewfinderPipeline_) return false;
+    // The photo session's outputs go with it; the viewfinder session builds its own.
+    closedSession_.reset();
+    releaseViewfinderOutputs();
+    SessionRecipe recipe = viewfinderRecipe_;
+    recipe.startupDelayMs = 0;
+    const auto route = viewfinderRoute_;
+    const bool created = createSession(rawWindow_, route, recipe, control, metering, *viewfinderCallbacks_,
+                                       *viewfinderPipeline_, diag, [](int32_t) { return true; });
+    diag("CAMERA_PHOTO_SESSION stage=viewfinder_restored ok=" + std::string(created ? "1" : "0") + " ms=" +
+         std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count()));
+    return created;
 }
 }  // namespace rawrcam::camera

@@ -191,7 +191,7 @@ bool CameraRequestPipeline::captureAfTrigger(CameraSessionDriver* session, const
             const uint8_t continuous = ACAMERA_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
             (void)request->setU8(ACAMERA_CONTROL_AF_MODE, 1, &continuous);
         }
-        (void)request->setI32(ACAMERA_CONTROL_AF_REGIONS, 0, nullptr);
+        if (!control.capabilities.keepTemplateRegions) (void)request->setI32(ACAMERA_CONTROL_AF_REGIONS, 0, nullptr);
     } else {
         RequestEntry af{};
         RequestEntry ae{};

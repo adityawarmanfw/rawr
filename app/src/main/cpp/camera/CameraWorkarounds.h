@@ -30,22 +30,28 @@ struct CameraWorkarounds {
     // A lost companion buffer does not fail the frame. Xiaomi's HAL drops the small companion output on its
     // full-size stills while the RAW outputs still arrive; elsewhere a lost companion is a real failure.
     bool ignoreLostCompanion = false;
+    // A request never empties an entry the template set: the AE fps range, exposure time, sensitivity, frame
+    // duration, colour gains and transform, and the AF / AE regions (keepTemplateRegions included). The vivo X200
+    // Ultra's gated routes lose the provider on the first viewfinder frame when the app clears them.
+    bool keepTemplateEntries = false;
 
     [[nodiscard]] bool any() const noexcept {
         return holdTapFocus || appPriorityAe || noTapFocus || alwaysSendFrameRate || noAutoCompanion ||
-               keepTemplateRegions || ignoreLostCompanion;
+               keepTemplateRegions || ignoreLostCompanion || keepTemplateEntries;
     }
     bool operator==(const CameraWorkarounds& o) const noexcept {
         return holdTapFocus == o.holdTapFocus && appPriorityAe == o.appPriorityAe && noTapFocus == o.noTapFocus &&
                alwaysSendFrameRate == o.alwaysSendFrameRate && noAutoCompanion == o.noAutoCompanion &&
-               keepTemplateRegions == o.keepTemplateRegions && ignoreLostCompanion == o.ignoreLostCompanion;
+               keepTemplateRegions == o.keepTemplateRegions && ignoreLostCompanion == o.ignoreLostCompanion &&
+               keepTemplateEntries == o.keepTemplateEntries;
     }
 };
 
 [[nodiscard]] inline CameraWorkarounds mergeWorkarounds(const CameraWorkarounds& a, const CameraWorkarounds& b) noexcept {
     return {a.holdTapFocus || b.holdTapFocus, a.appPriorityAe || b.appPriorityAe, a.noTapFocus || b.noTapFocus,
             a.alwaysSendFrameRate || b.alwaysSendFrameRate, a.noAutoCompanion || b.noAutoCompanion,
-            a.keepTemplateRegions || b.keepTemplateRegions, a.ignoreLostCompanion || b.ignoreLostCompanion};
+            a.keepTemplateRegions || b.keepTemplateRegions, a.ignoreLostCompanion || b.ignoreLostCompanion,
+            a.keepTemplateEntries || b.keepTemplateEntries};
 }
 
 // Whether a request writes its AF / AE region entry: a tap's region always; otherwise it clears the entry
@@ -63,6 +69,7 @@ struct CameraWorkarounds {
     else if (name == "noAutoCompanion") workarounds.noAutoCompanion = true;
     else if (name == "keepTemplateRegions") workarounds.keepTemplateRegions = true;
     else if (name == "ignoreLostCompanion") workarounds.ignoreLostCompanion = true;
+    else if (name == "keepTemplateEntries") workarounds.keepTemplateEntries = true;
     else return false;
     return true;
 }
@@ -86,6 +93,7 @@ struct CameraWorkarounds {
     if (workarounds.noAutoCompanion) names.push_back("noAutoCompanion");
     if (workarounds.keepTemplateRegions) names.push_back("keepTemplateRegions");
     if (workarounds.ignoreLostCompanion) names.push_back("ignoreLostCompanion");
+    if (workarounds.keepTemplateEntries) names.push_back("keepTemplateEntries");
     return names;
 }
 

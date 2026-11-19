@@ -109,7 +109,7 @@ CameraControlApplyResult applyCameraControlState(CameraRequest* request, const C
         result.aeTargetFpsRequested = true;
         result.aeTargetFpsStatus =
             request->setI32(ACAMERA_CONTROL_AE_TARGET_FPS_RANGE, 2, fps->data());
-    } else {
+    } else if (!state.capabilities.keepTemplateEntries) {
         (void)request->setI32(ACAMERA_CONTROL_AE_TARGET_FPS_RANGE, 0, nullptr);
     }
 
@@ -150,14 +150,18 @@ CameraControlApplyResult applyCameraControlState(CameraRequest* request, const C
     } else if (aePriority == camera2_priority::kSensorExposureTimePriority) {
         // S: app owns shutter; AE owns ISO + frame duration.
         (void)request->setI64(ACAMERA_SENSOR_EXPOSURE_TIME, 1, &exposure);
-        (void)request->setI32(ACAMERA_SENSOR_SENSITIVITY, 0, nullptr);
-        (void)request->setI64(ACAMERA_SENSOR_FRAME_DURATION, 0, nullptr);
+        if (!state.capabilities.keepTemplateEntries) {
+            (void)request->setI32(ACAMERA_SENSOR_SENSITIVITY, 0, nullptr);
+            (void)request->setI64(ACAMERA_SENSOR_FRAME_DURATION, 0, nullptr);
+        }
     } else if (aePriority == camera2_priority::kSensorSensitivityPriority) {
         // I: app owns ISO; AE owns shutter + frame duration.
         (void)request->setI32(ACAMERA_SENSOR_SENSITIVITY, 1, &sensitivity);
-        (void)request->setI64(ACAMERA_SENSOR_EXPOSURE_TIME, 0, nullptr);
-        (void)request->setI64(ACAMERA_SENSOR_FRAME_DURATION, 0, nullptr);
-    } else {
+        if (!state.capabilities.keepTemplateEntries) {
+            (void)request->setI64(ACAMERA_SENSOR_EXPOSURE_TIME, 0, nullptr);
+            (void)request->setI64(ACAMERA_SENSOR_FRAME_DURATION, 0, nullptr);
+        }
+    } else if (!state.capabilities.keepTemplateEntries) {
         // A: return all sensor exposure ownership to Camera2 AE.
         (void)request->setI64(ACAMERA_SENSOR_EXPOSURE_TIME, 0, nullptr);
         (void)request->setI32(ACAMERA_SENSOR_SENSITIVITY, 0, nullptr);
@@ -243,8 +247,10 @@ CameraControlApplyResult applyCameraControlState(CameraRequest* request, const C
         const uint8_t color = ACAMERA_COLOR_CORRECTION_MODE_HIGH_QUALITY;
         result.wbStatus = request->setU8(ACAMERA_CONTROL_AWB_MODE, 1, &awb);
         (void)request->setU8(ACAMERA_COLOR_CORRECTION_MODE, 1, &color);
-        (void)request->setFloat(ACAMERA_COLOR_CORRECTION_GAINS, 0, nullptr);
-        (void)request->setRational(ACAMERA_COLOR_CORRECTION_TRANSFORM, 0, nullptr);
+        if (!state.capabilities.keepTemplateEntries) {
+            (void)request->setFloat(ACAMERA_COLOR_CORRECTION_GAINS, 0, nullptr);
+            (void)request->setRational(ACAMERA_COLOR_CORRECTION_TRANSFORM, 0, nullptr);
+        }
     }
 
     uint8_t af = ACAMERA_CONTROL_AF_MODE_CONTINUOUS_PICTURE;

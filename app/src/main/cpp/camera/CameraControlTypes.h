@@ -148,6 +148,8 @@ struct CameraControlCapabilities {
     bool tapAfHoldsUntilNextTap = false;
     // Requests without a tap region keep the template's own AF/AE regions (CameraWorkarounds::keepTemplateRegions).
     bool keepTemplateRegions = false;
+    // No request clears an entry the template set (CameraWorkarounds::keepTemplateEntries).
+    bool keepTemplateEntries = false;
     // Continuous AF follows the first detected face. Off on vivo-gated routes:
     // moving or clearing the region there crashes the same AF publisher.
     bool faceAfSteering = true;

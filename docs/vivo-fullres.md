@@ -434,9 +434,15 @@ for admission.
 
 `session.gate: {"name": "vivoFullSize"}` selects the vivo key-40 gate. That code does not check
 for an X300 Ultra model name. It does not by itself choose a high-resolution size,
-sensor mode, or still request sequence. An X200 Ultra profile can select the same
-mechanism, but its hidden API, camera IDs, sizes, vendor keys, and HAL behavior
-must be validated on that phone; X300 Ultra values are not automatically portable.
+sensor mode, or still request sequence. The built-in X200 Ultra profile (`vivo_x200_ultra`) uses the same
+mechanism with its own values, tested on a V2454DA: the full-size sensor mode goes in
+`vivo.control.forceSensorMode` on the still request only (scope `still`; the X200 Ultra needs no session-level
+switch), 50 MP lenses use an 8192x6144 (8160x6144 on the 85 mm) photo stream, and the 200 MP F85 lens takes
+4x4 photo frames that `photoOutput: "reduced"` turns into 50 MP Bayer. Its HAL fails as soon as a full-size output
+is configured beside the viewfinder, so these lenses use `separatePhotoSession` (the photos get a session of their
+own, about a second per switch) and the `keepTemplateEntries` workaround (requests never clear the template's
+entries; clearing them loses the provider on the first viewfinder frame). X300 Ultra values are not automatically
+portable to other phones; validate a new phone's camera IDs, sizes, vendor keys, and HAL behavior on the device.
 
 The lens editor exposes:
 

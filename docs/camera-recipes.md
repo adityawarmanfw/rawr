@@ -116,12 +116,16 @@ An extra JPEG output configured with the session and never targeted: `width`, `h
 | `startupDelayMs` | 0 | Wait after the session is configured before the first request (0–5000). |
 | `gate.name`, `gate.hold` | none; `closed` with a photo stream, else `configured` | Vendor state the app holds while the device is open; `hold` says whether it is released once the session is configured or kept until the device closes. |
 | `stopViewfinderForPhotos` | false | Stop the viewfinder stream for a full-size photo and restart it afterwards. The screen freezes for full-size photos either way. |
+| `separatePhotoSession` | false | Configure the photo stream in a session of its own (needs `streams.photo`, native API only). The viewfinder session runs without it; at the shutter it closes, a session with only the photo stream takes the photos (a multi-frame shot keeps it open between its frames), and the viewfinder session is configured again. For HALs that fail when a full-size output is configured beside the viewfinder (vivo X200 Ultra). About a second per switch. |
 | `workarounds` | none | Camera workarounds this lens needs; see below. |
 
 How a full-size photo is taken is derived, not set: a lens with a photo stream, a companion it
 writes to and an enabled `decision` key uses the decision frame (one low-ISO viewfinder frame lets the
 HAL switch to full size, then the viewfinder stream stops for the photos); otherwise
 `stopViewfinderForPhotos` stops it, and without it the photo goes out beside the running viewfinder.
+`separatePhotoSession` takes precedence over both (`still=separateSession` in the recipe log). The photo session's
+stills carry the still template, the lens's request- and still-scope keys (still- and session-scope ones also in its
+session parameters) and the viewfinder's lens distance with AF off; the gate preset's per-still ids are not added.
 
 ## Requests and vendor keys
 
@@ -185,6 +189,7 @@ their presets on top (see `effectiveWorkarounds`), and the editor shows those as
 | `alwaysSendFrameRate` | Every request carries an AE fps range, even with AE off. |
 | `noAutoCompanion` | The rule-based companion is not added. |
 | `ignoreLostCompanion` | A lost companion buffer is logged (`CAMERA_BUFFER_LOST_IGNORED`) instead of failing the frame. The Xiaomi 17 Ultra's HAL drops the small companion output on full-size stills while the RAW outputs still arrive. |
+| `keepTemplateEntries` | No request clears an entry the template set: the AE fps range, exposure time, sensitivity, frame duration, colour gains and transform, and the AF / AE regions (it implies `keepTemplateRegions`). The vivo X200 Ultra's gated routes lose the provider on the first viewfinder frame otherwise. |
 | `keepTemplateRegions` | A request without a tap region leaves the template's own AF and AE regions alone instead of writing an empty one (the vivo X200 Ultra's AF node dereferences a null ROI otherwise and the provider crashes on the first full-size request). |
 
 Presets keep imported and user-edited profiles safe: a lens with a vendor gate implies `holdTapFocus`;
