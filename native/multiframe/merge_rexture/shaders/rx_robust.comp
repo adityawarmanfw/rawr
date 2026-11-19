@@ -20,6 +20,10 @@ layout(set = 0, binding = 5, r16f) writeonly uniform image2D erI;         // rob
 layout(set = 0, binding = 6, r16f) uniform image2D supportI;              // += er
 layout(set = 0, binding = 7, r32f) writeonly uniform image2D dbgPreI;     // verification only
 layout(set = 0, binding = 8, r32f) writeonly uniform image2D dbgScaleI;   // verification only
+// += (rejected share 1 - er, 1) where the frame covers the cell (its warped position lies in the image): the moving-texture
+// restore (rx_moving.comp) needs the share of companions rejected for motion; frames shifted out of the image near its border
+// are not motion
+layout(set = 0, binding = 9, rg16f) uniform image2D motI;
 layout(push_constant) uniform P { float alpha, beta; int debug; } p;
 
 const float MOTION_THRESHOLD = 0.65, ROBUST_S1 = 1.5, ROBUST_S2 = 9.0, ROB_K = 0.1;
@@ -122,6 +126,17 @@ void main() {
         for (int dx = 0; dx < 5; ++dx) er = min(er, sPre[(t2.y + dy) * T + t2.x + dx]);
     imageStore(erI, q, vec4(er));
     imageStore(supportI, q, vec4(imageLoad(supportI, q).x + max(er, 0.0)));
+    {
+        ivec2 tn = imageSize(flowI);
+        vec2 g = (vec2(2 * q) + 0.5) / 16.0 - 0.5, b = floor(g), fr = g - b;
+        vec2 acc = vec2(0.0);
+        for (int j = 0; j < 2; ++j)
+            for (int i = 0; i < 2; ++i)
+                acc += (i == 1 ? fr.x : 1.0 - fr.x) * (j == 1 ? fr.y : 1.0 - fr.y) * imageLoad(flowI, clamp(ivec2(b) + ivec2(i, j), ivec2(0), tn - 1)).xy;
+        vec2 l = vec2(q) + 0.5 * acc;
+        if (l.x >= 1.0 && l.y >= 1.0 && l.x < float(gsz.x) - 1.0 && l.y < float(gsz.y) - 1.0)
+            imageStore(motI, q, vec4(imageLoad(motI, q).xy + vec2(1.0 - clamp(er, 0.0, 1.0), 1.0), 0.0, 0.0));
+    }
     if (p.debug != 0) {
         imageStore(dbgPreI, q, vec4(sPre[(t2.y + 2) * T + t2.x + 2]));
         ivec2 tn = imageSize(flowI);

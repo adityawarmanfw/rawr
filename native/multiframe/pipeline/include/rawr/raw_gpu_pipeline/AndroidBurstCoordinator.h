@@ -134,6 +134,8 @@ class AndroidBurstCoordinator final {
     void setInitialWaitSemaphore(VkSemaphore semaphore) noexcept { initialWait_ = semaphore; }
     // Rexture detail fit (raw_merge_rexture_gpu::Config::detailRestore, "Rexturation") for the next run(); off by default.
     void setRextureDetailRestore(bool on) noexcept { rextureDetailRestore_ = on; }
+    // Rexture moving-texture restore (raw_merge_rexture_gpu::Config::movingRestore) for the next run(); on by default.
+    void setRextureMovingRestore(bool on) noexcept { rextureMovingRestore_ = on; }
     // Frees the large per-geometry image/buffer arena after the merged output
     // has been projected, while retaining pipelines and command infrastructure.
     void releaseScratch() noexcept;
@@ -184,6 +186,7 @@ class AndroidBurstCoordinator final {
     RextureObserver rextureObserver_{};
     bool rextureDebug_ = false, arenaRextureDebug_ = false;
     bool rextureDetailRestore_ = false;
+    bool rextureMovingRestore_ = true;
     bool arenaRextureDetail_ = false;
     BurstRunResult runRexture(const std::vector<BurstFrame>& frames, std::uint32_t referenceIndex,
                               const FrameConsumed& frameConsumed, const FrameLoad& frameLoad);

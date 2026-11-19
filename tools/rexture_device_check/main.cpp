@@ -103,6 +103,7 @@ int main(int argc, char** argv) {
         int frames = 0, repeat = 1;
         bool scores = false;
         bool detailRestore = false;   // --detail-restore (the app's Rexturation, off by default)
+        bool movingRestore = true;    // --moving (moving-texture restore, on by default)
         for (int i = 1; i < argc; ++i) {
             const std::string a = argv[i];
             auto need = [&]() { if (i + 1 >= argc) throw std::invalid_argument("missing value for " + a); return std::string(argv[++i]); };
@@ -114,6 +115,7 @@ int main(int argc, char** argv) {
             else if (a == "--repeat") repeat = std::stoi(need());
             else if (a == "--scores") scores = true;
             else if (a == "--detail-restore") detailRestore = std::stoi(need()) != 0;
+            else if (a == "--moving") movingRestore = std::stoi(need()) != 0;
             else if (a == "--strip-rows")   // the grain pass's strip height: the output must not depend on it
                 rawr::raw_gpu_pipeline::RextureRecorder::setStripRowsForTesting(std::uint32_t(std::stoul(need())));
             else if (a.rfind("--", 0) == 0) throw std::invalid_argument("unknown flag " + a);
@@ -217,6 +219,7 @@ int main(int argc, char** argv) {
             coordinator.setRextureObserver(stagedump::makeRextureObserver(*dump, inject));
         }
         coordinator.setRextureDetailRestore(detailRestore);
+        coordinator.setRextureMovingRestore(movingRestore);
         coordinator.initialize(ctx.pd, ctx.dev, ctx.qf,
                                [&](const VkSubmitInfo& si, VkFence f) { vktest::ck(vkQueueSubmit(ctx.q, 1, &si, f), "burst submit"); },
                                width, height, {}, cfg, algorithm, {});

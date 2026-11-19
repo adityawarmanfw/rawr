@@ -457,6 +457,7 @@ struct TuneOpts {
     std::string noiseAb;     // "a,b": scalar noise model override (normalised units)
     std::string injectFlow;  // rexture verification: dump dir whose frames/<i>/flow replaces the estimated fine flow
     bool rextureDetailRestore = false;  // --rexture-detail-restore 0|1 (the app's Rexturation, off by default)
+    bool rextureMovingRestore = true;   // --rexture-moving 0|1 (moving-texture restore, on by default)
     rawr::raw_merge_hdrplus_gpu::Config hdrplus{};
 };
 
@@ -994,6 +995,7 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
         coordinator.setRextureObserver(stagedump::makeRextureObserver(*stageDump, tune.injectFlow));
     }
     coordinator.setRextureDetailRestore(tune.rextureDetailRestore);
+    coordinator.setRextureMovingRestore(tune.rextureMovingRestore);
     coordinator.initialize(context.pd, context.dev, context.qf,
                            [&](const VkSubmitInfo& info, VkFence fence) {
                                vktest::ck(vkQueueSubmit(context.q, 1, &info, fence), "burst queue submit");
@@ -1238,7 +1240,7 @@ int main(int argc, char** argv) {
         " --output-dir DIR"
         " [--dump-linear] [--dump-cfa] [--repeat N] [--noise-source recorded|camera2|legacy|calibrated|burst]"
         " [--cal-profile FILE]"
-         " [--max-frames I] [--rexture-detail-restore 0|1] [--suffix STR] [--dump-base] [--dump-all-singles] [--dump-raw16] [--export-dng DIR] [--export-merged-dng FILE] [--merge rexture|hdrplus-freq] [--rexture-strip-rows N] [--hdrplus-strength F] [--hdrplus-tile 16|32] [--hdrplus-search 32|64|128] [--hdrplus-faithful] [--affine-deadzone F] [--affine-softness F] [--affine-isotropic] [--fallback-chroma GAIN] [--fallback-luma GAIN] [--fallback-max-sigma PX] [--no-hot-pixels] [--hot-pixel-list FILE]"
+         " [--max-frames I] [--rexture-detail-restore 0|1] [--rexture-moving 0|1] [--suffix STR] [--dump-base] [--dump-all-singles] [--dump-raw16] [--export-dng DIR] [--export-merged-dng FILE] [--merge rexture|hdrplus-freq] [--rexture-strip-rows N] [--hdrplus-strength F] [--hdrplus-tile 16|32] [--hdrplus-search 32|64|128] [--hdrplus-faithful] [--affine-deadzone F] [--affine-softness F] [--affine-isotropic] [--fallback-chroma GAIN] [--fallback-luma GAIN] [--fallback-max-sigma PX] [--no-hot-pixels] [--hot-pixel-list FILE]"
          " [--reference recorded|middle|sharpest|darkest] INPUT [INPUT2 ...]\n"
          "  INPUT: FILE.rzsl | DNG_DIR or dng:DNG_DIR (every *.dng, name-sorted, is one burst)"
          " | rawburst:DIR | synthetic:...";
@@ -1269,6 +1271,7 @@ int main(int argc, char** argv) {
             else if (a == "--repeat") tune.repeat = std::stoi(need(a.c_str()));
             else if (a == "--max-frames") tune.maxFrames = std::stoi(need(a.c_str()));
             else if (a == "--rexture-detail-restore") tune.rextureDetailRestore = std::stoi(need(a.c_str())) != 0;
+            else if (a == "--rexture-moving") tune.rextureMovingRestore = std::stoi(need(a.c_str())) != 0;
             else if (a == "--suffix") tune.suffix = need(a.c_str());
             else if (a == "--dump-base") tune.dumpBase = true;
             else if (a == "--dump-all-singles") tune.dumpAllSingles = true;

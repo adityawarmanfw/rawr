@@ -39,6 +39,12 @@ layout(push_constant) uniform P {
     float gain;          // op 3: reference exposure / the companion's exposure
 } p;
 const float KAPPA = 4.0, T1 = 3.0, T2 = 9.0;
+// The step's change (g - z0) is kept and added after the grain pass (op 2), so the grain pass's evening of few-frame areas stays.
+// It is scaled by the companions' support, min(sum of their A coefficients / DS_FULL, 1): where every companion was rejected (a
+// band around a moving subject) the step only moves z0 to the base frame's own samples: on texture (a moving subject, water,
+// rocks) that is real sharpening of the base, on flat areas only its noise. So the scale is also at least the base's texture:
+// its green plane's 3 x 3 standard deviation over the single-frame noise SD, TEXF_LO .. TEXF_HI.
+const float DS_FULL = 1.0, TEXF_LO = 1.5, TEXF_HI = 3.0;
 #include "rx_common.glsl"
 
 shared float sG[18 * 18];               // op 0: base green, op 1: merge green (workgroup +- 1)
@@ -52,7 +58,10 @@ float rawAt(ivec2 q) {
 float greenAt(ivec2 q) {
     q = clamp(q, ivec2(0), ivec2(p.w - 1, p.h - 1));
     if (rxChannel(q, p.cfa) == 1) return rawAt(q);
-    return 0.25 * (rawAt(q + ivec2(1, 0)) + rawAt(q - ivec2(1, 0)) + rawAt(q + ivec2(0, 1)) + rawAt(q - ivec2(0, 1)));
+    // neighbours mirrored at the image border (a clamped one would be the pixel itself, a red or blue sample)
+    const int xl = q.x > 0 ? q.x - 1 : q.x + 1, xr = q.x < p.w - 1 ? q.x + 1 : q.x - 1;
+    const int yu = q.y > 0 ? q.y - 1 : q.y + 1, yd = q.y < p.h - 1 ? q.y + 1 : q.y - 1;
+    return 0.25 * (rawAt(ivec2(xl, q.y)) + rawAt(ivec2(xr, q.y)) + rawAt(ivec2(q.x, yu)) + rawAt(ivec2(q.x, yd)));
 }
 
 void main() {
@@ -125,7 +134,8 @@ void main() {
         const float cN = q.y > 0 ? imageLoad(fitAcc, q - ivec2(0, 1)).w : 0.0;
         const float cNW = q.x > 0 && q.y > 0 ? imageLoad(fitAcc2, q - ivec2(1, 1)).x : 0.0;
         const float cNE = q.x < n.x && q.y > 0 ? imageLoad(fitAcc2, q + ivec2(1, -1)).y : 0.0;
-        const float base = imageLoad(fitBg, q).x;
+        const vec2 bsd = imageLoad(fitBg, q).xy;   // (base green, its 3 x 3 standard deviation)
+        const float base = bsd.x;
         const int c = (l.y + 1) * 18 + l.x + 1;
         const float z0 = sG[c];
         const float az = a.y * (z0 - base) + a.z * (sG[c + 1] - base) + a.w * (sG[c + 18] - base) + a2.x * (sG[c + 19] - base) +
@@ -137,14 +147,15 @@ void main() {
             const float y = rawAt(q);
             if (y < RX_CLIP_NORM) { bt = y - z0; bd = 1.0; }
         }
-        float g = z0 + p.omega * (a.x - az + bt) / (ds + bd + p.delta);
-        if (isnan(g) || isinf(g)) g = z0;
-        imageStore(fitBg, q, vec4(g, 0.0, 0.0, 0.0));
+        float dg = p.omega * (a.x - az + bt) / (ds + bd + p.delta) * max(clamp(ds / DS_FULL, 0.0, 1.0),
+                     smoothstep(TEXF_LO, TEXF_HI, bsd.y / sqrt(max(p.alpha * max(base, 0.0) + p.beta, 1e-20))));
+        if (isnan(dg) || isinf(dg)) dg = 0.0;
+        imageStore(fitBg, q, vec4(dg, 0.0, 0.0, 0.0));
         return;
     }
     if (q.x >= p.w || q.y >= p.h) return;
     // op 2
     const vec4 x = imageLoad(outI, q);
-    const float d = imageLoad(fitBg, q).x - x.y;
+    const float d = imageLoad(fitBg, q).x;   // the step's change, on top of the grain pass
     imageStore(outI, q, vec4(x.xyz + d * vec3(p.iwb0, p.iwb1, p.iwb2), x.w));
 }

@@ -39,6 +39,12 @@ const float TARGET_C = 0.08;
 const float SNR_LO = 15.0, SNR_HI = 45.0;
 const float SINGLE_SNR_LO = 15.0, SINGLE_SNR_HI = 28.0, SINGLE_M_LO = 0.85, SINGLE_M_HI = 0.97;
 const float KC = 2.0;                  // colour range weight relative to the luma one
+// The two texture-keeping rules below (skip the pass on clean single-frame pixels, keep the fine bands of clean pixels) are for
+// a moving subject's own texture. Flat surroundings of a mover (sky next to a bird) are also clean and single-frame there, and
+// with the rules they kept the raw single-frame grain next to a clean many-frame merge: a blotchy band. The rules now apply in
+// proportion to texture: the B3-weighted variance of the 5 x 5 stride-4 taps of x2 (a 17 px neighbourhood) over what single-frame
+// noise alone leaves there (TEX_F of the frame's noise variance, simulated: Bayer noise, demosaic, two B3 levels), times m.
+const float TEX_F = 0.022, TEX_LO = 1.5, TEX_HI = 3.0;
 // Range noise factor of the three levels. With few frames (4 or fewer) (1.0, 0.6, 0.4): the grain is the merge's own and the pass evens
 // it. From 8 frames on (0.3, 0.18, 0.12): the areas still below TARGET are then ones the robustness test rejected frames from
 // (moving water, foliage), and with the old factors the range weight read their real ripples (a few noise sigmas high) as grain
@@ -111,6 +117,20 @@ vec3 atrous(int level, ivec2 l, int stride, float m) {
     return num / den;
 }
 
+// texture of the pixel's neighbourhood (op 2: sTile holds x2 at stride 4)
+float texture2(ivec2 l, float m, float level) {
+    const int T = 32;
+    float mu = 0.0, s2 = 0.0;
+    for (int j = 0; j < 5; ++j)
+        for (int i = 0; i < 5; ++i) {
+            float v = sTile[(l.y + 4 * j) * T + l.x + 4 * i].g, w = B3[i] * B3[j];
+            mu += w * v;
+            s2 += w * v * v;
+        }
+    float nv = TEX_F * (p.alpha * max(level, 0.0) + p.beta) * max(m, 1e-6);
+    return smoothstep(TEX_LO, TEX_HI, sqrt(max(s2 - mu * mu, 0.0) / max(nv, 1e-20)));
+}
+
 void main() {
     const int tid = int(gl_LocalInvocationIndex);
     const ivec2 q = ivec2(int(gl_GlobalInvocationID.x), p.y0 + int(gl_GlobalInvocationID.y));
@@ -154,11 +174,13 @@ void main() {
         const vec3 x2 = fetch(2, q);
         const vec3 b3 = x2 - x3, b2 = x1 - x2, b1 = x0 - x1;
         const float snr = max(x3.g, 1e-6) / sqrt(max((p.alpha * max(x3.g, 0.0) + p.beta) * max(m, 1e-6), 1e-20));   // output SNR of the pixel
-        const float st = smoothstep(SNR_LO, SNR_HI, snr);   // 0 = noisy (shrink the fine bands like the 4 px band), 1 = clean (keep them)
+        float st = smoothstep(SNR_LO, SNR_HI, snr);   // 0 = noisy (shrink the fine bands like the 4 px band), 1 = clean (keep them)
         // A clean pixel that kept a single frame (moving subject, m about 1): nothing was merged there and its single-frame noise is low, so the grain pass is
         // skipped: it would only take texture off the demosaic.
         const float snr1 = max(x3.g, 1e-6) / sqrt(max(p.alpha * max(x3.g, 0.0) + p.beta, 1e-20));   // single-frame SNR
-        const float keep = smoothstep(SINGLE_SNR_LO, SINGLE_SNR_HI, snr1) * smoothstep(SINGLE_M_LO, SINGLE_M_HI, m);
+        const float tex = texture2(lid, m, x3.g);
+        const float keep = smoothstep(SINGLE_SNR_LO, SINGLE_SNR_HI, snr1) * smoothstep(SINGLE_M_LO, SINGLE_M_HI, m) * tex;
+        st *= tex;
         const float yl = mix(x3.g + g * b3.g + pow(g, 1.0 - 0.5 * st) * b2.g + pow(g, 1.0 - st) * b1.g, x0.g, keep);
         const vec2 ch = (x3.rb - x3.g) + gc * ((b3.rb - b3.g) + (b2.rb - b2.g) + (b1.rb - b1.g));
         imageStore(x0I, q, vec4(ch.x + yl, yl, ch.y + yl, 1.0));

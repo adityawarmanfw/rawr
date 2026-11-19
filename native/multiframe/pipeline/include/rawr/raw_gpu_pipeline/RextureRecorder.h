@@ -83,6 +83,7 @@ class RextureRecorder final {
     rawr::raw_merge_rexture_gpu::Config config_;
     void recordPyramid(VkCommandBuffer, bool base) const;
     void recordGrainPass(VkCommandBuffer) const;
+    void recordMovingRestore(VkCommandBuffer, VkImageView rawU16, const MultiframeFrameParameters& f) const;
     // Detail fit (rx_fit.comp, config.detailRestore): op 0 base green plane, 1 fitted green (after the final pass), 2 its detail
     // added to the output (after the grain pass), 3 a companion's motion weight.
     void recordFit(VkCommandBuffer, std::int32_t op, VkImageView rawU16, const MultiframeFrameParameters& f, float gain = 1.0f,

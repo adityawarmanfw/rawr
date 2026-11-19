@@ -23,6 +23,10 @@ struct Config {
     // companions accumulate, no second visit), its detail added as grey after the grain pass. Restores the fine detail the
     // merge's kernel and the pixel aperture soften. Two full-resolution RG16F images.
     bool detailRestore = false;
+    // Moving-texture restore (rx_moving.comp; on by default): where most covering companions were rejected for motion over a
+    // broad area (a sea, waves), the merge blended a few misplaced copies of the texture (soft, painted, glints dimmed); the base
+    // frame's own detail finer than ~0.05 c/px is put back there. Static areas and small or patchy movers are left as merged.
+    bool movingRestore = true;
 };
 
 [[nodiscard]] inline bool valid(const Config& c) noexcept {

@@ -1,0 +1,134 @@
+#version 450
+#extension GL_GOOGLE_include_directive : enable
+// Rexture moving-texture restore (after the grain pass and the detail fit). Where most companions were rejected for motion over a
+// broad area (a sea, waves) the merge blended a few misplaced copies of the moving texture: soft, painted, glints dimmed. There the
+// base frame's own detail finer than ~0.05 c/px is put back: out_c += gate (D - gauss(D)) / wb_c, D = base green - output green,
+// sigma SIGMA_LP px. The base green is the base frame's green samples (others: the mean of their 4 green neighbours).
+// Gate, at 1/8 resolution: raw = smoothstep(REJ_LO, REJ_HI, rejected share of the covering companions) * (1 - smoothstep(M_LO,
+// M_HI, m)), averaged over a cell, blurred (sigma GATE_SIGMA cells, ~32 px), then smoothstep(G_LO, G_HI): a thin or patchy partly
+// rejected zone around a moving subject (hair, a scooter) stays out (patchy single-frame grain next to clean merge = blotches), and
+// fully single-frame areas (m ~ 1) stay out (nothing was blended there; the grain pass's evening of them is kept).
+//   op 0: gate cells (1/8 res) -> gA      op 1: horizontal blur gA -> gB      op 2: vertical blur + smoothstep gB -> gA
+//   op 3: per 16 x 16 tile, dG = gate (D - gauss(D)) -> dI.x (workgroups with no gate skip)      op 4: out += dG / wb
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0, r16ui) readonly uniform uimage2D rawU16;   // base frame
+layout(set = 0, binding = 1, rgba16f) uniform image2D outI;            // linear_output
+layout(set = 0, binding = 2, rg16f) readonly uniform image2D motI;     // (sum of rejected share, covering companions), half res
+layout(set = 0, binding = 3, r32f) readonly uniform image2D mI;        // m per 4 x 4 pixel cell
+layout(set = 0, binding = 4, r16f) uniform image2D gA;                 // gate, 1/8 res
+layout(set = 0, binding = 5, r16f) uniform image2D gB;
+layout(set = 0, binding = 6, rgba16f) uniform image2D dI;              // scratch: dG in .x
+layout(push_constant) uniform P {
+    vec4 black;
+    float white;
+    int w, h, cfa, op;
+    float iwb0, iwb1, iwb2;
+} p;
+#include "rx_common.glsl"
+
+const float REJ_LO = 0.5, REJ_HI = 0.75, M_LO = 0.7, M_HI = 0.95, G_LO = 0.6, G_HI = 0.9;
+const float GATE_SIGMA = 4.0;   // cells of 8 px
+const int GATE_R = 12;
+const float SIGMA_LP = 3.2;
+const int R = 10;               // low-pass reach
+const int T = 16 + 2 * R;
+shared float sD[T * T];
+shared float sH[T * 16];        // horizontal pass: T rows x 16 columns
+shared uint sAny;
+
+float rawAt(ivec2 q) {
+    q = clamp(q, ivec2(0), ivec2(p.w - 1, p.h - 1));
+    return rxNormFromRaw(float(imageLoad(rawU16, q).x), q, p.black, p.white);
+}
+float baseGreen(ivec2 q) {
+    q = clamp(q, ivec2(0), ivec2(p.w - 1, p.h - 1));
+    if (rxChannel(q, p.cfa) == 1) return rawAt(q);
+    const int xl = q.x > 0 ? q.x - 1 : q.x + 1, xr = q.x < p.w - 1 ? q.x + 1 : q.x - 1;   // mirrored at the border
+    const int yu = q.y > 0 ? q.y - 1 : q.y + 1, yd = q.y < p.h - 1 ? q.y + 1 : q.y - 1;
+    return 0.25 * (rawAt(ivec2(xl, q.y)) + rawAt(ivec2(xr, q.y)) + rawAt(ivec2(q.x, yu)) + rawAt(ivec2(q.x, yd)));
+}
+float gateAt(ivec2 q) {   // bilinear on the 1/8 grid (cell centres at 8 c + 3.5)
+    ivec2 n = imageSize(gA);
+    vec2 u = (vec2(q) + 0.5) / 8.0 - 0.5, b = floor(u), f = u - b;
+    ivec2 lo = clamp(ivec2(b), ivec2(0), n - 1), hi = clamp(ivec2(b) + 1, ivec2(0), n - 1);
+    float a = mix(imageLoad(gA, lo).x, imageLoad(gA, ivec2(hi.x, lo.y)).x, f.x);
+    float c = mix(imageLoad(gA, ivec2(lo.x, hi.y)).x, imageLoad(gA, hi).x, f.x);
+    return mix(a, c, f.y);
+}
+
+void main() {
+    const ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    if (p.op == 0) {
+        const ivec2 n = imageSize(gA);
+        if (q.x >= n.x || q.y >= n.y) return;
+        const ivec2 gn = imageSize(motI), mn = imageSize(mI);
+        float acc = 0.0;
+        for (int j = 0; j < 4; ++j)
+            for (int i = 0; i < 4; ++i) {
+                ivec2 g = clamp(4 * q + ivec2(i, j), ivec2(0), gn - 1);
+                vec2 mo = imageLoad(motI, g).xy;
+                float rej = mo.y > 0.5 ? clamp(mo.x / mo.y, 0.0, 1.0) : 0.0;
+                float m = imageLoad(mI, clamp((2 * g) / 4, ivec2(0), mn - 1)).x;
+                acc += smoothstep(REJ_LO, REJ_HI, rej) * (1.0 - smoothstep(M_LO, M_HI, m));
+            }
+        imageStore(gA, q, vec4(acc / 16.0));
+        return;
+    }
+    if (p.op == 1 || p.op == 2) {
+        const ivec2 n = imageSize(gA);
+        if (q.x >= n.x || q.y >= n.y) return;
+        const ivec2 d = p.op == 1 ? ivec2(1, 0) : ivec2(0, 1);
+        float s = 0.0, wsum = 0.0;
+        for (int k = -GATE_R; k <= GATE_R; ++k) {
+            float wk = exp(-0.5 * float(k * k) / (GATE_SIGMA * GATE_SIGMA));
+            ivec2 t = clamp(q + k * d, ivec2(0), n - 1);
+            s += wk * (p.op == 1 ? imageLoad(gA, t).x : imageLoad(gB, t).x);
+            wsum += wk;
+        }
+        s /= wsum;
+        if (p.op == 1) imageStore(gB, q, vec4(s));
+        else imageStore(gA, q, vec4(smoothstep(G_LO, G_HI, s)));
+        return;
+    }
+    const int tid = int(gl_LocalInvocationIndex);
+    const ivec2 wo = ivec2(gl_WorkGroupID.xy) * 16;
+    if (tid == 0) sAny = 0u;
+    barrier();
+    {   // skip workgroups with no gate (most of an image): the gate grid is smooth, sample its 4 x 4 cells around the tile
+        ivec2 c = clamp((wo - 8) / 8 + ivec2(tid % 4, (tid / 4) % 4), ivec2(0), imageSize(gA) - 1);
+        if (tid < 16 && imageLoad(gA, c).x > 1e-3) atomicOr(sAny, 1u);
+    }
+    barrier();
+    if (sAny == 0u) return;
+    if (p.op == 4) {
+        if (q.x >= p.w || q.y >= p.h) return;
+        const float dg = imageLoad(dI, q).x;
+        const vec4 x = imageLoad(outI, q);
+        imageStore(outI, q, vec4(x.xyz + dg * vec3(p.iwb0, p.iwb1, p.iwb2), x.w));
+        return;
+    }
+    // op 3
+    const ivec2 n = ivec2(p.w - 1, p.h - 1);
+    for (int i = tid; i < T * T; i += 256) {
+        ivec2 t = clamp(wo - R + ivec2(i % T, i / T), ivec2(0), n);
+        sD[i] = baseGreen(t) - imageLoad(outI, t).y;
+    }
+    barrier();
+    float kw[R + 1];
+    float ks = 0.0;
+    for (int k = 0; k <= R; ++k) { kw[k] = exp(-0.5 * float(k * k) / (SIGMA_LP * SIGMA_LP)); ks += k == 0 ? kw[k] : 2.0 * kw[k]; }
+    for (int i = tid; i < T * 16; i += 256) {   // horizontal pass of the 16 output columns over all T rows
+        int row = i / 16, col = i % 16;
+        float s = 0.0;
+        for (int k = -R; k <= R; ++k) s += kw[abs(k)] * sD[row * T + col + R + k];
+        sH[i] = s / ks;
+    }
+    barrier();
+    if (q.x >= p.w || q.y >= p.h) return;
+    const ivec2 l = ivec2(gl_LocalInvocationID.xy);
+    float lp = 0.0;
+    for (int k = -R; k <= R; ++k) lp += kw[abs(k)] * sH[(l.y + R + k) * 16 + l.x];
+    lp /= ks;
+    const float d = sD[(l.y + R) * T + l.x + R];
+    imageStore(dI, q, vec4(gateAt(q) * (d - lp), 0.0, 0.0, 0.0));
+}

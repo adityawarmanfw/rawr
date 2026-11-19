@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include <rawr/raw_gpu_pipeline/RextureFit.h>
 #include <rawr/raw_gpu_pipeline/RextureRecorder.h>
 
@@ -139,6 +140,9 @@ ScratchLayout makeRextureScratchLayout(const MultiframeGeometry& g, bool debug, 
     img("rx_er", g.guide, PixelStorage::R16Float, Lifetime::Companion);
     img("rx_er_b", g.guide, PixelStorage::R16Float, Lifetime::Companion);
     img("rx_support", g.guide, PixelStorage::R16Float, Lifetime::Burst);
+    img("rx_mot", g.guide, PixelStorage::RG16Float, Lifetime::Burst);   // moving-texture restore: (rejected share, covering) sums
+    img("rx_mov_ga", Extent2D{(g.output.width + 7u) / 8u, (g.output.height + 7u) / 8u}, PixelStorage::R16Float, Lifetime::Output);
+    img("rx_mov_gb", Extent2D{(g.output.width + 7u) / 8u, (g.output.height + 7u) / 8u}, PixelStorage::R16Float, Lifetime::Output);
     if (debug) {
         img("rx_dbg_pre", g.guide, PixelStorage::R32Float, Lifetime::Companion);
         img("rx_dbg_scale", Extent2D{g.coarseToFine[3].tilesX, g.coarseToFine[3].tilesY}, PixelStorage::R32Float,
@@ -395,6 +399,7 @@ namespace rawr::raw_gpu_pipeline {
 void RextureRecorder::recordBurstClear(VkCommandBuffer c) const {
     VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     VkClearColorValue zero{};
+    vkCmdClearColorImage(c, arena_.image("rx_mot").image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &range);
     vkCmdClearColorImage(c, arena_.image("rx_support").image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &range);
     for (const char* n : {"rx_acc_a", "rx_acc_b", "rx_acc_c", "rx_dbg_ss2", "rx_fit_acc", "rx_fit_acc2"}) {
         try {
@@ -419,7 +424,7 @@ void RextureRecorder::recordRobustness(VkCommandBuffer c, bool debug, std::uint3
                      {{ib(0, arena_.image(slot == 1 ? "rx_flow_l3_b" : "rx_flow_l3")), ib(1, arena_.image("rx_base_mean")),
                        ib(2, arena_.image("rx_base_var")), ib(3, arena_.image("rx_alt_mean")),
                        ib(4, arena_.image("rx_alt_var")), ib(5, er), ib(6, arena_.image("rx_support")),
-                       ib(7, dbgPre), ib(8, dbgScale)},
+                       ib(7, dbgPre), ib(8, dbgScale), ib(9, arena_.image("rx_mot"))},
                       {}},
                      &p, sizeof(p), divUp(er.extent.width, 16), divUp(er.extent.height, 16));
     computeWriteBarrier(c);
@@ -529,14 +534,40 @@ void RextureRecorder::recordFinalize(VkCommandBuffer c, VkImageView rawU16, cons
         computeWriteBarrier(c);
         if (mark_) mark_("final");
     }
+    // The detail fit's step starts from the grain pass's output, so the evening of few-frame areas stays where the fit has
+    // nothing to add (no companion support, no texture: see rx_fit.comp).
+    recordGrainPass(c);
     if (config_.detailRestore) {
         recordFit(c, 1, rawU16, f);
         if (mark_) mark_("fit");
-    }
-    recordGrainPass(c);
-    if (config_.detailRestore) {
         recordFit(c, 2, rawU16, f);
         if (mark_) mark_("fit_add");
+    }
+    if (rawU16) recordMovingRestore(c, rawU16, f);
+}
+
+// Moving-texture restore (rx_moving.comp): the base frame's fine detail back where most covering companions were rejected for
+// motion over a broad area (config.movingRestore).
+void RextureRecorder::recordMovingRestore(VkCommandBuffer c, VkImageView rawU16, const MultiframeFrameParameters& f) const {
+    if (!config_.movingRestore) return;
+    struct { float black[4]; float white; std::int32_t w, h, cfa, op; float iwb[3]; } p{};
+    const auto& out = arena_.image("linear_output");
+    const auto& ga = arena_.image("rx_mov_ga");
+    std::copy(f.normalization.blackByPhase.begin(), f.normalization.blackByPhase.end(), p.black);
+    p.white = f.normalization.whiteLevel;
+    p.w = std::int32_t(out.extent.width);
+    p.h = std::int32_t(out.extent.height);
+    p.cfa = std::int32_t(config_.cfa);
+    for (int i = 0; i < 3; ++i) p.iwb[i] = 1.0f / f.whiteBalance[i];
+    ImageBinding raw{0, rawU16, VK_IMAGE_LAYOUT_GENERAL};
+    const DispatchBindings b{{raw, ib(1, out), ib(2, arena_.image("rx_mot")), ib(3, arena_.image("rx_lc_m")), ib(4, ga),
+                              ib(5, arena_.image("rx_mov_gb")), ib(6, arena_.image("rx_acc_a"))},
+                             {}};
+    for (std::int32_t op = 0; op < 5; ++op) {
+        p.op = op;
+        const Extent2D grid = op < 3 ? ga.extent : out.extent;
+        executor_.record(c, ShaderId::RxMoving, b, &p, sizeof(p), divUp(grid.width, 16), divUp(grid.height, 16));
+        computeWriteBarrier(c);
     }
 }
 
