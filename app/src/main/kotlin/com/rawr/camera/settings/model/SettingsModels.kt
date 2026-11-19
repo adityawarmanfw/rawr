@@ -647,6 +647,8 @@ data class SettingsValues(
     val multiframeChromaDenoise: Boolean = false,
     // Rexture only: render the JPEG from the merged RGB (no re-mosaic, no demosaic setting). The DNG is unaffected.
     val multiframeRextureNativeRgb: Boolean = false,
+    /** Rexturation (Rexture's detail fit, native rx_fit pass; off by default): merged image, so it is in the DNG and the JPEG. */
+    val multiframeRextureDetailRestore: Boolean = false,
     val multiframeTuning: MultiframeTuning = MultiframeTuning(),
     val customGpuDriverEnabled: Boolean = false,
     val customGpuDriverName: String? = null,

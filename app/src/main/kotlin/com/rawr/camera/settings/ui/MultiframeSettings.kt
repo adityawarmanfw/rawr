@@ -63,6 +63,14 @@ internal fun MultiframeSettings(state: SettingsUiState, dispatch: SettingsDispat
                     supportingText = "JPEG only. Renders the JPEG from Rexture's own merged colour instead of re-mosaicking it and running the Demosaic setting. The DNG is unaffected.",
                     enabled = enabled
                 ) { dispatch.invoke(SetMultiframeRextureNativeRgb(it)) }
+                SettingDivider()
+                SettingsSwitchRow(
+                    title = "Rexturation",
+                    checked = state.values.multiframeRextureDetailRestore,
+                    supportingText = "Recovers fine detail the merge softens. Slightly more grain.",
+                    enabled = enabled,
+                    testTag = SettingsTestTags.row("Multiframe", "rexturation")
+                ) { dispatch.invoke(SetMultiframeRextureDetailRestore(it)) }
             }
             SettingDivider()
             MultiframeSlider(spec(MultiframeNumericParameter.MaxFrames), tuning, enabled, dispatch)

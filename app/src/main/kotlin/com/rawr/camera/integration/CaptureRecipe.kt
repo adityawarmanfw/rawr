@@ -245,6 +245,8 @@ internal object CaptureRecipe {
             val value = v.multiframeTuning.sanitized()
             put("mergeAlgorithm", value.mergeAlgorithm.name)
             put("maxFrames", value.maxFrames)
+            put("rextureDetailRestore",
+                v.multiframeRextureDetailRestore && value.mergeAlgorithm == MultiframeMergeAlgorithm.Rexture)
         })
     }.toString()
 }

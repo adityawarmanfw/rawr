@@ -39,7 +39,7 @@ std::string jString(JNIEnv* env, jstring value) {
 }
 bool multiframeChromaDenoise(JNIEnv* env, jfloatArray values) {
     const jsize count = values ? env->GetArrayLength(values) : 0;
-    if (count != 23 && count != 25 && count != 26 && count != 28 && count != 29) return false;
+    if (count != 23 && count != 25 && count != 26 && count != 28 && count != 29 && count != 30) return false;
     jfloat flag = 0.0f;
     env->GetFloatArrayRegion(values, 22, 1, &flag);
     return flag > 0.5f;
@@ -52,8 +52,8 @@ rawrcam::capture::multiframe::MultiframeTuning multiframeTuning(JNIEnv* env, jfl
     // flag (read separately by multiframeChromaDenoise()), then the merge
     // algorithm, HDR+ strength, (optionally) HDR+ tile size and (optionally)
     // the bracket EV (headroom limit), long-frame count and (optionally) the
-    // long-frame EV.
-    if (count != 22 && count != 23 && count != 25 && count != 26 && count != 28 && count != 29) return out;
+    // long-frame EV, then (optionally) the Rexture detail-restoration flag (index 29).
+    if (count != 22 && count != 23 && count != 25 && count != 26 && count != 28 && count != 29 && count != 30) return out;
     std::array<jfloat, 22> v{};
     env->GetFloatArrayRegion(values, 0, 22, v.data());
     out.outputScale = v[0];
@@ -109,6 +109,12 @@ rawrcam::capture::multiframe::MultiframeTuning multiframeTuning(JNIEnv* env, jfl
         out.hdrplusTileSize = static_cast<std::uint32_t>(merge[2]);
         out.bracketEv = merge[3];
         out.bracketFrames = static_cast<std::uint32_t>(std::lround(merge[4]));
+    }
+    if (count >= 30) {
+        jfloat detail = 1.0f;
+        env->GetFloatArrayRegion(values, 29, 1, &detail);
+        if (!(detail == 0.0f || detail == 1.0f)) return {};
+        out.rextureDetailRestore = detail > 0.5f ? 1u : 0u;
     }
     return out;
 }

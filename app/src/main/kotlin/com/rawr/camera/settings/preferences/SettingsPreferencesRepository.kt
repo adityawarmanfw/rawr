@@ -576,6 +576,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
             multiframeBaseFrameMode = enumOrDefault(p[Keys.multiframeBaseFrameMode], d.multiframeBaseFrameMode),
             multiframeChromaDenoise = p[Keys.multiframeChromaDenoise] ?: d.multiframeChromaDenoise,
             multiframeRextureNativeRgb = p[Keys.multiframeRextureNativeRgb] ?: d.multiframeRextureNativeRgb,
+            multiframeRextureDetailRestore = p[Keys.multiframeRextureDetailRestore] ?: d.multiframeRextureDetailRestore,
             multiframeTuning =
                 MultiframeTuning(
                     mergeAlgorithm = enumOrDefault(p[Keys.multiframeMergeAlgorithm], d.multiframeTuning.mergeAlgorithm),
@@ -796,6 +797,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         p[Keys.multiframeBaseFrameMode] = v.multiframeBaseFrameMode.name
         p[Keys.multiframeChromaDenoise] = v.multiframeChromaDenoise
         p[Keys.multiframeRextureNativeRgb] = v.multiframeRextureNativeRgb
+        p[Keys.multiframeRextureDetailRestore] = v.multiframeRextureDetailRestore
         // Noise-profile selection was removed (always burst-fitted).
         p.remove(Keys.multiframeNoiseProfile)
         p.remove(Keys.camera2NoiseModelEnabled)
@@ -1063,6 +1065,7 @@ class SettingsPreferencesRepository(context: Context, private val defaults: Sett
         val multiframeBaseFrameMode = stringPreferencesKey("multiframe_base_frame_mode")
         val multiframeChromaDenoise = booleanPreferencesKey("multiframe_chroma_denoise")
         val multiframeRextureNativeRgb = booleanPreferencesKey("multiframe_rexture_native_rgb")
+        val multiframeRextureDetailRestore = booleanPreferencesKey("multiframe_rexture_detail_restore")
         val camera2NoiseModelEnabled = booleanPreferencesKey("camera2_noise_model_enabled")
         val multiframeNoiseProfile = stringPreferencesKey("multiframe_noise_profile")
         val multiframeMergeAlgorithm = stringPreferencesKey("multiframe_merge_algorithm")

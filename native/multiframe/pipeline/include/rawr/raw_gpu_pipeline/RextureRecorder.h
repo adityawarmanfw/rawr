@@ -13,7 +13,7 @@ namespace rawr::raw_gpu_pipeline {
 // Image names of the Rexture arena (see makeRextureScratchLayout). "rx_base_*" live for the whole burst, "rx_alt_*" for
 // one companion frame.
 // debug = verification build: adds full-resolution debug images (never allocated in production).
-ScratchLayout makeRextureScratchLayout(const MultiframeGeometry&, bool debug = false);
+ScratchLayout makeRextureScratchLayout(const MultiframeGeometry&, bool debug = false, bool detail = true);
 
 // Records the Rexture merge stages against ResourceArena. Each method leaves its results in the arena so the next one
 // may run in a later command buffer (same submission-safe contract as MultiframeRecorder).
@@ -47,6 +47,9 @@ class RextureRecorder final {
     // Robustness of the aligned companion (after its last alignment level): fused motion prior + photometric test + 5 x 5
     // minimum + support / cover update.
     void recordRobustness(VkCommandBuffer, bool debug, std::uint32_t slot = 0) const;
+    // A companion's detail fit motion weight (rx_fit op 3), after its robustness, same slot; nothing when the fit is off.
+    void recordFitMotion(VkCommandBuffer, VkImageView rawU16, const MultiframeFrameParameters& f, float gain,
+                         std::uint32_t slot = 0) const;
 
     // Adds the aligned companion to the running per-pixel sums (after recordRobustness), scaled by gain (as in
     // recordPrepare); a companion exposed longer than the base (gain < 1) leaves its clipped samples out.
@@ -65,7 +68,7 @@ class RextureRecorder final {
     static void setStripRowsForTesting(std::uint32_t rows) noexcept;
 
     // Number of marks recordFinalize emits for an image of this height.
-    static std::uint32_t finalizeMarks(std::uint32_t height, bool debug) noexcept;
+    static std::uint32_t finalizeMarks(std::uint32_t height, bool debug, bool detail = false) noexcept;
 
     // Profiling: called with the stage name after each dispatch group of the companion stages (never set in production).
     using Mark = std::function<void(const char*)>;
@@ -80,6 +83,10 @@ class RextureRecorder final {
     rawr::raw_merge_rexture_gpu::Config config_;
     void recordPyramid(VkCommandBuffer, bool base) const;
     void recordGrainPass(VkCommandBuffer) const;
+    // Detail fit (rx_fit.comp, config.detailRestore): op 0 base green plane, 1 fitted green (after the final pass), 2 its detail
+    // added to the output (after the grain pass), 3 a companion's motion weight.
+    void recordFit(VkCommandBuffer, std::int32_t op, VkImageView rawU16, const MultiframeFrameParameters& f, float gain = 1.0f,
+                   std::uint32_t slot = 0) const;
     void recordRcd(VkCommandBuffer, VkImageView rawU16, const MultiframeFrameParameters&, std::int32_t y0, std::int32_t rows,
                    bool gate) const;
 };

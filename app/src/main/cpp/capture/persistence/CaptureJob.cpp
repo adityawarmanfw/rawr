@@ -253,10 +253,10 @@ struct Reader {
         }
     }
     // Merge algorithm, HDR+ strength, tile size, the bracket fields and the
-    // long-frame/headroom fields were appended to MultiframeTuning without a
+    // long-frame/headroom fields and the Rexture detail-restoration flag were appended to MultiframeTuning without a
     // journal bump; older jobs carry a shorter prefix (88 bytes: before the merge algorithm,
     // 96: before the tile size, 100: before the bracket fields, 108: before
-    // the long-frame fields, read as legacy dark-frame captures).
+    // the long-frame fields, read as legacy dark-frame captures; 124: before the detail restoration, read as on).
     void one(multiframe::MultiframeTuning& v) {
         constexpr uint32_t kPrefixBytes = 2u * sizeof(uint32_t) + 20u * sizeof(float);
         static_assert(offsetof(multiframe::MultiframeTuning, mergeAlgorithm) == kPrefixBytes,
@@ -275,8 +275,11 @@ struct Reader {
         constexpr uint32_t kBeforeCurveShareBytes = kBeforeLongFrameBytes + 2u * sizeof(float) + sizeof(uint32_t);
         static_assert(offsetof(multiframe::MultiframeTuning, bracketCurveEv) == kBeforeCurveShareBytes,
                       "MultiframeTuning journal curve-share layout");
+        constexpr uint32_t kBeforeDetailRestoreBytes = kBeforeCurveShareBytes + sizeof(float);
+        static_assert(offsetof(multiframe::MultiframeTuning, rextureDetailRestore) == kBeforeDetailRestoreBytes,
+                      "MultiframeTuning journal detail-restore layout");
         if (n != sizeof(v) && n != kPrefixBytes && n != kBeforeTileBytes && n != kBeforeBracketBytes &&
-            n != kBeforeLongFrameBytes && n != kBeforeCurveShareBytes)
+            n != kBeforeLongFrameBytes && n != kBeforeCurveShareBytes && n != kBeforeDetailRestoreBytes)
             throw std::runtime_error("capture_job_tuning_schema_mismatch");
         v = {};
         bytes(&v, n);

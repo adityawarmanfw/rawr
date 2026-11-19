@@ -19,6 +19,10 @@ struct Config {
     // Frames in the burst (base included). Only the grain pass reads it: with 8 or more frames the areas it still evens out
     // are ones the robustness test rejected frames from (motion), where it keeps more of the texture than with few frames.
     float burstFrames = 1.0f;
+    // Detail fit, "Rexturation" in the app (rx_fit.comp; off by default): one forward-model step on green against every frame's raw samples (sums kept while the
+    // companions accumulate, no second visit), its detail added as grey after the grain pass. Restores the fine detail the
+    // merge's kernel and the pixel aperture soften. Two full-resolution RG16F images.
+    bool detailRestore = false;
 };
 
 [[nodiscard]] inline bool valid(const Config& c) noexcept {

@@ -55,6 +55,9 @@ struct MultiframeTuning {
     float aeLinearExposure = 0.0f;
     // Unused (a reverted tone split); kept so the journal layout is stable.
     float bracketCurveEv = 0.0f;
+    // Appended (journal prefix-compatible): Rexturation, Rexture's detail fit (1 = on; off by default). Journals without it
+    // read the default (off: older builds had no such pass).
+    std::uint32_t rextureDetailRestore = 0;
 };
 
 }  // namespace rawrcam::capture::multiframe

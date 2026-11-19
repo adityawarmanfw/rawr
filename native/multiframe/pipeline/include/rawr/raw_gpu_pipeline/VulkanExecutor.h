@@ -53,6 +53,7 @@ enum class ShaderId : std::uint32_t {
     RxRcdExport,
     RxLowcovEaw,
     RxFbFlags,
+    RxFit,
     Count
 };
 struct ImageBinding {

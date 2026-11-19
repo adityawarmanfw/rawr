@@ -95,6 +95,7 @@ int main(int argc, char** argv) {
     j.tuning.mergeAlgorithm = 2;
     j.tuning.hdrplusStrength = 18.0f;
     j.tuning.hdrplusTileSize = 16;
+    j.tuning.rextureDetailRestore = 1;   // not the default: the round trip must keep it
     auto path = jobPath(root, j.dng.displayName);
     save(path, j);
     auto restored = load(path);
@@ -194,6 +195,28 @@ int main(int argc, char** argv) {
     assert(restored.mergedDng.compression == rawrcam::encoding::dng::DngCompression::Uncompressed);
     assert(restored.tuning.mergeAlgorithm == 2 && restored.tuning.hdrplusStrength == 18.0f &&
            restored.tuning.hdrplusTileSize == 16);
+    assert(restored.tuning.rextureDetailRestore == 1);
+    // Jobs written before the Rexture detail-restoration flag carry the tuning up to bracketCurveEv: they read it as on.
+    {
+        std::ifstream in(path, std::ios::binary);
+        std::string bytes((std::istreambuf_iterator<char>(in)), {});
+        const uint32_t fullSize = sizeof(j.tuning), oldSize = uint32_t(offsetof(rawrcam::capture::multiframe::MultiframeTuning,
+                                                                                 rextureDetailRestore));
+        std::string record(reinterpret_cast<const char*>(&fullSize), sizeof(fullSize));
+        record.append(reinterpret_cast<const char*>(&j.tuning), sizeof(j.tuning));
+        const auto pos = bytes.find(record);
+        assert(pos != std::string::npos && bytes.find(record, pos + 1) == std::string::npos);
+        bytes.erase(pos + sizeof(fullSize) + oldSize, fullSize - oldSize);
+        std::memcpy(bytes.data() + pos, &oldSize, sizeof(oldSize));
+        const auto oldPath = root + "/old-tuning.job";
+        {
+            std::ofstream out(oldPath, std::ios::binary);
+            out.write(bytes.data(), bytes.size());
+        }
+        const auto old = load(oldPath);
+        assert(old.tuning.mergeAlgorithm == 2 && old.tuning.hdrplusTileSize == 16 && old.tuning.rextureDetailRestore == 0);
+        std::filesystem::remove(oldPath);
+    }
     markFilmFallback(path);
     assert(std::filesystem::exists(path + ".fallback"));
     assert(load(path).dng.processingRecipe == j.dng.processingRecipe);

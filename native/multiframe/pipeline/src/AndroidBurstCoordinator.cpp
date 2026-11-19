@@ -174,13 +174,15 @@ void AndroidBurstCoordinator::ensureExecutionInfra(VkPhysicalDevice physical, Vk
 
 bool AndroidBurstCoordinator::arenaMatchesSelection() const noexcept {
     if (arenaAlgorithm_ != algorithm_) return false;
-    if (algorithm_ == MergeAlgorithm::Rexture) return arenaRextureDebug_ == rextureDebug_;
+    if (algorithm_ == MergeAlgorithm::Rexture) return arenaRextureDebug_ == rextureDebug_ && arenaRextureDetail_ == rextureDetailRestore_;
     return arenaHdrPlus_.tileSize == hdrplus_.tileSize && arenaHdrPlus_.searchDistance == hdrplus_.searchDistance;
 }
 void AndroidBurstCoordinator::initializeArenaLocked(VkPhysicalDevice physical, VkDevice device) {
     if (algorithm_ == MergeAlgorithm::Rexture) {
-        arena_.initialize(physical, device, makeRextureScratchLayout(makeMultiframeGeometry(width_, height_, 1.0f), rextureDebug_));
+        arena_.initialize(physical, device,
+                          makeRextureScratchLayout(makeMultiframeGeometry(width_, height_, 1.0f), rextureDebug_, rextureDetailRestore_));
         arenaRextureDebug_ = rextureDebug_;
+        arenaRextureDetail_ = rextureDetailRestore_;
     } else {
         arena_.initialize(physical, device,
                           makeHdrPlusFrequencyScratchLayout(
@@ -446,6 +448,7 @@ BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>
     }
     config.whiteBalance = frames[ref].parameters.whiteBalance;
     config.burstFrames = float(frames.size());
+    config.detailRestore = rextureDetailRestore_;
     RextureRecorder recorder(arena_, executor_, config);
     // RAWR_REXTURE_PROFILE: GPU time per dispatch group (timestamps after each group), per-chunk wall time and the host time
     // between chunks, printed at the end. Never set in production.
@@ -481,7 +484,8 @@ BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>
         return gpu > 0.0 ? gpu : t.first;
     };
     const bool initializeLayouts = !layoutsInitialized_;
-    timings.referencePrepareMs = profiled(1u, ref, 3u, [&] {
+    const std::uint32_t fitMark = rextureDetailRestore_ ? 1u : 0u;  // the detail fit's own profiling marks
+    timings.referencePrepareMs = profiled(1u, ref, 3u + fitMark, [&] {
         if (initializeLayouts) arena_.recordInitializeLayouts(command_);
         recorder.recordBurstClear(command_);
         recorder.recordPrepare(command_, true, frames[ref].raw.view, frames[ref].parameters);
@@ -527,7 +531,10 @@ BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>
                     recorder.recordAlignmentLevel(command_, level, rextureDebug_);
                 });
             rextureObserver_("companion_align", i, arena_);
-            timings.robustnessMs += profiled(13u, i, 1u, [&] { recorder.recordRobustness(command_, rextureDebug_); });
+            timings.robustnessMs += profiled(13u, i, 1u + fitMark, [&] {
+                recorder.recordRobustness(command_, rextureDebug_);
+                recorder.recordFitMotion(command_, frames[i].raw.view, frames[i].parameters, gainOf(i));
+            });
             rextureObserver_("companion_robust", i, arena_);
             timings.accumulationMs += profiled(14u, i, 1u, [&] {
                 recorder.recordAccumulate(command_, frames[i].raw.view, frames[i].parameters, rextureDebug_, gainOf(i));
@@ -537,9 +544,10 @@ BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>
                 recorder.recordPrepare(command_, false, frames[i].raw.view, frames[i].parameters, gainOf(i));
                 for (std::uint32_t level = 0; level < 3u; ++level) recorder.recordAlignmentLevel(command_, level, false);
             });
-            timings.alignmentMs += profiled(11u, i, 3u + 1u, [&] {
+            timings.alignmentMs += profiled(11u, i, 3u + 1u + fitMark, [&] {
                 recorder.recordAlignmentLevel(command_, 3u, false);
                 recorder.recordRobustness(command_, false);
+                recorder.recordFitMotion(command_, frames[i].raw.view, frames[i].parameters, gainOf(i));
             });
             timings.accumulationMs += profiled(14u, i, 1u, [&] {
                 recorder.recordAccumulate(command_, frames[i].raw.view, frames[i].parameters, false, gainOf(i));
@@ -556,9 +564,10 @@ BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>
                 recorder.recordPrepare(command_, false, frames[i].raw.view, frames[i].parameters, gainOf(i));
                 for (std::uint32_t level = 0; level < 3u; ++level) recorder.recordAlignmentLevel(command_, level, false);
             });
-            timings.alignmentMs += profiled(11u, i, 3u + 1u, [&] {
+            timings.alignmentMs += profiled(11u, i, 3u + 1u + fitMark, [&] {
                 recorder.recordAlignmentLevel(command_, 3u, false, slot);
                 recorder.recordRobustness(command_, false, slot);
+                recorder.recordFitMotion(command_, frames[i].raw.view, frames[i].parameters, gainOf(i), slot);
             });
             if (pending < 0) {
                 pending = static_cast<int>(i);
@@ -584,7 +593,7 @@ BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>
         if (frameConsumed) frameConsumed(i);
     }
     if (rextureObserver_) rextureObserver_("companions_done", ref, arena_);
-    timings.finalizeMs = profiled(20u, ref, RextureRecorder::finalizeMarks(height_, rextureDebug_), [&] {
+    timings.finalizeMs = profiled(20u, ref, RextureRecorder::finalizeMarks(height_, rextureDebug_, rextureDetailRestore_), [&] {
         recorder.recordFinalize(command_, frames[ref].raw.view, frames[ref].parameters, rextureDebug_);
     });
     if (profile) {

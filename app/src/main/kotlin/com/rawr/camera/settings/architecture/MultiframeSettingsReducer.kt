@@ -13,6 +13,9 @@ internal fun reduceMultiframeSettings(
     is SetMultiframeRextureNativeRgb -> {
         state.withValues(state.values.copy(multiframeRextureNativeRgb = action.enabled))
     }
+    is SetMultiframeRextureDetailRestore -> {
+        state.withValues(state.values.copy(multiframeRextureDetailRestore = action.enabled))
+    }
 
     is SetMultiframeBaseFrameMode -> {
         state.withValues(state.values.copy(multiframeBaseFrameMode = action.value))

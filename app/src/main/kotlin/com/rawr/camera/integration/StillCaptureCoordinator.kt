@@ -295,7 +295,8 @@ class StillCaptureCoordinator(
                     dumpRzslRequested = zslPersistRequested,
                     multiframeTuning = current.multiframeTuning,
                     multiframeBaseFrameMode = current.multiframeBaseFrameMode,
-                    multiframeChromaDenoise = current.multiframeChromaDenoise
+                    multiframeChromaDenoise = current.multiframeChromaDenoise,
+                    multiframeDetailRestore = current.multiframeRextureDetailRestore
                 )
             } else {
                 preview.requestRawStillCapture(

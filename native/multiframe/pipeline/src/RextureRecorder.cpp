@@ -1,8 +1,8 @@
+#include <rawr/raw_gpu_pipeline/RextureFit.h>
 #include <rawr/raw_gpu_pipeline/RextureRecorder.h>
 
 #include <algorithm>
 #include <atomic>
-#include <cstdlib>
 #include <stdexcept>
 #include <string>
 
@@ -54,6 +54,7 @@ struct AccPc {
     float frameWeight;
     std::int32_t frames;
     float gain0, gain1;  // reference exposure / frame exposure of the pass's frames
+    std::int32_t fit;    // 1: add the companions' green samples to the detail fit sums
 };
 struct FinalPc {
     float black[4];
@@ -94,7 +95,7 @@ struct AxisPc {
 static_assert(sizeof(PreparePc) <= 128);
 }  // namespace
 
-ScratchLayout makeRextureScratchLayout(const MultiframeGeometry& g, bool debug) {
+ScratchLayout makeRextureScratchLayout(const MultiframeGeometry& g, bool debug, bool detail) {
     ScratchLayout r{};
     r.geometry = g;
     auto img = [&](std::string n, Extent2D e, PixelStorage s, Lifetime l, std::string pool = {}, std::string placeAt = {}) {
@@ -180,6 +181,17 @@ ScratchLayout makeRextureScratchLayout(const MultiframeGeometry& g, bool debug) 
         img("rx_rcd_dir", Extent2D{g.output.width, std::uint32_t(std::min<std::uint32_t>(kRcdRows, g.output.height))},
             PixelStorage::RG32Float, Lifetime::Output, "companion", "end:rx_rcd_work");
     }
+    // Detail fit (rx_fit.comp): the base green plane (read by each companion's motion test; the fitted green after the final
+    // pass) and the fit sums (rx_fit_acc + rx_fit_acc2: the centred sample sum and 5 coefficients of the fit's 3 x 3 stencil),
+    // full resolution,
+    // and the companion's motion weight (half resolution, one per pair slot); 1 x 1 placeholders when the fit is off
+    // (rx_accumulate binds them either way).
+    const Extent2D fitExtent = detail ? g.output : Extent2D{1u, 1u}, fitCells = detail ? g.guide : Extent2D{1u, 1u};
+    img("rx_fit_bg", fitExtent, PixelStorage::RG16Float, Lifetime::Burst);
+    img("rx_fit_acc", fitExtent, PixelStorage::RGBA16Float, Lifetime::Burst);
+    img("rx_fit_acc2", fitExtent, PixelStorage::RG16Float, Lifetime::Burst);
+    img("rx_fit_w", fitCells, PixelStorage::R16Float, Lifetime::Companion);
+    img("rx_fit_w_b", fitCells, PixelStorage::R16Float, Lifetime::Companion);
     auto bytes = [](const ImageSpec& s) {
         return static_cast<std::uint64_t>(s.extent.width) * s.extent.height * bytesPerPixel(s.storage);
     };
@@ -226,6 +238,10 @@ void RextureRecorder::recordPrepare(VkCommandBuffer c, bool base, VkImageView ra
     computeWriteBarrier(c);
     if (mark_) mark_("prep");
     recordPyramid(c, base);
+    if (base && config_.detailRestore) {
+        recordFit(c, 0, rawU16, f);
+        if (mark_) mark_("fit_base");
+    }
 }
 
 void RextureRecorder::recordPyramid(VkCommandBuffer c, bool base) const {
@@ -380,7 +396,7 @@ void RextureRecorder::recordBurstClear(VkCommandBuffer c) const {
     VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     VkClearColorValue zero{};
     vkCmdClearColorImage(c, arena_.image("rx_support").image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &range);
-    for (const char* n : {"rx_acc_a", "rx_acc_b", "rx_acc_c", "rx_dbg_ss2"}) {
+    for (const char* n : {"rx_acc_a", "rx_acc_b", "rx_acc_c", "rx_dbg_ss2", "rx_fit_acc", "rx_fit_acc2"}) {
         try {
             vkCmdClearColorImage(c, arena_.image(n).image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &range);
         } catch (const std::out_of_range&) {  // debug-only image
@@ -429,12 +445,15 @@ void RextureRecorder::recordAccumulate(VkCommandBuffer c, VkImageView rawU16, co
     p.frameWeight = 1.0f;
     p.frames = 1;
     p.gain0 = p.gain1 = gain;
+    p.fit = config_.detailRestore ? 1 : 0;
     ImageBinding raw{0, rawU16, VK_IMAGE_LAYOUT_GENERAL};
     const ArenaImage& ss2 = debug ? arena_.image("rx_dbg_ss2") : a;   // never touched without debug
     executor_.record(c, ShaderId::RxAccumulate,
                      {{raw, ib(1, arena_.image("rx_flow_l3")), ib(2, arena_.image("rx_er")), ib(3, arena_.image("rx_base_cov")),
                        ib(4, a), ib(5, arena_.image("rx_acc_b")), ib(6, arena_.image("rx_acc_c")), ib(7, ss2),
-                       raw8(rawU16), ib(9, arena_.image("rx_flow_l3")), ib(10, arena_.image("rx_er"))},
+                       raw8(rawU16), ib(9, arena_.image("rx_flow_l3")), ib(10, arena_.image("rx_er")),
+                       ib(11, arena_.image("rx_fit_w")), ib(12, arena_.image("rx_fit_acc")), ib(13, arena_.image("rx_fit_w")),
+                       ib(14, arena_.image("rx_fit_acc2")), ib(15, arena_.image("rx_fit_bg"))},
                       {}},
                      &p, sizeof(p), divUp(a.extent.width, 16), divUp(a.extent.height, 16));
     computeWriteBarrier(c);
@@ -510,13 +529,56 @@ void RextureRecorder::recordFinalize(VkCommandBuffer c, VkImageView rawU16, cons
         computeWriteBarrier(c);
         if (mark_) mark_("final");
     }
+    if (config_.detailRestore) {
+        recordFit(c, 1, rawU16, f);
+        if (mark_) mark_("fit");
+    }
     recordGrainPass(c);
+    if (config_.detailRestore) {
+        recordFit(c, 2, rawU16, f);
+        if (mark_) mark_("fit_add");
+    }
 }
 
-std::uint32_t RextureRecorder::finalizeMarks(std::uint32_t height, bool debug) noexcept {
+void RextureRecorder::recordFitMotion(VkCommandBuffer c, VkImageView rawU16, const MultiframeFrameParameters& f, float gain,
+                                      std::uint32_t slot) const {
+    if (!config_.detailRestore) return;
+    recordFit(c, 3, rawU16, f, gain, slot);
+    if (mark_) mark_("fit_motion");
+}
+
+void RextureRecorder::recordFit(VkCommandBuffer c, std::int32_t op, VkImageView rawU16, const MultiframeFrameParameters& f,
+                                float gain, std::uint32_t slot) const {
+    const auto& out = arena_.image("linear_output");
+    rexture_fit::PushConstants p{};
+    std::copy(f.normalization.blackByPhase.begin(), f.normalization.blackByPhase.end(), p.black);
+    p.white = f.normalization.whiteLevel;
+    p.w = std::int32_t(out.extent.width);
+    p.h = std::int32_t(out.extent.height);
+    p.cfa = std::int32_t(config_.cfa);
+    p.op = op;
+    p.omega = rexture_fit::kOmega;
+    p.delta = rexture_fit::kDelta;
+    for (int i = 0; i < 3; ++i) p.iwb[i] = 1.0f / f.whiteBalance[i];
+    p.alpha = config_.noiseAlpha;
+    p.beta = config_.noiseBeta;
+    p.gain = gain;
+    const auto& weight = arena_.image(slot == 1 ? "rx_fit_w_b" : "rx_fit_w");
+    const Extent2D grid = op == 3 ? weight.extent : out.extent;
+    ImageBinding raw{0, rawU16, VK_IMAGE_LAYOUT_GENERAL};
+    executor_.record(c, ShaderId::RxFit,
+                     {{raw, ib(1, arena_.image("rx_fit_bg")), ib(2, arena_.image("rx_fit_acc")), ib(3, out),
+                       ib(4, arena_.image(slot == 1 ? "rx_flow_l3_b" : "rx_flow_l3")), ib(5, weight), ib(6, arena_.image("rx_fit_acc2"))},
+                      {}},
+                     &p, sizeof(p), divUp(grid.width, 16), divUp(grid.height, 16));
+    computeWriteBarrier(c);
+}
+
+std::uint32_t RextureRecorder::finalizeMarks(std::uint32_t height, bool debug, bool detail) noexcept {
     const std::uint32_t strip = debug ? height : std::uint32_t(std::max(16, gStripRows / 16 * 16));
     const std::uint32_t strips = (height + strip - 1u) / strip;
-    return (debug ? 0u : 1u) + strips * (debug ? 1u : 2u) + 1u;  // flags, per strip (rcd, final), grain
+    // flags, per strip (rcd, final), grain; the detail fit before and after the grain pass
+    return (debug ? 0u : 1u) + strips * (debug ? 1u : 2u) + 1u + (detail ? 2u : 0u);
 }
 
 void RextureRecorder::setStripRowsForTesting(std::uint32_t rows) noexcept {
@@ -635,11 +697,14 @@ void RextureRecorder::recordAccumulatePair(VkCommandBuffer c, VkImageView rawSlo
     p.frames = 2;
     p.gain0 = gain0;
     p.gain1 = gain1;
+    p.fit = config_.detailRestore ? 1 : 0;
     ImageBinding raw{0, rawSlot0, VK_IMAGE_LAYOUT_GENERAL};
     executor_.record(c, ShaderId::RxAccumulate,
                      {{raw, ib(1, arena_.image("rx_flow_l3")), ib(2, arena_.image("rx_er")), ib(3, arena_.image("rx_base_cov")),
                        ib(4, a), ib(5, arena_.image("rx_acc_b")), ib(6, arena_.image("rx_acc_c")), ib(7, a), raw8(rawSlot1),
-                       ib(9, arena_.image("rx_flow_l3_b")), ib(10, arena_.image("rx_er_b"))},
+                       ib(9, arena_.image("rx_flow_l3_b")), ib(10, arena_.image("rx_er_b")),
+                       ib(11, arena_.image("rx_fit_w")), ib(12, arena_.image("rx_fit_acc")), ib(13, arena_.image("rx_fit_w_b")),
+                       ib(14, arena_.image("rx_fit_acc2")), ib(15, arena_.image("rx_fit_bg"))},
                       {}},
                      &p, sizeof(p), divUp(a.extent.width, 16), divUp(a.extent.height, 16));
     computeWriteBarrier(c);

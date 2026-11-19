@@ -1,0 +1,150 @@
+#version 450
+#extension GL_GOOGLE_include_directive : enable
+// Rexture detail fit: one over-relaxed forward-model step on green, folded into the merge (no second visit of the frames).
+// Forward model of a companion's green sample q: y_q ~ bilinear(z, q - flow) (1 px box aperture on the output grid). One damped
+// Jacobi step from the merge z0 is  g = z0 + OMEGA (b - A z0) / (diag(A 1) + DELTA),  b = sum w B^T y,  A = sum w B^T B.
+// A is a 3 x 3 stencil per pixel (a sample's footprint covers 4 pixels). rx_accumulate keeps, per pixel o, over the companions'
+// green samples covering it: bs = sum w b(o) (y - base(o)) (centred on the base green so that fp16 keeps its precision) and
+// A's centre and 4 of its neighbours, c0 / cE / cS / cSE / cSW = sum w b(o) b(o'); the other 4 are the neighbours' (A is symmetric):
+// W = cE(o - x), N = cS(o - y), NW = cSE(o - x - y), NE = cSW(o + x - y). Then diag(A 1) = the 9 coefficients' sum and
+// b - A z0 = bs - sum_k c_k (z0(o + k) - base(o)), exactly. (An assumed fixed stencil instead sharpens the edges of every other
+// pixel: a pixel's nearest green samples sit on one diagonal, which flips between green and non-green sites, a checkerboard.)
+// The base frame sits on the grid: its green sites add (y - z0) with weight 1.
+//   op 0 (after the base is prepared): base green plane (green sites as is, the others the mean of their 4 green neighbours)
+//        and its 3 x 3 standard deviation (a variance falls below fp16's normal range in flat areas) -> fitBg
+//   op 3 (per companion, after its robustness): motion weight per half-resolution cell c (the grid of the robustness map, read by
+//        rx_accumulate at o / 2): the companion's green samples of the 3 x 3 around the cell centre's warped position are compared
+//        with the base green at their scene points (q - flow),
+//          e = mean of (y - base)^2 / (2 sigma^2 + KAPPA sd^2)   (sd: the base green's 3 x 3 standard deviation, texture allowance)
+//          weight = clamp((T2 - e) / (T2 - T1)).
+//        Rexture's own robustness tests 3 x 3 means at half resolution and lets through moving detail a few pixels across
+//        (wings, faces); the fit would add it back as ghost lines.
+//   op 1 (after the final pass, before the grain pass): fitBg.x = g (z0 = linear_output green); the base green is not needed after
+//   op 2 (after the grain pass): linear_output += (g - green) / wb per channel: the green detail added as grey, colour untouched
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0, r16ui) readonly uniform uimage2D rawU16;   // base frame
+layout(set = 0, binding = 1, rg16f) uniform image2D fitBg;             // (base green, its 3 x 3 standard deviation); after op 1: (g, -)
+layout(set = 0, binding = 2, rgba16f) readonly uniform image2D fitAcc; // (bs, c0, cE, cS)
+layout(set = 0, binding = 3, rgba16f) uniform image2D outI;            // linear_output
+layout(set = 0, binding = 4, rg32f) readonly uniform image2D flowI;     // op 3: the companion's fine tile flow
+layout(set = 0, binding = 5, r16f) writeonly uniform image2D fitW;      // op 3: its motion weight per half-resolution cell
+layout(set = 0, binding = 6, rg16f) readonly uniform image2D fitAcc2;  // (cSE, cSW)
+layout(push_constant) uniform P {
+    vec4 black;
+    float white;
+    int w, h, cfa, op;
+    float omega, delta;
+    float iwb0, iwb1, iwb2;
+    float alpha, beta;   // op 3: single-frame noise model
+    float gain;          // op 3: reference exposure / the companion's exposure
+} p;
+const float KAPPA = 4.0, T1 = 3.0, T2 = 9.0;
+#include "rx_common.glsl"
+
+shared float sG[18 * 18];               // op 0: base green, op 1: merge green (workgroup +- 1)
+const int MT = 36;                      // op 3: base (green, sd) of the workgroup's 32 x 32 pixels +- 2 (scene points lie
+shared vec2 sB[MT * MT];                //       within 1.5 px of their cell centre)
+
+float rawAt(ivec2 q) {
+    q = clamp(q, ivec2(0), ivec2(p.w - 1, p.h - 1));
+    return rxNormFromRaw(float(imageLoad(rawU16, q).x), q, p.black, p.white);
+}
+float greenAt(ivec2 q) {
+    q = clamp(q, ivec2(0), ivec2(p.w - 1, p.h - 1));
+    if (rxChannel(q, p.cfa) == 1) return rawAt(q);
+    return 0.25 * (rawAt(q + ivec2(1, 0)) + rawAt(q - ivec2(1, 0)) + rawAt(q + ivec2(0, 1)) + rawAt(q - ivec2(0, 1)));
+}
+
+void main() {
+    const ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    if (p.op == 0) {
+        const ivec2 l = ivec2(gl_LocalInvocationID.xy);
+        const ivec2 o = ivec2(gl_WorkGroupID.xy) * 16 - 1;
+        for (int i = int(gl_LocalInvocationIndex); i < 18 * 18; i += 256) sG[i] = greenAt(o + ivec2(i % 18, i / 18));
+        barrier();
+        if (q.x >= p.w || q.y >= p.h) return;
+        float s = 0.0, s2 = 0.0;
+        for (int j = 0; j < 3; ++j)
+            for (int k = 0; k < 3; ++k) { float v = sG[(l.y + j) * 18 + l.x + k]; s += v; s2 += v * v; }
+        const float m = s / 9.0;
+        imageStore(fitBg, q, vec4(sG[(l.y + 1) * 18 + l.x + 1], sqrt(max(s2 / 9.0 - m * m, 0.0)), 0.0, 0.0));
+        return;
+    }
+    if (p.op == 3) {
+        const ivec2 cells = imageSize(fitW);
+        const ivec2 to = ivec2(gl_WorkGroupID.xy) * 32 - 2;
+        {
+            const ivec2 n = ivec2(p.w - 1, p.h - 1);
+            for (int i = int(gl_LocalInvocationIndex); i < MT * MT; i += 256)
+                sB[i] = imageLoad(fitBg, clamp(to + ivec2(i % MT, i / MT), ivec2(0), n)).xy;
+        }
+        barrier();
+        if (q.x >= cells.x || q.y >= cells.y) return;
+        // fine tile flow at the cell centre (bilinear over 16 px tiles, as rx_accumulate)
+        const vec2 oc = vec2(2 * q) + 0.5;
+        const ivec2 tn = imageSize(flowI);
+        const vec2 g = (oc + 0.5) / 16.0 - 0.5, b = floor(g), fr = g - b;
+        vec2 fl = vec2(0.0);
+        for (int j = 0; j < 2; ++j)
+            for (int i = 0; i < 2; ++i)
+                fl += (i == 1 ? fr.x : 1.0 - fr.x) * (j == 1 ? fr.y : 1.0 - fr.y) *
+                      imageLoad(flowI, clamp(ivec2(b) + ivec2(i, j), ivec2(0), tn - 1)).xy;
+        const ivec2 c0 = ivec2(floor(oc + fl + 0.5));
+        const ivec2 n = ivec2(p.w - 1, p.h - 1);
+        float e = 0.0, cnt = 0.0;
+        for (int j = -1; j <= 1; ++j)
+            for (int k = -1; k <= 1; ++k) {
+                const ivec2 s = c0 + ivec2(k, j);
+                if (any(lessThan(s, ivec2(0))) || any(greaterThan(s, n)) || rxChannel(s, p.cfa) != 1) continue;
+                const float y = rawAt(s);
+                if (y >= RX_CLIP_NORM) continue;
+                const vec2 pos = vec2(s) - fl, pb = floor(pos), f = pos - pb;   // the sample's scene point on the output grid
+                const ivec2 t = clamp(ivec2(pb) - to, ivec2(0), ivec2(MT - 2));   // the tile was loaded edge clamped
+                const vec2 a00 = sB[t.y * MT + t.x], a10 = sB[t.y * MT + t.x + 1];
+                const vec2 a01 = sB[(t.y + 1) * MT + t.x], a11 = sB[(t.y + 1) * MT + t.x + 1];
+                const float bg = mix(mix(a00.x, a10.x, f.x), mix(a01.x, a11.x, f.x), f.y);
+                const float sd = f.y < 0.5 ? (f.x < 0.5 ? a00.y : a10.y) : (f.x < 0.5 ? a01.y : a11.y);
+                const float r = p.gain * y - bg;
+                e += r * r / (2.0 * max(p.alpha * max(bg, 0.0) + p.beta, 1e-12) + KAPPA * sd * sd);
+                cnt += 1.0;
+            }
+        imageStore(fitW, q, vec4(cnt > 0.0 ? clamp((T2 - e / cnt) / (T2 - T1), 0.0, 1.0) : 1.0));
+        return;
+    }
+    if (p.op == 1) {
+        const ivec2 l = ivec2(gl_LocalInvocationID.xy);
+        const ivec2 o = ivec2(gl_WorkGroupID.xy) * 16 - 1;
+        const ivec2 n = ivec2(p.w - 1, p.h - 1);
+        for (int i = int(gl_LocalInvocationIndex); i < 18 * 18; i += 256)
+            sG[i] = imageLoad(outI, clamp(o + ivec2(i % 18, i / 18), ivec2(0), n)).y;
+        barrier();
+        if (q.x >= p.w || q.y >= p.h) return;
+        const vec4 a = imageLoad(fitAcc, q);   // (bs, c0, cE, cS)
+        const vec2 a2 = imageLoad(fitAcc2, q).xy;   // (cSE, cSW)
+        const float cW = q.x > 0 ? imageLoad(fitAcc, q - ivec2(1, 0)).z : 0.0;
+        const float cN = q.y > 0 ? imageLoad(fitAcc, q - ivec2(0, 1)).w : 0.0;
+        const float cNW = q.x > 0 && q.y > 0 ? imageLoad(fitAcc2, q - ivec2(1, 1)).x : 0.0;
+        const float cNE = q.x < n.x && q.y > 0 ? imageLoad(fitAcc2, q + ivec2(1, -1)).y : 0.0;
+        const float base = imageLoad(fitBg, q).x;
+        const int c = (l.y + 1) * 18 + l.x + 1;
+        const float z0 = sG[c];
+        const float az = a.y * (z0 - base) + a.z * (sG[c + 1] - base) + a.w * (sG[c + 18] - base) + a2.x * (sG[c + 19] - base) +
+                         a2.y * (sG[c + 17] - base) + cW * (sG[c - 1] - base) + cN * (sG[c - 18] - base) +
+                         cNW * (sG[c - 19] - base) + cNE * (sG[c - 17] - base);
+        const float ds = a.y + a.z + a.w + a2.x + a2.y + cW + cN + cNW + cNE;
+        float bt = 0.0, bd = 0.0;
+        if (rxChannel(q, p.cfa) == 1) {
+            const float y = rawAt(q);
+            if (y < RX_CLIP_NORM) { bt = y - z0; bd = 1.0; }
+        }
+        float g = z0 + p.omega * (a.x - az + bt) / (ds + bd + p.delta);
+        if (isnan(g) || isinf(g)) g = z0;
+        imageStore(fitBg, q, vec4(g, 0.0, 0.0, 0.0));
+        return;
+    }
+    if (q.x >= p.w || q.y >= p.h) return;
+    // op 2
+    const vec4 x = imageLoad(outI, q);
+    const float d = imageLoad(fitBg, q).x - x.y;
+    imageStore(outI, q, vec4(x.xyz + d * vec3(p.iwb0, p.iwb1, p.iwb2), x.w));
+}
