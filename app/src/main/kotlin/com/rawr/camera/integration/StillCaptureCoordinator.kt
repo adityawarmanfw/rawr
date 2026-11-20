@@ -70,7 +70,10 @@ class StillCaptureCoordinator(
                                     var frozenAssetId: String? = null,
                                     val gps: com.rawr.camera.location.CaptureGps? = null,
                                     val level: CaptureLevel? = null,
-                                    val requestedAtNs: Long = android.os.SystemClock.elapsedRealtimeNanos())
+                                    val requestedAtNs: Long = android.os.SystemClock.elapsedRealtimeNanos(),
+                                    // Device posture at the press: a full-size burst can take seconds to
+                                    // acquire, and the phone is often lowered or turned meanwhile.
+                                    val deviceRotationDegrees: Int = 0)
     private val queuedInputs = java.util.concurrent.ConcurrentLinkedQueue<CaptureInput>()
     private val activeCaptures = java.util.concurrent.atomic.AtomicInteger(0)
     // Camera-session leases (native still leases), apart from process ownership (activeCaptures,
@@ -94,7 +97,7 @@ class StillCaptureCoordinator(
             snapshot.userLutProfiles.firstOrNull { it.id == snapshot.selectedUserLutProfileId })
         queuedInputs.add(CaptureInput(snapshot, CaptureTime.snapshot(), releaseAssets,
             gps = if (snapshot.locationTagging) gpsSnapshot() else null, level = levelSnapshot(),
-            requestedAtNs = requestedAtNs))
+            requestedAtNs = requestedAtNs, deviceRotationDegrees = preview.captureDeviceRotationDegrees))
         activeCaptures.incrementAndGet()
         pressCameraLeases += 1
         preview.beginStillCapture()
@@ -249,6 +252,7 @@ class StillCaptureCoordinator(
                 val mfDenoise = current.photoDenoise.resolve(StillPath.MULTIFRAME)
                 mfDenoise.skipped.forEach { Log.i(TAG, "Denoise resolve path=multiframe skip=$it") }
                 preview.startPreparedMultiframeCapture(
+                    deviceRotationDegrees = input.deviceRotationDegrees,
                     baseDngOutputFd = (if (output.conditionalDng) -1 else output.dng?.fd ?: -1),
                     mergedDngOutputFd = (if (output.conditionalDng) -1 else output.mergedDng?.fd ?: -1),
                     jpegOutputFd = jpegFd,
@@ -300,6 +304,7 @@ class StillCaptureCoordinator(
                 )
             } else {
                 preview.requestRawStillCapture(
+                    deviceRotationDegrees = input.deviceRotationDegrees,
                     dngOutputFd = (if (output.conditionalDng) -1 else output.dng?.fd ?: -1),
                     jpegOutputFd = jpegFd,
                     jpegQuality = jpegQuality,

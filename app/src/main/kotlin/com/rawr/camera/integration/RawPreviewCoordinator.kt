@@ -459,7 +459,9 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
             else -> 0
         }
 
-    fun requestRawStillCapture(        dngOutputFd: Int,
+    fun requestRawStillCapture(
+        deviceRotationDegrees: Int = captureDeviceRotationDegrees,
+        dngOutputFd: Int,
         jpegOutputFd: Int,
         jpegQuality: Int,
         jpegChromaSubsamplingId: String,
@@ -518,7 +520,7 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
             fccSteps.coerceIn(1, 8),
             lensShadingCorrectionEnabled,
             highlightReconstructionEnabled,
-            captureDeviceRotationDegrees,
+            deviceRotationDegrees,
             wallClockMillis,
             utcOffsetMinutes,
             deviceMake,
@@ -540,6 +542,7 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
     }
 
     fun startPreparedMultiframeCapture(
+        deviceRotationDegrees: Int = captureDeviceRotationDegrees,
         baseDngOutputFd: Int,
         mergedDngOutputFd: Int,
         jpegOutputFd: Int,
@@ -607,7 +610,7 @@ class RawPreviewCoordinator(application: Application) : AutoCloseable {
             fccSteps.coerceIn(1, 8),
             lensShadingCorrectionEnabled,
             highlightReconstructionEnabled,
-            captureDeviceRotationDegrees,
+            deviceRotationDegrees,
             wallClockMillis,
             utcOffsetMinutes,
             deviceMake,
