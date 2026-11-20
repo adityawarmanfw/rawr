@@ -1,0 +1,375 @@
+// GPU Bayer downscales (native/raw_ingress BayerBinner) vs CPU references:
+//  - the linear 2x bin with sharpening on detail (shaders/bayer_lin.comp) against a CPU copy of the same
+//    algorithm (kernels from BayerBinKernels.h, half-float sharpening term, histogram noise floors,
+//    smoothed switch). Float summation order differs: no code may differ by more than two, few by one.
+//  - mirrored Bayer orders: a mirrored scene binned with the mirrored order equals the mirrored result;
+//  - the 50 -> 25 MP resample against the DNG converter's BayerResample.
+// Optional: bayer_bin_vulkan_test - <width> <height> <order> times a synthetic frame.
+// Requires a Vulkan device (MoltenVK on macOS).
+#include <algorithm>
+#include <array>
+#include <chrono>
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+#include "convert/BayerResample.h"
+#include "rawr/raw_ingress/BayerBinKernels.h"
+#include "rawr/raw_ingress/BayerBinner.h"
+#include "vk_test_common.hpp"
+
+namespace {
+
+using Frame = std::vector<std::uint16_t>;
+constexpr std::array<std::array<std::uint8_t, 4>, 4> kOrders{
+    {{0, 1, 1, 2}, {1, 0, 2, 1}, {1, 2, 0, 1}, {2, 1, 1, 0}}};  // RGGB GRBG GBRG BGGR
+
+struct Params {
+    std::array<float, 4> black{}, gains{};  // by buffer phase
+    float white = 1023;
+    std::uint32_t order = 0;
+};
+
+// Colour field, hard edges, thin lines, a zone plate corner and noise, 10-bit.
+Frame scene(std::uint32_t w, std::uint32_t h, const std::array<std::uint8_t, 4>& cfa, std::uint32_t seed) {
+    Frame f(std::size_t(w) * h);
+    std::uint32_t state = seed;
+    for (std::uint32_t y = 0; y < h; ++y)
+        for (std::uint32_t x = 0; x < w; ++x) {
+            state = state * 1664525u + 1013904223u;
+            const std::uint8_t c = cfa[2 * (y & 1) + (x & 1)];
+            const float rgb[3] = {0.35f + 0.25f * std::sin(x * 0.021f), 0.5f + 0.2f * std::cos(y * 0.017f),
+                                  0.3f + 0.2f * std::sin((x + y) * 0.013f)};
+            float v = rgb[c];
+            if ((x / 29 + y / 41) % 3 == 0) v *= 0.35f;
+            if ((x + 2 * y) % 53 < 2) v = 0.95f;
+            if (x > w / 2 && y > h / 2) {
+                const float dx = float(x) - w * 0.75f, dy = float(y) - h * 0.75f;
+                v = 0.45f + 0.4f * std::cos((dx * dx + dy * dy) * 0.004f);
+            }
+            const float code = 64.0f + v * 900.0f + float(state >> 27) - 16.0f;
+            f[std::size_t(y) * w + x] = std::uint16_t(std::clamp(code, 0.0f, 1023.0f));
+        }
+    return f;
+}
+
+float toHalf(float v) {  // the shader's rounding to the nearest half-float value
+    std::uint32_t b;
+    std::memcpy(&b, &v, 4);
+    b = (b + 0x0FFFu + ((b >> 13) & 1u)) & ~0x1FFFu;
+    std::memcpy(&v, &b, 4);
+    return v;
+}
+
+// CPU copy of shaders/bayer_lin.comp.
+Frame cpuBin(const Frame& in, std::uint32_t w, std::uint32_t h, const Params& p) {
+    const int ow = int(w / 2), oh = int(h / 2);
+    float maxBlack = 0, maxGain = 0;
+    for (int i = 0; i < 4; ++i) maxBlack = std::max(maxBlack, p.black[i]), maxGain = std::max(maxGain, p.gains[i]);
+    const float span = p.white - maxBlack, codeGain = 4;
+    std::array<float, 4> g{};
+    for (int i = 0; i < 4; ++i) g[i] = p.gains[i] / maxGain;
+    auto sample = [&](int x, int y) {
+        x = x < 0 ? -x : (x >= int(w) ? 2 * int(w) - 2 - x : x);
+        y = y < 0 ? -y : (y >= int(h) ? 2 * int(h) - 2 - y : y);
+        const int site = 2 * (y & 1) + (x & 1);
+        return (float(in[std::size_t(y) * w + x]) - p.black[site]) * (g[site] / span);
+    };
+    auto fromCode = [&](std::uint16_t c, int site) { return (float(c) / codeGain - p.black[site]) / span; };
+    auto toCode = [&](float v, int site) {
+        const float c = std::clamp(v * span + p.black[site], 0.0f, p.white);
+        return std::uint16_t(std::clamp(c * codeGain, 0.0f, p.white * codeGain) + 0.5f);
+    };
+    auto band = [&](float l) { return std::clamp(int(std::floor(2.0f * std::log2(std::max(l * span, 0.5f)))), 0, 25); };
+    const bool fx = p.order & 1u, fy = p.order & 2u;
+    Frame base(std::size_t(ow) * oh);
+    std::vector<float> d(std::size_t(ow) * oh);
+    for (int Y = 0; Y < oh; ++Y)
+        for (int X = 0; X < ow; ++X) {
+            const int q = 2 * ((Y & 1) ^ int(fy)) + ((X & 1) ^ int(fx));
+            float b = 0, dd = 0;
+            for (int ky = 0; ky < 12; ++ky)
+                for (int kx = 0; kx < 12; ++kx) {
+                    const float v = sample(2 * X - 5 + (fx ? 11 - kx : kx), 2 * Y - 5 + (fy ? 11 - ky : ky));
+                    b += rawr::raw_ingress::kBayerBinPlain[q * 144 + ky * 12 + kx] * v;
+                    dd += rawr::raw_ingress::kBayerBinSharpDelta[q * 144 + ky * 12 + kx] * v;
+                }
+            const int site = 2 * (Y & 1) + (X & 1);
+            base[std::size_t(Y) * ow + X] = toCode(b / g[site], site);
+            d[std::size_t(Y) * ow + X] = toHalf(dd / g[site]);
+        }
+    auto at = [&](int x, int y, bool level) {
+        x = std::clamp(x, 0, ow - 1);
+        y = std::clamp(y, 0, oh - 1);
+        const std::size_t i = std::size_t(y) * ow + x;
+        return level ? fromCode(base[i], 2 * (y & 1) + (x & 1)) : d[i] * d[i];
+    };
+    auto box7 = [&](int x, int y, bool level) {
+        float s = 0;
+        for (int j = -3; j <= 3; ++j)
+            for (int i = -3; i <= 3; ++i) s += at(x + i, y + j, level);
+        return s / 49.0f;
+    };
+    std::vector<std::uint32_t> hist(26 * 128);
+    for (int y = 3; y < oh - 3; y += 4)
+        for (int x = 3; x < ow - 3; x += 4) {
+            const float e = box7(x, y, false), l = box7(x, y, true);
+            const int bin = std::clamp(int(std::floor((std::log2(std::max(e, 1e-30f)) + 48.0f) / 0.375f)), 0, 127);
+            ++hist[band(l) * 128 + bin];
+        }
+    std::array<float, 26> f{};
+    for (int b = 0; b < 26; ++b) {
+        std::uint32_t total = 0, acc = 0;
+        for (int i = 0; i < 128; ++i) total += hist[b * 128 + i];
+        f[b] = -1;
+        if (total < 200) continue;
+        for (int i = 0; i < 128; ++i)
+            if ((acc += hist[b * 128 + i]) > total * 3 / 10) {
+                f[b] = std::exp2(-48.0f + (float(i) + 0.5f) * 0.375f);
+                break;
+            }
+    }
+    std::array<float, 26> floors{};
+    for (int b = 0; b < 26; ++b) {
+        float v = f[b];
+        if (v < 0) {
+            int lo = b - 1, hi = b + 1;
+            while (lo >= 0 && f[lo] < 0) --lo;
+            while (hi < 26 && f[hi] < 0) ++hi;
+            v = 1;
+            if (lo >= 0 && hi < 26) v = f[lo] + (f[hi] - f[lo]) * float(b - lo) / float(hi - lo);
+            else if (lo >= 0) v = f[lo];
+            else if (hi < 26) v = f[hi];
+        }
+        floors[b] = v;
+    }
+    auto rawSwitch = [&](int x, int y) {
+        float s = std::clamp((box7(x, y, false) / floors[band(box7(x, y, true))] - 2.5f) / 3.5f, 0.0f, 1.0f);
+        return s * s * (3 - 2 * s);
+    };
+    static const float gk[13] = {0.00222f, 0.00877f, 0.02702f, 0.06482f, 0.12111f, 0.17621f, 0.19967f,
+                                 0.17621f, 0.12111f, 0.06482f, 0.02702f, 0.00877f, 0.00222f};
+    Frame out(base.size());
+    for (int Y = 0; Y < oh; ++Y)
+        for (int X = 0; X < ow; ++X) {
+            float s = 0;
+            for (int j = 0; j < 13; ++j) {
+                float row = 0;
+                for (int i = 0; i < 13; ++i) row += gk[i] * rawSwitch(X + i - 6, Y + j - 6);
+                s += gk[j] * row;
+            }
+            const int site = 2 * (Y & 1) + (X & 1);
+            const std::size_t i = std::size_t(Y) * ow + X;
+            out[i] = toCode(fromCode(base[i], site) + s * d[i], site);
+        }
+    return out;
+}
+
+Frame cpuResample(const Frame& in, std::uint32_t iw, std::uint32_t ih, std::uint32_t ow, std::uint32_t oh,
+                  std::uint16_t maxCode) {
+    rawrcam::convert::BayerResample r;
+    if (!r.configure(iw, ih, ow, oh, maxCode)) throw std::runtime_error("cpu resample configure");
+    Frame out(std::size_t(ow) * oh);
+    for (std::uint32_t oy = 0; oy < oh; oy += 64) {
+        const std::uint32_t rows = std::min(64u, oh - oy);
+        r.band(oy, rows, [&](std::uint32_t x, std::uint32_t y) { return double(in[std::size_t(y) * iw + x]); },
+               out.data() + std::size_t(oy) * ow, ow);
+    }
+    return out;
+}
+
+struct Gpu {
+    vktest::Ctx& c;
+    rawr::raw_ingress::BayerBinner& binner;
+    VkCommandBuffer cmd;
+    VkFence fence;
+    double lastMs = 0;
+
+    void toGeneral(VkImage image, VkAccessFlags srcAccess) {
+        VkImageMemoryBarrier b{};
+        b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b.oldLayout = srcAccess ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
+        b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        b.srcAccessMask = srcAccess;
+        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+        b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = image;
+        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr,
+                             0, nullptr, 1, &b);
+    }
+    // Bin (and optionally resample to rw x rh); returns the final codes.
+    Frame run(const Frame& in, std::uint32_t w, std::uint32_t h, const Params& p, std::uint32_t rw = 0,
+              std::uint32_t rh = 0) {
+        const std::uint32_t ow = w / 2, oh = h / 2, fw = rw ? rw : ow, fh = rh ? rh : oh;
+        const VkMemoryPropertyFlags host = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        auto src = vktest::mkBuf(c.pd, c.dev, in.size() * 2, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, host);
+        auto dst = vktest::mkBuf(c.pd, c.dev, VkDeviceSize(fw) * fh * 2, VK_BUFFER_USAGE_TRANSFER_DST_BIT, host);
+        const auto usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        auto binned = vktest::mkImg(c.pd, c.dev, ow, oh, VK_FORMAT_R16_UINT, usage);
+        vktest::Img resampled{};
+        if (rw) resampled = vktest::mkImg(c.pd, c.dev, rw, rh, VK_FORMAT_R16_UINT, usage);
+        void* mapped = nullptr;
+        vktest::ck(vkMapMemory(c.dev, src.m, 0, VK_WHOLE_SIZE, 0, &mapped), "map src");
+        std::memcpy(mapped, in.data(), in.size() * 2);
+        vkUnmapMemory(c.dev, src.m);
+        vktest::ck(vkResetCommandBuffer(cmd, 0), "reset");
+        VkCommandBufferBeginInfo bi{};
+        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        vktest::ck(vkBeginCommandBuffer(cmd, &bi), "begin");
+        toGeneral(binned.i, 0);
+        if (rw) toGeneral(resampled.i, 0);
+        rawr::raw_ingress::BayerBinner::Bin f;
+        f.source = src.b;
+        f.destination = binned.v;
+        f.width = w;
+        f.height = h;
+        f.rowStrideBytes = w * 2;
+        f.black = p.black;
+        f.wbGains = p.gains;
+        f.white = p.white;
+        f.order = p.order;
+        f.codeGain = 4;
+        binner.bin(cmd, 0, f);
+        if (rw) {
+            toGeneral(binned.i, VK_ACCESS_SHADER_WRITE_BIT);
+            binner.resample(cmd, 0, {binned.v, resampled.v, ow, oh, rw, rh, p.white * 4.0f});
+        }
+        toGeneral(rw ? resampled.i : binned.i, VK_ACCESS_SHADER_WRITE_BIT);
+        VkBufferImageCopy r{};
+        r.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        r.imageExtent = {fw, fh, 1};
+        vkCmdCopyImageToBuffer(cmd, rw ? resampled.i : binned.i, VK_IMAGE_LAYOUT_GENERAL, dst.b, 1, &r);
+        vktest::ck(vkEndCommandBuffer(cmd), "end");
+        VkSubmitInfo si{};
+        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &cmd;
+        vktest::ck(vkResetFences(c.dev, 1, &fence), "reset fence");
+        const auto start = std::chrono::steady_clock::now();
+        vktest::ck(vkQueueSubmit(c.q, 1, &si, fence), "submit");
+        vktest::ck(vkWaitForFences(c.dev, 1, &fence, VK_TRUE, UINT64_MAX), "wait");
+        lastMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+        Frame out(std::size_t(fw) * fh);
+        vktest::ck(vkMapMemory(c.dev, dst.m, 0, VK_WHOLE_SIZE, 0, &mapped), "map dst");
+        std::memcpy(out.data(), mapped, out.size() * 2);
+        vkUnmapMemory(c.dev, dst.m);
+        vktest::delImg(c.dev, resampled);
+        vktest::delImg(c.dev, binned);
+        vktest::delBuf(c.dev, dst);
+        vktest::delBuf(c.dev, src);
+        return out;
+    }
+};
+
+bool compare(const char* name, const Frame& got, const Frame& want, std::uint32_t w) {
+    std::size_t off1 = 0, worse = 0, first = 0;
+    int maxError = 0;
+    for (std::size_t i = 0; i < want.size(); ++i) {
+        const int d = std::abs(int(got[i]) - int(want[i]));
+        maxError = std::max(maxError, d);
+        if (d == 1) ++off1;
+        if (d > 2 && worse++ == 0) first = i;
+    }
+    const bool ok = worse == 0 && off1 * 50 < want.size();
+    std::printf("%s %s off1=%zu/%zu max=%d worse=%zu first=(%zu,%zu)\n", ok ? "PASS" : "FAIL", name, off1, want.size(),
+                maxError, worse, first % w, first / w);
+    return ok;
+}
+
+Params params(std::uint32_t order) {
+    Params p;
+    p.order = order;
+    const float neutral[3] = {0.45f, 1.0f, 0.62f};  // camera neutral (R, G, B)
+    for (int i = 0; i < 4; ++i) {
+        p.black[i] = 64.0f + float(i & 1);
+        p.gains[i] = neutral[1] / neutral[kOrders[order][i]];
+    }
+    return p;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    auto c = vktest::ctx();
+    bool ok = true;
+    {
+        auto binner = rawr::raw_ingress::BayerBinner::create({c.pd, c.dev, c.qf});
+        VkCommandPoolCreateInfo pi{};
+        pi.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        pi.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+        pi.queueFamilyIndex = c.qf;
+        VkCommandPool pool{};
+        vktest::ck(vkCreateCommandPool(c.dev, &pi, nullptr, &pool), "pool");
+        VkCommandBufferAllocateInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        ai.commandPool = pool;
+        ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        ai.commandBufferCount = 1;
+        VkCommandBuffer cmd{};
+        vktest::ck(vkAllocateCommandBuffers(c.dev, &ai, &cmd), "cmd");
+        VkFenceCreateInfo fi{};
+        fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        VkFence fence{};
+        vktest::ck(vkCreateFence(c.dev, &fi, nullptr, &fence), "fence");
+        Gpu gpu{c, *binner, cmd, fence};
+        if (argc >= 5) {
+            const std::uint32_t w = std::uint32_t(std::atoi(argv[2])), h = std::uint32_t(std::atoi(argv[3]));
+            const auto p = params(std::uint32_t(std::atoi(argv[4])));
+            const auto in = scene(w, h, kOrders[p.order], 7);
+            for (int i = 0; i < 3; ++i) {
+                gpu.run(in, w, h, p);
+                std::printf("bin %ux%u: %.1f ms (submit+wait)\n", w, h, gpu.lastMs);
+            }
+            const std::uint32_t rw = std::uint32_t(w / 2 / std::sqrt(2.0)) & ~7u, rh = std::uint32_t(h / 2 / std::sqrt(2.0)) & ~7u;
+            gpu.run(in, w, h, p, rw, rh);
+            std::printf("bin + resample to %ux%u: %.1f ms\n", rw, rh, gpu.lastMs);
+        } else {
+            struct Case {
+                std::uint32_t w, h, order;
+            };
+            for (const Case& k : {Case{384, 256, 0}, Case{388, 260, 1}, Case{256, 200, 2}, Case{320, 240, 3}, Case{32, 32, 0}}) {
+                const auto p = params(k.order);
+                const auto in = scene(k.w, k.h, kOrders[k.order], 0x9e3779b9u ^ k.order);
+                const auto want = cpuBin(in, k.w, k.h, p);
+                const auto got = gpu.run(in, k.w, k.h, p);
+                char name[96];
+                std::snprintf(name, sizeof(name), "bin %ux%u order=%u", k.w, k.h, k.order);
+                ok &= compare(name, got, want, k.w / 2);
+                const std::uint32_t ow = k.w / 2, oh = k.h / 2;
+                if (ow >= 64 && oh >= 64) {
+                    const std::uint32_t rw = std::uint32_t(ow / std::sqrt(2.0)) & ~1u, rh = std::uint32_t(oh / std::sqrt(2.0)) & ~1u;
+                    const auto gotR = gpu.run(in, k.w, k.h, p, rw, rh);
+                    std::snprintf(name, sizeof(name), "resample %ux%u -> %ux%u", ow, oh, rw, rh);
+                    ok &= compare(name, gotR, cpuResample(got, ow, oh, rw, rh, std::uint16_t(p.white * 4)), rw);
+                }
+            }
+            // Mirror symmetry: an RGGB scene mirrored in x is GRBG; its bin must be the mirrored bin.
+            {
+                const std::uint32_t w = 256, h = 192;
+                const auto pr = params(0), pg = params(1);
+                const auto in = scene(w, h, kOrders[0], 11);
+                Frame mirrored(in.size());
+                for (std::uint32_t y = 0; y < h; ++y)
+                    for (std::uint32_t x = 0; x < w; ++x) mirrored[y * w + x] = in[y * w + (w - 1 - x)];
+                Params pm = pg;
+                for (int i = 0; i < 4; ++i) pm.black[i] = pr.black[i ^ 1], pm.gains[i] = pr.gains[i ^ 1];
+                const auto a = gpu.run(in, w, h, pr), b = gpu.run(mirrored, w, h, pm);
+                Frame bm(b.size());
+                for (std::uint32_t y = 0; y < h / 2; ++y)
+                    for (std::uint32_t x = 0; x < w / 2; ++x) bm[y * (w / 2) + x] = b[y * (w / 2) + (w / 2 - 1 - x)];
+                ok &= compare("mirror x (RGGB vs GRBG)", bm, a, w / 2);
+            }
+        }
+        vkDestroyFence(c.dev, fence, nullptr);
+        vkDestroyCommandPool(c.dev, pool, nullptr);
+    }
+    vktest::delCtx(c);
+    std::puts(ok ? "ALL PASS" : "SOME FAILED");
+    return ok ? 0 : 1;
+}

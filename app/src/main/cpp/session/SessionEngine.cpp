@@ -147,6 +147,7 @@ SessionEngine::SessionEngine(std::string filesDir) : filesDir_(std::move(filesDi
                     if (!reason.empty()) {
                         appendDiagnostic("REDUCED_RAW_FALLBACK full_size reason=" + reason);
                         context->photoReduced = false;
+                        context->photoReduced25 = false;
                         context->photoPhaseFit = false;
                     } else if (context->photoPhaseFit && context->baselineWhiteLevel > 0.0f &&
                                !capture::reducedRawFitFits(context->baselineWhiteLevel)) {
@@ -154,9 +155,10 @@ SessionEngine::SessionEngine(std::string filesDir) : filesDir_(std::move(filesDi
                         context->photoPhaseFit = false;
                     }
                 }
-                const uint32_t reduction = capture::reducedRawRequested(*context) ? 2u : 1u;
-                capture_.multiframe().configureFullSize(g.rawBufferWidth / reduction, g.rawBufferHeight / reduction,
-                                                       context->rawPreviewCfa);
+                const auto merged = capture::reducedRawRequested(*context)
+                                        ? capture::reducedRawSize(*context, g.rawBufferWidth, g.rawBufferHeight)
+                                        : capture::ReducedRawSize{g.rawBufferWidth, g.rawBufferHeight};
+                capture_.multiframe().configureFullSize(merged.width, merged.height, context->rawPreviewCfa);
                 appendDiagnostic("FULL_SIZE_STILL_CONFIG raw=" + std::to_string(g.rawBufferWidth) + "x" +
                                  std::to_string(g.rawBufferHeight) + " buffer=" + std::to_string(width) + "x" +
                                  std::to_string(height));
@@ -627,10 +629,12 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
     const size_t bytes = size_t(width) * height * sizeof(uint16_t);
     diagnostics::CaptureStageTimer allocationTiming("fullres_allocate", tag);
     const bool reduced = capture::reducedRawRequested(*context);
-    const uint32_t outputWidth = reduced ? width / 2 : width, outputHeight = reduced ? height / 2 : height;
-    auto journal = std::make_shared<capture::persistence::AcquiredRawJournal>(filesDir_, reduced ? bytes / 4 : bytes, count);
+    const auto output = reduced ? capture::reducedRawSize(*context, width, height) : capture::ReducedRawSize{width, height};
+    const uint32_t outputWidth = output.width, outputHeight = output.height;
+    auto journal = std::make_shared<capture::persistence::AcquiredRawJournal>(
+        filesDir_, size_t(outputWidth) * outputHeight * sizeof(uint16_t), count);
     std::unique_ptr<capture::ReducedRaw> reducer;
-    if (reduced) reducer = std::make_unique<capture::ReducedRaw>(vulkanContext_, width, height);
+    if (reduced) reducer = std::make_unique<capture::ReducedRaw>(vulkanContext_, *context, width, height);
     std::vector<uint8_t> reducedPixels;
     size_t reducedSubmitted = 0, reducedCollected = 0;
     const auto collectReduced = [&] {

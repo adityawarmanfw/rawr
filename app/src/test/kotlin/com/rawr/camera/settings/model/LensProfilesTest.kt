@@ -9,18 +9,23 @@ class LensProfilesTest {
     private val lens = LensProfile(name = "35", cameraId = "3")
 
     @Test
-    fun leavingHexadecaClearsReducedOptionsAndInvalidDraftsAreRejected() {
+    fun photoCfaChangesKeepOnlyValidReducedOptionsAndInvalidDraftsAreRejected() {
         val reduced = LensSensorLayout(photoBlock = 4, photoOutput = "reduced", photoPhaseFit = true)
         assertEquals(reduced, reduced.withPhotoBlock(4))
-        for (block in listOf(1, 2)) {
-            val changed = reduced.withPhotoBlock(block)
-            assertEquals("full", changed.photoOutput)
-            assertEquals(false, changed.photoPhaseFit)
-            assertEquals(block, changed.photoBlock)
-            assertEquals(emptyList(), validateLensProfile(lens.image { copy(sensorLayout = changed) }, emptyList()))
-            val invalid = lens.image { copy(sensorLayout = reduced.copy(photoBlock = block)) }
-            assertTrue(validateLensProfile(invalid, emptyList()).contains("Reduced photo output needs a 4×4 photo CFA"))
-        }
+        // Bayer keeps the reduced output (natural bin) but not the 4x4 phase fit.
+        val bayer = reduced.withPhotoBlock(1)
+        assertEquals("reduced", bayer.photoOutput)
+        assertEquals(false, bayer.photoPhaseFit)
+        assertEquals(emptyList(), validateLensProfile(lens.image { copy(sensorLayout = bayer) }, emptyList()))
+        val bayer25 = LensSensorLayout(photoOutput = "reduced25")
+        assertEquals(emptyList(), validateLensProfile(lens.image { copy(sensorLayout = bayer25) }, emptyList()))
+        // Quad has no reduced output.
+        val quad = reduced.withPhotoBlock(2)
+        assertEquals("full", quad.photoOutput)
+        assertEquals(false, quad.photoPhaseFit)
+        assertEquals(emptyList(), validateLensProfile(lens.image { copy(sensorLayout = quad) }, emptyList()))
+        val invalid = lens.image { copy(sensorLayout = reduced.copy(photoBlock = 2)) }
+        assertTrue(validateLensProfile(invalid, emptyList()).contains("Reduced photo output needs a Bayer or 4×4 photo CFA"))
     }
 
     @Test

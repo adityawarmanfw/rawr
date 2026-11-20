@@ -202,10 +202,13 @@ struct LensRoute {
     // Separate photo-stream CFA; absent streams and existing profiles keep Bayer.
     uint32_t photoSensorLayoutBlock = 1;
     std::optional<uint32_t> colourOrder;
-    // Photo stream only, 4x4 photoSensorLayoutBlock: reduce each photo frame to a quarter of the pixels
-    // (Hexadeca 200 MP -> 50 MP Bayer, exact 2x2 sums in quarter-DN units) instead of remosaicing it at full
-    // size. photoPhaseFit also fits and removes the sensor's per-position response first.
+    // Photo stream only: reduce each photo frame at ingress instead of keeping it at full size, so
+    // singles and merges run at the reduced size. 4x4 photoSensorLayoutBlock: Hexadeca 200 MP -> 50 MP
+    // Bayer (exact 2x2 sums in quarter-DN units, then the quad remosaic); photoPhaseFit also fits and removes
+    // the sensor's per-position response first. Bayer (block 1): the linear 2x Bayer bin, 200 MP -> 50 MP,
+    // codes x4. photoReduced25 resamples the 50 MP result to half its pixels (25 MP).
     bool photoReduced = false;
+    bool photoReduced25 = false;
     bool photoPhaseFit = false;
     // Remosaic quality (imaging::CfaRemosaicQuality): live = viewfinder, video
     // and merge frames (GPU: Fast 0 / Standard 1); photo = single stills
@@ -227,11 +230,11 @@ struct LensRoute {
     std::string dcpError;
 };
 
-// High-resolution photo streams expose JPEG only when configured for the
-// supported Hexadeca-to-quarter-resolution output. Ordinary routes are unchanged.
+// High-resolution photo streams expose JPEG only when configured for a reduced
+// output (Hexadeca or Bayer, 50 or 25 MP). Ordinary routes are unchanged.
 [[nodiscard]] inline bool photoOutputDngOnly(const LensRoute& lens) noexcept {
     constexpr uint64_t kDngOnlyPixels = 100'000'000;
-    const bool reduced = lens.photoReduced && lens.photoSensorLayoutBlock == 4u;
+    const bool reduced = lens.photoReduced && (lens.photoSensorLayoutBlock == 4u || lens.photoSensorLayoutBlock == 1u);
     return lens.photoStream && uint64_t(lens.photoStream->width) * lens.photoStream->height > kDngOnlyPixels && !reduced;
 }
 

@@ -347,18 +347,20 @@ data class LensSensorLayout(
     /** Same-colour block side for the separate photo stream; Bayer by default. */
     val photoBlock: Int = 1,
     /**
-     * "full": photo frames keep the sensor's resolution after remosaic. "reduced": 4×4 photo frames are reduced to
-     * a quarter of the pixels (200 MP to 50 MP Bayer) before storage and merge. Reduced needs photoBlock 4.
+     * "full": photo frames keep the sensor's resolution after remosaic. "reduced": photo frames are reduced to a
+     * quarter of the pixels (200 MP to 50 MP Bayer) before storage and merge; 4×4 frames by block sums, Bayer frames
+     * by the linear 2× bin. "reduced25": the same, then resampled to half those pixels (25 MP). Reduced needs
+     * photoBlock 1 or 4.
      */
     val photoOutput: String = "full",
     /** Reduced output only: fit the sensor's per-position response from each frame and divide it out. */
     val photoPhaseFit: Boolean = false
 ) {
-    /** Leaving Hexadeca also clears options that are only valid for that layout. */
+    /** Changing the photo CFA also clears options its new layout cannot use. */
     fun withPhotoBlock(value: Int): LensSensorLayout = copy(
         photoBlock = value,
-        photoOutput = if (value == 4) photoOutput else "full",
-        photoPhaseFit = value == 4 && photoOutput == "reduced" && photoPhaseFit
+        photoOutput = if (value == 4 || value == 1) photoOutput else "full",
+        photoPhaseFit = value == 4 && photoOutput != "full" && photoPhaseFit
     )
 }
 
@@ -381,7 +383,7 @@ val SENSOR_LAYOUT_BLOCKS = listOf(1, 2, 4)
 val COLOUR_ORDERS = listOf("RGGB", "GRBG", "GBRG", "BGGR")
 val LIVE_REMOSAIC_QUALITIES = listOf("fast", "standard", "detail")
 val PHOTO_REMOSAIC_QUALITIES = listOf("standard", "high", "detail")
-val PHOTO_OUTPUTS = listOf("full", "reduced")
+val PHOTO_OUTPUTS = listOf("full", "reduced", "reduced25")
 
 /** Problems with one lens, in display order; empty when the lens is valid. */
 fun validateLensProfile(lens: LensProfile, others: List<LensProfile>): List<String> = buildList {
@@ -402,8 +404,8 @@ fun validateLensProfile(lens: LensProfile, others: List<LensProfile>): List<Stri
     }
     val layout = lens.image.sensorLayout
     if (layout.photoOutput !in PHOTO_OUTPUTS) add("Unknown photo output ${layout.photoOutput}")
-    if (layout.photoOutput == "reduced" && layout.photoBlock != 4)
-        add("Reduced photo output needs a 4×4 photo CFA")
+    if (layout.photoOutput != "full" && layout.photoBlock != 4 && layout.photoBlock != 1)
+        add("Reduced photo output needs a Bayer or 4×4 photo CFA")
     validateLevels(lens.image.levels)?.let { add(it) }
     lens.vendorKeys.forEach { key -> validateVendorKey(key)?.let { add(it) } }
     if (session.cameraApi !in CAMERA_API_CHOICES) add("Unknown camera API ${session.cameraApi}")

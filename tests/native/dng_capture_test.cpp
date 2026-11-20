@@ -634,6 +634,35 @@ int main() {
             return 12;
         }
     }
+    // A Bayer frame reduced to 25 MP: the pixel array scaled by about 1.41 per side.
+    {
+        auto f = makeFrame(true);
+        auto c = std::make_shared<rawrcam::metadata::CameraContextMetadata>(*f.metadata.cameraContext);
+        c->geometry.rawBufferWidth = 1632;
+        c->geometry.rawBufferHeight = 1224;
+        c->geometry.pixelArrayWidth = 408;
+        c->geometry.pixelArrayHeight = 306;
+        c->geometry.preCorrectionActiveArray = {0, 0, 408, 306, true};
+        c->cfaBlock = 1;
+        c->photoReduced = c->photoReduced25 = true;
+        c->binnedFallbackContext = f.metadata.cameraContext;
+        f.metadata.cameraContext = c;
+        f.metadata.effectiveWhiteLevel = 1023;
+        rawrcam::capture::applyReducedRawMetadata(f.metadata);
+        f.width = f.metadata.cameraContext->geometry.rawBufferWidth;
+        f.height = f.metadata.cameraContext->geometry.rawBufferHeight;
+        f.packedRowStrideBytes = f.width * 2;
+        f.raw16.resize(size_t(f.width) * f.height * 2);
+        error.clear();
+        auto params = rawrcam::encoding::dng::makeTinyDngWriteParams(f, capture, &error);
+        if (f.width != 576 || f.height != 432 || !params || params->raw.active_area[0] != 0 ||
+            params->raw.active_area[1] != 0 || params->raw.active_area[2] != 432 || params->raw.active_area[3] != 576 ||
+            params->raw.white_level[0] != 4092) {
+            std::cerr << "25 MP geometry: " << error << "\n";
+            return 13;
+        }
+        std::cout << "DNG_CAPTURE_REDUCED25_GEOMETRY_PASS\n";
+    }
     auto bad = makeFrame(false);
     error.clear();
     if (rawrcam::encoding::dng::makeTinyDngWriteParams(bad, capture, &error) ||

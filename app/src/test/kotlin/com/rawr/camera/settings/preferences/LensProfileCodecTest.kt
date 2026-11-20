@@ -419,6 +419,11 @@ class LensProfileCodecTest {
         val full = lens.image { copy(sensorLayout = LensSensorLayout(photoBlock = 4)) }
         val fullLayout = lensJson(LensProfileCodec.encode(listOf(full))).getJSONObject("image").getJSONObject("sensorLayout")
         assertEquals(false, fullLayout.has("photoOutput") || fullLayout.has("photoPhaseFit"))
+        // A Bayer photo stream reduced to 25 MP keeps its sensorLayout although every block is 1.
+        val bayer = lens.image { copy(sensorLayout = LensSensorLayout(photoOutput = "reduced25")) }
+        val bayerJson = LensProfileCodec.encode(listOf(bayer))
+        assertEquals(bayer, requireNotNull(LensProfileCodec.decode(bayerJson)).single())
+        assertEquals("reduced25", lensJson(bayerJson).getJSONObject("image").getJSONObject("sensorLayout").getString("photoOutput"))
     }
 
     @Test

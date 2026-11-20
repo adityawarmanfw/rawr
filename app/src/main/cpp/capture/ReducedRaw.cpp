@@ -7,16 +7,24 @@
 
 #include "capture/ReducedRawMetadata.h"
 #include "diagnostics/timing/CaptureStageTimer.h"
+#include "geometry/CfaPattern.h"
 namespace rawrcam::capture {
 namespace {
 void check(VkResult r) {
     if (r != VK_SUCCESS) throw std::runtime_error("reduced_raw_vulkan_" + std::to_string(r));
 }
 }  // namespace
-ReducedRaw::ReducedRaw(const vulkan::VulkanContext& vk, uint32_t w, uint32_t h, uint32_t slots)
+ReducedRaw::ReducedRaw(const vulkan::VulkanContext& vk, const metadata::CameraContextMetadata& c, uint32_t w,
+                       uint32_t h, uint32_t slots)
     : vk_(vk), width_(w), height_(h), bytes_(size_t(w) * h * 2) {
+    const auto size = reducedRawSize(c, w, h);
+    outWidth_ = size.width;
+    outHeight_ = size.height;
     try {
         initialize(slots);
+        if (c.cfaBlock != 1) remosaic_ = rawr::raw_ingress::RawRemosaicker::create(vk_.gpuContext());
+        // The bin, and the 25 MP resample for either mode.
+        if (c.cfaBlock == 1 || c.photoReduced25) binner_ = rawr::raw_ingress::BayerBinner::create(vk_.gpuContext());
     } catch (...) {
         destroy();
         throw;
@@ -67,11 +75,15 @@ void ReducedRaw::initialize(uint32_t count) {
     check(vkCreateCommandPool(vk_.device(), &pi, nullptr, &pool_));
     for (uint32_t i = 0; i < count; ++i) {
         auto& s = slots_[i];
-        allocate(s.source, bytes_, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-        allocate(s.result, bytes_ / 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+        // Storage reads (Hexadeca reduction), transfers into the bin's strip image.
+        allocate(s.source, bytes_, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+        allocate(s.result, size_t(outWidth_) * outHeight_ * 2, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
         s.output =
-            rawr::vk::createOwnedImage(vk_.physicalDevice(), vk_.device(), width_ / 2, height_ / 2, VK_FORMAT_R16_UINT,
+            rawr::vk::createOwnedImage(vk_.physicalDevice(), vk_.device(), outWidth_, outHeight_, VK_FORMAT_R16_UINT,
                                        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+        if (outWidth_ != width_ / 2 || outHeight_ != height_ / 2)
+            s.half = rawr::vk::createOwnedImage(vk_.physicalDevice(), vk_.device(), width_ / 2, height_ / 2,
+                                                VK_FORMAT_R16_UINT, VK_IMAGE_USAGE_STORAGE_BIT);
         VkCommandBufferAllocateInfo ai{};
         ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
         ai.commandPool = pool_;
@@ -82,7 +94,6 @@ void ReducedRaw::initialize(uint32_t count) {
         fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
         check(vkCreateFence(vk_.device(), &fi, nullptr, &s.fence));
     }
-    remosaic_ = rawr::raw_ingress::RawRemosaicker::create(vk_.gpuContext());
 }
 void ReducedRaw::submit(uint32_t index, const std::vector<uint8_t>& pixels, const metadata::FrameMetadataSnapshot& m) {
     diagnostics::CaptureStageTimer timing("reduced_upload_and_submit", m.timestampNs, index);
@@ -92,10 +103,14 @@ void ReducedRaw::submit(uint32_t index, const std::vector<uint8_t>& pixels, cons
         throw std::runtime_error("reduced_raw_submit_invalid");
     const auto& c = *m.cameraContext;
     // A frame whose levels are too deep for the fit still reduces, without it.
-    const bool fit = c.photoPhaseFit && reducedRawFitFits(m.effectiveWhiteLevel);
+    const bool bayer = c.cfaBlock == 1;
+    const bool fit = !bayer && c.photoPhaseFit && reducedRawFitFits(m.effectiveWhiteLevel);
     const float limit = fit ? kReducedRawMaxFitCode : kReducedRawMaxCode;
     if (!std::isfinite(m.effectiveWhiteLevel) || m.effectiveWhiteLevel <= 0 || m.effectiveWhiteLevel > limit)
         throw std::runtime_error("reduced_raw_unsupported_white_level");
+    if (bayer == bool(remosaic_) || reducedRawSize(c, width_, height_).width != outWidth_ ||
+        reducedRawSize(c, width_, height_).height != outHeight_)
+        throw std::runtime_error("reduced_raw_mode_changed");
     // Copy and validate in one pass; phase-fit integer statistics require bounded source codes.
     auto* out = static_cast<uint16_t*>(s.source.mapped);
     const auto* in = reinterpret_cast<const uint16_t*>(pixels.data());
@@ -110,39 +125,79 @@ void ReducedRaw::submit(uint32_t index, const std::vector<uint8_t>& pixels, cons
     bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     check(vkBeginCommandBuffer(s.command, &bi));
-    VkImageMemoryBarrier b{};
-    b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-    b.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    b.image = s.output.image;
-    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    const bool resample = bool(s.half.image);
+    VkImageMemoryBarrier b[2]{};
+    for (auto& x : b) {
+        x.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        x.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        x.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        x.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        x.srcQueueFamilyIndex = x.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        x.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    }
+    b[0].image = s.output.image;
+    b[1].image = s.half.image;
     vkCmdPipelineBarrier(s.command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
-                         nullptr, 0, nullptr, 1, &b);
-    rawr::raw_ingress::RawRemosaicker::Frame f;
-    f.source = s.source.buffer;
-    f.destination = s.output.view;
-    f.width = width_;
-    f.height = height_;
-    f.rowStrideBytes = width_ * 2;
-    f.block = 4;
-    f.order = c.rawPreviewCfa;
-    f.quality = rawr::raw_ingress::RawRemosaicker::Quality::Detail;
-    f.hexadecaToQuad = true;
-    f.phaseFit = fit;
-    f.blackLevel = (m.blackLevelPhysicalRggb[0] + m.blackLevelPhysicalRggb[1] + m.blackLevelPhysicalRggb[2] +
-                    m.blackLevelPhysicalRggb[3]) *
-                   .25f;
-    remosaic_->record(s.command, index, f);
-    b.oldLayout = b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-    b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    b.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+                         nullptr, 0, nullptr, resample ? 2 : 1, b);
+    const VkImageView half = resample ? s.half.view : s.output.view;
+    if (bayer) {
+        rawr::raw_ingress::BayerBinner::Bin f;
+        f.source = s.source.buffer;
+        f.destination = half;
+        f.width = width_;
+        f.height = height_;
+        f.rowStrideBytes = width_ * 2;
+        // Black levels and colours in buffer phase order (2*(y&1)+(x&1)) for the frame's Bayer order.
+        const auto black = geometry::reorderRggbByCode(m.blackLevelPhysicalRggb, c.rawPreviewCfa);
+        static constexpr uint8_t kColours[4][4] = {{0, 1, 1, 2}, {1, 0, 2, 1}, {1, 2, 0, 1}, {2, 1, 1, 0}};
+        const uint32_t order = std::min<uint32_t>(c.rawPreviewCfa, 3);
+        // Camera-neutral gains (green / channel); the frame's own colour gains when no neutral was read.
+        const auto gains = reducedRawWhiteBalance(m);
+        for (int i = 0; i < 4; ++i) {
+            f.black[i] = black[i];
+            f.wbGains[i] = gains[kColours[order][i]];
+        }
+        f.white = m.effectiveWhiteLevel;
+        f.order = order;
+        f.codeGain = 4.0f;   // the x4 code scale applyReducedRawMetadata records
+        binner_->bin(s.command, index, f);
+    } else {
+        rawr::raw_ingress::RawRemosaicker::Frame f;
+        f.source = s.source.buffer;
+        f.destination = half;
+        f.width = width_;
+        f.height = height_;
+        f.rowStrideBytes = width_ * 2;
+        f.block = 4;
+        f.order = c.rawPreviewCfa;
+        f.quality = rawr::raw_ingress::RawRemosaicker::Quality::Detail;
+        f.hexadecaToQuad = true;
+        f.phaseFit = fit;
+        f.blackLevel = (m.blackLevelPhysicalRggb[0] + m.blackLevelPhysicalRggb[1] + m.blackLevelPhysicalRggb[2] +
+                        m.blackLevelPhysicalRggb[3]) *
+                       .25f;
+        remosaic_->record(s.command, index, f);
+    }
+    if (resample) {
+        VkMemoryBarrier toResample{};
+        toResample.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        toResample.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        toResample.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(s.command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1,
+                             &toResample, 0, nullptr, 0, nullptr);
+        // Codes are x4 the source's (Hexadeca sums and the bin alike).
+        binner_->resample(s.command, index,
+                          {s.half.view, s.output.view, width_ / 2, height_ / 2, outWidth_, outHeight_,
+                           std::min(65535.0f, m.effectiveWhiteLevel * 4.0f)});
+    }
+    b[0].oldLayout = b[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    b[0].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    b[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
     vkCmdPipelineBarrier(s.command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr,
-                         0, nullptr, 1, &b);
+                         0, nullptr, 1, &b[0]);
     VkBufferImageCopy region{};
     region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    region.imageExtent = {width_ / 2, height_ / 2, 1};
+    region.imageExtent = {outWidth_, outHeight_, 1};
     vkCmdCopyImageToBuffer(s.command, s.output.image, VK_IMAGE_LAYOUT_GENERAL, s.result.buffer, 1, &region);
     VkMemoryBarrier host{};
     host.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
@@ -167,7 +222,7 @@ void ReducedRaw::collect(uint32_t index, std::vector<uint8_t>& pixels) {
     auto& s = slots_.at(index);
     if (!s.pending) throw std::runtime_error("reduced_raw_collect_without_submit");
     check(vkWaitForFences(vk_.device(), 1, &s.fence, VK_TRUE, UINT64_MAX));
-    pixels.resize(bytes_ / 4);
+    pixels.resize(size_t(outWidth_) * outHeight_ * 2);
     std::memcpy(pixels.data(), s.result.mapped, pixels.size());
     s.pending = false;
 }
@@ -175,8 +230,10 @@ void ReducedRaw::destroy() noexcept {
     for (auto& s : slots_)
         if (s.pending) vkWaitForFences(vk_.device(), 1, &s.fence, VK_TRUE, UINT64_MAX);
     remosaic_.reset();
+    binner_.reset();
     for (auto& s : slots_) {
         rawr::vk::destroyOwnedImage(vk_.device(), s.output);
+        rawr::vk::destroyOwnedImage(vk_.device(), s.half);
         for (auto* b : {&s.source, &s.result}) {
             if (b->mapped) vkUnmapMemory(vk_.device(), b->memory);
             if (b->buffer) vkDestroyBuffer(vk_.device(), b->buffer, nullptr);

@@ -367,8 +367,8 @@ internal object LensProfileCodec {
                 choice(layout, "photoRemosaic", PHOTO_REMOSAIC_QUALITIES.toList())
                 choice(layout, "photoOutput", PHOTO_OUTPUTS)
                 flags(layout, "photoPhaseFit")
-                if (layout.optString("photoOutput") == "reduced")
-                    require(layout.optInt("photoBlock", 1) == 4) { "photoOutput reduced needs photoBlock 4" }
+                if (layout.optString("photoOutput", "full") != "full")
+                    require(layout.optInt("photoBlock", 1) in listOf(1, 4)) { "photoOutput reduced needs photoBlock 1 or 4" }
             }
             objectField(image, "distortion")
             choice(image, "mirror", LensMirror.entries.map { it.wireName })
@@ -455,7 +455,7 @@ internal object LensProfileCodec {
                 .put("shutterMaxNs", i.exposure.shutterMaxNs))
             .apply {
                 val layout = i.sensorLayout
-                if (layout.block > 1 || layout.photoBlock > 1 || layout.colourOrder != null) {
+                if (layout.block > 1 || layout.photoBlock > 1 || layout.colourOrder != null || layout.photoOutput != "full") {
                     put("sensorLayout", JSONObject().put("block", layout.block).put("liveRemosaic", layout.liveRemosaic)
                         .put("photoRemosaic", layout.photoRemosaic).apply {
                             if (layout.photoBlock > 1) put("photoBlock", layout.photoBlock)

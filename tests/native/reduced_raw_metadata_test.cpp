@@ -81,5 +81,46 @@ int main() {
         assert(std::string(capture::reducedRawUnsupportedReason(*d, 16324, 12288)) == "geometry");
         d->photoReduced = false;
         assert(std::string(capture::reducedRawUnsupportedReason(*d, 16320, 12288)) == "not_requested");
+        d->photoReduced = true;
+        d->cfaBlock = 2;  // quad has no reduced output
+        assert(std::string(capture::reducedRawUnsupportedReason(*d, 16320, 12288)) == "not_requested");
+    }
+    // Bayer (natural bin) at 50 and 25 MP: sizes, x4 levels, the bin's extra noise reduction.
+    for (const bool quarter : {false, true}) {
+        auto b = std::make_shared<metadata::CameraContextMetadata>(*c);
+        b->cfaBlock = b->photoCfaBlock = 1;
+        b->photoPhaseFit = false;
+        b->photoReduced25 = quarter;
+        assert(capture::reducedRawRequested(*b));
+        const auto size = capture::reducedRawSize(*b, 16320, 12288);
+        assert(quarter ? (size.width == 5768 && size.height == 4344) : (size.width == 8160 && size.height == 6144));
+        assert(size.width % 8 == 0 && size.height % 8 == 0);
+        metadata::FrameMetadataSnapshot f;
+        f.cameraContext = b;
+        f.blackLevelPhysicalRggb = b->baselineBlackLevelPhysicalRggb;
+        f.staticWhiteLevel = f.effectiveWhiteLevel = 1023;
+        f.sensorNoiseProfile.assign(8, .01);
+        capture::applyReducedRawMetadata(f);
+        assert(f.cameraContext->geometry.rawBufferWidth == size.width &&
+               f.cameraContext->geometry.rawBufferHeight == size.height);
+        assert(!f.cameraContext->photoReduced && !f.cameraContext->photoReduced25);
+        assert(f.effectiveWhiteLevel == 4092 && f.blackLevelPhysicalRggb[0] == 4 * 63);
+        // Per CFA site (RGGB here; no white balance in the metadata: gains 1): the linear bin's flat-area
+        // variance against a four-sample sum, times 0.40 for the 25 MP resample.
+        static constexpr unsigned kColour[4] = {0, 1, 1, 2};
+        for (unsigned p = 0; p < 4; ++p) {
+            const double bin = rawr::raw_ingress::bayerBinNoiseVarianceGain(kColour[p], {1, 1, 1}) / 0.25;
+            const double scale = quarter ? bin * 0.40 : bin;
+            assert(scale > 0.1 && scale < 1.0);
+            assert(std::abs(f.sensorNoiseProfile[2 * p] - .01 * scale) < 1e-12);
+            assert(std::abs(f.sensorNoiseProfile[2 * p + 1] - .01 * scale) < 1e-12);
+        }
+    }
+    // Hexadeca at 25 MP: only the resample's reduction.
+    {
+        auto h = std::make_shared<metadata::CameraContextMetadata>(*c);
+        h->photoReduced25 = true;
+        for (unsigned p = 0; p < 4; ++p) assert(capture::reducedRawNoiseScale(*h, {2, 1, 1.5f}, p) == 0.40);
+        assert(capture::reducedRawSize(*h, 16320, 12256).height == 4328);
     }
 }

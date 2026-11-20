@@ -693,7 +693,7 @@ std::string serializeCameraProfile(const CameraProfile& profile) {
             ObjectWriter layout;
             layout.number("block", r.sensorLayoutBlock);
             if (r.photoSensorLayoutBlock > 1) layout.number("photoBlock", r.photoSensorLayoutBlock);
-            if (r.photoReduced) layout.text("photoOutput", "reduced");
+            if (r.photoReduced) layout.text("photoOutput", r.photoReduced25 ? "reduced25" : "reduced");
             if (r.photoPhaseFit) layout.flag("photoPhaseFit", true);
             if (r.colourOrder) layout.text("colourOrder", cfaOrderName(*r.colourOrder));
             layout.text("liveRemosaic", r.liveRemosaic == 0 ? "fast" : r.liveRemosaic == 3 ? "detail" : "standard");
@@ -1135,16 +1135,19 @@ std::optional<LensRoute> readLens(const Json& l, std::string* error) {
         }
         r.photoSensorLayoutBlock = uint32_t(photoBlock);
         const std::string photoOutput = c->str("photoOutput", "full");
-        if (photoOutput != "full" && photoOutput != "reduced") {
+        if (photoOutput != "full" && photoOutput != "reduced" && photoOutput != "reduced25") {
             if (error) *error = "invalid sensorLayout photoOutput " + photoOutput + " for lens " + r.lensId;
             return std::nullopt;
         }
-        r.photoReduced = photoOutput == "reduced";
+        r.photoReduced = photoOutput != "full";
+        r.photoReduced25 = photoOutput == "reduced25";
         r.photoPhaseFit = c->flag("photoPhaseFit", false);
-        if (r.photoReduced && photoBlock != 4.0) {
-            if (error) *error = "sensorLayout photoOutput reduced needs photoBlock 4 for lens " + r.lensId;
+        if (r.photoReduced && photoBlock != 4.0 && photoBlock != 1.0) {
+            if (error) *error = "sensorLayout photoOutput " + photoOutput + " needs photoBlock 1 or 4 for lens " + r.lensId;
             return std::nullopt;
         }
+        // The phase fit is a 4x4-mosaic correction; a Bayer photo stream ignores it.
+        if (photoBlock != 4.0) r.photoPhaseFit = false;
         if (const std::string order = c->str("colourOrder"); !order.empty()) {
             r.colourOrder = cfaOrderFromName(order);
             if (!r.colourOrder) {

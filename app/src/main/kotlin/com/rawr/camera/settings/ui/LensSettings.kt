@@ -320,9 +320,10 @@ internal fun lensSummary(lens: LensProfile): String = buildList {
     add(lens.streams.raw.choice.label)
     add(if (lens.image.levels.isStatic) "Static levels" else "Dynamic levels")
     if (lens.image.sensorLayout.block > 1) add(sensorLayoutBlockLabel(lens.image.sensorLayout.block))
-    if (lens.streams.photo != null && lens.image.sensorLayout.photoBlock > 1)
+    val photoOutput = lens.image.sensorLayout.photoOutput
+    if (lens.streams.photo != null && (lens.image.sensorLayout.photoBlock > 1 || photoOutput != "full"))
         add("Photo " + sensorLayoutBlockLabel(lens.image.sensorLayout.photoBlock) +
-            if (lens.image.sensorLayout.photoOutput == "reduced") " → reduced" else "")
+            if (photoOutput != "full") " → " + photoOutputLabel(photoOutput).removePrefix("Reduced ").trim('(', ')') else "")
     lens.image.sensorLayout.colourOrder?.let { add(it) }
     val keys = lens.vendorKeys.count { it.enabled }
     if (keys > 0) add(if (keys == 1) "1 key" else "$keys keys")

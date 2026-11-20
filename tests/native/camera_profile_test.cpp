@@ -425,8 +425,16 @@ void testProfileJson() {
         assert(!reduced->lenses[1].photoReduced && !reduced->lenses[1].photoPhaseFit);
         assert(serializeCameraProfile(*parseCameraProfile(serializeCameraProfile(*reduced))) == serializeCameraProfile(*reduced));
         assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","cfa":{"photoBlock":2,"photoOutput":"reduced"}}]})"));
-        assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","cfa":{"photoOutput":"reduced"}}]})"));
         assert(!parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","cfa":{"photoBlock":4,"photoOutput":"half"}}]})"));
+        // Bayer photo streams reduce through the natural bin, at 50 or 25 MP; the 4x4 phase fit is dropped there.
+        const auto bayer = parseCameraProfile(R"({"lenses":[{"id":"b","cameraId":"5","cfa":{"photoOutput":"reduced"}},
+            {"id":"c","cameraId":"5","cfa":{"photoOutput":"reduced25","photoPhaseFit":true}},
+            {"id":"h","cameraId":"2","cfa":{"photoBlock":4,"photoOutput":"reduced25"}}]})");
+        assert(bayer && bayer->lenses[0].photoReduced && !bayer->lenses[0].photoReduced25);
+        assert(bayer->lenses[1].photoReduced && bayer->lenses[1].photoReduced25 && !bayer->lenses[1].photoPhaseFit);
+        assert(bayer->lenses[2].photoReduced && bayer->lenses[2].photoReduced25);
+        assert(serializeCameraProfile(*parseCameraProfile(serializeCameraProfile(*bayer))) == serializeCameraProfile(*bayer));
+        assert(serializeCameraProfile(*bayer).find("\"photoOutput\":\"reduced25\"") != std::string::npos);
         assert(still->lenses[0].vendorKeys[0].scope == CameraKeySetting::Scope::Still);
         assert(still->lenses[0].vendorKeys[1].scope == CameraKeySetting::Scope::Decision);
         assert(serializeCameraProfile(*still).find("\"scope\":\"decision\"") != std::string::npos);
@@ -560,6 +568,9 @@ int main() {
         route.photoReduced = true;
         route.photoSensorLayoutBlock = 2;
         assert(rawrcam::camera::photoOutputDngOnly(route));
+        route.photoSensorLayoutBlock = 1;  // Bayer natural bin
+        assert(!rawrcam::camera::photoOutputDngOnly(route));
+        route.photoSensorLayoutBlock = 2;
         route.photoStream->width = 8160;
         route.photoStream->height = 6144;
         assert(!rawrcam::camera::photoOutputDngOnly(route));

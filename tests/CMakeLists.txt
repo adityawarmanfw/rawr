@@ -315,6 +315,10 @@ rawr_test(raw_remosaic_vulkan_test
   "${APP}/imaging/RawPixelSource.cpp")
 target_include_directories(raw_remosaic_vulkan_test PRIVATE "${RAWR_ROOT}/native/vk_common/testing")
 target_link_libraries(raw_remosaic_vulkan_test PRIVATE rawr::raw_ingress)
+# GPU natural 2x Bayer bin and 25 MP resample vs the DNG converter's CPU code.
+rawr_test(bayer_bin_vulkan_test "${RAWR_ROOT}/tests/native/bayer_bin_vulkan_test.cpp")
+target_include_directories(bayer_bin_vulkan_test PRIVATE "${RAWR_ROOT}/native/vk_common/testing")
+target_link_libraries(bayer_bin_vulkan_test PRIVATE rawr::raw_ingress)
 
 # The production DCP shader, exercised on a host Vulkan device.
 find_program(GLSLC glslc REQUIRED)

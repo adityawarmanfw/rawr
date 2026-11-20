@@ -1,0 +1,246 @@
+#version 450
+// Linear 2x Bayer bin with sharpening on detail (Bayer -> Bayer at half size per side).
+//
+// Each output pixel is a fixed 12x12 weighted sum of the white-balanced source around it
+// (tools/bayer_bin_fit: least-squares fit to an anti-aliased 2x downscale, with the
+// sensor's 4-pixel grid lines and 8x8 diagonal grid nulled exactly). A second, sharper
+// kernel is applied only where the image has detail: its difference to the plain result
+// is blended in by a switch that compares local detail energy with the frame's own noise
+// floor for that brightness (the 30th percentile of the detail energy in each half-stop
+// band), smoothed so it cannot form patches. Flat areas keep the plain kernel.
+//
+// Passes (BIN_PASS, one pipeline each):
+//  0  base = plain kernel (codes, R16), d = sharp - plain (half float), 16x16 outputs/group
+//  1  histogram of log2(detail energy) per brightness band, every 4th output pixel
+//  2  per-band noise floor from the histogram (one group)
+//  3  switch, smoothing and blend into the destination, 16x16 outputs/group
+// Other Bayer orders use the RGGB kernels mirrored (the fit is symmetric).
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer Raw { uint words[]; } raw;
+layout(binding = 1, r16ui) uniform writeonly uimage2D baseW;
+layout(binding = 2, r16ui) uniform readonly uimage2D baseR;
+layout(binding = 3, r16f) uniform writeonly image2D dW;
+layout(binding = 4, r16f) uniform readonly image2D dR;
+layout(std430, binding = 5) buffer Hist { uint counts[]; } hist;   // BANDS x BINS
+layout(std430, binding = 6) buffer Floors { float floorE[]; } floors;  // BANDS
+layout(binding = 7, r16ui) uniform writeonly uimage2D outW;
+// Kernel weights (rawr/raw_ingress/BayerBinKernels.h): [q*144 + ky*12 + kx] for the RGGB output phase q.
+// Copied into shared memory per group: a large constant array indexed at run time lands in slow
+// per-thread memory on some GPUs (Adreno).
+layout(std140, binding = 8) uniform Kernels { vec4 kb[144]; vec4 kd[144]; } kernels;
+
+layout(push_constant) uniform PC {
+    vec4 scale;   // gains / span by buffer phase: code minus black -> white-balanced normalized sample
+    vec4 black;   // black level by buffer phase, source codes
+    vec4 gains;   // white-balance gains by buffer phase (max 1)
+    uint sw, sh, strideElems;  // source size, row stride in 16-bit elements
+    uint ow, oh;               // output size
+    uint order;                // CfaPattern code: bit 0 mirrors x, bit 1 mirrors y
+    float span;                // white - max(black)
+    float white;               // source white level
+    float codeGain;            // output codes per source code
+} pc;
+
+const int BANDS = 26, BINS = 128;
+const float LOG2_MIN = -48.0, BIN_W = 0.375;  // log2(E) histogram range [-48, 0)
+const float RAMP_LO = 2.5, RAMP_HI = 6.0;      // detail energy / noise floor: off below, full above
+
+float sampleAt(int x, int y) {  // white-balanced normalized source sample, reflected at the border
+    x = x < 0 ? -x : (x >= int(pc.sw) ? 2 * int(pc.sw) - 2 - x : x);
+    y = y < 0 ? -y : (y >= int(pc.sh) ? 2 * int(pc.sh) - 2 - y : y);
+    const uint index = uint(y) * pc.strideElems + uint(x);
+    const uint w = raw.words[index >> 1];
+    const uint code = (index & 1u) != 0u ? (w >> 16) : (w & 0xffffu);
+    const int site = 2 * (y & 1) + (x & 1);
+    return (float(code) - pc.black[site]) * pc.scale[site];
+}
+// Rounds to the nearest half-float value in 32-bit, so the r16f store is exact whatever rounding the
+// GPU's conversion applies (some truncate, which would bias the sharpening term).
+float toHalf(float v) {
+    const uint b = floatBitsToUint(v);
+    return uintBitsToFloat((b + 0x0FFFu + ((b >> 13) & 1u)) & ~0x1FFFu);
+}
+// Normalized (black-subtracted, not white-balanced) value <-> output codes.
+float fromCode(uint c, int site) { return (float(c) / pc.codeGain - pc.black[site]) / pc.span; }
+uint toCode(float v, int site) {
+    const float c = clamp(v * pc.span + pc.black[site], 0.0, pc.white);
+    return uint(clamp(c * pc.codeGain, 0.0, pc.white * pc.codeGain) + 0.5);
+}
+int bandOf(float level) { return clamp(int(floor(2.0 * log2(max(level * pc.span, 0.5)))), 0, BANDS - 1); }
+
+#if BIN_PASS == 0
+shared float src[75 * 75];
+shared float skb[576], skd[576];
+#elif BIN_PASS == 3
+shared float sd[34 * 34];     // d, then the horizontal box of d^2
+shared float sl[34 * 34];     // base level, then its horizontal box
+shared float se[28 * 28];     // switch before smoothing
+shared float sh2[16 * 28];    // horizontally smoothed switch
+#endif
+
+void main() {
+    const uint lid = gl_LocalInvocationIndex;
+#if BIN_PASS == 0
+    {
+        // 32 x 32 outputs per group from the 75 x 75 white-balanced source window at (2*X0 - 5, 2*Y0 - 5).
+        // Each thread makes four outputs of one row and one colour (X, X+2, X+4, X+6): every weight read
+        // serves four pixels, and one 24-sample run of a source row serves all four windows.
+        const int X0 = int(gl_WorkGroupID.x) * 32, Y0 = int(gl_WorkGroupID.y) * 32;
+        const int SX = 2 * X0 - 5, SY = 2 * Y0 - 5, SW = 75;
+        for (uint i = lid; i < uint(SW * SW); i += 256u) src[i] = sampleAt(SX + int(i) % SW, SY + int(i) / SW);
+        for (uint i = lid; i < 576u; i += 256u) {
+            skb[i] = kernels.kb[i >> 2][i & 3u];
+            skd[i] = kernels.kd[i >> 2][i & 3u];
+        }
+        barrier();
+        const int r = int(lid) / 8, g = int(lid) % 8, cb = (g >> 1) * 8 + (g & 1);  // tile row, first column
+        const int Y = Y0 + r, X = X0 + cb;
+        const bool fx = (pc.order & 1u) != 0u, fy = (pc.order & 2u) != 0u;
+        // RGGB phase of these pixels' neighbourhoods after mirroring (same for all four).
+        const int q = 2 * ((Y & 1) ^ int(fy)) + ((X & 1) ^ int(fx));
+        float b[4] = float[4](0.0, 0.0, 0.0, 0.0), d[4] = float[4](0.0, 0.0, 0.0, 0.0);
+        for (int ky = 0; ky < 12; ++ky) {
+            const int wy = fy ? 11 - ky : ky;  // window row read for kernel row ky
+            const int row = (2 * r + wy) * SW + 2 * cb;
+            float w[24];
+            for (int k = 0; k < 24; ++k) w[k] = src[row + k];
+            for (int kx = 0; kx < 12; ++kx) {
+                const float kb = skb[q * 144 + ky * 12 + kx], kd = skd[q * 144 + ky * 12 + kx];
+                const int o = fx ? 11 - kx : kx;
+                for (int j = 0; j < 4; ++j) {
+                    b[j] += kb * w[4 * j + o];
+                    d[j] += kd * w[4 * j + o];
+                }
+            }
+        }
+        if (Y >= int(pc.oh)) return;
+        const int site = 2 * (Y & 1) + (X & 1);
+        const float gn = 1.0 / pc.gains[site];
+        for (int j = 0; j < 4; ++j) {
+            if (X + 2 * j >= int(pc.ow)) break;
+            imageStore(baseW, ivec2(X + 2 * j, Y), uvec4(toCode(b[j] * gn, site)));
+            imageStore(dW, ivec2(X + 2 * j, Y), vec4(toHalf(d[j] * gn)));
+        }
+    }
+#elif BIN_PASS == 1
+    {
+        // Every 4th output pixel in both directions: detail energy (7x7 mean of d^2) and level
+        // (7x7 mean of base). One thread per sample.
+        const int x = 4 * int(gl_GlobalInvocationID.x) + 3, y = 4 * int(gl_WorkGroupID.y) + 3;
+        if (x >= int(pc.ow) - 3 || y >= int(pc.oh) - 3) return;
+        float e = 0.0, l = 0.0;
+        for (int j = -3; j <= 3; ++j)
+            for (int i = -3; i <= 3; ++i) {
+                const ivec2 p = ivec2(x + i, y + j);
+                const float dv = imageLoad(dR, p).x;
+                e += dv * dv;
+                l += fromCode(imageLoad(baseR, p).x, 2 * (p.y & 1) + (p.x & 1));
+            }
+        e *= 1.0 / 49.0;
+        l *= 1.0 / 49.0;
+        const int bin = clamp(int(floor((log2(max(e, 1e-30)) - LOG2_MIN) / BIN_W)), 0, BINS - 1);
+        atomicAdd(hist.counts[bandOf(l) * BINS + bin], 1u);
+    }
+#elif BIN_PASS == 2
+    {
+        // 30th percentile per band (one thread: 26 x 128 counts); bands with too few samples
+        // interpolate between the nearest valid bands' floors.
+        if (lid != 0u) return;
+        float f[BANDS];
+        for (int b = 0; b < BANDS; ++b) {
+            uint total = 0u;
+            for (int i = 0; i < BINS; ++i) total += hist.counts[b * BINS + i];
+            f[b] = -1.0;
+            if (total < 200u) continue;
+            const uint target = (total * 3u) / 10u;
+            uint acc = 0u;
+            for (int i = 0; i < BINS; ++i) {
+                acc += hist.counts[b * BINS + i];
+                if (acc > target) {
+                    f[b] = exp2(LOG2_MIN + (float(i) + 0.5) * BIN_W);
+                    break;
+                }
+            }
+        }
+        for (int b = 0; b < BANDS; ++b) {
+            float v = f[b];
+            if (v < 0.0) {
+                int lo = b - 1, hi = b + 1;
+                while (lo >= 0 && f[lo] < 0.0) --lo;
+                while (hi < BANDS && f[hi] < 0.0) ++hi;
+                v = 1.0;  // no valid band at all: nothing counts as detail
+                if (lo >= 0 && hi < BANDS) v = mix(f[lo], f[hi], float(b - lo) / float(hi - lo));
+                else if (lo >= 0) v = f[lo];
+                else if (hi < BANDS) v = f[hi];
+            }
+            floors.floorE[b] = v;
+        }
+    }
+#else
+    {
+        // 16 x 16 outputs. d and level over 34 x 34 (halo 9 = box 3 + smoothing 6), detail
+        // energy and the raw switch over 28 x 28, Gaussian (sigma 2, radius 6) both ways.
+        const int X0 = int(gl_WorkGroupID.x) * 16, Y0 = int(gl_WorkGroupID.y) * 16, T = 34, U = 28;
+        const ivec2 hi = ivec2(int(pc.ow) - 1, int(pc.oh) - 1);
+        for (uint i = lid; i < uint(T * T); i += 256u) {
+            const ivec2 p = clamp(ivec2(X0 - 9 + int(i) % T, Y0 - 9 + int(i) / T), ivec2(0), hi);
+            sd[i] = imageLoad(dR, p).x;
+            sl[i] = fromCode(imageLoad(baseR, p).x, 2 * (p.y & 1) + (p.x & 1));
+        }
+        barrier();
+        // Horizontal 7-box of d^2 and level over 34 rows x 28 columns, in registers then back.
+        float hd[4], hl[4];
+        for (int n = 0; n < 4; ++n) {
+            const int i = int(lid) + 256 * n;
+            hd[n] = 0.0;
+            hl[n] = 0.0;
+            if (i >= T * U) continue;
+            const int r = i / U, c = i % U;
+            for (int k = 0; k < 7; ++k) {
+                const float v = sd[r * T + c + k];
+                hd[n] += v * v;
+                hl[n] += sl[r * T + c + k];
+            }
+        }
+        barrier();
+        for (int n = 0; n < 4; ++n) {
+            const int i = int(lid) + 256 * n;
+            if (i >= T * U) continue;
+            sd[i] = hd[n];  // now laid out as 34 rows x 28
+            sl[i] = hl[n];
+        }
+        barrier();
+        // Vertical 7-box -> energy and level over 28 x 28, then the raw switch.
+        for (uint i = lid; i < uint(U * U); i += 256u) {
+            const int r = int(i) / U, c = int(i) % U;
+            float e = 0.0, l = 0.0;
+            for (int k = 0; k < 7; ++k) {
+                e += sd[(r + k) * U + c];
+                l += sl[(r + k) * U + c];
+            }
+            e *= 1.0 / 49.0;
+            l *= 1.0 / 49.0;
+            float s = clamp((e / floors.floorE[bandOf(l)] - RAMP_LO) / (RAMP_HI - RAMP_LO), 0.0, 1.0);
+            se[i] = s * s * (3.0 - 2.0 * s);
+        }
+        barrier();
+        const float gk[13] = float[13](0.00222, 0.00877, 0.02702, 0.06482, 0.12111, 0.17621, 0.19967, 0.17621, 0.12111,
+                                       0.06482, 0.02702, 0.00877, 0.00222);
+        for (uint i = lid; i < uint(U * 16); i += 256u) {  // 28 rows x 16 columns
+            const int r = int(i) / 16, c = int(i) % 16;
+            float v = 0.0;
+            for (int k = 0; k < 13; ++k) v += gk[k] * se[r * U + c + k];
+            sh2[i] = v;
+        }
+        barrier();
+        const int c = int(lid) % 16, r = int(lid) / 16, X = X0 + c, Y = Y0 + r;
+        if (X >= int(pc.ow) || Y >= int(pc.oh)) return;
+        float s = 0.0;
+        for (int k = 0; k < 13; ++k) s += gk[k] * sh2[(r + k) * 16 + c];
+        const int site = 2 * (Y & 1) + (X & 1);
+        const float base = fromCode(imageLoad(baseR, ivec2(X, Y)).x, site);
+        imageStore(outW, ivec2(X, Y), uvec4(toCode(base + s * imageLoad(dR, ivec2(X, Y)).x, site)));
+    }
+#endif
+}

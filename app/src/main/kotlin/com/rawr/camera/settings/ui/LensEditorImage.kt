@@ -247,19 +247,20 @@ internal fun SensorLayoutGroup(
                 onSelect = { onChange(layout.copy(liveRemosaic = it)) }
             )
         }
-        if (hasPhotoStream && editPhotoCfa && layout.photoBlock == 4) {
+        if (hasPhotoStream && editPhotoCfa && (layout.photoBlock == 4 || layout.photoBlock == 1)) {
             SettingDivider()
             DropdownChoiceRow(
                 title = "Photo output",
                 selected = layout.photoOutput,
                 values = PHOTO_OUTPUTS,
                 label = ::photoOutputLabel,
-                supportingText = "Reduced turns each 4×4 photo frame into a quarter-size Bayer frame (200 MP to 50 MP) " +
-                    "before it is stored and merged: much faster merges, smaller files.",
+                supportingText = "Reduced turns each photo frame into a smaller Bayer frame (200 MP to 50 MP, or 25 MP) " +
+                    "before it is stored and merged: much faster merges, smaller files, JPEG available. " +
+                    (if (layout.photoBlock == 4) "4×4 frames are summed in 2×2 blocks." else "Bayer frames are binned with grid-free, anti-aliased weights, sharpened on detail."),
                 testTag = lensEditorTag("photo_output"),
-                onSelect = { onChange(layout.copy(photoOutput = it, photoPhaseFit = layout.photoPhaseFit && it == "reduced")) }
+                onSelect = { onChange(layout.copy(photoOutput = it, photoPhaseFit = layout.photoPhaseFit && it != "full")) }
             )
-            if (layout.photoOutput == "reduced") {
+            if (layout.photoBlock == 4 && layout.photoOutput != "full") {
                 SettingDivider()
                 SettingsSwitchRow(
                     title = "Correct per-position response",
@@ -286,7 +287,11 @@ internal fun SensorLayoutGroup(
     }
 }
 
-internal fun photoOutputLabel(output: String): String = if (output == "reduced") "Reduced (50 MP)" else "Full"
+internal fun photoOutputLabel(output: String): String = when (output) {
+    "reduced" -> "Reduced (50 MP)"
+    "reduced25" -> "Reduced (25 MP)"
+    else -> "Full"
+}
 
 internal fun remosaicQualityLabel(quality: String): String = when (quality) {
     "fast" -> "Fast"

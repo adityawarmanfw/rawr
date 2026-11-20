@@ -29,6 +29,7 @@ inline void keepBinnedCorner(imaging::RawSnapshot& frame) {
     auto cropped = std::make_shared<metadata::CameraContextMetadata>(*context);
     if (base) cropped->cfaBlock = base->cfaBlock;
     cropped->photoReduced = false;
+    cropped->photoReduced25 = false;
     cropped->photoPhaseFit = false;
     cropped->geometry.rawBufferWidth = width;
     cropped->geometry.rawBufferHeight = height;

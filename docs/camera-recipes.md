@@ -138,14 +138,19 @@ HAL switch to full size, then the viewfinder stream stops for the photos); other
 (rational model on its own frame size), `mirror`, `dcp` (camera profile file) and `exposure` (requests
 beyond the advertised ISO and shutter ranges).
 
-`photoOutput` (`full`, default, or `reduced`) applies to a 4×4 photo stream (`photoBlock` 4): `reduced` turns each
-photo frame into a quarter-size Bayer frame (200 MP to 50 MP: exact 2×2 same-colour sums, then a quad remosaic)
-before it is stored or merged. `photoPhaseFit` (default false, reduced output only) first fits the sensor's per-position
-response from the frame and divides it out. Reduction and Detail remosaic run on the GPU; two fenced upload
-slots overlap CPU uploads with GPU conversion during bursts. The existing recovery journal stores the reduced
-Bayer frames (including a 50 MP readback), and the strip merge subsequently loads those frames. Black/white
-levels use quarter-DN units (×4); sensor noise profiles and hot-pixel lists are omitted after this spatial
-reconstruction because they no longer describe the stored pixels. HAL binned-corner fallback frames are not reduced.
+`photoOutput` (`full`, default, `reduced` or `reduced25`) applies to a Bayer or 4×4 photo stream (`photoBlock` 1
+or 4) and reduces each photo frame before it is stored or merged, so singles and merges run at the smaller size
+and JPEG stays available. `reduced` gives a quarter-size Bayer frame (200 MP to 50 MP): a 4×4 stream takes exact
+2×2 same-colour sums then a quad remosaic, a Bayer stream a linear 2× Bayer bin (12×12 weights fitted to an
+anti-aliased downscale with the sensor's grid frequencies nulled, plus sharper weights blended in only on detail). `reduced25` then resamples that result to half its pixels (25 MP; each CFA site from its
+own colour plane, Catmull-Rom clamped to the nearest same-colour samples), sides rounded down to a multiple of 8.
+`photoPhaseFit` (default false, 4×4 reduced output only) first fits the sensor's per-position response from the
+frame and divides it out. Everything runs on the GPU; two fenced upload slots overlap CPU uploads with GPU
+conversion during bursts. The recovery journal stores the reduced Bayer frames. Black/white levels use
+quarter-DN units (×4). The sensor noise profile is kept and scaled for the reduction (its ×4 levels already
+account for a sum of four; the Bayer bin's factor is computed per CFA site from its weights and the frame's white
+balance, the 25 MP resample keeps 0.40 of its input); hot-pixel
+lists are dropped. HAL binned-corner fallback frames are not reduced.
 
 `sensorLayout.block` describes the viewfinder RAW (1 = Bayer, 2 = quad, 4 = 4x4).
 `photoBlock` independently describes the separate `streams.photo` output and defaults to 1.

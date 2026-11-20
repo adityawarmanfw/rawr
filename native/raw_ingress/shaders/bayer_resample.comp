@@ -1,0 +1,76 @@
+#version 450
+// Non-integer Bayer downscale (50 MP -> 25 MP after the natural bin), the GPU
+// form of the DNG converter's BayerResample (app convert/BayerResample.h).
+// Each output site is resampled from the input samples of its own 2x2 phase
+// at the exact source position of the output pixel centre, with Catmull-Rom
+// widened by the scale, then clamped to the nearest same-site samples (within
+// one plane pitch) so the negative lobes cannot ring. Codes keep their scale.
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0, r16ui) uniform readonly uimage2D src;
+layout(binding = 1, r16ui) uniform writeonly uimage2D dst;
+
+layout(push_constant) uniform PC {
+    uint iw, ih, ow, oh;
+    float sx, sy;  // input / output per axis
+    int rx, ry;    // kernel radius in plane samples, ceil(2 * max(1, scale)) + 1
+    float maxCode;
+} pc;
+
+const int kMaxTaps = 12;
+
+float cubic(float x) {  // Catmull-Rom (B = 0, C = 0.5)
+    x = abs(x);
+    if (x < 1.0) return 1.5 * x * x * x - 2.5 * x * x + 1.0;
+    if (x < 2.0) return -0.5 * x * x * x + 2.5 * x * x - 4.0 * x + 2.0;
+    return 0.0;
+}
+
+// Same-phase taps around source coordinate p: indices, normalized weights.
+int taps(float p, int phase, int size, float scale, int radius, out int index[kMaxTaps], out float weight[kMaxTaps]) {
+    const float width = max(1.0, scale);
+    int start = int(floor(p)) - 2 * radius;
+    start += (start & 1) != phase ? 1 : 0;
+    const int end = int(ceil(p)) + 2 * radius;
+    int n = 0;
+    float total = 0.0;
+    for (int i = start; i <= end && n < kMaxTaps; i += 2) {
+        const float w = cubic((float(i) - p) / 2.0 / width);
+        if (w == 0.0) continue;
+        int j = i;
+        const int last = size - 2 + phase;
+        for (int guard = 0; guard < 8 && (j < phase || j > last); ++guard) j = j < phase ? 2 * phase - j : 2 * last - j;
+        index[n] = j;
+        weight[n] = w;
+        total += w;
+        ++n;
+    }
+    for (int k = 0; k < n; ++k) weight[k] /= total;
+    return n;
+}
+
+void main() {
+    const ivec2 o = ivec2(gl_GlobalInvocationID.xy);
+    if (o.x >= int(pc.ow) || o.y >= int(pc.oh)) return;
+    const float px = (float(o.x) + 0.5) * pc.sx - 0.5, py = (float(o.y) + 0.5) * pc.sy - 0.5;
+    int xi[kMaxTaps], yi[kMaxTaps];
+    float xw[kMaxTaps], yw[kMaxTaps];
+    const int nx = taps(px, o.x & 1, int(pc.iw), pc.sx, pc.rx, xi, xw);
+    const int ny = taps(py, o.y & 1, int(pc.ih), pc.sy, pc.ry, yi, yw);
+    float sum = 0.0, lo = 1e30, hi = -1e30;
+    for (int r = 0; r < ny; ++r) {
+        float line = 0.0;
+        const bool nearY = abs(float(yi[r]) - py) < 2.0;
+        for (int c = 0; c < nx; ++c) {
+            const float v = float(imageLoad(src, ivec2(xi[c], yi[r])).x);
+            line += xw[c] * v;
+            if (nearY && abs(float(xi[c]) - px) < 2.0) {
+                lo = min(lo, v);
+                hi = max(hi, v);
+            }
+        }
+        sum += yw[r] * line;
+    }
+    if (lo <= hi) sum = clamp(sum, lo, hi);
+    imageStore(dst, o, uvec4(uint(clamp(sum, 0.0, pc.maxCode) + 0.5)));
+}

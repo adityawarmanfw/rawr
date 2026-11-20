@@ -31,7 +31,7 @@ void SingleFrameCaptureAcquisition::remosaic(imaging::RawSnapshot& frame) {
         return;
     }
     try {
-        ReducedRaw reducer(vk_, frame.width, frame.height, 1);
+        ReducedRaw reducer(vk_, *frame.metadata.cameraContext, frame.width, frame.height, 1);
         reducer.submit(0, frame.raw16, frame.metadata);
         reducer.collect(0, frame.raw16);
     } catch (const std::exception& e) {
@@ -39,14 +39,15 @@ void SingleFrameCaptureAcquisition::remosaic(imaging::RawSnapshot& frame) {
         emit("REDUCED_RAW_FALLBACK full_size requestId=" + std::to_string(frame.requestId) + " error=" + e.what());
         auto context = std::make_shared<metadata::CameraContextMetadata>(*frame.metadata.cameraContext);
         context->photoReduced = false;
+        context->photoReduced25 = false;
         context->photoPhaseFit = false;
         frame.metadata.cameraContext = std::move(context);
         remosaicBlockCfaStill(frame);
         return;
     }
     applyReducedRawMetadata(frame.metadata);
-    frame.width /= 2;
-    frame.height /= 2;
+    frame.width = frame.metadata.cameraContext->geometry.rawBufferWidth;
+    frame.height = frame.metadata.cameraContext->geometry.rawBufferHeight;
     frame.packedRowStrideBytes = frame.width * 2;
     emit("STILL_REDUCED_GPU requestId=" + std::to_string(frame.requestId) + " raw=" +
          std::to_string(frame.width) + "x" + std::to_string(frame.height));
