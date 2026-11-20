@@ -1,10 +1,12 @@
 // Rexture moving-texture restore (rx_moving.comp), its five steps as RextureRecorder::recordMovingRestore runs them, on a
 // synthetic scene: truth = fine texture everywhere, base frame = its mosaic, merge = the truth softened. Companion statistics:
 //  - left part (x < 224): most covering companions rejected (0.9), merge partly blended (m 0.3): a broad moving area.
-//    Its top rows (y < 64): m 1, one frame (nothing blended);
+//    Its top rows (y < 64): m 1, one frame (nothing blended). Rows 64 to 127 are a flat wall whose base frame holds only noise
+//    (the single-frame noise model, about 3.5 % of the level: a high-ISO capture), with the merge clean;
 //  - right part: companions accepted (rejected share 0.1), except a 16 x 16 px island rejected like the left part.
-// Expected: the broad moving area moves towards the truth (base detail back); static areas, the island and the one-frame
-// rows keep the merge exactly; colour differences after white balance never change.
+// Expected: the broad moving area moves towards the truth (base detail back); static areas, the island, the one-frame
+// rows and the flat noisy wall keep the merge (the base frame's noise is not detail); colour differences after white
+// balance never change.
 #include <rawr/raw_gpu_pipeline/VulkanExecutor.h>
 
 #include <algorithm>
@@ -101,7 +103,9 @@ constexpr float kBlack = 64.0f, kWhite = 1023.0f;
 constexpr float kWb[3] = {2.2f, 1.0f, 1.6f};
 bool isGreen(uint32_t x, uint32_t y) { return ((x + y) & 1u) == 1u; }   // RGGB
 int channel(uint32_t x, uint32_t y) { return isGreen(x, y) ? 1 : ((y & 1u) == 0u ? 0 : 2); }
-struct Pc { float black[4]; float white; int32_t w, h, cfa, op; float iwb[3]; };
+struct Pc { float black[4]; float white; int32_t w, h, cfa, op; float iwb[3]; float alpha, beta; };
+constexpr float kAlpha = 3e-4f, kBeta = 1e-7f;   // single-frame noise variance alpha * level + beta (normalised raw)
+bool flatWall(uint32_t x, uint32_t y) { return x < 224 && y >= 64 && y < 128; }
 }  // namespace
 
 int main() {
@@ -113,7 +117,7 @@ int main() {
         std::vector<float> t(size_t(W) * H), z(size_t(W) * H);
         for (uint32_t y = 0; y < H; ++y)
             for (uint32_t x = 0; x < W; ++x)
-                t[size_t(y) * W + x] = 0.25f + 0.05f * std::sin(6.2831853f * float(x) / 5.0f) * std::sin(6.2831853f * float(y) / 7.0f + 0.4f);
+                t[size_t(y) * W + x] = flatWall(x, y) ? 0.25f : 0.25f + 0.05f * std::sin(6.2831853f * float(x) / 5.0f) * std::sin(6.2831853f * float(y) / 7.0f + 0.4f);
         const auto tz = [&](int x, int y) { return t[size_t(std::clamp(y, 0, int(H) - 1)) * W + size_t(std::clamp(x, 0, int(W) - 1))]; };
         for (uint32_t y = 0; y < H; ++y)
             for (uint32_t x = 0; x < W; ++x) {
@@ -125,10 +129,18 @@ int main() {
         const uint32_t gw = W / 2, gh = H / 2, mw = W / 4, mh = H / 4, cw = (W + 7) / 8, ch = (H + 7) / 8;
         std::vector<uint16_t> raw(size_t(W) * H), out(size_t(W) * H * 4), mot(size_t(gw) * gh * 2);
         std::vector<float> m(size_t(mw) * mh);
+        uint64_t rng = 0x9e3779b97f4a7c15ull;
+        const auto gauss = [&rng]() {   // deterministic standard normal (LCG + Box-Muller)
+            const auto u = [&rng]() { rng = rng * 6364136223846793005ull + 1442695040888963407ull; return (float((rng >> 40) & 0xffffffull) + 0.5f) / 16777216.0f; };
+            const float a = u(), b = u();
+            return std::sqrt(-2.0f * std::log(a)) * std::cos(6.2831853f * b);
+        };
         for (uint32_t y = 0; y < H; ++y)
             for (uint32_t x = 0; x < W; ++x) {
                 const size_t i = size_t(y) * W + x;
-                raw[i] = uint16_t(std::lround(kBlack + t[i] / kWb[channel(x, y)] * (kWhite - kBlack)));
+                float v = t[i] / kWb[channel(x, y)];
+                if (flatWall(x, y)) v += std::sqrt(kAlpha * v + kBeta) * gauss();
+                raw[i] = uint16_t(std::lround(kBlack + v * (kWhite - kBlack)));
                 for (int k = 0; k < 3; ++k) out[i * 4 + size_t(k)] = toHalf(z[i] / kWb[k]);
                 out[i * 4 + 3] = toHalf(1.0f);
             }
@@ -185,6 +197,8 @@ int main() {
             p.h = int32_t(H);
             p.cfa = 0;
             for (int i = 0; i < 3; ++i) p.iwb[i] = 1.0f / kWb[i];
+            p.alpha = kAlpha;
+            p.beta = kBeta;
             for (int32_t op = 0; op < 5; ++op) {
                 p.op = op;
                 const uint32_t ww = op < 3 ? cw : W, hh = op < 3 ? ch : H;
@@ -207,7 +221,7 @@ int main() {
         vktest::delBuf(c.dev, down);
         for (auto* im : all) vktest::delImg(c.dev, *im);
         double eMerge = 0, eOut = 0;
-        float staticChange = 0, oneFrameChange = 0, chroma = 0;
+        float staticChange = 0, oneFrameChange = 0, wallChange = 0, chroma = 0;
         for (uint32_t y = 0; y < H; ++y)
             for (uint32_t x = 0; x < W; ++x) {
                 const size_t i = size_t(y) * W + x;
@@ -216,17 +230,19 @@ int main() {
                 chroma = std::max({chroma, std::fabs((o[0] * kWb[0] - o[1]) - (a[0] * kWb[0] - a[1])), std::fabs((o[2] * kWb[2] - o[1]) - (a[2] * kWb[2] - a[1]))});
                 if (x >= 352) staticChange = std::max(staticChange, std::fabs(o[1] - a[1]));   // static part, the island included
                 if (y < 24 && x < 192) oneFrameChange = std::max(oneFrameChange, std::fabs(o[1] - a[1]));
+                if (x >= 24 && x < 200 && y >= 72 && y < 108) wallChange = std::max(wallChange, std::fabs(o[1] - a[1]));   // away from the textured rows
                 if (x >= 24 && x < 160 && y >= 128 && y < H - 24) {   // inside the broad moving area
                     eMerge += (a[1] - t[i]) * (a[1] - t[i]);
                     eOut += (o[1] - t[i]) * (o[1] - t[i]);
                 }
             }
         eMerge = std::sqrt(eMerge), eOut = std::sqrt(eOut);
-        std::printf("moving area: green rms error vs truth merge %.4f -> restored %.4f | static change %.1e | one-frame change %.1e | chroma change %.1e\n",
-                    eMerge, eOut, staticChange, oneFrameChange, chroma);
+        std::printf("moving area: green rms error vs truth merge %.4f -> restored %.4f | static change %.1e | one-frame change %.1e | noisy flat wall change %.1e | chroma change %.1e\n",
+                    eMerge, eOut, staticChange, oneFrameChange, wallChange, chroma);
         if (!(eOut < 0.5 * eMerge)) throw std::runtime_error("the broad moving area does not get the base detail back");
         if (!(staticChange == 0.0f)) throw std::runtime_error("a static area (or a small rejected island) changes");
         if (!(oneFrameChange == 0.0f)) throw std::runtime_error("a one-frame area changes");
+        if (!(wallChange < 1e-3f)) throw std::runtime_error("a flat moving area gets the base frame's noise");
         if (!(chroma < 2e-3f)) throw std::runtime_error("colour differences change");
         std::puts("rexture_moving_vulkan_test passed");
         return 0;

@@ -68,7 +68,7 @@ set(RAWR_MF_SHADER_SOURCES
   ${RAWR_MF_DIR}/merge_rexture/shaders/rx_rcd_diagonal.comp
   ${RAWR_MF_DIR}/merge_rexture/shaders/rx_rcd_green_sites.comp
   ${RAWR_MF_DIR}/merge_rexture/shaders/rx_rcd_export.comp
-  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_lowcov_eaw.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_even.comp
   ${RAWR_MF_DIR}/merge_rexture/shaders/rx_fb_flags.comp
   ${RAWR_MF_DIR}/merge_rexture/shaders/rx_fit.comp
   ${RAWR_MF_DIR}/merge_rexture/shaders/rx_moving.comp)
@@ -162,5 +162,9 @@ if(RAW_GPU_PIPELINE_BUILD_TESTS)
   target_include_directories(rexture_moving_vulkan_test PRIVATE ${RAWR_NATIVE_DIR}/vk_common/testing)
   target_link_libraries(rexture_moving_vulkan_test PRIVATE raw_gpu_pipeline)
   add_test(NAME rexture_moving_vulkan_test COMMAND rexture_moving_vulkan_test)
+  add_executable(rexture_even_vulkan_test tests/rexture_even_vulkan_test.cpp)
+  target_include_directories(rexture_even_vulkan_test PRIVATE ${RAWR_NATIVE_DIR}/vk_common/testing)
+  target_link_libraries(rexture_even_vulkan_test PRIVATE raw_gpu_pipeline)
+  add_test(NAME rexture_even_vulkan_test COMMAND rexture_even_vulkan_test)
   add_test(NAME rexture_fit_vulkan_test COMMAND rexture_fit_vulkan_test)
 endif()

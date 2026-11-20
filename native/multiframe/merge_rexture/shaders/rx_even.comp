@@ -1,0 +1,234 @@
+#version 450
+#extension GL_GOOGLE_include_directive : enable
+// Rexture grain evening (after the final pass, in place on linear_output). Where the merge kept fewer frames than its
+// surroundings (around and inside moving subjects) its grain is lowered towards the surroundings' level, scale by scale,
+// while detail that stands above the noise is kept: a decimated Laplacian pyramid (B3 5-tap down, 2-tap / 3-tap up),
+// luma G and colour R - G, B - G, bands l = 0 .. 5 (about 1 .. 32 px). Per band l, on the grid of level l + 1:
+//   A = mean of w^2 over the 2 x 2 band coefficients of a level l + 1 pixel, E = 5 x 5 B3 mean of A (local energy)
+//   n = C_b (alpha G_{l+1} + beta) m   noise energy of the band (C_b: noise energy of band b per unit pixel variance,
+//                                      measured on bursts from several sensors), m: the output's noise variance
+//                                      relative to one frame (rx_lc_m, 4 x 4 px cells)
+//   S = max(E - n, 0)                  energy above noise (detail)
+//   a = sqrt((S + (T / m) n) / (S + n))  the noise part scaled to the target T, the detail part kept
+//   T = min(m, TARGET, TOL m_ref), colour TARGET_C: m_ref is the clean neighbours' level (cell m, min over ~264 px,
+//       smoothed); within TOL of it nothing changes (merged areas are left as they are)
+// a is smoothed (5 x 5 B3: neighbouring coefficients get the same decision, no isolated kept specks in an evened area),
+// floored at GMIN (faint texture in a few-frame area stays visible) and applied bilinearly to the band. Luma band 5 is
+// kept. Scratch: rx_acc_a holds G_1 .. G_6 (row 0) and the rebuilt R_1 .. R_5 (row rrow) side by side; rx_acc_c holds A_l
+// (row 0) and the gains a_l (row rrow), each at the size of level l + 1, in the same columns.
+//   op 0: m_ref cells (1/8 res) = mean of 2 x 2 m cells -> refA      op 1 / 2: min over +-16 cells, x / y (A -> B -> A)
+//   op 3 / 4: gaussian sigma 8 cells, x / y (A -> B -> A)
+//   op 5: level = l: G_l = down(G_{l-1}) and A_{l-1}  (16 x 8 outputs per workgroup)
+//   op 6: level = l: gains a_l on the grid of level l + 1
+//   op 7: level = l: R_l = up(R_{l+1}) + a_l w_l (R_6 = G_6); l = 0 writes linear_output in place (reads its own pixel)
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0, rgba16f) uniform image2D outI;    // linear_output = G_0
+layout(set = 0, binding = 1, rgba16f) uniform image2D atlasI;  // G_1 .. G_6 at row 0, R_1 .. R_5 at row rrow
+layout(set = 0, binding = 2, rgba16f) uniform image2D gainI;   // A_0 .. A_5 at row 0, a_0 .. a_5 at row rrow
+layout(set = 0, binding = 3, r32f) readonly uniform image2D mI;
+layout(set = 0, binding = 4, r16f) uniform image2D refA;
+layout(set = 0, binding = 5, r16f) uniform image2D refB;
+layout(push_constant) uniform P {
+    int op, level, w, h;
+    float alpha, beta;
+    int rrow;
+    int ox[7];            // atlas column of level 1 .. 6 (index = level)
+} p;
+
+const int NB = 6;   // bands 0 .. 5, pyramid top G_6
+const float TARGET = 0.25, TARGET_C = 0.08, TOL = 1.25, GMIN = 0.3;
+const float C_L[NB] = float[NB](0.59, 0.061, 0.014, 0.0036, 0.0009, 0.0);
+const float C_RG[NB] = float[NB](0.96, 0.11, 0.037, 0.0105, 0.0027, 0.0006);
+const float C_BG[NB] = float[NB](1.09, 0.116, 0.042, 0.012, 0.0032, 0.0008);
+const float B3[5] = float[5](1.0 / 16.0, 4.0 / 16.0, 6.0 / 16.0, 4.0 / 16.0, 1.0 / 16.0);
+const int REF_R = 16, GAUSS_R = 24;
+const float GAUSS_S = 8.0;
+
+ivec2 lvlSize(int l) { return ivec2((p.w + (1 << l) - 1) >> l, (p.h + (1 << l) - 1) >> l); }
+vec3 G(int l, ivec2 q) { return l == 0 ? imageLoad(outI, q).rgb : imageLoad(atlasI, ivec2(p.ox[l], 0) + q).rgb; }
+vec3 R(int l, ivec2 q) { return l == NB ? G(NB, q) : imageLoad(atlasI, ivec2(p.ox[l], p.rrow) + q).rgb; }
+vec3 toLC(vec3 c) { return vec3(c.g, c.r - c.g, c.b - c.g); }
+vec3 fromLC(vec3 v) { return vec3(v.y + v.x, v.x, v.z + v.x); }
+
+// shared tiles as packed half floats (rgb in a uvec2): a smaller footprint keeps more workgroups resident on mobile GPUs
+shared uvec2 sT[960];
+shared uvec2 sU[400];
+uvec2 pk(vec3 v) { return uvec2(packHalf2x16(v.xy), packHalf2x16(vec2(v.z, 0.0))); }
+vec3 uk(uvec2 u) { return vec3(unpackHalf2x16(u.x), unpackHalf2x16(u.y).x); }
+shared float sM[256], sR[256];
+
+// up-sampling weights of fine index f from coarse indices (f >> 1) - 1 + k, k = 0 .. 2: even f (1, 6, 1) / 8, odd (0, 4, 4) / 8
+vec3 upW(int f) { return (f & 1) == 0 ? vec3(0.125, 0.75, 0.125) : vec3(0.0, 0.5, 0.5); }
+// expansion of a shared coarse tile (vec4 array sT at base, row length tn, first coarse index c0) at fine position f
+vec3 upT(int base, int tn, ivec2 c0, ivec2 f) {
+    const vec3 wx = upW(f.x), wy = upW(f.y);
+    const ivec2 t = (f >> 1) - 1 - c0;
+    vec3 s = vec3(0.0);
+    for (int j = 0; j < 3; ++j) {
+        const int r = base + (t.y + j) * tn + t.x;
+        s += wy[j] * (wx[0] * uk(sT[r]) + wx[1] * uk(sT[r + 1]) + wx[2] * uk(sT[r + 2]));
+    }
+    return s;
+}
+vec3 upU(int tn, ivec2 c0, ivec2 f) {   // the same from sU at offset 0
+    const vec3 wx = upW(f.x), wy = upW(f.y);
+    const ivec2 t = (f >> 1) - 1 - c0;
+    vec3 s = vec3(0.0);
+    for (int j = 0; j < 3; ++j) {
+        const int r = (t.y + j) * tn + t.x;
+        s += wy[j] * (wx[0] * uk(sU[r]) + wx[1] * uk(sU[r + 1]) + wx[2] * uk(sU[r + 2]));
+    }
+    return s;
+}
+float cellLoad(bool ref, ivec2 c) {
+    return ref ? imageLoad(refA, clamp(c, ivec2(0), imageSize(refA) - 1)).x : imageLoad(mI, clamp(c, ivec2(0), imageSize(mI) - 1)).x;
+}
+// bilinear on the m grid (4 px cells) or the m_ref grid (8 px) at a full-resolution position; from the shared tiles
+// (first cells m0 / r0) when tiled
+float cellAt(vec2 fpos, bool ref, bool tiled, ivec2 m0, ivec2 r0) {
+    const vec2 u = fpos / (ref ? 8.0 : 4.0) - 0.5, b = floor(u), f = u - b;
+    const ivec2 lo = ivec2(b);
+    vec4 v;
+    if (tiled) {
+        const ivec2 a = clamp(lo - (ref ? r0 : m0), ivec2(0), ivec2(14));
+        const int i = a.y * 16 + a.x;
+        v = ref ? vec4(sR[i], sR[i + 1], sR[i + 16], sR[i + 17]) : vec4(sM[i], sM[i + 1], sM[i + 16], sM[i + 17]);
+    } else {
+        v = vec4(cellLoad(ref, lo), cellLoad(ref, lo + ivec2(1, 0)), cellLoad(ref, lo + ivec2(0, 1)), cellLoad(ref, lo + 1));
+    }
+    return mix(mix(v.x, v.y, f.x), mix(v.z, v.w, f.x), f.y);
+}
+
+void main() {
+    const ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    const int tid = int(gl_LocalInvocationIndex);
+    const ivec2 lid = ivec2(gl_LocalInvocationID.xy);
+    if (p.op <= 4) {   // m_ref grid (1/8 resolution)
+        const ivec2 n = imageSize(refA);
+        if (q.x >= n.x || q.y >= n.y) return;
+        if (p.op == 0) {
+            const ivec2 mn = imageSize(mI);
+            float s = 0.0;
+            for (int j = 0; j < 2; ++j)
+                for (int i = 0; i < 2; ++i) s += imageLoad(mI, min(2 * q + ivec2(i, j), mn - 1)).x;
+            imageStore(refA, q, vec4(0.25 * s));
+            return;
+        }
+        const ivec2 d = (p.op == 1 || p.op == 3) ? ivec2(1, 0) : ivec2(0, 1);
+        const bool fromA = p.op == 1 || p.op == 3;
+        float v;
+        if (p.op <= 2) {
+            v = 1e30;
+            for (int k = -REF_R; k <= REF_R; ++k) {
+                const ivec2 t = clamp(q + k * d, ivec2(0), n - 1);
+                v = min(v, fromA ? imageLoad(refA, t).x : imageLoad(refB, t).x);
+            }
+        } else {
+            float s = 0.0, ws = 0.0;
+            for (int k = -GAUSS_R; k <= GAUSS_R; ++k) {
+                const ivec2 t = clamp(q + k * d, ivec2(0), n - 1);
+                const float wk = exp(-0.5 * float(k * k) / (GAUSS_S * GAUSS_S));
+                s += wk * (fromA ? imageLoad(refA, t).x : imageLoad(refB, t).x);
+                ws += wk;
+            }
+            v = s / ws;
+        }
+        if (fromA) imageStore(refB, q, vec4(v));
+        else imageStore(refA, q, vec4(v));
+        return;
+    }
+    const int l = p.level;
+    if (p.op == 5) {   // G_l = down(G_{l-1}) and A_{l-1}; 16 x 8 outputs per workgroup
+        const ivec2 n = lvlSize(l), nf = lvlSize(l - 1);
+        const ivec2 wo = ivec2(gl_WorkGroupID.x * 16, gl_WorkGroupID.y * 8);
+        const ivec2 f0 = 2 * wo - 4;                       // fine tile 40 x 24
+        for (int i = tid; i < 960; i += 256) sT[i] = pk(G(l - 1, clamp(f0 + ivec2(i % 40, i / 40), ivec2(0), nf - 1)));
+        barrier();
+        for (int i = tid; i < 180; i += 256) {             // G_l on [wo - 1, wo + 17) x [wo.y - 1, wo.y + 9) (clamped)
+            const ivec2 c = clamp(wo - 1 + ivec2(i % 18, i / 18), ivec2(0), n - 1);
+            const ivec2 t = 2 * c - 2 - f0;
+            vec3 s = vec3(0.0);
+            for (int j = 0; j < 5; ++j) {
+                const int r = (t.y + j) * 40 + t.x;
+                s += B3[j] * (B3[0] * uk(sT[r]) + B3[1] * uk(sT[r + 1]) + B3[2] * uk(sT[r + 2]) + B3[3] * uk(sT[r + 3]) + B3[4] * uk(sT[r + 4]));
+            }
+            sU[i] = pk(s);
+        }
+        barrier();
+        if (tid >= 128) return;
+        const ivec2 c = wo + ivec2(tid % 16, tid / 16);
+        if (c.x >= n.x || c.y >= n.y) return;
+        imageStore(atlasI, ivec2(p.ox[l], 0) + c, vec4(uk(sU[(c.y - wo.y + 1) * 18 + c.x - wo.x + 1]), 1.0));
+        vec3 a = vec3(0.0);
+        for (int j = 0; j < 2; ++j)
+            for (int i = 0; i < 2; ++i) {
+                const ivec2 f = min(2 * c + ivec2(i, j), nf - 1);
+                const vec3 wv = toLC(uk(sT[(f.y - f0.y) * 40 + f.x - f0.x]) - upU(18, wo - 1, f));
+                a += wv * wv;
+            }
+        imageStore(gainI, ivec2(p.ox[l], 0) + c, vec4(0.25 * a, 1.0));
+        return;
+    }
+    const ivec2 wo = ivec2(gl_WorkGroupID.xy) * 16;
+    if (p.op == 6) {   // gains a_l on the grid of level l + 1
+        const int lc = l + 1;
+        const ivec2 n = lvlSize(lc);
+        for (int i = tid; i < 576; i += 256)              // A_l on [wo - 4, wo + 20)
+            sT[i] = pk(imageLoad(gainI, ivec2(p.ox[lc], 0) + clamp(wo - 4 + ivec2(i % 24, i / 24), ivec2(0), n - 1)).rgb);
+        const bool tiled = lc == 1;
+        const ivec2 m0 = ((wo - 2) * 2 >> 2) - 1, r0 = ((wo - 2) * 2 >> 3) - 1;
+        if (tiled) {
+            sM[tid] = cellLoad(false, m0 + ivec2(tid % 16, tid / 16));
+            sR[tid] = cellLoad(true, r0 + ivec2(tid % 16, tid / 16));
+        }
+        barrier();
+        const float sc = float(1 << lc);
+        for (int i = tid; i < 400; i += 256) {             // gains on [wo - 2, wo + 18)
+            const ivec2 r = ivec2(i % 20, i / 20) + 2;      // position in the A tile
+            vec3 e = vec3(0.0);
+            for (int j = 0; j < 5; ++j) {
+                const int b = (r.y + j - 2) * 24 + r.x - 2;
+                e += B3[j] * (B3[0] * uk(sT[b]) + B3[1] * uk(sT[b + 1]) + B3[2] * uk(sT[b + 2]) + B3[3] * uk(sT[b + 3]) + B3[4] * uk(sT[b + 4]));
+            }
+            const ivec2 c = clamp(wo - 2 + ivec2(i % 20, i / 20), ivec2(0), n - 1);
+            const vec2 fpos = (vec2(c) + 0.5) * sc;
+            const float m = max(cellAt(fpos, false, tiled, m0, r0), 1e-4);
+            const float mref = TOL * max(cellAt(fpos, true, tiled, m0, r0), 1e-4);
+            const float s2 = p.alpha * max(G(lc, c).g, 0.0) + p.beta;
+            const vec2 gt = vec2(min(min(m, TARGET), mref), min(min(m, TARGET_C), mref)) / m;
+            const vec3 nb = vec3(C_L[l], C_RG[l], C_BG[l]) * s2 * m;
+            const vec3 S = max(e - nb, vec3(0.0));
+            vec3 a = sqrt((S + vec3(gt.x, gt.y, gt.y) * nb) / max(S + nb, vec3(1e-30)));
+            if (l == NB - 1) a.x = 1.0;
+            sU[i] = pk(a);
+        }
+        barrier();
+        if (q.x >= n.x || q.y >= n.y) return;
+        vec3 a = vec3(0.0);
+        for (int j = 0; j < 5; ++j) {
+            const int b = (lid.y + j) * 20 + lid.x;
+            a += B3[j] * (B3[0] * uk(sU[b]) + B3[1] * uk(sU[b + 1]) + B3[2] * uk(sU[b + 2]) + B3[3] * uk(sU[b + 3]) + B3[4] * uk(sU[b + 4]));
+        }
+        imageStore(gainI, ivec2(p.ox[lc], p.rrow) + q, vec4(max(a, vec3(GMIN)), 1.0));
+        return;
+    }
+    // op 7: R_l = up(R_{l+1}) + a_l w_l; coarse tiles of G_{l+1}, R_{l+1}, a_l on [wo / 2 - 1, wo / 2 + 9)
+    const ivec2 n = lvlSize(l), nc = lvlSize(l + 1), c0 = (wo >> 1) - 1;
+    for (int i = tid; i < 100; i += 256) {
+        const ivec2 c = clamp(c0 + ivec2(i % 10, i / 10), ivec2(0), nc - 1);
+        sT[i] = pk(G(l + 1, c));
+        sT[100 + i] = pk(R(l + 1, c));
+        sT[200 + i] = pk(imageLoad(gainI, ivec2(p.ox[l + 1], p.rrow) + c).rgb);
+    }
+    barrier();
+    if (q.x >= n.x || q.y >= n.y) return;
+    const vec4 x = l == 0 ? imageLoad(outI, q) : vec4(G(l, q), 1.0);
+    const vec3 w = toLC(x.rgb - upT(0, 10, c0, q));
+    const vec2 u = (vec2(q) + 0.5) * 0.5 - 0.5, b = floor(u), f = u - b;   // bilinear gain
+    const ivec2 t = ivec2(b) - c0;
+    const int g0 = 200 + t.y * 10 + t.x;
+    const vec3 a = mix(mix(uk(sT[g0]), uk(sT[g0 + 1]), f.x), mix(uk(sT[g0 + 10]), uk(sT[g0 + 11]), f.x), f.y);
+    const vec3 o = fromLC(toLC(upT(100, 10, c0, q)) + a * w);
+    if (l == 0) imageStore(outI, q, vec4(o, x.a));
+    else imageStore(atlasI, ivec2(p.ox[l], p.rrow) + q, vec4(o, 1.0));
+}

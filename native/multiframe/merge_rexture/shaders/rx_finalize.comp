@@ -10,7 +10,7 @@
 //   16 x 16 tiles rx_fb_flags flagged; in the others conf is 1 and the merged value is the output.
 //   m = the output's noise variance relative to one frame: the RCD share (1 - conf)^2 plus the merged share
 //     conf^2 / neff. It is written as the mean per 4 x 4 pixel cell (the per-site alternation of red / green / blue
-//     averages out) for rx_lowcov_eaw, which evens out the grain where few frames were merged.
+//     averages out) for rx_even, which evens out the grain where few frames were merged.
 // One workgroup = 16 x 16 pixels = 4 x 4 cells.
 #include "rx_common.glsl"
 

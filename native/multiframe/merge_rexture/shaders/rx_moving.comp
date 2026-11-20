@@ -23,6 +23,7 @@ layout(push_constant) uniform P {
     float white;
     int w, h, cfa, op;
     float iwb0, iwb1, iwb2;
+    float alpha, beta;    // single-frame noise model (normalised raw)
 } p;
 #include "rx_common.glsl"
 
@@ -31,9 +32,16 @@ const float GATE_SIGMA = 4.0;   // cells of 8 px
 const int GATE_R = 12;
 const float SIGMA_LP = 3.2;
 const int R = 10;               // low-pass reach
-const int T = 16 + 2 * R;
+// Only detail clearly above noise is put back: the energy of D - gauss(D) over the 7 x 7 neighbourhood (E_R) over what the base
+// frame's and the output's noise alone give there (single-frame variance (NOISE_B + m); NOISE_B: green sites as is, others the
+// mean of 4), smoothstep(E_LO, E_HI). Ripples on water are far above it; at high ISO a flat wall the hand swept over is not
+// (it got the base frame's grain back in patches)
+const int E_R = 3, C = 16 + 2 * E_R;
+const float NOISE_B = 0.625, E_LO = 2.0, E_HI = 4.0;
+const int RT = R + E_R, T = 16 + 2 * RT;
 shared float sD[T * T];
-shared float sH[T * 16];        // horizontal pass: T rows x 16 columns
+shared float sH[T * C];         // horizontal pass: T rows x C columns
+shared float sHP[C * C];        // D - gauss(D) of the core and its E_R margin
 shared uint sAny;
 
 float rawAt(ivec2 q) {
@@ -110,25 +118,35 @@ void main() {
     // op 3
     const ivec2 n = ivec2(p.w - 1, p.h - 1);
     for (int i = tid; i < T * T; i += 256) {
-        ivec2 t = clamp(wo - R + ivec2(i % T, i / T), ivec2(0), n);
+        ivec2 t = clamp(wo - RT + ivec2(i % T, i / T), ivec2(0), n);
         sD[i] = baseGreen(t) - imageLoad(outI, t).y;
     }
     barrier();
     float kw[R + 1];
     float ks = 0.0;
     for (int k = 0; k <= R; ++k) { kw[k] = exp(-0.5 * float(k * k) / (SIGMA_LP * SIGMA_LP)); ks += k == 0 ? kw[k] : 2.0 * kw[k]; }
-    for (int i = tid; i < T * 16; i += 256) {   // horizontal pass of the 16 output columns over all T rows
-        int row = i / 16, col = i % 16;
+    for (int i = tid; i < T * C; i += 256) {   // horizontal pass of the C columns (core + margin) over all T rows
+        int row = i / C, col = i % C;
         float s = 0.0;
         for (int k = -R; k <= R; ++k) s += kw[abs(k)] * sD[row * T + col + R + k];
         sH[i] = s / ks;
     }
     barrier();
+    for (int i = tid; i < C * C; i += 256) {   // vertical pass: D - gauss(D) on the C x C positions
+        int row = i / C, col = i % C;
+        float lp = 0.0;
+        for (int k = -R; k <= R; ++k) lp += kw[abs(k)] * sH[(row + R + k) * C + col];
+        sHP[i] = sD[(row + R) * T + col + R] - lp / ks;
+    }
+    barrier();
     if (q.x >= p.w || q.y >= p.h) return;
-    const ivec2 l = ivec2(gl_LocalInvocationID.xy);
-    float lp = 0.0;
-    for (int k = -R; k <= R; ++k) lp += kw[abs(k)] * sH[(l.y + R + k) * 16 + l.x];
-    lp /= ks;
-    const float d = sD[(l.y + R) * T + l.x + R];
-    imageStore(dI, q, vec4(gateAt(q) * (d - lp), 0.0, 0.0, 0.0));
+    const ivec2 l = ivec2(gl_LocalInvocationID.xy) + E_R;
+    float e = 0.0;
+    for (int dy = -E_R; dy <= E_R; ++dy)
+        for (int dx = -E_R; dx <= E_R; ++dx) { float v = sHP[(l.y + dy) * C + l.x + dx]; e += v * v; }
+    e /= float((2 * E_R + 1) * (2 * E_R + 1));
+    const float m = imageLoad(mI, clamp(q / 4, ivec2(0), imageSize(mI) - 1)).x;
+    const float nv = (p.alpha * max(imageLoad(outI, q).y, 0.0) + p.beta) * (NOISE_B + m);
+    const float gain = smoothstep(E_LO, E_HI, e / max(nv, 1e-20));
+    imageStore(dI, q, vec4(gateAt(q) * gain * sHP[l.y * C + l.x], 0.0, 0.0, 0.0));
 }

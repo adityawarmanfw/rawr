@@ -66,14 +66,15 @@ struct FinalPc {
 struct FlagsPc {
     std::int32_t w, h;
 };
-// rx_lowcov_eaw: op 0 / 1 / 2 / 3, image size, strip core rows [r0, r1), rows computed by this dispatch (first row y0),
-// first image row held by the two strip scratch images, the merge's single-frame noise model and the burst's frame count.
-struct LowCoveragePc {
-    std::int32_t op, w, h, r0, r1, y0, rows, a1, a2;
-    float alpha, beta, frames;
+// rx_even: op, pyramid level, image size, single-frame noise model
+struct EvenPc {
+    std::int32_t op, level, w, h;
+    float alpha, beta;
+    std::int32_t rrow;
+    std::int32_t ox[7];   // atlas column of pyramid level 1 .. 6
 };
 // Rows of one strip of the grain pass (only tests change it: every height must give the same output).
-constexpr std::int32_t kStripRows = 256, kStripHalo = 14, kStripRowsX1 = kStripRows + 24, kStripRowsX2 = kStripRows + 16;
+constexpr std::int32_t kStripRows = 256;
 // The fallback RCD of a strip also needs the rows around it: its five passes depend on each other over 7 rows.
 constexpr std::int32_t kRcdHalo = 8, kRcdRows = kStripRows + 2 * kRcdHalo;
 std::atomic<std::int32_t> gStripRows{kStripRows};
@@ -161,19 +162,14 @@ ScratchLayout makeRextureScratchLayout(const MultiframeGeometry& g, bool debug, 
         }
     }
     img("linear_output", g.output, PixelStorage::RGBA16Float, Lifetime::Output, "companion", "start:rx_alt_l3");
-    // Grain pass (rx_lowcov_eaw): the noise-level grid and the strip scratch, behind linear_output in the companion pool
-    // (everything else in it is dead once the last companion is accumulated). Memory does not grow with the image height.
+    // Grain evening (rx_even): the noise-level grid behind linear_output in the companion pool (everything else in it is dead
+    // once the last companion is accumulated); its pyramid scratch reuses the accumulators (rx_acc_a / rx_acc_c), free after the
+    // final pass.
     img("rx_lc_m", Extent2D{(g.output.width + 3u) / 4u, (g.output.height + 3u) / 4u}, PixelStorage::R32Float, Lifetime::Output,
         "companion", "end:linear_output");
-    img("rx_lc_halo", Extent2D{g.output.width, std::uint32_t(kStripHalo)}, PixelStorage::RGBA16Float, Lifetime::Output,
-        "companion", "end:rx_lc_m");
-    img("rx_lc_x1", Extent2D{g.output.width, std::uint32_t(kStripRowsX1)}, PixelStorage::RGBA16Float, Lifetime::Output,
-        "companion", "end:rx_lc_halo");
-    img("rx_lc_x2", Extent2D{g.output.width, std::uint32_t(kStripRowsX2)}, PixelStorage::RGBA16Float, Lifetime::Output,
-        "companion", "end:rx_lc_x1");
     // Fallback demosaic (RCD of the base): computed per strip while finalizing, only near the 16 x 16 tiles flagged by
-    // rx_fb_flags, so nothing of image size is kept for it. The fp32 work planes (RGB + direction field) alias the grain
-    // pass's strip scratch (that pass runs after the last strip). The verification build runs RCD once on the whole frame.
+    // rx_fb_flags, so nothing of image size is kept for it: fp32 work planes (RGB + direction field) of one strip, behind the
+    // noise grid. The verification build runs RCD once on the whole frame.
     img("rx_fb_tiles", Extent2D{(g.output.width + 15u) / 16u, (g.output.height + 15u) / 16u}, PixelStorage::R32Float,
         Lifetime::Output);
     if (debug) {
@@ -181,7 +177,7 @@ ScratchLayout makeRextureScratchLayout(const MultiframeGeometry& g, bool debug, 
         img("rx_rcd_dir", g.output, PixelStorage::RG32Float, Lifetime::Burst);
     } else {
         img("rx_rcd_work", Extent2D{g.output.width, std::uint32_t(std::min<std::uint32_t>(kRcdRows, g.output.height))},
-            PixelStorage::RGBA32Float, Lifetime::Output, "companion", "start:rx_lc_halo");
+            PixelStorage::RGBA32Float, Lifetime::Output, "companion", "end:rx_lc_m");
         img("rx_rcd_dir", Extent2D{g.output.width, std::uint32_t(std::min<std::uint32_t>(kRcdRows, g.output.height))},
             PixelStorage::RG32Float, Lifetime::Output, "companion", "end:rx_rcd_work");
     }
@@ -550,7 +546,7 @@ void RextureRecorder::recordFinalize(VkCommandBuffer c, VkImageView rawU16, cons
 // motion over a broad area (config.movingRestore).
 void RextureRecorder::recordMovingRestore(VkCommandBuffer c, VkImageView rawU16, const MultiframeFrameParameters& f) const {
     if (!config_.movingRestore) return;
-    struct { float black[4]; float white; std::int32_t w, h, cfa, op; float iwb[3]; } p{};
+    struct { float black[4]; float white; std::int32_t w, h, cfa, op; float iwb[3]; float alpha, beta; } p{};
     const auto& out = arena_.image("linear_output");
     const auto& ga = arena_.image("rx_mov_ga");
     std::copy(f.normalization.blackByPhase.begin(), f.normalization.blackByPhase.end(), p.black);
@@ -559,6 +555,8 @@ void RextureRecorder::recordMovingRestore(VkCommandBuffer c, VkImageView rawU16,
     p.h = std::int32_t(out.extent.height);
     p.cfa = std::int32_t(config_.cfa);
     for (int i = 0; i < 3; ++i) p.iwb[i] = 1.0f / f.whiteBalance[i];
+    p.alpha = config_.noiseAlpha;
+    p.beta = config_.noiseBeta;
     ImageBinding raw{0, rawU16, VK_IMAGE_LAYOUT_GENERAL};
     const DispatchBindings b{{raw, ib(1, out), ib(2, arena_.image("rx_mot")), ib(3, arena_.image("rx_lc_m")), ib(4, ga),
                               ib(5, arena_.image("rx_mov_gb")), ib(6, arena_.image("rx_acc_a"))},
@@ -616,34 +614,37 @@ void RextureRecorder::setStripRowsForTesting(std::uint32_t rows) noexcept {
     gStripRows = rows == 0 ? kStripRows : std::clamp(std::int32_t(rows), 16, kStripRows);
 }
 
-// Evens out the grain where the merge kept few frames, strip by strip, in place on linear_output (see rx_lowcov_eaw.comp).
-// A strip core [r0, r1) needs x0 rows +-14, x1 rows +-12 and x2 rows +-8, clamped to the image like the filter itself.
+// Evens out the grain where the merge kept fewer frames than its surroundings, in place on linear_output (see rx_even.comp):
+// the clean neighbours' level (1/8 resolution), the pyramid G_1 .. G_6, the rebuilt levels R_5 .. R_1, the level 0 gains,
+// then the output.
 void RextureRecorder::recordGrainPass(VkCommandBuffer c) const {
     const auto& out = arena_.image("linear_output");
+    const auto& atlas = arena_.image("rx_acc_a");
+    const auto& gain = arena_.image("rx_acc_c");
+    const auto& refA = arena_.image("rx_mov_ga");
     const std::int32_t w = std::int32_t(out.extent.width), h = std::int32_t(out.extent.height);
-    const std::int32_t strip = gStripRows;
-    // four dispatches per strip, one descriptor set each, from the executor's pool of 1024 sets per program and chunk
-    if ((h + strip - 1) / strip * 4 > 1000) throw std::invalid_argument("rexture recorder: image too tall for the grain pass");
-    const auto& noiseGrid = arena_.image("rx_lc_m");
-    const auto& halo = arena_.image("rx_lc_halo");
-    const auto& x1 = arena_.image("rx_lc_x1");
-    const auto& x2 = arena_.image("rx_lc_x2");
-    const auto run = [&](std::int32_t op, std::int32_t r0, std::int32_t r1, std::int32_t y0, std::int32_t rows,
-                         std::int32_t a1, std::int32_t a2) {
-        const LowCoveragePc q{op, w, h, r0, r1, y0, rows, a1, a2, config_.noiseAlpha, config_.noiseBeta, config_.burstFrames};
-        executor_.record(c, ShaderId::RxLowcovEaw, {{ib(0, out), ib(1, halo), ib(2, x1), ib(3, x2), ib(4, noiseGrid)}, {}}, &q,
-                         sizeof(q), divUp(std::uint32_t(w), 16), divUp(std::uint32_t(rows), 16));
+    const auto size = [&](std::int32_t l) {
+        return Extent2D{std::uint32_t((w + (1 << l) - 1) >> l), std::uint32_t((h + (1 << l) - 1) >> l)};
+    };
+    std::uint32_t atlasW = 0;
+    for (std::int32_t l = 1; l <= 6; ++l) atlasW += size(l).width;
+    if (atlasW > atlas.extent.width || 2u * size(1).height > atlas.extent.height)
+        throw std::invalid_argument("rexture recorder: image too small for the grain evening pyramid");
+    const DispatchBindings b{{ib(0, out), ib(1, atlas), ib(2, gain), ib(3, arena_.image("rx_lc_m")), ib(4, refA),
+                              ib(5, arena_.image("rx_mov_gb"))},
+                             {}};
+    EvenPc q{0, 0, w, h, config_.noiseAlpha, config_.noiseBeta, std::int32_t(size(1).height), {}};
+    for (std::int32_t l = 1, x = 0; l <= 6; ++l) { q.ox[l] = x; x += std::int32_t(size(l).width); }
+    const auto run = [&](std::int32_t op, std::int32_t level, std::uint32_t gx, std::uint32_t gy) {
+        q.op = op;
+        q.level = level;
+        executor_.record(c, ShaderId::RxEven, b, &q, sizeof(q), gx, gy);
         computeWriteBarrier(c);
     };
-    for (std::int32_t r0 = 0; r0 < h; r0 += strip) {
-        const std::int32_t r1 = std::min(r0 + strip, h);
-        const std::int32_t a1 = std::max(r0 - 12, 0), b1 = std::min(r1 + 12, h);
-        const std::int32_t a2 = std::max(r0 - 8, 0), b2 = std::min(r1 + 8, h);
-        run(0, r0, r1, a1, b1 - a1, a1, a2);                                   // x1 = A1(x0)
-        run(1, r0, r1, a2, b2 - a2, a1, a2);                                   // x2 = A2(x1)
-        if (r1 < h) run(3, r0, r1, std::max(r1 - kStripHalo, r0), std::min(kStripHalo, r1 - r0), a1, a2);  // next strip's halo
-        run(2, r0, r1, r0, r1 - r0, a1, a2);                                   // out = x3 + g (x0 - x3), in place
-    }
+    for (std::int32_t op = 0; op <= 4; ++op) run(op, 0, divUp(refA.extent.width, 16), divUp(refA.extent.height, 16));
+    for (std::int32_t l = 1; l <= 6; ++l) run(5, l, divUp(size(l).width, 16), divUp(size(l).height, 8));    // G_l, A_{l-1}
+    for (std::int32_t l = 0; l <= 5; ++l) run(6, l, divUp(size(l + 1).width, 16), divUp(size(l + 1).height, 16));   // a_l
+    for (std::int32_t l = 5; l >= 0; --l) run(7, l, divUp(size(l).width, 16), divUp(size(l).height, 16));   // R_l
     if (mark_) mark_("grain");
 }
 }  // namespace rawr::raw_gpu_pipeline
