@@ -331,6 +331,13 @@
           "enabled": true
         },
         {
+          "tag": "vivo.control.is_pro_mode",
+          "type": "int32",
+          "scope": "sessionAndRequest",
+          "values": [1],
+          "enabled": true
+        },
+        {
           "tag": "vivo.control.scenery.subfunction",
           "type": "int32",
           "scope": "sessionAndRequest",
@@ -408,6 +415,13 @@
           "enabled": true
         },
         {
+          "tag": "vivo.control.is_pro_mode",
+          "type": "int32",
+          "scope": "sessionAndRequest",
+          "values": [1],
+          "enabled": true
+        },
+        {
           "tag": "vivo.control.scenery.subfunction",
           "type": "int32",
           "scope": "sessionAndRequest",
@@ -474,6 +488,13 @@
           "type": "int32",
           "scope": "sessionAndRequest",
           "values": [2],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.is_pro_mode",
+          "type": "int32",
+          "scope": "sessionAndRequest",
+          "values": [1],
           "enabled": true
         },
         {
@@ -548,6 +569,13 @@
           "enabled": true
         },
         {
+          "tag": "vivo.control.is_pro_mode",
+          "type": "int32",
+          "scope": "sessionAndRequest",
+          "values": [1],
+          "enabled": true
+        },
+        {
           "tag": "vivo.control.scenery.subfunction",
           "type": "int32",
           "scope": "sessionAndRequest",
@@ -615,6 +643,13 @@
           "type": "int32",
           "scope": "sessionAndRequest",
           "values": [2],
+          "enabled": true
+        },
+        {
+          "tag": "vivo.control.is_pro_mode",
+          "type": "int32",
+          "scope": "sessionAndRequest",
+          "values": [1],
           "enabled": true
         },
         {
