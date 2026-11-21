@@ -70,6 +70,8 @@ def main():
     parser.add_argument("--fusion", help="exposure-fusion local tone mapping instead: EXPOSURE,SHADOWS,HIGHLIGHTS,SIGMA[,MIP[,BOOST]]")
     parser.add_argument("--any-demosaic", action="store_true",
                         help="render other demosaics with DualRcdVng4 (tone comparisons only)")
+    parser.add_argument("--capture-sharpen", type=int, default=0, help="RT capture sharpening iterations after demosaic (app: Low 2, Medium 3, Sharp 4, Sharpest 6)")
+    parser.add_argument("--capture-sharpen-radius", type=float, default=0.0, help="fixed capture sharpening radius (0 = auto)")
     parser.add_argument("--sdr-only", action="store_true", help="skip the UltraHDR gain map")
     parser.add_argument("--build-dir", type=Path, default=ROOT/"tmp/offline_rawr_pipeline")
     parser.add_argument("--skip-build", action="store_true")
@@ -184,6 +186,10 @@ def main():
         command += ["--fusion", ",".join(map(str, (
             1, exposures[0], highlights, captured_local.get("sigma", 5),
             captured_local.get("coarsestMip", 6), int(captured_local.get("boostLocalContrast", False))))) ]
+    if args.capture_sharpen:
+        command += ["--capture-sharpen", args.capture_sharpen]
+        if args.capture_sharpen_radius > 0:
+            command += ["--capture-sharpen-radius", args.capture_sharpen_radius]
     if args.agx:
         command += ["--agx", args.agx]
     if recovery_mode == "preserve":

@@ -1,5 +1,6 @@
 #include "vk_test_common.hpp"
 #include "post_demosaic/PostDemosaicProcessor.h"
+#include "capture_sharpening/CaptureSharpening.h"
 
 #include <dual/Dual.hpp>
 #include <rcd/Rcd.hpp>
@@ -70,6 +71,8 @@ struct Arguments {
     bool singleVariant = false;
     bool singleRecovery = true;
     bool preserveReconstructedHighlights = false;
+    uint32_t captureSharpenIterations = 0;
+    float captureSharpenRadius = 0.0f;  // > 0: fixed radius instead of the auto estimate  // RT capture sharpening after demosaic (app levels: 2, 3, 4, 6)
     bool quadfix = false;
     bool quadfixFastMedian = false;
     float exposureEV = 0.0f;
@@ -230,6 +233,8 @@ Arguments parseArguments(int argc, char** argv) {
             args.singleRecovery = std::stoul(argv[++i]) != 0u;
         }
         else if (value == "--preserve-reconstructed") args.preserveReconstructedHighlights = true;
+        else if (value == "--capture-sharpen-radius" && i + 1 < argc) args.captureSharpenRadius = std::stof(argv[++i]);
+        else if (value == "--capture-sharpen" && i + 1 < argc) args.captureSharpenIterations = static_cast<uint32_t>(std::stoul(argv[++i]));
         else if (value == "--exposure-ev" && i + 1 < argc) {
             args.exposureEV = std::stof(argv[++i]);
             args.hasExposureEV = true;
@@ -927,6 +932,28 @@ int main(int argc, char** argv) {
                                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
                                          0, nullptr, 0, nullptr, 1, &demosaicReady);
                 }
+                std::unique_ptr<rawr::capsharp::CaptureSharpening> captureSharpening;
+                if (args.captureSharpenIterations > 0) {  // as the app: in place on the demosaiced pre-WB image
+                    captureSharpening = std::make_unique<rawr::capsharp::CaptureSharpening>(
+                        rawr::vk::GpuContext{context.pd, context.dev, context.qf});
+                    rawr::capsharp::RecordInfo cs{};
+                    cs.commandBuffer = command;
+                    cs.width = config.width;
+                    cs.height = config.height;
+                    cs.image = source.i;
+                    cs.view = source.v;
+                    cs.clipState = clipImage.v;
+                    cs.cfaPattern = config.cfa;
+                    for (int c = 0; c < 3; ++c) cs.whiteBalance[c] = config.wbRgb[c];
+                    cs.params.iterations = args.captureSharpenIterations;
+                    if (args.captureSharpenRadius > 0.0f) { cs.params.autoRadius = false; cs.params.radius = args.captureSharpenRadius; }
+                    cs.deconvBandRows = 16;
+                    if (!captureSharpening->record(cs)) throw std::runtime_error("capture sharpening record failed");
+                    auto csReady = imageBarrier(source.i, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
+                                                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL);
+                    vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
+                                         0, nullptr, 0, nullptr, 1, &csReady);
+                }
                 post.record(command, source.i, source.v, clipImage.i, clipImage.v,
                             config.wbRgb, recovery, {}, VK_NULL_HANDLE, args.preserveReconstructedHighlights,
                             args.appColoropp ? 1u : 0u, args.appColoroppThreshold,
@@ -1241,6 +1268,7 @@ int main(int argc, char** argv) {
 
                 const auto started = std::chrono::steady_clock::now();
                 submitAndWait(context, command);
+                if (captureSharpening) { const auto r = captureSharpening->lastResult(); std::printf("capture sharpening: radius %.3f contrast %.2f valid %d\n", r.radius, r.contrast, int(r.valid)); }
                 const double elapsedMs = std::chrono::duration<double, std::milli>(
                     std::chrono::steady_clock::now() - started).count();
                 if (args.benchmarkPost != 0u) {
