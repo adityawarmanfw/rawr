@@ -83,7 +83,7 @@ class StillOutputStore(
     // on-disk skip marker for entries quarantined before this process read
     // them). Consulted before any provider open attempt.
     private val quarantinedThisLaunch = mutableSetOf<String>()
-    private val orphanEntries by lazy { journal.readAll() }
+    private val orphanNames by lazy { journal.names() }
     private val lastNameTimestamp = java.util.concurrent.atomic.AtomicLong(0)
     private val pending = ConcurrentHashMap<Long, PendingCapture>()
 
@@ -287,11 +287,16 @@ class StillOutputStore(
 
     /** Called on the IO dispatch lane after the foreground preview is ready. */
     fun nextRecovery(): PreparedCapture? {
-        for (original in orphanEntries) {
-            var entry = original
-            if (File(context.filesDir, "still_jobs/${entry.name}.renderer-owner").exists() ||
-                entry.name in attemptedRecovery || !claimed.add(entry.name)) continue
-            attemptedRecovery.add(entry.name)
+        for (name in orphanNames) {
+            if (name in attemptedRecovery || File(context.filesDir, "still_jobs/$name.renderer-owner").exists() ||
+                !claimed.add(name)) continue
+            attemptedRecovery.add(name)
+            // The previous owner may have published or retired the capture since discovery.
+            var entry = journal.read(name)
+            if (entry == null) {
+                claimed.remove(name)
+                continue
+            }
             val resolved = entry.resolveForRecovery(journal.hasFallback(entry))
             if (resolved != entry) {
                 journal.write(resolved)
