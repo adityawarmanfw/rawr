@@ -8,19 +8,31 @@
 
 #include "metadata/FrameMetadataSnapshot.h"
 #include "rawr/raw_ingress/BayerBinNoise.h"
+#include "rawr/raw_ingress/BayerBinSize.h"
 namespace rawrcam::capture {
 // Reduced photo output (LensRoute::photoReduced) on a full-size photo context: a 4x4 block mosaic
-// (Hexadeca sums + quad remosaic) or plain Bayer (linear 2x bin), optionally resampled to 25 MP.
+// (Hexadeca sums + quad remosaic, optionally resampled to 25 MP) or plain Bayer (linear 2x bin, or the
+// direct 3x bin for the smaller size: 22 MP from 200 MP).
 inline bool reducedRawRequested(const metadata::CameraContextMetadata& c) {
     return c.photoReduced && (c.cfaBlock == 4 || c.cfaBlock == 1) && bool(c.binnedFallbackContext);
 }
 struct ReducedRawSize {
     uint32_t width = 0, height = 0;
 };
-// Stored size of a reduced frame: half per side (50 MP from 200 MP), or that divided by sqrt(2) per
-// side (25 MP), rounded down to a multiple of 8.
+// Bayer frames for the smaller size go through the direct 3x bin; 4x4 frames are resampled after the
+// remosaic.
+[[nodiscard]] inline bool reducedRawDirect3x(const metadata::CameraContextMetadata& c) {
+    return c.photoReduced25 && c.cfaBlock == 1;
+}
+// Stored size of a reduced frame: half per side (50 MP from 200 MP); for the smaller size a third per
+// side for Bayer (22 MP), that half divided by sqrt(2) per side for 4x4 (25 MP); rounded down to a
+// multiple of 8.
 [[nodiscard]] inline ReducedRawSize reducedRawSize(const metadata::CameraContextMetadata& c, uint32_t width,
                                                    uint32_t height) {
+    if (reducedRawDirect3x(c)) {
+        const auto s = rawr::raw_ingress::bayerBinOutputSize(width, height, 3);
+        return {s.width, s.height};
+    }
     const uint32_t w = width / 2, h = height / 2;
     if (!c.photoReduced25) return {w, h};
     return {uint32_t(w / std::sqrt(2.0)) & ~7u, uint32_t(h / std::sqrt(2.0)) & ~7u};
@@ -41,11 +53,10 @@ struct ReducedRawSize {
 [[nodiscard]] inline double reducedRawNoiseScale(const metadata::CameraContextMetadata& c,
                                                  const std::array<float, 3>& whiteBalance, uint32_t phase) {
     static constexpr uint8_t kColours[4][4] = {{0, 1, 1, 2}, {1, 0, 2, 1}, {1, 2, 0, 1}, {2, 1, 1, 0}};
-    double bin = 1.0;
     if (c.cfaBlock == 1)
-        bin = rawr::raw_ingress::bayerBinNoiseVarianceGain(kColours[std::min<uint32_t>(c.rawPreviewCfa, 3)][phase & 3u],
-                                                           whiteBalance) / 0.25;
-    return c.photoReduced25 ? bin * 0.40 : bin;
+        return rawr::raw_ingress::bayerBinNoiseVarianceGain(kColours[std::min<uint32_t>(c.rawPreviewCfa, 3)][phase & 3u],
+                                                            whiteBalance, reducedRawDirect3x(c) ? 3 : 2) / 0.25;
+    return c.photoReduced25 ? 0.40 : 1.0;  // 4x4: the 25 MP resample's reduction
 }
 // Largest source code the reducer takes: its 2x2 sums (x4) live in R16 images; the phase fit's
 // 16-sample block sums do too, which limits it to 12-bit data.

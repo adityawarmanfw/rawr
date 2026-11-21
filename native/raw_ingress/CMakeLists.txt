@@ -27,15 +27,15 @@ embed_spirv(raw10_unpack ${CMAKE_CURRENT_LIST_DIR}/shaders/raw10_unpack.comp raw
   OUTPUT_DIR ${RAW_INGRESS_GEN} FLAGS --target-env=vulkan1.1 -O)
 embed_spirv(raw_remosaic ${CMAKE_CURRENT_LIST_DIR}/shaders/raw_remosaic.comp raw_remosaic_spv
   OUTPUT_DIR ${RAW_INGRESS_GEN} FLAGS --target-env=vulkan1.1 -O)
-foreach(pass 0 1 2 3)
-  embed_spirv(bayer_lin${pass} ${CMAKE_CURRENT_LIST_DIR}/shaders/bayer_lin.comp bayer_lin${pass}_spv
-    OUTPUT_DIR ${RAW_INGRESS_GEN} FLAGS --target-env=vulkan1.1 -O -DBIN_PASS=${pass})
-endforeach()
+embed_spirv(bayer_lin ${CMAKE_CURRENT_LIST_DIR}/shaders/bayer_lin.comp bayer_lin_spv
+  OUTPUT_DIR ${RAW_INGRESS_GEN} FLAGS --target-env=vulkan1.1 -O)
+embed_spirv(bayer_bin3 ${CMAKE_CURRENT_LIST_DIR}/shaders/bayer_bin3.comp bayer_bin3_spv
+  OUTPUT_DIR ${RAW_INGRESS_GEN} FLAGS --target-env=vulkan1.1 -O)
 embed_spirv(bayer_resample ${CMAKE_CURRENT_LIST_DIR}/shaders/bayer_resample.comp bayer_resample_spv
   OUTPUT_DIR ${RAW_INGRESS_GEN} FLAGS --target-env=vulkan1.1 -O)
 
 add_library(raw_ingress STATIC src/Raw10Unpacker.cpp src/RawRemosaicker.cpp src/BayerBinner.cpp
-  ${raw10_unpack_HDR} ${raw_remosaic_HDR} ${bayer_lin0_HDR} ${bayer_lin1_HDR} ${bayer_lin2_HDR} ${bayer_lin3_HDR}
+  ${raw10_unpack_HDR} ${raw_remosaic_HDR} ${bayer_lin_HDR} ${bayer_bin3_HDR}
   ${bayer_resample_HDR})
 add_library(rawr::raw_ingress ALIAS raw_ingress)
 target_include_directories(raw_ingress PUBLIC include PRIVATE ${RAW_INGRESS_GEN})

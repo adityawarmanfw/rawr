@@ -323,7 +323,7 @@ internal fun lensSummary(lens: LensProfile): String = buildList {
     val photoOutput = lens.image.sensorLayout.photoOutput
     if (lens.streams.photo != null && (lens.image.sensorLayout.photoBlock > 1 || photoOutput != "full"))
         add("Photo " + sensorLayoutBlockLabel(lens.image.sensorLayout.photoBlock) +
-            if (photoOutput != "full") " → " + photoOutputLabel(photoOutput).removePrefix("Reduced ").trim('(', ')') else "")
+            if (photoOutput != "full") " → " + photoOutputLabel(photoOutput, lens.image.sensorLayout.photoBlock).removePrefix("Reduced ").trim('(', ')') else "")
     lens.image.sensorLayout.colourOrder?.let { add(it) }
     val keys = lens.vendorKeys.count { it.enabled }
     if (keys > 0) add(if (keys == 1) "1 key" else "$keys keys")

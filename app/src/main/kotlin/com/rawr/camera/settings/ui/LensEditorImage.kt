@@ -253,10 +253,12 @@ internal fun SensorLayoutGroup(
                 title = "Photo output",
                 selected = layout.photoOutput,
                 values = PHOTO_OUTPUTS,
-                label = ::photoOutputLabel,
-                supportingText = "Reduced turns each photo frame into a smaller Bayer frame (200 MP to 50 MP, or 25 MP) " +
-                    "before it is stored and merged: much faster merges, smaller files, JPEG available. " +
-                    (if (layout.photoBlock == 4) "4×4 frames are summed in 2×2 blocks." else "Bayer frames are binned with grid-free, anti-aliased weights, sharpened on detail."),
+                label = { photoOutputLabel(it, layout.photoBlock) },
+                supportingText = "Reduced turns each photo frame into a smaller Bayer frame (200 MP to 50 MP, or " +
+                    (if (layout.photoBlock == 4) "25 MP" else "22 MP") +
+                    ") before it is stored and merged: much faster merges, smaller files, JPEG available. " +
+                    (if (layout.photoBlock == 4) "4×4 frames are summed in 2×2 blocks."
+                    else "Bayer frames are binned with grid-free, anti-aliased weights that keep colour detail; no sharpening."),
                 testTag = lensEditorTag("photo_output"),
                 onSelect = { onChange(layout.copy(photoOutput = it, photoPhaseFit = layout.photoPhaseFit && it != "full")) }
             )
@@ -287,9 +289,10 @@ internal fun SensorLayoutGroup(
     }
 }
 
-internal fun photoOutputLabel(output: String): String = when (output) {
+// The smaller size: Bayer frames bin 3x per side (22 MP from 200 MP), 4x4 frames resample to 25 MP.
+internal fun photoOutputLabel(output: String, photoBlock: Int): String = when (output) {
     "reduced" -> "Reduced (50 MP)"
-    "reduced25" -> "Reduced (25 MP)"
+    "reduced25" -> if (photoBlock == 4) "Reduced (25 MP)" else "Reduced (22 MP)"
     else -> "Full"
 }
 

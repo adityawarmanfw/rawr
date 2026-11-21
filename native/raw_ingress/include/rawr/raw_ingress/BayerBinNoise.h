@@ -4,16 +4,21 @@
 #include <cstdint>
 
 namespace rawr::raw_ingress {
-// Sum of squared plain-kernel weights of the linear 2x Bayer bin, [output colour R, G, B][source colour R, G, B].
-inline constexpr double kBayerBinNoiseWeights[3][3] = {{0.0545909408, 0.0465537676, 0.0202315274}, {0.0195147501, 0.0535238802, 0.0192457016}, {0.0109023157, 0.0257392835, 0.0438997173}};
+// Sum of squared kernel weights of the linear Bayer bins, [output colour R, G, B][source colour R, G, B]:
+// the 2x bin and the direct 3x bin.
+inline constexpr double kBayerBinNoiseWeights[3][3] = {{0.257815046, 0.00577848519, 0.00249337542}, {0.00299201886, 0.15140517, 0.00360170998}, {0.00212542205, 0.0049448628, 0.259555414}};
+inline constexpr double kBayerBin3NoiseWeights[3][3] = {{0.18966012, 0.0079219538, 0.00369759661}, {0.00434844434, 0.108836709, 0.0042771897}, {0.00288491566, 0.00638416289, 0.188190211}};
 
 // Noise variance of a flat-area output pixel of colour outColour (0 R, 1 G, 2 B) relative to one source
 // pixel's, with white-balance gains (R, G, B): a source of colour c enters the balanced domain with variance
 // times g_c^2, the output is divided by its own colour's gain. Assumes equal source variance in every colour.
-inline double bayerBinNoiseVarianceGain(std::uint32_t outColour, const std::array<float, 3>& gains) {
+// ratio: 2 or 3 (the bin's downscale per side).
+inline double bayerBinNoiseVarianceGain(std::uint32_t outColour, const std::array<float, 3>& gains,
+                                        std::uint32_t ratio = 2) {
     if (outColour > 2 || !(gains[outColour] > 0)) return 1.0;
+    const auto& w = ratio == 3 ? kBayerBin3NoiseWeights : kBayerBinNoiseWeights;
     double v = 0;
-    for (int c = 0; c < 3; ++c) v += kBayerBinNoiseWeights[outColour][c] * double(gains[c]) * gains[c];
+    for (int c = 0; c < 3; ++c) v += w[outColour][c] * double(gains[c]) * gains[c];
     return v / (double(gains[outColour]) * gains[outColour]);
 }
 }  // namespace rawr::raw_ingress

@@ -85,7 +85,7 @@ int main() {
         d->cfaBlock = 2;  // quad has no reduced output
         assert(std::string(capture::reducedRawUnsupportedReason(*d, 16320, 12288)) == "not_requested");
     }
-    // Bayer (natural bin) at 50 and 25 MP: sizes, x4 levels, the bin's extra noise reduction.
+    // Bayer (linear bins) at 50 MP (2x) and 22 MP (direct 3x): sizes, x4 levels, the bin's per-site noise.
     for (const bool quarter : {false, true}) {
         auto b = std::make_shared<metadata::CameraContextMetadata>(*c);
         b->cfaBlock = b->photoCfaBlock = 1;
@@ -93,7 +93,13 @@ int main() {
         b->photoReduced25 = quarter;
         assert(capture::reducedRawRequested(*b));
         const auto size = capture::reducedRawSize(*b, 16320, 12288);
-        assert(quarter ? (size.width == 5768 && size.height == 4344) : (size.width == 8160 && size.height == 6144));
+        assert(quarter ? (size.width == 5440 && size.height == 4096) : (size.width == 8160 && size.height == 6144));
+        assert(capture::reducedRawDirect3x(*b) == quarter);
+        if (quarter) {  // a height that is not a multiple of 3: a third rounded down to a multiple of 8, centred
+            const auto f35 = capture::reducedRawSize(*b, 16320, 12256);
+            const auto bin = rawr::raw_ingress::bayerBinOutputSize(16320, 12256, 3);
+            assert(f35.width == 5440 && f35.height == 4080 && bin.height == 4080 && bin.offsetY == 8 && bin.offsetX == 0);
+        }
         assert(size.width % 8 == 0 && size.height % 8 == 0);
         metadata::FrameMetadataSnapshot f;
         f.cameraContext = b;
@@ -105,13 +111,13 @@ int main() {
                f.cameraContext->geometry.rawBufferHeight == size.height);
         assert(!f.cameraContext->photoReduced && !f.cameraContext->photoReduced25);
         assert(f.effectiveWhiteLevel == 4092 && f.blackLevelPhysicalRggb[0] == 4 * 63);
-        // Per CFA site (RGGB here; no white balance in the metadata: gains 1): the linear bin's flat-area
-        // variance against a four-sample sum, times 0.40 for the 25 MP resample.
+        // Per CFA site (RGGB here; no white balance in the metadata: gains 1): the bin's flat-area variance
+        // against a four-sample sum (the x4 levels). At 2x green averages more samples than a sum of four,
+        // red and blue (kept apart from the other colours) about as many; the 3x bin averages more.
         static constexpr unsigned kColour[4] = {0, 1, 1, 2};
         for (unsigned p = 0; p < 4; ++p) {
-            const double bin = rawr::raw_ingress::bayerBinNoiseVarianceGain(kColour[p], {1, 1, 1}) / 0.25;
-            const double scale = quarter ? bin * 0.40 : bin;
-            assert(scale > 0.1 && scale < 1.0);
+            const double scale = rawr::raw_ingress::bayerBinNoiseVarianceGain(kColour[p], {1, 1, 1}, quarter ? 3 : 2) / 0.25;
+            assert(scale > 0.1 && scale < (quarter ? 1.0 : 1.5));
             assert(std::abs(f.sensorNoiseProfile[2 * p] - .01 * scale) < 1e-12);
             assert(std::abs(f.sensorNoiseProfile[2 * p + 1] - .01 * scale) < 1e-12);
         }

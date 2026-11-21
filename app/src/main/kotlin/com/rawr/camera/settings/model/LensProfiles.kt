@@ -349,8 +349,9 @@ data class LensSensorLayout(
     /**
      * "full": photo frames keep the sensor's resolution after remosaic. "reduced": photo frames are reduced to a
      * quarter of the pixels (200 MP to 50 MP Bayer) before storage and merge; 4×4 frames by block sums, Bayer frames
-     * by the linear 2× bin. "reduced25": the same, then resampled to half those pixels (25 MP). Reduced needs
-     * photoBlock 1 or 4.
+     * by the linear 2× bin. "reduced25": smaller still; 4×4 frames are resampled to half those pixels (25 MP),
+     * Bayer frames go through the direct 3× bin (22 MP from 200 MP). The value keeps its name for stored
+     * profiles. Reduced needs photoBlock 1 or 4.
      */
     val photoOutput: String = "full",
     /** Reduced output only: fit the sensor's per-position response from each frame and divide it out. */

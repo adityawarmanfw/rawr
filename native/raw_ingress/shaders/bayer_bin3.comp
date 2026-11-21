@@ -1,0 +1,119 @@
+#version 450
+#extension GL_EXT_control_flow_attributes : require
+// Direct 3x Bayer bin (Bayer -> Bayer at a third of the size per side; 200 MP -> 22 MP), one pass.
+//
+// Output pixel (X, Y) is centred on source (3X+1+ox, 3Y+1+oy): a fixed 17x17 weighted sum of the
+// white-balanced source around it, one weight set per output site (tools/bayer_bin_fit, ratio=3: least
+// squares to an anti-aliased 3x downscale, the sensor's 4-pixel grid lines and 8x8 diagonal grid nulled,
+// each colour reproducing itself at low frequencies), clamped to the same-colour source samples within
+// 3 pixels of the centre. No sharpening. The crop offset (ox, oy) is even, so the source keeps its phase.
+// Other Bayer orders use the RGGB weights of the phase-shifted output site: the window is centred on a
+// source pixel, so a one-pixel shift of the colour pattern is a change of output phase (no mirroring).
+//
+// 32 x 16 outputs per group, two per thread (X and X+2: same row, same colour, windows 6 source pixels
+// apart in one 23-sample run of each source row). Tried on the Adreno 840: four per thread runs out of
+// registers, one per thread is bound by shared-memory reads; this is the fastest.
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer Raw { uint words[]; } raw;
+layout(binding = 1, r16ui) uniform writeonly uimage2D outW;
+// Weights (rawr/raw_ingress/BayerBinKernels.h kBayerBin3): [q*289 + ky*17 + kx], staged in shared memory.
+layout(std140, binding = 2) uniform Kernels { vec4 k[289]; } kernels;
+
+layout(push_constant) uniform PC {
+    vec4 scale;   // gains / span by buffer phase: code minus black -> white-balanced normalized sample
+    vec4 black;   // black level by buffer phase, source codes
+    vec4 gains;   // white-balance gains by buffer phase (max 1)
+    uint sw, sh, strideElems;  // source size, row stride in 16-bit elements
+    uint ow, oh;               // output size
+    uint order;                // CfaPattern code: bit 0 shifts x, bit 1 shifts y
+    float span;                // white - max(black)
+    float white;               // source white level
+    float codeGain;            // output codes per source code
+    int ox, oy;                // source crop offset (even)
+} pc;
+
+float sampleAt(int x, int y) {  // white-balanced normalized source sample, reflected at the border
+    x = x < 0 ? -x : (x >= int(pc.sw) ? 2 * int(pc.sw) - 2 - x : x);
+    y = y < 0 ? -y : (y >= int(pc.sh) ? 2 * int(pc.sh) - 2 - y : y);
+    const uint index = uint(y) * pc.strideElems + uint(x);
+    const uint w = raw.words[index >> 1];
+    const uint code = (index & 1u) != 0u ? (w >> 16) : (w & 0xffffu);
+    const int site = 2 * (y & 1) + (x & 1);
+    return (float(code) - pc.black[site]) * pc.scale[site];
+}
+uint toCode(float v, int site) {
+    const float c = clamp(v * pc.span + pc.black[site], 0.0, pc.white);
+    return uint(clamp(c * pc.codeGain, 0.0, pc.white * pc.codeGain) + 0.5);
+}
+
+const int TW = 32, TH = 16;  // output tile (BayerBinner.cpp dispatches by it)
+// Source tile: the windows span 3 * (TW - 1) + 17 columns from an odd column; the tile starts one column
+// earlier (even) and is one column wider (even width), so interior rows load as whole 32-bit words.
+const int T = 3 * (TW - 1) + 19;   // 112
+const int TR = 3 * (TH - 1) + 17;  // 62
+// Shared row stride odd: rows a wave reads together then fall in different banks (a stride that is a
+// multiple of the bank count serialised them, half the speed). Tile plus weights: 32,648 bytes.
+const int TS = T + 1;
+shared float src[TS * TR];
+shared float sk[1156];
+
+void main() {
+    const uint lid = gl_LocalInvocationIndex;
+    const int X0 = int(gl_WorkGroupID.x) * TW, Y0 = int(gl_WorkGroupID.y) * TH;
+    const int SX = 3 * X0 + pc.ox - 8, SY = 3 * Y0 + pc.oy - 7;  // SX even
+    if ((pc.strideElems & 1u) == 0u && SX >= 0 && SY >= 0 && SX + T <= int(pc.sw) && SY + TR <= int(pc.sh)) {
+        // Interior: two samples per word (even column, even row stride).
+        const int HW = T / 2;
+        for (uint i = lid; i < uint(HW * TR); i += 256u) {
+            const int ty = int(i) / HW, tx = 2 * (int(i) % HW), y = SY + ty;
+            const uint word = raw.words[(uint(y) * pc.strideElems + uint(SX + tx)) >> 1];
+            const int site = 2 * (y & 1);
+            src[ty * TS + tx] = (float(word & 0xffffu) - pc.black[site]) * pc.scale[site];
+            src[ty * TS + tx + 1] = (float(word >> 16) - pc.black[site + 1]) * pc.scale[site + 1];
+        }
+    } else {
+        for (uint i = lid; i < uint(T * TR); i += 256u)
+            src[(int(i) / T) * TS + int(i) % T] = sampleAt(SX + int(i) % T, SY + int(i) / T);
+    }
+    for (uint i = lid; i < 1156u; i += 256u) sk[i] = kernels.k[i >> 2][i & 3u];
+    barrier();
+    // 16 threads per output row: colour parity px, first column cb = 4 * (g >> 1) + px.
+    const int r = int(lid) / 16, g = int(lid) % 16, px = g & 1, cb = (g >> 1) * 4 + px;
+    const int Y = Y0 + r, X = X0 + cb;
+    const bool fx = (pc.order & 1u) != 0u, fy = (pc.order & 2u) != 0u;
+    const int q = 2 * ((Y & 1) ^ int(fy)) + (px ^ int(fx));  // RGGB output phase of these pixels
+    const bool green = q == 1 || q == 2;
+    float b0 = 0.0, b1 = 0.0;
+    // Clamp range: the output colour's samples within 3 px of the centre. Green outputs sit on a green
+    // sample (rows and columns of equal parity); red and blue on the opposite colour (odd rows and columns).
+    // Scalars with fixed indices: per-output register arrays updated in a loop miscompile on Adreno.
+    float lo0 = 1e30, lo1 = 1e30, hi0 = -1e30, hi1 = -1e30;
+    for (int ky = 0; ky < 17; ++ky) {
+        const int row = (3 * r + ky) * TS + 3 * cb + 1;
+        float w[23];
+        // Unrolled: every w index constant, the row stays in registers (1.3x faster on the Adreno 840).
+        [[unroll]] for (int k = 0; k < 23; ++k) w[k] = src[row + k];
+        [[unroll]] for (int kx = 0; kx < 17; ++kx) {
+            const float kb = sk[q * 289 + ky * 17 + kx];
+            b0 += kb * w[kx];
+            b1 += kb * w[kx + 6];
+        }
+        const int dy = ky - 8;
+        const bool odd = (dy & 1) != 0;
+        if (dy >= -3 && dy <= 3 && (green || odd)) {
+            // Window j is centred on run index 6j+8: offsets -3, -1, 1, 3 on odd rows, -2, 0, 2 on even ones.
+            const float a0 = odd ? w[5] : w[6], a1 = odd ? w[7] : w[8], a2 = odd ? w[9] : w[10], a3 = odd ? w[11] : w[10];
+            lo0 = min(lo0, min(min(a0, a1), min(a2, a3)));
+            hi0 = max(hi0, max(max(a0, a1), max(a2, a3)));
+            const float c0 = odd ? w[11] : w[12], c1 = odd ? w[13] : w[14], c2 = odd ? w[15] : w[16], c3 = odd ? w[17] : w[16];
+            lo1 = min(lo1, min(min(c0, c1), min(c2, c3)));
+            hi1 = max(hi1, max(max(c0, c1), max(c2, c3)));
+        }
+    }
+    if (Y >= int(pc.oh)) return;
+    const int site = 2 * (Y & 1) + (X & 1);
+    const float gn = 1.0 / pc.gains[site];
+    if (X < int(pc.ow)) imageStore(outW, ivec2(X, Y), uvec4(toCode(clamp(b0, lo0, hi0) * gn, site)));
+    if (X + 2 < int(pc.ow)) imageStore(outW, ivec2(X + 2, Y), uvec4(toCode(clamp(b1, lo1, hi1) * gn, site)));
+}

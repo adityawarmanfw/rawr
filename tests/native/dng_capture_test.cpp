@@ -17,6 +17,7 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <tuple>
 #include <vector>
 
 static rawrcam::imaging::RawSnapshot makeFrame(bool resolvable) {
@@ -634,8 +635,9 @@ int main() {
             return 12;
         }
     }
-    // A Bayer frame reduced to 25 MP: the pixel array scaled by about 1.41 per side.
-    {
+    // The smaller reduced size: a Bayer frame through the 3x bin (the pixel array scaled by 4/3 per side)
+    // and a 4x4 frame resampled to 25 MP (about 1.41 per side).
+    for (const auto& [block, ow, oh] : {std::tuple{1u, 544u, 408u}, std::tuple{4u, 576u, 432u}}) {
         auto f = makeFrame(true);
         auto c = std::make_shared<rawrcam::metadata::CameraContextMetadata>(*f.metadata.cameraContext);
         c->geometry.rawBufferWidth = 1632;
@@ -643,7 +645,7 @@ int main() {
         c->geometry.pixelArrayWidth = 408;
         c->geometry.pixelArrayHeight = 306;
         c->geometry.preCorrectionActiveArray = {0, 0, 408, 306, true};
-        c->cfaBlock = 1;
+        c->cfaBlock = block;
         c->photoReduced = c->photoReduced25 = true;
         c->binnedFallbackContext = f.metadata.cameraContext;
         f.metadata.cameraContext = c;
@@ -655,14 +657,14 @@ int main() {
         f.raw16.resize(size_t(f.width) * f.height * 2);
         error.clear();
         auto params = rawrcam::encoding::dng::makeTinyDngWriteParams(f, capture, &error);
-        if (f.width != 576 || f.height != 432 || !params || params->raw.active_area[0] != 0 ||
-            params->raw.active_area[1] != 0 || params->raw.active_area[2] != 432 || params->raw.active_area[3] != 576 ||
+        if (f.width != ow || f.height != oh || !params || params->raw.active_area[0] != 0 ||
+            params->raw.active_area[1] != 0 || params->raw.active_area[2] != oh || params->raw.active_area[3] != ow ||
             params->raw.white_level[0] != 4092) {
-            std::cerr << "25 MP geometry: " << error << "\n";
+            std::cerr << "smaller reduced geometry (block " << block << "): " << f.width << "x" << f.height << " " << error << "\n";
             return 13;
         }
-        std::cout << "DNG_CAPTURE_REDUCED25_GEOMETRY_PASS\n";
     }
+    std::cout << "DNG_CAPTURE_REDUCED_SMALL_GEOMETRY_PASS\n";
     auto bad = makeFrame(false);
     error.clear();
     if (rawrcam::encoding::dng::makeTinyDngWriteParams(bad, capture, &error) ||

@@ -14,8 +14,9 @@ namespace rawrcam::capture {
 // Per-capture owner. Two fence-protected upload/readback slots, one ordered queue.
 // collect() must precede reuse; destruction retires outstanding submissions.
 // Each frame is reduced by its context: a 4x4 block mosaic through the Hexadeca sums and
-// quad remosaic, Bayer through the linear 2x bin (raw_ingress BayerBinner); a 25 MP output then resamples the half-size
-// result. width x height is the source, the output size comes from reducedRawSize().
+// quad remosaic (a 25 MP output then resamples the half-size result), Bayer through the linear bins
+// (raw_ingress BayerBinner: 2x, or 3x for the smaller size). width x height is the source, the output
+// size comes from reducedRawSize().
 class ReducedRaw final {
    public:
     ReducedRaw(const vulkan::VulkanContext&, const metadata::CameraContextMetadata&, uint32_t width, uint32_t height,
@@ -47,6 +48,7 @@ class ReducedRaw final {
     void allocate(Buffer&, size_t, VkBufferUsageFlags);
     const vulkan::VulkanContext& vk_;
     uint32_t width_, height_, outWidth_, outHeight_;
+    bool direct3x_ = false;  // Bayer at the smaller size: the direct 3x bin, no resample
     size_t bytes_;
     VkCommandPool pool_{};
     std::array<Slot, 2> slots_{};

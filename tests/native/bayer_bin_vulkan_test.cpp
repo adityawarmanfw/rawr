@@ -1,7 +1,10 @@
 // GPU Bayer downscales (native/raw_ingress BayerBinner) vs CPU references:
-//  - the linear 2x bin with sharpening on detail (shaders/bayer_lin.comp) against a CPU copy of the same
-//    algorithm (kernels from BayerBinKernels.h, half-float sharpening term, histogram noise floors,
-//    smoothed switch). Float summation order differs: no code may differ by more than two, few by one.
+//  - the linear 2x bin (shaders/bayer_lin.comp) against a CPU copy of the same algorithm (kernels from
+//    BayerBinKernels.h, clamp to the 3x3 same-colour source samples). Float summation order differs: no
+//    code may differ by more than two, few by one.
+//  - the direct 3x bin (shaders/bayer_bin3.comp) against a CPU copy that picks each output's RGGB kernel
+//    by matching the actual window colours (not the shader's phase rule), all orders, centred crops;
+//  - flat colours through the 3x bin in every order come out exact (a wrong phase would mix colours);
 //  - mirrored Bayer orders: a mirrored scene binned with the mirrored order equals the mirrored result;
 //  - the 50 -> 25 MP resample against the DNG converter's BayerResample.
 // Optional: bayer_bin_vulkan_test - <width> <height> <order> times a synthetic frame.
@@ -58,14 +61,6 @@ Frame scene(std::uint32_t w, std::uint32_t h, const std::array<std::uint8_t, 4>&
     return f;
 }
 
-float toHalf(float v) {  // the shader's rounding to the nearest half-float value
-    std::uint32_t b;
-    std::memcpy(&b, &v, 4);
-    b = (b + 0x0FFFu + ((b >> 13) & 1u)) & ~0x1FFFu;
-    std::memcpy(&v, &b, 4);
-    return v;
-}
-
 // CPU copy of shaders/bayer_lin.comp.
 Frame cpuBin(const Frame& in, std::uint32_t w, std::uint32_t h, const Params& p) {
     const int ow = int(w / 2), oh = int(h / 2);
@@ -80,92 +75,87 @@ Frame cpuBin(const Frame& in, std::uint32_t w, std::uint32_t h, const Params& p)
         const int site = 2 * (y & 1) + (x & 1);
         return (float(in[std::size_t(y) * w + x]) - p.black[site]) * (g[site] / span);
     };
-    auto fromCode = [&](std::uint16_t c, int site) { return (float(c) / codeGain - p.black[site]) / span; };
     auto toCode = [&](float v, int site) {
         const float c = std::clamp(v * span + p.black[site], 0.0f, p.white);
         return std::uint16_t(std::clamp(c * codeGain, 0.0f, p.white * codeGain) + 0.5f);
     };
-    auto band = [&](float l) { return std::clamp(int(std::floor(2.0f * std::log2(std::max(l * span, 0.5f)))), 0, 25); };
     const bool fx = p.order & 1u, fy = p.order & 2u;
-    Frame base(std::size_t(ow) * oh);
-    std::vector<float> d(std::size_t(ow) * oh);
+    Frame out(std::size_t(ow) * oh);
     for (int Y = 0; Y < oh; ++Y)
         for (int X = 0; X < ow; ++X) {
             const int q = 2 * ((Y & 1) ^ int(fy)) + ((X & 1) ^ int(fx));
-            float b = 0, dd = 0;
+            float b = 0;
             for (int ky = 0; ky < 12; ++ky)
-                for (int kx = 0; kx < 12; ++kx) {
-                    const float v = sample(2 * X - 5 + (fx ? 11 - kx : kx), 2 * Y - 5 + (fy ? 11 - ky : ky));
-                    b += rawr::raw_ingress::kBayerBinPlain[q * 144 + ky * 12 + kx] * v;
-                    dd += rawr::raw_ingress::kBayerBinSharpDelta[q * 144 + ky * 12 + kx] * v;
+                for (int kx = 0; kx < 12; ++kx)
+                    b += rawr::raw_ingress::kBayerBinPlain[q * 144 + ky * 12 + kx] *
+                         sample(2 * X - 5 + (fx ? 11 - kx : kx), 2 * Y - 5 + (fy ? 11 - ky : ky));
+            // Same-colour source samples around the one nearest the output centre.
+            const int cx = 2 * X + (X & 1), cy = 2 * Y + (Y & 1);
+            float lo = sample(cx, cy), hi = lo;
+            for (int u = -2; u <= 2; u += 2)
+                for (int v = -2; v <= 2; v += 2) {
+                    const float a = sample(cx + v, cy + u);
+                    lo = std::min(lo, a);
+                    hi = std::max(hi, a);
                 }
             const int site = 2 * (Y & 1) + (X & 1);
-            base[std::size_t(Y) * ow + X] = toCode(b / g[site], site);
-            d[std::size_t(Y) * ow + X] = toHalf(dd / g[site]);
+            out[std::size_t(Y) * ow + X] = toCode(std::clamp(b, lo, hi) / g[site], site);
         }
-    auto at = [&](int x, int y, bool level) {
-        x = std::clamp(x, 0, ow - 1);
-        y = std::clamp(y, 0, oh - 1);
-        const std::size_t i = std::size_t(y) * ow + x;
-        return level ? fromCode(base[i], 2 * (y & 1) + (x & 1)) : d[i] * d[i];
+    return out;
+}
+
+// CPU copy of shaders/bayer_bin3.comp, the RGGB phase found from the window's colours.
+Frame cpuBin3(const Frame& in, std::uint32_t w, std::uint32_t h, const Params& p) {
+    const auto size = rawr::raw_ingress::BayerBinner::outputSize(w, h, 3);
+    const int ow = int(size.width), oh = int(size.height), ox = int(size.offsetX), oy = int(size.offsetY);
+    float maxBlack = 0, maxGain = 0;
+    for (int i = 0; i < 4; ++i) maxBlack = std::max(maxBlack, p.black[i]), maxGain = std::max(maxGain, p.gains[i]);
+    const float span = p.white - maxBlack, codeGain = 4;
+    std::array<float, 4> g{};
+    for (int i = 0; i < 4; ++i) g[i] = p.gains[i] / maxGain;
+    auto reflect = [](int v, int n) { return v < 0 ? -v : (v >= n ? 2 * n - 2 - v : v); };
+    auto sample = [&](int x, int y) {
+        x = reflect(x, int(w));
+        y = reflect(y, int(h));
+        const int site = 2 * (y & 1) + (x & 1);
+        return (float(in[std::size_t(y) * w + x]) - p.black[site]) * (g[site] / span);
     };
-    auto box7 = [&](int x, int y, bool level) {
-        float s = 0;
-        for (int j = -3; j <= 3; ++j)
-            for (int i = -3; i <= 3; ++i) s += at(x + i, y + j, level);
-        return s / 49.0f;
+    auto toCode = [&](float v, int site) {
+        const float c = std::clamp(v * span + p.black[site], 0.0f, p.white);
+        return std::uint16_t(std::clamp(c * codeGain, 0.0f, p.white * codeGain) + 0.5f);
     };
-    std::vector<std::uint32_t> hist(26 * 128);
-    for (int y = 3; y < oh - 3; y += 4)
-        for (int x = 3; x < ow - 3; x += 4) {
-            const float e = box7(x, y, false), l = box7(x, y, true);
-            const int bin = std::clamp(int(std::floor((std::log2(std::max(e, 1e-30f)) + 48.0f) / 0.375f)), 0, 127);
-            ++hist[band(l) * 128 + bin];
-        }
-    std::array<float, 26> f{};
-    for (int b = 0; b < 26; ++b) {
-        std::uint32_t total = 0, acc = 0;
-        for (int i = 0; i < 128; ++i) total += hist[b * 128 + i];
-        f[b] = -1;
-        if (total < 200) continue;
-        for (int i = 0; i < 128; ++i)
-            if ((acc += hist[b * 128 + i]) > total * 3 / 10) {
-                f[b] = std::exp2(-48.0f + (float(i) + 0.5f) * 0.375f);
-                break;
-            }
-    }
-    std::array<float, 26> floors{};
-    for (int b = 0; b < 26; ++b) {
-        float v = f[b];
-        if (v < 0) {
-            int lo = b - 1, hi = b + 1;
-            while (lo >= 0 && f[lo] < 0) --lo;
-            while (hi < 26 && f[hi] < 0) ++hi;
-            v = 1;
-            if (lo >= 0 && hi < 26) v = f[lo] + (f[hi] - f[lo]) * float(b - lo) / float(hi - lo);
-            else if (lo >= 0) v = f[lo];
-            else if (hi < 26) v = f[hi];
-        }
-        floors[b] = v;
-    }
-    auto rawSwitch = [&](int x, int y) {
-        float s = std::clamp((box7(x, y, false) / floors[band(box7(x, y, true))] - 2.5f) / 3.5f, 0.0f, 1.0f);
-        return s * s * (3 - 2 * s);
-    };
-    static const float gk[13] = {0.00222f, 0.00877f, 0.02702f, 0.06482f, 0.12111f, 0.17621f, 0.19967f,
-                                 0.17621f, 0.12111f, 0.06482f, 0.02702f, 0.00877f, 0.00222f};
-    Frame out(base.size());
+    const auto& cfa = kOrders[p.order];
+    static constexpr std::uint8_t rggb[4] = {0, 1, 1, 2};
+    Frame out(std::size_t(ow) * oh);
     for (int Y = 0; Y < oh; ++Y)
         for (int X = 0; X < ow; ++X) {
-            float s = 0;
-            for (int j = 0; j < 13; ++j) {
-                float row = 0;
-                for (int i = 0; i < 13; ++i) row += gk[i] * rawSwitch(X + i - 6, Y + j - 6);
-                s += gk[j] * row;
+            const int cx = 3 * X + 1 + ox, cy = 3 * Y + 1 + oy;
+            const std::uint8_t colour = cfa[2 * (Y & 1) + (X & 1)];
+            // The RGGB output phase whose window (centred on 3X'+1) has this window's colours.
+            int q = -1;
+            for (int t = 0; t < 4 && q < 0; ++t) {
+                const int tcx = 3 * (t & 1) + 1, tcy = 3 * (t >> 1) + 1;
+                bool same = rggb[t] == colour;
+                for (int dy = 0; dy < 2 && same; ++dy)
+                    for (int dx = 0; dx < 2 && same; ++dx)
+                        same = rggb[2 * ((tcy + dy) & 1) + ((tcx + dx) & 1)] == cfa[2 * ((cy + dy) & 1) + ((cx + dx) & 1)];
+                if (same) q = t;
             }
+            if (q < 0) throw std::runtime_error("no RGGB phase for a 3x output");
+            float b = 0, lo = 1e30f, hi = -1e30f;
+            for (int ky = 0; ky < 17; ++ky)
+                for (int kx = 0; kx < 17; ++kx) {
+                    const int sx = cx + kx - 8, sy = cy + ky - 8;
+                    const float v = sample(sx, sy);
+                    b += rawr::raw_ingress::kBayerBin3[q * 289 + ky * 17 + kx] * v;
+                    if (std::abs(kx - 8) <= 3 && std::abs(ky - 8) <= 3 &&
+                        cfa[2 * (reflect(sy, int(h)) & 1) + (reflect(sx, int(w)) & 1)] == colour) {
+                        lo = std::min(lo, v);
+                        hi = std::max(hi, v);
+                    }
+                }
             const int site = 2 * (Y & 1) + (X & 1);
-            const std::size_t i = std::size_t(Y) * ow + X;
-            out[i] = toCode(fromCode(base[i], site) + s * d[i], site);
+            out[std::size_t(Y) * ow + X] = toCode(std::clamp(b, lo, hi) / g[site], site);
         }
     return out;
 }
@@ -205,8 +195,9 @@ struct Gpu {
     }
     // Bin (and optionally resample to rw x rh); returns the final codes.
     Frame run(const Frame& in, std::uint32_t w, std::uint32_t h, const Params& p, std::uint32_t rw = 0,
-              std::uint32_t rh = 0) {
-        const std::uint32_t ow = w / 2, oh = h / 2, fw = rw ? rw : ow, fh = rh ? rh : oh;
+              std::uint32_t rh = 0, std::uint32_t ratio = 2) {
+        const auto size = rawr::raw_ingress::BayerBinner::outputSize(w, h, ratio);
+        const std::uint32_t ow = size.width, oh = size.height, fw = rw ? rw : ow, fh = rh ? rh : oh;
         const VkMemoryPropertyFlags host = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
         auto src = vktest::mkBuf(c.pd, c.dev, in.size() * 2, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, host);
         auto dst = vktest::mkBuf(c.pd, c.dev, VkDeviceSize(fw) * fh * 2, VK_BUFFER_USAGE_TRANSFER_DST_BIT, host);
@@ -235,6 +226,7 @@ struct Gpu {
         f.white = p.white;
         f.order = p.order;
         f.codeGain = 4;
+        f.ratio = ratio;
         binner.bin(cmd, 0, f);
         if (rw) {
             toGeneral(binned.i, VK_ACCESS_SHADER_WRITE_BIT);
@@ -329,6 +321,11 @@ int main(int argc, char** argv) {
             const std::uint32_t rw = std::uint32_t(w / 2 / std::sqrt(2.0)) & ~7u, rh = std::uint32_t(h / 2 / std::sqrt(2.0)) & ~7u;
             gpu.run(in, w, h, p, rw, rh);
             std::printf("bin + resample to %ux%u: %.1f ms\n", rw, rh, gpu.lastMs);
+            for (int i = 0; i < 3; ++i) {
+                gpu.run(in, w, h, p, 0, 0, 3);
+                const auto s3 = rawr::raw_ingress::BayerBinner::outputSize(w, h, 3);
+                std::printf("bin3 to %ux%u: %.1f ms (submit+wait)\n", s3.width, s3.height, gpu.lastMs);
+            }
         } else {
             struct Case {
                 std::uint32_t w, h, order;
@@ -348,6 +345,37 @@ int main(int argc, char** argv) {
                     std::snprintf(name, sizeof(name), "resample %ux%u -> %ux%u", ow, oh, rw, rh);
                     ok &= compare(name, gotR, cpuResample(got, ow, oh, rw, rh, std::uint16_t(p.white * 4)), rw);
                 }
+            }
+            // Direct 3x bin: every order, sizes with and without a centred crop.
+            for (const Case& k : {Case{384, 288, 0}, Case{404, 292, 1}, Case{336, 260, 2}, Case{396, 300, 3}, Case{48, 48, 0}}) {
+                const auto p = params(k.order);
+                const auto in = scene(k.w, k.h, kOrders[k.order], 0x51ed2701u ^ k.order);
+                const auto want = cpuBin3(in, k.w, k.h, p);
+                const auto got = gpu.run(in, k.w, k.h, p, 0, 0, 3);
+                char name[96];
+                std::snprintf(name, sizeof(name), "bin3 %ux%u order=%u", k.w, k.h, k.order);
+                ok &= compare(name, got, want, rawr::raw_ingress::BayerBinner::outputSize(k.w, k.h, 3).width);
+            }
+            // Flat colours through the 3x bin: each output is its own colour's level, in every order.
+            for (std::uint32_t order = 0; order < 4; ++order) {
+                const auto p = params(order);
+                const std::uint32_t w = 192, h = 144;
+                const float level[3] = {300.0f, 700.0f, 450.0f};
+                Frame in(std::size_t(w) * h);
+                for (std::uint32_t y = 0; y < h; ++y)
+                    for (std::uint32_t x = 0; x < w; ++x)
+                        in[std::size_t(y) * w + x] = std::uint16_t(level[kOrders[order][2 * (y & 1) + (x & 1)]] + p.black[2 * (y & 1) + (x & 1)]);
+                const auto got = gpu.run(in, w, h, p, 0, 0, 3);
+                const auto size = rawr::raw_ingress::BayerBinner::outputSize(w, h, 3);
+                int worst = 0;
+                for (std::uint32_t y = 0; y < size.height; ++y)
+                    for (std::uint32_t x = 0; x < size.width; ++x) {
+                        const int site = 2 * (y & 1) + (x & 1);
+                        const int want = int(std::lround((level[kOrders[order][site]] + p.black[site]) * 4));
+                        worst = std::max(worst, std::abs(int(got[std::size_t(y) * size.width + x]) - want));
+                    }
+                std::printf("%s bin3 flat colours order=%u max error %d codes\n", worst <= 2 ? "PASS" : "FAIL", order, worst);
+                ok &= worst <= 2;
             }
             // Mirror symmetry: an RGGB scene mirrored in x is GRBG; its bin must be the mirrored bin.
             {

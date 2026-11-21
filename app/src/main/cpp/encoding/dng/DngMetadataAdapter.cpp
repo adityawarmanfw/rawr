@@ -88,8 +88,8 @@ std::optional<GeometryMap> mapGeometry(const rawrcam::imaging::RawSnapshot& fram
         if (a.right <= a.left || a.bottom <= a.top) break;
         return GeometryMap{0, 0, a.top, a.left, a.bottom, a.right, "scaled_full_pixel_array"};
     }
-    // A 25 MP reduced photo is the pixel array scaled by a non-integer factor (about 1.41 per side
-    // from a 4x binned array): the active area scales per axis, rounded inward.
+    // A smaller reduced photo is the (4x binned) pixel array scaled by a non-integer factor per side
+    // (Bayer 3x bin: 4/3; 4x4 25 MP resample: about 1.41): the active area scales per axis, rounded inward.
     if (g.pixelArrayWidth && g.pixelArrayHeight && frame.width > g.pixelArrayWidth &&
         frame.height > g.pixelArrayHeight && frame.width % g.pixelArrayWidth && frame.height % g.pixelArrayHeight) {
         const double sx = double(frame.width) / g.pixelArrayWidth, sy = double(frame.height) / g.pixelArrayHeight;
