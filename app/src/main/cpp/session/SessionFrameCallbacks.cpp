@@ -144,10 +144,16 @@ float SessionFrameCallbacks::postGainFor(const rawrcam::metadata::FrameMetadataS
         const auto exposure = rawrFrameExposure(metadata, controller->rawrAeContext().reportedPerRequest);
         const bool tagged = metadata.optimizedStillRequestId && *metadata.optimizedStillRequestId != 0;
         std::lock_guard<std::mutex> lock(rawrAeMutex_);
+        // The request in effect when the frame was taken: a burst is asked for its gain only once it
+        // is in (seconds later for 200 MP frames), by which time the viewfinder may have moved on.
         const auto& last = rawrAe_.last();
-        const bool atRepeating = !tagged || (exposure && last &&
-                                             std::abs(exposure->logExposure() - std::log2(double(last->request.shutterNs) *
-                                                                                         double(last->request.iso))) < 0.15);
+        const auto requested = rawrAe_.requestLogExposureAt(metadata.timestampNs);
+        const bool atRepeating =
+            !tagged || (exposure && (requested || last) &&
+                        std::abs(exposure->logExposure() -
+                                 requested.value_or(last ? std::log2(double(last->request.shutterNs) *
+                                                                     double(last->request.iso))
+                                                         : 0.0)) < 0.15);
         if (exposure && atRepeating) {
             if (const auto residual = rawrAe_.residualEvFor(metadata.timestampNs, exposure->logExposure()))
                 return std::clamp(std::exp2(*residual), 1.0f / 16.0f, tonemap::kMaxAePostGain);

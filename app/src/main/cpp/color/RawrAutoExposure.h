@@ -546,14 +546,26 @@ class Controller {
             step.request.underexposed == last_->request.underexposed)
             step.request = last_->request;
         last_ = step;
+        if (f.timestampNs != 0) {
+            // The sensor part of the request (shutter x ISO), as the still-gain check compares it.
+            targets_[nextTarget_] = {f.timestampNs, target,
+                                     std::log2(double(step.request.shutterNs) * double(step.request.iso))};
+            nextTarget_ = (nextTarget_ + 1) % targets_.size();
+        }
         return step;
     }
-    // Viewfinder/still gain (EV) bringing a frame of realized logExposure
-    // to the current target. nullopt before the first metered frame.
+    // Viewfinder/still gain (EV) bringing a frame of realized logExposure to
+    // the target in effect at the frame's timestamp (the latest metered frame
+    // at or before it), else the current target. A burst's frames are asked
+    // for only once the burst is in, which for 200 MP frames can be seconds
+    // later, after the restored viewfinder has moved the target; the photo
+    // follows what was shown when it was taken. nullopt before the first
+    // metered frame.
     std::optional<float> residualEvFor(std::uint64_t timestampNs, double logExposure) noexcept {
         if (const auto cached = cachedResidualEv(timestampNs)) return cached;
         if (!filter_.primed() || !std::isfinite(logExposure)) return std::nullopt;
-        const float residual = std::clamp(float(filter_.value() - logExposure), kMinResidualEv, kMaxResidualEv);
+        const double target = targetAt(timestampNs).value_or(filter_.value());
+        const float residual = std::clamp(float(target - logExposure), kMinResidualEv, kMaxResidualEv);
         if (timestampNs != 0) {
             ring_[next_] = {timestampNs, residual};
             next_ = (next_ + 1) % ring_.size();
@@ -565,6 +577,17 @@ class Controller {
         for (const auto& e : ring_)
             if (e.timestampNs == timestampNs) return e.residualEv;
         return std::nullopt;
+    }
+    // Smoothed target (log exposure) and the request it asked for, after the
+    // latest metered frame at or before timestampNs; nullopt when none is
+    // recorded that early.
+    [[nodiscard]] std::optional<double> targetAt(std::uint64_t timestampNs) const noexcept {
+        const auto* e = entryAt(timestampNs);
+        return e ? std::optional<double>(e->target) : std::nullopt;
+    }
+    [[nodiscard]] std::optional<double> requestLogExposureAt(std::uint64_t timestampNs) const noexcept {
+        const auto* e = entryAt(timestampNs);
+        return e ? std::optional<double>(e->requestLogExposure) : std::nullopt;
     }
     [[nodiscard]] const std::optional<Step>& last() const noexcept { return last_; }
     [[nodiscard]] bool primed() const noexcept { return filter_.primed(); }
@@ -592,6 +615,21 @@ class Controller {
     ExposureFilter filter_;
     std::array<Entry, 256> ring_{};  // ~8 s at 30 fps: covers the ZSL reference
     std::size_t next_ = 0;
+    struct TargetEntry {
+        std::uint64_t timestampNs = 0;
+        double target = 0.0;
+        double requestLogExposure = 0.0;
+    };
+    [[nodiscard]] const TargetEntry* entryAt(std::uint64_t timestampNs) const noexcept {
+        if (timestampNs == 0) return nullptr;
+        const TargetEntry* best = nullptr;
+        for (const auto& e : targets_)
+            if (e.timestampNs != 0 && e.timestampNs <= timestampNs && (!best || e.timestampNs > best->timestampNs))
+                best = &e;
+        return best;
+    }
+    std::array<TargetEntry, 1024> targets_{};  // ~34 s at 30 fps: covers a 200 MP burst and its hand-off
+    std::size_t nextTarget_ = 0;
     std::optional<Step> last_;
     double headroom_ = 0.0;
     std::uint64_t headroomNs_ = 0;

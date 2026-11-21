@@ -568,6 +568,30 @@ int main() {
         f.frameLogMeanEv = -3.3f;
         assert(meter(f, NightLook::Natural, 0.0f)->nightOffsetEv == 0.0f);
     }
+    // A burst frame asked for its gain after the viewfinder moved on (a 200 MP burst is handed over seconds
+    // later, and the restored viewfinder can meter differently): the gain follows the target at the
+    // frame's own timestamp, not the current one.
+    {
+        Sim sim;
+        sim.run({kDayKey - 3.0, kDayKey - 1.0}, 3.0);
+        const std::uint64_t burstTs = 1'000'000'000ull + sim.frame * std::uint64_t(1e9 / sim.fps) - 1;  // after the last metered frame
+        const double targetThen = *sim.ae.targetAt(burstTs);
+        sim.run({kDayKey, kDayKey + 2.0}, 3.0);  // the viewfinder is now 3 EV brighter
+        const std::uint64_t laterTs = 1'000'000'000ull + sim.frame * std::uint64_t(1e9 / sim.fps) - 1;
+        const double targetNow = *sim.ae.targetAt(laterTs);
+        assert(targetThen - targetNow > 2.0);
+        const double burstLogE = std::log2(66'666'667.0 * 800.0);
+        const float burstGain = *sim.ae.residualEvFor(burstTs, burstLogE);
+        assert(near(burstGain, std::clamp(float(targetThen - burstLogE), Controller::kMinResidualEv, Controller::kMaxResidualEv), 1e-4));
+        // A frame after the change gets the new target.
+        assert(near(*sim.ae.residualEvFor(laterTs, burstLogE),
+                    std::clamp(float(targetNow - burstLogE), Controller::kMinResidualEv, Controller::kMaxResidualEv), 1e-4));
+        // The request in effect at the burst frame is the one before the change.
+        const double requestThen = *sim.ae.requestLogExposureAt(burstTs), requestNow = *sim.ae.requestLogExposureAt(laterTs);
+        assert(requestThen - requestNow > 1.0);
+        // Before the first metered frame there is no history: the current target.
+        assert(!sim.ae.targetAt(1) && !sim.ae.requestLogExposureAt(1));
+    }
     std::puts("rawr_auto_exposure_test ok");
     return 0;
 }
