@@ -24,6 +24,13 @@ int main() {
     assert(kept.valid() && kept.y == 0 && kept.height == 1836);
     const auto window = videoSourceRect(3264, 2448, 2448, 1836, kept);
     assert(window.y == 0 && window.height == 1836);
+    // Xiaomi 17 Ultra front at 60 fps: the 4096x2304 mode fills rows 0..2303 of the 4096x3072 RAW10;
+    // the profile drops the 768 rows below. The UHD window then sits inside the rows the camera writes
+    // (a centred one would end at row 2615 and leave 312 rows unwritten).
+    const auto keptFront17 = videoKeptArea(4096, 3072, 0, 0, 0, 768);
+    assert(keptFront17.valid() && keptFront17.y == 0 && keptFront17.height == 2304);
+    const auto uhdFront17 = videoSourceRect(4096, 3072, 3840, 2160, keptFront17);
+    assert(uhdFront17.x == 128 && uhdFront17.y == 72 && uhdFront17.y + uhdFront17.height <= 2304);
     // Mirrored vertically, the window moves to the bottom of the frame: after the shader's mirror it
     // samples rows 0..1835 again, not the 612 rows the camera no longer writes.
     const auto mirrored = mirrorVideoSourceRect(window, 3264, 2448, false, true);
