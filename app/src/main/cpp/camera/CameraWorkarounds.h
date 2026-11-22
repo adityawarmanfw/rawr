@@ -27,22 +27,25 @@ struct CameraWorkarounds {
     // empty one. The vivo X200 Ultra's AF node takes an emptied region as a null ROI and kills the
     // provider (SIGSEGV in convertAPPROIToCoreROI) on its first full-size request.
     bool keepTemplateRegions = false;
+    // A lost companion buffer does not fail the frame. Xiaomi's HAL drops the small companion output on its
+    // full-size stills while the RAW outputs still arrive; elsewhere a lost companion is a real failure.
+    bool ignoreLostCompanion = false;
 
     [[nodiscard]] bool any() const noexcept {
         return holdTapFocus || appPriorityAe || noTapFocus || alwaysSendFrameRate || noAutoCompanion ||
-               keepTemplateRegions;
+               keepTemplateRegions || ignoreLostCompanion;
     }
     bool operator==(const CameraWorkarounds& o) const noexcept {
         return holdTapFocus == o.holdTapFocus && appPriorityAe == o.appPriorityAe && noTapFocus == o.noTapFocus &&
                alwaysSendFrameRate == o.alwaysSendFrameRate && noAutoCompanion == o.noAutoCompanion &&
-               keepTemplateRegions == o.keepTemplateRegions;
+               keepTemplateRegions == o.keepTemplateRegions && ignoreLostCompanion == o.ignoreLostCompanion;
     }
 };
 
 [[nodiscard]] inline CameraWorkarounds mergeWorkarounds(const CameraWorkarounds& a, const CameraWorkarounds& b) noexcept {
     return {a.holdTapFocus || b.holdTapFocus, a.appPriorityAe || b.appPriorityAe, a.noTapFocus || b.noTapFocus,
             a.alwaysSendFrameRate || b.alwaysSendFrameRate, a.noAutoCompanion || b.noAutoCompanion,
-            a.keepTemplateRegions || b.keepTemplateRegions};
+            a.keepTemplateRegions || b.keepTemplateRegions, a.ignoreLostCompanion || b.ignoreLostCompanion};
 }
 
 // Whether a request writes its AF / AE region entry: a tap's region always; otherwise it clears the entry
@@ -59,6 +62,7 @@ struct CameraWorkarounds {
     else if (name == "alwaysSendFrameRate") workarounds.alwaysSendFrameRate = true;
     else if (name == "noAutoCompanion") workarounds.noAutoCompanion = true;
     else if (name == "keepTemplateRegions") workarounds.keepTemplateRegions = true;
+    else if (name == "ignoreLostCompanion") workarounds.ignoreLostCompanion = true;
     else return false;
     return true;
 }
@@ -81,6 +85,7 @@ struct CameraWorkarounds {
     if (workarounds.alwaysSendFrameRate) names.push_back("alwaysSendFrameRate");
     if (workarounds.noAutoCompanion) names.push_back("noAutoCompanion");
     if (workarounds.keepTemplateRegions) names.push_back("keepTemplateRegions");
+    if (workarounds.ignoreLostCompanion) names.push_back("ignoreLostCompanion");
     return names;
 }
 

@@ -643,6 +643,7 @@ bool CameraDeviceSession::createSession(ANativeWindow* window, const std::option
                                                 : o.window == captureWindow_   ? "capture"
                                                                                : "aux_jpeg");
     }
+    callbackContext->ignoreLostCompanion = selected && effectiveWorkarounds(*selected).ignoreLostCompanion;
     sessionContext_ = callbackContext;
     staticLevels_.reset();
     captureStaticLevels_.reset();

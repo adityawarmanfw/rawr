@@ -149,7 +149,7 @@ fun isBufferUsage(text: String): Boolean =
         (text.length > 2 && (text.startsWith("0x") || text.startsWith("0X")) && text.drop(2).toULongOrNull(16) != null)
 
 /** Provider behaviours a lens can say it avoids (see the native CameraWorkarounds). */
-val CAMERA_WORKAROUNDS = listOf("holdTapFocus", "appPriorityAe", "noTapFocus", "alwaysSendFrameRate", "noAutoCompanion", "keepTemplateRegions")
+val CAMERA_WORKAROUNDS = listOf("holdTapFocus", "appPriorityAe", "noTapFocus", "alwaysSendFrameRate", "noAutoCompanion", "keepTemplateRegions", "ignoreLostCompanion")
 
 /**
  * One lens, grouped the way profile schema 2 groups it: which camera, its streams, how the session runs, what
