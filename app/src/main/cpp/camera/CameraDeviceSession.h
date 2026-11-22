@@ -82,6 +82,8 @@ class CameraDeviceSession final {
     // cameraId, so a lens switch between physical cameras of one logical camera only rebuilds the
     // capture session. Samsung (S23 Ultra) blocks reopening a just-closed camera for 1.5-3.5 s.
     void keepDeviceForNextOpen(const std::string& cameraId) { keepForCameraId_ = cameraId; }
+    // True when the last successful open() reused a kept device instead of opening one.
+    bool lastOpenReused() const noexcept { return lastOpenReused_; }
     bool hasSession() const noexcept { return session_ != nullptr; }
     CameraRequest* request() const noexcept { return request_.get(); }
     CameraSessionDriver* session() const noexcept { return session_.get(); }
@@ -163,6 +165,7 @@ class CameraDeviceSession final {
     std::string heldGate_;  // LensRoute::vendorGate held for the open device.
     std::string keepForCameraId_;  // set by keepDeviceForNextOpen, consumed by release()
     bool deviceKept_ = false;      // device_ stays open between release() and the next open()
+    bool lastOpenReused_ = false;
     std::string keptCameraId_;
     std::string keptOrOpenCameraId_;  // cameraId of device_ (open or kept)
     std::map<std::string, std::optional<uint32_t>> vendorTags_;  // name -> tag of the open camera

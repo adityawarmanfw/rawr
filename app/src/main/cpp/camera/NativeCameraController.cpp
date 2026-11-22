@@ -1031,6 +1031,17 @@ struct NativeCameraController::Impl final : CameraEventSink {
                                              return stillCurrent();
                                          });
         if (!stillCurrent()) return;
+        if (!sessionCreated && opened && deviceSession.lastOpenReused()) {
+            // Rawr 17U fork: a kept device can fail its next configure (S23 Ultra, once after a launch:
+            // device error, then "Broken pipe" on configure). That says nothing about the route's companion
+            // stream: close the device and start this lens again with a fresh open, with no RAW-only penalty.
+            diag("CAMERA_NDK_DEVICE_REUSE_FAILED lensId=" + lensId + " retry=fresh_open");
+            rollbackCameraStartLocked(lock, "reused_device_session");
+            if (shutDown) return;
+            active = true;
+            startLocked(lock);
+            return;
+        }
         if (!sessionCreated) {
             // Some HALs reject RAW + YUV at configure time (observed: physical
             // RAW16 + YUV on a Xiaomi logical camera). Retry this route once

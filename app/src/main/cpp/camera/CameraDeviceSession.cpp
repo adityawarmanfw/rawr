@@ -323,6 +323,7 @@ bool CameraDeviceSession::open(const LensRoute& route, CameraCallbacks& callback
                                std::unique_lock<std::mutex>& controllerLock,
                                const std::function<bool()>& stillCurrent) {
     const auto deadline = std::chrono::steady_clock::now() + kOpenBudget;
+    lastOpenReused_ = false;
     if (deviceKept_) {
         deviceKept_ = false;
         const bool reuse = device_ && keptCameraId_ == route.cameraId && heldGate_ == route.vendorGate &&
@@ -331,6 +332,7 @@ bool CameraDeviceSession::open(const LensRoute& route, CameraCallbacks& callback
             if (deviceContext_) deviceContext_->generation.store(generation_, std::memory_order_release);
             diag("CAMERA_NDK_DEVICE_REUSED cameraId=" + route.cameraId + " lensId=" + route.lensId +
                  " generation=" + std::to_string(generation_));
+            lastOpenReused_ = true;
             return true;
         }
         // Not the same camera after all: close the kept device as release() would have.
