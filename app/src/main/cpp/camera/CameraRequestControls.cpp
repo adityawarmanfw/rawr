@@ -248,7 +248,10 @@ CameraControlApplyResult applyCameraControlState(CameraRequest* request, const C
     }
 
     uint8_t af = ACAMERA_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
-    if (state.focusMode == FocusControlMode::Manual) {
+    const bool focusHold = state.viewfinderFocusHold && std::isfinite(*state.viewfinderFocusHold) &&
+                           state.focusMode == FocusControlMode::Continuous && !state.tapAfActive &&
+                           state.capabilities.manualFocusSupported;
+    if (state.focusMode == FocusControlMode::Manual || focusHold) {
         af = ACAMERA_CONTROL_AF_MODE_OFF;
     } else if (state.focusMode == FocusControlMode::LockedAuto || state.tapAfActive) {
         af = ACAMERA_CONTROL_AF_MODE_AUTO;
@@ -273,7 +276,11 @@ CameraControlApplyResult applyCameraControlState(CameraRequest* request, const C
                             : ACAMERA_LENS_OPTICAL_STABILIZATION_MODE_OFF;
     (void)request->setU8(ACAMERA_LENS_OPTICAL_STABILIZATION_MODE, 1, &ois);
 
-    if ((state.focusMode == FocusControlMode::Manual) && state.capabilities.manualFocusSupported) {
+    if (focusHold) {
+        const float diopters = *state.viewfinderFocusHold;
+        const auto status = request->setFloat(ACAMERA_LENS_FOCUS_DISTANCE, 1, &diopters);
+        if (status != kRequestOk) result.focusStatus = status;
+    } else if ((state.focusMode == FocusControlMode::Manual) && state.capabilities.manualFocusSupported) {
         const float diopters = requestedFocusDiopters(state);
         const auto status = request->setFloat(ACAMERA_LENS_FOCUS_DISTANCE, 1, &diopters);
         if (status != kRequestOk) result.focusStatus = status;

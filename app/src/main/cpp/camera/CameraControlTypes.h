@@ -283,6 +283,10 @@ struct CameraControlState {
     std::optional<uint8_t> lensState;
     // Populated only in a still request snapshot, never in live preview controls.
     std::optional<float> stillFocusDistance;
+    // Live preview only. Right after a single full-size still in continuous AF, the
+    // viewfinder holds the lens at the pre-still distance (diopters) for a few frames: a remosaic still
+    // switches the sensor mode and the HAL resets the lens, so continuous AF hunted from infinity.
+    std::optional<float> viewfinderFocusHold;
     // Camera2 CONTROL_POST_RAW_SENSITIVITY_BOOST result (100 == 1x).
     // Copied per repeating CaptureResult alongside appliedSensitivity so the
     // monitor can show the boost multiplier; null before the first result.
