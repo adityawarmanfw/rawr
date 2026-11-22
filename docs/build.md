@@ -60,3 +60,22 @@ Generated review images, logs, environments, and captures belong under `tmp/`.
 Native build trees are ignored. Gradle copies the canonical film asset from
 `native/spektrafilm/assets` into generated APK assets. Committed binary fixtures are intentional test
 inputs; generated source tables and film assets are required build inputs.
+
+## Debug signing
+
+Without configuration, a debug build is signed with the machine's own generated debug key. That key differs
+per machine, and a CI runner is fresh every run, so an APK from another machine (or another CI run) cannot
+update an installed debug build; Android asks for an uninstall first. To share one key, create it outside
+the checkout and give Gradle all four values (partial configuration fails):
+
+```sh
+keytool -genkeypair -keystore /private/path/rawr-debug.jks -alias rawrdebug \
+  -keyalg RSA -keysize 2048 -validity 36500
+```
+
+`RAWR_DEBUG_SIGNING_STORE_FILE`, `RAWR_DEBUG_SIGNING_STORE_PASSWORD`, `RAWR_DEBUG_SIGNING_KEY_ALIAS` and
+`RAWR_DEBUG_SIGNING_KEY_PASSWORD`, or `rawr.debugSigning.*` Gradle properties, or the same names in the
+git-ignored `signing/debug.properties`. The Debug build workflow reads the key from the repository secrets
+`DEBUG_KEYSTORE_BASE64` (the keystore, base64) and `DEBUG_KEYSTORE_PASSWORD` (store and key password, alias
+`rawrdebug`); builds without them (forks' pull requests) use the runner's own key. Only the
+`com.rawr.camera.debug` package and the benchmark build use this key; release signing is above.

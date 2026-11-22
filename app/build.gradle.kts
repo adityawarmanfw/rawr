@@ -107,6 +107,28 @@ android {
         }
     }
 
+    // Optional shared debug key (CI keeps it as a GitHub secret). Without it a debug build is signed with the
+    // machine's own generated debug key, so a debug APK from another machine, or from a fresh CI runner, has a
+    // different signature and cannot update an earlier install. Same lookup as release; partial configuration fails.
+    val localDebugSigning = Properties().apply {
+        rootProject.file("signing/debug.properties").takeIf { it.isFile }?.reader()?.use { load(it) }
+    }
+    val debugSigning = listOf("STORE_FILE", "STORE_PASSWORD", "KEY_ALIAS", "KEY_PASSWORD").associateWith { key ->
+        providers.gradleProperty("rawr.debugSigning.$key").orElse(providers.environmentVariable("RAWR_DEBUG_SIGNING_$key")).orNull
+            ?: localDebugSigning.getProperty("rawr.debugSigning.$key")
+    }
+    require(debugSigning.values.all { it == null } || debugSigning.values.all { !it.isNullOrBlank() }) {
+        "Provide all four RAWR_DEBUG_SIGNING_* values, or none to use the machine's own debug key."
+    }
+    if (debugSigning.values.all { it != null }) {
+        signingConfigs.getByName("debug") {
+            storeFile = rootProject.file(requireNotNull(debugSigning["STORE_FILE"]))
+            storePassword = debugSigning["STORE_PASSWORD"]
+            keyAlias = debugSigning["KEY_ALIAS"]
+            keyPassword = debugSigning["KEY_PASSWORD"]
+        }
+    }
+
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"

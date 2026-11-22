@@ -39,8 +39,25 @@ jobs:
       - name: Unit tests
         run: ./gradlew :app:testDebugUnitTest
 
+      # The shared debug key is a repository secret, so every CI debug APK has the same signature and installs
+      # as an update over the last one. Without the secrets (pull requests from forks get none) the build falls
+      # back to the runner's own debug key, which is different every run.
       - name: Assemble debug APK
-        run: ./gradlew :app:assembleDebug
+        env:
+          DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
+          DEBUG_KEYSTORE_PASSWORD: ${{ secrets.DEBUG_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -n "$DEBUG_KEYSTORE_BASE64" ] && [ -n "$DEBUG_KEYSTORE_PASSWORD" ]; then
+            printf '%s' "$DEBUG_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/rawr-debug.jks"
+            export RAWR_DEBUG_SIGNING_STORE_FILE="$RUNNER_TEMP/rawr-debug.jks"
+            export RAWR_DEBUG_SIGNING_STORE_PASSWORD="$DEBUG_KEYSTORE_PASSWORD"
+            export RAWR_DEBUG_SIGNING_KEY_ALIAS=rawrdebug
+            export RAWR_DEBUG_SIGNING_KEY_PASSWORD="$DEBUG_KEYSTORE_PASSWORD"
+            echo "::notice title=Debug signing::signed with the shared debug key"
+          else
+            echo "::warning title=Debug signing::no shared debug key available; this APK cannot update an earlier debug install"
+          fi
+          ./gradlew :app:assembleDebug
 
       - uses: actions/upload-artifact@v4
         with:
