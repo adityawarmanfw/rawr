@@ -123,6 +123,16 @@ void testProfileMatching() {
         m = matchBuiltInProfile(props({{"ro.product.model", model}}));
         assert(m.profileId == "vivo_x300_pro" && m.rule == "model" && !m.verified);
     }
+    // OPPO Find X8 Ultra (PKJ110): listed, not device-tested as a built-in.
+    m = matchBuiltInProfile(props({{"ro.product.model", "PKJ110"}}));
+    assert(m.profileId == "oppo_x8u" && m.rule == "model" && !m.verified);
+    const auto x8u = builtInCameraProfile("oppo_x8u");
+    assert(x8u.lenses.size() == 9);
+    assert(routeForLens(x8u, "1x")->cameraId == "0" && routeForLens(x8u, "1x")->physicalCameraId == "2");
+    assert(routeForLens(x8u, "F1x")->cameraId == "1" && routeForLens(x8u, "F1x")->mirror);
+    const auto x8uMain50 = routeForLens(x8u, "H1x");
+    assert(x8uMain50 && x8uMain50->photoStream && x8uMain50->photoStream->width == 8192 &&
+           x8uMain50->photoStream->height == 6144);
     const auto pro = builtInCameraProfile("vivo_x300_pro");
     assert(pro.lenses.size() == 3);
     assert(routeForLens(pro, "UW")->cameraId == "4" && routeForLens(pro, "1x")->cameraId == "2");

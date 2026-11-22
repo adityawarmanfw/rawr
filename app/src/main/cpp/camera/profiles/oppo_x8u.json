@@ -1,0 +1,224 @@
+{
+  "id": "oppo_x8u",
+  "schema": 2,
+  "name": "OPPO Find X8 Ultra",
+  "version": 1,
+  "match": {
+    "models": [
+      "PKJ110"
+    ]
+  },
+  "description": "Standard lenses, vendor sensor-mode lenses (2x, 6x, 12x) and a 50 MP main (RAW16 photo stream beside the binned viewfinder).",
+  "lenses": [
+    {
+      "id": "F1x",
+      "camera": {
+        "id": "1"
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 3280,
+          "height": 2464
+        }
+      },
+      "image": {
+        "mirror": "vertical"
+      }
+    },
+    {
+      "id": "0.6x",
+      "camera": {
+        "id": "3"
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 4096,
+          "height": 3072
+        }
+      }
+    },
+    {
+      "id": "1x",
+      "camera": {
+        "id": "0",
+        "physical": "2"
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 4096,
+          "height": 3072
+        }
+      }
+    },
+    {
+      "id": "2x",
+      "camera": {
+        "id": "2"
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 4096,
+          "height": 3072
+        }
+      },
+      "vendorKeys": [
+        {
+          "tag": "com.oplus.engineercamera.agingtest.mode.select",
+          "type": "int32",
+          "scope": "request",
+          "values": [
+            5
+          ],
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "id": "3x",
+      "camera": {
+        "id": "4"
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 4096,
+          "height": 3072
+        }
+      }
+    },
+    {
+      "id": "5.7x",
+      "camera": {
+        "id": "5"
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 4096,
+          "height": 3072
+        }
+      }
+    },
+    {
+      "id": "6x",
+      "camera": {
+        "id": "4"
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 4096,
+          "height": 3072
+        }
+      },
+      "vendorKeys": [
+        {
+          "tag": "com.oplus.engineercamera.agingtest.mode.select",
+          "type": "int32",
+          "scope": "request",
+          "values": [
+            22
+          ],
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "id": "12x",
+      "camera": {
+        "id": "5"
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 4096,
+          "height": 3072
+        }
+      },
+      "vendorKeys": [
+        {
+          "tag": "com.oplus.engineercamera.agingtest.mode.select",
+          "type": "int32",
+          "scope": "request",
+          "values": [
+            5
+          ],
+          "enabled": true
+        }
+      ]
+    },
+    {
+      "id": "H1x",
+      "camera": {
+        "id": "0"
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW16",
+          "width": 4096,
+          "height": 3072
+        },
+        "photo": {
+          "format": "RAW16",
+          "width": 8192,
+          "height": 6144,
+          "levels": {
+            "static": true,
+            "black": [
+              64,
+              64,
+              64,
+              64
+            ],
+            "white": 1023
+          }
+        }
+      },
+      "vendorKeys": [
+        {
+          "tag": "com.oplus.is.sdk.camera.package",
+          "type": "byte",
+          "scope": "session",
+          "values": [
+            1
+          ],
+          "enabled": true
+        },
+        {
+          "tag": "com.oplus.is.from.extension",
+          "type": "int32",
+          "scope": "session",
+          "values": [
+            1
+          ],
+          "enabled": true
+        },
+        {
+          "tag": "com.oplus.engineercamera.agingtest.mode.select",
+          "type": "int32",
+          "scope": "still",
+          "values": [
+            32
+          ],
+          "enabled": true
+        }
+      ],
+      "image": {
+        "levels": {
+          "static": true,
+          "black": [
+            64,
+            64,
+            64,
+            64
+          ],
+          "white": 1023
+        }
+      }
+    }
+  ]
+}
