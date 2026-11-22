@@ -1037,10 +1037,27 @@ struct NativeCameraController::Impl final : CameraEventSink {
             // stream: close the device and start this lens again with a fresh open, with no RAW-only penalty.
             diag("CAMERA_NDK_DEVICE_REUSE_FAILED lensId=" + lensId + " retry=fresh_open");
             rollbackCameraStartLocked(lock, "reused_device_session");
-            if (shutDown) return;
-            active = true;
-            startLocked(lock);
-            return;
+            // The dead device drops the camera id from the service for a moment (characteristics
+            // -10001), so an immediate start is rejected at selection and only the stall watchdog
+            // (~8 s) would bring the camera back. Retry the start for up to the open budget instead.
+            const std::string retryLens = lensId;
+            const auto retryDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(3500);
+            for (int attempt = 1;; ++attempt) {
+                if (shutDown || lensId != retryLens) return;
+                active = true;
+                startLocked(lock);
+                if (deviceSession.hasDevice() || starting || shutDown) {
+                    if (attempt > 1) diag("CAMERA_NDK_DEVICE_REUSE_RECOVERED attempts=" + std::to_string(attempt));
+                    return;
+                }
+                if (std::chrono::steady_clock::now() >= retryDeadline) {
+                    diag("CAMERA_NDK_DEVICE_REUSE_RETRY_GAVE_UP attempts=" + std::to_string(attempt));
+                    return;
+                }
+                lock.unlock();
+                std::this_thread::sleep_for(std::chrono::milliseconds(150));
+                lock.lock();
+            }
         }
         if (!sessionCreated) {
             // Some HALs reject RAW + YUV at configure time (observed: physical
