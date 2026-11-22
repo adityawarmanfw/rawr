@@ -219,7 +219,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         teardownCameraResourcesLocked(lock);
     }
 
-    // Rawr 17U fork: a lens switch within one logical camera keeps the device open on the
+    // A lens switch within one logical camera keeps the device open on the
     // Galaxy S23 Ultra (SM-S918B), whose HAL refuses to reopen a just-closed camera for
     // 1.5-3.5 s (Android 17, diagnostics from two users). Everywhere else the device closes
     // and reopens as before. debug.rawr.keep_device=1 opts another device in, =0 opts out.
@@ -250,7 +250,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
             diag("CAMERA_LENS_SWITCH_FORCED from=" + lensId + " to=" + value + " reason=session_close_timeout");
             forceRetireSessionLocked(lock, "CAMERA_LENS_SWITCH");
         } else if (keepDeviceAcrossLensSwitch() && preferredCameraId.empty()) {
-            // Rawr 17U fork: same logical camera -> keep the device open, rebuild only the session.
+            // Same logical camera -> keep the device open, rebuild only the session.
             const auto from = routeForLens(profile, lensId);
             const auto to = routeForLens(profile, value);
             if (from && to && !to->cameraId.empty() && from->cameraId == to->cameraId)
@@ -1032,7 +1032,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
                                          });
         if (!stillCurrent()) return;
         if (!sessionCreated && opened && deviceSession.lastOpenReused()) {
-            // Rawr 17U fork: a kept device can fail its next configure (S23 Ultra, once after a launch:
+            // A kept device can fail its next configure (S23 Ultra, once after a launch:
             // device error, then "Broken pipe" on configure). That says nothing about the route's companion
             // stream: close the device and start this lens again with a fresh open, with no RAW-only penalty.
             diag("CAMERA_NDK_DEVICE_REUSE_FAILED lensId=" + lensId + " retry=fresh_open");

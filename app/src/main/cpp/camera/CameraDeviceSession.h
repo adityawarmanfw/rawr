@@ -78,7 +78,7 @@ class CameraDeviceSession final {
     // A device kept open for the next lens (keepDeviceForNextOpen) is not "the open device":
     // a start must still run and reuse it through open().
     bool hasDevice() const noexcept { return device_ != nullptr && !deviceKept_; }
-    // Rawr 17U fork: the next release() keeps the device open when the next open() is for the same
+    // The next release() keeps the device open when the next open() is for the same
     // cameraId, so a lens switch between physical cameras of one logical camera only rebuilds the
     // capture session. Samsung (S23 Ultra) blocks reopening a just-closed camera for 1.5-3.5 s.
     void keepDeviceForNextOpen(const std::string& cameraId) { keepForCameraId_ = cameraId; }

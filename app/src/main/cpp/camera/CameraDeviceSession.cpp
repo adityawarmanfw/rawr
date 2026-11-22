@@ -898,7 +898,7 @@ CameraReaderRetirement CameraDeviceSession::release(const Diagnostic& diag) {
     const std::string keepFor = std::exchange(keepForCameraId_, std::string());
     if (device_ && !minimal && !deviceKept_ && !keepFor.empty() && keepFor == keptOrOpenCameraId_ &&
         std::string(device_->backendName()) == "native") {
-        // Rawr 17U fork: keep the device for the next lens of the same logical camera. Its callback
+        // Keep the device for the next lens of the same logical camera. Its callback
         // context moves to the new generation so device errors still reach the controller.
         deviceKept_ = true;
         keptCameraId_ = keepFor;
