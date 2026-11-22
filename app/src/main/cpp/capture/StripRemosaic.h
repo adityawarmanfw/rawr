@@ -62,4 +62,53 @@ void remosaicInStrips(std::vector<uint8_t>& pixels, uint32_t width, uint32_t hei
                     size_t(coreEnd - coreStart) * rowBytes);
     }
 }
+
+// Same strips, two windows in flight: strip i is copied in and submitted
+// before strip i-1 is waited for and copied out, so the host copies and the
+// gaps between submissions overlap the GPU work. submit(window, slot, strip)
+// starts the pass on windows[slot] (slot = strip & 1); wait(slot) blocks until
+// that slot's pass is done (its result is then in windows[slot]). Strip i's
+// window may reach into strip i-2's core, which is already written back; those
+// rows come from the originals saved before that write-back (`saved` rows).
+// Bit-identical to remosaicInStrips.
+template <class Submit, class Wait>
+void remosaicInStripsOverlapped(std::vector<uint8_t>& pixels, uint32_t width, uint32_t height,
+                                const StripLayout& layout, uint8_t* const windows[2], Submit&& submit, Wait&& wait) {
+    const size_t rowBytes = size_t(width) * 2;
+    if (pixels.size() != rowBytes * height) throw std::invalid_argument("strip_remosaic_size");
+    const uint32_t strips = layout.count(height);
+    const auto coreStart = [&](uint32_t i) { return i * layout.core; };
+    const auto coreEnd = [&](uint32_t i) { return std::min(height, coreStart(i) + layout.core); };
+    const auto windowStart = [&](uint32_t i) {
+        return layout.window >= height ? 0u
+                                       : std::min(coreStart(i) < StripLayout::kMargin ? 0u : coreStart(i) - StripLayout::kMargin,
+                                                  height - layout.window);
+    };
+    std::vector<uint8_t> tail(size_t(layout.saved) * rowBytes);
+    uint32_t written = 0;  // rows [0, written) of `pixels` already hold Bayer
+    const auto copyOut = [&](uint32_t j) {
+        wait(j & 1u);
+        // Keep the originals of this core's last rows for a later window that reaches back into it.
+        if (layout.saved && coreEnd(j) < height)
+            std::memcpy(tail.data(), pixels.data() + size_t(coreEnd(j) - layout.saved) * rowBytes,
+                        size_t(layout.saved) * rowBytes);
+        std::memcpy(pixels.data() + size_t(coreStart(j)) * rowBytes,
+                    windows[j & 1u] + size_t(coreStart(j) - windowStart(j)) * rowBytes,
+                    size_t(coreEnd(j) - coreStart(j)) * rowBytes);
+        written = coreEnd(j);
+    };
+    for (uint32_t i = 0; i < strips; ++i) {
+        if (i >= 2) copyOut(i - 2);  // frees windows[i & 1]
+        const uint32_t start = windowStart(i);
+        uint8_t* window = windows[i & 1u];
+        const uint32_t fromTail = written > start ? written - start : 0;
+        if (fromTail > layout.saved) throw std::logic_error("strip_remosaic_layout");
+        if (fromTail)
+            std::memcpy(window, tail.data() + size_t(layout.saved - fromTail) * rowBytes, size_t(fromTail) * rowBytes);
+        std::memcpy(window + size_t(fromTail) * rowBytes, pixels.data() + size_t(start + fromTail) * rowBytes,
+                    size_t(layout.window - fromTail) * rowBytes);
+        submit(window, i & 1u, i);
+    }
+    for (uint32_t j = strips >= 2 ? strips - 2 : 0; j < strips; ++j) copyOut(j);
+}
 }  // namespace rawrcam::capture

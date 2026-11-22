@@ -1,4 +1,5 @@
 #version 450
+#extension GL_EXT_control_flow_attributes : require
 // Block CFA (quad 2x2 / 4x4 same-colour blocks) -> Bayer remosaic. The camera
 // rows are first copied (RAW16, transfer) or unpacked (RAW10, pass 3) into an
 // R16 scratch image: image loads are cached in 2D where storage-buffer loads
@@ -7,8 +8,9 @@
 //  3. RAW10 only: unpack the camera rows into the raw image;
 //  6. exact 2x2 source sum -> half-resolution quarter-DN Quad image;
 //  7. High Quad Bayer reconstruction (after pass 0 statistics);
-//  8. Detail Quad: green with cubic interpolation into the green image;
-//  9. Detail Quad Bayer out (per-pixel colour line fit).
+//  8. Detail Quad: per red/blue block, cubic green into the green image and the block moments
+//     (mean green, mean sample, green variance and covariance sums) into the moment image;
+//  9. Detail Quad Bayer out (colour line fitted to the wanted colour's block moments).
 // Phase-response fit (Hexadeca reduction only, mirrors imaging/PhaseFit.h):
 //  13. clear the statistics; 10. block sums (16 raw samples) into the green
 //  image; 11. statistics over a lattice of flat blocks (shared-memory
@@ -24,6 +26,7 @@
 //  5. Bayer out from the block means.
 // Mirrors app/src/main/cpp/imaging/CfaRemosaic.h expression for expression;
 // tests/native/raw_remosaic_vulkan_test.cpp compares the two.
+layout(constant_id = 0) const uint specializedPass = 0u;
 layout(local_size_x = 16, local_size_y = 16) in;
 layout(std430, set = 0, binding = 0) readonly buffer Source { uint words[]; } src;
 layout(set = 0, binding = 1, r16ui) writeonly uniform uimage2D dst;
@@ -38,6 +41,9 @@ layout(std430, set = 0, binding = 4) buffer Diff { uint words[]; } diff;
 layout(set = 0, binding = 5, r16ui) readonly uniform uimage2D rawRead;
 layout(set = 0, binding = 6, r16ui) readonly uniform uimage2D greenRead;
 layout(std430, set = 0, binding = 7) readonly buffer DiffRead { uint words[]; } diffRead;
+// Detail block moments, one texel per red/blue block at (bx >> 1, by).
+layout(set = 0, binding = 8, rgba32f) writeonly uniform image2D momImage;
+layout(set = 0, binding = 9, rgba32f) readonly uniform image2D momRead;
 layout(push_constant) uniform P {
     uint width;
     uint height;
@@ -293,71 +299,6 @@ void fitFinalizeType(uint type) {
     }
 }
 
-// Detail Quad (block 2): the wanted colour of a blended pixel is a line fit T = a * G + b through
-// the wanted-colour pixels within 3 pixels (Gaussian distance and quartic green-similarity weights),
-// measured from the pixel's own green: u = g - g0, v = raw - g0. The slope is pulled toward 1 (the
-// colour-difference model) by a regulariser, and the line is trusted up to one green range beyond
-// the taps. Mirrors the Detail branch of remosaicBlockCfa, but visits only the 2x2 blocks of the
-// wanted colour (parity pc.parityR/B) instead of testing all 49 taps, and takes the separable
-// distance weight from a table.
-const float kDetailExp[4] = float[4](1.0, 0.77880079, 0.36787945, 0.10539922);  // exp(-d^2 / 4)
-const float kLineSimilarity = 0.5;
-const float kLineExtrapolation = 1.0;
-
-// The line fit from its weighted sums (sums of w, w*u, w*v, w*u*u, w*u*v; green range of the taps).
-float lineFit(float g0, float weight, float su, float sv, float suu, float suv, float umin, float umax) {
-    if (!(weight > 0.0)) return g0;
-    float mu = su / weight, mv = sv / weight;
-    float var_ = suu / weight - mu * mu, cov = suv / weight - mu * mv;
-    float level = max(g0 - pc.blackLevel * pc.codesPerDn, pc.codesPerDn);
-    float lambda = 0.00025 * level * level + 64.0 * pc.codesPerDn * pc.codesPerDn;
-    float slope = (cov + lambda) / (var_ + lambda);
-    float margin = kLineExtrapolation * (umax - umin);
-    float uHere = clamp(0.0, umin - margin, umax + margin);
-    return g0 + mv + slope * (uHere - mu) - uHere;
-}
-
-float detailAt(uint x, uint y) {
-    uint want = channelAt(x, y);
-    float g0 = greenAt(x, y);
-    if (want == 1u) return g0;
-    if (channelAt(x / 2u, y / 2u) == want) return rawAt(int(x), int(y));
-    uint parity = want == 0u ? pc.parityR : pc.parityB;
-    int bpy = int(parity >> 1u), bpx = int(parity & 1u);
-    int X = int(x), Y = int(y);
-    float weight = 0.0, su = 0.0, sv = 0.0, suu = 0.0, suv = 0.0, umin = 1e30, umax = -1e30;
-    for (int by = (Y - 3) >> 1; by <= (Y + 3) >> 1; ++by) {
-        if ((by & 1) != bpy) continue;
-        for (int bx = (X - 3) >> 1; bx <= (X + 3) >> 1; ++bx) {
-            if ((bx & 1) != bpx) continue;
-            for (int j = 0; j < 2; ++j) {
-                int qy = 2 * by + j, dy = qy - Y;
-                if (qy < 0 || qy >= int(pc.height) || abs(dy) > 3) continue;
-                for (int i = 0; i < 2; ++i) {
-                    int qx = 2 * bx + i, dx = qx - X;
-                    if (qx < 0 || qx >= int(pc.width) || abs(dx) > 3) continue;
-                    float g = greenAt(uint(qx), uint(qy));
-                    float d = g - g0, sg = kLineSimilarity * max(g0, g) + 4.0 * pc.codesPerDn;
-                    float d2 = d * d, s2 = sg * sg, s4 = s2 * s2;
-                    float wgt = kDetailExp[abs(dx)] * kDetailExp[abs(dy)] * s4 / (s4 + d2 * d2);
-                    float vv = rawAt(qx, qy) - g0;
-                    if (wgt > 1e-3) {
-                        umin = min(umin, d);
-                        umax = max(umax, d);
-                    }
-                    su += wgt * d;
-                    sv += wgt * vv;
-                    suu += wgt * d * d;
-                    suv += wgt * d * vv;
-                    weight += wgt;
-                }
-            }
-        }
-    }
-    return lineFit(g0, weight, su, sv, suu, suv, umin, umax);
-}
-
-
 // cfaFastAt: own sample, else block means of the wanted colour interpolated.
 float fastAt(uint x, uint y) {
     uint want = channelAt(x, y), bx = x / pc.block, by = y / pc.block;
@@ -390,60 +331,92 @@ float fastAt(uint x, uint y) {
     return top + (bottom - top) * ty;
 }
 
-// Tiled Detail Bayer out: a workgroup (32x32 pixels) first loads green and raw of its
-// pixels plus a 3-pixel halo into shared memory (green | raw << 16), then every pixel
-// walks its wanted-colour taps there instead of in the images. Same arithmetic as detailAt.
-const int DETAIL_TILE = 38;
-shared uint detailTile[38 * 38];
+// ---- Detail Quad (passes 8, 9), mirrors the Detail branch of remosaicBlockCfa ----
+const float kDetailSimilarity = 0.5, kDetailSlopeLambda = 4.0;
+const float kDetailSpatialLog2 = -0.25 * 0.06 * 1.44269504;  // kDetailSpatial on quarter-pixel^2 units, log2 e
 
-uint detailTileAt(ivec2 p, ivec2 origin) { return detailTile[(p.y - origin.y) * DETAIL_TILE + (p.x - origin.x)]; }
-
-float detailAtTile(uint x, uint y, ivec2 origin) {
-    uint want = channelAt(x, y);
-    uint here = detailTileAt(ivec2(x, y), origin);
-    float g0 = float(here & 0xffffu);
-    if (want == 1u) return g0;
-    if (channelAt(x / 2u, y / 2u) == want) return float(here >> 16u);
+// Colour line at the pixel's green from the wanted colour's block moments (CfaLineSums add + fit).
+float detailFit(int x, int y, float g0, uint want) {
     uint parity = want == 0u ? pc.parityR : pc.parityB;
     int bpy = int(parity >> 1u), bpx = int(parity & 1u);
-    int X = int(x), Y = int(y);
-    // The taps are the wanted-colour columns x rows of the 7x7 window (at most 4 each): the
-    // distance weight is separable, so list the columns and rows once.
-    int cols[4], rows[4];
-    float wc[4], wr[4];
-    int nc = 0, nr = 0;
-    for (int q = X - 3; q <= X + 3; ++q)
-        if (((q >> 1) & 1) == bpx && q >= 0 && q < int(pc.width)) {
-            cols[nc] = q;
-            wc[nc++] = kDetailExp[abs(q - X)];
-        }
-    for (int q = Y - 3; q <= Y + 3; ++q)
-        if (((q >> 1) & 1) == bpy && q >= 0 && q < int(pc.height)) {
-            rows[nr] = q;
-            wr[nr++] = kDetailExp[abs(q - Y)];
-        }
+    int pbx = x >> 1, pby = y >> 1;
+    float w = 0.0, su = 0.0, sv = 0.0, suu = 0.0, suv = 0.0, umin = 1e30, umax = -1e30;
     float floorSigma = 4.0 * pc.codesPerDn;
-    float weight = 0.0, su = 0.0, sv = 0.0, suu = 0.0, suv = 0.0, umin = 1e30, umax = -1e30;
-    for (int j = 0; j < nr; ++j)
-        for (int i = 0; i < nc; ++i) {
-            uint t = detailTileAt(ivec2(cols[i], rows[j]), origin);
-            float g = float(t & 0xffffu);
-            // spatial * s^4 / (s^4 + d^4), one division
-            float d = g - g0, sg = kLineSimilarity * max(g0, g) + floorSigma;
-            float d2 = d * d, s2 = sg * sg, s4 = s2 * s2;
-            float wgt = wc[i] * wr[j] * s4 / (s4 + d2 * d2);
-            float vv = float(t >> 16u) - g0;
+    // The wanted colour's blocks repeat every 2 blocks: start at the first one with its parity.
+    int byFirst = pby - 4 + (((pby - 4) & 1) != bpy ? 1 : 0), bxFirst = pbx - 4 + (((pbx - 4) & 1) != bpx ? 1 : 0);
+    for (int by = byFirst; by <= pby + 4; by += 2) {
+        if (by < 0 || by >= int(pc.blocksY)) continue;
+        int ty = 4 * by + 1 - 2 * y;  // twice the vertical distance to the block centre (odd)
+        for (int bx = bxFirst; bx <= pbx + 4; bx += 2) {
+            if (bx < 0 || bx >= int(pc.blocksX)) continue;
+            int tx = 4 * bx + 1 - 2 * x;
+            if (tx * tx + ty * ty > 4 * 49) continue;  // kDetailRadius = 7
+            vec4 m = imageLoad(momRead, ivec2(bx >> 1, by));
+            float d = m.x - g0, e = m.y - g0;
+            float sg = kDetailSimilarity * max(g0, m.x) + floorSigma;
+            float s2 = sg * sg, s4 = s2 * s2, d2 = d * d;
+            // exp(-(d^2) * 0.06) with d^2 = (tx^2 + ty^2) / 4: one exp2, no table lookup.
+            float wgt = exp2(float(tx * tx + ty * ty) * kDetailSpatialLog2) * s4 / (s4 + d2 * d2);
+            w += 4.0 * wgt;
+            su += 4.0 * wgt * d;
+            sv += 4.0 * wgt * e;
+            suu += wgt * (m.z + 4.0 * d * d);
+            suv += wgt * (m.w + 4.0 * d * e);
             if (wgt > 1e-3) {
                 umin = min(umin, d);
                 umax = max(umax, d);
             }
-            su += wgt * d;
-            sv += wgt * vv;
-            suu += wgt * d * d;
-            suv += wgt * d * vv;
-            weight += wgt;
         }
-    return lineFit(g0, weight, su, sv, suu, suv, umin, umax);
+    }
+    if (!(w > 0.0)) return g0;
+    float mu = su / w, mv = sv / w;
+    float var_ = suu / w - mu * mu, cov = suv / w - mu * mv;
+    float lambda = kDetailSlopeLambda * pc.codesPerDn * pc.codesPerDn;
+    float slope = (cov + lambda) / (var_ + lambda);
+    float margin = umax - umin;
+    float uHere = clamp(0.0, umin - margin, umax + margin);
+    return g0 + mv + slope * (uHere - mu) - uHere;
+}
+
+// Pass 8, one invocation per block: green of a red/blue block and its moments.
+void detailGreenPass(uint bx, uint by) {
+    if (bx >= pc.blocksX || by >= pc.blocksY || channelAt(bx, by) == 1u) return;
+    int X0 = int(2u * bx), Y0 = int(2u * by);
+    float g4[4], v4[4];
+    greenGroup(uint(X0), uint(Y0), g4, true);
+    for (int k = 0; k < 4; ++k) {
+        ivec2 p = ivec2(min(X0 + (k & 1), int(pc.width) - 1), min(Y0 + (k >> 1), int(pc.height) - 1));
+        g4[k] = float(roundDn(g4[k]));
+        v4[k] = rawAt(p.x, p.y);
+        imageStore(greenImage, ivec2(X0 + (k & 1), Y0 + (k >> 1)), uvec4(uint(g4[k]), 0u, 0u, 0u));
+    }
+    float mg = 0.25 * ((g4[0] + g4[1]) + (g4[2] + g4[3])), mv = 0.25 * ((v4[0] + v4[1]) + (v4[2] + v4[3]));
+    float gg = 0.0, gv = 0.0;
+    for (int k = 0; k < 4; ++k) {
+        float dg = g4[k] - mg;
+        gg += dg * dg;
+        gv += dg * (v4[k] - mv);
+    }
+    imageStore(momImage, ivec2(int(bx >> 1u), int(by)), vec4(mg, mv, gg, gv));
+}
+
+// Pass 9, one invocation per block (2x2 pixels): Bayer out.
+void detailOutPass(uint bx, uint by) {
+    if (bx >= pc.blocksX || by >= pc.blocksY) return;
+    bool colourBlock = channelAt(bx, by) != 1u;
+    uint blockColour = channelAt(bx, by);
+    for (int k = 0; k < 4; ++k) {
+        int x = int(2u * bx) + (k & 1), y = int(2u * by) + (k >> 1);
+        if (x >= int(pc.width) || y >= int(pc.height)) continue;
+        uint want = channelAt(uint(x), uint(y));
+        float own = rawAt(x, y);
+        float g0 = colourBlock ? float(imageLoad(greenRead, ivec2(x, y)).r) : own;
+        float v;
+        if (want == 1u) v = g0;
+        else if (blockColour == want) v = own;
+        else v = detailFit(x, y, g0, want);
+        imageStore(dst, ivec2(x, y), uvec4(roundDn(v), 0u, 0u, 0u));
+    }
 }
 
 // Passes 0 and 2 run one invocation per 2x2 pixel group (always inside one
@@ -456,12 +429,13 @@ shared float partialGreen[16][16];
 shared uint partialCount[16][16];
 
 void main() {
+    const uint activePass = specializedPass != 0u ? specializedPass : pc.pass;
     uint x = gl_GlobalInvocationID.x, y = gl_GlobalInvocationID.y;
-    if (pc.pass == 13u) {  // clear the statistics
+    if (activePass == 13u) {  // clear the statistics
         for (uint i = gl_LocalInvocationIndex; i < FIT_STATS; i += 256u) diff.words[i] = 0u;
         return;
     }
-    if (pc.pass == 10u) {  // block sums (reduced width / 2 blocks per row)
+    if (activePass == 10u) {  // block sums (reduced width / 2 blocks per row)
         if (x >= pc.width / 2u || y >= pc.height / 2u) return;
         uint sum = 0u;
         for (uint j = 0u; j < 4u; ++j)
@@ -469,7 +443,7 @@ void main() {
         imageStore(greenImage, ivec2(int(x), int(y)), uvec4(min(sum, 65535u), 0u, 0u, 0u));
         return;
     }
-    if (pc.pass == 11u) {  // statistics on a stride lattice of flat blocks
+    if (activePass == 11u) {  // statistics on a stride lattice of flat blocks
         for (uint i = gl_LocalInvocationIndex; i < FIT_STATS; i += 256u) fitAcc[i] = 0u;
         barrier();
         uint bw4 = pc.width / 2u, bh4 = pc.height / 2u;
@@ -500,11 +474,11 @@ void main() {
         }
         return;
     }
-    if (pc.pass == 12u) {  // curve per block type
+    if (activePass == 12u) {  // curve per block type
         if (gl_LocalInvocationIndex < 4u) fitFinalizeType(gl_LocalInvocationIndex);
         return;
     }
-    if (pc.pass == 6u) {
+    if (activePass == 6u) {
         if (x >= pc.width || y >= pc.height) return;
         uint sx = 2u*x, sy = 2u*y;
         if (pc.fit != 0u) {
@@ -516,7 +490,7 @@ void main() {
         imageStore(rawImage, ivec2(x,y), uvec4(sum,0u,0u,0u));
         return;
     }
-    if (pc.pass == 3u) {
+    if (activePass == 3u) {
         if (x >= pc.width || y >= pc.height) return;
         uint base = y * pc.rowStrideBytes + (x >> 2u) * 5u, k = x & 3u;
         uint v = (byteAt(base + k) << 2u) | ((byteAt(base + 4u) >> (2u * k)) & 3u);
@@ -525,35 +499,20 @@ void main() {
     }
     uint x0 = x * 2u, y0 = y * 2u;
     uint x1 = min(pc.width, x0 + 2u), y1 = min(pc.height, y0 + 2u);
-    if (pc.pass == 9u) {
-        ivec2 origin = ivec2(gl_WorkGroupID.xy) * 32 - 3;
-        for (uint i = gl_LocalInvocationIndex; i < uint(DETAIL_TILE * DETAIL_TILE); i += 256u) {
-            ivec2 p = origin + ivec2(int(i) % DETAIL_TILE, int(i) / DETAIL_TILE);
-            uint v = 0u;
-            if (p.x >= 0 && p.y >= 0 && p.x < int(pc.width) && p.y < int(pc.height))
-                v = imageLoad(greenRead, p).r | (imageLoad(rawRead, p).r << 16u);
-            detailTile[i] = v;
-        }
-        barrier();
-        for (uint py = y0; py < y1; ++py)
-            for (uint px = x0; px < x1; ++px)
-                imageStore(dst, ivec2(int(px), int(py)), uvec4(roundDn(detailAtTile(px, py, origin)), 0u, 0u, 0u));
+    if (activePass == 8u) {
+        detailGreenPass(x, y);
         return;
     }
-    if (pc.pass == 2u || pc.pass == 5u || pc.pass == 7u) {
+    if (activePass == 9u) {
+        detailOutPass(x, y);
+        return;
+    }
+    if (activePass == 2u || activePass == 5u || activePass == 7u) {
         for (uint py = y0; py < y1; ++py)
             for (uint px = x0; px < x1; ++px) {
-                float v = pc.pass == 7u ? highAt(px, py) : (pc.pass == 2u ? bayerAt(px, py) : fastAt(px, py));
+                float v = activePass == 7u ? highAt(px, py) : (activePass == 2u ? bayerAt(px, py) : fastAt(px, py));
                 imageStore(dst, ivec2(int(px), int(py)), uvec4(roundDn(v), 0u, 0u, 0u));
             }
-        return;
-    }
-    if (pc.pass == 8u) {
-        float g4[4];
-        greenGroup(x0, y0, g4, true);
-        for (uint py = y0; py < y1; ++py)
-            for (uint px = x0; px < x1; ++px)
-                imageStore(greenImage, ivec2(int(px), int(py)), uvec4(roundDn(g4[(py - y0) * 2u + (px - x0)]), 0u, 0u, 0u));
         return;
     }
     // Pass 0: green over the group; for R/B blocks the partial sums of raw -
@@ -561,7 +520,7 @@ void main() {
     bool colour = channelAt(x0 / pc.block, y0 / pc.block) != 1u;
     float sum = 0.0, greenSum = 0.0;
     uint count = 0u;
-    if (pc.pass == 4u) {
+    if (activePass == 4u) {
         for (uint py = y0; py < y1; ++py)
             for (uint px = x0; px < x1; ++px, ++count) sum += rawAt(int(px), int(py));
     } else {
@@ -595,7 +554,7 @@ void main() {
             greenTotal += partialGreen[l.y + j][l.x + i];
             pixels += partialCount[l.y + j][l.x + i];
         }
-    if (pc.pass == 4u)
+    if (activePass == 4u)
         storeDiff(by * pc.blocksX + bx, vec2(pixels != 0u ? total / float(pixels) : 0.0, 0.0));
     else
         storeDiff(by * pc.blocksX + bx, colour && pixels != 0u ? vec2(total, greenTotal) / float(pixels) : vec2(0.0));

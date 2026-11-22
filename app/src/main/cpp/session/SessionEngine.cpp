@@ -418,6 +418,11 @@ void SessionEngine::consumeIngress(imaging::FrameIngressQueue::Event event, imag
     }
     {
         std::lock_guard<std::mutex> lock(mu_);
+        if (raw && lastCameraContext_ &&
+            (lastCameraContext_->cfaBlock > 1u || lastCameraContext_->photoCfaBlock > 1u)) {
+            try { vulkanContext_.prepareRemosaic(); }
+            catch (const std::exception& e) { LOGE("REMOSAIC_PREWARM_START_FAILED %s", e.what()); }
+        }
         if (raw) rawReaderUsage_.rawArrived(std::get<imaging::RawFrameLease>(event.payload).get().generation);
         drainFullSizeStills();
         if (drops.images) realtime_.timing().recordDropped(drops.images);

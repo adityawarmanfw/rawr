@@ -143,11 +143,94 @@ inline float cfaBlendDiff(const CfaBlockTap& t, float green, Tap&& tap, float co
 // block straddling an edge no longer averaged into one value), weighted by
 // distance and green similarity.
 //
-// Detail (quad only, block 2; other block sizes run High): the green estimate
-// is cubic, and the colour difference is taken per pixel from the wanted
-// colour's pixels within 3 pixels instead of per 2x2 block. On Hexadeca input
-// reduced by exact 2x2 sums this is the sensor's own 50 MP grid; measured
-// against ground truth it is ~1.3 dB better than High there.
+// Detail (quad only, block 2; other block sizes run High): green is cubic (Hermite between the
+// neighbouring blocks' greens, the two axes blended by gradient). Red/blue at a foreign site lie on a
+// colour line T = a * G + b fitted to the wanted colour's 2x2 blocks within kDetailRadius pixels: each
+// block enters as its moments (mean green, mean sample, green variance, green/sample covariance) with a
+// Gaussian distance weight and a quartic similarity of its mean green to the pixel's green, and the line
+// is evaluated at the pixel's own green. A blended edge pixel lies on the line between its two colours,
+// so edges keep their colour; flat areas average 40-60 samples, so the chroma stays free of the 3-6 px
+// blotches a per-pixel estimate leaves (added-noise test on real quad frames: chroma noise -40%, luma
+// -20%, detail unchanged). The GPU builds the block moments once per red/blue block into a scratch image.
+
+// ---- Detail block moments (CPU and shader evaluate the same expressions) ----
+constexpr float kDetailRadius = 7.0f;         // block centres within this many pixels of the pixel
+constexpr float kDetailSpatial = 0.06f;       // distance weight exp(-d^2 * kDetailSpatial)
+constexpr float kDetailSimilarity = 0.5f;     // similarity scale as a share of the brighter green
+constexpr float kDetailSlopeLambda = 4.0f;    // slope regulariser (codes^2 per codesPerDn^2), pulls toward 1
+struct CfaBlockMoments {
+    float g = 0.0f, v = 0.0f, gg = 0.0f, gv = 0.0f;  // means; sums of squared/cross deviations
+};
+inline CfaBlockMoments cfaBlockMoments(const float g[4], const float v[4]) {
+    CfaBlockMoments m;
+    m.g = 0.25f * ((g[0] + g[1]) + (g[2] + g[3]));
+    m.v = 0.25f * ((v[0] + v[1]) + (v[2] + v[3]));
+    for (int k = 0; k < 4; ++k) {
+        const float dg = g[k] - m.g;
+        m.gg += dg * dg;
+        m.gv += dg * (v[k] - m.v);
+    }
+    return m;
+}
+struct CfaDetailTap {
+    int32_t dbx, dby;
+    float spatial;
+};
+// Per pixel phase (y & 3, x & 3): the wanted colour's blocks within kDetailRadius of the pixel (block
+// offsets from the pixel's block), in the order the shader walks them.
+inline std::vector<std::vector<std::vector<CfaDetailTap>>> cfaDetailTaps(uint32_t order) {
+    std::vector<std::vector<std::vector<CfaDetailTap>>> taps(4, std::vector<std::vector<CfaDetailTap>>(4));
+    const int32_t reach = int32_t(kDetailRadius / 2.0f) + 1;
+    for (int32_t py = 0; py < 4; ++py)
+        for (int32_t px = 0; px < 4; ++px) {
+            const uint32_t want = cfaChannel(order, uint32_t(px), uint32_t(py));
+            if (want == 1u || cfaChannel(order, uint32_t(px) / 2, uint32_t(py) / 2) == want) continue;
+            for (int32_t dby = -reach; dby <= reach; ++dby)
+                for (int32_t dbx = -reach; dbx <= reach; ++dbx) {
+                    const int32_t bx = px / 2 + dbx, by = py / 2 + dby;
+                    if (cfaChannel(order, uint32_t(bx) & 1u, uint32_t(by) & 1u) != want) continue;
+                    // Twice the axis distances to the block centre (odd integers); the weight is separable.
+                    const int32_t tx = 4 * bx + 1 - 2 * px, ty = 4 * by + 1 - 2 * py;
+                    if (float(tx * tx + ty * ty) > 4.0f * kDetailRadius * kDetailRadius) continue;
+                    // Same expression as the shader: exp2 of the squared distance in quarter-pixel units.
+                    constexpr float kLog2 = -0.25f * kDetailSpatial * 1.44269504f;
+                    taps[py][px].push_back({dbx, dby, std::exp2(float(tx * tx + ty * ty) * kLog2)});
+                }
+        }
+    return taps;
+}
+// Weighted sums of the line fit v = a * u + b, u and v measured from the pixel's green g0.
+struct CfaLineSums {
+    float w = 0.0f, u = 0.0f, v = 0.0f, uu = 0.0f, uv = 0.0f, umin = 1e30f, umax = -1e30f;
+    void add(const CfaBlockMoments& m, float g0, float spatial, float codesPerDn) {
+        const float d = m.g - g0, e = m.v - g0;
+        const float sg = kDetailSimilarity * std::max(g0, m.g) + 4.0f * codesPerDn;
+        const float s2 = sg * sg, s4 = s2 * s2, d2 = d * d;
+        const float wgt = spatial * s4 / (s4 + d2 * d2);  // per sample
+        w += 4.0f * wgt;
+        u += 4.0f * wgt * d;
+        v += 4.0f * wgt * e;
+        uu += wgt * (m.gg + 4.0f * d * d);
+        uv += wgt * (m.gv + 4.0f * d * e);
+        if (wgt > 1e-3f) {
+            umin = std::min(umin, d);
+            umax = std::max(umax, d);
+        }
+    }
+    // The line at the pixel's own green, slope pulled toward 1 (the colour-difference model); trusted up to
+    // one green range beyond the blocks.
+    float fit(float g0, float codesPerDn) const {
+        if (!(w > 0.0f)) return g0;
+        const float mu = u / w, mv = v / w;
+        const float var = uu / w - mu * mu, cov = uv / w - mu * mv;
+        const float lambda = kDetailSlopeLambda * codesPerDn * codesPerDn;
+        const float slope = (cov + lambda) / (var + lambda);
+        const float margin = umax - umin;
+        const float uHere = std::clamp(0.0f, umin - margin, umax + margin);
+        return g0 + mv + slope * (uHere - mu) - uHere;
+    }
+};
+
 enum class CfaRemosaicQuality : uint32_t { Fast = 0, Standard = 1, High = 2, Detail = 3 };
 
 // Fast at (x, y) from block means. Mirrored by the shader's fast pass.
@@ -185,6 +268,7 @@ inline void remosaicBlockCfa(uint16_t* raw, uint32_t w, uint32_t h, uint32_t n, 
     if (n < 2 || !raw || w < 2 * n || h < 2 * n || !std::isfinite(codesPerDn) || codesPerDn <= 0.0f) return;
     if (quality == CfaRemosaicQuality::Detail && n != 2) quality = CfaRemosaicQuality::High;
     const bool detail = quality == CfaRemosaicQuality::Detail;
+    (void)blackLevel;  // kept for callers; Detail's slope regulariser no longer depends on the level
     const uint32_t bw = (w + n - 1) / n, bh = (h + n - 1) / n;
     // Block parity of R and B.
     uint32_t parity[3][2] = {};
@@ -254,21 +338,15 @@ inline void remosaicBlockCfa(uint16_t* raw, uint32_t w, uint32_t h, uint32_t n, 
         });
     }
     if (detail) {
-        // Colour difference per pixel of red/blue blocks (raw - green), kept
-        // aside because the Bayer output overwrites `raw` in place. Quarter-DN
-        // 10-bit input stays well inside int16.
-        std::vector<int16_t> pixelDiff(size_t(w) * h, 0);
-        // Green (cubic) and the colour difference in one pass per 2x2 group. A
+        // Green (cubic) in one pass per 2x2 group. A
         // group lies inside one block; the horizontal terms belong to its rows
         // and the vertical ones to its columns, so each is loaded once for the
         // group (the shader's greenGroup does the same). Groups within 4 pixels
         // of an edge use the clamped per-pixel estimate.
         parallelRows((h + 1) / 2, [&](uint32_t g0, uint32_t g1) {
             const float eps = codesPerDn;
-            const auto store = [&](uint32_t x, uint32_t y, float v, bool colour) {
-                const size_t i = size_t(y) * w + x;
-                green[i] = uint16_t(std::clamp(std::lround(v), 0l, 65535l));
-                if (colour) pixelDiff[i] = int16_t(std::clamp<int32_t>(int32_t(raw[i]) - int32_t(green[i]), -32768, 32767));
+            const auto store = [&](uint32_t x, uint32_t y, float v, bool) {
+                green[size_t(y) * w + x] = uint16_t(std::clamp(std::lround(v), 0l, 65535l));
             };
             for (uint32_t gy = g0; gy < g1; ++gy)
                 for (uint32_t gx = 0; gx < (w + 1) / 2; ++gx) {
@@ -312,91 +390,48 @@ inline void remosaicBlockCfa(uint16_t* raw, uint32_t w, uint32_t h, uint32_t n, 
                         }
                 }
         });
-        // Taps: wanted-colour pixels within 3 pixels, Gaussian distance weight
-        // and quartic green similarity (same shape as High's, per pixel).
-        // The wanted-colour taps depend only on the pixel's phase (x & 3, y & 3),
-        // so each phase gets its tap list once (same order as the shader's block walk).
-        constexpr int32_t kRadius = 3;
-        struct DetailTap {
-            int32_t dx, dy;
-            float spatial;
-        };
-        std::vector<DetailTap> detailTaps[4][4];
-        for (int32_t py = 0; py < 4; ++py)
-            for (int32_t px = 0; px < 4; ++px) {
-                const uint32_t want = cfaChannel(order, uint32_t(px), uint32_t(py));
-                if (want == 1u || cfaChannel(order, uint32_t(px) / 2, uint32_t(py) / 2) == want) continue;
-                for (int32_t by = (py - kRadius) >> 1; by <= (py + kRadius) >> 1; ++by)
-                    for (int32_t bx = (px - kRadius) >> 1; bx <= (px + kRadius) >> 1; ++bx) {
-                        if (cfaChannel(order, uint32_t(bx) & 1u, uint32_t(by) & 1u) != want) continue;
-                        for (int32_t j = 0; j < 2; ++j)
-                            for (int32_t i = 0; i < 2; ++i) {
-                                const int32_t dx = 2 * bx + i - px, dy = 2 * by + j - py;
-                                if (std::abs(dx) > kRadius || std::abs(dy) > kRadius) continue;
-                                detailTaps[py][px].push_back({dx, dy, std::exp(-float(dx * dx + dy * dy) * 0.25f)});
-                            }
-                    }
-            }
-        const float sigmaFloor = 4.0f * codesPerDn;
-        // The wanted colour of a blended edge pixel lies on the line between the two colours, so it is a
-        // line fit T = a * G + b to the taps (slope regularised toward 1, the colour-difference model, where
-        // green does not vary). The green similarity is looser than a plain colour difference needs, so both
-        // sides of an edge contribute; the line is trusted a little beyond the taps' green range.
-        constexpr float kLineSimilarity = 0.5f, kLineExtrapolation = 1.0f;
+        // Moments of every red/blue block (rounded green, raw sample): mean green, mean sample, and the green
+        // variance and green/sample covariance sums about those means. Red/blue blocks of a block row share
+        // one x parity, so bx >> 1 indexes them.
+        const uint32_t mw = (bw + 1) / 2;
+        std::vector<CfaBlockMoments> moments(size_t(mw) * bh);
+        parallelRows(bh, [&](uint32_t b0, uint32_t b1) {
+            for (uint32_t by = b0; by < b1; ++by)
+                for (uint32_t bx = 0; bx < bw; ++bx) {
+                    if (cfaChannel(order, bx, by) == 1u) continue;
+                    float g[4], v[4];
+                    uint32_t k = 0;
+                    for (uint32_t j = 0; j < 2; ++j)
+                        for (uint32_t i = 0; i < 2; ++i, ++k) {
+                            const size_t p = size_t(std::min(h - 1, 2 * by + j)) * w + std::min(w - 1, 2 * bx + i);
+                            g[k] = float(green[p]);
+                            v[k] = float(raw[p]);
+                        }
+                    moments[size_t(by) * mw + (bx >> 1)] = cfaBlockMoments(g, v);
+                }
+        });
+        // The wanted colour's blocks around a pixel depend only on its phase (x & 3, y & 3): one list per phase.
+        const auto taps = cfaDetailTaps(order);
         parallelRows(h, [&](uint32_t y0, uint32_t y1) {
             for (uint32_t y = y0; y < y1; ++y)
                 for (uint32_t x = 0; x < w; ++x) {
-                    const auto& taps = detailTaps[y & 3u][x & 3u];
                     const size_t i = size_t(y) * w + x;
-                    const float greenHere = float(green[i]);
+                    const uint32_t want = cfaChannel(order, x, y);
+                    const float g0 = float(green[i]);
                     float v;
-                    if (taps.empty()) {
-                        if (cfaChannel(order, x, y) != 1u) continue;  // own site: the summed sample stays
-                        v = greenHere;
+                    if (want == 1u) {
+                        v = g0;
+                    } else if (cfaChannel(order, x / 2, y / 2) == want) {
+                        continue;  // own site: the sample stays
                     } else {
-                        const bool interior = x >= uint32_t(kRadius) && y >= uint32_t(kRadius) &&
-                                              x + uint32_t(kRadius) < w && y + uint32_t(kRadius) < h;
-                        float weight = 0.0f;
-                        // Sums of the weighted line fit v = a * u + b, with u, v measured from the
-                        // pixel's own green (green and wanted colour of each tap, minus greenHere).
-                        float su = 0.0f, sv = 0.0f, suu = 0.0f, suv = 0.0f, umin = 1e30f, umax = -1e30f;
-                        for (const auto& t : taps) {
-                            if (!interior) {
-                                const int32_t qx = int32_t(x) + t.dx, qy = int32_t(y) + t.dy;
-                                if (qx < 0 || qx >= int32_t(w) || qy < 0 || qy >= int32_t(h)) continue;
-                            }
-                            const size_t b = size_t(int64_t(i) + int64_t(t.dy) * int64_t(w) + t.dx);
-                            const float g = float(green[b]);
-                            // spatial / (1 + (d / s)^4) with one division
-                            const float d = g - greenHere, sg = kLineSimilarity * std::max(greenHere, g) + sigmaFloor;
-                            const float d2 = d * d, s2 = sg * sg, s4 = s2 * s2;
-                            const float wgt = t.spatial * s4 / (s4 + d2 * d2);
-                            const float u = d, vv = d + float(pixelDiff[b]);
-                            if (wgt > 1e-3f) {
-                                umin = std::min(umin, u);
-                                umax = std::max(umax, u);
-                            }
-                            su += wgt * u;
-                            sv += wgt * vv;
-                            suu += wgt * u * u;
-                            suv += wgt * u * vv;
-                            weight += wgt;
+                        CfaLineSums sums;
+                        const int32_t bx0 = int32_t(x / 2), by0 = int32_t(y / 2);
+                        for (const auto& t : taps[y & 3u][x & 3u]) {
+                            const int32_t bx = bx0 + t.dbx, by = by0 + t.dby;
+                            if (bx < 0 || by < 0 || bx >= int32_t(bw) || by >= int32_t(bh)) continue;
+                            sums.add(moments[size_t(by) * mw + size_t(bx >> 1)], g0, t.spatial, codesPerDn);
                         }
-                        if (weight > 0.0f) {
-                            const float mu = su / weight, mv = sv / weight;
-                            const float var = suu / weight - mu * mu, cov = suv / weight - mu * mv;
-                            // Slope regulariser (pulls the slope toward 1): a small share of the green level, plus a
-                            // noise-sized floor so flat dark areas keep the colour-difference model.
-                            const float level = std::max(greenHere - blackLevel, codesPerDn);
-                            const float lambda = 0.00025f * level * level + 64.0f * codesPerDn * codesPerDn;
-                            const float slope = (cov + lambda) / (var + lambda);
-                            // Fit only inside (a little beyond) the taps' green range; outside it, slope 1.
-                            const float margin = kLineExtrapolation * (umax - umin);
-                            const float uHere = std::clamp(0.0f, umin - margin, umax + margin);
-                            v = greenHere + mv + slope * (uHere - mu) - uHere;
-                        } else {
-                            v = greenHere;
-                        }
+                        v = sums.fit(g0, codesPerDn);
                     }
                     raw[i] = uint16_t(std::clamp(std::lround(v), 0l, 65535l));
                 }

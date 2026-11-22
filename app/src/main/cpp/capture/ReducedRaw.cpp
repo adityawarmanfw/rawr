@@ -23,7 +23,7 @@ ReducedRaw::ReducedRaw(const vulkan::VulkanContext& vk, const metadata::CameraCo
     direct3x_ = reducedRawDirect3x(c);
     try {
         initialize(slots);
-        if (c.cfaBlock != 1) remosaic_ = rawr::raw_ingress::RawRemosaicker::create(vk_.gpuContext());
+        if (c.cfaBlock != 1) remosaic_ = rawr::raw_ingress::RawRemosaicker::create(vk_.gpuContext(), vk_.remosaicPipelines());
         // The Bayer bins, and the 4x4 mode's 25 MP resample.
         if (c.cfaBlock == 1 || c.photoReduced25) binner_ = rawr::raw_ingress::BayerBinner::create(vk_.gpuContext());
     } catch (...) {

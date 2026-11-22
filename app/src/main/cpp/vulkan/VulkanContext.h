@@ -4,6 +4,8 @@
 
 #include <cstdint>
 #include <mutex>
+#include <future>
+#include "rawr/raw_ingress/RawRemosaicker.h"
 #include <string>
 
 #include "rawr/vk/GpuContext.h"
@@ -58,6 +60,9 @@ class VulkanContext {
     // driver refuses (callers then compile uncached, as before). Pipeline
     // caches are internally synchronized, so concurrent builds may share it.
     VkPipelineCache pipelineCache() const;
+    // One background compilation per device; captures share only immutable programs.
+    void prepareRemosaic() const;
+    std::shared_ptr<rawr::raw_ingress::RawRemosaicker::Pipelines> remosaicPipelines() const;
     bool multiframeQueueLowPriority() const noexcept { return mfLowPriority_; }
     uint32_t queueFamily() const noexcept { return queueFamily_; }
     float timestampPeriod() const noexcept { return timestampPeriod_; }
@@ -90,6 +95,8 @@ class VulkanContext {
     }
 
    private:
+    mutable std::mutex remosaicMutex_;
+    mutable std::shared_future<std::shared_ptr<rawr::raw_ingress::RawRemosaicker::Pipelines>> remosaicFuture_;
     VkInstance instance_ = VK_NULL_HANDLE;
     VkPhysicalDevice physical_ = VK_NULL_HANDLE;
     VkDevice device_ = VK_NULL_HANDLE;
