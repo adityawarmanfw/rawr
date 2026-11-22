@@ -25,6 +25,7 @@
 #include "diagnostics/logging/RuntimeTraceRecorder.h"
 #include "diagnostics/timing/CaptureStageTimer.h"
 #include "geometry/CfaPattern.h"
+#include "geometry/LensDistortion.h"
 #include "capture/FullSizeFallbacks.h"
 #include "capture/BurstLimits.h"
 #include "imaging/BinnedCorner.h"
@@ -342,8 +343,13 @@ rawrcam::geometry::SourceCropRect SessionEngine::previewVideoCropRectLocked() co
     const auto kept = lastCameraContext_ ? videoKeptAreaLocked(*lastCameraContext_) : rawrcam::video::VideoKeptArea{};
     const auto full = rawrcam::video::videoSourceRect(rawW, rawH, videoCropOutWidth_, videoCropOutHeight_, kept);
     if (full.width == 0) return crop;
-    const auto scaled = rawrcam::video::scaleVideoSourceRect(full, rawW, rawH, previewW, previewH);
+    auto scaled = rawrcam::video::scaleVideoSourceRect(full, rawW, rawH, previewW, previewH);
     if (scaled.width == 0) return crop;
+    // The window the preview presents: mirrored with the lens, as RawDevelopRecorder passes it.
+    const uint32_t mirror = lastCameraContext_ ? lastCameraContext_->profileMirror : 0u;
+    scaled = rawrcam::video::mirrorVideoSourceRect(scaled, previewW, previewH,
+                                                   (mirror & rawrcam::geometry::kLensMirrorHorizontal) != 0u,
+                                                   (mirror & rawrcam::geometry::kLensMirrorVertical) != 0u);
     crop = {scaled.x, scaled.y, scaled.width, scaled.height, true};
     return crop;
 }

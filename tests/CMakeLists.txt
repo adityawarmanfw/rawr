@@ -275,6 +275,8 @@ rawr_test(full_res_recipe_test
   "${APP}/color/DcpProfile.cpp"
   "${APP}/color/ColorMath.cpp"
   "${APP}/geometry/LensDistortion.cpp")
+rawr_test(video_crop_mirror_test
+  "${RAWR_ROOT}/tests/native/video_crop_mirror_test.cpp")
 rawr_test(camera_workarounds_test
   "${RAWR_ROOT}/tests/native/camera_workarounds_test.cpp"
   "${APP}/camera/CameraRouting.cpp"

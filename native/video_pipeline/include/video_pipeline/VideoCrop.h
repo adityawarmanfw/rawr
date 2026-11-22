@@ -72,6 +72,20 @@ struct VideoKeptArea {
     return rect;
 }
 
+// The same window in the frame mirrored horizontally and/or vertically. A sampler that mirrors the
+// whole frame after mapping a window into it (the live preview's lens mirror) needs this window to
+// show the original one's pixels; a window centred on the frame is its own mirror. A window that
+// does not fit the frame is returned unchanged.
+[[nodiscard]] inline VideoSourceRect mirrorVideoSourceRect(VideoSourceRect rect, uint32_t width, uint32_t height,
+                                                           bool horizontal, bool vertical) noexcept {
+    if (rect.width == 0 || rect.height == 0 || uint64_t(rect.x) + rect.width > width ||
+        uint64_t(rect.y) + rect.height > height)
+        return rect;
+    if (horizontal) rect.x = width - rect.x - rect.width;
+    if (vertical) rect.y = height - rect.y - rect.height;
+    return rect;
+}
+
 // Scales a full-RAW-space rect into another source space (e.g. the half-res
 // preview image). Exact for even halvings; otherwise truncates with even
 // alignment and clamps inside the target. Returns empty when degenerate.

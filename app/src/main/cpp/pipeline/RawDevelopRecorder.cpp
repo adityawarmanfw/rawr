@@ -16,6 +16,7 @@
 #include "diagnostics/probes/PipelineDiagnostics.h"
 #include "diagnostics/probes/RawIntegrityProbe.h"
 #include "diagnostics/probes/RawIntegrityProbePolicy.h"
+#include "geometry/LensDistortion.h"
 #include "geometry/OrientationTransform.h"
 #include "monitoring/ImageScopesProcessor.h"
 #include "monitoring/MonitoringOverlayProcessor.h"
@@ -644,19 +645,17 @@ RawDevelopRecordResult RawDevelopRecorder::record(const RawDevelopRecordInput& i
                                                                in.previewHeight);
         }
     }
-    // Padded raw edges (lens profile image.cropEdges): the frame is still
-    // processed whole, so the metering and the scopes keep seeing the padding;
-    // this only keeps it off the screen. Stills drop it for real
-    // (capture/single/StillEdgeCrop.h). An idle video crop already frames
-    // tighter than the padding, so it wins.
+    // Padded raw edges (lens profile image.cropEdges, and image.cropEdgesHighFps
+    // above 30 fps): the frame is still processed whole, so the metering and the
+    // scopes keep seeing the padding; this only keeps it off the screen. Stills
+    // drop it for real (capture/single/StillEdgeCrop.h). An idle video crop
+    // already frames tighter than the padding, so it wins.
     if (previewCrop.width == 0 && in.diagnosticMode == 0u && in.metadata.cameraContext) {
-        const auto& context = *in.metadata.cameraContext;
-        const uint32_t dropX = context.cropLeft + context.cropRight;
-        const uint32_t dropY = context.cropTop + context.cropBottom;
-        if ((dropX || dropY) && dropX < in.rawWidth && dropY < in.rawHeight) {
-            const rawrcam::video::VideoSourceRect kept{context.cropLeft, context.cropTop, in.rawWidth - dropX,
-                                                       in.rawHeight - dropY, false};
-            previewCrop = rawrcam::video::scaleVideoSourceRect(kept, in.rawWidth, in.rawHeight, in.previewWidth,
+        const auto kept = rawrcam::video::contextKeptArea(in.rawWidth, in.rawHeight, *in.metadata.cameraContext,
+                                                          in.videoHighFps);
+        if (kept.valid()) {
+            const rawrcam::video::VideoSourceRect rect{kept.x, kept.y, kept.width, kept.height, false};
+            previewCrop = rawrcam::video::scaleVideoSourceRect(rect, in.rawWidth, in.rawHeight, in.previewWidth,
                                                                in.previewHeight);
         }
     }
@@ -679,6 +678,14 @@ RawDevelopRecordResult RawDevelopRecorder::record(const RawDevelopRecordInput& i
             presented.lensWarp = &*cropWarp;
         }
     }
+    // The present shader mirrors the whole source after mapping the crop window into it (present.frag),
+    // so a window off the frame centre (a kept area that drops only the bottom rows of a 60 fps mode)
+    // would show the mirrored side. Mirror the window too: it then frames the rows the recorder writes.
+    // The lens warp above keeps the unmirrored window, which is what it sees after the mirror.
+    previewCrop = rawrcam::video::mirrorVideoSourceRect(
+        previewCrop, in.previewWidth, in.previewHeight,
+        (presented.lensMirror & rawrcam::geometry::kLensMirrorHorizontal) != 0u,
+        (presented.lensMirror & rawrcam::geometry::kLensMirrorVertical) != 0u);
     monitor_.present(presented, previewCrop.x, previewCrop.y, previewCrop.width, previewCrop.height);
     performance_.markPresentationDone(slot.command, in.slotIndex);
     performance_.markFrameDone(slot.command, in.slotIndex);
