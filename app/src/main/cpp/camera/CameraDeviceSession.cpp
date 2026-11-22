@@ -323,6 +323,30 @@ bool CameraDeviceSession::open(const LensRoute& route, CameraCallbacks& callback
                                std::unique_lock<std::mutex>& controllerLock,
                                const std::function<bool()>& stillCurrent) {
     const auto deadline = std::chrono::steady_clock::now() + kOpenBudget;
+    if (deviceKept_) {
+        deviceKept_ = false;
+        const bool reuse = device_ && keptCameraId_ == route.cameraId && heldGate_ == route.vendorGate &&
+                           effectiveCameraApi(route) != CameraApi::Java;
+        if (reuse) {
+            if (deviceContext_) deviceContext_->generation.store(generation_, std::memory_order_release);
+            diag("CAMERA_NDK_DEVICE_REUSED cameraId=" + route.cameraId + " lensId=" + route.lensId +
+                 " generation=" + std::to_string(generation_));
+            return true;
+        }
+        // Not the same camera after all: close the kept device as release() would have.
+        diag("CAMERA_NDK_DEVICE_KEPT_CLOSE cameraId=" + keptCameraId_ + " next=" + route.cameraId);
+        CameraDeviceCallbackContext* const closingContext = std::exchange(deviceContext_, nullptr);
+        std::string gate = std::exchange(heldGate_, std::string());
+        if (device_) {
+            closeDeviceDetached([closingContext, gate] {
+                delete closingContext;
+                if (!gate.empty()) releaseVendorCameraGate(gate);
+            });
+        } else {
+            delete closingContext;
+            if (!gate.empty()) releaseVendorCameraGate(gate);
+        }
+    }
     {
         std::unique_lock<std::mutex> lock(gPendingCloseMutex);
         if (gPendingCloses > 0) {
@@ -371,6 +395,7 @@ bool CameraDeviceSession::open(const LensRoute& route, CameraCallbacks& callback
             if (ok(os) && device) device_ = std::make_unique<NdkDeviceDriver>(device);
         }
         if (ok(os) && device_) {
+            keptOrOpenCameraId_ = route.cameraId;
             if (java) diag("CAMERA_API lens=" + route.lensId + " cameraApi=java available=1");
             if (attempt > 1) {
                 diag("CAMERA_NDK_OPEN_RECOVERED cameraId=" + route.cameraId + " attempts=" + std::to_string(attempt));
@@ -868,7 +893,17 @@ CameraReaderRetirement CameraDeviceSession::release(const Diagnostic& diag) {
     staticLevels_.reset();
     captureStaticLevels_.reset();
     sessionKeysApplied_ = false;
-    if (device_) {
+    const std::string keepFor = std::exchange(keepForCameraId_, std::string());
+    if (device_ && !minimal && !deviceKept_ && !keepFor.empty() && keepFor == keptOrOpenCameraId_ &&
+        std::string(device_->backendName()) == "native") {
+        // Rawr 17U fork: keep the device for the next lens of the same logical camera. Its callback
+        // context moves to the new generation so device errors still reach the controller.
+        deviceKept_ = true;
+        keptCameraId_ = keepFor;
+        if (deviceContext_) deviceContext_->generation.store(generation_, std::memory_order_release);
+        diag("CAMERA_NDK_DEVICE_KEPT cameraId=" + keptCameraId_ + " generation=" + std::to_string(generation_));
+    } else if (device_) {
+        deviceKept_ = false;
         // ACameraDevice_close() can hang forever on a HAL-wedged device
         // (observed after ERROR_CAMERA_DEVICE with no onClosed: the
         // worker wedged here and every later start queued behind it

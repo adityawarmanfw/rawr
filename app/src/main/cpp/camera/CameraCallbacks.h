@@ -2,6 +2,7 @@
 #include <camera/NdkCameraCaptureSession.h>
 #include <camera/NdkCameraDevice.h>
 
+#include <atomic>
 #include <string>
 #include <vector>
 
@@ -50,7 +51,9 @@ struct CameraSessionCallbackContext {
 };
 struct CameraDeviceCallbackContext {
     std::shared_ptr<CameraEventLifetime> lifetime;
-    uint64_t generation;
+    // Atomic: a device kept open across a lens switch (Rawr 17U fork, S23 Ultra)
+    // is moved to the new generation while its HAL callbacks may run.
+    std::atomic<uint64_t> generation;
 };
 class CameraCallbacks final {
    public:

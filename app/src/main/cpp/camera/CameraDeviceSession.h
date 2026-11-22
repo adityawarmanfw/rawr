@@ -75,7 +75,13 @@ class CameraDeviceSession final {
     bool hasFullSizeDecision() const noexcept;
     bool repeatFullSizeDecision(CameraRequestPipeline&, const CameraControlState&, uint64_t tagId, const Diagnostic&);
     bool stopRepeating(const Diagnostic&);
-    bool hasDevice() const noexcept { return device_ != nullptr; }
+    // A device kept open for the next lens (keepDeviceForNextOpen) is not "the open device":
+    // a start must still run and reuse it through open().
+    bool hasDevice() const noexcept { return device_ != nullptr && !deviceKept_; }
+    // Rawr 17U fork: the next release() keeps the device open when the next open() is for the same
+    // cameraId, so a lens switch between physical cameras of one logical camera only rebuilds the
+    // capture session. Samsung (S23 Ultra) blocks reopening a just-closed camera for 1.5-3.5 s.
+    void keepDeviceForNextOpen(const std::string& cameraId) { keepForCameraId_ = cameraId; }
     bool hasSession() const noexcept { return session_ != nullptr; }
     CameraRequest* request() const noexcept { return request_.get(); }
     CameraSessionDriver* session() const noexcept { return session_.get(); }
@@ -155,6 +161,10 @@ class CameraDeviceSession final {
     uint64_t generation_ = 0, readerGeneration_ = 0, closeGeneration_ = 0;
     bool closePending_ = false, forcedRetire_ = false;
     std::string heldGate_;  // LensRoute::vendorGate held for the open device.
+    std::string keepForCameraId_;  // set by keepDeviceForNextOpen, consumed by release()
+    bool deviceKept_ = false;      // device_ stays open between release() and the next open()
+    std::string keptCameraId_;
+    std::string keptOrOpenCameraId_;  // cameraId of device_ (open or kept)
     std::map<std::string, std::optional<uint32_t>> vendorTags_;  // name -> tag of the open camera
     // Profile keys of the running session, read back from its first capture result.
     std::vector<CameraKeySetting> resultKeys_;

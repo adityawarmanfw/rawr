@@ -219,6 +219,17 @@ struct NativeCameraController::Impl final : CameraEventSink {
         teardownCameraResourcesLocked(lock);
     }
 
+    // Rawr 17U fork: a lens switch within one logical camera keeps the device open on the
+    // Galaxy S23 Ultra (SM-S918B), whose HAL refuses to reopen a just-closed camera for
+    // 1.5-3.5 s (Android 17, diagnostics from two users). Everywhere else the device closes
+    // and reopens as before. debug.rawr.keep_device=1 opts another device in, =0 opts out.
+    bool keepDeviceAcrossLensSwitch() const {
+        const std::string prop = systemProperty("debug.rawr.keep_device");
+        if (prop == "0") return false;
+        if (prop == "1") return true;
+        return deviceModel == "SM-S918B";
+    }
+
     void setLens(const std::string& value) {
         std::unique_lock<std::mutex> lock(mutex);
         if (lensId == value) return;
@@ -238,6 +249,12 @@ struct NativeCameraController::Impl final : CameraEventSink {
         if (!retireSessionLocked(lock, std::chrono::seconds(3), "CAMERA_LENS_SWITCH")) {
             diag("CAMERA_LENS_SWITCH_FORCED from=" + lensId + " to=" + value + " reason=session_close_timeout");
             forceRetireSessionLocked(lock, "CAMERA_LENS_SWITCH");
+        } else if (keepDeviceAcrossLensSwitch() && preferredCameraId.empty()) {
+            // Rawr 17U fork: same logical camera -> keep the device open, rebuild only the session.
+            const auto from = routeForLens(profile, lensId);
+            const auto to = routeForLens(profile, value);
+            if (from && to && !to->cameraId.empty() && from->cameraId == to->cameraId)
+                deviceSession.keepDeviceForNextOpen(to->cameraId);
         }
 
         // Session is now closed or force-retired. It is safe to release the remaining
