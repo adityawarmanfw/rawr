@@ -5,7 +5,7 @@ package com.rawr.camera.settings.model
  * capture-screen order; disabled lenses are kept but not sent to the camera.
  * The name doubles as the app's lens id and the capture-screen label.
  */
-const val LENS_NAME_MAX_LENGTH = 4
+const val LENS_NAME_MAX_LENGTH = 12
 
 enum class VendorKeyScope(val wireName: String, val label: String) {
     /** Session parameter, set when each capture session (photo or video) is created. */
