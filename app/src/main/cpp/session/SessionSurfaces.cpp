@@ -171,8 +171,31 @@ ANativeWindow* SessionEngine::createRawInputWindow(uint64_t generation, uint32_t
             // allocation is CPU-only and the GPU sees incoherent data. CPU
             // read stays for the fallback upload.
             uint64_t usage = AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN;
-            if (format == rawrcam::geometry::RawPixelFormat::Raw10 && !realtime_.coordinator().cpuIngressRequired())
+            if (format == rawrcam::geometry::RawPixelFormat::Raw10 && !realtime_.coordinator().cpuIngressRequired()) {
+                // Rawr 17U fork: grallocs before 4.1 refuse GPU_DATA_BUFFER on RAW10 too (Galaxy S23 Ultra,
+                // SM8550: "non-BLOB pixel format with GPU_DATA_BUFFER usage is not supported prior to gralloc
+                // 4.1"). Every request then fails and the ladder demotes ~1 s later with a session restart, on
+                // every app launch. Ask the allocator up front, as for RAW16 below, and start CPU-only.
+                constexpr uint32_t kHalPixelFormatRaw10 = 0x25;
+                constexpr uint64_t kCameraWrite = 1ull << 17;  // GRALLOC_USAGE_HW_CAMERA_WRITE
+                AHardwareBuffer_Desc desc{};
+                desc.width = width;
+                desc.height = height;
+                desc.layers = 1;
+                desc.format = kHalPixelFormatRaw10;
+                desc.usage = AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN | AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER | kCameraWrite;
+                if (realtime_.coordinator().diagnosticMode() == 0u && AHardwareBuffer_isSupported(&desc) == 0) {
+                    rawReaderUsage_.demote();
+                    realtime_.coordinator().latchRaw16BufferIngress();
+                    std::ostringstream probe;
+                    probe << "RAW_READER_CPU_ONLY_USAGE format=RAW10 reason=gpu_usage_unallocatable usage=0x" << std::hex
+                          << desc.usage;
+                    SESSION_LOGI("%s", probe.str().c_str());
+                    appendDiagnostic(probe.str());
+                    return createRawReader(generation, width, height, format, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN);
+                }
                 usage |= AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER;
+            }
             return createRawReader(generation, width, height, format, usage);
         }
 
