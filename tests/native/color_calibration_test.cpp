@@ -148,6 +148,21 @@ int main() {
     assertNeutralInvariant(wide, wideState);
     assertNeutralInvariant(tele, teleState);
 
+    // Manual WB (AWB off): the requested gains are the white. The HAL still
+    // reports its own neutral point, which must not be used: a raw that the
+    // manual gains make neutral has to render neutral.
+    {
+        auto manual = wide;
+        manual.awbMode = 0;
+        manual.colorCorrectionGainsRggb = {2.0f, 1, 1, 1.85f};  // differs from 1/neutral
+        const auto manualState = deriveFrameColorTransform(manual, PreviewColorMode::Auto);
+        const auto rgb = math::multiply(manualState.cameraToLinearSrgbRowMajor, std::array<float,3>{1, 1, 1});
+        const float mean = (rgb[0]+rgb[1]+rgb[2])/3.0f;
+        assert(std::abs(rgb[0]-mean) < 0.035f);
+        assert(std::abs(rgb[1]-mean) < 0.035f);
+        assert(std::abs(rgb[2]-mean) < 0.035f);
+    }
+
     const auto f1 = deriveFrameColorTransform(wide, PreviewColorMode::Forward1);
     const auto f2 = deriveFrameColorTransform(wide, PreviewColorMode::Forward2);
     assert(f1.source == "FORWARD_MATRIX1_POST_WB_DIAGNOSTIC");

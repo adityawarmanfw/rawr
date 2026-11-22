@@ -19,7 +19,12 @@ bool nearlyIdentity(const Matrix3& m) {
 }
 
 Vec3 frameCameraNeutral(const metadata::FrameMetadataSnapshot& f) {
-    if (f.hasNeutralColorPoint) {
+    // With AWB off (Manual WB) the render's white is the requested gains. The
+    // HAL's neutral point there is its own AWB guess, not our white; using it
+    // left a colour cast that ignored the Manual WB. Same rule as AsShotNeutral
+    // in DngMetadataAdapter, so the JPEG matches the DNG.
+    const bool manualWb = f.awbMode == 0;
+    if (f.hasNeutralColorPoint && !manualWb) {
         return {f.neutralColorPoint[0], f.neutralColorPoint[1], f.neutralColorPoint[2]};
     }
     const float greenGain = 0.5f * (f.colorCorrectionGainsRggb[1] + f.colorCorrectionGainsRggb[2]);
