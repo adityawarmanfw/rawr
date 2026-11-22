@@ -1314,6 +1314,16 @@ struct NativeCameraController::Impl final : CameraEventSink {
             captureChanged.notify_all();
             return;
         }
+        if (actions.optimizedStill && actions.frame->optimizedStillRequestId) {
+            // OIS as the HAL applied it to this still (the preview's mode is copied onto the still request).
+            ACameraMetadata_const_entry oisResult{};
+            const bool reported = ACameraMetadata_getConstEntry(result, ACAMERA_LENS_OPTICAL_STABILIZATION_MODE,
+                                                                &oisResult) == ACAMERA_OK && oisResult.count == 1;
+            diag("CAMERA_STILL_OIS tag=" + std::to_string(*actions.frame->optimizedStillRequestId) +
+                 " preference=" + (control.oisEnabled ? "on" : "off") +
+                 " supported=" + (control.capabilities.oisSupported ? "1" : "0") +
+                 " result=" + (reported ? std::to_string(oisResult.data.u8[0]) : "missing"));
+        }
         if (actions.optimizedStill && deviceSession.hasCaptureStream()) {
             // What the HAL reports it did with a full-size still: some vendors
             // skip the sensor switch and return the binned readout in the
