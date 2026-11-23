@@ -55,7 +55,7 @@ inline void remosaicBlockCfaStill(imaging::RawSnapshot& frame, BlockRemosaicGpu*
     const auto& context = frame.metadata.cameraContext;
     if (!context || context->cfaBlock <= 1u || reducedRawRequested(*context)) return;
     const auto start = std::chrono::steady_clock::now();
-    const bool onGpu = remosaicBlockCfaBuffer(frame.raw16, frame.width, frame.height, *context,
+    [[maybe_unused]] const bool onGpu = remosaicBlockCfaBuffer(frame.raw16, frame.width, frame.height, *context,
                                               frame.metadata.blackLevelPhysicalRggb, gpu);
     [[maybe_unused]] const long long ms =
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();

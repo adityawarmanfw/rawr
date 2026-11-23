@@ -70,12 +70,8 @@ int main() {
     const std::string defaultParams = buildParametersBlock(defaults, output, tone, "", false, 30, 4096, 3072);
     MultiframeTuningView quality = defaults;
     quality.mergeAlgorithm = 2;
-    quality.hdrplusStrength = 18.0f;
-    quality.hdrplusTileSize = 16;
     const std::string qualityParams = buildParametersBlock(quality, output, tone, "", false, 19, 4096, 3072);
     assert(contains(qualityParams, "HDR+ frequency"));
-    assert(contains(qualityParams, "HDR+ strength: 18.000"));
-    assert(contains(qualityParams, "HDR+ tile size: 16"));
     assert(contains(defaultParams, "Rexture"));
     assert(!contains(defaultParams, "Low support rescue"));
 

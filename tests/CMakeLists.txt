@@ -198,7 +198,8 @@ rawr_test(raw_still_capture_manager_test
   "${RAWR_ROOT}/tests/native/raw_still_capture_manager_test.cpp"
   "${RAWR_ROOT}/app/src/main/cpp/imaging/Raw16CpuSnapshot.cpp"
   "${RAWR_ROOT}/app/src/main/cpp/imaging/RawPixelSource.cpp"
-  "${RAWR_ROOT}/app/src/main/cpp/capture/single/SingleShotSlot.cpp")
+  "${RAWR_ROOT}/app/src/main/cpp/capture/single/SingleShotSlot.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/native/capture_stubs/BlockRemosaicGpuStub.cpp")
 target_compile_options(raw_still_capture_manager_test PRIVATE -DNDEBUG)
 target_include_directories(raw_still_capture_manager_test BEFORE PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/native/capture_stubs")
 rawr_test(exif_transpose_test
