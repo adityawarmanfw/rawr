@@ -286,6 +286,7 @@
         "sensorLayout": {
           "block": 1,
           "photoBlock": 2,
+          "photoRemosaic": "detail",
           "colourOrder": "BGGR"
         }
       }
