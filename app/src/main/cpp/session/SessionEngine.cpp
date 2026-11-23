@@ -709,6 +709,9 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
     std::array<std::vector<uint8_t>, 2> packedBuffers;
     std::array<std::future<void>, 2> journalWrites;
     size_t writeSeq = 0;  // journal writes launched; slot = writeSeq & 1
+    // A second buffer costs one more frame of RAM: only frames up to 128 MiB (a 50 MP RAW16 is 100 MB) overlap. A
+    // 200 MP frame is 400 MB and keeps the one-buffer, write-in-place order.
+    const bool overlapWrites = !reduced && bytes <= (size_t(128) << 20);
     const auto waitWrite = [&](size_t slot) {
         if (journalWrites[slot].valid()) journalWrites[slot].get();
     };
@@ -795,7 +798,7 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
         waitTiming.finish();
         if (frames.size() + binnedCorners != index + 1) return UINT32_MAX;
         // The journal buffer this frame uses: its last write (two frames back) must be done.
-        auto& packed = packedBuffers[reduced ? 0u : (writeSeq & 1u)];
+        auto& packed = packedBuffers[overlapWrites ? (writeSeq & 1u) : 0u];
         CAPTURE_DEBUG_LOG("FULLRES_FRAME tag=%llu frame=%u sensorTimestampNs=%llu",
              static_cast<unsigned long long>(tag), index + 1,
              static_cast<unsigned long long>(frames.back().metadata.timestampNs));
@@ -851,7 +854,7 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
         uint16_t* upload = nullptr;
         if (reducer && imaging::rawPixelFormatOf(lease.image()) == imaging::RawPixelFormat::Raw10)
             upload = reducer->uploadBuffer(reducedSubmitted % 2);
-        if (!reduced) waitWrite(writeSeq & 1u);
+        if (overlapWrites) waitWrite(writeSeq & 1u);
         if (!upload && packed.size() != bytes) packed.resize(bytes);
         const auto copy = upload ? imaging::copyCompletedRaw16AhbToMemory(lease.ahb(), width, height, upload, bytes,
                                                                           lease.fence(), lease.image())
@@ -934,12 +937,17 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
         }
         // The journal takes frames in order: the previous write finishes first, then this one runs beside the next
         // frame's copy and remosaic.
-        waitWrite((writeSeq + 1u) & 1u);
-        journalWrites[writeSeq & 1u] = std::async(std::launch::async, [&journal, &packed, tag, frame = index + 1] {
-            diagnostics::CaptureStageTimer journalTiming("fullres_journal_append", tag, frame);
+        if (overlapWrites) {
+            waitWrite((writeSeq + 1u) & 1u);
+            journalWrites[writeSeq & 1u] = std::async(std::launch::async, [&journal, &packed, tag, frame = index + 1] {
+                diagnostics::CaptureStageTimer journalTiming("fullres_journal_append", tag, frame);
+                journal->append(packed);
+            });
+            ++writeSeq;
+        } else {
+            diagnostics::CaptureStageTimer journalTiming("fullres_journal_append", tag, index + 1);
             journal->append(packed);
-        });
-        ++writeSeq;
+        }
     }
     waitWrite(0);
     waitWrite(1);
