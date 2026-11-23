@@ -28,6 +28,7 @@ class RenderResources final {
     double prepareEngines(const RenderedStillContext& rendered);
     void setAssetManager(AAssetManager* assets) noexcept { assetManager_.store(assets); }
     void setEnginePersistenceEnabled(bool value) noexcept { enginePersistenceEnabled_.store(value); }
+    [[nodiscard]] bool enginePersistenceEnabled() const noexcept { return enginePersistenceEnabled_.load(); }
     void setFilmIdleEvictSeconds(int seconds) noexcept { filmIdleEvictSeconds_.store(seconds); }
     RenderOutputView outputView() const noexcept;
     RenderDeviceContext deviceContext() const noexcept {

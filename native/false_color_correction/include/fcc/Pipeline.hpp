@@ -16,6 +16,10 @@ public:
     // Output may be a different RGBA16F image. steps must be 1..config.maxSteps.
     // The caller owns input/output image layout transitions to GENERAL.
     void record(VkCommandBuffer,const LinearRgbImage& input,const LinearRgbImage& output,uint32_t steps=1);
+    // Same steps without a scratch image: a -> b -> a -> ... Both images are
+    // overwritten; the result is in b for odd step counts and in a for even
+    // ones (the returned pointer). Pixels are identical to record().
+    const LinearRgbImage* recordPingPong(VkCommandBuffer,const LinearRgbImage& a,const LinearRgbImage& b,uint32_t steps);
 
     const PipelineConfig& config() const noexcept;
     uint64_t currentAllocatedBytes() const noexcept;

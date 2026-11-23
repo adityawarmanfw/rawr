@@ -16,5 +16,10 @@ struct PipelineConfig {
     // Luminance-preserving chroma bound: >0 rescales the averaged chroma so
     // fromYIQ(Y,iq) stays in [0,1]. 0 disables (legacy unbounded).
     float chromaBound=0.0f;
+    // False skips the full-resolution scratch image used by
+    // record() for more than one step: the caller then runs more
+    // than one step with recordPingPong(), which alternates between its own two
+    // images instead.
+    bool ownScratch=true;
 };
 }

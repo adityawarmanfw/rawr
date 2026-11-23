@@ -3,6 +3,7 @@
 #include <fcc/Pipeline.hpp>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace fcc {
@@ -68,7 +69,7 @@ struct FalseColorCorrectionPipeline::Impl {
             // image only satisfies the descriptor layout shared with the
             // two-pass shaders.
             chroma = createImage(VK_FORMAT_R32G32_SFLOAT, 1, 1);
-            if (cfg.maxSteps >= 2) tempRgb = createImage(VK_FORMAT_R16G16B16A16_SFLOAT);
+            if (cfg.maxSteps >= 2 && cfg.ownScratch) tempRgb = createImage(VK_FORMAT_R16G16B16A16_SFLOAT);
             createPipelineObjects();
         } catch (...) {
             cleanup();
@@ -243,7 +244,7 @@ struct FalseColorCorrectionPipeline::Impl {
         descriptors(setIndex, src, dst);
         dispatch(cmd, 2, setIndex);
     }
-    void record(VkCommandBuffer cmd, const LinearRgbImage& input, const LinearRgbImage& output, uint32_t steps) {
+    void validate(VkCommandBuffer cmd, const LinearRgbImage& input, const LinearRgbImage& output, uint32_t steps) const {
         if (!cmd) throw std::invalid_argument("fcc: null command buffer");
         auto valid = [&](const LinearRgbImage& im) {
             return im.image && im.view && im.format == VK_FORMAT_R16G16B16A16_SFLOAT &&
@@ -252,6 +253,27 @@ struct FalseColorCorrectionPipeline::Impl {
         if (!valid(input) || !valid(output)) throw std::invalid_argument("fcc: invalid RGBA16F image contract");
         if (input.image == output.image) throw std::invalid_argument("fcc: input/output must be distinct images");
         if (steps < 1 || steps > cfg.maxSteps) throw std::invalid_argument("fcc: steps outside configured maxSteps");
+    }
+    const LinearRgbImage* recordPingPong(VkCommandBuffer cmd, const LinearRgbImage& a, const LinearRgbImage& b,
+                                         uint32_t steps) {
+        validate(cmd, a, b, steps);
+        initializeScratch(cmd);
+        const LinearRgbImage* src = &a;
+        const LinearRgbImage* dst = &b;
+        for (uint32_t i = 0; i < steps; ++i) {
+            // The previous step read dst (as its source) and wrote src: order both.
+            if (i > 0) {
+                barrier(cmd, src->image, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+                barrier(cmd, dst->image, VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_SHADER_WRITE_BIT);
+            }
+            oneStep(cmd, *src, *dst, i);
+            std::swap(src, dst);
+        }
+        return src;
+    }
+    void record(VkCommandBuffer cmd, const LinearRgbImage& input, const LinearRgbImage& output, uint32_t steps) {
+        validate(cmd, input, output, steps);
+        if (steps > 1 && !tempRgb.image) throw std::invalid_argument("fcc: steps > 1 needs ownScratch or recordPingPong");
         initializeScratch(cmd);
         if (steps == 1) {
             oneStep(cmd, input, output, 0);
@@ -292,6 +314,10 @@ FalseColorCorrectionPipeline::~FalseColorCorrectionPipeline() = default;
 void FalseColorCorrectionPipeline::record(VkCommandBuffer c, const LinearRgbImage& i, const LinearRgbImage& o,
                                           uint32_t s) {
     impl_->record(c, i, o, s);
+}
+const LinearRgbImage* FalseColorCorrectionPipeline::recordPingPong(VkCommandBuffer c, const LinearRgbImage& a,
+                                                                   const LinearRgbImage& b, uint32_t s) {
+    return impl_->recordPingPong(c, a, b, s);
 }
 const PipelineConfig& FalseColorCorrectionPipeline::config() const noexcept { return impl_->cfg; }
 uint64_t FalseColorCorrectionPipeline::currentAllocatedBytes() const noexcept { return impl_->liveBytes; }

@@ -82,17 +82,13 @@ void SharedHighlightRuntime::ensureResources() {
             clipState_ = rawrcam::vulkan::createOwnedImage(
                 physicalDevice_, device_, width_ / 2u, height_ / 2u, VK_FORMAT_R16_UINT,
                 VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
-            replayInput_ = rawrcam::vulkan::createOwnedImage(
-                physicalDevice_, device_, width_ / 2u, height_ / 2u, VK_FORMAT_R16G16B16A16_SFLOAT,
-                VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
         }
         output_ = rawrcam::vulkan::createOwnedImage(
             physicalDevice_, device_, width_, height_, VK_FORMAT_R16G16B16A16_SFLOAT,
             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
-        if (sharedHighlightPacked_ && !externalInput_) {
-            createSharedHighlightPipeline();
-            createReplayHighlightPipeline();
-        }
+        // The tagged-replay input and pipeline are created by the diagnostic
+        // replay itself: a capture never pays their half-res RGBA16F image.
+        if (sharedHighlightPacked_ && !externalInput_) createSharedHighlightPipeline();
 
         if (!externalInput_) {
             const uint64_t bytes64 = static_cast<uint64_t>(width_) * height_ * sizeof(uint16_t);
@@ -169,8 +165,14 @@ VkCommandBuffer SharedHighlightRuntime::beginTaggedPackedReplay(const std::vecto
                                                                 uint32_t variant, float anchorTolerance, float madLimit,
                                                                 float consensusLimit, uint32_t minSupport) {
     ensureResources();
-    if (!sharedHighlightPacked_ || !packed_.image || !replayInput_.image || !replayPipeline_)
+    if (!sharedHighlightPacked_ || !packed_.image)
         throw std::logic_error(label_ + " tagged replay resources unavailable");
+    if (!replayInput_.image) {
+        replayInput_ = rawrcam::vulkan::createOwnedImage(physicalDevice_, device_, width_ / 2u, height_ / 2u,
+                                                         VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+    }
+    if (!replayPipeline_) createReplayHighlightPipeline();
     const size_t expected = static_cast<size_t>(width_ / 2u) * (height_ / 2u) * 8u;
     if (taggedPackedRgba16f.size() != expected || expected != static_cast<size_t>(uploadBytes_))
         throw std::runtime_error(label_ + " tagged replay payload size mismatch");

@@ -421,7 +421,6 @@ RenderedStillCompletion executeStillRender(RenderResources& resources, RenderCom
     done.presentationQuarterTurns = rendered.presentationQuarterTurns;
     const auto t0 = std::chrono::steady_clock::now();
     try {
-        resources.createPixels(rendered);
         done.engineBuildMs = resources.prepareEngines(rendered);
         const bool hasSensorClipState = clipStateView != VK_NULL_HANDLE;
         // Clip provenance: single-frame stills carry sensor CFA evidence
@@ -474,6 +473,13 @@ RenderedStillCompletion executeStillRender(RenderResources& resources, RenderCom
             for (uint32_t i : {0u,1u,2u,3u,4u,5u,10u,11u,12u,13u,14u,15u,16u,17u})
                 vkCmdWriteTimestamp(commands.command(), VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, commands.timingPool(), i);
         }
+        // Every post-demosaic submission has completed (each chunk waits on its
+        // fence), and the commands recorded since read only its outputs. Free
+        // its spare full-size images before the RGBA8 output, readback and gain
+        // map exist, so the two sets never peak together.
+        if (!rendered.reuseLinearResult && !resources.enginePersistenceEnabled())
+            resources.postDemosaic().releaseScratch();
+        resources.createPixels(rendered);
 
         VkImageMemoryBarrier dst{};
         dst.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;

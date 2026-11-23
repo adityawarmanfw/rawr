@@ -129,6 +129,11 @@ class PostDemosaicProcessor final {
     void prepareColoropp();
     // True when the last record() used Inpaint Opposed and so needs the tap.
     [[nodiscard]] bool coloroppToneRequired() const noexcept { return coloroppActive_; }
+    // Frees the owned full-size images the last record() left unused (the
+    // spare ping-pong image, the denoise output when it is not the result,
+    // and the defringe scratch); outputs stay valid. Call only once the GPU
+    // has finished that record(); the next record() recreates what it needs.
+    void releaseScratch() noexcept;
 
    private:
     void createWbPipeline();
