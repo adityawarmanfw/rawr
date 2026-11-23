@@ -58,6 +58,34 @@ int main() {
         capture::keepCroppedEdges(f);  // idempotent: the crop is spent
         assert(f.width == 12 && f.height == 6);
     }
+    // Every combination of edges gives exactly the window a plain row-by-row copy into a new buffer would, and
+    // never reallocates: dropping the bottom moves nothing, the top moves one block, columns repack in place.
+    {
+        constexpr uint32_t W = 24, H = 18;
+        unsigned checked = 0;
+        for (uint32_t left : {0u, 2u, 6u})
+            for (uint32_t top : {0u, 2u, 8u})
+                for (uint32_t right : {0u, 4u})
+                    for (uint32_t bottom : {0u, 2u, 10u}) {
+                        if (top + bottom >= H) continue;  // leaves nothing: refused, covered below
+                        auto f = snapshot(W, H, left, top, right, bottom);
+                        const auto* before = f.raw16.data();
+                        std::vector<uint16_t> expected;
+                        for (uint32_t y = top; y < H - bottom; ++y)
+                            for (uint32_t x = left; x < W - right; ++x) expected.push_back(uint16_t(y * 100 + x));
+                        capture::keepCroppedEdges(f);
+                        const bool cropped = left | top | right | bottom;
+                        assert(f.width == W - left - right && f.height == H - top - bottom);
+                        assert(f.raw16.size() == size_t(f.width) * f.height * 2);
+                        assert(f.raw16.data() == before);  // no second buffer
+                        for (uint32_t y = 0; y < f.height; ++y)
+                            for (uint32_t x = 0; x < f.width; ++x)
+                                assert(pixelAt(f, x, y) == expected[size_t(y) * f.width + x]);
+                        assert(cropped || f.metadata.cameraContext->cropLeft == 0);
+                        ++checked;
+                    }
+        assert(checked == 48);
+    }
     // no crop, no context, or edges that leave nothing: untouched
     {
         auto none = snapshot(16, 12, 0, 0, 0, 0);

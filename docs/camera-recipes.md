@@ -145,7 +145,8 @@ recorded video all frame the kept area, and the DNG geometry moves with it. Ever
 period (2 × `sensorLayout.block`), so the kept area keeps the camera's own colour order; the parser and the lens
 editor refuse anything else. `cropEdgesHighFps` is the same for the sensor mode a lens switches to above 30 fps,
 added on top of `cropEdges` for video framing only (the Xiaomi 17 Ultra's 60 fps modes pad 512 rows, 768 on the
-front camera); stills are not affected.
+front camera); stills are not affected. The app records at 24 and 30 fps for now, so `cropEdgesHighFps` has no
+effect until a higher rate is offered.
 
 `photoOutput` (`full`, default, `reduced` or `reduced25`) applies to a Bayer or 4×4 photo stream (`photoBlock` 1
 or 4) and reduces each photo frame before it is stored or merged, so singles and merges run at the smaller size

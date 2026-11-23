@@ -50,12 +50,19 @@ inline void keepCroppedEdges(imaging::RawSnapshot& frame) {
     const uint32_t height = frame.height - top - bottom;
     const size_t srcStride = size_t(frame.width) * 2, dstStride = size_t(width) * 2;
     if (frame.raw16.size() < srcStride * frame.height) return;
-    const size_t leftBytes = size_t(left) * 2;
-    for (uint32_t y = 0; y < height; ++y)
-        std::memmove(frame.raw16.data() + y * dstStride, frame.raw16.data() + (y + top) * srcStride + leftBytes,
-                     dstStride);
+    // Move as little as the edges ask. Full-width rows (only top and/or bottom dropped) are one contiguous block:
+    // dropping the bottom needs no move at all, dropping the top one move. Only dropped columns repack row by row,
+    // forwards, so a row never overwrites source it has yet to read. No shrink_to_fit: it would allocate a second
+    // frame-sized buffer and copy into it (a full-size frame twice over at peak) to give back the dropped edges.
+    if (left == 0 && right == 0) {
+        if (top) std::memmove(frame.raw16.data(), frame.raw16.data() + size_t(top) * srcStride, dstStride * height);
+    } else {
+        const size_t leftBytes = size_t(left) * 2;
+        for (uint32_t y = 0; y < height; ++y)
+            std::memmove(frame.raw16.data() + y * dstStride, frame.raw16.data() + (y + top) * srcStride + leftBytes,
+                         dstStride);
+    }
     frame.raw16.resize(dstStride * height);
-    frame.raw16.shrink_to_fit();
 
     auto cropped = std::make_shared<metadata::CameraContextMetadata>(*context);
     cropped->geometry.rawBufferWidth = width;
