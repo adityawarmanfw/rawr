@@ -1242,6 +1242,16 @@ bool CameraDeviceSession::captureFullSizeInPhotoSession(std::unique_lock<std::mu
                 request->setFloat(ACAMERA_LENS_FOCUS_DISTANCE, 1, &distance) != ACAMERA_OK)
                 return false;
         }
+        // The viewfinder's request went away with its session, so the still names the user's OIS choice itself: left
+        // to the template, a HAL may default it off and every frame of a long full-size burst blurs.
+        if (control.capabilities.oisSupported) {
+            const uint8_t ois = control.oisEnabled ? ACAMERA_LENS_OPTICAL_STABILIZATION_MODE_ON
+                                                   : ACAMERA_LENS_OPTICAL_STABILIZATION_MODE_OFF;
+            const auto status = request->setU8(ACAMERA_LENS_OPTICAL_STABILIZATION_MODE, 1, &ois);
+            if (!keysLogged) diag("CAMERA_PHOTO_SESSION_OIS mode=" + std::to_string(ois) + " status=" + statusText(status));
+        } else if (!keysLogged) {
+            diag("CAMERA_PHOTO_SESSION_OIS unsupported");
+        }
         if (minFrameNs > 0) {
             RequestEntry duration{};
             const int64_t current = request->get(ACAMERA_SENSOR_FRAME_DURATION, &duration) == ACAMERA_OK &&
