@@ -542,16 +542,22 @@ AcquiredRawJournal::~AcquiredRawJournal() {
     if (!path_.empty()) unlink(path_.c_str());
 }
 void AcquiredRawJournal::append(const std::vector<uint8_t>& pixels) {
-    if (path_.empty() || count_ >= expected_ || pixels.size() != bytes_)
-        throw std::runtime_error("capture_job_acquisition_frame_invalid");
+    uint32_t index = 0;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (path_.empty() || count_ >= expected_ || pixels.size() != bytes_)
+            throw std::runtime_error("capture_job_acquisition_frame_invalid");
+        index = count_;
+    }
     size_t done = 0;
     while (done < bytes_) {
         const auto n =
-            pwrite(fd_.get(), pixels.data() + done, bytes_ - done, acquisitionPrefixBytes + count_ * bytes_ + done);
+            pwrite(fd_.get(), pixels.data() + done, bytes_ - done, acquisitionPrefixBytes + index * bytes_ + done);
         if (n < 0 && errno == EINTR) continue;
         if (n <= 0) throw std::runtime_error("capture_job_acquisition_write_failed");
         done += size_t(n);
     }
+    std::lock_guard<std::mutex> lock(mutex_);
     ++count_;
 }
 void AcquiredRawJournal::commit(const std::string& path, CaptureJob& job) {

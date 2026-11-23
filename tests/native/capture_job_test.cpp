@@ -4,6 +4,7 @@
 #include <unistd.h>
 
 #include <cassert>
+#include <future>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -281,6 +282,36 @@ int main(int argc, char** argv) {
             ++received;
         });
         assert(received == count);
+    }
+    // A burst the camera cuts short keeps the frames it delivered: the journal shrinks to what was written, with
+    // the writes running on another thread beside the drops.
+    {
+        const uint32_t requested = 30, kept = 17;
+        auto cut = j;
+        cut.metadata.resize(kept, j.frame.metadata);
+        cut.parameters.resize(kept);
+        cut.sharpnessScores.resize(kept, 1.0f);
+        const auto cutPath = jobPath(root, "salvaged.dng");
+        AcquiredRawJournal acquired(root, 384, requested);
+        std::future<void> write;
+        for (uint32_t i = 0; i < kept; ++i) {
+            if (write.valid()) write.get();
+            auto pixels = std::make_shared<std::vector<uint8_t>>(384, static_cast<uint8_t>(i));
+            write = std::async(std::launch::async, [&acquired, pixels] { acquired.append(*pixels); });
+            // Frames dropped (binned corner) while the write runs: three at a time on every fourth frame.
+            if (i % 4 == 1)
+                for (int d = 0; d < 3; ++d) acquired.dropExpected();
+        }
+        write.get();
+        // 30 requested - 12 drops = 18 expected; one more drop for the frame lost at the end.
+        acquired.dropExpected();
+        acquired.commit(cutPath, cut);
+        size_t received = 0;
+        load(cutPath, [&](CaptureJob&, size_t i, const std::vector<uint8_t>& raw) {
+            assert(raw.size() == 384 && raw.front() == i);
+            ++received;
+        });
+        assert(received == kept);
     }
     // Acquired RAW becomes the journal in place. Old v1/v9 jobs above still load.
     const auto directPath = jobPath(root, "direct.dng");

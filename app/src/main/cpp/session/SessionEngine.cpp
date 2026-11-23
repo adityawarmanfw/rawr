@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <future>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -703,7 +704,14 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
         ++reducedCollected;
     };
     // Allocated on first use: a reduced burst of RAW10 frames decodes straight into the reducer's upload buffers.
-    std::vector<uint8_t> packed;
+    // The plain path alternates two buffers: frame N is copied and remosaiced while frame N-1 is still being written
+    // to the journal. The writes are declared after the buffers, so they are waited for before the buffers go.
+    std::array<std::vector<uint8_t>, 2> packedBuffers;
+    std::array<std::future<void>, 2> journalWrites;
+    size_t writeSeq = 0;  // journal writes launched; slot = writeSeq & 1
+    const auto waitWrite = [&](size_t slot) {
+        if (journalWrites[slot].valid()) journalWrites[slot].get();
+    };
     std::unique_ptr<capture::BlockRemosaicGpu> gpuRemosaic;  // created at the first block-CFA frame
     bool gpuRemosaicTried = false;
     allocationTiming.finish();
@@ -714,6 +722,8 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
     };
     std::vector<Frame> frames;
     uint32_t binnedCorners = 0;
+    const uint32_t requestedCount = count;
+    bool salvaged = false;
     // Submit all exposures before copying or writing any frame. The camera can
     // schedule the burst consecutively while we drain its completed buffers.
     // A sequential lens gets one still now and each next one once the
@@ -748,10 +758,22 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
         const bool received = fullSize_.arrived.wait_until(lock, deadline, [&] {
             return ready() >= 1 || fullSize_.failed || fullSize_.failures.count(tag) || fullSize_.context != context;
         });
-        if (!received || fullSize_.failed || fullSize_.failures.count(tag) || fullSize_.context != context) {
+        // A flushed, failed or timed-out burst keeps every frame the camera already delivered: frames in hand are
+        // still processed, and a burst that ends early with two or more saved frames merges those.
+        const bool contextLost = fullSize_.context != context;
+        const bool failedNow = fullSize_.failed || fullSize_.failures.count(tag) != 0;
+        if (contextLost || !received || (failedNow && (fullSize_.failed || ready() == 0))) {
             lock.unlock();
-            forget();
             failedCameraGeneration_.store(context->cameraContextGeneration);
+            if (!contextLost && frames.size() >= 2u) {
+                appendDiagnostic("FULL_SIZE_BURST_SALVAGED tag=" + std::to_string(tag) +
+                                 " requested=" + std::to_string(requestedCount) + " kept=" + std::to_string(frames.size()) +
+                                 " binnedCorners=" + std::to_string(binnedCorners));
+                for (; count > index; --count) journal->dropExpected();
+                salvaged = true;
+                break;
+            }
+            forget();
             return UINT32_MAX;
         }
         for (auto it = fullSize_.burstResults.begin(); it != fullSize_.burstResults.end();) {
@@ -772,6 +794,8 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
         lock.unlock();
         waitTiming.finish();
         if (frames.size() + binnedCorners != index + 1) return UINT32_MAX;
+        // The journal buffer this frame uses: its last write (two frames back) must be done.
+        auto& packed = packedBuffers[reduced ? 0u : (writeSeq & 1u)];
         CAPTURE_DEBUG_LOG("FULLRES_FRAME tag=%llu frame=%u sensorTimestampNs=%llu",
              static_cast<unsigned long long>(tag), index + 1,
              static_cast<unsigned long long>(frames.back().metadata.timestampNs));
@@ -827,6 +851,7 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
         uint16_t* upload = nullptr;
         if (reducer && imaging::rawPixelFormatOf(lease.image()) == imaging::RawPixelFormat::Raw10)
             upload = reducer->uploadBuffer(reducedSubmitted % 2);
+        if (!reduced) waitWrite(writeSeq & 1u);
         if (!upload && packed.size() != bytes) packed.resize(bytes);
         const auto copy = upload ? imaging::copyCompletedRaw16AhbToMemory(lease.ahb(), width, height, upload, bytes,
                                                                           lease.fence(), lease.image())
@@ -907,9 +932,17 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
                               static_cast<unsigned long long>(tag), index + 1, context->cfaBlock,
                               capture::remosaicQualityName(capture::photoRemosaicQuality(*context)), onGpu ? 1 : 0);
         }
-        diagnostics::CaptureStageTimer journalTiming("fullres_journal_append", tag, index + 1);
-        journal->append(packed);
+        // The journal takes frames in order: the previous write finishes first, then this one runs beside the next
+        // frame's copy and remosaic.
+        waitWrite((writeSeq + 1u) & 1u);
+        journalWrites[writeSeq & 1u] = std::async(std::launch::async, [&journal, &packed, tag, frame = index + 1] {
+            diagnostics::CaptureStageTimer journalTiming("fullres_journal_append", tag, frame);
+            journal->append(packed);
+        });
+        ++writeSeq;
     }
+    waitWrite(0);
+    waitWrite(1);
     while (reducedCollected < reducedSubmitted) collectReduced();
     reducer.reset();
     gpuRemosaic.reset();
@@ -918,11 +951,11 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
     diagnostics::CaptureStageTimer idleTiming("fullres_wait_sequence_end", tag);
     if (!controller->waitFullSizeIdle(remainingMs())) {
         failedCameraGeneration_.store(context->cameraContextGeneration);
-        return UINT32_MAX;
+        if (!salvaged) return UINT32_MAX;
     }
     idleTiming.finish();
     forget();
-    appendDiagnostic("FULL_SIZE_BURST_FRAMES tag=" + std::to_string(tag) + " requested=" + std::to_string(count) +
+    appendDiagnostic("FULL_SIZE_BURST_FRAMES tag=" + std::to_string(tag) + " requested=" + std::to_string(requestedCount) +
                      " received=" + std::to_string(frames.size()) + " binnedCorners=" + std::to_string(binnedCorners));
     if (frames.size() + binnedCorners != count) return UINT32_MAX;
     // Fewer than two full-size frames is no merge: the press falls back to a
@@ -933,7 +966,7 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
     }
     // Camera buffers are released as they are copied. Reuse one CPU frame buffer
     // and keep the journal in place for the existing strip merge.
-    std::vector<uint8_t>().swap(packed);
+    for (auto& buffer : packedBuffers) std::vector<uint8_t>().swap(buffer);
     auto pending = std::make_unique<rawrcam::capture::multiframe::PendingMultiframeCapture>();
     for (size_t i = 0; i < frames.size(); ++i) {
         auto& f = frames[i];
