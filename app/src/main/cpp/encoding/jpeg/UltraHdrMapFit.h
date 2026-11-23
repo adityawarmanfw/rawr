@@ -111,30 +111,50 @@ inline bool fitAndRemapMap(const unsigned char* src, std::uint32_t w, std::uint3
     const float inv255 = 1.0f / 255.0f;
     (void)fastTanh(0.0f);  // force LUT init once, outside the threaded loop
     const std::uint32_t h32 = h;
+    // Base column of each map column, hoisted out of the per-texel loop
+    // (identity for full-resolution maps).
+    std::vector<std::uint32_t> baseColumn(useFloor ? w : 0);
+    for (std::uint32_t x = 0; x < baseColumn.size(); ++x)
+        baseColumn[x] = std::min(baseW - 1, static_cast<std::uint32_t>(std::uint64_t(x) * baseW / w));
     std::vector<std::thread> threads;
     rawrcam::support::JoinGuard joinAll(threads);
     threads.reserve(workers);
     for (unsigned t = 0; t < workers; ++t) {
         const std::uint32_t y0 = h32 * t / workers;
         const std::uint32_t y1 = h32 * (t + 1) / workers;
-        threads.emplace_back([=, &src, &dst, &eotf] {
+        threads.emplace_back([=, &src, &dst, &eotf, &baseColumn] {
+            // The floor depends only on the base RGB triple: a direct-mapped
+            // memo (exact: a hit returns the value this triple computed) skips
+            // most exp2/log2 pairs, since neighbouring texels repeat colours.
+            constexpr std::uint32_t kMemo = 1u << 16;
+            std::vector<std::uint32_t> memoKey(kMemo, 0xffffffffu);
+            std::vector<float> memoFloor(kMemo);
             for (std::uint32_t y = y0; y < y1; ++y) {
                 const std::size_t row = static_cast<std::size_t>(y) * w;
                 const std::uint32_t by = useFloor ? std::min(baseH - 1, static_cast<std::uint32_t>(
                                                                             std::uint64_t(y) * baseH / h))
                                                   : 0;
+                const unsigned char* baseRow = useFloor ? base + static_cast<std::size_t>(by) * baseW * 4 : nullptr;
                 for (std::uint32_t x = 0; x < w; ++x) {
                     const std::size_t i = row + x;
                     float c[3];
                     for (int k = 0; k < 3; ++k) c[k] = static_cast<float>(src[i * 4 + k]) * inv255 * wideMax;
                     if (useFloor) {
-                        const std::uint32_t bx =
-                            std::min(baseW - 1, static_cast<std::uint32_t>(std::uint64_t(x) * baseW / w));
-                        const unsigned char* p = base + (static_cast<std::size_t>(by) * baseW + bx) * 4;
-                        const float luma = 0.2126f * eotf[p[0]] + 0.7152f * eotf[p[1]] + 0.0722f * eotf[p[2]];
-                        // exp2(e*log2) instead of pow: ~3x cheaper on every texel; the 8-bit quantisation below
-                        // absorbs the last-ulp difference (tools/jpeg_strip_check --fit: map bytes compared).
-                        const float fl = luma > 0.0f ? floorScale * std::exp2(floorExp * std::log2(luma)) : 0.0f;
+                        const unsigned char* p = baseRow + static_cast<std::size_t>(baseColumn[x]) * 4;
+                        const std::uint32_t key = std::uint32_t(p[0]) | (std::uint32_t(p[1]) << 8) |
+                                                  (std::uint32_t(p[2]) << 16);
+                        const std::uint32_t slot = (key * 2654435761u) >> 16;
+                        float fl;
+                        if (memoKey[slot] == key) {
+                            fl = memoFloor[slot];
+                        } else {
+                            const float luma = 0.2126f * eotf[p[0]] + 0.7152f * eotf[p[1]] + 0.0722f * eotf[p[2]];
+                            // exp2(e*log2) instead of pow: ~3x cheaper on every texel; the 8-bit quantisation below
+                            // absorbs the last-ulp difference (tools/jpeg_strip_check --fit: map bytes compared).
+                            fl = luma > 0.0f ? floorScale * std::exp2(floorExp * std::log2(luma)) : 0.0f;
+                            memoKey[slot] = key;
+                            memoFloor[slot] = fl;
+                        }
                         for (int k = 0; k < 3; ++k) c[k] = std::max(c[k], fl);
                     }
                     // Shoulder each channel, then average: mean of shouldered
@@ -190,18 +210,18 @@ inline bool restoreHighlightColor(std::vector<unsigned char>& map, const unsigne
         boost[i] = std::exp2(float(i) / 255 * fittedMax);
     }
     // The gains of one texel. Returns false when it keeps its fitted gain (g = map code / 255 * fittedMax, inside
-    // [0, fittedMax]): it cannot move the encoding range, so the range pass skips it. The SDR colour is checked first,
-    // so the ~99 % of texels away from white skip the restore arithmetic.
+    // [0, fittedMax], left unwritten): it cannot move the encoding range, so the range pass skips it and the
+    // quantize pass maps its code through a table. The SDR colour is checked first, so the ~99 % of texels away
+    // from white skip the restore arithmetic.
+    // Base pixel of each map column/row, hoisted out of the per-texel loops.
+    std::vector<uint32_t> baseColumn(w), baseRow(h);
+    for (uint32_t x = 0; x < w; ++x) baseColumn[x] = std::min(baseW - 1, uint32_t(uint64_t(x) * baseW / w));
+    for (uint32_t y = 0; y < h; ++y) baseRow[y] = std::min(baseH - 1, uint32_t(uint64_t(y) * baseH / h));
     const auto gains = [&](uint32_t x, uint32_t y, float* g) -> bool {
         const size_t i = size_t(y) * w + x;
-        const uint32_t bx = std::min(baseW - 1, uint32_t(uint64_t(x) * baseW / w));
-        const uint32_t by = std::min(baseH - 1, uint32_t(uint64_t(y) * baseH / h));
-        const auto* b = base + (size_t(by) * baseW + bx) * 4;
+        const auto* b = base + (size_t(baseRow[y]) * baseW + baseColumn[x]) * 4;
         float s[3];
-        for (int k = 0; k < 3; ++k) {
-            s[k] = linear[b[k]];
-            g[k] = float(map[i * 4 + k]) / 255 * fittedMax;
-        }
+        for (int k = 0; k < 3; ++k) s[k] = linear[b[k]];
         // Restore only where the SDR lost colour: channels pressed against
         // white. A brightness ramp would also recolour well-exposed SDR
         // highlights and draw a ring at the ramp's onset.
@@ -209,6 +229,7 @@ inline bool restoreHighlightColor(std::vector<unsigned char>& map, const unsigne
         float t = std::clamp((smax - .75f) / .20f, 0.0f, 1.0f);
         t = t * t * (3 - 2 * t);
         if (t == 0) return false;
+        for (int k = 0; k < 3; ++k) g[k] = float(map[i * 4 + k]) / 255 * fittedMax;
         const auto* c = chromaticity + i * 4;
         const unsigned r = unsigned(c[0]) | (unsigned(c[1]) << 8);
         const unsigned green = unsigned(c[2]) | (unsigned(c[3]) << 8);
@@ -230,6 +251,11 @@ inline bool restoreHighlightColor(std::vector<unsigned char>& map, const unsigne
     // then quantize. Each worker only reads/writes its own rows.
     const unsigned workers = n < 4096 ? 1u : std::clamp(std::thread::hardware_concurrency(), 1u, 8u);
     std::vector<float> low(workers, 0), high(workers, fittedMax);
+    // Pass 1 marks the texels that restore colour (one bit each; rows padded
+    // to whole words so workers never share one). Pass 2 recomputes only
+    // those and requantizes the rest through a per-code table.
+    const size_t rowWords = (size_t(w) + 63) / 64;
+    std::vector<uint64_t> restored(rowWords * h, 0);
     std::vector<std::thread> threads;
     rawrcam::support::JoinGuard joinAll(threads);
     for (unsigned worker = 0; worker < workers; ++worker) {
@@ -238,6 +264,7 @@ inline bool restoreHighlightColor(std::vector<unsigned char>& map, const unsigne
                 for (uint32_t x = 0; x < w; ++x) {
                     float g[3];
                     if (!gains(x, y, g)) continue;
+                    restored[size_t(y) * rowWords + x / 64] |= uint64_t(1) << (x % 64);
                     for (float v : g) { low[worker] = std::min(low[worker], v); high[worker] = std::max(high[worker], v); }
                 }
         });
@@ -246,16 +273,35 @@ inline bool restoreHighlightColor(std::vector<unsigned char>& map, const unsigne
     encodedMin = std::floor(*std::min_element(low.begin(), low.end()) * 4) / 4;
     encodedMax = std::ceil(*std::max_element(high.begin(), high.end()) * 4) / 4;
     const float scale = 255 / (encodedMax - encodedMin);
+    const auto quantize = [&](float g) {
+        return static_cast<unsigned char>(std::round(std::clamp((g - encodedMin) * scale, 0.0f, 255.0f)));
+    };
+    // A texel that keeps its fitted gain has g = code / 255 * fittedMax (the
+    // same expression gains() evaluates), so its new code depends on the code alone.
+    unsigned char requantized[256];
+    for (int code = 0; code < 256; ++code) requantized[code] = quantize(float(code) / 255 * fittedMax);
     threads.clear();
     for (unsigned worker = 0; worker < workers; ++worker) {
         threads.emplace_back([&, worker] {
-            for (uint32_t y = h * worker / workers; y < h * (worker + 1) / workers; ++y)
+            // Raw pointers: byte stores may alias anything, which would make
+            // the compiler reload every vector's data pointer per texel.
+            unsigned char* const codes = map.data();
+            const uint64_t* const bits = restored.data();
+            const unsigned char* const table = requantized;
+            for (uint32_t y = h * worker / workers; y < h * (worker + 1) / workers; ++y) {
+                const uint64_t* const rowBits = bits + size_t(y) * rowWords;
+                unsigned char* const rowCodes = codes + size_t(y) * w * 4;
                 for (uint32_t x = 0; x < w; ++x) {
-                    float g[3]; gains(x, y, g);
-                    const size_t i = size_t(y) * w + x;
-                    for (int k = 0; k < 3; ++k)
-                        map[i * 4 + k] = static_cast<unsigned char>(std::round(std::clamp((g[k] - encodedMin) * scale, 0.0f, 255.0f)));
+                    unsigned char* const texel = rowCodes + size_t(x) * 4;
+                    if (rowBits[x / 64] >> (x % 64) & 1u) {
+                        float g[3];
+                        gains(x, y, g);
+                        for (int k = 0; k < 3; ++k) texel[k] = quantize(g[k]);
+                    } else {
+                        for (int k = 0; k < 3; ++k) texel[k] = table[texel[k]];
+                    }
                 }
+            }
         });
     }
     for (auto& thread : threads) thread.join();
