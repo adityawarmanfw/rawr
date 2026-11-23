@@ -804,6 +804,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
             diag("CAMERA_NDK_SELECTION_REJECT lensId=" + lensId + " profile=" + profile.id +
                  " reason=lens_not_in_profile");
             active = false;
+            deviceSession.closeKeptDevice([this](const std::string& line) { diag(line); }, "reason=lens_not_in_profile");
             return;
         }
         requests.retire();
@@ -821,6 +822,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         if (!selected) {
             active = false;
             starting = false;
+            deviceSession.closeKeptDevice([this](const std::string& line) { diag(line); }, "reason=selection_rejected");
             return;
         }
         const LensRoute& route = *selected;

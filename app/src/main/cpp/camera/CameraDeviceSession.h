@@ -82,6 +82,10 @@ class CameraDeviceSession final {
     // cameraId, so a lens switch between physical cameras of one logical camera only rebuilds the
     // capture session. Samsung (S23 Ultra) blocks reopening a just-closed camera for 1.5-3.5 s.
     void keepDeviceForNextOpen(const std::string& cameraId) { keepForCameraId_ = cameraId; }
+    // Closes a device kept for the next lens when that lens will not open after all (its start bailed out
+    // before open()), so the camera is not held with nobody using it. No-op when none is kept.
+    void closeKeptDevice(const Diagnostic&, const std::string& reason);
+    bool deviceKept() const noexcept { return deviceKept_; }
     // True when the last successful open() reused a kept device instead of opening one.
     bool lastOpenReused() const noexcept { return lastOpenReused_; }
     bool hasSession() const noexcept { return session_ != nullptr; }

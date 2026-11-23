@@ -319,16 +319,32 @@ std::optional<LensRoute> CameraDeviceSession::select(const LensRoute& requested,
 CameraControlState CameraDeviceSession::initialControls(const LensRoute& route) const {
     return readInitialCameraControlState(characteristics_, route, generation_);
 }
+void CameraDeviceSession::closeKeptDevice(const Diagnostic& diag, const std::string& reason) {
+    if (!deviceKept_) return;
+    deviceKept_ = false;
+    diag("CAMERA_NDK_DEVICE_KEPT_CLOSE cameraId=" + keptCameraId_ + " " + reason);
+    CameraDeviceCallbackContext* const closingContext = std::exchange(deviceContext_, nullptr);
+    std::string gate = std::exchange(heldGate_, std::string());
+    if (device_) {
+        closeDeviceDetached([closingContext, gate] {
+            delete closingContext;
+            if (!gate.empty()) releaseVendorCameraGate(gate);
+        });
+    } else {
+        delete closingContext;
+        if (!gate.empty()) releaseVendorCameraGate(gate);
+    }
+}
 bool CameraDeviceSession::open(const LensRoute& route, CameraCallbacks& callbacks, const Diagnostic& diag,
                                std::unique_lock<std::mutex>& controllerLock,
                                const std::function<bool()>& stillCurrent) {
     const auto deadline = std::chrono::steady_clock::now() + kOpenBudget;
     lastOpenReused_ = false;
     if (deviceKept_) {
-        deviceKept_ = false;
         const bool reuse = device_ && keptCameraId_ == route.cameraId && heldGate_ == route.vendorGate &&
                            effectiveCameraApi(route) != CameraApi::Java;
         if (reuse) {
+            deviceKept_ = false;
             if (deviceContext_) deviceContext_->generation.store(generation_, std::memory_order_release);
             diag("CAMERA_NDK_DEVICE_REUSED cameraId=" + route.cameraId + " lensId=" + route.lensId +
                  " generation=" + std::to_string(generation_));
@@ -336,18 +352,7 @@ bool CameraDeviceSession::open(const LensRoute& route, CameraCallbacks& callback
             return true;
         }
         // Not the same camera after all: close the kept device as release() would have.
-        diag("CAMERA_NDK_DEVICE_KEPT_CLOSE cameraId=" + keptCameraId_ + " next=" + route.cameraId);
-        CameraDeviceCallbackContext* const closingContext = std::exchange(deviceContext_, nullptr);
-        std::string gate = std::exchange(heldGate_, std::string());
-        if (device_) {
-            closeDeviceDetached([closingContext, gate] {
-                delete closingContext;
-                if (!gate.empty()) releaseVendorCameraGate(gate);
-            });
-        } else {
-            delete closingContext;
-            if (!gate.empty()) releaseVendorCameraGate(gate);
-        }
+        closeKeptDevice(diag, "next=" + route.cameraId);
     }
     {
         std::unique_lock<std::mutex> lock(gPendingCloseMutex);
