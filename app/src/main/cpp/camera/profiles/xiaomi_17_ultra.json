@@ -326,7 +326,7 @@
         "sensorLayout": {
           "block": 2,
           "liveRemosaic": "standard",
-          "photoRemosaic": "high"
+          "photoRemosaic": "detail"
         }
       }
     },
@@ -731,7 +731,7 @@
         "sensorLayout": {
           "block": 2,
           "liveRemosaic": "standard",
-          "photoRemosaic": "high"
+          "photoRemosaic": "detail"
         }
       }
     },
@@ -1259,7 +1259,7 @@
         "sensorLayout": {
           "block": 2,
           "liveRemosaic": "standard",
-          "photoRemosaic": "high"
+          "photoRemosaic": "detail"
         }
       }
     },

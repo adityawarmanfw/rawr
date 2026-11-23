@@ -98,7 +98,8 @@
       "image": {
         "sensorLayout": {
           "block": 1,
-          "photoBlock": 2
+          "photoBlock": 2,
+          "photoRemosaic": "detail"
         }
       }
     },
@@ -189,7 +190,8 @@
       "image": {
         "sensorLayout": {
           "block": 1,
-          "photoBlock": 2
+          "photoBlock": 2,
+          "photoRemosaic": "detail"
         }
       }
     },
@@ -280,7 +282,8 @@
       "image": {
         "sensorLayout": {
           "block": 1,
-          "photoBlock": 2
+          "photoBlock": 2,
+          "photoRemosaic": "detail"
         }
       }
     },
@@ -371,7 +374,8 @@
       "image": {
         "sensorLayout": {
           "block": 1,
-          "photoBlock": 2
+          "photoBlock": 2,
+          "photoRemosaic": "detail"
         }
       }
     }
