@@ -111,6 +111,11 @@ void NativeAvRecorder::configureVideo() {
         __android_log_print(ANDROID_LOG_WARN, "RawrNativeVideo",
                             "VIDEO_ENCODER_REALTIME_REFUSED status=%d codec=%s", int(configured),
                             videoCodecName_.c_str());
+        // A refused configure leaves no promise about the codec's state (the NDK has no reset): the fallback runs on
+        // a fresh instance of the same encoder.
+        (void)AMediaCodec_delete(videoCodec_);
+        videoCodec_ = AMediaCodec_createEncoderByType("video/hevc");
+        if (!videoCodec_) throw std::runtime_error("HEVC encoder unavailable");
         configured = configureWith(false);
     } else {
         __android_log_print(ANDROID_LOG_INFO, "RawrNativeVideo",
