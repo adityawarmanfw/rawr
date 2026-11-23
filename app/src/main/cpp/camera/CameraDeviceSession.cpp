@@ -172,16 +172,23 @@ void CameraDeviceSession::closeDeviceDetached(std::function<void()> afterClose) 
     }).detach();
 }
 
-std::optional<LensRoute> CameraDeviceSession::select(const LensRoute& requested, const Diagnostic& diag) {
+std::optional<LensRoute> CameraDeviceSession::select(const LensRoute& requested, const Diagnostic& diag, bool retry) {
     ++generation_;
-    emitCameraDiscovery(manager_, diag);
+    selectRejectedTransient_ = false;
+    if (!retry) emitCameraDiscovery(manager_, diag);
     ACameraMetadata* chars = nullptr;
     const camera_status_t cs = ACameraManager_getCameraCharacteristics(manager_, requested.cameraId.c_str(), &chars);
     if (!ok(cs) || !chars) {
-        diag("CAMERA_NDK_SELECTION_REJECT cameraId=" + requested.cameraId +
-             " stage=characteristics status=" + statusText(cs));
+        // The service answers INVALID_PARAMETER for an id it does not list. An id that listed before and is gone now
+        // is a device still closing (a forced close leaves it unlisted for seconds), not a camera that is absent.
+        selectRejectedTransient_ = cs == ACAMERA_ERROR_INVALID_PARAMETER && seenCameraIds_.count(requested.cameraId) > 0;
+        if (!retry)
+            diag("CAMERA_NDK_SELECTION_REJECT cameraId=" + requested.cameraId +
+                 " stage=characteristics status=" + statusText(cs) + (selectRejectedTransient_ ? " transient=1" : ""));
         return std::nullopt;
     }
+    seenCameraIds_.insert(requested.cameraId);
+    if (retry) emitCameraDiscovery(manager_, diag);
 
     // A physical sub-camera streams through its logical parent: the device,
     // controls and vendor keys stay on the logical camera, while the RAW

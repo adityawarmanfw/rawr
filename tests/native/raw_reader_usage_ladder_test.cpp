@@ -49,12 +49,31 @@ void cpuReaderAndRetiredReaderAreIgnored() {
 void failedCapturesDemoteEarly() {
     Ladder ladder;
     ladder.readerCreated(1, kImage, 0);
-    for (uint32_t i = 1; i < Ladder::kFailedCapturesToDemote; ++i) ladder.captureFailed(1);
-    ladder.captureFailed(7);  // another generation's failures don't count
+    for (uint32_t i = 1; i < Ladder::kFailedCapturesToDemote; ++i) ladder.captureFailed(1, i);
+    ladder.captureFailed(7, 100);  // another generation's failures don't count
     assert(!ladder.advance(1));
-    ladder.captureFailed(1);
+    ladder.captureFailed(1, Ladder::kFailedCapturesToDemote);
     assert(ladder.advance(1));
     assert(ladder.cpuOnly());
+}
+
+void callbacksOfOneFrameCountOnce() {
+    // A HAL that loses frame 0 (RAW and companion buffers, then the flushed request: three callbacks) and then
+    // streams has a working reader: that frame is one failure and the reader is not demoted.
+    Ladder ladder;
+    ladder.readerCreated(1, kImage, 0);
+    for (int i = 0; i < 6; ++i) ladder.captureFailed(1, 0);
+    assert(!ladder.advance(1));
+    assert(!ladder.cpuOnly());
+    // Interleaved callbacks of two frames: each frame counts once.
+    ladder.readerCreated(2, kImage, 100);
+    for (int i = 0; i < 4; ++i) {
+        ladder.captureFailed(2, 7);
+        ladder.captureFailed(2, 8);
+    }
+    assert(!ladder.advance(101));
+    ladder.captureFailed(2, 9);
+    assert(ladder.advance(101));
 }
 
 void profileFixedReaderIsNotWatched() {
@@ -63,7 +82,7 @@ void profileFixedReaderIsNotWatched() {
     Ladder ladder;
     ladder.readerCreated(1, Ladder::watchedUsage(true, kBuffer), 0);
     assert(!ladder.advance(10 * kDeadline));
-    for (uint32_t i = 0; i < 2 * Ladder::kFailedCapturesToDemote; ++i) ladder.captureFailed(1);
+    for (uint32_t i = 0; i < 2 * Ladder::kFailedCapturesToDemote; ++i) ladder.captureFailed(1, i);
     assert(!ladder.advance(10 * kDeadline));
     assert(!ladder.cpuOnly());
     // The next lens, with no fixed usage, is watched as before.
@@ -87,7 +106,7 @@ void provenImageUsageDoesNotCoverBufferUsage() {
     ladder.readerCreated(1, kImage, 0);
     ladder.rawArrived(1);
     ladder.readerCreated(2, kBuffer, 1000);
-    for (uint32_t i = 0; i < Ladder::kFailedCapturesToDemote; ++i) ladder.captureFailed(2);
+    for (uint32_t i = 0; i < Ladder::kFailedCapturesToDemote; ++i) ladder.captureFailed(2, i);
     assert(ladder.advance(1001));
     assert(ladder.cpuOnly());
 }
@@ -100,12 +119,13 @@ void deliveringBufferReaderNeverDemotes() {
     ladder.readerCreated(2, kBuffer, 1000);
     ladder.rawArrived(2);
     ladder.readerCreated(3, kBuffer, 50000);
-    for (uint32_t i = 0; i < Ladder::kFailedCapturesToDemote; ++i) ladder.captureFailed(3);
+    for (uint32_t i = 0; i < Ladder::kFailedCapturesToDemote; ++i) ladder.captureFailed(3, i);
     assert(!ladder.advance(50000 + 10 * kDeadline));
     assert(!ladder.cpuOnly());
 }
 
 int main() {
+    callbacksOfOneFrameCountOnce();
     provenImageUsageDoesNotCoverBufferUsage();
     deliveringBufferReaderNeverDemotes();
     failedCapturesDemoteEarly();

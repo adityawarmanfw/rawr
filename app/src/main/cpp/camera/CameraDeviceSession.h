@@ -7,6 +7,8 @@
 #include <functional>
 #include <map>
 #include <optional>
+#include <set>
+#include <string>
 
 #include "camera/CameraBackend.h"
 #include "camera/CameraCallbacks.h"
@@ -29,7 +31,12 @@ class CameraDeviceSession final {
     CameraDeviceSession& operator=(const CameraDeviceSession&) = delete;
     // Reads characteristics and negotiates the RAW stream. Returns the route
     // with `stream` resolved, or nullopt when the camera can't be used.
-    std::optional<LensRoute> select(const LensRoute&, const Diagnostic&);
+    // retry = a repeat of a start the camera service rejected as unlisted: no discovery sweep and no reject line per
+    // attempt (the sweep probes up to 63 ids and logs each), it runs once for the attempt that finds the camera.
+    std::optional<LensRoute> select(const LensRoute&, const Diagnostic&, bool retry = false);
+    // True when the last select() failed only because the camera service does not list a camera id this process
+    // has opened before: the id comes back once the HAL finishes closing the device (after a forced close).
+    bool lastSelectRejectedTransient() const noexcept { return selectRejectedTransient_; }
     CameraControlState initialControls(const LensRoute& route) const;
     // Releases the controller lock while waiting; stillCurrent is checked with
     // that lock held before touching session state after each wait.
@@ -170,6 +177,8 @@ class CameraDeviceSession final {
     std::string keepForCameraId_;  // set by keepDeviceForNextOpen, consumed by release()
     bool deviceKept_ = false;      // device_ stays open between release() and the next open()
     bool lastOpenReused_ = false;
+    bool selectRejectedTransient_ = false;
+    std::set<std::string> seenCameraIds_;  // camera ids whose characteristics were read in this process
     std::string keptCameraId_;
     std::string keptOrOpenCameraId_;  // cameraId of device_ (open or kept)
     std::map<std::string, std::optional<uint32_t>> vendorTags_;  // name -> tag of the open camera

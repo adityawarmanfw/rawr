@@ -203,9 +203,9 @@ SessionEngine::SessionEngine(std::string filesDir) : filesDir_(std::move(filesDi
         captureFrameIngress_.destroy();
         captureReaderGeneration_ = 0;
     };
-    callbacks.captureFailed = [this](uint64_t generation) {
+    callbacks.captureFailed = [this](uint64_t generation, int64_t frameNumber) {
         std::lock_guard<std::mutex> lock(mu_);
-        rawReaderUsage_.captureFailed(generation);
+        rawReaderUsage_.captureFailed(generation, frameNumber);
     };
     callbacks.acquisitionFailed = [this](uint64_t generation, uint64_t tag) {
         // Camera callbacks never acquire the session lock or run teardown.

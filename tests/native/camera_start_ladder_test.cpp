@@ -79,8 +79,33 @@ void deadlineScalesWithExposure() {
 void failedCapturesCount() {
     Ladder l;
     l.begin("2x", 1, 0, 0, true);
-    for (uint32_t i = 1; i < Ladder::kFailedCapturesToCount; ++i) assert(l.captureFailed(1) == Outcome::None);
-    assert(l.captureFailed(1) == Outcome::Retry);
+    for (uint32_t i = 1; i < Ladder::kFailedCapturesToCount; ++i) assert(l.captureFailed(1, i) == Outcome::None);
+    assert(l.captureFailed(1, Ladder::kFailedCapturesToCount) == Outcome::Retry);
+}
+
+// One lost first frame reports as three callbacks (RAW buffer, companion buffer, flushed request): one failure,
+// and the frame that follows proves the lens.
+void callbacksOfOneFrameCountOnce() {
+    Ladder l;
+    l.begin("L1", 1, 0, 0, true);
+    for (int i = 0; i < 6; ++i) assert(l.captureFailed(1, 0) == Outcome::None);
+    assert(l.watching(1));
+    l.firstFrame(1);
+    assert(!l.watching(1));
+    // Without a proving frame, three different frames still fail the start.
+    l.begin("L2", 2, 0, 0, true);
+    assert(l.captureFailed(2, 0) == Outcome::None);
+    assert(l.captureFailed(2, 0) == Outcome::None);
+    assert(l.captureFailed(2, 1) == Outcome::None);
+    assert(l.captureFailed(2, 1) == Outcome::None);
+    assert(l.captureFailed(2, 2) == Outcome::Retry);
+    // Callbacks of two frames can interleave: each frame still counts once.
+    l.begin("L3", 3, 0, 0, true);
+    assert(l.captureFailed(3, 7) == Outcome::None);
+    assert(l.captureFailed(3, 8) == Outcome::None);
+    assert(l.captureFailed(3, 7) == Outcome::None);
+    assert(l.captureFailed(3, 8) == Outcome::None);
+    assert(l.captureFailed(3, 9) == Outcome::Retry);
 }
 
 void staleGenerationsAreIgnored() {
@@ -120,6 +145,7 @@ int main() {
     assert(!profile.rawOnly("M50"));
     deadlineScalesWithExposure();
     failedCapturesCount();
+    callbacksOfOneFrameCountOnce();
     staleGenerationsAreIgnored();
     configureRejectionGoesStraightToRawOnly();
     std::cout << "camera_start_ladder_test passed\n";

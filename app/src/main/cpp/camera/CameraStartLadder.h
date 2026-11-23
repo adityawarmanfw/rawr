@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace rawrcam::camera {
 
@@ -20,8 +22,11 @@ namespace rawrcam::camera {
 //                the next user retry (lens or profile switch) instead of
 //                staying demoted.
 // A failure is a device error, kFailedCapturesToCount failed captures, or no
-// frame by the deadline. A frame proves the lens: later failures go to the
-// regular restart paths, and the lens is never demoted.
+// frame by the deadline. A failed capture is one frame number however many
+// callbacks report it: a HAL that loses the RAW and companion buffers of its
+// first frame and flushes the request (Motorola Edge 50 Ultra) reports it three
+// times, and that frame is followed by working ones. A frame proves the lens:
+// later failures go to the regular restart paths, and the lens is never demoted.
 // Pure state: the caller supplies time and owns synchronization.
 class CameraStartLadder final {
    public:
@@ -50,7 +55,7 @@ class CameraStartLadder final {
         auto& lens = lenses_[lensKey];
         if (lens.gaveUp) return Plan::GaveUp;
         if (!eligible && !lens.rawOnly) return Plan::AsConfigured;
-        current_ = {lensKey, generation, nowMs + firstFrameDeadlineMs(exposureNs), 0, !lens.proven};
+        current_ = {lensKey, generation, nowMs + firstFrameDeadlineMs(exposureNs), 0, !lens.proven, {}};
         return lens.rawOnly ? Plan::RawOnly : Plan::AsConfigured;
     }
 
@@ -70,8 +75,11 @@ class CameraStartLadder final {
 
     Outcome deviceFailed(uint64_t generation) { return watching(generation) ? fail() : Outcome::None; }
 
-    Outcome captureFailed(uint64_t generation) {
+    Outcome captureFailed(uint64_t generation, int64_t frameNumber) {
         if (!watching(generation)) return Outcome::None;
+        auto& counted = current_.countedFrames;
+        if (std::find(counted.begin(), counted.end(), frameNumber) != counted.end()) return Outcome::None;
+        counted.push_back(frameNumber);  // at most kFailedCapturesToCount: the start fails at the last one
         return ++current_.failedCaptures >= kFailedCapturesToCount ? fail() : Outcome::None;
     }
 
@@ -108,6 +116,7 @@ class CameraStartLadder final {
         int64_t deadlineMs = 0;
         uint32_t failedCaptures = 0;
         bool watching = false;
+        std::vector<int64_t> countedFrames;  // the callbacks of one frame (any order) count once
     };
 
     // One failure per start: the start stops watching once it has failed.

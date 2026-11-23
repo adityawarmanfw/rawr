@@ -41,7 +41,7 @@ void reportFailure(CameraSessionCallbackContext* callback, const char* kind, int
         trace.record(diagnostics::RuntimeTraceStage::CameraBufferLost, 0, callback->generation, -1, 0, 0, 0u,
                      frameNumber);
     CameraCallbackGuard<CameraEventSink> guard(callback->lifetime);
-    if (guard.owner) guard.owner->cameraCaptureFailed(callback->generation);
+    if (guard.owner) guard.owner->cameraCaptureFailed(callback->generation, frameNumber);
     if (guard.owner) guard.owner->cameraStillFailed(callback->generation, request, kind, frameNumber, reason);
     if (!takeFailureLine(callback->generation)) return;
     if (guard.owner)

@@ -26,7 +26,7 @@ struct PreviewCallbacks {
     // generation lifecycle as the RAW window).
     std::function<ANativeWindow*(uint64_t, uint32_t, uint32_t, geometry::RawPixelFormat)> createCaptureWindow;
     std::function<void(uint64_t)> destroyCaptureWindow;
-    std::function<void(uint64_t)> captureFailed;
+    std::function<void(uint64_t, int64_t)> captureFailed;  // generation, frame number
     std::function<void(uint64_t, uint64_t)> acquisitionFailed;  // tag 0 = device failure
     std::function<bool(const metadata::FrameMetadataSnapshot&)> submitMetadata;
     std::function<void(const std::string&)> diagnostic;

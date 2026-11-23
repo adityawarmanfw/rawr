@@ -1,6 +1,9 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
+#include <algorithm>
+#include <optional>
 
 namespace rawrcam::imaging {
 
@@ -35,6 +38,7 @@ class RawReaderUsageLadder final {
         usage_ = gpuUsage;
         pending_ = gpuUsage != 0 && !cpuOnly_ && (provenUsage_ & gpuUsage) != gpuUsage;
         failedCaptures_ = 0;
+        countedFrames_.clear();
     }
     void readerDestroyed(uint64_t generation) {
         if (generation == generation_) pending_ = false;
@@ -44,8 +48,13 @@ class RawReaderUsageLadder final {
         if (pending_) provenUsage_ |= usage_;
         pending_ = false;
     }
-    void captureFailed(uint64_t generation) {
-        if (generation == generation_ && pending_) ++failedCaptures_;
+    // One failed frame is one failure however many callbacks report it (its RAW and companion buffers, then the
+    // flushed request): a HAL that drops frame 0 and then streams must not read as a reader that never works.
+    void captureFailed(uint64_t generation, int64_t frameNumber) {
+        if (generation != generation_ || !pending_) return;
+        if (std::find(countedFrames_.begin(), countedFrames_.end(), frameNumber) != countedFrames_.end()) return;
+        if (failedCaptures_ < kFailedCapturesToDemote) countedFrames_.push_back(frameNumber);  // bounded
+        ++failedCaptures_;
     }
     // The GPU usage is known not to allocate: later readers start CPU-only.
     void demote() { cpuOnly_ = true; pending_ = false; }
@@ -64,6 +73,7 @@ class RawReaderUsageLadder final {
     uint64_t generation_ = 0;
     int64_t createdAtMs_ = 0;
     uint32_t failedCaptures_ = 0;
+    std::vector<int64_t> countedFrames_;  // frames already counted as failed (the callbacks of one frame)
     uint64_t usage_ = 0;
     uint64_t provenUsage_ = 0;
     bool pending_ = false;

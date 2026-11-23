@@ -154,6 +154,18 @@ struct NativeCameraController::Impl final : CameraEventSink {
     bool active = false;
     bool starting = false;
     bool shutDown = false;
+    // A start rejected because the camera service does not list the camera yet (a device still closing after a
+    // forced close: vivo X300 FE, 3x) retries from the control tick every kSelectRetryIntervalMs, not by blocking the
+    // camera lane, until kSelectRetryBudgetMs. Without it nothing retried until the session policy's 8 s stall
+    // watchdog, so the preview stayed dead for 9-17 s. 0 = no retry pending; any stop, lens switch or start ends it.
+    static constexpr int64_t kSelectRetryIntervalMs = 250;
+    static constexpr int64_t kSelectRetryBudgetMs = 15000;
+    int64_t selectRetryNextMs = 0;
+    int64_t selectRetryUntilMs = 0;
+    void clearSelectRetryLocked() {
+        selectRetryNextMs = 0;
+        selectRetryUntilMs = 0;
+    }
     // Empty or unknown lens ids resolve to the profile's first lens at start.
     std::string lensId;
     // Built-in profile for this device model until the app supplies the
@@ -208,6 +220,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         std::unique_lock<std::mutex> lock(mutex);
         if (active == value) return;
         active = value;
+        if (!active) clearSelectRetryLocked();
         if (active) {
             startLocked(lock);
             return;
@@ -238,6 +251,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         std::unique_lock<std::mutex> lock(mutex);
         if (lensId == value) return;
         startLadder.resetGivenUp();
+        clearSelectRetryLocked();
 
         const bool restart = active;
         if (!restart) {
@@ -778,6 +792,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
     void rollbackCameraStartLocked(std::unique_lock<std::mutex>& lock, const std::string& reason) {
         active = false;
         starting = false;
+        clearSelectRetryLocked();
         if (deviceSession.hasSession()) {
             if (!retireSessionLocked(lock, kStopRetireTimeout, "CAMERA_START_FAILURE"))
                 forceRetireSessionLocked(lock, "CAMERA_START_FAILURE");
@@ -818,10 +833,24 @@ struct NativeCameraController::Impl final : CameraEventSink {
             !outcome.empty())
             diag("CAMERA_API_OVERRIDE lens=" + requestedRoute.lensId + " " + outcome);
         const std::optional<LensRoute> selected =
-            deviceSession.select(requestedRoute, [this](const std::string& line) { diag(line); });
+            deviceSession.select(requestedRoute, [this](const std::string& line) { diag(line); },
+                                 /*retry=*/selectRetryUntilMs != 0);
         if (!selected) {
-            active = false;
             starting = false;
+            if (deviceSession.lastSelectRejectedTransient()) {
+                const int64_t now = monotonicMs();
+                if (selectRetryUntilMs == 0) {
+                    selectRetryUntilMs = now + kSelectRetryBudgetMs;
+                    diag("CAMERA_NDK_SELECTION_RETRY lens=" + lensId + " budgetMs=" + std::to_string(kSelectRetryBudgetMs));
+                }
+                if (now < selectRetryUntilMs) {
+                    selectRetryNextMs = now + kSelectRetryIntervalMs;  // active stays set: the tick starts it again
+                    return;
+                }
+                diag("CAMERA_NDK_SELECTION_RETRY_GAVE_UP lens=" + lensId);
+            }
+            clearSelectRetryLocked();
+            active = false;
             deviceSession.closeKeptDevice([this](const std::string& line) { diag(line); }, "reason=selection_rejected");
             return;
         }
@@ -1087,6 +1116,11 @@ struct NativeCameraController::Impl final : CameraEventSink {
             return;
         }
         starting = false;
+        if (selectRetryUntilMs != 0) {
+            diag("CAMERA_NDK_SELECTION_RETRY_RECOVERED lens=" + lensId + " afterMs=" +
+                 std::to_string(monotonicMs() - (selectRetryUntilMs - kSelectRetryBudgetMs)));
+            clearSelectRetryLocked();
+        }
         // The companion only has to start the pipeline. Producing it on every
         // frame holds each capture result back about a frame behind its RAW
         // image, which starves the preview pairer.
@@ -1255,15 +1289,15 @@ struct NativeCameraController::Impl final : CameraEventSink {
         if (framesLeft <= 1)
             longExposureEndMs.store(frameStartMs + frameMs + kReadoutMarginMs, std::memory_order_relaxed);
     }
-    void cameraCaptureFailed(uint64_t callbackGeneration) override {
+    void cameraCaptureFailed(uint64_t callbackGeneration, int64_t frameNumber) override {
         // Set once at construction; the receiver checks the generation.
-        if (callbacks.captureFailed) callbacks.captureFailed(callbackGeneration);
+        if (callbacks.captureFailed) callbacks.captureFailed(callbackGeneration, frameNumber);
         if (ladderGeneration.load(std::memory_order_acquire) != callbackGeneration) return;
         bool restart = false;
         {
             std::lock_guard<std::mutex> lock(mutex);
             if (callbackGeneration != deviceSession.generation()) return;
-            restart = noteLadderOutcomeLocked(startLadder.captureFailed(callbackGeneration), "capture_failed");
+            restart = noteLadderOutcomeLocked(startLadder.captureFailed(callbackGeneration, frameNumber), "capture_failed");
         }
         if (restart && callbacks.acquisitionFailed) callbacks.acquisitionFailed(callbackGeneration, 0);
     }
@@ -1951,6 +1985,14 @@ struct NativeCameraController::Impl final : CameraEventSink {
     }
     void tickControls(int64_t nowMs) {
         std::unique_lock<std::mutex> lock(mutex);
+        if (selectRetryNextMs != 0 && nowMs >= selectRetryNextMs) {
+            selectRetryNextMs = 0;
+            if (active && !shutDown && !starting && !deviceSession.hasDevice())
+                startLocked(lock);
+            else
+                clearSelectRetryLocked();
+            return;
+        }
         if (const auto watched = ladderGeneration.load(std::memory_order_acquire);
             watched != 0 && watched == deviceSession.generation() &&
             noteLadderOutcomeLocked(startLadder.tick(watched, nowMs), "no_first_frame")) {
