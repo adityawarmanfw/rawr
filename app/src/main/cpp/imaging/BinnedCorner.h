@@ -13,8 +13,10 @@ namespace rawrcam::imaging {
 // apart without scanning the frame.
 //
 // Returns d (4 or 2) for such a frame, or 1 for a full frame. Packed RAW16.
-inline uint32_t binnedCornerDivisor(const uint16_t* px, uint32_t width, uint32_t height) {
-    if (!px || width < 64 || height < 64) return 1;
+// The same test through a sampler (x, y) -> code, for frames that are not packed RAW16 in memory.
+template <class Sample>
+inline uint32_t binnedCornerDivisorSampled(Sample sample, uint32_t width, uint32_t height) {
+    if (width < 64 || height < 64) return 1;
     constexpr uint32_t kGrid = 8;
     const auto emptyOutside = [&](uint32_t d) {
         const uint32_t cw = width / d, ch = height / d;
@@ -22,7 +24,7 @@ inline uint32_t binnedCornerDivisor(const uint16_t* px, uint32_t width, uint32_t
         for (uint32_t gy = 0; gy < kGrid; ++gy) {
             for (uint32_t gx = 0; gx < kGrid; ++gx) {
                 const uint32_t x = (2 * gx + 1) * width / (2 * kGrid), y = (2 * gy + 1) * height / (2 * kGrid);
-                const uint16_t v = px[size_t(y) * width + x];
+                const uint16_t v = sample(x, y);
                 if (x >= cw || y >= ch) {
                     if (v != 0) return false;
                     ++outside;
@@ -38,6 +40,12 @@ inline uint32_t binnedCornerDivisor(const uint16_t* px, uint32_t width, uint32_t
     };
     if (!fits(2) || !emptyOutside(2)) return 1;
     return fits(4) && emptyOutside(4) ? 4 : 2;
+}
+
+inline uint32_t binnedCornerDivisor(const uint16_t* px, uint32_t width, uint32_t height) {
+    if (!px) return 1;
+    return binnedCornerDivisorSampled([px, width](uint32_t x, uint32_t y) { return px[size_t(y) * width + x]; },
+                                      width, height);
 }
 
 // Keeps the top-left width/d x height/d of a packed RAW16 frame, in place.
@@ -60,19 +68,25 @@ struct BinnedCornerCheck {
 // seamlessMode is 768 when a still switched to the 200 MP mode and 259 for
 // 50 MP, so any other value means the binned readout. Without the tag, or
 // when it claims the switch, the zero samples decide.
-inline BinnedCornerCheck fullSizeBinnedCorner(const std::vector<uint8_t>& raw16, uint32_t width, uint32_t height,
+// Same check on packed RAW16 held elsewhere (the reducer's upload buffer); pixels is its length in samples.
+inline BinnedCornerCheck fullSizeBinnedCorner(const uint16_t* raw16, size_t pixels, uint32_t width, uint32_t height,
                                               uint32_t pixelArrayWidth, uint32_t pixelArrayHeight,
                                               std::optional<int64_t> seamlessMode) {
-    if (!pixelArrayWidth || !pixelArrayHeight || raw16.size() < size_t(width) * height * 2) return {};
+    if (!raw16 || !pixelArrayWidth || !pixelArrayHeight || pixels < size_t(width) * height) return {};
     uint32_t d = 0;
     for (const uint32_t k : {2u, 4u})
         if (width == pixelArrayWidth * k && height == pixelArrayHeight * k) d = k;
     if (!d) return {};
     if (seamlessMode && *seamlessMode != (d == 4 ? 768 : 259)) return {d, "reported"};
-    if (const uint32_t empty = binnedCornerDivisor(reinterpret_cast<const uint16_t*>(raw16.data()), width, height);
-        empty > 1)
-        return {empty, "empty"};
+    if (const uint32_t empty = binnedCornerDivisor(raw16, width, height); empty > 1) return {empty, "empty"};
     return {};
+}
+
+inline BinnedCornerCheck fullSizeBinnedCorner(const std::vector<uint8_t>& raw16, uint32_t width, uint32_t height,
+                                              uint32_t pixelArrayWidth, uint32_t pixelArrayHeight,
+                                              std::optional<int64_t> seamlessMode) {
+    return fullSizeBinnedCorner(reinterpret_cast<const uint16_t*>(raw16.data()), raw16.size() / 2, width, height,
+                                pixelArrayWidth, pixelArrayHeight, seamlessMode);
 }
 
 }  // namespace rawrcam::imaging

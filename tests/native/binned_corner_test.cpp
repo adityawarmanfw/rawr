@@ -51,6 +51,24 @@ int main() {
     stray[size_t(H * 15 / 16) * W + W * 15 / 16] = 70;
     check(binnedCornerDivisor(stray.data(), W, H) == 1, "data outside the half is a real frame");
 
+    // A sampler (frames read in place, not held as packed RAW16) takes the same decision.
+    using rawrcam::imaging::binnedCornerDivisorSampled;
+    const std::vector<uint16_t>* const cases[] = {&full, &dark, &quarter, &half, &empty, &stray};
+    for (const auto* px : cases) {
+        const auto sampled = binnedCornerDivisorSampled(
+            [px](uint32_t x, uint32_t y) { return (*px)[size_t(y) * W + x]; }, W, H);
+        check(sampled == binnedCornerDivisor(px->data(), W, H), "sampled divisor matches the packed one");
+    }
+    // The raw-pointer overload sees the same frame as the vector one.
+    {
+        using rawrcam::imaging::fullSizeBinnedCorner;
+        const auto q = frame(W, H, W / 4, H / 4, 64);
+        const auto viaPointer = fullSizeBinnedCorner(q.data(), q.size(), W, H, W / 4, H / 4, std::nullopt);
+        check(viaPointer.divisor == 4, "pointer overload finds the quarter corner");
+        check(fullSizeBinnedCorner(q.data(), q.size() - 1, W, H, W / 4, H / 4, std::nullopt).divisor == 1,
+              "a short buffer is not described");
+    }
+
     // The HAL's report decides first; zero samples are the fallback.
     using rawrcam::imaging::fullSizeBinnedCorner;
     const auto bytes = [](const std::vector<uint16_t>& px) {
