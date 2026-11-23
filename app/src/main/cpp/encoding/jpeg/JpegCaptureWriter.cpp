@@ -88,6 +88,8 @@ std::vector<unsigned char> buildXmp(const std::string& description,
     return payload;
 }
 
+// UltraHDR gain map chroma subsampling (owner decision 2026-11-23: 4:2:0).
+constexpr int kGainMapSubsampling = TJSAMP_420;
 int tjSubsampling(ChromaSubsampling s) {
     switch (s) {
         case ChromaSubsampling::Yuv444:
@@ -418,12 +420,12 @@ bool JpegCaptureWriter::startUltraHdr(std::uint64_t requestId, const void* rgba8
                            tj3Set(baseHandle, TJPARAM_FASTDCT, 0) != 0) {
                     done.error = tj3GetErrorStr(baseHandle);
                  } else if (tj3Set(mapHandle, TJPARAM_QUALITY, mapQuality) != 0 ||
-                            // Gain map is multi-channel RGB: 4:4:4 keeps
-                            // chroma full-res so subsample ringing can't
-                            // print a border along boost shoulders. The
-                            // writer fits the ceiling + shoulder + chroma
-                            // knee on a copy just above (fitAndRemapMap).
-                            tj3Set(mapHandle, TJPARAM_SUBSAMP, TJSAMP_444) != 0 ||
+                            // Gain map 4:2:0: brightness (luma) stays full
+                            // resolution; only the colour of coloured HDR
+                            // highlights halves. The map encodes ~30-40%
+                            // faster than 4:4:4. The writer fits the ceiling,
+                            // shoulder and chroma knee on a copy (fitAndRemapMap).
+                            tj3Set(mapHandle, TJPARAM_SUBSAMP, kGainMapSubsampling) != 0 ||
                            tj3Set(mapHandle, TJPARAM_FASTDCT, 0) != 0) {
                     done.error = tj3GetErrorStr(mapHandle);
                 } else {
@@ -483,7 +485,7 @@ bool JpegCaptureWriter::startUltraHdr(std::uint64_t requestId, const void* rgba8
                                          std::chrono::duration<double, std::milli>(fitT1 - fitT0).count(), mapWidth,
                                          mapHeight, colorRestored ? 1 : 0, context.ultraHdr.gainMapMinLog2,
                                          context.ultraHdr.gainMapMaxLog2);
-                     if (!encodeParallel(mapEncodePixels, mapWidth, mapHeight, mapQuality, TJSAMP_444, requestId,
+                     if (!encodeParallel(mapEncodePixels, mapWidth, mapHeight, mapQuality, kGainMapSubsampling, requestId,
                                          &mapBuf, &mapSize) &&
                          tj3Compress8(mapHandle, mapEncodePixels, static_cast<int>(mapWidth), 0,
                                       static_cast<int>(mapHeight), TJPF_RGBA, &mapBuf, &mapSize) != 0) {
