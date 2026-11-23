@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <vector>
 
+#include "capture/StripRemosaic.h"
 #include "imaging/CfaRemosaic.h"
 
 namespace {
@@ -179,6 +180,127 @@ int main() {
                           worst);
             check(e < 1.0, what);
         }
+    }
+    // Detail fits red/blue to block moments over a wide window: threads change nothing, a flat colour field stays
+    // flat, a noisy flat field has less chroma speckle than High, and a hard colour edge keeps its colour.
+    {
+        constexpr uint32_t side = 192;
+        constexpr float kSlope = 0.2f, kOffset = 0.5f;
+        const float level[3] = {180.0f, 420.0f, 260.0f};
+        uint32_t state = 12345u;
+        const auto noise = [&] {  // roughly unit Gaussian from four uniform bytes
+            state = state * 1664525u + 1013904223u;
+            return (float((state >> 24) + ((state >> 16) & 255u) + ((state >> 8) & 255u) + (state & 255u)) - 510.0f) / 147.8f;
+        };
+        for (uint32_t order : {0u, 3u}) {
+            std::vector<uint16_t> flat(side * side), noisy(side * side);
+            for (uint32_t y = 0; y < side; ++y)
+                for (uint32_t x = 0; x < side; ++x) {
+                    const float v = level[cfaChannel(order, x / 2, y / 2)];
+                    flat[y * side + x] = uint16_t(std::lround(64.0f + v));
+                    noisy[y * side + x] = uint16_t(std::lround(64.0f + v + noise() * std::sqrt(kSlope * v + kOffset)));
+                }
+            auto one = noisy, four = noisy, plain = noisy, field = flat;
+            remosaicBlockCfa(one.data(), side, side, 2, order, 1, CfaRemosaicQuality::Detail, 1.0f, 64.0f);
+            remosaicBlockCfa(four.data(), side, side, 2, order, 4, CfaRemosaicQuality::Detail, 1.0f, 64.0f);
+            remosaicBlockCfa(plain.data(), side, side, 2, order, 4, CfaRemosaicQuality::High, 1.0f, 64.0f);
+            remosaicBlockCfa(field.data(), side, side, 2, order, 2, CfaRemosaicQuality::Detail, 1.0f, 64.0f);
+            check(one == four, "Detail: threaded result matches single-threaded");
+            bool exact = true;
+            for (uint32_t y = 16; y < side - 16; ++y)
+                for (uint32_t x = 16; x < side - 16; ++x)
+                    exact &= std::abs(int(field[y * side + x]) - int(std::lround(64.0f + level[cfaChannel(order, x, y)]))) <= 1;
+            check(exact, "Detail keeps a flat colour field");
+            // Chroma speckle: red minus the mean of its four green neighbours, spread over the interior.
+            const auto chromaSpread = [&](const std::vector<uint16_t>& m) {
+                double sum = 0.0, sum2 = 0.0;
+                int n = 0;
+                for (uint32_t y = 16; y < side - 16; ++y)
+                    for (uint32_t x = 16; x < side - 16; ++x) {
+                        if (cfaChannel(order, x, y) != 0u) continue;
+                        const double g = 0.25 * (m[y * side + x - 1] + m[y * side + x + 1] + m[(y - 1) * side + x] + m[(y + 1) * side + x]);
+                        const double d = double(m[y * side + x]) - g;
+                        sum += d;
+                        sum2 += d * d;
+                        ++n;
+                    }
+                return std::sqrt(sum2 / n - (sum / n) * (sum / n));
+            };
+            char what[96];
+            std::snprintf(what, sizeof what, "order=%u chroma speckle High %.2f, Detail %.2f DN", order, chromaSpread(plain), chromaSpread(one));
+            std::printf("%s\n", what);
+            check(chromaSpread(one) < chromaSpread(plain), what);
+        }
+        // A hard two-colour edge: Detail stays at least as close to the clean scene as High.
+        for (uint32_t order : {0u, 3u}) {
+            const auto edge = [&](uint32_t c, uint32_t x) {
+                const float a[3] = {380.f, 900.f, 300.f}, b[3] = {80.f, 120.f, 700.f};
+                return 64.0f + (x < side / 2 ? a[c] : b[c]);
+            };
+            std::vector<uint16_t> mosaic(side * side), truth(side * side);
+            for (uint32_t y = 0; y < side; ++y)
+                for (uint32_t x = 0; x < side; ++x) {
+                    mosaic[y * side + x] = uint16_t(edge(cfaChannel(order, x / 2, y / 2), x));
+                    truth[y * side + x] = uint16_t(edge(cfaChannel(order, x, y), x));
+                }
+            auto smoothed = mosaic, plain = mosaic;
+            remosaicBlockCfa(smoothed.data(), side, side, 2, order, 2, CfaRemosaicQuality::Detail, 1.0f, 64.0f);
+            remosaicBlockCfa(plain.data(), side, side, 2, order, 2, CfaRemosaicQuality::High, 1.0f, 64.0f);
+            double es = 0.0, ep = 0.0;
+            for (uint32_t y = 16; y < side - 16; ++y)
+                for (uint32_t x = 16; x < side - 16; ++x) {
+                    es += std::abs(double(smoothed[y * side + x]) - truth[y * side + x]);
+                    ep += std::abs(double(plain[y * side + x]) - truth[y * side + x]);
+                }
+            char what[96];
+            std::snprintf(what, sizeof what, "order=%u colour edge error Detail %.0f vs High %.0f", order, es, ep);
+            std::printf("%s\n", what);
+            check(es <= ep, what);
+        }
+    }
+    // Strip loops (capture/StripRemosaic.h): the overlapped loop (two windows in flight, as the GPU runs it)
+    // and the sequential one both match a whole-frame Detail run bit for bit.
+    {
+        constexpr uint32_t sw = 96;
+        for (uint32_t sh : {1024u, 1000u, 520u, 136u})
+            for (uint32_t strips : {2u, 3u, 4u, 6u}) {
+                std::vector<uint8_t> frame(size_t(sw) * sh * 2);
+                auto* px = reinterpret_cast<uint16_t*>(frame.data());
+                uint32_t st = 777u + sh + strips;
+                for (uint32_t y = 0; y < sh; ++y)
+                    for (uint32_t x = 0; x < sw; ++x) {
+                        st = st * 1664525u + 1013904223u;
+                        px[size_t(y) * sw + x] = uint16_t(64 + (cfaChannel(0, x / 2, y / 2) == 1u ? 400 : 200) +
+                                                          ((x / 9 + y / 7) % 2 ? 120 : 0) + (st >> 27));
+                    }
+                auto whole = frame;
+                remosaicBlockCfa(whole, sw, sh, 2, 0, 1, CfaRemosaicQuality::Detail, 1.0f, 64.0f);
+                const auto layout = rawrcam::capture::StripLayout::make(sh, strips);
+                const auto windowPass = [&](uint8_t* window) {
+                    remosaicBlockCfa(reinterpret_cast<uint16_t*>(window), sw, layout.window, 2, 0, 1,
+                                     CfaRemosaicQuality::Detail, 1.0f, 64.0f);
+                };
+                std::vector<uint8_t> a(size_t(sw) * layout.window * 2), b(a.size());
+                auto seq = frame;
+                rawrcam::capture::remosaicInStrips(seq, sw, sh, layout, a.data(),
+                                                   [&](uint8_t* w, uint32_t) { windowPass(w); });
+                auto ovl = frame;
+                uint8_t* const windows[2] = {a.data(), b.data()};
+                bool pending[2] = {false, false};
+                rawrcam::capture::remosaicInStripsOverlapped(
+                    ovl, sw, sh, layout, windows,
+                    [&](uint8_t*, uint32_t slot, uint32_t) {
+                        check(!pending[slot], "overlapped strips: a window is reused only after its wait");
+                        pending[slot] = true;
+                    },
+                    [&](uint32_t slot) {  // the "GPU" runs at wait time: the window must still hold its input
+                        windowPass(windows[slot]);
+                        pending[slot] = false;
+                    });
+                char what[96];
+                std::snprintf(what, sizeof what, "strip loops match whole frame h=%u strips=%u", sh, strips);
+                check(seq == whole && ovl == whole, what);
+            }
     }
     if (failures == 0) std::printf("cfa_remosaic_test: ok\n");
     return failures == 0 ? 0 : 1;

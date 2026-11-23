@@ -174,6 +174,7 @@ their presets on top (see `effectiveWorkarounds`), and the editor shows those as
 | `noTapFocus` | Tap AF and AF regions are unavailable. |
 | `alwaysSendFrameRate` | Every request carries an AE fps range, even with AE off. |
 | `noAutoCompanion` | The rule-based companion is not added. |
+| `ignoreLostCompanion` | A lost companion buffer is logged (`CAMERA_BUFFER_LOST_IGNORED`) instead of failing the frame. The Xiaomi 17 Ultra's HAL drops the small companion output on full-size stills while the RAW outputs still arrive. |
 | `keepTemplateRegions` | A request without a tap region leaves the template's own AF and AE regions alone instead of writing an empty one (the vivo X200 Ultra's AF node dereferences a null ROI otherwise and the provider crashes on the first full-size request). |
 
 Presets keep imported and user-edited profiles safe: a lens with a vendor gate implies `holdTapFocus`;

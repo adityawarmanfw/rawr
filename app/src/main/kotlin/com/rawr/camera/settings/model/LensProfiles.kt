@@ -5,7 +5,7 @@ package com.rawr.camera.settings.model
  * capture-screen order; disabled lenses are kept but not sent to the camera.
  * The name doubles as the app's lens id and the capture-screen label.
  */
-const val LENS_NAME_MAX_LENGTH = 4
+const val LENS_NAME_MAX_LENGTH = 12
 
 enum class VendorKeyScope(val wireName: String, val label: String) {
     /** Session parameter, set when each capture session (photo or video) is created. */
@@ -149,7 +149,7 @@ fun isBufferUsage(text: String): Boolean =
         (text.length > 2 && (text.startsWith("0x") || text.startsWith("0X")) && text.drop(2).toULongOrNull(16) != null)
 
 /** Provider behaviours a lens can say it avoids (see the native CameraWorkarounds). */
-val CAMERA_WORKAROUNDS = listOf("holdTapFocus", "appPriorityAe", "noTapFocus", "alwaysSendFrameRate", "noAutoCompanion", "keepTemplateRegions")
+val CAMERA_WORKAROUNDS = listOf("holdTapFocus", "appPriorityAe", "noTapFocus", "alwaysSendFrameRate", "noAutoCompanion", "keepTemplateRegions", "ignoreLostCompanion")
 
 /**
  * One lens, grouped the way profile schema 2 groups it: which camera, its streams, how the session runs, what

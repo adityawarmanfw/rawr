@@ -24,10 +24,10 @@ double elapsedMs(Clock::time_point begin, Clock::time_point end) {
 constexpr uint32_t kHalPixelFormatRaw16 = 0x20;
 
 Raw16CpuSnapshotResult copyToPacked(AImage* image, AHardwareBuffer* ahb, int lockFenceFd, uint32_t width,
-                                    uint32_t height, std::vector<uint8_t>& destination) noexcept {
+                                    uint32_t height, uint16_t* destination, size_t destinationBytes) noexcept {
     Raw16CpuSnapshotResult out{};
     out.gpuAcquireFenceFd = lockFenceFd;
-    if (ahb == nullptr || width == 0 || height == 0) {
+    if (ahb == nullptr || destination == nullptr || width == 0 || height == 0) {
         out.error = "invalid_input";
         return out;
     }
@@ -78,7 +78,7 @@ Raw16CpuSnapshotResult copyToPacked(AImage* image, AHardwareBuffer* ahb, int loc
         out.sourcePixelStrideBytes = static_cast<int32_t>(sizeof(uint16_t));
     }
     if (packedBytes > static_cast<uint64_t>(std::numeric_limits<size_t>::max()) ||
-        destination.size() != static_cast<size_t>(packedBytes)) {
+        destinationBytes != static_cast<size_t>(packedBytes)) {
         out.error = "destination_size_mismatch";
         return out;
     }
@@ -101,7 +101,7 @@ Raw16CpuSnapshotResult copyToPacked(AImage* image, AHardwareBuffer* ahb, int loc
     const auto copyBegin = Clock::now();
     const RawPixelSource source{static_cast<const uint8_t*>(address), format, width, height,
                                 static_cast<size_t>(sourceRowBytes)};
-    const bool copied = copyRawToPackedRaw16(source, reinterpret_cast<uint16_t*>(destination.data()));
+    const bool copied = copyRawToPackedRaw16(source, destination);
     out.copyMs = elapsedMs(copyBegin, Clock::now());
 
     int cpuReleaseFenceFd = -1;
@@ -132,17 +132,65 @@ Raw16CpuSnapshotResult copyRaw16AhbToPacked(AImage* image, AHardwareBuffer* ahb,
         out.error = "invalid_input";
         return out;
     }
-    return copyToPacked(image, ahb, acquireFenceFd, width, height, destination);
+    return copyToPacked(image, ahb, acquireFenceFd, width, height, reinterpret_cast<uint16_t*>(destination.data()),
+                        destination.size());
 }
 
 Raw16CpuSnapshotResult copyCompletedRaw16AhbToPacked(AHardwareBuffer* ahb, uint32_t width, uint32_t height,
                                                      std::vector<uint8_t>& destination, int acquireFenceFd,
                                                      AImage* image) noexcept {
-    Raw16CpuSnapshotResult out = copyToPacked(image, ahb, acquireFenceFd, width, height, destination);
+    return copyCompletedRaw16AhbToMemory(ahb, width, height, reinterpret_cast<uint16_t*>(destination.data()),
+                                         destination.size(), acquireFenceFd, image);
+}
+
+Raw16CpuSnapshotResult copyCompletedRaw16AhbToMemory(AHardwareBuffer* ahb, uint32_t width, uint32_t height,
+                                                     uint16_t* destination, size_t destinationBytes,
+                                                     int acquireFenceFd, AImage* image) noexcept {
+    Raw16CpuSnapshotResult out =
+        copyToPacked(image, ahb, acquireFenceFd, width, height, destination, destinationBytes);
     // Worker copies never hand a fence onward; only a release fence created
     // by the unlock is ours to close.
     if (out.gpuAcquireFenceFd >= 0 && out.gpuAcquireFenceFd != acquireFenceFd) close(out.gpuAcquireFenceFd);
     out.gpuAcquireFenceFd = -1;
+    return out;
+}
+
+std::optional<SampledFullSizeCheck> sampleFullSizeBinnedCorner(AImage* image, AHardwareBuffer* ahb, uint32_t width,
+                                                               uint32_t height, uint32_t pixelArrayWidth,
+                                                               uint32_t pixelArrayHeight,
+                                                               std::optional<int64_t> seamlessMode) noexcept {
+    if (!image || !ahb || width == 0 || height == 0 || width % 4u != 0) return std::nullopt;
+    if (rawPixelFormatOf(image) != RawPixelFormat::Raw10) return std::nullopt;
+    int32_t imageWidth = 0, imageHeight = 0, planes = 0, rowStride = 0;
+    if (AImage_getWidth(image, &imageWidth) != AMEDIA_OK || AImage_getHeight(image, &imageHeight) != AMEDIA_OK ||
+        AImage_getNumberOfPlanes(image, &planes) != AMEDIA_OK || planes != 1 ||
+        AImage_getPlaneRowStride(image, 0, &rowStride) != AMEDIA_OK || imageWidth < static_cast<int32_t>(width) ||
+        imageHeight < static_cast<int32_t>(height) || rowStride <= 0 ||
+        static_cast<size_t>(rowStride) < minimumRowBytes(RawPixelFormat::Raw10, width))
+        return std::nullopt;
+    SampledFullSizeCheck out{};
+    out.rowStrideBytes = static_cast<uint32_t>(rowStride);
+    // Same order as fullSizeBinnedCorner: only a full-size buffer is checked, the HAL report first.
+    uint32_t d = 0;
+    for (const uint32_t k : {2u, 4u})
+        if (pixelArrayWidth && pixelArrayHeight && width == pixelArrayWidth * k && height == pixelArrayHeight * k) d = k;
+    if (!d) return out;
+    if (seamlessMode && *seamlessMode != (d == 4 ? 768 : 259)) {
+        out.check = {d, "reported"};
+        return out;
+    }
+    void* address = nullptr;
+    if (AHardwareBuffer_lock(ahb, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN, -1, nullptr, &address) != 0 || !address)
+        return std::nullopt;
+    const RawPixelSource source{static_cast<const uint8_t*>(address), RawPixelFormat::Raw10, width, height,
+                                static_cast<size_t>(rowStride)};
+    const uint32_t empty = binnedCornerDivisorSampled(
+        [&source](uint32_t x, uint32_t y) { return readRawPixel(source, x, y); }, width, height);
+    int releaseFence = -1;
+    const int unlocked = AHardwareBuffer_unlock(ahb, &releaseFence);
+    if (releaseFence >= 0) close(releaseFence);
+    if (unlocked != 0) return std::nullopt;
+    if (empty > 1) out.check = {empty, "empty"};
     return out;
 }
 

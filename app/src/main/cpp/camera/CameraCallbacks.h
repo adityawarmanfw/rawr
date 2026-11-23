@@ -39,6 +39,8 @@ struct CameraSessionCallbackContext {
     // "aux_jpeg", "capture"), so a lost buffer can say which stream it belonged to.
     std::vector<const void*> outputWindows = {};
     std::vector<std::string> outputLabels = {};
+    // CameraWorkarounds::ignoreLostCompanion: a lost companion buffer is logged, not a failed frame.
+    bool ignoreLostCompanion = false;
     const char* outputLabel(size_t index) const {
         return index < outputLabels.size() ? outputLabels[index].c_str() : nullptr;
     }

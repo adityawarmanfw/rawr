@@ -1,6 +1,8 @@
 #include "VulkanContext.h"
 
 #include <cstring>
+#include <chrono>
+#include <sys/resource.h>
 #include <iterator>
 #include <stdexcept>
 #include <string>
@@ -270,6 +272,32 @@ void VulkanContext::createDeviceForSurface(VkSurfaceKHR surface) {
 
 VkPipelineCache VulkanContext::pipelineCache() const { return dispatch::pipelineCache(device_); }
 
+void VulkanContext::prepareRemosaic() const {
+    std::lock_guard<std::mutex> lock(remosaicMutex_);
+    if (!device_ || remosaicFuture_.valid()) return;
+    remosaicFuture_ = std::async(std::launch::async, [this] {
+        // Android/Linux applies this to the calling worker thread, not the viewfinder.
+        setpriority(PRIO_PROCESS, 0, 10);
+        const auto start = std::chrono::steady_clock::now();
+        auto programs = rawr::raw_ingress::RawRemosaicker::prepare(gpuContext(), pipelineCache());
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - start).count();
+        __android_log_print(ANDROID_LOG_INFO, "rawr", "REMOSAIC_PREWARM_READY ms=%lld", (long long)ms);
+        return programs;
+    }).share();
+}
+
+std::shared_ptr<rawr::raw_ingress::RawRemosaicker::Pipelines> VulkanContext::remosaicPipelines() const {
+    prepareRemosaic();
+    decltype(remosaicFuture_) future;
+    {
+        std::lock_guard<std::mutex> lock(remosaicMutex_);
+        future = remosaicFuture_;
+    }
+    if (!future.valid()) throw std::runtime_error("remosaic preparation requires a device");
+    return future.get();
+}
+
 VkResult VulkanContext::waitIdle() const {
     if (!device_) return VK_SUCCESS;
     if (hasMultiframeQueue_) {
@@ -281,6 +309,11 @@ VkResult VulkanContext::waitIdle() const {
 }
 
 void VulkanContext::destroyDevice() {
+    {
+        std::lock_guard<std::mutex> lock(remosaicMutex_);
+        if (remosaicFuture_.valid()) remosaicFuture_.wait();
+        remosaicFuture_ = {};  // release programs before destroying their device/cache
+    }
     dispatch::releasePipelineCache(device_);
     if (device_ != VK_NULL_HANDLE) vkDestroyDevice(device_, nullptr);
     device_ = VK_NULL_HANDLE;

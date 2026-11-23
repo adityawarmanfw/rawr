@@ -121,6 +121,26 @@ void testJson() {
     assert(error.find("workarounds belong to lenses") != std::string::npos);
 }
 
+void testIgnoreLostCompanion() {
+    CameraWorkarounds q;
+    assert(!q.ignoreLostCompanion && !q.any());
+    assert(setWorkaround(q, "ignoreLostCompanion") && q.ignoreLostCompanion && q.any());
+    assert(workaroundNames(q) == std::vector<std::string>{"ignoreLostCompanion"});
+    CameraWorkarounds other;
+    other.keepTemplateRegions = true;
+    const auto merged = mergeWorkarounds(q, other);
+    assert(merged.ignoreLostCompanion && merged.keepTemplateRegions && !(merged == other) && !(merged == q));
+    const auto lens = parseCameraProfile(R"({"lenses":[{"id":"a","cameraId":"0","session":{"workarounds":["ignoreLostCompanion"]}}]})");
+    assert(lens && lens->lenses[0].workarounds.ignoreLostCompanion);
+    const auto json = serializeCameraProfile(*lens);
+    assert(json.find(R"("workarounds":["ignoreLostCompanion"])") != std::string::npos);
+    // Only the lenses that name it: every vivo and OPPO lens keeps failing a frame on a lost companion buffer.
+    for (const char* id : {"vivo_x300_ultra", "vivo_x300_pro", "oppo_x9u_200mp"})
+        for (const auto& l : builtInCameraProfile(id).lenses) assert(!l.workarounds.ignoreLostCompanion);
+    for (const auto& l : builtInCameraProfile("xiaomi_17_ultra").lenses)
+        assert(l.workarounds.ignoreLostCompanion == l.photoStream.has_value());
+}
+
 void testKeepRegions() {
     CameraWorkarounds q;
     assert(!q.keepTemplateRegions && !q.any());
@@ -158,6 +178,7 @@ int main() {
     testPresets();
     testJson();
     testKeepRegions();
+    testIgnoreLostCompanion();
     testCarriesRecipe();
     std::cout << "camera_workarounds_test passed\n";
     return 0;

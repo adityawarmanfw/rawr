@@ -5,9 +5,13 @@
 #include <cstring>
 #include <stdexcept>
 
+#include <vulkan/vulkan_android.h>
+
 #include "capture/ReducedRawMetadata.h"
 #include "diagnostics/timing/CaptureStageTimer.h"
 #include "geometry/CfaPattern.h"
+#include "vulkan/RawImportEvidence.h"
+#include "vulkan/Synchronization.h"
 namespace rawrcam::capture {
 namespace {
 void check(VkResult r) {
@@ -23,7 +27,7 @@ ReducedRaw::ReducedRaw(const vulkan::VulkanContext& vk, const metadata::CameraCo
     direct3x_ = reducedRawDirect3x(c);
     try {
         initialize(slots);
-        if (c.cfaBlock != 1) remosaic_ = rawr::raw_ingress::RawRemosaicker::create(vk_.gpuContext());
+        if (c.cfaBlock != 1) remosaic_ = rawr::raw_ingress::RawRemosaicker::create(vk_.gpuContext(), vk_.remosaicPipelines());
         // The Bayer bins, and the 4x4 mode's 25 MP resample.
         if (c.cfaBlock == 1 || c.photoReduced25) binner_ = rawr::raw_ingress::BayerBinner::create(vk_.gpuContext());
     } catch (...) {
@@ -76,8 +80,7 @@ void ReducedRaw::initialize(uint32_t count) {
     check(vkCreateCommandPool(vk_.device(), &pi, nullptr, &pool_));
     for (uint32_t i = 0; i < count; ++i) {
         auto& s = slots_[i];
-        // Storage reads (Hexadeca reduction), transfers into the bin's strip image.
-        allocate(s.source, bytes_, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+        // The source upload buffer is made on first CPU use (ensureSource): a zero-copy burst never needs it.
         allocate(s.result, size_t(outWidth_) * outHeight_ * 2, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
         s.output =
             rawr::vk::createOwnedImage(vk_.physicalDevice(), vk_.device(), outWidth_, outHeight_, VK_FORMAT_R16_UINT,
@@ -100,8 +103,98 @@ void ReducedRaw::initialize(uint32_t count) {
 void ReducedRaw::submit(uint32_t index, const std::vector<uint8_t>& pixels, const metadata::FrameMetadataSnapshot& m) {
     diagnostics::CaptureStageTimer timing("reduced_upload_and_submit", m.timestampNs, index);
     auto& s = slots_.at(index);
-    if (!s.command || s.pending || pixels.size() != bytes_ || !m.cameraContext ||
-        !reducedRawRequested(*m.cameraContext))
+    if (pixels.size() != bytes_) throw std::runtime_error("reduced_raw_submit_invalid");
+    const float limit = sourceCodeLimit(s, m);
+    ensureSource(s);
+    // Copy and validate in one pass; phase-fit integer statistics require bounded source codes.
+    auto* out = static_cast<uint16_t*>(s.source.mapped);
+    const auto* in = reinterpret_cast<const uint16_t*>(pixels.data());
+    uint16_t maximum = 0;
+    for (size_t i = 0; i < bytes_ / 2; ++i) {
+        out[i] = in[i];
+        maximum = std::max(maximum, in[i]);
+    }
+    if (maximum > limit) throw std::runtime_error("reduced_raw_source_code_out_of_range");
+    record(s, index, m, s.source.buffer, width_ * 2, false);
+}
+uint16_t* ReducedRaw::uploadBuffer(uint32_t index) {
+    auto& s = slots_.at(index);
+    if (!s.command || s.pending) throw std::runtime_error("reduced_raw_upload_buffer_busy");
+    ensureSource(s);
+    return static_cast<uint16_t*>(s.source.mapped);
+}
+void ReducedRaw::submitUploaded(uint32_t index, const metadata::FrameMetadataSnapshot& m, uint16_t sourceMaximum) {
+    diagnostics::CaptureStageTimer timing("reduced_submit_uploaded", m.timestampNs, index);
+    auto& s = slots_.at(index);
+    if (sourceMaximum > sourceCodeLimit(s, m)) throw std::runtime_error("reduced_raw_source_code_out_of_range");
+    record(s, index, m, s.source.buffer, width_ * 2, false);
+}
+bool ReducedRaw::submitImported(uint32_t index, AHardwareBuffer* ahb, uint32_t rowStrideBytes,
+                                const metadata::FrameMetadataSnapshot& m, std::string* error) {
+    diagnostics::CaptureStageTimer timing("reduced_import_and_submit", m.timestampNs, index);
+    auto& s = slots_.at(index);
+    try {
+        // RAW10 codes never exceed 1023, below both limits.
+        if (1023.0f > sourceCodeLimit(s, m)) throw std::runtime_error("reduced_raw_source_code_out_of_range");
+        // The Bayer bin and the strip transfer read RAW16 only: those frames take the CPU paths.
+        if (!remosaic_ || binner_) throw std::runtime_error("reduced_raw_import_mode");
+        if (!ahb || rowStrideBytes < width_ / 4 * 5) throw std::runtime_error("reduced_raw_import_layout");
+        const auto getProperties = vk_.getAhbProperties();
+        if (!getProperties) throw std::runtime_error("reduced_raw_import_unsupported");
+        VkAndroidHardwareBufferFormatPropertiesANDROID fp{};
+        fp.sType = VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_FORMAT_PROPERTIES_ANDROID;
+        VkAndroidHardwareBufferPropertiesANDROID hp{};
+        hp.sType = VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_PROPERTIES_ANDROID;
+        hp.pNext = &fp;
+        check(getProperties(vk_.device(), ahb, &hp));
+        if (hp.memoryTypeBits == 0 || hp.allocationSize < VkDeviceSize(rowStrideBytes) * height_)
+            throw std::runtime_error("reduced_raw_import_size");
+        // As RawAhbImporter::ensureBufferImport, proven on the Adreno 840: a plain buffer bound to the AHB's
+        // memory reads the camera data; one created with VkExternalMemoryBufferCreateInfo reads it back black.
+        VkBufferCreateInfo bi{};
+        bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bi.size = hp.allocationSize;
+        bi.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        check(vkCreateBuffer(vk_.device(), &bi, nullptr, &s.imported));
+        VkMemoryRequirements req{};
+        vkGetBufferMemoryRequirements(vk_.device(), s.imported, &req);
+        if (req.size > hp.allocationSize) throw std::runtime_error("reduced_raw_import_requirements");
+        VkImportAndroidHardwareBufferInfoANDROID import{};
+        import.sType = VK_STRUCTURE_TYPE_IMPORT_ANDROID_HARDWARE_BUFFER_INFO_ANDROID;
+        import.buffer = ahb;
+        VkMemoryDedicatedAllocateInfo dedicated{};
+        dedicated.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
+        dedicated.pNext = &import;
+        dedicated.buffer = s.imported;
+        VkMemoryAllocateInfo ma{};
+        ma.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        ma.pNext = &dedicated;
+        ma.allocationSize = hp.allocationSize;
+        ma.memoryTypeIndex = vulkan::findImportMemoryType(vk_.physicalDevice(), hp.memoryTypeBits, 0);
+        check(vkAllocateMemory(vk_.device(), &ma, nullptr, &s.importedMemory));
+        check(vkBindBufferMemory(vk_.device(), s.imported, s.importedMemory, 0));
+        record(s, index, m, s.imported, rowStrideBytes, true);
+        return true;
+    } catch (const std::exception& e) {
+        if (!s.pending) releaseImport(s);
+        if (error) *error = e.what();
+        return false;
+    }
+}
+void ReducedRaw::ensureSource(Slot& s) {
+    // Storage reads (Hexadeca reduction), transfers into the bin's strip image.
+    if (!s.source.buffer)
+        allocate(s.source, bytes_, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+}
+void ReducedRaw::releaseImport(Slot& s) noexcept {
+    if (s.imported) vkDestroyBuffer(vk_.device(), s.imported, nullptr);
+    if (s.importedMemory) vkFreeMemory(vk_.device(), s.importedMemory, nullptr);
+    s.imported = VK_NULL_HANDLE;
+    s.importedMemory = VK_NULL_HANDLE;
+}
+float ReducedRaw::sourceCodeLimit(const Slot& s, const metadata::FrameMetadataSnapshot& m) const {
+    if (!s.command || s.pending || !m.cameraContext || !reducedRawRequested(*m.cameraContext))
         throw std::runtime_error("reduced_raw_submit_invalid");
     const auto& c = *m.cameraContext;
     // A frame whose levels are too deep for the fit still reduces, without it.
@@ -113,15 +206,13 @@ void ReducedRaw::submit(uint32_t index, const std::vector<uint8_t>& pixels, cons
     if (bayer == bool(remosaic_) || direct3x_ != reducedRawDirect3x(c) || reducedRawSize(c, width_, height_).width != outWidth_ ||
         reducedRawSize(c, width_, height_).height != outHeight_)
         throw std::runtime_error("reduced_raw_mode_changed");
-    // Copy and validate in one pass; phase-fit integer statistics require bounded source codes.
-    auto* out = static_cast<uint16_t*>(s.source.mapped);
-    const auto* in = reinterpret_cast<const uint16_t*>(pixels.data());
-    uint16_t maximum = 0;
-    for (size_t i = 0; i < bytes_ / 2; ++i) {
-        out[i] = in[i];
-        maximum = std::max(maximum, in[i]);
-    }
-    if (maximum > limit) throw std::runtime_error("reduced_raw_source_code_out_of_range");
+    return limit;
+}
+void ReducedRaw::record(Slot& s, uint32_t index, const metadata::FrameMetadataSnapshot& m, VkBuffer source,
+                        uint32_t rowStrideBytes, bool raw10) {
+    const auto& c = *m.cameraContext;
+    const bool bayer = c.cfaBlock == 1;
+    const bool fit = !bayer && c.photoPhaseFit && reducedRawFitFits(m.effectiveWhiteLevel);
     check(vkResetCommandBuffer(s.command, 0));
     VkCommandBufferBeginInfo bi{};
     bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -142,13 +233,20 @@ void ReducedRaw::submit(uint32_t index, const std::vector<uint8_t>& pixels, cons
     vkCmdPipelineBarrier(s.command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
                          nullptr, 0, nullptr, resample ? 2 : 1, b);
     const VkImageView half = resample ? s.half.view : s.output.view;
+    // A camera buffer read in place is taken from, and handed back to, the foreign queue (as the viewfinder's
+    // GPU RAW10 ingress does).
+    const bool camera = source == s.imported && s.imported != VK_NULL_HANDLE;
+    if (camera)
+        vulkan::acquireForeignBuffer(s.command, source, vk_.queueFamily(),
+                                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                     VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT);
     if (bayer) {
         rawr::raw_ingress::BayerBinner::Bin f;
-        f.source = s.source.buffer;
+        f.source = source;
         f.destination = half;
         f.width = width_;
         f.height = height_;
-        f.rowStrideBytes = width_ * 2;
+        f.rowStrideBytes = rowStrideBytes;
         // Black levels and colours in buffer phase order (2*(y&1)+(x&1)) for the frame's Bayer order.
         const auto black = geometry::reorderRggbByCode(m.blackLevelPhysicalRggb, c.rawPreviewCfa);
         static constexpr uint8_t kColours[4][4] = {{0, 1, 1, 2}, {1, 0, 2, 1}, {1, 2, 0, 1}, {2, 1, 1, 0}};
@@ -166,11 +264,12 @@ void ReducedRaw::submit(uint32_t index, const std::vector<uint8_t>& pixels, cons
         binner_->bin(s.command, index, f);
     } else {
         rawr::raw_ingress::RawRemosaicker::Frame f;
-        f.source = s.source.buffer;
+        f.source = source;
         f.destination = half;
         f.width = width_;
         f.height = height_;
-        f.rowStrideBytes = width_ * 2;
+        f.rowStrideBytes = rowStrideBytes;
+        f.raw10 = raw10;
         f.block = 4;
         f.order = c.rawPreviewCfa;
         f.quality = rawr::raw_ingress::RawRemosaicker::Quality::Detail;
@@ -181,6 +280,9 @@ void ReducedRaw::submit(uint32_t index, const std::vector<uint8_t>& pixels, cons
                        .25f;
         remosaic_->record(s.command, index, f);
     }
+    if (camera)
+        vulkan::releaseForeignBuffer(s.command, source, vk_.queueFamily(), VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                     VK_ACCESS_SHADER_READ_BIT);
     if (resample) {
         VkMemoryBarrier toResample{};
         toResample.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
@@ -227,11 +329,13 @@ void ReducedRaw::collect(uint32_t index, std::vector<uint8_t>& pixels) {
     check(vkWaitForFences(vk_.device(), 1, &s.fence, VK_TRUE, UINT64_MAX));
     pixels.resize(size_t(outWidth_) * outHeight_ * 2);
     std::memcpy(pixels.data(), s.result.mapped, pixels.size());
+    releaseImport(s);
     s.pending = false;
 }
 void ReducedRaw::destroy() noexcept {
     for (auto& s : slots_)
         if (s.pending) vkWaitForFences(vk_.device(), 1, &s.fence, VK_TRUE, UINT64_MAX);
+    for (auto& s : slots_) releaseImport(s);
     remosaic_.reset();
     binner_.reset();
     for (auto& s : slots_) {

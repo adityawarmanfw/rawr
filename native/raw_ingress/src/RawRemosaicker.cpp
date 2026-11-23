@@ -27,57 +27,97 @@ void memoryBarrier(VkCommandBuffer command, VkAccessFlags src, VkAccessFlags dst
 }
 }  // namespace
 
-std::unique_ptr<RawRemosaicker> RawRemosaicker::create(const rawr::vk::GpuContext& context) {
-    return std::unique_ptr<RawRemosaicker>(new RawRemosaicker(context));
+struct RawRemosaicker::Pipelines {
+    VkDevice device{};
+    VkDescriptorSetLayout setLayout{};
+    VkPipelineLayout layout{};
+    VkPipeline general{}, detail{};
+    ~Pipelines() {
+        if (detail) vkDestroyPipeline(device, detail, nullptr);
+        if (general) vkDestroyPipeline(device, general, nullptr);
+        if (layout) vkDestroyPipelineLayout(device, layout, nullptr);
+        if (setLayout) vkDestroyDescriptorSetLayout(device, setLayout, nullptr);
+    }
+};
+
+std::shared_ptr<RawRemosaicker::Pipelines> RawRemosaicker::prepare(const rawr::vk::GpuContext& context,
+                                                               VkPipelineCache cache) {
+    if (!context.device || !context.physicalDevice) throw std::invalid_argument("raw remosaic: no device");
+    auto result = std::make_shared<Pipelines>();
+    const VkDevice d = result->device = context.device;
+    auto& setLayout_ = result->setLayout;
+    auto& pipelineLayout_ = result->layout;
+    auto& pipeline_ = result->general;
+    auto& detailPipeline_ = result->detail;
+    std::array<VkDescriptorSetLayoutBinding, 10> bindings{};
+    bindings[0] = {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    bindings[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    bindings[2] = {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    bindings[3] = {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    bindings[4] = {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    bindings[5] = {5, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    bindings[6] = {6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    bindings[7] = {7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    bindings[8] = {8, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    bindings[9] = {9, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    VkDescriptorSetLayoutCreateInfo li{};
+    li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    li.bindingCount = static_cast<std::uint32_t>(bindings.size());
+    li.pBindings = bindings.data();
+    check(vkCreateDescriptorSetLayout(d, &li, nullptr, &setLayout_), "set layout");
+
+    VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PushConstants)};
+    VkPipelineLayoutCreateInfo pli{};
+    pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pli.setLayoutCount = 1;
+    pli.pSetLayouts = &setLayout_;
+    pli.pushConstantRangeCount = 1;
+    pli.pPushConstantRanges = &range;
+    check(vkCreatePipelineLayout(d, &pli, nullptr, &pipelineLayout_), "pipeline layout");
+
+    VkShaderModuleCreateInfo mi{};
+    mi.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    mi.codeSize = raw_remosaic_spv_size;
+    mi.pCode = reinterpret_cast<const std::uint32_t*>(raw_remosaic_spv);
+    VkShaderModule module = VK_NULL_HANDLE;
+    check(vkCreateShaderModule(d, &mi, nullptr, &module), "shader module");
+    VkComputePipelineCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    ci.stage.module = module;
+    ci.stage.pName = "main";
+    ci.layout = pipelineLayout_;
+    VkResult created = vkCreateComputePipelines(d, cache, 1, &ci, nullptr, &pipeline_);
+    if (created == VK_SUCCESS) {
+        const std::uint32_t enabled = 9u;
+        VkSpecializationMapEntry entry{0, 0, sizeof(enabled)};
+        VkSpecializationInfo spec{1, &entry, sizeof(enabled), &enabled};
+        ci.stage.pSpecializationInfo = &spec;
+        created = vkCreateComputePipelines(d, cache, 1, &ci, nullptr, &detailPipeline_);
+    }
+    vkDestroyShaderModule(d, module, nullptr);
+    check(created, "pipeline");
+
+    return result;
 }
 
-RawRemosaicker::RawRemosaicker(const rawr::vk::GpuContext& context) : context_(context) {
-    if (!context_.device || !context_.physicalDevice) throw std::invalid_argument("raw remosaic: no device");
+std::unique_ptr<RawRemosaicker> RawRemosaicker::create(const rawr::vk::GpuContext& context,
+                                                    std::shared_ptr<Pipelines> pipelines) {
+    return std::unique_ptr<RawRemosaicker>(new RawRemosaicker(context, std::move(pipelines)));
+}
+
+RawRemosaicker::RawRemosaicker(const rawr::vk::GpuContext& context, std::shared_ptr<Pipelines> pipelines)
+    : pipelines_(pipelines ? std::move(pipelines) : prepare(context)), context_(context) {
+    if (pipelines_->device != context.device) throw std::invalid_argument("raw remosaic: pipeline device mismatch");
+    setLayout_ = pipelines_->setLayout;
+    pipelineLayout_ = pipelines_->layout;
+    pipeline_ = pipelines_->general;
+    detailPipeline_ = pipelines_->detail;
     try {
         const VkDevice d = context_.device;
-        std::array<VkDescriptorSetLayoutBinding, 8> bindings{};
-        bindings[0] = {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-        bindings[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-        bindings[2] = {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-        bindings[3] = {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-        bindings[4] = {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-        bindings[5] = {5, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-        bindings[6] = {6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-        bindings[7] = {7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-        VkDescriptorSetLayoutCreateInfo li{};
-        li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        li.bindingCount = static_cast<std::uint32_t>(bindings.size());
-        li.pBindings = bindings.data();
-        check(vkCreateDescriptorSetLayout(d, &li, nullptr, &setLayout_), "set layout");
-
-        VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PushConstants)};
-        VkPipelineLayoutCreateInfo pli{};
-        pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        pli.setLayoutCount = 1;
-        pli.pSetLayouts = &setLayout_;
-        pli.pushConstantRangeCount = 1;
-        pli.pPushConstantRanges = &range;
-        check(vkCreatePipelineLayout(d, &pli, nullptr, &pipelineLayout_), "pipeline layout");
-
-        VkShaderModuleCreateInfo mi{};
-        mi.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        mi.codeSize = raw_remosaic_spv_size;
-        mi.pCode = reinterpret_cast<const std::uint32_t*>(raw_remosaic_spv);
-        VkShaderModule module = VK_NULL_HANDLE;
-        check(vkCreateShaderModule(d, &mi, nullptr, &module), "shader module");
-        VkComputePipelineCreateInfo ci{};
-        ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-        ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-        ci.stage.module = module;
-        ci.stage.pName = "main";
-        ci.layout = pipelineLayout_;
-        const VkResult created = vkCreateComputePipelines(d, VK_NULL_HANDLE, 1, &ci, nullptr, &pipeline_);
-        vkDestroyShaderModule(d, module, nullptr);
-        check(created, "pipeline");
-
         std::array<VkDescriptorPoolSize, 2> sizes{
-            {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3 * kSlots}, {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 5 * kSlots}}};
+            {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3 * kSlots}, {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 7 * kSlots}}};
         VkDescriptorPoolCreateInfo pi{};
         pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         pi.maxSets = kSlots;
@@ -105,11 +145,10 @@ void RawRemosaicker::destroy() noexcept {
     if (!d) return;
     releaseScratch();
     if (pool_) vkDestroyDescriptorPool(d, pool_, nullptr);
-    if (pipeline_) vkDestroyPipeline(d, pipeline_, nullptr);
-    if (pipelineLayout_) vkDestroyPipelineLayout(d, pipelineLayout_, nullptr);
-    if (setLayout_) vkDestroyDescriptorSetLayout(d, setLayout_, nullptr);
+    pipelines_.reset();
     pool_ = VK_NULL_HANDLE;
     pipeline_ = VK_NULL_HANDLE;
+    detailPipeline_ = VK_NULL_HANDLE;
     pipelineLayout_ = VK_NULL_HANDLE;
     setLayout_ = VK_NULL_HANDLE;
 }
@@ -118,13 +157,17 @@ void RawRemosaicker::releaseScratch() noexcept {
     const VkDevice d = context_.device;
     rawr::vk::destroyOwnedImage(d, scratch_.raw);
     rawr::vk::destroyOwnedImage(d, scratch_.green);
+    rawr::vk::destroyOwnedImage(d, scratch_.moments);
     if (scratch_.diff) vkDestroyBuffer(d, scratch_.diff, nullptr);
     if (scratch_.diffMemory) vkFreeMemory(d, scratch_.diffMemory, nullptr);
     scratch_ = {};
 }
 
-void RawRemosaicker::ensureScratch(std::uint32_t width, std::uint32_t height, std::uint32_t block) {
-    if (scratch_.raw.image && scratch_.width == width && scratch_.height == height && scratch_.block == block) return;
+void RawRemosaicker::ensureScratch(std::uint32_t width, std::uint32_t height, std::uint32_t block, bool needsDiff,
+                                   bool needsMoments) {
+    if (scratch_.raw.image && scratch_.width == width && scratch_.height == height && scratch_.block == block &&
+        scratch_.needsDiff == needsDiff && scratch_.needsMoments == needsMoments)
+        return;
     releaseScratch();
     const VkDevice d = context_.device;
     const auto make = [&](VkDeviceSize bytes, VkBuffer& buffer, VkDeviceMemory& memory) {
@@ -159,7 +202,14 @@ void RawRemosaicker::ensureScratch(std::uint32_t width, std::uint32_t height, st
                                                   VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
         scratch_.green = rawr::vk::createOwnedImage(context_.physicalDevice, d, width, height, VK_FORMAT_R16_UINT,
                                                     VK_IMAGE_USAGE_STORAGE_BIT);
-        make(VkDeviceSize(bw) * bh * 8u, scratch_.diff, scratch_.diffMemory);
+        // Detail block moments: one texel per red/blue block (bx >> 1, by); a 1x1 placeholder otherwise.
+        scratch_.moments = needsMoments
+                               ? rawr::vk::createOwnedImage(context_.physicalDevice, d, (bw + 1) / 2, bh,
+                                                            VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT)
+                               : rawr::vk::createOwnedImage(context_.physicalDevice, d, 1, 1,
+                                                            VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT);
+        // Detail needs no block statistics; retain a valid minimal descriptor when phase fitting is off.
+        make(needsDiff ? VkDeviceSize(bw) * bh * 8u : VkDeviceSize(4), scratch_.diff, scratch_.diffMemory);
     } catch (...) {
         releaseScratch();
         throw;
@@ -167,6 +217,8 @@ void RawRemosaicker::ensureScratch(std::uint32_t width, std::uint32_t height, st
     scratch_.width = width;
     scratch_.height = height;
     scratch_.block = block;
+    scratch_.needsDiff = needsDiff;
+    scratch_.needsMoments = needsMoments;
 }
 
 void RawRemosaicker::record(VkCommandBuffer command, std::uint32_t slot, const Frame& f) {
@@ -185,7 +237,7 @@ void RawRemosaicker::record(VkCommandBuffer command, std::uint32_t slot, const F
     const auto width = f.hexadecaToQuad ? f.width / 2u : f.width;
     const auto height = f.hexadecaToQuad ? f.height / 2u : f.height;
     const auto block = f.hexadecaToQuad ? 2u : f.block;
-    ensureScratch(width, height, block);
+    ensureScratch(width, height, block, f.quality != Quality::Detail || f.phaseFit, f.quality == Quality::Detail);
     // The slot has retired before record(). Always refresh descriptors:
     // callers may destroy/recreate buffers and views with recycled handle
     // values, which cannot safely serve as resource-lifetime cache keys.
@@ -195,7 +247,8 @@ void RawRemosaicker::record(VkCommandBuffer command, std::uint32_t slot, const F
         VkDescriptorImageInfo raw{VK_NULL_HANDLE, scratch_.raw.view, VK_IMAGE_LAYOUT_GENERAL};
         VkDescriptorImageInfo green{VK_NULL_HANDLE, scratch_.green.view, VK_IMAGE_LAYOUT_GENERAL};
         VkDescriptorBufferInfo diff{scratch_.diff, 0, VK_WHOLE_SIZE};
-        std::array<VkWriteDescriptorSet, 8> writes{};
+        VkDescriptorImageInfo moments{VK_NULL_HANDLE, scratch_.moments.view, VK_IMAGE_LAYOUT_GENERAL};
+        std::array<VkWriteDescriptorSet, 10> writes{};
         for (std::uint32_t i = 0; i < writes.size(); ++i) {
             writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[i].dstSet = sets_[slot];
@@ -214,6 +267,8 @@ void RawRemosaicker::record(VkCommandBuffer command, std::uint32_t slot, const F
         writes[6].pImageInfo = &green;
         writes[7].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[7].pBufferInfo = &diff;
+        writes[8].pImageInfo = &moments;
+        writes[9].pImageInfo = &moments;
         vkUpdateDescriptorSets(context_.device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
     const std::uint32_t bw = (width + block - 1) / block, bh = (height + block - 1) / block;
@@ -241,10 +296,10 @@ void RawRemosaicker::record(VkCommandBuffer command, std::uint32_t slot, const F
     // The scratch is shared across slots: the previous frame's passes must be
     // done with it before this frame writes it. Its contents never carry over,
     // so each frame starts from UNDEFINED.
-    VkImageMemoryBarrier toWrite[2]{};
-    for (int i = 0; i < 2; ++i) {
+    VkImageMemoryBarrier toWrite[3]{};
+    for (int i = 0; i < 3; ++i) {
         toWrite[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        toWrite[i].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        toWrite[i].srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
         toWrite[i].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
         toWrite[i].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         toWrite[i].newLayout = VK_IMAGE_LAYOUT_GENERAL;
@@ -253,12 +308,15 @@ void RawRemosaicker::record(VkCommandBuffer command, std::uint32_t slot, const F
     }
     toWrite[0].image = scratch_.raw.image;
     toWrite[1].image = scratch_.green.image;
+    toWrite[2].image = scratch_.moments.image;
     vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
-                         nullptr, 2, toWrite);
+                         nullptr, 3, toWrite);
     vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
     vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout_, 0, 1, &sets_[slot], 0, nullptr);
     const auto pass = [&](std::uint32_t index, std::uint32_t gx, std::uint32_t gy) {
+        const VkPipeline selected = index == 9u ? detailPipeline_ : pipeline_;
+        vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, selected);
         pc.pass = index;
         vkCmdPushConstants(command, pipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
         vkCmdDispatch(command, (gx + 15u) / 16u, (gy + 15u) / 16u, 1);
@@ -306,12 +364,19 @@ void RawRemosaicker::record(VkCommandBuffer command, std::uint32_t slot, const F
     // One invocation per 2x2 pixel group (see the shader).
     const bool fast = f.quality == Quality::Fast;
     const bool detail = f.quality == Quality::Detail;
-    // Block means / green + colour difference (Detail: cubic green only).
-    pass(fast ? 4u : (detail ? 8u : 0u), (width + 1u) / 2u, (height + 1u) / 2u);
-    memoryBarrier(command, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
-    stamp(2);
-    pass(fast ? 5u : (detail ? 9u : (f.quality == Quality::High ? 7u : 2u)), (width + 1u) / 2u,
-         (height + 1u) / 2u);  // Bayer out
+    if (detail) {
+        // Green + block moments per red/blue block, then Bayer out.
+        pass(8u, (width + 1u) / 2u, (height + 1u) / 2u);
+        memoryBarrier(command, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+        stamp(2);
+        pass(9u, (width + 1u) / 2u, (height + 1u) / 2u);
+    } else {
+        // Block means / green + colour difference.
+        pass(fast ? 4u : 0u, (width + 1u) / 2u, (height + 1u) / 2u);
+        memoryBarrier(command, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+        stamp(2);
+        pass(fast ? 5u : (f.quality == Quality::High ? 7u : 2u), (width + 1u) / 2u, (height + 1u) / 2u);  // Bayer out
+    }
     stamp(3);
 }
 

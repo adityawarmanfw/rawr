@@ -235,7 +235,8 @@ bool runStripped(vktest::Ctx& c, rawr::raw_ingress::RawRemosaicker& remosaicker,
         vktest::ck(vkMapMemory(c.dev, buf.m, 0, VK_WHOLE_SIZE, 0, &mapped), "map");
         auto out = frame;
         rawrcam::capture::remosaicInStrips(
-            out, width, height, layout, static_cast<std::uint8_t*>(mapped), [&](std::uint8_t*, std::uint32_t) {
+            out, width, height, layout, static_cast<std::uint8_t*>(mapped),
+            [&](std::uint8_t*, std::uint32_t) {
                 vktest::ck(vkResetCommandBuffer(cmd, 0), "reset");
                 VkCommandBufferBeginInfo bi{};
                 bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -332,7 +333,18 @@ int main(int argc, char** argv) {
         vktest::ck(vkCreateFence(c.dev, &fi, nullptr, &fence), "fence");
         bool ok = true;
         {
-            auto remosaicker = rawr::raw_ingress::RawRemosaicker::create({c.pd, c.dev, c.qf});
+            auto programs = rawr::raw_ingress::RawRemosaicker::prepare({c.pd, c.dev, c.qf});
+            auto remosaicker = rawr::raw_ingress::RawRemosaicker::create({c.pd, c.dev, c.qf}, programs);
+            if (argc == 1) {
+                // Capture-local descriptors/scratch may die while the programs remain reusable.
+                for (int capture = 0; capture < 3; ++capture) {
+                    auto next = rawr::raw_ingress::RawRemosaicker::create({c.pd, c.dev, c.qf}, programs);
+                    ok = runCase(c, *next, cmd, fence, 0,
+                                 {136, 72, 2, 3, 272, false, false, false, false, true, false}) && ok;
+                }
+            }
+            programs.reset();  // the surviving remosaicker must retain its programs
+
             if (argc != 1) {
                 if (argc != 6 && argc != 7)
                     throw std::runtime_error(
@@ -371,6 +383,20 @@ int main(int argc, char** argv) {
                                      {136, 72, 4, order, raw10 ? 173u : 280u, raw10, false, false, true, true}) &&
                              ok;
                     }
+                // Detail across several 32x32 workgroup tiles and partial edge tiles, every order and both storages.
+                for (unsigned order = 0; order < 4; ++order)
+                    for (bool raw10 : {false, true})
+                        ok = runCase(c, *remosaicker, cmd, fence, order % 3,
+                                     {136, 72, 2, order, raw10 ? 173u : 272u, raw10, false, false, false, true, false}) &&
+                             ok;
+                for (unsigned order : {0u, 3u})
+                    ok = runCase(c, *remosaicker, cmd, fence, 0,
+                                 {250, 186, 2, order, 500, false, false, false, false, true, false}) &&
+                         ok;
+                // Partial bottom block: the public record API permits odd heights.
+                for (unsigned order = 0; order < 4; ++order)
+                    ok = runCase(c, *remosaicker, cmd, fence, order % 3,
+                                 {136, 73, 2, order, 272, false, false, false, false, true, false}) && ok;
                 // Phase-response fit: a scene big enough for the statistics, both storages.
                 for (unsigned order : {0u, 3u})
                     for (bool raw10 : {false, true})

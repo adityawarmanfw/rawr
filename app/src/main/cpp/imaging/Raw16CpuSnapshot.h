@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "imaging/BinnedCorner.h"
 #include "imaging/RawPixelSource.h"
 #include "imaging/RawSnapshot.h"
 
@@ -39,6 +40,24 @@ Raw16CpuSnapshotResult copyRaw16AhbToPacked(AImage* image, AHardwareBuffer* ahb,
 Raw16CpuSnapshotResult copyCompletedRaw16AhbToPacked(AHardwareBuffer* ahb, uint32_t width, uint32_t height,
                                                      std::vector<uint8_t>& destination, int acquireFenceFd = -1,
                                                      AImage* image = nullptr) noexcept;
+
+// The same into caller-owned storage of destinationBytes (exactly width * height * 2), such as a mapped
+// upload buffer, so a frame headed for the GPU is decoded once instead of decoded and copied again.
+Raw16CpuSnapshotResult copyCompletedRaw16AhbToMemory(AHardwareBuffer* ahb, uint32_t width, uint32_t height,
+                                                     uint16_t* destination, size_t destinationBytes,
+                                                     int acquireFenceFd = -1, AImage* image = nullptr) noexcept;
+
+// fullSizeBinnedCorner for a RAW10 camera frame the GPU will read in place: the same decision, taking the
+// 128 grid samples through a short CPU lock instead of a decoded copy. Also returns the frame's row stride.
+// nullopt when the frame cannot be described or locked (the caller falls back to the CPU copy). The frame
+// must have no pending acquire fence.
+struct SampledFullSizeCheck {
+    BinnedCornerCheck check;
+    uint32_t rowStrideBytes = 0;
+};
+[[nodiscard]] std::optional<SampledFullSizeCheck> sampleFullSizeBinnedCorner(
+    AImage* image, AHardwareBuffer* ahb, uint32_t width, uint32_t height, uint32_t pixelArrayWidth,
+    uint32_t pixelArrayHeight, std::optional<int64_t> seamlessMode) noexcept;
 
 // RAW_CONTENT_STATS for a completed still snapshot (packed RAW16), logged so
 // device logs show whether a dark still had dark sensor data.

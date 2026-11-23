@@ -1,0 +1,646 @@
+{
+  "id": "xiaomi_15_ultra",
+  "schema": 2,
+  "name": "Xiaomi 15 Ultra",
+  "version": 1,
+  "match": {
+    "models": [
+      "25010PN30G",
+      "25010PN30I",
+      "25010PN30C"
+    ],
+    "propertyPrefixes": {
+      "ro.product.device": "xuanyuan"
+    }
+  },
+  "lenses": [
+    {
+      "id": "14mm",
+      "camera": {
+        "id": "3",
+        "physical": ""
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 4096,
+          "height": 3072
+        }
+      },
+      "vendorKeys": [],
+      "image": {
+        "levels": {
+          "static": false,
+          "black": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "white": 0
+        },
+        "exposure": {
+          "extended": false,
+          "isoMax": 0,
+          "shutterMaxNs": 0
+        }
+      }
+    },
+    {
+      "id": "14mm 50MP",
+      "camera": {
+        "id": "3",
+        "physical": ""
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW16",
+          "width": 8192,
+          "height": 6144,
+          "highResLive": true,
+          "useCase": 524547,
+          "buffers": {
+            "usage": "0x100003"
+          }
+        },
+        "companion": {
+          "mode": "fixed",
+          "width": 640,
+          "height": 480,
+          "format": "yuv",
+          "targeted": true,
+          "physical": false,
+          "detach": false
+        }
+      },
+      "session": {
+        "template": "still",
+        "frameRate": 15,
+        "startupDelayMs": 500
+      },
+      "vendorKeys": [
+        {
+          "tag": "org.codeaurora.qcamera3.sensor_meta_data.current_mode",
+          "type": "int32",
+          "scope": "sessionAndRequest",
+          "values": [
+            0
+          ],
+          "enabled": true
+        }
+      ],
+      "image": {
+        "levels": {
+          "static": false,
+          "black": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "white": 0
+        },
+        "exposure": {
+          "extended": false,
+          "isoMax": 0,
+          "shutterMaxNs": 0
+        }
+      }
+    },
+    {
+      "id": "23mm",
+      "camera": {
+        "id": "2",
+        "physical": ""
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 4096,
+          "height": 3072
+        }
+      },
+      "vendorKeys": [],
+      "image": {
+        "levels": {
+          "static": false,
+          "black": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "white": 0
+        },
+        "exposure": {
+          "extended": false,
+          "isoMax": 0,
+          "shutterMaxNs": 0
+        }
+      }
+    },
+    {
+      "id": "23mm 50MP",
+      "camera": {
+        "id": "2",
+        "physical": ""
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW16",
+          "width": 4096,
+          "height": 3072
+        },
+        "photo": {
+          "format": "RAW16",
+          "width": 8192,
+          "height": 6144,
+          "useCase": 524547,
+          "buffers": {
+            "usage": "0x100003"
+          },
+          "mergeFrameLimit": 1
+        }
+      },
+      "vendorKeys": [
+        {
+          "tag": "org.codeaurora.qcamera3.sensor_meta_data.current_mode",
+          "type": "int32",
+          "scope": "still",
+          "values": [
+            0
+          ],
+          "enabled": true
+        }
+      ],
+      "image": {
+        "levels": {
+          "static": false,
+          "black": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "white": 0
+        },
+        "exposure": {
+          "extended": false,
+          "isoMax": 0,
+          "shutterMaxNs": 0
+        }
+      },
+      "session": {
+        "workarounds": [
+          "ignoreLostCompanion"
+        ]
+      }
+    },
+    {
+      "id": "46mm ISZ",
+      "camera": {
+        "id": "2",
+        "physical": ""
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 4096,
+          "height": 3072
+        }
+      },
+      "vendorKeys": [
+        {
+          "tag": "org.codeaurora.qcamera3.sensor_meta_data.current_mode",
+          "type": "int32",
+          "scope": "request",
+          "values": [
+            3
+          ],
+          "enabled": true
+        }
+      ],
+      "image": {
+        "levels": {
+          "static": false,
+          "black": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "white": 0
+        },
+        "exposure": {
+          "extended": false,
+          "isoMax": 0,
+          "shutterMaxNs": 0
+        }
+      }
+    },
+    {
+      "id": "69mm",
+      "camera": {
+        "id": "4",
+        "physical": ""
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 4096,
+          "height": 3072
+        }
+      },
+      "vendorKeys": [],
+      "image": {
+        "levels": {
+          "static": false,
+          "black": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "white": 0
+        },
+        "exposure": {
+          "extended": false,
+          "isoMax": 0,
+          "shutterMaxNs": 0
+        }
+      }
+    },
+    {
+      "id": "69mm 50MP",
+      "camera": {
+        "id": "4",
+        "physical": ""
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW16",
+          "width": 8192,
+          "height": 6144,
+          "highResLive": true,
+          "useCase": 524547,
+          "buffers": {
+            "usage": "0x100003"
+          }
+        },
+        "companion": {
+          "mode": "fixed",
+          "width": 640,
+          "height": 480,
+          "format": "yuv",
+          "targeted": true,
+          "physical": false,
+          "detach": false
+        }
+      },
+      "session": {
+        "template": "still",
+        "frameRate": 12,
+        "startupDelayMs": 500
+      },
+      "vendorKeys": [
+        {
+          "tag": "org.codeaurora.qcamera3.sensor_meta_data.current_mode",
+          "type": "int32",
+          "scope": "sessionAndRequest",
+          "values": [
+            0
+          ],
+          "enabled": true
+        }
+      ],
+      "image": {
+        "levels": {
+          "static": false,
+          "black": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "white": 0
+        },
+        "exposure": {
+          "extended": false,
+          "isoMax": 0,
+          "shutterMaxNs": 0
+        }
+      }
+    },
+    {
+      "id": "95mm",
+      "camera": {
+        "id": "5",
+        "physical": ""
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 4080,
+          "height": 3072
+        }
+      },
+      "vendorKeys": [],
+      "image": {
+        "levels": {
+          "static": false,
+          "black": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "white": 0
+        },
+        "exposure": {
+          "extended": false,
+          "isoMax": 0,
+          "shutterMaxNs": 0
+        }
+      }
+    },
+    {
+      "id": "95mm 50MP",
+      "camera": {
+        "id": "5",
+        "physical": ""
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW16",
+          "width": 8160,
+          "height": 6144,
+          "highResLive": true,
+          "useCase": 524547,
+          "buffers": {
+            "usage": "0x100003"
+          }
+        },
+        "companion": {
+          "mode": "fixed",
+          "width": 640,
+          "height": 480,
+          "format": "yuv",
+          "targeted": true,
+          "physical": false,
+          "detach": false
+        },
+        "auxJpeg": {
+          "width": 8160,
+          "height": 6144,
+          "buffers": {
+            "usage": "0x100003"
+          }
+        }
+      },
+      "session": {
+        "template": "still",
+        "frameRate": 24,
+        "startupDelayMs": 500
+      },
+      "vendorKeys": [
+        {
+          "tag": "org.codeaurora.qcamera3.sensor_meta_data.current_mode",
+          "type": "int32",
+          "scope": "sessionAndRequest",
+          "values": [
+            1
+          ],
+          "enabled": true
+        }
+      ],
+      "image": {
+        "levels": {
+          "static": false,
+          "black": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "white": 0
+        },
+        "exposure": {
+          "extended": false,
+          "isoMax": 0,
+          "shutterMaxNs": 0
+        }
+      }
+    },
+    {
+      "id": "95mm DCG",
+      "camera": {
+        "id": "5",
+        "physical": ""
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW16",
+          "width": 4080,
+          "height": 3072
+        }
+      },
+      "session": {
+        "frameRate": 30
+      },
+      "vendorKeys": [
+        {
+          "tag": "org.codeaurora.qcamera3.sensor_meta_data.current_mode",
+          "type": "int32",
+          "scope": "request",
+          "values": [
+            10
+          ],
+          "enabled": true
+        },
+        {
+          "tag": "org.quic.camera.hdrfeaturemode.HDRFeatureMode",
+          "type": "int32",
+          "scope": "request",
+          "values": [
+            1
+          ],
+          "enabled": true
+        },
+        {
+          "tag": "org.quic.camera.hdrfeaturemode.NumberOfExpFrames",
+          "type": "int32",
+          "scope": "request",
+          "values": [
+            2
+          ],
+          "enabled": true
+        },
+        {
+          "tag": "com.qti.chi.rawcbinfo.IdealRaw",
+          "type": "byte",
+          "scope": "request",
+          "values": [
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "enabled": true
+        },
+        {
+          "tag": "com.qti.chi.rawcbinfo.RawSize",
+          "type": "byte",
+          "scope": "request",
+          "values": [
+            240,
+            15,
+            0,
+            0,
+            0,
+            12,
+            0,
+            0
+          ],
+          "enabled": true
+        }
+      ],
+      "image": {
+        "levels": {
+          "static": false,
+          "black": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "white": 0
+        },
+        "exposure": {
+          "extended": false,
+          "isoMax": 0,
+          "shutterMaxNs": 0
+        }
+      }
+    },
+    {
+      "id": "200mm ISZ",
+      "camera": {
+        "id": "5",
+        "physical": ""
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 4080,
+          "height": 3072
+        }
+      },
+      "vendorKeys": [
+        {
+          "tag": "org.codeaurora.qcamera3.sensor_meta_data.current_mode",
+          "type": "int32",
+          "scope": "request",
+          "values": [
+            38
+          ],
+          "enabled": true
+        }
+      ],
+      "image": {
+        "levels": {
+          "static": false,
+          "black": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "white": 0
+        },
+        "exposure": {
+          "extended": false,
+          "isoMax": 0,
+          "shutterMaxNs": 0
+        }
+      }
+    },
+    {
+      "id": "380mm ISZ",
+      "camera": {
+        "id": "5",
+        "physical": ""
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 4080,
+          "height": 3072
+        }
+      },
+      "vendorKeys": [
+        {
+          "tag": "org.codeaurora.qcamera3.sensor_meta_data.current_mode",
+          "type": "int32",
+          "scope": "request",
+          "values": [
+            39
+          ],
+          "enabled": true
+        }
+      ],
+      "image": {
+        "levels": {
+          "static": false,
+          "black": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "white": 0
+        },
+        "exposure": {
+          "extended": false,
+          "isoMax": 0,
+          "shutterMaxNs": 0
+        }
+      }
+    },
+    {
+      "id": "21mm front",
+      "camera": {
+        "id": "1",
+        "physical": ""
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW10",
+          "width": 3264,
+          "height": 2448
+        }
+      },
+      "vendorKeys": [],
+      "image": {
+        "levels": {
+          "static": false,
+          "black": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "white": 0
+        },
+        "exposure": {
+          "extended": false,
+          "isoMax": 0,
+          "shutterMaxNs": 0
+        }
+      }
+    }
+  ]
+}

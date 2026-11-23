@@ -251,6 +251,7 @@ internal fun workaroundTitle(workaround: String) = when (workaround) {
     "alwaysSendFrameRate" -> "Always send an fps range"
     "noAutoCompanion" -> "No automatic companion"
     "keepTemplateRegions" -> "Keep the template's focus regions"
+    "ignoreLostCompanion" -> "Ignore a lost companion buffer"
     else -> workaround
 }
 
@@ -261,5 +262,6 @@ internal fun workaroundDescription(workaround: String) = when (workaround) {
     "alwaysSendFrameRate" -> "Every request carries an AE fps range, even with AE off"
     "noAutoCompanion" -> "Do not add the small extra stream that unverified devices get"
     "keepTemplateRegions" -> "Without a tap, requests keep the camera's own focus and exposure regions instead of an empty one, which crashes this camera's focus code"
+    "ignoreLostCompanion" -> "A lost companion buffer does not fail the frame, for cameras that drop it on full-size photos while the RAW arrives"
     else -> ""
 }

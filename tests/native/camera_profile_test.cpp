@@ -139,6 +139,22 @@ void testProfileMatching() {
     assert(routeForLens(pro, "3.5x")->cameraId == "3");
     // Camera 5 is the same telephoto sensor as camera 3, so it is not offered as a fourth lens.
     assert(!routeForLens(pro, "8x"));
+    // Xiaomi 17 Ultra (nezha) and 15 Ultra (xuanyuan): listed models are exact, other variants match by codename.
+    m = matchBuiltInProfile(props({{"ro.product.model", "25128PNA1G"}}));
+    assert(m.profileId == "xiaomi_17_ultra" && m.rule == "model" && m.verified);
+    m = matchBuiltInProfile(props({{"ro.product.model", "2512BPNDAG"}}));
+    assert(m.profileId == "xiaomi_17_ultra" && m.rule == "model" && !m.verified);
+    m = matchBuiltInProfile(props({{"ro.product.model", "25128PNAXX"}, {"ro.product.device", "nezha"}}));
+    assert(m.profileId == "xiaomi_17_ultra" && m.rule == "property:ro.product.device" && !m.verified);
+    m = matchBuiltInProfile(props({{"ro.product.model", "25010PN30G"}}));
+    assert(m.profileId == "xiaomi_15_ultra" && m.rule == "model" && !m.verified);
+    const auto x17 = builtInCameraProfile("xiaomi_17_ultra");
+    for (const char* id : {"1x 50MP", "0.6x 50MP", "3.2x 50MP", "4.3x 50MP", "3.2x 200>50", "4.3x 200>25"}) {
+        const auto lens = routeForLens(x17, id);
+        assert(lens && lens->photoStream);
+    }
+    const auto x17Tele200 = routeForLens(x17, "3.2x 200>50");
+    assert(x17Tele200->photoStream->width == 16320 && x17Tele200->photoStream->height == 12288 && x17Tele200->photoReduced);
     // Other phones (X200 Ultra) and missing properties get generic.
     m = matchBuiltInProfile(props({{"ro.product.model", "V2454A"}, {"ro.vivo.product.model", "PD2454"}}));
     assert(m.profileId == "generic" && m.rule == "none" && !m.verified);

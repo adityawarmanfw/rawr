@@ -1,6 +1,7 @@
 #include "camera/CameraCallbacks.h"
 #include "camera/NdkRequest.h"
 
+#include <cstring>
 #include <mutex>
 
 #include "diagnostics/logging/RuntimeTraceRecorder.h"
@@ -22,6 +23,16 @@ bool takeFailureLine(uint64_t generation) {
 }
 void reportFailure(CameraSessionCallbackContext* callback, const char* kind, int64_t frameNumber, int reason,
                    int sequenceId, const CameraRequest* request, const char* target = nullptr) {
+    // ignoreLostCompanion lenses: a lost companion buffer does not fail the frame. Xiaomi's HAL drops the small
+    // companion output on full-size stills (17 Ultra 50/200 MP) while the RAW outputs still arrive.
+    if (callback->ignoreLostCompanion && sequenceId < 0 && target && std::strcmp(target, "companion") == 0) {
+        if (!takeFailureLine(callback->generation)) return;
+        CameraCallbackGuard<CameraEventSink> guard(callback->lifetime);
+        if (guard.owner)
+            guard.owner->cameraDeviceEvent(callback->generation, std::string("CAMERA_BUFFER_LOST_IGNORED frame=") +
+                                                                     std::to_string(frameNumber) + " target=companion");
+        return;
+    }
     auto& trace = diagnostics::RuntimeTraceRecorder::instance();
     if (sequenceId >= 0)
         trace.record(diagnostics::RuntimeTraceStage::CameraCaptureFailed, 0, callback->generation, sequenceId, 0, 0,

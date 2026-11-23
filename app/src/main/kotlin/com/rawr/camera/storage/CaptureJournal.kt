@@ -65,31 +65,32 @@ internal class CaptureJournal(private val directory: File, private val syncDirec
         syncDirectory(directory)
     }
 
-    fun readAll(): List<Entry> = directory.listFiles().orEmpty()
-        .filter { it.name.endsWith(".properties") }.sortedBy { it.name }
-        .mapNotNull { file ->
-            runCatching {
-                val p = Properties().apply { file.inputStream().use { load(it) } }
-                check(p.getProperty("version") in setOf("1", "2"))
-                val name = p.getProperty("name") ?: error("Missing capture name")
-                check(file.name == "$name.properties" && '/' !in name && ".." !in name)
-                val count = p.getProperty("count").toInt().also { check(it in 1..3) }
-                val names = List(count) { checkNotNull(p.getProperty("$it.name")) }
-                val multiframe = p.getProperty("multiframe")?.toBooleanStrictOrNull()
-                    ?: (names.count { it.endsWith(".dng") } == 2)
-                Entry(name, List(count) { i ->
-                    val role = p.getProperty("$i.role") ?: when {
-                        names[i].endsWith(".jpg") -> "jpeg"
-                        multiframe && i == 0 -> "base"
-                        multiframe -> "merged"
-                        else -> "single"
-                    }
-                    Target(checkNotNull(p.getProperty("$i.uri")), names[i], p.getProperty("$i.published") == "true",
-                        role, p.getProperty("$i.conditional") == "true", p.getProperty("$i.skipped") == "true")
-                }, multiframe, p.getProperty("capturedAt")?.toLongOrNull() ?: 0,
-                    p.getProperty("recipe").orEmpty(), p.getProperty("fallback") == "true", p.getProperty("lastError").orEmpty())
-            }.getOrNull() // Preserve unsupported/corrupt journals for inspection.
-        }
+    fun names(): List<String> = directory.list().orEmpty().filter { it.endsWith(".properties") }
+        .sorted().map { it.removeSuffix(".properties") }
+
+    fun readAll(): List<Entry> = names().mapNotNull(::read)
+
+    fun read(name: String): Entry? = runCatching {
+        require('/' !in name && ".." !in name)
+        val p = Properties().apply { File(directory, "$name.properties").inputStream().use { load(it) } }
+        check(p.getProperty("version") in setOf("1", "2"))
+        check(p.getProperty("name") == name)
+        val count = p.getProperty("count").toInt().also { check(it in 1..3) }
+        val names = List(count) { checkNotNull(p.getProperty("$it.name")) }
+        val multiframe = p.getProperty("multiframe")?.toBooleanStrictOrNull()
+            ?: (names.count { it.endsWith(".dng") } == 2)
+        Entry(name, List(count) { i ->
+            val role = p.getProperty("$i.role") ?: when {
+                names[i].endsWith(".jpg") -> "jpeg"
+                multiframe && i == 0 -> "base"
+                multiframe -> "merged"
+                else -> "single"
+            }
+            Target(checkNotNull(p.getProperty("$i.uri")), names[i], p.getProperty("$i.published") == "true",
+                role, p.getProperty("$i.conditional") == "true", p.getProperty("$i.skipped") == "true")
+        }, multiframe, p.getProperty("capturedAt")?.toLongOrNull() ?: 0,
+            p.getProperty("recipe").orEmpty(), p.getProperty("fallback") == "true", p.getProperty("lastError").orEmpty())
+    }.getOrNull() // Preserve unsupported/corrupt journals for inspection.
 
     fun hasFallback(entry: Entry) = entry.fallback || File(directory, entry.name + ".job.fallback").isFile
 

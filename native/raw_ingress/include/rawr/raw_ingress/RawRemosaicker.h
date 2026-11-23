@@ -22,7 +22,11 @@ class RawRemosaicker final {
    public:
     static constexpr std::uint32_t kSlots = 3;
 
-    static std::unique_ptr<RawRemosaicker> create(const rawr::vk::GpuContext& context);
+    struct Pipelines;
+    // Immutable, device-owned programs; keep alive across captures, destroy before the device.
+    static std::shared_ptr<Pipelines> prepare(const rawr::vk::GpuContext&, VkPipelineCache cache = VK_NULL_HANDLE);
+    static std::unique_ptr<RawRemosaicker> create(const rawr::vk::GpuContext& context,
+                                               std::shared_ptr<Pipelines> pipelines = {});
     ~RawRemosaicker();
     RawRemosaicker(const RawRemosaicker&) = delete;
     RawRemosaicker& operator=(const RawRemosaicker&) = delete;
@@ -53,7 +57,7 @@ class RawRemosaicker final {
         bool phaseFit = false;
         float blackLevel = 64.0f;
         std::uint32_t fitStride = 3;
-        // Optional: timestamps 0..3 around raw-in, green + block diff, Bayer out (profiling);
+        // Optional: timestamps 0..3 around raw-in, green + block diff (Detail: green + block moments), Bayer out (profiling);
         // with phaseFit also 5, 6, 7 after block sums, statistics and curve (pool of 8).
         VkQueryPool timestamps = VK_NULL_HANDLE;
     };
@@ -64,21 +68,25 @@ class RawRemosaicker final {
     void record(VkCommandBuffer command, std::uint32_t slot, const Frame& frame);
 
    private:
-    explicit RawRemosaicker(const rawr::vk::GpuContext& context);
+    explicit RawRemosaicker(const rawr::vk::GpuContext& context, std::shared_ptr<Pipelines> pipelines);
     void destroy() noexcept;
-    void ensureScratch(std::uint32_t width, std::uint32_t height, std::uint32_t block);
+    void ensureScratch(std::uint32_t width, std::uint32_t height, std::uint32_t block, bool needsDiff,
+                       bool needsMoments);
     void releaseScratch() noexcept;
 
     struct Scratch {
-        rawr::vk::OwnedImage raw, green;
+        bool needsDiff = false, needsMoments = false;
+        rawr::vk::OwnedImage raw, green, moments;
         VkBuffer diff = VK_NULL_HANDLE;
         VkDeviceMemory diffMemory = VK_NULL_HANDLE;
         std::uint32_t width = 0, height = 0, block = 0;
     };
+    std::shared_ptr<Pipelines> pipelines_;
     rawr::vk::GpuContext context_;
     VkDescriptorSetLayout setLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;
+    VkPipeline detailPipeline_ = VK_NULL_HANDLE;
     VkDescriptorPool pool_ = VK_NULL_HANDLE;
     std::array<VkDescriptorSet, kSlots> sets_{};
     Scratch scratch_;
