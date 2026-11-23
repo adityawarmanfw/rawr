@@ -242,5 +242,27 @@ int main() {
         }
         assert(caught && finished == 2);
     }
+    // A deeper queue (small readers) holds more frames and evicts only the oldest, each lease closing once.
+    {
+        unsigned deepConsumed = 0;
+        imaging::FrameIngressQueue::Drops deepDrops{};
+        imaging::FrameIngressQueue deep([&](imaging::FrameIngressQueue::Event event, imaging::FrameIngressQueue::Drops d) {
+            deepDrops.images += d.images;
+            if (std::holds_alternative<imaging::RawFrameLease>(event.payload)) ++deepConsumed;
+        });
+        deep.setMaxImages(3);
+        const auto deletedBefore = imagesDeleted;
+        int fds[4];
+        for (int i = 0; i < 4; ++i) {
+            fds[i] = newFd();
+            deep.enqueue(frame(20 + i, fds[i], 1000 + 100 * i, 11));
+        }
+        assert(closed(fds[0]) && !closed(fds[1]) && !closed(fds[2]) && !closed(fds[3]));
+        assert(imagesDeleted == deletedBefore + 1);
+        deep.start();
+        deep.stop();
+        assert(deepConsumed == 3 && deepDrops.images == 1);
+        assert(closed(fds[1]) && closed(fds[2]) && closed(fds[3]));
+    }
     std::cout << "NATIVE_OWNERSHIP_PASS\n";
 }

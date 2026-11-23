@@ -189,6 +189,8 @@ rawr_test(public_description_test
 rawr_test(multiframe_exif_test
   "${RAWR_ROOT}/tests/native/multiframe_exif_test.cpp"
   "${RAWR_ROOT}/app/src/main/cpp/capture/multiframe/MultiframeDescription.cpp")
+rawr_test(frame_limits_test
+  "${RAWR_ROOT}/tests/native/frame_limits_test.cpp")
 rawr_test(native_ownership_test
   "${RAWR_ROOT}/tests/native/native_ownership_test.cpp"
   "${RAWR_ROOT}/app/src/main/cpp/imaging/FrameIngressQueue.cpp"

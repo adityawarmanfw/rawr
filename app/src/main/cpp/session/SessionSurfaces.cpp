@@ -4,6 +4,7 @@
 #include <stdexcept>
 
 #include "diagnostics/logging/NativeLog.h"
+#include "imaging/FrameLimits.h"
 #include "session/SessionEngine.h"
 #include "vulkan/RawAhbImporter.h"
 #include "vulkan/VulkanDispatch.h"
@@ -87,7 +88,12 @@ bool SessionEngine::setPresentationSurface(JNIEnv* env, jobject surfaceObj, int 
 }
 ANativeWindow* SessionEngine::createRawReader(uint64_t generation, uint32_t width, uint32_t height,
                                               rawrcam::geometry::RawPixelFormat format, uint64_t usage) {
-    return rawFrameIngress_.create(generation, width, height, format, usage, profileMaxImages_);
+    // Small readers get the deeper realtime reader and ingress queue (imaging/FrameLimits.h); the queue follows the
+    // reader, so a reader of the usual 6 keeps the usual single waiting frame.
+    const std::size_t maxImages =
+        imaging::realtimeRawReaderMaxImages(profileMaxImages_, std::uint64_t(width) * height * 2u);
+    ingressQueue_.setMaxImages(imaging::ingressImageCapacity(maxImages));
+    return rawFrameIngress_.create(generation, width, height, format, usage, uint32_t(maxImages));
 }
 
 // Whether the allocator takes a RAW buffer of this size with the given usage plus what the camera adds.

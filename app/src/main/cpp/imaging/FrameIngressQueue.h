@@ -1,6 +1,7 @@
 #pragma once
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <deque>
 #include <functional>
 #include <mutex>
@@ -29,6 +30,8 @@ class FrameIngressQueue final {
     void start();
     void stop();
     void setLowPowerIdle(bool idle);
+    // RAW images that may wait for the consumer before the oldest is evicted (ingressImageCapacity of the reader).
+    void setMaxImages(std::size_t count);
     void enqueue(AcquiredRawFrame frame);
     bool enqueue(const metadata::FrameMetadataSnapshot& metadata);
     uint64_t latestTimestamp(uint64_t generation) const;
@@ -41,6 +44,7 @@ class FrameIngressQueue final {
     std::deque<Event> queue_;
     Drops drops_;
     uint64_t latestTimestamp_ = 0, generation_ = 0;
+    std::size_t maxImages_ = 1;  // kMaxIngressImages
     bool stopped_ = false;
     bool lowPowerIdle_ = false;
     std::thread worker_;

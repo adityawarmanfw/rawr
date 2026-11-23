@@ -31,6 +31,10 @@ void FrameIngressQueue::setLowPowerIdle(bool idle) {
     }
     changed_.notify_one();
 }
+void FrameIngressQueue::setMaxImages(std::size_t count) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    maxImages_ = std::max<std::size_t>(count, 1);
+}
 void FrameIngressQueue::enqueue(AcquiredRawFrame frame) {
     RawFrameLease lease(frame);
     {
@@ -42,7 +46,8 @@ void FrameIngressQueue::enqueue(AcquiredRawFrame frame) {
         }
         if (generation_ == frame.generation) latestTimestamp_ = std::max(latestTimestamp_, frame.timestampNs);
         auto isImage = [](const Event& event) { return std::holds_alternative<RawFrameLease>(event.payload); };
-        if (std::count_if(queue_.begin(), queue_.end(), isImage) >= static_cast<ptrdiff_t>(kMaxIngressImages)) {
+        // Evict down to maxImages_ - 1 so the new frame fits (a smaller capacity set later also drains here).
+        while (std::count_if(queue_.begin(), queue_.end(), isImage) >= static_cast<ptrdiff_t>(maxImages_)) {
             queue_.erase(std::find_if(queue_.begin(), queue_.end(), isImage));
             ++drops_.images;
         }
