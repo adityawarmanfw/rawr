@@ -155,6 +155,36 @@ void testProfileMatching() {
     }
     const auto x17Tele200 = routeForLens(x17, "3.2x 200>50");
     assert(x17Tele200->photoStream->width == 16320 && x17Tele200->photoStream->height == 12288 && x17Tele200->photoReduced);
+    // The 60 fps video modes pad blank rows at the bottom of the frame (image.cropEdgesHighFps); stills keep every row.
+    for (const char* id : {"0.6 Normal", "1x Normal", "3.2x Normal", "4.3x Normal"}) {
+        const auto lens = routeForLens(x17, id);
+        assert(lens && lens->highFpsCropBottom == 512 && lens->highFpsCropTop == 0 && lens->highFpsCropLeft == 0 &&
+               lens->highFpsCropRight == 0 && lens->cropBottom == 0);
+    }
+    assert(routeForLens(x17, "Front Normal")->highFpsCropBottom == 768);
+    assert(routeForLens(x17, "1x 50MP")->highFpsCropBottom == 0);
+    {
+        // Padded edges survive a profile round trip, and a value that would break the colour order is refused.
+        const auto json = serializeCameraProfile(x17);
+        assert(json.find("\"cropEdgesHighFps\"") != std::string::npos);
+        const auto again = parseCameraProfile(json);
+        assert(again && routeForLens(*again, "1x Normal")->highFpsCropBottom == 512);
+        const auto lensJson = [](const char* crop) {
+            return std::string(R"({"id":"t","schema":2,"lenses":[{"id":"a","camera":{"id":"0"},
+                "streams":{"raw":{"format":"RAW16","width":4000,"height":3000}},"image":{)") + crop + "}}]}";
+        };
+        std::string error;
+        assert(parseCameraProfile(lensJson(R"("cropEdges":{"bottom":512,"right":16})"), &error));
+        assert(!parseCameraProfile(lensJson(R"("cropEdges":{"bottom":513})"), &error) &&
+               error.find("multiple of") != std::string::npos);
+        assert(!parseCameraProfile(lensJson(R"("cropEdgesHighFps":{"top":-2})"), &error) &&
+               error.find("invalid cropEdgesHighFps") != std::string::npos);
+        assert(!parseCameraProfile(lensJson(R"("cropEdges":{"bottom":2.5})"), &error));
+        const auto quad = R"({"id":"t","schema":2,"lenses":[{"id":"q","camera":{"id":"0"},
+            "streams":{"raw":{"format":"RAW16","width":4000,"height":3000}},
+            "image":{"sensorLayout":{"block":2},"cropEdges":{"bottom":2}}}]})";
+        assert(!parseCameraProfile(quad, &error) && error.find("multiple of 4") != std::string::npos);
+    }
     // Other phones (X200 Ultra) and missing properties get generic.
     m = matchBuiltInProfile(props({{"ro.product.model", "V2454A"}, {"ro.vivo.product.model", "PD2454"}}));
     assert(m.profileId == "generic" && m.rule == "none" && !m.verified);

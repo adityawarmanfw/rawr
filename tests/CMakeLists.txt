@@ -275,6 +275,11 @@ rawr_test(full_res_recipe_test
   "${APP}/color/DcpProfile.cpp"
   "${APP}/color/ColorMath.cpp"
   "${APP}/geometry/LensDistortion.cpp")
+rawr_test(edge_crop_test
+  "${RAWR_ROOT}/tests/native/edge_crop_test.cpp")
+target_include_directories(edge_crop_test BEFORE PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/native/capture_stubs")
+rawr_test(crop_window_fractions_test
+  "${RAWR_ROOT}/tests/native/crop_window_fractions_test.cpp")
 rawr_test(video_crop_mirror_test
   "${RAWR_ROOT}/tests/native/video_crop_mirror_test.cpp")
 rawr_test(camera_workarounds_test

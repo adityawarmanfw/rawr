@@ -21,6 +21,7 @@ import com.rawr.camera.settings.model.PhotoStreamSettings
 import com.rawr.camera.settings.model.CompanionMode
 import com.rawr.camera.settings.model.CompanionSettings
 import com.rawr.camera.settings.model.LensCamera
+import com.rawr.camera.settings.model.LensCropEdges
 import com.rawr.camera.settings.model.LensSensorLayout
 import com.rawr.camera.settings.model.LensImage
 import com.rawr.camera.settings.model.LensRequest

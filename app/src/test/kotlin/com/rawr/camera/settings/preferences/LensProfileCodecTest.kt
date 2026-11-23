@@ -3,6 +3,7 @@ package com.rawr.camera.settings.preferences
 import com.rawr.camera.settings.model.AuxJpegSettings
 import com.rawr.camera.settings.model.PhotoStreamSettings
 import com.rawr.camera.settings.model.CompanionMode
+import com.rawr.camera.settings.model.LensCropEdges
 import com.rawr.camera.settings.model.LensSensorLayout
 import com.rawr.camera.settings.model.LensDcp
 import com.rawr.camera.settings.model.LensLevels
@@ -453,6 +454,20 @@ class LensProfileCodecTest {
         assertEquals("vendor.mode", keys[0].tag)
         // Retain the bad entry so the editor can show its validation error and repair it.
         assertEquals("vendor.mode\nInt32\n7", keys[1].tag)
+    }
+
+    @Test
+    fun paddedRawEdgesSurviveARoundTrip() {
+        val padded = LensProfile(name = "1x", cameraId = "0")
+            .image { copy(cropEdges = LensCropEdges(right = 16, bottom = 512), cropEdgesHighFps = LensCropEdges(bottom = 768)) }
+        roundTrips(padded)
+        val image = lensJson(LensProfileCodec.encode(listOf(padded))).getJSONObject("image")
+        assertEquals(512, image.getJSONObject("cropEdges").getInt("bottom"))
+        assertEquals(768, image.getJSONObject("cropEdgesHighFps").getInt("bottom"))
+        // A lens without padding writes neither object.
+        val plain = lensJson(LensProfileCodec.encode(listOf(LensProfile(name = "1x", cameraId = "0")))).optJSONObject("image")
+        assertNull(plain?.optJSONObject("cropEdges"))
+        assertNull(plain?.optJSONObject("cropEdgesHighFps"))
     }
 
     @Test

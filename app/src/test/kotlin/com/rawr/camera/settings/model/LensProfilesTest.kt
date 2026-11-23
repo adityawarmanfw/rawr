@@ -29,6 +29,20 @@ class LensProfilesTest {
     }
 
     @Test
+    fun rawEdgeCropsMustKeepTheColourOrderAndLeaveImage() {
+        // Padded edges are multiples of the CFA period (2 for Bayer, 4 for a quad layout).
+        val padded = lens.image { copy(cropEdges = LensCropEdges(bottom = 512), cropEdgesHighFps = LensCropEdges(bottom = 768)) }
+        assertEquals(emptyList(), validateLensProfile(padded, emptyList()))
+        assertTrue(validateLensProfile(lens.image { copy(cropEdges = LensCropEdges(bottom = 3)) }, emptyList())
+            .contains("Bottom raw edge crop must be a multiple of 2"))
+        assertTrue(validateLensProfile(lens.image { copy(cropEdgesHighFps = LensCropEdges(top = 6),
+            sensorLayout = LensSensorLayout(block = 2)) }, emptyList())
+            .contains("High-fps top raw edge crop must be a multiple of 4"))
+        assertTrue(validateLensProfile(lens.image { copy(cropEdges = LensCropEdges(left = -2)) }, emptyList())
+            .contains("Left raw edge crop can't be negative"))
+    }
+
+    @Test
     fun validLensHasNoProblems() {
         assertEquals(emptyList(), validateLensProfile(lens, emptyList()))
     }
