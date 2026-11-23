@@ -70,6 +70,11 @@ rawr_test(renderer_dng_source_test
   "${APP}/color/DcpProfile.cpp"
   "${APP}/color/ColorMath.cpp")
 target_link_libraries(renderer_dng_source_test PRIVATE rawr_tinydng)
+rawr_test(color_calibration_test
+  "${RAWR_ROOT}/tests/native/color_calibration_test.cpp"
+  "${APP}/color/ColorCalibration.cpp"
+  "${APP}/color/DcpProfile.cpp"
+  "${APP}/color/ColorMath.cpp")
 rawr_test(renderer_resample_test
   "${RAWR_ROOT}/tests/native/renderer_resample_test.cpp"
   "${APP}/renderer/LinearResample.cpp")
