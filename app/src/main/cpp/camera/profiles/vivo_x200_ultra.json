@@ -360,6 +360,7 @@
         "sensorLayout": {
           "block": 1,
           "photoBlock": 4,
+          "photoRemosaic": "detail",
           "colourOrder": "BGGR",
           "photoOutput": "reduced"
         }
