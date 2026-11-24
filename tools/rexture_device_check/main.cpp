@@ -110,7 +110,7 @@ long peakRssKb() {  // VmHWM of this process (Linux / Android); 0 elsewhere
 
 int main(int argc, char** argv) {
     try {
-        std::string dir, merge = "rexture", dumpDir, dumpFinalDir, inject, noiseAb;
+        std::string dir, merge = "rexture", dumpDir, dumpFinalDir, dumpFlagsDir, inject, noiseAb;
         int frames = 0, repeat = 1;
         bool scores = false;
         bool lazy = false;           // --lazy: load and release frames on demand, as the app does from its journal
@@ -124,6 +124,7 @@ int main(int argc, char** argv) {
             else if (a == "--noise-ab") noiseAb = need();
             else if (a == "--dump-stages") dumpDir = need();
             else if (a == "--dump-final") dumpFinalDir = need();
+            else if (a == "--dump-flags") dumpFlagsDir = need();
             else if (a == "--inject-flow") inject = need();
             else if (a == "--repeat") repeat = std::stoi(need());
             else if (a == "--scores") scores = true;
@@ -249,6 +250,19 @@ int main(int argc, char** argv) {
                 commands.submit(ctx.q, r);
             });
             coordinator.setRextureObserver(stagedump::makeRextureObserver(*dump, inject));
+        }
+        if (!dumpFlagsDir.empty()) {   // production path: the fallback tile flags and the sums they come from, after the merge
+            dump = std::make_unique<stagedump::StageDump>(ctx, dumpFlagsDir, [&](const stagedump::StageDump::Record& r) {
+                commands.submit(ctx.q, r);
+            });
+            coordinator.setRextureProbe([&](const char* stage, std::uint32_t, const ResourceArena& arena) {
+                if (std::string(stage) == "final") dump->image("fb_tiles", arena.image("rx_fb_tiles"), 1);
+                if (std::string(stage) != "companions_done") return;   // the grain pass reuses the accumulators later
+                dump->image("acc_a", arena.image("rx_acc_a"), 4);
+                dump->image("acc_b", arena.image("rx_acc_b"), 2);
+                dump->image("acc_c", arena.image("rx_acc_c"), 3);
+                dump->image("support", arena.image("rx_support"), 1);
+            });
         }
         coordinator.setRextureDetailRestore(detailRestore);
         coordinator.setRextureMovingRestore(movingRestore);

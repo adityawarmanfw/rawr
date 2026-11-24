@@ -104,6 +104,11 @@ class AndroidBurstCoordinator final {
         rextureObserver_ = std::move(observer);
         rextureDebug_ = static_cast<bool>(rextureObserver_);
     }
+    // Tools only: the same stage callbacks on the production path (no verification kernels or images).
+    void setRextureProbe(RextureObserver observer) {
+        rextureObserver_ = std::move(observer);
+        rextureDebug_ = false;
+    }
     AndroidBurstCoordinator() = default;
     ~AndroidBurstCoordinator() { reset(); }
     AndroidBurstCoordinator(const AndroidBurstCoordinator&) = delete;
