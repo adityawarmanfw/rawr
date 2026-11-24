@@ -419,33 +419,19 @@ void MfsrCaptureJob::runStages(Published& published) {
                                           : outputAdapter.projectMerged(merged.output, merged.outputView, projection);
     };
     std::optional<rawr::raw_multiframe_output::PackedRaw16> stitched;
-    // Strip merge JPEG: the stitched CFA back in sensor codes (the merged DNG widens them to 16 bit), developed and
-    // written like a single still after the merge arena is released, so the peak is the frame plus the develop.
+    // Strip merge JPEG: the stitched CFA in the merged DNG's widened 16-bit codes, developed and written like a single
+    // still after the merge arena is released, so the peak is the frame plus the develop. The develop normalizes with
+    // the frame's black/white, so they are widened with the codes. Rounding back to sensor codes would throw away the
+    // merge's sub-code precision: on a 10-bit sensor the denoised shadows collapse onto black and one-code steps
+    // (flat black patches and single-colour speckle once the render lifts them).
     std::shared_ptr<rawrcam::imaging::RawSnapshot> stripJpegFrame;
-    auto stripFullCodes = [&](const rawr::raw_multiframe_output::PackedRaw16& full) {
-        const float toSensor = 1.0f / rawr::raw_multiframe_output::sixteenBitCodeScale(
-                                          job->referenceMetadata.effectiveWhiteLevel);
-        rawr::raw_multiframe_output::PackedRaw16 out;
-        out.width = full.width;
-        out.height = full.height;
-        out.rowStrideBytes = full.width * std::uint32_t(sizeof(std::uint16_t));
-        out.pixels.resize(std::size_t(out.rowStrideBytes) * out.height);
-        const std::uint32_t inW = full.rowStrideBytes / std::uint32_t(sizeof(std::uint16_t));
-        const auto* src = reinterpret_cast<const std::uint16_t*>(full.pixels.data());
-        auto* dst = reinterpret_cast<std::uint16_t*>(out.pixels.data());
-        const std::uint32_t n = std::max(1u, std::min(6u, std::thread::hardware_concurrency()));
-        std::vector<std::thread> pool;
-        for (std::uint32_t t = 0; t < n; ++t) {
-            const std::uint32_t y0 = out.height * t / n, y1 = out.height * (t + 1) / n;
-            pool.emplace_back([=]() {
-                for (std::uint32_t y = y0; y < y1; ++y)
-                    for (std::uint32_t x = 0; x < out.width; ++x)
-                        dst[std::size_t(y) * out.width + x] = std::uint16_t(std::clamp(
-                            float(src[std::size_t(y) * inW + x]) * toSensor + 0.5f, 0.0f, 65535.0f));
-            });
-        }
-        for (auto& th : pool) th.join();
-        return makeCaptured(std::move(out));
+    auto stripWideCodes = [&](const rawr::raw_multiframe_output::PackedRaw16& full) {
+        auto captured = makeCaptured(full);
+        const float codeScale =
+            rawr::raw_multiframe_output::sixteenBitCodeScale(job->referenceMetadata.effectiveWhiteLevel);
+        for (auto& black : captured->metadata.blackLevelPhysicalRggb) black *= codeScale;
+        captured->metadata.effectiveWhiteLevel *= codeScale;
+        return captured;
     };
     auto renderStripJpeg = [&](std::shared_ptr<rawrcam::imaging::RawSnapshot> captured) {
         const auto begin = std::chrono::steady_clock::now();
@@ -594,7 +580,7 @@ void MfsrCaptureJob::runStages(Published& published) {
         }
         if (work->awaitDurable) work->awaitDurable();  // outputs follow: the journal must be durable first
         if (stripJpeg && stitched) try {
-                stripJpegFrame = stripFullCodes(*stitched);  // before the merged DNG consumes the stitched CFA
+                stripJpegFrame = stripWideCodes(*stitched);  // before the merged DNG consumes the stitched CFA
                 outputAdapter.releaseDngResources();  // per-strip projection buffers: nothing reads them any more
             } catch (const std::exception& e) {
                 mergedJpeg.output.outputFd.reset();
