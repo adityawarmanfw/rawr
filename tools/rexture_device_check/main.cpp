@@ -1,7 +1,7 @@
 // On-device (and desktop) check of the Rexture merge: runs a burst in the replay tool's `rawburst:` layout through the
 // production coordinator, optionally dumps every stage for the NumPy comparison, or times the merge
 // against HDR+ Quality. No camera, no app: an NDK executable pushed with adb.
-//   rexture_device_check DIR [--merge rexture|hdrplus-freq] [--frames N] [--noise-ab A,B] [--dump-stages OUT] [--dump-final OUT]
+//   rexture_device_check DIR [--merge rexture|hdrplus-freq] [--frames N] [--noise-ab A,B] [--dump-stages OUT] [--dump-final OUT] [--lazy 0|1]
 //                        [--inject-flow DUMPDIR] [--repeat K] [--scores] [--detail-restore 0|1]
 // --frames N cycles the burst's frames to N (timing only: repeated frames align trivially but cost the same).
 #include <rawr/raw_gpu_pipeline/AndroidBurstCoordinator.h>
@@ -17,6 +17,7 @@
 #include <iostream>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -28,6 +29,12 @@
 namespace {
 using Clock = std::chrono::steady_clock;
 using namespace rawr::raw_gpu_pipeline;
+
+// --lazy loads frames on the prefetch thread while the merge submits on the same queue.
+std::mutex& queueMutex() {
+    static std::mutex m;
+    return m;
+}
 
 struct Commands {
     VkDevice device{};
@@ -62,7 +69,10 @@ struct Commands {
         si.commandBufferCount = 1;
         si.pCommandBuffers = &command;
         vktest::ck(vkResetFences(device, 1, &fence), "reset fence");
-        vktest::ck(vkQueueSubmit(queue, 1, &si, fence), "queue submit");
+        {
+            std::lock_guard<std::mutex> lock(queueMutex());
+            vktest::ck(vkQueueSubmit(queue, 1, &si, fence), "queue submit");
+        }
         vktest::ck(vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX), "fence wait");
     }
 };
@@ -102,6 +112,7 @@ int main(int argc, char** argv) {
         std::string dir, merge = "rexture", dumpDir, dumpFinalDir, inject, noiseAb;
         int frames = 0, repeat = 1;
         bool scores = false;
+        bool lazy = false;           // --lazy: load and release frames on demand, as the app does from its journal
         bool detailRestore = false;   // --detail-restore (the app's Rexturation, off by default)
         bool movingRestore = true;    // --moving (moving-texture restore, on by default)
         for (int i = 1; i < argc; ++i) {
@@ -115,6 +126,7 @@ int main(int argc, char** argv) {
             else if (a == "--inject-flow") inject = need();
             else if (a == "--repeat") repeat = std::stoi(need());
             else if (a == "--scores") scores = true;
+            else if (a == "--lazy") lazy = std::stoi(need()) != 0;
             else if (a == "--detail-restore") detailRestore = std::stoi(need()) != 0;
             else if (a == "--moving") movingRestore = std::stoi(need()) != 0;
             else if (a == "--strip-rows")   // the grain pass's strip height: the output must not depend on it
@@ -134,7 +146,7 @@ int main(int argc, char** argv) {
                   << " geometry=" << width << 'x' << height << " frames=" << count << " merge=" << merge << '\n';
         auto commandsHolder = std::make_unique<Commands>(ctx);
         Commands& commands = *commandsHolder;
-        std::vector<vktest::Img> images;
+        std::vector<vktest::Img> images(count);
         std::vector<BurstFrame> burst;
         std::vector<std::vector<std::uint8_t>> raws(stored);
         MultiframeFrameParameters params{};
@@ -143,35 +155,41 @@ int main(int argc, char** argv) {
         std::uint32_t ref = 0;
         auto staging = vktest::mkBuf(ctx.pd, ctx.dev, VkDeviceSize(width) * height * 2u, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        for (int i = 0; i < count; ++i) {
-            const int src = i % stored;
+        auto frameName = [&](int src) {
             char name[32];
             std::snprintf(name, sizeof(name), "/frame_%02d", src);
-            if (raws[src].empty()) {
-                std::ifstream f(dir + name + ".raw16", std::ios::binary | std::ios::ate);
-                if (!f) throw std::runtime_error(std::string("cannot open ") + name + ".raw16");
+            return std::string(name);
+        };
+        {   // metadata of the first stored frame (the burst's black / white level, white balance and reference)
+            const auto meta = keyValues(dir + frameName(0) + ".meta", '\t');
+            const auto black = csvFloats(meta.at("blackLevelPhysicalRggb"), 4);
+            const auto gains = csvFloats(meta.at("colorCorrectionGainsRggb"), 4);
+            std::copy(black.begin(), black.end(), blackSeen.begin());
+            whiteSeen = std::stof(meta.at("effectiveWhiteLevel"));
+            params.whiteBalance = {gains[0], .5f * (gains[1] + gains[2]), gains[3]};
+            ref = static_cast<std::uint32_t>(std::stoul(meta.at("rawrReferenceIndex")));
+        }
+        std::vector<std::uint8_t> lazyBuffer;   // lazy mode reads the file again for every load, like the journal
+        // Reads frame i from disk, uploads it into its own image and points burst[i] at it.
+        auto loadFrame = [&](int i) {
+            const int src = i % stored;
+            std::vector<std::uint8_t>& raw = lazy ? lazyBuffer : raws[src];
+            if (lazy || raw.empty()) {
+                std::ifstream f(dir + frameName(src) + ".raw16", std::ios::binary | std::ios::ate);
+                if (!f) throw std::runtime_error(frameName(src) + ".raw16: cannot open");
                 const auto bytes = static_cast<std::size_t>(f.tellg());
                 if (bytes != std::size_t(width) * height * 2u) throw std::runtime_error("raw16 size mismatch");
                 f.seekg(0);
-                raws[src].resize(bytes);
-                f.read(reinterpret_cast<char*>(raws[src].data()), static_cast<std::streamsize>(bytes));
-                const auto meta = keyValues(dir + name + ".meta", '\t');
-                const auto black = csvFloats(meta.at("blackLevelPhysicalRggb"), 4);
-                const auto gains = csvFloats(meta.at("colorCorrectionGainsRggb"), 4);
-                if (src == 0) {
-                    std::copy(black.begin(), black.end(), blackSeen.begin());
-                    whiteSeen = std::stof(meta.at("effectiveWhiteLevel"));
-                    params.whiteBalance = {gains[0], .5f * (gains[1] + gains[2]), gains[3]};
-                    ref = static_cast<std::uint32_t>(std::stoul(meta.at("rawrReferenceIndex")));
-                }
+                raw.resize(bytes);
+                f.read(reinterpret_cast<char*>(raw.data()), static_cast<std::streamsize>(bytes));
             }
-            images.push_back(vktest::mkImg(ctx.pd, ctx.dev, width, height, VK_FORMAT_R16_UINT,
-                                           VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT));
+            images[i] = vktest::mkImg(ctx.pd, ctx.dev, width, height, VK_FORMAT_R16_UINT,
+                                      VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
             void* mapped = nullptr;
-            vktest::ck(vkMapMemory(ctx.dev, staging.m, 0, raws[src].size(), 0, &mapped), "map staging");
-            std::memcpy(mapped, raws[src].data(), raws[src].size());
+            vktest::ck(vkMapMemory(ctx.dev, staging.m, 0, raw.size(), 0, &mapped), "map staging");
+            std::memcpy(mapped, raw.data(), raw.size());
             vkUnmapMemory(ctx.dev, staging.m);
-            auto& im = images.back();
+            auto& im = images[i];
             commands.submit(ctx.q, [&](VkCommandBuffer c) {
                 VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
                 b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -193,14 +211,22 @@ int main(int argc, char** argv) {
                 vkCmdPipelineBarrier(c, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0,
                                      nullptr, 1, &b);
             });
+            burst[i].raw.image = im.i;
+            burst[i].raw.view = im.v;
+        };
+        for (int i = 0; i < count; ++i) {
             MultiframeFrameParameters fp = params;
             fp.normalization.blackByPhase = blackSeen;
             fp.normalization.whiteLevel = whiteSeen;
             rawr::zsl_ring::GpuRawImageView raw{{std::uint64_t(i + 1), 1000000000ull + std::uint64_t(i) * 33333333ull, width, height},
-                                                im.i, im.v, VK_FORMAT_R16_UINT, VkDeviceSize(width) * height * 2u};
+                                                VK_NULL_HANDLE, VK_NULL_HANDLE, VK_FORMAT_R16_UINT, VkDeviceSize(width) * height * 2u};
             burst.push_back({raw, fp});
         }
-        vktest::delBuf(ctx.dev, staging);
+        if (!lazy)
+            for (int i = 0; i < count; ++i) loadFrame(i);
+        else
+            loadFrame(int(ref < std::uint32_t(count) ? ref : std::uint32_t(count / 2)));   // the base stays resident
+        if (!lazy) vktest::delBuf(ctx.dev, staging);
         if (ref >= burst.size()) ref = std::uint32_t(burst.size() / 2);
 
         rawr::raw_merge_common::Config cfg{};
@@ -222,7 +248,10 @@ int main(int argc, char** argv) {
         coordinator.setRextureDetailRestore(detailRestore);
         coordinator.setRextureMovingRestore(movingRestore);
         coordinator.initialize(ctx.pd, ctx.dev, ctx.qf,
-                               [&](const VkSubmitInfo& si, VkFence f) { vktest::ck(vkQueueSubmit(ctx.q, 1, &si, f), "burst submit"); },
+                               [&](const VkSubmitInfo& si, VkFence f) {
+                                   std::lock_guard<std::mutex> lock(queueMutex());
+                                   vktest::ck(vkQueueSubmit(ctx.q, 1, &si, f), "burst submit");
+                               },
                                width, height, {}, cfg, algorithm, {});
         if (scores) {
             RextureFrameScorer scorer;
@@ -234,7 +263,20 @@ int main(int argc, char** argv) {
         }
         BurstRunResult result;
         for (int it = 0; it < repeat; ++it) {
-            result = coordinator.run(burst, ref);
+            AndroidBurstCoordinator::FrameLoad load;
+            AndroidBurstCoordinator::FrameConsumed consumed;
+            if (lazy) {   // the app's journal loader: a frame is uploaded when the merge reaches it and freed once merged
+                load = [&](std::uint32_t i) {
+                    if (!images[i].i) loadFrame(int(i));
+                };
+                consumed = [&](std::uint32_t i) {
+                    if (i == ref) return;   // the base stays resident
+                    vktest::delImg(ctx.dev, images[i]);
+                    burst[i].raw.image = VK_NULL_HANDLE;
+                    burst[i].raw.view = VK_NULL_HANDLE;
+                };
+            }
+            result = coordinator.run(burst, ref, consumed, load);
             const auto& t = result.timings;
             std::printf("run=%d frames=%d total_ms=%.2f base_prepare_ms=%.2f base_kernel_rcd_ms=%.2f companion_prepare_ms=%.2f "
                         "alignment_ms=%.2f robustness_ms=%.2f accumulation_ms=%.2f finalize_ms=%.2f init_ms=%.2f "

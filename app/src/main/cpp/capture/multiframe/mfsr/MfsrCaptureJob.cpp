@@ -146,7 +146,7 @@ void MfsrCaptureJob::runStages(Published& published) {
     // 8160x6144 needs ~3.8 GB with ~2.8 GB available and was killed. debug.rawr.strip_mp (16..56 MP) overrides.
     const std::uint32_t residentFrames = job && work->tuning.mergeAlgorithm == 2u
                                              ? std::uint32_t(job->frames.size())
-                                             : std::uint32_t(std::min<std::size_t>(2u, job ? job->frames.size() : 0u));
+                                             : std::uint32_t(std::min<std::size_t>(3u, job ? job->frames.size() : 0u));  // the pair's first, the current, the prefetched
     std::uint64_t memAvailable = readMemAvailableBytes();
     std::uint64_t stripPixels = kStripMergePixels;
     const char* stripReason = "whole";

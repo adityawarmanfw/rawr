@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <future>
 #include <map>
 #include <stdexcept>
 #include <string>
@@ -17,6 +18,8 @@
 namespace rawr::raw_gpu_pipeline {
 namespace {
 constexpr std::uint32_t kTimestampQueryCapacity = 64u;
+// Rexture frames at or above this many pixels prefetch the next companion during the merge of the current one.
+constexpr std::uint64_t kPrefetchMinPixels = 16'000'000;
 void check(VkResult r, const char* what) {
     if (r != VK_SUCCESS) throw std::runtime_error(what);
 }
@@ -514,13 +517,32 @@ BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>
     const auto gainOf = [&](std::uint32_t i) { return exposureGain(frames, ref, i); };
     int pending = -1;  // first frame of a pair waiting for its partner (production path)
     std::uint32_t companions = 0;
+    // Large frames: the next companion (journal read, staging copy, upload and its fence wait, ~100 ms at 50 MP) loads on a
+    // worker while the GPU merges the current one, instead of between the chunks. One frame more is resident. The loader
+    // is only ever called by one thread at a time: this one before the loop and for the first companion, then the worker.
+    const bool prefetchEnabled = frameLoad && std::uint64_t(width_) * height_ >= kPrefetchMinPixels;
+    std::future<void> prefetch;
+    std::uint32_t prefetchIndex = UINT32_MAX;
     for (std::uint32_t i = 0; i < frames.size(); ++i) {
         if (i == ref) continue;
         if (frames[i].raw.ref.width != width_ || frames[i].raw.ref.height != height_)
             throw std::invalid_argument("multiframe burst: RAW geometry mismatch");
         const auto loadBegin = Clock::now();
-        if (frameLoad) frameLoad(i);
+        if (prefetch.valid() && prefetchIndex == i) {
+            prefetch.get();  // rethrows a load failure here, as the synchronous load would
+            prefetchIndex = UINT32_MAX;
+        } else if (frameLoad) {
+            frameLoad(i);
+        }
         hostLoad += std::chrono::duration<double, std::milli>(Clock::now() - loadBegin).count();
+        if (prefetchEnabled) {
+            std::uint32_t next = i + 1u;
+            if (next == ref) ++next;
+            if (next < frames.size()) {
+                prefetchIndex = next;
+                prefetch = std::async(std::launch::async, [&frameLoad, next] { frameLoad(next); });
+            }
+        }
         if (rextureObserver_) {
             // Verification build: one submission per stage group so every stage can be dumped.
             timings.companionPrepareMs += profiled(11u, i, 3u, [&] {
@@ -541,7 +563,7 @@ BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>
                 recorder.recordAccumulate(command_, frames[i].raw.view, frames[i].parameters, rextureDebug_, gainOf(i));
             });
         } else if (!samePairLevels) {
-            timings.companionPrepareMs += profiled(11u, i, 3u + 4u + 5u + 3u, [&] {
+            timings.companionPrepareMs += profiled(11u, i, 3u + recorder.levelMarks(0) + recorder.levelMarks(1) + recorder.levelMarks(2), [&] {
                 recorder.recordPrepare(command_, false, frames[i].raw.view, frames[i].parameters, gainOf(i));
                 for (std::uint32_t level = 0; level < 3u; ++level) recorder.recordAlignmentLevel(command_, level, false);
             });
@@ -560,7 +582,7 @@ BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>
             // Companions are accumulated in pairs: the per-pixel state is read and written once per two frames. The first
             // of a pair waits (its raw stays pinned) while the second is prepared and aligned.
             const std::uint32_t slot = pending < 0 ? 0u : 1u;  // pairing is only used when every frame shares the levels
-            constexpr std::uint32_t kMarks1 = 3u + 4u + 5u + 3u;
+            const std::uint32_t kMarks1 = 3u + recorder.levelMarks(0) + recorder.levelMarks(1) + recorder.levelMarks(2);
             timings.companionPrepareMs += profiled(11u, i, kMarks1, [&] {
                 recorder.recordPrepare(command_, false, frames[i].raw.view, frames[i].parameters, gainOf(i));
                 for (std::uint32_t level = 0; level < 3u; ++level) recorder.recordAlignmentLevel(command_, level, false);

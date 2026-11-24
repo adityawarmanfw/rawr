@@ -120,7 +120,8 @@ struct JournalFrames {
     size_t bytes = 0;
     uint32_t windowY0 = 0, windowRows = 0;  // 0 rows: whole frames
     std::vector<uint8_t> buffer;
-    std::vector<bool> loaded;
+    // One byte per frame (not vector<bool>): the prefetch thread loads one frame while the merge releases another.
+    std::vector<uint8_t> loaded;
 };
 }  // namespace
 std::unique_ptr<multiframe::MultiframeWorkItem> loadBurst(const std::string& path, const vulkan::VulkanContext& vk,
@@ -139,7 +140,7 @@ std::unique_ptr<multiframe::MultiframeWorkItem> loadBurst(const std::string& pat
         source->bytes = size_t(width) * height * sizeof(uint16_t);
         source->file.open(path, std::ios::binary);
         if (!source->file) throw std::runtime_error("capture_job_open_failed");
-        source->loaded.assign(job.metadata.size(), false);
+        source->loaded.assign(job.metadata.size(), uint8_t{0});
         uploaded->initialize(vk, source->bytes);
         auto* burst = work->capture.get();
         for (size_t i = 0; i < job.metadata.size(); ++i) {
@@ -168,7 +169,7 @@ std::unique_ptr<multiframe::MultiframeWorkItem> loadBurst(const std::string& pat
             auto& frame = burst->frames[i];
             frame.raw = uploaded->add(*vulkan, *queueMutex, width, rows, frame.raw.ref.timestampNs,
                                       source->buffer.data(), bytes);
-            source->loaded[i] = true;
+            source->loaded[i] = 1;
         };
         burst->releaseFrame = [source, uploaded, burst](std::size_t i) {
             if (i >= source->loaded.size() || !source->loaded[i]) return;
@@ -176,7 +177,7 @@ std::unique_ptr<multiframe::MultiframeWorkItem> loadBurst(const std::string& pat
             uploaded->release(raw);
             raw.image = VK_NULL_HANDLE;
             raw.view = VK_NULL_HANDLE;
-            source->loaded[i] = false;
+            source->loaded[i] = 0;
         };
         burst->setRowWindow = [source, burst, height](uint32_t y0, uint32_t rows) {
             if (rows && (y0 + rows > height || (y0 & 1u))) throw std::runtime_error("capture_job_row_window_invalid");

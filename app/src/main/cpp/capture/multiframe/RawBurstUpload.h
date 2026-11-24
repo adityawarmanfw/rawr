@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -34,10 +35,14 @@ class RawBurstUpload final {
         VkImageView view{};
         VkDeviceMemory memory{};
     };
-    std::vector<Image> images;
+    // add() may run on a prefetch thread while the merge thread release()s an earlier frame: the list is guarded, and an image
+    // is published only once it is fully built (a deque keeps references stable).
+    std::deque<Image> images;
+    std::mutex imagesMutex;
     // Destroys the image add() created for this view (its ref.frameId - 1 slot is
-    // reused by nothing; the vector keeps indices stable).
+    // reused by nothing; the list keeps indices stable).
     void release(const rawr::zsl_ring::GpuRawImageView& view) {
+        std::lock_guard<std::mutex> lock(imagesMutex);
         for (auto& i : images) {
             if (i.image != view.image) continue;
             if (i.view) vkDestroyImageView(device, i.view, nullptr);
@@ -109,8 +114,22 @@ class RawBurstUpload final {
     // Packed RAW16 (width * 2 bytes per row) into a new device-local R16 image.
     rawr::zsl_ring::GpuRawImageView add(const vulkan::VulkanContext& vk, std::mutex& mutex, uint32_t width,
                                         uint32_t height, uint64_t timestamp, const uint8_t* raw, size_t rawBytes) {
-        images.emplace_back();
-        auto& i = images.back();
+        uint64_t frameId = 0;
+        {
+            std::lock_guard<std::mutex> lock(imagesMutex);
+            frameId = images.size() + 1;  // one add() at a time
+        }
+        Image local;
+        auto& i = local;
+        // Published on every exit, a partly built image included: the destructor frees whatever it holds.
+        struct Publish {
+            RawBurstUpload& self;
+            Image& image;
+            ~Publish() {
+                std::lock_guard<std::mutex> lock(self.imagesMutex);
+                self.images.push_back(image);
+            }
+        } publish{*this, local};
         VkImageCreateInfo ci{};
         ci.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
         ci.imageType = VK_IMAGE_TYPE_2D;
@@ -176,7 +195,7 @@ class RawBurstUpload final {
             raw_burst_upload_detail::check(vkQueueSubmit(vk.queue(), 1, &submit, fence));
         }
         raw_burst_upload_detail::check(vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX));
-        return {{images.size(), timestamp, width, height}, i.image, i.view, VK_FORMAT_R16_UINT, req.size};
+        return {{frameId, timestamp, width, height}, i.image, i.view, VK_FORMAT_R16_UINT, req.size};
     }
 };
 
