@@ -14,6 +14,8 @@ layout(set = 0, binding = 3, rgba32f) readonly uniform image2D tilesI;
 layout(push_constant) uniform P {
     int ts, which, iterations;
     float clipRadius, eps;
+    float stepGain;   // update scale: the central-difference gradient is twice the slope, so the plain update moves half way
+                      // (1 = the reference's half step; the production recorder passes 2, a full Gauss-Newton step)
 } p;
 
 shared vec2 red[256];
@@ -96,7 +98,7 @@ void main() {
                 delta = vec2(sid * (A11 * B0 - A01 * B1), sid * (-A01 * B0 + A00 * B1));
                 upd = ok;
             }
-            delta = clamp(delta, vec2(-p.clipRadius), vec2(p.clipRadius));
+            delta = clamp(delta * p.stepGain, vec2(-p.clipRadius), vec2(p.clipRadius));
             if (upd) sF = f + delta;
         }
         barrier();

@@ -49,6 +49,7 @@ constexpr float kBmPriorRatio = 0.25f;
 struct LkPc {
     std::int32_t ts, which, iterations;
     float clipRadius, eps;
+    float stepGain;  // update scale: 1 = the reference's half step, kLkFullStep in production
 };
 struct RobustPc {
     float alpha, beta;
@@ -307,6 +308,11 @@ constexpr std::int32_t kMetric[4] = {1, 1, 1, 0};
 constexpr std::uint32_t kBmR1TilesPerGroup = 3;
 constexpr std::uint32_t kUpsampleScale[4] = {0, 4, 4, 2};
 constexpr std::int32_t kLkIterations = 6;
+// Production LK: the gradient is the central difference r(x + 1) - r(x - 1), twice the slope, which makes the reference's
+// Gauss-Newton step move half way (the error halves per iteration, so it needs 6). The full step reaches the same flow in 2
+// (synthetic truth bursts within +-0.02 dB of the 6 half steps; real bursts: noise and edge detail within 0.3%), 2.5x less LK.
+constexpr std::int32_t kLkIterationsFullStep = 2;
+constexpr float kLkFullStep = 2.0f;
 constexpr float kHessianEps = 1.0e-10f;
 
 // Profile mark names per alignment level (cand, bm, lk, fill, lk1): the per-level split of the stage totals.
@@ -396,8 +402,11 @@ void RextureRecorder::recordAlignmentLevel(VkCommandBuffer c, std::uint32_t l, b
     // Level 1 is filled like the coarsest: a tile too faint to measure (a dark wall, wood grain) otherwise keeps the coarser level's estimate, which
     // for such a tile is far short of the real motion and is refined at no finer level.
     const bool fillLevel = l == 0u || (l == 1u && tx * ty <= 1024u);
-    LkPc lk{std::int32_t(kTileSize[l]), fillLevel ? 2 : 3, kLkIterations, float(kRadius[l]), kHessianEps};
-    executor_.record(c, ShaderId::RxLk, {{ib(0, ref), ib(1, mov), ib(2, flow), ib(3, tiles)}, {}}, &lk, sizeof(lk), tx, ty);
+    // The verification build keeps the reference's half steps.
+    LkPc lk{std::int32_t(kTileSize[l]), fillLevel ? 2 : 3, debug ? kLkIterations : kLkIterationsFullStep, float(kRadius[l]),
+            kHessianEps, debug ? 1.0f : kLkFullStep};
+    const ShaderId lkId = ShaderId::RxLk;
+    executor_.record(c, lkId, {{ib(0, ref), ib(1, mov), ib(2, flow), ib(3, tiles)}, {}}, &lk, sizeof(lk), tx, ty);
     computeWriteBarrier(c);
     if (mark_) mark_(kLevelMark[2][l]);
     if (fillLevel) {
@@ -405,7 +414,7 @@ void RextureRecorder::recordAlignmentLevel(VkCommandBuffer c, std::uint32_t l, b
         computeWriteBarrier(c);
         if (mark_) mark_(kLevelMark[3][l]);
         lk.which = 1;
-        executor_.record(c, ShaderId::RxLk, {{ib(0, ref), ib(1, mov), ib(2, flow), ib(3, tiles)}, {}}, &lk, sizeof(lk), tx,
+        executor_.record(c, lkId, {{ib(0, ref), ib(1, mov), ib(2, flow), ib(3, tiles)}, {}}, &lk, sizeof(lk), tx,
                          ty);
         computeWriteBarrier(c);
         if (mark_) mark_(kLevelMark[4][l]);
