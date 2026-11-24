@@ -1,3 +1,4 @@
+#include <cstddef>
 #include <cstdlib>
 #include <rawr/raw_gpu_pipeline/RextureFit.h>
 #include <rawr/raw_gpu_pipeline/RextureRecorder.h>
@@ -69,7 +70,11 @@ struct FinalPc {
     float white;
     std::int32_t w, h, cfa, debug;
     std::int32_t row0, rcdY0, rcdRows;  // first row of the dispatch; rows held by the RCD work planes
+    std::int32_t rcdPlanes;              // 1: the planes before export / bound, which rx_finalize applies per pixel
+    std::int32_t pad[3];                 // the shader's vec4 members start at 16-byte offsets
+    float rcdBalance[4], rcdInvRange[4];
 };
+static_assert(offsetof(FinalPc, rcdBalance) == 64 && sizeof(FinalPc) <= 128, "FinalPc must match rx_finalize's push block");
 struct FlagsPc {
     std::int32_t w, h;
 };
@@ -378,7 +383,7 @@ void RextureRecorder::recordAlignmentLevel(VkCommandBuffer c, std::uint32_t l, b
         const std::uint32_t coarseTs = kTileSize[l - 1];
         CandPc p{std::int32_t((kUpsampleScale[l] * coarseTs) / 16u), float(kUpsampleScale[l]), std::int32_t(l),
                  config_.noiseAlpha, config_.noiseBeta, debug ? 1 : 0, debug ? 0 : 1};  // the verification build keeps the reference's integer shifts
-        executor_.record(c, ShaderId::RxCandSelect, {{ib(0, ref), ib(1, mov), ib(2, coarse), ib(3, flow)}, {}}, &p,
+        executor_.record(c, debug ? ShaderId::RxCandSelect : ShaderId::RxCandSelectLean, {{ib(0, ref), ib(1, mov), ib(2, coarse), ib(3, flow)}, {}}, &p,
                          sizeof(p), tx, ty);
         computeWriteBarrier(c);
     }
@@ -480,7 +485,7 @@ void RextureRecorder::recordAccumulate(VkCommandBuffer c, VkImageView rawU16, co
     p.fit = config_.detailRestore ? 1 : 0;
     ImageBinding raw{0, rawU16, VK_IMAGE_LAYOUT_GENERAL};
     const ArenaImage& ss2 = debug ? arena_.image("rx_dbg_ss2") : a;   // never touched without debug
-    executor_.record(c, ShaderId::RxAccumulate,
+    executor_.record(c, debug || config_.detailRestore ? ShaderId::RxAccumulate : ShaderId::RxAccumulateLean,
                      {{raw, ib(1, arena_.image("rx_flow_l3")), ib(2, arena_.image("rx_er")), ib(3, arena_.image("rx_base_cov")),
                        ib(4, a), ib(5, arena_.image("rx_acc_b")), ib(6, arena_.image("rx_acc_c")), ib(7, ss2),
                        raw8(rawU16), ib(9, arena_.image("rx_flow_l3")), ib(10, arena_.image("rx_er")),
@@ -546,12 +551,16 @@ void RextureRecorder::recordFinalize(VkCommandBuffer c, VkImageView rawU16, cons
         } else {
             const std::int32_t y0 = std::max(r0 - kRcdHalo, 0), y1 = std::min(r1 + kRcdHalo, h);
             if (y1 - y0 > std::int32_t(work.extent.height)) throw std::logic_error("rexture recorder: RCD strip too tall");
-            recordRcd(c, rawU16, f, y0, y1 - y0, true);
+            recordRcd(c, rawU16, f, y0, y1 - y0, true, /*exportAndBound=*/false);
             if (mark_) mark_("rcd");
             p.rcdY0 = y0;
             p.rcdRows = y1 - y0;
         }
         p.row0 = r0;
+        p.rcdPlanes = debug ? 0 : 1;
+        for (int i = 0; i < 3; ++i) p.rcdBalance[i] = config_.whiteBalance[i];
+        p.rcdBalance[3] = 1.0f;
+        for (int i = 0; i < 4; ++i) p.rcdInvRange[i] = 1.0f / (f.normalization.whiteLevel - f.normalization.blackByPhase[i]);
         executor_.record(c, ShaderId::RxFinalize,
                          {{raw, ib(1, arena_.image("rx_base_cov")), ib(2, accA), ib(3, arena_.image("rx_acc_b")), ib(4, accC),
                            ib(5, arena_.image("rx_support")), ib(6, work), ib(7, out), ib(8, dbgOut), ib(9, dbgPre),
@@ -689,7 +698,7 @@ void RextureRecorder::recordBaseDemosaic(VkCommandBuffer c, VkImageView rawU16, 
 // fp32 RCD of the image rows [y0, y0 + rows) into rx_rcd_work (direction field in rx_rcd_dir), then the native-range bound
 // in place. gate: only near the tiles flagged in rx_fb_tiles.
 void RextureRecorder::recordRcd(VkCommandBuffer c, VkImageView rawU16, const MultiframeFrameParameters& f, std::int32_t y0,
-                                std::int32_t rows, bool gate) const {
+                                std::int32_t rows, bool gate, bool exportAndBound) const {
     if (!rawU16) throw std::invalid_argument("rexture recorder: null RAW16 view");
     const auto& out = arena_.image("rx_rcd_work");
     const auto& dir = arena_.image("rx_rcd_dir");
@@ -725,6 +734,7 @@ void RextureRecorder::recordRcd(VkCommandBuffer c, VkImageView rawU16, const Mul
     executor_.record(c, ShaderId::RxRcdGreenSites, b, &p, sizeof(p), divUp(half, 8), divUp(n, 32));
     computeWriteBarrier(c);
     if (mark_ && !gate) mark_("rcd_sites");
+    if (!exportAndBound) return;   // production: rx_finalize exports and bounds the pixels it reads
     executor_.record(c, ShaderId::RxRcdExport, b, &p, sizeof(p), divUp(p.width, 4), divUp(n, 32));
     computeWriteBarrier(c);
     if (mark_ && !gate) mark_("rcd_export");
@@ -762,7 +772,7 @@ void RextureRecorder::recordAccumulatePair(VkCommandBuffer c, VkImageView rawSlo
     p.gain1 = gain1;
     p.fit = config_.detailRestore ? 1 : 0;
     ImageBinding raw{0, rawSlot0, VK_IMAGE_LAYOUT_GENERAL};
-    executor_.record(c, ShaderId::RxAccumulate,
+    executor_.record(c, config_.detailRestore ? ShaderId::RxAccumulate : ShaderId::RxAccumulateLean,
                      {{raw, ib(1, arena_.image("rx_flow_l3")), ib(2, arena_.image("rx_er")), ib(3, arena_.image("rx_base_cov")),
                        ib(4, a), ib(5, arena_.image("rx_acc_b")), ib(6, arena_.image("rx_acc_c")), ib(7, a), raw8(rawSlot1),
                        ib(9, arena_.image("rx_flow_l3_b")), ib(10, arena_.image("rx_er_b")),

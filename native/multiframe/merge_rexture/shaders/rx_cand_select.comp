@@ -32,6 +32,14 @@ float movBilinear(vec2 pos, ivec2 movMax) {   // clamped sampling, as the intege
     return mix(mix(a, c, f.x), mix(d, e, f.x), f.y);
 }
 
+#ifdef RX_LEAN   // production: candidates at their exact shifts, no float-float tie re-sum
+#define EXACT_ON false
+#define FRAC_ON true
+#else
+#define EXACT_ON (p.exactTies != 0)
+#define FRAC_ON (p.fracCost != 0)
+#endif
+
 shared vec4 sCost[64];
 shared uint sAmb;
 shared vec4 sBest;
@@ -83,7 +91,7 @@ void main() {
             float refv = imageLoad(refI, q).x;
             meanSum += refv;
             for (int k = 0; k < 4; ++k)
-                cost32[k] += abs(refv - (p.fracCost != 0 ? movBilinear(vec2(q) + c[k] * p.scale, movMax)
+                cost32[k] += abs(refv - (FRAC_ON ? movBilinear(vec2(q) + c[k] * p.scale, movMax)
                                                          : imageLoad(movI, clamp(q + shift[k], ivec2(0), movMax)).x));
         }
     sCost[tid] = cost32;
@@ -101,13 +109,13 @@ void main() {
         bool amb = false;
         for (int i = 0; i < 4; ++i)
             for (int j = i + 1; j < 4; ++j)
-                if (p.exactTies != 0 && shift[i] != shift[j] && abs(c4[i] - c4[j]) <= 1e-4 * max(max(c4[i], c4[j]), 1e-12)) amb = true;
+                if (EXACT_ON && shift[i] != shift[j] && abs(c4[i] - c4[j]) <= 1e-4 * max(max(c4[i], c4[j]), 1e-12)) amb = true;
         sAmb = amb ? 1u : 0u;
         sBest = c4;
     }
     barrier();
     vec4 exact = sBest;           // (hi) costs; replaced below when ambiguous
-    if (sAmb != 0u) {
+    if (EXACT_ON && sAmb != 0u) {
         float hi[4] = float[4](0.0, 0.0, 0.0, 0.0), lo[4] = float[4](0.0, 0.0, 0.0, 0.0);
         for (int j = 0; j < 2; ++j)
             for (int i = 0; i < 2; ++i) {
@@ -139,7 +147,7 @@ void main() {
     if (tid == 0) {
         int sel = 0;
         float cBil;
-        if (sAmb != 0u) {
+        if (EXACT_ON && sAmb != 0u) {
             float best = sHi[0], bestLo = sLo[0];
             for (int k = 1; k < 4; ++k)
                 if (rxFfLess(sHi[k * 64], sLo[k * 64], best, bestLo)) {

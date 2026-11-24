@@ -43,6 +43,16 @@ layout(push_constant) uniform P {
     int fit;                 // 1: also keep the detail fit sums
 } p;
 
+// RX_LEAN (production build without Rexturation): the detail fit and verification paths are compiled out. Uniformly off they
+// still held registers, and the shader ran ~30% slower on Adreno 840 (fewer pixels in flight); same arithmetic otherwise.
+#ifdef RX_LEAN
+#define FIT_ON false
+#define DEBUG_ON false
+#else
+#define FIT_ON (p.fit != 0)
+#define DEBUG_ON (p.debug != 0)
+#endif
+
 const float RB_WIDEN = 1.2;
 // Every frame carries the same total weight at a pixel: its kernel weights are scaled so that their sum per colour is the
 // frame's robustness (a floor keeps weak-support taps from being boosted). Without it the base frame's samples, which sit on
@@ -68,7 +78,7 @@ void main() {
     vec3 sumS = vec3(0.0), sumW = vec3(0.0), sumSq = vec3(0.0), sumF2 = vec3(0.0);
     vec4 fitSum = vec4(0.0);
     vec2 fitSum2 = vec2(0.0);
-    const float fitBase = p.fit != 0 ? imageLoad(fitBgI, clamp(o, ivec2(0), imageSize(fitBgI) - 1)).x : 0.0;
+    const float fitBase = FIT_ON ? imageLoad(fitBgI, clamp(o, ivec2(0), imageSize(fitBgI) - 1)).x : 0.0;
     for (int f = 0; f < p.frames; ++f) {
         // bilinear flow at o (tile size 16)
         vec2 g = (vec2(o) + 0.5) / 16.0 - 0.5;
@@ -114,7 +124,7 @@ void main() {
                 vec2 d = vec2(q) - e;
                 float z = max(0.0, s * (qi.x * d.x * d.x + 2.0 * qi.y * d.x * d.y + qi.z * d.y * d.y));
                 float xn = rxNormFromRaw(float(loadRaw(f, q)), q, p.black, p.white);
-                if (p.fit != 0 && cc == 1 && xn < RX_CLIP_NORM && abs(d.x) < 1.0 && abs(d.y) < 1.0) {
+                if (FIT_ON && cc == 1 && xn < RX_CLIP_NORM && abs(d.x) < 1.0 && abs(d.y) < 1.0) {
                     // the sample sits at o + d: its footprint covers o (weight bw) and the neighbours towards d
                     const float ax = abs(d.x), ay = abs(d.y), bw = (1.0 - ax) * (1.0 - ay);
                     fs4 += bw * vec4(eg * xn - fitBase, bw, d.x > 0.0 ? ax * (1.0 - ay) : 0.0, d.y > 0.0 ? (1.0 - ax) * ay : 0.0);
@@ -134,7 +144,7 @@ void main() {
             fw *= sc;
             f2 *= sc * sc;
         }
-        if (p.fit != 0 && fs4.y > 0.0) {
+        if (FIT_ON && fs4.y > 0.0) {
             const float wf = r * loadFitW(f, clamp(o / 2, ivec2(0), imageSize(fitWI) - 1));
             fitSum += wf * fs4;
             fitSum2 += wf * fs2;
@@ -155,5 +165,5 @@ void main() {
     imageStore(accA, o, vec4(a.xyz + sumS, a.w + sumW.x));
     imageStore(accB, o, vec4(bb + sumW.yz, 0.0, 0.0));
     imageStore(accC, o, vec4(sq, 0.0));
-    if (p.debug != 0) imageStore(accSs2, o, vec4(imageLoad(accSs2, o).xyz + sumF2, 0.0));
+    if (DEBUG_ON) imageStore(accSs2, o, vec4(imageLoad(accSs2, o).xyz + sumF2, 0.0));
 }

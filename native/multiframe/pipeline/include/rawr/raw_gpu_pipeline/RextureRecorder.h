@@ -97,7 +97,7 @@ class RextureRecorder final {
     void recordFit(VkCommandBuffer, std::int32_t op, VkImageView rawU16, const MultiframeFrameParameters& f, float gain = 1.0f,
                    std::uint32_t slot = 0) const;
     void recordRcd(VkCommandBuffer, VkImageView rawU16, const MultiframeFrameParameters&, std::int32_t y0, std::int32_t rows,
-                   bool gate) const;
+                   bool gate, bool exportAndBound = true) const;
 };
 
 }  // namespace rawr::raw_gpu_pipeline

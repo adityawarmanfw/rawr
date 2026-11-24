@@ -107,6 +107,24 @@ foreach(RAWR_MF_SRC IN LISTS RAWR_MF_SHADER_SOURCES)
     DEPENDS ${RAWR_MF_SRC} ${RAWR_MF_INCLUDE_DEPS} VERBATIM)
   list(APPEND RAWR_MF_SPV_OUTPUTS ${RAWR_MF_PROD} ${RAWR_MF_TRACE} ${RAWR_MF_PROD_HDR} ${RAWR_MF_TRACE_HDR})
 endforeach()
+# Lean production variants (-DRX_LEAN): the same source with its optional paths (detail fit, verification outputs, the reference's
+# exact ties, ...) compiled out, dispatched when those paths are off. Each becomes symbol mf_<name>_lean_prod_spv.
+set(RAWR_MF_LEAN_SHADERS rx_accumulate rx_cand_select)
+file(GLOB RAWR_RX_GLSL_ALL ${RAWR_MF_DIR}/merge_rexture/shaders/*.glsl)
+foreach(RAWR_MF_LEAN IN LISTS RAWR_MF_LEAN_SHADERS)
+  set(RAWR_MF_SRC ${RAWR_MF_DIR}/merge_rexture/shaders/${RAWR_MF_LEAN}.comp)
+  set(RAWR_MF_OUT ${RAWR_MF_SPV_DIR}/prod/${RAWR_MF_LEAN}_lean.spv)
+  set(RAWR_MF_HDR ${RAWR_MF_SPV_DIR}/mf_${RAWR_MF_LEAN}_lean_prod.h)
+  set(RAWR_MF_PROD_EXTRA)
+  if(RAWR_MF_LEAN STREQUAL "rx_frame_prep")
+    set(RAWR_MF_PROD_EXTRA -DRX_PG=${RAWR_RX_PREP_PG})
+  endif()
+  add_custom_command(OUTPUT ${RAWR_MF_OUT} ${RAWR_MF_HDR}
+    COMMAND ${GLSLC} --target-env=vulkan1.1 -O -DRX_LEAN=1 ${RAWR_MF_PROD_EXTRA} ${RAWR_MF_SRC} -o ${RAWR_MF_OUT}
+    COMMAND ${CMAKE_COMMAND} -DINPUT=${RAWR_MF_OUT} -DOUTPUT=${RAWR_MF_HDR} -DSYMBOL=mf_${RAWR_MF_LEAN}_lean_prod_spv -P ${RAWR_EMBED_BINARY_SCRIPT}
+    DEPENDS ${RAWR_MF_SRC} ${RAWR_RX_GLSL_ALL} VERBATIM)
+  list(APPEND RAWR_MF_SPV_OUTPUTS ${RAWR_MF_OUT} ${RAWR_MF_HDR})
+endforeach()
 add_custom_target(raw_multiframe_gpu_shaders ALL DEPENDS ${RAWR_MF_SPV_OUTPUTS})
 
 add_library(raw_gpu_pipeline STATIC

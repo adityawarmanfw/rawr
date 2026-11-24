@@ -21,7 +21,7 @@ layout(set = 0, binding = 2, rgba16f) readonly uniform image2D accA;
 layout(set = 0, binding = 3, rg16f) readonly uniform image2D accB;
 layout(set = 0, binding = 4, rgba16f) readonly uniform image2D accC;
 layout(set = 0, binding = 5, r16f) readonly uniform image2D supportI;
-layout(set = 0, binding = 6, rgba32f) readonly uniform image2D rcdI;       // bounded fp32 RCD of the strip rows
+layout(set = 0, binding = 6, rgba32f) readonly uniform image2D rcdI;       // fp32 RCD of the strip rows (see rcdPlanes)
 layout(set = 0, binding = 7, rgba16f) writeonly uniform image2D outI;
 layout(set = 0, binding = 8, rgba32f) writeonly uniform image2D dbgOutI;   // (final rgb, neff)       verification only
 layout(set = 0, binding = 9, rgba32f) writeonly uniform image2D dbgPreI;   // (pre-grain rgb, conf)   verification only
@@ -33,7 +33,72 @@ layout(push_constant) uniform P {
     int w, h, cfa, debug;
     int row0;                // first row of this dispatch (a multiple of 16)
     int rcdY0, rcdRows;      // rows held by the RCD work planes
+    int rcdPlanes;           // 1: rcdI holds the RCD planes before export and bound (production), applied here per pixel;
+                             // 0: rcdI is already exported and bounded (verification build, whole-frame RCD)
+    vec4 rcdBalance;         // RCD's fixed balance (R, G, B, 1) and per-phase 1 / (white - black), as in rx_rcd_common.glsl
+    vec4 rcdInvRange;
 } p;
+
+// rx_rcd_export + rx_rcd_bound for one pixel, same arithmetic: the exported RCD value (the librtprocess border rule in the outer
+// 9 px), un-balanced, then each interpolated channel clamped to its native samples' range in the 5 x 5 window (edge clamp).
+int rcdRgbColorAt(ivec2 q) {
+    int x = q.x & 1, y = q.y & 1, c;
+    if (p.cfa == 0) c = y == 0 ? (x == 0 ? 0 : 1) : (x == 0 ? 2 : 3);
+    else if (p.cfa == 1) c = y == 0 ? (x == 0 ? 1 : 0) : (x == 0 ? 3 : 2);
+    else if (p.cfa == 2) c = y == 0 ? (x == 0 ? 2 : 3) : (x == 0 ? 0 : 1);
+    else c = y == 0 ? (x == 0 ? 3 : 2) : (x == 0 ? 1 : 0);
+    return c == 0 ? 0 : (c == 3 ? 2 : 1);
+}
+float rcdCfa(ivec2 q) {
+    q = clamp(q, ivec2(0), ivec2(p.w - 1, p.h - 1));
+    const int parity = ((q.y & 1) << 1) | (q.x & 1);
+    const float v = float(imageLoad(rawU16, q).r);
+    return (v - p.black[parity]) * p.rcdInvRange[parity] * p.rcdBalance[rcdRgbColorAt(q)];
+}
+vec3 rcdBorder(ivec2 q0) {
+    vec3 sum = vec3(0.0);
+    ivec3 count = ivec3(0);
+    for (int dy = -1; dy <= 1; ++dy)
+        for (int dx = -1; dx <= 1; ++dx) {
+            ivec2 q = q0 + ivec2(dx, dy);
+            if (q.x < 0 || q.y < 0 || q.x >= p.w || q.y >= p.h) continue;
+            int c = rcdRgbColorAt(q);
+            float v = rcdCfa(q);
+            if (c == 0) { sum.r += v; count.r++; }
+            else if (c == 1) { sum.g += v; count.g++; }
+            else { sum.b += v; count.b++; }
+        }
+    int own = rcdRgbColorAt(q0);
+    float ownv = rcdCfa(q0);
+    vec3 outRgb = sum / vec3(count);
+    if (own == 0) outRgb.r = ownv;
+    else if (own == 1) outRgb.g = ownv;
+    else outRgb.b = ownv;
+    return outRgb;
+}
+vec3 rcdBase(ivec2 q0) {
+    const ivec2 wq = ivec2(q0.x, clamp(q0.y - p.rcdY0, 0, p.rcdRows - 1));
+    if (p.rcdPlanes == 0) return imageLoad(rcdI, wq).xyz;
+    const int B = 9;   // RCD_BORDER
+    const bool interior = q0.x >= B && q0.y >= B && q0.x < p.w - B && q0.y < p.h - B;
+    vec3 rgb = interior ? imageLoad(rcdI, wq).rgb : rcdBorder(q0);
+    rgb /= p.rcdBalance.rgb;
+    float val[3] = float[3](rgb.x, rgb.y, rgb.z);
+    vec3 lo = vec3(1.0e30), hi = vec3(-1.0e30);
+    const ivec2 size = ivec2(p.w, p.h);
+    for (int dy = 0; dy < 5; ++dy)
+        for (int dx = 0; dx < 5; ++dx) {
+            const ivec2 qc = clamp(q0 - 2 + ivec2(dx, dy), ivec2(0), size - 1);
+            const int c = rxChannel(qc, p.cfa);
+            const float x = rxNormFromRaw(float(imageLoad(rawU16, qc).x), qc, p.black, p.white);
+            lo[c] = min(lo[c], x);
+            hi[c] = max(hi[c], x);
+        }
+    const int own = rxChannel(q0, p.cfa);
+    for (int k = 0; k < 3; ++k)
+        if (k != own) val[k] = clamp(val[k], lo[k], hi[k]);
+    return vec3(val[0], val[1], val[2]);
+}
 
 const float RB_WIDEN = 1.2;
 // NEFF_HI 1.5 (was 3): the smaller dark-area kernel (rx_kernel_cov) halves the effective frame count of a well merged pixel, and at 3 most of a dark moving
@@ -85,7 +150,7 @@ Fin finalizeAt(ivec2 q0) {
     float conf = min(cert.x, min(cert.y, cert.z));
     vec3 merged = (a.xyz + rs) / max(total, vec3(1e-20));
     const bool fallback = imageLoad(fbTiles, q0 / 16).x > 0.5;
-    vec3 base = fallback ? imageLoad(rcdI, ivec2(q0.x, clamp(q0.y - p.rcdY0, 0, p.rcdRows - 1))).xyz : merged;
+    vec3 base = fallback ? rcdBase(q0) : merged;
     Fin f;
     if (!fallback) conf = 1.0;
     f.rgb = fallback ? base + (merged - base) * conf : merged;
