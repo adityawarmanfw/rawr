@@ -211,8 +211,6 @@ class PostDemosaicProcessor final {
     // lazily on the first enabled record (strength <= 0 skips everything).
     std::unique_ptr<raw_denoise::DenoisePipeline> denoise_;
     std::function<void()> denoiseTileBoundary_;
-    rawr::vk::OwnedImage denoiseOut_{};
-    bool denoiseOutInitialized_ = false;
     std::unique_ptr<::fcc::FalseColorCorrectionPipeline> fcc_;
     std::unique_ptr<rawr::highlight::ColoroppProcessor> coloropp_;
     bool coloroppActive_ = false;

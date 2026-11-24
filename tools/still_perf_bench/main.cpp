@@ -142,6 +142,7 @@ struct Options {
     uint32_t fccSteps = 2;
     float defringe = 1.0f;
     uint32_t hl = 0;  // 0 off, 1 colour propagation, 2 Inpaint Opposed
+    bool denoise = false;  // the multiframe chroma denoise (7 scales, luma off, edge-k 0.5)
     bool distortion = false;
     bool lsc = true;
     bool uhdr = true;
@@ -465,13 +466,23 @@ Row runShot(Gpu& g, const Options& o, const std::vector<uint16_t>& raw, bool dum
         dist.intrinsic = {f, f, W / 2.0f, H / 2.0f, 0.0f};
         dist.distortion = {-0.08f, 0.02f, 0.0f, 0.0005f, -0.0003f};
     }
+    rawr::post::DenoiseRequest denoiseRequest{};
+    if (o.denoise) {
+        denoiseRequest.strength = 1.0f;
+        denoiseRequest.detail = 1.0f;
+        denoiseRequest.forceY = 0.0f;
+        denoiseRequest.maxScale = 7;
+        denoiseRequest.edgeK = 0.5f;
+        denoiseRequest.noiseA = 3.0e-4f;
+        denoiseRequest.noiseB = 8.0e-6f;
+    }
     auto tp = Clock::now();
     {
         VkCommandBuffer cmd = g.begin();
         vkCmdResetQueryPool(cmd, g.query, 0, 18);
         post->record(cmd, demosaiced.i, demosaiced.v, clip.i, clip.v, o.wb, o.hl == 1, dist, g.query, false,
                      o.hl == 2 ? 1u : 0u, 0.99f, 0.5f, 1.0f, rawr::shading::LensShadingMapView{}, o.pattern,
-                     rawr::post::DenoiseRequest{}, {}, camToSrgb);
+                     denoiseRequest, {}, camToSrgb);
         for (uint32_t q : {6u, 7u, 8u, 9u, 12u, 13u, 14u, 15u})
             vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, g.query, q);
         g.submit(cmd);
@@ -482,6 +493,7 @@ Row runShot(Gpu& g, const Options& o, const std::vector<uint16_t>& raw, bool dum
         R["wb_hl_dist.gpu"] = d(0, 1);
         R["hl_prop.gpu"] = d(1, 3);
         R["fcc.gpu"] = d(4, 5);
+        if (o.denoise) R["denoise.gpu"] = d(10, 11);
         R["defringe.gpu"] = d(16, 17) - d(4, 5);
     }
     R["post.wall"] = ms(tp, Clock::now());
@@ -698,6 +710,7 @@ int main(int argc, char** argv) {
             else if (a == "--fcc") o.fccSteps = uint32_t(std::stoul(next()));
             else if (a == "--defringe") o.defringe = std::stof(next());
             else if (a == "--hl") o.hl = uint32_t(std::stoul(next()));
+            else if (a == "--denoise") o.denoise = std::stoi(next()) != 0;
             else if (a == "--distortion") o.distortion = std::stoi(next()) != 0;
             else if (a == "--lsc") o.lsc = std::stoi(next()) != 0;
             else if (a == "--uhdr") o.uhdr = std::stoi(next()) != 0;
@@ -713,7 +726,7 @@ int main(int argc, char** argv) {
         }
         if (o.cfa.empty() || !o.width || !o.height || !(o.white > o.black))
             throw std::runtime_error("usage: still_perf_bench --cfa raw.u16 --width W --height H --black B --white W "
-                                     "[--wb r g b] [--reps N] [--fcc N] [--defringe S] [--hl 0|1|2] [--distortion 0|1] "
+                                     "[--wb r g b] [--reps N] [--fcc N] [--defringe S] [--hl 0|1|2] [--denoise 0|1] [--distortion 0|1] "
                                      "[--uhdr 0|1] [--jpeg 0|1] [--full-res-map 0|1] [--capture-color 0|1] "
                                      "[--slots N] [--persistent 0|1] [--dump PREFIX]");
         auto bytes = readBytes(o.cfa);
