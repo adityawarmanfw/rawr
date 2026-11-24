@@ -63,6 +63,7 @@
 #include "mf_rx_cand_select_prod.h"
 #include "mf_rx_block_match_prod.h"
 #include "mf_rx_block_match_r1_prod.h"
+#include "mf_rx_block_match_r4_prod.h"
 #include "mf_rx_lk_prod.h"
 #include "mf_rx_fill_prod.h"
 #include "mf_rx_robust_prod.h"
@@ -257,6 +258,8 @@ const std::array<Spec, static_cast<size_t>(ShaderId::Count)> specs{{{"noise_esti
                                    {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
                                   {"rx_block_match_r1", mf_rx_block_match_r1_prod_spv, mf_rx_block_match_r1_prod_spv_size, mf_rx_block_match_r1_prod_spv, mf_rx_block_match_r1_prod_spv_size,
                                    {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
+                                  {"rx_block_match_r4", mf_rx_block_match_r4_prod_spv, mf_rx_block_match_r4_prod_spv_size, mf_rx_block_match_r4_prod_spv, mf_rx_block_match_r4_prod_spv_size,
+                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
                                   {"rx_lk", mf_rx_lk_prod_spv, mf_rx_lk_prod_spv_size, mf_rx_lk_prod_spv, mf_rx_lk_prod_spv_size,
                                    {{0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}}},
                                   {"rx_fill", mf_rx_fill_prod_spv, mf_rx_fill_prod_spv_size, mf_rx_fill_prod_spv, mf_rx_fill_prod_spv_size,
@@ -317,6 +320,7 @@ void VulkanExecutor::initialize(VkDevice d, bool wantTrace) {
         "rx_cand_select",
         "rx_block_match",
         "rx_block_match_r1",
+        "rx_block_match_r4",
         "rx_lk",
         "rx_fill",
         "rx_robust",

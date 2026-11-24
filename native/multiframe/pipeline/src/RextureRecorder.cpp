@@ -377,6 +377,8 @@ void RextureRecorder::recordAlignmentLevel(VkCommandBuffer c, std::uint32_t l, b
     if (l == 3u && !debug) {
         // Finest level (tile 16, radius 1, L1): one thread per (tile, candidate), kBmR1TilesPerGroup tiles per workgroup.
         executor_.record(c, ShaderId::RxBlockMatchR1, bmSets, &bp, sizeof(bp), divUp(tx * ty, kBmR1TilesPerGroup), 1u);
+    } else if ((l == 1u || l == 2u) && !debug) {
+        executor_.record(c, ShaderId::RxBlockMatchR4, bmSets, &bp, sizeof(bp), tx, ty);
     } else {
         executor_.record(c, ShaderId::RxBlockMatch, bmSets, &bp, sizeof(bp), tx, ty);
     }

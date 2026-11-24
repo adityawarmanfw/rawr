@@ -1,0 +1,60 @@
+#version 450
+#extension GL_GOOGLE_include_directive : enable
+// Rexture alignment, levels 1 and 2: rx_block_match specialised to tile 16, radius 4, metric 1 (L2, window sampled with clamped
+// coordinates, ties-to-even rounding of the start) and the production tie rule (plain fp32 sums, first minimum in (sy, sx) scan
+// order). Same work split as the general shader (one workgroup per tile, one thread per candidate, shared copies of the
+// reference tile and the window), with the loop bounds and addressing fixed at compile time. Verification builds (exactTies) and
+// the 8 px coarsest level keep using rx_block_match.
+#include "rx_common.glsl"
+
+layout(local_size_x = 96) in;
+layout(set = 0, binding = 0, r32f) readonly uniform image2D refI;
+layout(set = 0, binding = 1, r32f) readonly uniform image2D movI;
+layout(set = 0, binding = 2, rg32f) uniform image2D flowI;
+layout(set = 0, binding = 3, rgba32f) readonly uniform image2D tilesI;
+layout(set = 0, binding = 4, r32f) writeonly uniform image2D costI;
+layout(push_constant) uniform P { int ts, radius, metric, exactTies; } p;
+
+const int TS = 16, R = 4, W = TS + 2 * R, N = 2 * R + 1, CAND = N * N;
+
+shared float sRef[TS * TS];
+shared float sMov[W * W];
+shared float sCost[96];
+
+void main() {
+    const ivec2 t = ivec2(gl_WorkGroupID.xy);
+    const int tid = int(gl_LocalInvocationID.x);
+    if (imageLoad(tilesI, t).w != 2.0) return;      // uniform per workgroup
+    const vec2 fl = imageLoad(flowI, t).xy;
+    const ivec2 base = ivec2(roundEven(fl));
+    const ivec2 w0 = t * TS + base - R;
+    const ivec2 n = imageSize(movI);
+    for (int i = tid; i < TS * TS; i += 96) sRef[i] = imageLoad(refI, t * TS + ivec2(i % TS, i / TS)).x;
+    for (int i = tid; i < W * W; i += 96)
+        sMov[i] = imageLoad(movI, clamp(w0 + ivec2(i % W, i / W), ivec2(0), n - 1)).x;
+    barrier();
+    float cost = 3.4e38;
+    if (tid < CAND) {
+        const int sy = tid / N, sx = tid % N;
+        float acc = 0.0;
+        for (int py = 0; py < TS; ++py)
+            for (int px = 0; px < TS; ++px) {
+                float e = sRef[py * TS + px] - sMov[(py + sy) * W + px + sx];
+                acc += e * e;
+            }
+        cost = acc;
+    }
+    sCost[tid] = cost;
+    barrier();
+    if (tid == 0) {
+        float best = sCost[0];
+        int win = 0;
+        for (int c = 1; c < CAND; ++c)
+            if (sCost[c] < best) {
+                best = sCost[c];
+                win = c;
+            }
+        imageStore(flowI, t, vec4(vec2(base + ivec2(win % N - R, win / N - R)), 0.0, 0.0));
+        imageStore(costI, t, vec4(best));
+    }
+}
