@@ -296,9 +296,19 @@ namespace {
 constexpr std::uint32_t kTileSize[4] = {8, 16, 16, 16};
 constexpr std::uint32_t kRadius[4] = {4, 4, 4, 1};
 constexpr std::int32_t kMetric[4] = {1, 1, 1, 0};
+// Tiles per workgroup of rx_block_match_r1 (its TPW). Small on purpose: on Adreno 840 3 tiles (7 KB of shared memory) beat 12 (28 KB)
+// by 1.5x, the group count being what hides the shared-memory latency.
+constexpr std::uint32_t kBmR1TilesPerGroup = 3;
 constexpr std::uint32_t kUpsampleScale[4] = {0, 4, 4, 2};
 constexpr std::int32_t kLkIterations = 6;
 constexpr float kHessianEps = 1.0e-10f;
+
+// Profile mark names per alignment level (cand, bm, lk, fill, lk1): the per-level split of the stage totals.
+constexpr const char* kLevelMark[5][4] = {{"cand_l0", "cand_l1", "cand_l2", "cand_l3"},
+                                          {"bm_l0", "bm_l1", "bm_l2", "bm_l3"},
+                                          {"lk_l0", "lk_l1", "lk_l2", "lk_l3"},
+                                          {"fill_l0", "fill_l1", "fill_l2", "fill_l3"},
+                                          {"lk1_l0", "lk1_l1", "lk1_l2", "lk1_l3"}};
 
 void copyFlow(VkCommandBuffer c, const ArenaImage& src, const ArenaImage& dst) {
     VkMemoryBarrier b{};
@@ -360,14 +370,18 @@ void RextureRecorder::recordAlignmentLevel(VkCommandBuffer c, std::uint32_t l, b
                          sizeof(p), tx, ty);
         computeWriteBarrier(c);
     }
-    if (mark_ && l > 0) mark_("cand");
+    if (mark_ && l > 0) mark_(kLevelMark[0][l]);
     if (debug) copyFlow(c, flow, arena_.image("rx_dbg_prior_l" + ls));
     BlockPc bp{std::int32_t(kTileSize[l]), std::int32_t(kRadius[l]), kMetric[l], debug ? 1 : 0};
-    executor_.record(c, ShaderId::RxBlockMatch,
-                     {{ib(0, ref), ib(1, mov), ib(2, flow), ib(3, tiles), ib(4, arena_.image("rx_bmcost_l" + ls))}, {}}, &bp,
-                     sizeof(bp), tx, ty);
+    const DispatchBindings bmSets{{ib(0, ref), ib(1, mov), ib(2, flow), ib(3, tiles), ib(4, arena_.image("rx_bmcost_l" + ls))}, {}};
+    if (l == 3u && !debug) {
+        // Finest level (tile 16, radius 1, L1): one thread per (tile, candidate), kBmR1TilesPerGroup tiles per workgroup.
+        executor_.record(c, ShaderId::RxBlockMatchR1, bmSets, &bp, sizeof(bp), divUp(tx * ty, kBmR1TilesPerGroup), 1u);
+    } else {
+        executor_.record(c, ShaderId::RxBlockMatch, bmSets, &bp, sizeof(bp), tx, ty);
+    }
     computeWriteBarrier(c);
-    if (mark_) mark_("bm");
+    if (mark_) mark_(kLevelMark[1][l]);
     if (debug) copyFlow(c, flow, arena_.image("rx_dbg_bm_l" + ls));
     // Levels above the coarsest: mode 2 and mode 1 tiles are independent, one dispatch. The coarsest level fills the
     // unconstrained tiles from the constrained ones between the two.
@@ -377,16 +391,16 @@ void RextureRecorder::recordAlignmentLevel(VkCommandBuffer c, std::uint32_t l, b
     LkPc lk{std::int32_t(kTileSize[l]), fillLevel ? 2 : 3, kLkIterations, float(kRadius[l]), kHessianEps};
     executor_.record(c, ShaderId::RxLk, {{ib(0, ref), ib(1, mov), ib(2, flow), ib(3, tiles)}, {}}, &lk, sizeof(lk), tx, ty);
     computeWriteBarrier(c);
-    if (mark_) mark_("lk");
+    if (mark_) mark_(kLevelMark[2][l]);
     if (fillLevel) {
         executor_.record(c, ShaderId::RxFill, {{ib(0, flow), ib(1, tiles)}, {}}, nullptr, 0, 1, 1);
         computeWriteBarrier(c);
-        if (mark_) mark_("fill");
+        if (mark_) mark_(kLevelMark[3][l]);
         lk.which = 1;
         executor_.record(c, ShaderId::RxLk, {{ib(0, ref), ib(1, mov), ib(2, flow), ib(3, tiles)}, {}}, &lk, sizeof(lk), tx,
                          ty);
         computeWriteBarrier(c);
-        if (mark_) mark_("lk1");
+        if (mark_) mark_(kLevelMark[4][l]);
     }
 }
 }  // namespace rawr::raw_gpu_pipeline

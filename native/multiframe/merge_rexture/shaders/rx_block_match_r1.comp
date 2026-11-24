@@ -1,0 +1,96 @@
+#version 450
+#extension GL_GOOGLE_include_directive : enable
+// Rexture alignment, finest level: rx_block_match specialised to tile 16, radius 1, metric 0 (L1, zero outside the image) and
+// the production tie rule (plain fp32 sums, first minimum in (sy, sx) scan order). The general shader runs 128 threads per tile
+// of which only the 9 candidates compute; this one packs TPW tiles into a workgroup (3, see kBmR1TilesPerGroup in the recorder), one
+// thread per (tile, candidate). Every
+// candidate is still summed sequentially in the same (py, px) order from the same shared copies, so the results are bit-identical.
+// Tiles of mode != 2 are skipped as before. Verification builds (exactTies) keep using rx_block_match.
+#include "rx_common.glsl"
+
+layout(local_size_x = 32) in;
+layout(set = 0, binding = 0, r32f) readonly uniform image2D refI;
+layout(set = 0, binding = 1, r32f) readonly uniform image2D movI;
+layout(set = 0, binding = 2, rg32f) uniform image2D flowI;
+layout(set = 0, binding = 3, rgba32f) readonly uniform image2D tilesI;
+layout(set = 0, binding = 4, r32f) writeonly uniform image2D costI;
+layout(push_constant) uniform P { int ts, radius, metric, exactTies; } p;
+
+const int TS = 16, R = 1, W = TS + 2 * R, N = 2 * R + 1, CAND = N * N, TPW = 3;
+const int REF_N = TS * TS, MOV_N = W * W;
+
+shared float sRef[TPW * REF_N];
+shared float sMov[TPW * MOV_N];
+shared float sCost[TPW * CAND];
+shared ivec2 sTile[TPW];
+shared ivec2 sW0[TPW];
+shared ivec2 sBase[TPW];
+shared bool sValid[TPW];
+
+float sampleMov(ivec2 q, ivec2 n) {
+    if (any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, n))) return 0.0;
+    return imageLoad(movI, q).x;
+}
+
+void main() {
+    const int tid = int(gl_LocalInvocationID.x);
+    const ivec2 grid = imageSize(flowI);
+    const int count = grid.x * grid.y;
+    if (tid < TPW) {
+        const int lin = int(gl_WorkGroupID.x) * TPW + tid;
+        bool valid = lin < count;
+        ivec2 t = ivec2(0);
+        if (valid) {
+            t = ivec2(lin % grid.x, lin / grid.x);
+            valid = imageLoad(tilesI, t).w == 2.0;
+        }
+        sValid[tid] = valid;
+        sTile[tid] = t;
+        if (valid) {
+            const vec2 fl = imageLoad(flowI, t).xy;
+            vec2 rounded = roundEven(fl);
+            vec2 away = sign(fl) * floor(abs(fl) + 0.5);
+            rounded = mix(rounded, away, vec2(equal(abs(fl - rounded), vec2(0.5))));
+            const ivec2 base = ivec2(rounded);
+            sBase[tid] = base;
+            sW0[tid] = t * TS + base - R;
+        }
+    }
+    barrier();
+    bool any0 = false;
+    for (int k = 0; k < TPW; ++k) any0 = any0 || sValid[k];
+    if (!any0) return;                                      // uniform per workgroup
+    const ivec2 movSize = imageSize(movI);
+    for (int i = tid; i < TPW * REF_N; i += 32) {
+        const int k = i / REF_N, j = i % REF_N;
+        if (sValid[k]) sRef[i] = imageLoad(refI, sTile[k] * TS + ivec2(j % TS, j / TS)).x;
+    }
+    for (int i = tid; i < TPW * MOV_N; i += 32) {
+        const int k = i / MOV_N, j = i % MOV_N;
+        if (sValid[k]) sMov[i] = sampleMov(sW0[k] + ivec2(j % W, j / W), movSize);
+    }
+    barrier();
+    const int k = tid / CAND, c = tid % CAND;
+    if (k < TPW && sValid[k]) {
+        const int sy = c / N, sx = c % N;
+        float acc = 0.0;
+        for (int py = 0; py < TS; ++py)
+            for (int px = 0; px < TS; ++px) {
+                float e = sRef[k * REF_N + py * TS + px] - sMov[k * MOV_N + (py + sy) * W + px + sx];
+                acc += abs(e);
+            }
+        sCost[k * CAND + c] = acc;
+    }
+    barrier();
+    if (tid < TPW && sValid[tid]) {
+        float best = sCost[tid * CAND];
+        int win = 0;
+        for (int cc = 1; cc < CAND; ++cc)
+            if (sCost[tid * CAND + cc] < best) {
+                best = sCost[tid * CAND + cc];
+                win = cc;
+            }
+        imageStore(flowI, sTile[tid], vec4(vec2(sBase[tid] + ivec2(win % N - R, win / N - R)), 0.0, 0.0));
+        imageStore(costI, sTile[tid], vec4(best));
+    }
+}

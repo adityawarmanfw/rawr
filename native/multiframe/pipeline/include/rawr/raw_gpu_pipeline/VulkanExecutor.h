@@ -41,6 +41,7 @@ enum class ShaderId : std::uint32_t {
     RxRefTiles,
     RxCandSelect,
     RxBlockMatch,
+    RxBlockMatchR1,
     RxLk,
     RxFill,
     RxRobust,

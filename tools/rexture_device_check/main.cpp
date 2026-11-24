@@ -1,7 +1,7 @@
 // On-device (and desktop) check of the Rexture merge: runs a burst in the replay tool's `rawburst:` layout through the
 // production coordinator, optionally dumps every stage for the NumPy comparison, or times the merge
 // against HDR+ Quality. No camera, no app: an NDK executable pushed with adb.
-//   rexture_device_check DIR [--merge rexture|hdrplus-freq] [--frames N] [--noise-ab A,B] [--dump-stages OUT]
+//   rexture_device_check DIR [--merge rexture|hdrplus-freq] [--frames N] [--noise-ab A,B] [--dump-stages OUT] [--dump-final OUT]
 //                        [--inject-flow DUMPDIR] [--repeat K] [--scores] [--detail-restore 0|1]
 // --frames N cycles the burst's frames to N (timing only: repeated frames align trivially but cost the same).
 #include <rawr/raw_gpu_pipeline/AndroidBurstCoordinator.h>
@@ -99,7 +99,7 @@ long peakRssKb() {  // VmHWM of this process (Linux / Android); 0 elsewhere
 
 int main(int argc, char** argv) {
     try {
-        std::string dir, merge = "rexture", dumpDir, inject, noiseAb;
+        std::string dir, merge = "rexture", dumpDir, dumpFinalDir, inject, noiseAb;
         int frames = 0, repeat = 1;
         bool scores = false;
         bool detailRestore = false;   // --detail-restore (the app's Rexturation, off by default)
@@ -111,6 +111,7 @@ int main(int argc, char** argv) {
             else if (a == "--frames") frames = std::stoi(need());
             else if (a == "--noise-ab") noiseAb = need();
             else if (a == "--dump-stages") dumpDir = need();
+            else if (a == "--dump-final") dumpFinalDir = need();
             else if (a == "--inject-flow") inject = need();
             else if (a == "--repeat") repeat = std::stoi(need());
             else if (a == "--scores") scores = true;
@@ -242,6 +243,17 @@ int main(int argc, char** argv) {
                         t.robustnessMs, t.accumulationMs, t.finalizeMs, t.initializeMs,
                         double(result.physicalImageBytes) / 1048576.0, double(result.physicalBufferBytes) / 1048576.0,
                         double(peakRssKb()) / 1024.0);
+        }
+        if (!dumpFinalDir.empty()) {
+            // Production-path merge output (no observer, so no verification kernels): for bit-identity checks between builds.
+            stagedump::StageDump finalDump(ctx, dumpFinalDir, [&](const stagedump::StageDump::Record& r) { commands.submit(ctx.q, r); });
+            ArenaImage out;
+            out.image = result.output;
+            out.view = result.outputView;
+            out.format = result.outputFormat;
+            out.extent = result.outputExtent;
+            finalDump.image("final", out, 3);
+            finalDump.finish();
         }
         if (dump) dump->finish();
         coordinator.reset();

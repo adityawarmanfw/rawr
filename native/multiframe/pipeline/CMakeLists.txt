@@ -57,6 +57,7 @@ set(RAWR_MF_SHADER_SOURCES
   ${RAWR_MF_DIR}/merge_rexture/shaders/rx_ref_tiles.comp
   ${RAWR_MF_DIR}/merge_rexture/shaders/rx_cand_select.comp
   ${RAWR_MF_DIR}/merge_rexture/shaders/rx_block_match.comp
+  ${RAWR_MF_DIR}/merge_rexture/shaders/rx_block_match_r1.comp
   ${RAWR_MF_DIR}/merge_rexture/shaders/rx_lk.comp
   ${RAWR_MF_DIR}/merge_rexture/shaders/rx_fill.comp
   ${RAWR_MF_DIR}/merge_rexture/shaders/rx_robust.comp

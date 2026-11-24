@@ -541,7 +541,7 @@ BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>
                 recorder.recordAccumulate(command_, frames[i].raw.view, frames[i].parameters, rextureDebug_, gainOf(i));
             });
         } else if (!samePairLevels) {
-            timings.companionPrepareMs += profiled(11u, i, 3u + 4u + 3u + 3u, [&] {
+            timings.companionPrepareMs += profiled(11u, i, 3u + 4u + 5u + 3u, [&] {
                 recorder.recordPrepare(command_, false, frames[i].raw.view, frames[i].parameters, gainOf(i));
                 for (std::uint32_t level = 0; level < 3u; ++level) recorder.recordAlignmentLevel(command_, level, false);
             });
@@ -560,7 +560,7 @@ BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>
             // Companions are accumulated in pairs: the per-pixel state is read and written once per two frames. The first
             // of a pair waits (its raw stays pinned) while the second is prepared and aligned.
             const std::uint32_t slot = pending < 0 ? 0u : 1u;  // pairing is only used when every frame shares the levels
-            constexpr std::uint32_t kMarks1 = 3u + 4u + 3u + 3u;
+            constexpr std::uint32_t kMarks1 = 3u + 4u + 5u + 3u;
             timings.companionPrepareMs += profiled(11u, i, kMarks1, [&] {
                 recorder.recordPrepare(command_, false, frames[i].raw.view, frames[i].parameters, gainOf(i));
                 for (std::uint32_t level = 0; level < 3u; ++level) recorder.recordAlignmentLevel(command_, level, false);
