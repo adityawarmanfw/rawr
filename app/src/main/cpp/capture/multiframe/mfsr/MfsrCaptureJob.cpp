@@ -989,9 +989,16 @@ void MfsrCaptureJob::runStages(Published& published) {
                         renderedContext.denoiseDetail = 1.0f;
                         renderedContext.denoiseForceY = 0.0f;
                         renderedContext.denoiseMaxScale = 7;
-                        // The default edge-stop averages across any colour step under ~20 noise sigmas, which
-                        // smears blue/yellow edges (equal-luma ones most). 0.5 keeps them with no loss of denoise.
-                        renderedContext.denoiseEdgeK = 0.5f;
+                        // White-balanced input (darktable's domain for the WB-adaptive Y0U0V0 rows): on the pre-WB
+                        // image the chroma bands leave pre-WB grey alone, which is magenta / green after white
+                        // balance, so with luma untouched 12-30% of the visible chroma noise survived at every scale
+                        // as green / magenta blotches. White-balanced: 2-5% up to 32 px (synthetic 7-frame Rexture
+                        // noise, dark and mid grey; tmp/crush/wbtest.py).
+                        renderedContext.denoiseWhiteBalancedInput = true;
+                        // The default edge-stop (0.02) averages across colour steps under ~20 noise sigmas and smears
+                        // weak blue/yellow edges over ~150 px. 0.2 keeps them within ~20 px with the same chroma
+                        // noise removal as 0.02; 0.5 stops at coarse noise too (11-45% left at 16-64 px).
+                        renderedContext.denoiseEdgeK = 0.2f;
                         renderedContext.denoiseNoiseA = a;
                         renderedContext.denoiseNoiseB = b;
                         outputInfo.chromaDenoiseLabel =

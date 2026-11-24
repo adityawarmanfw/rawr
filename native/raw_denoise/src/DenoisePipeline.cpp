@@ -300,8 +300,8 @@ DenoisePipeline::DenoisePipeline(VkPhysicalDevice physical, VkDevice device, Den
     im.back = makeModule(device, shaders.backtransform, "denoise back");
     const auto STORAGE_IMAGE = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     const auto STORAGE_BUFFER = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    // Push sizes mirror the .comp layouts (mat3 = 48B, 16-aligned).
-    im.preLayout = makeLayout(device, {{0, STORAGE_IMAGE}, {1, STORAGE_IMAGE}}, 96,
+    // Push sizes mirror the .comp layouts (mat3 = 48B, 16-aligned; then the wbIn vec4).
+    im.preLayout = makeLayout(device, {{0, STORAGE_IMAGE}, {1, STORAGE_IMAGE}}, 112,
                               &im.prePipeLayout);
     im.atrLayout = makeLayout(device, {{0, STORAGE_IMAGE}, {1, STORAGE_IMAGE}, {2, STORAGE_IMAGE},
                                        {3, STORAGE_BUFFER}, {4, STORAGE_BUFFER}, {5, STORAGE_IMAGE}},
@@ -309,7 +309,7 @@ DenoisePipeline::DenoisePipeline(VkPhysicalDevice physical, VkDevice device, Den
     im.thrLayout = makeLayout(device, {{0, STORAGE_BUFFER}, {1, STORAGE_BUFFER}}, 24,
                               &im.thrPipeLayout);
     im.backLayout = makeLayout(device, {{0, STORAGE_IMAGE}, {1, STORAGE_IMAGE}, {2, STORAGE_IMAGE}},
-                               96, &im.backPipeLayout);
+                               112, &im.backPipeLayout);
     im.prePipe = makePipe(device, im.pre, im.prePipeLayout);
     im.atrPipe = makePipe(device, im.atr, im.atrPipeLayout);
     im.thrPipe = makePipe(device, im.thr, im.thrPipeLayout);
@@ -408,6 +408,10 @@ void DenoisePipeline::record(VkCommandBuffer command, VkImageView srcView, VkIma
         yuvM[i] = m[i] / f;
         rgbM[i] = rgb[i] * f;
     }
+    // Source multipliers: the WB gains when the caller asks for darktable's white-balanced input, else 1.
+    float wbIn[3] = {1.0f, 1.0f, 1.0f};
+    if (params.whiteBalancedInput)
+        for (int c = 0; c < 3; c++) wbIn[c] = wb[c] > 0.0f && std::isfinite(wb[c]) ? wb[c] : 1.0f;
 
     // ---- tile scratch (grow-once, reused) ----
     if (im.scratchExtent < extent) {
@@ -490,6 +494,7 @@ void DenoisePipeline::record(VkCommandBuffer command, VkImageView srcView, VkIma
                     uint32_t tileE;
                     float a, p0, p1, p2, b, pad0, pad1;
                     float m[12];
+                    float wbIn[4];
                 } pp{};
                 pp.srcW = width;
                 pp.srcH = height;
@@ -505,6 +510,7 @@ void DenoisePipeline::record(VkCommandBuffer command, VkImageView srcView, VkIma
                 // the row-major yuvM, i.e. upload the transpose.
                 for (int col = 0; col < 3; col++)
                     for (int row = 0; row < 3; row++) pp.m[col * 4 + row] = yuvM[row * 3 + col];
+                for (int c = 0; c < 3; c++) pp.wbIn[c] = wbIn[c];
                 dispatch(im.prePipe, im.prePipeLayout, im.preSet, &pp, sizeof(pp),
                          (extent + kLocal - 1u) / kLocal, (extent + kLocal - 1u) / kLocal);
             }
@@ -542,6 +548,7 @@ void DenoisePipeline::record(VkCommandBuffer command, VkImageView srcView, VkIma
                     uint32_t tileW, tileH, outX, outY, halo;
                     float a, p0, p1, p2, b, bias, pad;
                     float m[12];
+                    float wbIn[4];
                 } pb{};
                 pb.tileW = tw;
                 pb.tileH = th;
@@ -556,6 +563,7 @@ void DenoisePipeline::record(VkCommandBuffer command, VkImageView srcView, VkIma
                 pb.bias = 0.0f;
                 for (int col = 0; col < 3; col++)
                     for (int row = 0; row < 3; row++) pb.m[col * 4 + row] = rgbM[row * 3 + col];
+                for (int c = 0; c < 3; c++) pb.wbIn[c] = wbIn[c];
                 dispatch(im.backPipe, im.backPipeLayout, im.backSet, &pb, sizeof(pb),
                          (tw + kLocal - 1u) / kLocal, (th + kLocal - 1u) / kLocal);
             }

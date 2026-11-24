@@ -76,6 +76,9 @@ struct DenoiseRequest {
     // Edge-stop sharpness of the wavelet weights (0.02 = shipped single-frame behaviour). The multiframe chroma
     // denoise raises it so colour edges are not averaged across. Clamped to [0.02, 4] at record time.
     float edgeK = 0.02f;
+    // Denoise the white-balanced source (raw_denoise::DenoiseParams::whiteBalancedInput). Off for the shipped
+    // single-frame denoise; the multiframe chroma denoise turns it on.
+    bool whiteBalancedInput = false;
 };
 class PostDemosaicProcessor final {
    public:

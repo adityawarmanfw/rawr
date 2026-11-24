@@ -48,8 +48,14 @@ struct DenoiseParams {
     float forceUv = 0.75f;
     // Edge-stop sharpness of the a-trous weights (e = |d|^2/sigma^2 * edgeK - 9). 0.02 is the darktable value
     // (single-frame default, parity-gated). Higher values stop averaging across weaker edges: the multiframe
-    // chroma denoise uses 0.5 so colour edges (blue/yellow above all) do not bleed.
+    // chroma denoise uses 0.2 (with whiteBalancedInput) so colour edges (blue/yellow above all) do not bleed.
     float edgeK = 0.02f;
+    // Denoise the source multiplied by whiteBalance (divided back afterwards), the white-balanced input darktable's
+    // WB-adaptive Y0U0V0 rows are built for: U0 = V0 = 0 on white-balanced grey. Off (the shipped, parity-gated
+    // single-frame behaviour), U0/V0 are differences of the pre-WB channels, so the neutral axis they leave alone
+    // is pre-WB grey, which is magenta / green after white balance: a chroma-only denoise (forceY 0) then keeps
+    // that noise at every scale.
+    bool whiteBalancedInput = false;
     // Inner tile extent; extended buffers are (tile+2H)^2.
     uint32_t tileSize = 1536;
 };
