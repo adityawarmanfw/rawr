@@ -144,9 +144,12 @@ void MfsrCaptureJob::runStages(Published& published) {
     // merges whole at full speed, one that does not is split into the tallest windows that do. The arena is sized
     // by the window geometry, not the frame count, so splitting is the only lever that shortens it. A 12 GB 17U at
     // 8160x6144 needs ~3.8 GB with ~2.8 GB available and was killed. debug.rawr.strip_mp (16..56 MP) overrides.
+    // Rexture streams: the base, the first frame of a pair, the one in flight, and from 16 MP up the prefetched next one
+    // (measured: 3 frame images resident at 50 MP before the prefetch, 4 with it).
+    const std::uint32_t streamedResident = std::uint64_t(ctx.rawWidth) * ctx.rawHeight >= 16'000'000u ? 4u : 3u;
     const std::uint32_t residentFrames = job && work->tuning.mergeAlgorithm == 2u
                                              ? std::uint32_t(job->frames.size())
-                                             : std::uint32_t(std::min<std::size_t>(3u, job ? job->frames.size() : 0u));  // the pair's first, the current, the prefetched
+                                             : std::uint32_t(std::min<std::size_t>(streamedResident, job ? job->frames.size() : 0u));
     std::uint64_t memAvailable = readMemAvailableBytes();
     std::uint64_t stripPixels = kStripMergePixels;
     const char* stripReason = "whole";

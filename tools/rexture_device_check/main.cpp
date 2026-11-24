@@ -16,6 +16,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <sstream>
@@ -169,6 +170,7 @@ int main(int argc, char** argv) {
             params.whiteBalance = {gains[0], .5f * (gains[1] + gains[2]), gains[3]};
             ref = static_cast<std::uint32_t>(std::stoul(meta.at("rawrReferenceIndex")));
         }
+        std::atomic<int> liveFrames{0}, maxLiveFrames{0};   // --lazy: frame images resident at once
         std::vector<std::uint8_t> lazyBuffer;   // lazy mode reads the file again for every load, like the journal
         // Reads frame i from disk, uploads it into its own image and points burst[i] at it.
         auto loadFrame = [&](int i) {
@@ -213,6 +215,9 @@ int main(int argc, char** argv) {
             });
             burst[i].raw.image = im.i;
             burst[i].raw.view = im.v;
+            const int live = ++liveFrames;
+            int seen = maxLiveFrames.load();
+            while (live > seen && !maxLiveFrames.compare_exchange_weak(seen, live)) {}
         };
         for (int i = 0; i < count; ++i) {
             MultiframeFrameParameters fp = params;
@@ -272,6 +277,7 @@ int main(int argc, char** argv) {
                 consumed = [&](std::uint32_t i) {
                     if (i == ref) return;   // the base stays resident
                     vktest::delImg(ctx.dev, images[i]);
+                    --liveFrames;
                     burst[i].raw.image = VK_NULL_HANDLE;
                     burst[i].raw.view = VK_NULL_HANDLE;
                 };
@@ -286,6 +292,7 @@ int main(int argc, char** argv) {
                         double(result.physicalImageBytes) / 1048576.0, double(result.physicalBufferBytes) / 1048576.0,
                         double(peakRssKb()) / 1024.0);
         }
+        if (lazy) std::printf("max_live_frames=%d (%.0f MiB of frame images)\n", maxLiveFrames.load(), maxLiveFrames.load() * double(width) * height * 2.0 / 1048576.0);
         if (!dumpFinalDir.empty()) {
             // Production-path merge output (no observer, so no verification kernels): for bit-identity checks between builds.
             stagedump::StageDump finalDump(ctx, dumpFinalDir, [&](const stagedump::StageDump::Record& r) { commands.submit(ctx.q, r); });
