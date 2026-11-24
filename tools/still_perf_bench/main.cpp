@@ -74,6 +74,21 @@ extern "C" VKAPI_ATTR void VKAPI_CALL vkFreeMemory(VkDevice device, VkDeviceMemo
     real(device, m, cb);
 }
 
+// Device-lifetime pipeline cache substituted for null caches, as the app's dispatch layer does, so warm shots
+// measure engine builds the way the app sees them (disk cache) instead of full shader compiles.
+extern "C" VKAPI_ATTR VkResult VKAPI_CALL vkCreateComputePipelines(VkDevice device, VkPipelineCache cache, uint32_t n,
+                                                                  const VkComputePipelineCreateInfo* infos,
+                                                                  const VkAllocationCallbacks* cb, VkPipeline* out) {
+    static auto real =
+        reinterpret_cast<PFN_vkCreateComputePipelines>(vkGetDeviceProcAddr(device, "vkCreateComputePipelines"));
+    static VkPipelineCache shared = [&] {
+        VkPipelineCache c{};
+        VkPipelineCacheCreateInfo ci{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO, nullptr, 0, 0, nullptr};
+        vkCreatePipelineCache(device, &ci, nullptr, &c);
+        return c;
+    }();
+    return real(device, cache ? cache : shared, n, infos, cb, out);
+}
 namespace {
 double ms(Clock::time_point a, Clock::time_point b) { return std::chrono::duration<double, std::milli>(b - a).count(); }
 double mib(VkDeviceSize b) { return double(b) / (1024.0 * 1024.0); }
@@ -135,6 +150,7 @@ struct Options {
     bool captureColor = true;
     uint32_t amazeSlots = 16;
     bool persistent = false;  // keep engines across reps (app "Persistent Engine")
+    int oldOrder = -1;        // 1: output buffers before post-demosaic, no releaseScratch (pre-change order); -1: app rule
     std::string dumpPrefix;   // write final RGBA8 base + RGBA8 map for bit-identity checks
 };
 
@@ -383,6 +399,45 @@ Row runShot(Gpu& g, const Options& o, const std::vector<uint16_t>& raw, bool dum
     delBuf(dev, upload);
 
     // ---------------- Render phase ----------------
+    // RenderResources::createPixels: RGBA8 output, readback (mapped, as the app maps it here), gain map + its
+    // readback and engine. Timed without the engine build (pixels.alloc) and with it (pixels.build).
+    const uint32_t mapW = o.fullResMap ? W : W / 2, mapH = o.fullResMap ? H : H / 2;
+    const uint32_t mapStoreH = mapH * (o.captureColor ? 2u : 1u);
+    Img sdr{}, map{};
+    Buf sdrRead{}, mapRead{};
+    void* sdrPix = nullptr;
+    void* mapPix = nullptr;
+    std::unique_ptr<gainmap::GainmapCompute> gm;
+    auto createPixels = [&] {
+        const auto tx = Clock::now();
+        sdr = mkImg(pd, dev, W, H, VK_FORMAT_R8G8B8A8_UNORM,
+                        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+        const VkDeviceSize sdrBytes = VkDeviceSize(W) * H * 4;
+        sdrRead = mkBuf(pd, dev, sdrBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
+        if (o.uhdr) {
+            map = mkImg(pd, dev, mapW, mapStoreH, VK_FORMAT_R8G8B8A8_UNORM,
+                        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+            mapRead = mkBuf(pd, dev, VkDeviceSize(mapW) * mapStoreH * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
+            gainmap::GainmapCreateInfo gci{};
+            gci.context = {pd, dev, nullptr};
+            gci.shaderSpirv = reinterpret_cast<const uint32_t*>(gainmap_spv);
+            gci.shaderSpirvBytes = gainmap_spv_size;
+            gci.blurShaderSpirv = reinterpret_cast<const uint32_t*>(gainmap_blur_spv);
+            gci.blurShaderSpirvBytes = gainmap_blur_spv_size;
+            const auto tg = Clock::now();
+            gm = std::make_unique<gainmap::GainmapCompute>(gci);
+            R["gainmap.build"] = ms(tg, Clock::now());
+        }
+        ck(vkMapMemory(dev, sdrRead.m, 0, VK_WHOLE_SIZE, 0, &sdrPix), "map sdr");
+        if (o.uhdr) ck(vkMapMemory(dev, mapRead.m, 0, VK_WHOLE_SIZE, 0, &mapPix), "map map");
+        R["pixels.build"] = ms(tx, Clock::now());
+        R["pixels.alloc"] = R["pixels.build"] - R["gainmap.build"];
+    };
+    // The app frees post-demosaic scratch first only from 20 MP up (StillRenderSequence).
+    const bool oldOrder = o.oldOrder >= 0 ? o.oldOrder != 0 : uint64_t(W) * H < 20000000u;
+    if (oldOrder) createPixels();
     auto tr = Clock::now();
     static std::unique_ptr<rawr::post::PostDemosaicProcessor> persistentPost;
     std::unique_ptr<rawr::post::PostDemosaicProcessor> freshPost;
@@ -430,35 +485,18 @@ Row runShot(Gpu& g, const Options& o, const std::vector<uint16_t>& raw, bool dum
     }
     R["post.wall"] = ms(tp, Clock::now());
 
-    // App order: post-demosaic's spare images go before the output-side buffers exist.
-    auto tx = Clock::now();
+    // New app order: post-demosaic's spare images go before the output-side buffers exist.
+    if (!oldOrder) {
+        const auto tx = Clock::now();
 #ifdef BENCH_RELEASE_SCRATCH
-    if (!o.persistent && !getenv("BENCH_KEEP_SCRATCH")) post->releaseScratch();
+        if (!o.persistent && !getenv("BENCH_KEEP_SCRATCH")) post->releaseScratch();
 #endif
-    Img sdr = mkImg(pd, dev, W, H, VK_FORMAT_R8G8B8A8_UNORM,
-                    VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
-    const VkDeviceSize sdrBytes = VkDeviceSize(W) * H * 4;
-    Buf sdrRead = mkBuf(pd, dev, sdrBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
-    const uint32_t mapW = o.fullResMap ? W : W / 2, mapH = o.fullResMap ? H : H / 2;
-    const uint32_t mapStoreH = mapH * (o.captureColor ? 2u : 1u);
-    Img map{};
-    Buf mapRead{};
-    std::unique_ptr<gainmap::GainmapCompute> gm;
-    if (o.uhdr) {
-        map = mkImg(pd, dev, mapW, mapStoreH, VK_FORMAT_R8G8B8A8_UNORM,
-                    VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
-        mapRead = mkBuf(pd, dev, VkDeviceSize(mapW) * mapStoreH * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
-        gainmap::GainmapCreateInfo gci{};
-        gci.context = {pd, dev, nullptr};
-        gci.shaderSpirv = reinterpret_cast<const uint32_t*>(gainmap_spv);
-        gci.shaderSpirvBytes = gainmap_spv_size;
-        gci.blurShaderSpirv = reinterpret_cast<const uint32_t*>(gainmap_blur_spv);
-        gci.blurShaderSpirvBytes = gainmap_blur_spv_size;
-        gm = std::make_unique<gainmap::GainmapCompute>(gci);
+        R["release.cpu"] = ms(tx, Clock::now());
+        createPixels();
     }
-    R["pixels.build"] = ms(tx, Clock::now());
+    // The app's "Render setup": post-demosaic build + output buffers + scratch release (CPU, outside fence waits).
+    // The gain-map engine persists across shots in the app, so it is left out.
+    R["setup.sum"] = R["render.build"] + R["pixels.alloc"] + R["release.cpu"];
 
     // SDR base stand-in: format-converting blit of the post-demosaic output, so
     // the JPEG encoders see real scene texture (tone is not under test).
@@ -512,13 +550,10 @@ Row runShot(Gpu& g, const Options& o, const std::vector<uint16_t>& raw, bool dum
     R["mem.render_peak"] = mib(mem::peak - memBase);
 
     // ---------------- CPU: readback telemetry + UltraHDR JPEG ----------------
-    void* sdrPix = nullptr;
-    void* mapPix = nullptr;
-    ck(vkMapMemory(dev, sdrRead.m, 0, VK_WHOLE_SIZE, 0, &sdrPix), "map sdr");
+
     VkMappedMemoryRange ranges[2]{{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, sdrRead.m, 0, VK_WHOLE_SIZE}};
     uint32_t nRanges = 1;
     if (o.uhdr) {
-        ck(vkMapMemory(dev, mapRead.m, 0, VK_WHOLE_SIZE, 0, &mapPix), "map map");
         ranges[nRanges++] = {VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, mapRead.m, 0, VK_WHOLE_SIZE};
     }
     auto ti = Clock::now();
@@ -625,7 +660,9 @@ Row runShot(Gpu& g, const Options& o, const std::vector<uint16_t>& raw, bool dum
     R["mem.final_peak"] = mib(mem::peak - memBase);
 
     gm.reset();
-    freshPost.reset();
+    const auto tt = Clock::now();
+    freshPost.reset();  // RenderResources::releaseCompletedProcessing, after the render (untimed in the app)
+    R["teardown.post"] = ms(tt, Clock::now());
     delImg(dev, sdr);
     delBuf(dev, sdrRead);
     if (o.uhdr) {
@@ -668,6 +705,7 @@ int main(int argc, char** argv) {
             else if (a == "--capture-color") o.captureColor = std::stoi(next()) != 0;
             else if (a == "--slots") o.amazeSlots = uint32_t(std::stoul(next()));
             else if (a == "--persistent") o.persistent = std::stoi(next()) != 0;
+            else if (a == "--old-order") o.oldOrder = std::stoi(next());
             else if (a == "--dump") o.dumpPrefix = next();
             else throw std::runtime_error("unknown argument " + a);
         }

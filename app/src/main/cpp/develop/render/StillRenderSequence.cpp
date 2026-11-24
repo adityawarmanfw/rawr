@@ -476,8 +476,12 @@ RenderedStillCompletion executeStillRender(RenderResources& resources, RenderCom
         // Every post-demosaic submission has completed (each chunk waits on its
         // fence), and the commands recorded since read only its outputs. Free
         // its spare full-size images before the RGBA8 output, readback and gain
-        // map exist, so the two sets never peak together.
-        if (!rendered.reuseLinearResult && !resources.enginePersistenceEnabled())
+        // map exist, so the two sets never peak together. Only for large frames:
+        // on the V2562 the allocation right after the free costs ~10-15 ms at
+        // 12 MP (a wash against the memory saved) but the peak matters at 50 MP.
+        constexpr std::uint64_t kReleaseScratchMinPixels = 20'000'000;
+        if (!rendered.reuseLinearResult && !resources.enginePersistenceEnabled() &&
+            static_cast<std::uint64_t>(rendered.width) * rendered.height >= kReleaseScratchMinPixels)
             resources.postDemosaic().releaseScratch();
         resources.createPixels(rendered);
 
