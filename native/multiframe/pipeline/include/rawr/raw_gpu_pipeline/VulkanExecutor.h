@@ -59,6 +59,8 @@ enum class ShaderId : std::uint32_t {
     RxMoving,
     RxAccumulateLean,
     RxCandSelectLean,
+    RxAccumulateLeanFit,
+    RxFitMotion,
     Count
 };
 struct ImageBinding {

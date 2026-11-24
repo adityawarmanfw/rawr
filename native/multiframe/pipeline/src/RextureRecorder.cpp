@@ -485,7 +485,7 @@ void RextureRecorder::recordAccumulate(VkCommandBuffer c, VkImageView rawU16, co
     p.fit = config_.detailRestore ? 1 : 0;
     ImageBinding raw{0, rawU16, VK_IMAGE_LAYOUT_GENERAL};
     const ArenaImage& ss2 = debug ? arena_.image("rx_dbg_ss2") : a;   // never touched without debug
-    executor_.record(c, debug || config_.detailRestore ? ShaderId::RxAccumulate : ShaderId::RxAccumulateLean,
+    executor_.record(c, debug ? ShaderId::RxAccumulate : (config_.detailRestore ? ShaderId::RxAccumulateLeanFit : ShaderId::RxAccumulateLean),
                      {{raw, ib(1, arena_.image("rx_flow_l3")), ib(2, arena_.image("rx_er")), ib(3, arena_.image("rx_base_cov")),
                        ib(4, a), ib(5, arena_.image("rx_acc_b")), ib(6, arena_.image("rx_acc_c")), ib(7, ss2),
                        raw8(rawU16), ib(9, arena_.image("rx_flow_l3")), ib(10, arena_.image("rx_er")),
@@ -635,7 +635,7 @@ void RextureRecorder::recordFit(VkCommandBuffer c, std::int32_t op, VkImageView 
     const auto& weight = arena_.image(slot == 1 ? "rx_fit_w_b" : "rx_fit_w");
     const Extent2D grid = op == 3 ? weight.extent : out.extent;
     ImageBinding raw{0, rawU16, VK_IMAGE_LAYOUT_GENERAL};
-    executor_.record(c, ShaderId::RxFit,
+    executor_.record(c, op == 3 ? ShaderId::RxFitMotion : ShaderId::RxFit,
                      {{raw, ib(1, arena_.image("rx_fit_bg")), ib(2, arena_.image("rx_fit_acc")), ib(3, out),
                        ib(4, arena_.image(slot == 1 ? "rx_flow_l3_b" : "rx_flow_l3")), ib(5, weight), ib(6, arena_.image("rx_fit_acc2"))},
                       {}},
@@ -772,7 +772,7 @@ void RextureRecorder::recordAccumulatePair(VkCommandBuffer c, VkImageView rawSlo
     p.gain1 = gain1;
     p.fit = config_.detailRestore ? 1 : 0;
     ImageBinding raw{0, rawSlot0, VK_IMAGE_LAYOUT_GENERAL};
-    executor_.record(c, config_.detailRestore ? ShaderId::RxAccumulate : ShaderId::RxAccumulateLean,
+    executor_.record(c, config_.detailRestore ? ShaderId::RxAccumulateLeanFit : ShaderId::RxAccumulateLean,
                      {{raw, ib(1, arena_.image("rx_flow_l3")), ib(2, arena_.image("rx_er")), ib(3, arena_.image("rx_base_cov")),
                        ib(4, a), ib(5, arena_.image("rx_acc_b")), ib(6, arena_.image("rx_acc_c")), ib(7, a), raw8(rawSlot1),
                        ib(9, arena_.image("rx_flow_l3_b")), ib(10, arena_.image("rx_er_b")),

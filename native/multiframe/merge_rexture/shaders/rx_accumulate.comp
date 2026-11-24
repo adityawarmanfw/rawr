@@ -48,6 +48,9 @@ layout(push_constant) uniform P {
 #ifdef RX_LEAN
 #define FIT_ON false
 #define DEBUG_ON false
+#elif defined(RX_LEAN_FIT)   // production with Rexturation: the detail fit on, verification off
+#define FIT_ON true
+#define DEBUG_ON false
 #else
 #define FIT_ON (p.fit != 0)
 #define DEBUG_ON (p.debug != 0)

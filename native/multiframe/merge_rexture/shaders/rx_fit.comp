@@ -64,9 +64,17 @@ float greenAt(ivec2 q) {
     return 0.25 * (rawAt(ivec2(xl, q.y)) + rawAt(ivec2(xr, q.y)) + rawAt(ivec2(q.x, yu)) + rawAt(ivec2(q.x, yd)));
 }
 
+// RX_FIT_OP (production variant): the op fixed at compile time, so one op's shared memory and registers do not cost the others
+// (op 3, the per-companion motion weight, runs ~20% faster alone on Adreno 840).
+#ifdef RX_FIT_OP
+#define FIT_OP RX_FIT_OP
+#else
+#define FIT_OP p.op
+#endif
+
 void main() {
     const ivec2 q = ivec2(gl_GlobalInvocationID.xy);
-    if (p.op == 0) {
+    if (FIT_OP == 0) {
         const ivec2 l = ivec2(gl_LocalInvocationID.xy);
         const ivec2 o = ivec2(gl_WorkGroupID.xy) * 16 - 1;
         for (int i = int(gl_LocalInvocationIndex); i < 18 * 18; i += 256) sG[i] = greenAt(o + ivec2(i % 18, i / 18));
@@ -79,7 +87,7 @@ void main() {
         imageStore(fitBg, q, vec4(sG[(l.y + 1) * 18 + l.x + 1], sqrt(max(s2 / 9.0 - m * m, 0.0)), 0.0, 0.0));
         return;
     }
-    if (p.op == 3) {
+    if (FIT_OP == 3) {
         const ivec2 cells = imageSize(fitW);
         const ivec2 to = ivec2(gl_WorkGroupID.xy) * 32 - 2;
         {
@@ -120,7 +128,7 @@ void main() {
         imageStore(fitW, q, vec4(cnt > 0.0 ? clamp((T2 - e / cnt) / (T2 - T1), 0.0, 1.0) : 1.0));
         return;
     }
-    if (p.op == 1) {
+    if (FIT_OP == 1) {
         const ivec2 l = ivec2(gl_LocalInvocationID.xy);
         const ivec2 o = ivec2(gl_WorkGroupID.xy) * 16 - 1;
         const ivec2 n = ivec2(p.w - 1, p.h - 1);
