@@ -12,6 +12,28 @@
   },
   "lenses": [
     {
+      "id": "S14",
+      "camera": {
+        "id": "4",
+        "physical": ""
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW16",
+          "width": 0,
+          "height": 0
+        }
+      },
+      "vendorKeys": [],
+      "image": {
+        "levels": {
+          "static": true,
+          "black": [64, 64, 64, 64],
+          "white": 1023
+        }
+      }
+    },
+    {
       "id": "B12",
       "camera": {
         "id": "3",
@@ -34,108 +56,16 @@
       }
     },
     {
-      "id": "F35X",
+      "id": "T85",
       "camera": {
-        "id": "3",
+        "id": "5",
         "physical": ""
       },
       "streams": {
         "raw": {
           "format": "RAW16",
           "width": 4080,
-          "height": 3064
-        },
-        "photo": {
-          "format": "RAW16",
-          "width": 8192,
-          "height": 6144,
-          "mergeFrameLimit": 16,
-          "buffers": {
-            "count": 4
-          }
-        }
-      },
-      "session": {
-        "gate": {
-          "name": "vivoFullSize"
-        },
-        "separatePhotoSession": true,
-        "workarounds": ["keepTemplateEntries"]
-      },
-      "vendorKeys": [
-        {
-          "tag": "vivo.control.forceSensorMode",
-          "type": "int32",
-          "scope": "still",
-          "values": [0],
-          "enabled": true
-        }
-      ],
-      "image": {
-        "levels": {
-          "static": true,
-          "black": [64, 64, 64, 64],
-          "white": 1023
-        }
-      }
-    },
-    {
-      "id": "F35RX",
-      "camera": {
-        "id": "3",
-        "physical": ""
-      },
-      "streams": {
-        "raw": {
-          "format": "RAW16",
-          "width": 4080,
-          "height": 3064
-        },
-        "photo": {
-          "format": "RAW16",
-          "width": 8192,
-          "height": 6144,
-          "mergeFrameLimit": 16,
-          "buffers": {
-            "count": 4
-          }
-        }
-      },
-      "session": {
-        "gate": {
-          "name": "vivoFullSize"
-        },
-        "separatePhotoSession": true,
-        "workarounds": ["keepTemplateEntries"]
-      },
-      "vendorKeys": [
-        {
-          "tag": "vivo.control.forceSensorMode",
-          "type": "int32",
-          "scope": "still",
-          "values": [13],
-          "enabled": true
-        }
-      ],
-      "image": {
-        "levels": {
-          "static": true,
-          "black": [64, 64, 64, 64],
-          "white": 1023
-        }
-      }
-    },
-    {
-      "id": "S14",
-      "camera": {
-        "id": "4",
-        "physical": ""
-      },
-      "streams": {
-        "raw": {
-          "format": "RAW16",
-          "width": 0,
-          "height": 0
+          "height": 3072
         }
       },
       "vendorKeys": [],
@@ -240,19 +170,89 @@
       }
     },
     {
-      "id": "T85",
+      "id": "F35X",
       "camera": {
-        "id": "5",
+        "id": "3",
         "physical": ""
       },
       "streams": {
         "raw": {
           "format": "RAW16",
           "width": 4080,
-          "height": 3072
+          "height": 3064
+        },
+        "photo": {
+          "format": "RAW16",
+          "width": 8192,
+          "height": 6144,
+          "mergeFrameLimit": 16,
+          "buffers": {
+            "count": 4
+          }
         }
       },
-      "vendorKeys": [],
+      "session": {
+        "gate": {
+          "name": "vivoFullSize"
+        },
+        "separatePhotoSession": true,
+        "workarounds": ["keepTemplateEntries"]
+      },
+      "vendorKeys": [
+        {
+          "tag": "vivo.control.forceSensorMode",
+          "type": "int32",
+          "scope": "still",
+          "values": [0],
+          "enabled": true
+        }
+      ],
+      "image": {
+        "levels": {
+          "static": true,
+          "black": [64, 64, 64, 64],
+          "white": 1023
+        }
+      }
+    },
+    {
+      "id": "F35RX",
+      "camera": {
+        "id": "3",
+        "physical": ""
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW16",
+          "width": 4080,
+          "height": 3064
+        },
+        "photo": {
+          "format": "RAW16",
+          "width": 8192,
+          "height": 6144,
+          "mergeFrameLimit": 16,
+          "buffers": {
+            "count": 4
+          }
+        }
+      },
+      "session": {
+        "gate": {
+          "name": "vivoFullSize"
+        },
+        "separatePhotoSession": true,
+        "workarounds": ["keepTemplateEntries"]
+      },
+      "vendorKeys": [
+        {
+          "tag": "vivo.control.forceSensorMode",
+          "type": "int32",
+          "scope": "still",
+          "values": [13],
+          "enabled": true
+        }
+      ],
       "image": {
         "levels": {
           "static": true,
