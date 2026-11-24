@@ -5,6 +5,11 @@
 // thrs[scale]. No host round-trip: the apply pass reads these directly.
 // thrs = adjt * sb2 / sqrt(max(1e-6, sum/(n-1) - sb2)), adjt = 8*force^2*4
 // with per-channel Y/UV forces. n counts INNER-region pixels only.
+// noiseUv > 0 replaces the U0/V0 thresholds with noiseUv.xy: k x the expected
+// noise of the band (host-side, from the noise model). BayesShrink takes the
+// signal from the whole tile's energy: in a mostly neutral tile that is ~0, the
+// threshold explodes and every colour detail (small coloured objects included)
+// is removed, whatever the force.
 
 layout(local_size_x = 256) in;
 
@@ -22,6 +27,7 @@ layout(push_constant) uniform Parameters {
     float forceY;
     float forceUv;
     uint scaleIdx;
+    vec2 noiseUv;
 }
 p;
 
@@ -45,6 +51,7 @@ void main() {
         vec3 adjt = vec3(8.0 * p.forceY * p.forceY * 4.0, 8.0 * p.forceUv * p.forceUv * 4.0,
                          8.0 * p.forceUv * p.forceUv * 4.0);
         vec3 t = adjt * p.sb2 / stdX;
+        if (p.noiseUv.x > 0.0) t.yz = p.noiseUv;
         thrs[p.scaleIdx] = vec4(t, 0.0);
     }
 }

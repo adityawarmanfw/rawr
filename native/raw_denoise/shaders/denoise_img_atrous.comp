@@ -47,6 +47,7 @@ layout(push_constant) uniform Parameters {
     uint scaleIdx;
     uint groupsX;
     float edgeK; // edge-stop sharpness: e = |d|^2/sigma^2 * edgeK - 9 (0.02 = darktable's; higher keeps chroma edges)
+    uint garrote; // apply: 0 soft threshold (darktable), 1 non-negative garrote d - t^2/d (keeps strong detail whole)
 }
 p;
 
@@ -70,6 +71,11 @@ void main() {
             vec3 d = imageLoad(detailImg, ivec2(lx, ly)).rgb;
             vec3 t = thresh[p.scaleIdx].xyz;
             vec3 amt = max(d - t, vec3(0.0)) + min(d + t, vec3(0.0));
+            if (p.garrote != 0u) {
+                // |d| > t >= 0 keeps d away from 0, and t^2 / d carries the sign of d.
+                const bvec3 keep = greaterThan(abs(d), t);
+                amt = mix(vec3(0.0), d - t * t / mix(vec3(1.0), d, keep), keep);
+            }
             vec3 prev = imageLoad(accumImg, ivec2(lx, ly)).rgb;
             imageStore(accumImg, ivec2(lx, ly), vec4(prev + amt, 0.0));
         }

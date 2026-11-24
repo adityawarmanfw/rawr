@@ -4,8 +4,6 @@
 // backtransform_Y0U0V0). Reads the tile accum + residue buffers, writes the
 // inner tile region of the full-frame output image. bias already includes
 // the -0.5*log(in_scale) term (host-side, in_scale = 1 so bias = 0).
-// The result is divided by the precondition's wbIn (back to the source's
-// pre-WB domain).
 
 #ifndef LOCAL_X
 #define LOCAL_X 16
@@ -34,7 +32,6 @@ layout(push_constant) uniform Parameters {
     float bias;
     float _pad;
     mat3 toRgb; // inverse of the strength-scaled toYuv, GLSL column order
-    vec4 wbIn;  // the precondition's source multipliers (rgb)
 }
 p;
 
@@ -50,6 +47,6 @@ void main() {
     vec3 scale = (sqrt(p.a) * (2.0 - pv)) / 4.0;
     vec3 xc = max(rgb, vec3(0.0));
     vec3 z1 = (xc + sqrt(max(xc * xc + p.bias, vec3(0.0)))) * scale;
-    vec3 out_ = (pow(z1, expon) - p.b) / p.wbIn.rgb;
+    vec3 out_ = pow(z1, expon) - p.b;
     imageStore(outImage, ivec2(p.outOriginX + lx, p.outOriginY + ly), vec4(out_, 1.0));
 }

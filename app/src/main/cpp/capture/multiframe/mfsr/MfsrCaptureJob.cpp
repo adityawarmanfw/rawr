@@ -989,15 +989,19 @@ void MfsrCaptureJob::runStages(Published& published) {
                         renderedContext.denoiseDetail = 1.0f;
                         renderedContext.denoiseForceY = 0.0f;
                         renderedContext.denoiseMaxScale = 7;
-                        // White-balanced input (darktable's domain for the WB-adaptive Y0U0V0 rows): on the pre-WB
-                        // image the chroma bands leave pre-WB grey alone, which is magenta / green after white
-                        // balance, so with luma untouched 12-30% of the visible chroma noise survived at every scale
-                        // as green / magenta blotches. White-balanced: 2-5% up to 32 px (synthetic 7-frame Rexture
-                        // noise, dark and mid grey; tmp/crush/wbtest.py).
-                        renderedContext.denoiseWhiteBalancedInput = true;
-                        // The default edge-stop (0.02) averages across colour steps under ~20 noise sigmas and smears
-                        // weak blue/yellow edges over ~150 px. 0.2 keeps them within ~20 px with the same chroma
-                        // noise removal as 0.02; 0.5 stops at coarse noise too (11-45% left at 16-64 px).
+                        // Colour axes of the white-balanced image on an exact VST: darktable's rows (built for
+                        // white-balanced input) on this pre-WB image left pre-WB grey alone, magenta / green after
+                        // white balance, so with luma untouched that noise survived at every scale as blotches.
+                        renderedContext.denoiseWbColourAxes = true;
+                        // Colour thresholds from the noise (k x band noise) with the garrote shrink, not darktable's
+                        // BayesShrink: that takes the signal from the whole tile, ~0 in a mostly neutral tile, so every
+                        // colour detail went (small coloured objects kept 7-45% of their colour) whatever the force.
+                        // k 0.75 on synthetic 7-frame Rexture noise, deep / dark / mid grey (tmp/crush/tradeoff.py):
+                        // colour noise left 7 / 6 / 5% (shipping 13 / 11 / 9%), at the 32 px blotch scale 4 / 3 / 3%
+                        // (36 / 11 / 6%); object colour kept 29-64 / 39-83 / 43-92% (17-30 / 8-33 / 7-45%); edge bleed
+                        // as without denoise.
+                        renderedContext.denoiseNoiseThresholdUv = 0.75f;
+                        renderedContext.denoiseGarrote = true;
                         renderedContext.denoiseEdgeK = 0.2f;
                         renderedContext.denoiseNoiseA = a;
                         renderedContext.denoiseNoiseB = b;

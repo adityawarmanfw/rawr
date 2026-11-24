@@ -48,14 +48,22 @@ struct DenoiseParams {
     float forceUv = 0.75f;
     // Edge-stop sharpness of the a-trous weights (e = |d|^2/sigma^2 * edgeK - 9). 0.02 is the darktable value
     // (single-frame default, parity-gated). Higher values stop averaging across weaker edges: the multiframe
-    // chroma denoise uses 0.2 (with whiteBalancedInput) so colour edges (blue/yellow above all) do not bleed.
+    // chroma denoise uses 0.2 (with wbColourAxes) so colour edges (blue/yellow above all) do not bleed.
     float edgeK = 0.02f;
-    // Denoise the source multiplied by whiteBalance (divided back afterwards), the white-balanced input darktable's
-    // WB-adaptive Y0U0V0 rows are built for: U0 = V0 = 0 on white-balanced grey. Off (the shipped, parity-gated
-    // single-frame behaviour), U0/V0 are differences of the pre-WB channels, so the neutral axis they leave alone
-    // is pre-WB grey, which is magenta / green after white balance: a chroma-only denoise (forceY 0) then keeps
-    // that noise at every scale.
-    bool whiteBalancedInput = false;
+    // Colour axes of the white-balanced image on an exact variance-stabilized input (see DenoisePipeline.cpp):
+    // U0 = V0 = 0 on white-balanced grey, unit noise in Y0/U0/V0 at every level. Off (the shipped, parity-gated
+    // single-frame behaviour: darktable's rows, built for white-balanced input, on the pre-WB image) the colour axes
+    // leave pre-WB grey alone, which is magenta / green after white balance, so a chroma-only denoise (forceY 0)
+    // keeps that noise at every scale.
+    bool wbColourAxes = false;
+    // > 0 (with wbColourAxes): the U0/V0 (colour) threshold of each band is this many times the band's noise instead
+    // of darktable's BayesShrink, which takes the signal from the whole tile and so removes
+    // every colour detail of a mostly neutral tile (small coloured objects, thin coloured lines) whatever forceUv is.
+    // 0 keeps BayesShrink (single-frame, parity-gated).
+    float noiseThresholdUv = 0.0f;
+    // Shrink rule of the kept detail: false = soft threshold (darktable, d - t), true = non-negative garrote
+    // (d - t^2 / d): detail well above the threshold passes almost whole, so object colour is not drained.
+    bool garrote = false;
     // Inner tile extent; extended buffers are (tile+2H)^2.
     uint32_t tileSize = 1536;
 };

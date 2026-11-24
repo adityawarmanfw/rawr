@@ -8,7 +8,7 @@
 // Usage:
 //   denoise_bench --spv-dir DIR --input-f32 IN --width W --height H \
 //     --tile T [--dump-out OUT] [--scales N] [--wb R G B --a A --b B
-//     --strength S --shadows SH --force-y FY --force-uv FUV --edge-k K --wb-input]
+//     --strength S --shadows SH --force-y FY --force-uv FUV --edge-k K --wb-colour-axes --noise-thr-uv K --garrote]
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -69,7 +69,8 @@ struct Cfg {
     float a = 0.0f, b = 0.0f;
     float strength = 1.0f, shadows = 1.0f;
     float forceY = 0.25f, forceUv = 0.75f, edgeK = 0.02f;
-    bool wbInput = false;
+    bool wbAxes = false, garrote = false;
+    float noiseThrUv = 0.0f;
 };
 
 Cfg parse(int argc, char** argv) {
@@ -97,7 +98,9 @@ Cfg parse(int argc, char** argv) {
         else if (k == "--force-y") c.forceY = std::strtof(need().c_str(), nullptr);
         else if (k == "--force-uv") c.forceUv = std::strtof(need().c_str(), nullptr);
         else if (k == "--edge-k") c.edgeK = std::strtof(need().c_str(), nullptr);
-        else if (k == "--wb-input") c.wbInput = true;
+        else if (k == "--wb-colour-axes") c.wbAxes = true;
+        else if (k == "--noise-thr-uv") c.noiseThrUv = std::strtof(need().c_str(), nullptr);
+        else if (k == "--garrote") c.garrote = true;
         else throw std::runtime_error("unknown arg " + k);
     }
     if (c.spvDir.empty() || c.inPath.empty() || !c.w || !c.h) throw std::runtime_error("missing args");
@@ -320,7 +323,9 @@ int main(int argc, char** argv) {
             p.forceY = c.forceY;
             p.forceUv = c.forceUv;
             p.edgeK = c.edgeK;
-            p.whiteBalancedInput = c.wbInput;
+            p.wbColourAxes = c.wbAxes;
+            p.noiseThresholdUv = c.noiseThrUv;
+            p.garrote = c.garrote;
             p.whiteBalance = {c.wb[0], c.wb[1], c.wb[2]};
             p.maxScale = c.scales;
             p.tileSize = c.tile;

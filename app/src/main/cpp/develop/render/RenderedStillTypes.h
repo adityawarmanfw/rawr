@@ -70,8 +70,11 @@ struct RenderedStillContext {
     int denoiseMaxScale = 7;
     // Wavelet edge-stop sharpness (0.02 = shipped; the multiframe chroma denoise raises it so colour edges do not bleed).
     float denoiseEdgeK = 0.02f;
-    // Denoise the white-balanced image (darktable's Y0U0V0 domain); the multiframe chroma denoise sets it.
-    bool denoiseWhiteBalancedInput = false;
+    // Colour axes of the white-balanced image on an exact VST (DenoiseParams::wbColourAxes); multiframe chroma sets it.
+    bool denoiseWbColourAxes = false;
+    // Colour thresholds from the noise model (x this factor) with the garrote shrink; 0 = BayesShrink (single-frame).
+    float denoiseNoiseThresholdUv = 0.0f;
+    bool denoiseGarrote = false;
     // Normalized-domain noise model (green): variance = a*x + b, resolved
     // from the frame SENSOR_NOISE_PROFILE with the demosaic normalization.
     float denoiseNoiseA = 0.0f;

@@ -651,7 +651,9 @@ void PostDemosaicProcessor::record(VkCommandBuffer cmd, VkImage sourceImage, VkI
         dp.forceY = std::isfinite(denoise.forceY) ? std::clamp(denoise.forceY, 0.0f, 1.0f) : 0.25f;
         dp.maxScale = std::clamp(denoise.maxScale, 1, 7);
         dp.edgeK = std::isfinite(denoise.edgeK) ? std::clamp(denoise.edgeK, 0.02f, 4.0f) : 0.02f;
-        dp.whiteBalancedInput = denoise.whiteBalancedInput;
+        dp.wbColourAxes = denoise.wbColourAxes;
+        dp.noiseThresholdUv = std::isfinite(denoise.noiseThresholdUv) ? std::clamp(denoise.noiseThresholdUv, 0.0f, 8.0f) : 0.0f;
+        dp.garrote = denoise.garrote;
         denoise_->setTileBoundary(denoiseTileBoundary_);
         denoise_->record(cmd, sourceView, wbImage_.view, width_, height_, dp, timingPool);
         denoise_->setTileBoundary({});

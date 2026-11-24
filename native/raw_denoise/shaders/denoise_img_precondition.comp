@@ -5,10 +5,6 @@
 // exact tile halos, including DT edge behavior at frame borders) and writes
 // the extended tile buffer. The Y0U0V0 matrix already folds
 // strength/compensate_strength scaling (host-side, like process_wavelets).
-// wbIn multiplies the source first: (1,1,1) keeps the shipped single-frame
-// behaviour; the camera WB gains give the white-balanced input darktable's
-// WB-adaptive Y0U0V0 rows are built for (U0 = V0 = 0 on white-balanced grey,
-// so a chroma-only denoise leaves only neutral noise).
 
 #ifndef LOCAL_X
 #define LOCAL_X 16
@@ -36,7 +32,6 @@ layout(push_constant) uniform Parameters {
     float _pad0;
     float _pad1;
     mat3 toYuv; // WB-adaptive, strength-scaled, GLSL column order
-    vec4 wbIn;  // source multipliers (rgb), see above
 }
 p;
 
@@ -47,7 +42,7 @@ void main() {
     ivec2 q = ivec2(p.originX + int(lx), p.originY + int(ly));
     q.x = clamp(q.x, 0, int(p.srcW) - 1);
     q.y = clamp(q.y, 0, int(p.srcH) - 1);
-    vec3 rgb = imageLoad(srcImage, q).rgb * p.wbIn.rgb;
+    vec3 rgb = imageLoad(srcImage, q).rgb;
     vec3 pv = vec3(p.p0, p.p1, p.p2);
     vec3 expon = 1.0 - pv * 0.5;
     vec3 scale = 2.0 / ((2.0 - pv) * sqrt(p.a));

@@ -36,7 +36,9 @@ void recordPostDemosaic(RenderResources& resources, RenderCommandSession& comman
     denoiseRequest.forceY = rendered.denoiseForceY;
     denoiseRequest.maxScale = rendered.denoiseMaxScale;
     denoiseRequest.edgeK = rendered.denoiseEdgeK;
-    denoiseRequest.whiteBalancedInput = rendered.denoiseWhiteBalancedInput;
+    denoiseRequest.wbColourAxes = rendered.denoiseWbColourAxes;
+    denoiseRequest.noiseThresholdUv = rendered.denoiseNoiseThresholdUv;
+    denoiseRequest.garrote = rendered.denoiseGarrote;
     denoiseRequest.noiseA = rendered.denoiseNoiseA;
     denoiseRequest.noiseB = rendered.denoiseNoiseB;
     // One submission per wavelet tile: the whole-frame denoise is
