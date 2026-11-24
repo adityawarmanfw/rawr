@@ -1,12 +1,10 @@
 #include "capture/multiframe/mfsr/MergeProcessor.h"
 
-#include <optional>
 #include <stdexcept>
 
 #include "capture/multiframe/MergeExposure.h"
 #include "capture/multiframe/MultiframeQueueHelpers.h"
 #include "diagnostics/logging/NativeLog.h"
-#include "support/PerformanceHint.h"
 namespace rawrcam::capture::multiframe {
 rawr::raw_gpu_pipeline::BurstRunResult MergeProcessor::run(
     vulkan::VulkanContext& context, rawr::raw_gpu_pipeline::AndroidBurstCoordinator& coordinator, FrozenBurst& burst,
@@ -55,18 +53,6 @@ rawr::raw_gpu_pipeline::BurstRunResult MergeProcessor::run(
     }
     LOGI("MULTIFRAME_QUEUE mode=%s lowpri=%d", useMfQueue ? "dualq" : "singleq",
          context.multiframeQueueLowPriority() ? 1 : 0);
-    // Platform performance hint for the merge thread (debug.rawr.adpf=1): a 2 ms target keeps every chunk reading as late,
-    // asking for the highest CPU/GPU clocks while the merge runs. Measure per device before enabling by default.
-    std::optional<rawrcam::support::PerformanceHintSession> adpf;
-    if (rawrcam::support::PerformanceHintSession::enabledByProperty()) {
-        adpf.emplace(2'000'000);
-        LOGI("MULTIFRAME_ADPF active=%d", adpf->active() ? 1 : 0);
-        if (adpf->active()) coordinator.setChunkObserver([&adpf](std::int64_t wallNs, std::int64_t gpuNs) { adpf->report(wallNs, gpuNs); });
-    }
-    struct ObserverReset {
-        rawr::raw_gpu_pipeline::AndroidBurstCoordinator& c;
-        ~ObserverReset() { c.setChunkObserver({}); }
-    } observerReset{coordinator};
     auto result = coordinator.run(
         burst.frames, burst.referenceIndex,
         [&burst, dumpRzslRequested](std::uint32_t index) {
