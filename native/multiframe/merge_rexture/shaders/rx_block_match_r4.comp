@@ -2,7 +2,7 @@
 #extension GL_GOOGLE_include_directive : enable
 // Rexture alignment, levels 1 and 2: rx_block_match specialised to tile 16, radius 4, metric 1 (L2, window sampled with clamped
 // coordinates, ties-to-even rounding of the start) and the production tie rule (plain fp32 sums, first minimum in (sy, sx) scan
-// order). Same work split as the general shader (one workgroup per tile, one thread per candidate, shared copies of the
+// order), plus the prior preference below. Same work split as the general shader (one workgroup per tile, one thread per candidate, shared copies of the
 // reference tile and the window), with the loop bounds and addressing fixed at compile time. Verification builds (exactTies) and
 // the 8 px coarsest level keep using rx_block_match.
 #include "rx_common.glsl"
@@ -13,13 +13,32 @@ layout(set = 0, binding = 1, r32f) readonly uniform image2D movI;
 layout(set = 0, binding = 2, rg32f) uniform image2D flowI;
 layout(set = 0, binding = 3, rgba32f) readonly uniform image2D tilesI;
 layout(set = 0, binding = 4, r32f) writeonly uniform image2D costI;
-layout(push_constant) uniform P { int ts, radius, metric, exactTies; } p;
+layout(push_constant) uniform P { int ts, radius, metric, exactTies; float priorRatio; } p;
+// priorRatio > 0 (production; the recorder's kBmPriorRatio): repeating texture near the sampling limit (shutter slats, railings) has several near-equal minima one
+// period apart, and the integer-shift costs rank them by sub-pixel phase, not by which one is right. The best candidate next to
+// the coarser level's estimate (within 1 px) is kept unless the global best is below priorRatio x its cost, both corrected for
+// the sub-pixel offset by a parabola through their axis neighbours.
 
 const int TS = 16, R = 4, W = TS + 2 * R, N = 2 * R + 1, CAND = N * N;
 
 shared float sRef[TS * TS];
 shared float sMov[W * W];
 shared float sCost[96];
+
+float refinedCost(int c) {   // cost at the parabola minimum along x and along y (neighbours inside the search window only)
+    const int sy = c / N, sx = c % N;
+    const float c0 = sCost[c];
+    float red = 0.0;
+    if (sx > 0 && sx < N - 1) {
+        const float m = sCost[c - 1], q = sCost[c + 1], k = q - 2.0 * c0 + m;
+        if (k > 0.0) red += min((q - m) * (q - m) / (8.0 * k), c0);
+    }
+    if (sy > 0 && sy < N - 1) {
+        const float m = sCost[c - N], q = sCost[c + N], k = q - 2.0 * c0 + m;
+        if (k > 0.0) red += min((q - m) * (q - m) / (8.0 * k), c0);
+    }
+    return max(c0 - red, 0.0);
+}
 
 void main() {
     const ivec2 t = ivec2(gl_WorkGroupID.xy);
@@ -54,6 +73,20 @@ void main() {
                 best = sCost[c];
                 win = c;
             }
+        if (p.priorRatio > 0.0) {
+            float bestP = 3.4e38;
+            int winP = R * N + R;
+            for (int sy = R - 1; sy <= R + 1; ++sy)
+                for (int sx = R - 1; sx <= R + 1; ++sx)
+                    if (sCost[sy * N + sx] < bestP) {
+                        bestP = sCost[sy * N + sx];
+                        winP = sy * N + sx;
+                    }
+            if (winP != win && !(refinedCost(win) < p.priorRatio * refinedCost(winP))) {
+                win = winP;
+                best = bestP;
+            }
+        }
         imageStore(flowI, t, vec4(vec2(base + ivec2(win % N - R, win / N - R)), 0.0, 0.0));
         imageStore(costI, t, vec4(best));
     }

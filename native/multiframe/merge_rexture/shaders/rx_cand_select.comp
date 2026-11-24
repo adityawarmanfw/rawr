@@ -20,7 +20,17 @@ layout(push_constant) uniform P {
     int level;
     float alpha, beta;
     int exactTies;
+    int fracCost;    // 1 (production): score every candidate at its exact (bilinear) shift, not at the rounded integer shift, so
+                     // a candidate one period off on repeating texture cannot win by sub-pixel phase; 0: the reference's integer shifts
 } p;
+
+float movBilinear(vec2 pos, ivec2 movMax) {   // clamped sampling, as the integer path
+    const vec2 b = floor(pos), f = pos - b;
+    const ivec2 i0 = ivec2(b);
+    const float a = imageLoad(movI, clamp(i0, ivec2(0), movMax)).x, c = imageLoad(movI, clamp(i0 + ivec2(1, 0), ivec2(0), movMax)).x;
+    const float d = imageLoad(movI, clamp(i0 + ivec2(0, 1), ivec2(0), movMax)).x, e = imageLoad(movI, clamp(i0 + ivec2(1, 1), ivec2(0), movMax)).x;
+    return mix(mix(a, c, f.x), mix(d, e, f.x), f.y);
+}
 
 shared vec4 sCost[64];
 shared uint sAmb;
@@ -73,7 +83,8 @@ void main() {
             float refv = imageLoad(refI, q).x;
             meanSum += refv;
             for (int k = 0; k < 4; ++k)
-                cost32[k] += abs(refv - imageLoad(movI, clamp(q + shift[k], ivec2(0), movMax)).x);
+                cost32[k] += abs(refv - (p.fracCost != 0 ? movBilinear(vec2(q) + c[k] * p.scale, movMax)
+                                                         : imageLoad(movI, clamp(q + shift[k], ivec2(0), movMax)).x));
         }
     sCost[tid] = cost32;
     sMean[tid] = meanSum;

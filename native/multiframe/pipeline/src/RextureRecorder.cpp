@@ -36,10 +36,16 @@ struct CandPc {
     std::int32_t level;
     float alpha, beta;
     std::int32_t exactTies;
+    std::int32_t fracCost;  // 1: candidates scored at their exact (bilinear) shift; production only, see rx_cand_select
 };
 struct BlockPc {
     std::int32_t ts, radius, metric, exactTies;
+    float priorRatio;  // rx_block_match_r4 only (levels 1-2): prefer the minimum next to the prior, see the shader
 };
+// Repeating texture near the sampling limit (shutter slats, railings, perforated metal): a far block-match minimum replaces the one
+// next to the coarser level's estimate only when its sub-pixel-corrected cost is below this fraction of the near one's. Removes the
+// outline artifacts (blobs of tiles aligned one period off) on the Paris shutter; neutral on the synthetic truth bursts.
+constexpr float kBmPriorRatio = 0.25f;
 struct LkPc {
     std::int32_t ts, which, iterations;
     float clipRadius, eps;
@@ -365,14 +371,14 @@ void RextureRecorder::recordAlignmentLevel(VkCommandBuffer c, std::uint32_t l, b
         const auto& coarse = arena_.image("rx_flow_l" + std::to_string(l - 1));
         const std::uint32_t coarseTs = kTileSize[l - 1];
         CandPc p{std::int32_t((kUpsampleScale[l] * coarseTs) / 16u), float(kUpsampleScale[l]), std::int32_t(l),
-                 config_.noiseAlpha, config_.noiseBeta, debug ? 1 : 0};
+                 config_.noiseAlpha, config_.noiseBeta, debug ? 1 : 0, debug ? 0 : 1};  // the verification build keeps the reference's integer shifts
         executor_.record(c, ShaderId::RxCandSelect, {{ib(0, ref), ib(1, mov), ib(2, coarse), ib(3, flow)}, {}}, &p,
                          sizeof(p), tx, ty);
         computeWriteBarrier(c);
     }
     if (mark_ && l > 0) mark_(kLevelMark[0][l]);
     if (debug) copyFlow(c, flow, arena_.image("rx_dbg_prior_l" + ls));
-    BlockPc bp{std::int32_t(kTileSize[l]), std::int32_t(kRadius[l]), kMetric[l], debug ? 1 : 0};
+    BlockPc bp{std::int32_t(kTileSize[l]), std::int32_t(kRadius[l]), kMetric[l], debug ? 1 : 0, debug ? 0.0f : kBmPriorRatio};
     const DispatchBindings bmSets{{ib(0, ref), ib(1, mov), ib(2, flow), ib(3, tiles), ib(4, arena_.image("rx_bmcost_l" + ls))}, {}};
     if (l == 3u && !debug) {
         // Finest level (tile 16, radius 1, L1): one thread per (tile, candidate), kBmR1TilesPerGroup tiles per workgroup.
