@@ -17,6 +17,8 @@ layout(push_constant) uniform P {
 } p;
 
 shared vec2 red[256];
+shared vec2 redZ[64];
+shared vec2 redQ[8];
 shared vec2 sF;
 
 float mz(ivec2 Q) {
@@ -71,12 +73,19 @@ void main() {
         }
         red[tid] = vec2(gx * dt, gy * dt);
         barrier();
-        for (int s = 128; s > 0; s >>= 1) {
-            if (tid < s) red[tid] += red[tid + s];
-            barrier();
+        // The 8-step tree sum red[t] += red[t + s] (s = 128 .. 1) regrouped into fewer barriers: every thread forms the same
+        // sub-sums in registers with the same pairing, so the total is bit-identical to the step-by-step tree.
+        if (tid < 64) redZ[tid] = (red[tid] + red[tid + 128]) + (red[tid + 64] + red[tid + 192]);
+        barrier();
+        if (tid < 8) {
+            const vec2 a = (redZ[tid] + redZ[tid + 32]) + (redZ[tid + 16] + redZ[tid + 48]);
+            const vec2 b = (redZ[tid + 8] + redZ[tid + 40]) + (redZ[tid + 24] + redZ[tid + 56]);
+            redQ[tid] = a + b;
         }
+        barrier();
         if (tid == 0) {
-            float B0 = -red[0].x, B1 = -red[0].y;
+            const vec2 total = ((redQ[0] + redQ[4]) + (redQ[2] + redQ[6])) + ((redQ[1] + redQ[5]) + (redQ[3] + redQ[7]));
+            float B0 = -total.x, B1 = -total.y;
             vec2 delta;
             bool upd;
             if (mode == 1) {
