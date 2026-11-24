@@ -150,6 +150,7 @@ struct Options {
     bool captureColor = true;
     uint32_t amazeSlots = 16;
     bool persistent = false;  // keep engines across reps (app "Persistent Engine")
+    bool stats = false;       // gain-map telemetry loop; the app runs it only with diagnostics on
     int oldOrder = -1;        // 1: output buffers before post-demosaic, no releaseScratch (pre-change order); -1: app rule
     std::string dumpPrefix;   // write final RGBA8 base + RGBA8 map for bit-identity checks
 };
@@ -559,8 +560,8 @@ Row runShot(Gpu& g, const Options& o, const std::vector<uint16_t>& raw, bool dum
     auto ti = Clock::now();
     vkInvalidateMappedMemoryRanges(dev, nRanges, ranges);
     R["invalidate.cpu"] = ms(ti, Clock::now());
-    if (o.uhdr) {
-        // RenderReadback's gain-map telemetry loop (single thread, R channel of every texel).
+    if (o.uhdr && o.stats) {
+        // RenderReadback's gain-map telemetry loop (diagnostics only in the app) (single thread, R channel of every texel).
         auto ts = Clock::now();
         const auto* mb = static_cast<const uint8_t*>(mapPix);
         const uint64_t n = uint64_t(mapW) * mapH;
@@ -705,6 +706,7 @@ int main(int argc, char** argv) {
             else if (a == "--capture-color") o.captureColor = std::stoi(next()) != 0;
             else if (a == "--slots") o.amazeSlots = uint32_t(std::stoul(next()));
             else if (a == "--persistent") o.persistent = std::stoi(next()) != 0;
+            else if (a == "--stats") o.stats = std::stoi(next()) != 0;
             else if (a == "--old-order") o.oldOrder = std::stoi(next());
             else if (a == "--dump") o.dumpPrefix = next();
             else throw std::runtime_error("unknown argument " + a);

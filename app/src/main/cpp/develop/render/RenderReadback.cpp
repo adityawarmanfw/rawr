@@ -238,7 +238,9 @@ void completeReadback(RenderResources& resources, RenderCommandSession& commands
     // No full-image checksum here: a byte-wise pass over mapped memory cost
     // ~45 ms per renderer slider frame and only fed a diagnostic log line.
     done.pixelBytes = static_cast<uint64_t>(resources.outputView().bytes);
-    if (rendered.ultraHdrEnabled && resources.outputView().gainmapPixels != nullptr &&
+    // Diagnostics only: nothing consumes these numbers but the log line, and the single-threaded pass
+    // over every map texel cost ~25-60 ms at 12 MP and ~100-165 ms at 50 MP before the JPEG encode.
+    if (rendered.diagnosticsEnabled && rendered.ultraHdrEnabled && resources.outputView().gainmapPixels != nullptr &&
         resources.outputView().gainmapWidth > 0 && resources.outputView().gainmapHeight > 0) {
         // Map content telemetry on the already-mapped readback: max
         // stored texel, fraction at boost level, mean. R channel of
