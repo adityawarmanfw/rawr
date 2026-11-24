@@ -209,6 +209,10 @@ void testProfileMatching() {
         assert(stillStrategyFor(*lens, true) == StillStrategy::SeparateSession);
     }
     assert(!routeForLens(x200u, "B12")->separatePhotoSession);
+    // The plain UW and front lenses exist next to the full-size ones.
+    assert(routeForLens(x200u, "S14")->cameraId == "4" && !routeForLens(x200u, "S14")->photoStream);
+    assert(routeForLens(x200u, "Face")->cameraId == "1");
+    assert(routeForLens(x200u, "T85_50")->photoRemosaic == 3u);
     {
         // A separate photo session needs a photo stream, and runs on the native API only.
         std::string error;

@@ -1085,6 +1085,37 @@ mirror=0
 dcp=
 key.still=vivo.control.forceSensorMode type:1 enabled:1 values:13,
 
+lens=S14
+camera=4
+physical=
+stream=0:0x0 highResLive:0 useCase:0
+levels=static:1 black:64,64,64,64 white:1023
+viewfinderLevels=none
+photoLevels=none
+exposure=extended:0 isoMax:0 shutterMaxNs:0
+rawBufferUsage=none
+rawBuffers=count:0 testFirst:0 fallBack:0
+cameraApi=auto opMode=0
+session=params:cadence requestDefaults:rawr frameRate:0 startupDelayMs:0
+template=default
+workarounds=
+gate= hold:default stopViewfinderForPhotos:0
+photoStream=none useCase:0 mergeFrameLimit:0 mergeFramesOneByOne:0
+photoBufferUsage=none
+companionSize=none
+companion=disabled:0 private:0 targeted:1 bufferCount:0 fallback:0 useCase:0
+companionBufferUsage=none
+companionPhysical=none
+companionDetach=none
+auxJpeg=none
+auxJpegBufferUsage=none
+auxJpegUseCase=0
+sensorLayout=block:1 liveRemosaic:1 photoRemosaic:2
+colourOrder=none
+distortion=none
+mirror=0
+dcp=
+
 lens=F14X
 camera=4
 physical=
@@ -1250,6 +1281,37 @@ distortion=none
 mirror=0
 dcp=
 key.still=vivo.control.forceSensorMode type:1 enabled:1 values:0,
+
+lens=Face
+camera=1
+physical=
+stream=0:0x0 highResLive:0 useCase:0
+levels=static:0 black:0,0,0,0 white:0
+viewfinderLevels=none
+photoLevels=none
+exposure=extended:0 isoMax:0 shutterMaxNs:0
+rawBufferUsage=none
+rawBuffers=count:0 testFirst:0 fallBack:0
+cameraApi=auto opMode=0
+session=params:cadence requestDefaults:rawr frameRate:0 startupDelayMs:0
+template=default
+workarounds=
+gate= hold:default stopViewfinderForPhotos:0
+photoStream=none useCase:0 mergeFrameLimit:0 mergeFramesOneByOne:0
+photoBufferUsage=none
+companionSize=none
+companion=disabled:0 private:0 targeted:1 bufferCount:0 fallback:0 useCase:0
+companionBufferUsage=none
+companionPhysical=none
+companionDetach=none
+auxJpeg=none
+auxJpegBufferUsage=none
+auxJpegUseCase=0
+sensorLayout=block:1 liveRemosaic:1 photoRemosaic:2
+colourOrder=none
+distortion=none
+mirror=0
+dcp=
 
 # profile vivo_x300_pro
 lens=UW

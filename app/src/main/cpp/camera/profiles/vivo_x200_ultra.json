@@ -126,6 +126,28 @@
       }
     },
     {
+      "id": "S14",
+      "camera": {
+        "id": "4",
+        "physical": ""
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW16",
+          "width": 0,
+          "height": 0
+        }
+      },
+      "vendorKeys": [],
+      "image": {
+        "levels": {
+          "static": true,
+          "black": [64, 64, 64, 64],
+          "white": 1023
+        }
+      }
+    },
+    {
       "id": "F14X",
       "camera": {
         "id": "4",
@@ -340,6 +362,28 @@
           "photoBlock": 4,
           "colourOrder": "BGGR",
           "photoOutput": "reduced"
+        }
+      }
+    },
+    {
+      "id": "Face",
+      "camera": {
+        "id": "1",
+        "physical": ""
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW16",
+          "width": 0,
+          "height": 0
+        }
+      },
+      "vendorKeys": [],
+      "image": {
+        "levels": {
+          "static": false,
+          "black": [0, 0, 0, 0],
+          "white": 0
         }
       }
     }
