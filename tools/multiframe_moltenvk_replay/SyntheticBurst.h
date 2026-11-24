@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstring>
 #include <random>
+#include <sstream>
 #include <stdexcept>
 
 namespace synthetic {
@@ -39,7 +40,43 @@ inline std::array<float, 3> sample(float x, float y, bool flat, float motion = 0
     }
     return rgb;
 }
+// synthetic:dark: a flat deep-shadow field (2048 x 1536, RGGB, 10-bit codes widened x16 like a merged 14-bit range)
+// with shot + read noise at the X300U ISO 3200 burst fit (var = A x + B, normalized). Truth is the constant kDarkRgb,
+// so everything in the merged output that is not kDarkRgb is noise: per-scale noise of the merge vs one frame.
+inline constexpr std::array<float, 3> kDarkRgb{.0030f, .0045f, .0022f};
+inline constexpr float kDarkShot = 1.5e-4f, kDarkRead = 1.0e-7f;
+inline rawr::zsl_container::Bundle darkBurst() {
+    constexpr unsigned W = 2048, H = 1536;
+    constexpr float black = 1024.f, white = 16383.f;
+    rawr::zsl_container::Bundle out{};
+    for (unsigned n = 0; n < 30; ++n) {
+        rawr::zsl_container::PackedFrame f{};
+        f.width = W; f.height = H; f.frameId = n + 1; f.timestampNs = 1000000000ull + n * 33333333ull;
+        // The true noise model as a resolved replay header (a flat field gives the burst fit only one level).
+        std::ostringstream model;
+        model.precision(9);
+        model << "rawrReplayNoiseV1\t1 " << kDarkShot << ' ' << kDarkRead;
+        for (int k = 0; k < 2; ++k) {  // low and high signal profiles alike
+            for (int s = 0; s < 4; ++s) model << ' ' << kDarkShot;
+            for (int s = 0; s < 4; ++s) model << ' ' << kDarkRead;
+        }
+        for (int s = 0; s < 4; ++s) model << " 0";
+        f.metadata = "effectiveWhiteLevel\t16383\nblackLevelPhysicalRggb\t1024,1024,1024,1024\n" + model.str() + '\n';
+        std::vector<uint16_t> raw(std::size_t(W) * H);
+        std::mt19937 rng(7919u + n);
+        std::normal_distribution<float> unit(0.f, 1.f);
+        for (unsigned y = 0; y < H; ++y) for (unsigned x = 0; x < W; ++x) {
+            const int c = !(y & 1) && !(x & 1) ? 0 : (y & 1) && (x & 1) ? 2 : 1;
+            const float v = kDarkRgb[c] + std::sqrt(kDarkShot * kDarkRgb[c] + kDarkRead) * unit(rng);
+            raw[std::size_t(y) * W + x] = uint16_t(std::clamp(std::lround(black + v * (white - black)), 0l, 65535l));
+        }
+        f.gpuPacket.resize(raw.size() * 2); std::memcpy(f.gpuPacket.data(), raw.data(), f.gpuPacket.size());
+        out.frames.push_back(std::move(f));
+    }
+    return out;
+}
 inline rawr::zsl_container::Bundle burst(const std::string& name) {
+    if (name == "synthetic:dark") return darkBurst();
     // NOTE: synthetic metadata carries only black/white levels, no
     // sensorNoiseProfile / replay-noise header. Replay with
     // --noise-source recorded therefore falls back to legacy

@@ -1114,7 +1114,7 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
         linear.write(static_cast<const char*>(output), static_cast<std::streamsize>(outputBytes));
         if (!linear) throw std::runtime_error("cannot write " + linearPath.string());
     }
-    if (isSynthetic) {
+    if (isSynthetic && path != "synthetic:dark") {  // synthetic:dark's truth is the constant synthetic::kDarkRgb
         const auto truthPath = outputDir / (std::filesystem::path(path).stem().string() +
             "." + tune.suffix + ".truth.rgb32f");
         std::ofstream truth(truthPath, std::ios::binary);
@@ -1243,7 +1243,7 @@ int main(int argc, char** argv) {
          " [--max-frames I] [--rexture-detail-restore 0|1] [--rexture-moving 0|1] [--suffix STR] [--dump-base] [--dump-all-singles] [--dump-raw16] [--export-dng DIR] [--export-merged-dng FILE] [--merge rexture|hdrplus-freq] [--rexture-strip-rows N] [--hdrplus-strength F] [--hdrplus-tile 16|32] [--hdrplus-search 32|64|128] [--hdrplus-faithful] [--affine-deadzone F] [--affine-softness F] [--affine-isotropic] [--fallback-chroma GAIN] [--fallback-luma GAIN] [--fallback-max-sigma PX] [--no-hot-pixels] [--hot-pixel-list FILE]"
          " [--reference recorded|middle|sharpest|darkest] INPUT [INPUT2 ...]\n"
          "  INPUT: FILE.rzsl | DNG_DIR or dng:DNG_DIR (every *.dng, name-sorted, is one burst)"
-         " | rawburst:DIR | synthetic:...";
+         " | rawburst:DIR | synthetic:{shifted,static,flat,motion,dark}";
     try {
         std::filesystem::path outputDir;
         for (int i = 1; i < argc; ++i) {
