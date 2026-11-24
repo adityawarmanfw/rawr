@@ -211,7 +211,7 @@ void testProfileMatching() {
     assert(!routeForLens(x200u, "35")->separatePhotoSession);
     // The plain UW and front lenses exist next to the full-size ones.
     assert(routeForLens(x200u, "14")->cameraId == "4" && !routeForLens(x200u, "14")->photoStream);
-    assert(routeForLens(x200u, "Self")->cameraId == "1");
+    assert(routeForLens(x200u, "SELF")->cameraId == "1");
     assert(routeForLens(x200u, "H85")->photoRemosaic == 3u);
     {
         // A separate photo session needs a photo stream, and runs on the native API only.

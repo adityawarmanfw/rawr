@@ -275,7 +275,7 @@
       }
     },
     {
-      "id": "Self",
+      "id": "SELF",
       "camera": {
         "id": "1",
         "physical": ""

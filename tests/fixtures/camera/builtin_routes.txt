@@ -1216,7 +1216,7 @@ mirror=0
 dcp=
 key.still=vivo.control.forceSensorMode type:1 enabled:1 values:0,
 
-lens=Self
+lens=SELF
 camera=1
 physical=
 stream=0:0x0 highResLive:0 useCase:0
