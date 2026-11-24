@@ -352,6 +352,11 @@ AndroidBurstCoordinator::ChunkTiming AndroidBurstCoordinator::executeChunk(std::
     chunkStats_.chunkSubmitMs += ms(waitBegin - submitBegin);
     chunkStats_.chunkWaitMs += ms(end - waitBegin);
     for (const double g : gpuIntervals) chunkStats_.chunkGpuMs += g;
+    if (chunkObserver_) {
+        double gpuMs = 0.0;
+        for (const double g : gpuIntervals) gpuMs += g;
+        chunkObserver_(static_cast<std::int64_t>(wall * 1.0e6), static_cast<std::int64_t>(gpuMs * 1.0e6));
+    }
     return std::pair<double, std::vector<double>>(wall, std::move(gpuIntervals));
 }
 void AndroidBurstCoordinator::recordTimestamp(std::uint32_t query) {

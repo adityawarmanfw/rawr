@@ -96,6 +96,10 @@ class AndroidBurstCoordinator final {
     // the companion in flight (FrameConsumed then frees it). Multi-pass merges
     // load every frame first. Unset: frames are resident.
     using FrameLoad = std::function<void(std::uint32_t)>;
+    // Called on the merge thread after every submission with its wall time and GPU time (nanoseconds, 0 when the GPU
+    // timestamps are unsupported): lets the app feed a platform performance-hint session. Empty by default.
+    using ChunkObserver = std::function<void(std::int64_t wallNs, std::int64_t gpuNs)>;
+    void setChunkObserver(ChunkObserver observer) { chunkObserver_ = std::move(observer); }
     // Debug/verification hook for the Rexture merge: called after each stage group has finished on the GPU (the
     // arena's images then hold that stage's results). Unset in production.
     using RextureObserver = std::function<void(const char* stage, std::uint32_t frame, const ResourceArena&)>;
@@ -195,6 +199,7 @@ class AndroidBurstCoordinator final {
     bool arenaReady_ = false;
     bool layoutsInitialized_ = false;
     bool submissionInFlight_ = false;
+    ChunkObserver chunkObserver_;
     BurstStageTimings chunkStats_{};  // per-run accumulation of the chunk fields, copied into the result's timings
     bool resourcesReused_ = false;
     bool pipelineCacheReused_ = false;
