@@ -118,6 +118,7 @@ struct AmazePipeline::Impl {
     ShaderProvider shaders;
     PipelineConfig cfg{};
     std::function<void()> passBoundary;
+    std::function<void(VkCommandBuffer, uint32_t)> passHook;
     std::function<VkCommandBuffer()> commandBoundary;
 
     std::vector<Tile> tiles;
@@ -495,6 +496,7 @@ struct AmazePipeline::Impl {
                     vkCmdDispatch(cmd, (w + kLocal - 1) / kLocal, (h + kLocal - 1) / kLocal, count);
                 }
                 computeBarrier(cmd);
+                if (passHook) passHook(cmd, uint32_t(pass));
             }
             if (commandBoundary)
                 cmd = commandBoundary();
@@ -530,6 +532,7 @@ void AmazePipeline::record(VkCommandBuffer c, const NormalizedBayerBufferView& i
     impl_->record(c, i, o, wb);
 }
 void AmazePipeline::setPassBoundary(std::function<void()> boundary) { impl_->passBoundary = std::move(boundary); }
+void AmazePipeline::setPassHook(std::function<void(VkCommandBuffer, uint32_t)> hook) { impl_->passHook = std::move(hook); }
 void AmazePipeline::setCommandBoundary(std::function<VkCommandBuffer()> boundary) {
     impl_->commandBoundary = std::move(boundary);
 }

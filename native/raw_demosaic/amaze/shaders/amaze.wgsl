@@ -257,16 +257,44 @@ fn amaze_nyquist(@builtin(global_invocation_id) id:vec3<u32>,@builtin(workgroup_
   let x=i32(id.x);let y=i32(id.y);let base=(y-o.y+NR)*NW+(x-o.x+NR);
   let wq=vec4<f32>(0.1465972771,0.1035927134,0.0732036125,0.0365543548);
   var cd=wq.x*ncd[base];
-  for(var dy=-2;dy<=2;dy++){for(var dx=-2;dx<=2;dx++){
-    let ax=abs(dx);let ay=abs(dy);if((ax+ay)%2!=0||(ax+ay)==0){continue;}
-    var k=wq.y;if(ax==2||ay==2){k=select(wq.z,wq.w,ax==2&&ay==2);}cd+=k*ncd[base+dy*NW+dx];
-  }}
+  cd+=wq.w*ncd[base+(-42)];
+  cd+=wq.z*ncd[base+(-40)];
+  cd+=wq.w*ncd[base+(-38)];
+  cd+=wq.y*ncd[base+(-21)];
+  cd+=wq.y*ncd[base+(-19)];
+  cd+=wq.z*ncd[base+(-2)];
+  cd+=wq.z*ncd[base+(2)];
+  cd+=wq.y*ncd[base+(19)];
+  cd+=wq.y*ncd[base+(21)];
+  cd+=wq.w*ncd[base+(38)];
+  cd+=wq.z*ncd[base+(40)];
+  cd+=wq.w*ncd[base+(42)];
   var g=0.0;
-  for(var dy=-2;dy<=2;dy++){for(var dx=-2;dx<=2;dx++){
-    let ax=abs(dx);let ay=abs(dy);let total=ax+ay;var w=0.0738441189;
-    if(total==1){w=0.0620751197;}else if(ax==1&&ay==1){w=0.0521818195;}else if(total==2){w=0.0368741929;}else if(total==3){w=0.0309973220;}else if(total==4){w=0.0184131942;}
-    g+=0.5*w*ngr[base+dy*NW+dx];
-  }}
+  g+=0.5*0.0184131942*ngr[base+(-42)];
+  g+=0.5*0.0309973220*ngr[base+(-41)];
+  g+=0.5*0.0368741929*ngr[base+(-40)];
+  g+=0.5*0.0309973220*ngr[base+(-39)];
+  g+=0.5*0.0184131942*ngr[base+(-38)];
+  g+=0.5*0.0309973220*ngr[base+(-22)];
+  g+=0.5*0.0521818195*ngr[base+(-21)];
+  g+=0.5*0.0620751197*ngr[base+(-20)];
+  g+=0.5*0.0521818195*ngr[base+(-19)];
+  g+=0.5*0.0309973220*ngr[base+(-18)];
+  g+=0.5*0.0368741929*ngr[base+(-2)];
+  g+=0.5*0.0620751197*ngr[base+(-1)];
+  g+=0.5*0.0738441189*ngr[base+(0)];
+  g+=0.5*0.0620751197*ngr[base+(1)];
+  g+=0.5*0.0368741929*ngr[base+(2)];
+  g+=0.5*0.0309973220*ngr[base+(18)];
+  g+=0.5*0.0521818195*ngr[base+(19)];
+  g+=0.5*0.0620751197*ngr[base+(20)];
+  g+=0.5*0.0521818195*ngr[base+(21)];
+  g+=0.5*0.0309973220*ngr[base+(22)];
+  g+=0.5*0.0184131942*ngr[base+(38)];
+  g+=0.5*0.0309973220*ngr[base+(39)];
+  g+=0.5*0.0368741929*ngr[base+(40)];
+  g+=0.5*0.0309973220*ngr[base+(41)];
+  g+=0.5*0.0184131942*ngr[base+(42)];
   ss(x,y,C_NYQ,select(0.0,1.0,cd>g&&acol(x,y)!=1u));
 }
 @compute @workgroup_size(16,16)
@@ -274,7 +302,14 @@ fn amaze_nyquist_vote(@builtin(global_invocation_id) id:vec3<u32>,@builtin(workg
   begin_tile(wg.z);
   if(id.x>=p.src_width||id.y>=p.src_height){return;}
   let x=i32(id.x);let y=i32(id.y);var count=0.0;
-  for(var dy=-2;dy<=2;dy++){for(var dx=-2;dx<=2;dx++){if(abs(dx)+abs(dy)==2){count+=sg(x+dx,y+dy,C_NYQ);}}}
+  count+=sg(x+(0),y+(-2),C_NYQ);
+  count+=sg(x+(-1),y+(-1),C_NYQ);
+  count+=sg(x+(1),y+(-1),C_NYQ);
+  count+=sg(x+(-2),y+(0),C_NYQ);
+  count+=sg(x+(2),y+(0),C_NYQ);
+  count+=sg(x+(-1),y+(1),C_NYQ);
+  count+=sg(x+(1),y+(1),C_NYQ);
+  count+=sg(x+(0),y+(2),C_NYQ);
   var flag=sg(x,y,C_NYQ);if(count>4.0){flag=1.0;}else if(count<4.0){flag=0.0;}if(!ain(x,y,8)){flag=0.0;}
   ss(x,y,C_NYQ2,flag);
 }
@@ -359,9 +394,20 @@ fn adiag_gradient(x:i32,y:i32,dx:i32,dy:i32)->f32 {
 }
 fn adiag_sq(x:i32,y:i32,dx:i32,dy:i32)->f32{return asq(dc(x,y)-dc(x-dx,y-dy))+asq(dc(x,y)-dc(x+dx,y+dy));}
 fn adiag_var(x:i32,y:i32,dx:i32,dy:i32)->f32{
-  var sum=AE2;for(var yy=-2;yy<=2;yy++){for(var xx=-2;xx<=2;xx++){
-    let total=abs(xx)+abs(yy);if(total==1||total==3){sum+=select(0.0564025278,0.1371949444,total==1)*adiag_sq(x+xx,y+yy,dx,dy);}
-  }}return sum;
+  var sum=AE2;
+  sum+=0.0564025278*adiag_sq(x+(-1),y+(-2),dx,dy);
+  sum+=0.0564025278*adiag_sq(x+(1),y+(-2),dx,dy);
+  sum+=0.0564025278*adiag_sq(x+(-2),y+(-1),dx,dy);
+  sum+=0.1371949444*adiag_sq(x+(0),y+(-1),dx,dy);
+  sum+=0.0564025278*adiag_sq(x+(2),y+(-1),dx,dy);
+  sum+=0.1371949444*adiag_sq(x+(-1),y+(0),dx,dy);
+  sum+=0.1371949444*adiag_sq(x+(1),y+(0),dx,dy);
+  sum+=0.0564025278*adiag_sq(x+(-2),y+(1),dx,dy);
+  sum+=0.1371949444*adiag_sq(x+(0),y+(1),dx,dy);
+  sum+=0.0564025278*adiag_sq(x+(2),y+(1),dx,dy);
+  sum+=0.0564025278*adiag_sq(x+(-1),y+(2),dx,dy);
+  sum+=0.0564025278*adiag_sq(x+(1),y+(2),dx,dy);
+  return sum;
 }
 fn adiag_bound(estimate:f32,v:f32,a:f32,b:f32)->f32{
   var r=estimate;

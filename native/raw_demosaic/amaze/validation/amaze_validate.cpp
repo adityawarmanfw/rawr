@@ -103,6 +103,7 @@ int main(int argc, char** argv) {
     try {
         std::string in, out, spvDir;
         uint32_t W = 0, H = 0, pattern = 0, slots = 8;
+        bool profile = false;
         bool floatInput = false;
         float black = 0, white = 0;
         std::array<float, 3> wb{1, 1, 1};
@@ -120,6 +121,7 @@ int main(int argc, char** argv) {
             else if (a == "--black") black = std::stof(next());
             else if (a == "--white") white = std::stof(next());
             else if (a == "--slots") slots = uint32_t(std::stoul(next()));
+            else if (a == "--profile") profile = std::stoi(next()) != 0;
             else if (a == "--spv-dir") spvDir = next();
             else if (a == "--float-input") floatInput = true;
             else if (a == "--wb") {
@@ -129,7 +131,7 @@ int main(int argc, char** argv) {
         if (in.empty() || out.empty() || !W || !H || !(white > black))
             throw std::runtime_error(
                 "usage: amaze_validate --cfa raw.u16 --out rgb.f32 --width W --height H --black B --white W "
-                "[--pattern 0..3] [--wb r g b] [--slots N] [--spv-dir DIR] [--float-input]");
+                "[--pattern 0..3] [--wb r g b] [--slots N] [--profile 0|1] [--spv-dir DIR] [--float-input]");
 
         // Packed {R,G1,G2,B}: same component mapping as amaze_tile.glsl.
         auto raw = readBytes(in);
@@ -224,8 +226,29 @@ int main(int argc, char** argv) {
         pout.view = outImg.v;
         pout.width = W;
         pout.height = H;
+        // --profile 1: GPU time per pass (timestamp after every pass of every tile batch, summed per pass).
+        VkQueryPool queries = VK_NULL_HANDLE;
+        std::vector<uint32_t> hookPass;
+        const uint32_t kMaxQueries = 8192;
+        if (profile) {
+            VkQueryPoolCreateInfo qi{};
+            qi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+            qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
+            qi.queryCount = kMaxQueries;
+            ck(vkCreateQueryPool(c.dev, &qi, nullptr, &queries), "query pool");
+            pipeline->setPassHook([&](VkCommandBuffer cb, uint32_t pass) {
+                if (hookPass.size() + 1 >= kMaxQueries) return;
+                vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queries, uint32_t(hookPass.size() + 1));
+                hookPass.push_back(pass);
+            });
+        }
         for (int run = 0; run < 2; ++run) {  // second run is the warm timing
             cmd = beginOnce(c, pool);
+            if (profile) {
+                hookPass.clear();
+                vkCmdResetQueryPool(cmd, queries, 0, kMaxQueries);
+                vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, queries, 0);
+            }
             if (floatInput)
                 pipeline->record(cmd, amaze::NormalizedBayerBufferView{{cfaBuf.b, 0, VK_WHOLE_SIZE}, W, H, cfg.pattern},
                                  pout, wb);
@@ -233,6 +256,26 @@ int main(int argc, char** argv) {
                 pipeline->record(cmd, pin, pout, wb);
             const auto t0 = std::chrono::steady_clock::now();
             submitWait(c, pool, cmd);
+            if (profile && run == 1) {
+                VkPhysicalDeviceProperties props{};
+                vkGetPhysicalDeviceProperties(c.pd, &props);
+                std::vector<uint64_t> t(hookPass.size() + 1);
+                ck(vkGetQueryPoolResults(c.dev, queries, 0, uint32_t(t.size()), t.size() * 8, t.data(), 8,
+                                         VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT),
+                   "query results");
+                std::vector<double> perPass(19, 0.0);
+                double total = 0;
+                for (size_t i = 0; i < hookPass.size(); ++i) {
+                    const double ms = double(t[i + 1] - t[i]) * double(props.limits.timestampPeriod) / 1e6;
+                    perPass[hookPass[i]] += ms;
+                    total += ms;
+                }
+                static const char* names[19] = {"import", "gradients", "candidates", "choose", "cddiff", "weights",
+                                                "nyquist", "nyquist_vote", "area", "hvwt_seq", "green", "refine",
+                                                "diagonal", "pmwt_seq", "rbint", "correct", "chroma", "finish", "export"};
+                for (int i = 0; i < 19; ++i) std::cout << "PASS " << names[i] << " " << perPass[i] << "\n";
+                std::cout << "PASS_TOTAL " << total << " batches=" << hookPass.size() / 19 << "\n";
+            }
             std::cout << "run" << run << "_ms="
                       << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count()
                       << "\n";

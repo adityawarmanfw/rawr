@@ -76,8 +76,9 @@ struct PipelineConfig {
     // so the output is camera-linear like RCD's.
     float outputScale = 1.0f;
     float outputAlpha = 1.0f;
-    // Tiles recorded concurrently per pass; each owns ~3.9 MB of scratch.
-    uint32_t tileSlots = 16;
+    // Tiles recorded concurrently per pass; each owns ~3.9 MB of scratch. Adreno 840 (12 and 50 MP): 8-16 slots run at the same
+    // speed, 12 is about 2-3% faster than 16 and holds 15 MB less; below 6 the passes starve (4: +18%, 2: +60%).
+    uint32_t tileSlots = 12;
 };
 
 // Records AMaZE into a caller-owned command buffer on librtprocess's tile grid
@@ -102,6 +103,9 @@ class AmazePipeline {
     // Optional hook run after each tile batch's barrier; the caller may submit
     // what is recorded so far and re-begin the same command buffer.
     void setPassBoundary(std::function<void()> boundary);
+    // Profiling hook: called after every pass of every tile batch (its barrier already recorded) with the command buffer
+    // and the pass index, so a caller can write timestamps. Empty by default (no cost).
+    void setPassHook(std::function<void(VkCommandBuffer, uint32_t)> hook);
     // Alternative hook for double-buffered submission: returns the command
     // buffer recording continues in (it may differ from the one passed to
     // record()). Takes precedence over setPassBoundary.
