@@ -439,6 +439,20 @@ BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>
         ~RestoreMerge() { target = saved; }
     } restoreMerge{merge_, merge_};
     const bool noiseFitted = estimateNoiseFromBurst(frames, ref, frameLoad, timings);
+    // Large frames: the next companion (journal read, staging copy, upload and its fence wait, ~100 ms at 50 MP) loads on a
+    // worker while the GPU merges the current one, instead of between the chunks. One frame more is resident. The loader
+    // is only ever called by one thread at a time: this one up to here (the base and the noise neighbour), then the worker,
+    // which starts with the first companion while the base frame is prepared.
+    const bool prefetchEnabled = frameLoad && std::uint64_t(width_) * height_ >= kPrefetchMinPixels;
+    std::future<void> prefetch;
+    std::uint32_t prefetchIndex = UINT32_MAX;
+    if (prefetchEnabled) {
+        const std::uint32_t first = ref == 0u ? 1u : 0u;
+        if (first < frames.size()) {
+            prefetchIndex = first;
+            prefetch = std::async(std::launch::async, [&frameLoad, first] { frameLoad(first); });
+        }
+    }
     // Scalar noise model: the mean of the four CFA-site pairs (the alignment convention), else the configured pair.
     rawr::raw_merge_rexture_gpu::Config config{};
     config.cfa = static_cast<rawr::raw_merge_rexture_gpu::CfaPattern>(static_cast<std::uint32_t>(merge_.cfa));
@@ -517,12 +531,6 @@ BurstRunResult AndroidBurstCoordinator::runRexture(const std::vector<BurstFrame>
     const auto gainOf = [&](std::uint32_t i) { return exposureGain(frames, ref, i); };
     int pending = -1;  // first frame of a pair waiting for its partner (production path)
     std::uint32_t companions = 0;
-    // Large frames: the next companion (journal read, staging copy, upload and its fence wait, ~100 ms at 50 MP) loads on a
-    // worker while the GPU merges the current one, instead of between the chunks. One frame more is resident. The loader
-    // is only ever called by one thread at a time: this one before the loop and for the first companion, then the worker.
-    const bool prefetchEnabled = frameLoad && std::uint64_t(width_) * height_ >= kPrefetchMinPixels;
-    std::future<void> prefetch;
-    std::uint32_t prefetchIndex = UINT32_MAX;
     for (std::uint32_t i = 0; i < frames.size(); ++i) {
         if (i == ref) continue;
         if (frames[i].raw.ref.width != width_ || frames[i].raw.ref.height != height_)
