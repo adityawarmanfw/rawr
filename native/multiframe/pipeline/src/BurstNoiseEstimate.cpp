@@ -12,6 +12,11 @@ constexpr std::size_t kMinBlocksPerBin = 24u;
 constexpr std::uint32_t kMinBins = 4u;
 // Low quantile of the per-block variances within a brightness bin.
 constexpr double kQuantile = 0.2;
+// Refinement passes: the quantile is re-taken on each block's variance relative to the current fit, so blocks of different
+// levels within one bin compare like with like. The first pass alone took the quantile of the raw variances, which picks
+// the bin's darker blocks while the point sits at its median level: 3% low on a continuous spread of levels, 11-19% low
+// on a few flat patches (tests/native/burst_noise_fit_test.cpp).
+constexpr int kRefinePasses = 3;
 constexpr double kQuantileZ = -0.8416;  // standard normal quantile for 0.2
 constexpr double kMinOffset = 1e-10;
 
@@ -105,6 +110,34 @@ std::optional<BurstNoiseFit> fitBurstNoise(const float* blockStats, std::uint32_
         minBins = std::min<std::uint32_t>(minBins, std::uint32_t(points.size()));
         double a = 0.0, b = 0.0;
         if (!fitLine(points, a, b)) return std::nullopt;
+        for (int pass = 0; pass < kRefinePasses; ++pass) {
+            std::vector<Point> refined;
+            for (std::size_t begin = 0; begin + kMinBlocksPerBin <= samples.size(); begin += perBin) {
+                const std::size_t end = std::min(samples.size(), begin + perBin);
+                std::vector<double> ratios, levels;
+                double count = 0.0;
+                for (std::size_t i = begin; i < end; ++i) {
+                    const double model = a * samples[i].level + b;
+                    if (!(model > 0.0)) continue;
+                    ratios.push_back(samples[i].variance / model);
+                    levels.push_back(samples[i].level);
+                    count += samples[i].count;
+                }
+                if (ratios.size() < kMinBlocksPerBin) continue;
+                const std::size_t q = std::size_t(kQuantile * double(ratios.size() - 1));
+                std::nth_element(ratios.begin(), ratios.begin() + q, ratios.end());
+                std::nth_element(levels.begin(), levels.begin() + levels.size() / 2, levels.end());
+                const double meanCount = count / double(ratios.size());
+                const double bias = 1.0 + kQuantileZ * std::sqrt(2.0 / std::max(meanCount - 1.0, 1.0));
+                const double level = levels[levels.size() / 2];
+                const double v = (a * level + b) * ratios[q] / std::max(bias, 0.5);
+                if (v > 0.0 && std::isfinite(v)) refined.push_back({level, v});
+            }
+            double ra = 0.0, rb = 0.0;
+            if (refined.size() < kMinBins || !fitLine(refined, ra, rb)) break;
+            a = ra;
+            b = rb;
+        }
         fit.profile.slopeBySite[site] = float(a);
         fit.profile.offsetBySite[site] = float(b);
     }

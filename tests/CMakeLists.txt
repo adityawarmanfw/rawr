@@ -130,6 +130,9 @@ rawr_test(camera_key_result_test
   "${RAWR_ROOT}/tests/native/camera_key_result_test.cpp")
 rawr_test(camera_start_ladder_test
   "${RAWR_ROOT}/tests/native/camera_start_ladder_test.cpp")
+rawr_test(burst_noise_fit_test
+  "${RAWR_ROOT}/tests/native/burst_noise_fit_test.cpp"
+  "${RAWR_ROOT}/native/multiframe/pipeline/src/BurstNoiseEstimate.cpp")
 rawr_test(session_recipe_log_test
   "${RAWR_ROOT}/tests/native/session_recipe_log_test.cpp")
 rawr_test(camera_request_test
