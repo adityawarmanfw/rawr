@@ -5,11 +5,15 @@ Three built-in profiles match CPH2841, PMA110 and PMA120. Select one in
 
 | Profile | Full-resolution lenses | Default |
 |---|---|---|
-| [50 MP native RAW](../app/src/main/cpp/camera/profiles/oppo_x9u_50mp_native_raw.json) | H0.6, H1x, H3x, H10x; Quad RAW remosaiced by RAWR | Yes |
+| [50 MP native RAW](../app/src/main/cpp/camera/profiles/oppo_x9u_50mp_native_raw.json) | H0.6, H1x, H3x, H10x; Quad RAW remosaiced by RAWR. Also 2x, 6x and 20x in-sensor crops | Yes |
 | [50 MP remosaiced](../app/src/main/cpp/camera/profiles/oppo_x9u_50mp_remosaiced.json) | H0.6, H1x, H10x; Bayer RAW remosaiced by the camera | No |
 | [200 MP (requires root + patched lib)](../app/src/main/cpp/camera/profiles/oppo_x9u_200mp.json) | 1xF and 3xF; no H lenses | No |
 
 All three retain the same standard 0.6x, 1x, 3x and 10x lenses. The default
+also has 2x, 6x and 20x: in-sensor crops of the 1x, 3x and 10x cameras
+(`com.oplus.engineercamera.agingtest.mode.select` 15, 45 and 9 on every request),
+delivered as Quad RAW on the native API with the companion off. With the
+companion the HAL reports a device error on these modes. The default
 excludes 200 MP, which requires root and a patched camera library. These are
 X9 Ultra settings, not a universal recipe for every OPPO phone or firmware.
 

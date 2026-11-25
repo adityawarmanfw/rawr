@@ -196,6 +196,40 @@
       }
     },
     {
+      "id": "2x",
+      "camera": {
+        "id": "2"
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW16",
+          "width": 0,
+          "height": 0
+        },
+        "companion": {
+          "mode": "off"
+        }
+      },
+      "vendorKeys": [
+        {
+          "tag": "com.oplus.engineercamera.agingtest.mode.select",
+          "type": "int32",
+          "scope": "request",
+          "values": [
+            15
+          ],
+          "enabled": true
+        }
+      ],
+      "image": {
+        "sensorLayout": {
+          "block": 2,
+          "liveRemosaic": "standard",
+          "photoRemosaic": "detail"
+        }
+      }
+    },
+    {
       "id": "3x",
       "camera": {
         "id": "4"
@@ -283,6 +317,40 @@
         "sensorLayout": {
           "block": 1,
           "photoBlock": 2,
+          "photoRemosaic": "detail"
+        }
+      }
+    },
+    {
+      "id": "6x",
+      "camera": {
+        "id": "4"
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW16",
+          "width": 0,
+          "height": 0
+        },
+        "companion": {
+          "mode": "off"
+        }
+      },
+      "vendorKeys": [
+        {
+          "tag": "com.oplus.engineercamera.agingtest.mode.select",
+          "type": "int32",
+          "scope": "request",
+          "values": [
+            45
+          ],
+          "enabled": true
+        }
+      ],
+      "image": {
+        "sensorLayout": {
+          "block": 2,
+          "liveRemosaic": "standard",
           "photoRemosaic": "detail"
         }
       }
@@ -378,8 +446,42 @@
           "photoRemosaic": "detail"
         }
       }
+    },
+    {
+      "id": "20x",
+      "camera": {
+        "id": "5"
+      },
+      "streams": {
+        "raw": {
+          "format": "RAW16",
+          "width": 0,
+          "height": 0
+        },
+        "companion": {
+          "mode": "off"
+        }
+      },
+      "vendorKeys": [
+        {
+          "tag": "com.oplus.engineercamera.agingtest.mode.select",
+          "type": "int32",
+          "scope": "request",
+          "values": [
+            9
+          ],
+          "enabled": true
+        }
+      ],
+      "image": {
+        "sensorLayout": {
+          "block": 2,
+          "liveRemosaic": "standard",
+          "photoRemosaic": "detail"
+        }
+      }
     }
   ],
   "default": true,
-  "description": "Standard lenses and 50 MP native Quad RAW, remosaiced by RAWR. No root required."
+  "description": "Standard lenses, 2x / 6x / 20x in-sensor crops and 50 MP native Quad RAW, remosaiced by RAWR. No root required."
 }

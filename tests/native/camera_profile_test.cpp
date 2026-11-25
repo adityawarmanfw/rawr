@@ -563,7 +563,19 @@ void testOppoPhotoStreams() {
     using namespace rawrcam::camera;
     const auto oppo = builtInCameraProfile("oppo_x9u_50mp_native_raw");
     const auto roundTrip = parseCameraProfile(serializeCameraProfile(oppo));
-    assert(roundTrip && roundTrip->lenses.size() == 8);
+    assert(roundTrip && roundTrip->lenses.size() == 11);
+    // In-sensor crops: Quad RAW on the native API, sensor mode on every request, never a companion
+    // (the HAL errors the device with one).
+    for (const auto& [name, camera, mode] :
+         {std::tuple{"2x", "2", 15}, std::tuple{"6x", "4", 45}, std::tuple{"20x", "5", 9}}) {
+        const auto lens = routeForLens(*roundTrip, name);
+        assert(lens && lens->cameraId == camera && lens->disableCompanion && !lens->photoStream);
+        assert(lens->sensorLayoutBlock == 2 && lens->liveRemosaic == 1 && lens->photoRemosaic == 3);  // Standard / Detail
+        assert(lens->vendorKeys.size() == 1);
+        assert(lens->vendorKeys[0].tag == "com.oplus.engineercamera.agingtest.mode.select");
+        assert(keyAppliesIn(lens->vendorKeys[0].scope, CameraKeySetting::Scope::Request));
+        assert(lens->vendorKeys[0].values == std::vector<double>{double(mode)});
+    }
     for (const auto& [name, camera, mode, width, height, block] : {
              std::tuple{"H0.6", "3", 5, 8192u, 6144u, 2u},
              std::tuple{"H1x", "2", 13, 8160u, 6128u, 2u},
