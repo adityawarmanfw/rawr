@@ -3,15 +3,23 @@
 // Rexture grain evening (after the final pass, in place on linear_output). Where the merge kept fewer frames than its
 // surroundings (around and inside moving subjects) its grain is lowered towards the surroundings' level, scale by scale,
 // while detail that stands above the noise is kept: a decimated Laplacian pyramid (B3 5-tap down, 2-tap / 3-tap up),
-// luma G and colour R - G, B - G, bands l = 0 .. 5 (about 1 .. 32 px). Per band l, on the grid of level l + 1:
+// luma G' and colour R' - G', B' - G', bands l = 0 .. 5 (about 1 .. 32 px). ' = white balanced (gains over G): the split
+// must be neutral after white balance, or a luma change tints (R, G and B moved by the same raw amount) and a colour
+// change pulls towards raw grey (a grey edge under warm light holds raw R - G and B - G detail). Per band l, on the grid
+// of level l + 1:
 //   A = mean of w^2 over the 2 x 2 band coefficients of a level l + 1 pixel, E = 5 x 5 B3 mean of A (local energy)
-//   n = C_b (alpha G_{l+1} + beta) m   noise energy of the band (C_b: noise energy of band b per unit pixel variance,
-//                                      measured on bursts from several sensors), m: the output's noise variance
-//                                      relative to one frame (rx_lc_m, 4 x 4 px cells)
+//   n = C_b v m                        noise energy of the band, m: the output's noise variance relative to one frame
+//                                      (rx_lc_m, 4 x 4 px cells), v: one pixel's variance at level l + 1, luma
+//                                      v(G') = alpha G' + beta, colour (v(X') + v(G')) / 1.6 with v(X') = k alpha X' +
+//                                      k^2 beta (k = the channel's gain). C_b: noise energy of band b per unit pixel
+//                                      variance, measured on bursts from several sensors against v(G) of the raw
+//                                      colour difference, where R and B carry about 0.6 of green's variance (so 1.6)
 //   S = max(E - n, 0)                  energy above noise (detail)
 //   a = sqrt((S + (T / m) n) / (S + n))  the noise part scaled to the target T, the detail part kept
 //   T = min(m, TARGET, TOL m_ref), colour TARGET_C: m_ref is the clean neighbours' level (cell m, min over ~264 px,
-//       smoothed); within TOL of it nothing changes (merged areas are left as they are)
+//       smoothed); within TOL of it and under the target nothing changes (merged areas are left as they are). The
+//       targets also cap the whole frame: luma at about a 4 frame merge, colour at about 12, so a burst of few frames
+//       is evened everywhere
 // a is smoothed (5 x 5 B3: neighbouring coefficients get the same decision, no isolated kept specks in an evened area),
 // floored at GMIN (faint texture in a few-frame area stays visible) and applied bilinearly to the band. Luma band 5 is
 // kept. Scratch: rx_acc_a holds G_1 .. G_6 (row 0) and the rebuilt R_1 .. R_5 (row rrow) side by side; rx_acc_c holds A_l
@@ -33,6 +41,7 @@ layout(push_constant) uniform P {
     float alpha, beta;
     int rrow;
     int ox[7];            // atlas column of level 1 .. 6 (index = level)
+    float wbR, wbB;       // white balance gains of R and B over G
 } p;
 
 const int NB = 6;   // bands 0 .. 5, pyramid top G_6
@@ -45,7 +54,9 @@ const int REF_R = 16, GAUSS_R = 24;
 const float GAUSS_S = 8.0;
 
 ivec2 lvlSize(int l) { return ivec2((p.w + (1 << l) - 1) >> l, (p.h + (1 << l) - 1) >> l); }
-vec3 G(int l, ivec2 q) { return l == 0 ? imageLoad(outI, q).rgb : imageLoad(atlasI, ivec2(p.ox[l], 0) + q).rgb; }
+vec3 wbGain() { return vec3(p.wbR, 1.0, p.wbB); }
+// the pyramid holds white-balanced values; linear_output (level 0) does not
+vec3 G(int l, ivec2 q) { return l == 0 ? imageLoad(outI, q).rgb * wbGain() : imageLoad(atlasI, ivec2(p.ox[l], 0) + q).rgb; }
 vec3 R(int l, ivec2 q) { return l == NB ? G(NB, q) : imageLoad(atlasI, ivec2(p.ox[l], p.rrow) + q).rgb; }
 vec3 toLC(vec3 c) { return vec3(c.g, c.r - c.g, c.b - c.g); }
 vec3 fromLC(vec3 v) { return vec3(v.y + v.x, v.x, v.z + v.x); }
@@ -194,9 +205,9 @@ void main() {
             const vec2 fpos = (vec2(c) + 0.5) * sc;
             const float m = max(cellAt(fpos, false, tiled, m0, r0), 1e-4);
             const float mref = TOL * max(cellAt(fpos, true, tiled, m0, r0), 1e-4);
-            const float s2 = p.alpha * max(G(lc, c).g, 0.0) + p.beta;
+            const vec3 k = wbGain(), v = k * p.alpha * max(G(lc, c), vec3(0.0)) + k * k * p.beta;
             const vec2 gt = vec2(min(min(m, TARGET), mref), min(min(m, TARGET_C), mref)) / m;
-            const vec3 nb = vec3(C_L[l], C_RG[l], C_BG[l]) * s2 * m;
+            const vec3 nb = vec3(C_L[l] * v.g, C_RG[l] * (v.r + v.g) / 1.6, C_BG[l] * (v.b + v.g) / 1.6) * m;
             const vec3 S = max(e - nb, vec3(0.0));
             vec3 a = sqrt((S + vec3(gt.x, gt.y, gt.y) * nb) / max(S + nb, vec3(1e-30)));
             if (l == NB - 1) a.x = 1.0;
@@ -222,13 +233,13 @@ void main() {
     }
     barrier();
     if (q.x >= n.x || q.y >= n.y) return;
-    const vec4 x = l == 0 ? imageLoad(outI, q) : vec4(G(l, q), 1.0);
+    const vec4 x = l == 0 ? vec4(imageLoad(outI, q).rgb * wbGain(), imageLoad(outI, q).a) : vec4(G(l, q), 1.0);
     const vec3 w = toLC(x.rgb - upT(0, 10, c0, q));
     const vec2 u = (vec2(q) + 0.5) * 0.5 - 0.5, b = floor(u), f = u - b;   // bilinear gain
     const ivec2 t = ivec2(b) - c0;
     const int g0 = 200 + t.y * 10 + t.x;
     const vec3 a = mix(mix(uk(sT[g0]), uk(sT[g0 + 1]), f.x), mix(uk(sT[g0 + 10]), uk(sT[g0 + 11]), f.x), f.y);
     const vec3 o = fromLC(toLC(upT(100, 10, c0, q)) + a * w);
-    if (l == 0) imageStore(outI, q, vec4(o, x.a));
+    if (l == 0) imageStore(outI, q, vec4(o / wbGain(), x.a));
     else imageStore(atlasI, ivec2(p.ox[l], p.rrow) + q, vec4(o, 1.0));
 }
