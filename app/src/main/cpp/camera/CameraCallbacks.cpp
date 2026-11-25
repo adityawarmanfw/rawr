@@ -104,13 +104,13 @@ ACameraCaptureSession_logicalCamera_captureCallbacks CameraCallbacks::logicalCap
 void CameraCallbacks::deviceDisconnected(CameraDeviceCallbackContext* callback) {
     CameraCallbackGuard<CameraEventSink> guard(callback->lifetime);
     if (guard.owner) guard.owner->cameraDeviceEvent(callback->generation, "CAMERA_NDK_DISCONNECTED");
-    if (guard.owner) guard.owner->cameraDeviceFailed(callback->generation);
+    if (guard.owner) guard.owner->cameraDeviceFailed(callback->generation, false);
 }
 void CameraCallbacks::deviceError(CameraDeviceCallbackContext* callback, int error) {
     CameraCallbackGuard<CameraEventSink> guard(callback->lifetime);
     if (guard.owner)
         guard.owner->cameraDeviceEvent(callback->generation, "CAMERA_NDK_ERROR error=" + std::to_string(error));
-    if (guard.owner) guard.owner->cameraDeviceFailed(callback->generation);
+    if (guard.owner) guard.owner->cameraDeviceFailed(callback->generation, true);
 }
 void CameraCallbacks::sessionClosed(CameraSessionCallbackContext* callback, const void* session) {
     {

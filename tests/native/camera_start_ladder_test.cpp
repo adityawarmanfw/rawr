@@ -1,5 +1,7 @@
 #include <cassert>
 #include <iostream>
+#include <string>
+#include <vector>
 
 #include "camera/CameraStartLadder.h"
 
@@ -126,6 +128,40 @@ void configureRejectionGoesStraightToRawOnly() {
     assert(l.deviceFailed(1) == Outcome::GaveUp);
 }
 
+void rawOnlyIsRememberedOnceProven() {
+    Ladder l;
+    l.begin("X", 1, 0, 0, true);
+    assert(l.deviceFailed(1) == Outcome::Retry);
+    l.begin("X", 2, 0, 0, true);
+    assert(l.deviceFailed(2) == Outcome::RetryRawOnly);
+    assert(l.rememberedRawOnly().empty());  // not proven yet
+    assert(l.begin("X", 3, 0, 0, true) == Plan::RawOnly);
+    l.firstFrame(3);
+    assert(l.rememberedRawOnly() == std::vector<std::string>{"X"});
+    // A lens that works with its companion is never remembered.
+    l.begin("Y", 4, 0, 0, true);
+    l.firstFrame(4);
+    assert(l.rememberedRawOnly() == std::vector<std::string>{"X"});
+}
+
+void restoredLensStartsRawOnlyAndIsForgottenIfItFails() {
+    Ladder l;
+    l.restoreRawOnly("X");
+    assert(l.rememberedRawOnly() == std::vector<std::string>{"X"});
+    assert(l.begin("X", 1, 0, 0, true) == Plan::RawOnly);
+    assert(l.watching(1));
+    l.firstFrame(1);
+    assert(l.rememberedRawOnly() == std::vector<std::string>{"X"});
+
+    Ladder broken;
+    broken.restoreRawOnly("X");
+    assert(broken.begin("X", 1, 0, 0, true) == Plan::RawOnly);
+    assert(broken.deviceFailed(1) == Outcome::GaveUp);
+    assert(broken.rememberedRawOnly().empty());
+    broken.resetGivenUp();  // user retry: the full ladder, companion first
+    assert(broken.begin("X", 2, 0, 0, true) == Plan::AsConfigured);
+}
+
 }  // namespace
 
 int main() {
@@ -148,6 +184,8 @@ int main() {
     callbacksOfOneFrameCountOnce();
     staleGenerationsAreIgnored();
     configureRejectionGoesStraightToRawOnly();
+    rawOnlyIsRememberedOnceProven();
+    restoredLensStartsRawOnlyAndIsForgottenIfItFails();
     std::cout << "camera_start_ladder_test passed\n";
     return 0;
 }

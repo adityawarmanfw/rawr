@@ -25,7 +25,8 @@ class CameraEventSink {
     // CAMERA_CAPTURE_FAILED or CAMERA_BUFFER_LOST.
     virtual void cameraStillFailed(uint64_t /*generation*/, const CameraRequest* /*request*/, const char* /*kind*/,
                                    int64_t /*frameNumber*/, int /*reason*/) {}
-    virtual void cameraDeviceFailed(uint64_t /*generation*/) {}
+    // deviceError: onError (vs onDisconnected).
+    virtual void cameraDeviceFailed(uint64_t /*generation*/, bool /*deviceError*/) {}
     virtual void cameraSequenceEnded(uint64_t /*generation*/, int /*sequenceId*/, bool /*aborted*/) {}
 };
 using CameraEventLifetime = CameraCallbackLifetime<CameraEventSink>;

@@ -163,6 +163,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
     // error with no onClosed) and the caller force-retires instead of
     // blocking cameraWorker forever.
     static constexpr std::chrono::milliseconds kStopRetireTimeout{4000};
+    static constexpr std::chrono::milliseconds kFailedDeviceCloseWait{100};
     bool active = false;
     bool starting = false;
     bool shutDown = false;
@@ -192,6 +193,12 @@ struct NativeCameraController::Impl final : CameraEventSink {
     // (capture-stream routes, whose companion is required).
     std::set<std::string> rawOnlyRoutes;
     CameraStartLadder startLadder;
+    // RAW-only lenses kept across launches (CameraStartLadder::rememberedRawOnly).
+    std::string ladderStorePath;
+    std::vector<std::string> ladderStoreSaved;
+    // Generation whose device reported an error (onError): its session's onClosed
+    // only arrives once the device is closed, so retiring it doesn't wait.
+    uint64_t failedDeviceGeneration = 0;
     // Generation the start ladder watches for its first frame; 0 = none. Lets
     // per-frame and capture-failure callbacks skip the mutex.
     std::atomic<uint64_t> ladderGeneration{0};
@@ -730,6 +737,29 @@ struct NativeCameraController::Impl final : CameraEventSink {
         while (in >> std::quoted(key) >> ratio)
             if (std::isfinite(ratio) && ratio > 0.0) sensitivityRatioCache[key] = ratio;
     }
+    void loadLadderStoreLocked() {
+        std::ifstream in(ladderStorePath);
+        std::string key;
+        while (in >> std::quoted(key))
+            if (!key.empty()) startLadder.restoreRawOnly(key);
+        ladderStoreSaved = startLadder.rememberedRawOnly();
+        if (!ladderStoreSaved.empty())
+            diag("CAMERA_START_LADDER_RESTORED rawOnlyLenses=" + std::to_string(ladderStoreSaved.size()));
+    }
+    void syncLadderStoreLocked() {
+        if (ladderStorePath.empty()) return;
+        auto remembered = startLadder.rememberedRawOnly();
+        if (remembered == ladderStoreSaved) return;
+        const std::string temp = ladderStorePath + ".tmp";
+        {
+            std::ofstream out(temp, std::ios::trunc);
+            for (const auto& key : remembered) out << std::quoted(key) << '\n';
+            if (!out) return;
+        }
+        if (std::rename(temp.c_str(), ladderStorePath.c_str()) != 0) return;
+        ladderStoreSaved = std::move(remembered);
+        diag("CAMERA_START_LADDER_STORED rawOnlyLenses=" + std::to_string(ladderStoreSaved.size()));
+    }
     void saveSensitivityStoreLocked() const {
         if (sensitivityStorePath.empty()) return;
         const std::string temp = sensitivityStorePath + ".tmp";
@@ -1188,6 +1218,15 @@ struct NativeCameraController::Impl final : CameraEventSink {
 
     bool retireSessionLocked(std::unique_lock<std::mutex>& lock, std::optional<std::chrono::milliseconds> timeout,
                              const char* prefix) {
+        // After a device error (onError) the HAL sends the session's onClosed only once the device
+        // is closed (OPPO CPH2841: it arrived after teardown), so the full wait always timed out and
+        // every failed start cost 4 s. Wait briefly, then let the caller force-retire, as it did after
+        // the timeout. A plain disconnect keeps the full wait.
+        if (failedDeviceGeneration != 0 && failedDeviceGeneration == deviceSession.generation()) {
+            diag(std::string(prefix) + "_CLOSE_WAIT_SHORT reason=device_failed generation=" +
+                 std::to_string(failedDeviceGeneration));
+            timeout = std::min(timeout.value_or(kFailedDeviceCloseWait), kFailedDeviceCloseWait);
+        }
         return deviceSession.retire(lock, timeout, prefix, [this](const std::string& line) { diag(line); });
     }
 
@@ -1204,6 +1243,7 @@ struct NativeCameraController::Impl final : CameraEventSink {
         using Outcome = CameraStartLadder::Outcome;
         if (outcome == Outcome::None) return false;
         ladderGeneration.store(0, std::memory_order_release);
+        if (outcome == Outcome::GaveUp) syncLadderStoreLocked();  // a remembered lens is forgotten
         const char* step = outcome == Outcome::Retry          ? "retry"
                            : outcome == Outcome::RetryRawOnly ? "raw_only"
                                                               : "gave_up";
@@ -1391,10 +1431,11 @@ struct NativeCameraController::Impl final : CameraEventSink {
         }
         if (callbacks.acquisitionFailed) callbacks.acquisitionFailed(generation, tag);
     }
-    void cameraDeviceFailed(uint64_t generation) override {
+    void cameraDeviceFailed(uint64_t generation, bool deviceError) override {
         {
             std::lock_guard<std::mutex> lock(mutex);
             if (generation != deviceSession.generation()) return;
+            if (deviceError) failedDeviceGeneration = generation;
             // The restart that follows (acquisitionFailed below) uses the new step.
             (void)noteLadderOutcomeLocked(startLadder.deviceFailed(generation), "device_error");
             fullSizeSequence.fail();
@@ -2181,6 +2222,7 @@ void NativeCameraController::framePaired(uint64_t generation) {
         generation != 0 && impl_->ladderGeneration.compare_exchange_strong(watched, 0, std::memory_order_acq_rel)) {
         std::lock_guard<std::mutex> lock(impl_->mutex);
         impl_->startLadder.firstFrame(generation);
+        impl_->syncLadderStoreLocked();
     }
     uint64_t expected = generation;
     if (generation == 0 || impl_->companionDetachGeneration.load(std::memory_order_acquire) != generation ||
@@ -2241,6 +2283,11 @@ void NativeCameraController::setSensitivityCalibrationStore(const std::string& p
     std::lock_guard<std::mutex> lock(impl_->mutex);
     impl_->sensitivityStorePath = path;
     impl_->loadSensitivityStoreLocked();
+}
+void NativeCameraController::setStartLadderStore(const std::string& path) {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    impl_->ladderStorePath = path;
+    impl_->loadLadderStoreLocked();
 }
 void NativeCameraController::setExposureCompensationSteps(int32_t value) { impl_->setEvSteps(value); }
 void NativeCameraController::setRawrAeConfig(const RawrAeConfig& config) { impl_->setRawrAeConfigValue(config); }

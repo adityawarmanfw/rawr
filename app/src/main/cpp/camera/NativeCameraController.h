@@ -86,6 +86,8 @@ class NativeCameraController {
     // The reported/requested ISO ratio is measured during startup when lens session keys change the sensor mode (rawr AE
     // needs it), never during video. File keeping measured calibrations across launches (once per camera).
     void setSensitivityCalibrationStore(const std::string& path);
+    // File keeping, across launches, the lenses the start ladder proved need RAW-only (no companion).
+    void setStartLadderStore(const std::string& path);
     void setExposureCompensationSteps(int32_t steps);
     // rawr auto exposure (opt-in, color/RawrAutoExposure.h). When enabled
     // and eligible (A/S/I mode, manual sensor control, stills, no spot AE,

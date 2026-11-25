@@ -27,6 +27,12 @@ namespace rawrcam::camera {
 // first frame and flushes the request (Motorola Edge 50 Ultra) reports it three
 // times, and that frame is followed by working ones. A frame proves the lens:
 // later failures go to the regular restart paths, and the lens is never demoted.
+// A RAW-only lens that delivers a frame is remembered: the caller keeps
+// rememberedRawOnly() across launches and hands it back through restoreRawOnly(),
+// so a lens that needs RAW-only pays for its failed starts once, not every launch
+// (OPPO CPH2841 user lenses with a sensor-mode key: two failed starts per lens on
+// every launch). A remembered lens whose RAW-only start fails gives up and is
+// forgotten, so it gets the full ladder again on the next user retry.
 // Pure state: the caller supplies time and owns synchronization.
 class CameraStartLadder final {
    public:
@@ -66,10 +72,21 @@ class CameraStartLadder final {
         lens.failures = 0;
     }
 
+    // A lens remembered as RAW-only from an earlier launch: it starts RAW-only.
+    void restoreRawOnly(const std::string& lensKey) {
+        auto& lens = lenses_[lensKey];
+        if (lens.gaveUp) return;
+        lens.rawOnly = true;
+        lens.remembered = true;
+        lens.failures = 0;
+    }
+
     void firstFrame(uint64_t generation) {
         if (!watching(generation)) return;
-        lenses_[current_.lensKey].proven = true;
-        lenses_[current_.lensKey].failures = 0;
+        auto& lens = lenses_[current_.lensKey];
+        lens.proven = true;
+        lens.failures = 0;
+        if (lens.rawOnly) lens.remembered = true;
         current_.watching = false;
     }
 
@@ -102,13 +119,22 @@ class CameraStartLadder final {
         auto it = lenses_.find(lensKey);
         return it != lenses_.end() && it->second.rawOnly;
     }
+    // RAW-only lenses that delivered a frame (this launch or an earlier one), sorted.
+    [[nodiscard]] std::vector<std::string> rememberedRawOnly() const {
+        std::vector<std::string> keys;
+        for (const auto& [key, lens] : lenses_)
+            if (lens.rawOnly && lens.remembered) keys.push_back(key);
+        std::sort(keys.begin(), keys.end());
+        return keys;
+    }
 
    private:
     struct Lens {
         bool proven = false;
         bool rawOnly = false;
         bool gaveUp = false;
-        uint32_t failures = 0;  // At the current step.
+        bool remembered = false;  // RAW-only proven or restored: kept across launches.
+        uint32_t failures = 0;    // At the current step.
     };
     struct Start {
         std::string lensKey;
