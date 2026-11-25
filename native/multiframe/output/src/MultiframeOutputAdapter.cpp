@@ -1,5 +1,6 @@
 #include <rawr/raw_multiframe_output/MultiframeOutputAdapter.h>
 
+#include <chrono>
 #include <cstring>
 #include <algorithm>
 #include <cmath>
@@ -10,6 +11,7 @@
 
 #include "multiframe_cfa_project.h"
 #include "multiframe_cfa_project_f32.h"
+#include "multiframe_green_prepare.h"
 #include "multiframe_packed_cfa.h"
 #include "multiframe_rgb_prepare.h"
 
@@ -33,7 +35,8 @@ struct ProjectionPush {
 static_assert(sizeof(ProjectionPush) == 36);
 
 // 1A RGB-prepare push block. Field order mirrors prepare_rgb.comp P{}:
-// 8 uints, black vec4, invRange vec4, threshold float. Keep under the
+// 8 uints, black vec4, invRange vec4, threshold float, site-chroma CFA (or ~0u: off), white balance R / B and the merged
+// noise model (slope, offset). Keep under the
 // 128-byte guaranteed push-constant limit; the shared pipeline layout
 // sizes to this (projection's 32B block still fits).
 struct RgbPreparePush {
@@ -48,11 +51,13 @@ struct RgbPreparePush {
     float black[4];
     float invRange[4];
     float clipThreshold;
-    std::uint32_t pad0;
-    std::uint32_t pad1;
-    std::uint32_t pad2;
+    std::uint32_t siteChromaCfa;
+    float whiteBalanceR;
+    float whiteBalanceB;
+    float noiseSlope;
+    float noiseOffset;
 };
-static_assert(sizeof(RgbPreparePush) == 80);
+static_assert(sizeof(RgbPreparePush) == 88);
 static_assert(sizeof(RgbPreparePush) <= 128);
 
 }  // namespace
@@ -137,8 +142,8 @@ void MultiframeOutputAdapter::initialize(VkPhysicalDevice physical, VkDevice dev
     check(vkMapMemory(device_, readbackMemory_, 0, readbackBytes_, 0, &mapped_),
           "multiframe output map readback buffer");
 
-    VkDescriptorSetLayoutBinding bindings[5]{};
-    for (std::uint32_t i = 0; i < 5; ++i) {
+    VkDescriptorSetLayoutBinding bindings[6]{};
+    for (std::uint32_t i = 0; i < 6; ++i) {
         bindings[i].binding = i;
         bindings[i].descriptorType = i == 3 ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         bindings[i].descriptorCount = 1;
@@ -146,7 +151,7 @@ void MultiframeOutputAdapter::initialize(VkPhysicalDevice physical, VkDevice dev
     }
     VkDescriptorSetLayoutCreateInfo descriptorLayoutInfo{};
     descriptorLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    descriptorLayoutInfo.bindingCount = 5;
+    descriptorLayoutInfo.bindingCount = 6;
     descriptorLayoutInfo.pBindings = bindings;
     check(vkCreateDescriptorSetLayout(device_, &descriptorLayoutInfo, nullptr, &descriptorLayout_),
           "multiframe output descriptor layout");
@@ -177,14 +182,14 @@ void MultiframeOutputAdapter::initialize(VkPhysicalDevice physical, VkDevice dev
         pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
         pipelineInfo.stage = stage;
         pipelineInfo.layout = pipelineLayout_;
-        const VkResult pipelineResult = vkCreateComputePipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, out);
+        const VkResult pipelineResult = vkCreateComputePipelines(device_, pipelineCache_, 1, &pipelineInfo, nullptr, out);
         vkDestroyShaderModule(device_, module, nullptr);
         check(pipelineResult, "multiframe output compute pipeline");
     };
     makeProjectionPipeline(multiframe_cfa_project_spv, multiframe_cfa_project_spv_size, &pipeline_);
     makeProjectionPipeline(multiframe_cfa_project_f32_spv, multiframe_cfa_project_f32_spv_size, &pipelineF32_);
 
-    VkDescriptorPoolSize poolSizes[] = {{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 4}, {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1}};
+    VkDescriptorPoolSize poolSizes[] = {{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 5}, {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1}};
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.maxSets = 1;
@@ -357,20 +362,21 @@ PackedRaw16 MultiframeOutputAdapter::projectMerged(VkImage mergedImage, VkImageV
 
 void MultiframeOutputAdapter::prepareRgb(VkImageView mergedView, std::uint32_t lscWidth,
                                          std::uint32_t lscHeight, const std::vector<float>& lscGains,
-                                         const SensorClipParams& sensorClip) {
-    prepare(mergedView, lscWidth, lscHeight, lscGains, sensorClip, false);
+                                         const SensorClipParams& sensorClip, const SiteChromaParams& siteChroma) {
+    prepare(mergedView, lscWidth, lscHeight, lscGains, sensorClip, false, siteChroma);
 }
 
 void MultiframeOutputAdapter::preparePackedCfa(VkImageView mergedView, std::uint32_t lscWidth,
                                                std::uint32_t lscHeight, const std::vector<float>& lscGains,
                                                const SensorClipParams& sensorClip) {
-    prepare(mergedView, lscWidth, lscHeight, lscGains, sensorClip, true);
+    prepare(mergedView, lscWidth, lscHeight, lscGains, sensorClip, true, SiteChromaParams{});
 }
 
 void MultiframeOutputAdapter::prepare(VkImageView mergedView, std::uint32_t lscWidth, std::uint32_t lscHeight,
                                       const std::vector<float>& lscGains, const SensorClipParams& sensorClip,
-                                      bool packedCfa) {
+                                      bool packedCfa, const SiteChromaParams& siteChroma) {
     if (!device_ || !mergedView || rgb_) throw std::invalid_argument("multiframe RGB: invalid prepare");
+    const auto setupBegin = std::chrono::steady_clock::now();
     check(vkWaitForFences(device_, 1, &fence_, VK_TRUE, UINT64_MAX), "multiframe RGB prior fence");
     sensorClipOrApplied_ = false;
     const bool hasLsc = lscWidth >= 2 && lscHeight >= 2 &&
@@ -405,6 +411,11 @@ void MultiframeOutputAdapter::prepare(VkImageView mergedView, std::uint32_t lscW
     createImage(VK_FORMAT_R16G16B16A16_SFLOAT, packedCfa ? width_ / 2 : width_, packedCfa ? height_ / 2 : height_,
                 rgb_, rgbMemory_, rgbView_);
     createImage(VK_FORMAT_R16_UINT, (width_ + 1) / 2, (height_ + 1) / 2, clip_, clipMemory_, clipView_);
+    const bool siteChromaOn = !packedCfa && siteChroma.enabled && siteChroma.cfa <= 3u &&
+                              std::isfinite(siteChroma.whiteBalanceR) && siteChroma.whiteBalanceR > 0.0f &&
+                              std::isfinite(siteChroma.whiteBalanceB) && siteChroma.whiteBalanceB > 0.0f;
+    createImage(VK_FORMAT_R16_SFLOAT, siteChromaOn ? width_ : 1u, siteChromaOn ? height_ : 1u, greenAlt_, greenAltMemory_,
+                greenAltView_);
     VkBufferCreateInfo bi{}; bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bi.size = bytes; bi.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
     check(vkCreateBuffer(device_, &bi, nullptr, &lscBuffer_), "multiframe RGB LSC buffer");
@@ -427,11 +438,24 @@ void MultiframeOutputAdapter::prepare(VkImageView mergedView, std::uint32_t lscW
     pi.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     pi.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT; pi.stage.module = module; pi.stage.pName = "main";
     pi.layout = pipelineLayout_;
-    const auto pipelineResult = vkCreateComputePipelines(device_, VK_NULL_HANDLE, 1, &pi, nullptr, &rgbPipeline_);
+    const auto pipelineBegin = std::chrono::steady_clock::now();
+    const auto pipelineResult = vkCreateComputePipelines(device_, pipelineCache_, 1, &pi, nullptr, &rgbPipeline_);
     vkDestroyShaderModule(device_, module, nullptr);
     check(pipelineResult, "multiframe RGB pipeline");
+    if (siteChromaOn) {
+        VkShaderModuleCreateInfo gi{}; gi.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        gi.codeSize = multiframe_green_prepare_spv_size;
+        gi.pCode = reinterpret_cast<const uint32_t*>(multiframe_green_prepare_spv);
+        VkShaderModule greenModule = VK_NULL_HANDLE;
+        check(vkCreateShaderModule(device_, &gi, nullptr, &greenModule), "multiframe green shader");
+        pi.stage.module = greenModule;
+        const auto greenResult = vkCreateComputePipelines(device_, pipelineCache_, 1, &pi, nullptr, &greenPipeline_);
+        vkDestroyShaderModule(device_, greenModule, nullptr);
+        check(greenResult, "multiframe green pipeline");
+    }
+    lastPipelineMs_ = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - pipelineBegin).count();
     // NOTE: descriptorSet_ is shared by the CFA-projection and RGB-prepare
-    // pipelines (layout has 5 bindings; CFA uses 0..1, RGB uses 0..4).
+    // pipelines (layout has 6 bindings; CFA uses 0..1, RGB uses 0..5, the site-chroma green 0 and 5).
     // releaseDngResources destroys projectionView_ while the set still points
     // at it; safe only because every use overwrites bindings first via
     // vkUpdateDescriptorSets and the prior fence is waited. Do not submit
@@ -442,33 +466,34 @@ void MultiframeOutputAdapter::prepare(VkImageView mergedView, std::uint32_t lscW
         sensorClip.refRawView != VK_NULL_HANDLE && sensorClip.refWidth == width_ &&
         sensorClip.refHeight == height_ && sensorClip.refWidth >= 2 && sensorClip.refHeight >= 2 &&
         sensorClip.cfa <= 3u && std::isfinite(sensorClip.whiteLevel) && std::isfinite(sensorClip.clipThreshold);
-    VkDescriptorImageInfo images[5] = {{VK_NULL_HANDLE, mergedView, VK_IMAGE_LAYOUT_GENERAL},
+    VkDescriptorImageInfo images[6] = {{VK_NULL_HANDLE, mergedView, VK_IMAGE_LAYOUT_GENERAL},
                                        {VK_NULL_HANDLE, rgbView_, VK_IMAGE_LAYOUT_GENERAL},
                                        {VK_NULL_HANDLE, clipView_, VK_IMAGE_LAYOUT_GENERAL},
                                        {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED},
                                        // Placeholder must be a valid R16U view when the
                                        // sensor term is disabled (shader never loads it).
                                        {VK_NULL_HANDLE,
-                                        useSensorClip ? sensorClip.refRawView : clipView_, VK_IMAGE_LAYOUT_GENERAL}};
+                                        useSensorClip ? sensorClip.refRawView : clipView_, VK_IMAGE_LAYOUT_GENERAL},
+                                       {VK_NULL_HANDLE, greenAltView_, VK_IMAGE_LAYOUT_GENERAL}};
     VkDescriptorBufferInfo buffer{lscBuffer_, 0, bytes};
-    VkWriteDescriptorSet writes[5]{};
-    for (uint32_t i = 0; i < 5; ++i) {
+    VkWriteDescriptorSet writes[6]{};
+    for (uint32_t i = 0; i < 6; ++i) {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; writes[i].dstSet = descriptorSet_;
         writes[i].dstBinding = i; writes[i].descriptorCount = 1;
         writes[i].descriptorType = i == 3 ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         if (i == 3) writes[i].pBufferInfo = &buffer; else writes[i].pImageInfo = &images[i];
     }
-    vkUpdateDescriptorSets(device_, 5, writes, 0, nullptr);
+    vkUpdateDescriptorSets(device_, 6, writes, 0, nullptr);
     check(vkResetCommandBuffer(command_, 0), "multiframe RGB reset command");
     VkCommandBufferBeginInfo begin{}; begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     check(vkBeginCommandBuffer(command_, &begin), "multiframe RGB begin");
-    VkImageMemoryBarrier barriers[2]{};
-    for (int i = 0; i < 2; ++i) {
+    VkImageMemoryBarrier barriers[3]{};
+    for (int i = 0; i < 3; ++i) {
         auto& b = barriers[i]; b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        b.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT; b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        b.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT; b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         b.newLayout = VK_IMAGE_LAYOUT_GENERAL; b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED; b.image = i == 0 ? rgb_ : clip_;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED; b.image = i == 0 ? rgb_ : (i == 1 ? clip_ : greenAlt_);
         b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     }
     VkMemoryBarrier ready{}; ready.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
@@ -477,7 +502,7 @@ void MultiframeOutputAdapter::prepare(VkImageView mergedView, std::uint32_t lscW
     // TOP_OF_PIPE as source stage (spec-correct; COMPUTE->COMPUTE here is a
     // validation-layer violation even though benign on mobile).
     vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                         0, 1, &ready, 0, nullptr, 2, barriers);
+                         0, 1, &ready, 0, nullptr, 3, barriers);
     const uint32_t pushLscW = hasLsc ? lscWidth : 1u;
     const uint32_t pushLscH = hasLsc ? lscHeight : 1u;
     RgbPreparePush push{};
@@ -498,13 +523,22 @@ void MultiframeOutputAdapter::prepare(VkImageView mergedView, std::uint32_t lscW
     }
     push.clipThreshold =
         (useSensorClip && std::isfinite(sensorClip.clipThreshold)) ? sensorClip.clipThreshold : 0.995f;
-    push.pad0 = 0u;
-    push.pad1 = 0u;
-    push.pad2 = 0u;
-    vkCmdBindPipeline(command_, VK_PIPELINE_BIND_POINT_COMPUTE, rgbPipeline_);
+    push.siteChromaCfa = siteChromaOn ? siteChroma.cfa : ~0u;
+    push.whiteBalanceR = siteChromaOn ? siteChroma.whiteBalanceR : 1.0f;
+    push.whiteBalanceB = siteChromaOn ? siteChroma.whiteBalanceB : 1.0f;
+    const auto finiteNonNegative = [](float v) { return std::isfinite(v) && v >= 0.0f ? v : 0.0f; };
+    push.noiseSlope = siteChromaOn ? finiteNonNegative(siteChroma.noiseSlope) : 0.0f;
+    push.noiseOffset = siteChromaOn ? finiteNonNegative(siteChroma.noiseOffset) : 0.0f;
     vkCmdBindDescriptorSets(command_, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout_, 0, 1, &descriptorSet_, 0, nullptr);
     vkCmdPushConstants(command_, pipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
-    vkCmdDispatch(command_, (width_ + 31) / 32, (height_ + 31) / 32, 1);
+    if (siteChromaOn) {   // the re-estimated green first (prepare_green.comp)
+        vkCmdBindPipeline(command_, VK_PIPELINE_BIND_POINT_COMPUTE, greenPipeline_);
+        vkCmdDispatch(command_, (width_ + 15) / 16, (height_ + 15) / 16, 1);
+        vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1,
+                             &ready, 0, nullptr, 0, nullptr);
+    }
+    vkCmdBindPipeline(command_, VK_PIPELINE_BIND_POINT_COMPUTE, rgbPipeline_);
+    vkCmdDispatch(command_, (width_ + 15) / 16, (height_ + 15) / 16, 1);   // one pixel per invocation
     ready.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
     vkCmdPipelineBarrier(command_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &ready, 0, nullptr, 0, nullptr);
@@ -512,8 +546,12 @@ void MultiframeOutputAdapter::prepare(VkImageView mergedView, std::uint32_t lscW
     check(vkResetFences(device_, 1, &fence_), "multiframe RGB reset fence");
     VkSubmitInfo si{}; si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     si.commandBufferCount = 1; si.pCommandBuffers = &command_;
+    const auto gpuBegin = std::chrono::steady_clock::now();
     submit_(si, fence_);
     check(vkWaitForFences(device_, 1, &fence_, VK_TRUE, UINT64_MAX), "multiframe RGB fence");
+    const auto gpuEnd = std::chrono::steady_clock::now();
+    lastSetupMs_ = std::chrono::duration<double, std::milli>(gpuBegin - setupBegin).count();
+    lastGpuMs_ = std::chrono::duration<double, std::milli>(gpuEnd - gpuBegin).count();
     sensorClipOrApplied_ = useSensorClip;
 }
 
@@ -540,6 +578,11 @@ void MultiframeOutputAdapter::reset() noexcept {
     if (device_ && lscBuffer_) vkDestroyBuffer(device_, lscBuffer_, nullptr);
     if (device_ && lscMemory_) vkFreeMemory(device_, lscMemory_, nullptr);
     if (device_ && rgbPipeline_) vkDestroyPipeline(device_, rgbPipeline_, nullptr);
+    if (device_ && greenAltView_) vkDestroyImageView(device_, greenAltView_, nullptr);
+    if (device_ && greenAlt_) vkDestroyImage(device_, greenAlt_, nullptr);
+    if (device_ && greenAltMemory_) vkFreeMemory(device_, greenAltMemory_, nullptr);
+    if (device_ && greenPipeline_) vkDestroyPipeline(device_, greenPipeline_, nullptr);
+    greenAltView_ = VK_NULL_HANDLE; greenAlt_ = VK_NULL_HANDLE; greenAltMemory_ = VK_NULL_HANDLE; greenPipeline_ = VK_NULL_HANDLE;
     rgbView_ = clipView_ = VK_NULL_HANDLE; rgb_ = clip_ = VK_NULL_HANDLE;
     rgbMemory_ = clipMemory_ = lscMemory_ = VK_NULL_HANDLE;
     lscBuffer_ = VK_NULL_HANDLE; rgbPipeline_ = VK_NULL_HANDLE;

@@ -1,0 +1,94 @@
+#version 450
+// Native-RGB site chroma, step 1 (see SiteChromaParams): a second green for prepare_rgb.comp. Where the merge kept few
+// frames (a moving subject, its effective frame count in the merged image's alpha) its green at red / blue sites is a
+// weak single-frame interpolation, and colour differences taken against it are false. There the green at red / blue
+// sites is re-estimated from the white-balanced CFA sites of the merged image, demosaic style: per direction the
+// neighbouring green times the local colour ratio when that ratio is mild, else Hamilton-Adams; the two directions of
+// each axis weighted by their inverse squared gradients; the axes blended by 3 x 3 sums of squared gradients. Green
+// sites keep the merged green. prepare_rgb then keeps, per pixel, whichever green gives the less coloured result.
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(binding = 0, rgba16f) readonly uniform image2D mergedRgb;   // rgb, alpha = effective frame count (Rexture)
+layout(binding = 5, r16f) writeonly uniform image2D greenAlt;
+layout(push_constant) uniform P {
+    uint width, height, lscWidth, lscHeight;
+    uint refWidth, refHeight, cfa, useSensorClip;
+    vec4 black;
+    vec4 invRange;
+    float clipThreshold;
+    uint siteChromaCfa;
+    float wbR, wbB;
+    float noiseSlope, noiseOffset;
+} p;
+
+// Effective frame count below which the re-estimated green takes over (smoothly between the two).
+const float NEFF_LO = 2.0, NEFF_HI = 4.0;
+const float AE = 1.0e-5;
+
+shared float sM[22 * 22];          // white-balanced CFA value of the 16 x 16 block +- 3
+shared float sDH[18 * 18], sDV[18 * 18];   // squared axis gradients of the block +- 1
+
+int siteColour(ivec2 q) {
+    ivec2 r = ivec2((p.siteChromaCfa == 1u || p.siteChromaCfa == 3u) ? 1 : 0,
+                    (p.siteChromaCfa == 2u || p.siteChromaCfa == 3u) ? 1 : 0);
+    ivec2 o = (q ^ r) & 1;
+    return (o.x == 0 && o.y == 0) ? 0 : ((o.x == 1 && o.y == 1) ? 2 : 1);
+}
+int mirror(int i, int n) { return i < 0 ? min(-i, n - 1) : (i >= n ? max(2 * n - 2 - i, 0) : i); }
+float mosaicAt(ivec2 q) {
+    q = ivec2(mirror(q.x, int(p.width)), mirror(q.y, int(p.height)));
+    vec3 v = imageLoad(mergedRgb, q).rgb;
+    v = mix(v, vec3(0.0), bvec3(isnan(v.x) || isinf(v.x), isnan(v.y) || isinf(v.y), isnan(v.z) || isinf(v.z)));
+    int c = siteColour(q);
+    return c == 1 ? v.g : (c == 0 ? v.r * p.wbR : v.b * p.wbB);
+}
+float M(ivec2 l) { return sM[(l.y + 3) * 22 + l.x + 3]; }    // l: position relative to the block origin, -3..18
+float cand(float n, float v, float n2) {
+    float ratio = 2.0 * n / (AE + v + n2);
+    return abs(1.0 - ratio) < 0.75 ? v * ratio : n + 0.5 * (v - n2);
+}
+
+void main() {
+    const ivec2 o = ivec2(gl_WorkGroupID.xy) * 16;
+    const int li = int(gl_LocalInvocationIndex);
+    for (int i = li; i < 22 * 22; i += 256) sM[i] = mosaicAt(o + ivec2(i % 22 - 3, i / 22 - 3));
+    barrier();
+    for (int i = li; i < 18 * 18; i += 256) {
+        const ivec2 l = ivec2(i % 18 - 1, i / 18 - 1);
+        const float c = M(l);
+        const float dh = abs(M(l - ivec2(1, 0)) - M(l + ivec2(1, 0))) + abs(2.0 * c - M(l - ivec2(2, 0)) - M(l + ivec2(2, 0)));
+        const float dv = abs(M(l - ivec2(0, 1)) - M(l + ivec2(0, 1))) + abs(2.0 * c - M(l - ivec2(0, 2)) - M(l + ivec2(0, 2)));
+        sDH[i] = dh * dh;
+        sDV[i] = dv * dv;
+    }
+    barrier();
+    const ivec2 l = ivec2(gl_LocalInvocationID.xy);
+    const ivec2 q = o + l;
+    if (q.x >= int(p.width) || q.y >= int(p.height)) return;
+    const vec4 merged = imageLoad(mergedRgb, q);
+    float g = merged.g;
+    if (siteColour(q) != 1) {
+        const float neff = isnan(merged.a) ? 0.0 : merged.a;
+        const float w = 1.0 - smoothstep(NEFF_LO, NEFF_HI, neff);
+        if (w > 0.0) {
+            const float c = M(l);
+            const float n = M(l - ivec2(0, 1)), s = M(l + ivec2(0, 1)), we = M(l - ivec2(1, 0)), e = M(l + ivec2(1, 0));
+            const float n2 = M(l - ivec2(0, 2)), s2 = M(l + ivec2(0, 2)), w2 = M(l - ivec2(2, 0)), e2 = M(l + ivec2(2, 0));
+            const float eN = cand(n, c, n2), eS = cand(s, c, s2), eW = cand(we, c, w2), eE = cand(e, c, e2);
+            const float wN = 1.0 / (AE + (abs(n - s) + abs(c - n2)) * (abs(n - s) + abs(c - n2)));
+            const float wS = 1.0 / (AE + (abs(s - n) + abs(c - s2)) * (abs(s - n) + abs(c - s2)));
+            const float wW = 1.0 / (AE + (abs(we - e) + abs(c - w2)) * (abs(we - e) + abs(c - w2)));
+            const float wE = 1.0 / (AE + (abs(e - we) + abs(c - e2)) * (abs(e - we) + abs(c - e2)));
+            const float gv = (wN * eN + wS * eS) / (wN + wS), gh = (wW * eW + wE * eE) / (wW + wE);
+            float DH = 0.0, DV = 0.0;
+            for (int dy = -1; dy <= 1; ++dy)
+                for (int dx = -1; dx <= 1; ++dx) {
+                    const int k = (l.y + dy + 1) * 18 + l.x + dx + 1;
+                    DH += sDH[k];
+                    DV += sDV[k];
+                }
+            const float wh = DV / (DH + DV + 1.0e-6);
+            g = mix(g, wh * gh + (1.0 - wh) * gv, w);
+        }
+    }
+    imageStore(greenAlt, q, vec4(g));
+}

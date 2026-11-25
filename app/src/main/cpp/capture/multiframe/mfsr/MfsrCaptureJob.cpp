@@ -773,9 +773,28 @@ void MfsrCaptureJob::runStages(Published& published) {
                     sensorClip.clipThreshold = 0.995f;
                 }
                 const auto rgbPrepBegin = std::chrono::steady_clock::now();
-                if (nativeRgb)
-                    outputAdapter.prepareRgb(mergeResult->outputView, lsc.width, lsc.height, lsc.gains, sensorClip);
-                else
+                if (nativeRgb) {
+                    // Rexture's red / blue between their own CFA sites alias into broad false-colour bands on fine
+                    // texture; prepareRgb takes their smooth colour from the sites (see SiteChromaParams).
+                    const auto wb = rawrcam::color::collapseRggbToRgb(job->referenceColor.baselineWbRggb);
+                    rawr::raw_multiframe_output::SiteChromaParams siteChroma{};
+                    siteChroma.enabled = wb[1] > 0.0f;
+                    siteChroma.cfa = ctx.cfa;
+                    siteChroma.whiteBalanceR = siteChroma.enabled ? wb[0] / wb[1] : 1.0f;
+                    siteChroma.whiteBalanceB = siteChroma.enabled ? wb[2] / wb[1] : 1.0f;
+                    if (mergeResult->noiseEstimated) {   // merged noise: burst fit / frames, as the multiframe chroma denoise
+                        const float frames = mergeResult->effectiveFrames > 0.0f
+                                                 ? std::max(mergeResult->effectiveFrames, 1.0f)
+                                                 : float(std::max<std::uint32_t>(mergeResult->frameCount, 1u));
+                        const auto& n = mergeResult->estimatedNoise;
+                        siteChroma.noiseSlope =
+                            .25f * (n.slopeBySite[0] + n.slopeBySite[1] + n.slopeBySite[2] + n.slopeBySite[3]) / frames;
+                        siteChroma.noiseOffset =
+                            .25f * (n.offsetBySite[0] + n.offsetBySite[1] + n.offsetBySite[2] + n.offsetBySite[3]) / frames;
+                    }
+                    outputAdapter.prepareRgb(mergeResult->outputView, lsc.width, lsc.height, lsc.gains, sensorClip,
+                                             siteChroma);
+                } else
                     outputAdapter.preparePackedCfa(mergeResult->outputView, lsc.width, lsc.height, lsc.gains, sensorClip);
                 rgbPrepMs = wallMs(rgbPrepBegin);
                 sensorClipOrApplied = outputAdapter.sensorClipOrApplied();

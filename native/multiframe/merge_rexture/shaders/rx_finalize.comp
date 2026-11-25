@@ -171,7 +171,8 @@ void main() {
     const ivec2 pos = o0 + t2;
     if (pos.x < p.w && pos.y < p.h) {
         Fin f = finalizeAt(pos);
-        imageStore(outI, pos, vec4(f.rgb, 1.0));
+        // Alpha: the effective frame count (the native-RGB output's site chroma re-estimates green where it is low).
+        imageStore(outI, pos, vec4(f.rgb, isnan(f.neff) ? 0.0 : min(f.neff, 1000.0)));
         sM[tid] = (1.0 - f.conf) * (1.0 - f.conf) + f.conf * f.conf / max(f.neff, 1.0);
         if (p.debug != 0) {
             imageStore(dbgOutI, pos, vec4(f.rgb, f.neff));
