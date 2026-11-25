@@ -8,6 +8,11 @@ ivec2 rxRedOffset(int cfa) { return ivec2((cfa == 1 || cfa == 3) ? 1 : 0, (cfa =
 // colour a few percent under it (V2562 35 mm red at about 0.978).
 const float RX_CLIP_NORM = 0.95;
 
+// Merged own-site CFA (rx_finalize's RX_MERGED_CFA variant), the input of the fallback demosaic: the merged value of each
+// pixel's own colour stored as uint16 = RX_MCFA_BLACK + x * RX_MCFA_SCALE, finer than any sensor's codes and with room for
+// noise below black. Read it as a raw frame with black RX_MCFA_BLACK and white RX_MCFA_BLACK + RX_MCFA_SCALE.
+const float RX_MCFA_BLACK = 4096.0, RX_MCFA_SCALE = 57344.0;
+
 // Normalised value of a raw sample at (already clamped) site q. Coordinates are clamped to the image first and the
 // phase of the clamped site is used: identical to normalising the whole image and edge-padding it.
 float rxNormFromRaw(float rawValue, ivec2 qClamped, vec4 black, float white) {

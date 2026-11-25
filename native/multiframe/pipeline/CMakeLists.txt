@@ -113,7 +113,8 @@ set(RAWR_MF_VARIANTS
   rx_accumulate:rx_accumulate_lean:RX_LEAN=1
   rx_accumulate:rx_accumulate_lean_fit:RX_LEAN_FIT=1
   rx_cand_select:rx_cand_select_lean:RX_LEAN=1
-  rx_fit:rx_fit_motion:RX_FIT_OP=3)
+  rx_fit:rx_fit_motion:RX_FIT_OP=3
+  rx_finalize:rx_merged_cfa:RX_MERGED_CFA=1)
 file(GLOB RAWR_RX_GLSL_ALL ${RAWR_MF_DIR}/merge_rexture/shaders/*.glsl)
 foreach(RAWR_MF_VARIANT IN LISTS RAWR_MF_VARIANTS)
   string(REPLACE ":" ";" RAWR_MF_V ${RAWR_MF_VARIANT})

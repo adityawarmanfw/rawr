@@ -1,8 +1,9 @@
-// Copy of native/raw_demosaic/rcd/shaders/rcd_common.glsl for Rexture's base demosaic, trimmed to the RAW-image input with a
-// fixed balance and run with fp32 intermediates (the library keeps its work planes in an RGBA16F image).
+// Copy of native/raw_demosaic/rcd/shaders/rcd_common.glsl for Rexture's fallback demosaic, trimmed to a RAW-image input with a
+// fixed balance and run with fp32 intermediates (the library keeps its work planes in an RGBA16F image). The input is the merged
+// own-site CFA (rx_finalize's RX_MERGED_CFA variant), or the base frame in the verification build's early dump.
 // Strip-wise: the work planes (outputImage, directionImage) hold only the image rows [y0, y0 + rows); every access goes through
-// wp(). Rows within 7 of a strip edge of the planes are not exact (their neighbours are clamped), so the caller keeps a margin
-// of at least 8 rows. Workgroups whose surroundings need no fallback demosaic (fbTiles) return immediately. RCD algorithm by Luis
+// wp(). The input holds rows [inY0, inY0 + inRows), 4 more on each side than the planes. Rows within 7 of a strip edge of the
+// planes are not exact (their neighbours are clamped), so the caller keeps a margin of at least 8 rows. Workgroups whose surroundings need no fallback demosaic (fbTiles) return immediately. RCD algorithm by Luis
 // Sanz Rodriguez via librtprocess / RawTherapee (GPL-3.0-or-later); see native/raw_demosaic/NOTICE.md.
 #ifndef RX_RCD_COMMON_GLSL
 #define RX_RCD_COMMON_GLSL
@@ -22,7 +23,7 @@ layout(push_constant) uniform Push {
     vec4 fixedBalance; // R, G, B gains (the spec's balance, unnormalised)
     int rows;          // rows held by the work planes
     int gate;          // 1 = skip workgroups away from flagged tiles
-    int pad1, pad2;
+    int inY0, inRows;  // rows held by the input image: the merged own-site CFA of a strip, or a whole frame (0, height)
 }
 pc;
 
@@ -62,7 +63,7 @@ ivec2 clampRaw(ivec2 p) { return clamp(p, ivec2(0), ivec2(int(pc.width) - 1, int
 float unbalancedCfa(ivec2 p) {
     p = clampRaw(p);
     int parity = ((p.y & 1) << 1) | (p.x & 1);
-    float v = float(imageLoad(raw16Input, p).r);
+    float v = float(imageLoad(raw16Input, ivec2(p.x, clamp(p.y - pc.inY0, 0, pc.inRows - 1))).r);
     return (v - component(pc.black, parity)) * component(pc.invRange, parity);
 }
 

@@ -33,8 +33,8 @@ class RextureRecorder final {
     void recordBaseKernel(VkCommandBuffer, bool debug) const;
 
     // Verification build only (makeRextureScratchLayout debug = true): RCD demosaic of the whole base frame (fp32 work planes,
-    // the spec's white balance) followed by the native-range bound, kept in rx_rcd_work. Production builds demosaic strip by
-    // strip inside recordFinalize and never call this.
+    // the spec's white balance) followed by the native-range bound, kept in rx_rcd_work for the stage dump. The final pass then
+    // demosaics the merged own-site CFA instead (whole frame here, strip by strip in production builds, which never call this).
     void recordBaseDemosaic(VkCommandBuffer, VkImageView rawU16, const MultiframeFrameParameters&) const;
 
     // Base: per-level tile structure (gradient tensor + flat-tile mode) of the reference pyramid. After recordPrepare(base).
@@ -62,7 +62,7 @@ class RextureRecorder final {
                               float gain0 = 1.0f, float gain1 = 1.0f) const;
 
     // Final pass (after the last companion): flags the 16 x 16 tiles that may need the fallback demosaic, then strip by strip
-    // the RCD demosaic of the base (flagged tiles only) and the finalize into linear_output (RGBA16F), then the strip-wise
+    // the merged own-site CFA and its RCD demosaic (near flagged tiles only) and the finalize into linear_output (RGBA16F), then the strip-wise
     // grain pass that lowers the noise where few frames were merged to the level of the merged areas around it.
     void recordFinalize(VkCommandBuffer, VkImageView baseRawU16, const MultiframeFrameParameters&, bool debug) const;
     // Tests and tools only: rows per strip of the grain pass (0 = default). The output must not depend on it.
@@ -96,8 +96,12 @@ class RextureRecorder final {
     // added to the output (after the grain pass), 3 a companion's motion weight.
     void recordFit(VkCommandBuffer, std::int32_t op, VkImageView rawU16, const MultiframeFrameParameters& f, float gain = 1.0f,
                    std::uint32_t slot = 0) const;
-    void recordRcd(VkCommandBuffer, VkImageView rawU16, const MultiframeFrameParameters&, std::int32_t y0, std::int32_t rows,
-                   bool gate, bool exportAndBound = true) const;
+    // input: a RAW16-style image holding rows [inY0, inY0 + inRows); merged = it is rx_mcfa (its own black / white levels).
+    void recordRcd(VkCommandBuffer, VkImageView input, const MultiframeFrameParameters&, std::int32_t y0, std::int32_t rows,
+                   bool gate, bool exportAndBound, std::int32_t inY0, std::int32_t inRows, bool merged) const;
+    // The merged own-site CFA (rx_finalize's RX_MERGED_CFA variant) of rows [y0, y0 + rows) into rx_mcfa, near flagged tiles.
+    void recordMergedCfa(VkCommandBuffer, VkImageView baseRawU16, const MultiframeFrameParameters&, std::int32_t y0,
+                         std::int32_t rows) const;
 };
 
 }  // namespace rawr::raw_gpu_pipeline

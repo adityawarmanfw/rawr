@@ -5,11 +5,14 @@
 //     per-frame weight normalisation as the companions);
 //     neff = (sum w)^2 / sum_frames W^2 per colour, mass = sum w / (support + 1),
 //     conf = min over colours of smoothstep(1, 3, neff) * smoothstep(.001, .03, mass),
-//     out = rcd + (merged - rcd) * conf, rcd = the bounded RCD demosaic of the base.
+//     out = rcd + (merged - rcd) * conf, rcd = the bounded RCD demosaic of the merged own-site CFA: each pixel's merged value of
+//     its own colour (this shader's RX_MERGED_CFA variant). Where only the base frame merged, that is the base frame; where many
+//     frames merged but a colour has no samples near a pixel (a burst without sub-pixel shifts: a tripod, a still hand), it is
+//     the merge's own samples, not the single base frame (which left half the pixels with one frame's noise).
 //   The RCD demosaic exists only for the strip being finished (work planes of rows [rcdY0, rcdY0 + rcdRows)) and only in the
 //   16 x 16 tiles rx_fb_flags flagged; in the others conf is 1 and the merged value is the output.
-//   m = the output's noise variance relative to one frame: the RCD share (1 - conf)^2 plus the merged share
-//     conf^2 / neff. It is written as the mean per 4 x 4 pixel cell (the per-site alternation of red / green / blue
+//   m = the output's noise variance relative to one frame: the RCD share (1 - conf)^2 / neff of the pixel's own colour plus the
+//     merged share conf^2 / neff. It is written as the mean per 4 x 4 pixel cell (the per-site alternation of red / green / blue
 //     averages out) for rx_even, which evens out the grain where few frames were merged.
 // One workgroup = 16 x 16 pixels = 4 x 4 cells.
 #include "rx_common.glsl"
@@ -27,6 +30,11 @@ layout(set = 0, binding = 8, rgba32f) writeonly uniform image2D dbgOutI;   // (f
 layout(set = 0, binding = 9, rgba32f) writeonly uniform image2D dbgPreI;   // (pre-grain rgb, conf)   verification only
 layout(set = 0, binding = 10, r32f) writeonly uniform image2D mI;          // m per 4 x 4 pixel cell
 layout(set = 0, binding = 11, r32f) readonly uniform image2D fbTiles;      // 1 = the 16 x 16 tile has an RCD fallback
+#ifdef RX_MERGED_CFA
+layout(set = 0, binding = 12, r16ui) writeonly uniform uimage2D mcfaI;    // merged own-site CFA of rows [mcfaY0, + mcfaRows)
+#else
+layout(set = 0, binding = 12, r16ui) readonly uniform uimage2D mcfaI;
+#endif
 layout(push_constant) uniform P {
     vec4 black;
     float white;
@@ -35,10 +43,12 @@ layout(push_constant) uniform P {
     int rcdY0, rcdRows;      // rows held by the RCD work planes
     int rcdPlanes;           // 1: rcdI holds the RCD planes before export and bound (production), applied here per pixel;
                              // 0: rcdI is already exported and bounded (verification build, whole-frame RCD)
-    vec4 rcdBalance;         // RCD's fixed balance (R, G, B, 1) and per-phase 1 / (white - black), as in rx_rcd_common.glsl
-    vec4 rcdInvRange;
+    vec4 rcdBalance;         // RCD's fixed balance (R, G, B, 1), as in rx_rcd_common.glsl
+    int mcfaY0, mcfaRows;    // rows held by the merged own-site CFA
+    int pad0, pad1;
 } p;
 
+#ifndef RX_MERGED_CFA
 // rx_rcd_export + rx_rcd_bound for one pixel, same arithmetic: the exported RCD value (the librtprocess border rule in the outer
 // 9 px), un-balanced, then each interpolated channel clamped to its native samples' range in the 5 x 5 window (edge clamp).
 int rcdRgbColorAt(ivec2 q) {
@@ -49,11 +59,15 @@ int rcdRgbColorAt(ivec2 q) {
     else c = y == 0 ? (x == 0 ? 3 : 2) : (x == 0 ? 1 : 0);
     return c == 0 ? 0 : (c == 3 ? 2 : 1);
 }
+// Merged own-site value at image pixel q (clamped into the image and into the rows the plane holds).
+float mcfaAt(ivec2 q) {
+    q = clamp(q, ivec2(0), ivec2(p.w - 1, p.h - 1));
+    const uint v = imageLoad(mcfaI, ivec2(q.x, clamp(q.y - p.mcfaY0, 0, p.mcfaRows - 1))).r;
+    return (float(v) - RX_MCFA_BLACK) / RX_MCFA_SCALE;
+}
 float rcdCfa(ivec2 q) {
     q = clamp(q, ivec2(0), ivec2(p.w - 1, p.h - 1));
-    const int parity = ((q.y & 1) << 1) | (q.x & 1);
-    const float v = float(imageLoad(rawU16, q).r);
-    return (v - p.black[parity]) * p.rcdInvRange[parity] * p.rcdBalance[rcdRgbColorAt(q)];
+    return mcfaAt(q) * p.rcdBalance[rcdRgbColorAt(q)];
 }
 vec3 rcdBorder(ivec2 q0) {
     vec3 sum = vec3(0.0);
@@ -90,7 +104,7 @@ vec3 rcdBase(ivec2 q0) {
         for (int dx = 0; dx < 5; ++dx) {
             const ivec2 qc = clamp(q0 - 2 + ivec2(dx, dy), ivec2(0), size - 1);
             const int c = rxChannel(qc, p.cfa);
-            const float x = rxNormFromRaw(float(imageLoad(rawU16, qc).x), qc, p.black, p.white);
+            const float x = mcfaAt(qc);
             lo[c] = min(lo[c], x);
             hi[c] = max(hi[c], x);
         }
@@ -99,6 +113,7 @@ vec3 rcdBase(ivec2 q0) {
         if (k != own) val[k] = clamp(val[k], lo[k], hi[k]);
     return vec3(val[0], val[1], val[2]);
 }
+#endif
 
 const float RB_WIDEN = 1.2;
 // NEFF_HI 1.5 (was 3): the smaller dark-area kernel (rx_kernel_cov) halves the effective frame count of a well merged pixel, and at 3 most of a dark moving
@@ -110,9 +125,12 @@ const float FRAME_NORM_FLOOR = 0.1;
 const float FRAME_NORM_GAMMA = 0.5;   // as in rx_accumulate
 shared float sM[256];                 // m of the workgroup's pixels (-1 outside the image)
 
-struct Fin { vec3 rgb; float conf; float neff; };
+struct Fin { vec3 rgb; float conf; float neff; float neffOwn; };
+struct Sums { vec3 merged, total, square; };
 
-Fin finalizeAt(ivec2 q0) {
+// The running sums at q0 with the base's own 3 x 3 samples added: the merged value, total weight and the sum over frames of
+// squared frame weights, per colour.
+Sums sumsAt(ivec2 q0) {
     const ivec2 size = ivec2(p.w, p.h);
     vec3 ca, cb, cc4, cd;
     vec2 cf;
@@ -139,16 +157,24 @@ Fin finalizeAt(ivec2 q0) {
     vec4 a = imageLoad(accA, q0);
     vec2 bw = imageLoad(accB, q0).xy;
     vec3 accSq = imageLoad(accC, q0).xyz;
-    vec3 total = vec3(a.w, bw) + rw;
-    vec3 square = accSq + rw * rw;
-    vec3 neff = total * total / max(square, vec3(1e-20));
+    Sums r;
+    r.total = vec3(a.w, bw) + rw;
+    r.square = accSq + rw * rw;
+    r.merged = (a.xyz + rs) / max(r.total, vec3(1e-20));
+    return r;
+}
+
+#ifndef RX_MERGED_CFA
+Fin finalizeAt(ivec2 q0) {
+    const Sums sums = sumsAt(q0);
+    const vec3 total = sums.total, merged = sums.merged;
+    vec3 neff = total * total / max(sums.square, vec3(1e-20));
     float loc = imageLoad(supportI, clamp(q0 / 2, ivec2(0), imageSize(supportI) - 1)).x;
     vec3 mass = total / max(loc + 1.0, 1.0);
     vec3 cert = vec3(smoothstep(NEFF_LO, NEFF_HI, neff.x) * smoothstep(MASS_LO, MASS_HI, mass.x),
                      smoothstep(NEFF_LO, NEFF_HI, neff.y) * smoothstep(MASS_LO, MASS_HI, mass.y),
                      smoothstep(NEFF_LO, NEFF_HI, neff.z) * smoothstep(MASS_LO, MASS_HI, mass.z));
     float conf = min(cert.x, min(cert.y, cert.z));
-    vec3 merged = (a.xyz + rs) / max(total, vec3(1e-20));
     const bool fallback = imageLoad(fbTiles, q0 / 16).x > 0.5;
     vec3 base = fallback ? rcdBase(q0) : merged;
     Fin f;
@@ -161,6 +187,7 @@ Fin finalizeAt(ivec2 q0) {
     if (isnan(conf)) conf = 0.0;
     f.conf = conf;
     f.neff = min(neff.x, min(neff.y, neff.z));
+    f.neffOwn = neff[rxChannel(q0, p.cfa)];
     return f;
 }
 
@@ -173,7 +200,9 @@ void main() {
         Fin f = finalizeAt(pos);
         // Alpha: the effective frame count (the native-RGB output's site chroma re-estimates green where it is low).
         imageStore(outI, pos, vec4(f.rgb, isnan(f.neff) ? 0.0 : min(f.neff, 1000.0)));
-        sM[tid] = (1.0 - f.conf) * (1.0 - f.conf) + f.conf * f.conf / max(f.neff, 1.0);
+        // the fallback demosaics the merged own-site values: its noise is that of the pixel's own colour's merge
+        sM[tid] = (1.0 - f.conf) * (1.0 - f.conf) / max(isnan(f.neffOwn) ? 1.0 : f.neffOwn, 1.0) +
+                  f.conf * f.conf / max(f.neff, 1.0);
         if (p.debug != 0) {
             imageStore(dbgOutI, pos, vec4(f.rgb, f.neff));
             imageStore(dbgPreI, pos, vec4(f.rgb, f.conf));
@@ -196,3 +225,20 @@ void main() {
         if (cnt > 0.0) imageStore(mI, o0 / 4 + cc, vec4(sum / cnt));
     }
 }
+#else
+// The merged own-site CFA of rows [mcfaY0, mcfaY0 + mcfaRows), only near the flagged tiles: the RCD passes run within one tile of
+// a flagged tile and read 4 pixels around their area, so two tiles of margin.
+void main() {
+    const ivec2 g0 = ivec2(gl_WorkGroupID.x * 16, p.mcfaY0 + int(gl_WorkGroupID.y) * 16);
+    const ivec2 n = imageSize(fbTiles);
+    const ivec2 t0 = max(g0 / 16 - 2, ivec2(0)), t1 = min((g0 + 15) / 16 + 2, n - 1);
+    bool needed = false;
+    for (int ty = t0.y; ty <= t1.y; ++ty)
+        for (int tx = t0.x; tx <= t1.x; ++tx) needed = needed || imageLoad(fbTiles, ivec2(tx, ty)).x > 0.5;
+    const ivec2 pos = g0 + ivec2(gl_LocalInvocationID.xy);
+    if (!needed || pos.x >= p.w || pos.y >= p.h || pos.y >= p.mcfaY0 + p.mcfaRows) return;
+    float v = sumsAt(pos).merged[rxChannel(pos, p.cfa)];
+    if (isnan(v) || isinf(v)) v = rxNormFromRaw(float(imageLoad(rawU16, pos).x), pos, p.black, p.white);
+    imageStore(mcfaI, ivec2(pos.x, pos.y - p.mcfaY0), uvec4(uint(clamp(round(RX_MCFA_BLACK + v * RX_MCFA_SCALE), 0.0, 65535.0))));
+}
+#endif

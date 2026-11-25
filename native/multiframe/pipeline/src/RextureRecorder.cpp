@@ -72,7 +72,9 @@ struct FinalPc {
     std::int32_t row0, rcdY0, rcdRows;  // first row of the dispatch; rows held by the RCD work planes
     std::int32_t rcdPlanes;              // 1: the planes before export / bound, which rx_finalize applies per pixel
     std::int32_t pad[3];                 // the shader's vec4 members start at 16-byte offsets
-    float rcdBalance[4], rcdInvRange[4];
+    float rcdBalance[4];
+    std::int32_t mcfaY0, mcfaRows;       // rows held by the merged own-site CFA (rx_mcfa)
+    std::int32_t pad2[2];
 };
 static_assert(offsetof(FinalPc, rcdBalance) == 64 && sizeof(FinalPc) <= 128, "FinalPc must match rx_finalize's push block");
 struct FlagsPc {
@@ -89,6 +91,10 @@ struct EvenPc {
 constexpr std::int32_t kStripRows = 256;
 // The fallback RCD of a strip also needs the rows around it: its five passes depend on each other over 7 rows.
 constexpr std::int32_t kRcdHalo = 8, kRcdRows = kStripRows + 2 * kRcdHalo;
+// The merged own-site CFA the RCD reads covers its planes' rows plus the 4 rows its passes read around them.
+constexpr std::int32_t kMcfaHalo = 4, kMcfaRows = kRcdRows + 2 * kMcfaHalo;
+// Encoding of rx_mcfa (rx_common.glsl RX_MCFA_*): uint16 = black + normalised value x scale.
+constexpr float kMcfaBlack = 4096.0f, kMcfaScale = 57344.0f;
 std::atomic<std::int32_t> gStripRows{kStripRows};
 struct BoundPc {
     float black[4];
@@ -101,7 +107,8 @@ struct RcdPc {
     std::uint32_t width, height, pattern;
     std::int32_t y0;
     float black[4], invRange[4], balance[4];
-    std::int32_t rows, gate, pad1, pad2;
+    std::int32_t rows, gate;
+    std::int32_t inY0, inRows;  // rows held by the input image
 };
 struct AxisPc {
     std::int32_t axis;
@@ -179,19 +186,22 @@ ScratchLayout makeRextureScratchLayout(const MultiframeGeometry& g, bool debug, 
     // final pass.
     img("rx_lc_m", Extent2D{(g.output.width + 3u) / 4u, (g.output.height + 3u) / 4u}, PixelStorage::R32Float, Lifetime::Output,
         "companion", "end:linear_output");
-    // Fallback demosaic (RCD of the base): computed per strip while finalizing, only near the 16 x 16 tiles flagged by
-    // rx_fb_flags, so nothing of image size is kept for it: fp32 work planes (RGB + direction field) of one strip, behind the
-    // noise grid. The verification build runs RCD once on the whole frame.
+    // Fallback demosaic (RCD of the merged own-site CFA): computed per strip while finalizing, only near the 16 x 16 tiles flagged
+    // by rx_fb_flags, so nothing of image size is kept for it: the strip's merged own-site CFA (uint16) and fp32 work planes
+    // (RGB + direction field), behind the noise grid. The verification build runs it once on the whole frame.
     img("rx_fb_tiles", Extent2D{(g.output.width + 15u) / 16u, (g.output.height + 15u) / 16u}, PixelStorage::R32Float,
         Lifetime::Output);
     if (debug) {
         img("rx_rcd_work", g.output, PixelStorage::RGBA32Float, Lifetime::Burst);
         img("rx_rcd_dir", g.output, PixelStorage::RG32Float, Lifetime::Burst);
+        img("rx_mcfa", g.output, PixelStorage::R16Uint, Lifetime::Burst);
     } else {
         img("rx_rcd_work", Extent2D{g.output.width, std::uint32_t(std::min<std::uint32_t>(kRcdRows, g.output.height))},
             PixelStorage::RGBA32Float, Lifetime::Output, "companion", "end:rx_lc_m");
         img("rx_rcd_dir", Extent2D{g.output.width, std::uint32_t(std::min<std::uint32_t>(kRcdRows, g.output.height))},
             PixelStorage::RG32Float, Lifetime::Output, "companion", "end:rx_rcd_work");
+        img("rx_mcfa", Extent2D{g.output.width, std::uint32_t(std::min<std::uint32_t>(kMcfaRows, g.output.height))},
+            PixelStorage::R16Uint, Lifetime::Output, "companion", "end:rx_rcd_dir");
     }
     // Detail fit (rx_fit.comp): the base green plane (read by each companion's motion test; the fitted green after the final
     // pass) and the fit sums (rx_fit_acc + rx_fit_acc2: the centred sample sum and 5 coefficients of the fit's 3 x 3 stencil),
@@ -505,7 +515,7 @@ void RextureRecorder::recordFinalize(VkCommandBuffer c, VkImageView rawU16, cons
     const auto& out = arena_.image("linear_output");
     const std::int32_t w = std::int32_t(out.extent.width), h = std::int32_t(out.extent.height);
     const auto& tiles = arena_.image("rx_fb_tiles");
-    if (debug) {  // the verification build keeps the whole-frame RCD of recordBaseDemosaic and every tile on
+    if (debug) {  // the verification build: every tile on, the whole-frame RCD of the merged own-site CFA
         VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         const VkClearColorValue one{{1.0f, 1.0f, 1.0f, 1.0f}};
         vkCmdClearColorImage(c, tiles.image, VK_IMAGE_LAYOUT_GENERAL, &one, 1, &range);
@@ -515,6 +525,8 @@ void RextureRecorder::recordFinalize(VkCommandBuffer c, VkImageView rawU16, cons
         b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
         vkCmdPipelineBarrier(c, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &b, 0, nullptr, 0,
                              nullptr);
+        recordMergedCfa(c, rawU16, f, 0, h);
+        recordRcd(c, arena_.image("rx_mcfa").view, f, 0, h, false, true, 0, h, true);
     } else {
         const FlagsPc fp{w, h};
         executor_.record(c, ShaderId::RxFbFlags,
@@ -548,23 +560,28 @@ void RextureRecorder::recordFinalize(VkCommandBuffer c, VkImageView rawU16, cons
         if (debug) {
             p.rcdY0 = 0;
             p.rcdRows = h;
+            p.mcfaY0 = 0;
+            p.mcfaRows = h;
         } else {
             const std::int32_t y0 = std::max(r0 - kRcdHalo, 0), y1 = std::min(r1 + kRcdHalo, h);
             if (y1 - y0 > std::int32_t(work.extent.height)) throw std::logic_error("rexture recorder: RCD strip too tall");
-            recordRcd(c, rawU16, f, y0, y1 - y0, true, /*exportAndBound=*/false);
+            const std::int32_t m0 = std::max(y0 - kMcfaHalo, 0), m1 = std::min(y1 + kMcfaHalo, h);
+            recordMergedCfa(c, rawU16, f, m0, m1 - m0);
+            recordRcd(c, arena_.image("rx_mcfa").view, f, y0, y1 - y0, true, /*exportAndBound=*/false, m0, m1 - m0, true);
             if (mark_) mark_("rcd");
             p.rcdY0 = y0;
             p.rcdRows = y1 - y0;
+            p.mcfaY0 = m0;
+            p.mcfaRows = m1 - m0;
         }
         p.row0 = r0;
         p.rcdPlanes = debug ? 0 : 1;
         for (int i = 0; i < 3; ++i) p.rcdBalance[i] = config_.whiteBalance[i];
         p.rcdBalance[3] = 1.0f;
-        for (int i = 0; i < 4; ++i) p.rcdInvRange[i] = 1.0f / (f.normalization.whiteLevel - f.normalization.blackByPhase[i]);
         executor_.record(c, ShaderId::RxFinalize,
                          {{raw, ib(1, arena_.image("rx_base_cov")), ib(2, accA), ib(3, arena_.image("rx_acc_b")), ib(4, accC),
                            ib(5, arena_.image("rx_support")), ib(6, work), ib(7, out), ib(8, dbgOut), ib(9, dbgPre),
-                           ib(10, noiseGrid), ib(11, tiles)},
+                           ib(10, noiseGrid), ib(11, tiles), ib(12, arena_.image("rx_mcfa"))},
                           {}},
                          &p, sizeof(p), divUp(std::uint32_t(w), 16), divUp(std::uint32_t(r1 - r0), 16));
         computeWriteBarrier(c);
@@ -692,13 +709,40 @@ void RextureRecorder::recordGrainPass(VkCommandBuffer c) const {
 namespace rawr::raw_gpu_pipeline {
 void RextureRecorder::recordBaseDemosaic(VkCommandBuffer c, VkImageView rawU16, const MultiframeFrameParameters& f) const {
     // Verification build only: RCD + bound of the whole frame, ungated, into the full-size work planes.
-    recordRcd(c, rawU16, f, 0, std::int32_t(arena_.image("rx_rcd_work").extent.height), false);
+    const std::int32_t h = std::int32_t(arena_.image("rx_rcd_work").extent.height);
+    recordRcd(c, rawU16, f, 0, h, false, true, 0, h, false);
+}
+
+void RextureRecorder::recordMergedCfa(VkCommandBuffer c, VkImageView rawU16, const MultiframeFrameParameters& f, std::int32_t y0,
+                                      std::int32_t rows) const {
+    const auto& mcfa = arena_.image("rx_mcfa");
+    const auto& out = arena_.image("linear_output");
+    if (rows <= 0 || rows > std::int32_t(mcfa.extent.height)) throw std::logic_error("rexture recorder: merged CFA strip too tall");
+    FinalPc p{};
+    std::copy(f.normalization.blackByPhase.begin(), f.normalization.blackByPhase.end(), p.black);
+    p.white = f.normalization.whiteLevel;
+    p.w = std::int32_t(out.extent.width);
+    p.h = std::int32_t(out.extent.height);
+    p.cfa = std::int32_t(config_.cfa);
+    p.mcfaY0 = y0;
+    p.mcfaRows = rows;
+    const auto& accA = arena_.image("rx_acc_a");
+    // bindings of rx_finalize; the variant reads the sums and writes binding 12
+    executor_.record(c, ShaderId::RxMergedCfa,
+                     {{ImageBinding{0, rawU16, VK_IMAGE_LAYOUT_GENERAL}, ib(1, arena_.image("rx_base_cov")), ib(2, accA),
+                       ib(3, arena_.image("rx_acc_b")), ib(4, arena_.image("rx_acc_c")), ib(5, arena_.image("rx_support")),
+                       ib(6, arena_.image("rx_rcd_work")), ib(7, out), ib(8, accA), ib(9, accA), ib(10, arena_.image("rx_lc_m")),
+                       ib(11, arena_.image("rx_fb_tiles")), ib(12, mcfa)},
+                      {}},
+                     &p, sizeof(p), divUp(std::uint32_t(p.w), 16), divUp(std::uint32_t(rows), 16));
+    computeWriteBarrier(c);
 }
 
 // fp32 RCD of the image rows [y0, y0 + rows) into rx_rcd_work (direction field in rx_rcd_dir), then the native-range bound
 // in place. gate: only near the tiles flagged in rx_fb_tiles.
 void RextureRecorder::recordRcd(VkCommandBuffer c, VkImageView rawU16, const MultiframeFrameParameters& f, std::int32_t y0,
-                                std::int32_t rows, bool gate, bool exportAndBound) const {
+                                std::int32_t rows, bool gate, bool exportAndBound, std::int32_t inY0, std::int32_t inRows,
+                                bool merged) const {
     if (!rawU16) throw std::invalid_argument("rexture recorder: null RAW16 view");
     const auto& out = arena_.image("rx_rcd_work");
     const auto& dir = arena_.image("rx_rcd_dir");
@@ -711,9 +755,11 @@ void RextureRecorder::recordRcd(VkCommandBuffer c, VkImageView rawU16, const Mul
     p.y0 = y0;
     p.rows = rows;
     p.gate = gate ? 1 : 0;
+    p.inY0 = inY0;
+    p.inRows = inRows;
     for (int i = 0; i < 4; ++i) {
-        p.black[i] = f.normalization.blackByPhase[i];
-        p.invRange[i] = 1.0f / (f.normalization.whiteLevel - f.normalization.blackByPhase[i]);
+        p.black[i] = merged ? kMcfaBlack : f.normalization.blackByPhase[i];
+        p.invRange[i] = merged ? 1.0f / kMcfaScale : 1.0f / (f.normalization.whiteLevel - f.normalization.blackByPhase[i]);
     }
     for (int i = 0; i < 3; ++i) p.balance[i] = config_.whiteBalance[i];
     p.balance[3] = 1.0f;
@@ -738,9 +784,16 @@ void RextureRecorder::recordRcd(VkCommandBuffer c, VkImageView rawU16, const Mul
     executor_.record(c, ShaderId::RxRcdExport, b, &p, sizeof(p), divUp(p.width, 4), divUp(n, 32));
     computeWriteBarrier(c);
     if (mark_ && !gate) mark_("rcd_export");
+    // The bound pass reads its input at image coordinates: the whole-frame runs (verification build) only.
+    if (inY0 != 0 || inRows < std::int32_t(p.height)) throw std::logic_error("rexture recorder: RCD bound needs a whole-frame input");
     BoundPc bp{};
-    std::copy(f.normalization.blackByPhase.begin(), f.normalization.blackByPhase.end(), bp.black);
-    bp.white = f.normalization.whiteLevel;
+    if (merged) {
+        std::fill(std::begin(bp.black), std::end(bp.black), kMcfaBlack);
+        bp.white = kMcfaBlack + kMcfaScale;
+    } else {
+        std::copy(f.normalization.blackByPhase.begin(), f.normalization.blackByPhase.end(), bp.black);
+        bp.white = f.normalization.whiteLevel;
+    }
     bp.w = std::int32_t(p.width);
     bp.h = std::int32_t(p.height);
     bp.cfa = std::int32_t(config_.cfa);
