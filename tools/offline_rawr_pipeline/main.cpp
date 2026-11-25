@@ -47,6 +47,10 @@ struct CaptureConfig {
     float defringeStrength = 0.0f;
     float defringeEdgeThreshold = 0.02f;
     float defringeLumaFloor = 0.08f;
+    // Wavelet denoise (rawr::post::DenoiseRequest); denoiseStrength 0 = off. The app's multiframe Chroma Denoise:
+    // strength 1, detail 1, forceY 0, maxScale 7, edgeK 0.2, wbColourAxes 1, noiseThresholdUv 0.75, garrote 1,
+    // noiseA / noiseB = the burst's green noise fit / merged frames.
+    rawr::post::DenoiseRequest denoise{};
     bool dualAutoContrast = true;
     float dualContrastPercent = 20.0f;
     float exposureEV = 0.0f;
@@ -204,6 +208,16 @@ CaptureConfig loadConfig(const std::filesystem::path& path) {
     if (values.count("dualAutoContrast")) c.dualAutoContrast = std::stoul(values.at("dualAutoContrast")) != 0u;
     if (values.count("dualContrastPercent")) c.dualContrastPercent = std::stof(values.at("dualContrastPercent"));
     if (values.count("exposureEV")) c.exposureEV = std::stof(values.at("exposureEV"));
+    if (values.count("denoiseStrength")) c.denoise.strength = std::stof(values.at("denoiseStrength"));
+    if (values.count("denoiseDetail")) c.denoise.detail = std::stof(values.at("denoiseDetail"));
+    if (values.count("denoiseForceY")) c.denoise.forceY = std::stof(values.at("denoiseForceY"));
+    if (values.count("denoiseMaxScale")) c.denoise.maxScale = std::stoi(values.at("denoiseMaxScale"));
+    if (values.count("denoiseEdgeK")) c.denoise.edgeK = std::stof(values.at("denoiseEdgeK"));
+    if (values.count("denoiseWbColourAxes")) c.denoise.wbColourAxes = std::stoi(values.at("denoiseWbColourAxes")) != 0;
+    if (values.count("denoiseNoiseThresholdUv")) c.denoise.noiseThresholdUv = std::stof(values.at("denoiseNoiseThresholdUv"));
+    if (values.count("denoiseGarrote")) c.denoise.garrote = std::stoi(values.at("denoiseGarrote")) != 0;
+    if (values.count("denoiseNoiseA")) c.denoise.noiseA = std::stof(values.at("denoiseNoiseA"));
+    if (values.count("denoiseNoiseB")) c.denoise.noiseB = std::stof(values.at("denoiseNoiseB"));
     if (values.count("wbRgb")) c.wbRgb = parseFloatArray<3>(values.at("wbRgb"), "wbRgb");
     if (values.count("cameraToWorkingColumnMajor")) {
         c.cameraToWorking = parseFloatArray<9>(values.at("cameraToWorkingColumnMajor"), "cameraToWorkingColumnMajor");
@@ -982,7 +996,7 @@ int main(int argc, char** argv) {
                 post.record(command, source.i, source.v, clipImage.i, clipImage.v,
                             config.wbRgb, recovery, {}, VK_NULL_HANDLE, args.preserveReconstructedHighlights,
                             args.appColoropp ? 1u : 0u, args.appColoroppThreshold,
-                            args.appColoroppCompression, args.postGain * std::exp2(config.exposureEV), {}, config.cfa, {}, {}, cameraToSrgb.data());
+                            args.appColoroppCompression, args.postGain * std::exp2(config.exposureEV), {}, config.cfa, config.denoise, {}, cameraToSrgb.data());
 
                 auto postReady = imageBarrier(post.sdrOutputImage(), VK_ACCESS_SHADER_WRITE_BIT,
                                               VK_ACCESS_SHADER_READ_BIT,
@@ -1312,7 +1326,7 @@ int main(int argc, char** argv) {
                                     config.wbRgb, recovery, {}, VK_NULL_HANDLE,
                                     args.preserveReconstructedHighlights, args.appColoropp ? 1u : 0u,
                                     args.appColoroppThreshold, args.appColoroppCompression,
-                                    args.postGain * std::exp2(config.exposureEV), {}, config.cfa, {}, {}, cameraToSrgb.data());
+                                    args.postGain * std::exp2(config.exposureEV), {}, config.cfa, config.denoise, {}, cameraToSrgb.data());
                         vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, queries, 1);
                         submitAndWait(context, command);
                         uint64_t timestamps[2]{};
