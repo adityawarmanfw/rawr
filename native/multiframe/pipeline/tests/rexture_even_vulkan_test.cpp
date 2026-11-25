@@ -4,6 +4,9 @@
 //    towards the merged level around it;
 //  - 256 <= x < 512: few-frame (m 0.6) texture well above the noise (a 6 px sinusoid): its amplitude must stay;
 //  - x >= 512: merged (m 0.06), far from both: must come out unchanged (within fp16 rounding).
+// Run twice: daylight-neutral raw (white balance 1) and the same grey scene under warm light (raw R and B at 1 / gain of
+// green, tungsten gains). After white balance the second must come out the same: the texture stays grey (no tint from
+// its raw R - G / B - G detail) and the patch's colour grain is lowered without following its luma grain.
 #include <rawr/raw_gpu_pipeline/VulkanExecutor.h>
 
 #include <algorithm>
@@ -100,20 +103,22 @@ struct Pc {
     float alpha, beta;
     int32_t rrow;
     int32_t ox[7];
+    float wbR, wbB;
 };
+static_assert(sizeof(Pc) == 64, "Pc must match rx_even's push block");
 bool patch(uint32_t x, uint32_t y) { return x >= 80 && x < 176 && y >= 80 && y < 176; }
 bool textured(uint32_t x) { return x >= 256 && x < 512; }
 float truthAt(uint32_t x, uint32_t y) {
     return textured(x) ? kLevel + 0.05f * std::sin(6.2831853f * float(x) / 6.0f) * std::sin(6.2831853f * float(y) / 9.0f) : kLevel;
 }
 float mAt(uint32_t x, uint32_t y) { return (patch(x, y) || textured(x)) ? kFew : kMerged; }
-}  // namespace
 
-int main() {
-    try {
+// One case: raw channel k = grey scene / gain k with the raw noise model; checks run on the white-balanced values. Returns
+// the regression of the patch's colour grain on its luma grain (see main).
+double runCase(Gpu& gpu, float wbR, float wbB) {
         using namespace rawr::raw_gpu_pipeline;
-        Gpu gpu;
         auto& c = gpu.c;
+        const float gk[3] = {wbR, 1.0f, wbB};
         uint64_t rng = 0x2545f4914f6cdd1dull;
         const auto gauss = [&rng]() {
             const auto u = [&rng]() { rng = rng * 6364136223846793005ull + 1442695040888963407ull; return (float((rng >> 40) & 0xffffffull) + 0.5f) / 16777216.0f; };
@@ -126,8 +131,11 @@ int main() {
         for (uint32_t y = 0; y < H; ++y)
             for (uint32_t x = 0; x < W; ++x) {
                 const size_t i = size_t(y) * W + x;
-                const float t = truthAt(x, y), sd = std::sqrt(kAlpha * t * mAt(x, y));
-                for (int k = 0; k < 3; ++k) img[i * 4 + size_t(k)] = toHalf(t + sd * gauss());
+                const float t = truthAt(x, y);
+                for (int k = 0; k < 3; ++k) {
+                    const float raw = t / gk[k];
+                    img[i * 4 + size_t(k)] = toHalf(raw + std::sqrt(kAlpha * raw * mAt(x, y)) * gauss());
+                }
                 img[i * 4 + 3] = toHalf(1.0f);
             }
         for (uint32_t my = 0; my < mh; ++my)
@@ -165,7 +173,7 @@ int main() {
             for (auto* im : all) barrier(cmd, im->i, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
             const auto ib = [](uint32_t b, const vktest::Img& i) { return ImageBinding{b, i.v, VK_IMAGE_LAYOUT_GENERAL}; };
             const DispatchBindings bind{{ib(0, outI), ib(1, atlas), ib(2, gain), ib(3, mI), ib(4, refA), ib(5, refB)}, {}};
-            Pc p{0, 0, int32_t(W), int32_t(H), kAlpha, 0.0f, int32_t(size(1).second), {}};
+            Pc p{0, 0, int32_t(W), int32_t(H), kAlpha, 0.0f, int32_t(size(1).second), {}, wbR, wbB};
             for (int32_t l = 1, x = 0; l <= 6; ++l) { p.ox[l] = x; x += int32_t(size(l).first); }
             const auto run = [&](int32_t op, int32_t level, uint32_t gx, uint32_t gy) {
                 p.op = op;
@@ -192,18 +200,22 @@ int main() {
         vktest::delBuf(c.dev, up);
         vktest::delBuf(c.dev, down);
         for (auto* im : all) vktest::delImg(c.dev, *im);
-        // residuals against the truth: luma (green) and colour (R - G) in the patch interior and the merged area around it
-        double pin[2] = {0, 0}, pout[2] = {0, 0}, bin = 0, nP = 0, nB = 0, proj = 0, projIn = 0, norm = 0;
+        // residuals against the truth after white balance: luma (green) and colour (R - G, B - G) in the patch interior,
+        // the merged area around it, the texture's luma amplitude and the colour that follows it
+        const auto in = [&](size_t i, int k) { return fromHalf(img[i * 4 + size_t(k)]) * gk[k]; };
+        const auto out = [&](size_t i, int k) { return fromHalf(res[i * 4 + size_t(k)]) * gk[k]; };
+        double pin[3] = {0, 0, 0}, pout[3] = {0, 0, 0}, follow = 0, bin = 0, nP = 0, nB = 0, proj = 0, projIn = 0, tint = 0, norm = 0;
         float far = 0;
         for (uint32_t y = 0; y < H; ++y)
             for (uint32_t x = 0; x < W; ++x) {
                 const size_t i = size_t(y) * W + x;
                 const float t = truthAt(x, y);
-                const float iG = fromHalf(img[i * 4 + 1]), iR = fromHalf(img[i * 4]);
-                const float oG = fromHalf(res[i * 4 + 1]), oR = fromHalf(res[i * 4]), oB = fromHalf(res[i * 4 + 2]);
+                const float iG = in(i, 1), oR = out(i, 0), oG = out(i, 1), oB = out(i, 2);
                 if (x >= 96 && x < 160 && y >= 96 && y < 160) {   // patch interior
                     pin[0] += (iG - t) * (iG - t); pout[0] += (oG - t) * (oG - t);
-                    pin[1] += ((iR - iG)) * ((iR - iG)); pout[1] += ((oR - oG)) * ((oR - oG));
+                    pin[1] += (in(i, 0) - iG) * (in(i, 0) - iG); pout[1] += (oR - oG) * (oR - oG);
+                    pin[2] += (in(i, 2) - iG) * (in(i, 2) - iG); pout[2] += (oB - oG) * (oB - oG);
+                    follow += double(oR - oG + oB - oG) * (oG - t);
                     nP += 1;
                 }
                 if (x >= 16 && x < 240 && y >= 16 && y < H - 16 && !(x >= 48 && x < 208 && y >= 48 && y < 208)) {   // merged, around it
@@ -213,22 +225,38 @@ int main() {
                 if (x >= 300 && x < 468 && y >= 40 && y < H - 40) {   // texture interior
                     const float s = t - kLevel;
                     proj += double(oG - kLevel) * s; projIn += double(iG - kLevel) * s; norm += double(s) * s;
+                    tint += double(0.5f * (oR + oB) - oG) * s;
                 }
-                if (x >= 700 && y >= 8 && y < H - 8) {
-                    for (int k = 0; k < 3; ++k) far = std::max(far, std::fabs(fromHalf(res[i * 4 + size_t(k)]) - fromHalf(img[i * 4 + size_t(k)])));
-                    (void)oB;
-                }
+                if (x >= 700 && y >= 8 && y < H - 8)
+                    for (int k = 0; k < 3; ++k) far = std::max(far, std::fabs(out(i, k) - in(i, k)) / gk[k]);
             }
-        const double lumaIn = std::sqrt(pin[0] / nP), lumaOut = std::sqrt(pout[0] / nP), colIn = std::sqrt(pin[1] / nP), colOut = std::sqrt(pout[1] / nP);
-        const double around = std::sqrt(bin / nB), keep = proj / norm, keepIn = projIn / norm;
-        std::printf("few-frame patch: luma noise %.4f -> %.4f (merged around it %.4f), colour noise %.4f -> %.4f | texture amplitude "
-                    "%.3f -> %.3f | far merged area max change %.1e\n",
-                    lumaIn, lumaOut, around, colIn, colOut, keepIn, keep, far);
+        const double lumaIn = std::sqrt(pin[0] / nP), lumaOut = std::sqrt(pout[0] / nP);
+        const double colIn = std::sqrt((pin[1] + pin[2]) / (2 * nP)), colOut = std::sqrt((pout[1] + pout[2]) / (2 * nP));
+        // regression of the colour grain (R' + B') / 2 - G' on the luma grain: about -1 for channels with independent grain,
+        // pulled towards gain - 1 when the luma grain is moved by the same raw amount in every channel (bright grain purple,
+        // dark grain yellow under warm light)
+        const double colourFollowsLuma = follow / (2 * pout[0]);
+        const double around = std::sqrt(bin / nB), keep = proj / norm, keepIn = projIn / norm, tinted = tint / norm;
+        std::printf("wb %.2f / %.2f: few-frame patch: luma noise %.4f -> %.4f (merged around it %.4f), colour noise %.4f -> %.4f "
+                    "(follows luma %+.2f) | texture amplitude %.3f -> %.3f, tint %+.3f | far merged area max change %.1e\n",
+                    wbR, wbB, lumaIn, lumaOut, around, colIn, colOut, colourFollowsLuma, keepIn, keep, tinted, far);
         if (!(lumaOut < 0.7 * lumaIn)) throw std::runtime_error("the few-frame patch's luma grain is not lowered");
         if (!(lumaOut < 2.0 * around)) throw std::runtime_error("the few-frame patch stays far noisier than the merged area around it");
         if (!(colOut < 0.8 * colIn)) throw std::runtime_error("the few-frame patch's colour grain is not lowered");
         if (!(keep > 0.9 * keepIn)) throw std::runtime_error("texture above the noise loses amplitude");
+        if (!(std::fabs(tinted) < 0.03)) throw std::runtime_error("grey texture comes out tinted after white balance");
         if (!(far < 2.5e-4f)) throw std::runtime_error("a merged area far from any few-frame area changes");
+        return colourFollowsLuma;
+}
+}  // namespace
+
+int main() {
+    try {
+        Gpu gpu;
+        const double neutral = runCase(gpu, 1.0f, 1.0f);
+        const double warm = runCase(gpu, 1.13f, 2.78f);   // tungsten
+        // the pass in raw space: -0.95 -> -0.86 and tint +0.11 on this scene
+        if (!(std::fabs(warm - neutral) < 0.04)) throw std::runtime_error("under warm light the colour grain follows the luma grain");
         std::puts("rexture_even_vulkan_test passed");
         return 0;
     } catch (const std::exception& e) {
