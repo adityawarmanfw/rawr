@@ -3,11 +3,14 @@
 // after nearest upsampling, each tile also tries the alignment of its
 // horizontal and vertical coarse neighbours and keeps the best of the three
 // (HDR+ paper, improves alignment at moving-object borders). One workgroup
-// per tile stages the reference tile and each candidate patch in shared
-// memory; lanes sum strided partials, reduced in fixed order by lane 0.
+// per tile: each lane reads its tile pixels and the three candidate samples
+// once, then a tree reduction sums the three costs (one pass over the tile
+// instead of three staged rounds and a serial sum by one lane).
 // Bracketed companions first rescale each candidate patch by the ratio of the
 // tile means, clamped to +-10% (upstream's non-uniform-exposure path).
-layout(local_size_x = 64) in;
+// 128 lanes: a 32 px tile is 8 pixels per lane, an 8 px tile still half the lanes busy (256 left most idle there).
+#define LANES 128
+layout(local_size_x = LANES) in;
 layout(set = 0, binding = 0, r32f) readonly uniform image2D refLevel;
 layout(set = 0, binding = 1, r32f) readonly uniform image2D compLevel;
 layout(std430, set = 0, binding = 2) readonly buffer Prev { ivec2 v[]; } prev;
@@ -22,10 +25,8 @@ layout(push_constant) uniform P {
 } p;
 
 const int MAX_TILE = 32;
-shared float sRef[MAX_TILE * MAX_TILE];
-shared float sComp[MAX_TILE * MAX_TILE];
-shared float sPartial[3][64];
-shared vec2 sSums[64];
+shared vec3 sCost[LANES];
+shared vec3 sSum[LANES];   // bracketed: the three candidates' sums
 
 void main() {
     ivec2 g = ivec2(gl_WorkGroupID.xy);
@@ -37,45 +38,55 @@ void main() {
     ivec3 ys = clamp(ivec3(g.y, g.y, g.y + ((g.y % 2 == 0) ? -1 : 1)), 0, p.tiles.y - 1);
     ivec2 cand[3];
     for (int c = 0; c < 3; ++c) cand[c] = prev.v[ys[c] * p.tiles.x + xs[c]];
-    for (int i = lane; i < t * t; i += 64) sRef[i] = imageLoad(refLevel, t0 + ivec2(i % t, i / t)).x;
-    for (int c = 0; c < 3; ++c) {
-        barrier();
-        for (int i = lane; i < t * t; i += 64) {
-            ivec2 s = t0 + ivec2(i % t, i / t) + p.downscale * cand[c];
-            // Upstream computes int * 2 * half(-65504) in half precision, which
-            // overflows: any out-of-frame sample makes the candidate cost +inf.
-            bool outside = any(lessThan(s, ivec2(0))) || any(greaterThanEqual(s, p.levelSize));
-            sComp[i] = outside ? uintBitsToFloat(0x7f800000u) : imageLoad(compLevel, s).x;
-        }
-        barrier();
-        float ratio = 1.0;
-        if (p.exposureRatio != 0) {
-            vec2 sums = vec2(0.0);
-            for (int i = lane; i < t * t; i += 64)
-                if (!isinf(sComp[i])) sums += vec2(max(0.0, sRef[i]), max(0.0, sComp[i]));
-            sSums[lane] = sums;
-            barrier();
-            for (int stride = 32; stride > 0; stride >>= 1) {
-                if (lane < stride) sSums[lane] += sSums[lane + stride];
-                barrier();
+    // Candidate samples of tile pixel i; an out-of-frame sample makes that candidate's cost +inf (upstream computes
+    // int * 2 * half(-65504) in half precision, which overflows).
+    vec3 ratio = vec3(1.0);
+    if (p.exposureRatio != 0) {
+        // Bracketed: each candidate's tile-mean ratio over its in-frame samples first.
+        vec3 sums = vec3(0.0), refSums = vec3(0.0);
+        for (int i = lane; i < t * t; i += LANES) {
+            ivec2 q = t0 + ivec2(i % t, i / t);
+            float r = max(0.0, imageLoad(refLevel, q).x);
+            for (int c = 0; c < 3; ++c) {
+                ivec2 s = q + p.downscale * cand[c];
+                if (all(greaterThanEqual(s, ivec2(0))) && all(lessThan(s, p.levelSize))) {
+                    sums[c] += max(0.0, imageLoad(compLevel, s).x);
+                    refSums[c] += r;
+                }
             }
-            ratio = clamp(sSums[0].x / (sSums[0].y + 1e-9), 0.9, 1.1);
+        }
+        sSum[lane] = sums;
+        sCost[lane] = refSums;
+        barrier();
+        for (int stride = LANES / 2; stride > 0; stride >>= 1) {
+            if (lane < stride) {
+                sSum[lane] += sSum[lane + stride];
+                sCost[lane] += sCost[lane + stride];
+            }
             barrier();
         }
-        float partial = 0.0;
-        for (int i = lane; i < t * t; i += 64) {
-            float d = abs(sRef[i] - ratio * sComp[i]);
-            partial += p.useSsd != 0 ? d * d : d;
+        ratio = clamp(sCost[0] / (sSum[0] + 1e-9), 0.9, 1.1);
+        barrier();
+    }
+    vec3 cost = vec3(0.0);
+    for (int i = lane; i < t * t; i += LANES) {
+        ivec2 q = t0 + ivec2(i % t, i / t);
+        float r = imageLoad(refLevel, q).x;
+        for (int c = 0; c < 3; ++c) {
+            ivec2 s = q + p.downscale * cand[c];
+            bool outside = any(lessThan(s, ivec2(0))) || any(greaterThanEqual(s, p.levelSize));
+            float d = outside ? uintBitsToFloat(0x7f800000u) : abs(r - ratio[c] * imageLoad(compLevel, s).x);
+            cost[c] += p.useSsd != 0 ? d * d : d;
         }
-        sPartial[c][lane] = partial;
     }
+    sCost[lane] = cost;
     barrier();
-    if (lane != 0) return;
-    float sDiff[3];
-    for (int c = 0; c < 3; ++c) {
-        sDiff[c] = 0.0;
-        for (int i = 0; i < 64; ++i) sDiff[c] += sPartial[c][i];
+    for (int stride = LANES / 2; stride > 0; stride >>= 1) {
+        if (lane < stride) sCost[lane] += sCost[lane + stride];
+        barrier();
     }
+    if (lane != 0) return;
+    vec3 sDiff = sCost[0];
     ivec2 best = (sDiff[0] < sDiff[1] && sDiff[0] < sDiff[2]) ? cand[0] : (sDiff[1] < sDiff[2] ? cand[1] : cand[2]);
     corrected.v[g.y * p.tiles.x + g.x] = best;
 }
