@@ -13,6 +13,7 @@ set(RCD_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(VNG4_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(VNG4_BUILD_BENCHMARK OFF CACHE BOOL "" FORCE)
 set(DUAL_BUILD_VALIDATION OFF CACHE BOOL "" FORCE)
+set(RAW_DEMOSAIC_EMBED_SHADERS ON CACHE BOOL "" FORCE)   # --amaze: the app's embedded AMaZE shaders
 add_subdirectory("${RAWR_ROOT}/native/raw_demosaic" "${CMAKE_CURRENT_BINARY_DIR}/raw_demosaic")
 set(RAW_DENOISE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 add_subdirectory("${RAWR_ROOT}/native/raw_denoise" "${CMAKE_CURRENT_BINARY_DIR}/raw_denoise")
@@ -183,6 +184,7 @@ target_link_libraries(rawr_offline_pipeline PRIVATE
   raw_highlight::raw_highlight
   rawr::shader_common
   dual::dual_demosaic
+  raw_demosaic::embedded_shaders
   quadfix::quadfix
   fcc::false_color_correction
   TonemapEngine::Vulkan

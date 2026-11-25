@@ -10,6 +10,7 @@
 #include "capture/multiframe/MergeExposure.h"
 #include "color/ColorCalibration.h"
 #include "color/ColorMath.h"
+#include "color/WhiteBalance.h"
 #include "geometry/CfaPattern.h"
 #include "renderer/DngSource.h"
 #include "vk_test_common.hpp"
@@ -435,6 +436,7 @@ void writeFrameDng(const std::filesystem::path& file, std::uint32_t cfa, std::ui
 struct TuneOpts {
     std::string noiseSource = "burst";  // matches the app (always burst-fitted)
     bool dumpLinear = false;
+    int nativeRgb = -1;  // --native-rgb 0|1: also run the app's native-RGB prepare (site chroma off / on), dump .native.linear.rgba16f
     bool dumpCfa = false;
     int repeat = 1;
     int maxFrames = 0;  // 0 = all frames
@@ -1087,6 +1089,56 @@ int replay(const std::string& path, const std::filesystem::path& outputDir, cons
                   << ',' << n.offsetBySite[3] << '\n';
     }
 
+    if (tune.nativeRgb >= 0) {
+        // The app's Rexture native-RGB JPEG input: prepareRgb (no lens shading here) with the site-chroma rebuild.
+        rawr::raw_multiframe_output::MultiframeOutputAdapter adapter;
+        const std::uint32_t ow = result.outputExtent.width, oh = result.outputExtent.height;
+        adapter.initialize(context.pd, context.dev, context.qf,
+                           [&](const VkSubmitInfo& info, VkFence fence) {
+                               vktest::ck(vkQueueSubmit(context.q, 1, &info, fence), "native rgb submit");
+                           },
+                           ow, oh);
+        const auto color = rawrcam::color::deriveFrameColorTransform(metadata[metaRef], rawrcam::color::PreviewColorMode::Auto);
+        const auto wb = rawrcam::color::collapseRggbToRgb(color.baselineWbRggb);
+        rawr::raw_multiframe_output::SiteChromaParams site{};
+        site.enabled = tune.nativeRgb != 0;
+        site.cfa = bundle.cfa;
+        site.whiteBalanceR = wb[0] / wb[1];
+        site.whiteBalanceB = wb[2] / wb[1];
+        if (result.noiseEstimated) {   // as the app: burst noise fit / merged frames
+            const float frames = result.effectiveFrames > 0.0f ? std::max(result.effectiveFrames, 1.0f)
+                                                               : float(std::max<std::uint32_t>(result.frameCount, 1u));
+            const auto& n = result.estimatedNoise;
+            site.noiseSlope = .25f * (n.slopeBySite[0] + n.slopeBySite[1] + n.slopeBySite[2] + n.slopeBySite[3]) / frames;
+            site.noiseOffset = .25f * (n.offsetBySite[0] + n.offsetBySite[1] + n.offsetBySite[2] + n.offsetBySite[3]) / frames;
+        }
+        const auto t0 = std::chrono::steady_clock::now();
+        adapter.prepareRgb(result.outputView, 0, 0, {}, {}, site);
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        const VkDeviceSize bytes = VkDeviceSize(ow) * oh * 8u;
+        auto buf = vktest::mkBuf(context.pd, context.dev, bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        commands.submit(context.q, [&](VkCommandBuffer command) {
+            imageBarrier(command, adapter.rgbImage(), VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                         VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT);
+            VkBufferImageCopy copy{};
+            copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            copy.imageExtent = {ow, oh, 1};
+            vkCmdCopyImageToBuffer(command, adapter.rgbImage(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buf.b, 1, &copy);
+        });
+        void* mapped = nullptr;
+        vktest::ck(vkMapMemory(context.dev, buf.m, 0, bytes, 0, &mapped), "map native rgb");
+        std::filesystem::create_directories(outputDir);
+        const auto dest = outputDir / (std::filesystem::path(path).stem().string() +
+                                       (tune.suffix.empty() ? "" : "." + tune.suffix) + ".native.linear.rgba16f");
+        std::ofstream file(dest, std::ios::binary | std::ios::trunc);
+        file.write(static_cast<const char*>(mapped), static_cast<std::streamsize>(bytes));
+        std::cerr << "native_rgb site=" << tune.nativeRgb << " noise=" << site.noiseSlope << ',' << site.noiseOffset << " prepare_ms=" << ms << " hash=0x" << std::hex
+                  << fnv1a(mapped, static_cast<std::size_t>(bytes)) << std::dec << '\n';
+        vkUnmapMemory(context.dev, buf.m);
+        vktest::delBuf(context.dev, buf);
+    }
     const VkDeviceSize outputBytes = VkDeviceSize(result.outputExtent.width) * result.outputExtent.height * 8u;
     auto readback = vktest::mkBuf(context.pd, context.dev, outputBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
@@ -1238,7 +1290,7 @@ int main(int argc, char** argv) {
     const std::string usage =
         std::string("usage: ") + argv[0] +
         " --output-dir DIR"
-        " [--dump-linear] [--dump-cfa] [--repeat N] [--noise-source recorded|camera2|legacy|calibrated|burst]"
+        " [--dump-linear] [--native-rgb 0|1] [--dump-cfa] [--repeat N] [--noise-source recorded|camera2|legacy|calibrated|burst]"
         " [--cal-profile FILE]"
          " [--max-frames I] [--rexture-detail-restore 0|1] [--rexture-moving 0|1] [--suffix STR] [--dump-base] [--dump-all-singles] [--dump-raw16] [--export-dng DIR] [--export-merged-dng FILE] [--merge rexture|hdrplus-freq] [--rexture-strip-rows N] [--hdrplus-strength F] [--hdrplus-tile 16|32] [--hdrplus-search 32|64|128] [--hdrplus-faithful] [--affine-deadzone F] [--affine-softness F] [--affine-isotropic] [--fallback-chroma GAIN] [--fallback-luma GAIN] [--fallback-max-sigma PX] [--no-hot-pixels] [--hot-pixel-list FILE]"
          " [--reference recorded|middle|sharpest|darkest] INPUT [INPUT2 ...]\n"
@@ -1267,6 +1319,7 @@ int main(int argc, char** argv) {
             } else if (a == "--noise-source") tune.noiseSource = need(a.c_str());
             else if (a == "--cal-profile") tune.calProfile = need(a.c_str());
             else if (a == "--dump-linear") tune.dumpLinear = true;
+            else if (a == "--native-rgb") tune.nativeRgb = std::stoi(need(a.c_str()));
             else if (a == "--dump-cfa") tune.dumpCfa = true;
             else if (a == "--repeat") tune.repeat = std::stoi(need(a.c_str()));
             else if (a == "--max-frames") tune.maxFrames = std::stoi(need(a.c_str()));

@@ -2,11 +2,14 @@
 // production coordinator, optionally dumps every stage for the NumPy comparison, or times the merge
 // against HDR+ Quality. No camera, no app: an NDK executable pushed with adb.
 //   rexture_device_check DIR [--merge rexture|hdrplus-freq] [--frames N] [--noise-ab A,B] [--dump-stages OUT] [--dump-final OUT] [--lazy 0|1]
-//                        [--inject-flow DUMPDIR] [--repeat K] [--scores] [--detail-restore 0|1]
+//                        [--inject-flow DUMPDIR] [--repeat K] [--scores] [--detail-restore 0|1] [--native-rgb 0|1]
+// --native-rgb times the app's native-RGB JPEG input step after the merge (prepareRgb, site chroma off / on), K times.
 // --frames N cycles the burst's frames to N (timing only: repeated frames align trivially but cost the same).
 #include <rawr/raw_gpu_pipeline/AndroidBurstCoordinator.h>
 #include <rawr/raw_gpu_pipeline/RextureFrameScorer.h>
 #include <rawr/raw_gpu_pipeline/RextureRecorder.h>
+#include <rawr/raw_multiframe_output/MultiframeOutputAdapter.h>
+#include <raw_demosaic/EmbeddedShaders.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -116,6 +119,8 @@ int main(int argc, char** argv) {
         bool lazy = false;           // --lazy: load and release frames on demand, as the app does from its journal
         bool detailRestore = false;   // --detail-restore (the app's Rexturation, off by default)
         bool movingRestore = true;    // --moving (moving-texture restore, on by default)
+        int nativeRgb = -1;           // --native-rgb 0|1: time the native-RGB prepare step after the merge
+        bool amazePath = false;       // --amaze-path: time the other JPEG input (re-mosaic prepare + AMaZE) after the merge
         for (int i = 1; i < argc; ++i) {
             const std::string a = argv[i];
             auto need = [&]() { if (i + 1 >= argc) throw std::invalid_argument("missing value for " + a); return std::string(argv[++i]); };
@@ -131,6 +136,8 @@ int main(int argc, char** argv) {
             else if (a == "--lazy") lazy = std::stoi(need()) != 0;
             else if (a == "--detail-restore") detailRestore = std::stoi(need()) != 0;
             else if (a == "--moving") movingRestore = std::stoi(need()) != 0;
+            else if (a == "--native-rgb") nativeRgb = std::stoi(need());
+            else if (a == "--amaze-path") amazePath = true;
             else if (a == "--strip-rows")   // the grain pass's strip height: the output must not depend on it
                 rawr::raw_gpu_pipeline::RextureRecorder::setStripRowsForTesting(std::uint32_t(std::stoul(need())));
             else if (a.rfind("--", 0) == 0) throw std::invalid_argument("unknown flag " + a);
@@ -306,6 +313,99 @@ int main(int argc, char** argv) {
                         double(result.physicalImageBytes) / 1048576.0, double(result.physicalBufferBytes) / 1048576.0,
                         double(peakRssKb()) / 1024.0);
         }
+        // The app's dispatch layer gives every pipeline its shared, disk-backed cache, so pipelines are compiled once: the
+        // native RGB / AMaZE path timings below share one cache across runs (run 0 is the cold compile).
+        VkPipelineCache pipelineCache = VK_NULL_HANDLE;
+        {
+            VkPipelineCacheCreateInfo pci{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+            vktest::ck(vkCreatePipelineCache(ctx.dev, &pci, nullptr, &pipelineCache), "pipeline cache");
+        }
+        if (nativeRgb >= 0) {
+            // As MfsrCaptureJob: no lens shading here; white balance and the merged noise from the burst.
+            rawr::raw_multiframe_output::SiteChromaParams site{};
+            site.enabled = nativeRgb != 0;
+            site.cfa = cfa;
+            site.whiteBalanceR = params.whiteBalance[0] / params.whiteBalance[1];
+            site.whiteBalanceB = params.whiteBalance[2] / params.whiteBalance[1];
+            const float nf = result.effectiveFrames > 0.0f ? std::max(result.effectiveFrames, 1.0f) : float(std::max<std::uint32_t>(result.frameCount, 1u));
+            if (result.noiseEstimated) {
+                const auto& n = result.estimatedNoise;
+                site.noiseSlope = .25f * (n.slopeBySite[0] + n.slopeBySite[1] + n.slopeBySite[2] + n.slopeBySite[3]) / nf;
+                site.noiseOffset = .25f * (n.offsetBySite[0] + n.offsetBySite[1] + n.offsetBySite[2] + n.offsetBySite[3]) / nf;
+            } else {
+                site.noiseSlope = cfg.noiseAlpha / nf;
+                site.noiseOffset = cfg.noiseBeta / nf;
+            }
+            for (int it = 0; it < repeat; ++it) {
+                rawr::raw_multiframe_output::MultiframeOutputAdapter adapter;
+                adapter.setPipelineCache(pipelineCache);
+                adapter.initialize(ctx.pd, ctx.dev, ctx.qf, [&](const VkSubmitInfo& info, VkFence fence) {
+                    std::lock_guard<std::mutex> lock(queueMutex());
+                    vktest::ck(vkQueueSubmit(ctx.q, 1, &info, fence), "native rgb submit");
+                }, result.outputExtent.width, result.outputExtent.height);
+                const auto t0 = Clock::now();
+                adapter.prepareRgb(result.outputView, 0, 0, {}, {}, site);
+                const double ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+                const double px = double(result.outputExtent.width) * result.outputExtent.height;
+                // Allocations of the step: RGBA16F output, R16 clip state (quarter size), R16F re-estimated green (site chroma).
+                const double mib = (px * 8.0 + px / 4.0 * 2.0 + (site.enabled ? px * 2.0 : 2.0)) / 1048576.0;
+                std::printf("native_rgb site=%d run=%d prepare_ms=%.2f setup_ms=%.2f pipeline_ms=%.2f gpu_ms=%.2f prepare_alloc_mib=%.1f peak_rss_mib=%.1f\n", nativeRgb, it, ms,
+                            adapter.lastSetupMs(), adapter.lastPipelineMs(), adapter.lastGpuMs(), mib,
+                            double(peakRssKb()) / 1024.0);
+            }
+        }
+        if (amazePath) {
+            // As MfsrCaptureJob with Native RGB off: preparePackedCfa (re-mosaic, LSC, clip state), then AMaZE on it. The app
+            // keeps its AMaZE pipeline across captures (warm pipeline cache), so its creation is reported apart.
+            const std::uint32_t ow = result.outputExtent.width, oh = result.outputExtent.height;
+            ::amaze::PipelineConfig acfg{};
+            acfg.width = ow;
+            acfg.height = oh;
+            acfg.pattern = static_cast<::amaze::BayerPattern>(cfa);
+            acfg.inputMode = ::amaze::InputMode::PackedCfaRgba16fImage;
+            const auto c0 = Clock::now();
+            ::amaze::AmazePipeline amaze(::amaze::VulkanContext{ctx.pd, ctx.dev, ctx.qf, nullptr, pipelineCache},
+                                         raw_demosaic::embeddedAmazeShaders(), acfg);
+            const double createMs = std::chrono::duration<double, std::milli>(Clock::now() - c0).count();
+            auto amazeOut = vktest::mkImg(ctx.pd, ctx.dev, ow, oh, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT);
+            commands.submit(ctx.q, [&](VkCommandBuffer c) {
+                VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+                b.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+                b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b.image = amazeOut.i;
+                b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                vkCmdPipelineBarrier(c, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0,
+                                     nullptr, 1, &b);
+            });
+            for (int it = 0; it < repeat; ++it) {
+                rawr::raw_multiframe_output::MultiframeOutputAdapter adapter;
+                adapter.setPipelineCache(pipelineCache);
+                adapter.initialize(ctx.pd, ctx.dev, ctx.qf, [&](const VkSubmitInfo& info, VkFence fence) {
+                    std::lock_guard<std::mutex> lock(queueMutex());
+                    vktest::ck(vkQueueSubmit(ctx.q, 1, &info, fence), "packed submit");
+                }, ow, oh);
+                const auto t0 = Clock::now();
+                adapter.preparePackedCfa(result.outputView, 0, 0, {});
+                const double prepMs = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+                const auto t1 = Clock::now();
+                commands.submit(ctx.q, [&](VkCommandBuffer c) {
+                    ::amaze::PackedCfaImageView in{adapter.rgbImage(), adapter.rgbView(), VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_LAYOUT_GENERAL,
+                                                   ow / 2, oh / 2, ow, oh, static_cast<::amaze::BayerPattern>(cfa)};
+                    ::amaze::LinearRgbImage out{amazeOut.i, amazeOut.v, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_LAYOUT_GENERAL, ow, oh};
+                    amaze.record(c, in, out, {params.whiteBalance[0] / params.whiteBalance[1], 1.0f, params.whiteBalance[2] / params.whiteBalance[1]});
+                });
+                const double amazeMs = std::chrono::duration<double, std::milli>(Clock::now() - t1).count();
+                const double px = double(ow) * oh;
+                std::printf("amaze_path run=%d packed_prepare_ms=%.2f setup_ms=%.2f pipeline_ms=%.2f gpu_ms=%.2f amaze_ms=%.2f amaze_create_ms=%.2f "
+                            "packed_alloc_mib=%.1f amaze_out_mib=%.1f amaze_peak_mib=%.1f\n", it, prepMs, adapter.lastSetupMs(), adapter.lastPipelineMs(),
+                            adapter.lastGpuMs(), amazeMs, createMs, (px / 4.0 * 8.0 + px / 4.0 * 2.0) / 1048576.0, px * 8.0 / 1048576.0,
+                            double(amaze.peakAllocatedBytes()) / 1048576.0);
+            }
+            vktest::delImg(ctx.dev, amazeOut);
+        }
+        vkDestroyPipelineCache(ctx.dev, pipelineCache, nullptr);
         if (lazy) std::printf("max_live_frames=%d (%.0f MiB of frame images)\n", maxLiveFrames.load(), maxLiveFrames.load() * double(width) * height * 2.0 / 1048576.0);
         if (!dumpFinalDir.empty()) {
             // Production-path merge output (no observer, so no verification kernels): for bit-identity checks between builds.

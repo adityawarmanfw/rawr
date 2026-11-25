@@ -4,6 +4,7 @@
 
 #include <dual/Dual.hpp>
 #include <rcd/Rcd.hpp>
+#include <raw_demosaic/EmbeddedShaders.hpp>
 #include <quadfix/Pipeline.hpp>
 #include <gainmap/GainmapCompute.h>
 #include <spektrafilm/SpektraFilm.h>
@@ -62,6 +63,7 @@ struct Arguments {
     bool demosaicedRgb = false;
     bool dumpDemosaic = false;
     bool rcdOnly = false;
+    bool amaze = false;  // --amaze: the app's AMaZE (embedded shaders) instead of Dual RCD+VNG4
     uint32_t benchmarkPost = 0;
     std::filesystem::path config;
     std::filesystem::path outputDir;
@@ -222,6 +224,7 @@ Arguments parseArguments(int argc, char** argv) {
         else if (value == "--demosaiced-rgb") args.demosaicedRgb = true;
         else if (value == "--dump-demosaic") args.dumpDemosaic = true;
         else if (value == "--rcd") args.rcdOnly = true;
+        else if (value == "--amaze") args.amaze = true;
         else if (value == "--benchmark-post" && i + 1 < argc) args.benchmarkPost = std::stoul(argv[++i]);
         else if (value == "--config" && i + 1 < argc) args.config = argv[++i];
         else if (value == "--output-dir" && i + 1 < argc) args.outputDir = argv[++i];
@@ -623,7 +626,20 @@ int main(int argc, char** argv) {
             rcdDemosaic = std::make_unique<rcd::RcdPipeline>(
                 rcd::VulkanContext{context.pd, context.dev, context.qf, nullptr}, shaderProvider, cfg);
         }
-        if (!args.rcdOnly && !args.linearRgb && !args.demosaicedRgb) demosaic = std::make_unique<dual::DualDemosaicPipeline>(
+        std::unique_ptr<::amaze::AmazePipeline> amazeDemosaic;
+        if (args.amaze) {
+            if (args.rcdOnly || args.quadfix || args.linearRgb || args.demosaicedRgb)
+                throw std::runtime_error("--amaze requires packed CFA input without --rcd / quadfix");
+            ::amaze::PipelineConfig cfg{};
+            cfg.width = config.width;
+            cfg.height = config.height;
+            cfg.pattern = static_cast<::amaze::BayerPattern>(config.cfa);
+            cfg.inputMode = ::amaze::InputMode::PackedCfaRgba16fImage;
+            amazeDemosaic = std::make_unique<::amaze::AmazePipeline>(
+                ::amaze::VulkanContext{context.pd, context.dev, context.qf, nullptr, VK_NULL_HANDLE},
+                raw_demosaic::embeddedAmazeShaders(), cfg);
+        }
+        if (!args.rcdOnly && !args.amaze && !args.linearRgb && !args.demosaicedRgb) demosaic = std::make_unique<dual::DualDemosaicPipeline>(
             dual::VulkanContext{context.pd, context.dev, context.qf, nullptr}, shaderProvider, dualConfig);
 
         if (!args.technicalLutDwg.empty() && args.film)
@@ -755,7 +771,7 @@ int main(int argc, char** argv) {
                  << "gpu=" << context.prop.deviceName << "\n"
                  << "width=" << config.width << "\nheight=" << config.height << "\n"
                  << "cfa=" << config.cfa << "\n"
-                 << "demosaic=" << (args.rcdOnly ? "production_rcd" : "production_dual_rcd_vng4") << "\n"
+                 << "demosaic=" << (args.amaze ? "production_amaze" : args.rcdOnly ? "production_rcd" : "production_dual_rcd_vng4") << "\n"
                  << "quadfix=" << (args.quadfix ? (args.quadfixFastMedian ? "fast" : "exact") : "off") << "\n"
                  << "post=production_wb_highlight_fcc\n"
                  << "tonemap=" << (args.technicalLutDwg.empty() ? "production_rawr_base" : "technical_lut_dwg_direct") << "\n"
@@ -887,6 +903,15 @@ int main(int argc, char** argv) {
                     dual::NormalizedBayerBufferView normalized{
                         {quadFiltered.b,0,rawBytes},config.width,config.height,bayerPattern(config.cfa)};
                     demosaic->record(command,normalized,demosaicOutput);
+                } else if (amazeDemosaic) {
+                    ::amaze::PackedCfaImageView amazeInput{
+                        packedImage.i, packedImage.v, VK_FORMAT_R16G16B16A16_SFLOAT,
+                        VK_IMAGE_LAYOUT_GENERAL, config.width / 2u, config.height / 2u,
+                        config.width, config.height, static_cast<::amaze::BayerPattern>(config.cfa)};
+                    ::amaze::LinearRgbImage amazeOutput{source.i, source.v, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                        VK_IMAGE_LAYOUT_GENERAL, config.width, config.height};
+                    amazeDemosaic->record(command, amazeInput, amazeOutput,
+                                          {config.wbRgb[0] / config.wbRgb[1], 1.0f, config.wbRgb[2] / config.wbRgb[1]});
                 } else if (rcdDemosaic) {
                     rcd::PackedCfaImageView rcdInput{
                         packedImage.i, packedImage.v, VK_FORMAT_R16G16B16A16_SFLOAT,
