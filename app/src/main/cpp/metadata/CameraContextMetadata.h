@@ -32,6 +32,8 @@ struct StaticColorCalibration {
 // generation, then pinned by every frame captured from that context.
 struct CameraContextMetadata {
     uint64_t cameraContextGeneration = 0;
+    // Profile ID travels with captured frames so rendering can apply narrowly scoped device policies.
+    std::string cameraProfileId;
     std::string cameraId;
     std::string lensId;
     SensorGeometry geometry{};

@@ -1273,6 +1273,7 @@ std::optional<CameraProfile> readProfile(const Json& root, std::string* error) {
         if (schema == 1.0 && !upgradeLensV1(entry, upgraded, error)) return std::nullopt;
         auto lens = readLens(schema == 1.0 ? upgraded : entry, error);
         if (!lens) return std::nullopt;
+        lens->profileId = profile.id;
         if (routeForLens(profile, lens->lensId)) {
             if (error) *error = "duplicate lens id " + lens->lensId;
             return std::nullopt;

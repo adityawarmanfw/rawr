@@ -21,6 +21,8 @@ struct RenderedStillContext {
     float dcpWeight1 = 1.0f;
     uint64_t requestId = 0;
     uint64_t timestampNs = 0;
+    // Source profile for device-specific build policies (empty for imports/replay without camera context).
+    std::string cameraProfileId;
     uint32_t width = 0;
     uint32_t height = 0;
     uint32_t presentationQuarterTurns = 0;

@@ -110,6 +110,7 @@ inline constexpr int32_t kExtendedIsoMax = 409'600;
 // How one UI lens maps onto the device. A camera profile is the full set of
 // these for a device: either a built-in default or the user's configuration.
 struct LensRoute {
+    std::string profileId;         // Camera profile this route belongs to; used for profile-specific runtime policy.
     std::string lensId;            // App lens id; also the capture-screen label.
     std::string cameraId;          // Camera2 id to open (logical, or a hidden/physical id).
     std::string physicalCameraId;  // Physical sub-camera of cameraId to stream from; empty for none.

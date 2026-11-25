@@ -934,6 +934,7 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
             CAPTURE_DEBUG_LOG("FULLRES_REMOSAIC tag=%llu frame=%u block=%u quality=%s gpu=%d",
                               static_cast<unsigned long long>(tag), index + 1, context->cfaBlock,
                               capture::remosaicQualityName(capture::photoRemosaicQuality(*context)), onGpu ? 1 : 0);
+            (void)onGpu;  // The release build may compile out CAPTURE_DEBUG_LOG; this result is diagnostic-only.
         }
         // The journal takes frames in order: the previous write finishes first, then this one runs beside the next
         // frame's copy and remosaic.

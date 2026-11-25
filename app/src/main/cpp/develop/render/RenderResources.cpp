@@ -46,6 +46,10 @@ uint32_t stillFilmArenaDim(uint32_t fullDim) noexcept { return ((std::max(1u, fu
 // Headroom above the film estimate: preview engine, ZSL ring, merge
 // remnants and OS needs at build time.
 constexpr std::uint64_t kFilmBuildHeadroomBytes = 768ull * 1024u * 1024u;
+// Tiled film keeps full-frame source/destination but limits effect scratch to
+// its expanded tile. OPPO X9 Ultra needs this tighter reserve to admit film
+// renders at its typical RAW sizes; all other profiles retain the 768 MiB gate.
+constexpr std::uint64_t kOppoFilmTiledBuildHeadroomBytes = 384ull * 1024u * 1024u;
 
 // /proc MemAvailable (reclaimable-aware, unlike sysinfo freeram).
 // Returns 0 when unreadable; callers must fail open on 0.
@@ -334,10 +338,14 @@ bool RenderResources::ensureFilm(const RenderedStillContext& rendered) {
             64u * uint32_t(gates.grainProduction);
         const uint32_t workingW = std::min(fullW, 512u + 2u * overlap);
         const uint32_t workingH = std::min(fullH, 256u + 2u * overlap);
+        const bool isOppoX9Ultra = rendered.cameraProfileId == "oppo_x9u_50mp_native_raw";
+        const std::uint64_t headroom = rendered.filmTiled && isOppoX9Ultra
+                                           ? kOppoFilmTiledBuildHeadroomBytes
+                                           : kFilmBuildHeadroomBytes;
         std::uint64_t required =
             (rendered.filmTiled ? estimateFilmTileScratchBytes(fullW, fullH, workingW, workingH, gates)
                                 : estimateFilmScratchBytes(fullW, fullH, gates)) +
-            kFilmBuildHeadroomBytes;
+            headroom;
         // Film glow-factor transient (full-res RGBA16F quotient) for
         // film+UltraHDR: account it here so large stills with
         // halation/diffusion can't slip past the gate and LMK-trip mid-capture.
@@ -353,10 +361,12 @@ bool RenderResources::ensureFilm(const RenderedStillContext& rendered) {
         }
         const std::uint64_t avail = readMemAvailableBytes();
         emit("STILL_FILM_RAM_GATE requiredMB=" + std::to_string(required >> 20) +
-             " availMB=" + std::to_string(avail >> 20));
-        __android_log_print(ANDROID_LOG_INFO, "RawrCamNative", "STILL_FILM_RAM_GATE requiredMB=%llu availMB=%llu",
+             " availMB=" + std::to_string(avail >> 20) + " headroomMB=" + std::to_string(headroom >> 20));
+        __android_log_print(ANDROID_LOG_INFO, "RawrCamNative",
+                            "STILL_FILM_RAM_GATE requiredMB=%llu availMB=%llu headroomMB=%llu",
                             static_cast<unsigned long long>(required >> 20),
-                            static_cast<unsigned long long>(avail >> 20));
+                            static_cast<unsigned long long>(avail >> 20),
+                            static_cast<unsigned long long>(headroom >> 20));
         if (avail > 0 && required > avail) {
             emit("STILL_FILM_RAM_GATE_REJECT falling back to tonemap");
             __android_log_print(ANDROID_LOG_ERROR, "RawrCamNative", "STILL_FILM_RAM_GATE_REJECT");

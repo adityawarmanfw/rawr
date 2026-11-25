@@ -1,6 +1,7 @@
 #include "camera/CameraDeviceSession.h"
 #include "camera/VendorCameraGate.h"
 
+#include <camera/NdkCameraError.h>
 #include <camera/NdkCameraMetadataTags.h>
 
 #include <algorithm>
@@ -324,6 +325,7 @@ std::optional<LensRoute> CameraDeviceSession::select(const LensRoute& requested,
         parsed->camera2Cfa = int32_t(*route.colourOrder);
         parsed->rawPreviewCfa = *route.colourOrder;
     }
+    parsed->cameraProfileId = route.profileId;
     if (route.sensorLayoutBlock > 1 || route.colourOrder)
         diag("CAMERA_CFA_OVERRIDE lens=" + route.lensId + " block=" + std::to_string(route.sensorLayoutBlock) +
              " order=" + std::to_string(parsed->rawPreviewCfa) + " live=" + std::to_string(route.liveRemosaic) +
@@ -894,9 +896,23 @@ bool CameraDeviceSession::retire(std::unique_lock<std::mutex>& lock, std::option
         return !closePending_ || closeGeneration_ != retiringGeneration;
     };
 
+    // On OPPO X9 Ultra, stopRepeating can report SESSION_CLOSED while the HAL
+    // defers onClosed until device teardown. Keep this shorter grace scoped to
+    // that profile and status; closeUnlocked still releases the controller
+    // lock around close() so in-flight callbacks can finish before we wait.
+    constexpr auto kAlreadyClosedCallbackGrace = std::chrono::milliseconds(250);
+    auto callbackTimeout = timeout;
+    if (stopStatus == ACAMERA_ERROR_SESSION_CLOSED && cameraContext_ &&
+        cameraContext_->cameraProfileId == "oppo_x9u_50mp_native_raw") {
+        callbackTimeout = callbackTimeout ? std::min(*callbackTimeout, kAlreadyClosedCallbackGrace)
+                                          : kAlreadyClosedCallbackGrace;
+        diag(std::string(diagnosticPrefix) + "_SESSION_ALREADY_CLOSED callbackGraceMs=" +
+             std::to_string(callbackTimeout->count()));
+    }
+
     bool closed = true;
-    if (timeout) {
-        closed = closed_.wait_for(lock, *timeout, closedPredicate);
+    if (callbackTimeout) {
+        closed = closed_.wait_for(lock, *callbackTimeout, closedPredicate);
     } else {
         closed_.wait(lock, closedPredicate);
     }

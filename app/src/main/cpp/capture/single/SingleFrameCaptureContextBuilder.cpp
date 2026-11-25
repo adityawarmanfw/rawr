@@ -56,6 +56,8 @@ develop::rendered::RenderedStillContext makeSingleFrameRenderContext(
     rendered.dcpWeight1 = colorState.calibrationWeight1;
     rendered.requestId = captured.requestId;
     rendered.timestampNs = captured.timestampNs;
+    if (captured.metadata.cameraContext)
+        rendered.cameraProfileId = captured.metadata.cameraContext->cameraProfileId;
     rendered.width = captured.width;
     rendered.height = captured.height;
     rendered.presentationQuarterTurns = presentationQuarterTurns;

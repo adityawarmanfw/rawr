@@ -950,6 +950,8 @@ void MfsrCaptureJob::runStages(Published& published) {
                 renderedContext.dcpWeight1 = job->referenceColor.calibrationWeight1;
                 renderedContext.requestId = requestId;
                 renderedContext.timestampNs = job->referenceMetadata.timestampNs;
+                if (job->referenceMetadata.cameraContext)
+                    renderedContext.cameraProfileId = job->referenceMetadata.cameraContext->cameraProfileId;
                 renderedContext.width = mergeResult->outputExtent.width;
                 renderedContext.height = mergeResult->outputExtent.height;
                 renderedContext.presentationQuarterTurns = turns;

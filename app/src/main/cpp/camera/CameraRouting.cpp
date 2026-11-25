@@ -96,15 +96,26 @@ ProfileMatch matchBuiltInProfile(const PropertyReader& property) {
 }
 
 std::optional<LensRoute> routeForLens(const CameraProfile& profile, const std::string& lensId) {
-    for (const auto& r : profile.lenses)
-        if (r.lensId == lensId) return r;
+    for (const auto& r : profile.lenses) {
+        if (r.lensId == lensId) {
+            auto route = r;
+            route.profileId = profile.id;
+            return route;
+        }
+    }
     return std::nullopt;
 }
 
 LensRoute routeForCameraId(const CameraProfile& profile, const std::string& cameraId) {
-    for (const auto& r : profile.lenses)
-        if (r.cameraId == cameraId && r.physicalCameraId.empty()) return r;
+    for (const auto& r : profile.lenses) {
+        if (r.cameraId == cameraId && r.physicalCameraId.empty()) {
+            auto route = r;
+            route.profileId = profile.id;
+            return route;
+        }
+    }
     LensRoute adHoc;
+    adHoc.profileId = profile.id;
     adHoc.lensId = "1x";
     adHoc.cameraId = cameraId;
     return adHoc;
