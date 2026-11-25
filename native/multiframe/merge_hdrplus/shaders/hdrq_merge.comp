@@ -31,7 +31,7 @@ layout(push_constant) uniform P {
     float black;
     float frameInv;       // 1 / fp16 storage scale of the frames
     float spectrumScale;  // storage scale of the fp16 spectra
-    float shrink;       // strength of the reference's own spectral shrinkage inside gated tiles (0 = off)
+    float binNoise;     // gated tiles: a bin merges while its difference stays within this many times its noise power
 } p;
 
 shared vec4 sRefRe[64], sRefIm[64], sAlRe[64], sAlIm[64];  // index dn*8 + dm
@@ -140,8 +140,7 @@ void main() {
     float motionNorm = clamp(p.maxMotionNorm - (mm - 0.02) * (p.maxMotionNorm - 1.0) / 0.15, 1.0, p.maxMotionNorm);
     vec2 cs = shiftTable.v[sBest * 64 + lane];
     float c = cs.x, s = cs.y;
-    vec4 refRe = sRefRe[lane], refIm = sRefIm[lane];
-    const vec4 ref0Re = refRe, ref0Im = refIm;  // the reference as stored; refRe/refIm may be shrunk below
+    const vec4 refRe = sRefRe[lane], refIm = sRefIm[lane];
     vec4 alRe = c * sAlRe[lane] - s * sAlIm[lane];
     vec4 alIm = s * sAlRe[lane] + c * sAlIm[lane];
     float magnitudeNorm = 1.0;
@@ -151,27 +150,26 @@ void main() {
         float ratio = (alMag.x + alMag.y + alMag.z + alMag.w) / (refMag.x + refMag.y + refMag.z + refMag.w);
         magnitudeNorm = mismatchWeight * clamp(ratio * ratio * ratio * ratio, 0.5, 3.0);
     }
-    vec4 w4 = (refRe - alRe) * (refRe - alRe) + (refIm - alIm) * (refIm - alIm);
-    w4 = w4 / (w4 + magnitudeNorm * motionNorm * noiseNorm);
+    const vec4 d2 = (refRe - alRe) * (refRe - alRe) + (refIm - alIm) * (refIm - alIm);
+    vec4 w4 = d2 / (d2 + magnitudeNorm * motionNorm * noiseNorm);
     float lo = min(w4.x, min(w4.y, min(w4.z, w4.w))), hi = max(w4.x, max(w4.y, max(w4.z, w4.w)));
     // Mean of the two central channel weights (upstream's robust variant of Liba's max).
     float weight = clamp(0.5 * (w4.x + w4.y + w4.z + w4.w - lo - hi), 0.0, 1.0);
-    // Hard gate: a tile whose aligned frame is displaced beyond the noise is not merged at any frequency.
-    weight = max(weight, gate);
-    // Where the frame is gated out the reference stands alone and keeps its own noise. Shrink its bins by their noise
-    // power (windowed 8x8 DFT: 9 sigma^2 per bin) so those tiles come out smooth instead of grainy; strong edges
-    // survive, the DC bin is untouched. Scaled by the gate so merged tiles are unchanged.
-    if (p.shrink > 0.0 && dm + dn > 0 && gate > 0.0) {
+    // Gated tile (the frame moved here beyond the noise): the lenient weight above would blend the moved content in (ghosts,
+    // background showing through a moving subject). There each bin is tested against the noise alone instead: a bin whose
+    // difference stays within the noise (flat or fine parts where both frames hold the same thing up to noise) still
+    // merges, so the moving area is denoised like its surroundings; a bin that really differs keeps the reference. The
+    // noise power of a bin of the difference of two windowed 8x8 frames is 2 x 9 sigma^2 per channel.
+    if (gate > 0.0) {
         vec4 sigma2 = p.noiseSlope * max(4.0 * imageLoad(rms, t) - p.black, vec4(0.0)) + p.noiseOffset;
-        vec4 power = refRe * refRe + refIm * refIm;
-        vec4 g = power / (power + p.shrink * 9.0 * sigma2 + 1.0e-6);
-        float keep = 1.0 - gate;
-        refRe *= keep + gate * g;
-        refIm *= keep + gate * g;
+        vec4 s4 = d2 / (d2 + p.binNoise * 18.0 * sigma2 + 1.0e-12);
+        float slo = min(s4.x, min(s4.y, min(s4.z, s4.w))), shi = max(s4.x, max(s4.y, max(s4.z, s4.w)));
+        float strict = clamp(0.5 * (s4.x + s4.y + s4.z + s4.w - slo - shi), 0.0, 1.0);
+        weight = mix(weight, max(weight, strict), gate);
     }
     // The sum over the burst is N x reference + sum of (contribution - reference). Only the second term is stored: it has
     // no black-level offset, so fp16 keeps it precise where the sum itself (dominated by the offset) would round away the
     // few levels of shadow signal and band smooth dark gradients.
-    imageStore(outFt, o, imageLoad(outFt, o) + p.spectrumScale * ((1.0 - weight) * alRe + weight * refRe - ref0Re));
-    imageStore(outFt, o + ivec2(1, 0), imageLoad(outFt, o + ivec2(1, 0)) + p.spectrumScale * ((1.0 - weight) * alIm + weight * refIm - ref0Im));
+    imageStore(outFt, o, imageLoad(outFt, o) + p.spectrumScale * (1.0 - weight) * (alRe - refRe));
+    imageStore(outFt, o + ivec2(1, 0), imageLoad(outFt, o + ivec2(1, 0)) + p.spectrumScale * (1.0 - weight) * (alIm - refIm));
 }

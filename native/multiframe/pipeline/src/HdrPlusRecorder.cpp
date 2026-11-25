@@ -223,14 +223,15 @@ struct MismatchNormPc {
 };
 struct FreqMergePc {
     std::int32_t tilesX, tilesY;
-    float robustnessNorm, readNoise, maxMotionNorm, gateLo, gateHi, noiseSlope, noiseOffset, black, frameInv, spectrumScale, shrink;
+    float robustnessNorm, readNoise, maxMotionNorm, gateLo, gateHi, noiseSlope, noiseOffset, black, frameInv, spectrumScale, binNoise;
 };
-// A frame is gated out of a tile where the displacement statistic (1 = noise only) rises from kGateLow to kGateHigh; the
-// reference's own bins are then shrunk by kGateShrink times their noise power. Tuned on the tmp bursts (scooter, crowd,
-// 33TJ, Pixel street, birds, a 30-frame bay with moving water). 2.0 smoothed the single-frame grain best but also took
-// 10-35% of the fine real ripple detail in moving water; 1.0 keeps most of it (75-99% of the finest band) with only mild
-// grain, and 0.5 and below bring back the coarse grain of an unshrunk frame.
-constexpr float kGateLow = 1.6f, kGateHigh = 2.6f, kGateShrink = 1.0f;
+// A frame is gated out of a tile where the displacement statistic (1 = noise only) rises from kGateLow to kGateHigh. In a gated
+// tile a frequency bin still merges while its difference stays within kGateBinNoise times its noise power (hdrq_merge.comp):
+// moving areas are denoised like their surroundings without the moved content showing through. Tuned on a dusk street (scooter
+// rider in front of a taxi) and a high-ISO hand sweeping a wall: 1 to 2 keep the rider solid and the area smooth (2 a little
+// smoother on the wall), 4 lets the taxi start to show through the rider. It replaces shrinking the lone reference's tile
+// spectra, which left a mottled, blotchy grain.
+constexpr float kGateLow = 1.6f, kGateHigh = 2.6f, kGateBinNoise = 2.0f;
 // Second displacement test, on the energy of the difference: the mean-based test cannot see a displaced fine pattern (small ripples,
 // foliage) because its block mean cancels. The block's mean square difference over what noise alone gives (q, ~1 for noise) raises the
 // statistic to 1 + kEnergyGain * (q - 1 - kEnergyDead) / kEnergyScale once q passes the dead zone; below it noise tiles are untouched.
@@ -470,7 +471,7 @@ void HdrPlusFrequencyRecorder::recordCompanionMerge(VkCommandBuffer c, std::uint
     if (mark) mark(3u);
     const auto norms = hp::frequencyNorms(config_.strength);
     FreqMergePc fm{std::int32_t(tx), std::int32_t(ty), norms.robustnessNorm, norms.readNoise, norms.maxMotionNorm,
-                   kGateLow, kGateHigh, noiseSlope_, noiseOffset_, meanBlack, 1.0f / frameScale(), spectrumScale(), kGateShrink};
+                   kGateLow, kGateHigh, noiseSlope_, noiseOffset_, meanBlack, 1.0f / frameScale(), spectrumScale(), kGateBinNoise};
     executor_.record(c, ShaderId::HdrqMerge,
                      {{ib(0, arena_.image("hdrq_ref_ft")), ib(1, alignedRgba),
                        ib(2, arena_.image("hdrq_final_ft")), ib(3, arena_.image("hdrq_rms")), ib(4, mismatch),
