@@ -21,8 +21,7 @@ layout(set = 0, binding = 6, r32f) readonly uniform image2D zmap;
 layout(std430, set = 0, binding = 5) readonly buffer ShiftTable { vec2 v[]; } shiftTable;
 layout(push_constant) uniform P {
     ivec2 tiles;
-    float robustnessNorm;
-    float readNoise;
+    float wienerNoise;  // Wiener noise term over the bin's noise power of the difference (HdrPlusRecorder.cpp kWienerNoise)
     float maxMotionNorm;
     float gateLo;  // displacement statistic where the frame starts to be rejected
     float gateHi;  // ... and where it is rejected outright
@@ -134,7 +133,10 @@ void main() {
         sBest = 0;
     }
     barrier();
-    vec4 noiseNorm = (imageLoad(rms, t) + p.readNoise) * float(ts * ts) * p.robustnessNorm;
+    // Noise variance per channel at the tile's level (4 x rms = the tile's root mean square signal), from the burst noise model;
+    // the noise power of a bin of the difference of two windowed 8x8 frames is 2 x 9 sigma^2.
+    const vec4 sigma2 = p.noiseSlope * max(4.0 * imageLoad(rms, t) - p.black, vec4(0.0)) + p.noiseOffset;
+    vec4 noiseNorm = p.wienerNoise * 18.0 * sigma2;
     float mm = imageLoad(mismatch, t).x;
     float mismatchWeight = clamp(1.0 - 10.0 * (mm - 0.2), 0.0, 1.0);
     float motionNorm = clamp(p.maxMotionNorm - (mm - 0.02) * (p.maxMotionNorm - 1.0) / 0.15, 1.0, p.maxMotionNorm);
@@ -161,7 +163,6 @@ void main() {
     // merges, so the moving area is denoised like its surroundings; a bin that really differs keeps the reference. The
     // noise power of a bin of the difference of two windowed 8x8 frames is 2 x 9 sigma^2 per channel.
     if (gate > 0.0) {
-        vec4 sigma2 = p.noiseSlope * max(4.0 * imageLoad(rms, t) - p.black, vec4(0.0)) + p.noiseOffset;
         vec4 s4 = d2 / (d2 + p.binNoise * 18.0 * sigma2 + 1.0e-12);
         float slo = min(s4.x, min(s4.y, min(s4.z, s4.w))), shi = max(s4.x, max(s4.y, max(s4.z, s4.w)));
         float strict = clamp(0.5 * (s4.x + s4.y + s4.z + s4.w - slo - shi), 0.0, 1.0);

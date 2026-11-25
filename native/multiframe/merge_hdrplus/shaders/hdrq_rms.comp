@@ -1,6 +1,6 @@
 #version 450
-// Port of hdr-plus-swift calculate_rms_rgba: per-tile shot-noise estimate of
-// the reference (HDR+ "noise model and tiled approximation").
+// Port of hdr-plus-swift calculate_rms_rgba: per-tile signal level of the reference, RMS / 4 (HDR+ "noise model and tiled
+// approximation"). hdrq_merge evaluates the burst noise model at 4 x this level.
 layout(local_size_x = 16, local_size_y = 16) in;
 layout(set = 0, binding = 0, rgba16f) readonly uniform image2D refRgba;
 layout(set = 0, binding = 1, rgba32f) writeonly uniform image2D rms;

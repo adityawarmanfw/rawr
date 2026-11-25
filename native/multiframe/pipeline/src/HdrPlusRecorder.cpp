@@ -223,8 +223,16 @@ struct MismatchNormPc {
 };
 struct FreqMergePc {
     std::int32_t tilesX, tilesY;
-    float robustnessNorm, readNoise, maxMotionNorm, gateLo, gateHi, noiseSlope, noiseOffset, black, frameInv, spectrumScale, binNoise;
+    float wienerNoise, maxMotionNorm, gateLo, gateHi, noiseSlope, noiseOffset, black, frameInv, spectrumScale, binNoise;
 };
+// Wiener shrinkage of each frequency bin: weight = d^2 / (d^2 + kWienerNoise x the bin's noise power of the difference, 18 sigma^2
+// per channel from the burst noise model at the tile's level). It replaced upstream's (tile RMS + read noise) x 64 x robustness
+// norm, whose noise grew with the signal at a fixed rate whatever the gain. On synthetic bursts of known noise (12 frames,
+// tmp/noisesyn) bright areas kept 4x less noise variance at high ISO and 13x at low ISO; at 16 both get ~16x, which is the old
+// low-ISO behaviour the gates were tuned with: daylight bursts are unchanged (noise within 6%), a high-ISO indoor burst loses
+// 26-49% of its noise, a moving square (also one 6 sigma above its background) stays out, gratings keep their contrast. 8 gave
+// ~14x and +5-15% noise in daylight.
+constexpr float kWienerNoise = 16.0f;
 // A frame is gated out of a tile where the displacement statistic (1 = noise only) rises from kGateLow to kGateHigh. In a gated
 // tile a frequency bin still merges while its difference stays within kGateBinNoise times its noise power (hdrq_merge.comp):
 // moving areas are denoised like their surroundings without the moved content showing through. Tuned on a dusk street (scooter
@@ -470,7 +478,7 @@ void HdrPlusFrequencyRecorder::recordCompanionMerge(VkCommandBuffer c, std::uint
     computeWriteBarrier(c);
     if (mark) mark(3u);
     const auto norms = hp::frequencyNorms(config_.strength);
-    FreqMergePc fm{std::int32_t(tx), std::int32_t(ty), norms.robustnessNorm, norms.readNoise, norms.maxMotionNorm,
+    FreqMergePc fm{std::int32_t(tx), std::int32_t(ty), kWienerNoise, norms.maxMotionNorm,
                    kGateLow, kGateHigh, noiseSlope_, noiseOffset_, meanBlack, 1.0f / frameScale(), spectrumScale(), kGateBinNoise};
     executor_.record(c, ShaderId::HdrqMerge,
                      {{ib(0, arena_.image("hdrq_ref_ft")), ib(1, alignedRgba),

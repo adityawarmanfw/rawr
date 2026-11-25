@@ -97,18 +97,15 @@ inline Geometry makeGeometry(std::uint32_t width, std::uint32_t height, const Co
     return g;
 }
 
-// Frequency-domain ("Higher quality") merge. Uniform-exposure constants from
-// upstream align_merge_frequency_domain.
+// Frequency-domain ("Higher quality") merge. Uniform-exposure constant from upstream align_merge_frequency_domain. The
+// Wiener shrinkage's noise term comes from the burst's noise model (HdrPlusRecorder.cpp, kWienerNoise), not from upstream's
+// strength-scaled tile RMS, which only matched the real noise at one ISO.
 struct FrequencyNorms {
-    float robustnessNorm = 0.f;  // scales the noise term of the Wiener shrinkage
-    float readNoise = 0.f;       // added to the per-tile shot-noise estimate
     float maxMotionNorm = 1.f;   // extra denoising for low-mismatch tiles
 };
 inline FrequencyNorms frequencyNorms(float strength) {
     const double rev = 0.5 * (26.5 - double(int(strength + 0.5f)));
     FrequencyNorms n{};
-    n.robustnessNorm = float(std::pow(2.0, -rev + 7.5));
-    n.readNoise = float(std::pow(std::pow(2.0, -rev + 10.0), 1.6));
     n.maxMotionNorm = float(std::max(1.0, std::pow(1.3, 11.0 - rev)));
     return n;
 }
