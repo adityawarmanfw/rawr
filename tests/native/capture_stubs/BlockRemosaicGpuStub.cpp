@@ -4,7 +4,8 @@
 
 namespace rawrcam::capture {
 bool BlockRemosaicGpu::supports(uint32_t, imaging::CfaRemosaicQuality) { return false; }
-void BlockRemosaicGpu::run(std::vector<uint8_t>&, uint32_t, uint32_t, imaging::CfaRemosaicQuality, float) {
+void BlockRemosaicGpu::run(std::vector<uint8_t>&, uint32_t, uint32_t, imaging::CfaRemosaicQuality, float,
+                           const imaging::QuadGainField*, bool) {
     throw std::logic_error("BlockRemosaicGpu is not available in host tests");
 }
 }  // namespace rawrcam::capture

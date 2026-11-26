@@ -440,8 +440,12 @@ mechanism with its own values, tested on a V2454DA: the full-size sensor mode go
 switch), 50 MP lenses use an 8192x6144 (8160x6144 on the 85 mm) photo stream, and the 200 MP F85 lens takes
 4x4 photo frames that `photoOutput: "reduced"` turns into 50 MP Bayer. The 50 MP main and tele (Q35, forced
 sensor mode 4, and Q85) hand over 2x2 quads: `photoBlock: 2` with the Detail remosaic and `photoPhaseFit`, which
-divides the sensor's per-position gain field out first (the main's quad pixels differ by up to ±5.8% towards the
-corners, a diagonal-stripe grid otherwise; `imaging/QuadGainField.h`). Its HAL fails as soon as a full-size output
+divides the sensor's per-position gain field out first (the main's quad pixels differ by up to ±11% towards the
+corners depending on focus, a diagonal-stripe grid otherwise; a quadratic surface plus a 32×24 residual grid,
+`imaging/QuadGainField.h`), then corrects the phase-detect disparity of its 2×2 on-chip lenses: out of focus, the
+halves of each block see the image shifted (about 6 px on a close-focus shot), which Detail turns into a blocky 4-px
+band along every soft edge (`imaging/QuadDisparity.h`: a local shift regressed on the gradient over 13×13 blocks,
+texture-gated so fine detail is left alone, then the block's measured split removed where the shift explains it). Its HAL fails as soon as a full-size output
 is configured beside the viewfinder, so these lenses use `separatePhotoSession` (the photos get a session of their
 own, about a second per switch) and the `keepTemplateEntries` workaround (requests never clear the template's
 entries; clearing them loses the provider on the first viewfinder frame). X300 Ultra values are not automatically

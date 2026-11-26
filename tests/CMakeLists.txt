@@ -54,7 +54,8 @@ rawr_test(cfa_remosaic_test
 rawr_test(phase_fit_test
   "${RAWR_ROOT}/tests/native/phase_fit_test.cpp")
 rawr_test(still_binned_fallback_test
-  "${RAWR_ROOT}/tests/native/still_binned_fallback_test.cpp")
+  "${RAWR_ROOT}/tests/native/still_binned_fallback_test.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/native/capture_stubs/BlockRemosaicGpuStub.cpp")
 target_include_directories(still_binned_fallback_test BEFORE PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/native/reader_stubs")
 rawr_test(lens_metadata_test
   "${RAWR_ROOT}/tests/native/lens_metadata_test.cpp")

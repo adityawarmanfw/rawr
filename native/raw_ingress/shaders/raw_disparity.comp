@@ -1,0 +1,221 @@
+#version 450
+// Quad phase-detect disparity correction (2x2 on-chip lens), mirrors
+// app/src/main/cpp/imaging/QuadDisparity.h expression for expression; see
+// there for the model. One workgroup per 16 x 16 blocks, by pc.pass:
+//  15. per block: the texture gate (green-plane roughness and diagonal split
+//      against the gradient, net of noise) and the regression terms
+//      (w rx gx, w 4 gx^2, w ry gy, w 4 gy^2), summed per 4 x 4-block cell
+//      into the moments image (idle until the Detail passes);
+//  16. 3 x 3 cell window sums, the shift per axis at the four cells around
+//      each block, interpolated, and the correction of the block's own
+//      measured split: pd image (the loaded raw) in, raw image out.
+// Kept apart from raw_remosaic.comp: its shared memory would push that shader
+// past the 32 KB limit.
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 2, r16ui) writeonly uniform uimage2D rawImage;
+layout(set = 0, binding = 8, rgba32f) writeonly uniform image2D termImage;
+layout(set = 0, binding = 9, rgba32f) readonly uniform image2D termRead;
+layout(set = 0, binding = 10, r16ui) readonly uniform uimage2D pdRead;
+// Same layout as raw_remosaic.comp (plus the noise model at the end).
+layout(push_constant) uniform P {
+    uint width;
+    uint height;
+    uint rowStrideBytes;
+    uint block;
+    uint order;
+    uint raw10;
+    uint pass;
+    uint blocksX;
+    uint blocksY;
+    uint parityR;
+    uint parityB;
+    float codesPerDn;
+    float blackLevel;
+    uint fit;
+    uint fitStride;
+    uint fieldRow0;
+    uint fieldHeight;
+    uint disparity;
+    float noiseSlope;
+    float noiseFloor;
+}
+pc;
+
+const int CELL = 4;  // QuadDisparity::kCell
+const int M = 3;     // kGateMargin
+const float kMaxShift = 4.0, kRegScale = 1.0 / 64.0;
+const float kNoiseG2 = 0.149, kNoiseL2 = 0.081, kNoiseD2 = 4.0;
+const float kRhoLow = 2.0, kRhoHigh = 8.0, kConfidenceNoise = 0.02, kGateNoise = 0.25;
+
+// Pass 15: means and diagonal splits of the tile + 3 blocks, green plane of the tile + 2.
+const int A = 16 + 2 * M;      // 22
+const int G = 16 + 2 * (M - 1);  // 20
+shared float sMean[A * A];
+shared float sDiag[A * A];
+shared vec2 sSplit[A * A];  // (s1 + s3) - (s0 + s2), (s2 + s3) - (s0 + s1)
+const int E = 16 + 2;  // per-block gate energies of the tile + 1
+shared vec3 sEnergy[E * E];  // green gradient^2, green Laplacian^2, diagonal split^2
+shared float sGreen[G * G];
+shared vec4 sBlockTerms[256];
+// Pass 16: cell sums of the tile's cells + 2, their 3 x 3 window sums (cells + 1), means of the tile + 2.
+shared vec4 sCells[8 * 8];
+shared vec4 sWindows[6 * 6];
+shared float sMean16[20 * 20];
+
+float sampleAt(int x, int y) { return float(imageLoad(pdRead, ivec2(x, y)).r); }
+uint roundDn(float v) { return uint(clamp(floor(abs(v) + 0.5) * sign(v), 0.0, 65535.0)); }
+float variance(float m) { return pc.noiseSlope * max(m - pc.blackLevel, 0.0) + pc.noiseFloor; }
+float blockMean(ivec2 q) {
+    const int x = 2 * q.x, y = 2 * q.y;
+    return 0.25 * ((sampleAt(x, y) + sampleAt(x + 1, y)) + (sampleAt(x, y + 1) + sampleAt(x + 1, y + 1)));
+}
+bool greenBlock(int bx, int by) {  // QuadDisparity.h quadGreenBlock
+    const bool diagonal = ((bx ^ by) & 1) == 0;
+    return pc.order == 1u || pc.order == 2u ? diagonal : !diagonal;
+}
+
+void gatePass(int bw, int bh, ivec2 b0, int lidx, ivec2 lid) {
+    for (int i = lidx; i < A * A; i += 256) {
+        const ivec2 q = b0 - M + ivec2(i % A, i / A);
+        float m = 0.0, d = 0.0;
+        vec2 split = vec2(0.0);
+        if (q.x >= 0 && q.y >= 0 && q.x < bw && q.y < bh) {
+            const int x = 2 * q.x, y = 2 * q.y;
+            const float s0 = sampleAt(x, y), s1 = sampleAt(x + 1, y), s2 = sampleAt(x, y + 1), s3 = sampleAt(x + 1, y + 1);
+            m = 0.25 * ((s0 + s1) + (s2 + s3));
+            d = (s0 + s3) - (s1 + s2);
+            split = vec2((s1 + s3) - (s0 + s2), (s2 + s3) - (s0 + s1));
+        }
+        sMean[i] = m;
+        sDiag[i] = d;
+        sSplit[i] = split;
+    }
+    barrier();
+    for (int i = lidx; i < G * G; i += 256) {
+        const ivec2 q = b0 - (M - 1) + ivec2(i % G, i / G);
+        const int l = (i / G + 1) * A + (i % G + 1);
+        float g = 0.0;
+        if (q.x >= 1 && q.y >= 1 && q.x < bw - 1 && q.y < bh - 1)
+            g = greenBlock(q.x, q.y) ? sMean[l] : 0.25 * ((sMean[l + 1] + sMean[l - 1]) + (sMean[l + A] + sMean[l - A]));
+        sGreen[i] = g;
+    }
+    barrier();
+    for (int i = lidx; i < E * E; i += 256) {
+        const int c = (i / E + 1) * G + (i % E + 1);  // in the green tile (origin tile - 2)
+        const float e = sGreen[c + 1], wv = sGreen[c - 1], s = sGreen[c + G], n = sGreen[c - G];
+        const float lap = sGreen[c] - 0.25 * ((e + wv) + (s + n));
+        const float hx = 0.5 * (e - wv), hy = 0.5 * (s - n);
+        const float dq = sDiag[(i / E + 2) * A + (i % E + 2)];  // in the mean tile (origin tile - 3)
+        sEnergy[i] = vec3(hx * hx + hy * hy, lap * lap, dq * dq);
+    }
+    barrier();
+    const ivec2 q = b0 + lid;
+    vec4 terms = vec4(0.0);
+    if (q.x < bw && q.y < bh) {
+    const int l = (lid.y + M) * A + lid.x + M;
+    float w = 0.0;
+    if (q.x >= M && q.y >= M && q.x < bw - M && q.y < bh - M) {
+        float g2 = 0.0, l2 = 0.0, d2 = 0.0;
+        for (int j = -1; j <= 1; ++j)
+            for (int i = -1; i <= 1; ++i) {
+                const vec3 en = sEnergy[(lid.y + 1 + j) * E + lid.x + 1 + i];
+                g2 += en.x;
+                l2 += en.y;
+                d2 += en.z;
+            }
+        const float var = variance(sMean[l]);
+        const float g2s = max(g2 * (1.0 / 9.0) - kNoiseG2 * var, 0.0);
+        const float l2s = max(l2 * (1.0 / 9.0) - kNoiseL2 * var, 0.0);
+        const float d2s = max(d2 * (1.0 / 9.0) - kNoiseD2 * var, 0.0);
+        const float rho = g2s / (16.0 * l2s + d2s + kGateNoise * kNoiseG2 * var + 1e-6);
+        w = clamp((rho - kRhoLow) / (kRhoHigh - kRhoLow), 0.0, 1.0);
+    }
+    const float gx = q.x - 2 >= 0 && q.x + 2 < bw ? (sMean[l + 2] - sMean[l - 2]) * 0.125 : 0.0;
+    const float gy = q.y - 2 >= 0 && q.y + 2 < bh ? (sMean[l + 2 * A] - sMean[l - 2 * A]) * 0.125 : 0.0;
+    const float rx = sSplit[l].x - 2.0 * gx, ry = sSplit[l].y - 2.0 * gy;
+    terms = vec4(w * (rx * gx), w * (4.0 * gx * gx), w * (ry * gy), w * (4.0 * gy * gy));
+    }
+    sBlockTerms[lidx] = terms;  // blocks outside the frame add 0 (exact)
+    barrier();
+    if (lidx < 16) {  // one cell each, its blocks in raster order (QuadDisparity.h)
+        const int cx = lidx % 4, cy = lidx / 4;
+        vec4 acc = vec4(0.0);
+        for (int j = 0; j < CELL; ++j)
+            for (int i = 0; i < CELL; ++i) acc += sBlockTerms[(cy * CELL + j) * 16 + cx * CELL + i];
+        const ivec2 c = b0 / CELL + ivec2(cx, cy);
+        const int cw = (bw + CELL - 1) / CELL, ch = (bh + CELL - 1) / CELL;
+        if (c.x < cw && c.y < ch) imageStore(termImage, c, acc);
+    }
+}
+
+void correctPass(int bw, int bh, ivec2 b0, int lidx, ivec2 lid) {
+    const int cw = (bw + CELL - 1) / CELL, ch = (bh + CELL - 1) / CELL;
+    const ivec2 c0 = b0 / CELL;
+    if (lidx < 64) {
+        const ivec2 c = c0 - 2 + ivec2(lidx % 8, lidx / 8);
+        sCells[lidx] = c.x >= 0 && c.y >= 0 && c.x < cw && c.y < ch ? imageLoad(termRead, c) : vec4(0.0);
+    }
+    for (int i = lidx; i < 20 * 20; i += 256) {
+        const ivec2 q = b0 - 2 + ivec2(i % 20, i / 20);
+        sMean16[i] = q.x >= 0 && q.y >= 0 && q.x < bw && q.y < bh ? blockMean(q) : 0.0;
+    }
+    barrier();
+    if (lidx < 36) {  // window of cell c0 - 1 + (i, j): its 3 x 3 cells in raster order (outside cells add 0)
+        const int i = lidx % 6, j = lidx / 6;
+        vec4 acc = vec4(0.0);
+        for (int dj = -1; dj <= 1; ++dj)
+            for (int di = -1; di <= 1; ++di) acc += sCells[(j + 1 + dj) * 8 + (i + 1 + di)];
+        sWindows[lidx] = acc;
+    }
+    barrier();
+    const ivec2 q = b0 + lid;
+    if (q.x >= bw || q.y >= bh) return;
+    const int l = (lid.y + 2) * 20 + lid.x + 2;
+    const float m = sMean16[l];
+    const float level = max(m - pc.blackLevel, 1.0) * kRegScale;
+    const float fx = (float(q.x) + 0.5) * (1.0 / float(CELL)) - 0.5, fy = (float(q.y) + 0.5) * (1.0 / float(CELL)) - 0.5;
+    const int cx0 = clamp(int(floor(fx)), 0, cw - 1), cx1 = min(cx0 + 1, cw - 1);
+    const int cy0 = clamp(int(floor(fy)), 0, ch - 1), cy1 = min(cy0 + 1, ch - 1);
+    const float tx = clamp(fx - float(cx0), 0.0, 1.0), ty = clamp(fy - float(cy0), 0.0, 1.0);
+    const int cxs[4] = int[4](cx0, cx1, cx0, cx1), cys[4] = int[4](cy0, cy0, cy1, cy1);
+    float sxc[4], syc[4];
+    for (int k = 0; k < 4; ++k) {
+        const vec4 t = sWindows[(cys[k] - c0.y + 1) * 6 + (cxs[k] - c0.x + 1)];
+        const int n = (min(CELL * (cxs[k] + 2), bw) - max(CELL * (cxs[k] - 1), 0)) *
+                      (min(CELL * (cys[k] + 2), bh) - max(CELL * (cys[k] - 1), 0));
+        const float reg = float(n) * level;
+        sxc[k] = clamp(t.x / (t.y + reg), -kMaxShift, kMaxShift);
+        syc[k] = clamp(t.z / (t.w + reg), -kMaxShift, kMaxShift);
+    }
+    const float topX = sxc[0] + (sxc[1] - sxc[0]) * tx, bottomX = sxc[2] + (sxc[3] - sxc[2]) * tx;
+    const float topY = syc[0] + (syc[1] - syc[0]) * tx, bottomY = syc[2] + (syc[3] - syc[2]) * tx;
+    const float sx = topX + (bottomX - topX) * ty, sy = topY + (bottomY - topY) * ty;
+    const float gx = q.x - 2 >= 0 && q.x + 2 < bw ? (sMean16[l + 2] - sMean16[l - 2]) * 0.125 : 0.0;
+    const float gy = q.y - 2 >= 0 && q.y + 2 < bh ? (sMean16[l + 40] - sMean16[l - 40]) * 0.125 : 0.0;
+    const int x = 2 * q.x, y = 2 * q.y;
+    float s[4] = float[4](sampleAt(x, y), sampleAt(x + 1, y), sampleAt(x, y + 1), sampleAt(x + 1, y + 1));
+    const float rx = ((s[1] + s[3]) - (s[0] + s[2])) - 2.0 * gx, ry = ((s[2] + s[3]) - (s[0] + s[1])) - 2.0 * gy;
+    const float var = variance(m);
+    const float px = 4.0 * sx * gx, py = 4.0 * sy * gy;
+    const float cwx = px * px / (px * px + kConfidenceNoise * var + 1e-6);
+    const float cwy = py * py / (py * py + kConfidenceNoise * var + 1e-6);
+    const float cx = cwx * rx * 0.25, cy = cwy * ry * 0.25;
+    const float lo = min(min(s[0], s[1]), min(s[2], s[3]));
+    const float hi = max(max(s[0], s[1]), max(s[2], s[3]));
+    for (int k = 0; k < 4; ++k) {
+        const float ox = (k & 1) != 0 ? 1.0 : -1.0, oy = (k & 2) != 0 ? 1.0 : -1.0;
+        const float v = clamp(s[k] - (cx * ox + cy * oy), lo, hi);
+        imageStore(rawImage, ivec2(x + (k & 1), y + (k >> 1)), uvec4(roundDn(v), 0u, 0u, 0u));
+    }
+}
+
+void main() {
+    const int bw = int(pc.width / 2u), bh = int(pc.height / 2u);
+    const ivec2 b0 = ivec2(gl_WorkGroupID.xy) * 16;
+    const int lidx = int(gl_LocalInvocationIndex);
+    const ivec2 lid = ivec2(gl_LocalInvocationID.xy);
+    if (pc.pass == 15u)
+        gatePass(bw, bh, b0, lidx, lid);
+    else
+        correctPass(bw, bh, b0, lidx, lid);
+}

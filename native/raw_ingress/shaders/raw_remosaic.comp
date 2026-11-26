@@ -8,7 +8,9 @@
 //  3. RAW10 only: unpack the camera rows into the raw image;
 // 14. RAW16 quad with a gain field (imaging/QuadGainField.h): load the camera
 //     rows into the raw image, each sample divided by its position's gain
-//     (coefficients in the diff buffer, 6 floats per surface);
+//     (diff buffer: 6 quadratic coefficients per surface, then a 32 x 24
+//     residual grid per surface). With the disparity correction on, the load
+//     goes to the pd image instead and raw_disparity.comp writes the raw image;
 //  6. exact 2x2 source sum -> half-resolution quarter-DN Quad image;
 //  7. High Quad Bayer reconstruction (after pass 0 statistics);
 //  8. Detail Quad: per red/blue block, cubic green into the green image and the block moments
@@ -47,6 +49,8 @@ layout(std430, set = 0, binding = 7) readonly buffer DiffRead { uint words[]; } 
 // Detail block moments, one texel per red/blue block at (bx >> 1, by).
 layout(set = 0, binding = 8, rgba32f) writeonly uniform image2D momImage;
 layout(set = 0, binding = 9, rgba32f) readonly uniform image2D momRead;
+// Disparity input (raw_disparity.comp reads it, binding 10 readonly there).
+layout(set = 0, binding = 10, r16ui) writeonly uniform uimage2D pdImage;
 layout(push_constant) uniform P {
     uint width;
     uint height;
@@ -65,6 +69,7 @@ layout(push_constant) uniform P {
     uint fitStride;    // odd statistics lattice stride
     uint fieldRow0;    // pass 14: the window's first row in the frame
     uint fieldHeight;  // pass 14: frame height (the field's v range)
+    uint disparity;    // pass 14: write the pd image (disparity correction follows)
 }
 pc;
 
@@ -505,13 +510,27 @@ void main() {
         float u = (float(x) + 0.5) / float(pc.width) * 2.0 - 1.0;
         float v = (float(gy) + 0.5) / float(pc.fieldHeight) * 2.0 - 1.0;
         uint k = surface * 6u;
+        // Residual grid (QuadGainField.h quadGainGrid): nodes span the frame edge to edge.
+        const uint GX = 32u, GY = 24u;
+        float fx = clamp((u + 1.0) * 0.5 * float(GX - 1u), 0.0, float(GX - 1u));
+        float fy = clamp((v + 1.0) * 0.5 * float(GY - 1u), 0.0, float(GY - 1u));
+        uint x0 = min(uint(fx), GX - 2u), y0 = min(uint(fy), GY - 2u);
+        float tx = fx - float(x0), ty = fy - float(y0);
+        uint n = 96u + surface * GX * GY + y0 * GX + x0;
+        float n00 = uintBitsToFloat(diffRead.words[n]), n01 = uintBitsToFloat(diffRead.words[n + 1u]);
+        float n10 = uintBitsToFloat(diffRead.words[n + GX]), n11 = uintBitsToFloat(diffRead.words[n + GX + 1u]);
+        float top = n00 + (n01 - n00) * tx, bottom = n10 + (n11 - n10) * tx;
+        float grid = top + (bottom - top) * ty;
         float g = 1.0 + uintBitsToFloat(diffRead.words[k]) +
                   u * (uintBitsToFloat(diffRead.words[k + 1u]) + uintBitsToFloat(diffRead.words[k + 3u]) * v +
                        uintBitsToFloat(diffRead.words[k + 4u]) * u) +
-                  v * (uintBitsToFloat(diffRead.words[k + 2u]) + uintBitsToFloat(diffRead.words[k + 5u]) * v);
+                  v * (uintBitsToFloat(diffRead.words[k + 2u]) + uintBitsToFloat(diffRead.words[k + 5u]) * v) + grid;
         float inverse = 1.0 / g;
         float corrected = (float(code) - pc.blackLevel) * inverse + pc.blackLevel;
-        imageStore(rawImage, ivec2(int(x), int(y)), uvec4(roundDn(corrected), 0u, 0u, 0u));
+        if (pc.disparity != 0u)
+            imageStore(pdImage, ivec2(int(x), int(y)), uvec4(roundDn(corrected), 0u, 0u, 0u));
+        else
+            imageStore(rawImage, ivec2(int(x), int(y)), uvec4(roundDn(corrected), 0u, 0u, 0u));
         return;
     }
     if (activePass == 3u) {

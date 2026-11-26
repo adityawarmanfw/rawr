@@ -10,6 +10,7 @@
 #include "capture/BlockRemosaicGpu.h"
 #include "capture/ReducedRawMetadata.h"
 #include "imaging/CfaRemosaic.h"
+#include "imaging/QuadDisparity.h"
 #include "imaging/QuadGainField.h"
 #include "imaging/RawSnapshot.h"
 
@@ -44,10 +45,17 @@ inline std::optional<imaging::QuadGainField> quadGainFieldFor(const std::vector<
     [[maybe_unused]] const long long us =
         std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
     __android_log_print(ANDROID_LOG_INFO, "RawrCamNative",
-                        "QUAD_GAIN_FIELD active=%d deviation=%.3f%% noise=%.3f%% fit_us=%lld", field.active ? 1 : 0,
-                        100.0f * field.deviation, 100.0f * field.noise, us);
+                        "QUAD_GAIN_FIELD active=%d deviation=%.3f%% noise=%.3f%% pixel_noise=%.3f*level+%.2f fit_us=%lld",
+                        field.active ? 1 : 0, 100.0f * field.deviation, 100.0f * field.noise, field.noiseSlope,
+                        field.noiseFloor, us);
     if (cache) *cache = field;
     return field;
+}
+// A quad lens with "Correct per-position response" also gets the phase-detect
+// disparity correction (QuadDisparity.h): the same sensors put one lens over
+// each 2x2 block, and on a soft edge the halves of a block disagree.
+inline bool quadDisparityFor(const metadata::CameraContextMetadata& context) {
+    return context.photoPhaseFit && context.cfaBlock == 2u;
 }
 // Remosaics one block-CFA RAW16 buffer to Bayer in place: on the GPU when the
 // caller holds a BlockRemosaicGpu that supports the lens, otherwise (or when
@@ -61,9 +69,11 @@ inline bool remosaicBlockCfaBuffer(std::vector<uint8_t>& raw16, uint32_t width, 
     const float blackMean = 0.25f * (black[0] + black[1] + black[2] + black[3]);
     const auto field = quadGainFieldFor(raw16, width, height, context, blackMean, white, fieldCache);
     const imaging::QuadGainField* activeField = field && field->active ? &*field : nullptr;
+    const bool disparity = quadDisparityFor(context);
     if (gpu && BlockRemosaicGpu::supports(context.cfaBlock, quality)) {
         try {
-            gpu->run(raw16, context.cfaBlock, context.rawPreviewCfa, quality, blackMean, activeField);
+            gpu->run(raw16, context.cfaBlock, context.rawPreviewCfa, quality, blackMean, field ? &*field : nullptr,
+                     disparity);
             return true;
         } catch (const BlockRemosaicGpu::PartialFailure&) {
             throw;  // some rows are already Bayer: the CPU path must not run over them
@@ -76,6 +86,10 @@ inline bool remosaicBlockCfaBuffer(std::vector<uint8_t>& raw16, uint32_t width, 
     if (activeField)
         imaging::applyQuadGainField(reinterpret_cast<uint16_t*>(raw16.data()), width, height, blackMean, *activeField,
                                     threads);
+    if (disparity)
+        imaging::correctQuadDisparity(reinterpret_cast<uint16_t*>(raw16.data()), width, height, context.rawPreviewCfa,
+                                      blackMean, field ? field->noiseSlope : 0.0f, field ? field->noiseFloor : 0.0f,
+                                      threads);
     imaging::remosaicBlockCfa(raw16, width, height, context.cfaBlock, context.rawPreviewCfa, threads, quality, 1.0f,
                               blackMean);
     return false;
@@ -94,8 +108,9 @@ inline void remosaicBlockCfaStill(imaging::RawSnapshot& frame, BlockRemosaicGpu*
     [[maybe_unused]] const long long ms =
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
     __android_log_print(ANDROID_LOG_INFO, "RawrCamNative",
-                        "STILL_CFA_REMOSAIC requestId=%llu raw=%ux%u block=%u quality=%s gpu=%d ms=%lld",
+                        "STILL_CFA_REMOSAIC requestId=%llu raw=%ux%u block=%u quality=%s disparity=%d gpu=%d ms=%lld",
                         static_cast<unsigned long long>(frame.requestId), frame.width, frame.height, context->cfaBlock,
-                        remosaicQualityName(photoRemosaicQuality(*context)), onGpu ? 1 : 0, ms);
+                        remosaicQualityName(photoRemosaicQuality(*context)), quadDisparityFor(*context) ? 1 : 0,
+                        onGpu ? 1 : 0, ms);
 }
 }  // namespace rawrcam::capture

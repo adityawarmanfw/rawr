@@ -10,6 +10,7 @@
 
 #include "capture/StripRemosaic.h"
 #include "imaging/CfaRemosaic.h"
+#include "imaging/QuadDisparity.h"
 #include "imaging/QuadGainField.h"
 
 namespace {
@@ -338,6 +339,85 @@ int main() {
         auto untouched = clean;
         applyQuadGainField(untouched.data(), QW, QH, 64.0f, none, 4);
         check(untouched == clean, "quad gain field: inactive field changes nothing");
+    }
+    {
+        // Quad gain field residual grid: a field the quadratic cannot bend to (the diagonal split grows with u^3,
+        // up to 6% in the corners) is still restored within a few codes; without the grid it is not.
+        constexpr uint32_t QW = 1536, QH = 1024;
+        std::vector<uint16_t> clean(QW * QH), seen(QW * QH);
+        for (uint32_t y = 0; y < QH; ++y)
+            for (uint32_t x = 0; x < QW; ++x) {
+                const float v = scene(cfaChannel(3, x / 2, y / 2), x / 3, y / 3) - 64.0f;
+                const uint32_t p = (y & 1u) * 2u + (x & 1u);
+                const float u = quadGainCoord(x, QW), w = quadGainCoord(y, QH);
+                const float g = 1.0f + 0.06f * u * u * u * w * (p == 0u || p == 3u ? 1.0f : -1.0f);
+                clean[y * QW + x] = uint16_t(std::lround(64.0f + v));
+                seen[y * QW + x] = uint16_t(std::lround(64.0f + v * g));
+            }
+        QuadGainField field = fitQuadGainField(seen.data(), QW, QH, 64.0f, 1023.0f, 4);
+        check(field.active, "quad gain grid: the field is corrected");
+        auto fixed = seen, quadraticOnly = seen;
+        applyQuadGainField(fixed.data(), QW, QH, 64.0f, field, 4);
+        QuadGainField noGrid = field;
+        noGrid.grid.fill(0.0f);
+        applyQuadGainField(quadraticOnly.data(), QW, QH, 64.0f, noGrid, 4);
+        double withGrid = 0.0, without = 0.0;
+        for (size_t i = 0; i < clean.size(); ++i) {
+            withGrid += std::abs(int(fixed[i]) - int(clean[i]));
+            without += std::abs(int(quadraticOnly[i]) - int(clean[i]));
+        }
+        withGrid /= double(clean.size());
+        without /= double(clean.size());
+        std::printf("quad gain grid: mean error quadratic only %.2f, with grid %.2f codes\n", without, withGrid);
+        check(withGrid < 0.5 * without, "quad gain grid: the grid takes what the quadratic leaves");
+    }
+    {
+        // Quad phase-detect disparity: a soft edge seen by a defocused 2x2 on-chip lens (each in-block position
+        // shifted 2.5 px along its side) splits every block on the edge; the correction brings the samples back
+        // towards the in-focus image. An in-focus scene (no shift) with fine texture is left nearly untouched.
+        constexpr uint32_t DW = 512, DH = 512;
+        const auto edge = [](float x, float y) {
+            return 100.0f + 500.0f * (0.5f + 0.5f * std::tanh((y - 256.0f + 0.3f * (x - 256.0f)) / 10.0f));
+        };
+        std::vector<uint16_t> truth(DW * DH), seen(DW * DH);
+        for (uint32_t y = 0; y < DH; ++y)
+            for (uint32_t x = 0; x < DW; ++x) {
+                const float gain = cfaChannel(3, x / 2, y / 2) == 1u ? 1.0f : 0.6f;
+                const float sx = float(x) + 0.5f + ((x & 1u) ? 2.5f : -2.5f), sy = float(y) + 0.5f + ((y & 1u) ? 2.5f : -2.5f);
+                truth[y * DW + x] = uint16_t(std::lround(64.0f + gain * edge(float(x) + 0.5f, float(y) + 0.5f)));
+                seen[y * DW + x] = uint16_t(std::lround(64.0f + gain * edge(sx, sy)));
+            }
+        auto fixed = seen;
+        correctQuadDisparity(fixed.data(), DW, DH, 3, 64.0f, 0.0f, 0.0f, 4);
+        double before = 0.0, after = 0.0;
+        for (uint32_t y = 16; y < DH - 16; ++y)
+            for (uint32_t x = 16; x < DW - 16; ++x) {
+                before += std::abs(int(seen[y * DW + x]) - int(truth[y * DW + x]));
+                after += std::abs(int(fixed[y * DW + x]) - int(truth[y * DW + x]));
+            }
+        // Fine in-focus textures alias on the 4-px same-colour lattice into gradients that correlate with the
+        // split like a shift does; the texture gate must leave them alone.
+        double changed = 0.0;
+        for (int pattern = 0; pattern < 3; ++pattern) {
+            std::vector<uint16_t> tex(DW * DH);
+            for (uint32_t y = 0; y < DH; ++y)
+                for (uint32_t x = 0; x < DW; ++x) {
+                    const float gain = cfaChannel(3, x / 2, y / 2) == 1u ? 1.0f : 0.6f;
+                    const float v = pattern == 0   ? std::sin(x * 1.9f) * std::cos(y * 1.3f)
+                                    : pattern == 1 ? std::sin(x * 1.1f)
+                                                   : std::sin(x * 0.7f + y * 0.4f);
+                    tex[y * DW + x] = uint16_t(std::lround(64.0f + gain * (300.0f + 120.0f * v)));
+                }
+            auto out = tex;
+            correctQuadDisparity(out.data(), DW, DH, 3, 64.0f, 0.0f, 0.25f, 4);
+            double c = 0.0;
+            for (size_t i = 0; i < out.size(); ++i) c += std::abs(int(out[i]) - int(tex[i]));
+            changed = std::max(changed, c / double(out.size()));
+        }
+        std::printf("quad disparity: edge error %.0f -> %.0f, in-focus textures mean change %.3f codes (worst)\n", before,
+                    after, changed);
+        check(after * 3.0 < before, "quad disparity: a defocused edge's block split is corrected");
+        check(changed < 0.05, "quad disparity: in-focus texture is kept");
     }
     if (failures == 0) std::printf("cfa_remosaic_test: ok\n");
     return failures == 0 ? 0 : 1;

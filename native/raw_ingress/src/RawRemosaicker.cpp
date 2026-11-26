@@ -4,6 +4,7 @@
 #include <stdexcept>
 #include <string>
 
+#include "raw_disparity.h"
 #include "raw_remosaic.h"
 
 namespace rawr::raw_ingress {
@@ -18,6 +19,8 @@ struct PushConstants {
     float blackLevel;
     std::uint32_t fit, fitStride;
     std::uint32_t fieldRow0, fieldHeight;
+    std::uint32_t disparity;
+    float noiseSlope, noiseFloor;
 };
 void memoryBarrier(VkCommandBuffer command, VkAccessFlags src, VkAccessFlags dst) {
     VkMemoryBarrier b{};
@@ -33,8 +36,9 @@ struct RawRemosaicker::Pipelines {
     VkDevice device{};
     VkDescriptorSetLayout setLayout{};
     VkPipelineLayout layout{};
-    VkPipeline general{}, detail{};
+    VkPipeline general{}, detail{}, disparity{};
     ~Pipelines() {
+        if (disparity) vkDestroyPipeline(device, disparity, nullptr);
         if (detail) vkDestroyPipeline(device, detail, nullptr);
         if (general) vkDestroyPipeline(device, general, nullptr);
         if (layout) vkDestroyPipelineLayout(device, layout, nullptr);
@@ -51,7 +55,7 @@ std::shared_ptr<RawRemosaicker::Pipelines> RawRemosaicker::prepare(const rawr::v
     auto& pipelineLayout_ = result->layout;
     auto& pipeline_ = result->general;
     auto& detailPipeline_ = result->detail;
-    std::array<VkDescriptorSetLayoutBinding, 10> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 11> bindings{};
     bindings[0] = {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
     bindings[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
     bindings[2] = {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
@@ -62,6 +66,7 @@ std::shared_ptr<RawRemosaicker::Pipelines> RawRemosaicker::prepare(const rawr::v
     bindings[7] = {7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
     bindings[8] = {8, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
     bindings[9] = {9, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    bindings[10] = {10, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
     VkDescriptorSetLayoutCreateInfo li{};
     li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     li.bindingCount = static_cast<std::uint32_t>(bindings.size());
@@ -100,6 +105,15 @@ std::shared_ptr<RawRemosaicker::Pipelines> RawRemosaicker::prepare(const rawr::v
     }
     vkDestroyShaderModule(d, module, nullptr);
     check(created, "pipeline");
+    // Disparity correction: its own module (shared memory), same layout.
+    mi.codeSize = raw_disparity_spv_size;
+    mi.pCode = reinterpret_cast<const std::uint32_t*>(raw_disparity_spv);
+    check(vkCreateShaderModule(d, &mi, nullptr, &module), "disparity shader module");
+    ci.stage.module = module;
+    ci.stage.pSpecializationInfo = nullptr;
+    created = vkCreateComputePipelines(d, cache, 1, &ci, nullptr, &result->disparity);
+    vkDestroyShaderModule(d, module, nullptr);
+    check(created, "disparity pipeline");
 
     return result;
 }
@@ -116,10 +130,11 @@ RawRemosaicker::RawRemosaicker(const rawr::vk::GpuContext& context, std::shared_
     pipelineLayout_ = pipelines_->layout;
     pipeline_ = pipelines_->general;
     detailPipeline_ = pipelines_->detail;
+    disparityPipeline_ = pipelines_->disparity;
     try {
         const VkDevice d = context_.device;
         std::array<VkDescriptorPoolSize, 2> sizes{
-            {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3 * kSlots}, {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 7 * kSlots}}};
+            {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3 * kSlots}, {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 8 * kSlots}}};
         VkDescriptorPoolCreateInfo pi{};
         pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         pi.maxSets = kSlots;
@@ -151,6 +166,7 @@ void RawRemosaicker::destroy() noexcept {
     pool_ = VK_NULL_HANDLE;
     pipeline_ = VK_NULL_HANDLE;
     detailPipeline_ = VK_NULL_HANDLE;
+    disparityPipeline_ = VK_NULL_HANDLE;
     pipelineLayout_ = VK_NULL_HANDLE;
     setLayout_ = VK_NULL_HANDLE;
 }
@@ -160,15 +176,16 @@ void RawRemosaicker::releaseScratch() noexcept {
     rawr::vk::destroyOwnedImage(d, scratch_.raw);
     rawr::vk::destroyOwnedImage(d, scratch_.green);
     rawr::vk::destroyOwnedImage(d, scratch_.moments);
+    rawr::vk::destroyOwnedImage(d, scratch_.pd);
     if (scratch_.diff) vkDestroyBuffer(d, scratch_.diff, nullptr);
     if (scratch_.diffMemory) vkFreeMemory(d, scratch_.diffMemory, nullptr);
     scratch_ = {};
 }
 
 void RawRemosaicker::ensureScratch(std::uint32_t width, std::uint32_t height, std::uint32_t block, bool needsDiff,
-                                   bool needsMoments) {
+                                   bool needsMoments, bool needsPd) {
     if (scratch_.raw.image && scratch_.width == width && scratch_.height == height && scratch_.block == block &&
-        scratch_.needsDiff == needsDiff && scratch_.needsMoments == needsMoments)
+        scratch_.needsDiff == needsDiff && scratch_.needsMoments == needsMoments && scratch_.needsPd == needsPd)
         return;
     releaseScratch();
     const VkDevice d = context_.device;
@@ -204,12 +221,16 @@ void RawRemosaicker::ensureScratch(std::uint32_t width, std::uint32_t height, st
                                                   VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
         scratch_.green = rawr::vk::createOwnedImage(context_.physicalDevice, d, width, height, VK_FORMAT_R16_UINT,
                                                     VK_IMAGE_USAGE_STORAGE_BIT);
-        // Detail block moments: one texel per red/blue block (bx >> 1, by); a 1x1 placeholder otherwise.
-        scratch_.moments = needsMoments
-                               ? rawr::vk::createOwnedImage(context_.physicalDevice, d, (bw + 1) / 2, bh,
-                                                            VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT)
-                               : rawr::vk::createOwnedImage(context_.physicalDevice, d, 1, 1,
-                                                            VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT);
+        // Detail block moments: one texel per red/blue block (bx >> 1, by); a 1x1 placeholder otherwise. The
+        // disparity correction keeps its regression terms here first (one texel per 4 x 4-block cell).
+        const std::uint32_t momentsWidth = std::max(needsMoments ? (bw + 1) / 2 : 1u, needsPd ? (bw + 3) / 4 : 1u);
+        const std::uint32_t momentsHeight = std::max(needsMoments ? bh : 1u, needsPd ? (bh + 3) / 4 : 1u);
+        scratch_.moments = rawr::vk::createOwnedImage(context_.physicalDevice, d, momentsWidth, momentsHeight,
+                                                      VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT);
+        // Disparity input (the loaded raw); a 1x1 placeholder otherwise.
+        scratch_.pd = rawr::vk::createOwnedImage(context_.physicalDevice, d, needsPd ? width : 1, needsPd ? height : 1,
+                                                 VK_FORMAT_R16_UINT,
+                                                 VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
         // Detail needs no block statistics; retain a valid minimal descriptor when phase fitting is off.
         make(needsDiff ? std::max<VkDeviceSize>(VkDeviceSize(bw) * bh * 8u, kGainFieldFloats * 4u) : VkDeviceSize(4),
              scratch_.diff, scratch_.diffMemory);
@@ -222,6 +243,7 @@ void RawRemosaicker::ensureScratch(std::uint32_t width, std::uint32_t height, st
     scratch_.block = block;
     scratch_.needsDiff = needsDiff;
     scratch_.needsMoments = needsMoments;
+    scratch_.needsPd = needsPd;
 }
 
 void RawRemosaicker::record(VkCommandBuffer command, std::uint32_t slot, const Frame& f) {
@@ -236,6 +258,9 @@ void RawRemosaicker::record(VkCommandBuffer command, std::uint32_t slot, const F
     const bool field = f.gainField != nullptr;
     if (field && (f.raw10 || f.hexadecaToQuad || f.block != 2u || f.fieldHeight < f.fieldRow0 + f.height))
         throw std::invalid_argument("raw remosaic: gain field needs quad RAW16 inside its frame");
+    const bool disparity = f.disparity;
+    if (disparity && (f.raw10 || f.hexadecaToQuad || f.block != 2u || f.width < 8u || f.height < 8u))
+        throw std::invalid_argument("raw remosaic: disparity correction needs quad RAW16");
     const bool quadOnly = f.quality == Quality::High || f.quality == Quality::Detail;
     if ((f.hexadecaToQuad && (f.block != 4u || !quadOnly || f.width % 8u || f.height % 8u)) ||
         (quadOnly && !f.hexadecaToQuad && f.block != 2u) || static_cast<unsigned>(f.quality) > 3u)
@@ -243,7 +268,8 @@ void RawRemosaicker::record(VkCommandBuffer command, std::uint32_t slot, const F
     const auto width = f.hexadecaToQuad ? f.width / 2u : f.width;
     const auto height = f.hexadecaToQuad ? f.height / 2u : f.height;
     const auto block = f.hexadecaToQuad ? 2u : f.block;
-    ensureScratch(width, height, block, f.quality != Quality::Detail || f.phaseFit || field, f.quality == Quality::Detail);
+    ensureScratch(width, height, block, f.quality != Quality::Detail || f.phaseFit || field, f.quality == Quality::Detail,
+                  disparity);
     // The slot has retired before record(). Always refresh descriptors:
     // callers may destroy/recreate buffers and views with recycled handle
     // values, which cannot safely serve as resource-lifetime cache keys.
@@ -254,7 +280,8 @@ void RawRemosaicker::record(VkCommandBuffer command, std::uint32_t slot, const F
         VkDescriptorImageInfo green{VK_NULL_HANDLE, scratch_.green.view, VK_IMAGE_LAYOUT_GENERAL};
         VkDescriptorBufferInfo diff{scratch_.diff, 0, VK_WHOLE_SIZE};
         VkDescriptorImageInfo moments{VK_NULL_HANDLE, scratch_.moments.view, VK_IMAGE_LAYOUT_GENERAL};
-        std::array<VkWriteDescriptorSet, 10> writes{};
+        VkDescriptorImageInfo pd{VK_NULL_HANDLE, scratch_.pd.view, VK_IMAGE_LAYOUT_GENERAL};
+        std::array<VkWriteDescriptorSet, 11> writes{};
         for (std::uint32_t i = 0; i < writes.size(); ++i) {
             writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[i].dstSet = sets_[slot];
@@ -275,6 +302,7 @@ void RawRemosaicker::record(VkCommandBuffer command, std::uint32_t slot, const F
         writes[7].pBufferInfo = &diff;
         writes[8].pImageInfo = &moments;
         writes[9].pImageInfo = &moments;
+        writes[10].pImageInfo = &pd;
         vkUpdateDescriptorSets(context_.device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
     const std::uint32_t bw = (width + block - 1) / block, bh = (height + block - 1) / block;
@@ -296,7 +324,10 @@ void RawRemosaicker::record(VkCommandBuffer command, std::uint32_t slot, const F
                      f.phaseFit ? 1u : 0u,
                      f.fitStride,
                      f.fieldRow0,
-                     f.fieldHeight};
+                     f.fieldHeight,
+                     disparity ? 1u : 0u,
+                     f.noiseSlope,
+                     f.noiseFloor};
     const auto stamp = [&](std::uint32_t index) {
         if (f.timestamps) vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, f.timestamps, index);
     };
@@ -304,8 +335,8 @@ void RawRemosaicker::record(VkCommandBuffer command, std::uint32_t slot, const F
     // The scratch is shared across slots: the previous frame's passes must be
     // done with it before this frame writes it. Its contents never carry over,
     // so each frame starts from UNDEFINED.
-    VkImageMemoryBarrier toWrite[3]{};
-    for (int i = 0; i < 3; ++i) {
+    VkImageMemoryBarrier toWrite[4]{};
+    for (int i = 0; i < 4; ++i) {
         toWrite[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         toWrite[i].srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
         toWrite[i].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -317,13 +348,14 @@ void RawRemosaicker::record(VkCommandBuffer command, std::uint32_t slot, const F
     toWrite[0].image = scratch_.raw.image;
     toWrite[1].image = scratch_.green.image;
     toWrite[2].image = scratch_.moments.image;
+    toWrite[3].image = scratch_.pd.image;
     vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
-                         nullptr, 3, toWrite);
+                         nullptr, 4, toWrite);
     vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
     vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout_, 0, 1, &sets_[slot], 0, nullptr);
     const auto pass = [&](std::uint32_t index, std::uint32_t gx, std::uint32_t gy) {
-        const VkPipeline selected = index == 9u ? detailPipeline_ : pipeline_;
+        const VkPipeline selected = index == 9u ? detailPipeline_ : index == 15u || index == 16u ? disparityPipeline_ : pipeline_;
         vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, selected);
         pc.pass = index;
         vkCmdPushConstants(command, pipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
@@ -377,13 +409,25 @@ void RawRemosaicker::record(VkCommandBuffer command, std::uint32_t slot, const F
         region.bufferRowLength = f.rowStrideBytes / 2u;
         region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         region.imageExtent = {f.width, f.height, 1};
-        vkCmdCopyBufferToImage(command, f.source, scratch_.raw.image, VK_IMAGE_LAYOUT_GENERAL, 1, &region);
+        // With the disparity correction the load goes to its input image.
+        vkCmdCopyBufferToImage(command, f.source, disparity ? scratch_.pd.image : scratch_.raw.image,
+                               VK_IMAGE_LAYOUT_GENERAL, 1, &region);
         VkMemoryBarrier b{};
         b.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
         b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
         vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &b, 0,
                              nullptr, 0, nullptr);
+    }
+    if (disparity) {
+        // One workgroup per 16 x 16 blocks (the pass helper divides by 16): gate + terms into the
+        // moments image, then window sums + correction into the raw image.
+        stamp(4);
+        pass(15u, width / 2u, height / 2u);
+        memoryBarrier(command, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+        stamp(5);
+        pass(16u, width / 2u, height / 2u);
+        memoryBarrier(command, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
     }
     stamp(1);
     // One invocation per 2x2 pixel group (see the shader).

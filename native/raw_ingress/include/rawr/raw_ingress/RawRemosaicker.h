@@ -21,7 +21,8 @@ namespace rawr::raw_ingress {
 class RawRemosaicker final {
    public:
     static constexpr std::uint32_t kSlots = 3;
-    static constexpr std::uint32_t kGainFieldFloats = 96;  // 16 surfaces x 6 terms
+    // 16 surfaces x 6 quadratic terms, then 16 surfaces x 32 x 24 residual grid nodes (QuadGainField::kFloats).
+    static constexpr std::uint32_t kGainFieldFloats = 96 + 16 * 32 * 24;
 
     struct Pipelines;
     // Immutable, device-owned programs; keep alive across captures, destroy before the device.
@@ -65,8 +66,19 @@ class RawRemosaicker final {
         // fieldHeight rows (strips); the frame's width is `width`.
         const float* gainField = nullptr;
         std::uint32_t fieldRow0 = 0, fieldHeight = 0;
+        // Quad (block 2, RAW16, no reduction) only: correct the phase-detect
+        // disparity of a 2x2 on-chip-lens sensor after the load (and the gain
+        // field), before the remosaic (app imaging/QuadDisparity.h,
+        // shaders/raw_disparity.comp). `blackLevel` is the raw black; the noise
+        // model (pixel variance = noiseSlope * (level - black) + noiseFloor, from
+        // QuadGainField) sets what the texture gate and confidence treat as noise.
+        // Reads 29 rows around each output row: strips need margins of that plus the remosaic's
+        // (and must start on a multiple of 8 rows: its 4 x 4-block cells follow the frame's grid).
+        bool disparity = false;
+        float noiseSlope = 0.0f, noiseFloor = 0.0f;
         // Optional: timestamps 0..3 around raw-in, green + block diff (Detail: green + block moments), Bayer out (profiling);
-        // with phaseFit also 5, 6, 7 after block sums, statistics and curve (pool of 8).
+        // with phaseFit also 5, 6, 7 after block sums, statistics and curve (pool of 8); with disparity
+        // 4 after the load and 5 after its gate pass (its correction pass ends at 1).
         VkQueryPool timestamps = VK_NULL_HANDLE;
     };
     // Records the three passes. Scratch is (re)allocated when the size
@@ -79,12 +91,12 @@ class RawRemosaicker final {
     explicit RawRemosaicker(const rawr::vk::GpuContext& context, std::shared_ptr<Pipelines> pipelines);
     void destroy() noexcept;
     void ensureScratch(std::uint32_t width, std::uint32_t height, std::uint32_t block, bool needsDiff,
-                       bool needsMoments);
+                       bool needsMoments, bool needsPd);
     void releaseScratch() noexcept;
 
     struct Scratch {
-        bool needsDiff = false, needsMoments = false;
-        rawr::vk::OwnedImage raw, green, moments;
+        bool needsDiff = false, needsMoments = false, needsPd = false;
+        rawr::vk::OwnedImage raw, green, moments, pd;
         VkBuffer diff = VK_NULL_HANDLE;
         VkDeviceMemory diffMemory = VK_NULL_HANDLE;
         std::uint32_t width = 0, height = 0, block = 0;
@@ -95,6 +107,7 @@ class RawRemosaicker final {
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;
     VkPipeline detailPipeline_ = VK_NULL_HANDLE;
+    VkPipeline disparityPipeline_ = VK_NULL_HANDLE;
     VkDescriptorPool pool_ = VK_NULL_HANDLE;
     std::array<VkDescriptorSet, kSlots> sets_{};
     Scratch scratch_;
