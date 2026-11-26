@@ -377,14 +377,21 @@ data class LensSensorLayout(
      * profiles. Reduced needs photoBlock 1 or 4.
      */
     val photoOutput: String = "full",
-    /** Reduced output only: fit the sensor's per-position response from each frame and divide it out. */
+    /**
+     * Fit the sensor's per-position response from each frame and divide it out: 4×4 reduced output (before the
+     * 2×2 sums), or a 2×2 quad photo stream (before the remosaic; skipped when the sensor is well matched).
+     */
     val photoPhaseFit: Boolean = false
 ) {
     /** Changing the photo CFA also clears options its new layout cannot use. */
     fun withPhotoBlock(value: Int): LensSensorLayout = copy(
         photoBlock = value,
         photoOutput = if (value == 4 || value == 1) photoOutput else "full",
-        photoPhaseFit = value == 4 && photoOutput != "full" && photoPhaseFit
+        photoPhaseFit = photoPhaseFit && when (value) {
+            4 -> photoOutput != "full"
+            2 -> true
+            else -> false
+        }
     )
 }
 

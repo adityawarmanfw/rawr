@@ -124,7 +124,7 @@
       }
     },
     {
-      "id": "H35",
+      "id": "Q35",
       "camera": {
         "id": "3",
         "physical": ""
@@ -157,7 +157,7 @@
           "tag": "vivo.control.forceSensorMode",
           "type": "int32",
           "scope": "still",
-          "values": [13],
+          "values": [4],
           "enabled": true
         }
       ],
@@ -166,11 +166,18 @@
           "static": true,
           "black": [64, 64, 64, 64],
           "white": 1023
+        },
+        "sensorLayout": {
+          "block": 1,
+          "photoBlock": 2,
+          "photoRemosaic": "detail",
+          "photoPhaseFit": true,
+          "colourOrder": "BGGR"
         }
       }
     },
     {
-      "id": "H85",
+      "id": "Q85",
       "camera": {
         "id": "5",
         "physical": ""
@@ -217,6 +224,7 @@
           "block": 1,
           "photoBlock": 2,
           "photoRemosaic": "detail",
+          "photoPhaseFit": true,
           "colourOrder": "BGGR"
         }
       }

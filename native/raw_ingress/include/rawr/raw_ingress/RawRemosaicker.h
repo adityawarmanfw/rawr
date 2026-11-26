@@ -21,6 +21,7 @@ namespace rawr::raw_ingress {
 class RawRemosaicker final {
    public:
     static constexpr std::uint32_t kSlots = 3;
+    static constexpr std::uint32_t kGainFieldFloats = 96;  // 16 surfaces x 6 terms
 
     struct Pipelines;
     // Immutable, device-owned programs; keep alive across captures, destroy before the device.
@@ -57,6 +58,13 @@ class RawRemosaicker final {
         bool phaseFit = false;
         float blackLevel = 64.0f;
         std::uint32_t fitStride = 3;
+        // Quad (block 2, RAW16, no reduction) only: divide a per-position gain
+        // field out while loading the raw (app imaging/QuadGainField.h:
+        // kGainFieldFloats coefficients, copied at record time). `blackLevel`
+        // is the raw black. fieldRow0 is this window's first row in a frame of
+        // fieldHeight rows (strips); the frame's width is `width`.
+        const float* gainField = nullptr;
+        std::uint32_t fieldRow0 = 0, fieldHeight = 0;
         // Optional: timestamps 0..3 around raw-in, green + block diff (Detail: green + block moments), Bayer out (profiling);
         // with phaseFit also 5, 6, 7 after block sums, statistics and curve (pool of 8).
         VkQueryPool timestamps = VK_NULL_HANDLE;

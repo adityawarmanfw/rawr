@@ -1164,8 +1164,9 @@ std::optional<LensRoute> readLens(const Json& l, std::string* error) {
             if (error) *error = "sensorLayout photoOutput " + photoOutput + " needs photoBlock 1 or 4 for lens " + r.lensId;
             return std::nullopt;
         }
-        // The phase fit is a 4x4-mosaic correction; a Bayer photo stream ignores it.
-        if (photoBlock != 4.0) r.photoPhaseFit = false;
+        // The per-position correction: the 4x4 phase fit (reduced output) or the quad gain field (2x2
+        // remosaic, imaging/QuadGainField.h); a Bayer photo stream ignores it.
+        if (photoBlock == 1.0) r.photoPhaseFit = false;
         if (const std::string order = c->str("colourOrder"); !order.empty()) {
             r.colourOrder = cfaOrderFromName(order);
             if (!r.colourOrder) {

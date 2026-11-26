@@ -2,12 +2,15 @@
 // a quad / 4x4 mosaic must come back close to the same scene sampled as
 // Bayer, in every colour order, and Bayer sites of the block's own colour
 // must keep their raw value.
+#include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstdio>
 #include <vector>
 
 #include "capture/StripRemosaic.h"
 #include "imaging/CfaRemosaic.h"
+#include "imaging/QuadGainField.h"
 
 namespace {
 int failures = 0;
@@ -283,13 +286,13 @@ int main() {
                 std::vector<uint8_t> a(size_t(sw) * layout.window * 2), b(a.size());
                 auto seq = frame;
                 rawrcam::capture::remosaicInStrips(seq, sw, sh, layout, a.data(),
-                                                   [&](uint8_t* w, uint32_t) { windowPass(w); });
+                                                   [&](uint8_t* w, uint32_t, uint32_t) { windowPass(w); });
                 auto ovl = frame;
                 uint8_t* const windows[2] = {a.data(), b.data()};
                 bool pending[2] = {false, false};
                 rawrcam::capture::remosaicInStripsOverlapped(
                     ovl, sw, sh, layout, windows,
-                    [&](uint8_t*, uint32_t slot, uint32_t) {
+                    [&](uint8_t*, uint32_t slot, uint32_t, uint32_t) {
                         check(!pending[slot], "overlapped strips: a window is reused only after its wait");
                         pending[slot] = true;
                     },
@@ -301,6 +304,40 @@ int main() {
                 std::snprintf(what, sizeof what, "strip loops match whole frame h=%u strips=%u", sh, strips);
                 check(seq == whole && ovl == whole, what);
             }
+    }
+    {
+        // Quad gain field: a smooth scene seen through a known per-position field (diagonal pairs opposite by
+        // quadrant up to 5%, a row offset, a column tilt) is recognised, and dividing the fit out brings every
+        // sample back to the field-free scene within a code or two. Without a field nothing is touched.
+        constexpr uint32_t QW = 1536, QH = 1024;
+        std::vector<uint16_t> clean(QW * QH), seen(QW * QH);
+        for (uint32_t y = 0; y < QH; ++y)
+            for (uint32_t x = 0; x < QW; ++x) {
+                const float v = scene(cfaChannel(3, x / 2, y / 2), x / 3, y / 3) - 64.0f;
+                const uint32_t p = (y & 1u) * 2u + (x & 1u);
+                const float u = quadGainCoord(x, QW), w = quadGainCoord(y, QH);
+                const float g = 1.0f + 0.05f * u * w * (p == 0u || p == 3u ? 1.0f : -1.0f) + (p < 2u ? 0.012f : -0.012f) +
+                                0.02f * u * (p & 1u ? 1.0f : -1.0f);
+                clean[y * QW + x] = uint16_t(std::lround(64.0f + v));
+                seen[y * QW + x] = uint16_t(std::lround(64.0f + v * g));
+            }
+        const QuadGainField field = fitQuadGainField(seen.data(), QW, QH, 64.0f, 1023.0f, 4);
+        check(field.active, "quad gain field: a 5% field is corrected");
+        auto fixed = seen;
+        applyQuadGainField(fixed.data(), QW, QH, 64.0f, field, 4);
+        int before = 0, after = 0;
+        for (size_t i = 0; i < clean.size(); ++i) {
+            before = std::max(before, std::abs(int(seen[i]) - int(clean[i])));
+            after = std::max(after, std::abs(int(fixed[i]) - int(clean[i])));
+        }
+        std::printf("quad gain field: deviation %.2f%%, max error %d -> %d codes\n", 100.0f * field.deviation, before,
+                    after);
+        check(before > 15 && after <= 2, "quad gain field: dividing the fit out restores the scene");
+        const QuadGainField none = fitQuadGainField(clean.data(), QW, QH, 64.0f, 1023.0f, 4);
+        check(!none.active, "quad gain field: a matched sensor is left alone");
+        auto untouched = clean;
+        applyQuadGainField(untouched.data(), QW, QH, 64.0f, none, 4);
+        check(untouched == clean, "quad gain field: inactive field changes nothing");
     }
     if (failures == 0) std::printf("cfa_remosaic_test: ok\n");
     return failures == 0 ? 0 : 1;

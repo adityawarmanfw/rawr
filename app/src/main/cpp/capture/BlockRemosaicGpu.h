@@ -8,6 +8,7 @@
 
 #include "capture/StripRemosaic.h"
 #include "imaging/CfaRemosaic.h"
+#include "imaging/QuadGainField.h"
 #include "vulkan/VulkanContext.h"
 
 namespace rawrcam::capture {
@@ -36,13 +37,15 @@ class BlockRemosaicGpu final {
     BlockRemosaicGpu& operator=(const BlockRemosaicGpu&) = delete;
     // The shader covers Fast/Standard for any block and High/Detail for quad only.
     static bool supports(uint32_t block, imaging::CfaRemosaicQuality);
-    // `black` is the mean raw black level in sample units.
+    // `black` is the mean raw black level in sample units. An active `field` (quad only) is divided out of
+    // each sample as the strip is loaded, exactly as imaging::applyQuadGainField does on the CPU.
     void run(std::vector<uint8_t>& pixels, uint32_t block, uint32_t order, imaging::CfaRemosaicQuality quality,
-             float black);
+             float black, const imaging::QuadGainField* field = nullptr);
 
    private:
     // Records and submits one window on `slot`; waitSlot blocks until it is done.
-    void submitWindow(uint32_t slot, uint32_t block, uint32_t order, imaging::CfaRemosaicQuality, float black);
+    void submitWindow(uint32_t slot, uint32_t block, uint32_t order, imaging::CfaRemosaicQuality, float black,
+                      const imaging::QuadGainField* field, uint32_t firstRow);
     void waitSlot(uint32_t slot);
     void waitAll() noexcept;
     void destroy() noexcept;

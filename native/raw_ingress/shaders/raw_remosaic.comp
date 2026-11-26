@@ -6,6 +6,9 @@
 // of the camera buffer are not (Adreno 840: 9 ms -> see RawRemosaicker.cpp).
 // One shader, passes by pc.pass:
 //  3. RAW10 only: unpack the camera rows into the raw image;
+// 14. RAW16 quad with a gain field (imaging/QuadGainField.h): load the camera
+//     rows into the raw image, each sample divided by its position's gain
+//     (coefficients in the diff buffer, 6 floats per surface);
 //  6. exact 2x2 source sum -> half-resolution quarter-DN Quad image;
 //  7. High Quad Bayer reconstruction (after pass 0 statistics);
 //  8. Detail Quad: per red/blue block, cubic green into the green image and the block moments
@@ -60,6 +63,8 @@ layout(push_constant) uniform P {
     float blackLevel;  // raw black (phase fit)
     uint fit;          // pass 6 applies the phase-fit curve
     uint fitStride;    // odd statistics lattice stride
+    uint fieldRow0;    // pass 14: the window's first row in the frame
+    uint fieldHeight;  // pass 14: frame height (the field's v range)
 }
 pc;
 
@@ -488,6 +493,25 @@ void main() {
         }
         uint sum = sourceAt(sx,sy) + sourceAt(sx+1u,sy) + sourceAt(sx,sy+1u) + sourceAt(sx+1u,sy+1u);
         imageStore(rawImage, ivec2(x,y), uvec4(sum,0u,0u,0u));
+        return;
+    }
+    if (activePass == 14u) {  // RAW16 rows with the quad gain field divided out (QuadGainField.h)
+        if (x >= pc.width || y >= pc.height) return;
+        uint off = y * pc.rowStrideBytes + 2u * x;
+        uint word = src.words[off >> 2u];
+        uint code = (off & 2u) != 0u ? word >> 16u : word & 0xffffu;
+        uint gy = pc.fieldRow0 + y;
+        uint surface = ((((gy >> 1u) & 1u) * 2u + ((x >> 1u) & 1u)) * 4u) + (gy & 1u) * 2u + (x & 1u);
+        float u = (float(x) + 0.5) / float(pc.width) * 2.0 - 1.0;
+        float v = (float(gy) + 0.5) / float(pc.fieldHeight) * 2.0 - 1.0;
+        uint k = surface * 6u;
+        float g = 1.0 + uintBitsToFloat(diffRead.words[k]) +
+                  u * (uintBitsToFloat(diffRead.words[k + 1u]) + uintBitsToFloat(diffRead.words[k + 3u]) * v +
+                       uintBitsToFloat(diffRead.words[k + 4u]) * u) +
+                  v * (uintBitsToFloat(diffRead.words[k + 2u]) + uintBitsToFloat(diffRead.words[k + 5u]) * v);
+        float inverse = 1.0 / g;
+        float corrected = (float(code) - pc.blackLevel) * inverse + pc.blackLevel;
+        imageStore(rawImage, ivec2(int(x), int(y)), uvec4(roundDn(corrected), 0u, 0u, 0u));
         return;
     }
     if (activePass == 3u) {
