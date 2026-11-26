@@ -9,14 +9,15 @@ namespace rawrcam::capture {
 // Runs an in-place per-window pass over a RAW16 frame in horizontal strips,
 // so the pass only needs window-sized memory. Each window is a strip's own
 // rows ("core") plus kMargin rows above and below, more than the block-CFA
-// remosaic reads (16 rows suffice for every quality on 2x2 and 4x4 blocks),
+// remosaic reads (16 rows suffice for every quality on 2x2 and 4x4 blocks;
+// the quad disparity correction before it reads 29 more),
 // so the result is bit-identical to one whole-frame pass. Cores and windows
 // are multiples of 8 rows: block grid and CFA phase survive. The last window
 // is pulled up to end at the frame (same edge clamping as the whole frame),
 // so it can reach rows above its margin; `saved` original rows of each
 // strip's bottom are kept because the frame is overwritten in place.
 struct StripLayout {
-    static constexpr uint32_t kMargin = 32;
+    static constexpr uint32_t kMargin = 48;
     uint32_t core = 0, window = 0, saved = 0;
     // One strip (window == height) unless the height is a multiple of 8 and a
     // strip layout fits.

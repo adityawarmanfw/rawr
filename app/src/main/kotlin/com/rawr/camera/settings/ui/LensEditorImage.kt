@@ -344,7 +344,7 @@ internal fun SensorLayoutGroup(
                     title = "Correct per-position response",
                     checked = layout.photoPhaseFit,
                     supportingText = "Removes faint grid or diagonal stripes on sensors whose 2×2 pixels don't match, " +
-                        "fitted from each photo. Skipped when the sensor is well matched; adds about 15 ms per photo.",
+                        "and blocky soft out-of-focus edges on sensors with one lens per 2×2 block, fitted from each photo.",
                     testTag = lensEditorTag("photo_phase_fit")
                 ) { onChange(layout.copy(photoPhaseFit = it)) }
             }

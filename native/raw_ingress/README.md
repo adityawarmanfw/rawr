@@ -52,7 +52,19 @@ writing each sample divided by its position's quadratic surface (coefficients co
 diff buffer with vkCmdUpdateBuffer; `fieldRow0`/`fieldHeight` place a strip window in its
 frame). The field is fitted on the CPU from the frame's own flat blocks (`imaging/QuadGainField.h`,
 which also holds the CPU apply); `raw_remosaic_vulkan_test` checks strips against the whole
-frame and the CPU (`... OUT field` for a real 10-bit frame).
+frame and the CPU (`... OUT field` for a real 10-bit frame). The diff buffer holds the 96
+quadratic coefficients, then a 32x24 bilinear residual grid per surface
+(`RawRemosaicker::kGainFieldFloats`).
+`Frame::disparity` (quad block=2, RAW16, no reduction) corrects the phase-detect disparity of
+a 2x2 on-chip-lens sensor before the remosaic (`shaders/raw_disparity.comp`, its own pipeline
+for shared memory): the load goes to the `pd` image, pass 15 computes a texture gate and
+regression terms per block and sums them per 4x4-block cell into the moments image (idle until
+Detail), pass 16 sums 3x3 cells around each cell, interpolates the shift per block and writes
+the corrected raw image. `noiseSlope`/`noiseFloor` (from the CPU
+QuadGainField fit) set the noise allowance. CPU reference `imaging/QuadDisparity.h`; the
+`disparity` cases of `raw_remosaic_vulkan_test` (`... OUT pd` for a real frame). Strips need
+29 rows of margin for it on top of the remosaic's 16 (StripLayout::kMargin 48) and windows that
+start on a multiple of 8 rows.
 The reduction is used by capture through `capture/ReducedRaw` (lens `photoOutput`).
 
 For 16320x12288 input, scratch consists of two 8160x6144 R16 images and one
