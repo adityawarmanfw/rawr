@@ -86,6 +86,10 @@ int main() {
     assert(!contains(sharp, "F1:") && !contains(sharp, "F2:"));
     const std::string fallback = buildSharpnessSection(MultiframeBaseFrameMode::Sharpest, {}, 2, 4);
     assert(contains(fallback, "middle fallback"));
+    // Full-size bursts: the first frame (closest to the press) is the base, whatever the merge.
+    const std::string first = buildSharpnessSection(MultiframeBaseFrameMode::Sharpest, {}, 0, 16, true, true);
+    assert(contains(first, "Mode: first frame") && contains(first, "- Reference: frame 1 of 16\n"));
+    assert(!contains(first, "shutter press (best") && !contains(first, "middle"));
 
     const std::string timings = formatMultiframeTimings(stages, MultiframeBaseFrameMode::Sharpest);
     assert(contains(timings, "Multiframe: 3120.3 ms"));

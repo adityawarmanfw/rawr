@@ -83,7 +83,8 @@ std::string buildParametersBlock(const MultiframeTuningView& tuning, const Multi
 // mode) print the middle reference. pressSelected: the base was chosen at the
 // shutter press (Rexture), so the per-burst sharpness list does not apply.
 std::string buildSharpnessSection(MultiframeBaseFrameMode mode, const std::vector<float>& scores,
-                                  std::uint32_t referenceIndex, std::uint32_t frameCount, bool pressSelected = false);
+                                  std::uint32_t referenceIndex, std::uint32_t frameCount, bool pressSelected = false,
+                                  bool firstFrameBase = false);
 
 // "Multiframe: T ms" + four stage lines + "Multiframe timings breakdown:"
 // eight detail lines. Shared string for DNG and (via context) JPEG.

@@ -61,9 +61,15 @@ std::string buildParametersBlock(const MultiframeTuningView& tuning, const Multi
 }
 
 std::string buildSharpnessSection(MultiframeBaseFrameMode mode, const std::vector<float>& scores,
-                                  std::uint32_t referenceIndex, std::uint32_t frameCount, bool pressSelected) {
+                                  std::uint32_t referenceIndex, std::uint32_t frameCount, bool pressSelected,
+                                  bool firstFrameBase) {
     std::ostringstream out;
     out << "\nBase Frame Selection:\n";
+    if (firstFrameBase) {
+        out << "- Mode: first frame (full-size burst, closest to the shutter press)\n"
+            << "- Reference: frame " << (referenceIndex + 1u) << " of " << frameCount << '\n';
+        return out.str();
+    }
     if (pressSelected) {
         out << "- Mode: shutter press (best sharpness and exposure of the last 0.25 s)\n"
             << "- Reference: frame " << (referenceIndex + 1u) << " of " << frameCount << '\n';
