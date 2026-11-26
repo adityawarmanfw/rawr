@@ -52,10 +52,10 @@ private fun agx(vararg v: Float) = AgxValues(v.toList())
 enum class AgxPreset(val label: String, val nativeId: Int, val defaults: AgxValues) {
     Rawr("AgX RAWR", 5, agx(
         6.5f, -10.0f,
-        2.66f, 1.41f, 1.15f, 0.0f, 0.182f, 0.0f, 0.0f, 1.0f, 0.0f, 2.2f,
-        1.0f, 0.0f, 0.70f, 1.18f, 0.0f,
-        0.1f, 0.034906585f, 0.1f, -0.017453292f, 0.15f, -0.05235988f,
-        0.0f, 1.0f, 0.1f, 0.034906585f, 0.1f, -0.017453292f, 0.15f, -0.05235988f)),
+        3.1f, 1.41f, 1.15f, 0.0f, 0.182f, 0.0f, 0.0f, 1.0f, 0.0f, 2.2f,
+        1.0f, 0.0f, 0.9f, 1.25f, 1.0f,
+        0.1f, 0.0f, 0.1f, 0.0f, 0.15f, 0.0f,
+        0.5f, 1.0f, 0.1f, 0.0f, 0.1f, 0.0f, 0.15f, 0.0f)),
     Default("AgX", 0, agx(
         6.5f, -10.0f,
         3.0f, 3.3f, 1.5f, 0.0f, 0.18f, 0.0f, 0.0f, 1.0f, 0.0f, 2.2f,
