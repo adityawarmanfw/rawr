@@ -994,7 +994,10 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
         pending->colors.push_back(f.color);
     }
     pending->acquiredJournal = std::move(journal);
-    pending->referenceIndex = static_cast<std::uint32_t>(pending->frames.size() / 2u);
+    // The first frame is the closest to the press (FrozenBurst::firstFrameBase); the frames are on the CPU, so
+    // there is no GPU sharpness scoring to pick among them.
+    pending->referenceIndex = 0;
+    pending->firstFrameBase = true;
     pending->referenceMetadata = pending->metadata[pending->referenceIndex];
     pending->referenceColor = pending->colors[pending->referenceIndex];
     const auto prepared = static_cast<uint32_t>(pending->frames.size());

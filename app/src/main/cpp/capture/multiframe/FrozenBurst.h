@@ -43,6 +43,10 @@ struct FrozenBurst {
     std::vector<rawrcam::metadata::FrameMetadataSnapshot> metadata;
     std::vector<rawrcam::color::FrameColorTransform> colors;
     std::uint32_t referenceIndex = 0;
+    // Full-size bursts start after the shutter press (a separate photo session can take ~0.6 s to open), so
+    // their first frame is the one closest to the press and is the base; the middle one would land the moment
+    // about half a burst later still.
+    bool firstFrameBase = false;
     rawrcam::metadata::FrameMetadataSnapshot referenceMetadata{};
     rawrcam::color::FrameColorTransform referenceColor{};
 };
