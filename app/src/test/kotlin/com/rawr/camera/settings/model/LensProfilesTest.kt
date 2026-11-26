@@ -19,10 +19,10 @@ class LensProfilesTest {
         assertEquals(emptyList(), validateLensProfile(lens.image { copy(sensorLayout = bayer) }, emptyList()))
         val bayer25 = LensSensorLayout(photoOutput = "reduced25")
         assertEquals(emptyList(), validateLensProfile(lens.image { copy(sensorLayout = bayer25) }, emptyList()))
-        // Quad has no reduced output.
+        // Quad has no reduced output, but keeps the per-position correction (its gain field).
         val quad = reduced.withPhotoBlock(2)
         assertEquals("full", quad.photoOutput)
-        assertEquals(false, quad.photoPhaseFit)
+        assertEquals(true, quad.photoPhaseFit)
         assertEquals(emptyList(), validateLensProfile(lens.image { copy(sensorLayout = quad) }, emptyList()))
         val invalid = lens.image { copy(sensorLayout = reduced.copy(photoBlock = 2)) }
         assertTrue(validateLensProfile(invalid, emptyList()).contains("Reduced photo output needs a Bayer or 4×4 photo CFA"))

@@ -46,6 +46,13 @@ the fit branch of pass 6. Statistics and curve live in the diff buffer. CPU refe
 `imaging/PhaseFit.h`; tests `phase_fit_test` and the `reduce-detail-fit` cases of
 `raw_remosaic_vulkan_test`. Samples must be <= 4095. The fit is per capture, never reuse
 a curve across ISO/modes.
+`Frame::gainField` (quad block=2, RAW16, no reduction) divides a per-position gain field out
+while the raw is loaded: pass 14 replaces the transfer copy, reading the camera rows and
+writing each sample divided by its position's quadratic surface (coefficients copied into the
+diff buffer with vkCmdUpdateBuffer; `fieldRow0`/`fieldHeight` place a strip window in its
+frame). The field is fitted on the CPU from the frame's own flat blocks (`imaging/QuadGainField.h`,
+which also holds the CPU apply); `raw_remosaic_vulkan_test` checks strips against the whole
+frame and the CPU (`... OUT field` for a real 10-bit frame).
 The reduction is used by capture through `capture/ReducedRaw` (lens `photoOutput`).
 
 For 16320x12288 input, scratch consists of two 8160x6144 R16 images and one

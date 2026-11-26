@@ -338,6 +338,16 @@ internal fun SensorLayoutGroup(
                 testTag = lensEditorTag("photo_remosaic"),
                 onSelect = { onChange(layout.copy(photoRemosaic = it)) }
             )
+            if (hasPhotoStream && layout.photoBlock == 2) {
+                SettingDivider()
+                SettingsSwitchRow(
+                    title = "Correct per-position response",
+                    checked = layout.photoPhaseFit,
+                    supportingText = "Removes faint grid or diagonal stripes on sensors whose 2×2 pixels don't match, " +
+                        "fitted from each photo. Skipped when the sensor is well matched; adds about 15 ms per photo.",
+                    testTag = lensEditorTag("photo_phase_fit")
+                ) { onChange(layout.copy(photoPhaseFit = it)) }
+            }
         }
     }
 }

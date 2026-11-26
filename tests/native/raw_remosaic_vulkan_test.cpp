@@ -16,6 +16,7 @@
 #include "capture/StripRemosaic.h"
 #include "imaging/CfaRemosaic.h"
 #include "imaging/PhaseFit.h"
+#include "imaging/QuadGainField.h"
 #include "imaging/RawPixelSource.h"
 #include "rawr/raw_ingress/RawRemosaicker.h"
 #include "vk_test_common.hpp"
@@ -199,11 +200,13 @@ bool runCase(vktest::Ctx& c, rawr::raw_ingress::RawRemosaicker& remosaicker, VkC
 }
 
 // BlockRemosaicGpu's strip loop (capture/StripRemosaic.h, the production header) with a GPU window pass,
-// against the same pass over the whole frame (must be bit-identical) and the CPU reference.
+// against the same pass over the whole frame (must be bit-identical) and the CPU reference. `gainField`:
+// the quad per-position gain field (QuadGainField.h) is fitted on the CPU and divided out while the GPU loads
+// each strip (CPU reference: applyQuadGainField first); a synthetic scene gets a known field.
 bool runStripped(vktest::Ctx& c, rawr::raw_ingress::RawRemosaicker& remosaicker, VkCommandBuffer cmd, VkFence fence,
                  std::uint32_t width, std::uint32_t height, std::uint32_t block, std::uint32_t order,
                  rawrcam::imaging::CfaRemosaicQuality quality, std::uint32_t strips, const char* input = nullptr,
-                 const char* output = nullptr) {
+                 const char* output = nullptr, bool gainField = false) {
     std::vector<std::uint8_t> frame(std::size_t(width) * height * 2);
     auto* px = reinterpret_cast<std::uint16_t*>(frame.data());
     if (input) {
@@ -218,8 +221,23 @@ bool runStripped(vktest::Ctx& c, rawr::raw_ingress::RawRemosaicker& remosaicker,
                 const auto ch = rawrcam::imaging::cfaChannel(order, x / block, y / block);
                 const float v = 64.0f + (ch == 1u ? 500.0f : 260.0f) * (1.0f + 0.5f * std::sin(x * 0.05f + y * 0.03f)) +
                                 ((x / 37 + y / 23) % 2 ? 150.0f : 0.0f) + float(state >> 28);
-                px[std::size_t(y) * width + x] = std::uint16_t(std::min(1023.0f, v));
+                float g = 1.0f;
+                if (gainField) {  // diagonal pairs opposite by quadrant, a row offset and a column tilt
+                    const auto p = (y & 1u) * 2u + (x & 1u);
+                    const float u = rawrcam::imaging::quadGainCoord(x, width), w = rawrcam::imaging::quadGainCoord(y, height);
+                    g = 1.0f + 0.05f * u * w * (p == 0u || p == 3u ? 1.0f : -1.0f) + (p < 2u ? 0.012f : -0.012f) +
+                        0.02f * u * (p & 1u ? 1.0f : -1.0f);
+                }
+                px[std::size_t(y) * width + x] = std::uint16_t(std::min(1023.0f, 64.0f + (v - 64.0f) * g));
             }
+    }
+    rawrcam::imaging::QuadGainField field;
+    if (gainField) {
+        field = rawrcam::imaging::fitQuadGainField(reinterpret_cast<const std::uint16_t*>(frame.data()), width, height,
+                                                   64.0f, 1023.0f, 4);
+        std::printf("gain field active=%d deviation=%.3f%% noise=%.3f%%\n", field.active ? 1 : 0,
+                    100.0f * field.deviation, 100.0f * field.noise);
+        if (!field.active && !input) return false;
     }
     const auto gpu = [&](std::uint32_t nStrips) {
         const auto layout = rawrcam::capture::StripLayout::make(height, nStrips);
@@ -236,7 +254,7 @@ bool runStripped(vktest::Ctx& c, rawr::raw_ingress::RawRemosaicker& remosaicker,
         auto out = frame;
         rawrcam::capture::remosaicInStrips(
             out, width, height, layout, static_cast<std::uint8_t*>(mapped),
-            [&](std::uint8_t*, std::uint32_t) {
+            [&](std::uint8_t*, std::uint32_t, std::uint32_t firstRow) {
                 vktest::ck(vkResetCommandBuffer(cmd, 0), "reset");
                 VkCommandBufferBeginInfo bi{};
                 bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -260,6 +278,11 @@ bool runStripped(vktest::Ctx& c, rawr::raw_ingress::RawRemosaicker& remosaicker,
                 f.block = block;
                 f.order = order;
                 f.quality = static_cast<rawr::raw_ingress::RawRemosaicker::Quality>(static_cast<unsigned>(quality));
+                if (field.active) {
+                    f.gainField = field.coef.data();
+                    f.fieldRow0 = firstRow;
+                    f.fieldHeight = height;
+                }
                 remosaicker.record(cmd, 0, f);
                 b.oldLayout = b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
                 b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -287,6 +310,7 @@ bool runStripped(vktest::Ctx& c, rawr::raw_ingress::RawRemosaicker& remosaicker,
     const auto [whole, wholeLayout] = gpu(1);
     const auto [stripped, layout] = gpu(strips);
     auto cpu = frame;
+    rawrcam::imaging::applyQuadGainField(reinterpret_cast<std::uint16_t*>(cpu.data()), width, height, 64.0f, field, 1);
     rawrcam::imaging::remosaicBlockCfa(cpu, width, height, block, order, 1, quality, 1.0f, 64.0f);  // Frame::blackLevel default
     std::size_t differsFromWhole = 0, cpuOff = 0, cpuWorse = 0;
     const auto* a = reinterpret_cast<const std::uint16_t*>(whole.data());
@@ -353,6 +377,9 @@ int main(int argc, char** argv) {
                 if (argc == 7 && std::string(argv[6]) == "strips")  // quad Detail in 4 strips vs whole frame
                     ok = runStripped(c, *remosaicker, cmd, fence, iw, ih, 2, order,
                                      rawrcam::imaging::CfaRemosaicQuality::Detail, 4, argv[1], argv[5]);
+                else if (argc == 7 && std::string(argv[6]) == "field")  // the same with the quad gain field (10-bit, black 64)
+                    ok = runStripped(c, *remosaicker, cmd, fence, iw, ih, 2, order,
+                                     rawrcam::imaging::CfaRemosaicQuality::Detail, 4, argv[1], argv[5], true);
                 else if (argc == 7 && std::string(argv[6]) == "quad")  // native 2x2 quad, Detail (real-image parity)
                     ok = runCase(c, *remosaicker, cmd, fence, 0,
                                  {iw, ih, 2, order, iw * 2, false, false, false, false, true, false}, argv[1], argv[5]);
@@ -413,6 +440,11 @@ int main(int argc, char** argv) {
                 ok = runStripped(c, *remosaicker, cmd, fence, 256, 1024, 4, 1,
                                  rawrcam::imaging::CfaRemosaicQuality::Standard, 3) &&
                      ok;
+                // Quad gain field divided out while each strip loads: strips identical to the whole frame, CPU parity.
+                for (unsigned order : {0u, 3u})
+                    ok = runStripped(c, *remosaicker, cmd, fence, 1024, 1024, 2, order,
+                                     rawrcam::imaging::CfaRemosaicQuality::Detail, 4, nullptr, nullptr, true) &&
+                         ok;
                 // Identical geometry and slot, but new source/destination lifetimes.
                 // Driver-recycled handles must not skip descriptor refresh.
                 for (int repeat = 0; repeat < 3; ++repeat)

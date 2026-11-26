@@ -212,6 +212,8 @@ struct LensRoute {
     // the sensor's per-position response first. Bayer (block 1): the linear 2x Bayer bin, 200 MP -> 50 MP,
     // codes x4. photoReduced25 is the smaller size: Bayer through the direct 3x bin (22 MP from 200 MP),
     // 4x4 resampled from the 50 MP result to half its pixels (25 MP).
+    // photoPhaseFit on a 2x2 photo stream: divide the sensor's per-position gain field out before the quad
+    // remosaic (imaging/QuadGainField.h, fitted per frame, skipped when small).
     bool photoReduced = false;
     bool photoReduced25 = false;
     bool photoPhaseFit = false;

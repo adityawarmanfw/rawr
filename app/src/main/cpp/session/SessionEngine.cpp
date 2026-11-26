@@ -717,6 +717,7 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
         if (journalWrites[slot].valid()) journalWrites[slot].get();
     };
     std::unique_ptr<capture::BlockRemosaicGpu> gpuRemosaic;  // created at the first block-CFA frame
+    std::optional<imaging::QuadGainField> gainField;  // quad per-position response, fitted on the first frame
     bool gpuRemosaicTried = false;
     allocationTiming.finish();
     struct Frame {
@@ -931,7 +932,8 @@ uint32_t SessionEngine::prepareFullSizeBurst(uint32_t maxFrames) {
             }
             const bool onGpu = capture::remosaicBlockCfaBuffer(packed, width, height, *context,
                                                                frames.back().metadata.blackLevelPhysicalRggb,
-                                                               gpuRemosaic.get());
+                                                               gpuRemosaic.get(),
+                                                               frames.back().metadata.effectiveWhiteLevel, &gainField);
             CAPTURE_DEBUG_LOG("FULLRES_REMOSAIC tag=%llu frame=%u block=%u quality=%s gpu=%d",
                               static_cast<unsigned long long>(tag), index + 1, context->cfaBlock,
                               capture::remosaicQualityName(capture::photoRemosaicQuality(*context)), onGpu ? 1 : 0);

@@ -203,7 +203,7 @@ void testProfileMatching() {
     assert(f85->sensorLayoutBlock == 1 && f85->photoSensorLayoutBlock == 4 && f85->photoReduced);
     assert(f85->vendorGate == "vivoFullSize" && !photoOutputDngOnly(*f85));
     // Every X200 Ultra full-size lens takes its photos in a session of their own.
-    for (const char* id : {"H14", "H35", "H85", "F85"}) {
+    for (const char* id : {"H14", "Q35", "Q85", "F85"}) {
         const auto lens = routeForLens(x200u, id);
         assert(lens && lens->separatePhotoSession && lens->workarounds.keepTemplateEntries);
         assert(stillStrategyFor(*lens, true) == StillStrategy::SeparateSession);
@@ -212,7 +212,21 @@ void testProfileMatching() {
     // The plain UW and front lenses exist next to the full-size ones.
     assert(routeForLens(x200u, "14")->cameraId == "4" && !routeForLens(x200u, "14")->photoStream);
     assert(routeForLens(x200u, "SELF")->cameraId == "1");
-    assert(routeForLens(x200u, "H85")->photoRemosaic == 3u);
+    // The 50 MP main and tele hand over 2x2 quads: Detail remosaic with the per-position gain field.
+    for (const char* id : {"Q35", "Q85"}) {
+        const auto lens = routeForLens(x200u, id);
+        assert(lens->photoRemosaic == 3u && lens->photoSensorLayoutBlock == 2 && lens->photoPhaseFit);
+        assert(lens->colourOrder && *lens->colourOrder == 3u);
+    }
+    assert(!routeForLens(x200u, "H35") && !routeForLens(x200u, "H85"));
+    {
+        bool mode4 = false;
+        const auto q35 = routeForLens(x200u, "Q35");
+        for (const auto& k : q35->vendorKeys)
+            mode4 |= k.tag == "vivo.control.forceSensorMode" && k.scope == CameraKeySetting::Scope::Still &&
+                     k.values.size() == 1 && k.values[0] == 4.0;
+        assert(mode4);
+    }
     {
         // A separate photo session needs a photo stream, and runs on the native API only.
         std::string error;

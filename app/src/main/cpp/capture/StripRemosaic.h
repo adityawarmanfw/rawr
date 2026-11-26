@@ -32,7 +32,8 @@ struct StripLayout {
 };
 
 // `window` holds layout.window rows of `width` samples (caller-owned, e.g.
-// mapped GPU memory); pass(window, stripIndex) remosaics it in place.
+// mapped GPU memory); pass(window, stripIndex, firstRow) remosaics it in place
+// (firstRow = the window's first frame row).
 template <class Pass>
 void remosaicInStrips(std::vector<uint8_t>& pixels, uint32_t width, uint32_t height, const StripLayout& layout,
                       uint8_t* window, Pass&& pass) {
@@ -54,7 +55,7 @@ void remosaicInStrips(std::vector<uint8_t>& pixels, uint32_t width, uint32_t hei
             std::memcpy(window, tail.data() + size_t(layout.saved - fromTail) * rowBytes, size_t(fromTail) * rowBytes);
         std::memcpy(window + size_t(fromTail) * rowBytes, pixels.data() + size_t(start + fromTail) * rowBytes,
                     size_t(layout.window - fromTail) * rowBytes);
-        pass(window, i);
+        pass(window, i, start);
         if (layout.saved && coreEnd < height)
             std::memcpy(tail.data(), pixels.data() + size_t(coreEnd - layout.saved) * rowBytes,
                         size_t(layout.saved) * rowBytes);
@@ -65,8 +66,9 @@ void remosaicInStrips(std::vector<uint8_t>& pixels, uint32_t width, uint32_t hei
 
 // Same strips, two windows in flight: strip i is copied in and submitted
 // before strip i-1 is waited for and copied out, so the host copies and the
-// gaps between submissions overlap the GPU work. submit(window, slot, strip)
-// starts the pass on windows[slot] (slot = strip & 1); wait(slot) blocks until
+// gaps between submissions overlap the GPU work. submit(window, slot, strip,
+// firstRow) starts the pass on windows[slot] (slot = strip & 1; firstRow = the
+// window's first frame row); wait(slot) blocks until
 // that slot's pass is done (its result is then in windows[slot]). Strip i's
 // window may reach into strip i-2's core, which is already written back; those
 // rows come from the originals saved before that write-back (`saved` rows).
@@ -107,7 +109,7 @@ void remosaicInStripsOverlapped(std::vector<uint8_t>& pixels, uint32_t width, ui
             std::memcpy(window, tail.data() + size_t(layout.saved - fromTail) * rowBytes, size_t(fromTail) * rowBytes);
         std::memcpy(window + size_t(fromTail) * rowBytes, pixels.data() + size_t(start + fromTail) * rowBytes,
                     size_t(layout.window - fromTail) * rowBytes);
-        submit(window, i & 1u, i);
+        submit(window, i & 1u, i, start);
     }
     for (uint32_t j = strips >= 2 ? strips - 2 : 0; j < strips; ++j) copyOut(j);
 }

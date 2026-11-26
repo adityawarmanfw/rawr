@@ -1,5 +1,6 @@
 #include "rawr/raw_ingress/RawRemosaicker.h"
 
+#include <algorithm>
 #include <stdexcept>
 #include <string>
 
@@ -16,6 +17,7 @@ struct PushConstants {
     float codesPerDn;
     float blackLevel;
     std::uint32_t fit, fitStride;
+    std::uint32_t fieldRow0, fieldHeight;
 };
 void memoryBarrier(VkCommandBuffer command, VkAccessFlags src, VkAccessFlags dst) {
     VkMemoryBarrier b{};
@@ -174,7 +176,7 @@ void RawRemosaicker::ensureScratch(std::uint32_t width, std::uint32_t height, st
         VkBufferCreateInfo bi{};
         bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
         bi.size = bytes;
-        bi.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        bi.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;  // gain field upload
         bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         check(vkCreateBuffer(d, &bi, nullptr, &buffer), "scratch buffer");
         VkMemoryRequirements req{};
@@ -209,7 +211,8 @@ void RawRemosaicker::ensureScratch(std::uint32_t width, std::uint32_t height, st
                                : rawr::vk::createOwnedImage(context_.physicalDevice, d, 1, 1,
                                                             VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT);
         // Detail needs no block statistics; retain a valid minimal descriptor when phase fitting is off.
-        make(needsDiff ? VkDeviceSize(bw) * bh * 8u : VkDeviceSize(4), scratch_.diff, scratch_.diffMemory);
+        make(needsDiff ? std::max<VkDeviceSize>(VkDeviceSize(bw) * bh * 8u, kGainFieldFloats * 4u) : VkDeviceSize(4),
+             scratch_.diff, scratch_.diffMemory);
     } catch (...) {
         releaseScratch();
         throw;
@@ -230,6 +233,9 @@ void RawRemosaicker::record(VkCommandBuffer command, std::uint32_t slot, const F
         throw std::invalid_argument("raw remosaic: row stride below width");
     if (f.phaseFit && (!f.hexadecaToQuad || f.fitStride % 2u == 0u || f.width / 4u < 9u || f.height / 4u < 9u))
         throw std::invalid_argument("raw remosaic: phase fit needs the Hexadeca reduction, an odd stride, 9x9 blocks");
+    const bool field = f.gainField != nullptr;
+    if (field && (f.raw10 || f.hexadecaToQuad || f.block != 2u || f.fieldHeight < f.fieldRow0 + f.height))
+        throw std::invalid_argument("raw remosaic: gain field needs quad RAW16 inside its frame");
     const bool quadOnly = f.quality == Quality::High || f.quality == Quality::Detail;
     if ((f.hexadecaToQuad && (f.block != 4u || !quadOnly || f.width % 8u || f.height % 8u)) ||
         (quadOnly && !f.hexadecaToQuad && f.block != 2u) || static_cast<unsigned>(f.quality) > 3u)
@@ -237,7 +243,7 @@ void RawRemosaicker::record(VkCommandBuffer command, std::uint32_t slot, const F
     const auto width = f.hexadecaToQuad ? f.width / 2u : f.width;
     const auto height = f.hexadecaToQuad ? f.height / 2u : f.height;
     const auto block = f.hexadecaToQuad ? 2u : f.block;
-    ensureScratch(width, height, block, f.quality != Quality::Detail || f.phaseFit, f.quality == Quality::Detail);
+    ensureScratch(width, height, block, f.quality != Quality::Detail || f.phaseFit || field, f.quality == Quality::Detail);
     // The slot has retired before record(). Always refresh descriptors:
     // callers may destroy/recreate buffers and views with recycled handle
     // values, which cannot safely serve as resource-lifetime cache keys.
@@ -288,7 +294,9 @@ void RawRemosaicker::record(VkCommandBuffer command, std::uint32_t slot, const F
                      f.hexadecaToQuad ? 4.0f : 1.0f,
                      f.blackLevel,
                      f.phaseFit ? 1u : 0u,
-                     f.fitStride};
+                     f.fitStride,
+                     f.fieldRow0,
+                     f.fieldHeight};
     const auto stamp = [&](std::uint32_t index) {
         if (f.timestamps) vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, f.timestamps, index);
     };
@@ -343,6 +351,23 @@ void RawRemosaicker::record(VkCommandBuffer command, std::uint32_t slot, const F
             stamp(7);
         }
         pass(6u, width, height);
+        memoryBarrier(command, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+    } else if (field) {
+        // Coefficients into the diff buffer (the previous frame's passes are done reading it), then the load.
+        VkMemoryBarrier before{};
+        before.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        before.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        before.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &before,
+                             0, nullptr, 0, nullptr);
+        vkCmdUpdateBuffer(command, scratch_.diff, 0, kGainFieldFloats * sizeof(float), f.gainField);
+        VkMemoryBarrier after{};
+        after.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        after.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        after.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &after, 0,
+                             nullptr, 0, nullptr);
+        pass(14u, f.width, f.height);
         memoryBarrier(command, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
     } else if (f.raw10) {
         pass(3u, f.width, f.height);

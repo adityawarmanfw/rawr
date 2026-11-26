@@ -1,5 +1,8 @@
 #include "capture/BlockRemosaicGpu.h"
 
+static_assert(rawr::raw_ingress::RawRemosaicker::kGainFieldFloats ==
+              rawrcam::imaging::QuadGainField::kSurfaces * rawrcam::imaging::QuadGainField::kTerms);
+
 #include <algorithm>
 #include <cstring>
 #include <mutex>
@@ -83,15 +86,18 @@ bool BlockRemosaicGpu::supports(uint32_t block, imaging::CfaRemosaicQuality qual
     return block == 4u && (quality == Q::Fast || quality == Q::Standard);
 }
 void BlockRemosaicGpu::run(std::vector<uint8_t>& pixels, uint32_t block, uint32_t order,
-                           imaging::CfaRemosaicQuality quality, float black) {
+                           imaging::CfaRemosaicQuality quality, float black, const imaging::QuadGainField* field) {
     if (pixels.size() != frameBytes_ || !supports(block, quality)) throw std::runtime_error("block_remosaic_invalid");
+    if (field && (!field->active || block != 2)) field = nullptr;
     // Strips are written back only after their wait: until the first wait succeeds, `pixels` is untouched.
     bool written = false;
     uint8_t* const windows[kSlots] = {static_cast<uint8_t*>(mapped_[0]), static_cast<uint8_t*>(mapped_[1])};
     try {
         remosaicInStripsOverlapped(
             pixels, width_, height_, layout_, windows,
-            [&](uint8_t*, uint32_t slot, uint32_t) { submitWindow(slot, block, order, quality, black); },
+            [&](uint8_t*, uint32_t slot, uint32_t, uint32_t firstRow) {
+                submitWindow(slot, block, order, quality, black, field, firstRow);
+            },
             [&](uint32_t slot) {
                 waitSlot(slot);
                 written = true;
@@ -103,7 +109,7 @@ void BlockRemosaicGpu::run(std::vector<uint8_t>& pixels, uint32_t block, uint32_
     }
 }
 void BlockRemosaicGpu::submitWindow(uint32_t slot, uint32_t block, uint32_t order, imaging::CfaRemosaicQuality quality,
-                                    float black) {
+                                    float black, const imaging::QuadGainField* field, uint32_t firstRow) {
     using Q = imaging::CfaRemosaicQuality;
     VkCommandBuffer command = command_[slot];
     check(vkResetCommandBuffer(command, 0));
@@ -134,6 +140,11 @@ void BlockRemosaicGpu::submitWindow(uint32_t slot, uint32_t block, uint32_t orde
                 : quality == Q::Fast     ? rawr::raw_ingress::RawRemosaicker::Quality::Fast
                                          : rawr::raw_ingress::RawRemosaicker::Quality::Standard;
     f.blackLevel = black;
+    if (field) {
+        f.gainField = field->coef.data();
+        f.fieldRow0 = firstRow;
+        f.fieldHeight = height_;
+    }
     // The remosaicker's scratch is shared by both slots; its recorded barriers order them on the queue.
     remosaic_->record(command, slot, f);
     // The shader reads the source buffer only in its first (copy) pass, so the
