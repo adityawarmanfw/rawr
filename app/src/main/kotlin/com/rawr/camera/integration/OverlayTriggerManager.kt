@@ -46,6 +46,7 @@ internal class OverlayTriggerManager(
     private var peakManualPulse = false
     private var afPeaking = false
     private var afInFlight = false
+    private var autoAfPeaking = false
     private var lastMask = -1
 
     private var hideShadow: Job? = null
@@ -142,6 +143,18 @@ internal class OverlayTriggerManager(
         afDwell = null
         emitLocked()
     }
+    /**
+     * Passive autofocus over a faceless scene asks for no metering region, so
+     * peaking is the only thing that shows what the camera is judging sharp on.
+     * Unlike [autofocusStart] this is a level, not a gesture: it holds for as
+     * long as the camera owns the viewfinder's focus graphic.
+     */
+    fun setAutoAfPeaking(active: Boolean) = synchronized(lock) {
+        if (autoAfPeaking == active) return
+        autoAfPeaking = active
+        emitLocked()
+    }
+
     private fun relaunchLocked(previous: Job?, delayMs: Long, body: () -> Unit): Job {
         previous?.cancel()
         return scope.launch {
@@ -152,7 +165,7 @@ internal class OverlayTriggerManager(
 
     private fun emitLocked() {
         var mask = 0
-        if (OverlayMode.Peaking in armed && (peakManualPulse || afPeaking)) mask = mask or BIT_PEAK
+        if (OverlayMode.Peaking in armed && (peakManualPulse || afPeaking || autoAfPeaking)) mask = mask or BIT_PEAK
         if (OverlayMode.RawHighlights in armed && rawPulse) mask = mask or BIT_RAW
         if (OverlayMode.TonemapShadows in armed && shadowPulse) mask = mask or BIT_SHADOW
         if (falseColor) mask = mask or BIT_FALSE

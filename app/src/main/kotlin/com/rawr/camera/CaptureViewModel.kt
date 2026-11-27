@@ -126,6 +126,7 @@ class CaptureViewModel(application: Application) : AndroidViewModel(application)
             onRenderExposureScrubbed = ::persistRenderExposure,
             onAgxControl = ::persistAgxControl,
             videoLocked = { videoSelectionLocked() },
+            autofocusPeakingEnabled = { latestSettings.autofocusPeakingEnabled },
             onRawCpuIngress = {
                 android.os.Handler(android.os.Looper.getMainLooper()).post {
                     android.widget.Toast.makeText(

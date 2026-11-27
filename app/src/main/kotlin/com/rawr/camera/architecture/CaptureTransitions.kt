@@ -39,7 +39,10 @@ object CaptureTransitions {
                 // A readout belongs to the camera that produced it; do not carry it across a
                 // capability/camera replacement without a fresh backend report.
                 backendNativeReadout = null,
-                appliedFocusDiopters = null
+                appliedFocusDiopters = null,
+                // Likewise the AF state was read from the previous camera; the new
+                // one has not reported anything yet.
+                cameraAfStatus = TargetStatus.Hidden
             )
 
         val selectedLensId =

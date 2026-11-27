@@ -36,6 +36,9 @@ private val LevelShadow = Color.Black.copy(alpha = .35f)
 /** Line width of the ticks, crosshair and ring; the dark outline adds 1 dp. */
 private const val LEVEL_STROKE_DP = 1f
 
+/** The weight the crosshair takes when the camera reports it has found focus. */
+private const val FOCUS_STROKE_DP = 2f
+
 /** Fixed tick distance from the centre and tick length (dp). */
 private const val TICK_RADIUS_DP = 46f
 private const val TICK_LENGTH_DP = 6f
@@ -64,7 +67,7 @@ private const val BUBBLE_ALPHA = .45f
  * bubble's meaning cross-fades to the tilt, over 60 to 75 degrees of elevation.
  */
 @Composable
-internal fun LevelMeterOverlay(modifier: Modifier = Modifier) {
+internal fun LevelMeterOverlay(modifier: Modifier = Modifier, focusConfirmed: Boolean = false) {
     val reading = rememberLevelReading()
     LockHaptic(reading)
     // Recomposes only when the phone crosses between portrait and landscape, not at sensor rate.
@@ -77,7 +80,7 @@ internal fun LevelMeterOverlay(modifier: Modifier = Modifier) {
     Box(modifier.testTag(CaptureTestTags.LEVEL_METER)) {
         Canvas(Modifier.matchParentSize()) {
             val r = reading.value ?: return@Canvas
-            drawLevel(r, landscapeBlend.value)
+            drawLevel(r, landscapeBlend.value, focusConfirmed)
         }
     }
 }
@@ -130,7 +133,7 @@ internal fun crosshairArms(landscapeBlend: Float, flatBlend: Float, major: Float
     return CrosshairArms(max(horizontal, floor), max(vertical, floor))
 }
 
-private fun DrawScope.drawLevel(r: LevelReading, landscapeBlend: Float) {
+private fun DrawScope.drawLevel(r: LevelReading, landscapeBlend: Float, focusConfirmed: Boolean) {
     val c = center
     val w = r.flatBlend
     val flat = r.flat
@@ -143,6 +146,12 @@ private fun DrawScope.drawLevel(r: LevelReading, landscapeBlend: Float) {
     val activeColor = if (flat) flatColor else horizonColor
     // At the horizon the crosshair only reports roll against the fixed ticks.
     val crosshairColor = if (flat) flatColor else levelColor(r.rollLevel, r.rollDeg)
+    // The camera having found its own focus is worth more attention than a level
+    // horizon: it is the reading that says the photo will be sharp. Both green,
+    // so focus wins the shade and the weight.
+    val focusGreen = focusConfirmed && activeColor != LevelGreen
+    val focusStroke = if (focusGreen) FOCUS_STROKE_DP.dp.toPx() else LEVEL_STROKE_DP.dp.toPx()
+    val crosshairShown = if (focusGreen) LevelGreen else crosshairColor
 
     // Fixed ticks. Four-fold symmetric, so they need no rotation in any posture.
     val tr = TICK_RADIUS_DP.dp.toPx()
@@ -158,14 +167,14 @@ private fun DrawScope.drawLevel(r: LevelReading, landscapeBlend: Float) {
     val arms = crosshairArms(landscapeBlend, w, ARM_DP.dp.toPx(), MINOR_ARM_DP.dp.toPx(), gap + 2.dp.toPx())
     rotate(r.rollDeg * (1f - w), c) {
         listOf(-1f, 1f).forEach { s ->
-            mark(crosshairColor, Offset(c.x + s * gap, c.y), Offset(c.x + s * arms.horizontal, c.y))
-            mark(crosshairColor, Offset(c.x, c.y + s * gap), Offset(c.x, c.y + s * arms.vertical))
+            mark(crosshairShown, Offset(c.x + s * gap, c.y), Offset(c.x + s * arms.horizontal, c.y), focusStroke)
+            mark(crosshairShown, Offset(c.x, c.y + s * gap), Offset(c.x, c.y + s * arms.vertical), focusStroke)
         }
     }
 
     // Fixed bubble at the centre: the target the moving bubble settles into.
     val ringR = BUBBLE_RADIUS_DP.dp.toPx() + 1.dp.toPx()
-    val ringColor = if (activeColor == LevelGreen) LevelGreen else LevelDim
+    val ringColor = if (activeColor == LevelGreen || focusGreen) LevelGreen else LevelDim
     drawCircle(LevelShadow, ringR, c, style = Stroke((LEVEL_STROKE_DP + 1f).dp.toPx()))
     drawCircle(ringColor, ringR, c, style = Stroke(LEVEL_STROKE_DP.dp.toPx()))
 
@@ -177,11 +186,13 @@ private fun DrawScope.drawLevel(r: LevelReading, landscapeBlend: Float) {
         // Horizon: toward the high side for roll; down when the lens is above the horizon.
         // Drawn in the phone's physical quadrant because the Activity is portrait-locked.
         rotate(r.quadrant.toFloat(), c) {
-            drawBubble(c, r.rollDeg * u, r.elevationDeg * u, limit, horizonColor, (1f - w) * BUBBLE_ALPHA)
+            drawBubble(c, r.rollDeg * u, r.elevationDeg * u, limit,
+                if (focusGreen) LevelGreen else horizonColor, (1f - w) * BUBBLE_ALPHA)
         }
     }
     if (w > 0f) {
-        drawBubble(c, r.bubbleXDeg * u, r.bubbleYDeg * u, limit, flatColor, w * BUBBLE_ALPHA)
+        drawBubble(c, r.bubbleXDeg * u, r.bubbleYDeg * u, limit,
+            if (focusGreen) LevelGreen else flatColor, w * BUBBLE_ALPHA)
     }
 }
 

@@ -36,6 +36,13 @@ internal fun DisplayControlsSettings(state: SettingsUiState, dispatch: SettingsD
             SettingDivider()
             ViewfinderResolutionRow(state.values.viewfinderDivisor) { dispatch.invoke(SetViewfinderDivisor(it)) }
             SettingDivider()
+            SettingsSwitchRow(
+                title = "Focus peaking in autofocus",
+                checked = state.values.autofocusPeakingEnabled,
+                supportingText = "Lights up what is sharp while the camera focuses on its own, with no face box and no tap-to-focus box on screen. Needs Focus peaking armed in Monitoring.",
+                testTag = SettingsTestTags.row("DisplayControls", "autofocus_peaking")
+            ) { dispatch.invoke(SetAutofocusPeaking(it)) }
+            SettingDivider()
             SettingsRow(
                 "Monitoring",
                 "Focus peaking behavior",

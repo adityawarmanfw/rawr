@@ -80,5 +80,8 @@ internal fun reduceCaptureSettings(
     is SetLevelMeter -> {
         state.withValues(state.values.copy(levelMeterEnabled = action.enabled))
     }
+    is SetAutofocusPeaking -> {
+        state.withValues(state.values.copy(autofocusPeakingEnabled = action.enabled))
+    }
     else -> error("Unsupported capture settings action: $action")
 }
