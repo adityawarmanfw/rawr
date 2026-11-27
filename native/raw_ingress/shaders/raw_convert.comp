@@ -1,0 +1,285 @@
+#version 450
+#extension GL_EXT_control_flow_attributes : require
+// Thin-feature stage of the quad remosaic (Convert + gated chroma), run on Detail's output. Mirrors
+// app/src/main/cpp/imaging/QuadConvert.h expression for expression; see there for the model. Own descriptor set
+// (RawRemosaicker::Pipelines::convert). A cell is 4 x 4 pixels (one R, two G, one B block), so every smoothing runs
+// on a grid 16x smaller than the pixels. By pc.pass:
+//  0. cell statistics from the (field, disparity corrected) quad: R, G, B block means and the maximum sample;
+//  1. coarse (sigma 2) and fine (sigma 1.25) Gaussians of the colour planes in shared memory (one 16 x 16 tile of
+//     cells + 6 per side), and the colour-ratio disagreement: Ls = (coarse rgb, dis), Lf = (fine rgb, 0);
+//  2. per cell weights: luminance structure tensor (orientation), structure, clipped neighbours, signal ramp:
+//     wMap = (convert weight, structure, chroma consistency, 0);
+//  3. per pixel: own sample colour-converted by the coarse ratio, blended with Detail's value, then the chroma
+//     fix on R/B sites.
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0, r16ui) readonly uniform uimage2D quadRead;    // the raw scratch (corrected quad)
+layout(set = 0, binding = 1, r16ui) readonly uniform uimage2D detailRead;  // Detail's Bayer output
+layout(set = 0, binding = 2, r16ui) writeonly uniform uimage2D finalOut;   // the caller's destination
+layout(set = 0, binding = 3, rgba16f) writeonly uniform image2D cellW;
+layout(set = 0, binding = 4, rgba16f) readonly uniform image2D cellR;
+layout(set = 0, binding = 5, rgba16f) writeonly uniform image2D lsW;
+layout(set = 0, binding = 6, rgba16f) readonly uniform image2D lsR;
+layout(set = 0, binding = 7, rgba16f) writeonly uniform image2D lfW;
+layout(set = 0, binding = 8, rgba16f) readonly uniform image2D lfR;
+layout(set = 0, binding = 9, rgba16f) writeonly uniform image2D wmW;
+layout(set = 0, binding = 10, rgba16f) readonly uniform image2D wmR;
+layout(push_constant) uniform P {
+    uint width;
+    uint height;
+    uint pass;
+    uint order;
+    float blackLevel;
+    float clipLevel;  // sample code at or above which a sample counts as clipped
+    uint cw;
+    uint ch;
+}
+pc;
+
+// QuadConvert constants.
+const float kDelta = 0.08, kDeltaChroma = 0.15;
+const float kOrientLow = 0.2, kOrientHigh = 0.5, kCoherence = 0.4;
+const float kStructureThreshold = 3.0;
+const float kNoiseSlope = 0.2, kNoiseFloor = 0.25;
+const float kSnrLow = 10.0, kSnrHigh = 40.0;
+const float kDarkRatioFloor = 3.0;
+const float K_COARSE[13] = float[13](0.00221819594, 0.00877313502, 0.0270231571, 0.0648251846, 0.121109389, 0.176213115, 0.199675635, 0.176213115, 0.121109389, 0.0648251846, 0.0270231571, 0.00877313502, 0.00221819594);
+const float K_FINE[9] = float[9](0.00190769136, 0.0179195758, 0.0887562409, 0.231804371, 0.319224238, 0.231804371, 0.0887562409, 0.0179195758, 0.00190769136);
+const float K_TENSOR[7] = float[7](0.00443304796, 0.0540055819, 0.242036223, 0.399050266, 0.242036223, 0.0540055819, 0.00443304796);
+
+float sampleAt(ivec2 p) { return float(imageLoad(quadRead, p).r) - pc.blackLevel; }
+ivec2 cellMax() { return ivec2(int(pc.cw) - 1, int(pc.ch) - 1); }
+
+// ---- pass 0
+void cellStats(ivec2 c) {
+    if (c.x >= int(pc.cw) || c.y >= int(pc.ch)) return;
+    float mean[2][2];
+    float mx = -1e30;
+    for (int a = 0; a < 2; ++a)
+        for (int b = 0; b < 2; ++b) {
+            const ivec2 p = ivec2(4 * c.x + 2 * b, 4 * c.y + 2 * a);
+            const float s0 = sampleAt(p), s1 = sampleAt(p + ivec2(1, 0)), s2 = sampleAt(p + ivec2(0, 1)), s3 = sampleAt(p + ivec2(1, 1));
+            mean[a][b] = 0.25 * ((s0 + s1) + (s2 + s3));
+            mx = max(max(mx, max(s0, s1)), max(s2, s3));
+        }
+    const int ry = int(pc.order >> 1), rx = int(pc.order & 1u), by = 1 - ry, bx = 1 - rx;
+    float g0, g1;
+    if (ry == rx) {
+        g0 = mean[0][1];
+        g1 = mean[1][0];
+    } else {
+        g0 = mean[0][0];
+        g1 = mean[1][1];
+    }
+    imageStore(cellW, c, vec4(mean[ry][rx], 0.5 * (g0 + g1), mean[by][bx], mx));
+}
+
+// ---- pass 1
+const int TS = 28;  // 16 + 2 * 6
+// One shared array for both passes (the module's shared memory is the sum of all declarations; 32 KB limit):
+// pass 1 uses the tile at 0, the coarse and fine horizontal sums after it; pass 2 its own regions from 0.
+shared float sMem[5200];
+const int OFF_TILE = 0, OFF_HC = 3 * TS * TS, OFF_HF = 3 * TS * TS + TS * 16;
+void blurPass(ivec2 g0, int lidx, ivec2 lid) {
+    const ivec2 cmax = cellMax();
+    float S[3], F[3];
+    // The three colour planes are loaded once; their horizontal sums are made one plane at a time (smaller footprint).
+    for (int i = lidx; i < TS * TS; i += 256) {
+        const ivec2 p = clamp(g0 - 6 + ivec2(i % TS, i / TS), ivec2(0), cmax);
+        const vec4 c = imageLoad(cellR, p);
+        sMem[i] = c.r;
+        sMem[TS * TS + i] = c.g;
+        sMem[2 * TS * TS + i] = c.b;
+    }
+    [[unroll]] for (int ch = 0; ch < 3; ++ch) {
+        barrier();
+        for (int i = lidx; i < TS * 16; i += 256) {
+            const int r = i / 16, c = i % 16;
+            float s = 0.0, f = 0.0;
+            [[unroll]] for (int k = 0; k < 13; ++k) s += K_COARSE[k] * sMem[ch * TS * TS + r * TS + c + k];
+            [[unroll]] for (int k = 0; k < 9; ++k) f += K_FINE[k] * sMem[ch * TS * TS + r * TS + c + 2 + k];
+            sMem[OFF_HC + i] = s;
+            sMem[OFF_HF + i] = f;
+        }
+        barrier();
+        float s = 0.0, f = 0.0;
+        [[unroll]] for (int k = 0; k < 13; ++k) s += K_COARSE[k] * sMem[OFF_HC + (lid.y + k) * 16 + lid.x];
+        [[unroll]] for (int k = 0; k < 9; ++k) f += K_FINE[k] * sMem[OFF_HF + (lid.y + 2 + k) * 16 + lid.x];
+        S[ch] = s;
+        F[ch] = f;
+    }
+    const ivec2 p = g0 + lid;
+    if (p.x >= int(pc.cw) || p.y >= int(pc.ch)) return;
+    const float eps = kDarkRatioFloor;
+    const float rsR = S[0] / max(S[1], eps), rsB = S[2] / max(S[1], eps);
+    const float rfR = F[0] / max(F[1], eps), rfB = F[2] / max(F[1], eps);
+    const float dis = max(abs(rfR / max(rsR, 1e-3) - 1.0), abs(rfB / max(rsB, 1e-3) - 1.0));
+    imageStore(lsW, p, vec4(S[0], S[1], S[2], dis));
+    imageStore(lfW, p, vec4(F[0], F[1], F[2], 0.0));
+}
+
+// ---- pass 2
+const int YT = 26;  // luminance tile, origin tile - 5
+const int GT = 24;  // gradient region, origin tile - 4
+const int FT = 18;  // orientation region, origin tile - 1
+const int ST = 20;  // structure region, origin tile - 2
+const int OFF_Y = 0, OFF_GRAD = YT * YT, OFF_F = YT * YT + GT * GT * 2, OFF_STR = OFF_F + FT * FT, OFF_STR3 = OFF_STR + ST * ST, OFF_H = OFF_STR3 + FT * FT;
+ivec2 sG0;  // workgroup origin (per invocation copy)
+
+float yAt(ivec2 p) {
+    p = clamp(p, ivec2(0), cellMax());
+    return sMem[OFF_Y + (p.y - (sG0.y - 5)) * YT + (p.x - (sG0.x - 5))];
+}
+vec2 gradAt(ivec2 p) {
+    p = clamp(p, ivec2(0), cellMax());
+    const float c = yAt(p);
+    const float gx = p.x == 0 ? yAt(p + ivec2(1, 0)) - c : p.x == int(pc.cw) - 1 ? c - yAt(p - ivec2(1, 0)) : 0.5 * (yAt(p + ivec2(1, 0)) - yAt(p - ivec2(1, 0)));
+    const float gy = p.y == 0 ? yAt(p + ivec2(0, 1)) - c : p.y == int(pc.ch) - 1 ? c - yAt(p - ivec2(0, 1)) : 0.5 * (yAt(p + ivec2(0, 1)) - yAt(p - ivec2(0, 1)));
+    return vec2(gx, gy);
+}
+vec2 sgrad(ivec2 p) {  // gradient of the (clamped) cell p, from the region
+    p = clamp(p, ivec2(0), cellMax());
+    const int o = OFF_GRAD + 2 * ((p.y - (sG0.y - 4)) * GT + (p.x - (sG0.x - 4)));
+    return vec2(sMem[o], sMem[o + 1]);
+}
+void weightPass(ivec2 g0, int lidx, ivec2 lid) {
+    sG0 = g0;
+    const ivec2 cmax = cellMax();
+    for (int i = lidx; i < YT * YT; i += 256) {
+        const ivec2 p = clamp(g0 - 5 + ivec2(i % YT, i / YT), ivec2(0), cmax);
+        const vec4 c = imageLoad(cellR, p);
+        sMem[OFF_Y + i] = (c.r + 2.0 * c.g + c.b) * 0.25;
+    }
+    barrier();
+    for (int i = lidx; i < GT * GT; i += 256) {
+        const vec2 g = gradAt(g0 - 4 + ivec2(i % GT, i / GT));
+        sMem[OFF_GRAD + 2 * i] = g.x;
+        sMem[OFF_GRAD + 2 * i + 1] = g.y;
+    }
+    barrier();
+    // Orientation of the cells -1 .. +16 of the tile: the gradient products smoothed separably (sigma 1) -
+    // columns first over the gradient region's 24 rows, then rows.
+    for (int i = lidx; i < GT * FT; i += 256) {
+        const int r = i / FT, c = i % FT;  // gradient-region row r, orientation column c (cell g0 - 1 + c)
+        float a = 0.0, b = 0.0, d = 0.0;
+        [[unroll]] for (int k = 0; k < 7; ++k) {
+            const ivec2 q = clamp(g0 - 1 + ivec2(c + k - 3, 0), ivec2(0), cmax);
+            const int gi = r * GT + (q.x - (g0.x - 4));
+            const vec2 g = vec2(sMem[OFF_GRAD + 2 * gi], sMem[OFF_GRAD + 2 * gi + 1]);
+            a += K_TENSOR[k] * (g.x * g.x);
+            b += K_TENSOR[k] * (g.y * g.y);
+            d += K_TENSOR[k] * (g.x * g.y);
+        }
+        sMem[OFF_H + 3 * i] = a;
+        sMem[OFF_H + 3 * i + 1] = b;
+        sMem[OFF_H + 3 * i + 2] = d;
+    }
+    barrier();
+    for (int i = lidx; i < FT * FT; i += 256) {
+        const int x = i % FT, y = i / FT;
+        const int qy = clamp(g0.y - 1 + y, 0, cmax.y);
+        float sxx = 0.0, syy = 0.0, sxy = 0.0;
+        [[unroll]] for (int k = 0; k < 7; ++k) {
+            const int r = clamp(qy + k - 3, 0, cmax.y) - (g0.y - 4);
+            const int o = OFF_H + 3 * (r * FT + x);
+            sxx += K_TENSOR[k] * sMem[o];
+            syy += K_TENSOR[k] * sMem[o + 1];
+            sxy += K_TENSOR[k] * sMem[o + 2];
+        }
+        const float den = sqrt((sxx - syy) * (sxx - syy) + 4.0 * sxy * sxy);
+        const float coh = den / (sxx + syy + 1e-9);
+        const float s2 = abs(2.0 * sxy) / max(den, 1e-9);
+        const float f = clamp((s2 - kOrientLow) / (kOrientHigh - kOrientLow), 0.0, 1.0);
+        sMem[OFF_F + i] = coh > kCoherence ? f : 1.0;
+    }
+    // Structure of the cells -2 .. +17.
+    for (int i = lidx; i < ST * ST; i += 256) {
+        const ivec2 q = clamp(g0 - 2 + ivec2(i % ST, i / ST), ivec2(0), cmax);
+        const vec2 g = sgrad(q);
+        const float gm = length(g) * 2.0;
+        const float sg = sqrt(kNoiseSlope * max(yAt(q), 0.0) + kNoiseFloor) * 0.25;
+        sMem[OFF_STR + i] = gm / max(sg, 0.15) > kStructureThreshold ? 1.0 : 0.0;
+    }
+    barrier();
+    for (int i = lidx; i < FT * FT; i += 256) {
+        const int x = i % FT, y = i / FT;  // cell g0 - 1 + (x, y); its structure neighbours are region cells (x .. x+2, y .. y+2)
+        float m = -1e30;
+        for (int dy = 0; dy < 3; ++dy)
+            for (int dx = 0; dx < 3; ++dx) m = max(m, sMem[OFF_STR + (y + dy) * ST + x + dx]);
+        sMem[OFF_STR3 + i] = m;
+    }
+    barrier();
+    const ivec2 c = g0 + lid;
+    if (c.x >= int(pc.cw) || c.y >= int(pc.ch)) return;
+    float orient3 = 1e30, sum = 0.0, dis3 = -1e30, clip3 = 0.0;
+    for (int dy = 0; dy < 3; ++dy)
+        for (int dx = 0; dx < 3; ++dx) {
+            orient3 = min(orient3, sMem[OFF_F + (lid.y + dy) * FT + lid.x + dx]);
+            sum += sMem[OFF_STR3 + (lid.y + dy) * FT + lid.x + dx];
+            const ivec2 q = clamp(c + ivec2(dx - 1, dy - 1), ivec2(0), cmax);
+            dis3 = max(dis3, imageLoad(lsR, q).a);
+            if (imageLoad(cellR, q).a + pc.blackLevel >= pc.clipLevel) clip3 = 1.0;
+        }
+    const float sm = clamp(sum * (1.0 / 9.0), 0.0, 1.0);
+    float w = clamp(1.0 - dis3 / kDelta, 0.0, 1.0);
+    w = w * orient3;
+    w = w * sm;
+    if (clip3 > 0.0) w = 0.0;
+    w *= clamp((imageLoad(lsR, c).g - kSnrLow) / (kSnrHigh - kSnrLow), 0.0, 1.0);
+    imageStore(wmW, c, vec4(w, sm, clamp(1.0 - dis3 / kDeltaChroma, 0.0, 1.0), 0.0));
+}
+
+// ---- pass 3
+// Bilinear fetch of a cell grid (macro: GLSL cannot pass a formatted image): (a (1 - fx) + b fx) (1 - fy) + (d (1 - fx) + e fx) fy.
+#define BILINEAR(IMG, C, F)                                                                                       \
+    ((imageLoad(IMG, C) * (1.0 - (F).x) + imageLoad(IMG, (C) + ivec2(1, 0)) * (F).x) * (1.0 - (F).y) +             \
+     (imageLoad(IMG, (C) + ivec2(0, 1)) * (1.0 - (F).x) + imageLoad(IMG, (C) + ivec2(1, 1)) * (F).x) * (F).y)
+int reflectIdx(int v, int n) { return v < 0 ? -v : v >= n ? 2 * n - 2 - v : v; }
+float detailAt(int x, int y) {
+    return float(imageLoad(detailRead, ivec2(reflectIdx(x, int(pc.width)), reflectIdx(y, int(pc.height)))).r) - pc.blackLevel;
+}
+float pick(vec3 v, int c) { return c == 0 ? v.x : c == 2 ? v.z : v.y; }
+void finalPass(ivec2 p) {
+    if (p.x >= int(pc.width) || p.y >= int(pc.height)) return;
+    const int ry = int(pc.order >> 1), rx = int(pc.order & 1u), by = 1 - ry, bx = 1 - rx;
+    const float yy = (float(p.y) + 0.5) * 0.25 - 0.5, xx = (float(p.x) + 0.5) * 0.25 - 0.5;
+    const ivec2 cc = ivec2(clamp(int(floor(xx)), 0, int(pc.cw) - 2), clamp(int(floor(yy)), 0, int(pc.ch) - 2));
+    const vec2 f = vec2(xx - float(cc.x), yy - float(cc.y));
+    const int bpy = (p.y >> 1) & 1, bpx = (p.x >> 1) & 1;
+    const int cq = (bpy == ry && bpx == rx) ? 0 : (bpy == by && bpx == bx) ? 2 : 1;
+    const int oy = p.y & 1, ox = p.x & 1;
+    const int cb = (oy == ry && ox == rx) ? 0 : (oy == by && ox == bx) ? 2 : 1;
+    const vec4 wm = BILINEAR(wmR, cc, f);
+    const float wp = wm.x;
+    const float d = detailAt(p.x, p.y);
+    float result = d;
+    if (wp > 0.0) {
+        float conv = sampleAt(p);
+        if (cb != cq) {
+            const vec3 ls = BILINEAR(lsR, cc, f).rgb;
+            conv = conv * pick(ls, cb) / max(pick(ls, cq), 1.0);
+        }
+        result = wp * conv + (1.0 - wp) * d;
+    }
+    if (cb != 1) {
+        const float wc = wm.y * wm.z * (1.0 - wp);
+        if (wc > 0.0) {
+            const float l = detailAt(p.x - 1, p.y), r = detailAt(p.x + 1, p.y), u = detailAt(p.x, p.y - 1), dn = detailAt(p.x, p.y + 1);
+            const float ghat = abs(l - r) <= abs(u - dn) ? 0.5 * (l + r) : 0.5 * (u + dn);
+            const vec3 lf = BILINEAR(lfR, cc, f).rgb;
+            const float fix = ghat * (pick(lf, cb) / max(lf.g, kDarkRatioFloor));
+            result = result * (1.0 - wc) + fix * wc;
+        }
+    }
+    imageStore(finalOut, p, uvec4(uint(clamp(floor(result + pc.blackLevel + 0.5), 0.0, 65535.0)), 0u, 0u, 0u));
+}
+
+void main() {
+    const ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    const int lidx = int(gl_LocalInvocationIndex);
+    const ivec2 lid = ivec2(gl_LocalInvocationID.xy);
+    const ivec2 g0 = ivec2(gl_WorkGroupID.xy) * 16;
+    if (pc.pass == 0u) cellStats(gid);
+    else if (pc.pass == 1u) blurPass(g0, lidx, lid);
+    else if (pc.pass == 2u) weightPass(g0, lidx, lid);
+    else finalPass(gid);
+}

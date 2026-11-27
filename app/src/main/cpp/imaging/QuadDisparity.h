@@ -55,6 +55,10 @@ struct QuadDisparity {
     static constexpr float kRegScale = 1.0f / 64.0f;
     // Expected noise in the gate energies per unit pixel variance (white noise through these operators).
     static constexpr float kNoiseG2 = 0.149f, kNoiseL2 = 0.081f, kNoiseD2 = 4.0f;
+    // The diagonal split counts a tenth in the gate's denominator: a strongly defocused highlight has a large,
+    // genuinely shift-driven diagonal term (multiplicative, not first order), and at full weight it closed the
+    // gate exactly where the shift is biggest (coloured patches with a 4-px lattice in a bokeh halo).
+    static constexpr float kDiagonalWeight = 0.1f;
     static constexpr float kRhoLow = 2.0f, kRhoHigh = 8.0f;
     // The gradient energy must also clear a quarter of its own noise level: flat noise has every energy
     // near zero after the noise is taken off, and a tiny leftover gradient would otherwise pass.
@@ -135,7 +139,7 @@ inline void correctQuadDisparity(uint16_t* raw, uint32_t width, uint32_t height,
             const float g2s = std::max(g2 * (1.0f / 9.0f) - D::kNoiseG2 * var, 0.0f);
             const float l2s = std::max(l2 * (1.0f / 9.0f) - D::kNoiseL2 * var, 0.0f);
             const float d2s = std::max(d2 * (1.0f / 9.0f) - D::kNoiseD2 * var, 0.0f);
-            const float rho = g2s / (16.0f * l2s + d2s + D::kGateNoise * D::kNoiseG2 * var + 1e-6f);
+            const float rho = g2s / (16.0f * l2s + D::kDiagonalWeight * d2s + D::kGateNoise * D::kNoiseG2 * var + 1e-6f);
             return std::clamp((rho - D::kRhoLow) / (D::kRhoHigh - D::kRhoLow), 0.0f, 1.0f);
         };
         // Regression terms per cell (sums over its blocks in raster order) for cell rows [cr0, cr1).
@@ -205,11 +209,14 @@ inline void correctQuadDisparity(uint16_t* raw, uint32_t width, uint32_t height,
                 const float cx = cwx * rx * 0.25f, cy = cwy * ry * 0.25f;
                 const int x = 2 * bx, y = 2 * by;
                 const float s[4] = {at(x, y), at(x + 1, y), at(x, y + 1), at(x + 1, y + 1)};
+                // The diagonal split goes with the shift: where one was found it is a defocus artefact (second order
+                // in the shift, so the per-axis terms above never see it).
+                const float cd = std::max(cwx, cwy) * ((s[0] + s[3]) - (s[1] + s[2])) * 0.25f;
                 const float lo = std::min(std::min(s[0], s[1]), std::min(s[2], s[3]));
                 const float hi = std::max(std::max(s[0], s[1]), std::max(s[2], s[3]));
                 for (int k = 0; k < 4; ++k) {
                     const float ox = (k & 1) ? 1.0f : -1.0f, oy = (k & 2) ? 1.0f : -1.0f;
-                    const float v = std::clamp(s[k] - (cx * ox + cy * oy), lo, hi);
+                    const float v = std::clamp(s[k] - (cx * ox + cy * oy + cd * ox * oy), lo, hi);
                     raw[size_t(y + (k >> 1)) * width + size_t(x + (k & 1))] =
                         uint16_t(std::clamp(std::floor(v + 0.5f), 0.0f, 65535.0f));
                 }

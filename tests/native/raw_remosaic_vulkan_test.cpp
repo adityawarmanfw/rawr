@@ -16,6 +16,7 @@
 #include "capture/StripRemosaic.h"
 #include "imaging/CfaRemosaic.h"
 #include "imaging/PhaseFit.h"
+#include "imaging/QuadConvert.h"
 #include "imaging/QuadDisparity.h"
 #include "imaging/QuadGainField.h"
 #include "imaging/RawPixelSource.h"
@@ -209,7 +210,7 @@ bool runCase(vktest::Ctx& c, rawr::raw_ingress::RawRemosaicker& remosaicker, VkC
 bool runStripped(vktest::Ctx& c, rawr::raw_ingress::RawRemosaicker& remosaicker, VkCommandBuffer cmd, VkFence fence,
                  std::uint32_t width, std::uint32_t height, std::uint32_t block, std::uint32_t order,
                  rawrcam::imaging::CfaRemosaicQuality quality, std::uint32_t strips, const char* input = nullptr,
-                 const char* output = nullptr, bool gainField = false, bool disparity = false) {
+                 const char* output = nullptr, bool gainField = false, bool disparity = false, bool convert = false) {
     std::vector<std::uint8_t> frame(std::size_t(width) * height * 2);
     auto* px = reinterpret_cast<std::uint16_t*>(frame.data());
     if (input) {
@@ -254,7 +255,8 @@ bool runStripped(vktest::Ctx& c, rawr::raw_ingress::RawRemosaicker& remosaicker,
     std::vector<float> upload(field.coef.begin(), field.coef.end());  // RawRemosaicker::kGainFieldFloats
     upload.insert(upload.end(), field.grid.begin(), field.grid.end());
     const auto gpu = [&](std::uint32_t nStrips) {
-        const auto layout = rawrcam::capture::StripLayout::make(height, nStrips);
+        const auto layout = rawrcam::capture::StripLayout::make(
+            height, nStrips, convert ? rawrcam::capture::StripLayout::kConvertMargin : rawrcam::capture::StripLayout::kMargin);
         const VkDeviceSize bytes = VkDeviceSize(width) * layout.window * 2u;
         const VkMemoryPropertyFlags host = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
         auto buf = vktest::mkBuf(c.pd, c.dev, bytes,
@@ -298,6 +300,7 @@ bool runStripped(vktest::Ctx& c, rawr::raw_ingress::RawRemosaicker& remosaicker,
                     f.fieldHeight = height;
                 }
                 f.disparity = disparity;
+                f.convert = convert;
                 f.noiseSlope = field.noiseSlope;
                 f.noiseFloor = field.noiseFloor;
                 remosaicker.record(cmd, 0, f);
@@ -331,7 +334,16 @@ bool runStripped(vktest::Ctx& c, rawr::raw_ingress::RawRemosaicker& remosaicker,
     if (disparity)
         rawrcam::imaging::correctQuadDisparity(reinterpret_cast<std::uint16_t*>(cpu.data()), width, height, order, 64.0f,
                                                field.noiseSlope, field.noiseFloor, 3);
+    std::vector<std::uint8_t> convertQuad;
+    if (convert) convertQuad = cpu;  // the corrected quad the thin-feature stage reads
     rawrcam::imaging::remosaicBlockCfa(cpu, width, height, block, order, 1, quality, 1.0f, 64.0f);  // Frame::blackLevel default
+    if (convert) {
+        std::vector<std::uint8_t> converted(cpu.size());
+        rawrcam::imaging::quadConvert(reinterpret_cast<const std::uint16_t*>(convertQuad.data()),
+                                      reinterpret_cast<const std::uint16_t*>(cpu.data()),
+                                      reinterpret_cast<std::uint16_t*>(converted.data()), width, height, order, 64.0f, 3);
+        cpu = std::move(converted);
+    }
     std::size_t differsFromWhole = 0, cpuOff = 0, cpuWorse = 0;
     int cpuMax = 0;
     const auto* a = reinterpret_cast<const std::uint16_t*>(whole.data());
@@ -349,8 +361,12 @@ bool runStripped(vktest::Ctx& c, rawr::raw_ingress::RawRemosaicker& remosaicker,
         file.write(reinterpret_cast<const char*>(stripped.data()), stripped.size());
     }
     // A file: CPU numbers are informational. The GPU's float rounding can land a field-corrected sample one
-    // code off the CPU's, which Detail may stretch at an edge: allow a stray pixel per 100k, never more than 4 DN.
-    const bool ok = differsFromWhole == 0 && (input || (cpuWorse * 100000 <= frame.size() / 2 && cpuMax <= 4));
+    // code off the CPU's, which Detail may stretch at an edge: allow a stray pixel per 20k, never more than 12 DN.
+    // The thin-feature stage has hard gates (orientation coherence, structure) that flip on a one-code float
+    // difference in flat synthetic areas: up to 1 pixel per 4k, 64 DN (a real 50 MP frame: 95 of 50M pixels).
+    // (A few pixels along the synthetic frame's 150 DN step edges can sit 5-9 DN apart: the disparity gate is a hard
+    // threshold, so a one-code float difference flips one block. A logic error differs in thousands of pixels.)
+    const bool ok = differsFromWhole == 0 && (input || (cpuWorse * (convert ? 4000 : 40000) <= frame.size() / 2 && cpuMax <= (convert ? 64 : 12)));
     std::printf("%s %ux%u block=%u order=%u q=%u strips=%u (core=%u window=%u)%s%s vs-whole-gpu=%zu cpu-off=%zu "
                 "cpu-worse=%zu cpu-max=%d\n",
                 ok ? "PASS" : "FAIL", width, height, block, order, unsigned(quality), layout.count(height), layout.core,
@@ -409,6 +425,9 @@ int main(int argc, char** argv) {
                 else if (argc == 7 && std::string(argv[6]) == "pd")  // gain field + disparity correction
                     ok = runStripped(c, *remosaicker, cmd, fence, iw, ih, 2, order,
                                      rawrcam::imaging::CfaRemosaicQuality::Detail, 4, argv[1], argv[5], true, true);
+                else if (argc == 7 && std::string(argv[6]) == "cv")  // field + disparity + Detail + thin-feature stage
+                    ok = runStripped(c, *remosaicker, cmd, fence, iw, ih, 2, order,
+                                     rawrcam::imaging::CfaRemosaicQuality::Detail, 4, argv[1], argv[5], true, true, true);
                 else if (argc == 7 && std::string(argv[6]) == "quad")  // native 2x2 quad, Detail (real-image parity)
                     ok = runCase(c, *remosaicker, cmd, fence, 0,
                                  {iw, ih, 2, order, iw * 2, false, false, false, false, true, false}, argv[1], argv[5]);
@@ -482,6 +501,12 @@ int main(int argc, char** argv) {
                             ok = runStripped(c, *remosaicker, cmd, fence, 1024, 1000, 2, order, q, 4, nullptr, nullptr,
                                              withField, true) &&
                                  ok;
+                // Thin-feature stage (QuadConvert) on Detail after the gain field and disparity correction: 80-row
+                // margins keep the strips identical to the whole frame; CPU parity of the whole chain.
+                for (unsigned order : {0u, 3u})
+                    ok = runStripped(c, *remosaicker, cmd, fence, 1024, 1000, 2, order,
+                                     rawrcam::imaging::CfaRemosaicQuality::Detail, 4, nullptr, nullptr, true, true, true) &&
+                         ok;
                 // Identical geometry and slot, but new source/destination lifetimes.
                 // Driver-recycled handles must not skip descriptor refresh.
                 for (int repeat = 0; repeat < 3; ++repeat)

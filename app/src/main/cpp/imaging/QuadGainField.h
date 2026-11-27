@@ -68,9 +68,11 @@ inline float quadGainGrid(const float* grid, float u, float v) {
     return top + (bottom - top) * ty;
 }
 // 1 / g at (u, v) for coefficients k (kTerms floats) and the surface's grid. Mirrored by the shader.
+// g is bounded to 0.7..1.3: where no tile had enough signal (dark corners) the polynomial and grid
+// extrapolate freely (seen reaching -0.03 and 1.8 on a 14 mm ultrawide), and 1 / g must not follow.
 inline float quadGainInverse(const float* k, const float* grid, float u, float v) {
     const float g = 1.0f + k[0] + u * (k[1] + k[3] * v + k[4] * u) + v * (k[2] + k[5] * v) + quadGainGrid(grid, u, v);
-    return 1.0f / g;
+    return 1.0f / std::clamp(g, 0.7f, 1.3f);
 }
 // Mirrors the shader's roundDn.
 inline uint16_t quadGainApplyOne(uint16_t sample, float black, float inverse) {
@@ -279,8 +281,8 @@ inline void fitQuadNoise(std::vector<std::vector<std::vector<float>>>& perThread
 }
 }  // namespace detail
 
-inline QuadGainField fitQuadGainField(const uint16_t* raw, uint32_t width, uint32_t height, float black, float white,
-                                      uint32_t threads = 1) {
+inline QuadGainField fitQuadGainFieldFlat(const uint16_t* raw, uint32_t width, uint32_t height, float black, float white,
+                                          uint32_t threads = 1) {
     QuadGainField field;
     constexpr uint32_t kRowStride = 7;  // odd: both block parities
     // 256 px tiles on 50 MP, smaller on small frames: at least ~16 x 12 tiles for the surface fit.
@@ -462,6 +464,193 @@ inline QuadGainField fitQuadGainField(const uint16_t* raw, uint32_t width, uint3
     // 0.2-0.5% per position (invisible), the X200 Ultra main about 5%.
     field.active = worstDeviation > std::max(0.0075f, 4.0f * worstNoise);
     return field;
+}
+
+namespace detail {
+// Local per-position response. Per tile and surface (block phase x position in the block) the clipped mean of
+// sample / block mean over every block with signal: in focus a symmetric 2x2 sampling makes that unbiased even in
+// textured areas, and it is constant over a 30x range of brightness (a gain, not an offset). Unlike the flat-block
+// polynomial fit it follows steep ramps (14 mm ultrawide: 0 to 11% top / bottom split within 600 px at the frame
+// edge) and does not extrapolate where a region has no data (tiles without blocks take their neighbours').
+// Tile estimates are smoothed by a 3 x 3 median, each phase's four positions renormalised to mean 1, resampled to
+// the 32 x 24 residual grid, and shrunk by their own standard error. Returns false when the frame is too small.
+inline bool fitLocalQuadField(const uint16_t* raw, uint32_t width, uint32_t height, float black, float white,
+                              uint32_t threads, QuadGainField& field) {
+    constexpr uint32_t GX = QuadGainField::kGridX, GY = QuadGainField::kGridY, kCells = QuadGainField::kGridCells;
+    const uint32_t bw = width / 2, bh = height / 2;
+    const uint32_t tb = std::clamp(std::min(bw / 40, bh / 30) / 2 * 2, 16u, 48u);  // tile edge in blocks, even
+    const uint32_t tx = (bw + tb - 1) / tb, ty = (bh + tb - 1) / tb;
+    if (tx < 4 || ty < 4 || !(white > black)) return false;
+    const uint32_t kStride = tb >= 32 ? 3u : 1u;  // odd block-row stride (both block-row parities); small tiles take every row
+    const float minLevel = std::max(12.0f, 0.012f * (white - black));
+    struct Cell {
+        double n = 0.0, s[4] = {0, 0, 0, 0}, q[4] = {0, 0, 0, 0};
+    };
+    std::vector<Cell> cells(size_t(ty) * tx * 4);
+    threads = std::clamp(threads, 1u, 16u);
+    const auto work = [&](uint32_t t) {
+        for (uint32_t iy = t; iy < ty; iy += threads) {
+            std::vector<Cell> row(size_t(tx) * 4);
+            const auto blockMean = [&](uint32_t bx, uint32_t by) {
+                const uint16_t* p = raw + size_t(2 * by) * width + 2 * bx;
+                return 0.25f * ((float(p[0]) + float(p[1])) + (float(p[width]) + float(p[width + 1]))) - black;
+            };
+            for (uint32_t by = std::max(iy * tb, 2u); by < std::min(bh - 2, (iy + 1) * tb); ++by) {
+                if (by % kStride != 0) continue;
+                const uint16_t* r0 = raw + size_t(2 * by) * width;
+                const uint16_t* r1 = r0 + width;
+                for (uint32_t bx = 2; bx + 2 < bw; ++bx) {
+                    float v[4] = {float(r0[2 * bx]) - black, float(r0[2 * bx + 1]) - black,
+                                  float(r1[2 * bx]) - black, float(r1[2 * bx + 1]) - black};
+                    const float m = 0.25f * ((v[0] + v[1]) + (v[2] + v[3]));
+                    if (!(m > minLevel)) continue;
+                    // In focus the four sit half a pixel either side of the block centre: take the scene's own
+                    // split out (same-colour block gradient, as the disparity stage measures it) so a smooth
+                    // ramp or parallel edges do not leak into the response.
+                    const float gx = (blockMean(bx + 2, by) - blockMean(bx - 2, by)) * 0.125f;
+                    const float gy = (blockMean(bx, by + 2) - blockMean(bx, by - 2)) * 0.125f;
+                    v[0] += 0.5f * (gx + gy);
+                    v[1] += 0.5f * (gy - gx);
+                    v[2] += 0.5f * (gx - gy);
+                    v[3] -= 0.5f * (gx + gy);
+                    const float inv = 1.0f / m;
+                    Cell& c = row[size_t(bx / tb) * 4 + ((by & 1u) * 2u + (bx & 1u))];
+                    c.n += 1.0;
+                    for (int k = 0; k < 4; ++k) {
+                        const float r = std::clamp(v[k] * inv, 0.5f, 1.5f);
+                        c.s[k] += r;
+                        c.q[k] += double(r) * r;
+                    }
+                }
+            }
+            for (uint32_t ix = 0; ix < tx; ++ix)
+                for (uint32_t ph = 0; ph < 4; ++ph) cells[(size_t(iy) * tx + ix) * 4 + ph] = row[size_t(ix) * 4 + ph];
+        }
+    };
+    {
+        std::vector<std::thread> pool;
+        for (uint32_t t = 1; t < threads; ++t) pool.emplace_back(work, t);
+        work(0);
+        for (auto& p : pool) p.join();
+    }
+    // Tile values [ty][tx][phase][k]; NaN where a tile holds too few blocks.
+    const size_t planeSize = size_t(ty) * tx;
+    std::vector<float> g(planeSize * 16, std::nanf("")), se(planeSize * 16, std::nanf(""));
+    std::vector<float> seSamples;
+    for (uint32_t iy = 0; iy < ty; ++iy)
+        for (uint32_t ix = 0; ix < tx; ++ix)
+            for (uint32_t ph = 0; ph < 4; ++ph) {
+                const Cell& c = cells[(size_t(iy) * tx + ix) * 4 + ph];
+                if (c.n < 24.0) continue;
+                for (uint32_t k = 0; k < 4; ++k) {
+                    const double mean = c.s[k] / c.n, var = std::max(c.q[k] / c.n - mean * mean, 0.0);
+                    const size_t at = (size_t(ph) * 4 + k) * planeSize + size_t(iy) * tx + ix;
+                    g[at] = float(mean);
+                    se[at] = float(std::sqrt(var / c.n));
+                    seSamples.push_back(se[at]);
+                }
+            }
+    if (seSamples.size() < 16 * 8) return false;
+    std::nth_element(seSamples.begin(), seSamples.begin() + seSamples.size() / 2, seSamples.end());
+    const float seMedian = seSamples[seSamples.size() / 2];
+    // Fill empty tiles from their neighbours, then a 3 x 3 median per plane.
+    std::vector<float> smooth(planeSize);
+    for (uint32_t pl = 0; pl < 16; ++pl) {
+        float* a = g.data() + size_t(pl) * planeSize;
+        for (int round = 0; round < 8; ++round) {
+            bool any = false;
+            std::vector<float> next(a, a + planeSize);
+            for (uint32_t iy = 0; iy < ty; ++iy)
+                for (uint32_t ix = 0; ix < tx; ++ix) {
+                    if (!std::isnan(a[size_t(iy) * tx + ix])) continue;
+                    float sum = 0.0f;
+                    int n = 0;
+                    const int dy[4] = {-1, 1, 0, 0}, dx[4] = {0, 0, -1, 1};
+                    for (int d = 0; d < 4; ++d) {
+                        const int yy = int(iy) + dy[d], xx = int(ix) + dx[d];
+                        if (yy < 0 || xx < 0 || yy >= int(ty) || xx >= int(tx)) continue;
+                        const float v = a[size_t(yy) * tx + size_t(xx)];
+                        if (!std::isnan(v)) sum += v, ++n;
+                    }
+                    if (n) next[size_t(iy) * tx + ix] = sum / float(n);
+                    else any = true;
+                }
+            std::copy(next.begin(), next.end(), a);
+            if (!any) break;
+        }
+        for (size_t i = 0; i < planeSize; ++i)
+            if (std::isnan(a[i])) a[i] = 1.0f;
+        for (uint32_t iy = 0; iy < ty; ++iy)
+            for (uint32_t ix = 0; ix < tx; ++ix) {
+                float v[9];
+                int n = 0;
+                for (int j = -1; j <= 1; ++j)
+                    for (int i = -1; i <= 1; ++i) {
+                        const int yy = std::clamp(int(iy) + j, 0, int(ty) - 1), xx = std::clamp(int(ix) + i, 0, int(tx) - 1);
+                        v[n++] = a[size_t(yy) * tx + size_t(xx)];
+                    }
+                std::nth_element(v, v + 4, v + 9);
+                smooth[size_t(iy) * tx + ix] = v[4];
+            }
+        std::copy(smooth.begin(), smooth.end(), a);
+    }
+    for (uint32_t ph = 0; ph < 4; ++ph)  // the four positions of a block phase average to 1
+        for (size_t i = 0; i < planeSize; ++i) {
+            float m = 0.0f;
+            for (uint32_t k = 0; k < 4; ++k) m += g[(size_t(ph) * 4 + k) * planeSize + i];
+            m *= 0.25f;
+            for (uint32_t k = 0; k < 4; ++k) g[(size_t(ph) * 4 + k) * planeSize + i] /= m;
+        }
+    // Resample to the residual grid (nodes edge to edge, node i at x = i W / (GX - 1)), shrink by the standard
+    // error of what a node averages (about a 3 x 3 tile median of tiles of standard error seMedian).
+    const float seNode = seMedian * 0.25f;
+    const float tilePx = float(2 * tb);
+    double worst = 0.0;
+    for (uint32_t ph = 0; ph < 4; ++ph) {
+        for (uint32_t n = 0; n < kCells; ++n) {
+            const uint32_t j = n / GX, i = n % GX;
+            // The outermost nodes lie half a tile beyond the outermost tile centres: extrapolate the local slope
+            // (linear in the last two tiles) instead of holding the edge tile's value.
+            const float fx = float(i) * float(width) / float(GX - 1) / tilePx - 0.5f;
+            const float fy = float(j) * float(height) / float(GY - 1) / tilePx - 0.5f;
+            const uint32_t x0 = uint32_t(std::clamp(std::floor(fx), 0.0f, float(tx - 2))),
+                           y0 = uint32_t(std::clamp(std::floor(fy), 0.0f, float(ty - 2)));
+            const uint32_t x1 = x0 + 1, y1 = y0 + 1;
+            const float ax = fx - float(x0), ay = fy - float(y0);
+            float v[4], mean = 0.0f;
+            for (uint32_t k = 0; k < 4; ++k) {
+                const float* a = g.data() + (size_t(ph) * 4 + k) * planeSize;
+                const float top = a[size_t(y0) * tx + x0] * (1 - ax) + a[size_t(y0) * tx + x1] * ax;
+                const float bot = a[size_t(y1) * tx + x0] * (1 - ax) + a[size_t(y1) * tx + x1] * ax;
+                v[k] = top * (1 - ay) + bot * ay - 1.0f;
+                v[k] = v[k] * v[k] * v[k] / (v[k] * v[k] + seNode * seNode + 1e-30f);
+                mean += 0.25f * v[k];
+            }
+            for (uint32_t k = 0; k < 4; ++k) field.grid[(ph * 4 + k) * kCells + n] = v[k] - mean;
+        }
+    }
+    for (uint32_t sf = 0; sf < QuadGainField::kSurfaces; ++sf) {
+        double rms = 0.0;
+        for (uint32_t n = 0; n < kCells; ++n) rms += double(field.grid[sf * kCells + n]) * field.grid[sf * kCells + n];
+        worst = std::max(worst, std::sqrt(rms / kCells));
+    }
+    field.coef.fill(0.0f);
+    field.deviation = float(worst);
+    field.noise = seNode;
+    field.active = worst > std::max(0.0075, 3.0 * double(seNode));
+    return true;
+}
+}  // namespace detail
+
+// The frame's per-position response field: the local estimate (detail::fitLocalQuadField), with the flat-block
+// polynomial + grid fit as the fallback on frames too small for tiles. Both fill the pixel noise model.
+inline QuadGainField fitQuadGainField(const uint16_t* raw, uint32_t width, uint32_t height, float black, float white,
+                                      uint32_t threads = 1) {
+    QuadGainField flat = fitQuadGainFieldFlat(raw, width, height, black, white, threads);
+    QuadGainField local = flat;
+    local.grid.fill(0.0f);
+    if (!detail::fitLocalQuadField(raw, width, height, black, white, threads, local)) return flat;
+    return local;
 }
 
 // Divides the field out of a quad frame in place (CPU path; the GPU applies it while loading the raw).

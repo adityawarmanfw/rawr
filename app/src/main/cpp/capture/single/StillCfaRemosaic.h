@@ -10,6 +10,7 @@
 #include "capture/BlockRemosaicGpu.h"
 #include "capture/ReducedRawMetadata.h"
 #include "imaging/CfaRemosaic.h"
+#include "imaging/QuadConvert.h"
 #include "imaging/QuadDisparity.h"
 #include "imaging/QuadGainField.h"
 #include "imaging/RawSnapshot.h"
@@ -70,10 +71,13 @@ inline bool remosaicBlockCfaBuffer(std::vector<uint8_t>& raw16, uint32_t width, 
     const auto field = quadGainFieldFor(raw16, width, height, context, blackMean, white, fieldCache);
     const imaging::QuadGainField* activeField = field && field->active ? &*field : nullptr;
     const bool disparity = quadDisparityFor(context);
+    // The same on-chip-lens sensors need the thin-feature stage after Detail (imaging/QuadConvert.h).
+    const bool thinStage = disparity && quality == imaging::CfaRemosaicQuality::Detail && width % 4 == 0 && height % 4 == 0 &&
+                           width >= 32 && height >= 32;
     if (gpu && BlockRemosaicGpu::supports(context.cfaBlock, quality)) {
         try {
             gpu->run(raw16, context.cfaBlock, context.rawPreviewCfa, quality, blackMean, field ? &*field : nullptr,
-                     disparity);
+                     disparity, thinStage);
             return true;
         } catch (const BlockRemosaicGpu::PartialFailure&) {
             throw;  // some rows are already Bayer: the CPU path must not run over them
@@ -90,8 +94,16 @@ inline bool remosaicBlockCfaBuffer(std::vector<uint8_t>& raw16, uint32_t width, 
         imaging::correctQuadDisparity(reinterpret_cast<uint16_t*>(raw16.data()), width, height, context.rawPreviewCfa,
                                       blackMean, field ? field->noiseSlope : 0.0f, field ? field->noiseFloor : 0.0f,
                                       threads);
+    std::vector<uint8_t> quad;
+    if (thinStage) quad = raw16;  // the corrected quad the stage reads
     imaging::remosaicBlockCfa(raw16, width, height, context.cfaBlock, context.rawPreviewCfa, threads, quality, 1.0f,
                               blackMean);
+    if (thinStage) {
+        std::vector<uint8_t> out(raw16.size());
+        imaging::quadConvert(reinterpret_cast<const uint16_t*>(quad.data()), reinterpret_cast<const uint16_t*>(raw16.data()),
+                             reinterpret_cast<uint16_t*>(out.data()), width, height, context.rawPreviewCfa, blackMean, threads);
+        raw16.swap(out);
+    }
     return false;
 }
 // A block-CFA lens (CameraContextMetadata::cfaBlock > 1) hands stills over as
