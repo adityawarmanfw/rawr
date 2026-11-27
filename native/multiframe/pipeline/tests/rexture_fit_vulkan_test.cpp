@@ -8,6 +8,9 @@
 //  - op 1: a non-finite sum keeps the merge,
 //  - op 2: only grey detail is added (colour differences after white balance unchanged), the green gains op 1's change,
 //  - op 3: a companion that matches the base gets motion weight 1, a patch that changed (moved) gets 0,
+//  - op 1 at bright and steep edges (a soft merge, companions that sample the sharp truth): next to a clipped plateau the step is
+//    zero (clip fade), at a 50:1 edge it never exceeds REL of the pixel plus 4 noise SDs (and does reach that bound), and at a
+//    moderate edge it still sharpens (error towards the truth falls),
 //  - the stencil is exact: companions at arbitrary sub-pixel offsets whose samples agree with the merge (sums built the way
 //    rx_accumulate builds them) leave it unchanged (an assumed stencil sharpened every other pixel: a checkerboard).
 #include <rawr/raw_gpu_pipeline/RextureFit.h>
@@ -356,22 +359,11 @@ int main() {
         std::printf("motion weight: static min %.2f, moved patch max %.2f\n", staticMin, movedMax);
         // 8) exact stencil: the merge is the truth (diagonal stripes, period 3.7 px), 6 companions at random sub-pixel offsets
         // sample it exactly; sums as rx_accumulate keeps them. Nothing may change, and no checkerboard may appear.
-        float consistentChange = 0, checker = 0;
-        {
-            std::vector<float> t2(size_t(W) * H);
-            for (uint32_t y = 0; y < H; ++y)
-                for (uint32_t x = 0; x < W; ++x) t2[size_t(y) * W + x] = 0.2f + 0.06f * std::sin(6.2831853f * float(x + y) / 3.7f);
+        // Companion sums (rx_accumulate's, for a grey scene) of 6 green-sampling frames at random sub-pixel offsets, for the truth t2 and
+        // its base mosaic raw2.
+        const auto sumsFor = [&](const std::vector<float>& t2, const std::vector<uint16_t>& raw2, std::vector<uint16_t>& a1,
+                                 std::vector<uint16_t>& a2) {
             const auto tz = [&](int x, int y) { return t2[size_t(std::clamp(y, 0, int(H) - 1)) * W + size_t(std::clamp(x, 0, int(W) - 1))]; };
-            std::vector<uint16_t> raw2(size_t(W) * H), z2(size_t(W) * H * 4);
-            for (uint32_t y = 0; y < H; ++y)
-                for (uint32_t x = 0; x < W; ++x) {
-                    const size_t i = size_t(y) * W + x;
-                    float rgb[3];
-                    for (int ch = 0; ch < 3; ++ch) rgb[ch] = q16(t2[i] / kWb[ch]);
-                    raw2[i] = uint16_t(std::lround(kBlack + rgb[channel(x, y)] * (kWhite - kBlack)));
-                    for (int ch = 0; ch < 3; ++ch) z2[i * 4 + size_t(ch)] = toHalf(rgb[ch]);
-                    z2[i * 4 + 3] = toHalf(1.0f);
-                }
             const auto norm2 = [&](int x, int y) {
                 x = std::clamp(x, 0, int(W) - 1), y = std::clamp(y, 0, int(H) - 1);
                 return (float(raw2[size_t(y) * W + size_t(x)]) - kBlack) / (kWhite - kBlack);
@@ -414,11 +406,29 @@ int main() {
                         }
                     }
             }
-            std::vector<uint16_t> a1(size_t(W) * H * 4), a2(size_t(W) * H * 2);
+            a1.assign(size_t(W) * H * 4, 0), a2.assign(size_t(W) * H * 2, 0);
             for (size_t i = 0; i < size_t(W) * H; ++i) {
                 a1[i * 4] = toHalf(float(bs[i])), a1[i * 4 + 1] = toHalf(float(c0[i])), a1[i * 4 + 2] = toHalf(float(cE[i]));
                 a1[i * 4 + 3] = toHalf(float(cS[i])), a2[i * 2] = toHalf(float(cSE[i])), a2[i * 2 + 1] = toHalf(float(cSW[i]));
             }
+        };
+        float consistentChange = 0, checker = 0;
+        {
+            std::vector<float> t2(size_t(W) * H);
+            for (uint32_t y = 0; y < H; ++y)
+                for (uint32_t x = 0; x < W; ++x) t2[size_t(y) * W + x] = 0.2f + 0.06f * std::sin(6.2831853f * float(x + y) / 3.7f);
+            std::vector<uint16_t> raw2(size_t(W) * H), z2(size_t(W) * H * 4);
+            for (uint32_t y = 0; y < H; ++y)
+                for (uint32_t x = 0; x < W; ++x) {
+                    const size_t i = size_t(y) * W + x;
+                    float rgb[3];
+                    for (int ch = 0; ch < 3; ++ch) rgb[ch] = q16(t2[i] / kWb[ch]);
+                    raw2[i] = uint16_t(std::lround(kBlack + rgb[channel(x, y)] * (kWhite - kBlack)));
+                    for (int ch = 0; ch < 3; ++ch) z2[i * 4 + size_t(ch)] = toHalf(rgb[ch]);
+                    z2[i * 4 + 3] = toHalf(1.0f);
+                }
+            std::vector<uint16_t> a1, a2;
+            sumsFor(t2, raw2, a1, a2);
             const Result r2 = run(gpu, raw2, a1, a2, z2, raw2);
             double chk = 0;
             int nchk = 0;
@@ -432,6 +442,54 @@ int main() {
                 }
             checker = float(std::fabs(chk / nchk));
         }
+        // 9) bright and steep edges: the merge is the truth blurred by [1 2 1] / 4, companions sample the sharp truth, so op 1 wants a
+        // large step at each edge. Columns 0..39: a clipped plateau (1.0) falling to 0.08 at x = 20; 40..79: 0.5 falling to 0.01
+        // (50:1) at x = 60; 80..127: 0.5 falling to 0.2 (a moderate edge) at x = 104.
+        float clipChange = 0, steepWorst = 0, steepReach = 0, controlChange = 0;
+        double controlMerge = 0, controlFit = 0;
+        {
+            std::vector<float> t3(size_t(W) * H);
+            for (uint32_t y = 0; y < H; ++y)
+                for (uint32_t x = 0; x < W; ++x)
+                    t3[size_t(y) * W + x] = x < 40 ? (x < 20 ? 1.0f : 0.08f) : (x < 80 ? (x < 60 ? 0.5f : 0.01f) : (x < 104 ? 0.5f : 0.2f));
+            const auto t3at = [&](int x) { return t3[size_t(std::clamp(x, 0, int(W) - 1))]; };   // rows are identical
+            std::vector<uint16_t> raw3(size_t(W) * H), z3(size_t(W) * H * 4);
+            for (uint32_t y = 0; y < H; ++y)
+                for (uint32_t x = 0; x < W; ++x) {
+                    const size_t i = size_t(y) * W + x;
+                    raw3[i] = uint16_t(std::lround(kBlack + q16(t3[i] / kWb[channel(x, y)]) * (kWhite - kBlack)));
+                    const float soft = 0.25f * t3at(int(x) - 1) + 0.5f * t3at(int(x)) + 0.25f * t3at(int(x) + 1);
+                    for (int ch = 0; ch < 3; ++ch) z3[i * 4 + size_t(ch)] = toHalf(soft / kWb[ch]);
+                    z3[i * 4 + 3] = toHalf(1.0f);
+                }
+            std::vector<uint16_t> a1, a2;
+            sumsFor(t3, raw3, a1, a2);
+            const Result r3 = run(gpu, raw3, a1, a2, z3, raw3);
+            for (uint32_t y = 8; y < H - 8; ++y) {
+                for (uint32_t x = 16; x <= 20; ++x) {   // within 2 px of the clipped plateau (z0 = 1 up to x = 18): the step is faded out
+                    const size_t i = size_t(y) * W + x;
+                    clipChange = std::max(clipChange, std::fabs(r3.fit[i] - fromHalf(z3[i * 4 + 1])));
+                }
+                for (uint32_t x = 40; x < 80; ++x) {
+                    const size_t i = size_t(y) * W + x;
+                    const float z0 = fromHalf(z3[i * 4 + 1]);
+                    const float bound = rf::kStepBoundRel * std::max(z0, 0.0f) + 4.0f * std::sqrt(kAlpha * std::max(z0, 0.0f) + kBeta);
+                    const float ratio = std::fabs(r3.fit[i] - z0) / bound;
+                    steepWorst = std::max(steepWorst, ratio);
+                    if (x >= 56 && x <= 63) steepReach = std::max(steepReach, ratio);   // around the edge itself
+                }
+                for (uint32_t x = 84; x < 124; ++x) {
+                    const size_t i = size_t(y) * W + x;
+                    const double t = t3[i], z0 = fromHalf(z3[i * 4 + 1]);
+                    controlChange = std::max(controlChange, std::fabs(r3.fit[i] - float(z0)));
+                    controlMerge += (z0 - t) * (z0 - t);
+                    controlFit += (r3.fit[i] - t) * (r3.fit[i] - t);
+                }
+            }
+            controlMerge = std::sqrt(controlMerge), controlFit = std::sqrt(controlFit);
+        }
+        std::printf("edges: next to a clipped plateau max step %.1e | 50:1 edge: step / bound worst %.2f, at the edge %.2f | moderate edge: max step %.3f, error vs truth merge %.3f -> fit %.3f\n",
+                    clipChange, steepWorst, steepReach, controlChange, controlMerge, controlFit);
         std::printf("exact stencil: max change %.1e, checkerboard component %.1e\n", consistentChange, checker);
         std::printf("base green max err %.1e, std max rel err %.1e (at %u, %u: %.3e vs %.3e) | stripes: green rms error merge %.4f -> fit %.4f | flat change %.1e | "
                     "no-data change %.1e at (%u, %u) | non-finite sum kept %d | chroma change %.1e, green vs fit %.1e\n",
@@ -448,6 +506,10 @@ int main() {
         if (!(movedMax == 0.0f)) throw std::runtime_error("a moved patch is not rejected");
         if (!(consistentChange < 2e-3f)) throw std::runtime_error("companions that agree with the merge change it");
         if (!(checker < 1e-4f)) throw std::runtime_error("the fit leaves a checkerboard");
+        if (!(clipChange < 1e-3f)) throw std::runtime_error("the step is not faded out next to a clipped plateau");
+        if (!(steepWorst < 1.05f)) throw std::runtime_error("the step exceeds its bound at a steep edge");
+        if (!(steepReach > 0.8f)) throw std::runtime_error("the step bound is not reached at a steep edge (the scene does not exercise it)");
+        if (!(controlChange > 0.01f && controlFit < 0.9 * controlMerge)) throw std::runtime_error("the step no longer sharpens a moderate edge");
         std::puts("rexture_fit_vulkan_test passed");
         return 0;
     } catch (const std::exception& e) {

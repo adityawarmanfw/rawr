@@ -21,4 +21,7 @@ static_assert(sizeof(PushConstants) <= 128);
 constexpr float kOmega = 2.0f;
 // Damping, in frames of weight: a pixel that few samples reach keeps the merge.
 constexpr float kDelta = 1.0f;
+// Op 1's step is limited to this fraction of the pixel's merged green plus 4 single-frame noise SDs (REL in rx_fit.comp: a steep
+// edge otherwise overshoots to black on every other pixel), and fades out within 2 px of a (nearly) clipped pixel.
+constexpr float kStepBoundRel = 0.12f;
 }  // namespace rawr::raw_gpu_pipeline::rexture_fit
