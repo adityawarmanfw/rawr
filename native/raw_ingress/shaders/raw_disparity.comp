@@ -44,7 +44,7 @@ pc;
 const int CELL = 4;  // QuadDisparity::kCell
 const int M = 3;     // kGateMargin
 const float kMaxShift = 4.0, kRegScale = 1.0 / 64.0;
-const float kNoiseG2 = 0.149, kNoiseL2 = 0.081, kNoiseD2 = 4.0;
+const float kNoiseG2 = 0.149, kNoiseL2 = 0.081, kNoiseD2 = 4.0, kDiagonalWeight = 0.1;
 const float kRhoLow = 2.0, kRhoHigh = 8.0, kConfidenceNoise = 0.02, kGateNoise = 0.25;
 
 // Pass 15: means and diagonal splits of the tile + 3 blocks, green plane of the tile + 2.
@@ -127,7 +127,7 @@ void gatePass(int bw, int bh, ivec2 b0, int lidx, ivec2 lid) {
         const float g2s = max(g2 * (1.0 / 9.0) - kNoiseG2 * var, 0.0);
         const float l2s = max(l2 * (1.0 / 9.0) - kNoiseL2 * var, 0.0);
         const float d2s = max(d2 * (1.0 / 9.0) - kNoiseD2 * var, 0.0);
-        const float rho = g2s / (16.0 * l2s + d2s + kGateNoise * kNoiseG2 * var + 1e-6);
+        const float rho = g2s / (16.0 * l2s + kDiagonalWeight * d2s + kGateNoise * kNoiseG2 * var + 1e-6);
         w = clamp((rho - kRhoLow) / (kRhoHigh - kRhoLow), 0.0, 1.0);
     }
     const float gx = q.x - 2 >= 0 && q.x + 2 < bw ? (sMean[l + 2] - sMean[l - 2]) * 0.125 : 0.0;
@@ -200,11 +200,13 @@ void correctPass(int bw, int bh, ivec2 b0, int lidx, ivec2 lid) {
     const float cwx = px * px / (px * px + kConfidenceNoise * var + 1e-6);
     const float cwy = py * py / (py * py + kConfidenceNoise * var + 1e-6);
     const float cx = cwx * rx * 0.25, cy = cwy * ry * 0.25;
+    // The diagonal split goes with the shift (QuadDisparity.h): where a shift was found it is a defocus artefact.
+    const float cd = max(cwx, cwy) * ((s[0] + s[3]) - (s[1] + s[2])) * 0.25;
     const float lo = min(min(s[0], s[1]), min(s[2], s[3]));
     const float hi = max(max(s[0], s[1]), max(s[2], s[3]));
     for (int k = 0; k < 4; ++k) {
         const float ox = (k & 1) != 0 ? 1.0 : -1.0, oy = (k & 2) != 0 ? 1.0 : -1.0;
-        const float v = clamp(s[k] - (cx * ox + cy * oy), lo, hi);
+        const float v = clamp(s[k] - (cx * ox + cy * oy + cd * ox * oy), lo, hi);
         imageStore(rawImage, ivec2(x + (k & 1), y + (k >> 1)), uvec4(roundDn(v), 0u, 0u, 0u));
     }
 }

@@ -525,7 +525,8 @@ void main() {
                   u * (uintBitsToFloat(diffRead.words[k + 1u]) + uintBitsToFloat(diffRead.words[k + 3u]) * v +
                        uintBitsToFloat(diffRead.words[k + 4u]) * u) +
                   v * (uintBitsToFloat(diffRead.words[k + 2u]) + uintBitsToFloat(diffRead.words[k + 5u]) * v) + grid;
-        float inverse = 1.0 / g;
+        // Bounded like quadGainInverse: the fit extrapolates where no tile had signal (dark corners).
+        float inverse = 1.0 / clamp(g, 0.7, 1.3);
         float corrected = (float(code) - pc.blackLevel) * inverse + pc.blackLevel;
         if (pc.disparity != 0u)
             imageStore(pdImage, ivec2(int(x), int(y)), uvec4(roundDn(corrected), 0u, 0u, 0u));

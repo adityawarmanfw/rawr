@@ -309,7 +309,7 @@ int main() {
     {
         // Quad gain field: a smooth scene seen through a known per-position field (diagonal pairs opposite by
         // quadrant up to 5%, a row offset, a column tilt) is recognised, and dividing the fit out brings every
-        // sample back to the field-free scene within a code or two. Without a field nothing is touched.
+        // sample back to the field-free scene within a few codes. Without a field nothing is touched.
         constexpr uint32_t QW = 1536, QH = 1024;
         std::vector<uint16_t> clean(QW * QH), seen(QW * QH);
         for (uint32_t y = 0; y < QH; ++y)
@@ -333,7 +333,9 @@ int main() {
         }
         std::printf("quad gain field: deviation %.2f%%, max error %d -> %d codes\n", 100.0f * field.deviation, before,
                     after);
-        check(before > 15 && after <= 2, "quad gain field: dividing the fit out restores the scene");
+        // The local estimator is non-parametric (tile means, 32 x 24 nodes): within 4 codes (0.4%) here, where
+        // the old quadratic fit, solving for the very form this scene was built from, reached 2.
+        check(before > 15 && after <= 4, "quad gain field: dividing the fit out restores the scene");
         const QuadGainField none = fitQuadGainField(clean.data(), QW, QH, 64.0f, 1023.0f, 4);
         check(!none.active, "quad gain field: a matched sensor is left alone");
         auto untouched = clean;

@@ -76,9 +76,18 @@ class RawRemosaicker final {
         // (and must start on a multiple of 8 rows: its 4 x 4-block cells follow the frame's grid).
         bool disparity = false;
         float noiseSlope = 0.0f, noiseFloor = 0.0f;
+        // Quad Detail only: the thin-feature stage on Detail's output (app imaging/QuadConvert.h,
+        // shaders/raw_convert.comp): each pixel's own sample colour-converted along thin lines and diagonals, and
+        // the colour dots of aliased thin lines pulled back. Needs width and height multiples of 4 and the window to
+        // start on a multiple of 4 rows (strips: 8). Its reach adds ~33 rows to the remosaic's: strips need margins
+        // of 80 (StripLayout::make(..., StripLayout::kConvertMargin)). Detail then writes an internal image and
+        // `destination` gets the final result. `convertClip` is the sample code from which a sample counts as clipped
+        // (10-bit sensors: 1020).
+        bool convert = false;
+        float convertClip = 1020.0f;
         // Optional: timestamps 0..3 around raw-in, green + block diff (Detail: green + block moments), Bayer out (profiling);
         // with phaseFit also 5, 6, 7 after block sums, statistics and curve (pool of 8); with disparity
-        // 4 after the load and 5 after its gate pass (its correction pass ends at 1).
+        // 4 after the load and 5 after its gate pass (its correction pass ends at 1); with convert 6 and 7 around the thin-feature stage.
         VkQueryPool timestamps = VK_NULL_HANDLE;
     };
     // Records the three passes. Scratch is (re)allocated when the size
@@ -91,12 +100,14 @@ class RawRemosaicker final {
     explicit RawRemosaicker(const rawr::vk::GpuContext& context, std::shared_ptr<Pipelines> pipelines);
     void destroy() noexcept;
     void ensureScratch(std::uint32_t width, std::uint32_t height, std::uint32_t block, bool needsDiff,
-                       bool needsMoments, bool needsPd);
+                       bool needsMoments, bool needsPd, bool needsConvert);
     void releaseScratch() noexcept;
 
     struct Scratch {
-        bool needsDiff = false, needsMoments = false, needsPd = false;
+        bool needsDiff = false, needsMoments = false, needsPd = false, needsConvert = false;
         rawr::vk::OwnedImage raw, green, moments, pd;
+        // Convert: Detail's output, then cell grids (4 x 4 px): statistics, coarse (+ ratio disagreement), fine, weights.
+        rawr::vk::OwnedImage detailOut, cell, ls, lf, wm;
         VkBuffer diff = VK_NULL_HANDLE;
         VkDeviceMemory diffMemory = VK_NULL_HANDLE;
         std::uint32_t width = 0, height = 0, block = 0;
@@ -108,8 +119,12 @@ class RawRemosaicker final {
     VkPipeline pipeline_ = VK_NULL_HANDLE;
     VkPipeline detailPipeline_ = VK_NULL_HANDLE;
     VkPipeline disparityPipeline_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout convertSetLayout_ = VK_NULL_HANDLE;
+    VkPipelineLayout convertPipelineLayout_ = VK_NULL_HANDLE;
+    VkPipeline convertPipeline_ = VK_NULL_HANDLE;
     VkDescriptorPool pool_ = VK_NULL_HANDLE;
     std::array<VkDescriptorSet, kSlots> sets_{};
+    std::array<VkDescriptorSet, kSlots> convertSets_{};
     Scratch scratch_;
 };
 

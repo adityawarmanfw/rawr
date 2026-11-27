@@ -18,15 +18,18 @@ namespace rawrcam::capture {
 // strip's bottom are kept because the frame is overwritten in place.
 struct StripLayout {
     static constexpr uint32_t kMargin = 48;
-    uint32_t core = 0, window = 0, saved = 0;
+    // The thin-feature stage after the remosaic (imaging/QuadConvert.h) reads cells up to 33 px away from Detail's
+    // output (valid 45 rows from a window edge) and the corrected quad (29): 80 rows.
+    static constexpr uint32_t kConvertMargin = 80;
+    uint32_t core = 0, window = 0, saved = 0, margin = kMargin;
     // One strip (window == height) unless the height is a multiple of 8 and a
-    // strip layout fits.
-    static StripLayout make(uint32_t height, uint32_t strips) {
-        StripLayout l{height, height, 0};
+    // strip layout fits. `margin` is a multiple of 8.
+    static StripLayout make(uint32_t height, uint32_t strips, uint32_t margin = kMargin) {
+        StripLayout l{height, height, 0, margin};
         strips = std::max(1u, strips);
-        if (height % 8 != 0 || strips == 1) return l;
-        const uint32_t core = (height / strips + 7) / 8 * 8, saved = 2 * kMargin + 8 * strips;
-        if (core >= saved && core + 2 * kMargin < height) l = {core, core + 2 * kMargin, saved};
+        if (height % 8 != 0 || strips == 1 || margin % 8 != 0) return l;
+        const uint32_t core = (height / strips + 7) / 8 * 8, saved = 2 * margin + 8 * strips;
+        if (core >= saved && core + 2 * margin < height) l = {core, core + 2 * margin, saved, margin};
         return l;
     }
     uint32_t count(uint32_t height) const { return (height + core - 1) / core; }
@@ -47,7 +50,7 @@ void remosaicInStrips(std::vector<uint8_t>& pixels, uint32_t width, uint32_t hei
         const uint32_t start =
             layout.window >= height
                 ? 0
-                : std::min(coreStart < StripLayout::kMargin ? 0 : coreStart - StripLayout::kMargin,
+                : std::min(coreStart < layout.margin ? 0 : coreStart - layout.margin,
                            height - layout.window);
         // Rows above this core were already remosaiced in `pixels`: the window takes their originals.
         const uint32_t fromTail = coreStart > start ? coreStart - start : 0;
@@ -84,7 +87,7 @@ void remosaicInStripsOverlapped(std::vector<uint8_t>& pixels, uint32_t width, ui
     const auto coreEnd = [&](uint32_t i) { return std::min(height, coreStart(i) + layout.core); };
     const auto windowStart = [&](uint32_t i) {
         return layout.window >= height ? 0u
-                                       : std::min(coreStart(i) < StripLayout::kMargin ? 0u : coreStart(i) - StripLayout::kMargin,
+                                       : std::min(coreStart(i) < layout.margin ? 0u : coreStart(i) - layout.margin,
                                                   height - layout.window);
     };
     std::vector<uint8_t> tail(size_t(layout.saved) * rowBytes);
