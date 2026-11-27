@@ -39,6 +39,9 @@ layout(push_constant) uniform P {
     float gain;          // op 3: reference exposure / the companion's exposure
 } p;
 const float KAPPA = 4.0, T1 = 3.0, T2 = 9.0;
+// Bounds of op 1's step at bright and steep edges (see the end of op 1): the step fades out within 2 pixels of a (nearly) clipped
+// merged green, and is limited to REL of the pixel's own value plus 4 single-frame noise SDs.
+const float CLIP_FADE_LO = 0.90, CLIP_FADE_HI = 0.99, REL = 0.12;
 // The step's change (g - z0) is kept and added after the grain pass (op 2), so the grain pass's evening of few-frame areas stays.
 // It is scaled by the companions' support, min(sum of their A coefficients / DS_FULL, 1): where every companion was rejected (a
 // band around a moving subject) the step only moves z0 to the base frame's own samples: on texture (a moving subject, water,
@@ -47,7 +50,7 @@ const float KAPPA = 4.0, T1 = 3.0, T2 = 9.0;
 const float DS_FULL = 1.0, TEXF_LO = 1.5, TEXF_HI = 3.0;
 #include "rx_common.glsl"
 
-shared float sG[18 * 18];               // op 0: base green, op 1: merge green (workgroup +- 1)
+shared float sG[20 * 20];               // op 0: base green (workgroup +- 1), op 1: merge green (workgroup +- 2)
 const int MT = 36;                      // op 3: base (green, sd) of the workgroup's 32 x 32 pixels +- 2 (scene points lie
 shared vec2 sB[MT * MT];                //       within 1.5 px of their cell centre)
 
@@ -130,10 +133,10 @@ void main() {
     }
     if (FIT_OP == 1) {
         const ivec2 l = ivec2(gl_LocalInvocationID.xy);
-        const ivec2 o = ivec2(gl_WorkGroupID.xy) * 16 - 1;
+        const ivec2 o = ivec2(gl_WorkGroupID.xy) * 16 - 2;
         const ivec2 n = ivec2(p.w - 1, p.h - 1);
-        for (int i = int(gl_LocalInvocationIndex); i < 18 * 18; i += 256)
-            sG[i] = imageLoad(outI, clamp(o + ivec2(i % 18, i / 18), ivec2(0), n)).y;
+        for (int i = int(gl_LocalInvocationIndex); i < 20 * 20; i += 256)
+            sG[i] = imageLoad(outI, clamp(o + ivec2(i % 20, i / 20), ivec2(0), n)).y;
         barrier();
         if (q.x >= p.w || q.y >= p.h) return;
         const vec4 a = imageLoad(fitAcc, q);   // (bs, c0, cE, cS)
@@ -144,11 +147,17 @@ void main() {
         const float cNE = q.x < n.x && q.y > 0 ? imageLoad(fitAcc2, q + ivec2(1, -1)).y : 0.0;
         const vec2 bsd = imageLoad(fitBg, q).xy;   // (base green, its 3 x 3 standard deviation)
         const float base = bsd.x;
-        const int c = (l.y + 1) * 18 + l.x + 1;
+        const int c = (l.y + 2) * 20 + l.x + 2;
         const float z0 = sG[c];
-        const float az = a.y * (z0 - base) + a.z * (sG[c + 1] - base) + a.w * (sG[c + 18] - base) + a2.x * (sG[c + 19] - base) +
-                         a2.y * (sG[c + 17] - base) + cW * (sG[c - 1] - base) + cN * (sG[c - 18] - base) +
-                         cNW * (sG[c - 19] - base) + cNE * (sG[c - 17] - base);
+        const float az = a.y * (z0 - base) + a.z * (sG[c + 1] - base) + a.w * (sG[c + 20] - base) + a2.x * (sG[c + 21] - base) +
+                         a2.y * (sG[c + 19] - base) + cW * (sG[c - 1] - base) + cN * (sG[c - 20] - base) +
+                         cNW * (sG[c - 21] - base) + cNE * (sG[c - 19] - base);
+        // Clipped greens are left out of the fit, so next to a clipped highlight the step is badly conditioned and alternates
+        // between green and non-green sites (a row of dots along the edge): it fades out within 2 px of a (nearly) clipped pixel.
+        float zmax = 0.0;
+        for (int j = 0; j < 5; ++j)
+            for (int k = 0; k < 5; ++k) zmax = max(zmax, sG[(l.y + j) * 20 + l.x + k]);
+        const float clipFade = 1.0 - smoothstep(CLIP_FADE_LO, CLIP_FADE_HI, zmax);
         const float ds = a.y + a.z + a.w + a2.x + a2.y + cW + cN + cNW + cNE;
         float bt = 0.0, bd = 0.0;
         if (rxChannel(q, p.cfa) == 1) {
@@ -157,6 +166,15 @@ void main() {
         }
         float dg = p.omega * (a.x - az + bt) / (ds + bd + p.delta) * max(clamp(ds / DS_FULL, 0.0, 1.0),
                      smoothstep(TEXF_LO, TEXF_HI, bsd.y / sqrt(max(p.alpha * max(base, 0.0) + p.beta, 1e-20))));
+        if (isnan(dg) || isinf(dg)) dg = 0.0;   // before the bounds: clamp() would turn a NaN into a finite step
+        dg *= clipFade;
+        // A step larger than REL of the pixel's value (or 4 noise SDs where it is dark) is beyond any real optical edge: at a very
+        // steep edge (50:1 within 3 px) the fit overshoots to black on every other pixel, again a row of dots.
+        {
+            const float sig = sqrt(max(p.alpha * max(z0, 0.0) + p.beta, 1e-12));   // single-frame noise SD
+            const float lim = REL * max(z0, 0.0) + 4.0 * sig;
+            dg = clamp(dg, -lim, lim);
+        }
         if (isnan(dg) || isinf(dg)) dg = 0.0;
         imageStore(fitBg, q, vec4(dg, 0.0, 0.0, 0.0));
         return;
