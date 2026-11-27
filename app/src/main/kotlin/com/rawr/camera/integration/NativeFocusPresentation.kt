@@ -32,7 +32,12 @@ internal object NativeFocusPresentation {
         val telemetry = current.copy(
             appliedFocusDiopters = snapshot.appliedFocusDistance,
             backendNativeReadout = if (distanceReadoutTrustworthy)
-                snapshot.appliedFocusDistance?.let(ExposureFormat::formatFocusDistance) else null
+                snapshot.appliedFocusDistance?.let(ExposureFormat::formatFocusDistance) else null,
+            // The HAL zone is display telemetry like the lens distance: an
+            // outstanding gesture must not freeze or roll back where the camera
+            // is actually measuring. Unknown AF state stays hidden rather than
+            // claiming a search before the first result.
+            cameraAfStatus = snapshot.afState?.let(::statusForAfState) ?: TargetStatus.Hidden
         )
         // A snapshot predating the gesture cannot roll back its box, mode or
         // rail. Rejected commands are acknowledged too and project normally.
@@ -43,13 +48,21 @@ internal object NativeFocusPresentation {
                 2 -> FocusMode.Mf
                 else -> FocusMode.Af
             },
-            status = if (!snapshot.tapAfActive && snapshot.focusMode == 0) TargetStatus.Hidden else when (snapshot.afState) {
-                1, 3 -> TargetStatus.Settling
-                2, 4 -> TargetStatus.Settled
-                5, 6 -> TargetStatus.Failed
-                else -> TargetStatus.Settling
-            },
+            status = if (!snapshot.tapAfActive && snapshot.focusMode == 0) TargetStatus.Hidden
+            else statusForAfState(snapshot.afState),
             mfNormalized = snapshot.requestedManualFocusNormalized.coerceIn(0f, 1f)
         )
+    }
+
+    /**
+     * One shared mapping from the reported AF state to the viewfinder's
+     * search/settled/failed language, so the HAL focus zone and the tap reticle
+     * can never disagree about what the camera is doing.
+     */
+    private fun statusForAfState(afState: Int?): TargetStatus = when (afState) {
+        1, 3 -> TargetStatus.Settling
+        2, 4 -> TargetStatus.Settled
+        5, 6 -> TargetStatus.Failed
+        else -> TargetStatus.Settling
     }
 }

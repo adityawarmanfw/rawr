@@ -59,7 +59,13 @@ data class FocusUiState(
     val mfNormalized: Float = .57f,
     /** Live lens position from CaptureResult in diopters; null before first result. */
     val appliedFocusDiopters: Float? = null,
-    val backendNativeReadout: String? = null
+    val backendNativeReadout: String? = null,
+    /**
+     * AF state exactly as the camera reported it, independent of the tap reticle.
+     * [status] above is deliberately Hidden in full auto (no tap is in flight),
+     * which would leave passive autofocus without any search/lock distinction.
+     */
+    val cameraAfStatus: TargetStatus = TargetStatus.Hidden
 )
 
 data class SpotAeUiState(

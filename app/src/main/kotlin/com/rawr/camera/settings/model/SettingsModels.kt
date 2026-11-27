@@ -597,6 +597,13 @@ data class SettingsValues(
     val showDcpQuickSelect: Boolean = true,
     /** Horizon/level overlay on the capture viewfinder. */
     val levelMeterEnabled: Boolean = false,
+    /**
+     * Draw the HAL's own autofocus window when no face box and no tap reticle
+     * is on screen. On by default; devices that report no AF window simply show
+     * nothing, so this is only ever a gain.
+     */
+    /** Peaking stands in for the camera's own focus when nothing else shows it. */
+    val autofocusPeakingEnabled: Boolean = true,
     // Preview-only look-stage (tonemap or film) downsample divisor, 1..4.
     // Film always runs at 2 or more. Never touches stills, video, or EXIF.
     val viewfinderDivisor: Int = 2,

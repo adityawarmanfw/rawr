@@ -27,6 +27,8 @@ class NativeCaptureScreenController(
     private val onRawCpuIngress: () -> Unit = {},
     /** A lens switch was accepted (persisted as the next launch's lens). */
     private val onLensSelected: (String) -> Unit = {},
+    /** Settings toggle for peaking as the passive-AF focus indicator. */
+    private val autofocusPeakingEnabled: () -> Boolean = { true },
     dispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val foregroundToken: () -> Any?
 ) : CaptureScreenController {
@@ -74,6 +76,7 @@ class NativeCaptureScreenController(
                     overlayTriggers.autofocusStatus(focus.status, focus.mode == FocusMode.Mf)
                 }
                 updateFaces(NativeCameraUiSnapshot.parseFaces(coordinator.faceDetectionsSnapshot()))
+                syncAutoAfPeaking()
 
                 // Applied exposure is display telemetry, not part of the AE loop.
                 // 10 Hz is responsive enough and avoids unnecessary JNI/JSON/UI churn;
@@ -409,6 +412,15 @@ class NativeCaptureScreenController(
         if (state.value.faceDetections != faces) {
             update { it.copy(faceDetections = faces) }
         }
+    }
+
+    /**
+     * Peaking is the only thing that shows what passive autofocus is looking at,
+     * so it rides the camera's own report. Polled every tick because faces,
+     * focus mode and the setting each move it independently of the others.
+     */
+    private fun syncAutoAfPeaking() {
+        overlayTriggers.setAutoAfPeaking(autofocusPeakingEnabled() && state.value.focusTracked())
     }
 
     private fun setFocusMode(mode: FocusMode) {

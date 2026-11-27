@@ -72,6 +72,9 @@ data class SetShowDcpQuickSelect(val enabled: Boolean) : SettingsApplicationActi
 
 data class SetLevelMeter(val enabled: Boolean) : SettingsApplicationAction
 
+/** Viewfinder overlay for the HAL's own autofocus window. */
+data class SetAutofocusPeaking(val enabled: Boolean) : SettingsApplicationAction
+
 data class SetColorRenderProfile(val value: ColorRenderProfile) : SettingsApplicationAction
 
 data class SelectUserLutProfile(val profileId: String) : SettingsApplicationAction
